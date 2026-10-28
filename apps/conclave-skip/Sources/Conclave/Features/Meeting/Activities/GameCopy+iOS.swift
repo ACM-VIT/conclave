@@ -1,10 +1,7 @@
 #if os(iOS) && !SKIP
 import Foundation
 
-/// S60 L6-14 (ACT-2): the one exhaustive copy mapping for the game shell on iOS (RC R15 "GameCopy uses keys and typed
-/// args"). Server game strings stay verbatim; module error text shows verbatim only for `GameFailure.server`.
 enum GameCopy {
-    // MARK: Header (S20 11 renders it; S60 8 g supplies the parts)
 
     static func seatTag(_ seat: SeatState) -> String? {
         switch seat {
@@ -27,7 +24,6 @@ enum GameCopy {
         }
     }
 
-    /// "6 players · Lobby", plus "+1 joining" while seats are queued.
     static func headerStatus(_ chrome: GameChromeModel) -> String {
         let phase = phaseLabel(chrome)
         var line = ActivitiesCopy.players(chrome.playerCount)
@@ -37,8 +33,6 @@ enum GameCopy {
         }
         return line
     }
-
-    // MARK: Lobby (S60 8 f, g)
 
     static func lobbyLine(_ lobby: GameLobbyModel, gameName: String, isHost: Bool) -> String {
         switch lobby.reason {
@@ -50,13 +44,9 @@ enum GameCopy {
         }
     }
 
-    // MARK: Countdown
-
     static func seconds(_ value: Int) -> String { ConclaveStrings.format("%lld s", value) }
     static func secondsLeft(_ value: Int) -> String { ConclaveStrings.format("Seconds Left %lld", value) }
     static func warning() -> String { ConclaveStrings.text("5 s left") }
-
-    // MARK: Failures and notices (exhaustive)
 
     static func failure(_ failure: GameFailure, serverText: String) -> String? {
         switch failure {
@@ -72,7 +62,6 @@ enum GameCopy {
         }
     }
 
-    /// K13 titles; kinds whose notice is a single sentence have none.
     static func noticeTitle(_ kind: GameKitNoticeKind) -> String? {
         switch kind {
         case .failure, .spectator, .info: return nil
@@ -86,8 +75,6 @@ enum GameCopy {
     static func spectatorBody() -> String { ConclaveStrings.text("You’re watching this round.") }
     static func rolesSecret() -> String { ConclaveStrings.text("You’re watching. Roles are secret.") }
     static func endFailed() -> String { ConclaveStrings.text("Couldn’t end the game. Try again.") }
-
-    // MARK: Results
 
     static func winnerLine(_ results: GameResultsModel) -> String? {
         if results.winnerName.isEmpty || results.isTie { return nil }
@@ -105,8 +92,6 @@ enum GameCopy {
         let name = row.isYou ? ConclaveStrings.text("You") : row.name
         return ConclaveStrings.format("%@ place, %@, %@ points", place, name, score(row.score))
     }
-
-    // MARK: Generic scene (the ACT-2 body for games whose scene lands with ACT-3 to ACT-6)
 
     static func progress(_ done: Int, _ total: Int) -> String { ConclaveStrings.format("%lld of %lld", done, total) }
 }

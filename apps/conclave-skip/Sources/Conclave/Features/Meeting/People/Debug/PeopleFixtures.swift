@@ -1,18 +1,6 @@
 import Foundation
 import Observation
 
-// S50 PL12 Debug People fixtures (PPL-1), layered on the S20 SL14 stage fixture: `CONCLAVE_PEOPLE_FIXTURE=<state>`
-// (iOS launch environment) and the intent extra `conclave.peopleFixture` (Android, Debug only, FLAG_DEBUGGABLE checked
-// like `conclave.stageFixture`). One run builds the stage fixture session over the People roster (so the stage and
-// People share canonical ids and one speaking store), then a standalone `PeoplePresenter` fed by scripted inputs.
-// No view model, WebRTC, audio, capture or network (OD Q19, silent testing). The scripts are shared (transpiled) so
-// both platforms and both test hosts read the same states. Later People slices add their states and scripted acks
-// here (PPL-2 to PPL-7: host-controls-*, host-access-lists, host-notice-sending, webinar-*, qa-*, stage-invite,
-// demoted-*). PPL-3 adds the scripted acks every state uses (PL12 default: success after 150 ms; Admit and Deny drop
-// the row, Admit All and Deny All empty Waiting, Lower All lowers every hand, Mute All mutes everyone but hosts) and
-// the knock banner on the stage for the states with people waiting, so people-host-waiting-3 opens through its View.
-
-/// Fixture states. Raw values are the launch values (S50 PL12 table).
 enum PeopleFixtureState: String, CaseIterable, Equatable {
     case guest4 = "people-guest-4"
     case host6 = "people-host-6"
@@ -27,7 +15,6 @@ enum PeopleFixtureState: String, CaseIterable, Equatable {
     case lostHost = "people-lost-host"
 }
 
-/// One scripted person (PL12 roster columns).
 struct PeopleFixturePerson: Equatable {
     let userId: String
     let name: String
@@ -36,7 +23,7 @@ struct PeopleFixturePerson: Equatable {
     let isCoHost: Bool
     let isMuted: Bool
     let isCameraOff: Bool
-    /// Seconds after the fixture's base time; below 0 means the hand is down.
+
     let handOffsetSeconds: Int
     let isPresenting: Bool
     let isReconnecting: Bool
@@ -53,7 +40,6 @@ struct PeopleFixturePerson: Equatable {
     var isHandRaised: Bool { handOffsetSeconds >= 0 }
 }
 
-/// Pure scripts per state, shared by the fixture roots and both test hosts.
 enum PeopleFixtureScript {
     static let ishaan = "u-ishaan"
     static let avery = "u-avery"
@@ -61,7 +47,7 @@ enum PeopleFixtureScript {
     static let sam = "u-sam"
     static let priya = "u-priya"
     static let omar = "u-omar"
-    /// Hands are timed from here (PH3 milliseconds); the stage fixture's fixed join time.
+
     static let baseMillis = StageFixtureScript.joinedAtMillis
     static let rtlName = "عبد الرحمن بن محمد بن عبد العزيز بن عبد الله الفيصل الهاشمي القرشي"
 
@@ -69,7 +55,6 @@ enum PeopleFixtureScript {
         PeopleFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// people-host-6 (PL12): Ishaan hosts; Avery is a co-host with a hand up; Lee presents; Omar reconnects.
     static func hostSix() -> [PeopleFixturePerson] {
         [
             PeopleFixturePerson.make(ishaan, "Ishaan", isLocal: true, isHost: true),
@@ -135,16 +120,12 @@ enum PeopleFixtureScript {
         }
     }
 
-    /// The search text the panel opens with (people-search-none types "zz").
     static func searchText(for state: PeopleFixtureState) -> String {
         state == PeopleFixtureState.searchNone ? "zz" : ""
     }
 
-    /// The people-lost-host transition fires 1 s after the panel opens (PL12).
     static let lostHostDelayMillis = 1000.0
 
-    /// How the fixture root opens the panel at launch: people-host-waiting-3 through the knock banner's View
-    /// (`peopleWaiting`, S50 1 l2), people-host-hands-3 through the raised-hand toast's View, the rest from the bar.
     static func openDestination(for state: PeopleFixtureState) -> PanelDestination {
         switch state {
         case .hostWaiting3: return PanelDestination.peopleWaiting
@@ -186,7 +167,6 @@ enum PeopleFixtureScript {
                                     raisedAtMillis: person.isHandRaised ? baseMillis + Double(person.handOffsetSeconds) * 1000.0 : 0.0)
     }
 
-    /// `waiting` replaces the state's scripted waiting list (the scripted acks remove admitted and denied people).
     static func peopleInputs(roster: [PeopleFixturePerson], state: PeopleFixtureState, isAdminOverride: Bool? = nil,
                              waiting: [PeopleWaitingInput]? = nil) -> PeopleInputs {
         var rows: [PeopleParticipantInput] = []
@@ -198,7 +178,7 @@ enum PeopleFixtureScript {
         var primary = primaryHost(roster)
         var localIsAdmin = hosts.contains(local)
         if let override = isAdminOverride, !override {
-            // adminUsersChanged without you (people-lost-host): your id leaves the host list.
+
             var kept: [String] = []
             for id in hosts {
                 if id != local { kept.append(id) }
@@ -229,7 +209,6 @@ enum PeopleFixtureScript {
         peopleInputs(roster: roster(for: state), state: state)
     }
 
-    /// The stage fixture over the same roster and ids, so the stage's speaking store and People's leaves agree.
     static func stageInputs(roster: [PeopleFixturePerson], state: PeopleFixtureState) -> StageInputs {
         var rows: [StageParticipantInput] = []
         var presenter = ""
@@ -259,7 +238,6 @@ enum PeopleFixtureScript {
         stageInputs(roster: roster(for: state), state: state)
     }
 
-    /// 20 speaker changes over the remotes (S50 1 l6: `people.revision` and every row counter stay unchanged).
     static func speakerScript(for state: PeopleFixtureState) -> [String] {
         var remotes: [String] = []
         for person in roster(for: state) {
@@ -275,7 +253,6 @@ enum PeopleFixtureScript {
         return result
     }
 
-    /// The row the scripted mute flips (S50 1 l3, l6): Avery Lee where present, else the first remote.
     static func mutedTarget(for state: PeopleFixtureState) -> String {
         var first = ""
         for person in roster(for: state) {
@@ -285,14 +262,8 @@ enum PeopleFixtureScript {
         return first
     }
 
-    // MARK: PPL-3 scripts (S50 4, 5; PL12 acks)
-
-    /// PL12: every scripted ack succeeds after 150 ms unless a state says otherwise.
     static let ackDelayMillis = 150.0
 
-    /// The stage notice inputs for a state with people waiting (the S20 knock banner, row 8); the session applies them
-    /// only for those states (`showsKnock`), so the other states' lanes stay as PPL-1 left them. A recovering state keeps
-    /// its own banner, which outranks the knock as in a call; losing host removes the knock.
     static func noticeInputs(roster: [PeopleFixturePerson], waiting: [PeopleWaitingInput], state: PeopleFixtureState,
                              isAdminOverride: Bool? = nil) -> StageNoticeInputs {
         let local = localId(roster)
@@ -310,12 +281,10 @@ enum PeopleFixtureScript {
                                       pendingFirstName: firstName)
     }
 
-    /// The states whose stage shows the knock banner (someone waits at launch).
     static func showsKnock(_ state: PeopleFixtureState) -> Bool {
         !waiting(for: state).isEmpty
     }
 
-    /// Admit or Deny acknowledged: that pending id leaves Waiting.
     static func withoutWaiting(_ waiting: [PeopleWaitingInput], id: String) -> [PeopleWaitingInput] {
         var result: [PeopleWaitingInput] = []
         for request in waiting {
@@ -324,7 +293,6 @@ enum PeopleFixtureScript {
         return result
     }
 
-    /// Lower All acknowledged (`admin:handsCleared`): every hand is down.
     static func handsLowered(_ roster: [PeopleFixturePerson]) -> [PeopleFixturePerson] {
         var result: [PeopleFixturePerson] = []
         for person in roster {
@@ -337,7 +305,6 @@ enum PeopleFixtureScript {
         return result
     }
 
-    /// Mute Everyone acknowledged: everyone except hosts and co-hosts is muted (the SFU's `includeAdmins: false`).
     static func everyoneMuted(_ roster: [PeopleFixturePerson]) -> [PeopleFixturePerson] {
         var result: [PeopleFixturePerson] = []
         for person in roster {
@@ -351,7 +318,6 @@ enum PeopleFixtureScript {
         return result
     }
 
-    /// One field flipped on one person.
     static func toggledMute(_ roster: [PeopleFixturePerson], userId: String) -> [PeopleFixturePerson] {
         var result: [PeopleFixturePerson] = []
         for person in roster {
@@ -370,14 +336,13 @@ enum PeopleFixtureScript {
     }
 }
 
-/// `people.counters` (PL12). Plain, never observed.
 @MainActor
 final class PeopleFixtureCounters {
     private(set) var speakerRuns = 0
     private(set) var scriptedMutes = 0
     private(set) var lostHost = 0
     private(set) var opens: [String] = []
-    /// PPL-3: scripted acks delivered (one per finished command).
+
     private(set) var acks = 0
 
     func recordSpeakerRun() { speakerRuns += 1 }
@@ -395,15 +360,11 @@ final class PeopleFixtureCounters {
     }
 }
 
-/// One command waiting for its scripted ack (tests hold them and release them in order).
 struct PeopleFixtureQueuedAck: Equatable {
     let command: PeopleCommand
     let ticket: HostActionTicket
 }
 
-/// One People fixture run: the stage fixture session over the People roster (request in HD/requests/B4-T7.md adds its
-/// `initialInputs`), the standalone `PeoplePresenter` and the scripts, shared by the iOS and Android fixture roots so
-/// both behave the same. Never touches `MeetingViewModel`.
 @MainActor
 final class PeopleFixtureSession {
     let state: PeopleFixtureState
@@ -413,10 +374,9 @@ final class PeopleFixtureSession {
     let counters = PeopleFixtureCounters()
     private(set) var roster: [PeopleFixturePerson]
     private(set) var inputs: PeopleInputs
-    /// PPL-3: the waiting list the scripted acks edit.
+
     private(set) var waitingList: [PeopleWaitingInput]
-    /// Tests set it to keep commands queued (`queuedAcks`) until `releaseAcks()`; the roots leave it false, so each
-    /// command finishes after `PeopleFixtureScript.ackDelayMillis`.
+
     var holdsAcks = false
     private(set) var queuedAcks: [PeopleFixtureQueuedAck] = []
     private var hostLost = false
@@ -435,15 +395,14 @@ final class PeopleFixtureSession {
         self.people = presenter
         presenter.recompose = recompose
         presenter.initialSearchQuery = PeopleFixtureScript.searchText(for: state)
-        // The stage fixture already forwards panel changes to the stage; People closes its presentation from the same
-        // coordinator callback (the VM does the same, HD request R2).
+
         let stageForward = session.shell.panels.onSnapshotChanged
         session.shell.panels.onSnapshotChanged = { [weak self] in
             stageForward?()
             self?.people.panelSnapshotChanged()
         }
         presenter.apply(inputs)
-        // PPL-3: the knock banner for the states with people waiting (S20 10 f row 8), and the PL12 scripted acks.
+
         if PeopleFixtureScript.showsKnock(state) {
             session.stage.applyNotices(PeopleFixtureScript.noticeInputs(roster: cast, waiting: waitingList, state: state))
         }
@@ -455,19 +414,15 @@ final class PeopleFixtureSession {
     var shell: MeetingShellPresenter { stageSession.shell }
     var stage: StagePresenter { stageSession.stage }
 
-    /// Opens Participants the way its entry points do: the bar or More (`none`), the knock banner View
-    /// (`peopleWaiting`, through the stage like S20 10) or the raised-hand toast View (`peopleRaisedHands`).
     func open(destination: PanelDestination) {
         counters.recordOpen(destination.rawValue)
         if destination == PanelDestination.peopleWaiting, let banner = stage.banner, banner.kind == NoticeKind.knock {
-            // S20 10 f row 8: the knock banner's View opens People at Waiting (PPL-3).
+
             stage.performNoticeAction(noticeId: banner.id, actionId: NoticeAction.view)
             return
         }
         stage.openPeople(destination: destination)
     }
-
-    // MARK: Scripted acks (PL12, PPL-3)
 
     private func scheduleAck(_ command: PeopleCommand, _ ticket: HostActionTicket) {
         if holdsAcks {
@@ -481,7 +436,6 @@ final class PeopleFixtureSession {
         }
     }
 
-    /// Delivers every held ack in dispatch order (tests).
     func releaseAcks() {
         let held = queuedAcks
         queuedAcks = []
@@ -490,8 +444,6 @@ final class PeopleFixtureSession {
         }
     }
 
-    /// The scripted server effect, then the acknowledgement: the row leaves before `finish` publishes the token, as
-    /// the pending list update and the ack arrive in a call.
     private func completeAck(_ command: PeopleCommand, _ ticket: HostActionTicket) {
         switch command.kind {
         case .admit, .deny:
@@ -512,7 +464,6 @@ final class PeopleFixtureSession {
         people.finish(ticket, HostActionResult.completed)
     }
 
-    /// 20 scripted speaker changes at the injected clock (S50 1 l6).
     func runSpeakerScript() {
         counters.recordSpeakerRun()
         var at = stage.now()
@@ -523,7 +474,6 @@ final class PeopleFixtureSession {
         stage.speakerChanged(nil, atMillis: at)
     }
 
-    /// One scripted mute on one row (S50 1 l3, l6): exactly that row's entry changes.
     func scriptedMute() {
         let target = PeopleFixtureScript.mutedTarget(for: state)
         if target.isEmpty { return }
@@ -532,7 +482,6 @@ final class PeopleFixtureSession {
         push(isAdminOverride: nil)
     }
 
-    /// people-lost-host: `adminUsersChanged` without you (PL12, S50 1 l9). The roots call it 1 s after opening.
     func loseHost() {
         counters.recordLostHost()
         hostLost = true
@@ -550,8 +499,6 @@ final class PeopleFixtureSession {
         }
     }
 
-    // MARK: Readouts (outside the panel subtree, PS 7.6)
-
     func revisionReadout() -> String { people.revisionReadout() }
 
     func recomposeReadout() -> String { recompose.summary() }
@@ -560,14 +507,11 @@ final class PeopleFixtureSession {
 
     func countersReadout() -> String { counters.summary() }
 
-    /// `people.actions` (PL12): the presenter's perform, confirm and command log and the last host outcome token, so a
-    /// cell can read "one hostAdmitted" after Admit (S50 4 l) or "one hostBulkApplied" after Lower All (5 l).
     func actionsReadout() -> String {
         let token = people.feedbackState.token
         return people.countersReadout() + " token=" + token.kind.rawValue + "#" + String(token.sequence)
     }
 
-    /// `stage.notices`: the knock banner (and its Admit state) and the toast lane.
     func noticesReadout() -> String {
         var knock = "none"
         if let banner = stage.banner, banner.kind == NoticeKind.knock {

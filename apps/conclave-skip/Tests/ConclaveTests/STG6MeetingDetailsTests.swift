@@ -3,12 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// STG-6 (OUT/PLAN-screens.md section 5; S20 15 l, SC15; S60 0.5 `ConnectionQualityLabel`; RECONCILE R21, R34, R50):
-/// the one connection label policy, the Meeting Details snapshot and rows on the fixtures (host, guest, recovering,
-/// custom tenant, attendee), zero webinar link generations on open and exactly one on Share, the scripted lock while
-/// open, More-opened and closed panels, the label staying stable across a recovery rejoin, and the view sources (inline
-/// copy on iOS, the API 28 to 32 snackbar on Android, the page stack, no legacy share helpers). The Kotlin twin with the
-/// same fixtures is T/Skip/STG6STG8BridgeTests.kt.
 @MainActor
 struct STG6MeetingDetailsTests {
     static let longSleep: (Double) async -> Void = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
@@ -41,26 +35,24 @@ struct STG6MeetingDetailsTests {
                                 connectionStatsFailed: failed)
     }
 
-    // MARK: The one connection label (S60 0.5, RECONCILE R21)
-
     @Test func connectionLabelPolicyVectors() {
         #expect(ConnectionQualityLabelPolicy.label(.emergency, hasSample: true, statsFailed: false) == .veryPoor)
         #expect(ConnectionQualityLabelPolicy.label(.good, hasSample: true, statsFailed: false) == .good)
         #expect(ConnectionQualityLabelPolicy.label(.fair, hasSample: true, statsFailed: false) == .fair)
         #expect(ConnectionQualityLabelPolicy.label(.poor, hasSample: true, statsFailed: false) == .poor)
-        // Unknown before the first sample reads measuring; after stats fail it reads unavailable.
+
         #expect(ConnectionQualityLabelPolicy.label(.unknown, hasSample: false, statsFailed: false) == .measuring)
         #expect(ConnectionQualityLabelPolicy.label(.unknown, hasSample: true, statsFailed: true) == .unavailable)
         #expect(ConnectionQualityLabelPolicy.label(.unknown, hasSample: false, statsFailed: true) == .measuring)
         #expect(!ConnectionQualityLabelPolicy.statsFailed(hasSample: true, consecutiveUnknownSamples: 2))
         #expect(ConnectionQualityLabelPolicy.statsFailed(hasSample: true, consecutiveUnknownSamples: 3))
         #expect(!ConnectionQualityLabelPolicy.statsFailed(hasSample: false, consecutiveUnknownSamples: 10))
-        // SC15: a recovery keeps the last measured value instead of flickering to "Measuring…".
+
         #expect(ConnectionQualityLabelPolicy.stable(previous: .fair, next: .measuring, isRecovering: true) == .fair)
         #expect(ConnectionQualityLabelPolicy.stable(previous: .fair, next: .measuring, isRecovering: false) == .measuring)
         #expect(ConnectionQualityLabelPolicy.stable(previous: .measuring, next: .measuring, isRecovering: true) == .measuring)
         #expect(ConnectionQualityLabelPolicy.stable(previous: .good, next: .unavailable, isRecovering: true) == .unavailable)
-        // One copy set for Meeting Details and Settings: every label has its own iOS key and Android name.
+
         var keys = Set<String>()
         var names = Set<String>()
         for label in ConnectionQualityLabel.allCases {
@@ -70,8 +62,6 @@ struct STG6MeetingDetailsTests {
         #expect(keys == ["Measuring…", "Good", "Fair", "Poor", "Very Poor", "Unavailable"])
         #expect(names.count == 6 && names.allSatisfy { $0.hasPrefix("set_quality_") })
     }
-
-    // MARK: Fixtures (S20 15 l)
 
     @Test func hostFixtureShowsTheWireframeRowsInOrder() throws {
         let session = StageFixtureSession(state: .meetingInfoHost)
@@ -106,7 +96,7 @@ struct STG6MeetingDetailsTests {
         #expect(session.stage.meetingInfo?.webinarLink == StageFixtureScript.webinarLink)
         let second = await session.ensureWebinarLink()
         #expect(second == StageFixtureScript.webinarLink && session.counters.generateWebinarLink == 1)
-        // The snapshot is built from inputs only; the stage owns no link method (RECONCILE R34).
+
         let presenter = try stageSource("Sources/Conclave/Features/Meeting/Stage/StagePresenter.swift")
         #expect(!presenter.contains("func ensureWebinarLink") && !presenter.contains("copyableWebinarLink"))
         let ios = try stageSource("Sources/Conclave/Features/Meeting/Stage/MeetingDetailsPanel+iOS.swift")
@@ -127,7 +117,7 @@ struct STG6MeetingDetailsTests {
         session.toggleRoomLock()
         let after = try #require(session.stage.meetingInfo)
         #expect(after.isLocked)
-        // A guest who is not a host joining changes no Meeting Details field, so the snapshot stays equal.
+
         let stage = presenter()
         stage.apply(hostInputs())
         stage.applyDetails(details(.good))
@@ -141,7 +131,7 @@ struct STG6MeetingDetailsTests {
         let info = try #require(StageFixtureSession(state: .meetingInfoRecovering).stage.meetingInfo)
         #expect(info.isRecovering && info.rowsContain("hostControls"))
         #expect(!MeetingInfoPolicy.isHostControlsEnabled(info))
-        // An existing webinar link still copies and shares; a missing one waits for the connection.
+
         #expect(MeetingInfoPolicy.isWebinarLinkActionEnabled(info))
         let missing = MeetingInfoPolicy.snapshot(inputs: StageFixtureScript.inputs(for: .meetingInfoRecovering),
                                                  details: StageDetailsInputs.make(callSession: 1, isWebinarEnabled: true),
@@ -163,7 +153,7 @@ struct STG6MeetingDetailsTests {
         #expect(MeetingInfoPolicy.rowIds(info) == ["webinarTitle", "hosts", "shareWebinarLink", "settings"])
         #expect(!MeetingInfoPolicy.rowIds(info).contains("roomCode") && !MeetingInfoPolicy.rowIds(info).contains("connection"))
         #expect(info.webinarTitle == StageFixtureScript.webinarTitle)
-        // Share Webinar Link only for a public webinar whose link exists; the Settings row always.
+
         let privateWebinar = MeetingInfoSnapshot(roomCode: "", link: "", roomLabel: "", isLocked: false, liveNotes: .off,
                                                  captionsOn: false, hostNames: [], joinedAtMillis: 0, connection: .good,
                                                  isHost: false, requiresInviteCode: false, isWebinarEnabled: true,
@@ -171,8 +161,6 @@ struct STG6MeetingDetailsTests {
                                                  isAttendee: true, webinarTitle: "", isRecovering: false)
         #expect(MeetingInfoPolicy.rowIds(privateWebinar) == ["webinarTitle", "settings"])
     }
-
-    // MARK: Presenter lifecycle (S20 15 k)
 
     @Test func moreBuildsTheSnapshotAndClosingClearsIt() {
         let stage = presenter()
@@ -185,7 +173,7 @@ struct STG6MeetingDetailsTests {
         stage.shell.panels.dismiss(cancelPending: true)
         stage.shell.panels.didDismiss(session: stage.shell.panels.snapshot.session, presentationID: presentation)
         #expect(stage.meetingInfo == nil)
-        // A lock while closed builds nothing.
+
         stage.apply(StageFixtureScript.copy(hostInputs(), isRoomLocked: true))
         #expect(stage.meetingInfo == nil)
     }
@@ -196,16 +184,16 @@ struct STG6MeetingDetailsTests {
         stage.applyDetails(details(.good))
         stage.openMeetingInfo()
         #expect(stage.meetingInfo?.connection == .good)
-        // The rejoin resets the core's stabilizer to unknown; the label keeps "Good" while recovering.
+
         stage.apply(hostInputs(isRecovering: true))
         stage.applyDetails(details(.unknown))
         #expect(stage.meetingInfo?.connection == .good)
         stage.applyDetails(details(.fair))
         #expect(stage.meetingInfo?.connection == .fair)
-        // Stats that stop reporting read unavailable, recovering or not.
+
         stage.applyDetails(details(.unknown, failed: true))
         #expect(stage.meetingInfo?.connection == .unavailable)
-        // A new call session starts measuring again.
+
         stage.apply(hostInputs(session: 2))
         stage.applyDetails(details(.unknown, hasSample: false, session: 2))
         #expect(stage.connectionLabel == .measuring)
@@ -221,8 +209,6 @@ struct STG6MeetingDetailsTests {
         #expect(names == ["stg_off", "stg_state_starting", "stg_on", "stg_state_paused", "stg_state_needs_attention"])
     }
 
-    // MARK: Sources
-
     @Test func iosMeetingDetailsCopiesInlineAndPushesInsideThePanel() throws {
         let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/MeetingDetailsPanel+iOS.swift"))
         #expect(ios.contains("PanelShell(title: isAttendee ? ConclaveStrings.text(\"Webinar Details\") : ConclaveStrings.text(\"Meeting Details\")"))
@@ -234,11 +220,11 @@ struct STG6MeetingDetailsTests {
         #expect(ios.contains("try? await Task.sleep(for: .milliseconds(Int(MeetingInfoPolicy.copiedMillis)))"))
         #expect(ios.contains("ShareLink(item: url, subject: Text(ConclaveStrings.text(\"Join My Conclave Meeting\"))"))
         #expect(ios.contains("NavigationLink(value: MeetingInfoRoute.host(PeopleRoute.hostControls))"))
-        // PPL-4's host pages render inside this panel, their rows linking into its one path (R50-2).
+
         #expect(ios.contains("HostPageView(people: people, page: route, link: { MeetingInfoRoute.host($0) })"))
         #expect(ios.contains("Text(ConclaveStrings.text(\"Unavailable while reconnecting\"))"))
         #expect(ios.contains(".listStyle(.insetGrouped)"))
-        // No toast on a system-appearance sheet (F00 C13), no legacy share helper or haptic.
+
         #expect(!ios.contains("postLocal") && !ios.contains("HapticManager") && !ios.contains("MeetingShare."))
     }
 
@@ -254,7 +240,7 @@ struct STG6MeetingDetailsTests {
         #expect(android.contains("putExtra(Intent.EXTRA_TITLE, title)") && android.contains("Intent.createChooser(intent, null)"))
         #expect(android.contains("PipManager.suppressNextAutoEnter(\"meeting_share\")"))
         #expect(android.contains("conclaveString(\"ds_unavailable_reconnecting\")"))
-        // PPL-4's host pages render inside this panel and push PeopleRoute keys on the same page stack (R50-2).
+
         #expect(android.contains("HostPageContent(people, route, reservation, snackbar, onPush)"))
         #expect(android.contains("if (!keepsHostPages && meetingDetailsIsHostPage(pages?.top)) pages?.popToRoot()"))
         #expect(!android.contains("MeetingShare.") && !android.contains("Text(\""))

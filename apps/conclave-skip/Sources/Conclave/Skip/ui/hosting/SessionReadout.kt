@@ -13,13 +13,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
-/**
- * WP2-S2b Debug session readout (S1C Q8, OWNER-DEFAULTS Q16; S70 0.6 Debug readouts) for the Debug hosting preview
- * (AppRoot.kt, mounted by HD request B2-T1). It shows the live shell snapshots and sys.feedbackRecords. Each line is
- * its own leaf that reads one snapshot, so a controls publish never recomposes the identity line. Values are ASCII
- * (MeetingSessionReadout); the test tag is the readout key. Opening the readout is a fixture start, so the records
- * reset once per composition of this section.
- */
 @Composable
 internal fun SessionReadoutSection(shell: MeetingShellPresenter, records: FeedbackDeliveryRecords) {
     LaunchedEffect(records) { records.reset() }
@@ -35,7 +28,7 @@ internal fun SessionReadoutSection(shell: MeetingShellPresenter, records: Feedba
         SessionReadoutLine(MeetingSessionReadout.outcomeKey) { MeetingSessionReadout.outcome(shell.session) }
         SessionReadoutLine(MeetingSessionReadout.controlsKey) { MeetingSessionReadout.controls(shell.controls) }
         SessionReadoutLine(MeetingSessionReadout.ledgerKey) {
-            // The ledger is not observable; the rows publish its pending state, so this refreshes with them.
+
             shell.controls.revision
             MeetingSessionReadout.ledger(shell.ledger)
         }

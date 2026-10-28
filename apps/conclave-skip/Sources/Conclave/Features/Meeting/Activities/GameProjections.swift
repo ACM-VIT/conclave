@@ -1,13 +1,5 @@
 import Foundation
 
-// S60 C6-15 (ACT-2): typed per-game projections, parsed ONCE per push from the existing payloads (`GamePublicState.view`
-// and `GamePlayerViewNotification.view`, both raw JSON in `GameJSONValue`), instead of re-parsing JSON on every access
-// (`GameJSONValue.string(_:)` parses the whole document per call, SM:344-440, INM G16). Field names mirror the SFU
-// modules in packages/sfu/server/games/modules (publicView for the room, playerView for one person); private fields
-// come only from the person's own player view and are kept apart from public ones, so hidden information never
-// reaches a shared surface (D13). Shared (transpiled): scalar structs, arrays of structs and optional structs only.
-// Absent numbers parse as -1 where 0 is meaningful (a choice index, a time), else 0.
-
 struct GameCountEntry: Equatable {
     let key: String
     let count: Int
@@ -24,20 +16,18 @@ struct GameNamedPlayer: Equatable, Identifiable {
     let name: String
 }
 
-/// What every game view shares, normalized: phase, server clock, the phase deadline, the 1-based round, counts and
-/// the scoreboard. The shell (chrome, countdown, results) reads only this.
 struct GameCommonProjection: Equatable {
     let phase: String
     let serverNowMillis: Double
-    /// 0 when the phase has no deadline.
+
     let deadlineMillis: Double
     let durationMillis: Double
-    /// 1-based; 0 in the lobby or for games without rounds.
+
     let roundNumber: Int
     let roundTotal: Int
     let actedCount: Int
     let totalPlayers: Int
-    /// Who acted this phase (never what they chose), for the strip adornments and the K6 chips.
+
     let actedPlayerIds: [String]
     let scoreboard: [GameScoreEntry]
     let winnerName: String
@@ -47,7 +37,6 @@ struct GameCommonProjection: Equatable {
                                             winnerName: "")
 }
 
-/// G/trivia.ts publicView and playerView.
 struct TriviaProjection: Equatable {
     let phase: String
     let questionIndex: Int
@@ -55,31 +44,30 @@ struct TriviaProjection: Equatable {
     let category: String
     let prompt: String
     let options: [String]
-    /// -1 until the reveal.
+
     let correctIndex: Int
     let optionCounts: [Int]
     let answeredCount: Int
     let totalPlayers: Int
-    // Private (the person's own view).
+
     let hasAnswered: Bool
     let myChoice: Int
     let score: Int
     let rank: Int
     let lastRoundPoints: Int
-    /// "correct", "wrong" or "" before the reveal.
+
     let outcome: String
 }
 
 struct BluffOptionProjection: Equatable, Identifiable {
     let id: String
     let text: String
-    /// "truth" or "fake" at the reveal, "" while choosing (the server never sends kind or author before).
+
     let kind: String
     let ownerName: String
     let votes: Int
 }
 
-/// G/bluff.ts.
 struct BluffProjection: Equatable {
     let phase: String
     let round: Int
@@ -90,7 +78,7 @@ struct BluffProjection: Equatable {
     let chosenCount: Int
     let totalPlayers: Int
     let roundPoints: [GameScoreEntry]
-    // Private.
+
     let yourFake: String
     let hasSubmitted: Bool
     let yourPick: String
@@ -98,7 +86,6 @@ struct BluffProjection: Equatable {
     let score: Int
 }
 
-/// G/wouldYouRather.ts.
 struct WouldYouRatherProjection: Equatable {
     let phase: String
     let index: Int
@@ -111,11 +98,10 @@ struct WouldYouRatherProjection: Equatable {
     let namesB: [String]
     let answeredCount: Int
     let totalPlayers: Int
-    // Private: 0, 1 or -1 when not chosen.
+
     let myChoice: Int
 }
 
-/// G/mostLikelyTo.ts.
 struct MostLikelyToProjection: Equatable {
     let phase: String
     let index: Int
@@ -128,19 +114,18 @@ struct MostLikelyToProjection: Equatable {
     let totalPlayers: Int
     let winnerId: String
     let winnerName: String
-    // Private.
+
     let yourVote: String
 }
 
 struct ReactionResultProjection: Equatable, Identifiable {
     let id: String
     let name: String
-    /// -1 for no time (an early tap or no tap).
+
     let reactionMs: Int
     let isEarly: Bool
 }
 
-/// G/reaction.ts.
 struct ReactionProjection: Equatable {
     let phase: String
     let round: Int
@@ -150,14 +135,13 @@ struct ReactionProjection: Equatable {
     let totalPlayers: Int
     let results: [ReactionResultProjection]
     let winnerName: String
-    // Private.
+
     let hasTapped: Bool
     let isEarly: Bool
     let reactionMs: Int
     let score: Int
 }
 
-/// G/imposter.ts. Not spectatable: a spectator has no player view, so `role` stays "" and no word ever arrives.
 struct ImposterProjection: Equatable {
     let phase: String
     let category: String
@@ -169,13 +153,13 @@ struct ImposterProjection: Equatable {
     let hasResult: Bool
     let imposterId: String
     let imposterName: String
-    /// The secret word revealed publicly at the result only.
+
     let resultWord: String
     let votedOutId: String
     let votedOutName: String
     let crewWon: Bool
     let isTie: Bool
-    // Private: "crew", "imposter" or "" (spectator). `secretWord` is the crew's word, never logged or shared.
+
     let role: String
     let secretWord: String
     let yourVote: String
@@ -185,13 +169,13 @@ struct WordleStandingProjection: Equatable, Identifiable {
     let id: String
     let name: String
     let triesUsed: Int
-    /// "win", "lose", "timeout" or "".
+
     let outcome: String
 }
 
 struct WordleGuessProjection: Equatable {
     let word: String
-    /// Per letter: "green", "yellow" or "gray".
+
     let feedback: [String]
 }
 
@@ -201,7 +185,6 @@ struct WordleBoardProjection: Equatable, Identifiable {
     let outcome: String
 }
 
-/// G/wordle.ts.
 struct WordleProjection: Equatable {
     let phase: String
     let wordSource: String
@@ -219,14 +202,14 @@ struct WordleProjection: Equatable {
     let resultWord: String
     let resultWinnerId: String
     let resultWinnerName: String
-    // Private.
+
     let isSetter: Bool
     let canSetWord: Bool
     let canGuess: Bool
     let secretWord: String
     let myGuesses: [WordleGuessProjection]
     let myOutcome: String
-    /// Every contestant's board, only in the setter's own view (the setter already knows the word).
+
     let boards: [WordleBoardProjection]
 }
 
@@ -237,7 +220,7 @@ struct ChessTeamMemberProjection: Equatable, Identifiable {
 }
 
 struct ChessLegalMoveProjection: Equatable, Identifiable {
-    /// The origin square ("e2").
+
     let id: String
     let targets: [String]
 }
@@ -248,26 +231,25 @@ struct ChessMoveProjection: Equatable {
     let to: String
     let color: String
     let promotion: String
-    /// Who moved: the captain, "Computer", or the captain the server auto-played for.
+
     let byName: String
-    /// True when the server played the move (rapid-fire expiry).
+
     let isAuto: Bool
 }
 
-/// G/chess.ts.
 struct ChessProjection: Equatable {
     let phase: String
     let mode: String
     let fen: String
     let turnSide: String
     let inCheck: Bool
-    /// -1 without a clock.
+
     let whiteClockMillis: Double
     let blackClockMillis: Double
     let timeControlMillis: Double
     let incrementMillis: Double
     let moveTimeMillis: Double
-    /// The server time the current turn began (the rapid-fire deadline base); 0 when no turn runs.
+
     let turnStartedAtMillis: Double
     let allowTakebacks: Bool
     let botSide: String
@@ -281,11 +263,11 @@ struct ChessProjection: Equatable {
     let drawOfferName: String
     let takebackSide: String
     let takebackName: String
-    /// "white", "black", "draw" or "" while playing.
+
     let resultWinner: String
     let resultReason: String
     let resultByName: String
-    // Private.
+
     let side: String
     let role: String
     let canMove: Bool
@@ -308,15 +290,14 @@ struct ZipStandingProjection: Equatable, Identifiable {
     let totalCells: Int
     let outcome: String
     let hintsUsed: Int
-    /// Epoch milliseconds (server clock) when this player solved the puzzle (`solvedAt`); 0 while unsolved.
+
     let solvedAtMillis: Double
 }
 
-/// G/zip.ts.
 struct ZipProjection: Equatable {
     let phase: String
     let gridSize: Int
-    /// Cell index (as text) to its number.
+
     let anchors: [GameCountEntry]
     let barriers: [ZipBarrierProjection]
     let deadCells: [Int]
@@ -332,17 +313,16 @@ struct ZipProjection: Equatable {
     let solutionPath: [Int]
     let winnerId: String
     let winnerName: String
-    // Private.
+
     let path: [Int]
     let outcome: String
     let hintsUsed: Int
     let hintAvailableAtMillis: Double
     let mistakes: Int
-    /// Epoch milliseconds (server clock) when you solved it (player view `solvedAt`); 0 while unsolved.
+
     let solvedAtMillis: Double
 }
 
-/// Scene kinds (S60 0.5 `GameScene.kind`).
 enum GameSceneKind {
     static let lobby = "lobby"
     static let trivia = "trivia"
@@ -357,7 +337,6 @@ enum GameSceneKind {
     static let privateView = "privateView"
     static let unsupported = "unsupported"
 
-    /// Server game ids this build knows (G/*.ts `id`).
     static func kind(forGameId gameId: String) -> String {
         switch gameId {
         case "trivia": return trivia
@@ -374,7 +353,6 @@ enum GameSceneKind {
     }
 }
 
-/// One push, parsed once: the common fields plus exactly one per-game projection (nil for an unknown game).
 struct GameProjection: Equatable {
     let gameId: String
     let kind: String
@@ -397,12 +375,8 @@ struct GameProjection: Equatable {
     var isKnownGame: Bool { kind != GameSceneKind.unsupported }
 }
 
-// MARK: Parsing
-
-/// Reads values out of a parsed JSON object. Numbers come back as Int, Double or NSNumber depending on the platform's
-/// JSON reader, so every number goes through one helper (the `GameJSONValue` rule).
 enum GameProjectionJSON {
-    /// Parses a raw JSON document once; an empty or invalid document is an empty object.
+
     static func object(_ raw: String) -> [String: Any] {
         if raw.isEmpty || raw == "null" { return [:] }
         return GameJSONValue(rawJSON: raw).dictionaryValue ?? [:]
@@ -473,7 +447,6 @@ enum GameProjectionJSON {
         return result
     }
 
-    /// A `Record<string, number>` as entries sorted by key, so equal maps compare equal.
     static func counts(_ dict: [String: Any], _ key: String) -> [GameCountEntry] {
         guard let values = dict[key] as? [String: Any] else { return [] }
         var result: [GameCountEntry] = []
@@ -494,8 +467,6 @@ enum GameProjectionJSON {
         return result
     }
 
-    /// `{ id, name, score }` rows (trivia, bluff, reaction, zip `scoreboard`) or `{ playerId, playerName, score }`
-    /// (wordle and zip `scores`).
     static func scores(_ dict: [String: Any], _ key: String) -> [GameScoreEntry] {
         var result: [GameScoreEntry] = []
         for item in objects(dict, key) {
@@ -512,7 +483,7 @@ enum GameProjectionJSON {
 }
 
 enum GameProjectionParser {
-    /// One push: the public view (room) and the person's own player view (empty while none arrived).
+
     static func parse(gameId: String, publicPhase: String, publicViewJSON: String, playerViewJSON: String) -> GameProjection {
         let view = GameProjectionJSON.object(publicViewJSON)
         let mine = GameProjectionJSON.object(playerViewJSON)

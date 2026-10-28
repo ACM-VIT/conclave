@@ -1,10 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 L6-5 (ACT-2) on iOS: K10 TextEntry and K11 SecretCard.
-
-/// K10: one text field plus its submit button. The draft lives in the scene (view state), so a rejected submission
-/// keeps it (S60 9 f); the counter appears 20 characters before the limit.
 struct GameKitTextEntry: View {
     let label: String
     let placeholder: String
@@ -51,10 +47,6 @@ struct GameKitTextEntry: View {
     }
 }
 
-/// K11 (S60 Q7, 9 c): press and hold reveals; release or cancellation hides within one frame. While hidden the
-/// secret is not in the view hierarchy at all (not merely transparent), so it never reaches the accessibility tree.
-/// VoiceOver gets a "Reveal Word" action that reveals until focus leaves; the card hides again when the scene is not
-/// active. A drag that starts on the card never scrolls the scene.
 struct GameKitSecretCard: View {
     let prompt: String
     let secret: String

@@ -33,15 +33,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
-/*
- * ENT-6 (S10 10 d, e, g, i; 0.6 L5): the Android outcome screen, the `OutcomeKey` page above Home in the premeeting
- * NavDisplay (`[HomeKey, OutcomeKey]`, PremeetingBackStack), so Back shows the system predictive pop preview of Home
- * and lands there through NavDisplay's onBack (`performOutcomeAction(backHome)`); no root back handler. System
- * appearance: the variant's glyph, the title as a heading and the pane title, the body, the one coral primary
- * (primaryContainer with onPrimaryContainer) and a primary-colored text button for the secondary. It reads one
- * OutcomeModel; copy and glyphs come from OutcomeUi, never from the model.
- */
-
 @Composable
 internal fun OutcomeScreen(premeeting: PremeetingPresenter) {
     val outcome = premeeting.outcome ?: return
@@ -104,7 +95,6 @@ internal fun OutcomeScreen(premeeting: PremeetingPresenter) {
     }
 }
 
-/** S10 10 g resource names and glyphs per variant and action (Material sentence case). */
 internal object OutcomeUi {
     fun titleName(variant: OutcomeVariant): String = when (variant) {
         OutcomeVariant.removed -> "pm_removed_title"
@@ -114,7 +104,6 @@ internal object OutcomeUi {
         OutcomeVariant.rejoinFailed -> "pm_couldnt_rejoin"
     }
 
-    /** The body's resource name; "" shows the clean server sentence of a failed rejoin as is (S10 10 f). */
     fun bodyName(outcome: OutcomeModel): String = when (outcome.variant) {
         OutcomeVariant.removed -> "pm_removed_body"
         OutcomeVariant.denied -> "pm_denied_body"
@@ -131,7 +120,6 @@ internal object OutcomeUi {
         OutcomeAction.backHome, OutcomeAction.none -> "pm_back_home"
     }
 
-    /** Canonical outcome concepts (S10 R1). */
     fun icon(variant: OutcomeVariant): ImageVector = when (variant) {
         OutcomeVariant.removed -> ConclaveIcons.PersonRemoveFill0
         OutcomeVariant.denied -> ConclaveIcons.DoNotTouchFill0
@@ -139,6 +127,5 @@ internal object OutcomeUi {
         OutcomeVariant.serverDisconnected, OutcomeVariant.rejoinFailed -> ConclaveIcons.WarningFill1
     }
 
-    /** A host-provided reason in curly quotes (the host's own words, not a localized sentence). */
     fun quoted(detail: String): String = "“" + detail + "”"
 }

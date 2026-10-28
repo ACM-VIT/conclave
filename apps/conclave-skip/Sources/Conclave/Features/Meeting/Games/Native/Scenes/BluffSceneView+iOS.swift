@@ -1,12 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 9 c (ACT-3) on iOS, Bluff: write (K1 with the blanked fact, K2, K10 field with Submit; then "Submitted: %@" and
-// the submitted count), choose (K3 options, your own bluff disabled with "Your bluff"), reveal ("The truth" with the
-// success border and glyph; "Bluff by %@ · %lld votes"; "You picked this"; the round points as K9). The draft is view
-// state that survives pushes and is kept on a rejection; the composer stays until the submit's ack (S60 9 f) and the
-// draft clears only when the round changes.
-
 struct BluffSceneView: View {
     let scene: BluffScene
     let games: GameStagePresenter
@@ -41,7 +35,6 @@ struct BluffSceneView: View {
     }
 }
 
-/// K10 plus the submitted state; reads `interaction` for the pending submit.
 struct BluffComposer: View {
     let scene: BluffScene
     let games: GameStagePresenter
@@ -74,7 +67,6 @@ struct BluffComposer: View {
     }
 }
 
-/// K3 for the choose phase; tapping your current pick again sends nothing.
 struct BluffChoices: View {
     let scene: BluffScene
     let games: GameStagePresenter
@@ -95,7 +87,6 @@ struct BluffChoices: View {
     }
 }
 
-/// The reveal: every option read-only with its truth or author and votes, then the round points.
 struct BluffReveal: View {
     let scene: BluffScene
 

@@ -31,28 +31,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/*
- * Stage chrome (F00 C03; S20 SR3): the meeting capsule, round chrome buttons (Minimize, audio route, flip camera)
- * and the stage chip, floating over the dark stage. Android has no glass: every shape is the flat label scrim
- * (64%, 80% under high contrast with WP4) with a 1 dp border and onSurface content, 48 dp tall. Compose these
- * inside HostingTheme(inCall = true). The chip is the same flat shape on every platform and stays while chrome
- * hides. Insets (safeDrawing, captionBar on desktop windowing) belong to the stage top row (STG-4).
- */
-
 internal object ConclaveChromeMetrics {
-    /** Chrome button and capsule height (F00 6). */
+
     const val HEIGHT_DP = 48
-    /** The capsule never takes more than this share of the stage width (F00 C03 c). */
+
     const val CAPSULE_MAX_WIDTH_FRACTION = 0.6f
 }
 
-/**
- * The meeting capsule: one line, the title (ellipsis), with the lock glyph when locked and the captions glyph while
- * captions are on. Owner decision 2026-10-28: no visible subtitle (the two-line capsule read too heavy); the
- * subtitle (participant count or "{name} is presenting") stays the state description. One Button node;
- * description = title, state description = subtitle plus "Locked". [maxWidth] is 60% of the stage width from the
- * caller.
- */
 @Composable
 internal fun ConclaveMeetingCapsule(
     title: String, subtitle: String, identifier: String, onClick: () -> Unit, modifier: Modifier = Modifier,
@@ -83,10 +68,6 @@ internal fun ConclaveMeetingCapsule(
     }
 }
 
-/**
- * A round 48 dp chrome button on the label scrim: description names the action and [stateText] (route name,
- * "Front" or "Back") goes in the state description. Hidden by the caller while it does not apply.
- */
 @Composable
 internal fun ConclaveChromeButton(
     description: String, icon: ImageVector, identifier: String, onClick: () -> Unit, modifier: Modifier = Modifier,
@@ -111,17 +92,11 @@ internal fun ConclaveChromeButton(
     }
 }
 
-/** Minimize (top leading): enters PiP or moves the task back, never ends the call. The arrow auto-mirrors. */
 @Composable
 internal fun ConclaveMinimizeButton(onClick: () -> Unit, modifier: Modifier = Modifier, identifier: String = "chrome.minimize") {
     ConclaveChromeButton(conclaveString("ds_minimize_call"), ConclaveIcons.ArrowBackFill0, identifier, onClick, modifier)
 }
 
-/**
- * The audio route button (top trailing): the icon follows the S30 route kind raw value (speaker, receiver,
- * bluetooth, wired, usb, hearingAid, unknown), the state description is the route name, and it opens the route
- * sheet. Each known route uses its canonical glyph; unknown routes use the speaker glyph.
- */
 @Composable
 internal fun ConclaveRouteButton(
     routeKind: String, routeName: String, onClick: () -> Unit, modifier: Modifier = Modifier, identifier: String = "chrome.route",
@@ -130,8 +105,6 @@ internal fun ConclaveRouteButton(
         stateText = routeName)
 }
 
-/** Flip camera: "Flip camera", state "Front" or "Back"; hidden by the caller while the camera is off. The caller
- *  plays `selectionChanged` after a dispatched result (RECONCILE R13). */
 @Composable
 internal fun ConclaveFlipCameraButton(
     isFront: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, identifier: String = "chrome.flip",
@@ -141,7 +114,6 @@ internal fun ConclaveFlipCameraButton(
         stateText = state)
 }
 
-/** The route kind icons (S30 3 d), shared with AudioRouteList. */
 internal fun conclaveRouteIcon(kind: String): ImageVector = when (kind) {
     "receiver" -> ConclaveIcons.PhoneInTalkFill0
     "bluetooth" -> ConclaveIcons.BluetoothFill0
@@ -151,11 +123,6 @@ internal fun conclaveRouteIcon(kind: String): ImageVector = when (kind) {
     else -> ConclaveIcons.VolumeUpFill0
 }
 
-/**
- * The stage chip (S20 SR3): a compact flat capsule with an optional glyph and an optional trailing text action, for
- * Hand raised, Now playing, Share invite and the minimized self view. The chip text is one node ([onClick] makes it
- * a Button); the action is its own node in the in-call primary color (6.246 class on the scrim's dark result).
- */
 @Composable
 internal fun ConclaveStageChip(
     title: String, identifier: String, modifier: Modifier = Modifier, icon: ImageVector? = null, onClick: (() -> Unit)? = null,
@@ -183,8 +150,7 @@ internal fun ConclaveStageChip(
                     overflow = TextOverflow.Ellipsis)
             }
             if (actionTitle != null && onAction != null) {
-                // S20 7 i: the short visible action keeps its full label for TalkBack and Voice Access. `this.onClick`
-                // names the semantics action explicitly, so the chip's own `onClick` parameter never shadows it.
+
                 val description = actionDescription ?: actionTitle
                 TextButton(onClick = onAction, modifier = Modifier.heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp).testTag("$identifier.action")
                     .semantics { contentDescription = description; this.onClick(label = description) { onAction(); true } }) {

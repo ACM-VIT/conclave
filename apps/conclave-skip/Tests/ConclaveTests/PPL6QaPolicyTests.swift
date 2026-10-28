@@ -3,12 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// PPL-6 (OUT/PLAN-screens.md section 5): the Webinar Q&A panel. QaOrderingPolicy (PL9: Top, Recent, Mine; host sorts
-/// Top and Recent only; attendees never see dismissed questions; the host filter), the one unseen counter (PH7, D12,
-/// RECONCILE R18: zero while open, arrivals after close only, never a lifetime total), WebinarQAPresenter's dispatch
-/// through the one People ledger (submit, upvote, moderate, written answers), its failure placement and copy, the Q&A
-/// off close with the announcement, the needsRejoin state, the composer rules, and source pins for the iOS panel (OQ2
-/// composer, PL15 answer page) and the Kotlin page. The Kotlin half is T/Skip/PPL6QaBridgeTests.kt.
 @MainActor
 struct PPL6QaPolicyTests {
     private final class CommandLog {
@@ -62,19 +56,17 @@ struct PPL6QaPolicyTests {
         return (people, log)
     }
 
-    // MARK: PL9 ordering
-
     @Test func topPutsTheLiveQuestionFirstThenVotesThenAskedTime() {
         let questions = [model("a", upvotes: 4, asked: 2), model("b", status: .answering, upvotes: 1, asked: 5),
                          model("c", upvotes: 9, asked: 3), model("d", upvotes: 4, asked: 1)]
         #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .top, filter: .openQuestions) == ["b", "c", "d", "a"])
-        // Recent: the live question first, then the newest asked.
+
         #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .recent, filter: .openQuestions) == ["b", "c", "a", "d"])
     }
 
     @Test func attendeesNeverSeeDismissedAndMineIsOwnOnly() {
         let questions = [model("x", status: .dismissed, mine: true), model("y", asked: 2, mine: true), model("z", asked: 3)]
-        // Equal votes order by asked time; your dismissed question never shows (web parity).
+
         #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .top, filter: .openQuestions) == ["y", "z"])
         #expect(QaOrderingPolicy.orderedIds(questions, role: QaRole.attendee, sort: .mine, filter: .openQuestions) == ["y"])
     }
@@ -93,21 +85,19 @@ struct PPL6QaPolicyTests {
         #expect(QaOrderingPolicy.leadingSwipe(.answering) == "answered")
     }
 
-    // MARK: R18 one unseen counter
-
     @Test func theUnseenCounterCountsOnlyArrivalsAfterTheMarker() {
-        // Attendee: a question counts the first time it is published; answering then answered is one.
+
         #expect(QaUnseenPolicy.counts(role: QaRole.attendee, previousStatus: "pending", nextStatus: "answering", isMine: false,
                                       isPanelOpen: false))
         #expect(!QaUnseenPolicy.counts(role: QaRole.attendee, previousStatus: "answering", nextStatus: "answered", isMine: false,
                                        isPanelOpen: false))
         #expect(!QaUnseenPolicy.counts(role: QaRole.attendee, previousStatus: "", nextStatus: "pending", isMine: true,
                                        isPanelOpen: false))
-        // Host: a new pending question counts; a status change does not.
+
         #expect(QaUnseenPolicy.counts(role: QaRole.host, previousStatus: "", nextStatus: "pending", isMine: false, isPanelOpen: false))
         #expect(!QaUnseenPolicy.counts(role: QaRole.host, previousStatus: "pending", nextStatus: "answering", isMine: false,
                                        isPanelOpen: false))
-        // While the panel is open nothing counts (D12, web PPL-34).
+
         #expect(!QaUnseenPolicy.counts(role: QaRole.host, previousStatus: "", nextStatus: "pending", isMine: false, isPanelOpen: true))
         var ids = QaUnseenPolicy.counted([], id: "q1", counts: true)
         ids = QaUnseenPolicy.counted(ids, id: "q1", counts: true)
@@ -117,8 +107,6 @@ struct PPL6QaPolicyTests {
         #expect(QaUnseenPolicy.derived(role: QaRole.host, isQaEnabled: false, attendeeCount: 2, hostCount: 5) == 0)
         #expect(QaUnseenPolicy.role(isWebinarAttendee: false, isAdmin: false) == QaRole.none)
     }
-
-    // MARK: WebinarQAPresenter
 
     @Test func theAttendeeSnapshotOrdersAndHidesDismissed() {
         let (people, _) = qaPeople(role: QaRole.attendee)
@@ -154,7 +142,7 @@ struct PPL6QaPolicyTests {
         people.qa.submit("A longer question")
         people.finish(try #require(log.tickets.first), HostActionResult.failed(.rateLimited))
         let failure = people.lastFailure
-        // Not swallowed for a non-host viewer (Q&A is not a host action).
+
         #expect(failure?.sourceKey == QaFieldID.composer)
         #expect(failure?.placement == HostFailurePlacement.panelInline.rawValue)
         #expect(PeopleFailureCopy.kind(action: failure?.action ?? "", failure: failure?.failure ?? "",
@@ -200,15 +188,14 @@ struct PPL6QaPolicyTests {
         let (people, log) = qaPeople(role: QaRole.host)
         let qa = people.qa
         #expect(qa.snapshot.availableSorts == ["top", "recent"])
-        // Open is pending or answering (S50 11 c, QaStatus.isOpen): q1 answering plus q2 and q3 pending; q4 answered;
-        // q5 dismissed.
+
         #expect(qa.snapshot.counts == [3, 1, 1])
         #expect(qa.toggleUpvote(id: "q2") == .ignored)
         #expect(qa.perform(hostAction: QaModerationAction.answering, id: "q2") == .dispatched)
         #expect(log.commands.last?.kind == .qaModerate && log.commands.last?.detail == "answering")
-        // One action per question at a time.
+
         #expect(qa.perform(hostAction: QaModerationAction.dismissed, id: "q2") == .ignored)
-        // Reopen is not offered for an open question.
+
         #expect(qa.perform(hostAction: QaModerationAction.reopen, id: "q1") == .ignored)
         #expect(qa.moderate(id: "q1", action: .answered, reopen: false, answerText: String(repeating: "a", count: 1001)) == .ignored)
         qa.drafts.answers["q1"] = "In the chat after the session."
@@ -259,8 +246,6 @@ struct PPL6QaPolicyTests {
         #expect(!QaComposerPolicy.canPostAnswer(String(repeating: "a", count: 1001), isPending: false))
         #expect(QaComposerPolicy.showsQuestionCounter(450) && !QaComposerPolicy.showsQuestionCounter(449))
     }
-
-    // MARK: Source pins
 
     @Test func thePlatformPanelsFollowTheSpec() throws {
         let panel = try ppl6Source("Sources/Conclave/Features/Meeting/Webinar/QaPanel+iOS.swift")

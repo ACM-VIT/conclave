@@ -26,33 +26,17 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import skip.ui.UIApplication
 
-/*
- * S20 10 d (STG-5, SL10; RECONCILE R1, R3): the Android notice lanes in the stage Box. The banner lane sits under the
- * top chrome slot (and under the status chips while they show), the dark stage-lane snackbar above the toolbar, and the
- * captions strip (SL11) between them, above the snackbar. Each lane reads only its own presenter property (banner,
- * toast, captionsActive) plus the cold noticeGeometry, whose values come from the reserved viewport insets, so the lanes
- * never move tiles and stay put while chrome hides. Banners use F00 C12 (ConclaveBanner, polite live region); toasts use
- * F00 C13 (ConclaveToastHost: one stock SnackbarHost with the dark slot, in-call surfaceContainerHigh #232327, onSurface,
- * primary action, a 1 dp extended border; it shows only stage.toast, never shows a second snackbar while one is
- * visible, lets the host stretch durations for accessibility and hands the result back through dismissNotice). No haptics.
- */
-
 private object NoticeLaneDefaults {
-    /** The status chips row under the top row: one 48 dp chip plus the 8 dp gap. */
+
     const val CHIP_ROW_DP = 56.0
     const val TOAST_GAP_DP = 8
     const val MAX_TOAST_WIDTH_DP = 560
 }
 
-/** A plain holder written during composition, so a banner keeps drawing while its exit motion runs. */
 private class RetainedNotice {
     var notice: MeetingNotice? = null
 }
 
-/**
- * The layer the call root mounts after the chrome. On the live route it installs the notice sound output and removes it
- * when the root leaves; the fixture's probes never install it (no audio in a silent run).
- */
 @Composable
 internal fun NoticeLanes(stage: StagePresenter, forceScreenReader: Boolean, installsSound: Boolean, modifier: Modifier = Modifier) {
     DisposableEffect(stage, installsSound) {
@@ -70,7 +54,6 @@ internal fun NoticeLanes(stage: StagePresenter, forceScreenReader: Boolean, inst
     }
 }
 
-/** Banner lane: reads stage.banner and the cold geometry only. */
 @Composable
 private fun NoticeBannerLane(stage: StagePresenter) {
     val geometry = stage.noticeGeometry
@@ -84,7 +67,6 @@ private fun NoticeBannerLane(stage: StagePresenter) {
     }
 }
 
-/** The one banner. Long host notices expand in place; the catch-up banner is itself a button (S20 10 f row 13). */
 @Composable
 private fun NoticeBanner(stage: StagePresenter, notice: MeetingNotice) {
     val context = LocalContext.current
@@ -122,7 +104,6 @@ private fun NoticeBanner(stage: StagePresenter, notice: MeetingNotice) {
     )
 }
 
-/** The bottom column: the captions strip above the snackbar, above the toolbar, clear of a bottom-corner self view. */
 @Composable
 private fun NoticeBottomLanes(stage: StagePresenter) {
     val geometry = stage.noticeGeometry
@@ -137,11 +118,6 @@ private fun NoticeBottomLanes(stage: StagePresenter) {
     }
 }
 
-/**
- * Toast lane: reads stage.toast only; the hosts time the snackbar and report the result. CHT-8 (S40 8 d): a chat preview
- * draws the chat variant (ChatPreviewSnackbar.kt, its own swipe and View action); every other kind keeps the F00 C13 slot.
- * Both hosts stay composed so each runs its own exit motion; the presenter shows one toast at a time.
- */
 @Composable
 private fun NoticeToastLane(stage: StagePresenter, modifier: Modifier) {
     val notice = stage.toast
@@ -157,9 +133,8 @@ private fun NoticeToastLane(stage: StagePresenter, modifier: Modifier) {
     }
 }
 
-/** Open settings from a banner: the Wi-Fi panel for a captive portal (API 29+, else Wi-Fi settings), else the app page. */
 private fun openNoticeSettings(context: Context, notice: MeetingNotice) {
-    // SYS-8 (S70 8 d, HD request B5-T4 R18c): Settings never suppresses PiP auto-enter; the call stays visible over it.
+
     if (notice.kind == NoticeKind.captivePortal) {
         val intent = if (Build.VERSION.SDK_INT >= 29) Intent(Settings.Panel.ACTION_WIFI) else Intent(Settings.ACTION_WIFI_SETTINGS)
         val activity = UIApplication.shared.androidActivity
@@ -182,7 +157,6 @@ internal fun noticeBannerKind(notice: MeetingNotice): ConclaveBannerKind = when 
     else -> ConclaveBannerKind.Info
 }
 
-/** Banner copy (S20 10 g; S70 2 g, 5 g, 6 g; S30 4 g): sentence case on Android. */
 @Composable
 internal fun noticeBannerText(notice: MeetingNotice): String = when (notice.kind) {
     NoticeKind.offline -> conclaveString("stg_banner_offline")
@@ -212,7 +186,6 @@ internal fun noticeBannerText(notice: MeetingNotice): String = when (notice.kind
     else -> ""
 }
 
-/** Action titles in stock Material casing; "Retry" and "View" never in capitals (S70 R70-12). */
 @Composable
 internal fun noticeActionTitle(actionId: String, notice: MeetingNotice, expanded: Boolean): String = when (actionId) {
     NoticeAction.view -> conclaveString("ds_view")
@@ -235,7 +208,6 @@ internal fun noticeActionTitle(actionId: String, notice: MeetingNotice, expanded
     else -> ""
 }
 
-/** The toast as the host draws it; chat previews and raised hands carry the 24 dp avatar row. */
 @Composable
 internal fun noticeToastItem(notice: MeetingNotice): ConclaveToastItem {
     val first = if (notice.actions.count == 0) null else notice.actions[0]
@@ -252,7 +224,6 @@ internal fun noticeToastItem(notice: MeetingNotice): ConclaveToastItem {
     )
 }
 
-/** Toast copy (S20 10 g; S70 5 g, 6 g, 7 g; S30 4 g, 3 g). */
 @Composable
 internal fun noticeToastMessage(notice: MeetingNotice): String = when (notice.kind) {
     NoticeKind.joined -> if (notice.count > 1) conclavePlural("stg_toast_joined_many", notice.count - 1, notice.name, notice.count - 1)
@@ -273,8 +244,7 @@ internal fun noticeToastMessage(notice: MeetingNotice): String = when (notice.ki
     NoticeKind.resumedMuted -> conclaveString("stg_toast_resumed_muted")
     NoticeKind.qualityLowered -> conclaveString("stg_toast_quality_lowered")
     NoticeKind.chatPreview -> {
-        // The S40 chat variant (title line, private tag, count line) arrives with the chat slices; until then the dark
-        // snackbar shows the sender (or the F00 grouping) and the newest text.
+
         val title = if (notice.senderCount > 1) conclavePlural("ds_name_and_others", notice.senderCount - 1, notice.name, notice.senderCount - 1)
             else notice.name
         if (notice.detail.isEmpty()) title else title + ": " + notice.detail
@@ -284,12 +254,12 @@ internal fun noticeToastMessage(notice: MeetingNotice): String = when (notice.ki
     NoticeKind.routeFailed -> conclaveString("ctl_toast_route_failed")
     NoticeKind.lockFailed -> conclaveString("ctl_toast_lock_failed")
     NoticeKind.linkCopied -> conclaveString("ds_link_copied")
-    // S50 PL14: a tile-menu People failure ("Couldn't mute Avery Lee." and the typed reasons, S50 3 g).
+
     PeopleFailurePlacementPolicy.stageNoticeKind -> peopleStageToastMessage(notice)
-    // S30 CC7 (CTL-1, HD request B4-T6 R4): the controls' explanation table names the blocked control's reason.
+
     NoticeKind.blockedExplanation ->
         ControlBarPolicy.explanation(fromNotice = notice)?.let { callControlToast(it) } ?: conclaveString("stg_toast_failed_generic")
-    // S70 10 g (SYS-10): sys_share_failed, or sys_err_screen_denied for deniedBySystem.
+
     NoticeKind.shareFailed -> conclaveString(ScreenShareFailurePolicy.androidResourceName(detail = notice.detail))
     else -> conclaveString("stg_toast_failed_generic")
 }

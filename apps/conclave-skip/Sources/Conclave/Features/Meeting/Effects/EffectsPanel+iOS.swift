@@ -3,25 +3,15 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-// S60 4 c (SET-6) on iOS: `MeetingPanel.effects`, always dark (owner default Q8 6, D19; `PanelShell` scopes the scheme),
-// detents `[.short, .large]` opening short with background interaction up through the content-measured short height
-// (RECONCILE R9, S60 R6-10; the PNL-1 sheet host maps `.short` to `.height`), large at accessibility sizes. While it
-// shows, the stage lifts the floating self view above the sheet (R6-6, `EffectsSelfViewPolicy`), so the person sees the
-// real sent video and the sheet adds no preview renderer (4 k). Short: the segmented tabs over one horizontal row of
-// tiles; large: the active effects with Remove All Effects, the sectioned grid (Blur, Backgrounds, Personal with Add
-// Photo), the Appearance list that defers to the iOS system effects (C6-21, D22) and the publish-cap footer. Hidden
-// until an engine publishes `.panel` (OQ6 default A): the call root mounts it, but nothing in production opens it.
-// `EffectsLobbySheet` presents the same content over the lobby (RECONCILE R31).
-
 enum EffectsLayoutMetrics {
-    /// The inline navigation bar the short detent adds to the measured content (4 c: 52 pt).
+
     static let navigationBar = 52.0
     static let tileSpacing: CGFloat = 12
     static let gridMinimum: CGFloat = 72
 }
 
 enum EffectsTaskLifetime {
-    /// Suspends until the enclosing task is cancelled (the view left the hierarchy).
+
     static func waitForCancellation() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(60))
@@ -52,9 +42,6 @@ struct EffectsPanel: View {
     }
 }
 
-/// RECONCILE R31, S60 4 a: the Effects content as a dark sheet over the lobby, `[.short, .large]` opening short with
-/// background interaction, so the lobby preview card stays visible; choices apply to the lobby preview through the one
-/// `LocalPreviewController` and persist into the call. The lobby presents it (HD request B7-T2 R7).
 struct EffectsLobbySheet: View {
     let effects: EffectsPresenter
     let onClose: () -> Void
@@ -92,8 +79,6 @@ struct EffectsLobbySheet: View {
     }
 }
 
-/// The shared body: reads only `effects.snapshot` (4 k). Tile choices play `selectionChanged` through the gesture
-/// route only when the presenter dispatched them (tiles are custom buttons, 4 e, h).
 struct EffectsContent: View {
     let effects: EffectsPresenter
     let usesShortLayout: Bool
@@ -122,8 +107,6 @@ struct EffectsContent: View {
         }
     }
 
-    // MARK: Layouts
-
     private func shortLayout(_ snapshot: EffectsSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             EffectsStatusRows(effects: effects, snapshot: snapshot)
@@ -143,7 +126,7 @@ struct EffectsContent: View {
             }
         }
         .padding(.vertical, 12)
-        // The intrinsic height, measured before the frame fills the sheet (4 c: 222 pt at the default text size).
+
         .onGeometryChange(for: Double.self) { proxy in Double(proxy.size.height) } action: { height in
             reportShortHeight(min(height, 600) + EffectsLayoutMetrics.navigationBar)
         }
@@ -270,15 +253,11 @@ struct EffectsContent: View {
         }
     }
 
-    // MARK: Personal images (4 j)
-
     private func removePersonal(_ item: EffectItem) {
         effects.removePersonalImage(id: item.id)
         EffectsPhotoStore.remove(fileName: item.assetName)
     }
 
-    /// Loads the picked item (HEIC arrives as JPEG with the compatible encoding), stores it off the main actor and
-    /// tells the presenter; a replacement removes the old image only after the new one stored.
     private func importPhoto(_ item: PhotosPickerItem) {
         let replacing = replacingId
         replacingId = ""
@@ -305,7 +284,6 @@ struct EffectsContent: View {
     }
 }
 
-/// The camera, preparing and issue rows above the tabs (4 c, f).
 private struct EffectsStatusRows: View {
     let effects: EffectsPresenter
     let snapshot: EffectsSnapshot
@@ -377,7 +355,6 @@ private struct EffectsStatusRows: View {
     }
 }
 
-/// The active effects with their Remove buttons and Remove All Effects (large detent, more than one active, 4 c).
 private struct EffectsActiveSection: View {
     let effects: EffectsPresenter
     let snapshot: EffectsSnapshot
@@ -419,9 +396,6 @@ private struct EffectsActiveSection: View {
     }
 }
 
-/// The Appearance tab (4 c, C6-21): system effects first wherever the active camera supports them (Center Stage as the
-/// Framing switch, Studio Light as a read-only value), the app's own rows only where they are unavailable, Studio Look
-/// always app-owned, and "Video Effects…" for the system module (S30 CC11).
 private struct EffectsAppearanceList: View {
     let effects: EffectsPresenter
     let snapshot: EffectsSnapshot

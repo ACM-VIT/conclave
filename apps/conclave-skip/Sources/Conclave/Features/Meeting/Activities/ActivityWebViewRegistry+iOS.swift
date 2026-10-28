@@ -4,37 +4,19 @@ import SwiftUI
 import UIKit
 import WebKit
 
-// S60 L6-15 and 13 c (ACT-7) on iOS: the platform registry of web engines for activity bodies, never transpiled. Keyed
-// by `appSessionId`, it creates the one `WKWebView` on the first host appearance for that id and releases it when the
-// shared session publishes ended (`ActiveAppSession.onBridgeEnded`) or a Try Again replaces it, so Show Video, panels,
-// rotation, size-class changes, PiP and background or resume never recreate it (`app.registrySerial` and `app.reloads`
-// readouts, L6-12). The host view only attaches and detaches the registered instance.
-//
-// Isolation (D14, C6-19): `WKWebsiteDataStore.nonPersistent()`; content only from the bundled, versioned embed served
-// by `NativeEmbedSchemeHandler` at `conclave-embed://app/` (never the meeting website, never the network: the page's
-// CSP sets connect-src 'none' and the scheme handler adds the same header); one `WKScriptMessageHandler` named
-// `conclaveApp` whose messages go through `ActiveAppSession.receiveFromEmbed` (origin, frame, size, version, type,
-// session ids, request id, payload); navigations outside the bundle origin are cancelled and a user-initiated link
-// asks "Open This Link in Safari?" first; a dead content process moves the card to the failure state.
-
 @MainActor
 @Observable
 final class ActivityWebViewRegistry {
     static let shared = ActivityWebViewRegistry()
 
-    /// Web views created (L6-12 `app.registrySerial`) and recreations for Try Again (`app.reloads`). Written after the
-    /// view update that created the web view, never during it.
     private(set) var registrySerial = 0
     private(set) var reloads = 0
-    /// A user-initiated link from the embed waiting for the confirmation (S40 link policy).
+
     private(set) var pendingExternalURL: URL? = nil
 
     @ObservationIgnored private var entries: [String: ActivityWebViewEntry] = [:]
     @ObservationIgnored private let schemeHandler = NativeEmbedSchemeHandler()
 
-    /// The registered web view for the host's current app session, created on first use. Nil when the host must not
-    /// hold one (failure states, no embed for the app) or the bundle is missing (the session then reports a load
-    /// failure).
     func webView(for model: AppHostModel, session: ActiveAppSession) -> WKWebView? {
         let id = model.appSessionId
         if !model.wantsWebView || id.isEmpty || id != session.appSessionId { return nil }
@@ -49,7 +31,11 @@ final class ActivityWebViewRegistry {
         guard let bundleURL = URL(string: AppBridgeProtocol.iosEntryURL(appId: model.appId, callSessionId: session.callSessionId,
                                                                          appSessionId: id)),
               NativeEmbedSchemeHandler.resourceURL(path: "/" + AppBridgeProtocol.entryFile(appId: model.appId)) != nil else {
-            DispatchQueue.main.async { session.embedFailed(appSessionId: id, issue: AppHostIssue.loadFailed) }
+            let mount = session.bridgeGeneration
+            DispatchQueue.main.async { [weak self, weak session] in
+                guard let self, let session, self.entries[id] == nil, session.bridgeGeneration == mount else { return }
+                session.embedFailed(appSessionId: id, issue: AppHostIssue.loadFailed, mount: mount)
+            }
             return nil
         }
         let entry = makeEntry(appSessionId: id, appId: model.appId, reloadSerial: model.reloadSerial, session: session)
@@ -59,20 +45,22 @@ final class ActivityWebViewRegistry {
             self?.release(appSessionId: endedId)
         }
         let webView = entry.webView
-        // Attaching emits the session's `loadStarted` (the presenter publishes), so it runs after this view update.
+
         DispatchQueue.main.async { [weak self, weak session] in
             guard let self = self, let session = session, self.entries[id] === entry else { return }
-            session.attachBridge(appSessionId: id) { [weak webView] json in
+            let attached = session.attachBridge(appSessionId: id) { [weak webView] json in
                 webView?.callAsyncJavaScript("if (window.conclaveNativeEmbed) { window.conclaveNativeEmbed.receive(message); }",
                                              arguments: ["message": json], in: nil, in: .page, completionHandler: nil)
             }
+            guard attached else { return }
+            entry.scriptHandler.mount = session.bridgeGeneration
+            entry.delegate.mount = session.bridgeGeneration
             webView.load(URLRequest(url: bundleURL))
             self.registrySerial += 1
         }
         return webView
     }
 
-    /// Tears the web view down (stops loading, removes the message handler, detaches the bridge).
     func release(appSessionId id: String) {
         guard let entry = entries.removeValue(forKey: id) else { return }
         entry.webView.stopLoading()
@@ -81,7 +69,9 @@ final class ActivityWebViewRegistry {
         entry.webView.configuration.userContentController.removeScriptMessageHandler(forName: AppBridgeProtocol.handlerName,
                                                                                     contentWorld: .page)
         entry.webView.removeFromSuperview()
-        entry.session?.detachBridge(appSessionId: id)
+        if entry.scriptHandler.mount != 0 {
+            entry.session?.detachBridge(appSessionId: id, mount: entry.scriptHandler.mount)
+        }
     }
 
     func hasWebView(appSessionId id: String) -> Bool {
@@ -99,9 +89,7 @@ final class ActivityWebViewRegistry {
     private func makeEntry(appSessionId id: String, appId: String, reloadSerial: Int, session: ActiveAppSession) -> ActivityWebViewEntry {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore.nonPersistent()
-        // ACT-8: Watch Together plays inline and follows the room's playback, and the Wheel's spin sounds follow the
-        // native Spin tap, without a tap inside the page (the YouTube player's own play button stays the prompt when
-        // WebKit still blocks it). The Whiteboard keeps the default.
+
         configuration.allowsInlineMediaPlayback = true
         if AppEmbedFramePolicy.playsMediaWithoutTap(appId: appId) { configuration.mediaTypesRequiringUserActionForPlayback = [] }
         configuration.setURLSchemeHandler(schemeHandler, forURLScheme: AppBridgeProtocol.iosScheme)
@@ -132,7 +120,7 @@ final class ActivityWebViewRegistry {
 @MainActor
 final class ActivityWebViewEntry {
     let webView: WKWebView
-    /// Held here because `WKWebView.navigationDelegate` and `uiDelegate` are weak.
+
     let delegate: NativeEmbedNavigationDelegate
     let scriptHandler: NativeEmbedScriptHandler
     let reloadSerial: Int
@@ -148,8 +136,6 @@ final class ActivityWebViewEntry {
     }
 }
 
-/// Serves the bundled embed (`Resources/native-embed-<app>.html`, built by `pnpm -C packages/apps-sdk run
-/// build:native-embed`) at `conclave-embed://app/<app>.html`. Anything else fails.
 @MainActor
 final class NativeEmbedSchemeHandler: NSObject, WKURLSchemeHandler {
     static func resourceURL(path: String) -> URL? {
@@ -163,7 +149,6 @@ final class NativeEmbedSchemeHandler: NSObject, WKURLSchemeHandler {
         return Bundle.module.url(forResource: name, withExtension: "html")
     }
 
-    /// ACT-8: the page's `frame-src` (only Watch Together frames the YouTube player, `AppEmbedFramePolicy`).
     static func frameSource(path: String) -> String {
         let file = path.hasPrefix("/") ? String(path.dropFirst()) : path
         for candidate in ["whiteboard", "wheel", "watch"] where AppBridgeProtocol.entryFile(appId: candidate) == file {
@@ -194,10 +179,9 @@ final class NativeEmbedSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
 }
 
-/// The one `conclaveApp` handler. It forwards the raw body with the sender's origin and frame; the shared session
-/// validates everything (a non-string body arrives as "" and is refused as malformed).
 @MainActor
 final class NativeEmbedScriptHandler: NSObject, WKScriptMessageHandler {
+    var mount = 0
     private weak var session: ActiveAppSession?
 
     init(session: ActiveAppSession) {
@@ -205,19 +189,18 @@ final class NativeEmbedScriptHandler: NSObject, WKScriptMessageHandler {
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let session = session else { return }
+        guard let session = session, mount != 0 else { return }
         let origin = message.frameInfo.securityOrigin
         var originText = origin.protocol + "://" + origin.host
         if origin.port > 0 { originText += ":" + String(origin.port) }
         let raw = message.body as? String ?? ""
-        session.receiveFromEmbed(raw: raw, origin: originText, isMainFrame: message.frameInfo.isMainFrame)
+        session.receiveFromEmbed(raw: raw, origin: originText, isMainFrame: message.frameInfo.isMainFrame, mount: mount)
     }
 }
 
-/// Navigation and window policy: only the bundle origin loads; a user link asks first; failures before `ready` and a
-/// dead content process move the card to "Couldn't Open" (the call continues).
 @MainActor
 final class NativeEmbedNavigationDelegate: NSObject, WKNavigationDelegate, WKUIDelegate {
+    var mount = 0
     let appSessionId: String
     private weak var session: ActiveAppSession?
     private weak var registry: ActivityWebViewRegistry?
@@ -234,7 +217,7 @@ final class NativeEmbedNavigationDelegate: NSObject, WKNavigationDelegate, WKUID
         if isMainFrame && AppBridgeProtocol.isBundleURL(target, origin: AppBridgeProtocol.iosOrigin) {
             return .allow
         }
-        // ACT-8: Watch Together's YouTube player frame (nothing else may load in a subframe).
+
         if !isMainFrame && navigationAction.targetFrame != nil
             && AppEmbedFramePolicy.allowsSubframe(appId: session?.appId ?? "", url: target) {
             return .allow
@@ -258,7 +241,8 @@ final class NativeEmbedNavigationDelegate: NSObject, WKNavigationDelegate, WKUID
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        session?.embedFailed(appSessionId: appSessionId, issue: AppHostIssue.rendererGone)
+        guard mount != 0 else { return }
+        session?.embedFailed(appSessionId: appSessionId, issue: AppHostIssue.rendererGone, mount: mount)
     }
 
     private func offerExternalLink(navigationAction: WKNavigationAction, target: String) {
@@ -269,11 +253,11 @@ final class NativeEmbedNavigationDelegate: NSObject, WKNavigationDelegate, WKUID
 
     private func failIfLoading(_ error: Error) {
         let nsError = error as NSError
-        // A navigation this delegate cancelled is not a load failure.
+
         if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return }
         if nsError.domain == "WebKitErrorDomain" && nsError.code == 102 { return }
-        guard let session = session, !session.embedReady else { return }
-        session.embedFailed(appSessionId: appSessionId, issue: AppHostIssue.loadFailed)
+        guard let session = session, mount != 0, !session.embedReady else { return }
+        session.embedFailed(appSessionId: appSessionId, issue: AppHostIssue.loadFailed, mount: mount)
     }
 }
 #endif

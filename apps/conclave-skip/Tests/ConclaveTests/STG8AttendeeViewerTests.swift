@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// STG-8 (OUT/PLAN-screens.md section 5; S20 12 l, 0.5 `AttendeeViewerSnapshot`, SC22; S30 0.6; RECONCILE R18, R30,
-/// R44): the attendee fixtures (waiting with 128 people, live camera, live share with the inset, two unseen answers), the
-/// program feed keeping its renderer when a share starts, no grid or captions for attendees, the hand capability hidden
-/// until PPL-5, the capsule (webinar title and "Live") opening Webinar Details, the live and demotion announcements, the
-/// auto-hide rule and the view sources. The Kotlin twin with the same fixtures is T/Skip/STG6STG8BridgeTests.kt.
 @MainActor
 struct STG8AttendeeViewerTests {
     static let longSleep: (Double) async -> Void = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
@@ -28,8 +23,6 @@ struct STG8AttendeeViewerTests {
         }
         return result
     }
-
-    // MARK: Fixtures (S20 12 l)
 
     @Test func waitingFixtureShowsTheTitleAndCountWithNoFeed() throws {
         let session = StageFixtureSession(state: .attendeeWaiting128)
@@ -62,7 +55,7 @@ struct STG8AttendeeViewerTests {
         stage.apply(camera)
         #expect(slotSummary(stage) == ["p:r1/programFeed/fill"])
         let binding = stage.bindings.binding(for: "p:r1")
-        // Avery starts sharing: the camera keeps its "p:" slot (now the inset), so its renderer is not recreated.
+
         var rows: [StageParticipantInput] = []
         for participant in camera.participants {
             if participant.userId == "r1" {
@@ -76,7 +69,7 @@ struct STG8AttendeeViewerTests {
         stage.apply(StageFixtureScript.copy(camera, participants: rows, screenShareUserId: "r1"))
         #expect(slotSummary(stage) == ["share:r1/programFeed/fit", "p:r1/speakerInset/fill"])
         #expect(stage.bindings.binding(for: "p:r1") === binding && binding.videoKey == "probe:r1")
-        // A per-session fit override on the feed wins (SC4).
+
         stage.setSlotFit(.fill, slotId: "share:r1")
         #expect(slotSummary(stage).first == "share:r1/programFeed/fill")
     }
@@ -100,12 +93,12 @@ struct STG8AttendeeViewerTests {
         let viewer = try #require(StageFixtureSession(state: .attendeeQaUnseen2).stage.attendee)
         #expect(viewer.qaEnabled && viewer.webinarQaUnseen == 2)
         #expect(!viewer.canRaiseHand, "the attendee hand stays hidden until PPL-5 (S20 Q10)")
-        // Q&A off reads no unseen count.
+
         let off = AttendeeViewerPolicy.snapshot(inputs: StageFixtureScript.inputs(for: .attendeeQaUnseen2),
                                                 details: StageDetailsInputs.make(callSession: 1, webinarQaUnseen: 2),
                                                 feed: AttendeeFeed.none, hand: .lowered)
         #expect(!off.qaEnabled && off.webinarQaUnseen == 0)
-        // The S30 attendee composition (CTL-1): Raise Hand only with the capability, Q&A with the badge, Leave last.
+
         #expect(ControlBarPolicy.order(.attendee) == [.hand, .qa, .leave])
         let controls = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Controls/ControlBarPolicy.swift"))
         #expect(controls.contains("guard inputs.attendeeCanRaiseHand else { return nil }"))
@@ -121,7 +114,7 @@ struct STG8AttendeeViewerTests {
         let info = try #require(session.stage.meetingInfo)
         #expect(info.isAttendee && MeetingInfoPolicy.rowIds(info).last == "settings")
         #expect(session.panelReadout() == "panel=meetingInfo invoker=call destination=none")
-        // An empty landing title stays empty in the model; the views show the "Webinar" fallback (SC22).
+
         let stage = presenter()
         stage.apply(StageFixtureScript.inputs(for: .attendeeLive))
         #expect(stage.capsule.title.isEmpty && stage.attendee?.title == "")
@@ -137,7 +130,7 @@ struct STG8AttendeeViewerTests {
         stage.apply(live)
         let liveCount = stage.announcementLog.filter { $0.hasPrefix(AttendeeViewerPolicy.webinarLiveAnnouncement + ":") }.count
         #expect(liveCount == 1)
-        // Moved to the audience inside the call: announced once; joining as an attendee is not a demotion.
+
         let demoted = presenter()
         demoted.apply(StageFixtureScript.base(count: 3))
         demoted.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 3), isWebinarAttendee: true))
@@ -170,13 +163,11 @@ struct STG8AttendeeViewerTests {
         #expect(AttendeeViewerPolicy.feed(cameraOnly) == AttendeeFeed(userId: "r2", isShare: false, insetUserId: ""))
         let speaker = StageFixtureScript.copy(cameraOnly, webinarSpeakerUserId: "r1")
         #expect(AttendeeViewerPolicy.feed(speaker).userId == "r1")
-        // A share with the presenter's camera off has no inset.
+
         let share = StageFixtureScript.copy(speaker, screenShareUserId: "r1")
         #expect(AttendeeViewerPolicy.feed(share) == AttendeeFeed(userId: "r1", isShare: true, insetUserId: ""))
         #expect(AttendeeViewerPolicy.kind(AttendeeFeed.none) == .attendeeWaiting)
     }
-
-    // MARK: Sources
 
     @Test func attendeeViewerSourcesStayInTheInCallTheme() throws {
         let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/AttendeeViewer+iOS.swift"))

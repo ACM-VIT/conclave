@@ -1,10 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 L6-5 (ACT-2) on iOS: K6 PlayerChips, K7 HostBar, K8 Scoreboard and K9 RoundResults.
-
-/// K6: non-interactive chips (24 pt avatar plus name) in an adaptive grid that reflows to fewer columns at large text.
-/// The container reads "6 players"; queued people show "next round"; a check marks who acted (never what).
 struct GameKitPlayerChips: View {
     let players: [GamePlayerModel]
     let pending: [GamePlayerModel]
@@ -54,8 +50,6 @@ struct GameKitPlayerChip: View {
     }
 }
 
-/// K7: a secondary (neutral bordered) and a primary (coral fill, in-call onCoral ink, never white) side by side,
-/// stacked when they do not fit (`ViewThatFits`, Dynamic Type).
 struct GameKitHostBar: View {
     let primaryTitle: String
     var primaryEnabled: Bool = true
@@ -103,7 +97,6 @@ struct GameKitHostBar: View {
     }
 }
 
-/// K8: ranked rows; the leader row sits on the raised surface with a text twin (never coral text on a raised fill).
 struct GameKitScoreboard: View {
     let rows: [GameScoreboardRow]
 
@@ -140,7 +133,6 @@ struct GameKitScoreboard: View {
     }
 }
 
-/// K9: one ranked round ("312 ms", "too soon", "no tap"); muted rows read secondary.
 struct GameKitRoundResults: View {
     let rows: [GameKitRoundRow]
 

@@ -10,16 +10,13 @@ private typealias AppDelegate = ConclaveAppDelegate
 
     var body: some Scene {
         WindowGroup {
-            // S20 SC14 (IOS 20.3): resizable iPad windows stop shrinking where the compact call bar still fits every
-            // control at its 44 pt floor (Conclave's `ConclaveWindowMetrics`, from CompactBarFit). iPhones are always
-            // wider, so this never constrains one.
+
             AppRootView()
                 .frame(minWidth: CGFloat(ConclaveWindowMetrics.minimumWidth), maxWidth: .infinity, maxHeight: .infinity)
         }
         .windowResizability(.contentMinSize)
         #if os(iOS)
-        // S30 CC20, CL21 (CTL-5): the "Call" hardware keyboard commands (Conclave's `ConclaveCallCommands`); they read
-        // the call's controls presenter through the focused scene value, so the menu is empty outside a call.
+
         .commands { ConclaveCallCommands() }
         #endif
         .onChange(of: scenePhase) { oldPhase, newPhase in

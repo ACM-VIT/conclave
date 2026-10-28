@@ -3,8 +3,6 @@ import SwiftUI
 import UIKit
 import Darwin
 
-// Compile with the six real production files, not the SwiftPM host-only test target.
-// BASELINE_ADAPTER changes API binding only; no SUT behavior is implemented here.
 @MainActor
 final class Fixture {
     let owner = NativeHostingPresenter()
@@ -245,7 +243,7 @@ struct FeedbackAdapterProbe {
         scenario("live_preference_recheck_at_consume") { f in
             f.attach(0); f.owner.completeNextFixtureAction()
             guard let ticket = f.delivery.prepareObservation(mount: 0) else { check(false, "ticket exists"); return }
-            f.defaults.set(false, forKey: ConclaveFeedback.preferenceKey) // No notification/refresh yet.
+            f.defaults.set(false, forKey: ConclaveFeedback.preferenceKey)
             check(f.delivery.consume(ticket, mount: 0) == nil, "consume reads actual disabled preference")
             f.defaults.set(true, forKey: ConclaveFeedback.preferenceKey)
             check(f.delivery.consume(ticket, mount: 0) == nil, "re-enabling cannot revive consumed rejection")
@@ -269,7 +267,7 @@ struct FeedbackAdapterProbe {
             f.owner.repeatLastFixtureCompletion(); f.observe(); ledger(f, [1, 1, 2], "R1 duplicate quiet")
             f.owner.completeNextFixtureAction()
             guard let old = f.delivery.prepareObservation(mount: 0) else { check(false, "old session ticket exists"); return }
-            f.owner.resetFixtureSession() // Final consume rejects session even before refresh.
+            f.owner.resetFixtureSession()
             check(f.delivery.consume(old, mount: 0) == nil, "live session checked at consume")
             check(!f.owner.completeFixtureAction(actionID: 99, expectedSession: 2, kind: .joined), "old callback rejected")
             f.observe()

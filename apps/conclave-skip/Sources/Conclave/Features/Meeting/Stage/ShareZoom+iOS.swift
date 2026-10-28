@@ -1,20 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// STG-3 (S20 5 c, e, f, g, h, i, k; SL7): share viewing on iOS. `ShareZoomState` is the share slot's view-local zoom and
-// pan (never published, S20 5 j); `ShareZoomContainer` wraps every renderer with the always-present frame, `scaleEffect`
-// and `offset` (identity outside the main share slot, so a share moving between the rail and main keeps its renderer);
-// the overlays are the placeholder (your own share, a remote share whose track is pending), the Reset Zoom chip, the one
-// share accessibility element and the landscape strip fade. The pure rules are the shared `ShareZoomPolicy`.
-//
-// Legibility: `scaleEffect` magnifies the drawable at its current size, so after a pinch or a double tap settles the
-// renderer is laid out once at the zoomed size (capped at the decoded frame, `ShareZoomPolicy.layoutScale`) inside the
-// clipped container; while the fingers move only the transforms change. One render-target resize per settled zoom,
-// none per gesture frame (S20 5 k, l). [Unverified at the WebRTC pin: `RTCMTLVideoView` sizes its drawable from its
-// bounds.]
-
-/// The fixture's `stage.counters` renderTargetResize hook (S20 SL14): called once per settled zoom whose laid-out
-/// renderer size changed. Production provides nothing.
 private struct StageRenderTargetResizeKey: EnvironmentKey {
     static let defaultValue: (() -> Void)? = nil
 }
@@ -26,16 +12,14 @@ extension EnvironmentValues {
     }
 }
 
-/// One share slot's zoom (S20 SL7). The container reads `live` and `layoutScale`, the chip and the accessibility element
-/// read `settled`, so a gesture frame re-evaluates only the container.
 @MainActor
 @Observable
 final class ShareZoomState {
-    /// What the slot shows now: the fingers' value during a gesture, the animated value while a settle runs.
+
     var live = ShareZoomValue.identity
-    /// The value the last gesture or action settled on.
+
     private(set) var settled = ShareZoomValue.identity
-    /// The renderer's laid-out scale for `settled`; changes once per settled zoom.
+
     private(set) var layoutScale = 1.0
 
     @ObservationIgnored private var gestureStart = ShareZoomValue.identity
@@ -44,10 +28,10 @@ final class ShareZoomState {
     @ObservationIgnored private var translation = CGSize.zero
     @ObservationIgnored private var isPinching = false
     @ObservationIgnored private var isPanning = false
-    /// Bumped by every gesture start, settle and reset, so an older settle never commits over a newer value.
+
     @ObservationIgnored private var token = 0
     @ObservationIgnored private(set) var slotSize = CGSize.zero
-    /// The decoded share frame (STG-7 `RendererFrameSizeStore`); zero until the renderer reports it.
+
     @ObservationIgnored private var videoWidth = 0.0
     @ObservationIgnored private var videoHeight = 0.0
 
@@ -73,7 +57,6 @@ final class ShareZoomState {
         recompute()
     }
 
-    /// True when no gesture is left, so the caller settles.
     func pinchEnded() -> Bool {
         isPinching = false
         return !isGestureActive
@@ -103,7 +86,6 @@ final class ShareZoomState {
         return token
     }
 
-    /// Commits a settled value; true when the renderer's laid-out size changed (one render-target resize).
     func commit(_ value: ShareZoomValue, token expected: Int, pixelsPerPoint: Double) -> Bool {
         guard expected == token else { return false }
         if live != value { live = value }
@@ -115,8 +97,6 @@ final class ShareZoomState {
         return true
     }
 
-    /// The slot changed size (rotation, the rail and main roles, a side panel): zoom resets to 1x (S20 5 c). True when the
-    /// renderer's laid-out size changed. The first size only records.
     func slotSizeChanged(_ size: CGSize) -> Bool {
         let first = slotSize == .zero
         if size == slotSize { return false }
@@ -125,7 +105,6 @@ final class ShareZoomState {
         return reset()
     }
 
-    /// Back to 1x at once (the share ends while zoomed, the presenter changes, the slot resizes).
     func reset() -> Bool {
         token += 1
         isPinching = false
@@ -158,8 +137,6 @@ final class ShareZoomState {
     }
 }
 
-/// Runs one settle: animated with `zoomSnap` (250 ms double tap, the spring back of an overshoot), instant under Reduce
-/// Motion (S20 5 h); the renderer is laid out at the settled size only when the animation is done.
 @MainActor
 enum ShareZoomDriver {
     static func settle(_ zoom: ShareZoomState, to target: ShareZoomValue, reduceMotion: Bool, pixelsPerPoint: Double,
@@ -180,11 +157,6 @@ enum ShareZoomDriver {
     }
 }
 
-/// Wraps every slot's renderer (D15: the same structure for every role). For the main share slot of a remote presenter
-/// it adds pinch (1x to 4x) with pan once zoomed, double tap (1x and 2x at the tap point) and the delayed single tap that
-/// still toggles chrome after the double-tap window, the Photos convention (S20 5 c). Elsewhere the gestures are off and
-/// the transforms are identity. The container is laid out left to right so gesture locations, the pan and the offset
-/// share physical coordinates (a shared screen never mirrors).
 struct ShareZoomContainer<Content: View>: View {
     let zoom: ShareZoomState
     let isZoomable: Bool
@@ -228,8 +200,7 @@ struct ShareZoomContainer<Content: View>: View {
                 settle(zoom.doubleTapTarget(at: value.location))
             }
             .exclusively(before: TapGesture(count: 1).onEnded {
-                // The share slot's single tap waits out the double-tap window (S20 5 c), then toggles chrome like a tap
-                // on the stage (S20 8 c) and clears the bar hold (S30 CC16).
+
                 stage.stageTapped()
                 chrome?.send(ChromeVisibilityEvent.tap)
             })
@@ -267,9 +238,6 @@ struct ShareZoomContainer<Content: View>: View {
     }
 }
 
-/// The share slot's placeholder under the chrome (S20 5 c, f): your own share shows "You're presenting" with the share
-/// glyph, never a preview of your screen (Q8); a remote share whose track is pending shows the presenter's avatar and
-/// "%@ is presenting" with no spinner. Only a remote share reads its binding.
 struct SharePlaceholder: View {
     let model: TileChromeModel
     let binding: RendererBinding
@@ -315,8 +283,6 @@ private struct SharePlaceholderFace: View {
     }
 }
 
-/// The share slot's overlays (S20 5 f, i): the one accessibility element (the tile chrome's own element is hidden for a
-/// share) and, once zoomed, the Reset Zoom chip at the top trailing corner of the content area.
 struct ShareSlotOverlays: View {
     let zoom: ShareZoomState
     let model: TileChromeModel
@@ -332,9 +298,6 @@ struct ShareSlotOverlays: View {
     }
 }
 
-/// "Shared Screen from Avery", value "Zoom 2x" while zoomed, with the system zoom action stepping 1x, 2x, 4x (S20 5 c,
-/// i). The element is transparent to touches, so the share's own gestures and VoiceOver's activation tap still reach
-/// the container. Your own share reads "You're presenting".
 private struct ShareSlotAccessibilityElement: View {
     let zoom: ShareZoomState
     let model: TileChromeModel
@@ -362,8 +325,6 @@ private struct ShareSlotAccessibilityElement: View {
     }
 }
 
-/// The flat Reset Zoom chip (SR3, S20 5 f): top trailing of the share's content area, below the top chrome slot, after a
-/// zoom past 1x. Chips stay while chrome hides. Instant under Reduce Motion.
 private struct ShareZoomResetChip: View {
     let zoom: ShareZoomState
     let stage: StagePresenter
@@ -374,7 +335,7 @@ private struct ShareZoomResetChip: View {
 
     var body: some View {
         if isZoomable && zoom.settled.isZoomed {
-            // The share slot is full bleed (S20 5 c); the chip clears the reserved top row and trailing stack.
+
             let viewport = stage.viewport
             ConclaveStageChip(title: ConclaveStrings.text("Reset Zoom"), identifier: "stage.share.resetZoom", onTap: {
                 ShareZoomDriver.settle(zoom, to: ShareZoomValue.identity, reduceMotion: reduceMotion,
@@ -386,8 +347,6 @@ private struct ShareZoomResetChip: View {
     }
 }
 
-/// The landscape share strip hides with chrome (S20 5 c, 8 a): opacity and hit testing only, so renderers stay mounted;
-/// `StageVisibilityPolicy` reports the same tiles invisible. Only rail tiles read the stage kind and the chrome state.
 struct ShareStripFade: ViewModifier {
     let stage: StagePresenter
     let role: StageSlotRole
@@ -408,19 +367,16 @@ struct ShareStripFade: ViewModifier {
 }
 
 enum ShareZoomText {
-    /// S20 5 g: "Shared Screen from %@"; your own share is "You're presenting".
+
     static func label(_ model: TileChromeModel) -> String {
         model.isLocal ? ConclaveStrings.text("You’re presenting") : ConclaveStrings.format("Shared Screen from %@", model.displayName)
     }
 
-    /// "%@ started presenting" for the stage's one announcement channel (S20 5 g, i); nil for other kinds
-    /// (`StageAnnouncementText` falls back to this, HD/requests/B5-T8.md).
     static func announcement(_ announcement: StageAnnouncement) -> String? {
         guard announcement.kind == ShareAnnouncementPolicy.presentingKind else { return nil }
         return ConclaveStrings.format("%@ started presenting", announcement.name)
     }
 
-    /// "Zoom 2x", "Zoom 2.5x" with the locale's number format.
     static func value(_ scale: Double) -> String {
         let spoken = ShareZoomPolicy.spokenScale(scale)
         let digits = ShareZoomPolicy.isWholeScale(scale) ? 0 : 1

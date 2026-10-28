@@ -80,7 +80,11 @@ for (const app of apps) {
   });
   // An inline script must never contain its own end tag.
   const script = result.outputFiles[0].text.replace(/<\/script/gi, "<\\/script");
-  const style = readFileSync(app.css, "utf8");
+  const style = (await esbuild.transform(readFileSync(app.css, "utf8"), {
+    loader: "css",
+    legalComments: "inline",
+    minifyWhitespace: true,
+  })).code;
   if (/gradient/i.test(style)) throw new Error(`${app.appId}: the embed CSS must stay flat (no gradients)`);
   const csp = [
     "default-src 'none'",

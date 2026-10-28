@@ -1,7 +1,5 @@
 import Foundation
 
-// MARK: - Connection State
-
 enum ConnectionState: String, Equatable {
     case disconnected
     case connecting
@@ -13,37 +11,22 @@ enum ConnectionState: String, Equatable {
     case error
 }
 
-/// Backstop for the reconnect state machine. Recovery is driven by
-/// fire-and-forget tasks, and overlapping triggers can strand it: a superseded
-/// join attempt bails on its attempt-id guard without resetting
-/// `isRejoinInFlight`, after which every recovery entry point
-/// (`rejoinIfPossible`, `forceRejoinWithFreshToken`, foreground recovery) is
-/// guard-blocked while the user stares at the "Connection interrupted" banner
-/// forever. Reproduced on 2026-07-14: ~16 min idle on the simulator, then
-/// stuck; even a background/foreground cycle could not restart recovery.
-///
-/// The watchdog is pure policy over observable state, in the same spirit as
-/// `MeetingEntryOverlayPolicy`: a stalled recovery forces a fresh rejoin
-/// cycle, and a recovery that exceeds the hard cap surfaces a terminal error
-/// instead of an endless banner.
 enum ConnectionRecoveryWatchdogPolicy {
-    /// Recovery with no join-attempt progress for this long forces a fresh
-    /// rejoin (long enough for a full token fetch + connect + join round).
+
     static let stallSeconds: Double = 25.0
-    /// Total time a single recovery may run before giving up into the error
-    /// screen with a retry affordance.
+
     static let hardCapSeconds: Double = 120.0
-    /// Watchdog evaluation cadence.
+
     static let tickSeconds: Double = 8.0
 
     enum Action: String, Equatable {
-        /// Recovery is progressing (or over); do nothing this tick.
+
         case wait
-        /// Recovery looks stranded; reset the in-flight guards and rejoin.
+
         case forceRejoin
-        /// Recovery has run past the hard cap; fail out to the error screen.
+
         case fail
-        /// Recovery finished (joined / terminal state); stop the watchdog.
+
         case standDown
     }
 
@@ -205,8 +188,6 @@ enum MeetingViewConstants {
     }
 }
 
-// MARK: - Participant
-
 enum ParticipantConnectionState: String, Codable, Equatable {
     case reconnecting
     case reconnected
@@ -233,8 +214,6 @@ struct Participant: Identifiable, Equatable {
     var connectionStatus: ParticipantConnectionStatus?
 }
 
-// MARK: - Chat
-
 struct ChatReplyPreview: Codable, Equatable {
     let id: String
     let userId: String
@@ -246,8 +225,6 @@ struct ChatReplyPreview: Codable, Equatable {
     let dmTargetUserId: String?
 }
 
-/// An uploaded chat image (meeting-core ChatImageAttachment). The URL points
-/// at the SFU's moderated asset store; clients render it directly.
 struct ChatImageAttachment: Codable, Equatable {
     let id: String
     let url: String
@@ -256,7 +233,6 @@ struct ChatImageAttachment: Codable, Equatable {
     let size: Int
 }
 
-/// Body of the asset-store upload response.
 struct ChatImageUploadResult: Codable {
     let image: ChatImageAttachment?
     let code: String?
@@ -267,8 +243,6 @@ struct ChatImageUploadError: Error {
     let message: String
 }
 
-/// Client-side validation for outgoing chat images, mirroring the web's
-/// chat-images.ts (6 MB cap, sniffed mime types, moderation-blocked code).
 enum ChatImageSendPolicy {
     static let maxBytes = 6 * 1024 * 1024
     static let moderationBlockedCode = "chat_image_moderation_blocked"
@@ -277,11 +251,8 @@ enum ChatImageSendPolicy {
         byteCount > 0 && byteCount <= maxBytes
     }
 
-    /// Sniffs the actual bytes rather than trusting a picker's file extension.
     static func mimeType(forData data: Data) -> String? {
-        // Direct Data indexing: both Array(data.prefix(N)) and iterating a
-        // Data prefix fail Skip's Kotlin transpile; subscripting works on
-        // both platforms (this Data always starts at index 0).
+
         guard data.count >= 12 else { return nil }
         var header: [UInt8] = []
         var index = 0
@@ -309,9 +280,6 @@ enum ChatImageSendPolicy {
         return nil
     }
 
-    /// A stable upload name with an extension matching the sniffed type, so
-    /// the asset store never sees a picker's placeholder or .heic name on
-    /// re-encoded bytes.
     static func uploadFileName(originalName: String, mimeType: String) -> String {
         let ext: String
         switch mimeType {
@@ -349,11 +317,6 @@ enum ConclaveAssistantChatIdentity {
     static let mentionToken = "conclave"
 }
 
-/// Keeps participant labels compact and consistent with the web meeting UI.
-/// Institution identities often arrive as `First Last 23BME0453`; the final
-/// registration token is useful for authentication, but not in a live tile or
-/// chat header. Limiting presentation to two words also prevents long names
-/// from destabilising compact phone layouts.
 enum MeetingDisplayNamePresentation {
     static func formatted(_ rawValue: String) -> String {
         let words = whitespaceSeparatedWords(rawValue)
@@ -381,15 +344,10 @@ enum MeetingDisplayNamePresentation {
     }
 }
 
-/// S40 CH2: where an own send stands. `delivered` is every received or acknowledged message; `sending` from the
-/// optimistic append until the acknowledgement or the echo; `failed` keeps the row and its text with retry and
-/// discard. The chat presenter derives `sendingSlow` from `sending` after 1 s (one presenter task per send).
 enum ChatMessageDelivery: String, Equatable {
     case delivered, sending, failed
 }
 
-/// S40 CH2, CH10: the delivery state of an own send. `failure` is a `ChatFailure` raw value ("" while sending);
-/// `serverText` is kept for logging only and never reaches the UI as copy. `isRetryable` decides Try Again.
 struct ChatSendStatus: Equatable {
     let delivery: ChatMessageDelivery
     let failure: String
@@ -399,8 +357,6 @@ struct ChatSendStatus: Equatable {
     static let sending = ChatSendStatus(delivery: .sending, failure: "", serverText: "", isRetryable: false)
 }
 
-/// A rebuilt (never copied) message: every new field must reach each reconstruction site listed in
-/// apps/conclave-skip/AGENTS.md ("Chat Message Reconstruction Sites"), or it silently vanishes.
 struct ChatMessage: Identifiable, Equatable {
     let id: String
     let userId: String
@@ -409,26 +365,23 @@ struct ChatMessage: Identifiable, Equatable {
     let timestamp: Date
     let gif: ChatGifAttachment?
     let image: ChatImageAttachment?
-    // Direct-message metadata (web chat parity). Set only on private messages.
+
     let isDirect: Bool
     let dmTargetUserId: String?
     let dmTargetDisplayName: String?
     let roomId: String?
     let replyTo: ChatReplyPreview?
-    /// S40 CH1: the optimistic id of an own send (`optimistic-<UUID>`), kept after the acknowledgement or the echo
-    /// replaces `id` with the server id, so the chat row id never changes. Nil for everyone else's messages.
+
     let clientId: String?
-    /// S40 CH2: nil for delivered messages (every received message and every acknowledged own send).
+
     let sendStatus: ChatSendStatus?
-    /// S40 CH3: the complete server set (meeting-core `ChatMessage.reactions`), replaced, never merged.
+
     let reactions: [ChatMessageReaction]
-    /// S40 CH4: a voice message (`/tts`), decided by the core's normalization (the SFU sends the raw content). The
-    /// stored content stays `TTS: <full text>` for the legacy chat; native rows strip the prefix.
+
     let isTts: Bool
-    /// S40 CH4: the sender's personal voice token (web-minted, SFU-relayed); nil for the system voice.
+
     let ttsVoiceToken: String?
-    /// S40 CH5: the sender removed the link preview, so this message shows no embed cards for anyone (web parity,
-    /// meeting-core `ChatMessage.suppressEmbeds`).
+
     let suppressEmbeds: Bool
 
     init(
@@ -471,13 +424,10 @@ struct ChatMessage: Identifiable, Equatable {
         self.suppressEmbeds = suppressEmbeds
     }
 
-    /// The delivery state with nil read as delivered.
     var delivery: ChatMessageDelivery {
         sendStatus?.delivery ?? ChatMessageDelivery.delivered
     }
 }
-
-// MARK: - Reactions
 
 enum ReactionKind: String, Codable {
     case emoji
@@ -493,7 +443,7 @@ struct Reaction: Identifiable {
     let timestamp: Date
     let roomId: String?
     var lane: Int = 0
-    
+
     init(id: String = UUID().uuidString, userId: String, kind: ReactionKind, value: String, label: String? = nil, timestamp: Date = Date(), roomId: String? = nil) {
         self.id = id
         self.userId = userId
@@ -631,22 +581,16 @@ enum MeetingReactionConstants {
     }
 }
 
-// MARK: - Room
-
 struct Room: Identifiable {
     let id: String
     var userCount: Int
     var isLocked: Bool = false
 }
 
-// MARK: - Video Quality
-
 enum VideoQuality: String, Codable {
     case low
     case standard
 }
-
-// MARK: - Connection Quality
 
 enum ConnectionQuality: String, Codable {
     case emergency
@@ -656,9 +600,6 @@ enum ConnectionQuality: String, Codable {
     case unknown
 }
 
-/// Separates user-visible transport latency from evidence that reducing media
-/// bitrate or resolution can actually help. High RTT alone makes a call feel
-/// delayed, but lowering camera resolution does not shorten the network path.
 enum RTCConnectionQualityPolicy {
     static func transportQuality(
         rttMs: Double?,
@@ -689,10 +630,6 @@ enum RTCConnectionQualityPolicy {
     }
 }
 
-/// Keeps one noisy RTC stats sample from immediately reconfiguring capture,
-/// simulcast layers, remote receive policy, and the visible quality banner.
-/// Emergency samples still apply immediately; ordinary degradation and
-/// recovery need consecutive evidence.
 struct ConnectionQualityStabilizer {
     private(set) var value: ConnectionQuality
     private var candidate: ConnectionQuality?
@@ -716,9 +653,6 @@ struct ConnectionQualityStabilizer {
             return value
         }
 
-        // Missing stats are not evidence that a constrained link recovered.
-        // The tracker is reset explicitly when a call is torn down or a new
-        // startup profile is seeded.
         guard sample != .unknown || value == .unknown else {
             candidate = nil
             consecutiveSamples = 0
@@ -752,18 +686,14 @@ enum ConnectionQualityStabilityPolicy {
     ) -> Int {
         guard current != candidate else { return 0 }
 
-        // Protect call continuity immediately when conditions are critical.
         if candidate == .emergency {
             return 1
         }
 
-        // The first usable stats after startup should settle quickly without
-        // letting a single partial report drive the whole media graph.
         if current == .unknown {
             return 2
         }
 
-        // Unknown is handled as "hold the current profile" by the tracker.
         if candidate == .unknown {
             return 10_000
         }
@@ -773,9 +703,6 @@ enum ConnectionQualityStabilityPolicy {
             return candidate == .poor ? 2 : 3
         }
 
-        // Recovery is deliberately slower than degradation. This prevents a
-        // roaming link from repeatedly restarting camera capture and swapping
-        // remote simulcast layers around a threshold.
         return candidate == .good ? 5 : 4
     }
 
@@ -809,9 +736,6 @@ enum ConnectionQualityHintPolicy {
         guard networkHint != .unknown else { return sampledQuality }
         guard sampledQuality != .unknown else { return networkHint }
 
-        // Match the web client: reachability/browser hints seed startup and
-        // unknown states, but measured RTC stats win once the call is live.
-        // Emergency is the only hint severe enough to keep constraining media.
         guard networkHint == .emergency else { return sampledQuality }
         return mostConstrained(sampledQuality, networkHint)
     }
@@ -940,34 +864,20 @@ struct ConnectionQualitySample {
     }
 }
 
-// MARK: - Audio Device
-
-/// A selectable audio input (microphone) or output (speaker/earpiece/bluetooth)
-/// route, surfaced from the platform's audio APIs. `id` is the stable platform
-/// identifier used to select the route; `label` is the human-readable name.
 struct AudioDevice: Identifiable, Equatable {
     let id: String
     let label: String
 }
-
-// MARK: - Producer Type
 
 enum ProducerType: String, Codable {
     case webcam
     case screen
 }
 
-// MARK: - Video Content Mode
-//  Two distinct aspect policies (Meet standard): cameras crop-to-fill, screen
-//  shares letterbox on black. Cross-platform (maps to RTCVideoView contentMode
-//  on iOS / RendererCommon.ScalingType on Android).
-
 enum VideoContentMode {
-    case fill   // scaleAspectFill - cameras (crop to fill, no distortion)
-    case fit    // scaleAspectFit - screen-share (letterbox on black)
+    case fill
+    case fit
 }
-
-// MARK: - Meet Error
 
 struct MeetError: Error, Equatable {
     enum Code: String {
@@ -977,7 +887,7 @@ struct MeetError: Error, Equatable {
         case transportError = "TRANSPORT_ERROR"
         case unknown = "UNKNOWN"
     }
-    
+
     let code: Code
     let message: String
     let recoverable: Bool

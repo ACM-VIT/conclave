@@ -27,17 +27,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/*
- * S50 PL2, 4 d (PPL-3): the Android waiting row, a Material 3 ListItem with the 40 dp avatar, the name (two lines) and
- * two explicit targets: Deny as a TextButton in onSurfaceVariant and Admit as a FilledTonalButton (C01 tonal,
- * secondaryContainer; never coral, F00 C10 e). The row itself is not clickable and has no swipe (AND 7.8). At font scale
- * 1.5 and up the buttons drop under the name through supportingContent. While its own Admit or Deny is in flight the
- * buttons become one spinner with "In progress"; recovering, offline or a bulk admission keeps them visible but
- * disabled, with the reason as the name's state description. Reads only its WaitingRowEntry; texts resolve once per
- * model change.
- */
-
-/** The waiting row's resolved texts (S50 4 g, 4 i). */
 internal data class WaitingRowTexts(
     val name: String,
     val deny: String,
@@ -60,7 +49,6 @@ internal fun waitingRowTextsOf(context: Context, model: WaitingRowModel): Waitin
     )
 }
 
-/** The unavailable reasons a waiting row or a header action can carry (S50 4 f). */
 internal fun peopleReasonOf(context: Context, reason: String): String = when (reason) {
     PeopleActionReason.reconnecting, PeopleActionReason.notJoined -> conclaveStringOf(context, "ds_unavailable_reconnecting")
     PeopleActionReason.offline -> conclaveStringOf(context, "ds_unavailable_offline")
@@ -68,7 +56,6 @@ internal fun peopleReasonOf(context: Context, reason: String): String = when (re
     else -> ""
 }
 
-/** One waiting request (S50 4 d). */
 @Composable
 internal fun WaitingRow(people: PeoplePresenter, rowKey: String, modifier: Modifier = Modifier) {
     val entry = people.waiting.entry(rowKey)
@@ -77,9 +64,9 @@ internal fun WaitingRow(people: PeoplePresenter, rowKey: String, modifier: Modif
     val texts = remember(model, context) { waitingRowTextsOf(context, model) }
     val identity = remember(model.avatarSeed) { ConclaveAvatarIdentity.fromSeed(model.avatarSeed) }
     val identifier = "people.row.${model.id}"
-    // Font scale 1.5 and up: the buttons move under the name (S50 4 d), nothing is clipped at 2.0.
+
     val stacked = LocalDensity.current.fontScale >= 1.5f
-    // people.recompose.waiting:<rowId> (PL12): the fixture ledger counts row compositions; production passes none.
+
     SideEffect { people.recompose?.record("${PeopleSectionID.waiting.rawValue}:${model.id}") }
     ListItem(
         headlineContent = {
@@ -94,7 +81,6 @@ internal fun WaitingRow(people: PeoplePresenter, rowKey: String, modifier: Modif
     )
 }
 
-/** Deny then Admit, 48 dp targets labelled with the name (F00 C10 g), or the one spinner while in flight. */
 @Composable
 private fun WaitingRowButtons(people: PeoplePresenter, model: WaitingRowModel, texts: WaitingRowTexts, identifier: String) {
     if (model.pendingAction.isNotEmpty()) {

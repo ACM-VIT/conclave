@@ -4,22 +4,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 
-/*
- * S30 4 d (CTL-2): the End confirmation on Android, the FND-1 ConclaveDialog (F00 C18 d): an M3 AlertDialog with the
- * S30 4 g copy (RECONCILE R6: "End call for everyone?", the disconnect message, the error-colored "End for everyone"
- * confirm at the end and Cancel at the start; exactly two buttons, no extra Leave). LeaveControl composes it inside the
- * stage, so it takes the in-call (dark) scheme (F00 2.1). Cancel, Back and a scrim tap cancel the confirmation; Confirm
- * dispatches End once per id (S1C DUP), after which the presenter shows the progress toast and Leave stays live (R09).
- * `endForEveryonePrompted` plays once per new confirmation (silent on Android per the contract table, kept for the
- * route's parity with iOS, S30 4 h). The open dialog keeps chrome up through the presenter's `end.dialog` (CC16).
- * The recap variant (two confirm buttons) is RecapEndDialog (TRN-2, CC8).
- */
-
 @Composable
 internal fun EndForEveryoneDialog(leave: LeaveUi, controls: CallControlsPresenter, haptics: ConclaveGestureHaptics) {
     val id = leave.confirmationId
     if (leave.offersRecap) {
-        // TRN-2 (S30 4 d recap variant, CC8): the two-confirm dialog while the recap is on offer.
+
         RecapEndDialog(confirmationId = id, controls = controls, haptics = haptics)
         return
     }
@@ -35,7 +24,6 @@ internal fun EndForEveryoneDialog(leave: LeaveUi, controls: CallControlsPresente
     )
 }
 
-/** S30 4 g Android column: `ctl_end_title`, `ctl_end_message`, `ctl_end_confirm`; Cancel is the component's `ds_cancel`. */
 @Composable
 internal fun rememberEndForEveryoneDialogModel(): ConclaveDialogModel {
     val title = conclaveString("ctl_end_title")

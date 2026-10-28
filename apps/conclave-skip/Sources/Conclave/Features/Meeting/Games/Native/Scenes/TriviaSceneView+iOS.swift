@@ -1,11 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 9 c (ACT-3) on iOS, Trivia: question (K1 with the category and progress, K2, K3 four options, the answered
-// count), reveal (correct option with the success border, check glyph and "Correct"; your wrong pick with the error
-// border, cross glyph and "Your answer"; every option's count; your outcome line) and the spectator view (read-only
-// cards, no self line). The correct answer is announced once at the reveal.
-
 struct TriviaSceneView: View {
     let scene: TriviaScene
     let games: GameStagePresenter
@@ -41,8 +36,6 @@ struct TriviaSceneView: View {
     }
 }
 
-/// K3 options; the only leaf that reads `interaction` (the acted row's spinner). `answerLocked` plays only when the
-/// answer was actually sent (S60 9 h).
 struct TriviaChoices: View {
     let scene: TriviaScene
     let games: GameStagePresenter

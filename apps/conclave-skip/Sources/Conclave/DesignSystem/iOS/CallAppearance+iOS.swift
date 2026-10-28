@@ -2,19 +2,12 @@
 import SwiftUI
 import UIKit
 
-// The iOS call-root appearance owner (F00 2.6 A7, 2.1; NF 10.2): the analogue of Android `ConclaveSystemBars`. The
-// call root is always dark, its status bar content is light over the dark stage in system light mode, and panels
-// still learn the system appearance so content panels follow it (PS 7.4). One call root applies it once; nested
-// in-call regions inside system screens (the lobby preview card) use `conclaveInCallRegion()` instead, which
-// never touches the window or the status bar.
-
 private struct ConclaveSystemColorSchemeKey: EnvironmentKey {
     static let defaultValue: ColorScheme = .light
 }
 
 extension EnvironmentValues {
-    /// The system appearance under a dark call root. Content panels pass it to `PanelShell` so a system-appearance
-    /// panel opened from the always-dark stage still follows the person's setting.
+
     var conclaveSystemColorScheme: ColorScheme {
         get { self[ConclaveSystemColorSchemeKey.self] }
         set { self[ConclaveSystemColorSchemeKey.self] = newValue }
@@ -22,22 +15,39 @@ extension EnvironmentValues {
 }
 
 extension View {
-    /// The call root: a dark subtree, light status bar content, and the system scheme published to descendants.
+
     func conclaveCallAppearance() -> some View {
         modifier(ConclaveCallAppearance())
     }
 
-    /// A dark region inside a system-appearance screen (lobby preview card, gallery In Call column): the dark
-    /// environment only, never a window or status bar change.
     func conclaveInCallRegion() -> some View {
         environment(\.colorScheme, .dark)
     }
 }
 
-/// iOS 27: `.toolbarColorScheme(.dark, for: .statusBar)` asks for light status bar content without retheming the
-/// window, so the inherited environment still carries the system scheme. iOS 17 to 26: a scoped
-/// `.preferredColorScheme(.dark)` on the call root (it reaches the window), and the system scheme comes from the
-/// window scene's own traits, which a window override does not change.
+struct ConclaveAppAppearance: ViewModifier {
+    let isCall: Bool
+
+    private var preference: ColorScheme? {
+        if #available(iOS 27.0, *) { return AppearancePreference.shared.mode.colorScheme }
+        return isCall ? .dark : AppearancePreference.shared.mode.colorScheme
+    }
+
+    func body(content: Content) -> some View {
+        content.preferredColorScheme(preference)
+    }
+}
+
+extension AppearanceMode {
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
 struct ConclaveCallAppearance: ViewModifier {
     @Environment(\.colorScheme) private var inheritedScheme
     @State private var sceneScheme: ColorScheme?
@@ -45,7 +55,7 @@ struct ConclaveCallAppearance: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(\.colorScheme, .dark)
-            .environment(\.conclaveSystemColorScheme, sceneScheme ?? inheritedScheme)
+            .environment(\.conclaveSystemColorScheme, AppearancePreference.shared.mode.colorScheme ?? sceneScheme ?? inheritedScheme)
             .modifier(ConclaveCallStatusBar())
             .background {
                 ConclaveSceneSchemeReader { scheme in
@@ -68,8 +78,6 @@ private struct ConclaveCallStatusBar: ViewModifier {
     }
 }
 
-/// Reads the window scene's user interface style and reports it on attach and on every change. It reports from
-/// UIKit callbacks, deferred to the next main-queue turn, so it never writes view state during an update.
 private struct ConclaveSceneSchemeReader: UIViewRepresentable {
     let onChange: (ColorScheme) -> Void
 

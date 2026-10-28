@@ -41,20 +41,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/*
- * S40 4 d (CHT-7): the Conclave AI row on Android. Reads only its ChatRowEntry (`row` plus the `assistant` model the
- * transpiled presenter writes), so a streamed delta recomposes this item and never the list. Leading like peer rows:
- * the AssistantMark (CL4: 32 dp primaryContainer circle, onPrimaryContainer glyph), the "Conclave" header with the
- * neutral "AI" tag on every answer, then the bubble: the neutral fill with the 1 dp outlineVariant border (the C23
- * tone that carries a border), and a 1 dp error border for a failure. Inside: the thinking line (stock 16 dp
- * CircularProgressIndicator plus a static label, R13, never the expressive indicator), the reasoning and steps headers
- * (Role.Button, state description, AnimatedVisibility(expandVertically) or instant under Remove animations; expanded
- * while the answer streams, collapsed when it completes unless the person chose), the AssistantMarkdown answer (links
- * through the external link confirmation) and the error line with Try again for the asker. No haptics beyond the
- * message menu's long press. While thinking, streaming or failed the row is one node ("Conclave, Thinking", Try again
- * as its custom action); a finished answer keeps headings and links as their own nodes behind the header, which
- * carries the summary semantics and the row actions. The approval card and the key prompt are W10-2 (not shown).
- */
 @Composable
 internal fun AssistantRow(entry: ChatRowEntry, actions: ChatRowActions, sidePane: Boolean, maxBubble: Dp) {
     val row = entry.row
@@ -80,9 +66,8 @@ internal fun AssistantRow(entry: ChatRowEntry, actions: ChatRowActions, sidePane
             })
         },
     ) {
-        AssistantMark()
         Column(
-            Modifier.padding(start = 8.dp).widthIn(max = maxBubble),
+            Modifier.widthIn(max = maxBubble),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             AssistantHeader(row, model, actions, finished)
@@ -106,19 +91,6 @@ internal fun AssistantRow(entry: ChatRowEntry, actions: ChatRowActions, sidePane
     }
 }
 
-/** CL4: the canonical assistant mark. */
-@Composable
-private fun AssistantMark() {
-    val scheme = MaterialTheme.colorScheme
-    Surface(shape = CircleShape, color = scheme.primaryContainer, modifier = Modifier.size(32.dp).clearAndSetSemantics { }) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(ConclaveIcons.AutoAwesomeFill0, contentDescription = null, tint = scheme.onPrimaryContainer,
-                modifier = Modifier.size(18.dp))
-        }
-    }
-}
-
-/** "Conclave", the neutral "AI" tag and the time; a finished answer's header is its summary node (3 i, 5 i). */
 @Composable
 private fun AssistantHeader(row: ChatRowModel, model: AssistantRowModel, actions: ChatRowActions, isSummary: Boolean) {
     val context = LocalContext.current
@@ -196,13 +168,11 @@ private fun AssistantBubble(row: ChatRowModel, model: AssistantRowModel, actions
     }
 }
 
-/** The stock indicator (F00 C14), 16 dp, stroke 2 dp, in the secondary ink. */
 @Composable
 private fun AssistantSpinner() {
     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-/** R13: the static label with the stock spinner, never a pulse. */
 @Composable
 private fun AssistantThinkingLine() {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -212,10 +182,6 @@ private fun AssistantThinkingLine() {
     }
 }
 
-/**
- * A reasoning or steps header: one Button node with the expand or collapse click label and the expanded or collapsed
- * state, 48 dp tall. The nonmirroring disclosure points down when closed and up when open in either reading direction.
- */
 @Composable
 private fun AssistantDisclosure(
     title: String,
@@ -254,7 +220,6 @@ private fun AssistantDisclosure(
     }
 }
 
-/** One listed step: CheckFill0 when done, the 16 dp spinner while running, the label and the query below. */
 @Composable
 private fun AssistantTaskRow(rowId: String, task: AssistantTask) {
     val scheme = MaterialTheme.colorScheme
@@ -274,7 +239,6 @@ private fun AssistantTaskRow(rowId: String, task: AssistantTask) {
     }
 }
 
-/** CH8: the kind's copy with ErrorFill1 in error, and Try again for the asker (tonal, neutral). */
 @Composable
 private fun AssistantErrorLine(row: ChatRowModel, model: AssistantRowModel, actions: ChatRowActions) {
     val scheme = MaterialTheme.colorScheme
@@ -295,7 +259,6 @@ private fun AssistantErrorLine(row: ChatRowModel, model: AssistantRowModel, acti
     }
 }
 
-/** S40 4 g, Android: Material sentence case. */
 @Composable
 internal fun assistantReasoningLabel(model: AssistantRowModel): String = when {
     !model.reasoningDone && model.state == AssistantRowState.streaming -> conclaveString("chat_assistant_reasoning_live")
@@ -312,7 +275,6 @@ internal fun assistantTaskLabel(task: AssistantTask): String = when (task.kind) 
     else -> ""
 }
 
-/** Presenter-chosen copy per kind (CH8); `needsKey` reads as unavailable until the key prompt ships (W10-2). */
 @Composable
 internal fun assistantErrorText(kind: AssistantErrorKind): String = when (kind) {
     AssistantErrorKind.unavailable, AssistantErrorKind.needsKey -> conclaveString("chat_assistant_unavailable")
@@ -322,7 +284,6 @@ internal fun assistantErrorText(kind: AssistantErrorKind): String = when (kind) 
     else -> conclaveString("chat_assistant_error_generic")
 }
 
-/** The one node's label while the answer is not finished ("Conclave, Thinking"), or the finished header's summary. */
 @Composable
 internal fun assistantRowLabel(row: ChatRowModel, model: AssistantRowModel): String {
     val name = conclaveString("chat_assistant_name")

@@ -1,32 +1,17 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 11 B3 (ACT-5) on iOS: chess inside the game shell's scroll view (GameShell+iOS.swift routes `GameSceneKind.chess`
-// to `ChessSceneBody`, HD request B8-T3 R3). The board is one `Canvas` of 64 flat squares in the two board tokens, with
-// `.caption2` coordinates, a 2 pt paper outline on the last move, a paper and ink double ring on the selected square,
-// paper dots and rings on legal targets, a paper and red double ring on a king in check, and a dashed paper outline on a
-// move waiting for its ack. A `SpatialTapGesture` maps a tap to its algebraic square; tap the piece, then the
-// destination. The canvas carries one synthetic accessibility child per square, laid out in the board geometry, so
-// touch exploration and the dump find "e4" at its drawn frame. The move chooser is the complete non-visual path
-// (piece, destination, promotion). The board never mirrors (D18) and is read from one immutable scene per push; the
-// move in flight is its own presenter property (`chessPendingMove`), read only by the board and the status lines.
-// Pieces: bundled MIT-licensed Tabler vectors in both Debug and Release (S60 Q9), tinted paper or ink with a
-// contrasting 1 pt outline. The original geometry and full license are preserved in artwork/chess-tabler.
-
-// MARK: Scene
-
-/// The chess body for playing and results (the shell draws the lobby).
 struct ChessSceneBody: View {
     let games: GameStagePresenter
+    var cardHeader: ((Bool) -> AnyView)? = nil
 
     var body: some View {
         if let chess = games.scene.chess {
-            ChessSceneView(scene: chess, games: games, isFinished: games.chrome.phase == .results)
+            ChessSceneView(scene: chess, games: games, isFinished: games.chrome.phase == .results, cardHeader: cardHeader)
         }
     }
 }
 
-/// A board move waiting for the person's promotion choice.
 struct ChessMoveRequest: Equatable {
     let from: String
     let to: String
@@ -36,8 +21,10 @@ struct ChessSceneView: View {
     let scene: ChessScene
     let games: GameStagePresenter
     let isFinished: Bool
+    var cardHeader: ((Bool) -> AnyView)? = nil
+    @ScaledMetric(relativeTo: .body) private var detailsWidth: CGFloat = 240
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
-    /// View-local (S60 11 j): the selected square, a watcher's Flip Board, the chooser and the promotion in progress.
+
     @State private var selected = ""
     @State private var flipped = false
     @State private var chooserOpen = false
@@ -46,45 +33,44 @@ struct ChessSceneView: View {
 
     var body: some View {
         let orientation = ChessBoardPolicy.orientation(scene, flipped: flipped)
-        VStack(alignment: .leading, spacing: 12) {
-            ChessHeader(scene: scene, onFlip: { flipped.toggle() })
-            ChessClocksRow(scene: scene, orientation: orientation)
-            if scene.canMove && voiceOver && !chooserOpen {
-                ChessChooserButton(onOpen: openChooser)
-            }
-            Group {
-                if chooserOpen && scene.canMove {
-                    ChessMoveChooser(scene: scene, onSend: { from, to, piece in send(from: from, to: to, promotion: piece) },
-                                     onClose: { chooserOpen = false })
-                } else {
-                    ChessBoardSurface(scene: scene, games: games, orientation: orientation, selected: selected,
-                                      onTap: { square in tap(square) })
-                }
-            }
-            .confirmationDialog(ChessCopy.promoteTo(), isPresented: promotionShown, titleVisibility: .visible,
-                                presenting: promotion) { request in
-                ForEach(ChessPromotion.allCases, id: \.self) { piece in
-                    Button(ChessCopy.promotionName(piece)) {
-                        send(from: request.from, to: request.to, promotion: piece.rawValue)
+        Group {
+            if let cardHeader {
+                GeometryReader { proxy in
+                    let plan = ChessCardLayoutPolicy.resolve(width: Double(proxy.size.width), height: Double(proxy.size.height),
+                                                             detailsWidth: Double(detailsWidth))
+                    if plan.usesColumns && !chooserOpen {
+                        compactScene(orientation: orientation, side: plan.boardSide, header: cardHeader)
+                    } else {
+                        VStack(spacing: 0) {
+                            cardHeader(false)
+                            Rectangle().fill(HostingTheme.inCallBorder).frame(height: 1).accessibilityHidden(true)
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 14) {
+                                    GameShellNotices(games: games)
+                                    stackedScene(orientation: orientation)
+                                }
+                                .padding(16)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .scrollDismissesKeyboard(.interactively)
+                            GameShellBottomBar(games: games)
+                        }
                     }
                 }
-                // Cancel keeps the position (never an automatic queen, S60 11 c).
-                Button(ConclaveStrings.text("Cancel"), role: .cancel) {}
+                .accessibilityIdentifier("game.body")
+            } else {
+                stackedScene(orientation: orientation)
             }
-            ChessStatusLines(scene: scene, games: games)
-            if scene.canMove && !voiceOver && !chooserOpen {
-                ChessChooserButton(onOpen: openChooser)
+        }
+        .confirmationDialog(ChessCopy.promoteTo(), isPresented: promotionShown, titleVisibility: .visible,
+                            presenting: promotion) { request in
+            ForEach(ChessPromotion.allCases, id: \.self) { piece in
+                Button(ChessCopy.promotionName(piece)) {
+                    send(from: request.from, to: request.to, promotion: piece.rawValue)
+                }
             }
-            ChessActionsBar(scene: scene, games: games)
-            ChessTeamsList(scene: scene)
-            ChessMovesList(scene: scene)
-            if isFinished && !games.chrome.isHost {
-                PromptLine(text: ConclaveStrings.text("Waiting for the host"))
-            }
-            // The kit's spectator notice only when a seat can be asked for (the role line already says "Watching").
-            if games.chrome.seat == .canJoin {
-                PromptSpectatorNotice(games: games)
-            }
+
+            Button(ConclaveStrings.text("Cancel"), role: .cancel) {}
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .conclaveGestureFeedback(.pieceMoved, trigger: movedCount)
@@ -105,6 +91,73 @@ struct ChessSceneView: View {
         .accessibilityIdentifier("game.scene.chess")
     }
 
+    private func compactScene(orientation: ChessSide, side: Double, header: (Bool) -> AnyView) -> some View {
+        HStack(alignment: .top, spacing: CGFloat(ChessCardLayoutPolicy.columnGap)) {
+            ChessBoardLayer(scene: scene, games: games, orientation: orientation, selected: selected,
+                            onTap: tap, side: side)
+                .frame(width: CGFloat(side), height: CGFloat(side))
+                .environment(\.layoutDirection, .leftToRight)
+                .accessibilityIdentifier("game.chess.board")
+            VStack(alignment: .leading, spacing: 8) {
+                if scene.canMove { ChessChooserButton(onOpen: openChooser) }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        header(true)
+                        GameShellNotices(games: games)
+                        ChessHeader(scene: scene, onFlip: { flipped.toggle() })
+                        ChessClocksRow(scene: scene, orientation: orientation)
+                        ChessStatusLines(scene: scene, games: games)
+                        ChessActionsBar(scene: scene, games: games)
+                        ChessTeamsList(scene: scene)
+                        ChessMovesList(scene: scene)
+                        if isFinished && !games.chrome.isHost {
+                            PromptLine(text: ConclaveStrings.text("Waiting for the host"))
+                        }
+                        if games.chrome.seat == .canJoin { PromptSpectatorNotice(games: games) }
+                        GameShellBottomBar(games: games)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityIdentifier("game.chess.details")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .padding(CGFloat(ChessCardLayoutPolicy.compactPadding))
+    }
+
+    private func stackedScene(orientation: ChessSide) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ChessHeader(scene: scene, onFlip: { flipped.toggle() })
+            ChessClocksRow(scene: scene, orientation: orientation)
+            if scene.canMove && voiceOver && !chooserOpen {
+                ChessChooserButton(onOpen: openChooser)
+            }
+            Group {
+                if chooserOpen && scene.canMove {
+                    ChessMoveChooser(scene: scene, onSend: { from, to, piece in send(from: from, to: to, promotion: piece) },
+                                     onClose: { chooserOpen = false })
+                } else {
+                    ChessBoardSurface(scene: scene, games: games, orientation: orientation, selected: selected,
+                                      onTap: { square in tap(square) })
+                }
+            }
+            ChessStatusLines(scene: scene, games: games)
+            if scene.canMove && !voiceOver && !chooserOpen {
+                ChessChooserButton(onOpen: openChooser)
+            }
+            ChessActionsBar(scene: scene, games: games)
+            ChessTeamsList(scene: scene)
+            ChessMovesList(scene: scene)
+            if isFinished && !games.chrome.isHost {
+                PromptLine(text: ConclaveStrings.text("Waiting for the host"))
+            }
+
+            if games.chrome.seat == .canJoin {
+                PromptSpectatorNotice(games: games)
+            }
+        }
+    }
+
     private var promotionShown: Binding<Bool> {
         Binding(get: { promotion != nil }, set: { shown in
             if !shown { promotion = nil }
@@ -116,7 +169,6 @@ struct ChessSceneView: View {
         chooserOpen = true
     }
 
-    /// Tap source, then destination (S60 11 c); ignored while a move waits for its ack.
     private func tap(_ square: String) {
         if games.chessPendingMove.isPending { return }
         let outcome = ChessBoardPolicy.tap(scene, selected: selected, square: square)
@@ -132,7 +184,6 @@ struct ChessSceneView: View {
         }
     }
 
-    /// One `move {from, to, promotion}`; `pieceMoved` plays only for a dispatched move (S60 11 e, h).
     private func send(from: String, to: String, promotion piece: String) {
         selected = ""
         promotion = nil
@@ -143,7 +194,6 @@ struct ChessSceneView: View {
     }
 }
 
-/// "Your Move" (or "White to Move", "Check", the result) with the mode and role line, and Flip Board for watchers.
 struct ChessHeader: View {
     let scene: ChessScene
     let onFlip: () -> Void
@@ -158,7 +208,7 @@ struct ChessHeader: View {
                     .accessibilityAddTraits(.isHeader)
                     .accessibilityIdentifier("game.chess.status")
                 if scene.isCheck {
-                    // The ring on the board carries the contrast; this text carries the meaning (S60 11 e).
+
                     Text(ChessCopy.check())
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(HostingTheme.inCallLeave)
@@ -166,7 +216,7 @@ struct ChessHeader: View {
                 }
                 Spacer(minLength: 8)
                 if scene.canFlip {
-                    // The R6-1 `flip_board` glyph joins this button when the icon lands (HD request B8-T3 R9).
+
                     Button(ChessCopy.flipBoard(), action: onFlip)
                         .buttonStyle(.bordered)
                         .tint(HostingTheme.token(DesignTokens.iosInCallText))
@@ -183,10 +233,6 @@ struct ChessHeader: View {
     }
 }
 
-// MARK: Clocks (one timer leaf)
-
-/// Both clocks and the rapid-fire move chip. Only this leaf ticks (once per second while the scene is active and a
-/// clock runs); the remaining time is the server's at the push minus the time since it arrived (S60 11 c, k).
 struct ChessClocksRow: View {
     let scene: ChessScene
     let orientation: ChessSide
@@ -229,8 +275,6 @@ private struct ChessClocksFace: View {
     }
 }
 
-/// "White 3:58" with tabular digits; the running side is outlined in paper; under 10 s it turns the warning color and
-/// adds "Low time" (no shake). VoiceOver reads one element ("White, 3 minutes, 58 seconds left", value "Running").
 private struct ChessClockChip: View {
     let clocks: ChessClockModel
     let side: ChessSide
@@ -266,7 +310,6 @@ private struct ChessClockChip: View {
     }
 }
 
-/// Rapid fire: "10 s per move" and, while a turn runs, the seconds left for this move.
 private struct ChessMoveTimerChip: View {
     let clocks: ChessClockModel
     let nowMillis: Double
@@ -293,10 +336,6 @@ private struct ChessMoveTimerChip: View {
     }
 }
 
-// MARK: Board (B3)
-
-/// A square board as wide as the card allows, capped at 480 pt (300 pt in compact height); cells are side / 8, about
-/// 38 pt on a 375 pt phone. Orientation follows your side (or a watcher's flip); never mirrored by the layout direction.
 struct ChessBoardSurface: View {
     let scene: ChessScene
     let games: GameStagePresenter
@@ -322,8 +361,6 @@ struct ChessBoardSurface: View {
     }
 }
 
-/// The canvas, its tap gesture and the synthetic accessibility children. Reads `chessPendingMove` (the move in flight)
-/// and nothing else from the presenter.
 struct ChessBoardLayer: View {
     let scene: ChessScene
     let games: GameStagePresenter
@@ -352,10 +389,6 @@ struct ChessBoardLayer: View {
     }
 }
 
-/// One canvas (S60 11 c, e): squares `iosGameBoardLight` / `iosGameBoardDark`, coordinates in paper `.caption2`, the
-/// last move outlined in paper 2 pt, the selection a paper and ink double ring, legal targets as solid paper dots (a
-/// ring for a capture), a king in check a paper 2 pt outline with a 2 pt red inner ring, the pending move dashed. No
-/// animation: pieces are placed instantly (S60 11 h).
 struct ChessCanvas: View {
     let scene: ChessScene
     let squares: [ChessSquareModel]
@@ -416,13 +449,11 @@ struct ChessCanvas: View {
                 index += 1
             }
         }
-        // Coordinates stay legible inside the fixed geometry (F00 5: geometry-bound board).
+
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
     }
 }
 
-/// Bundled Tabler Icons artwork (MIT), shared geometry for both sides. Darwin/Assets.xcassets belongs to the app,
-/// so these template images resolve from Bundle.main, not the Swift package resource bundle.
 enum ChessPieceArt {
     static func assetName(_ code: String) -> String? {
         guard let kind = ChessBoardPolicy.kind(ofPiece: code) else { return nil }
@@ -436,7 +467,6 @@ enum ChessPieceArt {
         }
     }
 
-    // Eight radial copies under the fill form a 1 pt silhouette outline without changing the licensed paths.
     private static let outlineOffsets: [CGSize] = [
         CGSize(width: -1, height: 0), CGSize(width: 1, height: 0),
         CGSize(width: 0, height: -1), CGSize(width: 0, height: 1),
@@ -449,12 +479,11 @@ enum ChessPieceArt {
         let isWhite = ChessBoardPolicy.side(ofPiece: code) == .white
         let fill = isWhite ? paper : ink
         let edge = isWhite ? ink : paper
-        // A square viewport preserves the source's 24 x 24 aspect and leaves room for the outline inside the cell.
+
         let side = min(rect.width, rect.height) * 0.96
         let frame = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
         let resolved = context.resolve(Image(name, bundle: .main).renderingMode(.original))
-        // Composite through the artwork's alpha. The compiled vector rendition can ignore ResolvedImage.shading;
-        // separate layers preserve both side colors and keep source-in blending away from the board underneath.
+
         context.drawLayer { layer in
             for offset in outlineOffsets {
                 layer.draw(resolved, in: frame.offsetBy(dx: offset.width, dy: offset.height))
@@ -470,9 +499,6 @@ enum ChessPieceArt {
     }
 }
 
-/// One synthetic accessibility child per square in the board geometry (S60 11 c): "e4, white knight", "e4, empty, legal
-/// move", "e8, black king, in check"; the selected square has the Selected trait; a square a tap would act on is a
-/// button whose action is that tap. Rank order follows the orientation.
 struct ChessAccessibilityGrid: View {
     let scene: ChessScene
     let squares: [ChessSquareModel]
@@ -510,7 +536,6 @@ struct ChessAccessibilityGrid: View {
     }
 }
 
-/// The tap action only on a square a tap would act on.
 struct ChessSquareAction: ViewModifier {
     let enabled: Bool
     let action: () -> Void
@@ -524,8 +549,6 @@ struct ChessSquareAction: ViewModifier {
     }
 }
 
-// MARK: Move chooser (the complete non-visual path)
-
 struct ChessChooserButton: View {
     let onOpen: () -> Void
 
@@ -538,9 +561,6 @@ struct ChessChooserButton: View {
     }
 }
 
-/// "Choose a Move" (S60 11 c, i): your pieces with a move ("Knight on g1"), then its destinations ("f3", "takes on
-/// e5"), then the promotion piece; 44 pt rows; Back steps back. Without projected legal moves it offers every empty or
-/// enemy square and the server decides (S60R 23). Instant swap in the card (no transition).
 struct ChessMoveChooser: View {
     let scene: ChessScene
     let onSend: (String, String, String) -> Void
@@ -632,10 +652,6 @@ private struct ChessChooserRow: View {
     }
 }
 
-// MARK: Status, actions, teams and moves
-
-/// "Move rejected" after a rejection (position restored), and the draw and takeback lines (S60 11 f). Reads
-/// `chessPendingMove` for the rejection, so a dispatch never re-evaluates the header.
 struct ChessStatusLines: View {
     let scene: ChessScene
     let games: GameStagePresenter
@@ -665,9 +681,6 @@ struct ChessStatusLines: View {
     }
 }
 
-/// The eligibility-gated actions (S60 11 c, C6-17): Offer Draw (never against the computer), Accept Draw and Decline,
-/// Request Takeback (disabled with its reason), Accept Takeback and Decline, and Resign… with its attached
-/// confirmation (R09). 44 pt bordered buttons that wrap; the pending one shows progress until its ack.
 struct ChessActionsBar: View {
     let scene: ChessScene
     let games: GameStagePresenter
@@ -686,7 +699,7 @@ struct ChessActionsBar: View {
                     actionButton(.declineDraw, title: ChessCopy.decline(), busy: busy, pendingType: interaction.pendingType)
                 }
                 if scene.showsTakeback {
-                    // The R6-1 `undo` glyph joins this button when the icon lands (HD request B8-T3 R9).
+
                     actionButton(.requestTakeback, title: ChessCopy.requestTakeback(), busy: busy, pendingType: interaction.pendingType)
                         .disabled(!scene.canRequestTakeback)
                         .accessibilityHint(ChessCopy.takebackReason(scene.takebackReason))
@@ -744,7 +757,6 @@ struct ChessActionsBar: View {
     }
 }
 
-/// "White: Avery (captain), You" and "Black: Ben": who plays each side (the computer by its server name).
 struct ChessTeamsList: View {
     let scene: ChessScene
 
@@ -760,7 +772,6 @@ struct ChessTeamsList: View {
     }
 }
 
-/// The move list (S60 11 c): a disclosure group "Moves" with rows "1. e4 e5" and "Auto-played for %@" notes.
 struct ChessMovesList: View {
     let scene: ChessScene
     @State private var expanded = false
@@ -800,10 +811,6 @@ struct ChessMovesList: View {
     }
 }
 
-// MARK: Copy
-
-/// S60 11 g, exhaustive iOS copy (L6-14): Apple title case for controls and headings, sentence case for lines and
-/// square labels; every enum mapped.
 enum ChessCopy {
     static func yourMove() -> String { ConclaveStrings.text("Your Move") }
     static func check() -> String { ConclaveStrings.text("Chess Check") }
@@ -881,12 +888,10 @@ enum ChessCopy {
         return low ? ConclaveStrings.format("Two Facts %@ %@", spoken, lowTime()) : spoken
     }
 
-    /// "3:58" in the current locale's digits.
     static func clock(_ seconds: Int) -> String {
         Duration.seconds(max(0, seconds)).formatted(.time(pattern: .minuteSecond))
     }
 
-    /// "3 minutes, 58 seconds" for VoiceOver.
     static func spokenDuration(_ seconds: Int) -> String {
         Duration.seconds(max(0, seconds)).formatted(.units(allowed: [.minutes, .seconds], width: .wide))
     }
@@ -909,7 +914,6 @@ enum ChessCopy {
         }
     }
 
-    /// "Avery offered a draw." for everyone but the offering side, which reads "Draw offered"; the same for takebacks.
     static func offerLine(_ offer: ChessOfferModel, isDraw: Bool) -> String {
         if !offer.isActive { return "" }
         if offer.isYourSide {
@@ -941,7 +945,6 @@ enum ChessCopy {
         }
     }
 
-    /// "white knight" for square labels; "" for an empty square.
     static func pieceName(_ code: String) -> String {
         guard let kind = ChessBoardPolicy.kind(ofPiece: code) else { return "" }
         let white = ChessBoardPolicy.side(ofPiece: code) == .white
@@ -958,17 +961,15 @@ enum ChessCopy {
     static func flipBoard() -> String { ConclaveStrings.text("Flip Board") }
     static func chooseMove() -> String { ConclaveStrings.text("Choose a Move") }
     static func choosePiece() -> String { ConclaveStrings.text("Choose a Piece") }
-    /// Its own key: the catalog's "Back" is the back camera.
+
     static func back() -> String { ConclaveStrings.text("Chess Chooser Back") }
     static func chooseSquare(_ piece: String) -> String { ConclaveStrings.format("Chess Choose Square %@", piece) }
 
-    /// "Knight on g1".
     static func pieceOn(_ square: ChessSquareModel) -> String {
         guard let kind = ChessBoardPolicy.kind(ofPiece: square.piece) else { return square.id }
         return ConclaveStrings.format("Chess Piece On %@ %@", kindName(kind), square.id)
     }
 
-    /// "f3", "takes on e5", "takes on d6 en passant", "castles to g1"; a promotion adds ", promotes".
     static func destination(_ move: ChessLegalMoveModel) -> String {
         var text = move.to
         switch ChessBoardPolicy.destinationKind(move) {
@@ -984,7 +985,6 @@ enum ChessCopy {
     static func noMoves() -> String { ConclaveStrings.text("No moves yet") }
     static func autoPlayed(_ name: String) -> String { ConclaveStrings.format("Auto-played for %@", name) }
 
-    /// "1. e4 e5", or "1. e4" while Black has not answered (SAN verbatim).
     static func moveRow(_ row: ChessMoveRowModel) -> String {
         if row.black.isEmpty { return ConclaveStrings.format("Chess Move Row %lld %@", row.number, row.white) }
         if row.white.isEmpty { return ConclaveStrings.format("Chess Move Row %lld %@ %@", row.number, "…", row.black) }
@@ -1005,7 +1005,6 @@ enum ChessCopy {
         return side == .black ? ConclaveStrings.format("Chess Team Black %@", list) : ConclaveStrings.format("Chess Team White %@", list)
     }
 
-    /// Board coordinate letters stay a to h in every locale (algebraic notation).
     static func fileLetter(_ file: Int) -> String {
         let id = ChessBoardPolicy.squareId(file: file, rank: 1)
         return id.isEmpty ? "" : String(id.prefix(1))
@@ -1018,7 +1017,6 @@ enum ChessCopy {
         return false
     }
 
-    /// "e4, white knight", "e4, empty, legal move", "e8, black king, in check, last move".
     static func squareLabel(_ square: ChessSquareModel, scene: ChessScene, pending: ChessPendingMoveModel, isTarget: Bool) -> String {
         let piece = ChessBoardPolicy.shownPiece(scene, pending: pending, square: square.id)
         var label = fact(square.id, piece.isEmpty ? ConclaveStrings.text("Chess Empty Square") : pieceName(piece))

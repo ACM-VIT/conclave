@@ -1,30 +1,23 @@
 import Foundation
 
-// ENT-7 (S10 5 l, L9): Account states for the Debug premeeting fixture route. The premeeting fixture session calls
-// `AccountFixtureScript.install` for every state (HD request B4-T3 R9): account states open Account with a scripted
-// identity and scripted answers; every other state still gets the scripted responder, so tapping the account button
-// in any fixture never reaches the network. Nothing here touches AppState, the view model or a provider SDK: a
-// scripted Continue with Google answers without the system sheet (tapping the iOS Sign in with Apple button still
-// opens the system sheet, so runtime cells never tap it).
-
 enum AccountFixtureState: String, CaseIterable, Equatable {
-    /// Signed out, Apple and Google listed; a provider sign-in succeeds after a short delay.
+
     case signedOut = "account-signed-out"
-    /// Signed in with Google; Delete Account (after the confirmation) succeeds: the deletion confirm cell.
+
     case signedIn = "account-signed-in"
-    /// A provider sign-in is cancelled by the person: silent, back to idle.
+
     case signInCancel = "account-sign-in-cancel"
-    /// A provider sign-in fails: the sign-in failed copy.
+
     case signInFailure = "account-sign-in-failure"
-    /// A stored sign-in whose session refresh returns no user: the Home notice, the expired context, the token.
+
     case expired = "account-expired"
-    /// Signed in; Delete Account fails: the delete failed footer (iOS) or snackbar with Retry (Android).
+
     case deleteFailure = "account-delete-failure"
-    /// Only Google listed: iOS shows the no-providers footer, Android shows Google (Q10).
+
     case googleOnly = "account-google-only"
-    /// Only Apple listed: iOS shows Apple alone, Android shows the no-providers copy.
+
     case appleOnly = "account-apple-only"
-    /// The first provider fetch fails (Try Again succeeds).
+
     case providersFailed = "account-providers-failed"
 }
 
@@ -32,9 +25,9 @@ enum AccountFixtureScript {
     static let userName = "Avery Lee"
     static let userEmail = "avery@example.com"
     static let userId = "fixture-user"
-    /// Scripted answers arrive after this delay, so pending rows are visible in captures.
+
     static let defaultAnswerDelayMillis = 600
-    /// The expired state's refresh answers after this delay (Home first, then the notice).
+
     static let expiryDelayMillis = 1500
 
     static func state(named: String) -> AccountFixtureState? {
@@ -57,7 +50,6 @@ enum AccountFixtureScript {
             || state == AccountFixtureState.expired
     }
 
-    /// Account states open Account at start (iOS sheet, Android page), except the expired state, which starts on Home.
     static func opensAccount(_ state: AccountFixtureState?) -> Bool {
         guard let state else { return false }
         return state != AccountFixtureState.expired
@@ -77,9 +69,6 @@ enum AccountFixtureScript {
         return AccountSignInOutcome.succeeded
     }
 
-    /// Installs the scripted responder on the fixture's account presenter, applies the state's identity and opens
-    /// Account (or schedules the expiry). `fixtureState` is the premeeting fixture state's raw value; a non-account
-    /// state installs the signed-out responder only. Returns the responder (tests read its request log).
     @MainActor
     @discardableResult
     static func install(fixtureState: String, account: AccountPresenter, premeeting: PremeetingPresenter,
@@ -100,14 +89,13 @@ enum AccountFixtureScript {
             responder.scheduleExpiry()
         } else if opensAccount(state) {
             premeeting.openAccount()
-            // Idempotent beside the presenter hook in `openAccount()` (HD request B4-T3 R2).
+
             account.didPresent()
         }
         return responder
     }
 }
 
-/// The scripted coordinator of one fixture run. Answers carry the request's generation, like production.
 @MainActor
 final class AccountFixtureResponder {
     let state: AccountFixtureState?
@@ -124,7 +112,6 @@ final class AccountFixtureResponder {
         self.answerDelayMillis = answerDelayMillis
     }
 
-    /// Every request kind handled, in order (tests).
     var handledRequests: [AccountRequestKind] { handled }
 
     func perform(_ request: AccountRequest) {
@@ -174,7 +161,6 @@ final class AccountFixtureResponder {
         }
     }
 
-    /// The expired state: the stored sign-in is dropped, the account gets the expired context and token, Home the notice.
     func scheduleExpiry() {
         let platform = AccountPlatform.current
         let target = premeeting
@@ -189,7 +175,6 @@ final class AccountFixtureResponder {
         answerLater(afterMillis: answerDelayMillis, body)
     }
 
-    /// A zero `answerDelayMillis` (tests) answers synchronously, whatever the delay asked for.
     private func answerLater(afterMillis: Int, _ body: @escaping (AccountPresenter) -> Void) {
         if answerDelayMillis <= 0 {
             if let presenter = account {

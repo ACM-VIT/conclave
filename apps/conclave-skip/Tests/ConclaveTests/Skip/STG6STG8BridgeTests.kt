@@ -10,15 +10,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * STG-6 and STG-8 through the transpiled policies, presenter and fixtures (the Swift halves are
- * T/STG6MeetingDetailsTests.swift and T/STG8AttendeeViewerTests.swift), with the same fixtures: the one connection label
- * (RECONCILE R21), the Meeting Details rows for host, guest, recovering, custom tenant and attendee, no webinar link on
- * open (R34), the Android items (Copy folded into trailing icon buttons, headers for Status and Webinar) and titles, the
- * API 28 to 32 snackbar rule, and the attendee feed, inset, waiting count, Q&A badge, hidden hand and announcements.
- * Pure: no composition (only the first composition in a JVM keeps recomposing under Robolectric; PanelStageBridgeTests
- * owns it).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class STG6STG8BridgeTests {
@@ -59,14 +50,14 @@ class STG6STG8BridgeTests {
         assertEquals(listOf("Avery", "You"), info.hostNames.toList())
         assertEquals(0, session.counters.generateWebinarLink)
         assertEquals("panel=meetingInfo invoker=call destination=none", session.panelReadout())
-        // Android folds Copy code and Copy link into the trailing icon buttons; Status and Webinar carry headers.
+
         val keys = meetingDetailsItems(info).map { it.key }
         assertEquals(listOf("roomCode", "meetingLink", "shareInvite", "h:status", "meetingLocked", "liveNotes", "captions",
             "inviteCodeRequired", "h:webinar", "shareWebinarLink", "copyWebinarLink", "d:details", "hosts", "started", "connection",
             "d:host", "hostControls"), keys)
         assertEquals("stg_panel_meeting_details", meetingDetailsTitleName(isAttendee = false, top = null))
         assertEquals("stg_panel_host_controls", meetingDetailsTitleName(isAttendee = false, top = MeetingDetailsPages.HOST_CONTROLS))
-        // PPL-4's host sub-pages push PeopleRoute raw values on the same stack and keep their own titles (R50-2).
+
         assertEquals(PeopleRoute.hostControls.rawValue, MeetingDetailsPages.HOST_CONTROLS)
         assertTrue(meetingDetailsIsHostPage(PeopleRoute.inviteCode.rawValue))
         assertTrue(meetingDetailsIsHostPage(PeopleRoute.notice.rawValue))

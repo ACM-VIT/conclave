@@ -1,11 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// Badges and tags (F00 C06). Badges are never read on their own: the owner's label or value carries the count
-// ("Chat, 3 unread"), tags fold into the row label and tile badges into the tile value.
-
-/// The count badge: ink numerals on coral (6.374, never white), "99+" above 99, removed at zero. Capped with the
-/// owner at xxxLarge. Coral fill against the raised in-call surface is 5.043.
 struct ConclaveCountBadge: View {
     let count: Int
 
@@ -28,7 +23,6 @@ struct ConclaveCountBadge: View {
     }
 }
 
-/// The dot badge: an 8 pt coral circle for "has unseen content" (More), hidden from accessibility.
 struct ConclaveDotBadge: View {
     var body: some View {
         Circle()
@@ -38,7 +32,6 @@ struct ConclaveDotBadge: View {
     }
 }
 
-/// A role tag beside a name: neutral, never coral. iOS title case ("Co-Host", S50 R50-5).
 struct ConclaveTag: View {
     let tag: ConclavePersonTag
 
@@ -59,9 +52,6 @@ struct ConclaveTag: View {
     }
 }
 
-/// A status badge on a video tile: 24 pt (16 pt dense). Hand raised is the warning fill with an ink glyph (11.855);
-/// pinned and presenting are the label scrim with a paper glyph; weak connection is the scrim with the glyph in the
-/// warning color. Decorative: the tile value says it.
 struct ConclaveTileBadge: View {
     let kind: ConclaveTileBadgeKind
     let size: CGFloat

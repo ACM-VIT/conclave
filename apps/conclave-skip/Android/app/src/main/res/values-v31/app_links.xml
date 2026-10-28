@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Advanced path filters are safe to expose only on API 31 and newer. -->
+
     <bool name="conclave_verified_app_links_enabled">true</bool>
 </resources>

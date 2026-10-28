@@ -4,8 +4,6 @@ import Observation
 import UIKit
 #endif
 
-// MARK: - Settings Sheet
-
 enum SettingsSheetPage: Equatable {
     case overview
     case room
@@ -1134,8 +1132,6 @@ struct SettingsSheetView: View {
                 androidTint: "muted"
             )
 
-            // S60 C6-10 (PPL-2): the field runs on the shared DisplayNameEditor (650 ms autosave, single flight, queue and
-            // flush on close, PH16 refusals and the S50 Q14 session flag); SET-1 replaces this legacy row.
             TextField("", text: Binding(get: { viewModel.displayNameEditor.draft },
                                         set: { viewModel.displayNameEditor.setDraft($0) }),
                       prompt: Text("Display name").foregroundStyle(ACMColors.textFaint))

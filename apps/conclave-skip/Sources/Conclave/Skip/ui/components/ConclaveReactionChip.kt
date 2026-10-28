@@ -25,16 +25,6 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import java.text.NumberFormat
 
-/*
- * The message reaction chip (F00 C24 = S40 CL2): "emoji count" in labelLarge tabular digits on a small-shape
- * surface, 32 dp tall inside a 48 dp target. Yours is selected: secondaryContainer with onSecondaryContainer
- * (13.963 light, 10.006 dark); others surfaceContainerHighest with onSurface. Never coral. Each chip is a Checkbox
- * node carrying the presenter's label, the count as its state and its toggle state; a long press (with its label)
- * opens the reactions viewer. Not FilterChip: its own selectable surface consumes the press, so an outer long press
- * would not fire (S40 3 d). A tap plays `reactionSent` only when it adds a reaction (S40 3 h); the long press plays
- * `longPress`. Chips wrap in a FlowRow with 4 dp gaps.
- */
-
 @Composable
 internal fun ConclaveReactionChip(
     chip: ConclaveReactionChipModel, identifier: String, onToggle: (ConclaveReactionChipModel) -> Unit, modifier: Modifier = Modifier,
@@ -79,7 +69,7 @@ internal fun ConclaveReactionChip(
     ) {
         Box(Modifier.heightIn(min = ConclaveReactionChipPolicy.androidVisualHeight.dp)
             .padding(horizontal = ConclaveReactionChipPolicy.horizontalPadding.dp), contentAlignment = Alignment.Center) {
-            // The visible face is data (the emoji and its count), built before the call so no Text takes a literal.
+
             val face = chip.emoji + " " + count
             ConclaveText(face, line = identifier, style = rememberTabular(MaterialTheme.typography.labelLarge),
                 modifier = Modifier.clearAndSetSemantics { })
@@ -87,8 +77,6 @@ internal fun ConclaveReactionChip(
     }
 }
 
-/** The chips of one message: a FlowRow with 4 dp gaps, each chip its own node in reading order. Callers pass the
- *  transpiled array as a list (`.toList()`). */
 @Composable
 internal fun ConclaveReactionChipRow(
     chips: List<ConclaveReactionChipModel>, identifier: String, onToggle: (ConclaveReactionChipModel) -> Unit,

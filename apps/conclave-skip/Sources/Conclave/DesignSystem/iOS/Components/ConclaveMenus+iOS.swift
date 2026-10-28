@@ -1,12 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// Menus, context menus and the reaction palette (F00 C16, C22). The system `Menu` and `contextMenu` keep their own
-// rendering, motion, semantics and haptics; menus inherit the invoker's dark environment over the stage. These
-// helpers build menu content from the shared `MenuSectionModel`, so the iOS menu, the iOS fallback sheet and the
-// Android sheet read one model. Content is built only when the menu opens (the system calls the builder then).
-
-/// The SF Symbol for a manifest concept used in menus, nil for a concept with no glyph. Screens may pass their own.
 enum ConclaveMenuSymbols {
     static func symbol(for concept: String) -> String? {
         switch concept {
@@ -53,10 +47,6 @@ enum ConclaveMenuSymbols {
     }
 }
 
-/// Menu rows from sections, in stable order. Sections become system sections (separators between them); a toggle
-/// row is a system `Toggle` (checkmark); a destructive row takes the destructive role; an unavailable row stays,
-/// disabled, with its reason as a second line (R10). Items that need another step end with an ellipsis in their
-/// title (the caller's copy).
 struct ConclaveMenuContent: View {
     let sections: [MenuSectionModel]
     let symbol: (MenuItemModel) -> String?
@@ -123,13 +113,10 @@ private struct ConclaveMenuRow: View {
     }
 }
 
-/// Where a menu's first item sits. Menus opened from the bottom bar keep the first declared item nearest the control
-/// (`.priority`); other menus keep the declared order (S30 CL5, D23).
 enum ConclaveMenuOrder: String, CaseIterable {
     case fromBar, fixed
 }
 
-/// An anchored menu (F00 C16) over a label the caller draws (the More control, a row's More, the host Leave).
 struct ConclaveMenuButton<MenuLabel: View>: View {
     let sections: [MenuSectionModel]
     let order: ConclaveMenuOrder
@@ -157,9 +144,6 @@ struct ConclaveMenuButton<MenuLabel: View>: View {
     }
 }
 
-/// The reaction palette (F00 C22): one row of emoji in a palette `ControlGroup` inside a menu. Each emoji is
-/// labelled; already-used reactions carry the selected trait. While reactions are off the row stays, disabled,
-/// with the reason as its value. The owning control plays `reactionSent` (a menu item may unmount first).
 struct ConclaveReactionPalette: View {
     let options: [ConclavePaletteOption]
     let isEnabled: Bool

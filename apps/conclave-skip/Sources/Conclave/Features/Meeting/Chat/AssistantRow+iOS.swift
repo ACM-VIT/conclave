@@ -2,26 +2,12 @@
 import SwiftUI
 import UIKit
 
-// S40 4 c (CHT-7): the Conclave AI row on iOS. Reads only its `ChatRowEntry` (`row` plus the `assistant` model the
-// presenter writes), so a streamed delta redraws this row and never the timeline. Leading like peer rows: the coral
-// assistant mark (CL4, onCoral glyph) and the "Conclave" header with the neutral "AI" tag on every answer (each answer
-// is its own reply), then the bubble: the neutral fill with the 1 pt separator border (the C23 tone that carries the
-// border), and a 1 pt system red border for a failure. Inside: the thinking line (static label plus the system
-// spinner, R13), the reasoning and steps disclosures (expanded while the answer streams, collapsed when it completes
-// unless the person chose), the markdown answer (`AssistantMarkdownView`, links through the external link
-// confirmation) and the error line with Try Again for the asker. No shimmer, pulse or cursor; no haptics. While the
-// answer is thinking, streaming or failed the row is one accessibility element ("Conclave, Thinking"); a finished
-// answer keeps its headings and links as their own elements behind the header, which carries the summary and the row
-// actions. The approval card and the key prompt are W10-2 (not shown).
-
-/// Canonical assistant artwork; completion and error retain their existing meanings.
 enum AssistantSymbols {
     static let assistant = ConclaveSymbols.sparkles
     static let taskDone = ConclaveSymbols.checkmark
     static let error = ConclaveSymbols.exclamationmarkOctagonFill
 }
 
-/// S40 4 g, iOS: Apple title case for controls, sentence case for status and body text.
 enum AssistantCopy {
     static var name: String { ConclaveStrings.text("Conclave") }
     static var tag: String { ConclaveStrings.text("AI") }
@@ -37,7 +23,6 @@ enum AssistantCopy {
         model.isWorking ? ConclaveStrings.text("Working") : ConclaveStrings.text("Actions")
     }
 
-    /// Running and done labels (`W/app/components/ConclaveMessage.tsx:48-74`).
     static func taskLabel(_ task: AssistantTask) -> String {
         switch task.kind {
         case .webSearch:
@@ -54,7 +39,6 @@ enum AssistantCopy {
         }
     }
 
-    /// Presenter-chosen copy per kind (CH8); `needsKey` reads as unavailable until the key prompt ships (W10-2).
     static func errorText(_ kind: AssistantErrorKind) -> String {
         switch kind {
         case .unavailable, .needsKey: return ConclaveStrings.text("Conclave AI isn't available in this room.")
@@ -65,7 +49,6 @@ enum AssistantCopy {
         }
     }
 
-    /// The one element's label while the answer is not finished ("Conclave, Thinking"), or the header's summary.
     static func rowLabel(_ row: ChatRowModel, model: AssistantRowModel) -> String {
         let detail: String
         if model.showsError {
@@ -83,15 +66,12 @@ enum AssistantCopy {
 struct AssistantRowView: View {
     let entry: ChatRowEntry
     let actions: ChatRowActions
-    let avatarSize: CGFloat
 
     var body: some View {
         let row = entry.row
         let model = entry.assistant ?? AssistantRowModel.placeholder
         let isFinished = model.state == AssistantRowState.done
         HStack(alignment: .top, spacing: CGFloat(DesignTokens.space8)) {
-            AssistantMark(size: avatarSize)
-                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space4)) {
                 AssistantHeader(row: row, model: model, actions: actions, isSummary: isFinished)
                 AssistantBubble(row: row, model: model, actions: actions)
@@ -119,8 +99,6 @@ struct AssistantRowView: View {
     }
 }
 
-/// S40 4 i: one element while thinking, streaming or failed (Try Again as its action for the asker); a finished
-/// answer keeps its children.
 private struct AssistantRowElement: ViewModifier {
     let row: ChatRowModel
     let model: AssistantRowModel
@@ -145,21 +123,6 @@ private struct AssistantRowElement: ViewModifier {
     }
 }
 
-/// CL4: a 32 pt coral circle with the onCoral assistant glyph (the brand speaking).
-private struct AssistantMark: View {
-    let size: CGFloat
-
-    var body: some View {
-        Image(systemName: AssistantSymbols.assistant)
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(HostingTheme.onCoral)
-            .frame(width: size, height: size)
-            .background(HostingTheme.coralFill, in: Circle())
-    }
-}
-
-/// "Conclave", the neutral "AI" tag (F00 C06 tag look) and the time. A finished answer's header is its summary element
-/// with the row actions (5 i) and Try Again never applies (only failures retry).
 private struct AssistantHeader: View {
     let row: ChatRowModel
     let model: AssistantRowModel
@@ -207,7 +170,6 @@ private struct AssistantHeaderSummary: ViewModifier {
     }
 }
 
-/// The bubble and its parts. The disclosure choices are the person's once made; until then they follow the state.
 private struct AssistantBubble: View {
     let row: ChatRowModel
     let model: AssistantRowModel
@@ -231,7 +193,7 @@ private struct AssistantBubble: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
                     } label: {
-                        Label(AssistantCopy.reasoningLabel(model), systemImage: AssistantSymbols.assistant)
+                        Text(AssistantCopy.reasoningLabel(model))
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(HostingTheme.secondaryText)
                     }
@@ -278,14 +240,12 @@ private struct AssistantBubble: View {
         .modifier(AssistantContextMenu(row: row, actions: actions))
     }
 
-    /// Expanded while the answer streams, collapsed once it is done, unless the person opened or closed it.
     private func binding(_ choice: Binding<Bool?>) -> Binding<Bool> {
         let automatic = model.state != AssistantRowState.done
         return Binding(get: { choice.wrappedValue ?? automatic }, set: { choice.wrappedValue = $0 })
     }
 }
 
-/// R13: the static label with the system spinner, never a pulse.
 private struct AssistantThinkingLine: View {
     var body: some View {
         HStack(spacing: CGFloat(DesignTokens.space8)) {
@@ -298,7 +258,6 @@ private struct AssistantThinkingLine: View {
     }
 }
 
-/// One listed step: the check when done, the small system spinner while running, the label and the query below.
 private struct AssistantTaskRow: View {
     let task: AssistantTask
 
@@ -326,7 +285,6 @@ private struct AssistantTaskRow: View {
     }
 }
 
-/// CH8: the kind's copy with the error glyph, and Try Again for the asker (`.bordered`, neutral).
 private struct AssistantErrorLine: View {
     let row: ChatRowModel
     let model: AssistantRowModel
@@ -353,8 +311,6 @@ private struct AssistantErrorLine: View {
     }
 }
 
-/// 5 c: the same message menu as other rows once the answer offers an action (Reply, reactions and Copy come when it
-/// is done); no menu at all while it has none.
 private struct AssistantContextMenu: ViewModifier {
     let row: ChatRowModel
     let actions: ChatRowActions

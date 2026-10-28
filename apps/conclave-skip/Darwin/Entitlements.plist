@@ -10,10 +10,7 @@
     <array>
         <string>applinks:conclave.acmvit.in</string>
         <string>applinks:www.conclave.acmvit.in</string>
-        <!-- SYS-9 (S70 9 c): the Debug-only developer association. Conclave.xcconfig resolves
-             this entry to the developer mode association for CONCLAVE_DEVELOPER_APPLINKS_HOST
-             in Debug only; in Release it resolves to the production host above again (the
-             system collapses the repeat), so a Release build never carries a developer domain. -->
+
         <string>$(CONCLAVE_DEVELOPER_ASSOCIATED_DOMAIN)</string>
     </array>
     <key>com.apple.security.application-groups</key>

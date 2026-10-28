@@ -13,15 +13,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 9 d (ACT-3) on Android, Bluff: write (K1 with the blanked fact, K2, K10 OutlinedTextField with the 60 character
- * limit and the IME Send action, Submit bluff; then "Submitted: %1$s" and the submitted count), choose (K3 with your
- * own bluff disabled as "Your bluff"), reveal ("The truth" with ext.success and the check glyph; "Bluff by %1$s"
- * with votes; "You picked this"; the round points as K9). The draft is saveable state keyed by the round, so it
- * survives pushes, the IME and rotation, stays on a rejection and clears only when the round changes; the composer
- * stays until the submit's ack (S60 9 f).
- */
-
 @Composable
 internal fun BluffSceneView(scene: BluffScene, games: GameStagePresenter) {
     var draft by rememberSaveable(scene.round) { mutableStateOf("") }
@@ -45,7 +36,6 @@ internal fun BluffSceneView(scene: BluffScene, games: GameStagePresenter) {
     }
 }
 
-/** K10 plus the submitted state; reads `interaction` for the pending submit. */
 @Composable
 private fun BluffComposer(scene: BluffScene, games: GameStagePresenter, draft: String, onDraftChange: (String) -> Unit) {
     val interaction = games.interaction
@@ -76,7 +66,6 @@ private fun BluffComposer(scene: BluffScene, games: GameStagePresenter, draft: S
     }
 }
 
-/** K3 for the choose phase; tapping your current pick or your own bluff sends nothing. */
 @Composable
 private fun BluffChoices(scene: BluffScene, games: GameStagePresenter) {
     val interaction = games.interaction
@@ -93,7 +82,6 @@ private fun BluffChoices(scene: BluffScene, games: GameStagePresenter) {
     }
 }
 
-/** The reveal: every option read-only with its truth or author and votes, then the round points (K9). */
 @Composable
 private fun BluffReveal(scene: BluffScene) {
     val truth = conclaveString("gm_bluff_truth")

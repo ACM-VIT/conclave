@@ -3,9 +3,6 @@ import Foundation
 import FoundationNetworking
 #endif
 
-// ACT-8 (B8-T2): Watch Together search and trending through the app backend, moved out of the shared Activities
-// presenter (AppHostPresenter.swift) so that file stays free of platform branches (STG9). KlipyService's HTTP pattern.
-
 private struct WatchSearchHTTPResult {
     let data: Data
     let statusCode: Int
@@ -19,11 +16,6 @@ private struct AndroidWatchSearchHTTPResponse: Decodable {
 }
 #endif
 
-/// Watch search and trending through the app backend (S60 13 c, f): `GET {appBaseURL}/api/youtube/search?q=` and
-/// `/api/youtube/trending` (apps/web/src/app/api/youtube), so the YouTube key stays on the server and the embed page
-/// never reaches the network. A 503 means search is switched off on that server ("Search is switched off on this
-/// server. Paste a YouTube link instead."). Reached only through `AppHostPresenter.watchSearch` and `watchTrending`,
-/// which the core sets (HD request B8-T2 R3); fixtures set canned rows, so no view calls it.
 enum WatchSearchService {
     static let queryLimit = 100
     static let resultLimit = 12
@@ -53,8 +45,6 @@ enum WatchSearchService {
         return components.url
     }
 
-    /// The route's answer as rows (pure, tested with canned bodies): 503 is "search off", any other non-2xx or an
-    /// unreadable body is a failure; rows need a valid video id, are deduped and capped at 12.
     static func decode(statusCode: Int, data: Data) -> WatchSearchOutcome {
         if statusCode == 503 { return WatchSearchOutcome(items: [], unavailable: true, failed: false) }
         if statusCode < 200 || statusCode > 299 { return failure }

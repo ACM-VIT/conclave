@@ -1,13 +1,5 @@
 package conclave.module
 
-/*
- * WP2-S1 Kotlin DTO boundary (contract-wp2-first-slice 3.5). Plain Kotlin values and caches over the transpiled
- * MeetingShellPresenter for the handwritten Compose shells. No composables, no listeners, and no @Stable or
- * @Immutable on Skip collections (R14): only Kotlin scalars cross into row composables, and the backing list never
- * escapes a snapshot.
- */
-
-/** One control row as Kotlin scalars; enum fields stay their transpiled Swift enums (String raw values). */
 internal data class MeetingControlRowUi(
     val id: String,
     val isVisible: Boolean,
@@ -18,7 +10,7 @@ internal data class MeetingControlRowUi(
     val hint: MeetingControlHint,
     val badgeCount: Int,
     val failure: MeetingActionFailure,
-    /** WP2-S2a (S30 CC3): raise or lower for a hand failure, none otherwise. */
+
     val failureDirection: MeetingActionDirection,
 ) {
     fun matches(row: MeetingControlRow): Boolean =
@@ -42,10 +34,6 @@ internal data class MeetingControlRowUi(
     }
 }
 
-/**
- * Per-row reuse: a row whose Swift value is unchanged keeps the previous snapshot's exact instance, found by id, so
- * only the changed row's composables see a new value under key(id). Ids and order are fixed (S1C ROW).
- */
 internal class MeetingControlRows(source: MeetingControlRowsState, previous: MeetingControlRows? = null) {
     val revision: Int = source.revision
     private val rows: List<MeetingControlRowUi> = buildList {
@@ -62,16 +50,14 @@ internal class MeetingControlRows(source: MeetingControlRowsState, previous: Mee
     val size: Int get() = rows.size
     operator fun get(index: Int): MeetingControlRowUi = rows[index]
 
-    /** The row for a control id, or null. */
     fun row(id: MeetingControlID): MeetingControlRowUi? = rows.firstOrNull { it.id == id.rawValue }
 }
 
-/** One cache per presenter lifetime (remember(presenter)). A cache hit still reads the observed property. */
 internal class MeetingControlRowsCache(private val presenter: MeetingShellPresenter) {
     private var cached: MeetingControlRows? = null
 
     fun current(): MeetingControlRows {
-        // Always read the observed property, even on a cache hit, to keep Compose subscribed.
+
         val state = presenter.controls
         val previous = cached
         if (previous != null && previous.revision == state.revision) return previous
@@ -79,7 +65,6 @@ internal class MeetingControlRowsCache(private val presenter: MeetingShellPresen
     }
 }
 
-/** The session snapshot as Kotlin scalars for the shells (phase routing, notice, outcome, role, confirmation). */
 internal data class MeetingSessionUi(
     val revision: Int,
     val callSession: Int,
@@ -94,9 +79,9 @@ internal data class MeetingSessionUi(
     val isWebinarAttendee: Boolean,
     val canEndForEveryone: Boolean,
     val confirmationId: Int,
-    /** A MeetingConfirmationInvoker value (S50 PH17): "call", "more" or "hostControls"; null without a dialog. */
+
     val confirmationInvoker: String?,
-    /** WP2-S2a (S10 R6 c): the root keeps the call root for recovering only while this is true. */
+
     val hasBeenAdmittedThisSession: Boolean,
     val entryOrigin: MeetingEntryOrigin,
 ) {
@@ -122,7 +107,6 @@ internal data class MeetingSessionUi(
     }
 }
 
-/** One cache per presenter lifetime; rebuilds only when the session revision changes. */
 internal class MeetingSessionCache(private val presenter: MeetingShellPresenter) {
     private var cached: MeetingSessionUi? = null
 
@@ -134,7 +118,6 @@ internal class MeetingSessionCache(private val presenter: MeetingShellPresenter)
     }
 }
 
-/** The entry snapshot as Kotlin scalars (preserved join input, form error, entry overlay intent). */
 internal data class MeetingEntryUi(
     val roomId: String,
     val displayName: String,

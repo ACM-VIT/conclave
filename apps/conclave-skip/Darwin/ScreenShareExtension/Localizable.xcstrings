@@ -2,7 +2,6 @@
   "sourceLanguage" : "en",
   "strings" : {
     "Couldn’t start screen sharing. Try again." : {
-      "comment" : "System alert when a screen share broadcast never connected to Conclave (S70 10 g)",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -14,7 +13,6 @@
       }
     },
     "Screen sharing stopped because Conclave lost the connection." : {
-      "comment" : "System alert when the broadcast lost its connection to Conclave while sharing (S70 10 g)",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -26,7 +24,6 @@
       }
     },
     "Screen sharing stopped." : {
-      "comment" : "System alert after the person stopped screen sharing from Conclave (S70 10 g)",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {

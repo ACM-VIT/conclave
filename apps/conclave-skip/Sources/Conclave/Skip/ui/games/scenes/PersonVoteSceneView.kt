@@ -12,12 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 9 d (ACT-3) on Android, Most Likely To: vote (K1 "Who is most likely %1$s", K2, K3 person rows from the server's
- * list, self allowed as the server allows, vote changeable; a target who left clears your vote with a notice), reveal
- * (sticky: counts, the winner marked "Most votes" in text and glyph, ties named, announced once).
- */
-
 @Composable
 internal fun PersonVoteSceneView(scene: PersonVoteScene, games: GameStagePresenter) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.mostLikelyTo"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -55,7 +49,6 @@ internal fun PersonVoteSceneView(scene: PersonVoteScene, games: GameStagePresent
     }
 }
 
-/** K3 person rows; your current vote again sends nothing. `voteCast` plays only for a sent vote. */
 @Composable
 private fun PersonVoteChoices(scene: PersonVoteScene, games: GameStagePresenter) {
     val interaction = games.interaction

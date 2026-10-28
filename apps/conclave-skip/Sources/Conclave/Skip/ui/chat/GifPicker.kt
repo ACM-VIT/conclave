@@ -54,18 +54,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/*
- * S40 7 d (CHT-5) on Android: the GIF, sticker and clip picker. Overlay: a ModalBottomSheet over the panel (never a
- * sheet from a dismissing sheet); side pane: the same content as an in-pane page on the pane's local back stack
- * (R40-12), so no window sheet or scrim covers the live stage. The F00 C20 search field, the C21 segmented row (its
- * change plays `selectionChanged`), a LazyVerticalGrid of 104 dp adaptive cells with 8 dp gaps that clears the
- * navigation bar, the next page when the last visible index is within six of the end, "Powered by Klipy" and the one
- * v1 tip (F00 C25). The content owns the 250 ms debounce and the generation guard through the shared
- * ChatGifPickerState; every request goes through `presenter.searchGifs` and is cancelled by a newer query, a kind
- * switch or closing the picker. A tile sends at once with the current reply and closes the picker. The native path no
- * longer uses the legacy chat view's GIF sheet host.
- */
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun GifPickerSheet(presenter: ChatPresenter, onDismiss: () -> Unit) {
@@ -83,7 +71,6 @@ internal fun GifPickerSheet(presenter: ChatPresenter, onDismiss: () -> Unit) {
     }
 }
 
-/** The picker body, shared by the overlay sheet and the side pane's in-pane page. */
 @Composable
 internal fun GifPickerContent(presenter: ChatPresenter, onPicked: () -> Unit, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
@@ -117,7 +104,6 @@ internal fun GifPickerContent(presenter: ChatPresenter, onPicked: () -> Unit, mo
         }
     }
 
-    // First open, then the 250 ms debounce for the query; a kind switch searches at once.
     LaunchedEffect(query) {
         if (state.generation > 0) delay(ChatGifPickerState.debounceMillis.toLong())
         start(ChatGifKind.init(rawValue = kindId) ?: ChatGifKind.gif, query)

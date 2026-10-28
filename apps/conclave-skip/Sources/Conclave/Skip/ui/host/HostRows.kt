@@ -24,15 +24,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-/*
- * S50 6 d (PPL-4): the Android Host Controls rows. HostPolicySwitchRow is PL4: the M3 Switch in primary (R06) shows
- * `isPending ? requestedOn : isOn`, so a tap moves the knob once and it stays until the acknowledgement or the
- * failure (then one move back); the row is one toggleable node with role Switch and the state "Updating" while
- * pending. Bulk rows are buttons whose confirmation comes from the page's HostConfirmationHost leaf (S50 3 j). Copy:
- * S50 6 g (`hst_` names; RECONCILE R16 policy names, R17 lock failure).
- */
-
-/** The policy names (S50 6 g, 9 g); also the "%1$s turned on by another host." and failure arguments. */
 internal fun hostPolicyTitleOf(context: Context, raw: String): String = when (raw) {
     HostPolicyID.lockMeeting.rawValue -> conclaveStringOf(context, "hst_lock")
     HostPolicyID.allowGuests.rawValue -> conclaveStringOf(context, "hst_allow_guests")
@@ -50,7 +41,6 @@ internal fun hostPolicyTitleOf(context: Context, raw: String): String = when (ra
     else -> conclaveStringOf(context, "ppl_host_controls")
 }
 
-/** The disabled reason under a row (S50 6 f); a pending row reads "Updating" instead. */
 internal fun hostReasonOf(context: Context, raw: String): String? = when (raw) {
     PeopleActionReason.reconnecting, PeopleActionReason.notJoined -> conclaveStringOf(context, "ds_unavailable_reconnecting")
     PeopleActionReason.offline -> conclaveStringOf(context, "ds_unavailable_offline")
@@ -64,10 +54,6 @@ internal fun hostBulkTitleOf(context: Context, row: HostBulkRow): String = when 
     HostBulkID.lowerAllHands -> conclaveStringOf(context, if (row.isPending) "hst_lowering_hands" else "hst_lower_hands")
 }
 
-/**
- * The Everyone rows' leading glyphs (S50 6 d, e; Android rows only, iOS Form rows carry none, H-06). Lower all hands
- * uses the canonical R50-4 lower-hand glyph, keeping the group icon-complete.
- */
 internal fun hostBulkIcon(bulk: HostBulkID): ImageVector = when (bulk) {
     HostBulkID.muteAll -> ConclaveIcons.MicOffFill1
     HostBulkID.camerasOff -> ConclaveIcons.VideocamOffFill1
@@ -75,7 +61,6 @@ internal fun hostBulkIcon(bulk: HostBulkID): ImageVector = when (bulk) {
     HostBulkID.lowerAllHands -> ConclaveIcons.DoNotTouchFill0
 }
 
-/** PL4 on Android. Reads the host snapshot; the tap dispatches through `setPolicy` (no state write before the ack). */
 @Composable
 internal fun HostPolicySwitchRow(people: PeoplePresenter, policy: HostPolicyID) {
     val context = LocalContext.current
@@ -105,7 +90,6 @@ internal fun HostPolicySwitchRow(people: PeoplePresenter, policy: HostPolicyID) 
     )
 }
 
-/** One Everyone row (S50 6 d): a button; pending shows its label and a spinner, disabled. */
 @Composable
 internal fun HostBulkRowItem(people: PeoplePresenter, row: HostBulkRow) {
     val context = LocalContext.current
@@ -122,7 +106,6 @@ internal fun HostBulkRowItem(people: PeoplePresenter, row: HostBulkRow) {
     )
 }
 
-/** The `hostControls` confirmation leaf on each host page (S50 3 j): bulk, Remove Code, Block, Rotate Link. */
 @Composable
 internal fun HostConfirmationHost(people: PeoplePresenter) {
     val confirmation = people.confirmation ?: return

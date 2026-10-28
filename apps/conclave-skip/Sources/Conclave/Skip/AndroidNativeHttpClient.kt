@@ -30,16 +30,11 @@ object AndroidNativeHttpClient {
         .callTimeout(150, TimeUnit.SECONDS)
         .build()
 
-    /**
-     * S40 CH7 (CHT-7): the streamed answer reads frames as they arrive, so the whole call may outlast the buffered
-     * client's 150 s cap (web search and tool rounds); the 120 s read timeout still ends a stalled stream.
-     */
     private val assistantStreamClient = client.newBuilder()
         .readTimeout(120, TimeUnit.SECONDS)
         .callTimeout(300, TimeUnit.SECONDS)
         .build()
 
-    /** One running assistant stream: the call once it exists, and whether Swift cancelled it before or after that. */
     private class AssistantStream {
         @Volatile var call: Call? = null
         @Volatile var cancelled = false
@@ -115,14 +110,6 @@ object AndroidNativeHttpClient {
         }
     }
 
-    /**
-     * S40 CH7 (CHT-7): the assistant's server-sent events, delivered as they arrive. The reader thread hands [onChunk]
-     * one complete frame at a time (its lines plus the blank line that ends it; UTF-8 is decoded per line, so no code
-     * point is split), then calls [onDone] once with the envelope `{statusCode, body, setCookieHeaders}` (`body` is the
-     * error body for a non-2xx answer, "" otherwise) or with an error message. Both callbacks run on the reader thread;
-     * the Swift side posts them to the main actor in order. [cancelAssistantStream] with the same [requestId] cancels
-     * the call, before or after it starts.
-     */
     fun requestAssistantStream(
         requestId: String,
         method: String,
@@ -153,8 +140,7 @@ object AndroidNativeHttpClient {
                         cookieHeader = cookieHeader
                     )
                 )
-                // Publish the call before reading the flag; cancel writes the flag before reading the call, so one of
-                // the two always sees the other.
+
                 stream.call = call
                 if (stream.cancelled) call.cancel()
                 val requestStartedAt = System.nanoTime()
@@ -204,7 +190,6 @@ object AndroidNativeHttpClient {
         }
     }
 
-    /** Cancels a running [requestAssistantStream]; a no-op once it finished. */
     fun cancelAssistantStream(requestId: String) {
         val stream = assistantStreams.remove(requestId) ?: return
         stream.cancelled = true
@@ -252,13 +237,12 @@ object AndroidNativeHttpClient {
                 .put("statusCode", response.code)
                 .put("body", response.body?.string().orEmpty())
                 .put("setCookieHeaders", setCookieHeaders)
-                // S10 0.8 C18 (HD request B5-T5 R4): the join's Retry-After for the one automatic retry.
+
                 .put("retryAfter", response.header("Retry-After").orEmpty())
                 .toString()
         }
     }
 
-    /** The request every path sends: method and body, the optional headers, and the stored plus provided cookies. */
     private fun buildRequest(
         method: String,
         url: String,

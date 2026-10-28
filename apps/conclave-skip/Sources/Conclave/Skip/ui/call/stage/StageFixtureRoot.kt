@@ -28,15 +28,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 
-/*
- * S20 SL14 (STG-1, STG-4): the Android Debug stage fixture root. MainActivity mounts it for the intent extra
- * `conclave.stageFixture=<state>` (BuildConfig.DEBUG plus FLAG_DEBUGGABLE, request in HD/requests/B3-T2.md);
- * `conclave.stageFixturePattern=live` switches the probes to the live pattern and `conclave.stageForceScreenReader=true`
- * makes auto-hide behave as if TalkBack ran. Standalone presenters (StageFixtureSession, shared with iOS); never
- * MeetingViewModel, WebRTC, audio, capture or network. Readouts sit beside the stage, never inside it (PS 7.6).
- */
-
-/** Called only by MainActivity's explicit debug launch route. */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun StageFixtureRoot(stateName: String, patternName: String? = null, forceScreenReader: Boolean = false, chatStateName: String? = null,
@@ -46,15 +37,15 @@ fun StageFixtureRoot(stateName: String, patternName: String? = null, forceScreen
         StageFixtureSession(state = state, pattern = StageFixtureScript.pattern(named = patternName), forceScreenReader = forceScreenReader)
     }
     LaunchedEffect(session) {
-        // S40 0.9 (HD request B4-T1 R3): `conclave.chatFixture` layers the chat fixture on this stage fixture and opens Chat.
+
         val chatState = ChatFixtureDriver.state(named = chatStateName)
         if (chatState != null) ChatFixtureDriver.installOnStage(state = chatState, shell = session.shell)
-        // TRN-2 (HD request B7-T5 R5): `conclave.transcriptFixture` layers the Transcript fixture and opens the panel.
+
         val transcriptState = TranscriptFixtureDriver.fixtureState(named = transcriptStateName)
         if (transcriptState != null) TranscriptFixtureDriver.installOnStage(state = transcriptState, shell = session.shell)
     }
     Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
-        // STG-3 (S20 SL14, HD request B5-T8 R10): one renderTargetResize per settled share zoom.
+
         CompositionLocalProvider(LocalStageRenderTargetResize provides { session.counters.recordRenderTargetResize() }) {
             CallRoot(
                 shell = session.shell,
@@ -107,10 +98,10 @@ private fun StageFixtureControls(session: StageFixtureSession, modifier: Modifie
             FixtureReadout(session.settingsCallsReadout(), "wp3.calls", tick)
             FixtureReadout(session.speakerTestReadout(), "speakerTest.count", tick)
             FixtureReadout(session.voicePreviewReadout(), "voicePreview.count", tick)
-            // SET-5, SET-6 (L6-12): the Layout panel's intents and the fake WP10 engine's calls.
+
             FixtureReadout(session.layoutCallsReadout(), "layout.calls", tick)
             FixtureReadout(session.effectsCallsReadout(), "wp10.calls", tick)
-            // SET-3 (S60 2 l3, l4): Connection polls and the last publish ceiling.
+
             FixtureReadout(session.statsPollsReadout(), "stats.polls", tick)
             FixtureReadout(session.publishCeilingReadout(), "wp3.ceiling", tick)
             FixtureReadout(session.captionsReadout(), "stage.captions.readout", tick)
@@ -127,7 +118,7 @@ private fun StageFixtureControls(session: StageFixtureSession, modifier: Modifie
 @Composable
 private fun FixtureButton(title: String, tag: String, onClick: () -> Unit) {
     TextButton(onClick = onClick, modifier = Modifier.heightIn(min = 48.dp).testTag(tag)) {
-        // Debug fixture labels are not user-facing copy (the hosting preview does the same).
+
         Text(title, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
     }
 }

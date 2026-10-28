@@ -3,25 +3,20 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-1 and ENT-2 core and root deltas (S10 0.8 C8, C9, C16; PLAN-screens 2 route switches). The view model feeds
-/// the premeeting presenter from the same refresh as the shell; the app delegate routes Conclave links to the native
-/// root's presenter; the native roots stay behind the Debug flags and the legacy root stays the default. iOS views
-/// and Android Kotlin compile only on their platforms, so their wiring is pinned by source scans.
 @MainActor
 struct EntryCoreDeltaTests {
-    // MARK: C9: the delegate's native intake
 
     @Test func nativeIntakeSendsConclaveLinksToTheRegisteredPresenter() {
         let delegate = ConclaveAppDelegate.shared
         let presenter = PremeetingPresenter()
         delegate.registerPremeeting(presenter)
         defer { delegate.registerPremeeting(nil) }
-        // S10 4 l5: `conclave://` with an empty room shows the Home notice and is handled.
+
         #expect(delegate.routeNatively("conclave://"))
         #expect(presenter.home.noticeKind == .invalidLink)
-        // A non-Conclave URL is not handled.
+
         #expect(!delegate.routeNatively("https://example.com/x"))
-        // A meeting link opens the lobby in editing (no auto-join, S10 4 l2).
+
         #expect(delegate.routeNatively("conclave://rose-sora-luffy"))
         #expect(presenter.path.last?.roomId == "rose-sora-luffy")
         #expect(presenter.lobbyStatus?.mode == .editing)
@@ -34,26 +29,24 @@ struct EntryCoreDeltaTests {
         let presenter = PremeetingPresenter()
         delegate.registerPremeeting(presenter)
         defer { delegate.registerPremeeting(nil) }
-        // S10 1 l6: a cold-start link ends as [Home, Lobby].
+
         #expect(presenter.path.map { $0.roomId } == ["lily-zoro-iris"])
     }
 
-    // MARK: Root wiring (source scans)
-
     @Test func theNativeRootsStayBehindTheDebugFlagsAndTheLegacyRootStaysTheDefault() throws {
         let app = try entrySource("Sources/Conclave/ConclaveApp.swift")
-        // WP2-S2b pin kept: one production feedback root, outside the route switch.
+
         #expect(app.components(separatedBy: ".conclaveRootFeedback(shell: MeetingViewModel.shared.shell)").count - 1 == 1)
         #expect(entryFlat(app).contains("if NativeRouteFlags.shared.isEnabled(.premeeting) { NativePremeetingProductionRoot(appState: appState) } else { legacyRoot }"))
         #expect(entryFlat(app).contains("} else if let premeetingFixture { PremeetingFixtureRoot(state: premeetingFixture) }"))
         #expect(app.contains("@State private var premeetingFixture = PremeetingFixtureScript.state(named: NativeRouteFlags.shared.premeetingFixture)"))
         #expect(app.contains("NativeRouteFlags.shared.configureFromLaunchEnvironment()"))
-        // C9 on the native root only; the legacy queue stays for the legacy route.
+
         #expect(entryFlat(app).contains("if NativeRouteFlags.shared.routesPremeetingNatively { return routeNatively(url.absoluteString) }"))
         #expect(entryFlat(app).contains("if NativeRouteFlags.shared.routesPremeetingNatively { _ = self.routeNatively(urlString) return }"))
         #expect(app.contains("AppState.shared.openJoinURL(url)"))
         #expect(app.contains("AppState.shared.openJoinURLString(urlString)"))
-        // C8: app activity reaches the presenter behind the flag.
+
         #expect(app.contains("MeetingViewModel.shared.setPremeetingAppActive(true)"))
         #expect(app.contains("MeetingViewModel.shared.setPremeetingAppActive(false)"))
 
@@ -72,7 +65,7 @@ struct EntryCoreDeltaTests {
         let pipBranch = try #require(main.range(of: "if (PipController.showsLegacyPipContent) {"))
         #expect(rootCall.lowerBound < pipBranch.lowerBound)
         #expect(main.components(separatedBy: "SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }").count - 1 == 1)
-        // The legacy root is still the last branch.
+
         #expect(entryFlat(main).contains("} else { legacyRoot() }"))
 
         let host = try entrySource("Sources/Conclave/Skip/ui/home/PremeetingHost.kt")
@@ -81,13 +74,15 @@ struct EntryCoreDeltaTests {
         #expect(host.contains("\ninternal fun PremeetingHost("))
         #expect(host.contains("\nfun NativePremeetingHost(callContent: @Composable () -> Unit) {"))
         #expect(host.contains("\nfun PremeetingFixtureHost(stateName: String) {"))
-        #expect(host.contains("CALL-ROOT SLOT"))
+        #expect(entryFlat(host).contains("callContent: @Composable () -> Unit,"))
+        #expect(entryFlat(host).contains("if (usesNativeCallRoot && stage != null) { CallRoot(shell = shell, stage = stage, people = people, renderers = StageRenderers.live, activitySession = activitySession, onMinimize = { stageMinimizeToBackground() }) } else { callContent() }"))
         #expect(host.components(separatedBy: "ConclaveSystemBars(").count - 1 == 1)
         #expect(host.contains("entryProvider = { key -> NavEntry(key) { _ -> PremeetingPage(premeeting, key) } }"))
 
         let ios = try entrySource("Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift")
         #expect(ios.hasPrefix("#if os(iOS) && !SKIP\n"))
-        #expect(ios.contains("CALL-ROOT SLOT"))
+        #expect(ios.contains("let interimCall: () -> InterimCall"))
+        #expect(entryFlat(ios).contains("interimIsStage: interimIsStage, onCovered: callDidCoverPremeeting, interimCall: interimCall)"))
         #expect(ios.contains("PremeetingAppWiring.install(appState: appState, viewModel: MeetingViewModel.shared)"))
         #expect(ios.contains(".conclavePremeetingFeedback(premeeting: viewModel.premeeting)"))
         #expect(!ios.contains(".preferredColorScheme("), "the premeeting stack follows the system appearance")
@@ -100,8 +95,7 @@ struct EntryCoreDeltaTests {
         #expect(entryFlat(content).contains("if !nativeRoutes, pendingJoinPromptRequestID != nil,"))
         #expect(entryFlat(content).contains("private func handlePendingJoinURLIfNeeded() { guard !nativeRoutes else { pendingJoinPromptRequestID = nil return }"))
         #expect(entryFlat(content).contains("case .disconnected, .connecting, .connected: if nativeRoutes { nativeInterimBackdrop } else { JoinView(viewModel: meetingViewModel, appState: appState)"))
-        // No new glass anywhere in the premeeting files (the only sanctioned glass entries are the call control and
-        // the composer files).
+
         for file in Self.newSwiftFiles + Self.newKotlinFiles {
             let text = try entrySource(file)
             #expect(!text.contains("glassEffect") && !text.contains("GlassEffectContainer") && !text.contains("acmGlass"), "\(file)")
@@ -114,7 +108,7 @@ struct EntryCoreDeltaTests {
         #expect(appState.contains("@ObservationIgnored var onIdentityChanged: (() -> Void)? = nil"))
         let wiring = try entrySource("Sources/Conclave/Features/Home/PremeetingAppWiring.swift")
         let flat = entryFlat(wiring)
-        // Identity first, then the bootstrap, then the link target (S10 1 c; recents are cleared only on a sign-out).
+
         let identity = try #require(flat.range(of: "let presenter = viewModel.premeeting pushIdentity(appState: appState, viewModel: viewModel)"))
         #expect(flat.contains("appState.onIdentityChanged = { PremeetingAppWiring.pushIdentity(appState: appState, viewModel: viewModel) }"))
         let bootstrap = try #require(flat.range(of: "presenter.bootstrap(user: appState.currentUser, recents: store.load())"))
@@ -124,10 +118,8 @@ struct EntryCoreDeltaTests {
 
     @Test func theViewModelFeedsThePremeetingPresenterFromTheShellRefresh() throws {
         let viewModel = try entrySource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        // Batch 3 integrator: STG-1 (HD request B3-T2 R2b) appends the stage's phase refresh after the premeeting apply,
-        // so the shell, presence, premeeting order is pinned up to the premeeting apply and the stage block after it.
-        // Batch 5 integrator (HD request B5-T3 R1c): the CTL-2 publish guard wraps the shell apply.
-        #expect(entryFlat(viewModel).contains("isApplyingShellInputs = true shell.apply(makeShellInputs()) isApplyingShellInputs = false callPresence.apply(makeCallPresenceInputs()) // S10 0.8 C8: the premeeting presenter reads the snapshot the shell just published (equality-guarded). premeeting.apply(makePremeetingInputs()) // The stage's `isInCall` follows the shell phase"))
+
+        #expect(entryFlat(viewModel).contains("isApplyingShellInputs = true shell.apply(makeShellInputs()) isApplyingShellInputs = false callPresence.apply(makeCallPresenceInputs()) premeeting.apply(makePremeetingInputs()) if shell.session.phase != lastStageShellPhase {"))
         #expect(viewModel.contains("let premeeting = PremeetingPresenter()"))
         #expect(entryFlat(viewModel).contains("premeeting.onCommand = { [weak self] command in self?.performPremeetingCommand(command) }"))
         #expect(entryFlat(viewModel).contains("case .leave: shell.leave() case .dismissOutcome: shell.dismissOutcome()"))
@@ -154,7 +146,7 @@ struct EntryCoreDeltaTests {
             #expect(entryMatches(#"Text\(\s*""#, in: text).isEmpty, "\(file) has a literal Text")
             #expect(!text.contains("performHapticFeedback") && !text.contains("LocalHapticFeedback"), "\(file)")
         }
-        // Shared presenters stay transpilable: no iOS frameworks, no function-reference maps.
+
         for file in Self.sharedSwiftFiles {
             let text = try entrySource(file)
             #expect(!text.contains("import SwiftUI") && !text.contains("import UIKit"), "\(file)")
@@ -187,7 +179,7 @@ struct EntryCoreDeltaTests {
 }
 
 #if os(macOS)
-/// S10 0.8 C8 on the view model (macOS stubs; no network).
+
 @MainActor
 @Suite(.serialized)
 struct EntryCoreDeltaViewModelTests {
@@ -227,7 +219,6 @@ private func entrySource(_ packageRelativePath: String) throws -> String {
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 
-/// Whitespace collapsed to single spaces, so a pin fails only when the code changes.
 private func entryFlat(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }

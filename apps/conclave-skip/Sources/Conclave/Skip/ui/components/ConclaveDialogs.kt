@@ -20,16 +20,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
-/*
- * Dialogs (F00 C18): an M3 AlertDialog composed inside the invoker's theme, so it is dark when raised from the
- * stage and follows the system appearance when raised from a system-appearance page (F00 2.1). Exactly one
- * confirm plus the dismiss button: a destructive confirm uses the error color, never coral; a normal confirm keeps
- * the default primary. Cancel, Back and a scrim tap all call onDismiss. The caller keeps the shown flag (rotation
- * keeps the dialog through rememberSaveable) and shows its pending state after a confirm; End for everyone takes
- * the S30 4 g copy. Each dialog window registers with the Debug semantics exporter and exposes its test tags as
- * resource ids (S40 R40-11).
- */
-
 @Composable
 internal fun ConclaveDialog(
     model: ConclaveDialogModel, identifier: String, onConfirm: () -> Unit, onDismiss: () -> Unit, modifier: Modifier = Modifier,
@@ -62,13 +52,6 @@ internal fun ConclaveDialog(
     )
 }
 
-/**
- * The short text-entry dialog (S50 0.7 PL10): an AlertDialog with one OutlinedTextField in its text slot (Change
- * name, Max attendees, and the multi-line Answer in writing at 4 to 8 lines). Input stops at the model's limit;
- * the supporting line shows the refusal [error] (isError), else the counter from `counterFrom`, else the model's
- * message. While [pending] the dialog stays open, the confirm shows a 16 dp spinner and Back or a scrim tap do
- * nothing; the caller closes it on success and keeps the text on a refusal.
- */
 @Composable
 internal fun ConclaveTextEntryDialog(
     model: ConclaveTextEntryDialogModel, value: String, onValueChange: (String) -> Unit, identifier: String,

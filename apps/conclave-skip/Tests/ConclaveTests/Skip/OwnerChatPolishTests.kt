@@ -46,9 +46,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/** Actual Compose layout on the existing Robolectric dependency, plus the shared opening policy. This uses the
- * same owned Recomposer approach as PanelStageBridgeTests so it does not depend on the test class execution order.
- * No device or pixel acceptance is claimed by these geometry and semantics assertions. */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28], qualifiers = "w360dp-h800dp")
 class OwnerChatPolishTests {
@@ -60,6 +57,12 @@ class OwnerChatPolishTests {
         stops.forEach { it() }
         activities.clear()
         stops.clear()
+    }
+
+    @Test fun jumpPillRequiresUnseenMessagesAwayFromBottom() {
+        assertFalse(ChatTimelinePolicy.showsJumpToLatest(isAtBottom = false, unseenCount = 0))
+        assertFalse(ChatTimelinePolicy.showsJumpToLatest(isAtBottom = true, unseenCount = 3))
+        assertTrue(ChatTimelinePolicy.showsJumpToLatest(isAtBottom = false, unseenCount = 1))
     }
 
     @Test fun openingPrecedenceMatchesSwiftAndKeepsReplyFailuresDistinct() {

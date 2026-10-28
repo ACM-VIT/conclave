@@ -17,11 +17,9 @@ enum MeetingReactionFlightPolicy {
     }
 }
 
-// MARK: - Reaction Picker
-
 struct ReactionPickerView: View {
     let onSelect: (MeetingReactionOption) -> Void
-    
+
     var body: some View {
         VStack(spacing: 4) {
             HStack(spacing: 2) {
@@ -71,12 +69,10 @@ private struct ReactionPickerButton: View {
     }
 }
 
-// MARK: - Reaction Overlay
-
 struct ReactionOverlayView: View {
     let reactions: [Reaction]
     let displayNameForUser: (String) -> String
-    
+
     var body: some View {
         GeometryReader { geometry in
             ForEach(reactions) { reaction in

@@ -32,17 +32,6 @@ import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlin.math.roundToInt
 
-/*
- * S60 3 d (SET-5) on Android: MeetingPanel.layout, always in the in-call theme (owner default Q8 6). In compact and
- * medium windows it is the WP1-3c bottom sheet (NativePanelHost + LayoutSheetHost), opening partially expanded with the
- * live controls first: the title row, the four mode radio rows and Maximum tiles fill the partial state (about 396 dp on
- * the 360 x 800 dp AVD, so the upper half of the stage stays visible above the M3 scrim and its reflow can be watched),
- * then the footers, Hide tiles, Self view, Position and Audio only in the expanded state. In the expanded side pane it is
- * an InCallPage in lazyList mode beside the stage with the same list. Radio rows sit in selectable groups and play
- * selectionChanged only for a dispatched choice (D8, 3 h); Maximum tiles is the stable M3 Slider (range semantics,
- * TalkBack adjust, each distinct value written once, no haptic per step). Registered by the native call root.
- */
-
 @Composable
 internal fun LayoutPage(
     layout: LayoutPanelPresenter,
@@ -56,7 +45,7 @@ internal fun LayoutPage(
 ) {
     val title = conclaveString("lay_title")
     if (variant == InCallPageVariant.Sheet) {
-        // The sheet variant: the host's ModalBottomSheet frames it; the page acknowledges when it disposes (C3).
+
         DisposableEffect(Unit) {
             onMounted()
             onDispose { onDisposed() }
@@ -86,16 +75,14 @@ internal fun LayoutPage(
     }
 }
 
-/** One radio row of a group: the title, an optional detail (Auto while pinned) or reason line, and its enabled state. */
 internal data class LayoutRadioOption(val id: String, val title: String, val detail: String?, val enabled: Boolean)
 
-/** The one list both hosts draw (3 d order). Reads only `layout.snapshot` (3 k). */
 @Composable
 internal fun LayoutList(layout: LayoutPanelPresenter, contentPadding: PaddingValues, containerColor: Color) {
     val snapshot = layout.snapshot
     val haptics = rememberConclaveHaptics()
     val pinnedDetail = conclaveString("lay_auto_pinned")
-    // Plain loops: a transpiled array's own `map` is not inline, so it cannot call composables (string lookups).
+
     val modes = mutableListOf<LayoutRadioOption>()
     for (mode in snapshot.modes) {
         val reason = LayoutCopy.reasonName(mode.reason)
@@ -164,7 +151,6 @@ internal fun LayoutList(layout: LayoutPanelPresenter, contentPadding: PaddingVal
     }
 }
 
-/** Radio rows in one selectable group (3 d, i): the row is the one clickable node with the radio role. */
 @Composable
 private fun LayoutRadioRows(
     options: List<LayoutRadioOption>, selectedId: String, identifier: String, containerColor: Color, onSelect: (String) -> Unit,
@@ -187,10 +173,6 @@ private fun LayoutRadioRows(
     }
 }
 
-/**
- * Maximum tiles (3 d): the headline, the tabular value and the stable Slider over 2 to 49 with 46 steps. A drag writes
- * each distinct rounded value once (the presenter ignores repeats); no haptic per step (AND 13.3).
- */
 @Composable
 private fun LayoutMaxTilesItem(layout: LayoutPanelPresenter, value: Int, containerColor: Color) {
     val title = conclaveString("lay_max_tiles")
@@ -217,7 +199,6 @@ private fun LayoutMaxTilesItem(layout: LayoutPanelPresenter, value: Int, contain
     )
 }
 
-/** A switch row: one Switch node for the whole row (the Switch itself takes no clicks); no haptic (D8). */
 @Composable
 private fun LayoutSwitchItem(
     title: String, detail: String?, checked: Boolean, identifier: String, containerColor: Color, onChange: (Boolean) -> Unit,
@@ -232,11 +213,6 @@ private fun LayoutSwitchItem(
     )
 }
 
-/**
- * L6-14 for the Layout panel on Android (Material sentence case, Q13): every mode, self view mode, corner and reason to
- * its `lay_` resource name. The S60 copy table names `K/ui/copy/SettingsCopy.kt`; that file belongs to SET-3 this batch,
- * so the Layout half lives here (HD record B7-T2).
- */
 internal object LayoutCopy {
     fun modeName(id: String): String = when (id) {
         "tiled" -> "lay_tiled"
@@ -259,7 +235,6 @@ internal object LayoutCopy {
         else -> "lay_bottom_right"
     }
 
-    /** null while the mode is enabled. */
     fun reasonName(raw: String): String? = when (LayoutModeReason.init(rawValue = raw) ?: LayoutModeReason.none) {
         LayoutModeReason.none -> null
         LayoutModeReason.attendee -> "lay_reason_attendee"

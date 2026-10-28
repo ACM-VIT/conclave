@@ -20,26 +20,17 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.LayoutDirection
 import kotlin.math.roundToInt
 
-/*
- * S20 SL5 (STG-1): one non-lazy Layout holds every slot, keyed by slot id, with frames from the shared
- * StageLayoutPolicy and the same viewport the presenter used for its capacity, so slots and frames always agree.
- * Renderers are AndroidView children keyed by slot id, never lazy grid items (P5, D15). The canvas draws under
- * every system bar; the reserved insets (safeDrawing plus the 48 dp top row plus 12, the 64 dp toolbar plus 12) never
- * change when chrome hides, so a chrome toggle never relayouts tiles. placeRelative mirrors frames in RTL.
- */
-
 internal object StageCanvasMetrics {
-    /** The 48 dp top row plus 12 dp. */
+
     const val TOP_RESERVE_DP = 60.0
-    /** The 64 dp toolbar plus 12 dp. */
+
     const val BAR_RESERVE_DP = 76.0
-    /** Material window classes (AND 8.1); never "isTablet". */
+
     const val MEDIUM_WIDTH_DP = 600.0
     const val EXPANDED_WIDTH_DP = 840.0
     const val MEDIUM_HEIGHT_DP = 480.0
 }
 
-/** The Android viewport from the canvas size and the safe drawing insets (all in dp). Pure, so tests can call it. */
 internal fun stageViewportFrom(width: Double, height: Double, top: Double, bottom: Double, leading: Double, trailing: Double): StageViewport {
     val widthClass = when {
         width < StageCanvasMetrics.MEDIUM_WIDTH_DP -> StageSizeClass.compact
@@ -56,7 +47,7 @@ internal fun stageViewportFrom(width: Double, height: Double, top: Double, botto
         insetTrailing = trailing,
         widthClass = widthClass,
         heightClass = heightClass,
-        // Android keeps the bottom toolbar in every orientation (S20 Q2).
+
         placement = StageChromePlacement.bottomBar,
     )
 }
@@ -78,11 +69,10 @@ internal fun StageCanvas(stage: StagePresenter, renderers: StageRenderers, chrom
             leading = if (direction == LayoutDirection.Ltr) left else right,
             trailing = if (direction == LayoutDirection.Ltr) right else left,
         )
-        // SYS-4 (S70 3 d): in PiP the slots and their renderers stay exactly as they were (the tiny window never reaches
-        // the presenter, so no slot drops out and no renderer is disposed); only the PiP target is laid out, full bleed.
+
         val inPip = PipController.inPipMode
         val pipSlotId = stage.pipTarget.slotId
-        // Equality guarded in the presenter: only real size or inset changes reach it.
+
         SideEffect { if (!inPip) stage.setViewport(viewport) }
         val snapshot = stage.layout
         val frames = remember(snapshot, viewport, inPip, pipSlotId) {
@@ -95,14 +85,14 @@ internal fun StageCanvas(stage: StagePresenter, renderers: StageRenderers, chrom
         val seeds = remember(snapshot) { snapshot.overflowSeeds.toList() }
         Layout(
             modifier = Modifier.fillMaxSize().pointerInput(Unit) {
-                // A tap on the stage outside a control toggles chrome (S20 8 d) and clears the bar hold (S30 CC16).
+
                 detectTapGestures(onTap = {
                     stage.stageTapped()
                     chrome.send(ChromeVisibilityEvent.tap)
                 })
             },
             content = {
-                // STG-3: the share slot's single tap and the landscape strip read chrome and the viewport.
+
                 CompositionLocalProvider(LocalStageChromeVisibility provides chrome, LocalStageViewport provides viewport) {
                     for (slot in snapshot.slots) {
                         key(slot.id) {

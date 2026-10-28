@@ -3,21 +3,14 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SYS-6 (OUT/PLAN-screens.md section 5; S70 6, SX11 `LifecycleRefreshPolicy`, SY9, SY22, O10; S20 SC16, 10 f):
-/// the pure halves of the lifecycle, recovery and system pressure rules, plus source scans of both
-/// `NetworkReachabilityMonitor` sides (S70 O14: no iOS-hosted test bundle) and of the core wiring the HD requests add.
-/// The `RejoinHarness` host cells (S70 6 l1, l2, l5 on the view model) are requested into
-/// T/LocalToggleGuardRecoveryTests.swift (core owned; HD/requests/B6-T6.md R10), where the harness is private.
-/// Tests marked "after R..." pass only once that request is applied. Not run in the heads-down push.
 struct SYS6LifecycleRecoveryTests {
-    // MARK: S70 6 c, 6 d: light refresh versus full recovery (SX11 kind(previous:next:))
 
     @Test func refreshKindFollowsTheDeepestPhaseSinceActive() {
         #expect(LifecycleRefreshPolicy.kind(previous: .inactive, next: .active) == .light)
         #expect(LifecycleRefreshPolicy.kind(previous: .background, next: .active) == .full)
         #expect(LifecycleRefreshPolicy.kind(previous: .launching, next: .active) == .full)
         #expect(LifecycleRefreshPolicy.kind(previous: .active, next: .active) == LifecycleRefreshKind.none)
-        // Only a transition to active runs anything.
+
         let phases: [ConclaveAppLifecyclePhase] = [.launching, .active, .inactive, .background]
         for previous in phases {
             #expect(LifecycleRefreshPolicy.kind(previous: previous, next: .inactive) == LifecycleRefreshKind.none)
@@ -32,17 +25,15 @@ struct SYS6LifecycleRecoveryTests {
     }
 
     @Test func trackerRunsLightAfterAnInactiveHopAndFullAfterTheBackgroundOnBothPlatforms() {
-        // The first activation of the process is full (it also runs the persisted resume check).
+
         var tracker = LifecycleRefreshTracker()
         #expect(tracker.deepestSinceActive == .launching)
         #expect(tracker.record(.active) == .full)
 
-        // iOS Control Center, Notification Center, a permission alert, the CallKit UI, the broadcast picker.
         #expect(tracker.record(.inactive) == LifecycleRefreshKind.none)
         #expect(!tracker.isInBackground)
         #expect(tracker.record(.active) == .light)
 
-        // iOS Home: active, inactive, background, then inactive on the way back, then active.
         #expect(tracker.record(.inactive) == LifecycleRefreshKind.none)
         #expect(tracker.record(.background) == LifecycleRefreshKind.none)
         #expect(tracker.isInBackground)
@@ -51,16 +42,13 @@ struct SYS6LifecycleRecoveryTests {
         #expect(tracker.record(.active) == .full)
         #expect(!tracker.isInBackground)
 
-        // Android onPause then onStop, then onStart and onResume (no inactive hop on the way back).
         #expect(tracker.record(.inactive) == LifecycleRefreshKind.none)
         #expect(tracker.record(.background) == LifecycleRefreshKind.none)
         #expect(tracker.record(.active) == .full)
 
-        // Android onPause alone (a dialog, the shade, entering PiP), then onResume.
         #expect(tracker.record(.inactive) == LifecycleRefreshKind.none)
         #expect(tracker.record(.active) == .light)
 
-        // A process launched straight into the background still runs full on its first return.
         var background = LifecycleRefreshTracker()
         #expect(background.record(.background) == LifecycleRefreshKind.none)
         #expect(!background.isInBackground)
@@ -83,8 +71,6 @@ struct SYS6LifecycleRecoveryTests {
         #expect(LifecycleRefreshCounters() == LifecycleRefreshCounters())
     }
 
-    // MARK: S70 6 c: speaker poll in the background, keyframes on return
-
     @Test func speakerSamplingStopsInTheBackgroundWithoutPip() {
         #expect(LifecycleRefreshPolicy.samplesActiveSpeaker(isInBackground: false, isInPip: false))
         #expect(LifecycleRefreshPolicy.samplesActiveSpeaker(isInBackground: false, isInPip: true))
@@ -106,13 +92,11 @@ struct SYS6LifecycleRecoveryTests {
         let visible = ["a", "b", "c", ""]
         #expect(LifecycleRefreshPolicy.keyframeProducerIds(candidates, visibleUserIds: visible, receivesVideo: true)
             == ["p-cam-a", "p-cam-b", "p-screen-a"])
-        // Audio-only mode receives no remote video, so nothing is asked.
+
         #expect(LifecycleRefreshPolicy.keyframeProducerIds(candidates, visibleUserIds: visible, receivesVideo: false).isEmpty)
         #expect(LifecycleRefreshPolicy.keyframeProducerIds(candidates, visibleUserIds: [], receivesVideo: true).isEmpty)
         #expect(LifecycleRefreshPolicy.keyframeProducerIds([], visibleUserIds: visible, receivesVideo: true).isEmpty)
     }
-
-    // MARK: S20 SC16, 10 f: Retry Now
 
     @Test func retryNowStartsOneRejoinBetweenAttempts() {
         #expect(RecoveryRetryPolicy.acceptsRetryNow(isRecovering: true, isRejoinInFlight: false, isRetryPending: false))
@@ -120,8 +104,6 @@ struct SYS6LifecycleRecoveryTests {
         #expect(!RecoveryRetryPolicy.acceptsRetryNow(isRecovering: true, isRejoinInFlight: true, isRetryPending: false))
         #expect(!RecoveryRetryPolicy.acceptsRetryNow(isRecovering: true, isRejoinInFlight: false, isRetryPending: true))
 
-        // A double tap before the rejoin task runs: the first marks the retry pending, the second is refused, and
-        // the banner already reads the attempt as in flight (Retry Now disabled).
         var pending = false
         var accepted = 0
         for _ in 0..<2 {
@@ -137,7 +119,7 @@ struct SYS6LifecycleRecoveryTests {
     }
 
     @Test func reconnectingBannerAtAttemptTwoOffersRetryNowUntilAnAttemptIsInFlight() {
-        // The STG-5 banner rows read the SC16 inputs the core publishes (S20 10 l reconnecting fixture).
+
         func reconnecting(inFlight: Bool) -> MeetingNotice? {
             let inputs = StageNoticeInputs.make(isRecovering: true, reconnectAttempt: 2, reconnectAttemptLimit: 5,
                                                 isRecoveryAttemptInFlight: inFlight)
@@ -152,8 +134,6 @@ struct SYS6LifecycleRecoveryTests {
         let pending = reconnecting(inFlight: RecoveryRetryPolicy.isAttemptInFlight(isRejoinInFlight: false, isRetryPending: true))
         #expect(pending?.actions == [NoticeAction.make(NoticeAction.retryRecovery, isEnabled: false)])
     }
-
-    // MARK: S70 SY22, 6 d: captive portal
 
     @Test func captivePortalNeedsTheCapabilityWithoutValidation() {
         #expect(NetworkCaptivePortalPolicy.isCaptivePortal(hasCaptivePortalCapability: true, isValidated: false))
@@ -173,8 +153,6 @@ struct SYS6LifecycleRecoveryTests {
         #expect(!android.map { $0.kind }.contains(NoticeKind.offline))
         #expect(ios.first?.kind == NoticeKind.offline)
     }
-
-    // MARK: S70 6 c, 6 d, O10, SY22: thermal levels and publish tiers
 
     @Test func thermalLevelsMapFromBothPlatforms() {
         #expect(SystemThermalLevel.fromAndroidThermalStatus(0) == .nominal)
@@ -225,13 +203,11 @@ struct SYS6LifecycleRecoveryTests {
         let critical = NativeSystemSendCeiling.make(thermalLevel: .critical, isLowPowerMode: false)
         let lowPower = NativeSystemSendCeiling.make(thermalLevel: .nominal, isLowPowerMode: true)
 
-        // No ceiling: the person's setting as is.
         #expect(policy.effectiveCamera(hd, dataSaverOn: false, systemSendCeiling: .unconstrained) == hd)
         #expect(policy.resolvedPublishCamera(auto, dataSaverOn: false, systemSendCeiling: .unconstrained)
             == policy.resolvedCamera(auto))
         #expect(!NativeSystemSendCeiling.unconstrained.isActive)
 
-        // Serious: one tier below. HD sends Auto's limits, keeps its own content hint and degradation preference.
         let hdSerious = policy.effectiveCamera(hd, dataSaverOn: false, systemSendCeiling: serious)
         #expect(hdSerious.resolution == .p720)
         #expect(hdSerious.frameRate == 30)
@@ -239,20 +215,18 @@ struct SYS6LifecycleRecoveryTests {
         #expect(hdSerious.contentHint == hd.contentHint)
         #expect(hdSerious.degradationPreference == hd.degradationPreference)
         #expect(hdSerious.preset == .highDefinition)
-        // Critical: two tiers below.
+
         let hdCritical = policy.effectiveCamera(hd, dataSaverOn: false, systemSendCeiling: critical)
         #expect(hdCritical.resolution == .p360)
         #expect(hdCritical.frameRate == 20)
         #expect(hdCritical.maxBitrateKbps == 260)
-        // Auto at serious goes to Data Saver; critical cannot go lower.
+
         let autoSerious = policy.resolvedPublishCamera(auto, dataSaverOn: false, systemSendCeiling: serious)
         #expect(autoSerious.height == 360)
         #expect(autoSerious.frameRate == 20)
         #expect(autoSerious.maxBitrateBps == 260_000)
         #expect(policy.resolvedPublishCamera(auto, dataSaverOn: false, systemSendCeiling: critical) == autoSerious)
 
-        // Data Saver (the S60 toggle or the system signal) and Low Power Mode apply the same 360p at 20 fps ceiling;
-        // the thermal steps below it change nothing more.
         let dataSaver = policy.effectiveCamera(hd, dataSaverOn: true, systemSendCeiling: .unconstrained)
         #expect(dataSaver.resolution == .p360)
         #expect(dataSaver.frameRate == 20)
@@ -260,7 +234,6 @@ struct SYS6LifecycleRecoveryTests {
         #expect(policy.effectiveCamera(hd, dataSaverOn: true, systemSendCeiling: critical) == dataSaver)
         #expect(lowPower.isActive)
 
-        // A ceiling only lowers: a custom 360p at 15 fps keeps its own frame rate and resolution.
         var small = auto
         small.preset = .custom
         small.resolution = .p360
@@ -271,8 +244,6 @@ struct SYS6LifecycleRecoveryTests {
         #expect(smallSerious.frameRate == 15)
         #expect(smallSerious.maxBitrateKbps == 200)
     }
-
-    // MARK: S70 6 l5 (pure half): two escalations, one toast, two steps; clearing removes the ceiling
 
     @Test func twoEscalationsPostOneToastAndTwoCeilingSteps() {
         var pressure = SystemPressureState()
@@ -287,19 +258,16 @@ struct SYS6LifecycleRecoveryTests {
         #expect(pressure.ceiling.thermalSteps == 2)
         #expect(pressure.qualityLoweredToastsPosted == 1)
 
-        // Fair or nominal clears the ceiling, silently.
         let cleared = pressure.applyThermalLevel(.fair, callSession: 4, isInCall: true)
         #expect(cleared == SystemPressureChange(ceilingChanged: true, postsQualityLoweredToast: false))
         #expect(pressure.ceiling == .unconstrained)
-        // A repeated level changes nothing.
+
         #expect(pressure.applyThermalLevel(.fair, callSession: 4, isInCall: true)
             == SystemPressureChange(ceilingChanged: false, postsQualityLoweredToast: false))
 
-        // Once per call: a later escalation in the same call (a recovery rejoin keeps the call session) is silent.
         #expect(!pressure.applyThermalLevel(.serious, callSession: 4, isInCall: true).postsQualityLoweredToast)
         #expect(pressure.qualityLoweredToastsPosted == 1)
 
-        // A new call may post once more; outside a call nothing posts but the ceiling still applies.
         _ = pressure.applyThermalLevel(.nominal, callSession: 4, isInCall: true)
         #expect(pressure.applyThermalLevel(.critical, callSession: 5, isInCall: true).postsQualityLoweredToast)
         #expect(pressure.qualityLoweredToastsPosted == 2)
@@ -307,7 +275,7 @@ struct SYS6LifecycleRecoveryTests {
         let homeChange = home.applyThermalLevel(.serious, callSession: 0, isInCall: false)
         #expect(homeChange == SystemPressureChange(ceilingChanged: true, postsQualityLoweredToast: false))
         #expect(home.ceiling.thermalSteps == 1)
-        // De-escalation never posts.
+
         #expect(!SystemPressurePolicy.postsQualityLoweredToast(previousSteps: 2, nextSteps: 1, isInCall: true,
                                                                alreadyPostedThisCall: false))
     }
@@ -324,7 +292,7 @@ struct SYS6LifecycleRecoveryTests {
     }
 
     @Test func theCeilingNeverTouchesTheSavedSettings() throws {
-        // The resolver takes the saved settings by value and returns limits; the saved value is identical afterwards.
+
         let saved = NativeMediaQualityPolicy.defaultSettings
         let before = NativeMediaQualityPreferences.encode(saved)
         var pressure = SystemPressureState()
@@ -334,11 +302,10 @@ struct SYS6LifecycleRecoveryTests {
         #expect(NativeMediaQualityPreferences.encode(saved) == before)
         #expect(saved == NativeMediaQualityPolicy.defaultSettings)
 
-        // Source rule: the ceiling code never writes `videoQuality`, persisted settings or UserDefaults.
         let source = try sys6Source("Sources/Conclave/Core/WebRTC/MediaQualitySettings.swift")
-        let ceilingFunctions = try #require(sys6Section(source, from: "// MARK: Publish ceilings",
+        let ceilingFunctions = try #require(sys6Section(source, from: "static func publishTier(of camera:",
                                                         to: "static func baseVideoQuality"))
-        let pressureTypes = try #require(sys6Section(source, from: "// MARK: - System pressure", to: nil))
+        let pressureTypes = try #require(sys6Section(source, from: "enum NativePublishTier:", to: nil))
         for section in [ceilingFunctions, pressureTypes] {
             #expect(!section.contains("videoQuality ="))
             #expect(!section.contains("updateVideoQuality"))
@@ -348,8 +315,6 @@ struct SYS6LifecycleRecoveryTests {
             #expect(!section.contains(".save("))
         }
     }
-
-    // MARK: Monitor sources (both platforms)
 
     @Test func bothMonitorSidesDeclareTheSameMembersAndNoOtherType() throws {
         let swift = try sys6Source("Sources/Conclave/Core/Networking/NetworkReachabilityMonitor.swift")
@@ -364,7 +329,7 @@ struct SYS6LifecycleRecoveryTests {
         #expect(kotlin.contains("internal var onThermalLevelChanged: ((SystemThermalLevel) -> Unit)? = null"))
         #expect(swift.contains("    func start() {") && swift.contains("    func stop() {"))
         #expect(kotlin.contains("    internal fun start() {") && kotlin.contains("    internal fun stop() {"))
-        // The Kotlin file hides every type the Swift file declares, so the Swift file declares only the monitor.
+
         let declarations = ["\nenum ", "\nstruct ", "\nclass ", "\nprotocol ", "\nextension ", "\nfinal class "]
         var count = 0
         for keyword in declarations {
@@ -379,20 +344,20 @@ struct SYS6LifecycleRecoveryTests {
         let observers = try #require(sys6Section(swift, from: "private func startSystemPressureObservers()",
                                                  to: "private func stopSystemPressureObservers()"))
         #expect(observers.contains("#if os(iOS) && !SKIP"))
-        // NSProcessInfo.h: the thermal notification arrives only after the property was read once.
+
         let read = try #require(observers.range(of: "_ = ProcessInfo.processInfo.thermalState"))
         let observe = try #require(observers.range(of: "ProcessInfo.thermalStateDidChangeNotification"))
         #expect(read.lowerBound < observe.lowerBound)
         #expect(observers.contains(".NSProcessInfoPowerStateDidChange"))
         #expect(swift.contains("ProcessInfo.processInfo.isLowPowerModeEnabled"))
         #expect(swift.contains("center.removeObserver(thermalObserver)"))
-        // iOS has no captive-portal signal: the iOS side never reports one.
+
         #expect(!swift.contains("onCaptivePortalChanged?("))
     }
 
     @Test func androidMonitorRegistersThermalOnApi29PlusAndReadsTheCaptivePortalCapability() throws {
         let kotlin = try sys6Source("Sources/Conclave/Skip/NetworkReachabilityMonitor.kt")
-        // S70 6 d, O10: API 28 registers no thermal listener (no adaptation, no toast).
+
         #expect(kotlin.contains("if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && thermalListener == null) {\n            registerThermalListener(power)"))
         let register = try #require(sys6Section(kotlin, from: "@RequiresApi(Build.VERSION_CODES.Q)\n    private fun registerThermalListener",
                                                 to: "private fun stopSystemPressureListeners()"))
@@ -401,17 +366,17 @@ struct SYS6LifecycleRecoveryTests {
         #expect(kotlin.components(separatedBy: "addThermalStatusListener(").count - 1 == 1)
         #expect(kotlin.contains("power.removeThermalStatusListener(listener)"))
         #expect(kotlin.contains("private var thermalListener: Any? = null"))
-        // Battery saver on every level.
+
         #expect(kotlin.contains("IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)"))
         #expect(kotlin.contains("ContextCompat.RECEIVER_NOT_EXPORTED"))
         #expect(kotlin.contains("publishLowPowerMode(power.isPowerSaveMode)"))
         #expect(kotlin.contains("appContext.unregisterReceiver(receiver)"))
-        // SY22: the captive-portal flag through the shared rule, published only on change.
+
         #expect(kotlin.contains("NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL"))
         #expect(kotlin.contains("NetworkCaptivePortalPolicy.isCaptivePortal("))
         #expect(kotlin.contains("if (lastCaptivePortal == isCaptivePortal) return"))
         #expect(kotlin.components(separatedBy: "publishCaptivePortal(isCaptivePortal)").count - 1 == 2)
-        // Unchanged reachability rules (ConclaveTests pins the bandwidth policy too).
+
         #expect(kotlin.contains("AndroidNetworkReachabilityQualityPolicy.bandwidthQuality"))
     }
 
@@ -423,7 +388,7 @@ struct SYS6LifecycleRecoveryTests {
             "Sources/Conclave/Skip/NetworkReachabilityMonitor.kt",
             "Tests/ConclaveTests/SYS6LifecycleRecoveryTests.swift",
         ]
-        // Built from parts so this file does not match itself.
+
         let banned = "gra" + "dient"
         for path in paths {
             let text = try sys6Source(path)
@@ -431,17 +396,15 @@ struct SYS6LifecycleRecoveryTests {
             #expect(!text.contains("\u{2013}"), "\(path) has an en dash")
             #expect(!text.lowercased().contains(banned), "\(path) breaks the flat design rule")
         }
-        // The shared policy file stays transpile-safe: no platform import, no tuple return, no function-reference map.
+
         let policy = try sys6Source("Sources/Conclave/Core/Call/LifecycleRefreshPolicy.swift")
         #expect(!policy.contains("import UIKit") && !policy.contains("import SwiftUI") && !policy.contains("#if"))
         #expect(!policy.contains(".map(") && !policy.contains("compactMap"))
     }
 
-    // MARK: Core wiring (after R1 to R7 in HD/requests/B6-T6.md)
-
     @Test func coreWiresTheLifecycleRecoveryAndPressureInputs() throws {
         let vm = try sys6Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        // R2: light versus full.
+
         #expect(vm.contains("func handleAppResignedActive()"))
         #expect(vm.contains("let refresh = lifecycleRefreshTracker.record(.active)"))
         #expect(vm.contains("lifecycleRefreshTracker.record(.background)"))
@@ -452,16 +415,16 @@ struct SYS6LifecycleRecoveryTests {
         #expect(light.lowerBound < presence.lowerBound)
         #expect(active.contains("lifecycleRefreshCounters.recordKeyframeRequests("))
         #expect(vm.contains("requestKeyFrame: true"))
-        // R3: the speaker poll.
+
         #expect(vm.contains("LifecycleRefreshPolicy.samplesActiveSpeaker("))
-        // R4: Retry Now and the watchdog on a forced rejoin.
+
         #expect(vm.contains("RecoveryRetryPolicy.acceptsRetryNow("))
         #expect(vm.contains("isRecoveryAttemptInFlight: RecoveryRetryPolicy.isAttemptInFlight("))
         let force = try #require(sys6Section(vm, from: "    func forceRejoinWithFreshToken() async {",
                                              to: "    func recoverActiveMeetingFromForeground() async {"))
         #expect(force.contains("startRecoveryWatchdogIfNeeded()"))
         #expect(!force.contains("reconnectAttempts"))
-        // R5: captive portal and pressure.
+
         #expect(vm.contains("networkMonitor.onCaptivePortalChanged"))
         #expect(vm.contains("isCaptivePortal: state.isCaptivePortal"))
         #expect(vm.contains("networkMonitor.onThermalLevelChanged"))
@@ -473,10 +436,10 @@ struct SYS6LifecycleRecoveryTests {
         #expect(apply.contains("webRTCClient.updateMediaPublishConfiguration("))
         #expect(!apply.contains("videoQuality"))
         #expect(!apply.contains(".save("))
-        // R7: the delegate reports the inactive hop.
+
         let app = try sys6Source("Sources/Conclave/ConclaveApp.swift")
         #expect(app.contains("MeetingViewModel.shared.handleAppResignedActive()"))
-        // R1: the captive flag is a stage input.
+
         let state = try sys6Source("Sources/Conclave/Core/State/MeetingState.swift")
         #expect(state.contains("var isCaptivePortal: Bool = false"))
     }
@@ -490,7 +453,6 @@ private func sys6Source(_ packageRelativePath: String) throws -> String {
     try String(contentsOf: sys6PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
 }
 
-/// The text from the first `from` marker up to the next `to` marker after it (or the end when `to` is nil).
 private func sys6Section(_ text: String, from: String, to: String?) -> String? {
     guard let start = text.range(of: from) else { return nil }
     guard let to else { return String(text[start.lowerBound...]) }

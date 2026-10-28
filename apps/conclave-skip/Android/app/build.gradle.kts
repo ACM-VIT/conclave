@@ -96,7 +96,7 @@ kotlin {
 
 android {
     namespace = group as String
-    // OkHttp 5.5 requires Android 17 APIs at compile time.
+
     compileSdk = 37
     compileOptions {
         sourceCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
@@ -117,21 +117,13 @@ android {
         manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = conclaveAuthBaseUrl
         manifestPlaceholders["SFU_JOIN_URL"] = sfuJoinUrl
         manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "true"
-        // skip.tools.skip-build-plugin will automatically use Skip.env properties for:
-        // applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
-        // versionCode = CURRENT_PROJECT_VERSION
-        // versionName = MARKETING_VERSION
+
     }
 
     buildFeatures {
         buildConfig = true
     }
 
-    // Per-app language (S70 14 d, SY13): AGP generates the locale config from the app's
-    // res/values* folders and adds android:localeConfig to the merged manifest, so the
-    // Android 13+ language list names only languages that ship. The unqualified
-    // resources' locale lives in src/main/res/resources.properties. Never also set
-    // android:localeConfig by hand: the manifest merger rejects it while this is on.
     androidResources {
         generateLocaleConfig = true
     }
@@ -177,15 +169,7 @@ android {
         }
         release {
             signingConfig = signingConfigs.findByName("release")
-            // R8 minification miscompiles SkipUI's presentation/preferences code:
-            // it produces a null skip.ui.Preference that crashes PresentationRoot →
-            // PreferenceValues.collectPreferences on sheet / share-chooser
-            // presentation transitions (NPE, sometimes surfacing earlier as a
-            // checkNotNullParameter). Not reproducible in debug (no R8), and
-            // -dontoptimize / keep rules don't contain it. Disabled until Skip
-            // ships an R8-compatible SkipUI. isDebuggable=false still delivers the
-            // release runtime perf win (ART optimization, no debug overhead); the
-            // only cost is a larger APK - use an App Bundle (AAB) to split it.
+
             isMinifyEnabled = false
             isShrinkResources = false
             isDebuggable = false
@@ -200,10 +184,5 @@ dependencies {
     implementation(platform("com.squareup.okhttp3:okhttp-bom:5.5.0"))
     implementation("com.squareup.okhttp3:okhttp")
 
-    // The Activity theme (res/values/themes.xml) is `Theme.Material3.Dark.*`,
-    // whose color attributes (colorOnPrimary, colorSurface, …) ship in the
-    // Material Components XML library. Compose Material3 does NOT provide the
-    // XML theme attrs, so this AAR must be a direct dependency or the merged
-    // resources fail with "style attribute 'attr/colorOnPrimary' not found".
     implementation("com.google.android.material:material:1.14.0")
 }

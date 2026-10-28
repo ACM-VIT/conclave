@@ -40,19 +40,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 
-/*
- * S60 0.6 L6-3 (SET-3; C6-3, C6-8; 1 d, 1 f, 1 i, 1 k, 1 l11, 1 l12; RECONCILE R22) on Android: the dark 4:3
- * LivePreviewCard inside the system-appearance Settings list, composed in HostingTheme(inCall = true). It reads
- * settings.video only. The capture belongs to the one WP3 LocalPreviewController (the presenter asks it through
- * previewHooks); this card draws the surface and offers Start preview and Stop preview. The local preview keeps one
- * PreviewView per panel presentation (SettingsPreviewRenderers, keyed by the presentation id that SettingsPage provides):
- * the LazyColumn item leaving composition detaches it from the controller and its parent, and the item coming back
- * re-attaches the same view. The item's composition reports on and off screen (30 s off screen stops the preview,
- * C6-8). While the meeting camera is on the card shows the sent track ("Visible to everyone") through VideoTrackView,
- * outside the stage renderer ledger. Mirroring follows Mirror my video for the front camera only (C6-3).
- */
-
-/** The Settings panel presentation id, so the card keeps one PreviewView per presentation (0 outside the panel). */
 internal val LocalSettingsPresentationId = staticCompositionLocalOf { 0 }
 
 @Composable
@@ -123,7 +110,6 @@ private fun LivePreviewSurfaceOrIdle(settings: SettingsPresenter, video: Setting
     }
 }
 
-/** The local preview: the presentation's PreviewView, attached to the one controller while composed. */
 @Composable
 private fun LivePreviewLocalSurface() {
     val presentationId = LocalSettingsPresentationId.current
@@ -142,11 +128,10 @@ private fun LivePreviewLocalSurface() {
     )
 }
 
-/** The sent track while the meeting camera is on, outside the stage renderer ledger (stage.renderers unchanged). */
 @Composable
 private fun LivePreviewSentTrack(mirrored: Boolean) {
     val presentationId = LocalSettingsPresentationId.current
-    // Read on every composition (a camera restart makes a new track); VideoTrackView moves the sink only on a change.
+
     val track = (MeetingViewModel.shared.webRTCClient.getLocalVideoTrack() as? VideoTrackWrapper)?.rtcVideoTrack
     CompositionLocalProvider(LocalRendererLedger provides null) {
         VideoTrackView(track = track, mirror = mirrored, fit = false, rendererKey = "settings:preview:$presentationId",
@@ -184,7 +169,6 @@ private fun LivePreviewCaption(text: String, identifier: String, modifier: Modif
         modifier = modifier.clip(CircleShape).background(ext.labelScrim).padding(horizontal = 10.dp, vertical = 4.dp).testTag(identifier))
 }
 
-/** "Camera access is off" with Open settings (F00 C18 intrinsic copy). */
 @Composable
 private fun LivePreviewBlocked(settings: SettingsPresenter) {
     val scheme = MaterialTheme.colorScheme
@@ -201,7 +185,6 @@ private fun LivePreviewBlocked(settings: SettingsPresenter) {
     }
 }
 
-/** Start preview or Stop preview: a flat pill on the scrim, 48 dp tall; disabled while interrupted (1 l11). */
 @Composable
 private fun LivePreviewButton(settings: SettingsPresenter, video: SettingsVideo, modifier: Modifier) {
     val stopping = SettingsPreviewPolicy.canStop(state = video.preview)
@@ -226,12 +209,10 @@ private fun LivePreviewButton(settings: SettingsPresenter, video: SettingsVideo,
     }
 }
 
-/** One PreviewView per Settings presentation; a new presentation makes a new view and drops the old one (1 l12). */
 internal object SettingsPreviewRenderers {
     private var key = -1
     private var view: PreviewView? = null
 
-    /** Debug renderer counter: views created; scrolling out and back keeps it unchanged. */
     internal var creationCount: Int = 0
         private set
 
@@ -249,7 +230,6 @@ internal object SettingsPreviewRenderers {
         return made
     }
 
-    /** The panel closed: the view is detached and dropped. */
     fun release(presentationId: Int) {
         if (key != presentationId) return
         val current = view ?: return

@@ -3,12 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ACT-2 (OUT/PLAN-screens.md section 5, S60 8): the game shell and kit. Typed projections parsed once per push and
-/// checked against the public and private views of packages/sfu/server/games/modules (C6-15), server `selfId`, the
-/// client-local request id with its 10 s timeout (a push never clears a pending move), the failure mapping, the five
-/// stored properties staying separate, lobby, seat, private view, unsupported and results rules, the move adapter
-/// payloads, the copy contract, and source scans of the K1 to K13 kit on both platforms. The Kotlin half is in
-/// T/Skip/ActivityBridgeTests.kt.
 @MainActor
 struct ACT2GameShellTests {
     private final class Recorder {
@@ -38,8 +32,6 @@ struct ACT2GameShellTests {
                              isHost: true, receivedAtMillis: receivedAt)
     }
 
-    // MARK: Fixtures (public and private views as the SFU modules project them)
-
     static let triviaQuestion = #"{"phase":"question","questionIndex":1,"totalQuestions":5,"serverNow":1700000000000,"deadline":1700000020000,"questionDurationMs":20000,"category":"Science","prompt":"Which planet has the most moons?","options":["Jupiter","Saturn","Neptune","Uranus"],"correctIndex":null,"optionCounts":[],"answeredCount":1,"totalPlayers":3,"scoreboard":[{"id":"b","name":"B","score":900},{"id":"a","name":"A","score":900},{"id":"c","name":"C","score":100}],"tiles":{"b":{"acted":true}}}"#
     static let triviaReveal = #"{"phase":"reveal","questionIndex":1,"totalQuestions":5,"serverNow":1700000021000,"deadline":1700000026000,"category":"Science","prompt":"Which planet has the most moons?","options":["Jupiter","Saturn","Neptune","Uranus"],"correctIndex":1,"optionCounts":[1,2,0,0],"answeredCount":3,"totalPlayers":3,"scoreboard":[],"tiles":{}}"#
     static let triviaMine = #"{"answered":true,"choice":0,"score":900,"rank":2,"lastRoundPoints":0,"correct":false}"#
@@ -58,8 +50,6 @@ struct ACT2GameShellTests {
     static let chessMine = #"{"side":"black","role":"captain","canMove":true,"canResign":true,"canOfferDraw":true,"canRespondToDraw":false,"canRequestTakeback":false,"canRespondToTakeback":false}"#
     static let zipPlaying = #"{"phase":"playing","gridSize":6,"anchors":{"0":1,"35":2},"barriers":[{"from":1,"to":2}],"deadCells":[7],"serverNow":1700000000000,"roundStartedAt":1699999990000,"roundEndsAt":1700000170000,"standings":[{"playerId":"a","playerName":"A","cellsFilled":4,"totalCells":35,"outcome":null,"hintsUsed":0,"solvedAt":null}],"finishedCount":0,"totalPlayers":1,"currentRound":1,"totalRounds":3,"isFinalRound":false,"scores":[],"scoreboard":[{"id":"a","name":"A","score":0}],"result":null}"#
     static let zipMine = #"{"path":[0,1,2,3],"outcome":null,"solvedAt":null,"hintsUsed":0,"hintAvailableAt":1700000030000,"mistakes":1}"#
-
-    // MARK: Projections (C6-15)
 
     @Test func triviaProjectsPublicAndPrivateViewsOnce() throws {
         let projection = GameProjectionParser.parse(gameId: "trivia", publicPhase: "question", publicViewJSON: Self.triviaQuestion,
@@ -87,7 +77,7 @@ struct ACT2GameShellTests {
         let bluff = try #require(GameProjectionParser.parse(gameId: "bluff", publicPhase: "choose", publicViewJSON: Self.bluffChoose,
                                                             playerViewJSON: Self.bluffMine).bluff)
         #expect(bluff.options.map { $0.id } == ["o1", "o2"])
-        #expect(bluff.options.allSatisfy { $0.kind.isEmpty && $0.ownerName.isEmpty })   // never the kind or author while choosing
+        #expect(bluff.options.allSatisfy { $0.kind.isEmpty && $0.ownerName.isEmpty })
         #expect(bluff.yourFake == "Austria" && bluff.hasSubmitted && bluff.ownOptionId == "o2" && bluff.yourPick.isEmpty)
         let wyr = try #require(GameProjectionParser.parse(gameId: "would-you-rather", publicPhase: "reveal", publicViewJSON: Self.wyrReveal,
                                                           playerViewJSON: #"{"choice":1}"#).wouldYouRather)
@@ -110,7 +100,7 @@ struct ACT2GameShellTests {
         let imposter = try #require(GameProjectionParser.parse(gameId: "imposter", publicPhase: "discuss", publicViewJSON: Self.imposterDiscuss,
                                                                playerViewJSON: Self.imposterImposter).imposter)
         #expect(imposter.role == "imposter" && imposter.secretWord.isEmpty)
-        // Not spectatable: a spectator has no player view, so no role and no word anywhere.
+
         let spectator = try #require(GameProjectionParser.parse(gameId: "imposter", publicPhase: "discuss",
                                                                 publicViewJSON: Self.imposterDiscuss, playerViewJSON: "").imposter)
         #expect(spectator.role.isEmpty && spectator.secretWord.isEmpty && spectator.resultWord.isEmpty)
@@ -151,8 +141,6 @@ struct ACT2GameShellTests {
         #expect(broken.common.phase == "lobby" && !broken.hasPlayerView && broken.trivia?.options == [])
     }
 
-    // MARK: Presenter: parse once, selfId, pending (C6-15)
-
     @Test func eachPushIsParsedOnceAndAnEqualPushNotAtAll() {
         let games = presenter(trivia(view: Self.triviaQuestion, mine: Self.triviaMine))
         #expect(games.parseCount == 1)
@@ -177,7 +165,7 @@ struct ACT2GameShellTests {
         #expect(command.kind == GameStageCommandKind.move && command.type == "answer" && command.payloadJSON == #"{"choice":1}"#)
         #expect(games.interaction.pendingRequestId == command.requestId && games.interaction.pendingType == "answer")
         #expect(games.hasLiveTimeout)
-        // The SFU broadcasts the new state before it acks the move.
+
         games.apply(trivia(view: Self.triviaQuestion.replacingOccurrences(of: "\"answeredCount\":1", with: "\"answeredCount\":2"),
                            mine: Self.triviaMine))
         #expect(games.interaction.isPending)
@@ -187,7 +175,7 @@ struct ACT2GameShellTests {
         games.moveAcknowledged(requestId: command.requestId, success: true, serverText: "")
         #expect(!games.interaction.isPending && games.interaction.failure == GameFailure.none)
         #expect(!games.hasLiveTimeout)
-        // An unanswered move times out to the server failure.
+
         _ = games.send(GameMoveIntent.answer(3))
         let second = try #require(recorder.commands.last)
         games.fireTimeout(requestId: second.requestId)
@@ -235,7 +223,7 @@ struct ACT2GameShellTests {
     }
 
     @Test func theCountdownUsesTheServerClockOffset() throws {
-        // Pushed at client 1700000005000 while the server said 1700000000000: the client runs 5 s ahead.
+
         let games = presenter(trivia(view: Self.triviaQuestion, receivedAt: 1700000005000))
         let countdown = try #require(games.countdown)
         #expect(countdown.serverOffsetMillis == 5000)
@@ -247,8 +235,6 @@ struct ACT2GameShellTests {
         games.apply(trivia(phase: "results", view: #"{"phase":"results","deadline":null,"scoreboard":[]}"#))
         #expect(games.countdown == nil)
     }
-
-    // MARK: Lobby, seat, scenes, results (S60 8 f, l)
 
     @Test func lobbyRulesFollowTheFixtures() {
         let host = GameStagePresenter()
@@ -331,8 +317,6 @@ struct ACT2GameShellTests {
         #expect(games.summary() == ActivityGameSummary.none && !games.hasLiveTimeout)
     }
 
-    // MARK: Move adapter (S60 9 j)
-
     @Test func movePayloadsAreEachModulesValidatedShape() {
         #expect(GameMoveAdapter.payloadJSON(GameMoveIntent.answer(2)) == #"{"choice":2}"#)
         #expect(GameMoveAdapter.payloadJSON(GameMoveIntent.submitBluff("Vienna \"really\"")) == #"{"text":"Vienna \"really\""}"#)
@@ -346,8 +330,6 @@ struct ACT2GameShellTests {
         #expect(GameMoveAdapter.payloadJSON(GameMoveIntent.start()).isEmpty && GameMoveAdapter.payloadJSON(GameMoveIntent.tap()).isEmpty)
         #expect(GameMoveAdapter.quoted("a\\b\nc") == #""a\\b\nc""#)
     }
-
-    // MARK: Copy contract and kit scans (L6-5, L6-14)
 
     @Test func everyGameEnumCaseHasCopyOnBothPlatforms() throws {
         let ios = try stageSource("Sources/Conclave/Features/Meeting/Activities/GameCopy+iOS.swift")
@@ -374,19 +356,19 @@ struct ACT2GameShellTests {
         }
         let flatIOS = stageNormalized(ios)
         let flatKotlin = stageNormalized(kotlin)
-        // K2: one leaf, server-derived, stopped in the background.
+
         #expect(flatIOS.contains("TimelineView(.periodic(from: .now, by: 1))") && flatIOS.contains("if scenePhase == .active"))
         #expect(flatKotlin.contains("lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED)"))
         #expect(flatKotlin.contains("LinearProgressIndicator( progress = { fraction }"))
-        // K11: held only while the finger is down; the word absent while hidden.
+
         #expect(flatIOS.contains("DragGesture(minimumDistance: 0).updating($isHeld)") && !ios.contains("onLongPressGesture"))
         #expect(flatIOS.contains(".accessibilityAction(named: Text(ConclaveStrings.text(\"Reveal Word\")))"))
         #expect(flatKotlin.contains(".pointerInput(enabled)") && flatKotlin.contains("tryAwaitRelease()"))
         #expect(flatKotlin.contains("CustomAccessibilityAction(revealLabel)") && !kotlin.contains("FLAG_SECURE"))
-        // K3: correctness and selection carry a word, never color alone.
+
         #expect(flatIOS.contains("ConclaveStrings.text(\"Your answer\")") && flatIOS.contains("ConclaveStrings.text(\"Correct\")"))
         #expect(flatKotlin.contains("role = Role.RadioButton") && flatKotlin.contains("conclaveString(\"gm_your_answer\")"))
-        // The shell: End confirmation attached to its control, pinned bars, typed scenes only.
+
         #expect(flatIOS.contains(".modifier(GameShellEndDialog(games: games, name: chrome.name, isPresented: $endPrompt))"))
         #expect(flatIOS.contains(".safeAreaInset(edge: .bottom, spacing: 0)"))
         for forbidden in ["GameJSONValue", "dictionaryValue", "Font.system(size:", "confetti", "shimmer", "MeetingState"] {

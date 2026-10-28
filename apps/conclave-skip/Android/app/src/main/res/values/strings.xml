@@ -1,14 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-    Strings for new handwritten Compose screens (owner decision Q14), in Material sentence case (Q13).
-    The Skip-generated Conclave library module has no resource source set, so its Kotlin resolves these by name
-    at run time through conclaveString() in Sources/Conclave/Skip/ui/theme/ConclaveStrings.kt. Rename a string
-    only together with its call sites; a Swift source test checks that every referenced name exists here.
-    Numbers in visible text follow the device locale, except counts that scripts parse (the clipped text, match
-    and tap readouts): those arrive as ASCII strings (%1$s), so they read the same in every locale (TG 4.1).
--->
+
 <resources>
-    <!-- Debug component gallery in the hosting preview. -->
+
     <string name="native_gallery_show">Show component gallery</string>
     <string name="native_gallery_hide">Hide component gallery</string>
     <string name="native_gallery_expanded">Expanded</string>
@@ -72,7 +65,7 @@
     <string name="native_gallery_live_on_secondary_container">On secondary container text on secondary container</string>
     <string name="native_gallery_live_error">Error text on surface</string>
     <string name="native_gallery_expected">Appendix C %1$.3f</string>
-    <!-- Component gallery additions (WP1-2b): sections, specimens, the compact bar probe and Show loading. -->
+
     <string name="native_gallery_show_loading">Show loading</string>
     <string name="native_gallery_buttons">Buttons</string>
     <string name="native_gallery_call_controls">Call controls</string>
@@ -112,14 +105,14 @@
     <string name="native_gallery_error_title">Could not load</string>
     <string name="native_gallery_error_body">Check your connection and try again.</string>
 
-    <!-- Debug semantics exporter in the hosting preview. -->
+
     <string name="native_semantics_title">Semantics export</string>
     <string name="native_semantics_export">Export semantics</string>
     <string name="native_semantics_idle">No export yet. Exports go to cache/wp1-semantics, newest in latest.json.</string>
     <string name="native_semantics_status">Wrote %1$s: %2$d merged and %3$d unmerged nodes</string>
     <string name="native_semantics_failed">Export failed: %1$s</string>
 
-    <!-- In-call panels (WP1-3b1): page navigation, the mini tile and the hosting preview panel titles. -->
+
     <string name="native_panel_back_to_call">Back to call</string>
     <string name="native_panel_close">Close %1$s</string>
     <string name="native_panel_return_to_call">Return to call</string>
@@ -131,13 +124,13 @@
     <string name="native_panel_layout_grid">Grid</string>
     <string name="native_panel_layout_spotlight">Spotlight</string>
     <string name="native_panel_layout_sidebar">Sidebar</string>
-    <!-- Hosting preview controls added with the panels. -->
+
     <string name="native_panel_open_layout">Layout panel</string>
     <string name="native_panel_refresh_readouts">Refresh readouts</string>
-    <!-- In-call panel pages (PNL-1): the nested-page Back icon. -->
+
     <string name="native_panel_back">Back</string>
 
-    <!-- Design system components (WP1-2b): ds_ -->
+
     <string name="ds_in_progress">In progress</string>
     <string name="ds_leave_call">Leave call</string>
     <string name="ds_unread_count">%1$d unread</string>
@@ -159,7 +152,7 @@
     <string name="ds_state_muted">Muted</string>
     <string name="ds_state_off">Off</string>
     <string name="ds_state_sharing">Sharing</string>
-    <!-- Foundation pack and in-call chrome (FND-1, FND-2): ds_ -->
+
     <string name="ds_close">Close</string>
     <string name="ds_close_title">Close %1$s</string>
     <string name="ds_back_to_call">Back to call</string>
@@ -195,7 +188,7 @@
     <string name="ds_state_raised">Raised</string>
     <string name="ds_state_not_raised">Not raised</string>
     <string name="ds_reactions_off">Reactions are off</string>
-    <!-- Content components (FND-3) and the stage share and presenting strings (STG-1): ds_ -->
+
     <string name="ds_share_invite">Share invite</string>
     <string name="ds_share_subject">Join my Conclave meeting</string>
     <string name="ds_share_text">Join me in this Conclave meeting.\n%1$s</string>
@@ -208,7 +201,7 @@
         <item quantity="other">%1$d results</item>
     </plurals>
     <string name="ds_dismiss_tip">Dismiss tip</string>
-    <!-- Notice lanes (STG-5), tile states and tags (STG-2) and chat retry (CHT-1): ds_ -->
+
     <string name="ds_retry">Retry</string>
     <string name="ds_view">View</string>
     <string name="ds_open_settings">Open settings</string>
@@ -219,18 +212,18 @@
     <string name="ds_link_copied">Link copied</string>
     <string name="ds_state_back_online">Back online</string>
     <string name="ds_tag_ai">AI</string>
-    <!-- Batch 5: components -->
+
     <string name="ds_unavailable_offline">Unavailable while offline</string>
     <string name="ds_unavailable_reconnecting">Unavailable while reconnecting</string>
-    <!-- Batch 6: components -->
+
     <string name="ds_attendee">Attendee</string>
-    <!-- T3 borrow: composer counter announcement (P9) -->
+
     <plurals name="ds_char_over_limit">
         <item quantity="one">%1$d character over the limit</item>
         <item quantity="other">%1$d characters over the limit</item>
     </plurals>
 
-    <!-- Call notification, notification channel and system fixture (SYS-1): sys_ -->
+
     <string name="sys_call_fallback_title">Conclave meeting</string>
     <string name="sys_call_waiting">Asking to join</string>
     <string name="sys_call_joining">Joining…</string>
@@ -240,20 +233,20 @@
     <string name="sys_call_unmute">Unmute</string>
     <string name="sys_channel_call">Ongoing call</string>
     <string name="sys_channel_call_desc">Shows while you’re in a meeting so you can mute or hang up.</string>
-    <!-- Debug session readout in the hosting preview (WP2-S2b): sys_ -->
+
     <string name="sys_session_readout_title">Session readout</string>
-    <!-- Notice lanes, system rows (STG-5): sys_ -->
+
     <string name="sys_notif_prime_call">Allow notifications to keep Mute and Hang up in your notification shade.</string>
     <string name="sys_open_wifi_settings">Open settings</string>
     <string name="sys_allow">Allow</string>
     <string name="sys_err_hand_rate">You’re raising your hand too quickly.</string>
     <string name="sys_announce_reconnecting">Reconnecting</string>
     <string name="sys_announce_reconnected">Reconnected</string>
-    <!-- Batch 5: Picture in Picture (SYS-4) -->
+
     <string name="sys_pip_content">Video of %1$s</string>
     <string name="sys_pip_reconnecting">Reconnecting…</string>
     <string name="sys_pip_on_hold">On hold</string>
-    <!-- Batch 6: Settings status rows and Retry Now (SET-1, SYS-6) -->
+
     <string name="sys_notif_off">Notifications are off for Conclave</string>
     <string name="sys_call_notif_title">Call notification</string>
     <string name="sys_call_notif_on">On</string>
@@ -264,7 +257,7 @@
     <string name="sys_links_footer">Choose Conclave for conclave.acmvit.in links in Settings.</string>
     <string name="sys_diag_export">Export diagnostics</string>
     <string name="sys_retrying_now">Retrying now</string>
-    <!-- Batch 7: screen share failures and notification (SYS-10), diagnostics export (SYS-15) -->
+
     <string name="sys_diag_footer">Creates a file without names, messages or meeting codes that you can send to support.</string>
     <string name="sys_diag_share_title">Conclave diagnostics</string>
     <string name="sys_diag_failed">Couldn’t create the diagnostics file.</string>
@@ -276,7 +269,7 @@
     <string name="sys_channel_share_desc">Shows while you’re sharing your screen.</string>
     <string name="sys_share_notif_title">Sharing your screen</string>
     <string name="sys_call_stop_sharing">Stop sharing</string>
-    <!-- Batch 8: notification channels and local notifications (SYS-3) -->
+
     <string name="sys_notif_admitted_body">You’re in. Tap to return to the call.</string>
     <string name="sys_notif_mention">Mentioned you</string>
     <string name="sys_notif_mention_line">Mentioned you: %1$s</string>
@@ -288,14 +281,14 @@
     <string name="sys_notif_messages_channel_off">Private messages and mentions are off in system settings.</string>
     <string name="sys_fixture_clear_notifications">Clear notifications</string>
 
-    <!-- Audio route names (SYS-2): ctl_route_ -->
+
     <string name="ctl_route_phone">Phone</string>
     <string name="ctl_route_speaker">Speaker</string>
     <string name="ctl_route_bluetooth">Bluetooth headset</string>
     <string name="ctl_route_wired">Wired headset</string>
     <string name="ctl_route_usb">USB audio</string>
     <string name="ctl_route_hearing_aid">Hearing aid</string>
-    <!-- Call controls (CTL-1) and the S20 10 g control toasts and recap banner (STG-5): ctl_ -->
+
     <string name="ctl_banner_recap">Conclave is writing the recap in chat. The call ends for everyone once it lands.</string>
     <string name="ctl_end_now">End now</string>
     <string name="ctl_toast_ending">Ending the call for everyone…</string>
@@ -335,7 +328,7 @@
     <string name="ctl_mic_denied_title">Microphone access is off</string>
     <string name="ctl_mic_denied_body">Allow microphone access in Settings so people can hear you.</string>
     <string name="ctl_open_settings">Open settings</string>
-    <!-- Batch 5: Leave and End for everyone (CTL-2) -->
+
     <string name="ctl_end_for_everyone_ellipsis">End call for everyone…</string>
     <string name="ctl_end_for_everyone">End call for everyone</string>
     <string name="ctl_end_title">End call for everyone?</string>
@@ -343,7 +336,7 @@
     <string name="ctl_end_confirm">End for everyone</string>
     <string name="ctl_state_leaving">Leaving</string>
     <string name="ctl_ending">Ending…</string>
-    <!-- Batch 6: More, reactions tray and Raise Hand (CTL-5, CTL-6) -->
+
     <string name="ctl_lowering_hand">Lowering hand…</string>
     <string name="ctl_raising_hand">Raising hand…</string>
     <string name="ctl_activity_running">%1$s is running</string>
@@ -401,11 +394,11 @@
     <string name="ctl_kb_people">Show participants</string>
     <string name="ctl_kb_share">Share screen</string>
     <string name="ctl_kb_lock">Lock meeting</string>
-    <!-- Batch 7: End dialog recap variant (TRN-2, S30 CC8) -->
+
     <string name="ctl_end_recap_message">Conclave can post a recap of the meeting to chat before the call ends.</string>
     <string name="ctl_end_post_recap">Post recap and end</string>
     <string name="ctl_end_without_recap">End without recap</string>
-    <!-- Batch 8: audio route sheet and media shortcuts (CTL-3, CTL-4) -->
+
     <string name="ctl_audio_output">Audio output</string>
     <string name="ctl_audio_settings">Audio settings</string>
     <string name="ctl_route_connecting">Connecting…</string>
@@ -414,7 +407,7 @@
     <string name="ctl_route_bt_allow_settings">Allow access in Settings</string>
     <string name="ctl_choose_audio_output">Choose audio output</string>
 
-    <!-- Premeeting Home, join sheet, switch prompt, lobby and outcome stand-ins (ENT-1, ENT-2): pm_ -->
+
     <string name="pm_app_title">Conclave</string>
     <string name="pm_new_meeting">New meeting</string>
     <string name="pm_join">Join</string>
@@ -432,7 +425,7 @@
     <string name="pm_remove_from_recents">Remove from recents</string>
     <string name="pm_more_options_for">More options for %1$s</string>
     <string name="pm_empty_title">No recent meetings</string>
-    <string name="pm_empty_body">Start a meeting, or join one with a code or link.</string>
+    <string name="pm_empty_body">Start a meeting or join with a link.</string>
     <string name="pm_notice_ended_by_host">The host ended the meeting.</string>
     <string name="pm_notice_room_closed">This meeting has ended.</string>
     <string name="pm_notice_invalid_link">This link can’t be opened in Conclave.</string>
@@ -469,7 +462,7 @@
     <string name="pm_disconnected_body">The meeting server ended your connection. You can rejoin.</string>
     <string name="pm_couldnt_rejoin">Couldn’t rejoin</string>
     <string name="pm_back_home">Back to home</string>
-    <!-- Pre-join lobby and meeting link (ENT-3, ENT-8), Account, sign-in and privacy (ENT-7): pm_ -->
+
     <string name="pm_presence_checking">Checking who’s here</string>
     <string name="pm_presence_none">No one here yet</string>
     <plurals name="pm_presence_count">
@@ -534,7 +527,7 @@
     <string name="pm_delete_failed">Couldn’t delete your account. Check your connection and try again.</string>
     <string name="pm_retry">Retry</string>
     <string name="pm_account_deleted">Account deleted</string>
-    <!-- Batch 5: entry transition and outcome (ENT-5, ENT-6) -->
+
     <string name="pm_joining">Joining…</string>
     <string name="pm_starting">Starting…</string>
     <string name="pm_still_connecting">Still connecting. Check your connection.</string>
@@ -557,13 +550,13 @@
     <string name="pm_stop_asking_body">You’ll lose your place, and someone will need to let you in again.</string>
     <string name="pm_stop_asking_confirm">Stop asking</string>
     <string name="pm_keep_waiting">Keep waiting</string>
-    <!-- Batch 7: permission priming (ENT-4) -->
+
     <string name="pm_camera_access_off_reason">Camera access is off in Settings.</string>
     <string name="pm_mic_access_off_reason">Microphone access is off in Settings.</string>
     <string name="pm_mic_rationale">Conclave needs the microphone so people in the meeting can hear you.</string>
     <string name="pm_camera_rationale">Conclave needs the camera so people in the meeting can see you.</string>
     <string name="pm_allow">Allow</string>
-    <!-- Batch 8: webinar attendee landing (ENT-9) -->
+
     <string name="pm_tag_starts_soon">Starts soon</string>
     <string name="pm_tag_live">Live</string>
     <string name="pm_tag_ended">Ended</string>
@@ -599,7 +592,7 @@
         <item quantity="other">The lobby opens %1$d minutes before the start.</item>
     </plurals>
 
-    <!-- Call stage, chrome chips and panel titles (STG-1, STG-4): stg_ -->
+
     <string name="stg_panel_transcript">Transcript</string>
     <string name="stg_panel_activities">Activities</string>
     <string name="stg_panel_effects">Effects</string>
@@ -627,7 +620,7 @@
     <string name="stg_show_activity">Show %1$s</string>
     <string name="stg_activity">Activity</string>
     <string name="stg_someone">Someone</string>
-    <!-- Notice lanes and captions strip (STG-5, TRN-1), tile menu (STG-2), activity stage (STG-9): stg_ -->
+
     <string name="stg_banner_offline">You’re offline. We’ll reconnect when your connection is back.</string>
     <string name="stg_banner_captive_portal">This Wi-Fi network needs you to sign in.</string>
     <string name="stg_banner_reconnecting">Reconnecting to the meeting…</string>
@@ -708,7 +701,7 @@
     <string name="stg_retry">Retry</string>
     <string name="stg_show_video">Show video</string>
     <string name="stg_showing_activity">Showing activity</string>
-    <!-- Batch 5: Meeting Details, attendee viewer, PiP and share viewing (STG-6, STG-8, SYS-4, STG-3) -->
+
     <string name="stg_room_code">Room code</string>
     <string name="stg_copy_code">Copy code</string>
     <string name="stg_code_copied">Code copied</string>
@@ -756,7 +749,7 @@
     <string name="stg_camera_paused">Camera paused</string>
     <string name="stg_flip_failed">Couldn’t switch cameras. Try again.</string>
 
-    <!-- People actions (STG-2, S50 3 g) and the Participants panel (PPL-1): ppl_ -->
+
     <string name="ppl_pin">Pin</string>
     <string name="ppl_unpin">Unpin</string>
     <string name="ppl_detail_invited">Invited on stage</string>
@@ -787,7 +780,7 @@
     <string name="ppl_offline_footer">You’re offline. Host actions return when you reconnect.</string>
     <string name="ppl_lost_host">You’re no longer a host.</string>
     <string name="ppl_no_match">No one matches “%1$s”.</string>
-    <!-- Batch 5: people actions (PPL-2) -->
+
     <string name="ppl_change_name">Change name…</string>
     <string name="ppl_hide_messages">Hide messages from %1$s</string>
     <string name="ppl_show_messages">Show messages from %1$s</string>
@@ -843,7 +836,7 @@
     <string name="ppl_announce_cohost">%1$s is now a co-host.</string>
     <string name="ppl_announce_host">%1$s is now the host.</string>
     <string name="ppl_announce_removed">%1$s was removed.</string>
-    <!-- Batch 6: webinar people, stage invitations and roles (PPL-5, PPL-7) -->
+
     <string name="ppl_bring_on_stage">Bring on stage</string>
     <string name="ppl_cancel_invite">Cancel invite</string>
     <string name="ppl_inviting">Inviting…</string>
@@ -864,7 +857,7 @@
     <string name="ppl_invite_message">%1$s wants to bring you into the conversation. You’ll rejoin as a speaker and can turn on your microphone and camera.</string>
     <string name="ppl_invite_message_fallback">A host wants to bring you into the conversation. You’ll rejoin as a speaker and can turn on your microphone and camera.</string>
     <string name="ppl_announce_new_host">%1$s is now the host.</string>
-    <!-- Batch 8: admissions and raised hands (PPL-3) -->
+
     <string name="ppl_deny_all">Deny all…</string>
     <string name="ppl_more_waiting">More waiting actions</string>
     <string name="ppl_admitting">Admitting…</string>
@@ -875,7 +868,7 @@
         <item quantity="other">%1$d admitted</item>
     </plurals>
 
-    <!-- Chat panel, composer, message actions and reactions (CHT-1 to CHT-3): chat_ -->
+
     <string name="chat_title">Chat</string>
     <string name="chat_locked_title">Chat is locked</string>
     <string name="chat_locked_body">The host has paused messaging. You’ll be able to chat when it reopens.</string>
@@ -1006,7 +999,7 @@
     <string name="chat_cmd_desc_camera">Turn your camera on or off</string>
     <string name="chat_cmd_desc_leave">Leave the meeting</string>
     <string name="chat_cmd_desc_clear">Clear chat on this device</string>
-    <!-- Batch 5: photos, GIFs, link cards and voice messages (CHT-4 to CHT-6) -->
+
     <string name="chat_attach">Add attachment</string>
     <string name="chat_attach_photo">Photo</string>
     <string name="chat_attach_gif">GIFs and stickers</string>
@@ -1070,7 +1063,7 @@
     <string name="chat_send_voice">Send voice message</string>
     <string name="chat_ax_voice">Voice message</string>
     <string name="chat_attach_voice">Voice message</string>
-    <!-- Batch 6: Conclave AI rows and stage chat previews (CHT-7, CHT-8) -->
+
     <string name="chat_assistant_name">Conclave</string>
     <string name="chat_assistant_tag">AI</string>
     <string name="chat_assistant_thinking">Thinking</string>
@@ -1111,13 +1104,13 @@
     <string name="chat_preview_label">Message from %1$s: %2$s</string>
     <string name="chat_preview_open">Open chat</string>
     <string name="chat_preview_dismiss">Dismiss message from %1$s</string>
-    <!-- T3 borrow: chat Send button reasons (P6) -->
+
     <string name="chat_send_reason_offline">Offline</string>
     <string name="chat_send_reason_not_joined">Not joined yet</string>
     <string name="chat_send_reason_empty">Type a message</string>
     <string name="chat_send_reason_uploading">Uploading photo</string>
 
-    <!-- Activities launcher, game shell, apps and shared browser (ACT-1, ACT-2): act_, gm_, br_, app_, set_ -->
+
     <string name="act_action_failed">That didn’t go through. Try again.</string>
     <string name="act_apps">Apps</string>
     <string name="act_apps_watch_only">Participants watch only.</string>
@@ -1179,7 +1172,7 @@
     <string name="app_wheel_detail">Random picker for names and choices</string>
     <string name="app_whiteboard">Whiteboard</string>
     <string name="app_whiteboard_detail">Collaborative whiteboard</string>
-    <!-- Batch 7: the SDK app host and Whiteboard tools (ACT-7) -->
+
     <plurals name="app_editing">
         <item quantity="one">%1$d editing</item>
         <item quantity="other">%1$d editing</item>
@@ -1248,7 +1241,7 @@
     <string name="app_wb_color_blue">Blue</string>
     <string name="app_wb_color_lavender">Lavender</string>
     <string name="app_wb_color_purple">Purple</string>
-    <!-- Batch 8: Spin the Wheel and Watch Together pages (ACT-8) -->
+
     <string name="app_wheel_spin">Spin</string>
     <string name="app_wheel_edit_names">Edit names</string>
     <string name="app_wheel_winner">Winner: %1$s</string>
@@ -1320,7 +1313,7 @@
     <string name="br_title">Shared browser</string>
     <string name="br_unavailable">The shared browser isn’t available on this server.</string>
     <string name="br_website">Website</string>
-    <!-- Batch 8: shared browser card (ACT-9) -->
+
     <string name="br_keyboard">Keyboard</string>
     <string name="br_more_actions">More shared browser actions</string>
     <string name="br_mute_audio">Mute browser audio</string>
@@ -1375,7 +1368,7 @@
     <string name="gm_wins_with">%1$s wins with %2$s</string>
     <string name="gm_your_answer">Your answer</string>
     <string name="set_available_when_reconnected">Available when you’re reconnected.</string>
-    <!-- Batch 5: connection quality and about (STG-6, shared with SET-1 and SET-3) -->
+
     <string name="set_quality_measuring">Measuring…</string>
     <string name="set_quality_good">Good</string>
     <string name="set_quality_fair">Fair</string>
@@ -1384,7 +1377,7 @@
     <string name="set_quality_unavailable">Unavailable</string>
     <string name="set_about">About</string>
     <string name="set_version">Version</string>
-    <!-- Batch 6: Settings, audio and voice pages (SET-1, SET-2, SET-4) -->
+
     <string name="set_title">Settings</string>
     <string name="set_general">General</string>
     <string name="set_audio">Audio</string>
@@ -1499,7 +1492,7 @@
     <string name="set_redo">Redo</string>
     <string name="set_discard_recording_title">Discard recording?</string>
     <string name="set_discard">Discard</string>
-    <!-- Batch 7: Video, screen share and connection pages (SET-3) -->
+
     <string name="set_preset_hd">HD</string>
     <string name="set_preset_studio">Studio</string>
     <string name="set_preset_custom">Custom</string>
@@ -1595,7 +1588,7 @@
         <item quantity="one">%1$d second left</item>
         <item quantity="other">%1$d seconds left</item>
     </plurals>
-    <!-- Batch 6: prompt games (ACT-3) -->
+
     <string name="gm_reveal_now">Reveal now</string>
     <string name="gm_next">Next</string>
     <string name="gm_trivia_question">Question</string>
@@ -1671,7 +1664,7 @@
     <string name="gm_imp_word_was">The secret word was %1$s</string>
     <string name="gm_imp_call_vote">Call the vote</string>
     <string name="gm_imp_end_vote">End vote</string>
-    <!-- Batch 7: Wordle (ACT-4) -->
+
     <string name="gm_wordle_set_round">Round %1$d of %2$d · Set the word</string>
     <string name="gm_wordle_set">Set the word</string>
     <string name="gm_wordle_guess_round">Round %1$d of %2$d · Guess the word</string>
@@ -1713,7 +1706,7 @@
     <string name="gm_wordle_letter_present">%1$s, in the word</string>
     <string name="gm_wordle_letter_absent">%1$s, not in the word</string>
     <string name="gm_wordle_time_left">%1$s left</string>
-    <!-- Batch 8: chess (ACT-5) and Zip (ACT-6) -->
+
     <string name="gm_chess_duel">Live chess duel</string>
     <string name="gm_chess_teams">Captain-led team chess</string>
     <string name="gm_chess_you_cpu">You vs the computer</string>
@@ -1845,7 +1838,7 @@
     <string name="gm_zip_cell_next">, next</string>
     <string name="gm_zip_cell_dead">, not part of the puzzle</string>
 
-    <!-- Batch 5: Host Controls (PPL-4) -->
+
     <string name="hst_announce_on">%1$s turned on by another host.</string>
     <string name="hst_announce_off">%1$s turned off by another host.</string>
     <string name="hst_title">Host controls</string>
@@ -1949,7 +1942,7 @@
     <string name="hst_sending">Sending…</string>
     <string name="hst_notice_sent">Notice sent</string>
     <string name="hst_fail_notice">Couldn’t send the notice.</string>
-    <!-- Batch 6: Webinar Settings pages (PPL-5) -->
+
     <string name="hst_attendees">Attendees</string>
     <string name="hst_webinar_link">Webinar link</string>
     <string name="hst_watching_row">Watching</string>
@@ -1976,13 +1969,13 @@
     <string name="hst_fail_invite">Couldn’t invite %1$s on stage.</string>
     <string name="hst_fail_gone">%1$s is no longer watching.</string>
     <string name="hst_fail_cancel_invite">Couldn’t cancel the invite.</string>
-    <!-- Batch 8: admissions and raised hands failures (PPL-3) -->
+
     <string name="hst_fail_admit">Couldn’t admit %1$s.</string>
     <string name="hst_fail_admit_all">Couldn’t admit everyone.</string>
     <string name="hst_fail_deny">Couldn’t deny %1$s.</string>
     <string name="hst_fail_lower_all">Couldn’t lower all hands.</string>
 
-    <!-- Batch 6: Webinar questions and answers (PPL-6) -->
+
     <string name="qa_title">Q&amp;A</string>
     <string name="qa_top">Top</string>
     <string name="qa_recent">Recent</string>
@@ -2032,7 +2025,7 @@
     <string name="qa_announce_sent">Your question was sent.</string>
     <string name="qa_announce_off">Q&amp;A is off.</string>
 
-    <!-- Batch 7: Layout panel (SET-5) -->
+
     <string name="lay_title">Layout</string>
     <string name="lay_auto">Auto</string>
     <string name="lay_tiled">Tiled</string>
@@ -2061,7 +2054,7 @@
     <string name="lay_audio_only">Audio only</string>
     <string name="lay_audio_only_detail">Turns off the video you send and receive in this call. Your camera stays off until you turn it on.</string>
 
-    <!-- Batch 7: Effects panel (SET-6) -->
+
     <string name="fx_title">Effects</string>
     <string name="fx_backgrounds">Backgrounds</string>
     <string name="fx_filters">Filters</string>
@@ -2106,7 +2099,7 @@
     <string name="fx_err_limit">You can keep up to 8 personal images. Remove one to add another.</string>
     <string name="fx_publish_cap">While effects are on, video is sent at up to 720p and 30 fps.</string>
 
-    <!-- Batch 7: Transcript panel, Ask, Minutes and export (TRN-2) -->
+
     <string name="trn_title">Transcript</string>
     <string name="trn_tab_transcript">Transcript</string>
     <string name="trn_tab_ask">Ask</string>
@@ -2212,4 +2205,9 @@
     <string name="trn_announce_started">Live notes started</string>
     <string name="trn_announce_paused">Live notes paused</string>
     <string name="trn_announce_stopped">Live notes stopped</string>
+    <string name="appearance_title">Appearance</string>
+    <string name="appearance_system">System</string>
+    <string name="appearance_light">Light</string>
+    <string name="appearance_dark">Dark</string>
+    <string name="chat_empty_greeting">Say hello to the room.</string>
 </resources>

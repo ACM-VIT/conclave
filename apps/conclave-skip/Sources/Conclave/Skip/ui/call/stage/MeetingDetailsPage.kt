@@ -45,32 +45,12 @@ import kotlinx.coroutines.launch
 import skip.ui.UIApplication
 import java.util.Date
 
-/*
- * S20 15 (STG-6) on Android: Meeting details (`MeetingPanel.meetingInfo`) and its attendee variant Webinar details
- * (S20 12 a, RECONCILE R44). One InCallPage in lazyList mode (system appearance, the call mini tile on the overlay),
- * a LazyColumn keyed by row id over `MeetingInfoPolicy.rows` (F00 C09 d: value rows with the value as supporting text,
- * status values trailing, Copy as a trailing IconButton), and the host's PanelPageStack for the pushed pages (Host
- * controls, the attendee Settings and its privacy policy): Back pops a page first, with predictive progress, before the
- * panel closes (PNL-1, PS 8.5). Share sends the F00 strings with the room label as EXTRA_TITLE and no chooser title,
- * keeping the PiP auto-enter suppression (SC21, RECONCILE R14; the same payload as the shared Android meeting share,
- * written out here because the stage sources never name the legacy share helpers); the app's "Link copied" snackbar
- * shows only on API 28 to 32 (D-24).
- * The page reads only `stage.meetingInfo`; the webinar link is generated only by its owner (`webinarLinkProvider`, the
- * S50 HostControlsPresenter.ensureWebinarLink(), RECONCILE R34). Mounted by the native call root.
- */
-
-/**
- * The pushed pages on the host's PanelPageStack (plain string keys, PNL-1). Host controls is `PeopleRoute.hostControls`'
- * raw value, and its own sub-pages push `PeopleRoute` raw values on the same stack (R50-2), so PPL-4's host pages render
- * here unchanged; none of them collides with the attendee keys.
- */
 internal object MeetingDetailsPages {
     const val HOST_CONTROLS = "hostControls"
     const val SETTINGS = "settings"
     const val PRIVACY = "privacy"
 }
 
-/** True when the page on top is one of the S50 host pages (Host controls or a page it pushed). Pure. */
 internal fun meetingDetailsIsHostPage(top: String?): Boolean = when (top) {
     PeopleRoute.hostControls.rawValue, PeopleRoute.inviteCode.rawValue, PeopleRoute.accessList.rawValue,
     PeopleRoute.notice.rawValue, PeopleRoute.webinar.rawValue, PeopleRoute.attendeeCode.rawValue,
@@ -78,7 +58,6 @@ internal fun meetingDetailsIsHostPage(top: String?): Boolean = when (top) {
     else -> false
 }
 
-/** The title resource for the page on top: the details (or Webinar details), then the pushed page's own title. */
 internal fun meetingDetailsTitleName(isAttendee: Boolean, top: String?): String = when {
     top == MeetingDetailsPages.HOST_CONTROLS -> "stg_panel_host_controls"
     top == MeetingDetailsPages.SETTINGS -> "stg_settings"
@@ -87,7 +66,6 @@ internal fun meetingDetailsTitleName(isAttendee: Boolean, top: String?): String 
     else -> if (isAttendee) "stg_webinar_details" else "stg_panel_meeting_details"
 }
 
-/** What one LazyColumn item draws. */
 internal enum class MeetingDetailsItemKind { Header, Divider, Row }
 
 internal data class MeetingDetailsItem(
@@ -97,14 +75,9 @@ internal data class MeetingDetailsItem(
     val row: MeetingInfoRowID? = null,
 )
 
-/**
- * Android folds Copy code and Copy link into trailing IconButtons on the Room code and Meeting link rows (S20 15 b, d);
- * every other row of `MeetingInfoPolicy.rows` is one item.
- */
 internal fun meetingDetailsFoldsIntoIcon(row: MeetingInfoRowID): Boolean =
     row == MeetingInfoRowID.copyCode || row == MeetingInfoRowID.copyLink
 
-/** The section header resource, or null for a section that starts with a divider (S20 15 b; C11 d headers). */
 internal fun meetingDetailsSectionTitleName(section: MeetingInfoSection): String? = when (section) {
     MeetingInfoSection.status -> "stg_status"
     MeetingInfoSection.webinar -> "stg_section_webinar"
@@ -112,7 +85,6 @@ internal fun meetingDetailsSectionTitleName(section: MeetingInfoSection): String
     else -> null
 }
 
-/** The page's items in S20 15 b order: per section a header (Status, Webinar) or a divider, then its rows. Pure. */
 internal fun meetingDetailsItems(info: MeetingInfoSnapshot): List<MeetingDetailsItem> {
     val items = mutableListOf<MeetingDetailsItem>()
     var first = true
@@ -151,7 +123,7 @@ internal fun MeetingDetailsPage(
     val info = stage.meetingInfo
     val isAttendee = info?.isAttendee == true
     val snackbar = remember { SnackbarHostState() }
-    // Losing host (or a move to the audience) while on a host page returns to the details (S50 12).
+
     val keepsHostPages = info != null && info.isHost && !info.isAttendee
     LaunchedEffect(keepsHostPages) {
         if (!keepsHostPages && meetingDetailsIsHostPage(pages?.top)) pages?.popToRoot()
@@ -168,7 +140,7 @@ internal fun MeetingDetailsPage(
         miniTileVideo = miniTileVideo,
         contentMode = InCallPageContent.lazyList,
         snackbarHost = { SnackbarHost(snackbar) },
-        // The host Notice page composes a text field; the mini tile steps aside for the keyboard, as in Host controls.
+
         hideMiniTileWithIme = true,
         isNested = pages?.isNested == true,
         onBack = { pages?.pop() },
@@ -289,7 +261,6 @@ private fun MeetingDetailsRow(
     }
 }
 
-/** A status row: the title with its value trailing ("Meeting locked    On"), read as one node. */
 @Composable
 private fun MeetingDetailsStatusRow(title: String, value: String, identifier: String) {
     ListItem(
@@ -303,7 +274,6 @@ private fun MeetingDetailsStatusRow(title: String, value: String, identifier: St
     )
 }
 
-/** An action row (Share invite, Settings): the whole row is a button with a leading icon. */
 @Composable
 private fun MeetingDetailsActionRow(
     title: String,
@@ -322,10 +292,6 @@ private fun MeetingDetailsActionRow(
     )
 }
 
-/**
- * A value row with a trailing Copy IconButton (Room code, Meeting link): the value wraps (no truncation at font scale
- * 2.0); Copy writes the clipboard, plays `linkCopied`, shows the check for 2 s and, on API 28 to 32 only, the snackbar.
- */
 @Composable
 private fun MeetingDetailsCopyValueRow(
     title: String,
@@ -374,10 +340,6 @@ private fun MeetingDetailsCopyValueRow(
     )
 }
 
-/**
- * Share webinar link (S20 15 f): with a link, the share sheet at once; without one (hosts only), the tap generates it
- * through the owner with a row spinner and then opens the share sheet. Opening the page never generates a link.
- */
 @Composable
 private fun MeetingDetailsWebinarShareRow(info: MeetingInfoSnapshot, provider: (suspend () -> String?)?, identifier: String) {
     val context = LocalContext.current
@@ -407,7 +369,6 @@ private fun MeetingDetailsWebinarShareRow(info: MeetingInfoSnapshot, provider: (
     )
 }
 
-/** The webinar Copy row: copies an existing link at once; a missing one is generated first (row spinner), then copied. */
 @Composable
 private fun MeetingDetailsWebinarCopyRow(
     info: MeetingInfoSnapshot,
@@ -458,10 +419,6 @@ private fun MeetingDetailsWebinarCopyRow(
     )
 }
 
-/**
- * Host controls (hosts only): a nested page inside this InCallPage (S20 15 d). While recovering the row stays visible,
- * disabled, with "Unavailable while reconnecting" (15 f). Material list rows draw no chevron (C09 d convention).
- */
 @Composable
 private fun MeetingDetailsHostControlsRow(enabled: Boolean, identifier: String, onOpen: () -> Unit) {
     ListItem(
@@ -475,12 +432,6 @@ private fun MeetingDetailsHostControlsRow(enabled: Boolean, identifier: String, 
     )
 }
 
-/**
- * The S50 Host controls content pushed inside Meeting details (S20 15 d; the S60 R6-3 mechanism): PPL-4's
- * `HostPageContent`, the same pages Participants and the root Host controls panel render, pushing its sub-pages on this
- * panel's stack. Without a People presenter (the stage fixture) an empty page keeps the push, the title, Back and the
- * predictive pop working.
- */
 @Composable
 private fun MeetingDetailsHostPage(
     people: PeoplePresenter?,
@@ -496,10 +447,6 @@ private fun MeetingDetailsHostPage(
     }
 }
 
-/**
- * The attendee path to Settings and the Privacy policy (RECONCILE R44): the About rows that exist today. SET-1
- * (batch 6) replaces this body with the S60 call-scope Settings filtered for role attendee.
- */
 @Composable
 private fun MeetingDetailsAttendeeSettings(reservation: PaddingValues, onPush: (String) -> Unit) {
     val context = LocalContext.current
@@ -514,7 +461,6 @@ private fun MeetingDetailsAttendeeSettings(reservation: PaddingValues, onPush: (
     }
 }
 
-/** The privacy policy text (verbatim `PrivacyPolicyDocument`, OQ9) as a page of this panel. */
 @Composable
 private fun MeetingDetailsPrivacyPage(reservation: PaddingValues) {
     val blocks = remember { PrivacyPolicyDocument.blocks.toList() }
@@ -541,16 +487,10 @@ private fun MeetingDetailsPrivacyPage(reservation: PaddingValues) {
 
 private const val MEETING_DETAILS_BULLET = "•"
 
-/** The row spinner while a webinar link is generated (15 f). */
 private val MeetingDetailsSpinner: @Composable () -> Unit = {
     CircularProgressIndicator(Modifier.size(20.dp).testTag("meetingInfo.spinner"), strokeWidth = 2.dp)
 }
 
-/**
- * The localized share (SC21, RECONCILE R14): ACTION_SEND with EXTRA_SUBJECT, EXTRA_TEXT and EXTRA_TITLE (the API 29+
- * Sharesheet preview), no chooser title, and the PiP auto-enter suppression a chooser needs (it fires onUserLeaveHint
- * on several builds).
- */
 internal fun meetingDetailsShare(context: Context, subject: String, text: String, title: String) {
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
@@ -573,7 +513,6 @@ internal fun meetingDetailsShare(context: Context, subject: String, text: String
     }
 }
 
-/** The clipboard write for Copy code and Copy link (SC21; never a legacy share helper). */
 internal fun meetingDetailsCopy(context: Context, value: String, label: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
     clipboard.setPrimaryClip(ClipData.newPlainText(label, value))

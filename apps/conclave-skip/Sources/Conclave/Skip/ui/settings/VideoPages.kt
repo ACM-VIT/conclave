@@ -37,16 +37,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 2 d (SET-3; C6-4, C6-5, C6-9, C6-29, D11, D21; RECONCILE R40, R43) on Android: Camera quality and Share quality as
- * radio lists in one selectable group (selectionChanged on a dispatched choice, 2 h), their Advanced pages (each setting
- * a ListItem opening a single-choice AlertDialog; the bitrate a Slider plus a numeric field in a dialog), Share device
- * audio while the S70 10 capability holds, and Connection. Presets are encoder ceilings over the persisted
- * NativeMediaQualityPreferences (the presenter writes them, the core re-runs its publish resolver). Connection reads
- * the one shared label (R21) and the ConnectionStatsModel leaf, collected only while the page is composed (one
- * DisposableEffect subscription, zero polls after Back). Pages take the InCallPage reservation as list padding (R50-1).
- */
-
 @Composable
 internal fun SettingsCameraQualityPage(settings: SettingsPresenter, reservation: PaddingValues, onPush: (String) -> Unit) {
     val video = settings.video
@@ -114,7 +104,7 @@ internal fun SettingsShareQualityPage(settings: SettingsPresenter, reservation: 
             SettingsActionItem(conclaveString("set_restore_quality"), "settings.share.restore") { settings.restoreRecommendedScreenShare() }
         }
         if (video.canShareDeviceAudio) {
-            // C6-29 (RECONCILE R43): shown only while the S70 10 capability holds.
+
             item("deviceAudio", "switch") {
                 SettingsSwitchItem(conclaveString("set_share_device_audio"), video.shareDeviceAudioOn, "settings.share.deviceAudio",
                     supporting = conclaveString("set_share_device_audio_detail")) { settings.setShareDeviceAudio(it) }
@@ -123,7 +113,6 @@ internal fun SettingsShareQualityPage(settings: SettingsPresenter, reservation: 
     }
 }
 
-/** The camera or share Advanced page: each setting opens a single-choice dialog; the bitrate opens the slider dialog. */
 @Composable
 internal fun SettingsAdvancedPage(settings: SettingsPresenter, reservation: PaddingValues, isScreenShare: Boolean) {
     val video = settings.video
@@ -206,7 +195,6 @@ private fun settingsOptimizeName(rawValue: String, isScreenShare: Boolean): Stri
 
 internal data class SettingsChoice(val value: String, val title: String)
 
-/** The Material single-choice dialog: radio rows in one selectable group; a choice applies and closes. */
 @Composable
 private fun SettingsChoiceDialog(
     title: String, options: List<SettingsChoice>, selected: String, identifier: String,
@@ -237,7 +225,6 @@ private fun SettingsChoiceDialog(
     )
 }
 
-/** "Full-quality bitrate": a stepped Slider and a numeric field (Number keyboard); Done applies once. */
 @Composable
 private fun SettingsBitrateDialog(limits: CameraLimitsModel, onConfirm: (Int) -> Unit, onDismiss: () -> Unit) {
     var value by remember { mutableFloatStateOf(limits.bitrateKbps.toFloat()) }
@@ -296,7 +283,7 @@ internal fun SettingsConnectionPage(settings: SettingsPresenter, reservation: Pa
     val general = settings.general
     val stats = settings.stats
     DisposableEffect(stats) {
-        // C6-9: 1 Hz while the page is composed; leaving it unsubscribes.
+
         stats.subscribe()
         onDispose { stats.unsubscribe() }
     }
@@ -354,7 +341,6 @@ internal fun SettingsConnectionPage(settings: SettingsPresenter, reservation: Pa
     }
 }
 
-/** The leaf that reads the 1 Hz values (2 k): label and value rows, values in the shared tabular style (R6-13). */
 @Composable
 private fun SettingsConnectionDetails(stats: ConnectionStatsModel) {
     val values = stats.values
@@ -378,7 +364,6 @@ private fun SettingsConnectionDetails(stats: ConnectionStatsModel) {
     }
 }
 
-/** Packet loss in percent, locale formatted (the system formats percent; no resource needed). */
 private fun settingsPercent(percent: Double): String {
     val format = java.text.NumberFormat.getPercentInstance()
     format.maximumFractionDigits = 1
@@ -399,7 +384,6 @@ private fun SettingsStatItem(title: String, value: String, identifier: String) {
     )
 }
 
-/** A radio row (Role.RadioButton in the page's selectable group); the RadioButton itself takes no clicks. */
 @Composable
 private fun SettingsRadioItem(
     title: String, detail: String?, selected: Boolean, enabled: Boolean, identifier: String, onSelect: () -> Unit,
@@ -414,7 +398,6 @@ private fun SettingsRadioItem(
     )
 }
 
-/** "Restore recommended settings": a primary-text button row. */
 @Composable
 private fun SettingsActionItem(title: String, identifier: String, onClick: () -> Unit) {
     ListItem(

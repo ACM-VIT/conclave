@@ -3,12 +3,10 @@ import SwiftUI
 import AVFoundation
 import WebRTC
 
-// MARK: - Local Video Preview (Camera)
-
 struct LocalVideoView: View {
     let captureSession: AVCaptureSession?
     var isMirrored: Bool = true
-    
+
     var body: some View {
         GeometryReader { geometry in
             if let session = captureSession {
@@ -21,12 +19,10 @@ struct LocalVideoView: View {
     }
 }
 
-// MARK: - WebRTC Local Video (RTCVideoTrack-based)
-
 struct RTCLocalVideoView: View {
     let videoTrack: RTCVideoTrack?
     var isMirrored: Bool = true
-    
+
     var body: some View {
         GeometryReader { geometry in
             if let track = videoTrack {
@@ -39,19 +35,17 @@ struct RTCLocalVideoView: View {
     }
 }
 
-// MARK: - Camera Preview Layer (UIKit Bridge for AVCaptureSession)
-
 struct CameraPreviewLayer: UIViewRepresentable {
     let session: AVCaptureSession
     var isMirrored: Bool = true
-    
+
     func makeUIView(context: Context) -> CameraPreviewUIView {
         let view = CameraPreviewUIView()
         view.session = session
         view.isMirrored = isMirrored
         return view
     }
-    
+
     func updateUIView(_ uiView: CameraPreviewUIView, context: Context) {
         uiView.session = session
         uiView.isMirrored = isMirrored
@@ -66,40 +60,40 @@ class CameraPreviewUIView: UIView {
             }
         }
     }
-    
+
     var isMirrored: Bool = true {
         didSet {
             updateMirroring()
         }
     }
-    
+
     lazy var previewLayer: AVCaptureVideoPreviewLayer = {
         let layer = AVCaptureVideoPreviewLayer()
         layer.videoGravity = .resizeAspectFill
         return layer
     }()
-    
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         setup()
     }
-    
+
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         setup()
     }
-    
+
     func setup() {
         backgroundColor = .black
         layer.addSublayer(previewLayer)
         updateMirroring()
     }
-    
+
     override func layoutSubviews() {
         super.layoutSubviews()
         previewLayer.frame = bounds
     }
-    
+
     func updateMirroring() {
         if isMirrored {
             previewLayer.transform = CATransform3DMakeScale(-1, 1, 1)
@@ -108,8 +102,6 @@ class CameraPreviewUIView: UIView {
         }
     }
 }
-
-// MARK: - Remote Video View
 
 struct RemoteVideoView: View {
     @ObservedObject var trackWrapper: VideoTrackWrapper
@@ -146,8 +138,6 @@ struct RemoteVideoView: View {
     }
 }
 
-// MARK: - RTCVideoView Representable
-
 struct RTCVideoViewRepresentable: UIViewRepresentable {
     let track: RTCVideoTrack
     var isMirrored: Bool = false
@@ -180,7 +170,7 @@ struct RTCVideoViewRepresentable: UIViewRepresentable {
             uiView.transform = .identity
         }
     }
-    
+
     static func dismantleUIView(_ uiView: RTCMTLVideoView, coordinator: Coordinator) {
         coordinator.detach(from: uiView)
     }
@@ -204,18 +194,11 @@ struct RTCVideoViewRepresentable: UIViewRepresentable {
     }
 }
 
-// MARK: - PiP sample-buffer sink (S70 3 c; SYS-4)
-
-/// The renderer adapter of the iOS video-call PiP window: it attaches the one `PipSampleBufferRenderer` to the PiP
-/// target's track and swaps it when the target or its consumer changes. Main thread only, so a sink is never added or
-/// removed inside a frame callback (`apps/conclave-skip/AGENTS.md` media invariants: the decode thread holds the
-/// broadcaster lock while it renders). The track is held weakly like the stage renderers' coordinators; a released
-/// track renders nothing more.
 @MainActor
 final class PipVideoTrackSink {
     let renderer: PipSampleBufferRenderer
     private(set) weak var track: RTCVideoTrack?
-    /// How many times the sink moved to another track (diagnostics; a target switch swaps, never recreates).
+
     private(set) var swapCount = 0
 
     init(renderer: PipSampleBufferRenderer) {
@@ -224,7 +207,6 @@ final class PipVideoTrackSink {
 
     var isAttached: Bool { track != nil }
 
-    /// Moves the renderer to `next` (nil detaches). Equal tracks are a no-op.
     func attach(_ next: RTCVideoTrack?) {
         if track === next { return }
         track?.remove(renderer)
@@ -238,19 +220,10 @@ final class PipVideoTrackSink {
     }
 }
 
-// MARK: - Renderer frame size (S20 SC11, S70 R70-10; STG-7)
-
-/// Reports one renderer's decoded frame size into the stage's `RendererFrameSizeStore`, which the PiP target frame
-/// reads (SYS-4 sizes `preferredContentSize` from it). Attach it as the `RTCMTLVideoView` delegate: the view calls
-/// `videoView(_:didChangeVideoSize:)` on the main queue whenever `setSize(_:)` reports a new size, rotation included, so
-/// nothing runs inside a frame callback and no sink moves (RR6, `apps/conclave-skip/AGENTS.md` media invariants). The
-/// store is equality guarded, so an unchanged size republishes nothing. The view holds its delegate weakly; the
-/// representable's coordinator owns this object.
 final class RendererFrameSizeObserver: NSObject, RTCVideoViewDelegate {
     private(set) var slotId = ""
     private(set) weak var store: RendererFrameSizeStore?
 
-    /// Points the observer at a slot and a store; a change forgets the old slot's size in the old store.
     @MainActor
     func configure(slotId: String, store: RendererFrameSizeStore?) {
         if slotId == self.slotId && store === self.store { return }
@@ -259,7 +232,6 @@ final class RendererFrameSizeObserver: NSObject, RTCVideoViewDelegate {
         self.store = store
     }
 
-    /// The renderer left its slot (dismantled or moved).
     @MainActor
     func detach() {
         if !slotId.isEmpty { store?.remove(slotId: slotId) }
@@ -286,8 +258,6 @@ final class RendererFrameSizeObserver: NSObject, RTCVideoViewDelegate {
     }
 }
 
-// MARK: - Video Grid Item
-
 struct VideoGridItem: View {
     let displayName: String
     let isMuted: Bool
@@ -295,12 +265,10 @@ struct VideoGridItem: View {
     let isHandRaised: Bool
     let isSpeaking: Bool
     let isLocal: Bool
-    // Stable identity for the facehash avatar (falls back to the remote
-    // track's user id, then to the name alone).
+
     var identityId: String? = nil
     var connectionStatus: ParticipantConnectionStatus? = nil
-    // When set AND camera off, the tile fills its frame (immersive solo avatar)
-    // rather than locking to 16:9. Video tiles always keep 16:9.
+
     var fillStage: Bool = false
     var isThumbnail: Bool = false
     var avatarSizeOverride: CGFloat? = nil
@@ -340,9 +308,7 @@ struct VideoGridItem: View {
 
     @ViewBuilder
     var aspectAdjustedContent: some View {
-        // Fill the frame the parent assigns (grid cell / stage / thumbnail).
-        // Video crops via scaleAspectFill; the avatar centres. The grid packer
-        // hands us correctly proportioned frames, so there are no letterbox gaps.
+
         ZStack {
             videoContent
                 .transaction { transaction in
@@ -352,7 +318,7 @@ struct VideoGridItem: View {
         }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    
+
     @ViewBuilder
     var videoContent: some View {
         if isCameraOff {
@@ -371,11 +337,10 @@ struct VideoGridItem: View {
             avatarView
         }
     }
-    
+
     var avatarView: some View {
         GeometryReader { geo in
-            // Scale the avatar to the tile so it reads well in a big solo tile
-            // and isn't oversized in a small grid tile (Meet-style).
+
             let labelClearance: CGFloat = isThumbnail ? 30.0 : 44.0
             let shortestSide = min(geo.size.width, max(1.0, geo.size.height - labelClearance))
             let minAvatarSize = min(isThumbnail ? 24.0 : 44.0, shortestSide)
@@ -390,10 +355,10 @@ struct VideoGridItem: View {
             .frame(width: geo.size.width, height: geo.size.height)
         }
     }
-    
+
     var overlays: some View {
         ZStack {
-            
+
             if isHandRaised {
                 handRaisedBadge
             }
@@ -401,7 +366,7 @@ struct VideoGridItem: View {
             if let connectionStatus, !isLocal {
                 connectionStatusBadge(connectionStatus)
             }
-            
+
             nameLabel
         }
     }
@@ -465,14 +430,13 @@ struct VideoGridItem: View {
             Spacer()
         }
     }
-    
+
     var nameLabel: some View {
         VStack {
             Spacer()
 
             HStack {
-                // Web-style nameplate: a dark pill chip instead of a text
-                // shadow, so it stays readable over video without any glow.
+
                 HStack(spacing: 5) {
                     if isMuted {
                         Image(systemName: "mic.slash.fill")

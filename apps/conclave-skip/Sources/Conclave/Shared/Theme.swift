@@ -1,7 +1,4 @@
-//  Native design tokens aligned with the web Carbon palette.
-//  Keep this file close to the TypeScript token tree so web, iOS, and Android
-//  stay visually consistent.
-//
+
 
 import SwiftUI
 #if canImport(UIKit)
@@ -16,18 +13,16 @@ func acmColor01(red: Double, green: Double, blue: Double, opacity: Double = 1.0)
     Color(red: red, green: green, blue: blue, opacity: opacity)
 }
 
-// MARK: - Colors
-
 enum ACMColors {
-    static let primaryOrange = acmColor(red: 249.0, green: 95.0, blue: 74.0)   // accent  #F95F4A
-    static let primaryPink = acmColor(red: 255.0, green: 0.0, blue: 122.0)     // accent2 #FF007A
+    static let primaryOrange = acmColor(red: 249.0, green: 95.0, blue: 74.0)
+    static let primaryPink = acmColor(red: 255.0, green: 0.0, blue: 122.0)
 
     static let accent = primaryOrange
     static let accentSecondary = primaryPink
-    static let bg = acmColor(red: 10.0, green: 10.0, blue: 11.0)               // #0a0a0b
-    static let bgAlt = acmColor(red: 19.0, green: 19.0, blue: 22.0)            // #131316 (tile)
-    static let surfaceRaised = acmColor(red: 35.0, green: 35.0, blue: 39.0)    // #232327
-    static let text = acmColor(red: 250.0, green: 250.0, blue: 250.0)         // #fafafa
+    static let bg = acmColor(red: 10.0, green: 10.0, blue: 11.0)
+    static let bgAlt = acmColor(red: 19.0, green: 19.0, blue: 22.0)
+    static let surfaceRaised = acmColor(red: 35.0, green: 35.0, blue: 39.0)
+    static let text = acmColor(red: 250.0, green: 250.0, blue: 250.0)
     static let textMuted = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.74)
     static let textFaint = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.56)
     static let border = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.14)
@@ -35,21 +30,19 @@ enum ACMColors {
     static let scrim = acmColor(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.7)
     static let speaking = primaryOrange
 
-    // Legacy aliases kept for existing views.
-    static let cream = text                                                    // primary text → #fafafa
-    static let dark = bg                                                       // app background
+    static let cream = text
+    static let dark = bg
     static let darkAlt = bgAlt
-    static let surface = acmColor(red: 24.0, green: 24.0, blue: 27.0)          // #18181b
+    static let surface = acmColor(red: 24.0, green: 24.0, blue: 27.0)
     static let surfaceLight = surfaceRaised
-    static let surfaceHover = acmColor(red: 46.0, green: 46.0, blue: 51.0)     // #2e2e33
-    static let lobbyPanel = acmColor(red: 14.0, green: 14.0, blue: 16.0)       // #0e0e10
-    static let lobbyPreview = acmColor(red: 18.0, green: 18.0, blue: 20.0)     // #121214
+    static let surfaceHover = acmColor(red: 46.0, green: 46.0, blue: 51.0)
+    static let lobbyPanel = acmColor(red: 14.0, green: 14.0, blue: 16.0)
+    static let lobbyPreview = acmColor(red: 18.0, green: 18.0, blue: 20.0)
     static let fieldBackground = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.03)
     static let subtleFill = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.04)
     static let subtleFillHover = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.08)
     static let borderSubtle = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.10)
 
-    // White-based text tints.
     static let creamLight = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.74)
     static let creamDim = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.56)
     static let creamMuted = acmColor(red: 250.0, green: 250.0, blue: 250.0, opacity: 0.40)
@@ -63,13 +56,12 @@ enum ACMColors {
     static let primaryPinkFaint = acmColor(red: 255.0, green: 0.0, blue: 122.0, opacity: 0.3)
     static let primaryPinkGhost = acmColor(red: 255.0, green: 0.0, blue: 122.0, opacity: 0.2)
 
-    // Compatibility aliases. Intentionally clear to avoid old glow shadows.
     static let primaryOrangeSoft = Color.clear
     static let primaryPinkSoft = Color.clear
 
-    static let error = acmColor(red: 234.0, green: 67.0, blue: 53.0)           // danger #ea4335
+    static let error = acmColor(red: 234.0, green: 67.0, blue: 53.0)
     static let errorDim = acmColor(red: 234.0, green: 67.0, blue: 53.0, opacity: 0.6)
-    static let success = acmColor(red: 34.0, green: 197.0, blue: 94.0)         // #22c55e
+    static let success = acmColor(red: 34.0, green: 197.0, blue: 94.0)
     static let black = acmColor(red: 0.0, green: 0.0, blue: 0.0)
     static let white = acmColor(red: 255.0, green: 255.0, blue: 255.0)
     static let overlay50 = acmColor(red: 0.0, green: 0.0, blue: 0.0, opacity: 0.5)
@@ -78,24 +70,17 @@ enum ACMColors {
         acmColor(red: 0.0, green: 0.0, blue: 0.0, opacity: opacity)
     }
 
-    // Mirrors `@conclave/ui-tokens` AVATAR_PALETTE so users keep the same
-    // avatar color across web and native.
-    /// Deterministic identity color; delegates to the facehash palette so
-    /// color dots and face avatars always agree with the web app.
     static func avatarColor(for key: String) -> Color {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return FacehashPresentation.palette[0] }
         return FacehashPresentation.color(for: trimmed)
     }
 
-    // MARK: - Hand Raised Colors
-    static let handRaised = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.95)        // amber-400
+    static let handRaised = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.95)
     static let handRaisedBackground = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.2)
     static let handRaisedBorder = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.4)
-    static let handRaisedShadow = Color.clear // neutralised - no glow
+    static let handRaisedShadow = Color.clear
 }
-
-// MARK: - Spacing Scale (4pt grid system)
 
 enum ACMSpacing {
     static let xxs: CGFloat = 4
@@ -108,8 +93,6 @@ enum ACMSpacing {
     static let xxxl: CGFloat = 48
 }
 
-// MARK: - Corner Radius Scale
-
 enum ACMRadius {
     static let sm: CGFloat = 8
     static let md: CGFloat = 12
@@ -118,17 +101,10 @@ enum ACMRadius {
     static let full: CGFloat = 999
 }
 
-// MARK: - Motion
-
-/// Layout motion matches the web app's FLIP system (GridLayout.tsx):
-/// cubic-bezier(0.22, 1, 0.36, 1), 220ms for tile glides on identity
-/// changes, 280ms for stage-level reflows and surface swaps.
 enum ACMMotion {
     static let tileGlide = Animation.timingCurve(0.22, 1.0, 0.36, 1.0, duration: 0.22)
     static let stageSwap = Animation.timingCurve(0.22, 1.0, 0.36, 1.0, duration: 0.28)
 }
-
-// MARK: - Typography
 
 enum ACMFont {
     #if SKIP
@@ -156,7 +132,6 @@ enum ACMFont {
         return custom(name, size: size, fallback: .system(size: size, weight: weight, design: .default))
     }
 
-    /// Retained for call-site compatibility; routes to the sans family.
     static func mono(_ size: CGFloat, weight: Font.Weight = .medium) -> Font {
         return trial(size, weight: weight)
     }
@@ -179,8 +154,6 @@ enum ACMFont {
     }
 }
 
-// MARK: - System Symbol Helpers
-
 enum ACMSystemIcon {
     static func image(_ iosName: String, androidName: String? = nil) -> Image {
         #if SKIP
@@ -190,13 +163,10 @@ enum ACMSystemIcon {
         #endif
     }
 
-    /// Preferred for meeting glyphs. iOS uses SF Symbols; Android uses the
-    /// Kotlin `MeetingIcon` bridge because SkipUI only resolves a small core
-    /// glyph set through `Image(systemName:)`.
     @ViewBuilder
     static func icon(_ iosName: String, android key: String, size: CGFloat = 18, tint: String = "text") -> some View {
         #if SKIP
-        // Compose needs explicit tint and size inside Skip-hosted buttons/sheets.
+
         ComposeView { context in
             MeetingIcon(name: key, size: Double(size), tint: tint, modifier: context.modifier)
         }
@@ -214,10 +184,6 @@ func ACMAndroidSemanticText(_ label: String) -> some View {
     EmptyView()
 }
 #endif
-
-// MARK: - Control Button Styles (Carbon - filled circles, Meet semantics)
-//  default = white@10% fill · active = solid accent · muted = solid danger
-//  (Meet's red mic-off) · danger = solid danger. No borders, no shadows.
 
 #if !SKIP
 struct ACMControlButtonStyle: ButtonStyle {
@@ -248,13 +214,11 @@ struct ACMControlButtonStyle: ButtonStyle {
 
     var backgroundColor: Color {
         if isHandRaised { return ACMColors.handRaised }
-        if isDanger || isMuted { return ACMColors.error }       // Meet: mic-off = red
+        if isDanger || isMuted { return ACMColors.error }
         if isActive { return ACMColors.primaryOrange }
         return acmColor(red: 255.0, green: 255.0, blue: 255.0, opacity: 0.1)
     }
 }
-
-// MARK: - Primary Button Style
 
 struct ACMPrimaryButtonStyle: ButtonStyle {
     var isLoading: Bool = false
@@ -345,8 +309,6 @@ extension View {
     }
 }
 
-// MARK: - Input Field Style
-
 extension View {
     public func acmInputStyle() -> some View {
         self
@@ -364,8 +326,6 @@ extension View {
     }
 }
 
-// MARK: - Video Tile Style (flat - speaking = 2px solid accent, NO glow)
-
 extension View {
     public func acmVideoTile(isSpeaking: Bool = false) -> some View {
         self
@@ -378,8 +338,6 @@ extension View {
     }
 }
 
-// MARK: - Label Style (sans - no monospace, no uppercase tracking gimmick)
-
 extension View {
     public func acmLabel() -> some View {
         self
@@ -387,8 +345,6 @@ extension View {
             .foregroundStyle(ACMColors.textMuted)
     }
 }
-
-// MARK: - Convenience Extensions
 
 extension View {
     public func acmColorBackground(_ color: Color) -> some View {
@@ -419,9 +375,7 @@ extension View {
 }
 
 extension View {
-    /// Frosted-glass backing. On iOS this is a real material (the closest thing
-    /// to Liquid Glass available pre-availability-gating); on Android/Skip it
-    /// falls back to a translucent scrim.
+
     public func acmMaterialBackground(opacity: Double = 0.3) -> some View {
         #if SKIP
         return self.acmColorBackground(Color(red: 0, green: 0, blue: 0, opacity: opacity))

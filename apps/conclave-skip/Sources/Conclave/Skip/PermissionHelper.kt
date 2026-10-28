@@ -17,8 +17,6 @@ import java.util.ArrayDeque
 import skip.foundation.ProcessInfo
 import skip.ui.UIApplication
 
-// Plain-Kotlin permission helper (no `skip.lib.*` import, so the Kotlin stdlib
-// APIs are not shadowed by Skip's Swift-shaped equivalents).
 object PermissionHelper {
     private const val RECORD_AUDIO_REQUEST_CODE = 1002
     private const val CAMERA_REQUEST_CODE = 1003
@@ -190,8 +188,6 @@ object PermissionHelper {
         )
     }
 
-    /// Reports the outcome (true below API 33, where POST_NOTIFICATIONS does
-    /// not exist). Queued behind any active mic/camera prompt like the others.
     fun requestNotificationsPermissionIfNeeded(callback: (Boolean) -> Unit): PermissionRequestToken {
         synchronized(permissionLock) {
             notificationsPermissionWaiters.addLast(callback)
@@ -200,18 +196,10 @@ object PermissionHelper {
         return PermissionRequestToken(NOTIFICATIONS_REQUEST_CODE, callback)
     }
 
-    /// False while a `false` outcome comes from a request that never reached
-    /// the user (dropped from the queue, no activity, or cancelled by Android
-    /// because another permission dialog was still up). Read it inside the
-    /// callback: it describes the outcome being delivered.
     fun wasLastNotificationsPermissionRequestAnswered(): Boolean {
         return lastNotificationsPermissionRequestAnswered
     }
 
-    /// Terminal call end only. Drops a queued (not yet shown) POST_NOTIFICATIONS
-    /// request so it never surfaces after the call, reporting it unanswered.
-    /// Recovery rejoins run `cancelPendingCallPermissionRequests()`, which
-    /// leaves it queued. An already visible prompt is left to finish.
     fun dropQueuedNotificationsPermissionRequest() {
         val dropped = synchronized(permissionLock) {
             pendingPermissionRequests.removeAll { it.requestCode == NOTIFICATIONS_REQUEST_CODE }
@@ -221,12 +209,6 @@ object PermissionHelper {
         }
     }
 
-    // MARK: Notification permission status (SYS-3, S70 2 d, j)
-
-    /**
-     * `shouldShowRequestPermissionRationale` for POST_NOTIFICATIONS (API 33+; read nowhere before SYS-3, CE D6). False
-     * without an activity and below API 33, where notifications are an implicit grant.
-     */
     fun showsNotificationsRationale(): Boolean {
         if (Build.VERSION.SDK_INT < 33) {
             return false
@@ -239,13 +221,11 @@ object PermissionHelper {
         }
     }
 
-    /** The app-level notifications switch (off reads as permanently denied: only Settings fixes it). */
     fun areAppNotificationsEnabled(): Boolean {
         val context = ProcessInfo.processInfo.androidContext
         return NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
 
-    /** The derived state as a NotificationPermissionState raw value, through the one shared policy. */
     fun notificationsPermissionState(): String {
         return NotificationPermissionStatePolicy.androidState(
             apiLevel = Build.VERSION.SDK_INT,
@@ -256,10 +236,6 @@ object PermissionHelper {
         ).rawValue
     }
 
-    /**
-     * S70 2 a: the app's notification settings (`ACTION_APP_NOTIFICATION_SETTINGS`, API 26) or one channel's
-     * (`ACTION_CHANNEL_NOTIFICATION_SETTINGS`); below API 26 the app details page.
-     */
     fun notificationSettingsIntent(packageName: String, channelId: String): Intent {
         if (Build.VERSION.SDK_INT < 26) {
             return appSettingsIntent(packageName)
@@ -273,7 +249,6 @@ object PermissionHelper {
             .putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
     }
 
-    /** Opens them through the one external hand-off (SYS-8: Settings never suppresses PiP auto-enter). */
     fun openNotificationSettings(channelId: String): Boolean {
         val activity: Activity? = UIApplication.shared.androidActivity
         val context: Context = activity ?: ProcessInfo.processInfo.androidContext.applicationContext
@@ -322,7 +297,7 @@ object PermissionHelper {
                     android.Manifest.permission.RECORD_AUDIO,
                     ::hasRecordAudioPermission
                 )
-                // ENT-4 (S10 7 d): an answer the person gave (empty arrays mean Android cancelled it unseen).
+
                 if (permissions.isNotEmpty()) recordMediaPermissionAnswer(MEDIA_KIND_MICROPHONE, granted)
                 finishRecordAudioPermission(granted)
             }
@@ -340,11 +315,9 @@ object PermissionHelper {
                 notificationPermissionPromptActive = false
                 suppressShareUntilElapsedMs =
                     SystemClock.elapsedRealtime() + NOTIFICATION_SHARE_SUPPRESSION_MS
-                // SYS-3 (S70 2 d): the persisted asked flag, written only for an answer the person gave, so a later
-                // process tells "never asked" from a refusal (NotificationPermissionStatePolicy).
+
                 if (permissions.isNotEmpty()) NotificationPreferences.setPermissionAsked()
-                // Empty arrays mean Android cancelled the request without
-                // showing it (another permission dialog was still up).
+
                 finishNotificationsPermission(
                     permissionGranted(
                         permissions,
@@ -402,9 +375,9 @@ object PermissionHelper {
                 try {
                     beforeRequest()
                     scheduleActivePermissionTimeout(requestCode)
-                    // S70 8 d (SYS-8): the permission dialog activity is not Home; no PiP auto-enter behind it.
+
                     PipManager.suppressForExternalHandoff(ExternalHandoffKind.permissionDialog)
-                    // ENT-4 (S10 7 d): the camera and microphone launches remember the request and the rationale before it.
+
                     noteMediaPermissionLaunch(requestCode, activity)
                     ActivityCompat.requestPermissions(
                         activity,
@@ -455,9 +428,7 @@ object PermissionHelper {
     }
 
     private fun clearQueuedCallPermissionRequests() {
-        // A queued POST_NOTIFICATIONS request is kept: this also runs on
-        // in-call recovery rejoins. Terminal call end drops it separately via
-        // dropQueuedNotificationsPermissionRequest().
+
         synchronized(permissionLock) {
             pendingPermissionRequests.removeAll { request ->
                 isCallPermissionRequestCode(request.requestCode)
@@ -608,21 +579,12 @@ object PermissionHelper {
         drainPermissionCallbacks(NOTIFICATIONS_REQUEST_CODE, null).forEach { it(granted) }
     }
 
-    // MARK: Media permission status (ENT-3, S10 0.5 MediaPermissionStatusProvider; ENT-4, S10 7 d, j; WP3)
-
     private const val MEDIA_PERMISSION_PREFS = "conclave.mediaPermissions"
     private const val MEDIA_KIND_MICROPHONE = "microphone"
     private const val MEDIA_KIND_CAMERA = "camera"
 
-    /** The rationale flag right before each launched camera or microphone prompt, keyed by kind (main thread). */
     private val mediaRationaleBeforeRequest = HashMap<String, Boolean>()
 
-    /**
-     * The lobby's status for "camera" or "microphone" as a MediaPermissionState raw value, through the one shared
-     * mapping (EntryPolicies.androidMediaPermissionState): "unavailable" without camera hardware, "granted",
-     * "notDetermined" before the first launched request, "denied" after a refused one. Android cannot tell "never asked"
-     * from "denied" by itself, so the launch is remembered.
-     */
     fun mediaPermissionState(kind: String): String {
         return EntryPolicies.androidMediaPermissionState(
             hasDevice = hasMediaDevice(kind),
@@ -631,11 +593,6 @@ object PermissionHelper {
         ).rawValue
     }
 
-    /**
-     * Whether the system would show its prompt again (S10 7 d, EntryPolicies.androidCanAskAgain): before the first
-     * request, while it asks for a rationale, or after a dismissed first prompt that never became a permanent denial.
-     * False after a permanent denial, so the lobby offers Open settings instead.
-     */
     fun canAskMediaPermissionAgain(kind: String): Boolean {
         return EntryPolicies.androidCanAskAgain(
             isGranted = hasMediaPermission(kind),
@@ -645,7 +602,6 @@ object PermissionHelper {
         )
     }
 
-    /** Remembered when a lobby or call prompt launches, so a later refusal reads "denied", not "notDetermined". */
     fun markMediaPermissionRequested(kind: String) {
         mediaPermissionPrefs().edit().putBoolean(kind, true).apply()
     }
@@ -654,13 +610,11 @@ object PermissionHelper {
         return mediaPermissionPrefs().getBoolean(kind, false)
     }
 
-    /** `shouldShowRequestPermissionRationale` for the kind; false without an activity (S10 7 d "denied once"). */
     fun showsMediaPermissionRationale(kind: String): Boolean {
         val activity = UIApplication.shared.androidActivity ?: return false
         return showsMediaPermissionRationale(kind, activity)
     }
 
-    /** The permanent denial recorded after a refused prompt (EntryPolicies.androidDenialBlocks); cleared on a grant. */
     fun isMediaPermissionBlocked(kind: String): Boolean {
         return mediaPermissionPrefs().getBoolean("$kind.blocked", false)
     }
@@ -695,7 +649,6 @@ object PermissionHelper {
         }
     }
 
-    /** Right before ActivityCompat.requestPermissions: the request is remembered with the rationale flag before it. */
     private fun noteMediaPermissionLaunch(requestCode: Int, activity: Activity) {
         val kind = mediaKind(requestCode) ?: return
         val rationale = showsMediaPermissionRationale(kind, activity)
@@ -705,11 +658,6 @@ object PermissionHelper {
         markMediaPermissionRequested(kind)
     }
 
-    /**
-     * An answer the person gave (S10 7 d): a grant clears the refusal record; a refusal reads the rationale again and
-     * records a permanent denial through EntryPolicies.androidDenialBlocks (denied with no rationale after a request
-     * that had one, or a repeated refusal).
-     */
     private fun recordMediaPermissionAnswer(kind: String, granted: Boolean) {
         val prefs = mediaPermissionPrefs()
         val before = synchronized(permissionLock) {
@@ -733,15 +681,10 @@ object PermissionHelper {
         return context.getSharedPreferences(MEDIA_PERMISSION_PREFS, Context.MODE_PRIVATE)
     }
 
-    /** S10 7 d: the app's system settings page (ACTION_APPLICATION_DETAILS_SETTINGS). */
     fun appSettingsIntent(packageName: String): Intent {
         return Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
     }
 
-    /**
-     * Opens the app's settings page through the one external hand-off (SYS-8: Settings never suppresses PiP
-     * auto-enter, so a call stays visible while the person flips the switch; a failed start restores it).
-     */
     fun openAppSettings(): Boolean {
         val activity: Activity? = UIApplication.shared.androidActivity
         val context: Context = activity ?: ProcessInfo.processInfo.androidContext.applicationContext

@@ -41,16 +41,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
-/*
- * ENT-5 (S10 8 d, e, f, g, i; 9 d, e, f, g, i; 0.6 L6): the lobby's bottom block in its four modes, in place so the
- * preview card and its renderer never move (S10 9 k). Editing: the one coral primary (primaryContainer with
- * onPrimaryContainer) and its disabled reason. Connecting: the pending primary (spinner and "Joining…" or "Starting…",
- * disabled, state "In progress") and, after 8 s, the slow footnote. Waiting: the spinner with "Asking to join", the
- * body for its WaitingKind as a polite live region and the tonal Cancel. Failed: the error glyph, "Couldn't join"
- * (or start), the body by class and Try again, focused. It takes the cached LobbyStatusUi (L12). Announcements go
- * through one polite live-region node; no haptic here (the outcome tokens come from the shell and the presenter).
- */
-
 @Composable
 internal fun EntryStatusBlock(premeeting: PremeetingPresenter, status: LobbyStatusUi) {
     Box(Modifier.fillMaxWidth()) {
@@ -61,7 +51,7 @@ internal fun EntryStatusBlock(premeeting: PremeetingPresenter, status: LobbyStat
         ) {
             EntryStatusContent(premeeting, status)
         }
-        // Drawn over the block (1 dp), so an announcement never shifts the layout.
+
         EntryStatusAnnouncer(premeeting, status)
     }
 }
@@ -101,7 +91,6 @@ private fun EntryStatusContent(premeeting: PremeetingPresenter, status: LobbySta
     }
 }
 
-/** S10 9 d: spinner and title, the body (polite live region), the tonal Cancel that cancels at once. */
 @Composable
 private fun EntryWaitingBlock(premeeting: PremeetingPresenter, status: LobbyStatusUi) {
     val scheme = MaterialTheme.colorScheme
@@ -127,7 +116,6 @@ private fun EntryWaitingBlock(premeeting: PremeetingPresenter, status: LobbyStat
     }
 }
 
-/** S10 8 d: the failed block; its Try again takes focus once (a recomposition never repeats it). */
 @Composable
 private fun EntryFailedBlock(premeeting: PremeetingPresenter, status: LobbyStatusUi) {
     val scheme = MaterialTheme.colorScheme
@@ -156,8 +144,6 @@ private fun EntryFailedBlock(premeeting: PremeetingPresenter, status: LobbyStatu
     }
 }
 
-/** The one coral action (primaryContainer with onPrimaryContainer, F00 C01 d); pending keeps its label beside an
- *  18 dp spinner and reports "In progress"; M3's disabled container when off. */
 @Composable
 internal fun EntryPrimaryButton(
     title: String,
@@ -186,10 +172,6 @@ internal fun EntryPrimaryButton(
     }
 }
 
-/**
- * S10 8 i, 9 i: the polite announcements of the entry states, on mode changes only: "Joining <room>" when a join
- * starts, "You're in. Joining now." on admission, "Couldn't join" on an initial failure. One 1 dp live-region node.
- */
 @Composable
 private fun EntryStatusAnnouncer(premeeting: PremeetingPresenter, status: LobbyStatusUi) {
     val context = LocalContext.current
@@ -199,7 +181,7 @@ private fun EntryStatusAnnouncer(premeeting: PremeetingPresenter, status: LobbyS
         val prior = previous
         previous = status.mode
         if (status.mode == LobbyMode.connecting && prior != LobbyMode.connecting) {
-            // Read here, not in composition: the link snapshot is not a dependency of the block.
+
             val label = premeeting.lobbyLink?.roomLabel ?: ""
             announcement = if (prior == LobbyMode.waiting) conclaveStringOf(context, "pm_admitted")
             else conclaveStringOf(context, "pm_announce_joining", label)
@@ -216,8 +198,6 @@ private fun EntryStatusAnnouncer(premeeting: PremeetingPresenter, status: LobbyS
     }
 }
 
-/** S10 8 d, 9 d: Back while busy belongs to the lobby, so the gesture never previews Home: an immediate cancel while
- *  connecting, the "Stop asking to join?" confirmation while waiting (both through the host's back path). */
 @Composable
 internal fun LobbyBusyBackHandler(premeeting: PremeetingPresenter, routeId: Int, onBack: () -> Unit) {
     val status = premeeting.lobbyStatus
@@ -226,8 +206,6 @@ internal fun LobbyBusyBackHandler(premeeting: PremeetingPresenter, routeId: Int,
     BackHandler(enabled = busy) { onBack() }
 }
 
-/** S10 9 d: "Stop asking to join?" (F00 C18). Back or a scrim tap keeps waiting; Stop asking is the primary text
- *  button, not destructive red. */
 @Composable
 internal fun StopAskingDialog(premeeting: PremeetingPresenter) {
     AlertDialog(
@@ -263,7 +241,6 @@ internal fun lobbyPrimaryReasonText(reason: LobbyPrimaryReason): String = when (
     else -> ""
 }
 
-/** S10 9 f bodies (RECONCILE R46); a clean server restart sentence is shown as is. */
 @Composable
 internal fun entryWaitingBody(status: LobbyStatusUi): String = when (status.waitingKind) {
     WaitingKind.standard -> conclaveString("pm_wait_standard")
@@ -276,13 +253,11 @@ internal fun entryWaitingBody(status: LobbyStatusUi): String = when (status.wait
         if (status.waitingText.isNotEmpty()) status.waitingText else conclaveString("pm_wait_server_restart")
 }
 
-/** S10 8 f bodies: a clean server sentence as is, else the class's sentence. */
 @Composable
 internal fun entryFailureBody(status: LobbyStatusUi): String =
     if (status.issue == LobbyIssue.failedServerText && status.issueServerText.isNotEmpty()) status.issueServerText
     else conclaveString(entryFailureBodyName(status.issue))
 
-/** The `pm_fail_*` resource name of a failure class (shared with the outcome screen's failed rejoin). */
 internal fun entryFailureBodyName(issue: LobbyIssue): String = when (issue) {
     LobbyIssue.failedNetwork -> "pm_fail_network"
     LobbyIssue.failedMedia -> "pm_fail_media"

@@ -1,7 +1,5 @@
 package conclave.module
 
-// Only Kotlin scalars cross into the row composables. No Skip collection is
-// declared stable, and the backing list never escapes this snapshot.
 internal data class NativeHostingPerson(
     val id: String,
     val name: String,
@@ -9,10 +7,6 @@ internal data class NativeHostingPerson(
     val isSelected: Boolean,
 )
 
-/**
- * Per-row reuse (PS 8.8, P1): a row whose Swift value is unchanged keeps the previous snapshot's exact
- * instance, found by ID, so only the mutated row's composables see a new value.
- */
 internal class NativeHostingRows(source: NativeHostingRowsState, previous: NativeHostingRows? = null) {
     val revision: Int = source.revision
     val selectedCount: Int = source.selectedCount
@@ -31,12 +25,11 @@ internal class NativeHostingRows(source: NativeHostingRowsState, previous: Nativ
     operator fun get(index: Int): NativeHostingPerson = people[index]
 }
 
-/** One cache per presenter lifetime. Scalar changes reuse the exact row snapshot; row changes reuse rows. */
 internal class NativeHostingRowsCache(private val presenter: NativeHostingPresenter) {
     private var cached: NativeHostingRows? = null
 
     fun current(): NativeHostingRows {
-        // Always read the observed property, even on a cache hit, to keep Compose subscribed.
+
         val state = presenter.rowsState
         val previous = cached
         if (previous != null && previous.revision == state.revision) return previous
@@ -44,7 +37,6 @@ internal class NativeHostingRowsCache(private val presenter: NativeHostingPresen
     }
 }
 
-/** Opt-in gallery seam; row snapshots above remain independent of icon state. */
 @androidx.compose.runtime.Composable
 internal fun NativeHostingIconSection(controller: NativeIconRasterController) {
     NativeIconGalleryControls(controller)

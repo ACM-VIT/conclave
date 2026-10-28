@@ -52,13 +52,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-/*
- * ENT-2 (S10 3 d): join by code or link on Android, a ModalBottomSheet that opens expanded with the field focused (the
- * IME and its clipboard suggestion are the fast path; the Paste chip reads the clip only on tap, so Android 12+ shows
- * its access toast only after a deliberate paste). Keystrokes stay in view state; on a valid submit the sheet hides
- * first and then hands the input to the presenter, and the lobby is pushed from `joinSheetDidDismiss()` when the
- * sheet leaves composition, never while it is still dismissing (F00 C15). Swipe, Back and scrim tap are a dismissal.
- */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
@@ -74,7 +67,6 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
     val isValid = EntryPolicies.isValidJoinInput(text)
     val scheme = MaterialTheme.colorScheme
 
-    // Leaving composition (a submit, a dismissal, a link that replaces the sheet) flushes the pending route.
     DisposableEffect(premeeting) {
         onDispose { premeeting.joinSheetDidDismiss() }
     }
@@ -171,7 +163,7 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
             ) {
                 Text(conclaveString("pm_join"))
             }
-            // Inside the sheet content: the sheet composes in its own window, so the requester attaches only here.
+
             LaunchedEffect(Unit) {
                 snapshotFlow { sheetState.isVisible }.first { it }
                 focus.requestFocus()
@@ -180,13 +172,11 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
     }
 }
 
-/** Whether the clip is plain text, without reading it (no access toast). */
 internal fun joinClipboardHasText(context: Context): Boolean {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
     return clipboard.primaryClipDescription?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) == true
 }
 
-/** Reads the clip on a deliberate tap only. */
 internal fun joinClipboardText(context: Context): String {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return ""
     val item = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0) ?: return ""

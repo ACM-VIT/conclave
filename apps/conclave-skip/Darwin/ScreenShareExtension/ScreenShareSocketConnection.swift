@@ -1,12 +1,4 @@
-//
-//  ScreenShareSocketConnection.swift
-//  ScreenShareExtension
-//
-//  AF_UNIX stream-socket client used by the broadcast extension to reach the
-//  main app's ScreenShareSocketServer over the shared App Group container
-//  (`<group>/rtc_SSFD`). Keep this pure Darwin/Foundation with no Skip or app
-//  module dependency.
-//
+
 
 import Darwin
 import Foundation

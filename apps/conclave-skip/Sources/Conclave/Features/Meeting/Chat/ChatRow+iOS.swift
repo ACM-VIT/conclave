@@ -2,20 +2,10 @@
 import SwiftUI
 import UIKit
 
-// S40 3 (CHT-1, CHT-3 chips): message rows. Each row reads only its `ChatRowEntry`, so a reaction or delivery change
-// redraws one row. One summary element per message (the bubble text, with the assembled label, value and the row's
-// accessibility actions); every control (quote, chips, failed marker) stays its own element. The bubble is the C23
-// component; own public rows are coral with onCoral ink, every private and peer row neutral (Q9). No text selection
-// modifier (the context menu carries Copy). CHT-4 and CHT-5: photo rows show the bounded image in a fixed 240 by 180 box (the
-// viewer opens on tap, a failed load retries on tap), GIF rows animate only on screen (stickers without a bubble,
-// clips as a poster with the play glyph), and ready link cards follow the reactions. Media-only rows put the summary
-// on the media element. Voice rows are CHT-6's; Conclave AI rows are `AssistantRowView` (CHT-7, AssistantRow+iOS.swift).
-
 struct ChatRowView: View {
     let entry: ChatRowEntry
     let actions: ChatRowActions
     let isHighlighted: Bool
-    @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = 32
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -34,9 +24,9 @@ struct ChatRowView: View {
             case .unreadDivider:
                 ChatUnreadDivider()
             case .assistant:
-                AssistantRowView(entry: entry, actions: actions, avatarSize: min(avatarSize, 48))
+                AssistantRowView(entry: entry, actions: actions)
             default:
-                ChatMessageRowView(row: row, actions: actions, avatarSize: min(avatarSize, 48))
+                ChatMessageRowView(row: row, actions: actions)
             }
         }
         .padding(.top, ChatRowSpacing.top(row))
@@ -54,7 +44,6 @@ struct ChatRowView: View {
     }
 }
 
-/// 2 c spacing: group start 12 above, grouped follow-up 2, structural and system rows 8 above and below.
 enum ChatRowSpacing {
     static func top(_ row: ChatRowModel) -> CGFloat {
         switch row.kind {
@@ -75,8 +64,6 @@ enum ChatRowSpacing {
     }
 }
 
-/// 5 c: iOS 27 swipe to reply inside the timeline's swipe container; iOS 17 to 26 have no swipe (Reply stays first
-/// in the menu and in the accessibility actions).
 private struct ChatSwipeToReply: ViewModifier {
     let row: ChatRowModel
     let actions: ChatRowActions
@@ -95,18 +82,9 @@ private struct ChatSwipeToReply: ViewModifier {
 private struct ChatMessageRowView: View {
     let row: ChatRowModel
     let actions: ChatRowActions
-    let avatarSize: CGFloat
 
     var body: some View {
         HStack(alignment: .top, spacing: CGFloat(DesignTokens.space8)) {
-            if !row.isOwn {
-                if row.isGroupStart {
-                    ConclaveAvatar(name: row.senderName, id: row.senderId, size: .chat)
-                        .accessibilityHidden(true)
-                } else {
-                    Color.clear.frame(width: avatarSize, height: 1)
-                }
-            }
             VStack(alignment: row.isOwn ? .trailing : .leading, spacing: CGFloat(DesignTokens.space4)) {
                 if row.isGroupStart {
                     ChatRowHeader(row: row)
@@ -125,7 +103,7 @@ private struct ChatMessageRowView: View {
                         actions.toggle(row.id, emoji: chip.emoji)
                     }
                 }
-                // CL6: only ready cards are in the row (CH16), so each appears once and never resizes.
+
                 ForEach(Array(row.embedURLs.enumerated()), id: \.element) { index, url in
                     LinkEmbedCard(entry: actions.embed(url), rowId: row.id, index: index) { target in
                         actions.openURLString(target)
@@ -146,7 +124,6 @@ private struct ChatMessageRowView: View {
     }
 }
 
-/// Name or "You" and the locale time (3 c); the name truncates at one line (the summary speaks the full name).
 private struct ChatRowHeader: View {
     let row: ChatRowModel
 
@@ -166,7 +143,6 @@ private struct ChatRowHeader: View {
     }
 }
 
-/// Every private row, grouped follow-ups included (privacy never rests on hue, Q9).
 private struct ChatPrivateLabel: View {
     let row: ChatRowModel
 
@@ -180,8 +156,6 @@ private struct ChatPrivateLabel: View {
     }
 }
 
-/// The bubble (C23), the context menu target (5 c), holding the quote, the photo or GIF element and the summary text.
-/// Media rows have no bubble padding (the quote and caption pad themselves); stickers have no bubble at all.
 private struct ChatBubbleContent: View {
     let row: ChatRowModel
     let actions: ChatRowActions
@@ -225,7 +199,6 @@ private struct ChatBubbleContent: View {
     }
 }
 
-/// Which media element a row draws (3 c, f).
 enum ChatRowMedia: String {
     case none, photo, gif, sticker, clip
 
@@ -235,7 +208,7 @@ enum ChatRowMedia: String {
     static func kind(_ row: ChatRowModel) -> ChatRowMedia {
         if row.kind == ChatRowKind.photo && !row.photoURL.isEmpty { return ChatRowMedia.photo }
         if row.kind == ChatRowKind.gif {
-            // A GIF whose URL does not parse shows its title in a bubble (3 f, CV:2138-2144).
+
             if URL(string: row.gifURL) == nil || row.gifURL.isEmpty { return ChatRowMedia.none }
             switch row.gifKind {
             case .sticker: return ChatRowMedia.sticker
@@ -246,8 +219,6 @@ enum ChatRowMedia: String {
         return ChatRowMedia.none
     }
 
-    /// The text summary shows for text rows, a photo with a caption, and a GIF that fell back to its title; media-only
-    /// rows put the summary on the media element.
     static func showsText(_ row: ChatRowModel, media: ChatRowMedia) -> Bool {
         if media == ChatRowMedia.none { return true }
         if media == ChatRowMedia.photo { return !row.photoCaptionIsEmpty && !row.plainText.isEmpty }
@@ -255,9 +226,6 @@ enum ChatRowMedia: String {
     }
 }
 
-/// S40 3 c photo: a fixed 240 by 180 box (`ChatImageBox`, bounded ImageIO decode), the viewer on tap (the iOS 18 zoom
-/// source), "Couldn't load photo. Tap to retry." in the same box on failure. Labelled "Photo from Avery Lee" plus the
-/// caption, never the upload file name; for a photo without caption it is the row's summary element.
 private struct ChatPhotoElement: View {
     let row: ChatRowModel
     let actions: ChatRowActions
@@ -283,7 +251,6 @@ private struct ChatPhotoElement: View {
     }
 }
 
-/// iOS 18: the row thumbnail is the zoom transition's source.
 private struct ChatPhotoZoomSource: ViewModifier {
     let rowId: String
     let namespace: Namespace.ID?
@@ -297,9 +264,6 @@ private struct ChatPhotoZoomSource: ViewModifier {
     }
 }
 
-/// S40 3 c GIF, sticker and clip: a GIF box 220 wide (height from the aspect, 120 to 300) animated only on screen; a
-/// sticker up to 160 square without a bubble; a clip as its poster with the play glyph and the "Clip" tag, opening the
-/// clip in the in-app browser (no inline player until the playback dependency is approved, Q6). The summary element.
 private struct ChatGifElement: View {
     let row: ChatRowModel
     let actions: ChatRowActions
@@ -351,7 +315,6 @@ private struct ChatGifElement: View {
     }
 }
 
-/// 3 c reply quote: a Button that jumps; a quote whose target is gone shows the unavailable line and is not tappable.
 private struct ChatQuote: View {
     let row: ChatRowModel
     let reply: ChatReplyRef
@@ -376,15 +339,13 @@ private struct ChatQuote: View {
     }
 }
 
-/// The summary element (3 i): linkified spans (CH17) with mentions semibold and a mention of you in coralText on
-/// neutral fills; label, value and the row's accessibility actions (5 i).
 private struct ChatBubbleText: View {
     let row: ChatRowModel
     let actions: ChatRowActions
 
     var body: some View {
         Group {
-            // Assistant rows never reach this view (AssistantRowView, CHT-7).
+
             Text(attributed)
                 .font(.body)
                 .lineLimit(nil)
@@ -422,7 +383,6 @@ private struct ChatBubbleText: View {
     }
 }
 
-/// 5 i: the menu's actions in menu order, then the row actions.
 struct ChatRowAccessibilityActions: View {
     let row: ChatRowModel
     let actions: ChatRowActions
@@ -467,8 +427,6 @@ struct ChatRowAccessibilityActions: View {
     }
 }
 
-/// 3 c delivery: "Sending…" after 1 s; failed shows the marker Button with its menu and "Not Delivered", plus the
-/// reason line for non-retryable failures (3 g).
 private struct ChatDeliveryLine: View {
     let row: ChatRowModel
     let actions: ChatRowActions
@@ -511,7 +469,6 @@ private struct ChatDeliveryLine: View {
     }
 }
 
-/// 3 c system rows: centered footnote; the error tone adds the error glyph; the hidden-sender row adds Show (Q2b).
 private struct ChatSystemRow: View {
     let row: ChatRowModel
     let actions: ChatRowActions
@@ -540,7 +497,6 @@ private struct ChatSystemRow: View {
     }
 }
 
-/// 3 c action rows (`/me`): the name semibold primary ("You" for yours) then the text; Copy is the only action.
 private struct ChatActionRow: View {
     let row: ChatRowModel
     let actions: ChatRowActions
@@ -590,7 +546,6 @@ private struct ChatUnreadDivider: View {
     }
 }
 
-/// The lifted bubble in the context menu (5 c), capped at 320 pt.
 private struct ChatBubblePreview: View {
     let row: ChatRowModel
 

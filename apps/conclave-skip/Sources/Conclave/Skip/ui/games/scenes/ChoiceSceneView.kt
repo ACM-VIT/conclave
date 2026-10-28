@@ -12,12 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 9 d (ACT-3) on Android, Would You Rather: choose (K1, K2, K4 two options separated by "or", changeable until the
- * phase ends, the chose count), reveal (sticky K5 weighted split with counts and names per side; a side nobody picked
- * says so; everyone but the seated host reads "Waiting for the host").
- */
-
 @Composable
 internal fun ChoiceSceneView(scene: ChoiceScene, games: GameStagePresenter) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.wouldYouRather"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -36,7 +30,6 @@ internal fun ChoiceSceneView(scene: ChoiceScene, games: GameStagePresenter) {
     }
 }
 
-/** K4; a new side is sent, your current side again is not. `voteCast` plays only for a sent pick. */
 @Composable
 private fun ChoiceButtons(scene: ChoiceScene, games: GameStagePresenter) {
     val interaction = games.interaction

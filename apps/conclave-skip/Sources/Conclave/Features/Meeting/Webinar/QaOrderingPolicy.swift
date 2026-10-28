@@ -1,10 +1,5 @@
 import Foundation
 
-/// S50 PL9 (shared, pure): what each role sees and in what order. Top = answering first, then upvotes descending, then
-/// asked time ascending (web host order, ParticipantsPanel.tsx:146-157); Recent = answering first, then asked time
-/// descending; Mine = your own questions only, asked time descending (attendees only: hosts cannot submit, so Mine
-/// would always be empty for them). The host filter is Open (pending and answering), Answered or Dismissed; attendees
-/// never see dismissed questions, their own included (WebinarViewer.tsx:316).
 enum QaOrderingPolicy {
     static func availableSorts(role: String) -> [QaSort] {
         if role == QaRole.attendee { return [QaSort.top, QaSort.recent, QaSort.mine] }
@@ -12,12 +7,10 @@ enum QaOrderingPolicy {
         return []
     }
 
-    /// The sort a role may use: Mine falls back to Top for a host (a promoted attendee keeps no Mine).
     static func effectiveSort(_ sort: QaSort, role: String) -> QaSort {
         availableSorts(role: role).contains(sort) ? sort : QaSort.top
     }
 
-    /// Whether a question shows for the role, sort and filter.
     static func isVisible(_ question: QaQuestionModel, role: String, sort: QaSort, filter: QaHostFilter) -> Bool {
         if role == QaRole.attendee {
             if question.status == QaStatus.dismissed { return false }
@@ -34,7 +27,6 @@ enum QaOrderingPolicy {
         return false
     }
 
-    /// The ordered ids the list shows (S50 11 j, k: recomputed only on an entry, sort or filter change).
     static func orderedIds(_ questions: [QaQuestionModel], role: String, sort: QaSort, filter: QaHostFilter) -> [String] {
         let resolved = effectiveSort(sort, role: role)
         var visible: [QaQuestionModel] = []
@@ -66,7 +58,6 @@ enum QaOrderingPolicy {
         return a.id < b.id
     }
 
-    /// Host counts for the filter chips and menu: open, answered, dismissed.
     static func counts(_ questions: [QaQuestionModel]) -> [Int] {
         var open = 0
         var answered = 0
@@ -83,9 +74,6 @@ enum QaOrderingPolicy {
         return [open, answered, dismissed]
     }
 
-    /// The host actions a question offers (S50 11 c): Answer Live (pending), Mark Answered (pending or answering),
-    /// Answer in Writing (any open), Dismiss (open), Reopen (answered or dismissed). `QaModerationAction` values plus
-    /// "answerText" for the written answer.
     static func hostActions(_ status: QaStatus) -> [String] {
         switch status {
         case .pending:
@@ -97,7 +85,6 @@ enum QaOrderingPolicy {
         }
     }
 
-    /// The leading swipe on a host row: Answer Live while pending, Mark Answered while answering, none otherwise.
     static func leadingSwipe(_ status: QaStatus) -> String {
         if status == QaStatus.pending { return QaModerationAction.answering }
         if status == QaStatus.answering { return QaModerationAction.answered }
@@ -105,20 +92,17 @@ enum QaOrderingPolicy {
     }
 }
 
-/// The written-answer host action id (not an SFU action: it posts `answered` with `answerText`).
 enum QaHostAction {
     static let answerText = "answerText"
 }
 
-/// S50 11 c, f (shared, pure): the composer and answer field rules.
 enum QaComposerPolicy {
-    /// Ask is enabled for 2 to 500 characters (SFU minimum and cap) while Q&A is on, connected and not sending.
+
     static func canSubmit(_ text: String, composerEnabled: Bool, isSending: Bool) -> Bool {
         let count = text.trimmingCharacters(in: .whitespacesAndNewlines).count
         return composerEnabled && !isSending && count >= QaLimits.questionMin && text.count <= QaLimits.questionMax
     }
 
-    /// "Ask a longer question." shows only for text that is present but under the minimum (S50 11 l: "?").
     static func isTooShort(_ text: String) -> Bool {
         let count = text.trimmingCharacters(in: .whitespacesAndNewlines).count
         return count > 0 && count < QaLimits.questionMin
@@ -126,7 +110,6 @@ enum QaComposerPolicy {
 
     static func showsQuestionCounter(_ count: Int) -> Bool { count >= QaLimits.questionCounterFrom }
 
-    /// Post Answer is disabled when the trimmed draft is empty, over 1,000 characters or pending (PL15).
     static func canPostAnswer(_ text: String, isPending: Bool) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty && text.count <= QaLimits.answerMax && !isPending
@@ -134,7 +117,6 @@ enum QaComposerPolicy {
 
     static func showsAnswerCounter(_ count: Int) -> Bool { count >= QaLimits.answerCounterFrom }
 
-    /// The composer state from the inputs: off, offline, reconnecting, else enabled (S50 11 f).
     static func composerReason(isQaEnabled: Bool, blockedReason: String) -> String {
         if !isQaEnabled { return QaComposerReason.qaOff }
         if blockedReason == MeetingBlockedReason.offline.rawValue { return QaComposerReason.offline }

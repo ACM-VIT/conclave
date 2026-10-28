@@ -12,15 +12,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * PPL-1 through the transpiled People presenter, policies and fixtures (the Swift half is
- * T/PeopleHostPoliciesTests.swift): the S50 PL6 order with the same results as Swift, the raised-hand queue and the
- * waiting order, one row written per mutation and none per speaker change, PL8 search over the cached snapshot, the
- * destination scroll published once, the Android page's item order and header index (ParticipantsPage.kt), the row
- * texts in the S50 2 g order (PersonRow.kt) and every PL12 fixture over the same stage roster. Pure: no composition
- * (only the first composition in a JVM keeps recomposing under Robolectric, PanelStageBridgeTests owns it). App
- * string resources are not visible to this library test, so text expectations are built with the same lookups.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class PeopleHostBridgeTests {
@@ -65,7 +56,7 @@ class PeopleHostBridgeTests {
         p.apply(PeopleFixtureScript.inputs(PeopleFixtureState.hostWaiting3))
         assertEquals(listOf("waiting:guest-71a2", "waiting:p-lee", "waiting:p-sam"), ids(p, PeopleSectionID.waiting))
         assertEquals("p-lee", p.waiting.entry("waiting:p-lee").model.serverId)
-        // A guest never sees Waiting.
+
         p.apply(PeopleFixtureScript.peopleInputs(roster = PeopleFixtureScript.roster(PeopleFixtureState.guest4),
             state = PeopleFixtureState.hostWaiting3))
         assertNull(p.snapshot.section(PeopleSectionID.waiting))
@@ -87,7 +78,7 @@ class PeopleHostBridgeTests {
         assertEquals(revision, p.snapshot.revision)
         assertFalse(p.rows.entry("u-sam").model.isMuted)
         assertSame(lee, p.rows.entry("u-lee"))
-        // 20 speaker changes: no revision, no row write, the order unchanged; the leaf reads the stage's store.
+
         var at = 1000.0
         var last = ""
         for (id in PeopleFixtureScript.speakerScript(PeopleFixtureState.host6)) {
@@ -143,10 +134,10 @@ class PeopleHostBridgeTests {
         assertEquals(6, items[meetingHeader].count)
         assertEquals(PeopleItemKind.Person, items[meetingHeader + 1].kind)
         assertFalse(items.any { it.kind == PeopleItemKind.Footer || it.kind == PeopleItemKind.Loading })
-        // Searching hides the action rows; no match shows the C14 empty state only.
+
         val none = PeopleSearchPolicy.filter(p.snapshot.sections, query = "zz").toList()
         assertEquals(listOf("empty"), peopleListItems(p.snapshot, none, searching = true).map { it.key })
-        // Alone: the footer; a guest: no Host controls row.
+
         p.apply(PeopleFixtureScript.inputs(PeopleFixtureState.alone))
         val alone = peopleListItems(p.snapshot, p.snapshot.sections.toList(), searching = false)
         assertEquals(PeopleFooterKind.alone.rawValue, alone.last().rowKey)

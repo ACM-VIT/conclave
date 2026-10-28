@@ -25,10 +25,6 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-/**
- * The real controller on the main looper, without composition, so no painter ever binds. Every exit must
- * release the process-wide run lease, including a cancelled caller whose last IO result is discarded.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class NativeIconRasterControllerTests {
@@ -46,14 +42,12 @@ class NativeIconRasterControllerTests {
         assertTrue("an earlier run still holds the process lease: $status", canStart)
     }
 
-    /** The run directory named by the Preparing status, below the canonical cache root. */
     private fun runDirectory(controller: NativeIconRasterController): File {
         val path = controller.status.removePrefix("Preparing ")
         assertTrue(controller.status, path.startsWith("cache/wp1-icon-raster/"))
         return File(app.cacheDir.canonicalFile, path.removePrefix("cache/"))
     }
 
-    /** Runs main-looper work (IO completions and, with [step], timers) until the run gives up its lease. */
     private fun drive(controller: NativeIconRasterController, step: Duration = Duration.ZERO) {
         val looper = shadowOf(Looper.getMainLooper())
         val deadline = System.nanoTime() + 10_000_000_000L
@@ -77,7 +71,7 @@ class NativeIconRasterControllerTests {
         assertFalse("one run per process, whichever controller owns it", second.canStart)
         second.start(IconRasterPlan.Geometry)
         assertFalse(second.busy)
-        // Lands before the main thread sees any IO result; the first index is published regardless.
+
         first.cancel("explicit cancel")
         assertEquals("Stopping; explicit cancel", first.status)
         drive(first)
@@ -89,7 +83,7 @@ class NativeIconRasterControllerTests {
         assertEquals(1, index.getJSONArray("failures").length())
         assertEquals("explicit cancel", index.getJSONArray("failures").getString(0))
         assertFalse(File(dir, "COMPLETE.json").exists())
-        // The released lease admits the next run from either controller.
+
         second.start(IconRasterPlan.Geometry)
         assertTrue(second.busy && !first.canStart)
         second.cancel("explicit cancel")
@@ -98,8 +92,7 @@ class NativeIconRasterControllerTests {
     }
 
     @Test fun alreadyCancelledCallerStillPublishesTheFirstIncompleteIndexAndReleasesTheLease() {
-        // The UNDISPATCHED launch reaches the open block even on a cancelled scope, and only NonCancellable keeps
-        // withContext from throwing at entry. No IO scheduling race is involved, so dropping it always fails here.
+
         val cancelled = CoroutineScope(Job().apply { cancel() } + Dispatchers.Main)
         val controller = NativeIconRasterController(app, cancelled).apply { eligibility(true); active(true) }
         assertTrue("an earlier run still holds the process lease: ${controller.status}", controller.canStart)
@@ -125,14 +118,13 @@ class NativeIconRasterControllerTests {
     }
 
     @Test fun cancelDuringApkHashingStopsAtTheNextBufferWithoutReachingEndOfFile() {
-        // A FIFO stands in for the APK. End of file never arrives while the writer stays open, so the hash can end
-        // only through the controller's live callback, at the next buffer after the cancel.
+
         val apk = File(app.cacheDir, "fifo-${UUID.randomUUID()}.apk")
         assertEquals(0, ProcessBuilder("mkfifo", apk.path).inheritIO().start().waitFor())
         app.applicationInfo.sourceDir = apk.path
         val opened = CountDownLatch(1)
         var writer: FileOutputStream? = null
-        // Opening the write end blocks until the hashing IO thread opens the read end.
+
         Thread { writer = FileOutputStream(apk); opened.countDown() }.apply { isDaemon = true; start() }
         try {
             val controller = controller()
@@ -145,7 +137,7 @@ class NativeIconRasterControllerTests {
                 looper.idle()
             }
             controller.cancel("explicit cancel")
-            // Wakes a read that is already blocked; the live check after it, or before it, sees the cancel.
+
             writer!!.write(ByteArray(1))
             drive(controller)
             assertEquals("index-0001.json", newestIndex(dir))
@@ -155,11 +147,11 @@ class NativeIconRasterControllerTests {
             assertEquals("explicit cancel", index.getJSONArray("failures").getString(0))
             assertTrue(index.isNull("packageIdentity"))
             assertFalse(File(dir, "COMPLETE.json").exists())
-            // The hash closed the APK early, so the read end is gone.
+
             assertThrows(IOException::class.java) { writer!!.write(ByteArray(65536)) }
             assertTrue(controller.canStart)
         } finally {
-            // Lets a hash that ignores the cancel reach end of file instead of blocking forever.
+
             runCatching { writer?.close() }
             apk.delete()
         }
@@ -212,7 +204,7 @@ class NativeIconRasterControllerTests {
         val controller = controller()
         controller.start(IconRasterPlan.Geometry)
         val dir = runDirectory(controller)
-        // Advances the main-looper clock past the 3 s readiness bound.
+
         drive(controller, Duration.ofMillis(50))
         val index = index(dir)
         assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

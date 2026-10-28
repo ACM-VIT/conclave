@@ -1,4 +1,4 @@
-/// Canonical F00 vocabulary. Gesture delivery is local; only async outcomes publish tokens.
+
 enum FeedbackKind: String, CaseIterable, Equatable {
     case none, signInSucceeded, validationFailed, sessionExpired, stillConnecting, meetingOpened
     case cameraOffByHost, handLoweredByHost, actionRejected, routeSwitchFailed
@@ -14,7 +14,6 @@ enum FeedbackKind: String, CaseIterable, Equatable {
     case hostAdmitted, hostAdmittedAll, hostDenied, hostRemoved, hostMadeHost, hostBulkApplied
     case hostPolicyChanged, hostActionFailed, hostInvitedToStage, hostMovedToAudience, questionSent, questionFailed, upvoteChanged, becameHost, lostHost
 
-    /// Semantic filtering prevents a gesture from also becoming an outcome haptic.
     var isAsyncOutcome: Bool {
         switch self {
         case .none, .micOn, .micOff, .cameraOn, .cameraOff, .handRaised, .handLowered,

@@ -3,10 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-2 (S10 3, 4): the join sheet flow on the presenter (submit, push after dismissal, invite codes kept, the
-/// validation token, the Rejoin suggestion), the sheet sources on both platforms (detents, PasteButton, no iOS
-/// autofocus, the confirm button branches, the Android focus and clipboard rules), and the strings both platforms
-/// resolve (present after the HD/strings/B3-T1.json merge).
 @MainActor
 struct ENT2JoinCodeTests {
     @Test func submittingALinkPushesItsLobbyOnlyAfterTheSheetIsGoneWithTheInviteCode() throws {
@@ -23,7 +19,7 @@ struct ENT2JoinCodeTests {
         #expect(target?.meetingInviteCode == "abc")
         #expect(target?.allowRoomCreation == true)
         #expect(target?.intent == .join)
-        // A second dismissal callback pushes nothing more.
+
         presenter.joinSheetDidDismiss()
         #expect(presenter.path.count == 1)
         #expect(presenter.feedbackState.token.kind == .none)
@@ -50,7 +46,7 @@ struct ENT2JoinCodeTests {
         #expect(presenter.feedbackState.token == FeedbackToken(sequence: 1, kind: .validationFailed))
         presenter.submitJoinInput("")
         #expect(presenter.feedbackState.token.sequence == 2)
-        // Swipe, Cancel, Back or scrim: no pending route, nothing pushed.
+
         presenter.dismissJoinSheet()
         presenter.joinSheetDidDismiss()
         #expect(presenter.path.isEmpty)
@@ -79,20 +75,20 @@ struct ENT2JoinCodeTests {
         #expect(flat.contains(".onChange(of: isFocused) { if isFocused { detent = .large } }"))
         #expect(flat.contains("PasteButton(payloadType: String.self)"))
         #expect(flat.contains(".keyboardType(.URL) .textContentType(.URL) .textInputAutocapitalization(.never) .autocorrectionDisabled() .submitLabel(.join)"))
-        // No autofocus on iOS (S10 3 c).
+
         #expect(!ios.contains("isFocused = true"))
         #expect(!ios.contains("defaultFocus"))
-        // Owner entry polish: Cancel stays leading; one filled confirmation sits below the form.
+
         #expect(flat.contains("ToolbarItem(placement: .cancellationAction) { Button(ConclaveStrings.text(\"Cancel\"), role: .cancel)"))
         #expect(!flat.contains("ToolbarItem(placement: .confirmationAction)"))
         #expect(flat.contains(".safeAreaInset(edge: .bottom, spacing: 0) { VStack(spacing: 0) { Divider() JoinConfirmButton(isValid: isValid, action: submit) .padding(16) } .background(Color(uiColor: .systemGroupedBackground)) }"))
         #expect(!ios.contains("role: .close"))
-        // The filled button has sufficient ink contrast on every supported iOS version.
+
         #expect(flat.contains("Button(action: action) { Text(ConclaveStrings.text(\"Join\")) .foregroundStyle(HostingTheme.onCoral) .frame(maxWidth: .infinity, minHeight: 28) } .buttonStyle(.borderedProminent) .controlSize(.large) .tint(HostingTheme.coralFill) .opacity(isValid ? 1 : HostingTheme.disabledOpacity) .disabled(!isValid)"))
         #expect(flat.contains(".scrollDismissesKeyboard(.interactively)"))
         #expect(!ios.contains("Color.white") && !ios.contains(".foregroundStyle(.white)"))
         #expect(flat.contains("input = EntryPolicies.sanitizeRoomInput(newValue)"))
-        // The root presents it with the dismissal callback that pushes the pending route.
+
         let root = ent2Flat(try ent2Source("Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift"))
         #expect(root.contains(".sheet(isPresented: joinSheetBinding, onDismiss: { premeeting.joinSheetDidDismiss() }) { JoinCodeSheet(premeeting: premeeting) }"))
         #expect(root.contains("Binding(get: { premeeting.isJoinSheetPresented }, set: { if !$0 { premeeting.dismissJoinSheet() } })"))
@@ -103,12 +99,12 @@ struct ENT2JoinCodeTests {
         let flat = ent2Flat(android)
         #expect(flat.contains("rememberModalBottomSheetState(skipPartiallyExpanded = true)"))
         #expect(flat.contains("ModalBottomSheet( onDismissRequest = { premeeting.dismissJoinSheet() },"))
-        // Focus is requested inside the sheet content, once the sheet is visible (no uninitialized requester).
+
         #expect(flat.contains("LaunchedEffect(Unit) { snapshotFlow { sheetState.isVisible }.first { it } focus.requestFocus() }"))
-        // The clip description is read without the content; the content only on a tap.
+
         #expect(android.contains("primaryClipDescription?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)"))
         #expect(flat.contains("keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go,"))
-        // A cancelled hide must not commit a join; cancellation propagates before this sequential continuation.
+
         #expect(!android.contains("invokeOnCompletion"))
         #expect(flat.contains("sheetState.hide() if (!sheetState.isVisible) premeeting.submitJoinInput(raw)"))
         #expect(flat.contains("if (isSubmitting) return"))

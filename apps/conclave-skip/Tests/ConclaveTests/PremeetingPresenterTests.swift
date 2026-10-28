@@ -3,10 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-1 (S10 0.4, 0.5, 1, 2; L9): the app-scoped premeeting presenter, the 0.4 root table, recents and the Rejoin
-/// card, notices, the R51 gate, task teardown (S1C 3.3 TEAR) and the L9 fixture sessions. The transpiled presenter
-/// also runs in `T/Skip/EntryPoliciesBridgeTests.kt`; the iOS views compile only for iOS and are pinned by source
-/// scans in `T/EntryCoreDeltaTests.swift` and `T/ENT2JoinCodeTests.swift`.
 @MainActor
 struct PremeetingPresenterTests {
     private static let now: Double = 1793102400000.0
@@ -34,8 +30,6 @@ struct PremeetingPresenterTests {
                               hasBeenAdmittedThisSession: true, currentRoomId: room)
     }
 
-    // MARK: Home (S10 2)
-
     @Test func homePublishesTheRejoinCardAndTheOtherRecentsNewestFirst() {
         let presenter = presenter()
         presenter.bootstrap(user: nil, recents: PremeetingFixtureScript.recents(for: .home, nowMillis: Self.now))
@@ -43,18 +37,18 @@ struct PremeetingPresenterTests {
         #expect(home.rejoin?.title == "rose-sora-luffy")
         #expect(home.rejoin?.end == .left)
         #expect(home.rejoin?.endedAtText.isEmpty == false)
-        // The card's record is not repeated in Recent; row route ids are the record index from the base.
+
         #expect(home.recents.map { $0.title } == ["lily-zoro-iris", "maple-goku-tulip"])
         #expect(home.recents.map { $0.routeId } == [PremeetingRoute.recentRouteIdBase + 1, PremeetingRoute.recentRouteIdBase + 2])
         #expect(home.recents.first?.role == .host)
         #expect(home.recents.allSatisfy { !$0.relativeTime.isEmpty && $0.routeKind == .lobby })
         #expect(home.revision > 0)
-        // The one-shot Rejoin wake-up exists exactly while a card is published (S10 0.5 task table).
+
         #expect(presenter.liveTaskCount == 1)
     }
 
     @Test func theRejoinCardExpiresFifteenMinutesAfterTheEnd() {
-        // The fixture's card ended 3 minutes before `now`; 13 minutes later it is 16 minutes old (Q3).
+
         let presenter = presenter(now: Self.now + 13.0 * Self.minute)
         presenter.bootstrap(user: nil, recents: PremeetingFixtureScript.recents(for: .home, nowMillis: Self.now))
         #expect(presenter.home.rejoin == nil)
@@ -90,7 +84,7 @@ struct PremeetingPresenterTests {
         #expect(presenter.recentRecords.first?.recentRole == .host)
         #expect(presenter.recentRecords.first?.end == "")
         #expect(presenter.root.root == .call)
-        // The view model clears the room on cleanup; the session's record still gets its end.
+
         presenter.apply(PremeetingInputs.make(callSession: 1, phase: .home, outcomeId: 7, outcomeKind: .left,
                                               hasBeenAdmittedThisSession: true))
         #expect(presenter.recentRecords.first?.end == RecentEnd.left.rawValue)
@@ -127,11 +121,9 @@ struct PremeetingPresenterTests {
         #expect(presenter.home.recents.isEmpty && presenter.home.rejoin == nil)
         #expect(!presenter.home.isSignedIn)
         #expect(presenter.liveTaskCount == 0)
-        // A guest is not signed in.
+
         #expect(!PremeetingPresenter.isSignedIn(AppState.User(id: "g", name: "Guest", email: nil, provider: .guest)))
     }
-
-    // MARK: The S10 0.4 table
 
     @Test func rootPolicyMatchesTheS10PhaseTable() {
         func decide(_ phase: MeetingPhaseKind, admitted: Bool = false, outcome: MeetingTerminalOutcomeKind? = nil,
@@ -179,13 +171,13 @@ struct PremeetingPresenterTests {
                                               currentRoomId: "rose-sora-luffy"))
         #expect(presenter.lobbyStatus?.mode == .waiting)
         #expect(presenter.lobbyStatus?.waitingKind == .standard)
-        // A drop before the first admission stays in the lobby with "Reconnecting" (S10 R6 a).
+
         presenter.apply(PremeetingInputs.make(callSession: 1, phase: .recovering, roomLabel: "rose-sora-luffy",
                                               currentRoomId: "rose-sora-luffy"))
         #expect(presenter.root.root == .premeeting)
         #expect(presenter.lobbyStatus?.mode == .waiting)
         #expect(presenter.lobbyStatus?.waitingKind == .reconnecting)
-        // Cancel: the path is kept and the lobby is editable again (S10 0.4 home row).
+
         presenter.apply(PremeetingInputs.make(callSession: 1, phase: .home, roomLabel: "rose-sora-luffy",
                                               currentRoomId: "rose-sora-luffy"))
         #expect(presenter.path.count == 1)
@@ -219,7 +211,7 @@ struct PremeetingPresenterTests {
         #expect(recorder.commands == [.dismissOutcome])
         #expect(presenter.outcome == nil)
         #expect(presenter.root == PremeetingRootDecision.home)
-        // The same outcome republished before the core clears it stays dismissed.
+
         presenter.apply(PremeetingInputs.make(callSession: 1, phase: .outcome, outcomeId: 9, outcomeKind: .removed,
                                               hasBeenAdmittedThisSession: true, isAppActive: false))
         #expect(presenter.outcome == nil)
@@ -248,8 +240,6 @@ struct PremeetingPresenterTests {
         #expect(presenter.path.first?.roomId == "lily-zoro-iris")
     }
 
-    // MARK: Home actions
-
     @Test func newMeetingOpensAStandInLobbyWithAGeneratedCodeAndNoCommand() throws {
         let recorder = Recorder()
         let presenter = presenter(recorder: recorder)
@@ -265,7 +255,7 @@ struct PremeetingPresenterTests {
         #expect(target?.allowRoomCreation == true)
         #expect(presenter.lobbyStatus?.intent == .newMeeting)
         #expect(presenter.lobbyStatus?.mode == .editing)
-        // The stand-in lobby has no Start: nothing reaches the core.
+
         #expect(recorder.commands.isEmpty)
         presenter.setPath([])
         #expect(presenter.path.isEmpty)
@@ -283,7 +273,7 @@ struct PremeetingPresenterTests {
         #expect(target?.roomId == "lily-zoro-iris")
         #expect(target?.intent == .join)
         #expect(target?.meetingInviteCode == nil)
-        // An unknown route (no target, not a recent row) is dropped.
+
         presenter.setPath([PremeetingRoute(id: 77, kind: .lobby, roomId: "nope")])
         #expect(presenter.path.isEmpty)
         presenter.openRecent(id: row.id)
@@ -335,7 +325,7 @@ struct PremeetingPresenterTests {
         #expect(recorder.commands.count == 1)
         presenter.showHomeNotice(.movedToAudience)
         #expect(presenter.home.noticeKind == .movedToAudience)
-        // A stage notice is not a Home notice.
+
         presenter.dismissHomeNotice()
         presenter.apply(PremeetingInputs.make(phase: .home, notice: .formError, noticeText: "Name needed"))
         #expect(presenter.home.noticeKind == .none)
@@ -364,8 +354,6 @@ struct PremeetingPresenterTests {
                                               hasBeenAdmittedThisSession: true))
         #expect(presenter.liveTaskCount == 0)
     }
-
-    // MARK: L9 fixture
 
     @Test func everyFixtureStateReachesItsRowOfTheTable() {
         for state in PremeetingFixtureState.allCases {
@@ -396,7 +384,7 @@ struct PremeetingPresenterTests {
             case .resume:
                 #expect(premeeting.lobbyStatus?.intent == .resume)
                 #expect(premeeting.lobbyStatus?.mode == .connecting)
-                // RECONCILE R4: the resume restores muted with the camera off.
+
                 #expect(!session.shell.entry.micIntentOn && !session.shell.entry.cameraIntentOn)
             case .inCall:
                 #expect(premeeting.root.root == .call)
@@ -406,7 +394,7 @@ struct PremeetingPresenterTests {
                 #expect(premeeting.outcome?.variant == .connectionLost)
             case .joinFailed:
                 #expect(premeeting.lobbyStatus?.mode == .failed)
-            // Batch 4 integrator (HD request B4-T2 R5): the ENT-3 lobby fixtures.
+
             case .lobby:
                 #expect(premeeting.lobbyMedia?.preview == .blocked)
                 #expect(premeeting.lobbyIdentity?.guestName == PremeetingFixtureScript.lobbyGuestName)
@@ -418,20 +406,18 @@ struct PremeetingPresenterTests {
                 #expect(premeeting.lobbyStatus?.intent == .newMeeting)
                 #expect(premeeting.lobbyLink?.roomLabel == PremeetingFixtureScript.newMeetingCode)
                 #expect(premeeting.lobbyLink?.canShare == false)
-            // Batch 7 integrator (HD request B7-T8 R3): the ENT-4 permission priming fixtures (T/ENT4PermissionPrimingTests.swift
-            // checks each one's permissions).
+
             case .lobbyPermissionsUndetermined, .lobbyMicRationale, .lobbyCameraRationale, .lobbyPermissionsDenied,
                  .lobbyPermissionsRestricted:
                 #expect(premeeting.lobbyStatus?.mode == .editing, "\(state)")
                 #expect(PermissionPrimingFixture.permissions(forState: state.rawValue) != nil, "\(state)")
-            // Batch 4 integrator (HD request B4-T3 R10): the ENT-7 account fixtures.
+
             case .accountSignedOut, .accountSignedIn, .accountSignInCancel, .accountSignInFailure, .accountExpired,
                  .accountDeleteFailure, .accountGoogleOnly, .accountAppleOnly, .accountProvidersFailed:
-                // ENT-7: Home stays the root; T/ENT7AccountTests.swift checks the account side.
+
                 #expect(premeeting.root == PremeetingRootDecision.home, "\(state)")
                 #expect(AccountFixtureScript.state(named: state.rawValue) != nil, "\(state)")
-            // Batch 5 integrator (HD request B5-T5 R5): the ENT-5 and ENT-6 fixtures (T/ENT5EntryTransitionTests.swift
-            // and T/ENT6OutcomeTests.swift check each one in detail).
+
             case .failedNetwork:
                 #expect(premeeting.lobbyStatus?.mode == .failed && premeeting.lobbyStatus?.issue == .failedNetwork)
             case .failedServerBusy, .retryAfter:
@@ -451,8 +437,7 @@ struct PremeetingPresenterTests {
                 #expect(premeeting.home.noticeKind == .roomClosed && premeeting.outcome == nil)
             case .homeRejoin:
                 #expect(premeeting.home.rejoin != nil && premeeting.currentInputs.rejoinRoomId == PremeetingFixtureScript.roomLabel)
-            // Batch 8 integrator (HD request B8-T7 R2): the ENT-9 webinar landing fixtures (T/ENT9WebinarLandingTests.swift
-            // checks each one's status after the landing appears).
+
             case .webinarLoading, .webinarEarly, .webinarEarlyOneMinute, .webinarEarlyShort, .webinarNoCalendar, .webinarOpen,
                  .webinarNameNeeded, .webinarInviteCode, .webinarJoining, .webinarAlmostThere, .webinarToCall,
                  .webinarWaitingHost, .webinarLocked, .webinarFull, .webinarUnavailable, .webinarEnded, .webinarCancelled,

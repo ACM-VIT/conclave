@@ -12,14 +12,6 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.util.concurrent.TimeUnit
 
-/**
- * PPL-6 through the transpiled Q&A presenter and policies (the Swift half is T/PPL6QaPolicyTests.swift), plus the
- * PPL-5 and PPL-7 shared rules the Android pages call: the PL9 order with the same results as Swift, the R18 unseen
- * counter, one command per tap through the shared ledger with Android snackbar placement for panel failures, the host
- * filter counts, the webinar settings field rules, the webinar People rows and the PL13 role table, and the pure item
- * builders of the Android pages (Webinar settings order, Q&A sort and filter names). Pure: no composition (only the
- * first composition in a JVM keeps recomposing under Robolectric).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class PPL6QaBridgeTests {

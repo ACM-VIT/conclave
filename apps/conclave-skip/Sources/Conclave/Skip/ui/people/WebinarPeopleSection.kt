@@ -35,15 +35,6 @@ import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlinx.coroutines.launch
 
-/*
- * S50 10 d (PPL-5): the webinar host branch of the Android Participants list. Attendee hand-queue rows carry a
- * FilledTonalButton "Bring on stage" (C01 tonal, never a coral fill, D4) with the row itself not clickable; invited
- * rows a TextButton "Cancel invite"; the attendees count is a ListItem whose text reads `people.attendeeCount` in its
- * own composable scope, as do the Attendees header and footer, so attendee count changes recompose those leaves only
- * (S50 10 k). Each row reads only its own PersonRowEntry.
- */
-
-/** "Priya N., attendee" and "Hand raised, 1 of 2 in queue" (S50 10 i), resolved once per model change. */
 internal data class WebinarAttendeeTexts(val name: String, val sub: String, val states: String, val actionLabel: String)
 
 internal fun webinarAttendeeTextsOf(context: Context, model: PersonRowModel, queueCount: Int): WebinarAttendeeTexts {
@@ -62,7 +53,6 @@ internal fun webinarAttendeeTextsOf(context: Context, model: PersonRowModel, que
     return WebinarAttendeeTexts(name = name, sub = sub, states = states.joinToString(", "), actionLabel = label)
 }
 
-/** One attendee row (hand queue or invited). Reads only its entry; the button is its own 48 dp target. */
 @Composable
 internal fun WebinarAttendeeRow(people: PeoplePresenter, rowKey: String, sectionId: String, queueCount: Int) {
     val entry = people.rows.entry(rowKey)
@@ -127,7 +117,6 @@ internal fun WebinarAttendeeRow(people: PeoplePresenter, rowKey: String, section
     )
 }
 
-/** "%1$d watching" (S50 10 d): reads `people.attendeeCount` in its own scope. */
 @Composable
 internal fun WebinarWatchingRow(people: PeoplePresenter) {
     val count = people.attendeeCount
@@ -138,14 +127,12 @@ internal fun WebinarWatchingRow(people: PeoplePresenter) {
     )
 }
 
-/** The Attendees header with the watching count (S50 10 b), its own leaf. */
 @Composable
 internal fun WebinarAttendeesHeader(people: PeoplePresenter) {
     ConclaveSectionHeader(title = conclaveString("ppl_attendees"), identifier = "people.section.attendees.header",
         count = people.attendeeCount)
 }
 
-/** The webinar footer kind's string name (S50 10 g). */
 internal fun webinarFooterName(kind: WebinarFooterKind): String? = when (kind) {
     WebinarFooterKind.empty -> "ppl_attendees_empty"
     WebinarFooterKind.quiet -> "ppl_attendees_footer"
@@ -153,10 +140,6 @@ internal fun webinarFooterName(kind: WebinarFooterKind): String? = when (kind) {
     else -> null
 }
 
-/**
- * The Attendees footer (S50 10 f): nobody watching shows the empty copy and a "Share webinar link" row (generating
- * the link through the one owner, R34); otherwise the quiet footer; a host promoted mid-webinar sees the queue note.
- */
 @Composable
 internal fun WebinarAttendeesFooter(people: PeoplePresenter, snapshot: PeopleSnapshot) {
     val count = people.attendeeCount

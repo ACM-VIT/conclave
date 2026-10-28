@@ -1,14 +1,5 @@
 import Foundation
 
-// Pure chat policies (S40 CH3, CH10, CH15, CH17), transpiled for both platforms and tested with the same vectors.
-// Strings are walked as arrays of one-character strings: on iOS a character is a grapheme, on Android a UTF-16 unit,
-// and every class used here is ASCII or whitespace, so both platforms produce the same segments as the web regex.
-// No Character letter test (a Skip pitfall); ASCII classes are spelled out.
-
-/// CH17: the web linkifier (`getChatMessageSegments`, apps/web/src/app/lib/utils.ts) ported by hand, because the
-/// pattern `((?:https?://|www\.)[^\s]+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?:/[^\s]*)?)` (case
-/// insensitive) has no portable regex on both platforms. Bare domains get `https://`, trailing `),.!?;:` is trimmed
-/// off the link, and a match containing "@" stays text (emails behind a scheme or `www.`).
 enum ChatLinkifyPolicy {
     private static let lettersLower = "abcdefghijklmnopqrstuvwxyz"
     private static let digits = "0123456789"
@@ -56,8 +47,6 @@ enum ChatLinkifyPolicy {
         return segments
     }
 
-    /// The end of a match starting at `start` (exclusive), or `start` when none. The first alternative wins at a
-    /// position, like the JavaScript alternation.
     static func matchEnd(_ chars: [String], at start: Int) -> Int {
         let schemeEnd = schemeOrWwwEnd(chars, at: start)
         if schemeEnd > start {
@@ -88,10 +77,8 @@ enum ChatLinkifyPolicy {
         return start
     }
 
-    /// `(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?:/[^\s]*)?` with the regex's greedy backtracking over
-    /// the label count. A label is the maximal run of `[a-z0-9-]` before a dot, starting and ending alphanumeric.
     private static func domainEnd(_ chars: [String], at start: Int) -> Int {
-        // Every candidate label boundary: positions just after each "label." in sequence.
+
         var labelEnds: [Int] = []
         var cursor = start
         while cursor < chars.count {
@@ -162,9 +149,6 @@ enum ChatLinkifyPolicy {
     }
 }
 
-/// CH17 mentions: an `@token` in a text segment whose normalized token matches a mention option becomes a
-/// `mention` span; your own token becomes `mentionYou`. Tokens use the SFU lookup normalization
-/// (`normalizeLookupToken`: lowercased, only `[a-z0-9._-]`).
 enum ChatMentionPolicy {
     private static let tokenCharacters = "abcdefghijklmnopqrstuvwxyz0123456789._-"
 
@@ -179,7 +163,6 @@ enum ChatMentionPolicy {
         return result
     }
 
-    /// Splits text spans at known mentions; links and existing mentions stay as they are.
     static func applyMentions(_ spans: [ChatSpan], knownTokens: [String], youToken: String) -> [ChatSpan] {
         if knownTokens.isEmpty && youToken.isEmpty { return spans }
         var result: [ChatSpan] = []
@@ -199,7 +182,7 @@ enum ChatMentionPolicy {
                         end += 1
                     }
                     var tokenEnd = end
-                    // Trailing punctuation never belongs to the token (SFU TRAILING_MENTION_PUNCTUATION_PATTERN).
+
                     while tokenEnd > index + 1 && ".".contains(chars[tokenEnd - 1]) {
                         tokenEnd -= 1
                     }
@@ -235,8 +218,6 @@ enum ChatMentionPolicy {
     }
 }
 
-/// CH15: the web grouping rule (apps/web ChatPanel.tsx): a follow-up within 2 minutes from the same sender, with the
-/// same privacy and target, not after an action or system row, and the follow-up has no reply.
 enum ChatRowGroupingPolicy {
     static let windowMillis = 120_000.0
 
@@ -261,18 +242,15 @@ enum ChatRowGroupingPolicy {
     }
 }
 
-/// CH3: the web reaction rules (meeting-core `CHAT_REACTION_EMOJIS`, `MAX_REACTIONS_PER_CHAT_MESSAGE`,
-/// apps/web chat-reactions.ts `canReactToChatMessage` and `applyLocalReactionToggle`).
 enum ChatReactionRules {
     static let maxDistinctPerMessage = 12
-    /// Canonical order (meeting-core types.ts).
+
     static let emojis: [String] = ["👍", "👏", "😂", "❤️", "🎉", "😮", "😢", "🤔"]
-    /// The iOS palette's quick five (ChatMessageActions.tsx); the other three sit under More Reactions.
+
     static let quickEmojis: [String] = ["👍", "❤️", "😂", "🎉", "😮"]
     static let moreEmojis: [String] = ["👏", "😢", "🤔"]
     static let namesShown = 3
 
-    /// The catalog key suffix for an emoji's spoken name ("thumbsUp" ...), "" for unknown emoji.
     static func nameKey(_ emoji: String) -> String {
         switch emoji {
         case "👍": return "thumbsUp"
@@ -287,8 +265,6 @@ enum ChatReactionRules {
         }
     }
 
-    /// Only server-retained messages carry reactions: acknowledged (a server id), not private; plus an open gate and
-    /// reactions on (or a host), mirroring the SFU handler.
     static func canReact(serverId: String, isDirect: Bool, gate: ChatSendGate, reactionsEnabled: Bool, isHost: Bool) -> Bool {
         if serverId.isEmpty || serverId.hasPrefix("local-") || serverId.hasPrefix("optimistic-") { return false }
         if isDirect { return false }
@@ -296,8 +272,6 @@ enum ChatReactionRules {
         return reactionsEnabled || isHost
     }
 
-    /// The optimistic toggle the core applies before `chat:react` answers (web `applyLocalReactionToggle`). Returns
-    /// the input unchanged when adding a new emoji would pass the cap.
     static func toggled(_ reactions: [ChatMessageReaction], emoji: String, userId: String) -> [ChatMessageReaction] {
         var next: [ChatMessageReaction] = []
         var found = false
@@ -328,7 +302,6 @@ enum ChatReactionRules {
         return next
     }
 
-    /// The chips for a row: names in the web order (you first, "" for you), at most `namesShown`.
     static func chips(_ reactions: [ChatReactionInput], nameFor: (String) -> String) -> [ChatReactionChip] {
         var chips: [ChatReactionChip] = []
         for reaction in reactions {
@@ -349,8 +322,6 @@ enum ChatReactionRules {
     }
 }
 
-/// CH10: chat failures from the shared error classifier plus the SFU's chat strings (chatHandlers.ts). Route blocks
-/// (`assistantIsPublic`, `privateTextOnly`) never come from here.
 enum ChatFailurePolicy {
     static func failure(category: MeetingErrorCategory, serverText: String) -> ChatFailure {
         let text = serverText.lowercased()
@@ -374,7 +345,6 @@ enum ChatFailurePolicy {
         }
     }
 
-    /// The SFU chat strings, lowercased (chatHandlers.ts, chatReactionHandlers.ts).
     static func failure(serverMessage text: String) -> ChatFailure {
         if text.contains("too quickly") || text.contains("too many") { return ChatFailure.rateLimited }
         if text.contains("message too long") { return ChatFailure.tooLong }
@@ -385,7 +355,7 @@ enum ChatFailurePolicy {
         if text.contains("private messages are disabled") || text.contains("private messages are turned off") {
             return ChatFailure.privateDisabled
         }
-        // Reply strings first: "reply target is no longer available." also contains the private-target phrase.
+
         if text.contains("private replies must stay") { return ChatFailure.replyPrivateThread }
         if text.contains("reply target") { return ChatFailure.replyUnavailable }
         if text.contains("multiple users match") { return ChatFailure.privateTargetAmbiguous }
@@ -401,7 +371,6 @@ enum ChatFailurePolicy {
         return ChatFailure.unknown
     }
 
-    /// Retryable failures keep Try Again (S40 3 g): transport, timeouts, rate limits and unknown.
     static func isRetryable(_ failure: ChatFailure) -> Bool {
         switch failure {
         case .notConnected, .timedOut, .rateLimited, .unknown, .none:
@@ -411,15 +380,12 @@ enum ChatFailurePolicy {
         }
     }
 
-    /// Non-retryable failures show their reason line under the failed bubble; retryable ones show none except the
-    /// rate limit (3 g).
     static func showsReason(_ failure: ChatFailure) -> Bool {
         if failure == ChatFailure.rateLimited { return true }
         return !isRetryable(failure)
     }
 }
 
-/// 2 c day separators: one key per local calendar day.
 enum ChatDayPolicy {
     static func dayKey(millis: Double) -> Int {
         let date = Date(timeIntervalSince1970: millis / 1000.0)

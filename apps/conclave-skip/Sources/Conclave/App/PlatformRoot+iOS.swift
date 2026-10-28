@@ -1,7 +1,6 @@
 #if DEBUG && os(iOS) && !SKIP
 import SwiftUI
 
-/// Development-only native root in the real Conclave module, below the existing app delegate.
 struct NativeHostingPreview: View {
     @State private var presenter: NativeHostingPresenter
     @State private var feedback: IOSFeedbackDelivery
@@ -9,10 +8,9 @@ struct NativeHostingPreview: View {
     @State private var consumerMount = 0
     @State private var stageLifetime = HostingStageLifetime()
     @State private var rootSize = CGSize.zero
-    /// Debug fixture only (this file is Debug-only): forces a compact horizontal size class on the preview root,
-    /// the IPAD-4 and IPAD-5 driver when no window resize is available (PS 16). It is recorded as an override.
+
     @State private var compactOverride = false
-    /// The root control that opened the shown panel; the inspector hands VoiceOver focus back to it (PS 7.7).
+
     @State private var lastInvoker: HostingPanelInvoker?
     @AccessibilityFocusState private var focusedInvoker: HostingPanelInvoker?
     @Environment(\.colorScheme) private var systemScheme
@@ -27,15 +25,12 @@ struct NativeHostingPreview: View {
         self.onClose = onClose
     }
 
-    /// Size classes from the environment, size from the root's own layout (PS 7.1). The root never branches
-    /// its structure on them; only the hosts' bindings follow. The compact override wins when it is on.
     private var window: PanelWindow {
         PanelWindow(width: Double(rootSize.width), height: Double(rootSize.height),
                     horizontalRegular: !compactOverride && horizontalSizeClass == .regular,
                     verticalRegular: verticalSizeClass == .regular)
     }
 
-    /// The size class the preview root's content sees, so SwiftUI's own inspector adaptation follows the override.
     private var contentHorizontalSizeClass: UserInterfaceSizeClass? {
         compactOverride ? .compact : horizontalSizeClass
     }
@@ -43,9 +38,7 @@ struct NativeHostingPreview: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // L1, as amended by the WP1-3b1 review (M1): the stage is a layout sibling above the List, so a
-                // medium sheet never hides it (P1.3, IOS-1); it reserves its height in the same layout and never
-                // overlays the List.
+
                 HostingStageStrip(lifetime: stageLifetime, presenter: presenter)
                     .fixedSize(horizontal: false, vertical: true)
                 List {
@@ -84,12 +77,12 @@ struct NativeHostingPreview: View {
                         }
                         .accessibilityIdentifier("panel.rapid")
                         .accessibilityFocused($focusedInvoker, equals: .rapid)
-                        // The IPAD-4 and IPAD-5 driver: regular x regular shows the inspector, compact the sheet.
+
                         Toggle(ConclaveStrings.text("Compact Width Override"), isOn: $compactOverride)
                             .accessibilityIdentifier("panel.compactOverride")
                     }
                     Section(ConclaveStrings.text("Stage Readouts")) {
-                        // Readouts live in the List, never in the stage, so refreshing them never redraws a tile.
+
                         HostingPanelStyleReadout(adapter: panelHost, window: window)
                         HostingRendererReadouts(presenter: presenter)
                     }
@@ -118,7 +111,7 @@ struct NativeHostingPreview: View {
                         Button("Reset Session") { presenter.resetFixtureSession() }
                             .accessibilityIdentifier("fixture.resetSession")
                     }
-                    // WP2-S2b Debug session readout (S1C Q8, OWNER-DEFAULTS Q16).
+
                     SessionReadoutSection(shell: MeetingViewModel.shared.shell, records: FeedbackDeliveryRecords.shared)
                     Section("Icons") {
                         NativeIconGalleryDisclosure()
@@ -151,15 +144,14 @@ struct NativeHostingPreview: View {
                 }
                 .listStyle(.insetGrouped)
             }
-            // PS 7.2: the inspector column attaches to the stack's root content, under the navigation bar, so the
-            // stage strip narrows beside it; the sheet host stays on the stack below.
+
             .modifier(NativePanelInspectorHost(coordinator: presenter.panels, adapter: panelHost, window: window) { presentation, resolved in
                 HostingPanelContent(presenter: presenter, feedback: feedback, adapter: panelHost, presentation: presentation,
                                     resolved: resolved, systemScheme: systemScheme)
             })
             .navigationTitle("Hosting Preview")
             .toolbar {
-                // Q12: not .confirmationAction, which iOS 26 can draw as a white label on the accent fill.
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done", action: onClose)
                         .tint(HostingTheme.coralText)
@@ -169,8 +161,7 @@ struct NativeHostingPreview: View {
         }
         .environment(\.horizontalSizeClass, contentHorizontalSizeClass)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { rootSize = $0 }
-        // PS 7.7: when the inspector closes (not when it migrates into a sheet), VoiceOver focus returns to the
-        // control that opened it. A sheet restores focus itself.
+
         .onChange(of: panelHost.inspectorItem == nil) { _, closed in
             guard closed, panelHost.sheetItem == nil, presenter.panels.snapshot.current == nil, let lastInvoker else { return }
             focusedInvoker = lastInvoker
@@ -187,7 +178,6 @@ struct NativeHostingPreview: View {
     }
 }
 
-/// Root controls that open panels, for the inspector's focus return.
 private enum HostingPanelInvoker: Hashable {
     case participants, settings, layout, rapid
 }
@@ -214,22 +204,15 @@ private struct NativeHostingPersonRow: View {
     }
 }
 
-/// The stage lifetime probe (S10 R12): counts stage creations so Debug tests and a stand-in call root can prove a
-/// renderer host survives panel, theme and route changes (S10 10 l4). Internal, not private, so other Debug roots
-/// reuse it; plain storage, never observed, so counting never redraws anything.
 final class HostingStageLifetime {
     private(set) var creations = 0
 
-    /// Records one stage creation and returns a short instance identity for the readout.
     func create() -> String {
         creations += 1
         return String(UUID().uuidString.prefix(8))
     }
 }
 
-/// The inert stage strip (PS 7.6): the original stage line plus one tile per row, each over a renderer probe.
-/// It is dark through its own environment and in-call token colors, never a window override, and its tiles
-/// derive from the rows, so a row mutation redraws its tile without recreating any probe.
 private struct HostingStageStrip: View {
     let lifetime: HostingStageLifetime
     let presenter: NativeHostingPresenter
@@ -249,18 +232,14 @@ private struct HostingStageStrip: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-        // Sideways only: the strip sits right below the navigation bar, which must keep the system background.
+
         .background(HostingTheme.token(DesignTokens.iosInCallStage), ignoresSafeAreaEdges: .horizontal)
-        // The whole stage keeps its dark look under Smart Invert, like the video it stands for (IOS-12).
+
         .accessibilityIgnoresInvertColors()
         .environment(\.colorScheme, .dark)
     }
 }
 
-/// One stage tile over its renderer probe. The name never sits in a fixed-height container (PS 7.7): the tile is
-/// at least 96 pt tall (PS 7.6) and grows with its label, which stops growing at the first accessibility size,
-/// like a video name label, and shows in the large content viewer. The selection badge has its own corner, so
-/// the name keeps the full width.
 private struct HostingStageTile: View {
     let row: NativeHostingRow
     let ledger: RendererIdentityLedger
@@ -291,8 +270,6 @@ private struct HostingStageTile: View {
     }
 }
 
-/// `style=<s> detent=<d> coverage=<c>` for the shown sheet or inspector (detent `none` for the inspector).
-/// Machine-read, so it is not localized.
 private struct HostingPanelStyleReadout: View {
     let adapter: NativePanelHostAdapter
     let window: PanelWindow
@@ -312,7 +289,6 @@ private struct HostingPanelStyleReadout: View {
     }
 }
 
-/// The renderer ledger and the open timer are not observable; this leaf reads them on appear and on Refresh.
 private struct HostingRendererReadouts: View {
     let presenter: NativeHostingPresenter
     @State private var refresh = 0
@@ -331,9 +307,6 @@ private struct HostingRendererReadouts: View {
     }
 }
 
-/// Debug readouts inside the panel (review m1): at the large detent the root List is not interactive, and a sheet
-/// can cover the root readouts at any detent. `panel.readout.style` follows the detent live; the ledger is not
-/// observable, so the renderer line reads on appear and on Refresh. Machine-read, so the values are not localized.
 private struct HostingPanelReadouts: View {
     let presenter: NativeHostingPresenter
     let feedback: IOSFeedbackDelivery
@@ -359,8 +332,6 @@ private struct HostingPanelReadouts: View {
     }
 }
 
-/// Rapid Replacement goes through the timed path, so the panel it ends on reports its open latency (review
-/// ISSUE 6); the presenter drops the start of the presentation it supersedes.
 @MainActor
 private func rapidPanels(_ presenter: NativeHostingPresenter) {
     let now = hostingUptime()
@@ -369,7 +340,6 @@ private func rapidPanels(_ presenter: NativeHostingPresenter) {
     presenter.presentPanel(.participants, from: .more, at: now)
 }
 
-/// One monotonic clock for the diagnostic open timer.
 private func hostingUptime() -> Double {
     ProcessInfo.processInfo.systemUptime
 }
@@ -447,8 +417,6 @@ private struct HostingSamplePanel: View {
     }
 }
 
-/// The fixture sample text lives in the adapter's draft store, keyed by presentation, and focus promotes a
-/// medium sheet to large through the shell's environment action. Runtime enters text only by Paste.
 private struct HostingSampleTextField: View {
     let adapter: NativePanelHostAdapter
     let presentationID: Int
@@ -482,8 +450,6 @@ private enum HostingLayoutChoice: String, CaseIterable, Identifiable {
     }
 }
 
-/// Layout from the call: a medium sheet in the dark in-call appearance with one native single choice. The
-/// choice stays inside the panel and changes nothing else.
 private struct HostingLayoutPanel: View {
     let presenter: NativeHostingPresenter
     let feedback: IOSFeedbackDelivery

@@ -1,18 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S40 4 c (CHT-7): the native markdown renderer for Conclave AI answers on iOS, standalone so Transcript Ask (TRN-2)
-// reuses it: it takes the shared parser's `StreamingMarkdownBlock`s (S/Shared/NativeStreamingMarkdown.swift) and
-// nothing else, holds no state and sets no link handler (the host sets the environment `openURL`; chat routes it to
-// the external link confirmation). System text styles with full Dynamic Type: paragraphs and lists `.body`, headings
-// `.title3`, `.headline` and `.subheadline` semibold with the header trait, quotes with a 3 pt separator rule, code
-// `.callout` monospaced in a horizontal scroll on the tertiary system fill, rules as `Divider()`. Blocks are
-// equatable and keyed by id, so while an answer streams only the tail block redraws. No cursor, shimmer or pulse
-// (R13).
-
-/// Inline runs to an AttributedString. Strong, emphasis, code and strikethrough use presentation intents, so the text
-/// keeps the block's Dynamic Type font; links carry `.link` and open through the environment `openURL`. The streaming
-/// tail reads unbalanced markers as open (the parser's streaming rule), so text does not jump when they close.
 enum AssistantMarkdownInline {
     static func attributed(_ text: String, isStreaming: Bool) -> AttributedString {
         var result = AttributedString()
@@ -34,7 +22,6 @@ enum AssistantMarkdownInline {
     }
 }
 
-/// The answer body: one view per block, in order.
 struct AssistantMarkdownView: View {
     let blocks: [StreamingMarkdownBlock]
     var identifier: String = "assistant.markdown"

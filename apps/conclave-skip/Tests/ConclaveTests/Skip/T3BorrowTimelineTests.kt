@@ -27,21 +27,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/**
- * T3B-3 (R/t3-borrow/PLAN.md section 4; P7, the presenter half of P4, P8) through the transpiled Kotlin (the Swift half
- * is T/T3BorrowPresenterTests.swift): the DelayedStatusPolicy table with the same results as Swift, the presenter's
- * delayed gate line (the gate task parks on the injected sleep and the test runs its body at the deadline), the
- * one-attachment guard and canAcceptPhoto, the fixture's new states and scripts, ChatRowActions.composerDidFocus, and
- * the composer focus follow on a real reversed LazyColumn composed on a Robolectric activity: one row up follows, three
- * screens up stays, the animated follow settles on the newest row. The focus tests drive the effect body
- * (ChatFocusFollow.follow, the only call in ChatComposerFocusFollow's LaunchedEffect) directly, because under
- * Robolectric a window Recomposer never recomposes once an earlier test in the JVM has stalled Compose's shared main
- * dispatcher (PanelStageBridgeTests.hostRecomposer explains it), and which class runs first follows Gradle's order (G3b
- * rounds 3 and 4), so a revision bump here would not reliably restart the effect. Nothing here needs a recomposition,
- * so the file passes in any class order: the initial composition (when the view attaches) and the View layout pass need
- * no Recomposer frame, and scrollToItem and the animation's scrollBy remeasure the list synchronously. The Conclave
- * test classpath has no Compose UI test artifacts, so the animated follow runs on this file's stepping frame clock.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class T3BorrowTimelineTests {
@@ -64,7 +49,6 @@ class T3BorrowTimelineTests {
         photosEnabled = photosEnabled, gate = gate, roster = roster(), assistant = AssistantAvailability.available,
         attachment = attachment)
 
-    /** A presenter on the test clock; its gate task parks, and the tests run its body when the clock reaches the deadline. */
     private fun presenter(gate: ChatSendGate = ChatSendGate.allowed): ChatPresenter {
         val chat = ChatPresenter()
         chat.now = { base + clock }
@@ -80,26 +64,26 @@ class T3BorrowTimelineTests {
     fun delayedStatusPolicyMatchesSwift() {
         assertEquals(400.0, DelayedStatusPolicy.showDelayMillis, 0.0)
         assertEquals(400.0, DelayedStatusPolicy.minimumVisibleMillis, 0.0)
-        // A 250 ms blip never shows.
+
         var current = DelayedStatusPolicy.step(DelayedStatus.idle, value = "reconnecting", isImmediate = false, now = 0.0)
         assertEquals(status(DelayedStatusPhase.pending, "reconnecting", 400.0), current)
         assertEquals("", DelayedStatusPolicy.visible(current))
         assertEquals(DelayedStatus.idle, DelayedStatusPolicy.step(current, value = "", isImmediate = false, now = 250.0))
-        // A 1,500 ms outage shows from 400 ms, holds to 800 ms and hides when it ends.
+
         current = DelayedStatusPolicy.step(current, value = "reconnecting", isImmediate = false, now = 400.0)
         assertEquals(status(DelayedStatusPhase.shown, "reconnecting", 800.0), current)
         assertEquals("reconnecting", DelayedStatusPolicy.visible(current))
         assertEquals(current, DelayedStatusPolicy.step(current, value = "", isImmediate = false, now = 600.0))
         assertEquals(800.0, DelayedStatusPolicy.wakeDeadline(current, value = "", now = 600.0), 0.0)
         assertEquals(DelayedStatus.idle, DelayedStatusPolicy.step(current, value = "", isImmediate = false, now = 1500.0))
-        // Reconnecting to offline while shown re-stamps the hold.
+
         assertEquals(status(DelayedStatusPhase.shown, "offline", 1000.0),
             DelayedStatusPolicy.step(current, value = "offline", isImmediate = false, now = 600.0))
-        // A different value while pending keeps the show time.
+
         assertEquals(status(DelayedStatusPhase.pending, "offline", 400.0),
             DelayedStatusPolicy.step(status(DelayedStatusPhase.pending, "reconnecting", 400.0), value = "offline",
                 isImmediate = false, now = 200.0))
-        // Immediate values show and clear at once.
+
         val locked = DelayedStatusPolicy.step(DelayedStatus.idle, value = "locked", isImmediate = true, now = 50.0)
         assertEquals(status(DelayedStatusPhase.shown, "locked", 50.0), locked)
         assertEquals(DelayedStatus.idle, DelayedStatusPolicy.step(locked, value = "", isImmediate = false, now = 50.0))
@@ -117,7 +101,7 @@ class T3BorrowTimelineTests {
         val reconnecting = presenter(ChatSendGate.reconnecting)
         assertEquals(ChatSendGate.reconnecting, reconnecting.composer.gateLine)
         assertFalse(reconnecting.hasGateLineTask)
-        // R8 first apply (fix pass): a line drawn at once by the first apply counts as one show, as in Swift.
+
         assertEquals(1, reconnecting.gateLineShowCount)
         reconnecting.reset()
         assertEquals(0, reconnecting.gateLineShowCount)
@@ -125,7 +109,7 @@ class T3BorrowTimelineTests {
 
         val chat = presenter()
         val publishes = chat.composerPublishCount
-        // A 250 ms blip: Send follows the gate, the line never draws, the task is cancelled.
+
         chat.apply(inputs(ChatSendGate.reconnecting), ChatInputChange.gate)
         assertEquals(ChatSendGate.reconnecting, chat.composer.gate)
         assertEquals(ChatSendGate.allowed, chat.composer.gateLine)
@@ -136,7 +120,7 @@ class T3BorrowTimelineTests {
         assertEquals(ChatSendGate.allowed, chat.composer.gateLine)
         assertEquals(2, chat.composerPublishCount - publishes)
         assertEquals(0, chat.gateLineShowCount)
-        // A long outage: drawn at the 400 ms deadline, held through a reopen until 800 ms.
+
         clock = 1000.0
         chat.apply(inputs(ChatSendGate.reconnecting), ChatInputChange.gate)
         clock = 1400.0
@@ -152,12 +136,12 @@ class T3BorrowTimelineTests {
         chat.gateLineDeadlineDidPass()
         assertEquals(ChatSendGate.allowed, chat.composer.gateLine)
         assertFalse(chat.hasGateLineTask)
-        // Locked is immediate; an outage the lock masked shows at once when the lock lifts (it is not new).
+
         chat.apply(inputs(ChatSendGate.locked), ChatInputChange.gate)
         assertEquals(ChatSendGate.locked, chat.composer.gateLine)
         chat.apply(inputs(ChatSendGate.offline), ChatInputChange.gate)
         assertEquals(ChatSendGate.offline, chat.composer.gateLine)
-        // Reset cancels the waiting task (the offline hold) and makes the next apply immediate.
+
         chat.apply(inputs(ChatSendGate.allowed), ChatInputChange.gate)
         assertEquals(ChatSendGate.offline, chat.composer.gateLine)
         assertTrue(chat.hasGateLineTask)
@@ -206,14 +190,14 @@ class T3BorrowTimelineTests {
         val queryShell = MeetingShellPresenter()
         val query = ChatFixtureDriver.installOnStage(ChatFixtureState.suggestionsMentionQuery, queryShell)
         assertEquals("@av", query.chat.drafts.text(query.chat.composer.draftKey))
-        // photoTwice: one chip, the notice and one attachPhoto in the log.
+
         val shell = MeetingShellPresenter()
         val driver = ChatFixtureDriver.installOnStage(ChatFixtureState.busy, shell)
         driver.run(ChatFixtureScriptName.photoTwice)
         assertEquals(ChatAttachmentPhase.preparing, shell.chat.composer.attachment.phase)
         assertEquals(ChatFailure.oneAttachment, shell.chat.composer.inlineNotice)
         assertEquals(1, driver.actionsReadout.split("\n").count { it.startsWith("attachPhoto") })
-        // gateBlip: Send greys out at once while the line stays hidden (the scripts park on the injected sleep).
+
         val gateShell = MeetingShellPresenter()
         val gate = ChatFixtureDriver.installOnStage(ChatFixtureState.busy, gateShell)
         gateShell.chat.now = { base + clock }
@@ -236,29 +220,25 @@ class T3BorrowTimelineTests {
         assertEquals(0, actions.focusRequest)
     }
 
-    /**
-     * P8 on a real reversed list: one row up (the newest row still partly visible) follows at once under Remove
-     * animations, three screens up stays (in both motion modes, with no frame awaited).
-     */
     @Test
     fun focusFollowsOnlyWhileTheNewestRowIsVisible() {
         val listState = LazyListState()
         composeReversedList(listState, reduceMotion = true)
         settle()
         assertTrue(ChatFocusFollow.newestVisible(listState))
-        // One row up: scrolled past the 48 px bottom slop, the newest row still partly visible.
+
         runBlocking { listState.scrollToItem(0, 60) }
         settle()
         assertEquals(60, listState.firstVisibleItemScrollOffset)
         assertTrue(ChatFocusFollow.newestVisible(listState))
-        // A focus gain: the effect body follows to the newest row instantly (no frame awaited).
+
         val instant = SteppingFrameClock()
         assertTrue(runBlocking(instant) { ChatFocusFollow.follow(listState, reduceMotion = true) })
         settle()
         assertEquals(0, instant.frames)
         assertEquals(0, listState.firstVisibleItemIndex)
         assertEquals(0, listState.firstVisibleItemScrollOffset)
-        // Three screens up: the newest row is out of view, so a focus gain leaves the position alone.
+
         runBlocking { listState.scrollToItem(24) }
         settle()
         assertFalse(ChatFocusFollow.newestVisible(listState))
@@ -271,7 +251,6 @@ class T3BorrowTimelineTests {
         assertEquals(0, listState.firstVisibleItemScrollOffset)
     }
 
-    /** The animated follow (animations on): it runs over frames and settles on the newest row. */
     @Test
     fun focusFollowAnimatesToTheNewestRow() {
         val listState = LazyListState()
@@ -288,11 +267,6 @@ class T3BorrowTimelineTests {
         assertEquals(0, listState.firstVisibleItemScrollOffset)
     }
 
-    /**
-     * The timeline's shape on a Robolectric activity: a 360 x 800 dp reversed LazyColumn of 120 rows, 100 dp each, with
-     * ChatComposerFocusFollow composed beside it as in ChatTimeline. Its revision never moves here, so the composed
-     * effect never follows; the tests call its body.
-     */
     private fun composeReversedList(listState: LazyListState, reduceMotion: Boolean): ComponentActivity {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
         activity.setContent {
@@ -313,10 +287,6 @@ class T3BorrowTimelineTests {
         }
     }
 
-    /**
-     * The animated follow's frame clock: every awaited frame arrives at once, 16 ms after the previous one, so the
-     * animation runs to its end inside runBlocking without the window's Choreographer.
-     */
     private class SteppingFrameClock : MonotonicFrameClock {
         var frames = 0
             private set

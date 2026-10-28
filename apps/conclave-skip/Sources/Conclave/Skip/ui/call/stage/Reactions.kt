@@ -28,13 +28,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/*
- * S20 9 (STG-4, SL9): the reaction burst layer. Reads only stage.reactions (hot state in one leaf layer), draws at most
- * renderLimit bubbles in a leading column above the toast lane, and takes no pointer input and no semantics, so taps
- * reach the tiles below and TalkBack never hears it. Each bubble animates its own transform and alpha once; nothing
- * redraws once the last bubble has faded. Remove animations: appear in place, hold, fade.
- */
-
 @Composable
 internal fun ReactionBurstLayer(stage: StagePresenter, modifier: Modifier = Modifier) {
     val kind = stage.kind

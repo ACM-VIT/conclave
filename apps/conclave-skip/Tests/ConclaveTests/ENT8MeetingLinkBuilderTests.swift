@@ -3,10 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-8 (S10 11, 0.6 L8; S20 0.7 SC21, SC23; RECONCILE R14, R50; S10 Q1): the shared meeting link builder against the
-/// web `buildMeetingPath` and `canonicalizeSfuClientId` vectors (apps/web/src/lib/meeting-links.ts, sfu-client-id.ts),
-/// and source scans of the share and copy paths on both platforms (one payload, `EXTRA_TITLE`, no chooser title, one
-/// `linkCopied` gesture and no legacy haptic). The same vectors run in Kotlin in `T/Skip/ENT3LobbyBridgeTests.kt`.
 struct ENT8MeetingLinkBuilderTests {
     @Test func theDefaultTenantWritesNoClientId() {
         #expect(MeetingLinkBuilder.path(roomCode: "rose-sora-luffy", clientId: nil) == "/rose-sora-luffy")
@@ -21,10 +17,10 @@ struct ENT8MeetingLinkBuilderTests {
         #expect(MeetingLinkBuilder.url(roomCode: "rose-sora-luffy", clientId: "acme")
                 == "https://conclave.acmvit.in/rose-sora-luffy?clientId=acme")
         #expect(MeetingLinkBuilder.path(roomCode: "rose-sora-luffy", clientId: " acme ") == "/rose-sora-luffy?clientId=acme")
-        // `encodeURIComponent` keeps `.` `-` `_` and encodes `:`.
+
         #expect(MeetingLinkBuilder.path(roomCode: "r", clientId: "a.b:c-d_e") == "/r?clientId=a.b%3Ac-d_e")
         #expect(MeetingLinkBuilder.carriesClientId("acme"))
-        // Invalid ids (outside `^[a-zA-Z0-9._:-]{1,64}$`) are dropped like the web does.
+
         #expect(MeetingLinkBuilder.path(roomCode: "r", clientId: "bad id") == "/r")
         #expect(MeetingLinkBuilder.path(roomCode: "r", clientId: "acme/x") == "/r")
         #expect(MeetingLinkBuilder.path(roomCode: "r", clientId: String(repeating: "a", count: 65)) == "/r")
@@ -41,7 +37,7 @@ struct ENT8MeetingLinkBuilderTests {
         #expect(MeetingLinkBuilder.path(roomCode: "caf\u{00E9}", clientId: nil) == "/caf%C3%A9")
         #expect(MeetingLinkBuilder.path(roomCode: "it's(1)!~*", clientId: nil) == "/it's(1)!~*")
         #expect(MeetingLinkBuilder.path(roomCode: "a&b=c", clientId: nil) == "/a%26b%3Dc")
-        // The legacy state helper's vector keeps its value through the builder.
+
         #expect(MeetingLinkBuilder.url(roomCode: " room/with?reserved#chars ", clientId: nil)
                 == "https://conclave.acmvit.in/room%2Fwith%3Freserved%23chars")
     }
@@ -63,12 +59,10 @@ struct ENT8MeetingLinkBuilderTests {
         let fresh = PremeetingPresenter()
         fresh.newMeeting()
         #expect(fresh.lobbyLink?.meetingLink == "" && fresh.lobbyLink?.canShare == false, "S10 Q1")
-        // Promotion: no Share either (R30).
+
         let promotion = LobbySnapshotPolicy.link(routeId: 1, intent: .promotion, roomId: "r", title: "r", clientId: nil)
         #expect(!promotion.canShare)
     }
-
-    // MARK: Share and copy paths (SC21, R14)
 
     @Test func theIOSShareAndCopyUseTheF00PayloadAndOneGesture() throws {
         let row = try ent8Source("Sources/Conclave/Features/Lobby/MeetingLinkRow+iOS.swift")
@@ -114,13 +108,12 @@ struct ENT8MeetingLinkBuilderTests {
             let text = try ent8Source(file)
             #expect(!text.contains("Invite sent") && !text.contains("pm_share_"), "\(file)")
         }
-        // The builder is pure and transpilable.
+
         let builder = try ent8Source("Sources/Conclave/Core/Networking/MeetingLinkBuilder.swift")
         #expect(!builder.contains("import SwiftUI") && !builder.contains("import UIKit"))
         #expect(!builder.contains("MeetingState"))
     }
 
-    /// Passes after the integrator merges `HD/strings/B4-T2.json`.
     @Test func linkStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent8Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])

@@ -1,12 +1,5 @@
 import Foundation
 
-// TRN-2 (S60 L6-12, 6 l): the Debug Transcript panel fixtures `transcript-*`, layered on the S20 SL14 stage fixture
-// (iOS `CONCLAVE_TRANSCRIPT_FIXTURE=<state>`, Android intent extra `conclave.transcriptFixture`; hooks in HD request
-// B7-T5 R5). The driver binds the stage fixture shell's `TranscriptPresenter` to its own `TranscriptState` and plays the
-// FakeTranscriptOwner: every intent is recorded (`transcript.calls`) and answered with scripted state changes, never a
-// socket, the network, audio or capture. Shared (transpiled) so both platforms and both test hosts read the same
-// states and scripts.
-
 enum TranscriptFixtureState: String, CaseIterable, Equatable {
     case idle = "transcript-idle"
     case viewOnly = "transcript-viewonly"
@@ -18,32 +11,30 @@ enum TranscriptFixtureState: String, CaseIterable, Equatable {
     case unavailable = "transcript-unavailable"
     case ended = "transcript-ended"
     case relayUnavailable = "transcript-relay-unavailable"
-    /// 6 l 5 and 12: 2,000 segments (pause markers, a long same-speaker run) for the rebuild and first-frame checks.
+
     case long = "transcript-long"
-    /// 6 l 6: the Ask tab with a done answer, an error and a not-sent row (the 30 s timeout is the askSilence script).
+
     case ask = "transcript-ask"
-    /// 6 l 7 and 13: Minutes with every section and the recap row.
+
     case minutes = "transcript-minutes"
 }
 
-/// The Debug script controls inside the panel (`transcript.fixture.<script>`).
 enum TranscriptFixtureScriptName: String, CaseIterable, Equatable {
-    /// 6 l 5: ten partial deltas growing the newest row, then its final.
+
     case stream10 = "stream:10"
-    /// 6 l 5: one partial that grows the newest row by five lines.
+
     case growFiveLines
-    /// 6 l 2: the next Stop fails (controls reconnecting).
+
     case stopFails
-    /// 6 l 6: the next question is rejected by the worker.
+
     case askReject
-    /// 6 l 6: the next question gets no answer (30 s later "No answer yet.").
+
     case askSilence
-    /// 6 l 13: the next recap fails.
+
     case recapFails
     case resetCounters
 }
 
-/// Debug counters for the readouts (`transcript.row.<id>.recompose`, `transcript.rebuilds`, `export.bytes`).
 final class TranscriptFixtureCounters {
     private(set) var counts: [String: Int] = [:]
 
@@ -62,12 +53,10 @@ final class TranscriptFixtureCounters {
     }
 }
 
-/// The installed fixture (the panels show their script bar only while `driver` is set) and the row counters.
 enum TranscriptDiagnostics {
     static var counters: TranscriptFixtureCounters? = nil
     static var driver: TranscriptFixtureDriver? = nil
 
-    /// One readout line for the stage fixture (`transcript.calls`, HD request B7-T5 R5).
     @MainActor
     static func readout() -> String {
         guard let driver = driver else { return "transcript none" }
@@ -75,14 +64,13 @@ enum TranscriptDiagnostics {
     }
 }
 
-/// The scripted people and text. The local person is Jordan Lee.
 enum TranscriptFixtureScript {
     static let localUserId = "jordan@example.com#fixture"
     static let localName = "Jordan Lee"
     static let averyId = "avery@example.com#web-1"
     static let samId = "sam@example.com#web-2"
     static let roomId = "fixture-room"
-    /// A fixed clock (2026-10-27 10:41 local-ish epoch) so screenshots do not drift.
+
     static let baseMillis = 1_793_101_260_000.0
 
     static let sentences: [String] = [
@@ -113,8 +101,6 @@ enum TranscriptFixtureScript {
                                text: text, startMs: startMs, isFinal: final)
     }
 
-    /// `count` finals: speakers change every two segments, 20 s apart, with a 4-minute lull every 150 segments (pause
-    /// markers) and one long same-speaker run in the middle (a monologue group).
     static func finals(count: Int) -> [TranscriptSegmentModel] {
         var result: [TranscriptSegmentModel] = []
         var time = baseMillis
@@ -148,29 +134,26 @@ enum TranscriptFixtureScript {
     static let answer = "Two decisions so far:\n\n- **Launch** stays on the twelfth.\n- The deck goes to design after lunch.\n\nAvery owns the deck."
 }
 
-/// The FakeTranscriptOwner plus the scripted state for one fixture (S60 L6-12).
 @MainActor
 final class TranscriptFixtureDriver {
     let fixture: TranscriptFixtureState
     let state = TranscriptState()
     let presenter: TranscriptPresenter
     let counters = TranscriptFixtureCounters()
-    /// Scripted failures for the next intent.
+
     private(set) var stopFails = false
     private(set) var askMode = "answer"
     private(set) var recapFails = false
     private(set) var recap = RecapPhase.idle
-    /// Injectable so tests drive time (the fixture app uses real sleeps).
+
     var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
     }
-    /// Off in tests: scripted follow-ups (stop finishing, streamed answers) wait for the explicit calls.
+
     var runsFollowUps = true
     private var nextQuestion = 0
     private var nextSegment = 100_000
 
-    /// `presenter` defaults to a fresh presenter; the default is built inside the main-actor init because a default
-    /// argument expression runs nonisolated.
     init(fixture: TranscriptFixtureState, presenter: TranscriptPresenter? = nil) {
         self.fixture = fixture
         self.presenter = presenter ?? TranscriptPresenter()
@@ -184,7 +167,6 @@ final class TranscriptFixtureDriver {
         applyInputs()
     }
 
-    /// The stage fixture hook: the shell's own presenter, the panel opened from the call (destination per state).
     @discardableResult
     static func installOnStage(state: TranscriptFixtureState, shell: MeetingShellPresenter) -> TranscriptFixtureDriver {
         let driver = TranscriptFixtureDriver(fixture: state, presenter: shell.transcript)
@@ -207,8 +189,6 @@ final class TranscriptFixtureDriver {
             + presenter.snapshot.stop.rawValue + "; recap " + recap.rawValue
     }
 
-    // MARK: Scripts
-
     func run(_ script: TranscriptFixtureScriptName) {
         switch script {
         case .stream10:
@@ -228,7 +208,6 @@ final class TranscriptFixtureDriver {
         }
     }
 
-    /// `count` growing partial deltas for a new item at the end, then (optionally) its final.
     func streamPartials(_ count: Int, finalize: Bool) {
         nextSegment += 1
         let id = "live-" + String(nextSegment)
@@ -260,12 +239,10 @@ final class TranscriptFixtureDriver {
                                                   text: long + " " + long, startMs: start, isFinal: false))
     }
 
-    /// Finishes a scripted stop (tests; the fixture app does it after 600 ms).
     func finishStop() {
         if state.sessionStatus == "stopping" { state.sessionStatus = "idle" }
     }
 
-    /// Streams the canned answer for `id` (tests call it; the fixture app does it with short sleeps).
     func answer(questionId id: String, question: String) {
         state.applyQuestionUpdate(id: id, question: question, answer: "Two decisions so far:", status: TranscriptQAStatus.streaming,
                                   error: nil, timestamp: TranscriptFixtureScript.baseMillis)
@@ -277,8 +254,6 @@ final class TranscriptFixtureDriver {
         recap = next
         applyInputs()
     }
-
-    // MARK: FakeTranscriptOwner
 
     private func perform(_ command: TranscriptCommand) -> Bool {
         switch command.kind {
@@ -354,7 +329,6 @@ final class TranscriptFixtureDriver {
                                               joinedAtMillis: TranscriptFixtureScript.baseMillis))
     }
 
-    /// The state each fixture starts in (S60 6 l 1, 1b).
     private func seed() {
         state.connectionStatus = TranscriptConnectionStatus.connected
         state.applyProviderKeyAvailability(openAI: true, sarvam: true)

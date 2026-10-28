@@ -29,19 +29,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/*
- * The chat bubble (F00 C23 = S40 CL1, adopted by RECONCILE R35): shape, tones and grouping geometry for Chat rows
- * and the Transcript Ask answers (S60 6). RoundedCornerShape(radiusBubbleAndroid = 20) with the sender-side
- * corners between grouped bubbles at radiusBubbleTailAndroid = 4: the top corner for a follow-up, the bottom corner
- * when another bubble follows (Google Messages grouping); start and end follow the reading direction. Own public
- * messages take primaryContainer with onPrimaryContainer ink (the second coral use, F00 2.6 A10); peers and every
- * private message take surfaceContainerHigh with onSurface, and private messages add a 1 dp outlineVariant border
- * so privacy never rests on hue (S40 Q9); answers take secondaryContainer (S60 6 e). Text rows pad 12 by 8; media
- * rows have no padding and clip to the shape. Rows own the 80% width cap, the header, reactions, delivery and the
- * summary node with its custom actions (S40 3 d, 3 i). Flat: no tonal or shadow elevation.
- */
-
-/** The tone colors for content inside a bubble (S40 3 e). Links and mentions of you use [link]. */
 internal object ConclaveBubbleColors {
     @Composable
     fun fill(tone: ConclaveBubbleTone): Color {
@@ -63,14 +50,12 @@ internal object ConclaveBubbleColors {
         }
     }
 
-    /** Links on neutral fills are primary (4.715 light, 6.246 dark); on coral they are onPrimaryContainer. */
     @Composable
     fun link(tone: ConclaveBubbleTone): Color {
         val scheme = MaterialTheme.colorScheme
         return if (tone.usesCoralFill) scheme.onPrimaryContainer else scheme.primary
     }
 
-    /** The quote rule: primary on neutral, ink at 70% on coral. */
     @Composable
     fun quoteBar(tone: ConclaveBubbleTone): Color {
         val scheme = MaterialTheme.colorScheme
@@ -78,7 +63,6 @@ internal object ConclaveBubbleColors {
         else scheme.primary
     }
 
-    /** The quote inset: surfaceContainerHighest on neutral, ink at 12% on coral. */
     @Composable
     fun quoteFill(tone: ConclaveBubbleTone): Color {
         val scheme = MaterialTheme.colorScheme
@@ -87,7 +71,6 @@ internal object ConclaveBubbleColors {
     }
 }
 
-/** The bubble outline for its place in a sender's group (pure, so the corner rule is testable). */
 internal fun conclaveBubbleShape(isOwn: Boolean, isFollowUp: Boolean, hasFollower: Boolean): RoundedCornerShape {
     val corners = ConclaveBubbleGeometry.androidCorners(isOwn = isOwn, isFollowUp = isFollowUp, hasFollower = hasFollower)
     return RoundedCornerShape(
@@ -95,7 +78,6 @@ internal fun conclaveBubbleShape(isOwn: Boolean, isFollowUp: Boolean, hasFollowe
     )
 }
 
-/** One bubble. [isOwn] picks the sender side for the grouping corners; [tone] picks the colors. */
 @Composable
 internal fun ConclaveChatBubble(
     tone: ConclaveBubbleTone, isOwn: Boolean, identifier: String, modifier: Modifier = Modifier, isFollowUp: Boolean = false,
@@ -118,11 +100,6 @@ internal fun ConclaveChatBubble(
     }
 }
 
-/**
- * The reply quote at the top of a bubble (S40 3 d): a 3 dp rule, the author and a two-line preview in an inset, one
- * clickable node that jumps to the original message. [description] is the spoken label ("Reply to Avery Lee:
- * Starting in 2 min"); [clickLabel] names the action ("Go to original message").
- */
 @Composable
 internal fun ConclaveBubbleQuote(
     author: String, preview: String, tone: ConclaveBubbleTone, description: String, clickLabel: String, identifier: String,

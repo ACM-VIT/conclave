@@ -1,13 +1,8 @@
 import Foundation
 
-/// ENT-7 (S10 5): the production answer to `AccountRequest`s. It calls `NativeAuthService` (typed errors), writes
-/// AppState (whose identity hook pushes the new user to the premeeting and account presenters, S10 0.8 C8) and hands
-/// each result back with the request's generation. A stale generation writes nothing: a sign-in cancelled by Close
-/// never stores a user. Only the native premeeting root installs it (`AccountAppWiring`); the L9 fixture uses
-/// `AccountFixtureResponder` and touches no network.
 @MainActor
 final class AccountAuthCoordinator {
-    /// Foreground refreshes of a stored sign-in at most this often (the launch refresh always runs).
+
     static let foregroundRefreshFloorMillis = 300000.0
 
     let appState: AppState
@@ -32,7 +27,7 @@ final class AccountAuthCoordinator {
         case .signInWithApple:
             signInWithApple(request)
         case .cancelSignIn:
-            // Android closes the Credential Manager sheet; iOS has nothing to cancel once the presenter dropped it.
+
             NativeAuthService.cancelNativeGoogleSignIn()
         case .signOut:
             signOut(generation: request.generation)
@@ -45,8 +40,6 @@ final class AccountAuthCoordinator {
         }
     }
 
-    // MARK: - Providers
-
     private func loadProviders(generation: Int) {
         Task { @MainActor [weak self] in
             do {
@@ -54,7 +47,7 @@ final class AccountAuthCoordinator {
                 let apple = providers.contains(NativeAuthProvider.apple)
                 let google = providers.contains(NativeAuthProvider.google)
                 if AccountPlatform.current == AccountPlatform.ios && AccountProvidersPolicy.isParityGap(listsApple: apple, listsGoogle: google) {
-                    // S10 5 c: the server lists Google without Apple; iOS offers neither and logs the gap.
+
                     PerformanceDiagnostics.event("auth_providers_parity_gap", details: "google_without_apple")
                 }
                 self?.account?.providersLoaded(generation: generation, listsApple: apple, listsGoogle: google)
@@ -64,13 +57,11 @@ final class AccountAuthCoordinator {
         }
     }
 
-    // MARK: - Sign in
-
     private func signInWithGoogle(generation: Int) {
         Task { @MainActor [weak self] in
             do {
                 let identity = try await NativeAuthService.requestNativeGoogleIdentityToken()
-                // Closed while the provider sheet was up: never create a server session for a dropped attempt.
+
                 guard let current = self, current.isCurrent(generation) else { return }
                 let user = try await NativeAuthService.signInWithSocialToken(
                     provider: .google,
@@ -114,7 +105,6 @@ final class AccountAuthCoordinator {
         return presenter.isCurrent(generation: generation)
     }
 
-    /// Stores the user (the identity push reaches the presenters first), then reports success.
     private func completeSignIn(_ user: NativeAuthenticatedUser, kind: AuthProviderKind, fallbackName: String?,
                                 fallbackEmail: String?, generation: Int) {
         guard let presenter = account, presenter.isCurrent(generation: generation) else { return }
@@ -137,12 +127,10 @@ final class AccountAuthCoordinator {
                              outcome: cancelled ? AccountSignInOutcome.cancelled : AccountSignInOutcome.failed)
     }
 
-    // MARK: - Sign out and deletion
-
     private func signOut(generation: Int) {
         Task { @MainActor [weak self] in
             guard let current = self else { return }
-            // The local sign-out happens first inside; the remote sign-out and the Google credential clear follow.
+
             await current.appState.clearAuthenticationAndWait()
             current.account?.finishSignOut(generation: generation)
         }
@@ -154,8 +142,7 @@ final class AccountAuthCoordinator {
             do {
                 try await NativeAuthService.deleteCurrentUser()
                 guard let current = self else { return }
-                // Invariant 8: signed out locally only after the server deleted the account. The identity push
-                // clears recents in the premeeting presenter (Q4).
+
                 if deletingUserId == nil || current.appState.currentUser?.id == deletingUserId {
                     current.appState.clearAuthentication(signOutRemote: false)
                 }
@@ -165,8 +152,6 @@ final class AccountAuthCoordinator {
             }
         }
     }
-
-    // MARK: - Guest name
 
     private func saveGuestName(_ name: String) {
         let current = appState.currentUser
@@ -183,11 +168,6 @@ final class AccountAuthCoordinator {
                                                               newGuestId: "guest-" + UUID().uuidString))
     }
 
-    // MARK: - Session refresh (S10 0.5 task table: launch and foreground)
-
-    /// Re-validates a stored sign-in. No user back means the session expired: the local sign-in is cleared, the
-    /// account gets the expired context and the `sessionExpired` token, and Home shows the notice. A network failure
-    /// keeps the saved account for the next foreground.
     func refreshSession(force: Bool) {
         guard let stored = appState.currentUser, AccountIdentityPolicy.isSignedIn(stored.provider) else { return }
         guard let presenter = account, !presenter.isBusy else { return }
@@ -223,7 +203,7 @@ final class AccountAuthCoordinator {
                     fallbackId: storedId
                 ))
             } catch {
-                // Offline or a server error: keep the saved account; the next foreground tries again.
+
                 self?.allowRefreshRetry(generation: generation)
             }
         }
@@ -236,8 +216,6 @@ final class AccountAuthCoordinator {
     }
 }
 
-/// ENT-7: the one-time production wiring, called from `PremeetingAppWiring` (HD request B4-T3 R7) behind the native
-/// premeeting route only. Installs the coordinator, pushes the first identity and starts the launch session refresh.
 enum AccountAppWiring {
     private static var coordinator: AccountAuthCoordinator? = nil
     private static var googleConfigured: Bool? = nil
@@ -256,14 +234,12 @@ enum AccountAppWiring {
         installed.refreshSession(force: true)
     }
 
-    /// AppState's identity hook (through `PremeetingAppWiring.pushIdentity`): the account presenter's inputs.
     @MainActor
     static func pushIdentity(appState: AppState, account: AccountPresenter) {
         account.apply(AccountPresenterInputs.from(user: appState.currentUser, googleConfigured: isGoogleConfigured(),
                                                   platform: AccountPlatform.current))
     }
 
-    /// Read once per process: the build's Google client id and, on Android, Play services.
     private static func isGoogleConfigured() -> Bool {
         if let known = googleConfigured {
             return known

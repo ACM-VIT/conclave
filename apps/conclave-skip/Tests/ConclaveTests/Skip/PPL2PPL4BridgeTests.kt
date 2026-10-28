@@ -9,15 +9,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * PPL-2 and PPL-4 through the transpiled People and Host Controls presenters (the Swift halves are
- * T/PPL2PeopleActionTests.swift and T/PPL4HostControlsTests.swift): the PL7 order and group emission with the same
- * results as Swift, one command per tap with the duplicate ignored (PH2), Remove and Block dispatching one block, PL14
- * placement on Android (page snackbar for panel origins, the stage lane for the tile menu), the PL4 switch intent with
- * one transition back on failure, PH15 drafts kept until the acknowledgement, the access list item order
- * (AccessPages.kt) and the Host Controls item order (HostControlsContent.kt, S50 6 b). Pure: no composition (only the
- * first composition in a JVM keeps recomposing under Robolectric).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class PPL2PPL4BridgeTests {
@@ -67,7 +58,7 @@ class PPL2PPL4BridgeTests {
         val own = actionIds(people, me)
         assertTrue(own.contains(PersonActionID.changeName))
         assertFalse(own.contains(PersonActionID.mute))
-        // RECONCILE R19: the tile menu lists the same items (Admit and Deny never appear on a person row).
+
         assertEquals(actions, PeopleActionPolicy.tileActions(actions))
     }
 
@@ -81,7 +72,7 @@ class PPL2PPL4BridgeTests {
         assertEquals(HostFailurePlacement.panelSnackbar.rawValue, people.lastFailure?.placement)
         people.dismissFailure(id = people.lastFailure?.id ?: 0)
         assertNull(people.lastFailure)
-        // The tile menu is stage origin: the S20 toast lane, nothing stored in the panel.
+
         people.perform(PersonActionID.mute, rowId = priya, source = PeopleActionSource.tileMenu)
         people.finish(log.tickets[1], HostActionResult.failed(HostActionFailure.rateLimited))
         assertNull(people.lastFailure)

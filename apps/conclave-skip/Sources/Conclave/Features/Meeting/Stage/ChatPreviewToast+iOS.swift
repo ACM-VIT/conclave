@@ -2,15 +2,6 @@
 import Accessibility
 import SwiftUI
 
-// S40 8 c (CHT-8; R40-8, F00 C13 chat variant; S20 10 c, f; RECONCILE R3): the chat preview on the stage toast lane.
-// The toast lane mounts this host beside the F00 C13 host (HD request B6-T5 R1): this one shows `stage.toast` only
-// while it is a `chatPreview`, the other host every other kind, and the presenter shows one toast at a time. The whole
-// toast is one Button that opens Chat at the newest message (`performNoticeAction(.view)`, S40 R40-2 destination
-// `chatMessage`); a swipe down, the escape gesture or the named accessibility action dismisses it. Display time is
-// the host's: 4 s, restarted when the preview updates in place, held under VoiceOver, Switch Control or the fixture
-// screen-reader override. No sound, no haptic (S20 10 h). Always dark (in-call surface).
-
-/// Fixed geometry (points): the 44 pt minimum target, the swipe that dismisses.
 enum ChatPreviewToastMetrics {
     static let minHeight: CGFloat = 44
     static let dismissTravel: CGFloat = 32
@@ -18,8 +9,6 @@ enum ChatPreviewToastMetrics {
     static let dragMinimumDistance: CGFloat = 8
 }
 
-/// The chat variant's host: shows the current chat preview, times it, announces each new preview once and hands the id
-/// back through `dismissNotice(id:)` when it leaves.
 struct ChatPreviewToastHost: View {
     let stage: StagePresenter
     let screenReader: Bool
@@ -36,7 +25,7 @@ struct ChatPreviewToastHost: View {
                     .id(notice.id)
                     .conclaveLanePresence(from: .bottom)
                     .onAppear { announce(notice) }
-                    // An in-place update (one more message) changes the key, so the 4 s start again (S40 8 m).
+
                     .task(id: ChatPreviewTimerKey(id: notice.id, count: notice.count, screenReader: screenReader)) {
                         let millis = ChatPreviewPolicy.displayMillis(isScreenReaderRunning: screenReader)
                         guard millis > 0 else { return }
@@ -50,7 +39,6 @@ struct ChatPreviewToastHost: View {
         .accessibilityIdentifier("chat.preview.host")
     }
 
-    /// One low-priority announcement per preview id; coalesced updates do not announce again (S40 8 i).
     private func announce(_ notice: MeetingNotice) {
         guard announced.id != notice.id else { return }
         announced.id = notice.id
@@ -60,22 +48,16 @@ struct ChatPreviewToastHost: View {
     }
 }
 
-/// The timer key: the toast, its message count (an in-place update restarts the time) and the screen reader state.
 struct ChatPreviewTimerKey: Equatable {
     let id: String
     let count: Int
     let screenReader: Bool
 }
 
-/// A reference latch (never observed view state), so announcing never re-evaluates the host.
 final class ChatPreviewAnnouncementLatch {
     var id: String?
 }
 
-/// One preview (S40 8 c): the 24 pt avatar of the newest sender, the title line (name, or "Avery Lee and 2 others"; the
-/// lock and "Private" for a private message), the body in two lines and, for one sender with several messages, the
-/// count line. Flat raised surface with a 1 pt border, radius 12; geometry capped at xxxLarge with the Large Content
-/// Viewer (F00 5).
 struct ChatPreviewToast: View {
     let notice: MeetingNotice
     let onOpen: () -> Void
@@ -90,7 +72,7 @@ struct ChatPreviewToast: View {
         let shape = RoundedRectangle(cornerRadius: ConclaveToastMetrics.radius)
         Button(action: onOpen) {
             HStack(alignment: .top, spacing: 12) {
-                // The assistant's mark is the avatar of its identity until the `assistant` glyph lands (R40-5, CL4).
+
                 ConclaveAvatar(name: notice.name, id: notice.userId.isEmpty ? nil : notice.userId, size: .mention)
                 VStack(alignment: .leading, spacing: 2) {
                     ChatPreviewTitleLine(title: title, isPrivate: notice.isPrivate)
@@ -132,7 +114,6 @@ struct ChatPreviewToast: View {
         .accessibilityIdentifier("chat.preview.toast")
     }
 
-    /// Swipe down dismisses (S40 8 a); a short drag springs back (no travel under Reduce Motion).
     private var swipeDown: some Gesture {
         DragGesture(minimumDistance: ChatPreviewToastMetrics.dragMinimumDistance)
             .onChanged { value in
@@ -152,7 +133,6 @@ struct ChatPreviewToast: View {
     }
 }
 
-/// The title line: the name (semibold) and, for a private message, the lock glyph with "Private" (S40 8 b).
 struct ChatPreviewTitleLine: View {
     let title: String
     let isPrivate: Bool
@@ -185,21 +165,18 @@ struct ChatPreviewTitleLine: View {
     }
 }
 
-/// Symbol concepts (`private_message`, S40 R40-5).
 enum ChatPreviewSymbols {
     static let privateMessage = ConclaveSymbols.lockFill
 }
 
-/// iOS copy (S40 8 g): sentence case bodies from the String Catalog; names and message text are data, never keys.
 enum ChatPreviewCopy {
-    /// One sender: the name; several: "Avery Lee and 2 others" (F00 grouping, people other than the newest sender).
+
     static func title(_ notice: MeetingNotice) -> String {
         let others = ChatPreviewPolicy.othersCount(notice)
         if others > 0 { return ConclaveStrings.format("%@ and %lld others", notice.name, others) }
         return notice.name
     }
 
-    /// The body from the presenter's kind and payload (never a file name, S40 8 f).
     static func body(_ notice: MeetingNotice) -> String {
         let text = notice.detail
         switch ChatPreviewPolicy.bodyKind(notice) {
@@ -218,12 +195,10 @@ enum ChatPreviewCopy {
         }
     }
 
-    /// "3 new messages" for one sender with several messages; "" otherwise.
     static func countLine(_ notice: MeetingNotice) -> String {
         ChatPreviewPolicy.showsCountLine(notice) ? ConclaveStrings.format("%lld new messages", notice.count) : ""
     }
 
-    /// "Message from Avery Lee: Can you share the deck?" (the label and the announcement).
     static func announcement(_ notice: MeetingNotice) -> String {
         ConclaveStrings.format("Message from %@: %@", title(notice), body(notice))
     }
@@ -232,7 +207,6 @@ enum ChatPreviewCopy {
         announcement(notice)
     }
 
-    /// The private tag and the count line, read after the label.
     static func value(_ notice: MeetingNotice) -> String {
         var parts: [String] = []
         if notice.isPrivate { parts.append(ConclaveStrings.text("Private")) }

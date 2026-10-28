@@ -2,10 +2,15 @@
 import Testing
 @testable import Conclave
 
-/// Owner chat polish: opening destination precedence, scroll proximity and the grouping/identity contract that the
-/// native alignment changes must preserve. Native pixels and iOS scroll interaction still require the viewer pass.
 @MainActor
 struct OwnerChatPolishTests {
+    @Test func jumpPillRequiresNewMessagesAwayFromTheBottom() {
+        #expect(!ChatTimelinePolicy.showsJumpToLatest(isAtBottom: false, unseenCount: 0))
+        #expect(!ChatTimelinePolicy.showsJumpToLatest(isAtBottom: true, unseenCount: 3))
+        #expect(ChatTimelinePolicy.showsJumpToLatest(isAtBottom: false, unseenCount: 1))
+        #expect(!ChatTimelinePolicy.showsJumpToLatest(isAtBottom: false, unseenCount: -1))
+    }
+
     @Test func openingHasOneDestination() {
         #expect(ChatTimelinePolicy.initialTarget(focusId: "quoted", firstUnreadId: "new", newestId: "last") == "quoted")
         #expect(ChatTimelinePolicy.initialTarget(focusId: "", firstUnreadId: "new", newestId: "last") == "unread")

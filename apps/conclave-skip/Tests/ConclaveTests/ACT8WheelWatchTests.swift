@@ -3,14 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ACT-8 (OUT/PLAN-screens.md section 5, S60 13 Wheel and Watch, PLAN WP9): Spin the Wheel and Watch Together on the
-/// ACT-7 app host. The `status.app` page data codec against the shared fixtures (packages/apps-sdk/src/native-embed/
-/// tests/wheel-watch-fixtures.json, also run by `pnpm -C packages/apps-sdk run test:native-embed-apps`), the Swift twin
-/// lists, pasted YouTube links, the frame policy both registries ask, the backend search decoder, the presenter's page
-/// models and commands (pending until ack, roles, the winner and title announcements, search phases, reorder), the
-/// fixtures, and source scans of both platforms' card controls and Activities pages. Tests marked "after R1" need
-/// HD request B8-T2 R1 (AppBridgeProtocol.swift); "after R2 to R6" need the other requests; the strings test needs the
-/// batch 8 strings merge.
 @MainActor
 struct ACT8WheelWatchTests {
     private final class Wire {
@@ -38,7 +30,7 @@ struct ACT8WheelWatchTests {
 
     private static let call = "call-8-test"
 
-    private func host(_ wire: Wire, inputs: AppHostInputs, roster: [String] = []) -> (AppHostPresenter, ActiveAppSession) {
+    private func host(_ wire: Wire, inputs: AppHostInputs, roster: [String] = [], primedSnapshot: Bool = true) -> (AppHostPresenter, ActiveAppSession) {
         let presenter = AppHostPresenter()
         presenter.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
         presenter.onOpenPage = { [wire] appId in wire.pages.append(appId) }
@@ -47,10 +39,12 @@ struct ACT8WheelWatchTests {
         let relay = ActiveAppSession()
         relay.sleep = { _ in }
         relay.bundleOrigin = AppBridgeProtocol.iosOrigin
-        relay.syncTransport = { _, _ in AppsSyncResponse(syncMessage: Data([1]), stateVector: nil, awarenessUpdate: nil) }
+        let snapshot = AppsSyncResponse(syncMessage: Data([1]), stateVector: nil, awarenessUpdate: nil)
+        relay.syncTransport = { _, _ in snapshot }
         presenter.bind(session: relay)
         relay.begin(appId: inputs.appId, callSessionId: Self.call, isReadOnly: !AppHostPresenter.canEdit(
             isAttendee: inputs.isAttendee, isHost: inputs.isHost, isLocked: inputs.isLocked))
+        if primedSnapshot { relay.acceptPrimedSnapshot(snapshot, appSessionId: relay.appSessionId) }
         presenter.apply(inputs)
         relay.attachBridge(appSessionId: relay.appSessionId) { [wire] json in wire.delivered.append(json) }
         return (presenter, relay)
@@ -59,7 +53,7 @@ struct ACT8WheelWatchTests {
     private func envelope(_ session: ActiveAppSession, _ type: String, _ payload: [String: Any], requestId: String) -> String {
         let object: [String: Any] = ["v": 1, "type": type, "callSessionId": session.callSessionId,
                                      "appSessionId": session.appSessionId, "requestId": requestId, "payload": payload]
-        // A bad payload fails this test instead of aborting the whole run (an invalid object raises, it never throws).
+
         guard JSONSerialization.isValidJSONObject(object), let data = try? JSONSerialization.data(withJSONObject: object),
               let text = String(data: data, encoding: .utf8) else {
             Issue.record("the \(type) envelope is not a JSON object")
@@ -106,7 +100,6 @@ struct ACT8WheelWatchTests {
         return try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
-    /// The generated cases, built the same way as the node test (`appFor`).
     private static func app(for item: [String: Any]) -> Any? {
         let count = item["count"] as? Int ?? 0
         if item["generate"] as? String == "wheelEntries" {
@@ -122,8 +115,6 @@ struct ACT8WheelWatchTests {
         if item["absent"] as? Bool == true { return nil }
         return item["app"]
     }
-
-    // MARK: Codec, twins and links
 
     @Test func appStatusCodecMatchesTheSharedFixtures() throws {
         let fixtures = try Self.fixtures()
@@ -142,7 +133,6 @@ struct ACT8WheelWatchTests {
         #expect(AppEmbedAppCodec.parse(nil) == AppEmbedAppStatus.empty)
     }
 
-    /// After R1: the whole status envelope goes through `AppBridgeCodec.parseStatus`, which reads `app`.
     @Test func statusEnvelopesCarryThePageData() throws {
         let fixtures = try Self.fixtures()
         let scope = try #require(fixtures["scope"] as? [String: Any])
@@ -160,7 +150,6 @@ struct ACT8WheelWatchTests {
         }
     }
 
-    /// After R1: the outbound types and entry files.
     @Test func swiftTwinsMatchTheSDK() throws {
         let fixtures = try Self.fixtures()
         let commands = try #require(fixtures["hostCommands"] as? [String])
@@ -242,15 +231,36 @@ struct ACT8WheelWatchTests {
         #expect(WatchSearchService.requestURL(path: "/api/youtube/trending", query: "", baseURL: URL(string: "https://conclave.example")!)?.query == nil)
     }
 
-    // MARK: Presenter: Spin the Wheel (after R1)
+    @Test func handshakeAndPageDataWaitForTheAuthoritativeSnapshot() async {
+        let wire = Wire()
+        let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true),
+                                      primedSnapshot: false)
+        defer { presenter.reset(); relay.end() }
+        #expect(!relay.hasHeldSnapshot)
+        #expect(ready(relay) == .none)
+        #expect(relay.embedReady && !relay.snapshotDelivered && relay.lifecycle == .opening)
+        #expect(presenter.model.phase == .opening && !presenter.wheel.isReady)
+        #expect(send(relay, "status", ["app": Self.wheelApp(["Ada", "Ben"])], id: "e-2") == .none)
+        #expect(!presenter.wheel.isReady && !presenter.wheel.canSpin && presenter.spinWheel() == .explained)
+        for _ in 0..<200 where !relay.snapshotDelivered {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #expect(relay.snapshotDelivered && relay.lifecycle == .ready)
+        #expect(wire.delivered.filter { AppBridgeCodec.jsonObject($0)?["type"] as? String == "snapshot" }.count == 1)
+        #expect(presenter.model.phase == .ready && presenter.wheel.isReady && presenter.wheel.canSpin)
+        #expect(presenter.spinWheel() == .dispatched && wire.lastType() == "spin")
+    }
 
     @Test func wheelPageDataSpinAndNames() {
         let wire = Wire()
         let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true),
                                       roster: ["You", "Ada", "Grace"])
         #expect(presenter.model.hasEmbed && presenter.model.phase == .opening, "after R1 the wheel has an embed")
+        #expect(relay.hasHeldSnapshot && !relay.snapshotDelivered && !relay.isReady)
         #expect(presenter.spinWheel() == .explained, "nothing before ready and the page data")
         #expect(ready(relay) == .none)
+        #expect(relay.snapshotDelivered && relay.isReady)
         #expect(!presenter.wheel.isReady, "no page data yet: no \"No names yet.\" before the room snapshot")
         let headerRevision = presenter.model.revision
         send(relay, "status", ["app": Self.wheelApp(["Ada", "Ben", "Cy"])], id: "e-2")
@@ -321,8 +331,6 @@ struct ACT8WheelWatchTests {
         #expect(presenter.wheel.isFull && presenter.model.nameCount == 64)
         #expect(presenter.addWheelNames("One more") == .explained && presenter.addEveryoneToWheel() == .explained)
     }
-
-    // MARK: Presenter: Watch Together (after R1)
 
     @Test func watchHostSearchesPlaysQueuesAndAnswersRequests() async {
         let wire = Wire()
@@ -444,8 +452,6 @@ struct ACT8WheelWatchTests {
         #expect(Set(AppPageFixtureState.allCases.map { $0.rawValue }).isDisjoint(with: Set(AppHostFixtureState.allCases.map { $0.rawValue })))
     }
 
-    // MARK: Source scans
-
     @Test func cardControlsAndPagesFollowThePlatformRules() throws {
         let ios = try act8Source("Sources/Conclave/Features/Meeting/Activities/NativeAppHost+iOS.swift")
         let pages = try act8Source("Sources/Conclave/Skip/ui/apps/AppPages.kt")
@@ -489,7 +495,6 @@ struct ACT8WheelWatchTests {
         #expect(packageJSON.contains("\"test:native-embed-apps\": \"node --test ./src/native-embed/tests/wheel-watch-contract-test.mjs\""))
     }
 
-    /// True once the integrator applies HD requests B8-T2 R2 to R6.
     @Test func requestedHooksAreWired() throws {
         #expect(ActivitiesDestinationPolicy.isRenderable(.wheel) && ActivitiesDestinationPolicy.isRenderable(.watch))
         let session = try act8Source("Sources/Conclave/Features/Meeting/Activities/ActivitySession.swift")
@@ -509,7 +514,6 @@ struct ACT8WheelWatchTests {
         for state in AppPageFixtureState.allCases { #expect(stageFixtures.contains("\"" + state.rawValue + "\""), "\(state.rawValue)") }
     }
 
-    /// True after the batch 8 strings merge (HD/strings/B8-T2.json).
     @Test func pageStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: act8PackageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
         let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])

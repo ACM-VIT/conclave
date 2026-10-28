@@ -3,10 +3,6 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Minimal cross-platform text WebSocket used for the transcript worker stream.
-/// iOS/macOS use `URLSessionWebSocketTask`; Android routes through an OkHttp
-/// bridge (`TranscriptWebSocketBridge`). Only one connection is active at a time,
-/// which is all the transcript feature needs.
 @MainActor
 final class TranscriptWebSocket {
     var onOpen: (() -> Void)?
@@ -53,8 +49,7 @@ final class TranscriptWebSocket {
         self.task = task
         isActive = true
         task.resume()
-        // URLSessionWebSocketTask buffers sends until the socket opens, so it's
-        // safe to signal readiness now; a genuine failure surfaces via receive().
+
         onOpen?()
         startPingLoop(for: task)
         receiveNext()

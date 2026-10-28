@@ -2,13 +2,6 @@
 import SwiftUI
 import UIKit
 
-// ENT-8 (S10 6 c L8, 11 c; S20 SC21; RECONCILE R14, R50): the lobby's Meeting Link row and the toolbar Share on iOS.
-// The link comes from the shared MeetingLinkBuilder through `premeeting.lobbyLink` (it carries `?clientId=` only for
-// a non-default tenant). Copy is view code: `UIPasteboard.general.url` plus the `linkCopied` gesture through a
-// view-local counter (F00 8), and an inline confirmation ("Copied" with a checkmark for 1.8 s, F00 C13: no toast on a
-// system-appearance screen). Never the legacy MeetingShare helpers (they play a success haptic, SC21). For a new
-// meeting before Start the row only explains that invites come after Start (S10 Q1).
-
 struct MeetingLinkRow: View {
     let premeeting: PremeetingPresenter
     @State private var copyCount = 0
@@ -45,11 +38,6 @@ struct MeetingLinkRow: View {
                     .accessibilityIdentifier("lobby.link.copy")
                     .conclaveGestureFeedback(.linkCopied, trigger: copyCount)
                 }
-            } else {
-                Text(ConclaveStrings.text("You can invite people after you start."))
-                    .font(.footnote)
-                    .foregroundStyle(HostingTheme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .accessibilityIdentifier("lobby.link")
@@ -76,8 +64,6 @@ struct MeetingLinkRow: View {
     }
 }
 
-/// The toolbar Share (S10 11 c): `ShareLink` with the F00 payload (subject and message keys, RECONCILE R14) and the
-/// room label as the preview title. Shown only while the lobby can share (never for a new meeting before Start).
 struct MeetingShareLinkButton: View {
     let premeeting: PremeetingPresenter
 

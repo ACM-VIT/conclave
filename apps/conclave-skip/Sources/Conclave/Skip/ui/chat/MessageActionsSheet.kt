@@ -36,16 +36,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/*
- * S40 5 d (CHT-3): message actions on Android. The overlay shows a ModalBottomSheet (system theme, skips the partial
- * state) with a two-line excerpt, all eight emoji in canonical order as 48 dp targets (selected secondaryContainer;
- * a tap toggles and closes), then the actions in the iOS order: Reply, Send private message, Copy text, Copy link,
- * View reactions; Hide messages from %1$s (Report stays hidden while canReport is false, Owner OQ5 (2026-10-26));
- * failed rows end with Retry and Delete (error color, last). The side pane shows the same items as a DropdownMenu
- * anchored to the bubble inside the pane, so no window sheet or scrim covers the stage (AND 7.12). One sheet at a
- * time: the viewer opens only after this sheet finished hiding (D12). Popup roots register with the exporter (R40-11).
- */
-
 private class ChatMenuAction(val tag: String, val label: String, val icon: ImageVector?, val destructive: Boolean, val run: () -> Unit)
 
 @Composable
@@ -79,7 +69,6 @@ private fun chatMenuActions(row: ChatRowModel, actions: ChatRowActions, close: (
     return listOf(main, safety, failed).filter { it.isNotEmpty() }
 }
 
-/** The emoji a menu offers: all eight, except at the 12-emoji cap only those already on the message (5 f). */
 private fun chatMenuEmojis(row: ChatRowModel): List<String> {
     val present = row.reactions.toList().map { it.emoji }
     return ChatReactionRules.emojis.toList().filter { !row.isAtReactionCap || present.contains(it) }
@@ -114,7 +103,6 @@ private fun ChatEmojiRow(row: ChatRowModel, onPick: (String) -> Unit) {
     }
 }
 
-/** The overlay's long-press sheet. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MessageActionsSheet(presenter: ChatPresenter, actions: ChatRowActions, rowId: String) {
@@ -163,7 +151,6 @@ internal fun MessageActionsSheet(presenter: ChatPresenter, actions: ChatRowActio
     }
 }
 
-/** The side pane's anchored menu (emoji row first), inside the pane, never over the stage. */
 @Composable
 internal fun MessageActionsMenu(presenter: ChatPresenter, actions: ChatRowActions, rowId: String) {
     val row = presenter.rows.entry(rowId).row

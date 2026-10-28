@@ -37,17 +37,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import skip.foundation.ProcessInfo
 
-/*
- * S20 10 d (SL11; TRN-1, S60 5): the captions strip above the stage-lane snackbar. It mounts only while captions are on
- * and live notes are live for a non-attendee (stage.captionsActive), and only the strip reads the CaptionLineFeed leaf,
- * so a caption delta recomposes the strip alone (S20 10 k). Surface(surfaceContainer) with a 1 dp extended border and
- * the medium shape; the speaker name in semibold, then the line; partial text in onSurfaceVariant (S60 R6-12); at most 2
- * lines (3 at font scale 1.5 and up), the oldest words clipped at the top; the quiet first state reads "Captions will
- * appear here." and the line hides after 6 s of silence (the feed decides). The strip is one button "Open transcript"
- * with the latest line as its state; it is no live region (captions are not announced). The CaptioningManager user style
- * applies its foreground and background colors and font scale (AAPPS 6.14) and refreshes when the setting changes.
- */
-
 @Composable
 internal fun CaptionsStripSlot(stage: StagePresenter) {
     if (stage.captionsActive) {
@@ -102,14 +91,13 @@ private fun CaptionsStrip(feed: CaptionLineFeed, onOpen: () -> Unit) {
                     }
                     withStyle(SpanStyle(color = if (line.isFinal) ink else secondary)) { append(line.text) }
                 }
-                // The full line lays out at its natural height; the box shows its last lines (oldest clipped at the top).
+
                 Text(annotated, style = textStyle, modifier = Modifier.fillMaxWidth().testTag("stage.captions.text"))
             }
         }
     }
 }
 
-/** The person's caption style; null colors keep the in-call tokens. */
 internal data class CaptionUserStyle(val foreground: Color?, val background: Color?, val fontScale: Float) {
     companion object {
         val standard = CaptionUserStyle(foreground = null, background = null, fontScale = 1.0f)
@@ -126,7 +114,6 @@ internal data class CaptionUserStyle(val foreground: Color?, val background: Col
     }
 }
 
-/** Reads the CaptioningManager style and listens for changes while the strip shows. */
 @Composable
 private fun rememberCaptionUserStyle(): CaptionUserStyle {
     val context = LocalContext.current.applicationContext
@@ -144,10 +131,6 @@ private fun rememberCaptionUserStyle(): CaptionUserStyle {
     return style
 }
 
-/**
- * S60 Q10 on Android: the first-use captions default follows CaptioningManager.isEnabled. Called from the transpiled
- * CaptionsPreference (TranscriptModels.swift) under SKIP.
- */
 internal object NativeCaptioning {
     fun isSystemCaptioningEnabled(): Boolean {
         return try {

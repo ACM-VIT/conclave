@@ -1,8 +1,5 @@
 import Foundation
 
-// Shared, testable presentation policies for the in-call games. The games
-// sheet (catalog/config/vote) and the on-stage game surface both read these.
-
 struct GameCatalogVisual: Equatable {
     let icon: String
     let androidIcon: String
@@ -298,10 +295,6 @@ enum GameConfigDraftPolicy {
     }
 }
 
-// MARK: - Stage text policies
-
-/// Text derivations for the on-stage game views. Pure string logic so it can
-/// be unit-tested without SwiftUI.
 enum GameStageTextPolicy {
     static func progressKicker(_ view: GameJSONValue?, fallback: String) -> String {
         let index = view?.int("questionIndex") ?? view?.int("index")
@@ -344,8 +337,6 @@ enum GameStageTextPolicy {
         count == 1 ? "1 vote" : "\(count) votes"
     }
 
-    /// Server prompts are fragments like "to become a world leader"; read them
-    /// as a sentence under the game's name.
     static func mostLikelyHeadline(_ prompt: String?) -> String {
         guard let prompt = prompt?.trimmingCharacters(in: .whitespacesAndNewlines),
               !prompt.isEmpty else {

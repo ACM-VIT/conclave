@@ -21,11 +21,10 @@ import java.io.File
 import java.util.Locale
 import java.util.UUID
 
-/** Capture and export pipeline in the real module. Never touches ConclaveIcons accessors. */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class NativeIconRasterTests {
-    /** Records the offscreen scope and paints a quarter-width bar on the leading edge. */
+
     private class ProbePainter : Painter() {
         var seenDensity = 0f
         var seenDirection: LayoutDirection? = null
@@ -135,7 +134,7 @@ class NativeIconRasterTests {
     }
 
     @Test fun jobCancellationAtTheCommitPointNeverWritesCompletion() {
-        // Scope disposal and the run deadline cancel the job without calling cancel(); the commit consults it.
+
         val journal = opened(IconRasterPlan.Geometry)
         val req = request(18, 3, LayoutDirection.Ltr)
         journal.export(req, listOf(captureIcon(ProbePainter(), req, 0), captureIcon(ProbePainter(), req, 1)), null)
@@ -201,9 +200,9 @@ class NativeIconRasterTests {
     }
 
     @Test fun journalNamesAndHashesStayAsciiUnderNativeDigitLocales() {
-        // Default numbering systems that are not Latin; ar-EG and bn-BD made every run fail at its first write.
+
         for (tag in listOf("ar-EG", "fa-IR", "bn-BD", "mr-IN", "ne-NP", "my-MM")) withDefaultLocale(tag) {
-            // Precondition: this JVM localizes %d for the tag, so only Locale.ROOT keeps the names ASCII.
+
             assertNotEquals(tag, "0012", "%04d".format(12))
             val journal = opened(IconRasterPlan.Geometry)
             val req = request(18, 1, LayoutDirection.Ltr, ordinal = 12)
@@ -242,7 +241,6 @@ class NativeIconRasterTests {
         app.applicationInfo.sourceDir = apk.path
         assertEquals(apk.path, app.applicationContext.applicationInfo.sourceDir)
         val identity = withDefaultLocale("bn-BD") { iconPackageIdentity(app) }
-        // SHA-256 of zero bytes, written independently of iconSHA256.
         assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", identity.getString("apkSHA256"))
         assertEquals(app.packageName, identity.getString("package"))
         assertEquals("cancelled while hashing APK", runCatching { iconPackageIdentity(app) { false } }.exceptionOrNull()?.message)

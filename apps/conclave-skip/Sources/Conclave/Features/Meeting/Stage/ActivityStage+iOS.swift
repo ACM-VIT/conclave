@@ -1,17 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S20 11 and SL12 (STG-9) on iOS: the activity takeover container. The `activity` slot of the canvas holds one flat
-// card (`iosInCallSurface`, radius 16, 1 pt `inCallBorder`) with a header owned here (identity glyph, name as a
-// heading, status line, the Show Video toggle, then the trailing host or seat actions spec 60 places) and a body slot
-// filled by the activity: the game shell (ACT-2), the SDK app host (ACT-7) or the shared browser surface (ACT-9,
-// `BrowserSurface+iOS.swift`) with their opening and failed states. People stay in the strip (you always included,
-// last before "+N"); the card never floats a self view. The meeting column ignores the keyboard; only the card body pads by the real keyboard overlap, so the
-// stage never compresses (AGENTS.md game stage layout rules). The container reads only `layout.activityKind`; the body
-// observes its own presenter, so game pushes never invalidate the stage (S20 11 k).
-
-/// The session's activity presenters for the card and the Activities panel, provided once by the call root (HD request
-/// B4-T8 R5). Nil outside a native call root (the card then shows its frame with an empty body).
 private struct ActivitySessionKey: EnvironmentKey {
     static let defaultValue: ActivitySession? = nil
 }
@@ -23,7 +12,6 @@ extension EnvironmentValues {
     }
 }
 
-/// The `activity` slot content (SlotView's activity branch, HD request B4-T8 R6).
 struct ActivityStageContainer: View {
     let stage: StagePresenter
     @Environment(\.activitySession) private var session
@@ -41,15 +29,25 @@ struct ActivityStageCard: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: ActivityStageMetrics.cornerRadius, style: .continuous)
-        VStack(spacing: 0) {
-            ActivityStageHeader(kind: kind, stage: stage, session: session)
-            Rectangle()
-                .fill(HostingTheme.inCallBorder)
-                .frame(height: 1)
-                .accessibilityHidden(true)
-            ActivityStageBody(kind: kind, stage: stage, session: session)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        Group {
+            if kind == ActivityKind.game.rawValue, let session,
+               session.games.scene.kind == GameSceneKind.chess, session.games.scene.chess != nil {
+                ChessSceneBody(games: session.games, cardHeader: { compact in
+                    AnyView(ActivityStageHeader(kind: kind, stage: stage, session: session, stacked: compact))
+                })
                 .modifier(KeyboardOverlapAvoidance(keyboardTopY: keyboard.keyboardTopY))
+            } else {
+                VStack(spacing: 0) {
+                    ActivityStageHeader(kind: kind, stage: stage, session: session)
+                    Rectangle()
+                        .fill(HostingTheme.inCallBorder)
+                        .frame(height: 1)
+                        .accessibilityHidden(true)
+                    ActivityStageBody(kind: kind, stage: stage, session: session)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .modifier(KeyboardOverlapAvoidance(keyboardTopY: keyboard.keyboardTopY))
+                }
+            }
         }
         .background(HostingTheme.token(DesignTokens.iosInCallSurface), in: shape)
         .overlay { shape.strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
@@ -64,14 +62,11 @@ enum ActivityStageMetrics {
     static let cornerRadius: CGFloat = 16
 }
 
-/// Copy and glyphs the stage chrome and announcements share (HD request B4-T8 R7: the Now Playing chip and the stage
-/// announcer call these, so the chip names an app by its localized name, not its id).
 enum ActivityStageCopy {
     static func kind(_ raw: String) -> ActivityKind {
         ActivityKind(rawValue: raw) ?? ActivityKind.game
     }
 
-    /// The chip and announcement name: the server game name, the app's localized name, or "Shared Browser".
     static func displayName(kind raw: String, name: String) -> String {
         switch kind(raw) {
         case .game: return name.isEmpty ? ConclaveStrings.text("Game") : name
@@ -80,8 +75,6 @@ enum ActivityStageCopy {
         }
     }
 
-    /// `activityStarted` and `activityEnded` (S20 11 g); nil for any other announcement kind. `name` is the encoded
-    /// `ActivityStagePolicy.announcementName(kind:names:)`.
     static func announcement(kind: String, name: String) -> String? {
         let display = displayName(kind: ActivityStagePolicy.announcedKind(name), name: ActivityStagePolicy.announcedName(name))
         if kind == ActivityStagePolicy.startedAnnouncement { return ActivitiesCopy.started(display) }
@@ -98,27 +91,36 @@ enum ActivityStageCopy {
     }
 }
 
-/// The card header: identity, name (heading), status line, Show Video, then the trailing actions. Its controls come
-/// before the body in reading order.
 struct ActivityStageHeader: View {
     let kind: String
     let stage: StagePresenter
     let session: ActivitySession?
+    var stacked = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            ActivityStageIdentity(kind: kind, session: session)
-            Spacer(minLength: 4)
-            ActivityShowVideoButton(stage: stage)
-            ActivityStageTrailing(kind: kind, session: session)
+        Group {
+            if stacked {
+                VStack(alignment: .leading, spacing: 8) {
+                    ActivityStageIdentity(kind: kind, session: session)
+                    HStack(spacing: 10) {
+                        ActivityShowVideoButton(stage: stage)
+                        ActivityStageTrailing(kind: kind, session: session)
+                    }
+                }
+            } else {
+                HStack(alignment: .center, spacing: 10) {
+                    ActivityStageIdentity(kind: kind, session: session)
+                    Spacer(minLength: 4)
+                    ActivityShowVideoButton(stage: stage)
+                    ActivityStageTrailing(kind: kind, session: session)
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 }
 
-/// Glyph, name and status. A game reads the shell's `chrome` (per phase, never per move); a live browser card reads its
-/// `BrowserStageModel` (ACT-9); an app, or the browser before its card has a session, reads the Now Playing row.
 struct ActivityStageIdentity: View {
     let kind: String
     let session: ActivitySession?
@@ -162,11 +164,11 @@ struct ActivityStageIdentity: View {
             return Parts(name: ActivityStageCopy.displayName(kind: raw, name: chrome.name), status: GameCopy.headerStatus(chrome), appId: "")
         }
         if kind == .browser && session.browser.model.isActive {
-            // ACT-9 (S60 14 b, g): the site and the state from the browser card's model ("example.com · Live").
+
             return Parts(name: BrowserCopy.title, status: BrowserCopy.headerStatus(session.browser.model), appId: "")
         }
         if let item = session.activities.snapshot.nowPlayingItem(kind: kind) {
-            // ACT-7 (HD request B7-T1 R2): an app's status comes from its host ("%lld editing", "Editing locked").
+
             let hostStatus = kind == .app ? AppHostHeader.status(session.appHost) : ""
             return Parts(name: ActivitiesCopy.nowPlayingTitle(item),
                          status: hostStatus.isEmpty ? ActivitiesCopy.nowPlayingStatus(item) : hostStatus, appId: item.appId)
@@ -175,8 +177,6 @@ struct ActivityStageIdentity: View {
     }
 }
 
-/// Show Video (S20 11 c, i): a local, reversible toggle with its state as the value. While video shows, the card leaves
-/// the stage and the Now Playing chip brings it back, so the visible button always reads "Showing Activity".
 struct ActivityShowVideoButton: View {
     let stage: StagePresenter
 
@@ -198,9 +198,6 @@ struct ActivityShowVideoButton: View {
     }
 }
 
-/// The trailing slot: the game's seat control and host End (ACT-2), the app host menu (ACT-7) or the browser host menu
-/// (ACT-9: audio, Session Info, Close with its confirmation). Participants get no close; before the browser card has a
-/// session the Now Playing Close stands in.
 struct ActivityStageTrailing: View {
     let kind: String
     let session: ActivitySession?
@@ -210,10 +207,10 @@ struct ActivityStageTrailing: View {
             if ActivityStageCopy.kind(kind) == .game {
                 GameShellHeaderActions(games: session.games)
             } else if ActivityStageCopy.kind(kind) == .app {
-                // ACT-7 (HD request B7-T1 R2): Lock Editing and Close in the host menu (S60 13 c).
+
                 NativeAppHostMenu(host: session.appHost)
             } else if session.browser.model.isActive {
-                // ACT-9 (S60 14 c): the browser host menu.
+
                 BrowserStageMenu(browser: session.browser)
             } else {
                 ActivityCloseButton(kind: ActivityStageCopy.kind(kind), activities: session.activities)
@@ -253,8 +250,6 @@ struct ActivityCloseButton: View {
     }
 }
 
-/// The body slot: the game shell, the app host, or the shared browser surface; `ActivityWebBody` covers the moment
-/// before the browser card has a session (S60R 25).
 struct ActivityStageBody: View {
     let kind: String
     let stage: StagePresenter
@@ -266,10 +261,10 @@ struct ActivityStageBody: View {
                 GameShellBody(games: session.games, storeURL: session.storeURL,
                               onShowVideo: { stage.setShowsVideoOverActivity(true) })
             } else if ActivityStageCopy.kind(kind) == .app {
-                // ACT-7 (HD request B7-T1 R2): the one retained web view per app session, its states and the tools.
+
                 NativeAppHostBody(host: session.appHost, onShowVideo: { stage.setShowsVideoOverActivity(true) })
             } else if session.browser.model.isActive {
-                // ACT-9 (S60 14 c): the WebRTC video, the controller's input layer, the address row and the states.
+
                 BrowserStageBody(browser: session.browser, stage: stage, onShowVideo: { stage.setShowsVideoOverActivity(true) })
             } else {
                 ActivityWebBody(kind: kind, stage: stage, session: session)
@@ -280,8 +275,6 @@ struct ActivityStageBody: View {
     }
 }
 
-/// The shared browser before its card has a session (ACT-9): "Opening %@" with a system spinner, or "Couldn't Open %@"
-/// with Retry and Show Video. A live body is the browser surface's (one retained web engine per browser session).
 struct ActivityWebBody: View {
     let kind: String
     let stage: StagePresenter

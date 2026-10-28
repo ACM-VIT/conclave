@@ -47,9 +47,7 @@ open class AndroidAppMain: Application {
         super.onCreate()
         ProcessInfo.launch(applicationContext)
         AppDelegate.shared.onInit()
-        // Prebuild the meeting icon vectors on a background thread now, so the
-        // first sheet/controls render reuses the cached vectors instead of
-        // building ~12 of them on the main thread mid-open (the sheet-content lag).
+
         warmMeetingIcons()
     }
 
@@ -81,7 +79,7 @@ open class MainActivity: AppCompatActivity {
             debugEligible = BuildConfig.DEBUG,
         )
         if (!fixturePresented && nativePremeetingRequested && !productionWiringInstalled) {
-            // Install only when production actually wins the root switch, including after preview Close.
+
             NativeRouteLaunch.installProductionWiring()
             productionWiringInstalled = true
         }
@@ -93,14 +91,12 @@ open class MainActivity: AppCompatActivity {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         UIApplication.launch(this)
-        // SYS-3 (S70 2 a): a local notification's tap that recreated the activity (a no-op for any other intent).
+
         LocalNotifications.handleTap(intent)
-        // Register the MediaProjection consent launcher (must happen at onCreate
-        // before the Activity reaches STARTED) so screen-share can request it.
+
         ScreenCaptureManager.register(this)
         enableEdgeToEdge()
-        // PLAN-screens 2 route switches and S10 L9: Debug-only intent extras, like conclave.hostingPreview. Release
-        // builds never configure the registry, so the legacy root stays the default (ENT-FLIP is a later slice).
+
         val routesDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         NativeRouteLaunch.configure(
             routes = intent?.getStringExtra(NativeRouteLaunch.ROUTES_EXTRA),
@@ -109,7 +105,7 @@ open class MainActivity: AppCompatActivity {
         )
         val premeetingFixture = NativeRouteLaunch.premeetingFixture
         val nativePremeeting = NativeRouteLaunch.usesNativePremeeting
-        // Snapshot launch selectors just as the remembered roots do; onNewIntent does not replace those roots.
+
         val systemFixture = if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra("conclave.systemFixture") else null
         val stageFixture = if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra("conclave.stageFixture") else null
         val peopleFixture = if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra("conclave.peopleFixture") else null
@@ -121,7 +117,7 @@ open class MainActivity: AppCompatActivity {
         updateFixturePresentation()
 
         setContent {
-            // Launch-only proof route. Release and ordinary launches keep the working root.
+
             var showsHostingPreview by remember {
                 mutableStateOf(hostingPreviewRequested)
             }
@@ -129,12 +125,11 @@ open class MainActivity: AppCompatActivity {
             val stageForceScreenReader = remember {
                 stageFixture != null && intent?.getBooleanExtra("conclave.stageForceScreenReader", false) == true
             }
-            // S40 0.9 (HD request B4-T1 R3): the chat fixture layers on the stage fixture and opens Chat.
+
             val chatFixture = remember { if (stageFixture != null) intent?.getStringExtra("conclave.chatFixture") else null }
-            // S60 L6-12 (HD request B7-T5 R5): the Transcript fixture layers on the stage fixture and opens Transcript.
+
             val transcriptFixture = remember { if (stageFixture != null) intent?.getStringExtra("conclave.transcriptFixture") else null }
-            // S50 PL12 (HD request B4-T7 R5): Debug-only People fixture over the stage fixture (standalone presenters;
-            // never WebRTC, audio, capture or network). The stage fixture's pattern and screen-reader extras apply.
+
             val peopleFixturePattern = remember { if (peopleFixture != null) intent?.getStringExtra("conclave.stageFixturePattern") else null }
             val peopleForceScreenReader = remember {
                 peopleFixture != null && intent?.getBooleanExtra("conclave.stageForceScreenReader", false) == true
@@ -143,19 +138,11 @@ open class MainActivity: AppCompatActivity {
             val legacyRoot: @Composable () -> Unit = {
                 saveableStateHolder.SaveableStateProvider(FULL_ROOT_SAVEABLE_KEY) {
                     PresentationRootView(ComposeContext())
-                    // Skip app template: never save or restore SkipUI state.
-                    // SkipUI's rememberSaveable values are Bundle keys into the
-                    // ComposeStateSaver of the ComposeContext that saved them.
-                    // The PiP swap (and activity recreation) rebuilds the root
-                    // with a fresh ComposeContext, so restored keys resolve to
-                    // null and PresentationRoot NPEs on PiP exit or resume.
-                    // Dropping the state makes the root recompose fresh; call
-                    // state lives in MeetingViewModel, not in view state.
+
                     SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }
                 }
             }
-            // WP2-S2b (S70 12 d): the single production feedback root, outside the PiP swap and the route switch,
-            // so neither remounts it (a rotation recreates it with a baselined cursor). Never for a fixture.
+
             val fixturePresented = NativeFixtureLaunch.androidRootPresented(
                 selectorRequested = fixtureSelectorRequested,
                 hostingPreviewRequested = showsHostingPreview,
@@ -168,11 +155,10 @@ open class MainActivity: AppCompatActivity {
                 ConclaveRootFeedback()
             }
             if (nativePremeeting && !fixturePresented) {
-                // ENT-1: the premeeting stream, the second production delivery (launch-time route, never remounted).
+
                 NativePremeetingRootFeedback()
             }
-            // S70 3 d (SYS-4): the legacy PiP surface only while the native call root is not composed; the native root
-            // stays composed in PiP and draws its own PiP slot (renderers survive, PS 9.4).
+
             if (PipController.showsLegacyPipContent) {
                 PipContent()
             } else if (systemFixture != null && !PipController.isInCall) {
@@ -180,24 +166,24 @@ open class MainActivity: AppCompatActivity {
             } else if (peopleFixture != null && !PipController.isInCall) {
                 PeopleFixtureRoot(peopleFixture, peopleFixturePattern, peopleForceScreenReader)
             } else if (stageFixture != null && !PipController.isInCall) {
-                // S30 CL13 (HD request B4-T6 R10): `controls-<state>` values mount the controls fixture.
+
                 if (isControlsFixtureState(stageFixture)) {
                     ControlsFixtureRoot(stageFixture)
                 } else {
                     StageFixtureRoot(stageFixture, stageFixturePattern, stageForceScreenReader, chatFixture, transcriptFixture)
                 }
             } else if (premeetingFixture.isNotEmpty() && !PipController.isInCall) {
-                // S10 L9: standalone presenters; never the view model, a call, media or the network.
+
                 PremeetingFixtureHost(premeetingFixture)
             } else if (showsHostingPreview && !PipController.isInCall) {
-                // The library cannot see the app build type; it also checks FLAG_DEBUGGABLE at run time.
+
                 NativeHostingPreviewRoot(fixtureEligible = BuildConfig.DEBUG, onClose = {
                     showsHostingPreview = false
                     hostingPreviewRequested = false
                     updateFixturePresentation()
                 })
             } else if (nativePremeeting) {
-                // PLAN-screens 2: the native premeeting root (S10 0.4); the legacy root is the interim call content.
+
                 NativePremeetingHost(callContent = legacyRoot)
             } else {
                 legacyRoot()
@@ -213,7 +199,7 @@ open class MainActivity: AppCompatActivity {
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             PipManager.handleActivityResumed(this)
         }
-        // S70 SY18: the volume keys change call volume while a call is live, even during silence.
+
         AudioRouteOwnerBridge.applyVolumeControlStream(this)
         updateFixturePresentation()
         AppDelegate.shared.onResume()
@@ -236,9 +222,7 @@ open class MainActivity: AppCompatActivity {
         if (PipManager.consumeAutoEnterSuppression()) {
             return
         }
-        // Android 12+ can distinguish the Home gesture from an app-launched
-        // chooser itself. Let system auto-enter handle Home so share sheets,
-        // browsers, and permission activities never force a fake PiP state.
+
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
             PipManager.configureForActiveCall(PipController.isInCall, PipController.muted)
             return
@@ -272,9 +256,9 @@ open class MainActivity: AppCompatActivity {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == CallActionDispatcher.ACTION_RETURN_TO_CALL) {
-            // The activity is already in front; record returnToCall against the posted presence session.
+
             CallActionDispatcher.returnToCall(intent.getIntExtra(CallActionDispatcher.EXTRA_PRESENCE_SESSION, -1))
-            // SYS-3: an admission or chat notification's tap also carries its kind and room (Chat at the message).
+
             LocalNotifications.handleTap(intent)
             return
         }
@@ -308,8 +292,7 @@ open class MainActivity: AppCompatActivity {
     @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.S)
     override fun onPictureInPictureUiStateChanged(pipState: android.app.PictureInPictureUiState) {
         super.onPictureInPictureUiStateChanged(pipState)
-        // S70 3 d (D-13): API 35 reports the transition before the window shrinks, so the native root hides chrome
-        // first; API 31 to 34 report stashing only (chrome hides on the mode change there).
+
         val transitioning = android.os.Build.VERSION.SDK_INT >= 35 && pipState.isTransitioningToPip
         PipManager.handlePictureInPictureUiStateChanged(stashed = pipState.isStashed, transitioningToPip = transitioning)
     }

@@ -12,11 +12,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * ENT-5 and ENT-6 (S10 8, 9, 10, 0.8 C3, C6, C18; RECONCILE R4, R46, R48): the transpiled entry and outcome policies
- * and presenter as Kotlin sees them, the Android caches, anchors, transition transform and outcome resource names.
- * Mirrors `T/ENT5EntryTransitionTests.swift` and `T/ENT6OutcomeTests.swift`.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ENT5ENT6BridgeTests {
@@ -120,7 +115,7 @@ class ENT5ENT6BridgeTests {
         assertNull(presenter.outcome)
         assertEquals(LobbyIntent.rejoin, presenter.lobbyStatus?.intent)
         assertEquals(1, presenter.rejoinCommandCount)
-        // Without a context, Back to Home is the only action (one coral).
+
         val bare = presenter()
         inCall(bare)
         bare.apply(PremeetingInputs.make(callSession = 1, phase = MeetingPhaseKind.outcome, outcomeId = 8,

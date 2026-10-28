@@ -181,7 +181,7 @@ private struct AndroidSfuJoinHTTPResponse: Decodable {
     let statusCode: Int
     let body: String
     let setCookieHeaders: [String]
-    /// S10 0.8 C18 (HD request B5-T5 R4): the `Retry-After` header ("" or absent when none).
+
     let retryAfter: String?
 }
 #endif
@@ -233,7 +233,7 @@ enum SfuJoinService {
 
         if !(200...299).contains(statusCode) {
             let errorResponse = try? JSONDecoder().decode(SfuJoinError.self, from: data)
-            // WP2-S2a (S70 7 c, RECONCILE R48): typed status and Retry-After for MeetingErrorClassifier.
+
             let retryAfter = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After")
             throw MeetingHTTPStatusError(
                 statusCode: statusCode,
@@ -303,7 +303,7 @@ enum SfuJoinService {
         let data = responseEnvelope.body.data(using: String.Encoding.utf8) ?? Data()
         if !(200...299).contains(responseEnvelope.statusCode) {
             let errorResponse = try? JSONDecoder().decode(SfuJoinError.self, from: data)
-            // WP2-S2a and S10 0.8 C18 (HD request B5-T5 R4): typed status and Retry-After from the Android envelope.
+
             throw MeetingHTTPStatusError(
                 statusCode: responseEnvelope.statusCode,
                 retryAfterSeconds: MeetingErrorClassifier.retryAfterSeconds(header: responseEnvelope.retryAfter),

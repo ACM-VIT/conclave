@@ -1,11 +1,5 @@
 import Foundation
 
-// S60 L6-12 and S20 SL14 (STG-9, ACT-1, ACT-2): activity fixture states layered on the stage fixture. No socket,
-// network, audio or capture: the launcher and the game shell receive scripted inputs, and their commands land in a
-// recording fake owner (`ActivityFixtureOwner`, the `FakeActivityOwner` of L6-12) that answers the way the server
-// would where a fixture needs it. Raw values are launch values (`CONCLAVE_STAGE_FIXTURE` / `conclave.stageFixture`);
-// the stage fixture adds them through HD request B4-T8 R8 and calls `ActivityFixtureScript.apply(named:...)`.
-
 enum ActivityFixtureState: String, CaseIterable, Equatable {
     case gameTrivia6 = "game-trivia-6"
     case appAndGame = "app-and-game"
@@ -26,16 +20,15 @@ enum ActivityFixtureState: String, CaseIterable, Equatable {
     case activitiesRecovering = "activities-recovering"
 }
 
-/// Records what a real core would perform and answers like the server where the fixture needs it.
 @MainActor
 final class ActivityFixtureOwner {
     private(set) var activityCommands: [String] = []
     private(set) var gameEmits: [String] = []
-    /// When false, moves stay unanswered so the 10 s timeout cell can run (S60 8 l 8).
+
     var acknowledgesMoves = true
-    /// ACT-7 (HD request B7-T1 R5): the app host fixture's recording owner (Close, Lock Editing, relayed bytes).
+
     let appHost = AppHostFixtureOwner()
-    /// ACT-9 (HD request B8-T1 R3): the browser card fixture's recording owner (navigate, audio, close, refresh).
+
     let browser = BrowserFixtureOwner()
     var failsEnd = false
 
@@ -60,7 +53,6 @@ final class ActivityFixtureOwner {
         gameEmits.append(event)
     }
 
-    /// `game.emits` readout (L6-12): count and the last payload.
     func emitsReadout() -> String {
         if gameEmits.isEmpty { return "none" }
         return String(gameEmits.count) + " last=" + (gameEmits.last ?? "")
@@ -80,12 +72,9 @@ enum ActivityFixtureScript {
         ActivityFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Whether the fixture opens the Activities panel over the stage (the `activities-*` panel cells).
     static func opensActivitiesPanel(_ state: ActivityFixtureState) -> Bool {
         state.rawValue.hasPrefix("activities-")
     }
-
-    // MARK: Catalog (the nine server games, G/*.ts metadata and options)
 
     static func choice(_ id: String, _ label: String) -> GameChoiceModel { GameChoiceModel(id: id, label: label) }
 
@@ -154,24 +143,19 @@ enum ActivityFixtureScript {
         ]
     }
 
-    // MARK: Stage layer
-
-    /// What the activity layer adds to the stage fixture inputs (presence and names only, S20 11 j).
     static func stageInputs(named raw: String, base: StageInputs, appId appOverride: String = "") -> StageInputs {
-        // ACT-7 app host states (HD request B7-T1 R5) show the app card like `app-opening`; ACT-8 states name their app
-        // (HD request B8-T2 R6).
+
         if AppHostFixtures.isFixture(raw) {
             return stageInputs(named: ActivityFixtureState.appOpening.rawValue, base: base, appId: AppHostFixtures.appId(named: raw))
         }
-        // ACT-9 browser states (HD request B8-T1 R3): the browser is live on the stage (presence only).
+
         if BrowserStageFixtures.isFixture(raw) { return BrowserStageFixtures.stageInputs(named: raw, base: base) }
-        // ACT-3 prompt game states (HD request B6-T7 R4), ACT-4 Wordle states (HD request B7-T7 R4), ACT-5 chess and
-        // ACT-6 Zip states (HD requests B8-T3 R5, B8-T4 R8); `base` for any other name.
+
         guard let state = state(named: raw) else {
             if WordleFixtures.state(named: raw) != nil { return WordleFixtures.stageInputs(named: raw, base: base) }
-            // ACT-5 chess states (HD request B8-T3 R5).
+
             if ChessFixtures.state(named: raw) != nil { return ChessFixtures.stageInputs(named: raw, base: base) }
-            // ACT-6 Zip states (HD request B8-T4 R8).
+
             if ZipFixtures.state(named: raw) != nil { return ZipFixtures.stageInputs(named: raw, base: base) }
             return PromptGameFixtures.stageInputs(named: raw, base: base)
         }
@@ -211,8 +195,6 @@ enum ActivityFixtureScript {
             isMediaPending: base.isMediaPending, joinedAtMillis: base.joinedAtMillis, alwaysShowControls: base.alwaysShowControls,
             isEffectsOpen: base.isEffectsOpen)
     }
-
-    // MARK: Launcher and shell layers
 
     static func activitiesInputs(_ state: ActivityFixtureState, appId appOverride: String = "") -> ActivitiesInputs {
         let host = state != .activitiesParticipantIdle && state != .gameSpectator
@@ -314,36 +296,32 @@ enum ActivityFixtureScript {
         }
     }
 
-    /// Feeds the activity session for a fixture name and wires its commands to the recording owner. Returns nil for a
-    /// name that is not an activity fixture (the stage fixture keeps its own state).
     @discardableResult
     @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ActivityFixtureState? {
         if BrowserStageFixtures.isFixture(raw) {
-            // ACT-9 browser states (HD request B8-T1 R3): the scripted browser card.
+
             BrowserStageFixtures.apply(named: raw, presenter: session.browser, owner: owner.browser)
             return nil
         }
         if AppHostFixtures.isFixture(raw) {
-            // ACT-7 app host states (HD request B7-T1 R5): the `app-opening` layer, then the scripted host.
+
             apply(named: ActivityFixtureState.appOpening.rawValue, session: session, owner: owner)
             let fixtureApp = AppHostFixtures.appId(named: raw)
             if fixtureApp != "whiteboard" {
-                // ACT-8 (HD request B8-T2 R6): the launcher names the fixture's app.
+
                 session.applyActivities(activitiesInputs(ActivityFixtureState.appOpening, appId: fixtureApp))
             }
             AppHostFixtures.apply(named: raw, presenter: session.appHost, owner: owner.appHost)
             return nil
         }
         guard let state = state(named: raw) else {
-            // ACT-3 prompt game states (HD request B6-T7 R4), ACT-4 Wordle states (HD request B7-T7 R4), ACT-5 chess and
-            // ACT-6 Zip states (HD requests B8-T3 R5, B8-T4 R8); nothing for any other name (each returns nil for a name
-            // it does not own).
+
             PromptGameFixtures.apply(named: raw, session: session, owner: owner)
             WordleFixtures.apply(named: raw, session: session, owner: owner)
-            // ACT-5 chess states (HD request B8-T3 R5); nil for any other name.
+
             ChessFixtures.apply(named: raw, session: session, owner: owner)
-            // ACT-6 Zip states (HD request B8-T4 R8); nil for any other name.
+
             ZipFixtures.apply(named: raw, session: session, owner: owner)
             return nil
         }

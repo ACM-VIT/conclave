@@ -1,18 +1,11 @@
 import Foundation
 import Observation
 
-// S50 0.5 and 11 (PPL-6, transpiled): the Webinar Q&A contract. The core pushes `QaInputs` (PH7 entries, PH10 Q&A
-// state, the viewer's role and the role-appropriate unseen counter); `WebinarQAPresenter` orders them with
-// `QaOrderingPolicy` (PL9) into one observable entry per question, so a vote change re-evaluates one row. Everything
-// crosses into handwritten Kotlin: String raw-value enums, scalar structs and arrays of structs, no associated values,
-// no tuples (S1C 3.6).
-
 enum QaStatus: String, CaseIterable, Equatable {
     case pending, answering, answered, dismissed
 
-    /// Open = pending and answering (the host filter, S50 PL9).
     var isOpen: Bool { self == QaStatus.pending || self == QaStatus.answering }
-    /// Published to the whole room (SFU `isPublishedQaStatus`).
+
     var isPublished: Bool { self == QaStatus.answering || self == QaStatus.answered }
 }
 
@@ -21,26 +14,23 @@ enum QaSort: String, CaseIterable, Equatable {
 }
 
 enum QaHostFilter: String, CaseIterable, Equatable {
-    // `open` is a Kotlin modifier keyword, so the Open filter is `openQuestions` (raw value unchanged).
+
     case openQuestions = "open"
     case answered, dismissed
 }
 
-/// The viewer's Q&A role (S50 0.5 `QaPanelSnapshot.role`; RECONCILE R18: hosts moderate, attendees ask).
 enum QaRole {
     static let attendee = "attendee"
     static let host = "host"
     static let none = "none"
 }
 
-/// `QaPanelSnapshot.availability` (S50 11 f).
 enum QaAvailability {
     static let available = "available"
-    /// A viewer who became host or co-host after joining a webinar gets no snapshot until PH18 h.
+
     static let needsRejoin = "needsRejoin"
 }
 
-/// `QaPanelSnapshot.composerReason` (S50 11 f).
 enum QaComposerReason {
     static let none = "none"
     static let qaOff = "qaOff"
@@ -48,14 +38,12 @@ enum QaComposerReason {
     static let offline = "offline"
 }
 
-/// `QaPanelSnapshot.submitPhase`.
 enum QaSubmitPhase {
     static let idle = "idle"
     static let sending = "sending"
     static let failed = "failed"
 }
 
-/// Moderation actions as the SFU spells them (`webinar:qa:moderate`, webinarInteractionHandlers.ts).
 enum QaModerationAction {
     static let answering = "answering"
     static let answered = "answered"
@@ -63,7 +51,6 @@ enum QaModerationAction {
     static let reopen = "reopen"
 }
 
-/// Inline failure slots of the Q&A panel (S50 0.5 `sourceKey`).
 enum QaFieldID {
     static let composer = "qaComposer"
     static let answerPrefix = "qaAnswer:"
@@ -71,7 +58,6 @@ enum QaFieldID {
     static func answer(_ questionId: String) -> String { answerPrefix + questionId }
 }
 
-/// The SFU limits (webinarInteractionHandlers.ts): questions 2 to 500 characters, written answers up to 1,000.
 enum QaLimits {
     static let questionMin = 2
     static let questionMax = 500
@@ -80,14 +66,12 @@ enum QaLimits {
     static let answerCounterFrom = 900
 }
 
-/// One question as the core sees it (`WebinarQaEntry`, SM), with the viewer's own vote folded in (the SFU projects
-/// change events without per-viewer vote state, so the core tracks its own votes, webinarNotifications.ts).
 struct QaEntryInput: Equatable {
     let id: String
     let userId: String
     let askerName: String
     let question: String
-    /// `QaStatus` raw value.
+
     let status: String
     let askedAtMillis: Double
     let upvotes: Int
@@ -104,25 +88,24 @@ struct QaEntryInput: Equatable {
     }
 }
 
-/// The schema boundary between the core and the Q&A presenter (S50 0.5, PH7 hook: Q&A fields refresh only this child).
 struct QaInputs: Equatable {
     let callSession: Int
     let attempt: Int
-    /// Your canonical id, so `isMine` compares against the entry's userId.
+
     let localUserId: String
-    /// A `QaRole` value.
+
     let role: String
     let isWebinarEnabled: Bool
-    /// PH10 `isWebinarQaEnabled`.
+
     let isQaEnabled: Bool
-    /// PH7: the first `webinar:qaSnapshot` of this call session arrived.
+
     let isSnapshotReceived: Bool
-    /// You gained host rights after the join (the SFU sends no snapshot at promotion until PH18 h).
+
     let becameHostAfterJoin: Bool
-    /// A `MeetingBlockedReason` raw value from the S1 phase and the network.
+
     let blockedReason: String
     let entries: [QaEntryInput]
-    /// The role-appropriate PH7 counter (RECONCILE R18: one derived `webinarQaUnseen`).
+
     let unseen: Int
 
     static func make(callSession: Int = 0, attempt: Int = 0, localUserId: String = "", role: String = QaRole.none,
@@ -134,11 +117,9 @@ struct QaInputs: Equatable {
                  becameHostAfterJoin: becameHostAfterJoin, blockedReason: blockedReason, entries: entries, unseen: unseen)
     }
 
-    /// Q&A is offered at all: webinar mode and Attendee Q&A on, and you are a host or an attendee (R18).
     var isAvailableToRole: Bool { isWebinarEnabled && isQaEnabled && role != QaRole.none }
 }
 
-/// One question row (S50 0.5).
 struct QaQuestionModel: Equatable, Identifiable {
     let id: String
     let askerName: String
@@ -150,9 +131,9 @@ struct QaQuestionModel: Equatable, Identifiable {
     let hasUpvoted: Bool
     let answerText: String
     let answeredByName: String
-    /// upvote, answering, answered, dismissed, reopen, answerText or "".
+
     let pendingAction: String
-    /// A `MeetingBlockedReason` raw value: upvotes and moderation are disabled with it (S50 11 f).
+
     let blockedReason: String
 
     static func placeholder(_ id: String) -> QaQuestionModel {
@@ -164,7 +145,6 @@ struct QaQuestionModel: Equatable, Identifiable {
     var isEnabled: Bool { blockedReason == MeetingBlockedReason.none.rawValue && pendingAction.isEmpty }
 }
 
-/// One observable question (S50 11 k): a vote change re-evaluates one row, on both platforms.
 @MainActor
 @Observable
 final class QaQuestionEntry {
@@ -179,7 +159,6 @@ final class QaQuestionEntry {
     }
 }
 
-/// `QaQuestionEntry` per question id, created on demand and pruned with the entries.
 @MainActor
 final class QaQuestionStore {
     private var entries: [String: QaQuestionEntry] = [:]
@@ -223,31 +202,30 @@ final class QaQuestionStore {
     var count: Int { entries.count }
 }
 
-/// The panel structure (S50 0.5); rows live in `QaQuestionStore`.
 struct QaPanelSnapshot: Equatable {
     let revision: Int
-    /// A `QaRole` value.
+
     let role: String
     let isEnabled: Bool
     let isLoaded: Bool
-    /// A `QaAvailability` value.
+
     let availability: String
-    /// `QaSort` raw values: attendee [top, recent, mine]; host [top, recent].
+
     let availableSorts: [String]
     let sort: QaSort
     let filter: QaHostFilter
-    /// Ordered by `QaOrderingPolicy`.
+
     let questionIds: [String]
-    /// Host: open, answered, dismissed.
+
     let counts: [Int]
     let composerEnabled: Bool
-    /// A `QaComposerReason` value.
+
     let composerReason: String
-    /// A `QaSubmitPhase` value.
+
     let submitPhase: String
-    /// Bumps on every acknowledged question, so the composer clears its own text once (S50 11 c).
+
     let submitSerial: Int
-    /// The question a written answer was posted to, and a serial that bumps on each one (the iOS page pops, PL15).
+
     let answeredQuestionId: String
     let answerSerial: Int
 
@@ -274,12 +252,10 @@ struct QaPanelSnapshot: Equatable {
     }
 }
 
-/// Plain class, not observed (S50 0.5): drafts that survive panel close; cleared by `reset()` and on success.
 final class QaDrafts {
     var question = ""
     var answers: [String: String] = [:]
 
-    /// The draft for one question ("" when none), for the platform answer fields.
     func answer(_ questionId: String) -> String {
         answers[questionId] ?? ""
     }

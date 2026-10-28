@@ -1,10 +1,6 @@
 #if os(iOS) && !SKIP
 import Foundation
 
-// S60 4 g (SET-6), L6-14 on iOS: one exhaustive mapping from the Effects vocabulary (tabs, catalog ids, camera states,
-// issues) to String Catalog keys in Apple title case (Q13). Catalog names stay verbatim ("Camper vacation"). The S60
-// table names `SettingsCopy+iOS.swift` for Effects too; that file belongs to SET-3 this batch, so the Effects half lives
-// here (HD record B7-T2).
 enum EffectsCopy {
     static func title() -> String {
         ConclaveStrings.text("Effects")
@@ -18,7 +14,6 @@ enum EffectsCopy {
         }
     }
 
-    /// A tile's name: the catalog title keyed by id; personal images read "Your Image %lld".
     static func itemTitle(_ item: EffectItem) -> String {
         if item.kind == EffectKind.personal {
             return ConclaveStrings.format("Your Image %lld", item.personalIndex + 1)
@@ -43,7 +38,6 @@ enum EffectsCopy {
         }
     }
 
-    /// The Appearance rows' detail lines (4 g).
     static func appearanceDetail(id: String) -> String {
         switch id {
         case EffectsCatalog.studioLighting: return ConclaveStrings.text("Makes it easier to see you against a bright background")
@@ -52,7 +46,6 @@ enum EffectsCopy {
         }
     }
 
-    /// The grid section a Backgrounds tile sits in at the large detent (4 c): Blur, Backgrounds, Personal.
     static func sectionTitle(_ kind: EffectKind) -> String {
         switch kind {
         case .none, .blur: return ConclaveStrings.text("Blur")
@@ -61,7 +54,6 @@ enum EffectsCopy {
         }
     }
 
-    /// The camera row (4 c, f); nil while the camera is on.
     static func cameraLine(_ camera: EffectsCameraState) -> String? {
         switch camera {
         case .on: return nil
@@ -73,7 +65,6 @@ enum EffectsCopy {
         }
     }
 
-    /// The inline error row (4 f, g); nil without an issue.
     static func issue(_ issue: EffectsIssue) -> String? {
         switch issue {
         case .none: return nil
@@ -86,13 +77,11 @@ enum EffectsCopy {
         }
     }
 
-    /// The tile value (4 i): "Applying" while processing, "Selected" when chosen, empty otherwise.
     static func tileValue(_ item: EffectItem) -> String {
         if item.isProcessing { return ConclaveStrings.text("Applying") }
         return item.isSelected ? ConclaveStrings.text("Selected") : ""
     }
 
-    /// Why a tile cannot be chosen right now (4 c, f); nil when it can.
     static func blockedReason(_ item: EffectItem) -> String? {
         guard item.isBlockedBySystem else { return nil }
         if item.kind == EffectKind.blur { return ConclaveStrings.text("Portrait is on in Video Effects.") }

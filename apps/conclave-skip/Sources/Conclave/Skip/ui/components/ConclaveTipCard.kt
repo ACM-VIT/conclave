@@ -24,20 +24,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
-/*
- * The one-time tip (F00 C25; RECONCILE R39): an inline dismissible card inside the content of the panel where the
- * feature lives, never a popup, tooltip or coachmark over the stage or the control bar. The C09 surface treatment:
- * surfaceContainerHigh, medium shape, a 1 dp outlineVariant border, the concept glyph in onSurfaceVariant, the title
- * in titleSmall and the body in bodyMedium. The text merges into one node read in content order (never announced on
- * appear, never focused); Dismiss is its own 48 dp button. Dismissal is stored once per tip id under
- * `conclave.tip.<id>` (OneTimeTipPolicy.storeKey) and the card is never composed again on this install. The store is
- * the app's SharedPreferences file "conclave.tips" (DataStore is not a declared dependency of this module); one read
- * per composition of the card, no timer. The hosting screen owns the copy and decides eligibility with
- * OneTimeTipPolicy.isEligible (at most one tip per panel presentation, hidden while the panel is loading, empty for
- * another reason or in an error state).
- */
-
-/** Dismissed tips, one Boolean per tip id. */
 internal object ConclaveTipStore {
     const val PREFERENCES = "conclave.tips"
 
@@ -49,16 +35,11 @@ internal object ConclaveTipStore {
             .putBoolean(OneTimeTipPolicy.storeKey(id), true).apply()
     }
 
-    /** Debug galleries only: shows every tip again. */
     fun reset(context: Context) {
         context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit().clear().apply()
     }
 }
 
-/**
- * The inline tip card for tip [id] (a OneTimeTipID raw value). It shows until dismissed, then stores the dismissal,
- * removes itself (instant, no exit motion) and calls [onDismiss].
- */
 @Composable
 internal fun ConclaveTipCard(
     id: String, title: String, body: String, icon: ImageVector, identifier: String, modifier: Modifier = Modifier,

@@ -3,18 +3,8 @@ import SwiftUI
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
 
-// S30 1 c and CC16 (CTL-2): the auto-hide hold for system menus opened from the bar. SwiftUI `Menu` and `contextMenu`
-// report no open or close, so a touch that begins inside the bar sets the stage's `bar.hold` transient id, which keeps
-// chrome visible while the host Leave menu (and later the Mic, Camera and More menus) is open. The controls presenter
-// clears it on its next action (`StagePresenter.noteControlAction()`), and a stage tap or a panel open clears it too; a
-// menu dismissed without a choice keeps chrome up until the next stage tap, the safe failure (1 c).
-//
-// One window-level recognizer per bar: it never cancels, delays or claims a touch (`cancelsTouchesInView` false, both
-// delays off, simultaneous with every recognizer) and fails right after `touchesBegan`. The bar installs it from a
-// zero-interaction background view with the bar's own frame, so "inside the bar" needs no global geometry.
-
 extension View {
-    /// Installs the bar touch hold behind this view (the control bar row or column).
+
     func callControlsBarTouchHold(_ stage: StagePresenter) -> some View {
         background {
             BarTouchObserver(onTouchInside: {
@@ -40,7 +30,6 @@ private struct BarTouchObserver: UIViewRepresentable {
     }
 }
 
-/// Takes no touches itself; attaches the recognizer to its window while it is in one.
 private final class BarTouchHostView: UIView {
     var onTouchInside: (() -> Void)?
     private var recognizer: BarTouchRecognizer?

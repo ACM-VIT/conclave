@@ -21,15 +21,6 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import skip.foundation.UserDefaults
 
-/**
- * SYS-3 (S70 2 l2 to l5, SY19) against the transpiled NotificationPermissionStatePolicy, NotificationPrimingPolicy,
- * LocalNotificationPostPolicy and SystemNotifications presenter (a recording LocalNotificationCenter stands in for the
- * platform), plus the handwritten Android bridge: the two lazy channels, the admission notification, the per-room
- * MessagingStyle notification, the tap intent and the notification settings intents. The Swift half is
- * T/SYS3NotificationsTests.swift; the same vectors give the same results on both platforms. App-module resource names
- * resolve to 0 in this library-module run, so a recording resolver stands in; resolved copy, icon and color on a real
- * system are the silent AVD cell (S70 2 l1, the system fixture's sys.notifications posts).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class SYS3NotificationsBridgeTests {
@@ -71,7 +62,6 @@ class SYS3NotificationsBridgeTests {
         }
     }
 
-    /** Records every call the presenter makes into the platform (the S70 2 l3 fake center). */
     private class Recorder {
         val requests = mutableListOf<String>()
         val posted = mutableListOf<LocalNotificationRequest>()
@@ -130,8 +120,6 @@ class SYS3NotificationsBridgeTests {
             roomLabel = ROOM, callSession = 4, presenceSession = 7, previousSenderId = if (alertsOnce) sender else "")
     }
 
-    // MARK: S70 2 l2: the permission states and the banner
-
     @Test
     fun permissionStatesAndPrimingMatchSwift() {
         assertEquals("conclave.pref.notificationsPermissionAsked", NotificationPermissionStatePolicy.askedPreferenceKey)
@@ -180,10 +168,10 @@ class SYS3NotificationsBridgeTests {
         notifications.requestPermission(reason = NotificationRequestReason.call)
         assertEquals(listOf("call"), recorder.requests.toList())
         assertFalse(notifications.snapshot.showsPrimingBanner)
-        // Dropped before the person answered: the asked flag stays unwritten.
+
         notifications.permissionAnswered(granted = false, answered = false)
         assertFalse(NotificationPreferences.permissionAsked(defaults = defaults))
-        // Answered: written; rationale tells denied from permanently denied.
+
         notifications.requestPermission(reason = NotificationRequestReason.messages)
         notifications.permissionAnswered(granted = false, answered = true)
         assertTrue(NotificationPreferences.permissionAsked(defaults = defaults))
@@ -192,14 +180,12 @@ class SYS3NotificationsBridgeTests {
         notifications.statusRead(reading(rationale = false))
         assertEquals(NotificationPermissionState.permanentlyDenied, notifications.snapshot.permission)
         assertTrue(notifications.snapshot.offersOpenSettings)
-        // A later call in the same process: no banner again.
+
         notifications.apply(SystemNotificationInputs.none)
         notifications.apply(live(session = 2))
         notifications.stageEntryFinished()
         assertFalse(notifications.snapshot.showsPrimingBanner)
     }
-
-    // MARK: S70 2 l3, l4: what posts
 
     @Test
     fun privateMessagesAndMentionsPostPerRoomAndAlertOnlyForANewSender() {
@@ -215,7 +201,7 @@ class SYS3NotificationsBridgeTests {
         assertEquals(listOf("chat.m0", "chat.m1", "chat.m2", "chat.m3"), recorder.posted.map { it.identifier })
         assertEquals(listOf(false, true, false, false), recorder.posted.map { it.alertsOnce })
         assertTrue(recorder.posted.all { it.channelId == "conclave_messages" && it.threadIdentifier == "meeting.$ROOM" })
-        // Active, an attendee or the blocked channel: nothing more.
+
         notifications.apply(live(active = true))
         notifications.chatMessageForYou(LocalChatMessageInput.make(messageId = "x1", senderId = "a", text = "x", isPrivate = true))
         notifications.apply(live(active = false, attendee = true))
@@ -224,12 +210,12 @@ class SYS3NotificationsBridgeTests {
         notifications.statusRead(reading(granted = true, messages = false))
         notifications.chatMessageForYou(LocalChatMessageInput.make(messageId = "x3", senderId = "a", text = "x", isPrivate = true))
         assertEquals(4, recorder.posted.size)
-        // Chat in PiP counts as not visible.
+
         notifications.statusRead(reading(granted = true))
         notifications.apply(live(active = false, pip = true, chatVisible = true))
         notifications.chatMessageForYou(LocalChatMessageInput.make(messageId = "x4", senderId = "a", text = "x", isPrivate = true))
         assertEquals(5, recorder.posted.size)
-        // The call ended: everything for the room goes.
+
         notifications.apply(SystemNotificationInputs.none)
         assertTrue(recorder.removed.last().startsWith("$ROOM:"))
     }
@@ -248,8 +234,6 @@ class SYS3NotificationsBridgeTests {
         notifications.apply(live(session = 4, active = true))
         assertEquals("$ROOM:admitted.4", recorder.removed.last())
     }
-
-    // MARK: The bridge (S70 2 d)
 
     @Test
     fun channelsAreCreatedLazilyWithHighImportanceAndABlockedChannelReadsOff() {
@@ -321,7 +305,7 @@ class SYS3NotificationsBridgeTests {
         assertEquals(lines.size, style.messages.size)
         val fresh = LocalNotificationBuilder.messages(context, mention("m11"), lines, resolver)
         assertTrue((fresh.flags and Notification.FLAG_ONLY_ALERT_ONCE) == 0)
-        // A photo without a caption names its kind, never a file name.
+
         val photo = LocalNotificationPostPolicy.messageRequest(kind = LocalNotificationKind.privateMessage,
             message = LocalChatMessageInput.make(messageId = "p1", senderId = "avery", senderName = "Avery Lee", text = "",
                 bodyKind = "photo", isPrivate = true),
@@ -358,10 +342,10 @@ class SYS3NotificationsBridgeTests {
         val channel = PermissionHelper.notificationSettingsIntent("com.acmvit.conclave", "conclave_messages")
         assertEquals(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS, channel.action)
         assertEquals("conclave_messages", channel.getStringExtra(Settings.EXTRA_CHANNEL_ID))
-        // Below API 33 notifications are an implicit grant.
+
         assertEquals("granted", PermissionHelper.notificationsPermissionState())
         assertFalse(PermissionHelper.showsNotificationsRationale())
-        // The call notification's tap (no SYS-3 kind) is not one of ours.
+
         LocalNotifications.handleTap(Intent(CallActionDispatcher.ACTION_RETURN_TO_CALL))
     }
 

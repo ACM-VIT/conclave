@@ -9,14 +9,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * STG-2 through the transpiled tile policies (the Swift half is T/STG2TileTests.swift): the tile menu items per role
- * with the Android rule (no Flip item, S20 6 d), the people sections after the stage section without their Pin
- * (RECONCILE R19), disabled items kept with their reason on Android, the shared dispatcher, the camera-on featured
- * speaker and the spotlight main, the pin announcements, the S20 4 rail geometry, the tile overlay decisions and the
- * reconnect reasons, with the same results as Swift. Pure: no composition (PanelStageBridgeTests owns the one
- * composition per JVM).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class STG2TileBridgeTests {
@@ -49,7 +41,7 @@ class STG2TileBridgeTests {
             items(context(role = StageSlotRole.spotlightMain, kind = StageKind.spotlight, pinned = true)))
         assertEquals(listOf(TileMenuItemId.pin, TileMenuItemId.cropToFill), items(context(fit = StageVideoFit.fit)))
         assertEquals(listOf(TileMenuItemId.pin), items(context(cameraOff = true)))
-        // Your own tile on Android: no Flip item (the top row has Flip).
+
         assertEquals(listOf(TileMenuItemId.pin, TileMenuItemId.showFullVideo),
             items(context(slotId = "p:you", userId = "you", local = true, canFlip = true)))
         assertEquals(listOf(TileMenuItemId.minimizeSelfView, TileMenuItemId.showFullVideo),
@@ -57,7 +49,7 @@ class STG2TileBridgeTests {
                 canFlip = true)))
         assertEquals(listOf(TileMenuItemId.showSelfView),
             items(context(slotId = "p:you", userId = "you", role = StageSlotRole.selfMinimized, kind = StageKind.oneOnOne, local = true)))
-        // iOS rule through the same policy.
+
         assertEquals(listOf(TileMenuItemId.pin, TileMenuItemId.flipCamera, TileMenuItemId.showFullVideo),
             items(context(slotId = "p:you", userId = "you", local = true, canFlip = true, offersFlip = true)))
         assertTrue(items(context(slotId = "share:r1", role = StageSlotRole.share, kind = StageKind.presentation)).isEmpty())
@@ -84,11 +76,11 @@ class STG2TileBridgeTests {
         assertEquals(reason, sections[1].items[0].disabledReason)
         assertTrue(ConclaveMenuPolicy.destructiveItemsAreLast(sections))
         for (section in sections) assertTrue(section.id, ConclaveMenuPolicy.isIconConsistent(section))
-        // The iOS context menu hides the disabled item; actions skip it on both platforms.
+
         assertEquals(listOf(TileMenuPolicy.stageSectionId, "ppl.0", "ppl.3"),
             TileMenuPolicy.contextMenuSections(sections).toList().map { it.id })
         assertEquals(listOf("pin", "showFullVideo", "message", "remove"), TileMenuPolicy.accessibilityItems(sections).toList().map { it.id })
-        // The Android helper builds the same menu.
+
         val menu = stageTileMenu(StageSlot(id = "p:r1", role = StageSlotRole.grid, userId = "r1", fit = StageVideoFit.fill),
             TileChromeModel(userId = "r1", displayName = "Avery", avatarSeed = "Avery:r1", isLocal = false, isMuted = false,
                 isCameraOff = false, isHandRaised = false, isPinned = false, isPresenting = false, isWeakConnection = false,
@@ -183,7 +175,7 @@ class STG2TileBridgeTests {
         val pinnedModel = TileChromeModel(userId = "r1", displayName = "Avery", avatarSeed = "Avery:r1", isLocal = false, isMuted = false,
             isCameraOff = false, isHandRaised = false, isPinned = true, isPresenting = true, isWeakConnection = true, isReconnecting = false,
             reconnectReason = "", isHost = false, isVoiceAgent = false)
-        // 48 dp target centered on the pinned badge with two badges after it: 8 + 2 x 28 + 12 - 24.
+
         assertEquals(52.0, TileFeaturePolicy.unpinTargetTrailingInset(model = pinnedModel, density = TileChromeDensity.spotlight,
             targetSize = TileFeaturePolicy.unpinTargetAndroid), 0.001)
         assertEquals(0.0, TileFeaturePolicy.unpinTargetTopInset(density = TileChromeDensity.spotlight,

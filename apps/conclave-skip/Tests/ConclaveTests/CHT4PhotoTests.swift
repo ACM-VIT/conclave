@@ -6,10 +6,6 @@ import ImageIO
 #endif
 @testable import Conclave
 
-/// CHT-4 (OUT/PLAN-screens.md section 5; S40 3 photo rows, 6 photos, 9, 0.8 CH6, CH18, Q5, Q7; S70 8 pickers): the
-/// shared prepare step (sniffing, the HEIC and large-photo transcode, the failure mapping), the presenter's attachment
-/// flow and send rules, the fixed photo geometry, the viewer containers and the build declarations (Coil, the
-/// FileProvider and the Photo Picker backport). The Kotlin half is T/Skip/CHT4CHT5BridgeTests.kt.
 @MainActor
 struct CHT4PhotoTests {
     private func header(_ bytes: [UInt8]) -> [UInt8] {
@@ -21,8 +17,6 @@ struct CHT4PhotoTests {
     private func ascii(_ text: String) -> [UInt8] {
         Array(text.utf8)
     }
-
-    // MARK: CH6 sniffing and the plan
 
     @Test func sniffingRecognizesTheFiveServerTypesAndHeic() {
         #expect(ChatPhotoPolicy.sniff(header([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) == "image/png")
@@ -68,8 +62,6 @@ struct CHT4PhotoTests {
         #expect(ChatPhotoFailurePolicy.isRetryable(.photoUnavailable) && !ChatPhotoFailurePolicy.isRetryable(.photoBlocked))
     }
 
-    // MARK: CH6 prepare on the host (ImageIO)
-
     @Test func prepareKeepsAFittingJpegRefusesUnknownBytesAndLargeGifs() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cht4-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -95,8 +87,7 @@ struct CHT4PhotoTests {
     }
 
     #if canImport(ImageIO)
-    /// Writes a 4032 by 3024 noise image (noise compresses badly, so the file is large) in `type`; false when the host
-    /// has no encoder for it.
+
     private func noiseImage(type: String, to url: URL) -> Bool {
         let width = 4032
         let height = 3024
@@ -123,13 +114,12 @@ struct CHT4PhotoTests {
         return CGImageDestinationFinalize(destination)
     }
 
-    /// S40 0.8 CH6 test: a HEIC above 6 MB becomes a JPEG under 6 MB (the one shared test for both platforms' rule).
     @Test func aLargeHeicBecomesAJpegUnderSixMegabytes() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cht4-heic-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let heic = folder.appendingPathComponent("IMG_0002.heic")
-        // A host without a HEIC encoder cannot make the input; the rule is then covered by the PNG case below.
+
         guard noiseImage(type: "public.heic", to: heic) else { return }
         let prepared = ChatPhotoPreparer.prepareNow(fileURL: heic.absoluteString, mimeType: "image/heic", fileName: "IMG_0002.HEIC",
                                                     outputDirectory: folder.path)
@@ -156,8 +146,6 @@ struct CHT4PhotoTests {
         #expect(prepared.byteCount <= ChatPhotoPolicy.maxBytes)
     }
     #endif
-
-    // MARK: The presenter's attachment flow (6 f)
 
     private func ready(_ url: String) -> ChatAttachmentState {
         ChatAttachmentState(phase: .ready, progress: 1, thumbnailKey: url, failure: .none)
@@ -188,7 +176,7 @@ struct CHT4PhotoTests {
         #expect(chat.send(text: "") == .dispatched, "a ready photo sends alone")
         #expect(log.last?.kind == .send && log.last?.fileURL == "file:///cache/chat-photos/a.jpg" && log.last?.text == "")
         #expect(chat.composer.attachment.phase == .none, "the chip leaves with the send")
-        // Remove and Try Again reach the core with the photo.
+
         let failed = ChatAttachmentState(phase: .failed, progress: 0, thumbnailKey: "file:///cache/chat-photos/b.jpg", failure: .photoUnavailable)
         chat.apply(inputs(attachment: failed), change: .attachment)
         chat.retryAttachment()
@@ -232,8 +220,6 @@ struct CHT4PhotoTests {
         #expect(ChatComposerPolicy.photoRouteFailure(.publicText) == .none)
     }
 
-    // MARK: Geometry, containers and the main-actor rule (3 c, 9 c, CH6)
-
     @Test func mediaKeepsFixedGeometry() {
         #expect(ChatMediaGeometry.photoWidth == 240 && ChatMediaGeometry.photoHeight == 180)
         #expect(ChatMediaGeometry.gifHeight(aspect: 1.8) == 122 && ChatMediaGeometry.gifHeight(aspect: 0.6) == 300)
@@ -264,11 +250,10 @@ struct CHT4PhotoTests {
         #expect(androidRow.contains("ChatMediaGeometry.photoWidth.dp") && androidRow.contains("chat_photo_failed"))
     }
 
-    /// CH6 test: no image bytes cross the main actor; every caller hands over a file.
     @Test func everyPhotoReachesThePresenterAsAFile() throws {
         let composer = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatComposer+iOS.swift")
         #expect(composer.contains("FileRepresentation(importedContentType: UTType.image)"))
-        #expect(composer.contains("preferredItemEncoding: .compatible") && composer.contains("UIPasteboard.general.hasImages"))
+        #expect(composer.contains("preferredItemEncoding: .current") && composer.contains("UIPasteboard.general.hasImages"))
         #expect(!composer.contains("loadTransferable(type: Data.self)") && !composer.contains("UIImage("))
         var cursor = composer.startIndex
         while let range = composer.range(of: "chat.attachPhoto(", range: cursor..<composer.endIndex) {

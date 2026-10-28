@@ -3,10 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// WP1-H1b (TG 3.4 item 3, 3.5, 3.8; PLAN-next A9; OWNER-DEFAULTS Q11, Q18): the legacy haptic facade, its route
-/// policy, the `DeliveredTokenKinds` registry and the tested iOS mapper. The iOS player and the Android activity
-/// route are not compiled by this host, so their rules are pinned by source scans; the transpiled route runs in
-/// `T/Skip/SystemBridgeTests.kt` (`legacyActivityRouteUsesSingleArgumentCall`).
 @MainActor
 struct WP1H1bHapticDeliveryTests {
     private static let legacyIOSTokens: Set<String> = [
@@ -29,12 +25,12 @@ struct WP1H1bHapticDeliveryTests {
             #expect(Self.legacyIOSTokens.contains(FeedbackHapticContract.ios(kind)), "\(kind) has no legacy iOS token")
             #expect(ConclaveHapticFeedback.iosLegacyHaptic(kind) != .none || FeedbackHapticContract.ios(kind) == "none", "\(kind)")
         }
-        // WP2-S2b moved the shell kinds to the token route (DeliveredTokenKinds) in the same change.
+
         #expect(Set(LegacyHapticRoutes.outcomeKinds) == [.validationFailed])
     }
 
     @Test func deliveredTokenKindsNeverOverlapTheLegacyRoute() {
-        // WP2-S2b wired the production consumer; the kinds it delivers left the legacy set in the same change.
+
         #expect(Set(DeliveredTokenKinds.kinds) == [.joined, .admitted, .joinFailed, .denied, .removed, .connectionLost, .connectionRestored, .actionRejected])
         let overlap = Set(DeliveredTokenKinds.kinds).intersection(Set(LegacyHapticRoutes.outcomeKinds))
         #expect(overlap.isEmpty, "single-path invariant broken for \(overlap)")
@@ -44,7 +40,7 @@ struct WP1H1bHapticDeliveryTests {
     }
 
     @Test func iosStartAndStopRemapThroughTheTestedMapper() {
-        // OWNER-DEFAULTS Q11: SensoryFeedback.start and .stop only play on watchOS.
+
         #expect(ConclaveHapticFeedback.iosLegacyHaptic(.shareStarted) == .impactMedium)
         #expect(ConclaveHapticFeedback.iosLegacyHaptic(.transcriptionStarted) == .impactMedium)
         #expect(ConclaveHapticFeedback.iosLegacyHaptic(.shareStopped) == .impactLight)
@@ -60,7 +56,7 @@ struct WP1H1bHapticDeliveryTests {
         for (token, haptic) in table {
             #expect(ConclaveHapticFeedback.iosLegacyHaptic(token: token) == haptic, "\(token)")
         }
-        // Every kind maps through its contract token; the four Q11 rows never fall back to silence.
+
         for kind in FeedbackKind.allCases {
             let token = FeedbackHapticContract.ios(kind)
             #expect(ConclaveHapticFeedback.iosLegacyHaptic(kind) == (table[token] ?? .none), "\(kind)")

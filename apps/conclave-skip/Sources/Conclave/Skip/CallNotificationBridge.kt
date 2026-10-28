@@ -5,31 +5,55 @@ import android.content.Intent
 import androidx.core.content.ContextCompat
 import skip.foundation.ProcessInfo
 
-/**
- * The Android CallPresence adapter (S70 0.5 fan-out, SY4): it diffs each snapshot change with the shared
- * NotificationPostPolicy and starts, updates or stops CallForegroundService. Re-posts happen only when a visible
- * field changes. It never observes the snapshot and plays no haptic (S70 D7).
- */
+internal class CallNotificationStartGate {
+    private var session = -1
+    private var attempted = false
+    var appActive = false
+        private set
+
+    fun setAppActive(active: Boolean): Boolean {
+        val returned = active && !appActive
+        appActive = active
+        if (returned) attempted = false
+        return returned
+    }
+
+    fun claim(presenceSession: Int): Boolean {
+        if (presenceSession != session) {
+            session = presenceSession
+            attempted = false
+        }
+        if (!appActive || attempted) return false
+        attempted = true
+        return true
+    }
+
+    fun reset() {
+        session = -1
+        attempted = false
+    }
+}
+
 object CallNotificationBridge {
+    internal val startGate = CallNotificationStartGate()
+    internal var startServiceForTesting: ((Intent) -> Unit)? = null
     @Volatile private var presence: CallPresence? = null
-    /** Set for the SX1 system fixture: the service then holds the mediaPlayback type alone. */
+
     @Volatile private var fixtureOnly = false
 
-    /** The adapter set MeetingViewModel.shared installs once; also attaches the action dispatcher. */
     internal fun presenceAdapters(presence: CallPresence): CallPresenceAdapters {
         this.presence = presence
         fixtureOnly = false
         CallActionDispatcher.attach(presence)
-        // SYS-4 (S70 3 d): the PiP params follow the same snapshot.
+
         return CallPresenceAdapters(skip.lib.Array(listOf(adapter(), PipManager.presenceAdapter(presence))))
     }
 
-    /** SX1 fixture adapters for a standalone CallPresence (Debug only; never WebRTC, audio or capture). */
     internal fun fixtureAdapters(presence: CallPresence): CallPresenceAdapters {
         this.presence = presence
         fixtureOnly = true
         CallActionDispatcher.attach(presence)
-        // SYS-4 (S70 3 d): the PiP params follow the same snapshot.
+
         return CallPresenceAdapters(skip.lib.Array(listOf(adapter(), PipManager.presenceAdapter(presence))))
     }
 
@@ -40,7 +64,7 @@ object CallNotificationBridge {
         val command = NotificationPostPolicy.command(
             old = old,
             new = new,
-            isAppActive = true,
+            isAppActive = startGate.appActive,
             isRunning = CallForegroundService.isRunning,
         )
         when (command) {
@@ -51,10 +75,6 @@ object CallNotificationBridge {
         }
     }
 
-    /**
-     * Re-posts the current snapshot (a POST_NOTIFICATIONS grant mid-call, a foreground return after a refused start).
-     * Starts the service when a call is in progress and it is not running yet.
-     */
     fun repostCurrent() {
         val snapshot = presence?.snapshot ?: return
         if (!CallPresencePhasePolicy.isCallInProgress(snapshot.phase)) return
@@ -62,7 +82,12 @@ object CallNotificationBridge {
         send(action, snapshot)
     }
 
+    fun setAppActive(active: Boolean) {
+        if (startGate.setAppActive(active)) repostCurrent()
+    }
+
     private fun send(action: String, snapshot: CallPresenceSnapshot) {
+        if (action == CallForegroundService.ACTION_START && !startGate.claim(snapshot.presenceSession)) return
         val ctx = context()
         val intent = Intent(ctx, CallForegroundService::class.java).apply {
             this.action = action
@@ -73,15 +98,17 @@ object CallNotificationBridge {
             CallActionDispatcher.reportSurface(CallSurfaceStatus.starting)
         }
         try {
-            ContextCompat.startForegroundService(ctx, intent)
+            val override = startServiceForTesting
+            if (override != null) override(intent) else ContextCompat.startForegroundService(ctx, intent)
         } catch (t: Throwable) {
-            // While-in-use types cannot start from the background (AND 15.3): retried on the next foreground.
+
             debugLog("[Call] Failed to start the foreground call service: ${t}")
             CallActionDispatcher.reportSurface(CallSurfaceStatus.refused)
         }
     }
 
     private fun stop() {
+        startGate.reset()
         val ctx = context()
         val intent = Intent(ctx, CallForegroundService::class.java).apply {
             action = CallForegroundService.ACTION_STOP

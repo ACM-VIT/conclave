@@ -11,16 +11,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * PPL-3 through the transpiled People presenter, admissions policy, notice policy, stage presenter and fixtures (the
- * Swift half is T/PPL3AdmissionsHandsTests.swift): waiting rows with one command per tap and the same keys as Swift,
- * Admit All at once with the count for "%lld admitted", Deny All asking first, recovering disabling every button with
- * the reason, the silent stale entry, failure copy with the Android page snackbar for panel origins and the toast lane
- * for the knock banner (PL14), one Lower All sharing the Host Controls flight, the knock banner staying quiet while
- * Participants is current, the PL12 fixtures with scripted acks, and the waiting row texts (WaitingRow.kt). Pure: no
- * composition (only the first composition in a JVM keeps recomposing under Robolectric). App string resources are not
- * visible to this library test, so text expectations are built with the same lookups.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class PPL3AdmissionsBridgeTests {
@@ -118,14 +108,14 @@ class PPL3AdmissionsBridgeTests {
         p.apply(inputs(listOf(lee, sam, guest)))
         assertTrue(p.headerActions.showsAdmitAll)
         assertTrue(p.headerActions.hasActions(PeopleSectionID.waiting.rawValue))
-        // Deny All asks first and carries the count.
+
         p.requestDenyAll()
         val dialog = p.confirmation
         assertEquals(PeopleConfirmationKind.denyAll, dialog?.kind)
         assertEquals(3, dialog?.count)
         assertTrue(log.commands.isEmpty())
         p.cancelConfirmation(id = dialog?.id ?: 0)
-        // Admit All acts at once; every row waits for it.
+
         assertEquals(ControlTapResult.dispatched, p.admitAll())
         assertNull(p.confirmation)
         assertEquals(PeopleCommandKind.admitAll, log.commands.last().kind)
@@ -196,7 +186,7 @@ class PPL3AdmissionsBridgeTests {
         p.finish(log.tickets[0], HostActionResult.completed)
         assertEquals(FeedbackKind.hostBulkApplied, p.feedbackState.token.kind)
         assertNull(p.snapshot.section(PeopleSectionID.raisedHands))
-        // A guest sees the queue but no Lower All.
+
         p.apply(inputs(emptyList(), isAdmin = false, hands = true))
         assertNotNull(p.snapshot.section(PeopleSectionID.raisedHands))
         assertEquals(PeopleHeaderActions.none, p.headerActions)
@@ -229,7 +219,7 @@ class PPL3AdmissionsBridgeTests {
         stage.performNoticeAction(noticeId = banner?.id ?: "", actionId = NoticeAction.view)
         assertEquals(MeetingPanel.participants, shell.panels.snapshot.current?.panel)
         assertEquals(PanelDestination.peopleWaiting, shell.panels.snapshot.current?.destination)
-        // The policy: assertive once with People closed, silent while Participants is current, Admit All disabled in flight.
+
         val noticeInputs = StageNoticeInputs.make(callSession = 1, isHost = true, localUserId = me,
             pendingUserIds = skip.lib.Array(listOf("p-lee", "p-sam")))
         fun knock(panel: String, pending: Boolean): MeetingNotice? {

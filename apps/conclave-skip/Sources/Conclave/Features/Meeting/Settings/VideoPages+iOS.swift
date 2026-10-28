@@ -2,15 +2,6 @@
 import SwiftUI
 import UIKit
 
-// S60 2 c (SET-3; C6-4, C6-5, C6-9, C6-29, D11, D21; RECONCILE R40, R43) on iOS: Camera Quality and its Advanced page,
-// Share Quality and its Advanced page (with Share Device Audio while the S70 10 capability holds), and Connection.
-// Presets are encoder ceilings over the persisted `NativeMediaQualityPreferences` (the presenter writes them and the core
-// re-runs its publish resolver); Advanced lists only what the device camera supports (D11) and any change makes the
-// preset Custom. Connection reads the one shared label (R21) and the `ConnectionStatsModel` leaf, subscribed for the
-// page's lifetime through `.task` (no appearance callbacks; zero polls after Back). Each page body reads
-// `settings.video` or `settings.general`; the 1 Hz details are read only by `SettingsConnectionDetails`. System
-// pickers play their own selection feedback (no haptics, D8). `link` maps a push onto the container's path.
-
 struct SettingsVideoPage<Route: Hashable>: View {
     let route: SettingsRoute
     let settings: SettingsPresenter
@@ -31,8 +22,6 @@ struct SettingsVideoPage<Route: Hashable>: View {
         }
     }
 }
-
-// MARK: - Camera Quality
 
 private struct SettingsCameraQualityPage<Route: Hashable>: View {
     let settings: SettingsPresenter
@@ -81,8 +70,6 @@ private struct SettingsCameraQualityPage<Route: Hashable>: View {
     }
 }
 
-// MARK: - Share Quality
-
 private struct SettingsShareQualityPage<Route: Hashable>: View {
     let settings: SettingsPresenter
     let link: (SettingsRoute) -> Route?
@@ -120,7 +107,7 @@ private struct SettingsShareQualityPage<Route: Hashable>: View {
                 .accessibilityIdentifier("settings.share.restore")
             }
             if video.canShareDeviceAudio {
-                // C6-29 (RECONCILE R43): shown only while the S70 10 capability holds.
+
                 Section {
                     Toggle(ConclaveStrings.text("Share Device Audio"),
                            isOn: Binding(get: { video.shareDeviceAudioOn }, set: { settings.setShareDeviceAudio($0) }))
@@ -138,7 +125,6 @@ private struct SettingsShareQualityPage<Route: Hashable>: View {
     }
 }
 
-/// An inline picker option: the title and its detail line (2 c).
 private struct SettingsOptionLabel: View {
     let title: String
     let detail: String
@@ -152,8 +138,6 @@ private struct SettingsOptionLabel: View {
         }
     }
 }
-
-// MARK: - Advanced (camera and share)
 
 private struct SettingsAdvancedPage: View {
     let settings: SettingsPresenter
@@ -221,8 +205,6 @@ private struct SettingsAdvancedPage: View {
     }
 }
 
-/// "Full-Quality Bitrate": the value and a stepped slider. The draft commits once the value rests for half a second, so
-/// a drag (or a VoiceOver adjustment) writes the store and reaches the encoder once, not once per step.
 private struct SettingsBitrateRow: View {
     let settings: SettingsPresenter
     let limits: CameraLimitsModel
@@ -256,8 +238,6 @@ private struct SettingsBitrateRow: View {
         }
     }
 }
-
-// MARK: - Connection
 
 private struct SettingsConnectionPage: View {
     let settings: SettingsPresenter
@@ -307,14 +287,13 @@ private struct SettingsConnectionPage: View {
         .navigationTitle(SettingsCopy.pageTitle(.connection))
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            // C6-9: 1 Hz for the page's lifetime; cancellation (Back, panel close) unsubscribes.
+
             await settings.stats.observe()
         }
         .accessibilityIdentifier("settings.page.connection")
     }
 }
 
-/// The leaf that reads the 1 Hz values (2 k): label and value rows, values in tabular digits, read on focus only.
 private struct SettingsConnectionDetails: View {
     let stats: ConnectionStatsModel
 
@@ -353,7 +332,6 @@ private struct SettingsStatRow: View {
     }
 }
 
-/// Status glyph and tint with the text twin (F00 A3): good, fair, poor; neutral while measuring or unavailable.
 enum SettingsConnectionGlyph {
     static func symbol(_ label: ConnectionQualityLabel) -> String {
         switch label {

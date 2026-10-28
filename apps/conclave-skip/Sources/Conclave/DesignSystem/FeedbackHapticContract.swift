@@ -1,6 +1,5 @@
-/// One row of the canonical per-kind haptic table (TG 3.2). iOS tokens name `SensoryFeedback` values
-/// ("impact.light", "success", ...); Android tokens name `HapticFeedbackConstants` ("CONFIRM", ...).
-/// "none" means no haptic.
+
+
 struct FeedbackHapticRow: Equatable {
     let kind: FeedbackKind
     let ios: String
@@ -9,10 +8,6 @@ struct FeedbackHapticRow: Equatable {
     let android28: String
 }
 
-/// Test and gallery oracle for both platform mappers. Production mappers stay exhaustive switches
-/// (`ConclaveFeedback.sensory`, `ConclaveHaptics.constant`); this table is what they are checked against.
-/// Owner decision Q11: share and transcription starts play impact(medium) and stops impact(light) on iOS,
-/// because SensoryFeedback.start and .stop only play on watchOS.
 enum FeedbackHapticContract {
     static let rows: [FeedbackHapticRow] = [
         FeedbackHapticRow(kind: .none, ios: "none", android34: "none", android30: "none", android28: "none"),
@@ -79,16 +74,13 @@ enum FeedbackHapticContract {
         FeedbackHapticRow(kind: .questionSent, ios: "success", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .questionFailed, ios: "error", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
         FeedbackHapticRow(kind: .upvoteChanged, ios: "selection", android34: "SEGMENT_TICK", android30: "CLOCK_TICK", android28: "CLOCK_TICK"),
-        // D5: iOS-only success by owner decision; hostMadeHost plays on both platforms.
+
         FeedbackHapticRow(kind: .becameHost, ios: "success", android34: "none", android30: "none", android28: "none"),
         FeedbackHapticRow(kind: .lostHost, ios: "none", android34: "none", android30: "none", android28: "none"),
     ]
 
-    /// From API 33 Android shows its own clipboard confirmation, so `linkCopied` is silent there (D2).
     static let linkCopiedFromAPI33 = "none"
 
-    /// SensoryFeedback values that play nothing on iPhone: no feedback at all, or the watchOS-only
-    /// start and stop. The Q11 remap means no row uses start or stop any more.
     static let iPhoneSilentTokens: Set<String> = ["none", "start", "stop"]
 
     static func row(for kind: FeedbackKind) -> FeedbackHapticRow? {
@@ -102,8 +94,6 @@ enum FeedbackHapticContract {
         return row(for: kind)?.ios ?? "none"
     }
 
-    /// The Android token at an API level: the 34+ column, the 30 to 33 column with the API 33
-    /// `linkCopied` override, or the 28 and 29 column.
     static func android(_ kind: FeedbackKind, api: Int) -> String {
         guard let match = row(for: kind) else { return "none" }
         if api >= 34 { return match.android34 }

@@ -92,47 +92,33 @@ enum PendingUserRowsPolicy {
 @MainActor
 @Observable
 final class MeetingState {
-    /// WP2-S1 E2: the view model's single shell hook. Every field the shell presenter and `CallPresence` read
-    /// (contract-wp2-first-slice 3.2 inputs table) calls it from its `didSet`; chat arrays, the active speaker,
-    /// connection quality and other high-frequency fields never do. The view model installs exactly one closure and
-    /// rebinds it when `state` is replaced.
+
     @ObservationIgnored var onShellInputChanged: (() -> Void)? = nil
-    /// S20 SC1 E1: the stage's own refresh hooks, separate from S1, so an S1-only change never builds stage inputs
-    /// and a stage-only change is never missed. The view model installs one closure each (`bindStageInputs()`).
+
     @ObservationIgnored var onStageInputChanged: (() -> Void)? = nil
-    /// S30 CC1 (CTL-1): the controls refresh path's own hook, called only from fields S1 does not hook (S1-hooked fields
-    /// reach the controls through the shell refresh). The view model binds it to `requestControlsRefresh()`.
+
     @ObservationIgnored var onControlsInputChanged: (() -> Void)? = nil
-    /// S50 PH1: People's own refresh hook, separate from S1, the stage and the controls, so a People-only change never
-    /// builds stage inputs and a speaker change, an audio level or a reaction never builds People inputs. The view
-    /// model installs one closure (`bindPeopleInputs()`). Connection fields refresh People through the S1 publish.
+
     @ObservationIgnored var onPeopleInputChanged: (() -> Void)? = nil
-    /// S50 PH1 (PPL-4): the Host Controls path (policies, access lists, webinar config), separate from People rows, so
-    /// a policy or list change never rebuilds People and a roster change never rebuilds Host Controls. The view model
-    /// binds it to `requestHostControlsRefresh()`.
+
     @ObservationIgnored var onHostInputChanged: (() -> Void)? = nil
-    /// SC1 E5: the active or TTS speaker changed (hot; writes only the speaking store and the order policy).
+
     @ObservationIgnored var onStageSpeakerChanged: (() -> Void)? = nil
-    /// Hot: the active reactions changed (writes only the reaction layer).
+
     @ObservationIgnored var onStageReactionsChanged: (() -> Void)? = nil
-    /// SC1 E4: a game push; the view model refreshes the stage only when presence changes.
+
     @ObservationIgnored var onStageGameChanged: (() -> Void)? = nil
-    /// S60 7 (ACT-1): the launcher's own refresh hook (catalog, vote, apps, browser, role, connection), separate from
-    /// S1, the stage and chat. The view model installs one closure (`bindActivityInputs()`).
+
     @ObservationIgnored var onActivityInputChanged: (() -> Void)? = nil
-    /// S60 8 (ACT-2): a game push or identity change for the game shell (parsed once per push).
+
     @ObservationIgnored var onActivityGameChanged: (() -> Void)? = nil
-    /// S50 PH7 (PPL-6): the Q&A presenter's own refresh hook (entries, Q&A state, the unseen counters), separate from
-    /// People rows, so a vote never rebuilds People and a roster change never rebuilds Q&A. The view model binds it to
-    /// `requestQaRefresh()`.
+
     @ObservationIgnored var onQaInputChanged: (() -> Void)? = nil
-    /// S40 CH13: the chat presenter's own refresh hook, separate from S1 and the stage, with a change hint so changes
-    /// that touch no messages skip the message diff. The view model installs one closure (`bindChatInputs()`).
+
     @ObservationIgnored var onChatInputChanged: ((ChatInputChange) -> Void)? = nil
-    /// S40 0.5: bumped by every `chatMessages` and `systemMessages` write (diagnostics; never observed).
+
     @ObservationIgnored private(set) var chatRevision = 0
 
-    // Connection State
     var connectionState: ConnectionState = .disconnected {
         didSet {
             PerformanceDiagnostics.state("connectionState", old: "\(oldValue)", new: "\(connectionState)")
@@ -142,10 +128,7 @@ final class MeetingState {
             onActivityGameChanged?()
         }
     }
-    /// True from the first established-call interruption until replacement
-    /// transports and media are ready. Unlike `connectionState`, this remains
-    /// true while a reconnect-driven join is in `.joining`, so the UI does not
-    /// lose its notice or disable local media intent halfway through recovery.
+
     var isRecoveringConnection: Bool = false {
         didSet {
             guard oldValue != isRecoveringConnection else { return }
@@ -161,9 +144,7 @@ final class MeetingState {
             onActivityGameChanged?()
         }
     }
-    /// True while a connected call is moving through an expected app
-    /// background/foreground transition. Transport recovery may briefly run,
-    /// but it should not be presented as a user-facing outage.
+
     var isResumingFromBackground: Bool = false {
         didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
@@ -186,25 +167,18 @@ final class MeetingState {
     var isNetworkOffline: Bool = false {
         didSet { onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate) }
     }
-    /// SYS-6 (S70 SY22, 6 d; S20 10 f banner 2): Android only. The active network reports a captive portal and is not
-    /// validated, so the banner lane shows "This Wi-Fi network needs you to sign in." instead of offline. iOS has no
-    /// such signal and never sets it.
+
     var isCaptivePortal: Bool = false {
         didSet { if oldValue != isCaptivePortal { onStageInputChanged?() } }
     }
     var waitingMessage: String? = nil {
         didSet { onShellInputChanged?() }
     }
-    /// WP2-S1 E1: the typed terminal outcome of the current call session, recorded before each terminal phase write
-    /// (the legacy `errorMessage` and notice strings are unchanged).
+
     var terminalOutcome: MeetingTerminalOutcome? = nil {
         didSet { onShellInputChanged?() }
     }
 
-    // Meeting-entry takeover: a branded Lottie overlay that covers connect →
-    // join → media-settle so the user never sees the raw join spinner or the
-    // post-join device-init hiccups. Set true on New/Join, cleared only once the
-    // meeting is fully ready (see MeetingViewModel.scheduleMeetingEntryReveal).
     var isEnteringMeeting: Bool = false {
         didSet {
             PerformanceDiagnostics.state("isEnteringMeeting", old: "\(oldValue)", new: "\(isEnteringMeeting)")
@@ -217,11 +191,10 @@ final class MeetingState {
     var meetingEntryStartedAt: Date?
     var meetingEntryGeneration: Int = 0
 
-    // Room State
     var roomId: String = "" {
         didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
     }
-    /// CTL-5: Host Controls refreshes before the controls, whose More Lock Meeting row reads the host lock row.
+
     var isRoomLocked: Bool = false {
         didSet { onStageInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?(); onControlsInputChanged?() }
     }
@@ -231,24 +204,23 @@ final class MeetingState {
     var isNoGuests: Bool = false {
         didSet { onPeopleInputChanged?(); onHostInputChanged?() }
     }
-    /// S50 3 f: Send Private Message follows it, so People refreshes too.
+
     var isDmEnabled: Bool = true {
         didSet { onChatInputChanged?(ChatInputChange.policy); onPeopleInputChanged?(); onHostInputChanged?() }
     }
     var isImageAttachmentsEnabled: Bool = true {
         didSet { onChatInputChanged?(ChatInputChange.policy); onHostInputChanged?() }
     }
-    /// S50 PH5 (`participantMediaPermissionsChanged`): non-hosts may unmute or turn on video; the bar reads them as
-    /// `isMicDisabledByHost` / `isCameraDisabledByHost` (S30 CC10).
+
     var isParticipantUnmuteAllowed: Bool = true {
         didSet { onControlsInputChanged?(); onHostInputChanged?() }
     }
     var isParticipantVideoAllowed: Bool = true {
         didSet { onControlsInputChanged?(); onHostInputChanged?() }
     }
-    // True while a picked chat image is uploading to the asset store.
+
     var isChatImageUploading: Bool = false
-    /// S40 CH6 (CHT-4): the native composer's photo (prepare, upload, ready, failed); only the chat presenter reads it.
+
     var chatAttachment: ChatAttachmentState = ChatAttachmentState.none {
         didSet {
             if oldValue != chatAttachment { onChatInputChanged?(ChatInputChange.attachment) }
@@ -276,8 +248,6 @@ final class MeetingState {
         didSet { onHostInputChanged?() }
     }
 
-    // Webinar State
-    /// S50 PH9: mutable after the join (a promotion or demotion rejoins with the new role).
     var webinarRole: String? = nil {
         didSet {
             onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate); onPeopleInputChanged?()
@@ -311,31 +281,25 @@ final class MeetingState {
     var webinarFeedMode: String = "active-speaker" {
         didSet { onStageInputChanged?() }
     }
-    /// S50 PH10 (PPL-5): Attendee Q&A, from the join ack and `webinar:configChanged`; the host toggles it in Webinar
-    /// Settings. People (the Q&A row), Host Controls (the switch), the stage (the attendee badge), the controls (the
-    /// attendee Q&A control) and Q&A read it.
+
     var isWebinarQaEnabled: Bool = false {
         didSet {
             onStageInputChanged?(); onControlsInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?()
             onQaInputChanged?()
         }
     }
-    /// S50 PH8 (PPL-5): the attendee hand queue as the SFU last sent it to admins (the whole queue per change,
-    /// webinarNotifications.ts:166-174), and whether one arrived this call session (false for a host promoted
-    /// mid-webinar until the next change, S50 10 f).
+
     var webinarHandQueue: [WebinarHandQueueEntry] = [] {
         didSet { onPeopleInputChanged?() }
     }
     var webinarHandQueueReceived: Bool = false {
         didSet { onPeopleInputChanged?() }
     }
-    /// S50 PH9 interim (Q15): attendees invited on stage from this device in this call session, queue userId to name.
+
     var webinarStageInvites: [String: String] = [:] {
         didSet { onPeopleInputChanged?() }
     }
-    /// S50 PH7 (PPL-6): Q&A entries by id (the presenter orders them), the first-snapshot flag, the viewer's own votes
-    /// (change events carry no per-viewer vote, webinarNotifications.ts) and the two unseen counters (RECONCILE R18:
-    /// attendees count questions newly answering or answered, hosts new pending questions, since the last close).
+
     var webinarQaEntries: [String: WebinarQaEntry] = [:] {
         didSet { onQaInputChanged?() }
     }
@@ -354,14 +318,11 @@ final class MeetingState {
     var webinarSpeakerUserId: String? {
         didSet { onStageInputChanged?() }
     }
-    /// S20 SC22 (WP7, STG-8): the webinar landing title for the attendee capsule and Webinar Details; empty selects
-    /// the "Webinar" fallback. Set by the webinar landing before the join (HD request B5-T2 R3); cleared only by
-    /// `cleanup()` (a join's live snapshot reset keeps it).
+
     var webinarTitle: String = "" {
         didSet { onStageInputChanged?() }
     }
 
-    // User State
     var userId: String {
         didSet { onStageInputChanged?(); onChatInputChanged?(ChatInputChange.roster); onPeopleInputChanged?() }
     }
@@ -376,11 +337,9 @@ final class MeetingState {
         didSet {
             onQaInputChanged?()
             onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate); onPeopleInputChanged?()
-            // S60 7, 8 (ACT-1, ACT-2): the launcher's and the game shell's host flag.
+
             onActivityInputChanged?(); onActivityGameChanged?()
-            // S50 PH11 (INM D5): waiting requests, access lists, the attendee hand queue and the interim stage invites
-            // (PH8, PH9) go with the host role, so no stale waiting badge (Participants control, More row) and no stale
-            // list remains after losing host. The host Q&A counter goes too (RECONCILE R18).
+
             if oldValue && !isAdmin { clearHostOnlyState() }
         }
     }
@@ -396,8 +355,6 @@ final class MeetingState {
         if webinarQaUnseenHost != 0 { webinarQaUnseenHost = 0 }
     }
 
-    /// S50 PH7, PH8, PH9: the webinar role, Q&A and hand queue state of one call session, cleared together on a fresh
-    /// join and on cleanup (the counters and invites never carry into another session).
     func resetWebinarInteractionState() {
         if !webinarHandQueue.isEmpty { webinarHandQueue = [] }
         if webinarHandQueueReceived { webinarHandQueueReceived = false }
@@ -415,29 +372,24 @@ final class MeetingState {
         didSet { onStageInputChanged?(); onPeopleInputChanged?() }
     }
 
-    // Participants
     var participants: [String: Participant] = [:] {
         didSet {
-            // First, so every hook below reads the new roster through `uniqueRemoteParticipants`.
+
             isUniqueRemoteCacheValid = false
             if oldValue.count != participants.count {
                 PerformanceDiagnostics.state("participants.count", old: "\(oldValue.count)", new: "\(participants.count)")
             }
             onShellInputChanged?()
             onStageInputChanged?()
-            // The view model rebuilds the derived chat roster and applies only when ids or names changed (CH13), so a
-            // mute, camera or hand update refreshes no chat.
+
             onChatInputChanged?(ChatInputChange.roster)
             onPeopleInputChanged?()
         }
     }
-    /// S50 PH19 (RECONCILE R20): join order keyed by canonical id, assigned at first presence, kept across recovery
-    /// rejoins, reset per call session and on leave; read by the stage (`makeStageInputs()`) and People. The stage
-    /// assigns no serials of its own.
+
     var participantJoinSerials: [String: Int] = [:]
     private var nextParticipantJoinSerial = 0
 
-    /// Assigns the next serial the first time `canonicalId` is present; later calls keep it.
     func assignParticipantJoinSerial(_ canonicalId: String) {
         guard !canonicalId.isEmpty, participantJoinSerials[canonicalId] == nil else { return }
         nextParticipantJoinSerial += 1
@@ -449,26 +401,16 @@ final class MeetingState {
         nextParticipantJoinSerial = 0
     }
 
-    /// S50 PH13: user keys by participant id from the admin snapshot (`AdminRoomParticipantSnapshot.userKey`), so
-    /// "Remove and Block" blocks the right key; `userKey(for:)` is the fallback. Reset per call session.
     var participantUserKeys: [String: String] = [:] {
         didSet { onPeopleInputChanged?() }
     }
 
-    /// S50 PH12 (INM D14): the remote user ids the last admin snapshot reported as webinar attendees. PH12 keeps them
-    /// out of `participants`, so `canPromoteHost(userId:)` reads this list to refuse a host grant to an attendee.
-    /// Replaced by every admin snapshot; reset per call session and on cleanup. Read by no presenter.
     var webinarAttendeeSnapshotUserIds: [String] = []
 
-    /// S50 PH3 (PPL-3): when each raised hand went up, in server milliseconds (`HandRaisedNotification.timestamp`),
-    /// keyed by the id People shows (your `userId`; a remote participant's canonical stage id). A lowered hand forgets
-    /// its time; `handRaisedSnapshot` entries carry no time, so a hand first seen there reads 0 and sorts after timed
-    /// hands by join order. Reset per call session, on cleanup and when every hand is cleared.
     var raisedAtByUserId: [String: Double] = [:] {
         didSet { onPeopleInputChanged?() }
     }
 
-    /// PH13: the key the SFU blocks by for `id`: the admin snapshot's key, else the part before "#".
     func userKey(for id: String) -> String {
         let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
         if let known = participantUserKeys[normalized], !known.isEmpty { return known }
@@ -490,22 +432,21 @@ final class MeetingState {
         didSet { onStageInputChanged?(); onPeopleInputChanged?() }
     }
 
-    // Media State
     var isMuted: Bool = true {
         didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
     }
     var isCameraOff: Bool = true {
         didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
     }
-    /// S20 SC8, S60 C6-2 (STG-3): your camera facing, owned by `LocalPreviewController` and mirrored here once per change.
+
     var localCameraFacing: LocalCameraFacing = .front {
         didSet { onStageInputChanged?() }
     }
-    /// S20 6 f (STG-3): the system holds your camera right now (`LocalPreviewController.callCameraInterruption`).
+
     var isLocalCameraPaused: Bool = false {
         didSet { onStageInputChanged?() }
     }
-    /// S10 0.8 C1 (ENT-3): the lobby's media intent while the join is in flight; `.joined` reconciles it once.
+
     var pendingEntryMediaIntent: EntryMediaIntent? = nil
     var isAudioOnlyMode: Bool = false {
         didSet { onShellInputChanged?(); onStageInputChanged?() }
@@ -520,16 +461,13 @@ final class MeetingState {
     var connectionQuality: ConnectionQuality = .unknown {
         didSet { onStageInputChanged?() }
     }
-    // Selected audio routes (mic input / speaker output). nil = follow the
-    // platform default. Mirrors the web client's device pickers.
+
     var selectedAudioInputId: String?
     var selectedAudioOutputId: String?
-    /// S10 0.8 C2 (ENT-3): the lobby's route intent (an AudioRouteKind raw value and an input id), kept for display;
-    /// the routing owner applies it once when call audio starts.
+
     var prejoinAudioOutputKind = ""
     var prejoinAudioInputId = ""
 
-    // Shared Browser
     var isBrowserActive: Bool = false {
         didSet { onStageInputChanged?(); onControlsInputChanged?(); onActivityInputChanged?() }
     }
@@ -545,12 +483,11 @@ final class MeetingState {
     var browserURL: String? {
         didSet { onActivityInputChanged?() }
     }
-    /// ACT-9 (S60 14 k): the browser card resolves its input URL from this once per change.
+
     var browserNoVncURL: String? {
         didSet { onActivityInputChanged?() }
     }
-    /// S60 C6-20 (ACT-9): the host's `browser:getCapabilities` probe said available (false until it does, after a
-    /// timeout or for anyone but a host). Read by the Activities launcher's shared browser row.
+
     var isBrowserAvailable: Bool = false {
         didSet {
             if oldValue != isBrowserAvailable { onActivityInputChanged?() }
@@ -566,7 +503,6 @@ final class MeetingState {
         didSet { onActivityInputChanged?() }
     }
 
-    // Apps Runtime
     var activeAppId: String? {
         didSet { onStageInputChanged?(); onControlsInputChanged?(); onActivityInputChanged?() }
     }
@@ -576,12 +512,9 @@ final class MeetingState {
     var isAppsActionInFlight: Bool = false {
         didSet { onActivityInputChanged?() }
     }
-    /// S60 0.8 C6-18 (ACT-7): Yjs and awareness bytes live in the non-observable `ActiveAppSession`, never here (a
-    /// cursor flood publishes nothing). This coarse flag flips at most once per app session, when room data first
-    /// arrives, for the legacy placeholder's "Synced with room" line (HD request B7-T1 R3).
+
     var activeAppHasRoomData: Bool = false
 
-    // Games
     var gameCatalog: [GameCatalogEntry] = [] {
         didSet { onActivityInputChanged?() }
     }
@@ -594,18 +527,15 @@ final class MeetingState {
     var gameVote: GameVoteState? {
         didSet { onControlsInputChanged?(); onActivityInputChanged?() }
     }
-    /// The server's canonical id for you from `game:snapshot` / `game:getState` (`selfId`, C6-15); nil until sent.
+
     var gameSelfId: String? = nil {
         didSet { onActivityGameChanged?() }
     }
     var isGameActionInFlight: Bool = false
     var gameErrorMessage: String?
-    // End-game arming lives in meeting state, not view @State: the stage
-    // chrome can be rebuilt by game pushes mid-arm, which would silently
-    // swallow the confirmation tap.
+
     var isGameEndArmed: Bool = false
 
-    // Active States
     var activeScreenShareUserId: String? = nil {
         didSet { onShellInputChanged?(); onStageInputChanged?() }
     }
@@ -618,15 +548,13 @@ final class MeetingState {
     var ttsSpeakerId: String? {
         didSet { onStageSpeakerChanged?() }
     }
-    /// S40 CH4: the message id the speaker is playing ("" when idle); only the chat's voice rows read it (CHT-6).
+
     var activeTtsMessageId: String = "" {
         didSet {
             if oldValue != activeTtsMessageId { onChatInputChanged?(ChatInputChange.playback) }
         }
     }
-    // Locally-pinned participant → spotlight stage (not synced; mirrors web's
-    // per-tile pin). nil = grid.
-    /// S50 3 f: People offers Pin or Unpin from it.
+
     var pinnedUserId: String? {
         didSet { onStageInputChanged?(); onPeopleInputChanged?() }
     }
@@ -646,7 +574,6 @@ final class MeetingState {
         didSet { onStageInputChanged?() }
     }
 
-    // Chat
     var chatMessages: [ChatMessage] = [] {
         didSet {
             if oldValue.count != chatMessages.count {
@@ -687,7 +614,6 @@ final class MeetingState {
         }
     }
 
-    // Reactions
     var activeReactions: [Reaction] = [] {
         didSet {
             if oldValue.count != activeReactions.count {
@@ -809,13 +735,8 @@ final class MeetingState {
             }
     }
 
-    // Verify G2 r3 (perf): every `participant(for:)` used to re-sort and re-merge the whole roster, so a refresh that
-    // canonicalizes n rows (`makeStageInputs()`, `makePeopleInputs()`) cost O(n^3). The merged list and its user-key
-    // index are now built once per `participants` write (or local identity change) and reused until the next one. The
-    // merge and the first-match order are unchanged. Never observed: the getter still reads `participants`, `userId`
-    // and `sfuUserId`, so a view that reads a roster property keeps its observation dependencies.
     @ObservationIgnored private var uniqueRemoteCache: [Participant] = []
-    /// Indices into `uniqueRemoteCache` by `userKeyPart(for:)`, ascending (list order).
+
     @ObservationIgnored private var uniqueRemoteIndexByKey: [String: [Int]] = [:]
     @ObservationIgnored private var uniqueRemoteCacheUserId = ""
     @ObservationIgnored private var uniqueRemoteCacheSfuUserId: String? = nil
@@ -838,8 +759,7 @@ final class MeetingState {
         var indexByKey: [String: [Int]] = [:]
         for participant in source.values.sorted(by: { $0.id < $1.id })
             where isRemoteParticipantUserId(participant.id) {
-            // `userIdsMatch` never matches two ids with different user keys, so only this key's earlier entries can
-            // match; they are kept in list order, so the first match is the one the full scan found.
+
             let key = Self.userKeyPart(for: participant.id)
             let candidates = indexByKey[key] ?? []
             guard let index = candidates.first(where: { Self.userIdsMatch(remotes[$0].id, participant.id) }) else {
@@ -1046,7 +966,6 @@ final class MeetingState {
             return nil
         }
 
-        // The first merged participant that matches, through the user-key index (only one key can match).
         let remotes = uniqueRemoteParticipants
         for index in uniqueRemoteIndexByKey[Self.userKeyPart(for: normalized)] ?? []
             where Self.userIdsMatch(remotes[index].id, normalized) {
@@ -1075,10 +994,6 @@ final class MeetingState {
         return participant.id
     }
 
-    /// S20 SC1 E6 (0.5 identity rule): every id the stage receives is canonical. A local identity (`userId` or
-    /// `sfuUserId`, with or without a session suffix) maps to `userId`; a remote id maps through
-    /// `presentRemoteParticipantId(for:)` (suffixed and SFU ids resolve to the participant id); anything else is
-    /// dropped, so slot ids, the tile stores and the visibility report always agree.
     func canonicalStageUserId(_ raw: String?) -> String? {
         let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !normalized.isEmpty else { return nil }
@@ -1104,10 +1019,6 @@ final class MeetingState {
         visibleGridSnapshot().hiddenParticipantCount
     }
 
-    /// `forceSelfTile` folds the local user into the strip regardless of the
-    /// self-view mode. The game stage uses it so the self view never floats
-    /// over a game's controls - during a game you're a player in the strip
-    /// like everyone else.
     func tileStripSnapshot(forceSelfTile: Bool = false) -> MeetingTileStripSnapshot {
         let context = visibilityContext()
         let showSelfTile = context.shouldShowSelfTile || forceSelfTile
@@ -1144,7 +1055,7 @@ final class MeetingState {
         if isWebinarAttendee {
             return renderableStageUserId(webinarSpeakerUserId) == nil ? .tiled : .spotlight
         }
-        // S20 SC2: the pin is transient and no longer writes `viewMode`, so a renderable pin wins in every mode.
+
         if hasRenderablePinnedUser {
             return .spotlight
         }
@@ -1199,7 +1110,7 @@ final class MeetingState {
         #if os(iOS) && canImport(ReplayKit) && !SKIP
         return RPScreenRecorder.shared().isAvailable
         #elseif SKIP
-        // Android: screen capture via MediaProjection (API 21+).
+
         return true
         #else
         return false
@@ -1353,7 +1264,6 @@ final class MeetingState {
         return Self.userIdsMatch(pinnedUserId, normalized)
     }
 
-    /// The join's SFU client id (VM `joinRoom`); "" or the default tenant writes no `?clientId=` (ENT-8, RECONCILE R50).
     var meetingClientId = ""
 
     var meetingLink: String {
@@ -1372,15 +1282,10 @@ final class MeetingState {
         MeetingDisplayNamePresentation.formatted(rawDisplayName(for: id))
     }
 
-    /// S40 3 f: the full name for chat headers, labels and reactors (never cut to two words; the header truncates
-    /// at one line with the full name in the accessibility label).
     func chatDisplayName(for id: String) -> String {
         rawDisplayName(for: id).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// S50 2 j: remote participants with duplicate sessions merged (muted only if every session is, hand if any, the
-    /// `mergedRemoteParticipant` rules), for `makePeopleInputs()`. People's full names use `chatDisplayName(for:)`
-    /// (the same full-name rule, HD request B4-T7 R1e).
     var mergedRemoteParticipants: [Participant] {
         uniqueRemoteParticipants
     }
@@ -1574,8 +1479,7 @@ final class MeetingState {
             return false
         }
         guard let participant = participant(for: normalized) else {
-            // S50 PH12: an attendee from the admin snapshot is not in `participants`, so it is refused here (INM D14);
-            // any other unknown id keeps the old default.
+
             return !webinarAttendeeSnapshotUserIds.contains { Self.userIdsMatch($0, normalized) }
         }
         return !participant.isWebinarAttendee

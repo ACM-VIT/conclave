@@ -3,10 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-1 and ENT-2 (S10 3 c, 4 c, 0.8 C9, C16; S70 9; RECONCILE R42): the entry policies, the parser classes and the
-/// web-only `schedule` segment, the S10 4 c rules table through the premeeting presenter (every row, both join-mode
-/// mismatches, the sign-in queue) and the Debug route registry. The same rules run transpiled in
-/// `T/Skip/EntryPoliciesBridgeTests.kt`.
 @MainActor
 struct EntryPoliciesTests {
     private final class Recorder {
@@ -22,7 +18,6 @@ struct EntryPoliciesTests {
         return presenter
     }
 
-    /// A presenter in a call (or connecting) in `room` with `joinMode`.
     private func busy(_ phase: MeetingPhaseKind, room: String = "lily-zoro-iris", joinMode: JoinMode = .meeting,
                       aliases: [String] = [], recorder: Recorder? = nil) -> PremeetingPresenter {
         let presenter = presenter(recorder)
@@ -35,8 +30,6 @@ struct EntryPoliciesTests {
         }
         return presenter
     }
-
-    // MARK: Sanitizer and generator (moved from JoinView)
 
     @Test func theSanitizerKeepsLinksRawAndNormalizesTypedCodes() {
         #expect(EntryPolicies.sanitizeRoomInput("Rose Sora Luffy") == "rose-sora-luffy")
@@ -75,8 +68,6 @@ struct EntryPoliciesTests {
         #expect(EntryPolicies.recentLink(roomId: "yuki-haz", isWebinar: true) == "https://conclave.acmvit.in/w/yuki-haz")
     }
 
-    // MARK: Parser (S10 0.8 C16, C9; RECONCILE R42; S70 9 l4)
-
     @Test func scheduleIsWebOnlyAndSchedRoomsStayRooms() {
         #expect(NativeJoinLinkParser.parse("https://conclave.acmvit.in/schedule", allowRoomCreationForURLs: true).roomId.isEmpty)
         #expect(NativeJoinLinkParser.parse("https://conclave.acmvit.in/schedule/abc", allowRoomCreationForURLs: true).roomId.isEmpty)
@@ -86,7 +77,7 @@ struct EntryPoliciesTests {
         #expect(NativeJoinLinkParser.parse("https://conclave.acmvit.in/sched-ule-room").roomId == "sched-ule-room")
         #expect(NativeJoinLinkParser.parse("https://conclave.acmvit.in/sched-1a2b3c4d").roomId == "sched-1a2b3c4d")
         #expect(NativeJoinLinkParser.classify("https://conclave.acmvit.in/sched-ule-room") == .meeting)
-        // A typed "schedule" is not a room either (the same web-only list as every other web page).
+
         #expect(NativeJoinLinkParser.parse("schedule").roomId.isEmpty)
     }
 
@@ -102,13 +93,11 @@ struct EntryPoliciesTests {
         #expect(NativeJoinLinkParser.classify("https://example.com/x") == .notConclave)
         #expect(NativeJoinLinkParser.classify("mailto:someone@example.com") == .notConclave)
         #expect(NativeJoinLinkParser.classify("") == .notConclave)
-        // A sign-in redirect with a safe next target still opens the meeting.
+
         #expect(NativeJoinLinkParser.classify("https://conclave.acmvit.in/sign-in?next=%2Frose-sora-luffy") == .meeting)
         #expect(EntryPolicies.switchTargetKind(.invalidConclave) == .invalid)
         #expect(EntryPolicies.switchTargetKind(.webinar) == .webinar)
     }
-
-    // MARK: The S10 4 c rules table through the presenter
 
     @Test func anIdleMeetingLinkOpensTheLobbyAndAWebinarLinkTheLanding() throws {
         let presenter = presenter()
@@ -183,11 +172,11 @@ struct EntryPoliciesTests {
     }
 
     @Test func theSameRoomInTheOtherJoinModePromptsBothWays() {
-        // Attending as a webinar attendee, a participant link to the same room prompts (invariant 13).
+
         let attendee = busy(.inCall, room: "yuki-haz", joinMode: .webinarAttendee)
         attendee.handleIncomingURL("https://conclave.acmvit.in/yuki-haz")
         #expect(attendee.switchPrompt != nil)
-        // In the room as a participant, the webinar link to it prompts (proposed invariant 15).
+
         let participant = busy(.inCall, room: "yuki-haz", joinMode: .meeting)
         participant.handleIncomingURL("https://conclave.acmvit.in/w/yuki-haz")
         #expect(participant.switchPrompt != nil)
@@ -229,7 +218,7 @@ struct EntryPoliciesTests {
         presenter.confirmSwitch(id: second?.id ?? -1)
         #expect(recorder.commands == [.leave])
         #expect(presenter.switchPrompt == nil)
-        // The core leaves; once Home is reached the target lobby opens in editing (no auto-join).
+
         presenter.apply(PremeetingInputs.make(callSession: 1, phase: .home, hasBeenAdmittedThisSession: true))
         #expect(presenter.path.map { $0.roomId } == ["maple-goku-tulip"])
         #expect(presenter.lobbyStatus?.mode == .editing)
@@ -241,8 +230,6 @@ struct EntryPoliciesTests {
         stayed.apply(PremeetingInputs.make(callSession: 1, phase: .home))
         #expect(stayed.path.map { $0.roomId } == ["lily-zoro-iris"], "Stay consumes the link")
     }
-
-    // MARK: Route registry (PLAN-screens 2)
 
     @Test func theRouteRegistryParsesKeysAndReleaseIgnoresIt() {
         #expect(NativeRouteFlags.parse("premeeting") == [.premeeting])

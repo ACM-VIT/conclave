@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-3 (S10 6, 0.5 lobby snapshots, 0.6 L1 to L3, L8, L12, 0.8 C1, C2, C17; S60 C6-8; RECONCILE R22, R23, R30, R31,
-/// R49): the lobby half of the premeeting presenter (six independently published snapshots, the C1 and C2 intent
-/// hooks, the C17 code check, the presence poll and the preview demand with the publish latch), the pure lobby
-/// policies, the presence parser, the L9 lobby fixtures and source scans of the lobby files on both platforms. The
-/// transpiled presenter also runs in `T/Skip/ENT3LobbyBridgeTests.kt`.
 @MainActor
 struct ENT3LobbyTests {
     private static let link = "https://conclave.acmvit.in/rose-sora-luffy"
@@ -28,8 +23,6 @@ struct ENT3LobbyTests {
         return presenter.path.last?.id ?? -1
     }
 
-    // MARK: Six snapshots (S10 0.5, 6 k)
-
     @Test func aLinkLobbyPublishesAllSixSnapshotsForItsRoute() {
         let presenter = presenter()
         let routeId = openLinkLobby(presenter)
@@ -48,7 +41,7 @@ struct ENT3LobbyTests {
         #expect(presenter.lobbyMedia?.preview == .off)
         #expect(presenter.lobbyMedia?.showsEffects == false, "R31: hidden until an engine publishes .panel")
         #expect(presenter.lobbyStatus?.isPrimaryEnabled == true)
-        // Popping clears all six.
+
         presenter.setPath([])
         #expect(presenter.lobbyStatus == nil && presenter.lobbyMedia == nil && presenter.lobbyPresence == nil)
         #expect(presenter.lobbyIdentity == nil && presenter.lobbyLink == nil && presenter.lobbyAudio == nil)
@@ -70,15 +63,13 @@ struct ENT3LobbyTests {
         presenter.applyPermissions(microphone: .granted, camera: .denied, canAskAgainMicrophone: false, canAskAgainCamera: false)
         #expect(presenter.lobbyMedia?.preview == .blocked, "the card overlay for a denied camera (S10 7 f)")
         #expect(presenter.lobbyAudio == audio && presenter.lobbyStatus == status && presenter.lobbyLink == link)
-        // Equal device inputs publish nothing.
+
         let count = presenter.snapshotPublishCount
         presenter.applyPermissions(microphone: .granted, camera: .denied, canAskAgainMicrophone: false, canAskAgainCamera: false)
         presenter.applyAudioRoutes(outputs: [AudioRouteOption(id: "bt", kind: .bluetooth, name: "Buds", isConnecting: false)],
                                    currentOutputId: "bt", inputOptions: [], currentInputId: "")
         #expect(presenter.snapshotPublishCount == count)
     }
-
-    // MARK: Primary (S10 6 f, g)
 
     @Test func thePrimaryNeedsANameForGuestsAndAConnection() {
         let presenter = presenter(guestName: "")
@@ -96,14 +87,14 @@ struct ENT3LobbyTests {
         presenter.apply(PremeetingInputs.make(accountName: "", isNetworkOffline: true))
         #expect(presenter.lobbyStatus?.primaryReason == LobbyPrimaryReason.offline.rawValue)
         #expect(presenter.lobbyStatus?.issue == .offline)
-        // A new meeting asks for a name "to start".
+
         let fresh = self.presenter(guestName: "")
         fresh.newMeeting()
         #expect(fresh.lobbyStatus?.primaryReason == LobbyPrimaryReason.nameMissingStart.rawValue)
         #expect(fresh.lobbyLink?.canShare == false, "S10 Q1: no Share before Start")
         #expect(fresh.lobbyLink?.meetingLink == "")
         #expect(fresh.lobbyPresence?.kind == .hidden, "presence hidden for newMeeting (R49)")
-        // Signed in: no name needed.
+
         let signedIn = self.presenter(guestName: "")
         signedIn.apply(PremeetingInputs.make(isSignedIn: true, accountName: "Avery Lee", accountSeed: "u1"))
         _ = openLinkLobby(signedIn)
@@ -111,11 +102,9 @@ struct ENT3LobbyTests {
         #expect(signedIn.lobbyStatus?.isPrimaryEnabled == true)
     }
 
-    // MARK: Form errors (S10 6 f; Q8)
-
     @Test func formErrorsAfterAJoinBecomeIssuesAndAStaleOneIsIgnored() {
         let presenter = presenter()
-        // A form error already in the session belongs to an earlier lobby.
+
         presenter.apply(PremeetingInputs.make(callSession: 1, notice: .formError, noticeText: "No room found.", accountName: "Avery"))
         _ = openLinkLobby(presenter)
         #expect(presenter.lobbyStatus?.issue == LobbyIssue.none)
@@ -156,8 +145,6 @@ struct ENT3LobbyTests {
         #expect(LobbyIssuePolicy.classify(formError: "The host locked this meeting.", enteredInviteCode: "").issue == .failedServerText)
     }
 
-    // MARK: C1 and C2 (S10 0.8; intent only, never a state write or a live route)
-
     @Test func toggleIntentGoesToTheCoreHookAndAsksForAnUndeterminedPermission() {
         let hooks = ENT3HookRecorder()
         let presenter = presenter(hooks: hooks)
@@ -166,20 +153,20 @@ struct ENT3LobbyTests {
         presenter.setMicIntent(true)
         #expect(hooks.permissionRequests == ["microphone"])
         #expect(hooks.intents == ["true:false"], "the intended state shows while the prompt is up (S10 7 c)")
-        // The core applied it; a refusal returns it to off with no second request.
+
         presenter.apply(PremeetingInputs.make(accountName: "Avery", micIntentOn: true))
         #expect(presenter.lobbyMedia?.micIntentOn == true)
         presenter.permissionRequestFinished(kind: "microphone", granted: false)
         #expect(hooks.intents == ["true:false", "false:false"])
-        // Denied without ask-again (iOS): nothing reaches the core.
+
         presenter.applyPermissions(microphone: .denied, camera: .granted, canAskAgainMicrophone: false, canAskAgainCamera: true)
         presenter.apply(PremeetingInputs.make(accountName: "Avery", micIntentOn: false))
         presenter.setMicIntent(true)
         #expect(hooks.intents.count == 2)
-        // Camera granted: straight to the core.
+
         presenter.setCameraIntent(true)
         #expect(hooks.intents.last == "false:true")
-        // No camera hardware: nothing.
+
         presenter.applyPermissions(microphone: .granted, camera: .unavailable, canAskAgainMicrophone: true, canAskAgainCamera: false)
         presenter.setCameraIntent(true)
         #expect(hooks.intents.count == 3)
@@ -203,13 +190,11 @@ struct ENT3LobbyTests {
         presenter.selectAudioInput(id: "bt-in")
         #expect(hooks.routeIntents == ["bluetooth|", "bluetooth|bt-in"])
         #expect(presenter.lobbyAudio?.inputName == "Buds")
-        // One input: no Microphone row.
+
         presenter.applyAudioRoutes(outputs: [], currentOutputId: "", inputOptions: [
             AudioRouteOption(id: "mic", kind: .receiver, name: "iPhone Mic", isConnecting: false)], currentInputId: "mic")
         #expect(presenter.lobbyAudio?.showsInputRow == false)
     }
-
-    // MARK: Join (S10 6 j; the LobbyJoinCoordinator)
 
     @Test func joinCarriesTheLinkTargetAndTheTypedValues() {
         let hooks = ENT3HookRecorder()
@@ -227,7 +212,7 @@ struct ENT3LobbyTests {
         #expect(request?.joinMode == .meeting)
         #expect(request?.isHost == true, "custom tenant: the JoinAdminIntentPolicy admin request")
         #expect(presenter.joinRequestCount == 1)
-        // The link with a custom tenant carries its client id (R50).
+
         #expect(presenter.lobbyLink?.meetingLink == "https://conclave.acmvit.in/rose-sora-luffy?clientId=acme")
     }
 
@@ -243,7 +228,7 @@ struct ENT3LobbyTests {
         #expect(request?.meetingInviteCode == "typed")
         #expect(request?.cameraFacing == .back)
         #expect(request?.allowRoomCreation == false)
-        // A guest without a name cannot join; a new meeting is a host join that may create the room.
+
         #expect(LobbyJoinCoordinator.makeRequest(
             target: PremeetingRouteTarget(routeId: 3, kind: .lobby, intent: .join, roomId: "x", title: "x",
                                           joinMode: .meeting, meetingInviteCode: nil, webinarInviteCode: nil,
@@ -274,14 +259,12 @@ struct ENT3LobbyTests {
         #expect(LobbyJoinCoordinator.accountDisplayName(account, fallback: "x") == "Avery Lee")
     }
 
-    // MARK: C17 code collision check (RECONCILE R49)
-
     @Test func aBusyFreshCodeIsRegeneratedOnceThenStartUsesTheSecondCode() async {
         let hooks = ENT3HookRecorder()
         hooks.presenceAnswers = [2, 0]
         let presenter = presenter(hooks: hooks)
         var codes = ["rose-sora-luffy", "lily-zoro-iris", "maple-goku-tulip"]
-        // An extra request past the script fails the expectations below instead of trapping on an empty array.
+
         presenter.generateRoomCode = { codes.isEmpty ? "extra-code-requested" : codes.removeFirst() }
         presenter.newMeeting()
         let routeRoom = presenter.path.last?.roomId
@@ -313,8 +296,6 @@ struct ENT3LobbyTests {
         #expect(LobbyCollisionPolicy.shouldRegenerate(count: 2, attempt: 3) == false)
     }
 
-    // MARK: Presence (S10 6 f, l6; Q5)
-
     @Test func presenceReadsTheThreeCountsAndStopsWhenTheLobbyIsPopped() async {
         let hooks = ENT3HookRecorder()
         hooks.presenceAnswers = [0, 1, 3]
@@ -333,7 +314,7 @@ struct ENT3LobbyTests {
         let fetches = presenter.presenceFetchCount
         try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(presenter.presenceFetchCount == fetches, "polling stops when the lobby is popped (6 l6)")
-        // A failed request hides presence.
+
         #expect(LobbyPresencePolicy.kind(hasResult: true, count: nil, intent: .join, mode: .editing) == .hidden)
         #expect(LobbyPresencePolicy.kind(hasResult: true, count: 2, intent: .join, mode: .waiting) == .hidden)
     }
@@ -353,14 +334,12 @@ struct ENT3LobbyTests {
         #expect(hooks.refreshCount >= 2, "devices are re-read on appearance and on foreground")
         presenter.lobbyDidDisappear(routeId: routeId)
         #expect(presenter.liveTaskCount == 0)
-        // A late disappearance of an older lobby never stops the new one.
+
         presenter.lobbyDidAppear(routeId: routeId)
         presenter.lobbyDidDisappear(routeId: routeId + 99)
         #expect(presenter.liveTaskCount == 1)
         presenter.setPath([])
     }
-
-    // MARK: Preview demand and the publish latch (S10 6 k, Q16; S60 C6-8; R22)
 
     @Test func thePreviewRunsOnlyWhileWantedAndIsHandedOffToTheCall() {
         let hooks = ENT3HookRecorder()
@@ -373,7 +352,7 @@ struct ENT3LobbyTests {
         #expect(hooks.previewCalls == ["start:front"])
         presenter.applyPreview(state: .live, sessionId: 1, isFrontCamera: true, interruption: .none)
         #expect(presenter.lobbyMedia?.preview == .live)
-        // Entering keeps the preview (the card stays in the lobby); the call takes the camera: hand-off, not a stop.
+
         presenter.apply(PremeetingInputs.make(callSession: 1, phase: .entering, roomLabel: "rose-sora-luffy",
                                               currentRoomId: "rose-sora-luffy", accountName: "Avery", cameraIntentOn: true))
         #expect(hooks.previewCalls == ["start:front"])
@@ -381,10 +360,10 @@ struct ENT3LobbyTests {
                                               hasBeenAdmittedThisSession: true, currentRoomId: "rose-sora-luffy",
                                               accountName: "Avery", cameraIntentOn: true))
         #expect(hooks.previewCalls == ["start:front", "handOff"])
-        // Back home after the call: the latch reopens.
+
         presenter.apply(PremeetingInputs.make(callSession: 1, phase: .home, hasBeenAdmittedThisSession: true, accountName: "Avery"))
         #expect(hooks.previewCalls == ["start:front", "handOff", "resetLatch"])
-        // A camera-off intent in the lobby stops a running preview.
+
         let next = openLinkLobby(presenter)
         presenter.apply(PremeetingInputs.make(accountName: "Avery", cameraIntentOn: true))
         presenter.lobbyDidAppear(routeId: next)
@@ -406,7 +385,7 @@ struct ENT3LobbyTests {
         machine = LocalPreviewPolicy.next(machine, event: .handOff)
         #expect(machine.state == .published && machine.isLatched)
         #expect(!LocalPreviewPolicy.mayCapture(machine), "no capture while the call owns the camera")
-        // Nothing restarts it while latched: start, bound, stop and failures are ignored.
+
         for event in [LocalPreviewEvent.start, .bound, .stop, .failed, .interrupted, .permissionDenied] {
             #expect(LocalPreviewPolicy.next(machine, event: event) == machine, "\(event)")
         }
@@ -414,7 +393,7 @@ struct ENT3LobbyTests {
         #expect(machine.state == .off && !machine.isLatched)
         machine = LocalPreviewPolicy.next(machine, event: .start)
         #expect(machine.state == .starting && machine.sessionId == 2)
-        // Android: the WebRTC client's release closes the same latch.
+
         #expect(LocalPreviewPolicy.next(machine, event: .releasedByCall).isLatched)
         #expect(LocalPreviewPolicy.isWanted(cameraIntentOn: true, permission: .granted, isLobbyVisible: true, isCallOwningCamera: false))
         #expect(!LocalPreviewPolicy.isWanted(cameraIntentOn: true, permission: .granted, isLobbyVisible: true, isCallOwningCamera: true))
@@ -422,7 +401,7 @@ struct ENT3LobbyTests {
     }
 
     @Test func theMacOSControllerReportsNoCameraAndKeepsTheLatch() {
-        // The host build has no capture device: a start ends unavailable, never live; the latch still holds.
+
         let controller = LocalPreviewController()
         var changes = 0
         controller.onChange = { changes += 1 }
@@ -437,21 +416,19 @@ struct ENT3LobbyTests {
         #expect(!controller.isPublishLatched && controller.state == .off)
     }
 
-    // MARK: Small policies
-
     @Test func displayNamesFeedbackAndAudioFollowTheSpec() {
         #expect(DisplayNamePolicy.limit == 40 && DisplayNamePolicy.counterThreshold == 30)
         #expect(!DisplayNamePolicy.isCounterVisible(count: 29) && DisplayNamePolicy.isCounterVisible(count: 30))
         #expect(DisplayNamePolicy.capped(String(repeating: "b", count: 41)).count == 40)
         #expect(DisplayNamePolicy.normalized("  Avery    Lee ") == "Avery Lee")
-        // One gesture per tap that changes the intent (C04 e); none for a blocked tap.
+
         #expect(LobbyToggleFeedbackPolicy.kind(isOn: false, permission: .granted, onKind: .micOn, offKind: .micOff) == .micOn)
         #expect(LobbyToggleFeedbackPolicy.kind(isOn: true, permission: .denied, onKind: .micOn, offKind: .micOff) == .micOff)
         #expect(LobbyToggleFeedbackPolicy.kind(isOn: false, permission: .denied, onKind: .micOn, offKind: .micOff) == nil)
         #expect(LobbyToggleFeedbackPolicy.kind(isOn: false, permission: .denied, onKind: .micOn, offKind: .micOff,
                                                canAskAgain: true) == .micOn)
         #expect(LobbyToggleFeedbackPolicy.kind(isOn: false, permission: .unavailable, onKind: .cameraOn, offKind: .cameraOff) == nil)
-        // The chosen kind shows at once; its name comes from the options or stays empty for the view.
+
         let device = LobbyDeviceInputs.initial.withRoutes(
             outputs: [AudioRouteOption(id: "spk", kind: .speaker, name: "", isConnecting: false)], currentOutputId: "spk",
             inputs: [], currentInputId: "")
@@ -477,8 +454,6 @@ struct ENT3LobbyTests {
         #expect(RoomPresenceService.userCount(statusCode: 200, body: Data("nope".utf8)) == nil)
     }
 
-    // MARK: L9 lobby fixtures
-
     @Test func theLobbyFixturesShowTheirInjectedStatesWithoutAnyCall() {
         let lobby = PremeetingFixtureSession(state: .lobby)
         lobby.start()
@@ -486,7 +461,7 @@ struct ENT3LobbyTests {
         #expect(lobby.premeeting.lobbyMedia?.preview == .blocked)
         #expect(lobby.premeeting.lobbyStatus?.isPrimaryEnabled == true)
         #expect(lobby.premeeting.lobbyIdentity?.guestName == PremeetingFixtureScript.lobbyGuestName)
-        // The scripted C1 answer flips the toggle; the scripted join shows Connecting; nothing else runs.
+
         lobby.premeeting.setMicIntent(true)
         #expect(lobby.premeeting.lobbyMedia?.micIntentOn == true)
         lobby.premeeting.startOrJoin()
@@ -509,8 +484,6 @@ struct ENT3LobbyTests {
         #expect(fresh.premeeting.lobbyMedia?.preview == .unavailable)
         #expect(PremeetingFixtureScript.state(named: "lobby-name-missing") == .lobbyNameMissing)
     }
-
-    // MARK: Source scans (both platforms)
 
     static let lobbySwiftFiles = [
         "Sources/Conclave/Features/Lobby/LobbyContracts.swift",
@@ -548,7 +521,7 @@ struct ENT3LobbyTests {
             #expect(!text.contains("MeetingState"), "\(file) reads MeetingState")
             #expect(!text.contains("beginMeetingEntry"), "\(file): the native lobby never arms the entry overlay")
         }
-        // R9: no glass anywhere in the lobby (the system bars only).
+
         for file in Self.lobbyIOSFiles {
             let text = try ent3Source(file)
             #expect(text.hasPrefix("#if os(iOS) && !SKIP\n"), "\(file)")
@@ -567,27 +540,27 @@ struct ENT3LobbyTests {
             #expect(!text.contains("fontFamily"), "\(file)")
             #expect(!text.contains("enableEdgeToEdge") && !text.contains("ConclaveSystemBars("), "\(file): one system-bar writer")
         }
-        // Shared lobby files stay transpilable.
+
         for file in Self.lobbySwiftFiles {
             let text = try ent3Source(file)
             #expect(!text.contains("import SwiftUI"), "\(file)")
             #expect(ent3Matches(#"\.(?:map|compactMap|flatMap)\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*\)"#, in: text).isEmpty, "\(file)")
             #expect(!text.contains(".isLetter"), "\(file)")
         }
-        // UIKit only inside the iOS branch of the device services.
+
         let devices = try ent3Source("Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift")
         #expect(devices.contains("#if os(iOS) && !SKIP\nimport AVFoundation\nimport UIKit\n#endif"))
     }
 
     @Test func theLobbyNeverAppliesARouteOrHandsThePreviewToAProducer() throws {
-        // C2: intent only. No lobby file calls the live route setters or touches the communication device.
+
         for file in Self.lobbySwiftFiles + Self.lobbyIOSFiles + Self.lobbyKotlinFiles {
             let text = try ent3Source(file)
             #expect(!text.contains("setAudioOutput(") && !text.contains("setAudioInput("), "\(file)")
             #expect(!text.contains("setCommunicationDevice") && !text.contains("isSpeakerphoneOn"), "\(file)")
             #expect(!text.contains("requestRoute(") && !text.contains("BLUETOOTH_CONNECT"), "\(file): no route apply, no nearby-devices ask (R24)")
         }
-        // The publish latch: the preview owner has no track, capturer or producer path on either platform.
+
         for file in ["Sources/Conclave/Core/WebRTC/LocalPreviewController.swift", "Sources/Conclave/Skip/LocalPreviewController.kt"] {
             let text = try ent3Source(file)
             for pattern in ["createProducer", "startProducing", "produce(", "RTCVideoSource", "RTCCameraVideoCapturer",
@@ -597,14 +570,14 @@ struct ENT3LobbyTests {
             #expect(text.contains("LocalPreviewPolicy.next("), "\(file) runs the shared state machine")
             #expect(text.contains("handOffToCall()") && text.contains("resetLatch()"), "\(file)")
         }
-        // Both controllers expose the same members (the Kotlin file replaces the Swift file's transpiled output).
+
         let kotlin = try ent3Source("Sources/Conclave/Skip/LocalPreviewController.kt")
         for member in ["val shared", "var onChange", "fun start(facing: LocalCameraFacing)", "fun stop()", "fun flip()",
                        "val state: PreviewState", "val sessionId: Int", "var facing: LocalCameraFacing",
                        "val interruption: PreviewInterruption", "val isPublishLatched: Boolean", "var startCount"] {
             #expect(kotlin.contains(member), "Kotlin controller lacks \(member)")
         }
-        // The WebRTC client's release of the CameraX preview reaches the controller (the Android latch).
+
         let cameraPreview = try ent3Source("Sources/Conclave/Skip/CameraPreview.kt")
         #expect(cameraPreview.contains("onReleased?.invoke(preview)"))
         #expect(kotlin.contains("CameraPreviewController.onReleased = { released -> onMain { handleRelease(released) } }"))
@@ -627,7 +600,7 @@ struct ENT3LobbyTests {
         #expect(services.contains("viewModel.setEntryMediaIntent(mic: mic, camera: camera)"))
         #expect(services.contains("viewModel.setPrejoinAudioRouteIntent(outputKind: outputKind, inputId: inputId)"))
         #expect(services.contains("viewModel.setPreferredLocalCameraFacing(request.cameraFacing) viewModel.joinRoom("))
-        // The iOS lobby keys its appearance by route and reads each snapshot in its own leaf.
+
         let lobby = ent3Flat(try ent3Source("Sources/Conclave/Features/Lobby/LobbyView+iOS.swift"))
         #expect(lobby.contains(".task(id: route.id) { premeeting.lobbyDidAppear(routeId: route.id) }"))
         #expect(lobby.contains(".onDisappear { premeeting.lobbyDidDisappear(routeId: route.id) }"))
@@ -640,7 +613,6 @@ struct ENT3LobbyTests {
     }
 }
 
-/// Records every hook the presenter calls (no media, no network).
 @MainActor
 private final class ENT3HookRecorder {
     let hooks = LobbyCoreHooks()
@@ -655,7 +627,7 @@ private final class ENT3HookRecorder {
     var refreshCount = 0
 
     init() {
-        // Weak captures: a presenter task that outlives a failed test never touches a freed recorder.
+
         hooks.setEntryMediaIntent = { [weak self] mic, camera in
             self?.intents.append("\(mic):\(camera)")
         }
@@ -695,7 +667,6 @@ private final class ENT3HookRecorder {
     }
 }
 
-/// Waits (bounded by wall-clock time) for a condition the presenter's tasks make true.
 @MainActor
 private func ent3Settle(_ condition: () -> Bool) async -> Bool {
     for _ in 0..<1000 {
@@ -710,7 +681,6 @@ private func ent3Source(_ packageRelativePath: String) throws -> String {
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 
-/// Whitespace collapsed to single spaces, so a pin fails only when the code changes.
 private func ent3Flat(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
@@ -724,7 +694,7 @@ private func ent3Matches(_ pattern: String, in text: String) -> [String] {
 }
 
 #if os(macOS)
-/// S10 0.8 C1 and C2 on the view model (macOS stubs; no network). These need HD request B4-T2 R1 and R2 applied.
+
 @MainActor
 @Suite(.serialized)
 struct ENT3EntryCoreDeltaTests {

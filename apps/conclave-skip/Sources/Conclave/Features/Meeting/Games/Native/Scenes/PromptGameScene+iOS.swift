@@ -2,12 +2,6 @@
 import Accessibility
 import SwiftUI
 
-// S60 9 (ACT-3) on iOS: the body of the six prompt games inside the game shell's scroll view (GameShell+iOS.swift routes
-// their scene kinds here and pins `PromptGameHostBar` in its bottom bar, HD request B6-T7 R2). Each scene reads the
-// typed scene model the presenter built once per push; controls read `interaction` in their own leaf, and the
-// countdown stays its own leaf (S60 8 k). No decorative motion: answers lock, reveals and scores appear in one frame.
-
-/// Switches on the prompt game scene; results (the shell's finished phase) have their own per game bodies.
 struct PromptGameSceneBody: View {
     let games: GameStagePresenter
 
@@ -31,7 +25,6 @@ struct PromptGameSceneBody: View {
     }
 }
 
-/// The pinned host bar of a prompt game phase (S60 9 c): one primary for a seated host, pending until that emit's ack.
 struct PromptGameHostBar: View {
     let games: GameStagePresenter
 
@@ -47,7 +40,6 @@ struct PromptGameHostBar: View {
     }
 }
 
-/// Observes only `countdown`, so the per-second leaf never re-evaluates the scene.
 struct PromptCountdownSlot: View {
     let games: GameStagePresenter
 
@@ -58,7 +50,6 @@ struct PromptCountdownSlot: View {
     }
 }
 
-/// K13 for a person without a seat: never a self line, Join when the server allows a late seat (S60 8 f).
 struct PromptSpectatorNotice: View {
     let games: GameStagePresenter
     var message: String = GameCopy.spectatorBody()
@@ -70,7 +61,6 @@ struct PromptSpectatorNotice: View {
     }
 }
 
-/// A quiet secondary line (counts, standings).
 struct PromptLine: View {
     let text: String
 
@@ -85,7 +75,6 @@ struct PromptLine: View {
     }
 }
 
-/// A headline line in paper (an outcome, a winner, a result).
 struct PromptHeadline: View {
     let text: String
 
@@ -99,15 +88,10 @@ struct PromptHeadline: View {
     }
 }
 
-/// How a read-only reveal row stands out: the success border with its glyph and word, or the 2 pt coral selection
-/// border of your own pick (a non-text indicator next to its "You picked this" or "Your answer" line, R03).
 enum PromptRowEmphasis: Equatable {
     case none, success, selected
 }
 
-/// A read-only reveal row (Bluff truth and authors, Most Likely To counts): the option, a marked word with its glyph,
-/// detail lines and an optional count. Correctness is never color alone (D4): the success border always comes with
-/// the glyph and the word.
 struct PromptResultRow: View {
     let id: String
     let text: String
@@ -166,8 +150,6 @@ struct PromptResultRow: View {
     }
 }
 
-/// One-shot announcement (S60 9 i): posted the first time `key` is claimed for this game session, so a view that
-/// appears again (Show Video and back, a scroll) never repeats it. `urgent` is the assertive Reaction "Tap now".
 struct PromptAnnouncement: ViewModifier {
     let games: GameStagePresenter
     let key: String
@@ -185,8 +167,6 @@ struct PromptAnnouncement: ViewModifier {
     }
 }
 
-/// The finished phase per game (S60 9 c): K8 with the award for the scored games, the wrap for Would You Rather and
-/// Most Likely To (no score invented), and the Imposter result lines. Participants see "Waiting for the host".
 struct PromptResultsBody: View {
     let games: GameStagePresenter
     let scene: GameScene
@@ -213,8 +193,6 @@ struct PromptResultsBody: View {
     }
 }
 
-/// Trivia, Bluff and Reaction results: the award as the kicker ("Best bluffer", "Sharpest reflexes"), the winner line
-/// and K8.
 struct PromptScoredResults: View {
     let games: GameStagePresenter
     let kind: String

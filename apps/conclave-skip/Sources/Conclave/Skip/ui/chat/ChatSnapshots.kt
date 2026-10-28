@@ -17,14 +17,6 @@ import androidx.browser.customtabs.CustomTabsIntent
 import java.util.Date
 import skip.ui.UIApplication
 
-/*
- * S40 2 d, 3 g, 5 g (CHT-1 to CHT-3): the Android chat's cached snapshots, row actions and copy. Handwritten Compose
- * Material 3 over the transpiled ChatPresenter: the list reads `presenter.timeline` once per revision (reversed once
- * here, never per frame), each item reads only its own `ChatRowEntry`, and the row actions are one stable class per
- * panel. Strings resolve by name from the app-module strings.xml (`conclaveString`, `conclavePlural`).
- */
-
-/** The reversed timeline (newest first for the reversed LazyColumn), rebuilt only when the revision changes. */
 internal class ChatTimelineCache(private val presenter: ChatPresenter) {
     internal class Reversed(val revision: Int, val ids: List<String>, val kinds: List<ChatRowKind>, val snapshot: ChatTimelineSnapshot)
 
@@ -44,42 +36,30 @@ internal class ChatTimelineCache(private val presenter: ChatPresenter) {
     }
 }
 
-/**
- * One per panel (2 d): every row gets the same reference. The menu and viewer row ids are Compose state read only by
- * the panel and the one row whose menu is open; rows never read the snackbar or the confirmation.
- */
 internal class ChatRowActions(val presenter: ChatPresenter, private val context: Context) {
-    /** The row whose long-press sheet (overlay) or anchored menu (side pane) is open; "" when none. */
+
     var menuRowId by mutableStateOf("")
-    /** The row whose reactions viewer is open; "" when none. */
+
     var viewerRowId by mutableStateOf("")
-    /** Bumped to focus the composer (Reply, Send private message, Ask Conclave AI; S40 Q11). */
+
     var focusRequest by mutableStateOf(0)
-    /**
-     * T3 borrow P8 (S40 2 d composer focus): bumped by the composer each time its field gains focus
-     * (`onFocusChanged { it.hasFocus }`). Only the timeline's small follow effect reads it, so a focus gain recomposes
-     * no list or row.
-     */
+
     var composerFocusRevision by mutableIntStateOf(0)
         private set
-    /** Text the composer inserts with the next focus ("@Conclave " from the empty state). */
+
     var pendingInsert = ""
-    /** D23: a link that leaves Conclave waits here for its confirmation. */
+
     var pendingExternalUrl by mutableStateOf("")
     var pendingExternalIsWeb = false
-    /** API 28 to 32 show the app's "Copied" snackbar (5 d); API 33 and later rely on the system confirmation. */
+
     var copiedRequest by mutableStateOf(0)
-    /** CHT-4: the row whose photo the full-screen viewer shows; "" when none (S40 9 d). */
+
     var photoRowId by mutableStateOf("")
-    /** CHT-5: the GIF picker (overlay sheet, or the side pane's in-pane page, S40 7 d). */
+
     var showsGifs by mutableStateOf(false)
-    /**
-     * T3 borrow P3: the composer's focus capture while the GIF picker is open. Kept here, not in the composer, because
-     * the side pane's in-pane GIF page removes the composer from the composition; the composer composed when the page
-     * closes takes it once (takeGifsFocusCapture). A plain field, never Compose state.
-     */
+
     var gifsFocusCapture: ChatFocusCapture? = null
-    /** CHT-7 (S40 4 d): a link in a Conclave AI answer waits here for the external link confirmation; "" when none. */
+
     var pendingAssistantUrl by mutableStateOf("")
 
     fun openMenu(rowId: String) { menuRowId = rowId }
@@ -91,14 +71,12 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     fun openGifs() { showsGifs = true }
     fun closeGifs() { showsGifs = false }
 
-    /** P3: the GIF picker's focus capture, once (null after the first take). */
     fun takeGifsFocusCapture(): ChatFocusCapture? {
         val capture = gifsFocusCapture
         gifsFocusCapture = null
         return capture
     }
 
-    /** A card's entry (CH16): read only, never a fetch (the presenter fetched it when it built the row). */
     fun embed(url: String): ChatEmbedEntry = presenter.embeds.entry(url)
 
     fun focusComposer(insert: String = "") {
@@ -106,10 +84,6 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
         focusRequest += 1
     }
 
-    /**
-     * P8: the composer's field gained focus. The timeline scrolls to the newest row only when that row (index 0 of the
-     * reversed list) is at least partly visible; otherwise the position and the jump pill stay.
-     */
     fun composerDidFocus() {
         composerFocusRevision += 1
     }
@@ -128,16 +102,11 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     fun copyLink(rowId: String) { writeClip(presenter.linkText(rowId)) }
     fun toggle(rowId: String, emoji: String) { presenter.toggleReaction(rowId, emoji) }
     fun retry(rowId: String) { presenter.retry(rowId) }
-    /** S40 4 f: the asker's Try again on a failed answer. */
+
     fun retryAssistant(rowId: String) { presenter.retryAssistant(rowId) }
 
-    /** S40 4 d: every link in an answer asks first ("Open external link?"). */
     fun openAssistantLink(url: String) { pendingAssistantUrl = url }
 
-    /**
-     * Open link: meeting links route in the app (S10 4); http and https open in Custom Tabs on the call task, falling
-     * back to ACTION_VIEW; another app's link opens through the hand-off at once, since the dialog was its confirmation.
-     */
     fun confirmAssistantLink() {
         val url = pendingAssistantUrl
         if (url.isEmpty()) return
@@ -153,7 +122,6 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
         NativeExternalHandoff.openExternalApp(url)
     }
 
-    /** Copy link: the clipboard (the system confirmation on API 33 and later, the snackbar before). */
     fun copyAssistantLink() {
         val url = pendingAssistantUrl
         pendingAssistantUrl = ""
@@ -164,11 +132,6 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     fun showSender(userId: String) { presenter.showSender(userId) }
     fun jumpToReply(messageId: String) { presenter.jumpTo(messageId) }
 
-    /**
-     * D23, RECONCILE R25: meeting links route in the app through the S10 4 intake; http and https open in Custom Tabs
-     * in the call task with PiP auto-enter suppressed (S40 Q16, S70 8 d); a link that would leave Conclave (another
-     * app's scheme, or no browser with Custom Tabs, the ACTION_VIEW fallback) confirms first.
-     */
     fun openLink(url: String) {
         val kind = NativeJoinLinkParser.classify(url)
         if (kind == NativeJoinLinkKind.meeting || kind == NativeJoinLinkKind.webinar) {
@@ -191,12 +154,6 @@ internal class ChatRowActions(val presenter: ChatPresenter, private val context:
     }
 }
 
-/**
- * S40 3 h, Q16 and S70 8 d: http and https links open in a Custom Tab launched from the call activity (androidx.browser
- * in K/skip.yml), so the tab sits on top of the call task; PiP auto-enter is suppressed before the launch and restored
- * when it fails (the suppression window clears itself on return). False when no browser supports Custom Tabs or no
- * activity is up: the caller falls back to the confirmation and ACTION_VIEW.
- */
 internal object ChatLinkLauncher {
     fun openInCustomTab(context: Context, url: String): Boolean {
         val activity = UIApplication.shared.androidActivity ?: return false
@@ -212,7 +169,6 @@ internal object ChatLinkLauncher {
     }
 }
 
-/** The chat's Android copy (S40 3 g, 5 g, 6 g; Material sentence case). */
 internal object ChatCopyAndroid {
     @Composable
     fun failureReason(failure: ChatFailure): String = when (failure) {
@@ -255,7 +211,7 @@ internal object ChatCopyAndroid {
     fun announcement(announcement: ChatAnnouncement): String = when (announcement.kind) {
         "newMessage" -> conclaveString("chat_announce_message", announcement.name, announcement.text)
         "newMessages" -> conclavePlural("chat_announce_messages", announcement.count, announcement.count)
-        // CHT-7 (S40 4 i): one announcement when an answer completes, with its first sentence.
+
         "assistantAnswered" -> conclaveString("chat_ax_assistant_answered", announcement.text)
         else -> ""
     }
@@ -273,7 +229,6 @@ internal object ChatCopyAndroid {
         else -> emoji
     }
 
-    /** "You and Avery reacted with Thumbs up" (web label rule): up to 3 names, then "and N others". */
     @Composable
     fun chipLabel(chip: ChatReactionChip): String {
         val name = emojiName(chip.emoji)
@@ -353,7 +308,6 @@ internal object ChatCopyAndroid {
 
     fun time(context: Context, millis: Double): String = DateFormat.getTimeFormat(context).format(Date(millis.toLong()))
 
-    /** 2 d: "Today" and "Yesterday" through DateUtils, other days the long date format. */
     fun day(context: Context, millis: Double): String {
         val time = millis.toLong()
         val now = System.currentTimeMillis()
@@ -363,11 +317,9 @@ internal object ChatCopyAndroid {
         return DateFormat.getLongDateFormat(context).format(Date(time))
     }
 
-    /** 3 i: the summary label "Avery Lee, Can you share the deck?". */
     @Composable
     fun rowLabel(row: ChatRowModel): String = conclaveString("chat_ax_row", senderName(row), row.plainText)
 
-    /** 3 i: value parts in fixed order (private, reply, media, reactions count, time, delivery). */
     @Composable
     fun rowValue(context: Context, row: ChatRowModel): String {
         val parts = mutableListOf<String>()

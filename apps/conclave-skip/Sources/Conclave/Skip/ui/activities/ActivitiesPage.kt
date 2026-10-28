@@ -52,16 +52,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 7 d (ACT-1) on Android: the Activities launcher page. One InCallPage in lazyList mode (system appearance,
- * hasComposer false from hasBottomComposer(.activities), the mini tile hidden with the IME, the page SnackbarHost for
- * end and action failures, D23), the host's PanelPageStack for Setup and the browser launcher (keys from ActivitiesKey,
- * the transpiled ActivitiesRoute raw value plus an id; Back from Setup returns to the root, fixing INM G2's Android
- * bug). The root list reads only `activities.snapshot`; Setup reads only `activities.setup`. Mounted by the native
- * call root (HD request B4-T8 R5); the side pane shows the same page.
- */
-
-/** One pushed page: the transpiled route plus an id (a game id for Setup), stored on the page stack as text. */
 internal data class ActivitiesKey(val route: ActivitiesRoute, val id: String) {
     fun encoded(): String = route.rawValue + "|" + id
 
@@ -110,7 +100,7 @@ internal fun ActivitiesPage(
         onClose = onClose,
         onMounted = {
             onMounted()
-            // The presentation lifecycle: refresh once (silent) and land on the destination (S60 R6-5).
+
             session.activities.refresh()
             val landing = ActivitiesDestinationPolicy.landing(destination = request.destination, targetId = request.targetId)
             ActivitiesKey.from(landing)?.let { pages?.push(it.encoded()) }
@@ -127,7 +117,7 @@ internal fun ActivitiesPage(
         when (key?.route) {
             ActivitiesRoute.setup -> GameSetupPage(session.activities, key.id, reservation)
             ActivitiesRoute.browser -> BrowserLauncherPage(session.activities, reservation)
-            // ACT-8 (S60 13 d): K/ui/apps/AppPages.kt.
+
             ActivitiesRoute.wheel -> AppWheelPage(session.appHost, reservation)
             ActivitiesRoute.watch -> AppWatchPage(session.appHost, reservation)
             else -> ActivitiesRoot(session, reservation, onPush = { pages?.push(it.encoded()) }, onClose = onClose)
@@ -135,10 +125,6 @@ internal fun ActivitiesPage(
     }
 }
 
-/**
- * Effects with their own reads: the auto-dismiss once a started activity is live, same-panel destination requests
- * (SR7), and the page snackbar for end and action failures (D23; never the stage toast lane).
- */
 @Composable
 private fun ActivitiesPageEffects(
     session: ActivitySession, request: PanelRequest, pages: PanelPageStack?, snackbars: SnackbarHostState, onClose: () -> Unit,
@@ -177,8 +163,6 @@ private fun ActivitiesPageEffects(
         activities.dismissInlineError()
     }
 }
-
-// MARK: Root
 
 @Composable
 private fun ActivitiesRoot(session: ActivitySession, reservation: PaddingValues, onPush: (ActivitiesKey) -> Unit, onClose: () -> Unit) {
@@ -432,13 +416,6 @@ private fun PlainRow(text: String) {
     ListItem(headlineContent = { Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant) })
 }
 
-// MARK: Setup
-
-/**
- * Setup (S60 7 d): the description, the player range, the visible options and the pinned primary as the last element
- * of the page (never the composer slot), kept above the IME by InCallPage's imePadding. beginSetup runs from a keyed
- * LaunchedEffect (idempotent).
- */
 @Composable
 private fun GameSetupPage(activities: ActivitiesPresenter, gameId: String, reservation: PaddingValues) {
     LaunchedEffect(gameId) { activities.beginSetup(gameId) }
@@ -496,9 +473,6 @@ private fun SetupStartBar(activities: ActivitiesPresenter, setup: GameSetupModel
     }
 }
 
-// MARK: Browser launcher
-
-/** The launcher (S60 7 d): a URI keyboard with no capitalization, IME Go launches, validation under the field. */
 @Composable
 private fun BrowserLauncherPage(activities: ActivitiesPresenter, reservation: PaddingValues) {
     var url by rememberSaveable { mutableStateOf("") }

@@ -3,14 +3,7 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// FND-3, foundation pack 3 (OUT/PLAN-screens.md section 5): the content panel components. The composer (F00 C19,
-/// S40 6, R40-6, R40-10; RECONCILE R32; owner OQ2) with the second sanctioned glass file, search (C20), the segmented
-/// control and its fallbacks (C21, S60 R6-8), the chat bubble (C23 = S40 CL1), the reaction chip (C24 = S40 CL2), the
-/// one-time tip (C25, RECONCILE R39), the short text-entry dialog (S50 PL10), the semantics exporter additions (S40
-/// R40-11) and the game board tokens (S60 R6-7, F00 2.6 A9). iOS-only and Kotlin sources are not compiled by this
-/// macOS host, so their rules are read from the sources; the Kotlin half runs in T/Skip/FND3ContentComponentsBridgeTests.kt.
 struct FND3ContentComponentsTests {
-    // MARK: Composer material (F00 4, C19; owner OQ2)
 
     @Test func composerMaterialFollowsTheBranchCondition() {
         var rows = 0
@@ -28,7 +21,7 @@ struct FND3ContentComponentsTests {
             }
         }
         #expect(rows == 16)
-        // F00 C19 l: Chat shows two glass shapes (attach circle, field container); Ask and Q&A have no attach control.
+
         #expect(ConclaveComposerMaterialPolicy.glassShapeCount(.glass, hasAttach: true) == 2)
         #expect(ConclaveComposerMaterialPolicy.glassShapeCount(.glass, hasAttach: false) == 1)
         #expect(ConclaveComposerMaterialPolicy.glassShapeCount(.opaque, hasAttach: true) == 0)
@@ -44,7 +37,7 @@ struct FND3ContentComponentsTests {
         #expect(ConclaveComposerMetrics.minimumFieldHeight == 44 && ConclaveComposerMetrics.maximumLines == 6)
         #expect(ConclaveComposerMetrics.stackSpacing == 8 && ConclaveComposerMetrics.stackHorizontalPadding == 16)
         #expect(ConclaveComposerMetrics.replyBarWidth == 3)
-        // S40 6 f: visible from 90% (900 of 1,000; 450 of 500), always in voice mode; never for an uncapped field.
+
         #expect(ConclaveComposerCounterPolicy.visibleFrom(limit: 1000) == 900)
         #expect(ConclaveComposerCounterPolicy.visibleFrom(limit: 500) == 450)
         #expect(ConclaveComposerCounterPolicy.visibleFrom(limit: 0) == 0)
@@ -54,7 +47,7 @@ struct FND3ContentComponentsTests {
         #expect(!ConclaveComposerCounterPolicy.isVisible(count: 10, limit: 0, alwaysVisible: true))
         #expect(ConclaveComposerCounterPolicy.overflow(count: 1200, limit: 1000) == 200)
         #expect(ConclaveComposerCounterPolicy.overflow(count: 1000, limit: 1000) == 0)
-        // CH6: Send waits for a ready photo; progress shows while preparing or uploading; only a failure retries.
+
         for phase in ConclaveAttachmentPhase.allCases {
             #expect(phase.blocksSend == (phase != .ready))
             #expect(phase.showsProgress == (phase == .preparing || phase == .uploading))
@@ -62,8 +55,6 @@ struct FND3ContentComponentsTests {
         }
     }
 
-    /// F00 4 "Single entry" and C19 c: inside the composer file every glass call sits in the one branch, regular only,
-    /// in one container; the field container is never interactive; the opaque branch is the R32 field.
     @Test func composerGlassStaysInsideItsBranch() throws {
         let text = try fnd3Source(Self.composerGlassFile)
         #expect(text.hasPrefix("#if os(iOS) && !SKIP\n"))
@@ -83,31 +74,29 @@ struct FND3ContentComponentsTests {
         #expect(inside.components(separatedBy: ".glassEffect(").count - 1 == 2)
         #expect(flat.contains(".glassEffect(.regular.interactive(), in: .circle)"))
         #expect(flat.contains(".glassEffect(.regular, in: RoundedRectangle(cornerRadius: CGFloat(ConclaveComposerMetrics.glassCornerRadius), style: .continuous))"))
-        // The field container is regular and never interactive: exactly one interactive glass call, on the circle.
+
         #expect(inside.components(separatedBy: ".interactive(").count - 1 == 1)
         let materials = ["ultraThinMaterial", "thinMaterial", "regularMaterial", "thickMaterial", "ultraThickMaterial", "barMaterial"]
         for pattern in [".clear", "Glass.tint", ".tint(", "glassProminent", "symbolColorRenderingMode(.gradient"] + materials {
             #expect(!code.contains(pattern), "the composer uses \(pattern)")
         }
         #expect(!code.contains("#available(iOS 26.0, *) &&"))
-        // Increase Contrast strokes both glass shapes; the opaque branch is the system background with a separator border.
+
         #expect(inside.components(separatedBy: "ConclaveComposerContrastStroke(").count - 1 == 2)
         #expect(fnd3Normalized(code).contains("if isIncreased { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 1) }"))
         let opaque = fnd3Normalized(outside)
         #expect(opaque.contains(".background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: CGFloat(ConclaveComposerMetrics.opaqueCornerRadius), style: .continuous))"))
         #expect(opaque.contains(".strokeBorder(Color(uiColor: .separator), lineWidth: 1)"))
-        // Send sits inside the field container in both branches; the container is one 44 pt row. T3 borrow P5 (a
-        // recorded C19 c deviation): the 12 by 8 padding wraps the field only and Send is never padded, so a single
-        // line is centred in 44 pt and Send stays on the last line as the text grows (T3BorrowComposerComponentTests).
+
         #expect(fnd3Normalized(code).contains("HStack(alignment: .bottom, spacing: 0) { field .padding(.vertical, CGFloat(ConclaveComposerMetrics.fieldVerticalPadding)) .frame(maxWidth: .infinity, minHeight: CGFloat(ConclaveComposerMetrics.minimumFieldHeight), alignment: .leading) .padding(.leading, CGFloat(ConclaveComposerMetrics.fieldHorizontalPadding)) .padding(.trailing, CGFloat(ConclaveComposerMetrics.fieldTrailingGap)) send } .frame(minHeight: CGFloat(ConclaveComposerMetrics.minimumFieldHeight))"))
         #expect(code.components(separatedBy: "fieldContainer").count - 1 >= 3)
-        // iOS 27 reduced resource usage selects the opaque field; the Debug force is read Debug-only.
+
         #expect(code.contains("@Environment(\\.systemPrefersReducedResourceUsage) private var prefersReducedResourceUsage"))
         #expect(code.contains("if #available(iOS 27.0, *) {"))
         #expect(code.contains("@available(iOS 27.0, *)"))
         #expect(code.contains("@Environment(\\.accessibilityReduceTransparency) private var reduceTransparency"))
         #expect(code.contains("@Environment(\\.conclaveForceOpaqueControls) private var forceOpaqueSetting"))
-        // The parts around the field row are never glass.
+
         for file in ["Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift",
                      "Sources/Conclave/DesignSystem/iOS/Components/ConclaveChatBubble+iOS.swift",
                      "Sources/Conclave/DesignSystem/iOS/Components/ConclaveReactionChip+iOS.swift",
@@ -126,7 +115,7 @@ struct FND3ContentComponentsTests {
         #expect(ios.contains("struct ConclaveComposerStack<Accessories: View, FieldRow: View, Footer: View>: View {"))
         #expect(ios.contains("VStack(alignment: .leading, spacing: CGFloat(ConclaveComposerMetrics.stackSpacing)) { accessories fieldRow footer"))
         #expect(ios.contains(".fill(HostingTheme.coralText) .frame(width: CGFloat(ConclaveComposerMetrics.replyBarWidth))"))
-        // Send keeps its pinned FND-1 label; the labelled variant names the screen's action and the disabled reason.
+
         #expect(ios.contains(".accessibilityLabel(ConclaveStrings.text(\"Send\"))"))
         #expect(ios.contains(".accessibilityLabel(title) .accessibilityValue(isEnabled ? \"\" : disabledReason)"))
         #expect(!ios.contains(".tint("), "segments keep the system thumb, Send keeps its glyph color")
@@ -139,8 +128,6 @@ struct FND3ContentComponentsTests {
         #expect(android.contains("liveRegion = LiveRegionMode.Polite"))
         #expect(!android.contains("primaryContainer"), "no coral in fields, search or segments")
     }
-
-    // MARK: Search (F00 C20)
 
     @Test func searchFiltersTheSnapshotInPlace() throws {
         let items = [ConclaveSearchItem(id: "a", text: "Avery Lee"), ConclaveSearchItem(id: "b", text: "Sam Ortiz"),
@@ -167,8 +154,6 @@ struct FND3ContentComponentsTests {
         for word in ["SearchBar(", "DockedSearchBar", "ExpandedFullScreenSearchBar"] { #expect(!android.contains(word), "\(word)") }
     }
 
-    // MARK: Segmented control (F00 C21; S60 R6-8)
-
     @Test func segmentedControlFallsBackWithoutClipping() throws {
         #expect(!ConclaveSegmentedPolicy.iosUsesRows(isAccessibilitySize: false, segmentCount: 3))
         #expect(ConclaveSegmentedPolicy.iosUsesRows(isAccessibilitySize: true, segmentCount: 3))
@@ -193,8 +178,6 @@ struct FND3ContentComponentsTests {
         #expect(!android.contains("FilterChip"))
     }
 
-    // MARK: Chat bubble (F00 C23 = S40 CL1)
-
     @Test func bubbleGeometryGroupsOnTheSenderSide() throws {
         let full = 20.0
         let tail = 4.0
@@ -218,7 +201,7 @@ struct FND3ContentComponentsTests {
         #expect(ConclaveBubbleGeometry.quoteBarWidth == 3 && ConclaveBubbleGeometry.quoteCornerRadius == 8)
         #expect(ConclaveBubbleTone.allCases.filter { $0.usesCoralFill } == [.own])
         #expect(ConclaveBubbleTone.allCases.filter { $0.hasBorder } == [.privateMessage])
-        // The own bubble's ink on coral (F00 2.6 A10, S40 3 e): 6.374, 6.764 under Increase Contrast; Android the same.
+
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosAppOnCoral, background: DesignTokens.iosAppCoralFill) - 6.374) < 0.001)
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosAppOnCoralHighContrast, background: DesignTokens.iosAppCoralFill) - 6.764) < 0.001)
         #expect(DesignTokens.androidLightPrimaryContainer == DesignTokens.coral && DesignTokens.androidDarkPrimaryContainer == DesignTokens.coral)
@@ -235,8 +218,6 @@ struct FND3ContentComponentsTests {
         #expect(android.contains("tonalElevation = 0.dp, shadowElevation = 0.dp,"))
         #expect(android.contains("ConclaveBubbleGeometry.androidCorners(isOwn = isOwn, isFollowUp = isFollowUp, hasFollower = hasFollower)"))
     }
-
-    // MARK: Reaction chip (F00 C24 = S40 CL2)
 
     @Test func reactionChipPlaysOnlyWhenItAdds() throws {
         func chip(mine: Bool, canToggle: Bool) -> ConclaveReactionChipModel {
@@ -268,8 +249,6 @@ struct FND3ContentComponentsTests {
         for word in ["FilterChip(", "primaryContainer", "Experimental"] { #expect(!android.contains(word), "\(word)") }
     }
 
-    // MARK: One-time tip (F00 C25; RECONCILE R39)
-
     @Test func tipShowsOncePerIdInsidePanelsOnly() throws {
         #expect(OneTimeTipPolicy.storeKey(OneTimeTipID.gifPicker.rawValue) == "conclave.tip.gifPicker")
         #expect(OneTimeTipID.allCases.map { $0.rawValue } == ["gifPicker"])
@@ -293,15 +272,13 @@ struct FND3ContentComponentsTests {
         #expect(android.contains("Icon(ConclaveIcons.CloseFill0, contentDescription = conclaveString(\"ds_dismiss_tip\"))"))
         #expect(android.contains("if (!visible) return"))
         for word in ["Popup(", "TooltipBox", "LaunchedEffect", "PlainTooltip", "RichTooltip"] { #expect(!android.contains(word), "\(word)") }
-        // F00 C25 l: no popover tips anywhere; TipKit is configured once at launch (request R2 to ConclaveApp.swift).
+
         for file in try fnd3Files(under: "Sources/Conclave", extensions: ["swift"]) {
             #expect(!(try fnd3Source(file)).contains(".popoverTip"), "\(file)")
         }
         let app = try fnd3Source("Sources/Conclave/ConclaveApp.swift")
         #expect(app.contains("try? Tips.configure([.datastoreLocation(.applicationDefault)])"), "B3-T3 request R2 applied")
     }
-
-    // MARK: Short text-entry dialog (S50 PL10)
 
     @Test func textEntryDialogCapsAndConfirmsOnlyRealText() throws {
         #expect(ConclaveTextEntryPolicy.capped(String(repeating: "a", count: 45), limit: 40).count == 40)
@@ -319,7 +296,7 @@ struct FND3ContentComponentsTests {
         #expect(ios.contains(".alert(model.title, isPresented: $isPresented) { TextField(model.fieldLabel, text: $text)"))
         #expect(ios.contains(".disabled(!ConclaveTextEntryPolicy.canConfirm(text, isPending: false))"))
         #expect(ios.contains("let capped = ConclaveTextEntryPolicy.capped(value, limit: model.limit)"))
-        // The FND-1 pins stay: one destructive ternary per C18 dialog kind.
+
         #expect(ios.components(separatedBy: "role: model.confirmRole == .destructive ? .destructive : nil").count - 1 == 2)
         let android = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/components/ConclaveDialogs.kt"))
         #expect(android.contains("onDismissRequest = { if (!pending) onDismiss() },"))
@@ -328,8 +305,6 @@ struct FND3ContentComponentsTests {
         #expect(android.contains("CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)"))
         #expect(!android.contains("primaryContainer"))
     }
-
-    // MARK: Semantics exporter (S40 R40-11)
 
     @Test func exporterReadsActionsAndPopupRoots() throws {
         let exporter = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/hosting/NativeSemanticsExport.kt"))
@@ -341,7 +316,7 @@ struct FND3ContentComponentsTests {
         #expect(exporter.contains("internal object NativeSemanticsPopupRoots {"))
         #expect(exporter.contains("val registered = isDebuggableApp(context) if (registered) NativeSemanticsPopupRoots.register(view, name)"))
         #expect(exporter.contains("listOf(\"merged\" to merged, \"unmerged\" to unmerged) + popups"))
-        // Every sheet, dialog and dropdown root in the component files registers and exposes tags as resource ids.
+
         let roots: [(String, Int)] = [("Sources/Conclave/Skip/ui/components/ConclaveDialogs.kt", 2),
                                       ("Sources/Conclave/Skip/ui/components/ConclaveMenus.kt", 1),
                                       ("Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt", 1),
@@ -352,8 +327,6 @@ struct FND3ContentComponentsTests {
             #expect(text.components(separatedBy: "testTagsAsResourceId = true").count - 1 == count, "\(file)")
         }
     }
-
-    // MARK: Board tokens (S60 R6-7, F00 2.6 A9)
 
     @Test func boardTokensComeFromTheZincRamp() throws {
         #expect(DesignTokens.iosGameBoardLight == 0xFF71717A && DesignTokens.iosGameBoardLight == DesignTokens.neutralZinc500)
@@ -368,13 +341,11 @@ struct FND3ContentComponentsTests {
         let generator = try fnd3Source("../../packages/ui-tokens/scripts/gen-native-tokens.mjs")
         #expect(generator.contains("const iosGameKeys = [\"boardLight\", \"boardDark\"];"))
         #expect(generator.contains("\"gameBoardLight\", \"gameBoardDark\"];"))
-        // Android reads them as ext.gameBoardLight and ext.gameBoardDark (B3-T3 request R3 to ConclaveExtendedColors.kt).
+
         let ext = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/theme/ConclaveExtendedColors.kt"))
         #expect(ext.contains("gameBoardLight = Color(DesignTokens.androidExtendedGameBoardLight),"), "B3-T3 request R3 applied")
         #expect(ext.contains("gameBoardDark = Color(DesignTokens.androidExtendedGameBoardDark),"), "B3-T3 request R3 applied")
     }
-
-    // MARK: Catalog
 
     @Test func contentSpecimenIDsAndPairsAreStable() {
         #expect(ComponentGalleryCatalog.contentSpecimenIDs == [
@@ -397,7 +368,7 @@ struct FND3ContentComponentsTests {
             ("contrast.composerSend.androidDark", 5.388), ("contrast.gameBoard.paperOnLight", 4.630), ("contrast.gameBoard.paperOnDark", 10.006),
             ("contrast.gameBoard.squares", 2.161), ("contrast.gameBoard.coralPath", 3.364),
         ]
-        // Keyed lookup only: a duplicate id fails galleryCatalogKeysStableUniqueAndDashFree, it never aborts the run.
+
         let pairs = Dictionary(ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (id, value) in expected {
             let pair = pairs[id]
@@ -406,8 +377,6 @@ struct FND3ContentComponentsTests {
         }
         #expect(Array(ComponentGalleryCatalog.contrastPairs.suffix(14).map { $0.id }) == expected.map { $0.0 })
     }
-
-    // MARK: Hygiene
 
     @Test func sharedContentModelsStayInsideSkipLite() throws {
         let text = try fnd3Source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveContentModels.swift")
@@ -452,8 +421,6 @@ struct FND3ContentComponentsTests {
     ]
 }
 
-// MARK: Helpers (private to this file)
-
 private func fnd3PackageRoot() -> URL {
     URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 }
@@ -492,7 +459,6 @@ private func fnd3Matches(_ pattern: String, in text: String) -> [[String]] {
     }
 }
 
-/// The ranges of every block that opens with `marker` (which ends in "{"), through its matching closing brace.
 private func fnd3BracedBlocks(after marker: String, in text: String) -> [Range<String.Index>] {
     var result: [Range<String.Index>] = []
     var start = text.startIndex

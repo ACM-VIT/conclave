@@ -19,12 +19,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/**
- * SYS-1 (S70 SX3, SY4; 1 l3, l4, l6, l10) against the transpiled CallPresence and policies and the handwritten
- * call notification bridge, plus the WP1-H1b Android legacy route (TG 3.8, kept here because the haptics bridge test
- * file belongs to another task this batch). App-module resource names resolve to 0 in this library-module run, so a
- * recording resolver stands in; resolved resources are a silent AVD cell (1 l5).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class SystemBridgeTests {
@@ -85,8 +79,6 @@ class SystemBridgeTests {
         isRedirectContinuation = isRedirectContinuation,
     )
 
-    // MARK: SX3 builder (1 l3)
-
     @Test
     fun callStyleNotificationAsksForTheNamesAndUsesAbsoluteActions() {
         val context = RuntimeEnvironment.getApplication()
@@ -105,7 +97,7 @@ class SystemBridgeTests {
         assertTrue(resolver.colors.contains("sys_notification_accent"))
         assertTrue(resolver.strings.contains("sys_call_unmute"))
         assertFalse(resolver.strings.contains("sys_call_mute"))
-        // Live uses the system default status text.
+
         assertFalse(resolver.strings.any { it.startsWith("sys_call_") && it != "sys_call_unmute" })
         assertEquals(NotificationCompat.CATEGORY_CALL, notification.category)
         assertTrue((notification.flags and Notification.FLAG_ONGOING_EVENT) != 0)
@@ -135,13 +127,13 @@ class SystemBridgeTests {
             assertTrue("$phase asks for $name", resolver.strings.contains(name))
             assertTrue(resolver.strings.contains("sys_call_unmute"))
         }
-        // An empty title asks for the fallback name, which this resolver does not know: "[name]", never English.
+
         val untitled = presenceAt(inputs(MeetingPhaseKind.entering, roomLabel = ""))
         val resolver = RecordingResolver()
         CallNotificationBuilder.build(context, "conclave_ongoing_call", CallNotificationModel.from(untitled.snapshot), resolver)
         assertTrue(resolver.strings.contains("sys_call_fallback_title"))
         assertEquals("[sys_call_fallback_title]", resolver.string("sys_call_fallback_title"))
-        // Attendees get Hang up only.
+
         val attendee = presenceAt(
             inputs(MeetingPhaseKind.entering),
             CallPresenceInputs.make(callSession = 1, sessionPhase = MeetingPhaseKind.inCall, roomLabel = "webinar", isWebinarAttendee = true),
@@ -158,8 +150,6 @@ class SystemBridgeTests {
         assertEquals(model, CallNotificationModel.fromIntent(intent))
         assertNull(CallNotificationModel.fromIntent(Intent()))
     }
-
-    // MARK: Absolute actions and stale intents (0.5, 1 l10)
 
     @Test
     fun actionIntentsAreAbsoluteAndCarryThePresenceSession() {
@@ -189,7 +179,6 @@ class SystemBridgeTests {
         val firstSession = presence.snapshot.presenceSession
         val muteIntent = shadowOf(CallNotificationBuilder.actionIntent(context, CallNotificationBuilder.ACTION_MUTE, 11, firstSession)).savedIntent
 
-        // A same-room redirect keeps the presence session, so the posted intent still applies.
         presence.apply(inputs(MeetingPhaseKind.home, callSession = 2, isMuted = false, isRedirectContinuation = true))
         presence.apply(inputs(MeetingPhaseKind.inCall, callSession = 2, isMuted = false))
         assertEquals(firstSession, presence.snapshot.presenceSession)
@@ -198,7 +187,6 @@ class SystemBridgeTests {
         assertEquals(1, commands.size)
         assertEquals(SystemCallSource.notification, commands[0].source)
 
-        // The call ends and a new one starts: the old intent is stale and changes nothing.
         presence.apply(inputs(MeetingPhaseKind.home, callSession = 2))
         presence.apply(inputs(MeetingPhaseKind.entering, callSession = 3, isMuted = false))
         presence.apply(inputs(MeetingPhaseKind.inCall, callSession = 3, isMuted = false))
@@ -221,8 +209,6 @@ class SystemBridgeTests {
         assertEquals(SystemCallSource.pictureInPicture, commands[0].source)
     }
 
-    // MARK: Swipe from Recents (1 l6)
-
     @Test
     fun removingTheTaskRecordsExactlyOneLeave() {
         val presence = presenceAt(inputs(MeetingPhaseKind.entering), inputs(MeetingPhaseKind.inCall))
@@ -236,8 +222,6 @@ class SystemBridgeTests {
         assertEquals(SystemCallSource.system, commands[0].source)
         assertFalse(CallForegroundService.isRunning)
     }
-
-    // MARK: Channel migration matrix (1 l4)
 
     private class FakeChannelStore(
         var importances: MutableMap<String, Int> = mutableMapOf(),
@@ -281,7 +265,6 @@ class SystemBridgeTests {
             assertEquals(listOf(current), untouched.created)
             assertEquals(listOf(legacy), untouched.deleted)
 
-            // Once migrated, the new channel is used as it is, blocked or not.
             val migrated = FakeChannelStore(mutableMapOf(current to NotificationManager.IMPORTANCE_NONE), api = api)
             assertEquals(CallChannelResult(current, blocked = true), CallChannelSetup.ensure(migrated, api, RecordingResolver()))
             assertTrue(migrated.created.isEmpty())
@@ -303,8 +286,6 @@ class SystemBridgeTests {
         assertNull(manager.getNotificationChannel("conclave_call_channel"))
     }
 
-    // MARK: WP1-H1b legacy activity route (TG 3.8)
-
     @Test
     fun legacyActivityRouteUsesSingleArgumentCall() {
         val single = mutableListOf<Int>()
@@ -312,7 +293,7 @@ class SystemBridgeTests {
         val view = object : android.view.View(RuntimeEnvironment.getApplication()) {
             override fun performHapticFeedback(constant: Int): Boolean {
                 single += constant
-                return true // Recording view: never plays the platform effect.
+                return true
             }
 
             override fun performHapticFeedback(constant: Int, flags: Int): Boolean {
@@ -326,7 +307,7 @@ class SystemBridgeTests {
             ConclaveHaptics.performFromActivity(FeedbackKind.handRaised)
             assertEquals(listOf(HapticFeedbackConstants.VIRTUAL_KEY), single)
             assertTrue(withFlags.isEmpty())
-            // Not resumed or no window focus: the provider returns null and nothing plays.
+
             ConclaveHaptics.legacyHapticView = { null }
             ConclaveHaptics.performFromActivity(FeedbackKind.handRaised)
             assertEquals(1, single.size)
@@ -340,7 +321,7 @@ class SystemBridgeTests {
     fun legacyFacadeRoutesAndTheTranspiledMapperAgree() {
         assertTrue(ConclaveHapticFeedback.accepts(FeedbackKind.micOn, route = ConclaveHapticRoute.gesture))
         assertFalse(ConclaveHapticFeedback.accepts(FeedbackKind.joined, route = ConclaveHapticRoute.gesture))
-        // WP2-S2b: joined is delivered as a token now, so the legacy route refuses it; validationFailed stays legacy.
+
         assertFalse(ConclaveHapticFeedback.accepts(FeedbackKind.joined, route = ConclaveHapticRoute.legacyOutcome))
         assertTrue(ConclaveHapticFeedback.accepts(FeedbackKind.validationFailed, route = ConclaveHapticRoute.legacyOutcome))
         assertFalse(ConclaveHapticFeedback.accepts(FeedbackKind.hostMutedYou, route = ConclaveHapticRoute.legacyOutcome))

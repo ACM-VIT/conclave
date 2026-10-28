@@ -3,12 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// CHT-8 (OUT/PLAN-screens.md section 5; S40 8, 0.7 R40-4, R40-8, R40-13, 0.8 CH12; S60 0.8 C6-22; RECONCILE R1, R3):
-/// the unread rules, the preview bodies (never a file name), the R40-4 event, the in-place coalescing with the count line
-/// and the "and 2 others" title, the drops (Chat current, a suspended lane, previews off, attendees, your own messages),
-/// `/clear` and hide sender, the tap that opens Chat at the newest message, the stage fixture states, the display time,
-/// the two toast sources and the strings. The core wiring pins at the end need HD requests B6-T5 R1 to R3. The Kotlin
-/// half is T/Skip/CHT8PreviewBridgeTests.kt.
 @MainActor
 struct CHT8UnreadPreviewTests {
     final class Clock {
@@ -53,13 +47,11 @@ struct CHT8UnreadPreviewTests {
         return stage
     }
 
-    // MARK: CH12 unread and posting rules
-
     @Test func unreadRulesFollowCH12() {
-        // +1 for a remote message (public, private, voice, a completed assistant answer) while Chat is not current.
+
         #expect(ChatPreviewPolicy.countsUnread(isOwn: false, isHiddenSender: false, isEmptyAssistantStart: false,
                                                isChatCurrent: false, isAttendee: false))
-        // Nothing for your own message, a hidden sender, the empty assistant start, an open Chat or an attendee.
+
         #expect(!ChatPreviewPolicy.countsUnread(isOwn: true, isHiddenSender: false, isEmptyAssistantStart: false,
                                                 isChatCurrent: false, isAttendee: false))
         #expect(!ChatPreviewPolicy.countsUnread(isOwn: false, isHiddenSender: true, isEmptyAssistantStart: false,
@@ -70,7 +62,7 @@ struct CHT8UnreadPreviewTests {
                                                 isChatCurrent: true, isAttendee: false))
         #expect(!ChatPreviewPolicy.countsUnread(isOwn: false, isHiddenSender: false, isEmptyAssistantStart: false,
                                                 isChatCurrent: false, isAttendee: true))
-        // Previews post for remote arrivals only; the stage drops them while Chat is current.
+
         #expect(ChatPreviewPolicy.postsPreview(isOwn: false, isHiddenSender: false, isEmptyAssistantStart: false, isAttendee: false))
         #expect(!ChatPreviewPolicy.postsPreview(isOwn: true, isHiddenSender: false, isEmptyAssistantStart: false, isAttendee: false))
         #expect(!ChatPreviewPolicy.postsPreview(isOwn: false, isHiddenSender: true, isEmptyAssistantStart: false, isAttendee: false))
@@ -78,8 +70,6 @@ struct CHT8UnreadPreviewTests {
                 "an empty assistant start posts nothing")
         #expect(!ChatPreviewPolicy.postsPreview(isOwn: false, isHiddenSender: false, isEmptyAssistantStart: false, isAttendee: true))
     }
-
-    // MARK: Bodies (S40 8 f)
 
     @Test func previewBodiesNeverShowAFileName() {
         let text = ChatPreviewPolicy.body(message: message("m1", "Can you share the deck?\nThe one from Tuesday"))
@@ -120,22 +110,20 @@ struct CHT8UnreadPreviewTests {
         #expect(event.userId == "r1" && event.name == "Avery Lee" && event.messageId == "srv-7")
         #expect(event.detail == "Are you free?" && event.isPrivate)
         #expect(event.serverText == ChatPreviewBodyKind.text.rawValue)
-        // The assistant keeps its identity (it has no canonical stage id).
+
         let answer = message("a1", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName,
                              "Done! I opened the issue.")
         let assistant = ChatPreviewPolicy.event(message: answer, canonicalSenderId: "")
         #expect(assistant.userId == ConclaveAssistantChatIdentity.userId && assistant.detail == "Done!")
-        // The notice carries the body kind through; "" reads as text.
+
         let notice = MeetingNoticePolicy.toast(fromEvent: event)
         #expect(notice?.serverText == "text" && notice?.messageId == "srv-7" && notice?.isPrivate == true)
         let bare = MeetingNoticePolicy.toast(fromEvent: StageEvent.make(kind: StageEventKind.chatPreview, userId: "r1", name: "A"))
         #expect(bare.map { ChatPreviewPolicy.bodyKind($0) } == .text)
-        // A require, not a force unwrap: a nil toast fails the test instead of aborting the whole test process.
+
         let assistantNotice = try #require(MeetingNoticePolicy.toast(fromEvent: assistant))
         #expect(ChatPreviewPolicy.isAssistant(assistantNotice))
     }
-
-    // MARK: Coalescing (S40 8 f, S20 10 f)
 
     @Test func oneSenderUpdatesTheShownPreviewInPlace() {
         let center = center()
@@ -169,7 +157,7 @@ struct CHT8UnreadPreviewTests {
         #expect(shown.map { ChatPreviewPolicy.othersCount($0) } == 2)
         #expect(shown.map { ChatPreviewPolicy.showsCountLine($0) } == false, "several senders show no count line")
         #expect(center.previewSenders(noticeId: shown?.id ?? "") == ["r2", "r3", "r1"])
-        // Without ids the name separates people.
+
         #expect(ChatPreviewPolicy.senderKey(userId: "", name: "Guest") == "name:Guest")
         #expect(ChatPreviewPolicy.senderKey(userId: "r1", name: "Avery Lee") == "r1")
     }
@@ -185,13 +173,11 @@ struct CHT8UnreadPreviewTests {
         #expect(waiting?.name == "Avery Lee" && waiting?.detail == "Hello")
     }
 
-    // MARK: Drops
-
     @Test func aSuspendedLaneDropsPreviewsButKeepsEvents() {
         let center = center()
         _ = center.post(preview("m1", "Can you share the deck?"), nowMillis: 0)
         #expect(center.toast?.kind == NoticeKind.chatPreview)
-        // RECONCILE R3: a compact sheet at any detent (or an Android overlay) suspends the lane; the preview is dropped.
+
         center.setToastLaneSuspended(true)
         #expect(center.toast == nil && center.queue.isEmpty)
         _ = center.post(preview("m2", "Still there?"), nowMillis: 100)
@@ -225,7 +211,7 @@ struct CHT8UnreadPreviewTests {
         open.setCurrentPanel(MeetingPanel.chat.rawValue, nowMillis: 0)
         _ = open.post(preview("m1", "Hi"), nowMillis: 10)
         #expect(open.toast == nil && open.queue.isEmpty)
-        // Opening Chat clears what was waiting or showing.
+
         let shown = center()
         _ = shown.post(preview("m1", "Hi"), nowMillis: 0)
         shown.setCurrentPanel(MeetingPanel.chat.rawValue, nowMillis: 10)
@@ -260,8 +246,6 @@ struct CHT8UnreadPreviewTests {
         #expect(hide.toast != nil)
     }
 
-    // MARK: Actions
-
     @Test func tappingThePreviewOpensChatAtTheNewestMessage() {
         let clock = Clock()
         let stage = presenter(clock)
@@ -287,8 +271,6 @@ struct CHT8UnreadPreviewTests {
         #expect(notice.expiresAtMillis == 0, "toasts carry no presenter expiry")
     }
 
-    // MARK: Stage fixture (SL14 with the chat preview states)
-
     @Test func chatPreviewFixturesShowTheirToasts() {
         let same = StageFixtureSession(state: .chatPreviewsSameSender3)
         #expect(same.stage.toast?.count == 3 && same.stage.toast?.senderCount == 1)
@@ -304,24 +286,22 @@ struct CHT8UnreadPreviewTests {
         #expect(off.stage.toast == nil && off.unreadChatCount == 1, "previews off: the badge still counts")
         let attendee = StageFixtureSession(state: .chatPreviewsAttendee)
         #expect(attendee.stage.toast == nil && attendee.unreadChatCount == 0, "attendees: no badge and no toast")
-        // The scripted badge reaches the S1 controls row (what a mounted bar reads).
+
         let row = same.shell.controls.rows.first { $0.id == MeetingControlID.chat.rawValue }
         #expect(row?.badgeCount == 3)
-        // Tap: Chat opens at the newest message, the badge resets and the preview leaves.
+
         same.stage.performNoticeAction(noticeId: same.stage.toast?.id ?? "", actionId: NoticeAction.view)
         #expect(same.panelReadout() == "panel=chat invoker=call destination=chatMessage")
         #expect(same.shell.panels.snapshot.current?.targetId == "cp-s3")
         #expect(same.unreadChatCount == 0 && same.stage.toast == nil)
-        // A preview script while Chat is open adds nothing.
+
         same.postChatPreviewScript(named: "mixed3")
         #expect(same.stage.toast == nil && same.unreadChatCount == 0)
-        // The script on a plain stage.
+
         let plain = StageFixtureSession(state: .grid4)
         plain.postChatPreviewScript(named: "mixed3")
         #expect(plain.stage.toast?.senderCount == 3 && plain.unreadChatCount == 3)
     }
-
-    // MARK: Sources and strings
 
     @Test func previewSourcesFollowTheStageRules() throws {
         let ios = try stageSource("Sources/Conclave/Features/Meeting/Stage/ChatPreviewToast+iOS.swift")
@@ -383,8 +363,6 @@ struct CHT8UnreadPreviewTests {
             #expect(xml.contains("<plurals name=\"" + plural + "\""), "missing Android plurals \(plural)")
         }
     }
-
-    // MARK: Core and lane wiring (need HD requests B6-T5 R1 to R3)
 
     @Test func theCoreAndTheLanesUseThePreviewPolicy() throws {
         let vm = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"))

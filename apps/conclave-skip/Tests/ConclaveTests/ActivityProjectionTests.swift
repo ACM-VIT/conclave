@@ -3,10 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ACT-1 (OUT/PLAN-screens.md section 5, S60 7): the Activities launcher. `ActivitiesPresenter` snapshots on the
-/// activities-* fixtures, setup drafts and `showWhen` (C6-16), the vote tap results, the slow start and failure, the
-/// End duplicate guard, browser validation under the field, the destination landing (L6-11), the copy contract (L6-14,
-/// RC R15) and the strings in both catalogs. The Kotlin half is in T/Skip/ActivityBridgeTests.kt.
 @MainActor
 struct ActivityProjectionTests {
     private final class Recorder {
@@ -22,8 +18,6 @@ struct ActivityProjectionTests {
         activities.apply(ActivityFixtureScript.activitiesInputs(state))
         return activities
     }
-
-    // MARK: Root snapshots (S60 7 l 1, 2)
 
     @Test func hostIdleShowsTheWholeCatalogAppsAndTheBrowser() {
         let s = presenter(.activitiesHostIdle).snapshot
@@ -69,13 +63,11 @@ struct ActivityProjectionTests {
         #expect(item != nil)
         #expect(item?.gameName == "Trivia" && item?.round == 3 && item?.roundTotal == 7 && item?.playerCount == 6)
         #expect(item?.canEnd == true)
-        // A finished game (results on the stage) frees the catalog again.
+
         activities.applyGameSummary(ActivityGameSummary(gameId: "trivia", name: "Trivia", isActive: true, isFinished: true, round: 7,
                                                         roundTotal: 7, playerCount: 6))
         #expect(activities.snapshot.catalogReason == ActivitiesReason.none)
     }
-
-    // MARK: Setup (S60 7 c, l 3, 4, 6; C6-16)
 
     @Test func chessPlayAsAndComputerLevelShowOnlyAgainstTheComputer() {
         let activities = presenter(.activitiesHostIdle)
@@ -90,7 +82,7 @@ struct ActivityProjectionTests {
         setup = activities.setup
         #expect(setup?.options.first { $0.id == "side" }?.isVisible == true)
         #expect(setup?.options.first { $0.id == "difficulty" }?.isVisible == true)
-        // Idle on Setup: beginSetup is idempotent (S60 7 l 13).
+
         activities.beginSetup("chess")
         activities.beginSetup("chess")
         #expect(activities.beginSetupCount == 1)
@@ -115,7 +107,7 @@ struct ActivityProjectionTests {
         let revision = activities.setup
         activities.setText("topic", text: "team lore ")
         #expect(activities.draftText("topic") == "team lore ")
-        // Typing never republishes the setup (the field keeps its own text).
+
         #expect(activities.setup == revision)
         activities.startGame()
         let start = try #require(recorder.commands.last)
@@ -138,7 +130,7 @@ struct ActivityProjectionTests {
         #expect(activities.setup?.phase == SetupPhase.failed)
         #expect(activities.setup?.failureServerText == "Trivia needs at least 3 players.")
         #expect(activities.setup?.options.first { $0.id == "pace" }?.value == "fast")
-        // A stale timer never moves a newer phase.
+
         activities.fireSlowTimer(serial: activities.currentTimerSerial - 1)
         #expect(activities.setup?.phase == SetupPhase.failed)
     }
@@ -166,8 +158,6 @@ struct ActivityProjectionTests {
                                                         roundTotal: 7, playerCount: 6))
         #expect(activities.dismissSignal == before + 1)
     }
-
-    // MARK: Vote (S60 7 f, l 5)
 
     @Test func voteTapsReturnDispatchedOnlyForANewChoice() {
         let recorder = Recorder()
@@ -197,8 +187,6 @@ struct ActivityProjectionTests {
         #expect(recovering.castVote("trivia") == ActivityTapResult.explained)
     }
 
-    // MARK: End (S60 7 l 7, 11)
-
     @Test func endIsOneCommandWhilePendingAndFailsInline() {
         let recorder = Recorder()
         let activities = presenter(.activitiesGameLive, recorder: recorder)
@@ -215,8 +203,6 @@ struct ActivityProjectionTests {
         activities.applyGameSummary(ActivityGameSummary.none)
         #expect(activities.snapshot.nowPlayingItem(kind: .game) == nil)
     }
-
-    // MARK: Browser (S60 7 l 8)
 
     @Test func browserValidationShowsUnderTheFieldAndSendsNothing() {
         let recorder = Recorder()
@@ -244,8 +230,6 @@ struct ActivityProjectionTests {
         #expect(BrowserURLValidationPolicy.validate("HTTP://Example.com/path?q=1") == BrowserValidation.none)
     }
 
-    // MARK: Destinations and routes (L6-11, S60 R6-5)
-
     @Test func destinationsLandOnTheirPage() {
         #expect(ActivitiesDestinationPolicy.landing(destination: .activitiesVote, targetId: "") ==
                 ActivitiesLanding(route: .root, id: "", focusesVote: true))
@@ -267,8 +251,6 @@ struct ActivityProjectionTests {
         #expect(activities.setup == nil)
         #expect(activities.snapshot.withRevision(0) == ActivitiesSnapshot.empty)
     }
-
-    // MARK: Copy contract (L6-14, RC R15) and catalogs
 
     @Test func everyActivitiesEnumCaseHasCopyOnBothPlatforms() throws {
         let ios = try stageSource("Sources/Conclave/Features/Meeting/Activities/ActivitiesCopy+iOS.swift")
@@ -297,8 +279,6 @@ struct ActivityProjectionTests {
         }
     }
 
-    /// After the batch strings merge (HD/strings/B4-T8.json): every catalog key the activity iOS files resolve and every
-    /// resource name the activity Kotlin files resolve exists, with a comment on the iOS side.
     @Test func activityStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: activityPackageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
         let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])

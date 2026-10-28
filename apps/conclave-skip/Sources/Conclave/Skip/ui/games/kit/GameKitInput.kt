@@ -40,14 +40,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 
-/*
- * S60 L6-5 (ACT-2) on Android: K10 TextEntry and K11 SecretCard.
- */
-
-/**
- * K10: one text field plus its submit button. The scene keeps the draft (a rejected submission keeps it, S60 9 f);
- * the counter appears 20 characters before the limit; the IME's Send submits.
- */
 @Composable
 internal fun GameKitTextEntry(
     label: String,
@@ -80,13 +72,6 @@ internal fun GameKitTextEntry(
     }
 }
 
-/**
- * K11 (S60 Q7, 9 d): press and hold reveals, release or cancellation hides (detectTapGestures onPress with
- * tryAwaitRelease, keyed pointerInput, callbacks through rememberUpdatedState). While hidden the secret is not
- * composed at all and the hidden face clears its semantics, so the word never reaches TalkBack; TalkBack gets a
- * "Reveal word" custom action. The card hides below STARTED. The secure window flag is not
- * used (it would blank the call).
- */
 @Composable
 internal fun GameKitSecretCard(prompt: String, secret: String, enabled: Boolean, onRevealBegan: () -> Unit) {
     var held by remember { mutableStateOf(false) }
@@ -95,8 +80,7 @@ internal fun GameKitSecretCard(prompt: String, secret: String, enabled: Boolean,
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     val active = lifecycleState.isAtLeast(Lifecycle.State.STARTED)
     LaunchedEffect(active) { if (!active) revealedForTalkBack = false }
-    // Compose exposes no accessibility-focus callback, so a TalkBack reveal lasts until the round's secret changes,
-    // the card leaves composition or the app goes below STARTED (iOS hides on focus loss).
+
     LaunchedEffect(secret) { revealedForTalkBack = false }
     val shows = enabled && active && (held || revealedForTalkBack)
     val scheme = MaterialTheme.colorScheme

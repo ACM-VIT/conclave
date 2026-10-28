@@ -1,22 +1,17 @@
 import Foundation
 
-// ENT-1 (S10 2, Q3, Q4): local recents. Device only, newest first, at most 20, no invite codes or client secrets,
-// cleared on sign-out and account deletion. The presenter writes them on `inCall` (upsert) and on terminal outcomes
-// (end), and builds the Rejoin card from the newest record (15 minutes after `left` or `connectionLost`).
-
-/// One stored recent meeting. String raw values keep old stores decodable when an enum grows.
 struct RecentMeetingRecord: Codable, Equatable, Identifiable {
     let id: String
     let roomId: String
     let title: String
-    /// `JoinMode` raw value.
+
     let joinMode: String
-    /// `RecentRole` raw value.
+
     let role: String
     let lastJoinedAtMillis: Double
-    /// 0 while the meeting has no recorded end.
+
     let endedAtMillis: Double
-    /// `RecentEnd` raw value, "" while the meeting has no recorded end.
+
     let end: String
 
     var recentRole: RecentRole { RecentRole(rawValue: role) ?? RecentRole.participant }
@@ -31,15 +26,13 @@ struct RecentMeetingRecord: Codable, Equatable, Identifiable {
 
 enum RecentMeetingsPolicy {
     static let cap = 20
-    /// Q3: the Rejoin card lives 15 minutes after the end.
+
     static let rejoinWindowMillis: Double = 15.0 * 60.0 * 1000.0
 
-    /// The stable id of a room in a join mode (one row per room and mode).
     static func recordId(roomId: String, joinMode: JoinMode) -> String {
         joinMode.rawValue + ":" + roomId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    /// Inserts or moves the record to the front (same id replaced), capped at `cap`.
     static func upsert(_ records: [RecentMeetingRecord], _ record: RecentMeetingRecord) -> [RecentMeetingRecord] {
         var next: [RecentMeetingRecord] = [record]
         for existing in records where existing.id != record.id {
@@ -49,7 +42,6 @@ enum RecentMeetingsPolicy {
         return next
     }
 
-    /// Records the end of the record with `id`; unchanged when there is none.
     static func end(_ records: [RecentMeetingRecord], id: String, end: RecentEnd, atMillis millis: Double) -> [RecentMeetingRecord] {
         var next: [RecentMeetingRecord] = []
         for record in records {
@@ -66,8 +58,6 @@ enum RecentMeetingsPolicy {
         return next
     }
 
-    /// The Rejoin card candidate: the newest record, only when it ended by leaving or a lost connection less than
-    /// 15 minutes ago. A newer meeting is a newer first record, so it hides the card (Q3).
     static func rejoinCandidate(_ records: [RecentMeetingRecord], nowMillis: Double) -> RecentMeetingRecord? {
         guard let newest = records.first, newest.endedAtMillis > 0 else { return nil }
         guard let end = newest.recentEnd, end == .left || end == .connectionLost else { return nil }
@@ -75,14 +65,11 @@ enum RecentMeetingsPolicy {
         return newest
     }
 
-    /// When the card for `record` expires.
     static func rejoinExpiryMillis(_ record: RecentMeetingRecord) -> Double {
         record.endedAtMillis + rejoinWindowMillis
     }
 }
 
-/// UserDefaults JSON storage (the AppState pattern). A nil `defaults` keeps the records in memory only (tests and
-/// the L9 fixture, which never touch the device store).
 final class RecentMeetingsStore {
     static let defaultsKey = "conclave.premeeting.recents"
 
@@ -125,8 +112,6 @@ final class RecentMeetingsStore {
     }
 }
 
-/// Locale-formatted times for Home (S10 2 g: formatted by the presenter with the device locale, never platform
-/// copy). Computed at snapshot time and on foreground, never per frame (F00 P6).
 enum PremeetingTimeFormatting {
     private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -142,7 +127,6 @@ enum PremeetingTimeFormatting {
         return formatter
     }()
 
-    /// "Yesterday", "3 days ago" (first letter upper case for a row subtitle).
     static func relative(millis: Double, nowMillis: Double) -> String {
         let date = Date(timeIntervalSince1970: millis / 1000.0)
         let now = Date(timeIntervalSince1970: nowMillis / 1000.0)
@@ -151,7 +135,6 @@ enum PremeetingTimeFormatting {
         return String(first).uppercased() + String(text.dropFirst())
     }
 
-    /// "3:42 PM" or "15:42" by locale.
     static func clockTime(millis: Double) -> String {
         clockFormatter.string(from: Date(timeIntervalSince1970: millis / 1000.0))
     }

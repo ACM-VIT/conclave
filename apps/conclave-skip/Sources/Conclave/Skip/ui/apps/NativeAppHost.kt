@@ -64,17 +64,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/*
- * S60 13 d (ACT-7) on Android: the SDK app host inside the S20 activity card (always dark). NativeAppHostBody is the card
- * body for an app (HD request B7-T1 R2 mounts it in ActivityStage.kt): the tag row, the canvas (AndroidView attaching the
- * one WebView ActivityWebViewRegistry holds for the app session, never created on recomposition), the opening and failure
- * states and the Whiteboard toolbar (a LazyRow of 48 dp labelled toggles with tooltips; menus are DropdownMenus).
- * NativeAppHostMenu is the header's host menu: IconButton(MoreVertFill0) with "Lock editing" (checkbox item) and
- * "Close %1$s" in error. Tool selection plays selectionChanged on Android only; no other haptic (S60 13 e, h).
- * ACT-8: Spin the wheel's card bar (Spin, the card's one primary, and Edit names), Watch together's header "Queue", and
- * the winner and selected video title announced natively (S60 13 i). The two Activities pages are in AppPages.kt.
- */
-
 @Composable
 internal fun NativeAppHostBody(host: AppHostPresenter, onShowVideo: () -> Unit, modifier: Modifier = Modifier) {
     val model = host.model
@@ -83,7 +72,7 @@ internal fun NativeAppHostBody(host: AppHostPresenter, onShowVideo: () -> Unit, 
         host.session?.setReduceMotion(accessibility.removeAnimations)
     }
     LaunchedEffect(model.wantsWebView, model.appSessionId) {
-        // A failure releases the WebView (Try Again creates a fresh one); the registry keeps it otherwise.
+
         if (!model.wantsWebView && model.appSessionId.isNotEmpty()) ActivityWebViewRegistry.release(model.appSessionId)
     }
     Column(modifier.fillMaxSize().testTag("app.host.${model.phase.rawValue}").semantics { isTraversalGroup = true }) {
@@ -113,7 +102,6 @@ internal fun NativeAppHostBody(host: AppHostPresenter, onShowVideo: () -> Unit, 
     AppExternalLinkDialog()
 }
 
-/** Spin (the card's one primary, primaryContainer) and Edit names (opens Activities at the Wheel page). */
 @Composable
 private fun WheelCardBar(host: AppHostPresenter) {
     val wheel = host.wheel
@@ -144,7 +132,6 @@ private fun WheelCardBar(host: AppHostPresenter) {
     }
 }
 
-/** Watch together's header button: "Queue" opens Activities at the Watch page. */
 @Composable
 private fun AppWatchQueueButton(host: AppHostPresenter) {
     TextButton(onClick = { host.openPage() }, modifier = Modifier.heightIn(min = 48.dp).testTag("app.watch.queue")) {
@@ -152,7 +139,6 @@ private fun AppWatchQueueButton(host: AppHostPresenter) {
     }
 }
 
-/** The wheel winner ("Winner: %1$s") and a newly selected video's title, announced natively (S60 13 i). */
 @Composable
 private fun AppPageAnnouncer(host: AppHostPresenter) {
     val view = LocalView.current
@@ -170,11 +156,10 @@ private fun AppPageAnnouncer(host: AppHostPresenter) {
     }
 }
 
-/** The header's host menu (S60 13 d); non-hosts see nothing. */
 @Composable
 internal fun NativeAppHostMenu(host: AppHostPresenter) {
     val model = host.model
-    // ACT-8: Watch together's "Queue" (everyone) before the host menu (S60 13 d).
+
     if (model.appId == "watch" && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.readOnly)) AppWatchQueueButton(host)
     if (!model.canClose && !model.canLock) return
     var expanded by remember { mutableStateOf(false) }
@@ -231,11 +216,8 @@ internal fun NativeAppHostMenu(host: AppHostPresenter) {
     }
 }
 
-/** The card's status line for an app (HD request B7-T1 R2: the header identity reads it). */
 @Composable
 internal fun nativeAppHostStatus(host: AppHostPresenter): String = appHostStatus(host.model)
-
-// MARK: Canvas
 
 @Composable
 private fun AppHostCanvas(host: AppHostPresenter, model: AppHostModel) {
@@ -248,7 +230,7 @@ private fun AppHostCanvas(host: AppHostPresenter, model: AppHostModel) {
             contentDescription = label
             if (hint.isNotEmpty()) stateDescription = hint
         },
-        // Detach only: the registry keeps the instance for the app session (L6-15).
+
         onRelease = { container -> container.removeAllViews() },
         update = { container ->
             val session = host.session
@@ -263,8 +245,6 @@ private fun AppHostCanvas(host: AppHostPresenter, model: AppHostModel) {
         },
     )
 }
-
-// MARK: States
 
 @Composable
 private fun AppHostTagRow(tag: AppHostTag) {
@@ -299,7 +279,6 @@ private fun AppHostOpening(appId: String) {
     }
 }
 
-/** "Couldn't open %1$s" with Try again and Show video; a version mismatch adds "Update Conclave to use %1$s." */
 @Composable
 private fun AppHostFailure(host: AppHostPresenter, model: AppHostModel, onShowVideo: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -328,7 +307,6 @@ private fun AppHostFailure(host: AppHostPresenter, model: AppHostModel, onShowVi
     }
 }
 
-/** The empty board (S60 13 g): text only, never intercepting touches. Reads only the element count. */
 @Composable
 private fun AppBoardEmptyHint(host: AppHostPresenter, modifier: Modifier) {
     val toolbar = host.toolbar
@@ -341,8 +319,6 @@ private fun AppBoardEmptyHint(host: AppHostPresenter, modifier: Modifier) {
             textAlign = TextAlign.Center)
     }
 }
-
-// MARK: Whiteboard toolbar (S60 13 d)
 
 @Composable
 private fun WhiteboardToolbar(host: AppHostPresenter) {
@@ -535,10 +511,6 @@ private fun CheckedMenuItem(label: String, checked: Boolean, onClick: () -> Unit
     )
 }
 
-/**
- * One 48 dp toolbar toggle: surfaceContainerHigh with onSurface ink; selected is ext.toggleEngagedContainer with the
- * engaged ink (never coral). The long-press tooltip names it; pending shows a spinner and the "In progress" state.
- */
 @Composable
 private fun AppToolChip(
     label: String,
@@ -581,7 +553,6 @@ private fun AppToolChip(
     }
 }
 
-/** User ink is content, not app palette (S60 13 e): the swatch shows the embed's own color value. */
 @Composable
 private fun InkSwatch(hex: String) {
     val ext = LocalConclaveExtendedColors.current
@@ -635,7 +606,6 @@ private fun DeletePageDialog(host: AppHostPresenter, onDone: () -> Unit) {
     )
 }
 
-/** "Open this link?" for a user link from the embed; Open hands it to Custom Tabs on the call task (PiP suppressed). */
 @Composable
 private fun AppExternalLinkDialog() {
     val url = ActivityWebViewRegistry.pendingExternalUrl ?: return
@@ -653,12 +623,11 @@ private fun AppExternalLinkDialog() {
     )
 }
 
-/** L6-12 Debug readouts (fixtures only): registry serial, reloads and the bridge's rejection count. */
 @Composable
 private fun AppHostReadouts(host: AppHostPresenter) {
     val tertiary = MaterialTheme.colorScheme.onSurfaceVariant
     val style = MaterialTheme.typography.labelSmall
-    // Machine-readable readouts, not copy: identifier, "=", value.
+
     val readouts = listOf(
         "app.registrySerial" to ActivityWebViewRegistry.registrySerial,
         "app.reloads" to ActivityWebViewRegistry.reloads,
@@ -672,7 +641,6 @@ private fun AppHostReadouts(host: AppHostPresenter) {
     }
 }
 
-/** Export (S60 13 d): the embed's PNG in cache/exports/ (the FileProvider `exports` path), shared like a chat photo. */
 private suspend fun shareWhiteboardExport(context: Context, pngBase64: String, title: String) {
     val file = withContext(Dispatchers.IO) {
         runCatching {

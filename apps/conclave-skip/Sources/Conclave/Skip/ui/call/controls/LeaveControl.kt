@@ -27,18 +27,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-/*
- * S30 4 d (CTL-2): the Leave control in the Android toolbar. The WP1-2b 72 x 48 dp callEnd pill (F00 C04 d), "Leave
- * call" (Owner OQ3), one tap leaves for everyone with no haptic (Q11). A host's long press opens the FND-2 dropdown menu
- * with the error-colored "End call for everyone…" on top (farthest from the thumb: the menu opens above the bar), a
- * divider, then "Leave call", no icons (CL15, RECONCILE R8), playing `longPress` as it opens; TalkBack gets the same End
- * as a custom action and the long-click label, so End never depends on a long press (S30 4 i). Guests keep the plain
- * tooltip (a host's long press belongs to the menu). The End confirmation (EndForEveryoneDialog.kt, F00 C18) is composed
- * here for both bar invokers, "call" and "more", because an AlertDialog has no anchor; Host Controls composes its own
- * (S50 PH17). The control reads only `controls.leaveState` through LeaveCache (S30 4 k, CL14). Resolved strings sit in
- * vals before any `semantics {}` block (CL14).
- */
-
 @Composable
 internal fun LeaveControl(controls: CallControlsPresenter, modifier: Modifier = Modifier) {
     val cache = remember(controls) { LeaveCache(controls) }
@@ -53,14 +41,14 @@ internal fun LeaveControl(controls: CallControlsPresenter, modifier: Modifier = 
     val showsMenu = LeaveControlPolicy.showsHostMenu(leave.snapshot, isAccessibilityText = false)
     val offersEnd = LeaveControlPolicy.offersEndAction(leave.snapshot)
     val expanded = menuOpen && showsMenu
-    // S30 CC16: the open menu keeps chrome visible (Compose menus report through this effect).
+
     DisposableEffect(expanded) {
         if (expanded) stage.setTransientChrome(id = ChromeAutoHidePolicy.leaveMenu, open = true)
         onDispose {
             if (expanded) stage.setTransientChrome(id = ChromeAutoHidePolicy.leaveMenu, open = false)
         }
     }
-    // Losing host or starting to leave closes an open menu.
+
     LaunchedEffect(showsMenu) {
         if (!showsMenu) menuOpen = false
     }
@@ -124,7 +112,6 @@ internal fun LeaveControl(controls: CallControlsPresenter, modifier: Modifier = 
     }
 }
 
-/** The host menu words (S30 4 g, Material sentence case) and the S30 7 reason lines of a disabled End row. */
 @Composable
 internal fun rememberLeaveMenuTitles(): LeaveMenuTitles {
     val leave = conclaveString("ds_leave_call")

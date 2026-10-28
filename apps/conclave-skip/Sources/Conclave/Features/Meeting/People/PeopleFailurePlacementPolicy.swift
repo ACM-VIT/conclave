@@ -1,11 +1,7 @@
 import Foundation
 
-/// S50 PL14 (shared, pure; RECONCILE R2: origin decides, not coverage). An action started inside People, Host
-/// Controls or a pushed host page reports inline at its source on iOS (any detent and the inspector) and on the
-/// page's snackbar on Android (any InCallPage variant); an action started on the stage (the tile menu, the knock
-/// banner, a stage dialog) uses the S20 toast lane on both platforms. The same rule is S60 D23 and S70 D20.
 enum PeopleFailurePlacementPolicy {
-    /// The toast kind a stage-origin People failure posts through `StagePresenter.postLocal` (S20 10, S30 CC7).
+
     static let stageNoticeKind = "peopleFailed"
 
     static func placement(origin: String, platform: String) -> HostFailurePlacement {
@@ -13,14 +9,12 @@ enum PeopleFailurePlacementPolicy {
         return platform == NoticePlatform.android ? HostFailurePlacement.panelSnackbar : HostFailurePlacement.panelInline
     }
 
-    /// The stage toast for a failure (Retry routes back through the core's notice command with this detail).
     static func stageNotice(_ failure: HostActionFailureModel, userId: String) -> MeetingNotice {
         MeetingNotice.make(kind: stageNoticeKind, severity: NoticeSeverity.error, userId: userId, name: failure.targetName,
                            actions: [NoticeAction.make(NoticeAction.retry)],
                            detail: stageDetail(failureId: failure.id, action: failure.action, failure: failure.failure))
     }
 
-    /// `<failure id>|<command kind>|<failure>`: the notice carries what its copy and its Retry need.
     static func stageDetail(failureId: Int, action: String, failure: String) -> String {
         String(failureId) + "|" + action + "|" + failure
     }
@@ -42,9 +36,6 @@ enum PeopleFailurePlacementPolicy {
     }
 }
 
-/// Which sentence a failure shows (S50 3 g, 6 g, 7 g, 8 g; RECONCILE R17): a typed reason sentence when the failure
-/// names one, else the action's own "Couldn't ..." sentence. Views map the kind to their catalog key or `ppl_` /
-/// `hst_` name, so both platforms show the same sentence.
 enum PeopleFailureCopy {
     static let cantRemove = "cantRemove"
     static let rateLimited = "rateLimited"
@@ -70,20 +61,17 @@ enum PeopleFailureCopy {
     static let access = "access"
     static let notice = "notice"
     static let link = "link"
-    /// PPL-5 (S50 10 g, 9 g): "Couldn't invite %@ on stage.", "%@ is no longer watching.", "Couldn't cancel the
-    /// invite.", "Couldn't update webinar settings."
+
     static let invite = "invite"
     static let inviteGone = "inviteGone"
     static let cancelInvite = "cancelInvite"
     static let webinar = "webinar"
-    /// PPL-6 (S50 11 f, g): "Couldn't send your question.", "You're sending questions too quickly.", "Ask a longer
-    /// question.", "Couldn't update the question."
+
     static let qaSend = "qaSend"
     static let qaRateLimited = "qaRateLimited"
     static let qaTooShort = "qaTooShort"
     static let qaModerate = "qaModerate"
-    /// PPL-3 (S50 4 g, 5 g): "Couldn't admit %@.", "Couldn't admit everyone.", "Couldn't deny %@."; Lower All uses
-    /// `hands` ("Couldn't lower all hands.").
+
     static let admit = "admit"
     static let admitAll = "admitAll"
     static let deny = "deny"
@@ -91,7 +79,7 @@ enum PeopleFailureCopy {
 
     static func kind(action: String, failure: String, sourceKey: String) -> String {
         let typed = HostActionFailure(rawValue: failure)
-        // PPL-6: a question's own refusals read as Q&A sentences (S50 11 f) before the shared reasons.
+
         if action == PeopleCommandKind.qaSubmit.rawValue {
             if typed == HostActionFailure.rateLimited { return qaRateLimited }
             if typed == HostActionFailure.invalidInput { return qaTooShort }
@@ -132,7 +120,7 @@ enum PeopleFailureCopy {
     }
 
     private static func bulkKind(_ sourceKey: String) -> String {
-        // PPL-3: a header bulk action reports at its section (Lower All on Raised Hands, Mute All on the roster).
+
         if sourceKey == PeopleSectionID.raisedHands.rawValue { return hands }
         if sourceKey == PeopleSectionID.inMeeting.rawValue || sourceKey == PeopleSectionID.panelists.rawValue { return muteAll }
         guard let bulk = HostBulkID(rawValue: sourceKey) else { return generic }

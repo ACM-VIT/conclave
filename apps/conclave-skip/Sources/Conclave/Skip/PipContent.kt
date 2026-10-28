@@ -30,14 +30,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/**
- * Minimal Picture-in-Picture surface: active speaker video when available,
- * otherwise their avatar. Mute and Leave stay in Android's PiP action bar.
- *
- * Legacy root only (S70 3 d, 3 m): Main.kt swaps to it while the legacy call screen ships
- * (PipController.showsLegacyPipContent). The native call root stays composed in PiP and draws
- * [NativePipOverlay] over its own canvas instead.
- */
 @Composable
 fun PipContent() {
     val videoState = PipController.pipVideoState
@@ -84,15 +76,6 @@ private fun PipAvatar(name: String) {
     }
 }
 
-/**
- * S20 13 d content over the native call root while it is in a PiP window (S70 3 b, d, f, i; SYS-4). The root stays
- * composed and its canvas lays out only the PiP target over the whole window (PipStageLayoutPolicy), so no renderer is
- * disposed (PS 9.4); this layer adds what the target's video does not show: the name pill and muted glyph from 160 dp
- * wide, the avatar with the name while the camera is off, the solo text when nobody else is here, and the
- * Reconnecting or On hold pill. It reads the stage's PiP choice and that person's tile chrome only (one observable
- * entry), and is one semantics node: "Video of Avery" with the state "Muted". In-call tokens (always dark), no
- * gradients, no buttons (the window's actions are the system RemoteActions).
- */
 @Composable
 internal fun NativePipOverlay(stage: StagePresenter, phase: CallPresencePhase, modifier: Modifier = Modifier) {
     val choice = stage.pipTarget
@@ -173,10 +156,6 @@ private fun NativePipContentLayer(content: PipContentModel, avatarDiameter: Floa
     }
 }
 
-/**
- * The S70 SX1 PiP readouts for the system fixture (HD request B5-T4): `sys.pip` (the last params) and
- * `sys.pipSuppressions` (count and last reason), as test tags with ASCII values.
- */
 @Composable
 internal fun PipFixtureReadouts(modifier: Modifier = Modifier) {
     val params = PipController.paramsReadout

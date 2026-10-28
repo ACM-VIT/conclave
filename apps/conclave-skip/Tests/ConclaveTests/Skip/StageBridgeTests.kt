@@ -10,14 +10,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * STG-1 and STG-4 through the transpiled stage policies and presenter (the Swift halves are T/StagePoliciesTests.swift
- * and T/STG4ChromeAutoHideTests.swift): SL1 caps at the S20 2 l1 sizes with the same results as Swift, the kind
- * chooser, the SL2 order and promotion timing with an injected clock, SL4 store isolation, SC6 audio never paused,
- * the SL8 chrome state machine, the reaction rules, the Android viewport classes and the SL14 fixture script. Pure:
- * no composition (only the first composition in a JVM keeps recomposing under Robolectric, PanelStageBridgeTests owns
- * it).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class StageBridgeTests {
@@ -201,14 +193,14 @@ class StageBridgeTests {
         assertFalse(ChromeAutoHidePolicy.shouldArm(hidden, canAutoHide = true))
         assertFalse(ChromeAutoHidePolicy.canAutoHide(blocker = AutoHideBlocker.none, voiceOver = true, switchControl = false, focusInChrome = false))
         assertEquals(7500.0, ChromeAutoHidePolicy.hideDelayMillis(timeoutMillis = 7500.0, holdUntilMillis = 0.0, nowMillis = 1.0), 0.001)
-        // The Kotlin chrome state wrapper reveals while blocked and hides on the timer only when allowed.
+
         val state = StageChromeVisibilityState()
         state.setCanAutoHide(true)
         state.send(ChromeVisibilityEvent.timerFired)
         assertTrue(state.state.isHidden)
         state.setCanAutoHide(false)
         assertFalse(state.state.isHidden)
-        // Presenter blockers: Always Show Controls, panels and transient ids (S30 CC16, S60 C6-14).
+
         val stage = presenter(StageFixtureScript.base(count = 4))
         assertEquals(AutoHideBlocker.none, stage.autoHideBlocker)
         stage.setTransientChrome(id = ChromeAutoHidePolicy.moreSheet, open = true)

@@ -13,19 +13,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * CTL-5 and CTL-6 through the transpiled More policy, reaction palette policy, controls presenter, PanelCoordinator and
- * CL13 More fixtures (the Swift halves are T/CTL5MoreMenuTests.swift and T/CTL6ReactionsHandTests.swift): the same row
- * ids, order and reasons in normal, recovering and offline states (S30 5 f, 7), the menu budget numbers (CL16), the
- * Android tile order (5 d), panels from More with invoker more after the sheet (D17, 5 l5), End from More (R09), the
- * palette ids and availability (6 j, 6 f), the hand ticket on the More row and the stage (SC12), the keyboard mapping
- * (1 g), and the More and reactions caches (CL14). Pure: no composition (PanelStageBridgeTests owns the one composition
- * per JVM). Not run in the heads-down push.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class CTL5CTL6BridgeTests {
-    // Batch 7 (TRN-2, SET-5): Transcript and Layout landed, so both rows show between Activities and Settings.
+
     private val guestIds = listOf("reactions", "hand", "screenShare", "captions", "flipCamera", "participants", "activities", "transcript",
         "layout", "settings", "invite", "copyLink", "meetingDetails")
     private val hostIds = guestIds + listOf("hostControls", "lockMeeting", "endForEveryone")
@@ -41,18 +32,18 @@ class CTL5CTL6BridgeTests {
     @Test fun moreRowsAndOrderMatchSwift() {
         assertEquals(guestIds, ids(ControlsFixtureState.guest))
         assertEquals(hostIds, ids(ControlsFixtureState.host))
-        // S30 7 acceptance: recovering and offline keep the same rows in the same places.
+
         assertEquals(ids(ControlsFixtureState.guest), ids(ControlsFixtureState.recovering))
         assertEquals(ids(ControlsFixtureState.guest), ids(ControlsFixtureState.offline))
         assertEquals(ids(ControlsFixtureState.host), ids(ControlsFixtureState.hostRecovering))
         assertEquals(ids(ControlsFixtureState.host), ids(ControlsFixtureState.hostOffline))
-        // 5 l12: no room link, no Invite or Copy link; Q&A for the webinar host with its count (R18).
+
         val noLink = ids(ControlsFixtureState.noLink)
         assertFalse(noLink.contains("invite") || noLink.contains("copyLink"))
         val webinar = ControlsFixtureSession(state = ControlsFixtureState.webinarHost).controls
         assertEquals(2, webinar.more.item(MoreItemID.qa)?.count)
         assertEquals(true, webinar.bar.control(CallControlKind.more)?.showsDot)
-        // Transcript and Layout landed (batch 7); Effects waits for its availability (OQ6 default A); no voice agent (Owner OQ7).
+
         assertTrue(ids(ControlsFixtureState.webinarHost).contains("transcript") && ids(ControlsFixtureState.webinarHost).contains("layout"))
         assertFalse(ids(ControlsFixtureState.webinarHost).any { it == "effects" })
         assertFalse(MoreItemID.values().any { it.rawValue.lowercase().contains("voice") })
@@ -92,7 +83,7 @@ class CTL5CTL6BridgeTests {
 
     @Test fun panelsPresentFromMoreAfterTheSheetAndEndBelongsToMore() {
         val session = ControlsFixtureSession(state = ControlsFixtureState.host)
-        // 5 l5: the sheet reports its dismissal first, then the chosen panel presents with invoker more.
+
         session.controls.noteMoreSheetDismissed()
         assertEquals(1, session.controls.moreSheetDismissCount)
         assertEquals(0, session.counters.panelPresent)
@@ -101,13 +92,13 @@ class CTL5CTL6BridgeTests {
         assertEquals("panel=participants invoker=more", session.panelReadout())
         assertEquals(ControlTapResult.ignored, session.controls.select(MoreItemID.participants))
         assertTrue(session.countersReadout().contains("sheetDismissed=1"))
-        // R09: More's End confirmation; the Android Leave control composes it (includesMoreInvoker = true).
+
         assertEquals(ControlTapResult.dispatched, session.controls.select(MoreItemID.endForEveryone))
         val leave = session.controls.leaveState
         assertEquals(MeetingConfirmationInvoker.more, leave.confirmationInvoker)
         assertTrue(MoreMenuPolicy.presentsEndDialog(leave))
         assertTrue(LeaveControlPolicy.presentsDialog(leave, includesMoreInvoker = true))
-        // Panels and End act after the sheet; the hand, captions and Copy link act in place.
+
         assertTrue(MoreMenuPolicy.actsAfterDismiss(session.controls.more.item(MoreItemID.settings)!!))
         assertFalse(MoreMenuPolicy.actsAfterDismiss(session.controls.more.item(MoreItemID.copyLink)!!))
         val coordinator = PanelCoordinator(session = 4)
@@ -141,7 +132,7 @@ class CTL5CTL6BridgeTests {
             ControlsFixtureSession(state = ControlsFixtureState.reactionsOff).controls.reactions.availability)
         assertEquals(ReactionAvailability.available,
             ControlsFixtureSession(state = ControlsFixtureState.hostReactionsOff).controls.reactions.availability)
-        // SC12: raising on the row and on the stage chip in the tap's frame.
+
         val slow = ControlsFixtureSession(state = ControlsFixtureState.slowAck)
         slow.sleep = { _ -> }
         assertEquals(ControlTapResult.dispatched, slow.controls.select(MoreItemID.hand))

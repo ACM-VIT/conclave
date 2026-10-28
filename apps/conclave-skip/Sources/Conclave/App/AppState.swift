@@ -26,8 +26,7 @@ final class AppState {
             onIdentityChanged?()
         }
     }
-    /// S10 0.8 C8: the native premeeting root pushes identity changes to its presenter through this hook (the view
-    /// model's `setPremeetingIdentity`). Nil on the legacy route, so nothing changes there.
+
     @ObservationIgnored var onIdentityChanged: (() -> Void)? = nil
     var pendingJoinURLString: String?
     var pendingJoinRequestID = 0

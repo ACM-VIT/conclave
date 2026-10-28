@@ -2,12 +2,6 @@
 import AVKit
 import SwiftUI
 
-// ENT-3 (S10 6 c, L3): the lobby's inset grouped boxes and the audio rows on iOS. Not a `List`: a lazily backed list
-// could unload and recreate the preview card's representable at accessibility sizes (F00 P5), so the lobby is a plain
-// `ScrollView { VStack }` and these boxes draw the inset grouped look (system list margins, 10 pt continuous corners,
-// the secondary grouped background, dividers inset by 16 pt, the footnote footer below).
-
-/// One inset grouped box with an optional footer.
 struct LobbyGroupedSection<Content: View>: View {
     let footer: String
     let footerIdentifier: String
@@ -39,7 +33,6 @@ struct LobbyGroupedSection<Content: View>: View {
     }
 }
 
-/// A row inside a grouped box: 44 pt minimum, 16 pt leading and trailing insets.
 struct LobbyGroupedRow<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
@@ -51,16 +44,12 @@ struct LobbyGroupedRow<Content: View>: View {
     }
 }
 
-/// The divider between rows of one box (inset by 16 pt like a grouped list).
 struct LobbyGroupedDivider: View {
     var body: some View {
         Divider().padding(.leading, 16)
     }
 }
 
-/// S10 6 c `AudioRouteRow`: "Audio", the route name and the system route picker (`AVRoutePickerView`, coralText tint,
-/// 44 pt). The system owns the glyph, the route list and its label; the row records the chosen route as the prejoin
-/// intent when the picker closes (S10 0.8 C2), never applying it early.
 struct LobbyAudioRouteRow: View {
     let premeeting: PremeetingPresenter
 
@@ -84,8 +73,6 @@ struct LobbyAudioRouteRow: View {
     }
 }
 
-/// S10 6 c `MicrophoneInputRow` (iOS 17 and later): a menu `Picker` over the inputs the inactive session lists,
-/// shown only when more than one is listed (Q14). The choice is intent only (C2); `setAudioInput` is never called.
 struct LobbyMicrophoneInputRow: View {
     let premeeting: PremeetingPresenter
 
@@ -110,7 +97,7 @@ struct LobbyMicrophoneInputRow: View {
 }
 
 enum LobbyAudioCopy {
-    /// The platform's route name, or a name for the kind when the system gives none (receiver, speaker).
+
     static func routeName(kind: String, name: String) -> String {
         if !name.isEmpty { return name }
         switch AudioRouteKind(rawValue: kind) ?? AudioRouteKind.unknown {
@@ -124,7 +111,6 @@ enum LobbyAudioCopy {
     }
 }
 
-/// `AVRoutePickerView` in a system-appearance row: coralText tint, no glass (the picker is the system's control).
 private struct LobbyRoutePicker: UIViewRepresentable {
     let onDismiss: () -> Void
 

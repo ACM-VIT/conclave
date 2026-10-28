@@ -2,29 +2,18 @@
 import SwiftUI
 import UIKit
 
-// S30 5 c (CTL-5): the More control on the iOS bar. A native `Menu` (F00 C16, Q2) with `.menuOrder(.priority)` (CL5,
-// RECONCILE R8), so the first declared section, the reaction palette, sits nearest the control and the Host submenu
-// farthest; it opens as the dark fallback sheet (MoreSheet+iOS.swift, CL16) whenever the menu would not fit without
-// scrolling: accessibility text sizes, the iPhone compact-height column, or an estimate (`MoreMenuPolicy`) taller than
-// the space above the control. Both read the one `MoreSnapshot`. Feedback triggers live on this control, not on menu
-// items (items unmount before a delayed effect could fire, F00 C22 c), and each fires only after the presenter returns
-// `dispatched` (S30 5 h): `reactionSent`, `handRaised` or `handLowered` (the kind captured before the tap),
-// `linkCopied`, `selectionChanged` on Flip (H2 row 23), `endForEveryonePrompted` when More's End dialog appears.
-// Nothing plays on open, panel rows, Invite, Settings or Lock. The End confirmation More asks for is the FND-1 dialog
-// attached here (R09); the Leave control keeps its own. Never glass beyond the shared control surface (R02).
-
 struct MoreControl: View {
     let model: CallControlModel
     let controls: CallControlsPresenter
     let diameter: CGFloat
-    /// The uncapped text size from the bar (the bar caps its own chrome at `.xxxLarge`).
+
     let textSize: DynamicTypeSize
-    /// The space above the control for the menu (0 in the vertical column).
+
     let menuSpace: CGFloat
     let isVerticalBar: Bool
     @State private var showsSheet = false
     @State private var showsTray = false
-    /// A panel row, End or a share start chosen in the fallback sheet, performed in its `onDismiss` (NF 9.1).
+
     @State private var deferred: MoreItemID? = nil
     @State private var reactionCounter = 0
     @State private var handCounter = 0
@@ -33,8 +22,7 @@ struct MoreControl: View {
     @State private var flipCounter = 0
     @State private var endPromptCounter = 0
     @State private var lastPromptedId = 0
-    /// The confirmation this control already closed, so the binding never shows it again while S1 catches up (the CTL-2
-    /// Leave control's rule).
+
     @State private var closedConfirmationId = 0
 
     private var isEngaged: Bool { showsSheet || showsTray }
@@ -80,8 +68,7 @@ struct MoreControl: View {
             MoreSheet(controls: controls, actions: actions(inSheet: true), onClose: { showsSheet = false })
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
-                // In-call dark (D3); a sheet scopes the scheme to its own presentation. Rows grow with Dynamic Type
-                // (uncapped, S30 5 f Largest text).
+
                 .preferredColorScheme(.dark)
                 .dynamicTypeSize(textSize)
         }
@@ -94,7 +81,7 @@ struct MoreControl: View {
                 set: { shown in
                     if shown || confirmationId == 0 { return }
                     closedConfirmationId = confirmationId
-                    // As on the Leave control: cancel on the next turn, after a confirm may have consumed the id.
+
                     Task { @MainActor in
                         if controls.leaveState.confirmationId == confirmationId {
                             controls.cancelEnd(id: confirmationId)
@@ -106,7 +93,7 @@ struct MoreControl: View {
             onConfirm: { _ = controls.confirmEndForEveryone(id: confirmationId, postRecap: false) },
             onCancel: { controls.cancelEnd(id: confirmationId) }
         )
-        // TRN-2 (S30 4 g recap variant, CC8).
+
         .recapEndDialog(
             controls: controls,
             confirmationId: confirmationId,
@@ -127,7 +114,7 @@ struct MoreControl: View {
             onCancel: { controls.cancelEnd(id: confirmationId) }
         )
         .onChange(of: confirmationId) { _, _ in
-            // S30 5 h: once per new confirmation More asked for (its row, or its row in the fallback sheet).
+
             let current = controls.leaveState
             if MoreMenuPolicy.playsEndPrompt(previousId: lastPromptedId, leave: current) {
                 endPromptCounter += 1
@@ -135,11 +122,11 @@ struct MoreControl: View {
             lastPromptedId = current.confirmationId
         }
         .onChange(of: showsSheet) { _, open in
-            // S30 CC16: an open sheet keeps chrome visible (a system menu holds it through the bar hold, CTL-2).
+
             controls.stage.setTransientChrome(id: ChromeAutoHidePolicy.moreSheet, open: open)
         }
         .onChange(of: MoreMenuHeightKey(estimate: estimate, space: Double(menuSpace), usesSheet: usesSheet), initial: true) { _, key in
-            // CL13 `controls.menuHeight`; never published.
+
             controls.reportMenuHeight(MoreMenuPolicy.menuHeightReadout(estimate: key.estimate, space: key.space, usesSheet: key.usesSheet))
         }
         .onDisappear {
@@ -152,7 +139,6 @@ struct MoreControl: View {
         .conclaveGestureFeedback(.endForEveryonePrompted, trigger: endPromptCounter)
     }
 
-    /// The callbacks the menu and the sheet share. Every one runs only after the presenter returned `dispatched`.
     private func actions(inSheet: Bool) -> MoreActions {
         MoreActions(
             inSheet: inSheet,
@@ -164,7 +150,7 @@ struct MoreControl: View {
             onCopy: { copyCounter += 1 },
             onFlip: { flipCounter += 1 },
             onMoreReactions: {
-                // After the menu has dismissed (a popover or sheet never presents from a closing menu).
+
                 Task { @MainActor in showsTray = true }
             },
             selectAfterDismiss: { id in
@@ -174,7 +160,6 @@ struct MoreControl: View {
         )
     }
 
-    /// The fallback sheet's `onDismiss`: a panel, the End confirmation or a share start, only now that it is gone.
     private func performDeferred() {
         guard let id = deferred else { return }
         deferred = nil
@@ -182,7 +167,6 @@ struct MoreControl: View {
     }
 }
 
-/// The count badge (the compact host waiting count) or More's dot, ink on coral, folded into the value (F00 C06).
 private struct MoreBadge: View {
     let model: CallControlModel
     @Environment(\.layoutDirection) private var layoutDirection
@@ -205,9 +189,8 @@ struct MoreMenuHeightKey: Equatable {
     let usesSheet: Bool
 }
 
-/// What the menu and the fallback sheet call back into the More control (its feedback counters and the deferral).
 struct MoreActions {
-    /// True in the fallback sheet: panel rows, End and a share start wait for the sheet's dismissal.
+
     let inSheet: Bool
     let onReaction: () -> Void
     let onHand: (Bool) -> Void
@@ -216,8 +199,6 @@ struct MoreActions {
     let onMoreReactions: () -> Void
     let selectAfterDismiss: (MoreItemID) -> Void
 
-    /// One row: in the menu every row selects at once (the system closes the menu first); in the sheet the rows that
-    /// open something wait for the sheet to go (`MoreMenuPolicy.actsAfterDismiss`).
     @MainActor
     func choose(_ item: MoreItem, controls: CallControlsPresenter) {
         if inSheet && MoreMenuPolicy.actsAfterDismiss(item) {
@@ -237,7 +218,6 @@ struct MoreActions {
         }
     }
 
-    /// Copy Link: the pasteboard first, then the toast "Link copied" through the presenter (CC7, CL18).
     @MainActor
     func copyLink(_ link: String, controls: CallControlsPresenter) {
         if let url = URL(string: link) {
@@ -254,8 +234,6 @@ struct MoreActions {
     }
 }
 
-/// The menu content (S30 5 c): built when the menu opens [Unverified: SwiftUI builds `Menu` content lazily on iOS 17;
-/// if not, it still reads only `more` and `reactions`]. Sections in priority order, first nearest the control.
 struct MoreMenuContent: View {
     let controls: CallControlsPresenter
     let actions: MoreActions
@@ -265,7 +243,9 @@ struct MoreMenuContent: View {
         ForEach(more.sections) { section in
             switch section.id {
             case MoreSectionID.reactions:
-                MoreMenuReactions(section: section, controls: controls, actions: actions)
+                Section {
+                    MoreMenuReactions(section: section, controls: controls, actions: actions)
+                }
             case MoreSectionID.share:
                 Section {
                     MoreShareGroup(section: section, more: more, controls: controls, actions: actions)
@@ -289,8 +269,6 @@ struct MoreMenuContent: View {
     }
 }
 
-/// The palette (C22: `ControlGroup` with the palette style, nearest the control), or one disabled row with the
-/// reason while reactions cannot send (S30 6 f), then "More Reactions…" once flat art ships (Q10).
 private struct MoreMenuReactions: View {
     let section: MoreSection
     let controls: CallControlsPresenter
@@ -319,9 +297,6 @@ private struct MoreMenuReactions: View {
     }
 }
 
-/// One You or Panels row. Captions is a system `Toggle` (checkmark); the hand and share rows flip their titles
-/// instead ("Lower Hand", "Stop Sharing", H-06); Layout is one submenu level with the inline mode picker and
-/// "Layout Options". A disabled row keeps its place and shows its reason as the subtitle (R10).
 struct MoreMenuRow: View {
     let item: MoreItem
     let more: MoreSnapshot
@@ -331,10 +306,15 @@ struct MoreMenuRow: View {
     var body: some View {
         switch item.kind {
         case .captions:
-            Toggle(isOn: Binding(get: { item.isOn }, set: { on in _ = controls.setCaptions(on) })) {
-                MoreRowLabel(title: MoreCopy.title(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
+            Button {
+                _ = controls.setCaptions(!item.isOn)
+            } label: {
+                Label(MoreCopy.captionsStateTitle(item), systemImage: MoreCopy.glyph(item))
             }
             .disabled(!item.isEnabled)
+            .accessibilityLabel(MoreCopy.captionsStateTitle(item))
+            .accessibilityHint(MoreCopy.subtitle(item) ?? "")
+            .accessibilityAddTraits(.isToggle)
             .accessibilityIdentifier("control.more." + item.id)
         case .layout:
             Menu {
@@ -366,9 +346,6 @@ struct MoreMenuRow: View {
     }
 }
 
-/// Invite, Copy Link and Details as one medium `ControlGroup` row (HIG medium layout, IOS 9.2). Invite is the
-/// `ShareLink` with the F00 payload and the full label "Share Invite" (CL19, RECONCILE R14); Details reads "Meeting
-/// Details".
 private struct MoreShareGroup: View {
     let section: MoreSection
     let more: MoreSnapshot
@@ -407,11 +384,10 @@ private struct MoreShareGroup: View {
                 }
             }
         }
+        .controlGroupStyle(.compactMenu)
     }
 }
 
-/// The Host submenu (one level, HIG): Host Controls, Lock Meeting (a `Toggle`, "Locking…" while pending), then End Call
-/// for Everyone… last in its own section (destructive, farthest from the control, CL15). No voice agent (Owner OQ7).
 struct MoreHostItems: View {
     let section: MoreSection
     let controls: CallControlsPresenter
@@ -449,8 +425,6 @@ struct MoreHostItems: View {
     }
 }
 
-/// A row label: the title, the optional subtitle (reason or status) as the second `Text`, and the glyph. Every row
-/// in a section carries an icon (H-06).
 struct MoreRowLabel: View {
     let title: String
     let subtitle: String?
@@ -468,8 +442,6 @@ struct MoreRowLabel: View {
     }
 }
 
-/// CL16: the body text scale for a Dynamic Type size (Apple's body sizes over the 17 pt default: 14, 15, 16, 17,
-/// 19, 21, 23; the accessibility sizes always take the sheet, so their values only keep the readout honest).
 enum MoreTextScale {
     static func of(_ size: DynamicTypeSize) -> Double {
         switch size {
@@ -490,9 +462,11 @@ enum MoreTextScale {
     }
 }
 
-/// iOS copy for More (S30 5 g, 6 g and 7; Apple title case for titles, sentence case for subtitles). String Catalog
-/// keys through `ConclaveStrings`; Layout, Effects and Host Controls use the canonical CL11 concepts.
 enum MoreCopy {
+    static func captionsStateTitle(_ item: MoreItem) -> String {
+        ConclaveStrings.format("Option Summary %@ %@", title(item), ConclaveStrings.text(item.isOn ? "On" : "Off"))
+    }
+
     static func title(_ item: MoreItem) -> String {
         switch item.kind {
         case .reactions: return ConclaveStrings.text("Reactions Are Off")
@@ -529,7 +503,6 @@ enum MoreCopy {
         }
     }
 
-    /// The full accessibility label where the visible title is the short form (the medium row).
     static func accessibilityTitle(_ item: MoreItem) -> String {
         switch item.kind {
         case .invite: return ConclaveStrings.text("Share Invite")
@@ -538,8 +511,6 @@ enum MoreCopy {
         }
     }
 
-    /// The second line: the reason while blocked (S30 7), else the status (5 f); nil for none. A reason never replaces
-    /// the title (S30 7 rule 2).
     static func subtitle(_ item: MoreItem) -> String? {
         if !item.isEnabled && !item.isPending {
             if item.kind == MoreItemID.reactions && item.reason == ControlBlockedReason.disabledByHost {
@@ -602,7 +573,6 @@ enum MoreCopy {
         }
     }
 
-    /// "React with Thumbs Up" (S30 6 g): a word label, never the glyph (WEB CTL-G2).
     static func reactionLabel(_ option: ReactionOptionModel) -> String {
         ConclaveStrings.format("React with %@", reactionName(option.nameKey))
     }
@@ -615,7 +585,7 @@ enum MoreCopy {
         case "heart": return ConclaveStrings.text("Heart")
         case "party": return ConclaveStrings.text("Party")
         case "wow": return ConclaveStrings.text("Wow")
-        // The art names (shown once the flat art ships, CC14).
+
         case "aura": return ConclaveStrings.text("Aura")
         case "crying": return ConclaveStrings.text("Crying")
         case "goblin": return ConclaveStrings.text("Goblin")
@@ -626,7 +596,6 @@ enum MoreCopy {
         }
     }
 
-    /// The FND-2 palette options for the emoji row.
     static func paletteOptions(_ reactions: ReactionPaletteSnapshot) -> [ConclavePaletteOption] {
         var options: [ConclavePaletteOption] = []
         for option in reactions.emoji {
@@ -635,7 +604,6 @@ enum MoreCopy {
         return options
     }
 
-    /// The reason the palette shows while it cannot send (the tray footer and the sheet row).
     static func reactionsReason(_ reactions: ReactionPaletteSnapshot) -> String? {
         switch reactions.availability {
         case .disabledByHost: return ConclaveStrings.text("Turned off by the host")

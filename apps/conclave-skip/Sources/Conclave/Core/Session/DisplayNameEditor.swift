@@ -1,8 +1,6 @@
 import Foundation
 import Observation
 
-/// What the editor reads from the core when it decides (S60 C6-10): the current name, the connection, the attendee
-/// role and the room, so a save for an old room never lands in a new one.
 struct DisplayNameEditorContext: Equatable {
     let displayName: String
     let connectionState: ConnectionState
@@ -13,39 +11,29 @@ struct DisplayNameEditorContext: Equatable {
                                                 isWebinarAttendee: false, roomId: "")
 }
 
-/// A save queued behind the one in flight (the legacy Settings queue, SSV:1205-1229).
 struct DisplayNameQueuedSave: Equatable {
     let name: String
     let roomId: String?
     let shouldFlush: Bool
 }
 
-/// S60 0.8 C6-10 and RECONCILE R38: the one rename intent for the Settings Name field (650 ms autosave, single flight,
-/// queue and flush on close, server sync when idle) and the S50 People "Change Name..." alert, on the shared S10
-/// `DisplayNamePolicy` (cap 40, counter from 30). It maps the S50 PH16 typed refusals (`renameRateLimited`,
-/// `renameDisabled`, `renameTooLong`) and keeps one session flag (S50 Q14): after "Display name updates are disabled"
-/// anywhere, both entry points are disabled for the rest of the session. The view model owns it, installs `context`
-/// and `save` (`updateDisplayNameResult`, which also updates `lastJoinContext`, so a reconnect keeps the new name) and
-/// resets the flag per call session. The tested legacy policies (`SettingsDisplayNameAutoSavePolicy`,
-/// `SettingsTimingPolicy`) keep their names and tests; this class replaces only the Settings view's `@State`
-/// (SSV:181-201) and its helpers (SSV:1181-1325).
 @MainActor
 @Observable
 final class DisplayNameEditor {
-    /// The Settings field text (capped at 40).
+
     private(set) var draft: String = ""
     private(set) var isSaving: Bool = false
-    /// A `HostActionFailure` raw value shown under the Settings field, "" when none; cleared by the next edit.
+
     private(set) var refusal: String = ""
-    /// S50 Q14: true after a `renameDisabled` refusal this session (People and Settings read it).
+
     private(set) var isDisabledForSession: Bool = false
 
     @ObservationIgnored var context: () -> DisplayNameEditorContext = { DisplayNameEditorContext.empty }
-    /// The core's typed rename (PH16).
+
     @ObservationIgnored var save: ((String) async -> HostActionResult)? = nil
-    /// Called when `isDisabledForSession` changes, so People refreshes its action table.
+
     @ObservationIgnored var onSessionFlagChanged: (() -> Void)? = nil
-    /// Test seam: the autosave delay.
+
     @ObservationIgnored var sleep: (UInt64) async -> Void = { nanoseconds in
         try? await Task.sleep(nanoseconds: nanoseconds)
     }
@@ -57,7 +45,6 @@ final class DisplayNameEditor {
 
     init() {}
 
-    /// S60 `canEditName`: connected, not an attendee, and not refused for the session.
     var canEditName: Bool {
         let current = context()
         return !isDisabledForSession && current.connectionState == ConnectionState.joined && !current.isWebinarAttendee
@@ -65,16 +52,12 @@ final class DisplayNameEditor {
 
     var hasPendingAutoSave: Bool { autoSaveTask != nil || queued != nil }
 
-    // MARK: Settings field
-
-    /// A keystroke: the cap applies, a shown refusal clears, and the autosave reschedules.
     func setDraft(_ value: String) {
         let capped = DisplayNamePolicy.capped(value)
         if !refusal.isEmpty && capped != draft { refusal = "" }
         assignDraft(capped)
     }
 
-    /// The server name reached the field only while nothing local is pending (SSV:1192-1204).
     func syncFromServerIfIdle() {
         guard SettingsDisplayNameAutoSavePolicy.shouldSyncInputFromServer(
             hasInFlightUpdate: isSaving,
@@ -84,7 +67,6 @@ final class DisplayNameEditor {
         assignDraft(context().displayName)
     }
 
-    /// Settings closes: the pending draft saves now, or right after the save in flight (SSV:1318-1333).
     func flush() {
         let pendingName = draft
         let pendingRoomId = context().roomId
@@ -102,7 +84,6 @@ final class DisplayNameEditor {
         }
     }
 
-    /// The room changed: nothing queued for the old room survives (SSV:1309-1316).
     func roomChanged() {
         cancelAutoSave()
         queued = nil
@@ -115,10 +96,6 @@ final class DisplayNameEditor {
         autoSaveGeneration += 1
     }
 
-    // MARK: People "Change Name..." (S50 3 c, 3 d)
-
-    /// One immediate save through the same single flight. A pending Settings autosave is cancelled first; a save
-    /// already in flight makes this one `cancelled` (the People dialog closes quietly).
     func rename(_ name: String) async -> HostActionResult {
         cancelAutoSave()
         if isSaving { return HostActionResult.cancelled }
@@ -132,7 +109,6 @@ final class DisplayNameEditor {
         return result
     }
 
-    /// A new call session clears the session flag and any shown refusal (S50 Q14 is per session).
     func resetSession() {
         cancelAutoSave()
         queued = nil
@@ -142,8 +118,6 @@ final class DisplayNameEditor {
             onSessionFlagChanged?()
         }
     }
-
-    // MARK: Internals (the SSV policies, moved)
 
     private func canSave(_ value: String) -> Bool {
         if isDisabledForSession { return false }
@@ -157,7 +131,6 @@ final class DisplayNameEditor {
         !isSaving && canSave(value)
     }
 
-    /// Mirrors the legacy `.onChange(of: displayNameInput)`: every change of the field text reschedules.
     private func assignDraft(_ value: String) {
         if value == draft { return }
         draft = value
@@ -237,7 +210,6 @@ final class DisplayNameEditor {
         }
     }
 
-    /// The core call plus the PH16 refusal mapping and the Q14 flag.
     private func performSave(_ name: String) async -> HostActionResult {
         guard let save else { return HostActionResult.cancelled }
         saveCount += 1

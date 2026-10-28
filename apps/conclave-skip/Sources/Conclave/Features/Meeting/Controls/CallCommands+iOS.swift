@@ -1,14 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S30 1 g, CL21, CC20 (CTL-5): the hardware keyboard commands as one scene-level `CommandMenu("Call")`, registered by
-// the Darwin app scene (`.commands { ConclaveCallCommands() }`, Darwin/Sources/Main.swift). The titles appear in the
-// iPadOS 26 menu bar and in the Command-key overlay on iPadOS 17 to 25, whatever composition is on screen and whether or
-// not More is open. Items read `controls.commands` (visible and enabled per item; Lock Meeting for hosts only) and call
-// the same presenter intents as the bar (`perform(_:)`); keyboard commands play no haptic (S30 1 h). Outside a call the
-// focused value is nil and the menu has no items. The bar sets the value with `.focusedSceneValue(controls)`
-// (CallControlBar+iOS.swift). `FocusedValue(_:)` over an `@Observable` object and `focusedSceneValue(_:)` are iOS 17.
-
 public struct ConclaveCallCommands: Commands {
     @FocusedValue(CallControlsPresenter.self) private var controls: CallControlsPresenter?
 
@@ -23,7 +15,6 @@ public struct ConclaveCallCommands: Commands {
     }
 }
 
-/// The g table rows in order; reads only `controls.commands`.
 private struct CallCommandButtons: View {
     let controls: CallControlsPresenter
 
@@ -41,8 +32,6 @@ private struct CallCommandButtons: View {
     }
 }
 
-/// S30 1 g: Command-D, Command-E, Option-Command-H, Shift-Command-C, Shift-Command-P, Shift-Command-S and
-/// Shift-Command-L, with the discoverability titles (Apple title case).
 enum CallCommandsCopy {
     static var menuTitle: String { ConclaveStrings.text("Call") }
 

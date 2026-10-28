@@ -3,26 +3,12 @@ import Accessibility
 import SwiftUI
 import UIKit
 
-// S20 15 (STG-6) on iOS: Meeting Details (`MeetingPanel.meetingInfo`), and its attendee variant Webinar Details (S20 12
-// a, RECONCILE R44). One `PanelShell` with a path over the view-local `MeetingInfoRoute` (one
-// `navigationDestination(for:)`), medium and large with the stage usable at medium, the inspector on regular x regular,
-// system appearance (OD Q8 (6)). The list reads only `stage.meetingInfo` (built from inputs, equality guarded, S20 15 k)
-// and draws the rows of `MeetingInfoPolicy.rows` in S20 15 b order. Copy confirms inline for 2 s (F00 C13: no toast on
-// a system-appearance sheet) with the `linkCopied` gesture (SC21); share uses `ShareLink` with the F00 payload
-// (RECONCILE R14), never the legacy `MeetingShare`. The webinar link is generated only by its one owner through
-// `webinarLinkProvider` (S50 `HostControlsPresenter.ensureWebinarLink()`, RECONCILE R34). Host Controls pushes the S50
-// content inside this panel and promotes a medium sheet to large first (R34); the attendee Settings row pushes the
-// attendee settings rows (R44). Mounted by the native call root.
-
-/// The pushed pages (view-local; associated values are fine in an iOS-only type): the S50 host pages, the attendee
-/// Settings rows and its privacy policy page.
 enum MeetingInfoRoute: Hashable {
     case host(PeopleRoute)
     case attendeeSettings
     case privacyPolicy
 }
 
-/// Generates a missing webinar link through its single owner and returns it (nil on failure).
 typealias MeetingDetailsWebinarLinkProvider = () async -> String?
 
 struct MeetingDetailsPanel: View {
@@ -48,7 +34,7 @@ struct MeetingDetailsPanel: View {
                 }
         }
         .onChange(of: path.count) { previous, next in
-            // Every push (Host Controls, Settings) promotes a medium sheet to large (PS 7.3, RECONCILE R34, R44).
+
             if next > previous { adapter.promoteToLarge() }
         }
         .background { MeetingDetailsLeaves(stage: stage, path: $path) }
@@ -56,7 +42,6 @@ struct MeetingDetailsPanel: View {
     }
 }
 
-/// Zero-size leaf: losing host (or becoming an attendee) while on a host page pops back to the details (S50 12).
 private struct MeetingDetailsLeaves: View {
     let stage: StagePresenter
     @Binding var path: [MeetingInfoRoute]
@@ -76,7 +61,6 @@ private struct MeetingDetailsLeaves: View {
     }
 }
 
-/// The root list (S20 15 b, c): one section per `MeetingInfoSection` with rows, in order.
 private struct MeetingDetailsList: View {
     let stage: StagePresenter
     let webinarLinkProvider: MeetingDetailsWebinarLinkProvider?
@@ -127,8 +111,6 @@ private struct MeetingDetailsSection: View {
     }
 }
 
-/// One row. Value rows are `LabeledContent` (read as "Room Code, abc-defg-hij"); long values wrap, and the link may
-/// break after a slash at the largest text sizes (15 f).
 private struct MeetingDetailsRowView: View {
     let row: MeetingInfoRowID
     let info: MeetingInfoSnapshot
@@ -201,7 +183,6 @@ private struct MeetingDetailsRowView: View {
     }
 }
 
-/// Share Invite with the one share payload (F00 11, RECONCILE R14); no `ShareLink` over an empty or invalid URL.
 private struct MeetingDetailsInviteRow: View {
     let link: String
     let roomLabel: String
@@ -217,8 +198,6 @@ private struct MeetingDetailsInviteRow: View {
     }
 }
 
-/// Copy Code and Copy Link (SC21): the pasteboard, one `linkCopied` per copy, the label reads "Copied" with a checkmark
-/// for 2 s, and a polite announcement ("Code copied", "Link copied").
 private struct MeetingDetailsCopyRow: View {
     let title: String
     let value: String
@@ -247,9 +226,6 @@ private struct MeetingDetailsCopyRow: View {
     }
 }
 
-/// Share Webinar Link (15 f): with a link, the system share sheet; without one (hosts only), the first tap generates it
-/// through the one owner with a row spinner, and the row turns into the share control once the link arrives (SwiftUI
-/// cannot open the share sheet without a tap on a `ShareLink`). Opening the panel never generates a link.
 private struct MeetingDetailsWebinarShareRow: View {
     let info: MeetingInfoSnapshot
     let provider: MeetingDetailsWebinarLinkProvider?
@@ -286,7 +262,6 @@ private struct MeetingDetailsWebinarShareRow: View {
     }
 }
 
-/// The webinar Copy row: copies an existing link at once; a missing one is generated first (row spinner), then copied.
 private struct MeetingDetailsWebinarCopyRow: View {
     let info: MeetingInfoSnapshot
     let provider: MeetingDetailsWebinarLinkProvider?
@@ -339,8 +314,6 @@ private struct MeetingDetailsWebinarCopyRow: View {
     }
 }
 
-/// Host Controls (hosts only): a chevron row that pushes the S50 content inside this panel; while recovering it stays
-/// visible, disabled, with "Unavailable while reconnecting" (15 f).
 private struct MeetingDetailsHostControlsRow: View {
     let isEnabled: Bool
 
@@ -351,7 +324,7 @@ private struct MeetingDetailsHostControlsRow: View {
                     Text(ConclaveStrings.text("Unavailable while reconnecting"))
                 }
             } label: {
-                // Host controls are distinct from the host badge.
+
                 Label(ConclaveStrings.text("Host Controls"), systemImage: ConclaveSymbols.personBadgeShieldCheckmarkFill)
             }
         }
@@ -359,7 +332,6 @@ private struct MeetingDetailsHostControlsRow: View {
     }
 }
 
-/// The pushed pages.
 private struct MeetingDetailsDestination: View {
     let route: MeetingInfoRoute
     let people: PeoplePresenter?
@@ -370,7 +342,7 @@ private struct MeetingDetailsDestination: View {
         case .host(let page):
             MeetingDetailsHostPage(route: page, people: people)
         case .attendeeSettings:
-            // SET-1 (RECONCILE R44): the call-scope Settings filtered for role attendee; only the privacy policy pushes.
+
             SettingsAttendeeList(settings: shell.settings,
                                  link: { route in route == SettingsRoute.privacy ? MeetingInfoRoute.privacyPolicy : nil })
         case .privacyPolicy:
@@ -379,10 +351,6 @@ private struct MeetingDetailsDestination: View {
     }
 }
 
-/// The S50 Host Controls content pushed inside Meeting Details: the same page Participants pushes (S50 6 a; S60 R6-3
-/// mechanism), PPL-4's `HostPageView`, whose sub-page rows link into this panel's path through the
-/// `MeetingInfoRoute.host` mirror (`link`, R50-2: one homogeneous path per stack). Without a People presenter (the
-/// stage fixture) the empty `PeopleHostPage` stand-in keeps the push, the title and Back working (HD request B5-T2 R6).
 private struct MeetingDetailsHostPage: View {
     let route: PeopleRoute
     let people: PeoplePresenter?
@@ -396,7 +364,6 @@ private struct MeetingDetailsHostPage: View {
     }
 }
 
-/// iOS copy and helpers for Meeting Details (Apple title case, S20 15 g).
 enum MeetingDetailsCopy {
     static func sectionTitle(_ section: MeetingInfoSection) -> String? {
         switch section {
@@ -410,12 +377,10 @@ enum MeetingDetailsCopy {
         info.webinarTitle.isEmpty ? ConclaveStrings.text("Webinar") : info.webinarTitle
     }
 
-    /// The call session's start time, in the locale's short time style.
     static func startedTime(_ millis: Double) -> String {
         Date(timeIntervalSince1970: millis / 1000.0).formatted(date: .omitted, time: .shortened)
     }
 
-    /// A zero-width space after each slash, so a long link wraps at its path breaks instead of mid-word (15 f).
     static func breakable(_ link: String) -> String {
         link.replacingOccurrences(of: "/", with: "/\u{200B}")
     }

@@ -20,9 +20,6 @@ enum SocketRoomEventPolicy {
     }
 }
 
-/// Pure, bounded retry policy for an exact planned-handoff abort. The request
-/// value is created once and retained by the state so every wire attempt uses
-/// the same request, producer, and predecessor identity.
 enum PlannedConsumerHandoffAbortRetryPolicy {
     static let maximumAttempts = 3
     static let baseBackoffMilliseconds: Int64 = 75
@@ -168,7 +165,7 @@ private enum SocketEvent {
     static let browserNavigate = SfuClientEvent.browserNavigate.rawValue
     static let browserClose = SfuClientEvent.browserClose.rawValue
     static let browserGetState = SfuClientEvent.browserGetState.rawValue
-    /// C6-20 (ACT-9): the capability probe; `SfuClientEvent.browserGetCapabilities` lands with HD request B8-T1 R2.
+
     static let browserGetCapabilities = SfuClientEvent.browserGetCapabilities.rawValue
     static let browserActivity = SfuClientEvent.browserActivity.rawValue
     static let appsOpen = SfuClientEvent.appsOpen.rawValue
@@ -263,8 +260,6 @@ private enum SocketEvent {
     static let gameVote = SfuServerEvent.gameVote.rawValue
 }
 
-// MARK: - Socket Manager
-
 enum SocketError: LocalizedError {
     case invalidURL
     case notConnected
@@ -305,12 +300,8 @@ private struct JoinRoomRedirectAck: LocalizedError {
 @MainActor
 final class SocketIOManager {
 
-    // MARK: - Published State
-
     @Published private(set) var isConnected = false
     @Published private(set) var connectionError: Error?
-
-    // MARK: - Callbacks
 
     var onConnected: (() -> Void)?
     var onDisconnected: ((String?) -> Void)?
@@ -319,7 +310,6 @@ final class SocketIOManager {
     var onReconnected: (() -> Void)?
     var onReconnectFailed: (() -> Void)?
 
-    // Room events
     var onWaitingRoomStatus: ((WaitingRoomStatusNotification) -> Void)?
     var onJoinApproved: ((JoinDecisionNotification) -> Void)?
     var onJoinRejected: ((JoinDecisionNotification) -> Void)?
@@ -354,7 +344,6 @@ final class SocketIOManager {
     var onGameEnded: ((GameEndedNotification) -> Void)?
     var onGameVote: ((GameVoteState?) -> Void)?
 
-    // Participant events
     var onUserJoined: ((UserJoinedNotification) -> Void)?
     var onUserLeft: ((UserLeftNotification) -> Void)?
     var onDisplayNameSnapshot: ((DisplayNameSnapshotNotification) -> Void)?
@@ -363,32 +352,27 @@ final class SocketIOManager {
     var onParticipantCameraOff: ((ParticipantCameraOffNotification) -> Void)?
     var onParticipantConnectionState: ((ParticipantConnectionStateNotification) -> Void)?
 
-    // Producer events
     var onNewProducer: ((ProducerInfo) -> Void)?
     var onProducerClosed: ((ProducerClosedNotification) -> Void)?
     var onConsumerTelemetry: ((ConsumerTelemetryNotification) -> Void)?
     var onWebcamReceiverCapacityProof: ((WebcamReceiverCapacityProofNotification) -> Void)?
 
-    // Chat/Reactions
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
     var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?
-    /// S40 CH7 (CHT-7): a relayed assistant packet's process state, delivered before its text goes through
-    /// `onChatMessage`.
+
     var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Void)?
     var onReaction: ((Reaction) -> Void)?
 
-    // Hand raise
     var onHandRaised: ((HandRaisedNotification) -> Void)?
     var onHandRaisedSnapshot: ((HandRaisedSnapshotNotification) -> Void)?
 
-    // Room state
     var onRoomLockChanged: ((RoomLockChangedNotification) -> Void)?
     var onChatLockChanged: ((ChatLockChangedNotification) -> Void)?
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
     var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
-    /// S50 PH5: the room's participant media permissions (also sent at join).
+
     var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
@@ -399,7 +383,6 @@ final class SocketIOManager {
     var onSetVideoQuality: ((SetVideoQualityNotification) -> Void)?
     var onAdminMediaEnforced: ((AdminMediaEnforcedNotification) -> Void)?
     var onAdminBulkMediaEnforced: ((AdminBulkMediaEnforcedNotification) -> Void)?
-    // MARK: - Private Properties
 
     var manager: SocketManager?
     var socket: SocketIOClient?
@@ -419,8 +402,6 @@ final class SocketIOManager {
     private static let closeConsumerRetryDelayNanoseconds: UInt64 = 500_000_000
     private static let closeConsumerRetryWindowSeconds: TimeInterval = 30
     private static let startGameAckTimeout: TimeInterval = 45
-
-    // MARK: - Connection
 
     func connect(sfuURL: String, token: String) async throws {
         let normalizedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -625,8 +606,6 @@ final class SocketIOManager {
         isConnected = false
     }
 
-    // MARK: - Room Actions
-
     func joinRoom(
         roomId: String,
         sessionId: String,
@@ -699,8 +678,6 @@ final class SocketIOManager {
             throw error
         }
     }
-
-    // MARK: - Transport Actions
 
     func createProducerTransport() async throws -> TransportResponse {
         let data = try await emitAckOnly(event: SocketEvent.createProducerTransport)
@@ -874,10 +851,6 @@ final class SocketIOManager {
         }
     }
 
-    /// Close one exact server Consumer generation and wait for the SFU to
-    /// confirm it. Planned make-before-break rollback must not create another
-    /// successor until this acknowledgement has restored the predecessor as
-    /// the server-current generation.
     func closeConsumerAndWait(
         consumerId: String,
         timeoutMilliseconds: Int = 1_250
@@ -892,8 +865,7 @@ final class SocketIOManager {
                 timeoutSeconds: timeoutSeconds
             )
         } catch {
-            // An already-absent exact generation is equivalent to an
-            // acknowledged close for rollback/retirement purposes.
+
             let message = error.localizedDescription.lowercased()
             if message.contains("consumer not found") || message.contains("not_found") {
                 return
@@ -934,13 +906,6 @@ final class SocketIOManager {
         _ = try await emitSocketData(event: SocketEvent.setConsumerPreferences, payloadObject: payload)
     }
 
-    /// Snapshot the room's current producers (producer-sync safety net). The SFU
-    /// `getProducers` handler is callback-only (`(callback) => …`), so emit with
-    /// NO payload - the payloaded emit() would put `{}` in the first arg slot and
-    /// the server would bind the ack callback to it, silently dropping the reply.
-    /// Returns the whole response object (not the array) so the Skip-transpiled
-    /// caller iterates `.producers` itself - a bare `[ProducerInfo]` across the
-    /// hand-written-Kotlin boundary trips Skip's Array/List bridging.
     func getProducers() async throws -> GetProducersResponse {
         let data = try await emitAckOnly(event: SocketEvent.getProducers)
         return try JSONDecoder().decode(GetProducersResponse.self, from: data)
@@ -950,8 +915,6 @@ final class SocketIOManager {
         let data = try await emitAckOnly(event: SocketEvent.getRooms)
         return try JSONDecoder().decode(RoomListResponse.self, from: data).rooms
     }
-
-    // MARK: - Media Controls
 
     func toggleMute(producerId: String, paused: Bool) async throws {
         let request = ToggleMediaRequest(producerId: producerId, paused: paused)
@@ -967,8 +930,6 @@ final class SocketIOManager {
         _ = try await emit(event: SocketEvent.closeProducer, payload: ["producerId": producerId])
     }
 
-    // MARK: - Chat
-
     func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil, suppressEmbeds: Bool = false) async throws -> ChatMessage {
         let request = SendChatRequest(content: content, gif: gif, image: image, recipient: recipient, replyTo: replyTo,
                                       suppressEmbeds: suppressEmbeds ? true : nil)
@@ -980,8 +941,6 @@ final class SocketIOManager {
         return message.chatMessage(taggedRoomId: activeRoomId)
     }
 
-    /// S40 CH3: toggles your reaction on a retained message. The SFU handler is `(data, callback)` and answers the
-    /// authoritative set (`{ success, reactions }`) or `{ error }`, which `emit` throws as a server error.
     func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction] {
         let request = ChatReactRequest(messageId: messageId, emoji: emoji)
         let data = try await emit(event: SocketEvent.chatReact, payload: request)
@@ -989,14 +948,8 @@ final class SocketIOManager {
         return response.reactions ?? []
     }
 
-    /// Asks the SFU for a short-lived upload slot for a chat image; the bytes
-    /// are then POSTed to `uploadUrl` with the bearer token (see
-    /// MeetingViewModel.sendChatImageAttachment).
     func authorizeChatImageUpload() async throws -> ChatImageUploadAuthorization {
-        // The server handler is `(_data, callback)`, so a real (empty) payload
-        // must fill the first slot - an ack-only emit binds the ack function to
-        // `_data` and the callback never fires (mirror of the getProducers
-        // gotcha above, in the other direction).
+
         let data = try await emit(event: SocketEvent.chatImageUploadAuthorize, payload: EmptySocketPayload())
         return try JSONDecoder().decode(ChatImageUploadAuthorizationAck.self, from: data).authorization()
     }
@@ -1018,27 +971,19 @@ final class SocketIOManager {
         }
     }
 
-    // MARK: - Reactions
-
     func sendReaction(emoji: String?, kind: String?, value: String?, label: String?) async throws {
         let request = SendReactionRequest(emoji: emoji, kind: kind, value: value, label: label)
         _ = try await emit(event: SocketEvent.sendReaction, payload: request)
     }
-
-    // MARK: - Hand Raise
 
     func setHandRaised(_ raised: Bool) async throws {
         let request = SetHandRaisedRequest(raised: raised)
         _ = try await emit(event: SocketEvent.setHandRaised, payload: request)
     }
 
-    // MARK: - Display Name
-
     func updateDisplayName(_ name: String) async throws {
         _ = try await emit(event: SocketEvent.updateDisplayName, payload: ["displayName": name])
     }
-
-    // MARK: - Admin Actions
 
     func lockRoom(_ locked: Bool) async throws -> RoomPolicyMutationResponse {
         let data = try await emit(event: SocketEvent.lockRoom, payload: ["locked": locked])
@@ -1070,14 +1015,11 @@ final class SocketIOManager {
         return try JSONDecoder().decode(RoomPolicyMutationResponse.self, from: data)
     }
 
-    /// S50 PH6: `setImageAttachmentsEnabled` (adminHandlers.ts:1383-1404); the ack carries `enabled`.
     func setImageAttachmentsEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse {
         let data = try await emit(event: SocketEvent.setImageAttachmentsEnabled, payload: ["enabled": enabled])
         return try JSONDecoder().decode(RoomPolicyMutationResponse.self, from: data)
     }
 
-    /// S50 PH5: `setParticipantMediaPermissions` (adminHandlers.ts:1444-1478); turning a permission off also closes
-    /// the matching live producers server side.
     func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?) async throws -> ParticipantMediaPermissionsResponse {
         let request = ParticipantMediaPermissionsRequest(unmuteAllowed: unmuteAllowed, videoAllowed: videoAllowed)
         let data = try await emit(event: SocketEvent.setParticipantMediaPermissions, payload: request)
@@ -1197,50 +1139,40 @@ final class SocketIOManager {
         return try JSONDecoder().decode(WebinarLinkResponse.self, from: data)
     }
 
-    // MARK: - Webinar roles and Q&A (S50 PH7, PH8, PH10; webinarInteractionHandlers.ts)
-
-    /// PH10: Attendee Q&A through `webinar:updateConfig` (SFU webinar.ts:347-350).
     func updateWebinarQaEnabled(_ enabled: Bool) async throws -> WebinarConfigSnapshot {
         try await updateWebinarConfigPayload(["qaEnabled": enabled])
     }
 
-    /// PH8: `webinar:promoteAttendee` (`(data, callback)`, host only); the SFU tells only the attendee.
     func promoteWebinarAttendee(userId: String) async throws {
         _ = try await emit(event: SocketEvent.webinarPromoteAttendee, payload: WebinarUserRequest(userId: userId))
     }
 
-    /// PH8: `webinar:demoteParticipant`; on an attendee it only revokes the stage invite.
     func demoteWebinarParticipant(userId: String) async throws {
         _ = try await emit(event: SocketEvent.webinarDemoteParticipant, payload: WebinarUserRequest(userId: userId))
     }
 
-    /// PH8, S20 Q10: the attendee hand (`webinar:setHandRaised`); the ack echoes `raised`.
     func setWebinarHandRaised(_ raised: Bool) async throws -> Bool {
         let data = try await emit(event: SocketEvent.webinarSetHandRaised, payload: SetHandRaisedRequest(raised: raised))
         let response = try? JSONDecoder().decode(WebinarHandRaisedResponse.self, from: data)
         return response?.raised ?? raised
     }
 
-    /// PH8: `webinar:declineStage` is a `(callback)` handler, so it is emitted ack-only (AGENTS "Socket Ack Shapes").
     func declineWebinarStage() async throws {
         _ = try await emitAckOnly(event: SocketEvent.webinarDeclineStage)
     }
 
-    /// PH7: `webinar:qa:submit`; returns the new question id.
     func submitWebinarQuestion(_ question: String) async throws -> String {
         let data = try await emit(event: SocketEvent.webinarQaSubmit, payload: WebinarQaSubmitRequest(question: question))
         let response = try? JSONDecoder().decode(WebinarQaSubmitResponse.self, from: data)
         return response?.id ?? ""
     }
 
-    /// PH7: `webinar:qa:upvote`; the ack carries the viewer's own `upvotes` and `hasUpvoted`.
     func upvoteWebinarQuestion(id: String) async throws -> WebinarQaUpvoteResponse {
         let data = try await emit(event: SocketEvent.webinarQaUpvote, payload: WebinarQaUpvoteRequest(id: id))
         return (try? JSONDecoder().decode(WebinarQaUpvoteResponse.self, from: data))
             ?? WebinarQaUpvoteResponse(success: true, upvotes: nil, hasUpvoted: nil)
     }
 
-    /// PH7: `webinar:qa:moderate` (answering, answered, dismissed, reopen; a written answer up to 1,000 characters).
     func moderateWebinarQuestion(id: String, action: String, answerText: String?) async throws {
         _ = try await emit(event: SocketEvent.webinarQaModerate,
                            payload: WebinarQaModerateRequest(id: id, action: action, answerText: answerText))
@@ -1251,17 +1183,12 @@ final class SocketIOManager {
         return try JSONDecoder().decode(BrowserStateNotification.self, from: data)
     }
 
-    /// C6-20 (ACT-9): `browser:getCapabilities` is an `async (callback) =>` handler, so the probe is emitted ack-only
-    /// with NO payload (AGENTS.md "Socket Ack Shapes"; a `{}` payload would bind to the callback), with the web's 22 s
-    /// timeout. The answer never carries an `error` key; a timeout throws and the caller treats it as unavailable.
     func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse {
         let data = try await emitAckOnly(event: SocketEvent.browserGetCapabilities,
                                          timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.capabilitiesAckMillis))
         return try JSONDecoder().decode(BrowserCapabilitiesResponse.self, from: data)
     }
 
-    /// Launch, navigate and close wait up to 45 s (C6-20, WEB APP-40): launching Kitesurf can take two sequential cloud
-    /// requests that the SFU caps at 20 s each.
     func launchBrowser(url: String) async throws -> LaunchBrowserResponse {
         let request = LaunchBrowserRequest(url: url)
         let data = try await emit(event: SocketEvent.browserLaunch, payload: request,
@@ -1276,7 +1203,6 @@ final class SocketIOManager {
         return try JSONDecoder().decode(LaunchBrowserResponse.self, from: data)
     }
 
-    /// `browser:close` is `async (callback) =>`: ack-only, no payload.
     func closeBrowser() async throws {
         _ = try await emitAckOnly(event: SocketEvent.browserClose,
                                   timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.commandAckMillis))
@@ -1616,13 +1542,6 @@ final class SocketIOManager {
         return access
     }
 
-    // MARK: - Private: Emit with Ack
-
-    /// Emit an event that carries NO request payload - just an ack callback (e.g.
-    /// getProducers). The SFU handlers for these are `(callback) => …`; the
-    /// payloaded emit() below would send `{}` as a real first arg, so the server
-    /// would bind the ack callback to that object and never reply. Mirrors the
-    /// web client's `socket.emit(event, callback)` and the Kotlin emitAckOnly.
     func emitAckOnly(event: String, timeoutSeconds: TimeInterval = 30) async throws -> Data {
         guard let socket = socket else {
             throw SocketError.notConnected
@@ -1659,8 +1578,6 @@ final class SocketIOManager {
         }
     }
 
-    /// Empty `{}` payload for handlers declared `(_data, callback)` that carry
-    /// no request fields but still need the first argument slot filled.
     struct EmptySocketPayload: Encodable {}
 
     func emit<T: Encodable>(
@@ -2142,8 +2059,6 @@ final class SocketIOManager {
         )
     }
 
-    // MARK: - Event Handlers
-
     func registerEventHandlers(_ socket: SocketIOClient) {
         socket.on(SocketEvent.userJoined) { [weak self] data, _ in
             guard let self, let first = data.first,
@@ -2253,7 +2168,7 @@ final class SocketIOManager {
             guard let self, let first = data.first,
                   self.socket === socket,
                   let activeRoomId = self.activeRoomId else { return }
-            // S40 CH7 (CHT-7): the packet's process state first; its text then goes through the chat pipeline.
+
             if let packet = self.decode(ConclaveAssistantMessageNotification.self, from: first),
                self.eventRoomIdMatchesActiveOrPending(packet.roomId, allowMissingRoomId: true) {
                 self.onConclaveAssistantPacket?(packet)

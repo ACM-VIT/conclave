@@ -1,26 +1,16 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// Video tile chrome (F00 C08 with S20 SR4): the chrome and camera-off presentation around a renderer. The renderer
-// is the bottom layer, passed in by the stage and never recreated by chrome, theme, panel or speaker changes (PS
-// P2); the chrome is a sibling overlay that observes only its `TileChromeModel`. The speaking ring and the speaking
-// part of the tile value are leaves that read `TileSpeakingState`, so a speaker change redraws one stroke. Density
-// comes from the slot size (dense below 139 x 167; spotlight from the caller). One accessibility element per tile:
-// label = name ("You" locally), value = joined states, actions from the stage (Pin, host actions).
-
-/// A named accessibility action on a tile (Pin, Unpin, host actions from S20 and S50).
 struct ConclaveTileAction: Identifiable {
     let id: String
     let title: String
     let action: () -> Void
 }
 
-/// Which tile composition to draw.
 enum ConclaveTileVariant: String, CaseIterable {
-    /// A grid, spotlight or rail tile with the name pill.
+
     case grid
-    /// The floating self view: no name pill, the muted badge top leading, a 1 pt border, the flip button from the
-    /// caller bottom trailing.
+
     case selfView
 }
 
@@ -32,14 +22,16 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
     let cornerRadius: CGFloat
     let actions: [ConclaveTileAction]
     let identifier: String
-    /// Replaces the spoken name when set (S20 12 i: the attendee program feed reads "Live Video from %@").
+
     let accessibilityName: String?
+    let overlayInsets: EdgeInsets
     @ViewBuilder let renderer: () -> Renderer
     @ViewBuilder let selfViewAccessory: () -> SelfViewAccessory
 
     init(model: TileChromeModel, speaking: TileSpeakingState, variant: ConclaveTileVariant = .grid,
          isSpotlight: Bool = false, cornerRadius: CGFloat = CGFloat(DesignTokens.radiusTile),
          actions: [ConclaveTileAction] = [], identifier: String, accessibilityName: String? = nil,
+         overlayInsets: EdgeInsets = EdgeInsets(),
          @ViewBuilder renderer: @escaping () -> Renderer,
          @ViewBuilder selfViewAccessory: @escaping () -> SelfViewAccessory) {
         self.model = model
@@ -50,6 +42,7 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
         self.actions = actions
         self.identifier = identifier
         self.accessibilityName = accessibilityName
+        self.overlayInsets = overlayInsets
         self.renderer = renderer
         self.selfViewAccessory = selfViewAccessory
     }
@@ -66,6 +59,7 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
                 }
                 TileOverlays(model: model, speaking: speaking, variant: variant, density: density,
                              selfViewAccessory: selfViewAccessory)
+                    .padding(overlayInsets)
                 ConclaveSpeakingRing(state: speaking, cornerRadius: cornerRadius)
                 if variant == .selfView {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -97,8 +91,6 @@ extension ConclaveTileChrome where SelfViewAccessory == EmptyView {
     }
 }
 
-/// The tile value: the model's states plus Speaking from the leaf. A modifier body re-runs on a speaker change
-/// without re-evaluating the chrome inside it.
 private struct TileValue: ViewModifier {
     let model: TileChromeModel
     let speaking: TileSpeakingState
@@ -109,9 +101,8 @@ private struct TileValue: ViewModifier {
     }
 }
 
-/// Localized state words for the tile value (F00 C08 g).
 enum ConclaveTileText {
-    /// S20 3 i: "You" for yours; the name plus "Host" or "AI" otherwise (joined like the tile value).
+
     static func label(_ model: TileChromeModel) -> String {
         if model.isLocal { return ConclaveStrings.text("You") }
         if model.isVoiceAgent { return model.displayName + ", " + ConclaveStrings.text("AI") }
@@ -133,8 +124,6 @@ enum ConclaveTileText {
     }
 }
 
-/// The 2 pt coral inner stroke while speaking (5.973 against the tile); it appears and disappears without
-/// animation, the presenter owns the hysteresis.
 struct ConclaveSpeakingRing: View {
     let state: TileSpeakingState
     let cornerRadius: CGFloat
@@ -155,8 +144,7 @@ private struct CameraOffFace: View {
         ZStack {
             HostingTheme.token(DesignTokens.iosInCallTile)
             if model.isVoiceAgent {
-                // A glyph, not text: it fills half the avatar circle like the Android 0.5 icon box, so it follows the
-                // slot density (tile avatars do not scale with text) without a point-size font.
+
                 Image(systemName: ConclaveSymbols.waveform)
                     .resizable()
                     .scaledToFit()
@@ -241,8 +229,6 @@ private struct MutedBadge: View {
     }
 }
 
-/// The name pill: paper text on the label scrim (6.407 over white video, 12.105 under Increase Contrast), the
-/// slashed microphone while muted and, under Differentiate Without Color, the waveform while speaking (AX8).
 private struct TileNamePill: View {
     let model: TileChromeModel
     let speaking: TileSpeakingState
@@ -271,7 +257,6 @@ private struct TileNamePill: View {
     }
 }
 
-/// The waveform inside the name pill: a leaf that alone reads the speaking state.
 private struct PillWaveform: View {
     let state: TileSpeakingState
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
@@ -284,8 +269,6 @@ private struct PillWaveform: View {
     }
 }
 
-/// Shows the waveform next to a name only while speaking under Differentiate Without Color; a leaf, so a speaker
-/// change touches nothing else. Stages that draw a speaker cue outside the pill use it directly.
 struct ConclaveSpeakingWaveform: View {
     let state: TileSpeakingState
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
@@ -302,8 +285,6 @@ struct ConclaveSpeakingWaveform: View {
     }
 }
 
-/// The "+N" overflow tile (F00 C08): up to three overlapping 30 pt avatars over the "+N" count, a Button that opens
-/// People, labelled "N More Participants".
 struct ConclaveOverflowTile: View {
     let count: Int
     let identities: [ConclaveAvatarIdentity]

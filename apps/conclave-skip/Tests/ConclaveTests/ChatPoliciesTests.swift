@@ -3,16 +3,12 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// CHT-1 (OUT/PLAN-screens.md section 5; S40 0.5, 0.8 CH1, CH2, CH10, CH12 to CH15, CH17, 2, 3): the shared chat
-/// models and policies, the presenter's rows, identity, grouping, unread capture and capabilities, the core's
-/// reconstruction sites and the panel sources. The Kotlin half is T/Skip/ChatBridgeTests.kt; the composer is
-/// T/CHT2ComposerPolicyTests.swift and the actions T/CHT3MessageActionsTests.swift.
 @MainActor
 struct ChatPoliciesTests {
     static let local = "jordan@example.com#s1"
     static let avery = "avery@example.com#w1"
     static let sam = "sam@example.com#w2"
-    /// Noon UTC, so base and base + 10 minutes share a local day in every time zone from UTC-12 to UTC+14.
+
     static let base = 1_800_014_400_000.0
 
     static func roster() -> [ChatRosterEntry] {
@@ -57,8 +53,6 @@ struct ChatPoliciesTests {
         chat.rows.entry(for: id).row
     }
 
-    // MARK: CH17 linkify parity with the web (getChatMessageSegments)
-
     private func spans(_ text: String) -> [String] {
         ChatLinkifyPolicy.spans(text).map { span in
             span.kind == .link ? "link(\(span.text)|\(span.url))" : "text(\(span.text))"
@@ -72,10 +66,10 @@ struct ChatPoliciesTests {
         #expect(spans("HTTP://LOUD.EXAMPLE") == ["link(HTTP://LOUD.EXAMPLE|HTTP://LOUD.EXAMPLE)"])
         #expect(spans("(see https://x.io/y)") == ["text((see )", "link(https://x.io/y|https://x.io/y)", "text())"])
         #expect(spans("1.5 and e.g. a.b.c") == ["text(1.5 and e.g. a.b.c)"])
-        // Web quirks kept for parity: a bare file name is a domain, and only the email's domain part matches.
+
         #expect(spans("file.txt") == ["link(file.txt|https://file.txt)"])
         #expect(spans("avery@example.com") == ["text(avery@)", "link(example.com|https://example.com)"])
-        // A match holding "@" (behind a scheme) stays text.
+
         #expect(spans("https://user@host.example") == ["text(https://user@host.example)"])
         #expect(spans("") == ["text()"])
         #expect(spans("no links here") == ["text(no links here)"])
@@ -90,8 +84,6 @@ struct ChatPoliciesTests {
         #expect(ChatMentionPolicy.normalizedToken(" Avery Lee! ") == "averylee")
         #expect(ChatMentionPolicy.firstLink(ChatLinkifyPolicy.spans("a docs.example.com b x.io")) == "https://docs.example.com")
     }
-
-    // MARK: CH15 grouping and CH1 identity
 
     @Test func groupingFollowsTheWebTwoMinuteRule() {
         let replyRef = ChatReplyRef(messageId: "s-1", authorName: "Avery Lee", isAuthorYou: false, preview: "first", media: "",
@@ -127,7 +119,7 @@ struct ChatPoliciesTests {
         #expect(chat.rows.entry(for: "optimistic-1") === sending)
         #expect(sending.row.serverId == "s-1" && sending.row.delivery == .delivered && sending.row.canReact)
         #expect(chat.rows.rowId(forMessageId: "s-1") == "optimistic-1")
-        // A history rebuild after a reconnect carries the server id only; the row keeps its client id.
+
         chat.apply(Self.inputs([]), change: .messages)
         chat.apply(Self.inputs([ChatMessageInput.make(id: "s-1", senderId: Self.local, senderName: "Jordan Lee", isOwn: true,
                                                       content: "hello", timestampMillis: Self.base, isHistory: true)]),
@@ -159,12 +151,10 @@ struct ChatPoliciesTests {
                                          failure: .timedOut, retryable: true)]), change: .messages)
         let failed = Self.row(chat, "optimistic-1")
         #expect(failed.delivery == .failed && failed.canRetry && failed.canDelete && failed.failure == .timedOut)
-        // A row that is no longer sending never turns slow again.
+
         chat.markSlow(rowId: "optimistic-1")
         #expect(Self.row(chat, "optimistic-1").delivery == .failed)
     }
-
-    // MARK: CH12 unread capture, 2 c structure
 
     @Test func unreadRowsAreCapturedOnOpenAndTheDividerLeavesOnClose() {
         var messages = [Self.peer("s-1", "old", at: 0)]
@@ -179,8 +169,7 @@ struct ChatPoliciesTests {
         let ids = chat.timeline.rowIds
         let divider = ids.firstIndex(of: "unread")
         #expect(divider != nil)
-        // `dropFirst`, not `ids[divider + 1]`: a divider in the last place fails the expectation instead of trapping
-        // and aborting the whole test process.
+
         if let divider { #expect(ids.dropFirst(divider + 1).first == "s-3") }
         #expect(chat.timeline.firstUnreadId == "s-3")
         chat.panelDidClose()
@@ -211,7 +200,7 @@ struct ChatPoliciesTests {
             ChatMessageInput.make(id: "s-2", senderId: Self.avery, senderName: "Avery Lee", content: "new", timestampMillis: today),
         ]), change: .messages)
         let ids = chat.timeline.rowIds
-        // A require, not an expect: the indexes below would trap and abort the whole test process.
+
         try #require(ids.count == 4)
         #expect(ids[0] == "day:" + String(ChatDayPolicy.dayKey(millis: yesterday)))
         #expect(ids[2] == "day:" + String(ChatDayPolicy.dayKey(millis: today)))
@@ -277,8 +266,6 @@ struct ChatPoliciesTests {
         #expect(chat.timeline.isEmpty)
     }
 
-    // MARK: CH10 failure mapping
-
     @Test func chatFailuresMapFromTheServerTextAndTheClassifier() {
         let table: [(String, ChatFailure)] = [
             ("you are sending messages too quickly", .rateLimited),
@@ -308,8 +295,6 @@ struct ChatPoliciesTests {
         #expect(ChatFailurePolicy.showsReason(.rateLimited) && !ChatFailurePolicy.showsReason(.timedOut))
     }
 
-    // MARK: CH1 to CH3 through the wire models and every reconstruction site
-
     @Test func notificationReactionsReachTheChatMessage() throws {
         let json = """
         {"id":"s-1","userId":"avery@example.com#w1","displayName":"Avery","content":"hi","timestamp":1000,
@@ -326,14 +311,14 @@ struct ChatPoliciesTests {
 
     @Test func everyReconstructionSiteCarriesTheNewFields() throws {
         let vm = try chatSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        // normalizedChatMessage (both branches) and refreshChatDisplayName pass the three fields through.
+
         #expect(vm.components(separatedBy: "clientId: message.clientId,\n            sendStatus: message.sendStatus,\n            reactions: message.reactions").count - 1 == 2)
         #expect(vm.components(separatedBy: "clientId: message.clientId,\n                sendStatus: message.sendStatus,\n                reactions: message.reactions").count - 1 == 1)
         #expect(vm.contains("clientId: incoming.clientId ?? existing.clientId"))
         #expect(vm.contains("reactions: incoming.reactions.isEmpty ? existing.reactions : incoming.reactions"))
         #expect(vm.contains("clientId: optimisticId,\n            sendStatus: ChatSendStatus.sending"))
         #expect(vm.contains("private func rebuiltChatMessage("))
-        // The echo and the acknowledgement keep the client id (CH1).
+
         #expect(vm.contains("rebuiltChatMessage(normalized, clientId: optimisticId, sendStatus: nil"))
         #expect(vm.contains("rebuiltChatMessage(normalized, clientId: optimisticMessageId, sendStatus: nil"))
         let kotlin = try chatSource("Sources/Conclave/Skip/SocketIOManager+Android.kt")
@@ -345,8 +330,6 @@ struct ChatPoliciesTests {
         let messages = try chatSource("Sources/Conclave/Core/Models/SocketMessages.swift")
         #expect(messages.contains("reactions: reactions ?? []"))
     }
-
-    // MARK: Sources (S40 1 l 7, 3, CH22)
 
     @Test func chatSourcesStayInsideTheirRules() throws {
         let legacy = ["ChatMentionCandidate", "ChatMentionSuggestion", "ChatTimelineEntry", "ChatGroupingPolicy", "ChatComposerLayout",
@@ -379,7 +362,7 @@ struct ChatPoliciesTests {
             #expect(!text.contains("chat_action_report"), "\(file) shows Report")
             #expect(!chatHasDash(text), "\(file) contains an en or em dash")
         }
-        // Readouts and counters only in Debug blocks or the fixture (CH22).
+
         let row = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatRow+iOS.swift")
         #expect(row.contains("#if DEBUG\n        let _ = ChatDiagnostics.counters?.bump"))
         let timeline = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatTimeline+iOS.swift")
@@ -407,7 +390,7 @@ struct ChatPoliciesTests {
 }
 
 #if os(macOS)
-/// The core half of CHT-1 to CHT-3 on the macOS host (S40 CH1, CH2, CH3, CH12, CH13, S30 CC5).
+
 @MainActor
 struct ChatViewModelWiringTests {
     private func joinedViewModel() -> MeetingViewModel {
@@ -530,16 +513,12 @@ struct ChatViewModelWiringTests {
     }
 }
 
-/// The texts of the iOS `SocketError` cases (`timeout` and `serverError`), which exist only in the iOS build; the macOS
-/// host classifies an error by its text, like `PresenterHostError` in PresenterSessionTests.
 private struct ChatWiringHostError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
 }
 #endif
-
-// MARK: Helpers (private to this file)
 
 private func chatPackageRoot() -> URL {
     URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -564,10 +543,6 @@ func chatHasDash(_ text: String) -> Bool {
     text.unicodeScalars.contains { $0.value == 0x2013 || $0.value == 0x2014 }
 }
 
-/// `ChatFixtureDriver.install()` writes the shared `ChatDiagnostics` statics, and Swift Testing runs suites in
-/// parallel, so every test that installs a chat fixture driver (CHT4, CHT5, CHT7, T3 borrow) holds this main-actor gate
-/// from before the install until its `defer` releases it. The tests still keep their driver in a local: the chat
-/// closures hold it weakly and only the static holds it strongly.
 @MainActor
 enum ChatFixtureTestGate {
     private static var isHeld = false
@@ -583,7 +558,6 @@ enum ChatFixtureTestGate {
         }
     }
 
-    /// Clears the statics and hands the gate to the next waiting test (it stays held across the handoff).
     static func release() {
         ChatDiagnostics.driver = nil
         ChatDiagnostics.counters = nil

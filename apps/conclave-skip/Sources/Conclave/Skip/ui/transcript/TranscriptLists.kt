@@ -58,15 +58,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
-/*
- * S60 6 d, L6-4 (TRN-2): the Transcript, Ask and Minutes lists on Android. The Transcript list is the S40 ChatTimeline
- * pattern: a reversed LazyColumn (newest at index 0, at the bottom) over newest-first row ids keyed by row id with the
- * marker or group content type; "at bottom" is the first item at offset 48 dp or less; the follow effect lives in its
- * own small composable keyed on the newest row id plus its revision, so growth of the live row is followed while pinned
- * and a delta recomposes only that row and the effect, never the list. Ask uses S40 CL1 bubbles with the CHT-7
- * markdown renderer (long press "Copy answer"); Minutes uses headers and ListItems with Owner and Due lines.
- */
-
 private const val TRANSCRIPT_BOTTOM_SLOP_DP = 48
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -105,7 +96,7 @@ internal fun TranscriptFeedList(feed: TranscriptFeed, reservation: PaddingValues
                 TranscriptRow(feed.row(reversed[index]))
             }
         }
-        // 6 h: the S40 CL5 pill fades in 120 ms (opacity only).
+
         AnimatedVisibility(
             visible = !atBottom,
             enter = fadeIn(tween(120)),
@@ -127,7 +118,6 @@ internal fun TranscriptFeedList(feed: TranscriptFeed, reservation: PaddingValues
     }
 }
 
-/** The follow rule (6 d): keyed on the newest row id plus its revision; reads them alone, so the list never recomposes. */
 @Composable
 private fun TranscriptFollowEffect(feed: TranscriptFeed, listState: LazyListState, wasAtBottom: () -> Boolean) {
     val newestId = feed.newestId
@@ -137,7 +127,6 @@ private fun TranscriptFollowEffect(feed: TranscriptFeed, listState: LazyListStat
     }
 }
 
-/** One row (L6-4): a speaker group as one element ("Avery, 10:41 AM, ..."; partial adds "Still speaking"), or a marker. */
 @Composable
 private fun TranscriptRow(row: TranscriptRowModel) {
     SideEffect { TranscriptDiagnostics.counters?.bump("transcript.row." + row.id + ".recompose") }
@@ -178,8 +167,6 @@ private fun TranscriptRow(row: TranscriptRowModel) {
     }
 }
 
-// MARK: Ask (6 d)
-
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun TranscriptAskList(presenter: TranscriptPresenter, page: TranscriptPageState, reservation: PaddingValues) {
@@ -198,7 +185,7 @@ internal fun TranscriptAskList(presenter: TranscriptPresenter, page: TranscriptP
                 icon = ConclaveIcons.AutoAwesomeFill0, identifier = "transcript.ask.emptyStatus")
             for (name in listOf("trn_ask_suggest_decisions", "trn_ask_suggest_summary", "trn_ask_suggest_actions")) {
                 val suggestion = conclaveString(name)
-                // Fills the field, never sends; tonal so the coral prominent action stays the only coral one.
+
                 ConclaveButton(title = suggestion, role = ConclaveButtonRole.Tonal, identifier = "transcript.ask.$name",
                     onClick = { page.updateAsk(suggestion) })
             }
@@ -211,7 +198,7 @@ internal fun TranscriptAskList(presenter: TranscriptPresenter, page: TranscriptP
     }
     var wasAtBottom by remember { mutableStateOf(true) }
     LaunchedEffect(atBottom) { wasAtBottom = atBottom }
-    // A new question scrolls to it.
+
     LaunchedEffect(reversed.firstOrNull()) { listState.scrollToItem(0) }
     TranscriptAskFollowEffect(thread, listState) { wasAtBottom }
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -233,7 +220,6 @@ internal fun TranscriptAskList(presenter: TranscriptPresenter, page: TranscriptP
     }
 }
 
-/** Streaming growth of the newest answer is followed only while pinned (S40 CHT-7). */
 @Composable
 private fun TranscriptAskFollowEffect(thread: AskThread, listState: LazyListState, wasAtBottom: () -> Boolean) {
     val growth = thread.tailGrowth
@@ -242,11 +228,6 @@ private fun TranscriptAskFollowEffect(thread: AskThread, listState: LazyListStat
     }
 }
 
-/**
- * One question (trailing, primaryContainer) and its answer (leading, secondaryContainer), S40 CL1 through the FND-3
- * bubble. Thinking is static "Thinking" with the system spinner (R13); a done answer offers "Copy answer" on long press;
- * failures carry Try again.
- */
 @Composable
 private fun TranscriptAskRow(row: AskRow, maxBubbleDp: Float, onRetry: () -> Unit, onLink: (String) -> Unit) {
     val context = LocalContext.current
@@ -305,7 +286,6 @@ private fun TranscriptAskRow(row: AskRow, maxBubbleDp: Float, onRetry: () -> Uni
     }
 }
 
-/** The one F00 C19 composer (S40 R40-6 slots; always opaque on Android), ImeAction.Send, hardware Enter sends. */
 @Composable
 internal fun TranscriptAskComposer(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, page: TranscriptPageState) {
     val canSend = AskRowPolicy.canSend(page.askDraft, canAsk = snapshot.canAsk, phase = snapshot.phase, link = snapshot.link)
@@ -328,8 +308,6 @@ internal fun TranscriptAskComposer(presenter: TranscriptPresenter, snapshot: Tra
     }
 }
 
-// MARK: Minutes (6 d)
-
 @Composable
 internal fun TranscriptMinutesList(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, reservation: PaddingValues) {
     val minutes = presenter.minutes
@@ -338,7 +316,7 @@ internal fun TranscriptMinutesList(presenter: TranscriptPresenter, snapshot: Tra
     val empty = MinutesPolicy.emptyKind(phase = snapshot.phase, hasContent = minutes.hasContent)
     val sections = minutes.sections.toList()
     val statusKind = MinutesPolicy.statusKind(updating = snapshot.minutesUpdating, updatedAtMillis = snapshot.minutesUpdatedAtMillis)
-    // 6 k: the relative "Updated" label refreshes once a minute while Minutes is visible (the only timer).
+
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(statusKind) {
         while (statusKind == MinutesStatusKind.updated) {
@@ -436,7 +414,6 @@ private fun TranscriptMinutesHeader(title: String) {
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp).semantics { heading() })
 }
 
-/** One entry with "Owner: %1$s" and "Due: %1$s" as separate supporting lines (6 d). */
 @Composable
 private fun TranscriptMinutesEntry(entry: MinutesEntryModel) {
     val scheme = MaterialTheme.colorScheme

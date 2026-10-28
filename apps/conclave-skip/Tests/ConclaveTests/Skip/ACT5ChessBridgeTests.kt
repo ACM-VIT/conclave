@@ -10,14 +10,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * ACT-5 through the transpiled chess scene, the board policy and the game presenter (the Swift half is
- * T/ACT5ChessTests.swift): the same ChessFixtures pushes parsed through the Android JSON path (64 squares, legal moves
- * deduplicated with their flags, check, the clocks and the auto-played note), one move with its payload and pending
- * overlay, a rejection that restores the position and plays moveRejected, promotion only by choice, the payload-free
- * actions, roles and results, the board geometry, the clock and the resource name for every enum case (L6-14). Pure: no
- * composition.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ACT5ChessBridgeTests {

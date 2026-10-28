@@ -1,19 +1,5 @@
 import Foundation
 
-// S30 0.7 CL13 Debug fixtures on the S20 SL14 stage fixture route (CTL-1): `CONCLAVE_STAGE_FIXTURE=controls-<state>`
-// (iOS launch environment) and the intent extra `conclave.stageFixture=controls-<state>` (Android, Debug only,
-// FLAG_DEBUGGABLE). A standalone shell, stage and controls presenter with a scripted core; slots render the counting
-// `RendererProbe`. No WebRTC, audio, capture or network, never `MeetingViewModel`. Shared (transpiled), so both
-// fixture roots and both test hosts read the same states. CTL-1 ships the bar states; CTL-2 the End states (a held
-// acknowledgment in `controls-end-confirm`, a slow one in `controls-end-slow-ack`, a refused one in
-// `controls-end-failed`); CTL-5 and CTL-6 the More states (`controls-webinar-host`, `controls-no-link`,
-// `controls-reactions-off`, `controls-host-reactions-off`, `controls-more-hand-raising`) with a scripted request handler
-// (reactions, captions, layout, Flip, Lock); CTL-3 and CTL-4 the route and shortcut states (`controls-route-bluetooth`,
-// `controls-route-failed`, `controls-route-bt-no-permission`, `controls-route-wired`, `controls-two-inputs`,
-// `controls-camera-effects`, `controls-system-effects`) over the session's own `AudioRouteOwner` with a scripted backend (every session has one,
-// so the route sheet and the Mic menu work on every state); the recap states arrive with TRN-2 (CC8). The art state
-// (`controls-art-shipped`) waits for the flat reaction assets (CC14, S30 Q10).
-
 enum ControlsFixtureState: String, CaseIterable, Equatable {
     case guest = "controls-guest"
     case host = "controls-host"
@@ -36,13 +22,13 @@ enum ControlsFixtureState: String, CaseIterable, Equatable {
     case leaving = "controls-leaving"
     case wide = "controls-wide"
     case wideRecovering = "controls-wide-recovering"
-    // CTL-5 and CTL-6 (S30 5 l10, l12; 6 l4, l5).
+
     case webinarHost = "controls-webinar-host"
     case noLink = "controls-no-link"
     case reactionsOff = "controls-reactions-off"
     case hostReactionsOff = "controls-host-reactions-off"
     case moreHandRaising = "controls-more-hand-raising"
-    // CTL-3 and CTL-4 (S30 3 l1, l2, l2b and the wired route; 2 l1, l4, l6; S70 5 l4).
+
     case routeBluetooth = "controls-route-bluetooth"
     case routeFailed = "controls-route-failed"
     case routeBluetoothNoPermission = "controls-route-bt-no-permission"
@@ -52,15 +38,14 @@ enum ControlsFixtureState: String, CaseIterable, Equatable {
     case systemEffects = "controls-system-effects"
 }
 
-/// Pure scripts per state (shared by the fixture roots and both test hosts).
 enum ControlsFixtureScript {
     static let roomLabel = "abc-defg-hij"
     static let localUserId = "you"
     static let meetingLink = "https://conclave.acmvit.in/abc-defg-hij"
     static let presenterName = "Avery"
-    /// Fixed and long past, so the recent-join hold never delays the auto-hide cells.
+
     static let joinedAtMillis = 1700000000000.0
-    /// How long a scripted slow acknowledgment takes (`controls-slow-ack`): past the 600 ms spinner threshold.
+
     static let slowAckMillis = 2000.0
     static let remoteNames = ["Avery", "Ben", "Cai"]
 
@@ -86,7 +71,6 @@ enum ControlsFixtureScript {
         state == .attendee || state == .attendeeQa2
     }
 
-    /// States that show the wide bar on any device (CL13): the wide cells and the controls only the wide bar carries.
     static func forcesWide(_ state: ControlsFixtureState) -> Bool {
         switch state {
         case .wide, .wideRecovering, .remoteShare, .handRaising:
@@ -96,23 +80,18 @@ enum ControlsFixtureScript {
         }
     }
 
-    /// CTL-5: the room link More offers (S30 5 l12: none without a room id).
     static func meetingLink(_ state: ControlsFixtureState) -> String {
         state == .noLink ? "" : meetingLink
     }
 
-    /// CTL-5: a running game behind Activities on the webinar host state (the status line and More's dot stay quiet
-    /// elsewhere).
     static func gameName(_ state: ControlsFixtureState) -> String {
         state == .webinarHost ? "Trivia" : ""
     }
 
-    /// The End states open on the host's confirmation, as the Leave menu would leave it (S30 4 l3, l4).
     static func opensOnEndConfirmation(_ state: ControlsFixtureState) -> Bool {
         state == .endConfirm || state == .endSlowAck || state == .endFailed
     }
 
-    /// The S1 inputs for a state with the scripted microphone, camera and hand.
     static func shellInputs(_ state: ControlsFixtureState, isMuted: Bool, isCameraOff: Bool, isHandRaised: Bool,
                             isScreenSharing: Bool, micInFlight: Bool, cameraInFlight: Bool, handInFlight: Bool,
                             recovering: Bool) -> MeetingShellInputs {
@@ -145,8 +124,6 @@ enum ControlsFixtureScript {
         )
     }
 
-    /// The controls-only inputs (CC1, CC9, CC10, CTL-5) a state adds on top of the shell snapshots; `local` carries the
-    /// scripted local preferences (captions, layout, lock) the request handler changes.
     @MainActor
     static func controlsInputs(_ state: ControlsFixtureState, shell: MeetingShellPresenter,
                                local: ControlsFixtureLocal = ControlsFixtureLocal.initial) -> CallControlsInputs {
@@ -172,22 +149,16 @@ enum ControlsFixtureScript {
         )
     }
 
-    // MARK: Routes (CTL-3)
-
     static let receiverRouteId = "receiver"
     static let speakerRouteId = "speaker"
     static let bluetoothRouteId = "bt-pixel"
     static let wiredRouteId = "wired"
-    /// Scripted device names (fixture data, not app copy); the receiver and the speaker stay unnamed, so Android draws
-    /// its `ctl_route_*` labels and iOS draws nothing of its own (the system list owns the iOS output names).
+
     static let bluetoothName = "Pixel Buds Pro"
     static let builtInInputId = "input-built-in"
     static let bluetoothInputId = "input-bt-pixel"
     static let usbInputId = "input-usb"
 
-    /// The routes a state starts with. Speaker on every bar state; Phone selected with a Bluetooth headset present in
-    /// the route states (S30 3 l1); the unnamed R70-2 row without the Android 12+ grant (3 l2b); two microphones for
-    /// the iOS 17 to 25 picker (2 l6).
     static func routeState(_ state: ControlsFixtureState, currentId: String, currentInputId: String,
                            bluetoothGranted: Bool) -> AudioRoutePlatformState {
         let receiver = AudioRouteOption(id: receiverRouteId, kind: AudioRouteKind.receiver, name: "", isConnecting: false)
@@ -211,7 +182,7 @@ enum ControlsFixtureScript {
             return AudioRoutePlatformState.make(options: [receiver, speaker, access], currentId: currentId, defaultId: speakerRouteId,
                                                 canToggleSpeaker: true, bluetoothAccess: BluetoothRouteAccess.needsGrant)
         case .routeWired:
-            // S30 3 l on a wired headset: unnamed, so Android draws "Wired headset" (`ctl_route_wired`).
+
             let wired = AudioRouteOption(id: wiredRouteId, kind: AudioRouteKind.wired, name: "", isConnecting: false)
             return AudioRoutePlatformState.make(options: [receiver, speaker, wired], currentId: currentId, defaultId: wiredRouteId,
                                                 inputs: [builtIn], currentInputId: currentInputId, canToggleSpeaker: true,
@@ -229,8 +200,6 @@ enum ControlsFixtureScript {
         }
     }
 
-    /// The route a state opens on: Phone in the route states (S30 3 l1), the speaker elsewhere (video calls default to
-    /// the loudspeaker, S70 5 c).
     static func initialRouteId(_ state: ControlsFixtureState) -> String {
         switch state {
         case .routeBluetooth, .routeFailed, .routeBluetoothNoPermission:
@@ -242,7 +211,6 @@ enum ControlsFixtureScript {
         }
     }
 
-    /// A four-person stage (you plus three remotes with cameras on); a remote presents in `controls-remote-share`.
     static func stageInputs(_ state: ControlsFixtureState, isMuted: Bool, isCameraOff: Bool, isHandRaised: Bool,
                             recovering: Bool, handPending: Bool = false, routeKind: String = "speaker",
                             routeName: String = "") -> StageInputs {
@@ -268,8 +236,6 @@ enum ControlsFixtureScript {
     }
 }
 
-/// CTL-5: the local preferences the scripted request handler changes (captions, layout, the room lock). CTL-4: whether
-/// the scripted camera runs (the iOS system video effects item follows it, CC11).
 struct ControlsFixtureLocal: Equatable {
     let captionsOn: Bool
     let layoutMode: String
@@ -283,7 +249,6 @@ struct ControlsFixtureLocal: Equatable {
     }
 }
 
-/// `controls.counters` (CL13). Plain, never observed: readouts refresh on demand.
 @MainActor
 final class ControlsFixtureCounters {
     private(set) var toggleMicrophone = 0
@@ -292,17 +257,17 @@ final class ControlsFixtureCounters {
     private(set) var toggleHand = 0
     private(set) var panelPresent = 0
     private(set) var leave = 0
-    /// End tickets that reached the scripted core (S30 4 l3: one per dispatched confirm).
+
     private(set) var endConfirmed = 0
     private(set) var requestPermission = 0
-    /// CTL-5 and CTL-6: requests that reached the scripted core.
+
     private(set) var reaction = 0
     private(set) var flipCamera = 0
     private(set) var captions = 0
     private(set) var layout = 0
     private(set) var lock = 0
     private(set) var systemEffects = 0
-    /// CTL-3 and CTL-4: what reached the scripted route backend and the iOS microphone modes request.
+
     private(set) var routeApply = 0
     private(set) var inputApply = 0
     private(set) var bluetoothRequest = 0
@@ -327,9 +292,6 @@ final class ControlsFixtureCounters {
     func recordBluetoothRequest() { bluetoothRequest += 1 }
     func recordMicModes() { micModes += 1 }
 
-    /// CTL-3 and CTL-4 (CL13 `controls.counters`): routeRequest, inputRequest and speaker are the presenter's requests;
-    /// routeApply, inputApply and bluetoothRequest what reached the scripted backend; micModes and systemEffects the iOS
-    /// system modules.
     func routeSummary(routeRequest: Int, inputRequest: Int, speaker: Int, routeRetry: Int, routeFailed: Int,
                       audioSettings: Int) -> String {
         "routeRequest=" + String(routeRequest) + " inputRequest=" + String(inputRequest) + " speaker=" + String(speaker)
@@ -339,15 +301,12 @@ final class ControlsFixtureCounters {
             + " micModes=" + String(micModes) + " systemEffects=" + String(systemEffects)
     }
 
-    /// CTL-5 and CTL-6 (CL13 `controls.counters`): the core requests plus the presenter's view-side counts.
     func moreSummary(copyLink: Int, invite: Int, sheetDismissed: Int, keyboard: Int) -> String {
         "reaction=" + String(reaction) + " flipCamera=" + String(flipCamera) + " captions=" + String(captions)
             + " layout=" + String(layout) + " lock=" + String(lock) + " copyLink=" + String(copyLink)
             + " invite=" + String(invite) + " sheetDismissed=" + String(sheetDismissed) + " keyboard=" + String(keyboard)
     }
 
-    /// `endRequested` comes from the presenter: the End requests made through `requestEndForEveryone(from:)` (the Leave
-    /// menu, its accessibility action and the fixture button; the failure toast's Retry asks S1 through the stage).
     func summary(explain: Int, permissionAlert: Int, endRequested: Int) -> String {
         "toggleMicrophone=" + String(toggleMicrophone) + " toggleCamera=" + String(toggleCamera)
             + " toggleShare=" + String(toggleShare) + " toggleHand=" + String(toggleHand)
@@ -358,7 +317,6 @@ final class ControlsFixtureCounters {
     }
 }
 
-/// One fixture run: the standalone presenters and the scripted core, shared by the iOS and Android fixture roots.
 @MainActor
 final class ControlsFixtureSession {
     let state: ControlsFixtureState
@@ -367,7 +325,7 @@ final class ControlsFixtureSession {
     let controls: CallControlsPresenter
     let renderers = RendererIdentityLedger()
     let counters = ControlsFixtureCounters()
-    /// Injectable so the host tests can finish a slow acknowledgment at once.
+
     var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
     }
@@ -381,13 +339,13 @@ final class ControlsFixtureSession {
     private var recovering = false
     private var ackSerial = 0
     private var lastPresentationId = 0
-    /// `controls-end-confirm` keeps its End ticket unanswered (a held acknowledgment).
+
     private var heldEndTicket: MeetingActionTicket? = nil
-    /// CTL-5: captions, layout and lock as the scripted core holds them.
+
     private var local = ControlsFixtureLocal.initial
-    /// CTL-6 (S20 SC12): the last S1 hand-row pending value the stage saw, so the stage chip follows the ticket.
+
     private var stageHandPending = false
-    /// CTL-3: the session's own route owner (never the process-wide one) and the scripted platform it drives.
+
     let routeOwner = AudioRouteOwner()
     private var routeCurrentId = ControlsFixtureScript.speakerRouteId
     private var routeCurrentInputId = ControlsFixtureScript.builtInInputId
@@ -401,9 +359,9 @@ final class ControlsFixtureSession {
         stage = stagePresenter
         controls = CallControlsPresenter(shell: owner, stage: stagePresenter)
         routeCurrentId = ControlsFixtureScript.initialRouteId(state)
-        // Live by default (a tap plays micOff, 1 l11); muted where the cell starts from a tap toward live.
+
         isMuted = state == .slowAck || state == .hostDisabledMedia
-        // CTL-4 (S30 2 l4): `controls-camera-effects` starts with the camera off, so its menu holds only Effects.
+
         isCameraOff = state == .audioOnly || state == .cameraDenied || state == .hostDisabledMedia || state == .cameraEffects
         local = local.withCamera(!isCameraOff)
         handInFlight = state == .handRaising || state == .moreHandRaising
@@ -416,8 +374,7 @@ final class ControlsFixtureSession {
         shell.panels.onSnapshotChanged = { [weak self] in
             self?.panelsChanged()
         }
-        // HD/requests/B5-T3.md R1 in the fixture: S1 publishes caused by an intent (the stage's Retry re-requesting the
-        // confirmation, a ticket's result) reach the controls at once, as the view model's publish hook does.
+
         shell.onPublish = { [weak self] _, _, _ in
             self?.refreshControls()
             self?.followHandTicket()
@@ -425,12 +382,11 @@ final class ControlsFixtureSession {
         controls.onCommand = { [weak self] _ in
             self?.counters.recordPermissionRequest()
         }
-        // CTL-5 and CTL-6: the scripted core for the local requests (the view model's `controls.onRequest`).
+
         controls.onRequest = { [weak self] request in
             self?.handleRequest(request) ?? false
         }
-        // CTL-3: the session's route owner with a scripted backend; a refused apply reaches the toast as the view model's
-        // `onRouteFailed` does, and the toast's Retry comes back through the stage's notice command (HD/requests/B8-T6.md).
+
         controls.routeOwner = routeOwner
         routeOwner.backend = AudioRouteBackend(
             applyOutput: { [weak self] id in self?.applyRouteOutput(id) ?? false },
@@ -450,7 +406,7 @@ final class ControlsFixtureSession {
         }
         publishRoutes()
         if ControlsFixtureScript.isRecovering(state) {
-            // Admission first, so the recovery keeps the stage (S10 0.4).
+
             push()
             recovering = true
         }
@@ -462,14 +418,11 @@ final class ControlsFixtureSession {
             confirmEnd(id: id)
         }
         if state == .moreHandRaising {
-            // S30 6 l5: the raise acknowledges after the scripted delay; the More row and the S20 chip follow in one publish.
+
             scheduleHandAck(ticket: nil)
         }
     }
 
-    // MARK: Fixture buttons
-
-    /// The S30 4 host End path, as the Leave menu calls it (the presenter counts the request).
     func requestEnd(from invoker: String) {
         controls.requestEndForEveryone(from: invoker)
         refreshControls()
@@ -480,8 +433,6 @@ final class ControlsFixtureSession {
         refreshControls()
     }
 
-    // MARK: Readouts (outside the stage subtree, PS 7.6)
-
     func countersReadout() -> String {
         counters.summary(explain: controls.explainCount, permissionAlert: controls.promptCount, endRequested: controls.endRequestCount)
             + " " + counters.moreSummary(copyLink: controls.copyLinkCount, invite: controls.inviteCount,
@@ -491,8 +442,6 @@ final class ControlsFixtureSession {
                                           routeFailed: controls.routeFailureCount, audioSettings: controls.audioSettingsCount)
     }
 
-    /// CTL-3 `controls.route`: the current route, the phase, the pending id, the access state and the row ids with "*"
-    /// on the selected one; CTL-4 `controls.shortcuts`: the Camera items, "(reason)" while disabled.
     func routeReadout() -> String {
         let route = controls.route
         var ids: [String] = []
@@ -514,7 +463,6 @@ final class ControlsFixtureSession {
         return "mic=" + (mic ? "1" : "0") + " camera=" + (camera ? "1" : "0") + " items=" + (ids.isEmpty ? "none" : ids.joined(separator: ","))
     }
 
-    /// CTL-5 `controls.more`: the row ids in section order, each with "(reason)" while disabled and "*" while pending.
     func moreReadout() -> String {
         var parts: [String] = []
         for section in controls.more.sections {
@@ -531,10 +479,8 @@ final class ControlsFixtureSession {
         return (controls.more.isRecovering ? "recovering " : "") + (parts.isEmpty ? "none" : parts.joined(separator: " | "))
     }
 
-    /// CL13 `controls.menuHeight` (iOS): the last budget the More control drew.
     func menuHeightReadout() -> String { controls.menuHeightReadout }
 
-    /// CTL-6: the hand as the More row and the S20 chip read it (S30 6 l5).
     func handReadout() -> String {
         "more=" + controls.handState.rawValue + " stage=" + stage.localHand.rawValue
             + " reactions=" + controls.reactions.availability.rawValue
@@ -565,8 +511,6 @@ final class ControlsFixtureSession {
             + " endReason=" + leave.endBlockedReason.rawValue
     }
 
-    /// `stage.notices` (S20 10): the banner and toast kinds, so the End progress and failure toasts can be read (S30 4 l3,
-    /// l4) without a screenshot.
     func noticesReadout() -> String { stage.noticesReadout() }
 
     func panelReadout() -> String {
@@ -580,15 +524,12 @@ final class ControlsFixtureSession {
 
     func renderersReadout() -> String { renderers.summary() }
 
-    // MARK: Scripted core
-
     private func handle(_ command: MeetingShellCommand, ticket: MeetingActionTicket?) {
         switch command {
         case .toggleMicrophone:
             counters.recordMicrophone()
             if state == .slowAck {
-                // CC21 with WP2-S1c: a mute over a pending unmute applies at once and holds the guard until its own
-                // acknowledgment; S1 never sends a tap toward live while one is pending.
+
                 isMuted = !isMuted
                 micInFlight = true
                 scheduleAck(kind: MeetingActionKind.microphone)
@@ -612,7 +553,7 @@ final class ControlsFixtureSession {
         case .toggleHand:
             counters.recordHand()
             if state == .handRaising || state == .slowAck {
-                // The hand is not optimistic (INM B5): pending until the scripted acknowledgment.
+
                 scheduleHandAck(ticket: ticket)
             } else {
                 isHandRaised = !isHandRaised
@@ -627,7 +568,7 @@ final class ControlsFixtureSession {
         case .endForEveryone:
             counters.recordEndConfirmed()
             if state == .endConfirm {
-                // S30 4 l3: the acknowledgment never arrives, so "Ending the call for everyone…" stays and Leave stays live.
+
                 heldEndTicket = ticket
             } else if state == .endSlowAck {
                 scheduleEndAck(ticket: ticket)
@@ -655,7 +596,6 @@ final class ControlsFixtureSession {
         }
     }
 
-    /// `controls-end-slow-ack`: End completes after the scripted delay, which clears the progress toast.
     private func scheduleEndAck(ticket: MeetingActionTicket?) {
         let wait = sleep
         Task { @MainActor [weak self] in
@@ -679,7 +619,6 @@ final class ControlsFixtureSession {
         }
     }
 
-    /// CTL-5 and CTL-6: the scripted core answers every local request at once.
     private func handleRequest(_ request: CallControlsRequest) -> Bool {
         switch request.kind {
         case .sendReaction:
@@ -709,9 +648,6 @@ final class ControlsFixtureSession {
         return true
     }
 
-    // MARK: Scripted route backend (CTL-3)
-
-    /// `controls-route-failed` refuses every apply (the owner fails at once, S30 3 l2); the others land at once.
     private func applyRouteOutput(_ id: String) -> Bool {
         counters.recordRouteApply()
         if state == .routeFailed { return false }
@@ -728,8 +664,6 @@ final class ControlsFixtureSession {
         return true
     }
 
-    /// S30 3 l2b with the grant stubbed: the one request is granted, the row becomes the named device and the route is
-    /// selected (the Android client's `requestBluetoothAccessFromRouteSheet` does the same after a real grant).
     private func grantBluetoothAccess() {
         counters.recordBluetoothRequest()
         if state != .routeBluetoothNoPermission || bluetoothGranted { return }
@@ -743,8 +677,6 @@ final class ControlsFixtureSession {
                                                             bluetoothGranted: bluetoothGranted))
     }
 
-    /// S20 SC12 in the fixture (HD/requests/B6-T3.md R1 mirrors it in the view model): the stage chip shows raising in
-    /// the same frame as the hand ticket starts and keeps it until the ticket finishes.
     private func followHandTicket() {
         let pending = shell.controls.rows.first(where: { $0.id == MeetingControlID.hand.rawValue })?.isPending ?? false
         if pending == stageHandPending { return }
@@ -761,7 +693,6 @@ final class ControlsFixtureSession {
         refreshControls()
     }
 
-    /// Pushes the scripted state to every presenter (shell first: the controls read the snapshots it just published).
     private func push() {
         shell.apply(ControlsFixtureScript.shellInputs(state, isMuted: isMuted, isCameraOff: isCameraOff, isHandRaised: isHandRaised,
                                                       isScreenSharing: isScreenSharing, micInFlight: micInFlight,

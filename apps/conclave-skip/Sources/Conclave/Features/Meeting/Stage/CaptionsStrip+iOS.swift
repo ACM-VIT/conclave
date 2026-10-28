@@ -3,17 +3,6 @@ import MediaAccessibility
 import SwiftUI
 import UIKit
 
-// S20 10 c (SL11; TRN-1, S60 5): the captions strip between the banner and the toast lanes. It mounts only while
-// captions are on and live notes are live for a non-attendee (`stage.captionsActive`), and only the strip reads the
-// `CaptionLineFeed` leaf, so a caption delta redraws the strip and nothing else (S20 10 k). The speaker name in
-// `.subheadline.weight(.semibold)`, then the line in `.body`: partial text in the secondary in-call ink, final text in
-// the in-call text color; at most 2 lines (3 at accessibility sizes, the oldest words truncated); flat in-call surface
-// with a 1 pt border, radius 12. The quiet first state reads "Captions will appear here." and the line hides after 6 s
-// of silence (the feed decides). The strip is one Button "Open Transcript" with the latest line as its value; it is
-// not a live region (captions are not announced). A custom Subtitles and Captioning style from Settings applies its
-// colors and relative size (MediaAccessibility, domain user) and refreshes when the setting changes.
-
-/// Mounts the strip while captions are active; reads one cold Bool.
 struct CaptionsStripSlot: View {
     let stage: StagePresenter
 
@@ -60,7 +49,6 @@ enum CaptionsStripMetrics {
     static let radius = CGFloat(DesignTokens.radiusMedium)
 }
 
-/// The strip's text: speaker name then the line, or the quiet placeholder. Lines replace without animation (S20 10 h).
 struct CaptionsStripText: View {
     let line: CaptionLine
     let appearance: CaptionAppearance
@@ -73,8 +61,7 @@ struct CaptionsStripText: View {
                 .foregroundStyle(HostingTheme.inCallTextSecondary)
                 .lineLimit(lineLimit)
         } else {
-            // The oldest words leave first: the full line lays out at its natural height and the strip shows its last
-            // `lineLimit` lines, clipped at the top (S20 10 c "oldest truncated"); the full text is the button's value.
+
             Text(attributed)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -95,7 +82,7 @@ struct CaptionsStripText: View {
         name.foregroundColor = ink
         var text = AttributedString(line.text)
         text.font = appearance.scaledFont(.body, weight: .regular)
-        // Partial text is secondary (S60 R6-12); a custom caption color applies to both.
+
         text.foregroundColor = line.isFinal ? ink : (appearance.foreground ?? HostingTheme.inCallTextSecondary)
         return name + text
     }
@@ -107,9 +94,6 @@ struct CaptionsStripText: View {
     }
 }
 
-/// The person's Subtitles and Captioning style (MediaAccessibility, domain user). Each value applies only when its
-/// behavior is `useValue`; otherwise the in-call tokens stand. User-chosen caption colors are a system preference, not
-/// palette.
 struct CaptionAppearance: Equatable {
     let foreground: Color?
     let background: Color?
@@ -137,8 +121,6 @@ struct CaptionAppearance: Equatable {
         return CaptionAppearance(foreground: foreground, background: background, relativeSize: relative)
     }
 
-    /// The text style's font. Only a custom caption size (a system preference the person chose) scales the point size
-    /// the style resolves to at the current Dynamic Type size; every other case keeps the text style.
     func scaledFont(_ style: Font.TextStyle, weight: Font.Weight) -> Font {
         if relativeSize == 1 { return Font.system(style, weight: weight) }
         let base = UIFont.preferredFont(forTextStyle: style == .subheadline ? .subheadline : .body)

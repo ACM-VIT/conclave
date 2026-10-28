@@ -3,17 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// CTL-4 (OUT/PLAN-screens.md section 5): the Mic and Camera long-press shortcuts. The shared `MediaShortcutPolicy`, the
-/// presenter's `shortcuts` snapshot, `microphoneShortcuts(chooser:)` and `selectShortcut(_:)`, and the CL13 shortcut
-/// fixtures run here against the real S1 shell, stage and a session-owned route owner; the iOS context menus (not
-/// compiled by the macOS host), the iOS system modules (SystemCameraEffects+iOS.swift, S30 CC11) and the Kotlin long
-/// press, dropdown and custom actions are read. The Kotlin half is T/Skip/CTL3CTL4BridgeTests.kt. Covers S30 2 l (unit
-/// halves of l1, l2, l4, l5 and l6), S30 2 f (states), 2 k (snapshot only on change, the route read only by the menu),
-/// RECONCILE R13 (every user flip plays selectionChanged on dispatch), 0.7 CL3 and CL17, 0.8 CC11. Not run in the
-/// heads-down push.
 @MainActor
 struct CTL4MediaShortcutTests {
-    // MARK: Harness
 
     static func route(canToggleSpeaker: Bool = true, isSpeakerOn: Bool = false, inputs: Int = 2, canChooseInput: Bool = true,
                       canShowMicModes: Bool = true) -> AudioRouteSnapshot {
@@ -32,28 +23,26 @@ struct CTL4MediaShortcutTests {
     static let titles = MediaShortcutTitles(flipCamera: "Flip camera", effects: "Effects", reconnecting: "Available after reconnecting",
                                             offline: "Available when you\u{2019}re back online")
 
-    // MARK: Mic items (S30 2 b, c, f)
-
     @Test func micItemsFollowTheRouteAndTheOS() {
-        // iOS 26: the system input picker with any input; Mic Mode when the module exists; Audio Settings last (2 l1).
+
         let full = MediaShortcutPolicy.microphoneItems(route: Self.route(), chooser: .systemPicker, opensAudioSettings: true, isLeaving: false)
         #expect(Self.kinds(full) == [.speaker, .chooseMicrophone, .micMode, .audioSettings])
-        // iOS 17 to 25: the input list only with more than one input (2 l6).
+
         #expect(Self.kinds(MediaShortcutPolicy.microphoneItems(route: Self.route(), chooser: .list, opensAudioSettings: true, isLeaving: false))
                 == [.speaker, .microphone, .micMode, .audioSettings])
         #expect(Self.kinds(MediaShortcutPolicy.microphoneItems(route: Self.route(inputs: 1), chooser: .list, opensAudioSettings: true,
                                                                isLeaving: false)) == [.speaker, .micMode, .audioSettings])
         #expect(Self.kinds(MediaShortcutPolicy.microphoneItems(route: Self.route(inputs: 0), chooser: .systemPicker, opensAudioSettings: true,
                                                                isLeaving: false)) == [.speaker, .micMode, .audioSettings])
-        // iPad (no receiver): no Speaker row; no module: no Mic Mode (Q7).
+
         #expect(Self.kinds(MediaShortcutPolicy.microphoneItems(route: Self.route(canToggleSpeaker: false, canShowMicModes: false),
                                                                chooser: .systemPicker, opensAudioSettings: true, isLeaving: false))
                 == [.chooseMicrophone, .audioSettings])
-        // The Speaker toggle carries the route's checked state; everything else is enabled and unchecked.
+
         let on = MediaShortcutPolicy.microphoneItems(route: Self.route(isSpeakerOn: true), chooser: .list, opensAudioSettings: true, isLeaving: false)
         #expect(on.first?.kind == .speaker && on.first?.isOn == true)
         #expect(on.dropFirst().allSatisfy { !$0.isOn && $0.isEnabled && $0.reason == .none })
-        // Nothing while leaving; Audio Settings only while Settings can open.
+
         #expect(MediaShortcutPolicy.microphoneItems(route: Self.route(), chooser: .list, opensAudioSettings: true, isLeaving: true).isEmpty)
         #expect(!Self.kinds(MediaShortcutPolicy.microphoneItems(route: Self.route(), chooser: .list, opensAudioSettings: false, isLeaving: false))
             .contains(.audioSettings))
@@ -71,30 +60,28 @@ struct CTL4MediaShortcutTests {
         #expect(ControlsFixtureSession(state: .leaving).controls.microphoneShortcuts(chooser: .list).isEmpty)
     }
 
-    // MARK: Camera items (S30 2 c, d, f, l4)
-
     @Test func cameraItemsFollowTheCameraTheFlipAndEffects() {
-        // Camera on and flippable: Flip only (no Effects panel in production, OQ6 default A; no system module on Android).
+
         #expect(Self.kinds(ControlsFixtureSession(state: .guest).controls.shortcuts.camera) == [.flipCamera])
-        // 2 l4: camera off with the Effects panel: Effects only.
+
         let effects = ControlsFixtureSession(state: .cameraEffects).controls.shortcuts.camera
         #expect(Self.kinds(effects) == [.effects] && effects.allSatisfy { $0.isEnabled })
-        // iOS system module while the camera runs (CC11): Flip, then Video Effects.
+
         #expect(Self.kinds(ControlsFixtureSession(state: .systemEffects).controls.shortcuts.camera) == [.flipCamera, .systemVideoEffects])
-        // Camera off without Effects: no item, so no menu and no long press.
+
         #expect(ControlsFixtureSession(state: .cameraDenied).controls.shortcuts.camera.isEmpty)
-        // Recovering and offline: Flip stays in place, disabled with its reason (S30 2 f, R10).
+
         let recovering = ControlsFixtureSession(state: .recovering).controls.shortcuts.cameraItem(.flipCamera)
         #expect(recovering?.isEnabled == false && recovering?.reason == .reconnecting)
         #expect(ControlsFixtureSession(state: .offline).controls.shortcuts.cameraItem(.flipCamera)?.reason == .offline)
-        // A flip in flight disables the item until the guard clears.
+
         let session = ControlsFixtureSession(state: .guest)
         let inFlight = CallControlsInputs.fromShell(session.shell, canFlipCamera: true, isFlipInFlight: true)
         let item = MediaShortcutPolicy.item(MediaShortcutPolicy.cameraItems(inputs: inFlight), .flipCamera)
         #expect(item?.isEnabled == false && item?.reason == ControlBlockedReason.none)
-        // No flip capability: no Flip row.
+
         #expect(MediaShortcutPolicy.cameraItems(inputs: CallControlsInputs.fromShell(session.shell, canFlipCamera: false)).isEmpty)
-        // Attendees have no camera control; leaving clears everything.
+
         #expect(ControlsFixtureSession(state: .attendee).controls.shortcuts.camera.isEmpty)
         #expect(ControlsFixtureSession(state: .leaving).controls.shortcuts.camera.isEmpty)
     }
@@ -105,14 +92,14 @@ struct CTL4MediaShortcutTests {
         #expect(guest.control(.chat)?.hasShortcut == false && guest.control(.more)?.hasShortcut == false)
         let wide = ControlsFixtureSession(state: .wide).controls.bar
         #expect(wide.control(.screenShare)?.hasShortcut == false && wide.control(.hand)?.hasShortcut == false)
-        // 2 l4: a camera with no enabled item gets no long press (Android: the plain tooltip).
+
         #expect(ControlsFixtureSession(state: .cameraDenied).controls.bar.control(.camera)?.hasShortcut == false)
         #expect(ControlsFixtureSession(state: .cameraEffects).controls.bar.control(.camera)?.hasShortcut == true)
-        // Recovering: the only camera item is disabled, so no dead-end menu; the Mic keeps its route shortcut.
+
         let recovering = ControlsFixtureSession(state: .recovering).controls.bar
         #expect(recovering.control(.camera)?.hasShortcut == false && recovering.control(.microphone)?.hasShortcut == true)
         #expect(ControlsFixtureSession(state: .leaving).controls.bar.control(.microphone)?.hasShortcut == false)
-        // iOS: no context menu at accessibility text sizes or without an enabled item (the actions stay).
+
         let flip = ControlsFixtureSession(state: .guest).controls.shortcuts.camera
         #expect(MediaShortcutPolicy.attachesMenu(flip, isAccessibilityText: false))
         #expect(!MediaShortcutPolicy.attachesMenu(flip, isAccessibilityText: true))
@@ -120,8 +107,6 @@ struct CTL4MediaShortcutTests {
         let disabled = ControlsFixtureSession(state: .recovering).controls.shortcuts.camera
         #expect(!MediaShortcutPolicy.attachesMenu(disabled, isAccessibilityText: false) && !MediaShortcutPolicy.hasEnabledItem(disabled))
     }
-
-    // MARK: Actions (S30 2 j, l5; R13; CC11)
 
     @Test func aFlipFromTheShortcutDispatchesOnceAndPlaysSelectionChanged() {
         let session = ControlsFixtureSession(state: .guest)
@@ -131,10 +116,10 @@ struct CTL4MediaShortcutTests {
         #expect(MediaShortcutPolicy.gestureKind(.flipCamera, result: .ignored) == nil)
         #expect(MediaShortcutPolicy.gestureKind(.effects, result: .dispatched) == nil)
         #expect(MediaShortcutPolicy.gestureKind(.speaker, result: .dispatched) == nil)
-        // While reconnecting the flip is blocked and nothing plays.
+
         let recovering = ControlsFixtureSession(state: .recovering)
         #expect(recovering.controls.selectShortcut(.flipCamera) == .ignored && recovering.counters.flipCamera == 0)
-        // An item the snapshot does not carry is ignored (no Effects panel on the guest state).
+
         #expect(session.controls.selectShortcut(.effects) == .ignored && session.controls.selectShortcut(.systemVideoEffects) == .ignored)
     }
 
@@ -152,17 +137,17 @@ struct CTL4MediaShortcutTests {
         #expect(modes.controls.selectShortcut(.micMode) == .dispatched)
         #expect(modes.counters.micModes == 1 && modes.controls.micModesRequestCount == 1)
         #expect(modes.countersReadout().contains("micModes=1"))
-        // No module on this route: Mic Mode is ignored.
+
         let bluetooth = ControlsFixtureSession(state: .routeBluetooth)
         #expect(bluetooth.controls.selectShortcut(.micMode) == .ignored && bluetooth.counters.micModes == 0)
-        // The iOS 26 picker presents in the view; the presenter only says it may (inputs exist).
+
         #expect(bluetooth.controls.selectShortcut(.chooseMicrophone) == .dispatched && bluetooth.controls.inputPickerCount == 1)
-        // "Microphone" as an accessibility action and "Audio Settings" open Settings at Audio (CC6).
+
         #expect(bluetooth.controls.selectShortcut(.microphone) == .dispatched)
         #expect(bluetooth.shell.panels.snapshot.current?.destination == .settingsAudio)
-        // The Speaker toggle goes through the route owner.
+
         #expect(bluetooth.controls.selectShortcut(.speaker) == .dispatched && bluetooth.controls.route.isSpeakerOn)
-        // CC11 helpers: the module needs the camera capturing.
+
         #expect(MediaShortcutPolicy.isCameraCaptureRunning(isCameraOff: false, isAudioOnly: false, isCameraInterrupted: false,
                                                            isPublishingDisabled: false))
         for flags in [(true, false, false, false), (false, true, false, false), (false, false, true, false), (false, false, false, true)] {
@@ -172,8 +157,7 @@ struct CTL4MediaShortcutTests {
     }
 
     @Test func shortcutsPublishOnlyOnChange() {
-        // S30 2 k: the Camera items change only with the camera, the flip capability and the effects inputs; route
-        // changes never touch the bar.
+
         let session = ControlsFixtureSession(state: .guest)
         let shortcuts = session.controls.shortcuts.revision
         let bar = session.controls.bar.revision
@@ -190,7 +174,7 @@ struct CTL4MediaShortcutTests {
     @Test func theAndroidCameraMenuIsOneIconCompleteSection() {
         let sections = MediaShortcutPolicy.cameraMenuSections(ControlsFixtureSession(state: .systemEffects).controls.shortcuts.camera,
                                                               titles: Self.titles)
-        // The iOS system module never becomes an Android row.
+
         #expect(sections.count == 1 && sections.first?.items.map { $0.id } == ["flipCamera"])
         #expect(sections.first.map { ConclaveMenuPolicy.isIconConsistent($0) } == true)
         let recovering = MediaShortcutPolicy.cameraMenuSections(ControlsFixtureSession(state: .recovering).controls.shortcuts.camera,
@@ -202,7 +186,7 @@ struct CTL4MediaShortcutTests {
                                                              titles: Self.titles)
         #expect(effects.first?.items.map { $0.title } == ["Effects"] && effects.first?.items.first?.concept == "effects")
         #expect(MediaShortcutPolicy.cameraMenuSections([], titles: Self.titles).isEmpty)
-        // TalkBack custom actions: only items that can act, never the iOS module.
+
         #expect(MediaShortcutPolicy.accessibilityItems(ControlsFixtureSession(state: .systemEffects).controls.shortcuts.camera)
             .map { $0.kind } == [.flipCamera])
         #expect(MediaShortcutPolicy.accessibilityItems(ControlsFixtureSession(state: .recovering).controls.shortcuts.camera).isEmpty)
@@ -220,30 +204,28 @@ struct CTL4MediaShortcutTests {
         #expect(ControlsFixtureSession(state: .recovering).shortcutsReadout() == "mic=1 camera=0 items=flipCamera(reconnecting)")
     }
 
-    // MARK: Source scans (iOS views are not compiled by the macOS host; Kotlin is read)
-
     @Test func iosMenusAttachBelowAccessibilitySizesAndEveryItemIsAnAction() throws {
         let menu = ctl4Normalized(try ctl4Source("Sources/Conclave/Features/Meeting/Controls/MediaShortcutMenu+iOS.swift"))
         let cell = ctl4Normalized(try ctl4Source("Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift"))
         #expect(menu.hasPrefix("#if os(iOS) && !SKIP"))
-        // The menu attaches only through the shared gate; the accessibility actions exist either way (AX4).
+
         #expect(menu.components(separatedBy: ".contextMenu {").count - 1 == 2)
         #expect(menu.components(separatedBy: "MediaShortcutPolicy.attachesMenu(items, isAccessibilityText: isAccessibilityText)").count - 1 == 2)
         #expect(menu.components(separatedBy: ".accessibilityActions {").count - 1 == 2)
-        // CL17: the iOS 26 input picker behind availability; the iOS 17 to 25 Picker over the route's inputs.
+
         #expect(menu.contains("if #available(iOS 26.0, *) { let picker = AVInputPickerInteraction() view.addInteraction(picker)"))
         #expect(menu.contains("Picker(selection: Binding(get: { controls.route.currentInputId }, set: { id in _ = controls.requestInput(id: id) })) {"))
         #expect(menu.contains(".pickerStyle(.menu)"))
-        // The Speaker toggle binds to the owner; no preview closure; no haptic of its own (the system menu plays).
+
         #expect(menu.contains("Toggle(isOn: Binding(get: { controls.route.isSpeakerOn }, set: { on in _ = controls.setSpeaker(on) })) {"))
         for pattern in ["preview:", "sensoryFeedback", "HapticManager", "conclaveGestureFeedback", "Image(systemName: \""] {
             #expect(!menu.contains(pattern), "the shortcut menu uses \(pattern)")
         }
-        // R13: the flip plays selectionChanged from the cell, only after a dispatched flip.
+
         #expect(menu.contains("if MediaShortcutPolicy.gestureKind(kind, result: result) != nil { onFlip() }"))
         #expect(cell.contains(".modifier(MediaShortcutModifier(model: model, controls: controls, isAccessibilityText: isAccessibilityText, onFlip: { flipCounter += 1 }))"))
         #expect(cell.contains(".conclaveGestureFeedback(.selectionChanged, trigger: flipCounter)"))
-        // The CTL-1 pins hold.
+
         #expect(cell.contains("let kind = ControlBarPolicy.gestureKind(model) if controls.tap(model.kind) == ControlTapResult.dispatched, let kind {"))
         #expect(cell.contains(".conclaveGestureFeedback(feedbackKind, trigger: feedbackCount)"))
     }
@@ -254,7 +236,7 @@ struct CTL4MediaShortcutTests {
         #expect(effects.contains("AVCaptureDevice.showSystemUserInterface(.videoEffects)"))
         #expect(effects.contains("AVCaptureDevice.showSystemUserInterface(.microphoneModes)"))
         #expect(effects.contains("static func canShowSystemVideoEffects(isCaptureRunning: Bool) -> Bool"))
-        // SET-6's Center Stage write stays cooperative.
+
         #expect(effects.contains("centerStageControlMode"))
     }
 
@@ -262,20 +244,20 @@ struct CTL4MediaShortcutTests {
         let toggle = ctl4Normalized(try ctl4Source("Sources/Conclave/Skip/ui/call/controls/CallToggle.kt"))
         let bar = ctl4Normalized(try ctl4Source("Sources/Conclave/Skip/ui/call/controls/CallControlBar.kt"))
         let menu = ctl4Normalized(try ctl4Source("Sources/Conclave/Skip/ui/call/controls/MediaShortcutMenu.kt"))
-        // CL3: the long-click slot, its label and the custom actions; the built-in haptic stays off (plays once).
+
         #expect(toggle.contains("onLongClickLabel = onLongClickLabel, onLongClick = onLongClick, hapticFeedbackEnabled = false,"))
         #expect(toggle.contains("customActions: List<CustomAccessibilityAction> = emptyList(),"))
         #expect(toggle.contains("if (customActions.isNotEmpty()) this.customActions = customActions"))
-        // 2 d: longPress as the shortcut opens; the Mic opens the route sheet; the Camera keeps the tooltip without items.
+
         #expect(bar.contains("val longPress: (() -> Unit)? = if (opens != null) { { haptics.gesture(FeedbackKind.longPress) opens() } } else { null }"))
         #expect(bar.components(separatedBy: "FeedbackKind.longPress").count - 1 == 1)
         #expect(bar.contains("onLongClick = longPress, onLongClickLabel = shortcut.longClickLabel, customActions = shortcut.actions)"))
         #expect(bar.contains("if (longPress != null) toggle() else CallControlTooltip(label) { toggle() }"))
         #expect(bar.contains("val chooseOutput = conclaveString(\"ctl_choose_audio_output\")"))
         #expect(bar.contains("val opens = if (control.hasShortcut && items.hasEnabledCameraItem) onCameraMenu else null"))
-        // The CTL-1 tap pin holds.
+
         #expect(bar.contains("val kind = control.gesture if (controls.tap(control.kind) == ControlTapResult.dispatched && kind != null) haptics.gesture(kind)"))
-        // The dropdown is the FND-2 menu; CC16 camera.menu; R13 selectionChanged only for a dispatched flip.
+
         #expect(menu.contains("ConclaveDropdownMenu("))
         #expect(menu.contains("MediaShortcutPolicy.cameraMenuSections(shortcuts.snapshot.camera, titles = titles).toList()"))
         #expect(menu.contains("stage.setTransientChrome(id = ChromeAutoHidePolicy.cameraMenu, open = true)"))
@@ -288,7 +270,7 @@ struct CTL4MediaShortcutTests {
     }
 
     @Test func shortcutStringsResolveInBothCatalogs() throws {
-        // After the strings merge (HD/strings/B8-T6.json).
+
         let catalog = try ctl4Source("Sources/Conclave/Resources/Localizable.xcstrings")
         for key in ["Speaker", "Choose Microphone\u{2026}", "Choose Microphone", "Microphone", "Mic Mode\u{2026}", "Mic Mode", "Audio Settings",
                     "Flip Camera", "Effects", "Video Effects\u{2026}", "Video Effects"] {
@@ -318,8 +300,6 @@ struct CTL4MediaShortcutTests {
         #expect(policy.range(of: #"\.(map|compactMap|flatMap)\(\w+(\.init)?\)"#, options: .regularExpression) == nil)
     }
 }
-
-// MARK: Helpers (file-private, so no other suite collides)
 
 private func ctl4PackageRoot() -> URL {
     URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

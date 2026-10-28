@@ -1,18 +1,10 @@
 import Foundation
 
-/// S50 PL7 (shared, pure): the row action table of S50 3 f, its group order and the menu models every surface reads
-/// (the People row menu, the iOS context menu, accessibility actions and the S20 tile menu; RECONCILE R19: S50 3 g
-/// is the single source of `ppl_` copy and order). Groups: 0 everyone, 1 host media, 2 roles, 3 destructive. For a
-/// host or co-host viewer whose target has at least one group 1 action the groups are emitted 1, 0, 2, 3 (the top
-/// menu item then matches the first trailing swipe, IOS 9.2); otherwise 0, 1, 2, 3. Group 3 is always last.
 enum PeopleActionPolicy {
     static let sectionPrefix = "people.g"
-    /// The rename ledger target (`changeName:self`, S50 3 j).
+
     static let selfTarget = "self"
 
-    // MARK: The table (S50 3 f)
-
-    /// The actions for one roster person. `pendingAction` is the row's in-flight host action ("" when none).
     static func actions(_ person: PeopleParticipantInput, role: PersonRole, context: PeopleActionContext,
                         pendingAction: String) -> [PersonActionModel] {
         let viewer = context.viewerRole
@@ -67,20 +59,20 @@ enum PeopleActionPolicy {
             if person.hasScreenAudio && !person.isScreenSharing {
                 group1.append(item(PersonActionID.stopScreenAudio, group: 1, reason: hostReason))
             }
-            // Q3: a grant that lasts until the meeting ends (`canPromoteHost`: a participant, not a host yet).
+
             if role == PersonRole.participant {
                 group2.append(item(PersonActionID.makeCoHost, group: 2, reason: hostReason, needsConfirmation: true))
             }
-            // Q1: only the current host transfers the role.
+
             if context.isPrimaryHostViewer && (role == PersonRole.coHost || role == PersonRole.participant) {
                 group2.append(item(PersonActionID.makeHost, group: 2, reason: hostReason, needsConfirmation: true))
             }
-            // The SFU refuses any admin target (webinarInteractionHandlers.ts:411-417).
+
             if context.isWebinarEnabled && context.supportsMoveToAudience && role == PersonRole.participant {
                 group2.append(item(PersonActionID.moveToAudience, group: 2, reason: hostReason, isDestructive: true,
                                    needsConfirmation: true))
             }
-            // Q2: co-hosts never remove the host.
+
             if !(viewer == PersonRole.coHost && role == PersonRole.host) {
                 group3.append(item(PersonActionID.remove, group: 3, reason: hostReason, isDestructive: true,
                                    needsConfirmation: true, isSwipe: hostEnabled))
@@ -106,7 +98,6 @@ enum PeopleActionPolicy {
                           isDestructive: isDestructive, needsConfirmation: needsConfirmation, isSwipe: isSwipe)
     }
 
-    /// The group order the table emitted (for tests and the tile menu check).
     static func groupOrder(_ actions: [PersonActionModel]) -> [Int] {
         var order: [Int] = []
         for action in actions {
@@ -115,9 +106,6 @@ enum PeopleActionPolicy {
         return order
     }
 
-    // MARK: Surfaces
-
-    /// RECONCILE R19: the tile menu lists the same items in the same order minus Admit and Deny (S20 3 a).
     static func tileActions(_ actions: [PersonActionModel]) -> [PersonActionModel] {
         var result: [PersonActionModel] = []
         for action in actions {
@@ -128,7 +116,6 @@ enum PeopleActionPolicy {
         return result
     }
 
-    /// iOS trailing swipe (S50 3 c): Mute (only for an unmuted target) then Remove, enabled items only.
     static func swipeActions(_ actions: [PersonActionModel]) -> [PersonActionModel] {
         var mute: [PersonActionModel] = []
         var remove: [PersonActionModel] = []
@@ -140,7 +127,6 @@ enum PeopleActionPolicy {
         return mute + remove
     }
 
-    /// Available items in order, for the accessibility actions (AX4) and the iOS context menu (unavailable hidden).
     static func availableActions(_ actions: [PersonActionModel]) -> [PersonActionModel] {
         var result: [PersonActionModel] = []
         for action in actions {
@@ -149,9 +135,6 @@ enum PeopleActionPolicy {
         return result
     }
 
-    /// The menu sections in emitted order, one section per group, with resolved titles and reasons. Concepts follow
-    /// F00 7.1 and H-06: a section is icon-complete or icon-free, so a section with an item whose glyph is not in the
-    /// catalog drops all its icons. Every current action has a canonical mapping.
     static func menuSections(_ actions: [PersonActionModel], titles: PeopleActionTitles) -> [MenuSectionModel] {
         var sections: [MenuSectionModel] = []
         var currentGroup = -1
@@ -222,8 +205,6 @@ enum PeopleActionPolicy {
         }
     }
 
-    /// The manifest concept per item (F00 7.3 names; `ConclaveMenuSymbols` and `conclaveMenuIcon` resolve them). ""
-    /// is reserved for a future action with no canonical artwork.
     static func concept(_ action: PersonActionID) -> String {
         switch action {
         case .pin: return "pin"
@@ -247,8 +228,6 @@ enum PeopleActionPolicy {
         }
     }
 
-    // MARK: Dispatch mapping (S50 0.5)
-
     static func confirmationKind(_ action: PersonActionID) -> PeopleConfirmationKind? {
         switch action {
         case .remove: return PeopleConfirmationKind.remove
@@ -259,8 +238,6 @@ enum PeopleActionPolicy {
         }
     }
 
-    /// The core command for a ticketed row action; nil for the local actions (pin, private message, hide, lower
-    /// hand) and the dialog-opening Change Name.
     static func commandKind(_ action: PersonActionID) -> PeopleCommandKind? {
         switch action {
         case .mute: return PeopleCommandKind.mute
@@ -280,19 +257,16 @@ enum PeopleActionPolicy {
         }
     }
 
-    /// Ledger keys are target scoped (`mute:<rowId>`, `changeName:self`, `policy:<id>`), never a producer id.
     static func ledgerKey(_ kind: PeopleCommandKind, target: String) -> String {
         kind.rawValue + ":" + target
     }
 
-    /// The row a pending key shows on: Remove and Block both show as Remove.
     static func rowPendingAction(_ keyKind: String) -> String {
         if keyKind == PeopleCommandKind.block.rawValue { return PersonActionID.remove.rawValue }
         if PersonActionID(rawValue: keyKind) != nil { return keyKind }
         return ""
     }
 
-    /// Q7: a guest's user key is per device ("guest-" ids), so the block note says they can join from another device.
     static func isGuestUserId(_ userId: String) -> Bool {
         let key = userId.components(separatedBy: "#").first ?? userId
         return key.hasPrefix("guest-")

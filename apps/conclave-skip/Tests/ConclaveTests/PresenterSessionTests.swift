@@ -4,12 +4,8 @@ import Observation
 import Testing
 @testable import Conclave
 
-/// WP2-S1 (contract-wp2-first-slice 5.1 to 5.3): the meeting shell presenter, its ledger and policies. Every S1
-/// scenario id appears in a test name comment as `S1-...`; `T/Skip/PresenterSessionBridgeTests.kt` covers the same
-/// ids against the transpiled presenter (all but S1-STALE-03, which needs the view model).
 @MainActor
 struct PresenterSessionTests {
-    // MARK: Helpers
 
     private func identity(_ callSession: Int, _ attempt: Int = 1, _ token: String = "attempt") -> MeetingSessionIdentity {
         MeetingSessionIdentity(callSession: callSession, attempt: attempt, attemptToken: "\(token)-\(callSession)-\(attempt)")
@@ -67,10 +63,8 @@ struct PresenterSessionTests {
         presenterSessionRow(presenter.controls.rows, id)
     }
 
-    // MARK: Stale callbacks
-
     @Test func staleCallbacks() throws {
-        // S1-STALE-01: a finish from an earlier attempt is dropped and quiet.
+
         let log = CommandLog()
         let shell = presenter(log, joined())
         #expect(shell.toggleHand() == .dispatched)
@@ -81,7 +75,6 @@ struct PresenterSessionTests {
         #expect(!shell.finish(ticket, MeetingActionResult.completed))
         #expect(shell.snapshotPublishCount == publishes)
 
-        // S1-STALE-02: a double finish of one ticket is accepted once.
         #expect(shell.toggleHand() == .dispatched)
         try #require(log.tickets.count > 1)
         let second = log.tickets[1]
@@ -90,11 +83,8 @@ struct PresenterSessionTests {
         #expect(!row(shell, .hand).isPending)
     }
 
-    // MARK: Room switch
-
     @Test func roomSwitch() throws {
-        // S1-ROOM-01: a new call session cancels pending, resets panels to the new session and sets the feedback
-        // baseline in one coherent publish.
+
         let log = CommandLog()
         let shell = presenter(log, joined(isAdmin: true))
         #expect(shell.toggleHand() == .dispatched)
@@ -114,11 +104,9 @@ struct PresenterSessionTests {
         try #require(log.tickets.count > 0)
         #expect(shell.ledger.result(of: log.tickets[0].id)?.kind == .cancelled)
 
-        // S1-ROOM-02: late callbacks from room A after B starts are dropped.
         #expect(!shell.finish(log.tickets[0], MeetingActionResult.failed(.ackTimedOut)))
         #expect(row(shell, .hand).failure == .none)
 
-        // S1-ROOM-03: admission and recovery do not start a call session.
         #expect(!MeetingCallSessionPolicy.startsNewCallSession(isRecoveryJoin: true, reuseExistingSocket: false, previousConnectionState: .reconnecting))
         #expect(!MeetingCallSessionPolicy.startsNewCallSession(isRecoveryJoin: false, reuseExistingSocket: true, previousConnectionState: .waiting))
         #expect(!MeetingCallSessionPolicy.startsNewCallSession(isRecoveryJoin: false, reuseExistingSocket: true, previousConnectionState: .joining))
@@ -129,18 +117,15 @@ struct PresenterSessionTests {
         #expect(shell.ledger.result(of: log.tickets[1].id)?.kind == .interrupted)
     }
 
-    // MARK: Lost acknowledgment
-
     @Test func lostAcknowledgment() throws {
-        // S1-ACK-01: the iOS timeout (the text of the iOS-only SocketError.timeout) classifies as ackTimedOut.
+
         #expect(MeetingActionFailurePolicy.classify(PresenterHostError("Timed out waiting for the SFU")) == .ackTimedOut)
-        // S1-ACK-02: the Kotlin timeout text classifies as ackTimedOut too.
+
         let kotlinTimeout = NSError(domain: "skip.lib.ErrorException", code: 0, userInfo: [
             NSLocalizedDescriptionKey: "Timed out waiting for setHandRaised acknowledgement"
         ])
         #expect(MeetingActionFailurePolicy.classify(kotlinTimeout) == .ackTimedOut)
 
-        // S1-ACK-03: after a failed ack the server event still drives isOn; there is no optimistic rollback.
         let log = CommandLog()
         let shell = presenter(log, joined())
         #expect(shell.toggleHand() == .dispatched)
@@ -150,7 +135,6 @@ struct PresenterSessionTests {
         shell.apply(joined(isHandRaised: true))
         #expect(row(shell, .hand).isOn)
 
-        // S1-ACK-04: recovery start interrupts the pending hand ticket and the later ack is dropped.
         let recovery = presenter(CommandLog(), joined())
         let recoveryLog = CommandLog()
         recovery.onCommand = { _, ticket in if let ticket { recoveryLog.tickets.append(ticket) } }
@@ -162,10 +146,8 @@ struct PresenterSessionTests {
         #expect(!recovery.finish(recoveryLog.tickets[0], MeetingActionResult.completed))
     }
 
-    // MARK: Duplicate action
-
     @Test func duplicateAction() throws {
-        // S1-DUP-01: a second hand tap while pending dispatches nothing and publishes nothing.
+
         let log = CommandLog()
         let shell = presenter(log, joined(isAdmin: true))
         #expect(shell.toggleHand() == .dispatched)
@@ -174,7 +156,6 @@ struct PresenterSessionTests {
         #expect(log.commands == [.toggleHand])
         #expect(shell.snapshotPublishCount == publishes)
 
-        // S1-DUP-02: a double confirm dispatches end once.
         shell.requestEndForEveryone(from: MeetingConfirmationInvoker.more)
         let confirmation = try #require(shell.session.confirmation)
         #expect(confirmation.invoker == MeetingConfirmationInvoker.more)
@@ -182,8 +163,6 @@ struct PresenterSessionTests {
         #expect(shell.confirmEndForEveryone(id: confirmation.id) == .duplicate)
         #expect(log.commands.filter { $0 == .endForEveryone }.count == 1)
 
-        // S1-DUP-03 (split by S30 CC21): a mic tap toward muted while an unmute is pending dispatches once; a tap
-        // toward live while a mute is pending is a duplicate. The same pair for the camera.
         let media = CommandLog()
         let unmutePending = presenter(media, joined(isMuted: false, micToggleInFlight: true))
         #expect(row(unmutePending, .microphone).isPending)
@@ -199,10 +178,8 @@ struct PresenterSessionTests {
         #expect(media.commands == [.toggleMicrophone, .toggleCamera])
     }
 
-    // MARK: Role change
-
     @Test func roleChange() throws {
-        // S1-ROLE-01: host loss clears the end confirmation and hides host rows.
+
         let log = CommandLog()
         let shell = presenter(log, joined(isAdmin: true))
         shell.requestEndForEveryone(from: MeetingConfirmationInvoker.call)
@@ -213,7 +190,6 @@ struct PresenterSessionTests {
         #expect(row(shell, .endForEveryone).blockedReason == .hostOnly)
         #expect(!shell.session.canEndForEveryone)
 
-        // S1-ROLE-02: an attendee blocks media rows with reason attendee.
         shell.apply(joined(isWebinarAttendee: true))
         for id in [MeetingControlID.microphone, .camera, .screenShare, .hand] {
             #expect(row(shell, id).blockedReason == .attendee, "\(id)")
@@ -221,7 +197,6 @@ struct PresenterSessionTests {
         }
         #expect(shell.toggleMicrophone() == .unavailable)
 
-        // S1-ROLE-03: a pending end survives host loss until its result.
         let ending = CommandLog()
         let host = presenter(ending, joined(isAdmin: true))
         host.requestEndForEveryone(from: MeetingConfirmationInvoker.more)
@@ -233,12 +208,10 @@ struct PresenterSessionTests {
         #expect(host.finish(ending.tickets[0], MeetingActionResult.completed))
     }
 
-    // MARK: One-row updates
-
     @Test func oneRowUpdates() {
         let log = CommandLog()
         let shell = presenter(log, joined())
-        // S1-ROW-01: a hand toggle changes only the hand row.
+
         let before = shell.controls
         shell.apply(joined(isHandRaised: true))
         let after = shell.controls
@@ -248,7 +221,6 @@ struct PresenterSessionTests {
         }
         #expect(after.rows.first { $0.id == "hand" }?.isOn == true)
 
-        // S1-ROW-02: the unread count changes only the chat row.
         shell.apply(joined(isHandRaised: true, unreadChatCount: 3))
         let chat = shell.controls
         #expect(chat.revision == after.revision + 1)
@@ -257,22 +229,18 @@ struct PresenterSessionTests {
         }
         #expect(row(shell, .chat).badgeCount == 3)
 
-        // S1-ROW-03: recovery keeps ids and order and explains blocked rows.
         shell.apply(joined(isHandRaised: true, isRecoveringConnection: true, connectionState: .reconnecting, unreadChatCount: 3))
         #expect(shell.controls.rows.map { $0.id } == MeetingControlID.allCases.map { $0.rawValue })
         #expect(row(shell, .hand).blockedReason == .reconnecting)
         #expect(row(shell, .microphone).isEnabled && row(shell, .microphone).hint == .appliesAfterReconnect)
         #expect(row(shell, .screenShare).blockedReason == .reconnecting)
 
-        // S1-ROW-04: duplicate inputs leave the revision unchanged.
         let revision = shell.controls.revision
         let publishes = shell.snapshotPublishCount
         shell.apply(joined(isHandRaised: true, isRecoveringConnection: true, connectionState: .reconnecting, unreadChatCount: 3))
         #expect(shell.controls.revision == revision)
         #expect(shell.snapshotPublishCount == publishes)
     }
-
-    // MARK: Contract tables
 
     @Test func ledgerIdsNeverReuseAcrossSessions() throws {
         let ledger = MeetingActionLedger()
@@ -327,7 +295,7 @@ struct PresenterSessionTests {
         #expect(phase(MeetingShellInputs.make(identity: session, connectionState: .disconnected, joinFormErrorMessage: "No room found")) == MeetingPhaseResolution(phase: .home, notice: .formError, noticeText: "No room found"))
         #expect(phase(MeetingShellInputs.make(identity: session, connectionState: .disconnected, terminalOutcome: outcome(.endedByYou))) == MeetingPhaseResolution(phase: .home, notice: .none, noticeText: nil))
         #expect(phase(MeetingShellInputs.make(identity: session, connectionState: .disconnected)) == MeetingPhaseResolution(phase: .home, notice: .none, noticeText: nil))
-        // An outcome from an earlier call session never routes the new one.
+
         #expect(phase(MeetingShellInputs.make(identity: identity(2), connectionState: .error, terminalOutcome: outcome(.removed))).phase == .home)
     }
 
@@ -348,7 +316,7 @@ struct PresenterSessionTests {
                                     let context = MeetingControlRowContext.make(phase: MeetingPhasePolicy.resolve(inputs).phase)
                                     let rows = MeetingControlAvailabilityPolicy.rows(inputs, context: context)
                                     func find(_ id: MeetingControlID) -> MeetingControlRow { presenterSessionRow(rows, id) }
-                                    // The ControlsBarView.swift:199-215 expressions, restated.
+
                                     let isJoined = state == .joined
                                     let canChange = MeetingMediaControlAvailabilityPolicy.canChangeLocalMediaIntent(
                                         connectionState: state, isRecoveringConnection: recovering, mediaPublishingDisabled: attendee
@@ -383,7 +351,7 @@ struct PresenterSessionTests {
         shell.onPublish = { session, controls, feedback in publishes.append((session, controls, feedback)) }
         #expect(shell.toggleHand() == .dispatched)
         shell.requestEndForEveryone(from: MeetingConfirmationInvoker.more)
-        // Recovery, then a terminal outcome, then a new call session that still carries the old outcome.
+
         shell.apply(joined(isAdmin: true, isRecoveringConnection: true, connectionState: .reconnecting))
         shell.apply(joined(isAdmin: true))
         let removed = MeetingTerminalOutcome(id: 7, callSession: 1, kind: .removed, serverText: "Removed")
@@ -439,7 +407,7 @@ struct PresenterSessionTests {
         let shell = presenter(log, MeetingShellInputs.make(identity: identity(1), connectionState: .waiting))
         shell.apply(MeetingShellInputs.make(identity: identity(1, 2), connectionState: .joining))
         #expect(shell.feedbackState.token == FeedbackToken(sequence: 1, kind: .admitted))
-        // Joined after admitted in the same call session is suppressed (OWNER-DEFAULTS Q16).
+
         shell.apply(joined(attempt: 2))
         #expect(shell.feedbackState.token.sequence == 1)
         shell.apply(joined(attempt: 2, isRecoveringConnection: true, connectionState: .reconnecting))
@@ -456,7 +424,7 @@ struct PresenterSessionTests {
         #expect(shell.feedbackState.token == FeedbackToken(sequence: 4, kind: .removed))
         shell.apply(joined(attempt: 4, connectionState: .error, terminalOutcome: removed))
         #expect(shell.feedbackState.token.sequence == 4)
-        // A new call session: baseline, then joined once.
+
         shell.apply(MeetingShellInputs.make(identity: identity(2), connectionState: .connecting))
         #expect(shell.feedbackState == MeetingShellFeedbackState(session: 2, token: FeedbackToken.baseline))
         shell.apply(joined(2))
@@ -482,7 +450,7 @@ struct PresenterSessionTests {
         let second = presenter(secondLog, joined())
         #expect(first.toggleHand() == .dispatched)
         #expect(second.toggleHand() == .dispatched)
-        // Each presenter numbers its own tickets and owns its own ledger and panels.
+
         try #require(firstLog.tickets.count > 0 && secondLog.tickets.count > 0)
         #expect(firstLog.tickets[0].id == 1 && secondLog.tickets[0].id == 1)
         #expect(first.finish(firstLog.tickets[0], MeetingActionResult.completed))
@@ -493,71 +461,97 @@ struct PresenterSessionTests {
     }
 
     @Test func kotlinFixturesCoverEverySwiftScenario() throws {
-        let ids = ["S1-STALE-01", "S1-STALE-02", "S1-ROOM-01", "S1-ROOM-02", "S1-ROOM-03", "S1-ACK-01", "S1-ACK-02",
-                   "S1-ACK-03", "S1-ACK-04", "S1-DUP-01", "S1-DUP-02", "S1-DUP-03", "S1-ROLE-01", "S1-ROLE-02",
-                   "S1-ROLE-03", "S1-ROW-01", "S1-ROW-02", "S1-ROW-03", "S1-ROW-04"]
-        #expect(ids.count == 19)
+        let cases: [(id: String, test: String, swift: String, kotlin: String)] = [
+            ("S1-STALE-01", "staleCallbacks", "#expect(!shell.finish(ticket, MeetingActionResult.completed))", "assertFalse(shell.finish(ticket, MeetingActionResult.completed))"),
+            ("S1-STALE-02", "staleCallbacks", "#expect(!shell.finish(second, MeetingActionResult.completed))", "assertFalse(shell.finish(second, MeetingActionResult.completed))"),
+            ("S1-ROOM-01", "roomSwitch", "#expect(published.2 == MeetingShellFeedbackState(session: 2, token: FeedbackToken.baseline))", "assertEquals(MeetingShellFeedbackState(session = 2, token = FeedbackToken.baseline), feedback)"),
+            ("S1-ROOM-02", "roomSwitch", "#expect(!shell.finish(log.tickets[0], MeetingActionResult.failed(.ackTimedOut)))", "assertFalse(shell.finish(recorder.tickets[0], MeetingActionResult.failed(MeetingActionFailure.ackTimedOut)))"),
+            ("S1-ROOM-03", "roomSwitch", "#expect(!MeetingCallSessionPolicy.startsNewCallSession(isRecoveryJoin: true, reuseExistingSocket: false, previousConnectionState: .reconnecting))", "assertFalse(MeetingCallSessionPolicy.startsNewCallSession(isRecoveryJoin = true, reuseExistingSocket = false, previousConnectionState = ConnectionState.reconnecting))"),
+            ("S1-ACK-01", "lostAcknowledgment", "#expect(MeetingActionFailurePolicy.classify(PresenterHostError(\"Timed out waiting for the SFU\")) == .ackTimedOut)", "assertEquals(MeetingActionFailure.ackTimedOut, MeetingActionFailurePolicy.classify(message = \"Timed out waiting for the SFU\"))"),
+            ("S1-ACK-02", "lostAcknowledgment", "#expect(MeetingActionFailurePolicy.classify(kotlinTimeout) == .ackTimedOut)", "assertEquals(MeetingActionFailure.ackTimedOut, MeetingActionFailurePolicy.classify(kotlinTimeout))"),
+            ("S1-ACK-03", "lostAcknowledgment", "shell.apply(joined(isHandRaised: true)) #expect(row(shell, .hand).isOn)", "shell.apply(joined(isHandRaised = true)) assertTrue(row(shell, MeetingControlID.hand).isOn)"),
+            ("S1-ACK-04", "lostAcknowledgment", "#expect(!recovery.finish(recoveryLog.tickets[0], MeetingActionResult.completed))", "assertFalse(recovering.finish(recovery.tickets[0], MeetingActionResult.completed))"),
+            ("S1-DUP-01", "duplicateAction", "#expect(shell.toggleHand() == .duplicate)", "assertEquals(MeetingDispatch.duplicate, shell.toggleHand())"),
+            ("S1-DUP-02", "duplicateAction", "#expect(log.commands.filter { $0 == .endForEveryone }.count == 1)", "assertEquals(1, recorder.commands.count { it == MeetingShellCommand.endForEveryone })"),
+            ("S1-DUP-03", "duplicateAction", "#expect(media.commands == [.toggleMicrophone, .toggleCamera])", "assertEquals(listOf(MeetingShellCommand.toggleMicrophone, MeetingShellCommand.toggleCamera), media.commands)"),
+            ("S1-ROLE-01", "roleChange", "#expect(row(shell, .endForEveryone).blockedReason == .hostOnly)", "assertEquals(MeetingBlockedReason.hostOnly, row(shell, MeetingControlID.endForEveryone).blockedReason)"),
+            ("S1-ROLE-02", "roleChange", "#expect(row(shell, id).blockedReason == .attendee, \"\\(id)\")", "assertEquals(\"$id\", MeetingBlockedReason.attendee, row(shell, id).blockedReason)"),
+            ("S1-ROLE-03", "roleChange", "#expect(host.ledger.isPending(.endForEveryone))", "assertTrue(host.ledger.isPending(MeetingActionKind.endForEveryone))"),
+            ("S1-ROW-01", "oneRowUpdates", "#expect(after.rows.first { $0.id == \"hand\" }?.isOn == true)", "assertNotSame(before[index], after[index]) assertTrue(after[index].isOn)"),
+            ("S1-ROW-02", "oneRowUpdates", "#expect(row(shell, .chat).badgeCount == 3)", "assertEquals(3, chat[index].badgeCount)"),
+            ("S1-ROW-03", "oneRowUpdates", "#expect(shell.controls.rows.map { $0.id } == MeetingControlID.allCases.map { $0.rawValue })", "assertEquals(MeetingControlID.values().map { it.rawValue }, ids)"),
+            ("S1-ROW-04", "oneRowUpdates", "#expect(shell.controls.revision == revision)", "assertEquals(revision, shell.controls.revision)"),
+        ]
+        #expect(cases.count == 19 && Set(cases.map { $0.id }).count == 19)
         let kotlin = try presenterSessionSource("Tests/ConclaveTests/Skip/PresenterSessionBridgeTests.kt")
         let swift = try presenterSessionSource("Tests/ConclaveTests/PresenterSessionTests.swift")
-        for id in ids {
-            #expect(kotlin.contains(id), "Kotlin misses \(id)")
-            #expect(swift.contains(id), "Swift misses \(id)")
+        func fixture(_ source: String, declaration: String) throws -> String {
+            let start = try #require(source.range(of: declaration))
+            let end = try #require(source.range(of: "\n    @Test", range: start.upperBound..<source.endIndex))
+            return source[start.lowerBound..<end.lowerBound].split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         }
-        #expect(swift.contains("S1-STALE-03"))
-        #expect(!kotlin.contains("S1-STALE-03"))
+        for item in cases {
+            let swiftBody = try fixture(swift, declaration: "\n    @Test func \(item.test)(")
+            let kotlinBody = try fixture(kotlin, declaration: "\n    @Test\n    fun \(item.test)(")
+            #expect(swiftBody.contains(item.swift), "Swift misses \(item.id) in \(item.test)")
+            #expect(kotlinBody.contains(item.kotlin), "Kotlin misses \(item.id) in \(item.test)")
+        }
+        let staleKick = try fixture(swift, declaration: "\n    @Test func staleOldRoomKickIsIgnoredByShell(")
+        #expect(staleKick.contains("viewModel.socketManager.onKicked?(KickedNotification(reason: \"Bye\", roomId: \"old-room\"))"))
+        #expect(staleKick.components(separatedBy: "#expect(viewModel.shell.session.phase == .inCall)").count - 1 == 2)
+        #expect(staleKick.contains("#expect(viewModel.state.terminalOutcome == nil)"))
+        #expect(!kotlin.contains("\n    fun staleOldRoomKickIsIgnoredByShell("))
     }
-
-    // MARK: WP2-S2a contract amendments (S10 R6, S30 CC2 and CC3, S50 PH17, S70 R70-6 and R70-11)
 
     @Test func phaseTableCoversTheS2aRows() {
         func phase(_ inputs: MeetingShellInputs) -> MeetingPhaseResolution { MeetingPhasePolicy.resolve(inputs) }
         let session = identity(1)
         let disconnected = MeetingTerminalOutcome(id: 4, callSession: 1, kind: .serverDisconnected, serverText: "")
-        // R6 d: serverDisconnected is an outcome whether the legacy route went home (disconnected) or errored.
+
         #expect(phase(MeetingShellInputs.make(identity: session, connectionState: .disconnected, terminalOutcome: disconnected)) == MeetingPhaseResolution(phase: .outcome, notice: .none, noticeText: nil))
         #expect(phase(MeetingShellInputs.make(identity: session, connectionState: .error, terminalOutcome: disconnected)).phase == .outcome)
-        // R70-6: a CallKit hold is a notice in call; offline and a restart notice outrank it.
+
         #expect(phase(MeetingShellInputs.make(identity: session, connectionState: .joined, audioInterruption: .held)) == MeetingPhaseResolution(phase: .inCall, notice: .onHold, noticeText: nil))
         #expect(phase(MeetingShellInputs.make(identity: session, connectionState: .joined, isNetworkOffline: true, audioInterruption: .held)).notice == .offline)
         #expect(phase(MeetingShellInputs.make(identity: session, connectionState: .joined, audioInterruption: .otherAudio)).notice == .none)
-        // R70-11: a redirect continuation connects as a recovery (the stage stays), never as a fresh entry.
+
         for state in [ConnectionState.connecting, .connected, .joining] {
             #expect(phase(MeetingShellInputs.make(identity: session, connectionState: state, isRedirectContinuation: true)) == MeetingPhaseResolution(phase: .recovering, notice: .reconnecting, noticeText: nil), "\(state)")
         }
-        // R6 a: a reconnect before the first admission stays recovering; the root reads hasBeenAdmittedThisSession.
+
         #expect(phase(MeetingShellInputs.make(identity: session, connectionState: .reconnecting)).phase == .recovering)
     }
 
     @Test func admissionAndEntryOriginFollowTheSession() {
-        // R6 c: hasBeenAdmittedThisSession and entryOrigin are S1-owned session facts.
+
         let log = CommandLog()
         let shell = presenter(log, MeetingShellInputs.make(identity: identity(1), connectionState: .connecting))
         #expect(!shell.session.hasBeenAdmittedThisSession)
         #expect(shell.session.entryOrigin == .initial)
-        // A drop before the first admission: still not admitted, still the initial entry (the root shows the lobby).
+
         shell.apply(MeetingShellInputs.make(identity: identity(1), connectionState: .reconnecting, isRecoveringConnection: true))
         #expect(shell.session.phase == .recovering)
         #expect(!shell.session.hasBeenAdmittedThisSession)
         #expect(shell.session.entryOrigin == .initial)
-        // The first join after that drop is a join, not a restore (R6 a).
+
         shell.apply(joined(attempt: 2))
         #expect(shell.feedbackState.token == FeedbackToken(sequence: 1, kind: .joined))
         #expect(shell.session.hasBeenAdmittedThisSession)
         #expect(shell.session.entryOrigin == .initial)
-        // A recovery after the call was live makes the entry a recovery and keeps the admission.
+
         shell.apply(joined(attempt: 2, isRecoveringConnection: true, connectionState: .reconnecting))
         #expect(shell.session.entryOrigin == .recovery)
         #expect(shell.session.hasBeenAdmittedThisSession)
         shell.apply(joined(attempt: 3))
         #expect(shell.feedbackState.token == FeedbackToken(sequence: 2, kind: .connectionRestored))
-        // A same-meeting redirect starts a new call session but keeps the admission and plays no second joined.
+
         shell.apply(MeetingShellInputs.make(identity: identity(2), connectionState: .joining, roomId: "lily-zoro-iris", isRedirectContinuation: true))
         #expect(shell.session.phase == .recovering)
         #expect(shell.session.hasBeenAdmittedThisSession)
         #expect(shell.session.entryOrigin == .recovery)
         shell.apply(joined(2))
         #expect(shell.feedbackState.token.kind != .joined)
-        // A fresh call session resets both.
+
         shell.apply(MeetingShellInputs.make(identity: identity(3), connectionState: .connecting))
         #expect(!shell.session.hasBeenAdmittedThisSession)
         #expect(shell.session.entryOrigin == .initial)
@@ -576,7 +570,7 @@ struct PresenterSessionTests {
     }
 
     @Test func blockedReasonsCoverOfflinePermissionInterruptionAndEnding() {
-        // S30 CC2 and the 7 matrix: offline blocks socket mutations like recovery; media intent stays live.
+
         let offline = MeetingShellInputs.make(identity: identity(1), connectionState: .joined, isNetworkOffline: true, isAdmin: true)
         let context = MeetingControlRowContext.make(phase: .inCall)
         func availability(_ id: MeetingControlID, _ inputs: MeetingShellInputs, _ rowContext: MeetingControlRowContext = MeetingControlRowContext.make(phase: .inCall)) -> MeetingControlRow {
@@ -591,11 +585,10 @@ struct PresenterSessionTests {
         #expect(availability(.camera, offline).isEnabled)
         #expect(availability(.leave, offline).isEnabled)
         #expect(availability(.chat, offline).isEnabled)
-        // Recovering wins over offline (S30 7 rule 3: the notice decides).
+
         let both = MeetingShellInputs.make(identity: identity(1), connectionState: .reconnecting, isRecoveringConnection: true, isNetworkOffline: true)
         #expect(availability(.hand, both, MeetingControlRowContext.make(phase: .recovering)).blockedReason == .reconnecting)
 
-        // Permission: blocked toward live, a tap toward muted or off still applies.
         let micDenied = MeetingShellInputs.make(identity: identity(1), connectionState: .joined, isMuted: true, microphonePermission: .denied)
         #expect(availability(.microphone, micDenied).blockedReason == .permissionDenied)
         #expect(!availability(.microphone, micDenied).isEnabled)
@@ -605,7 +598,6 @@ struct PresenterSessionTests {
         #expect(availability(.camera, cameraAsk).blockedReason == .permissionUndetermined)
         #expect(!availability(.camera, cameraAsk).isEnabled)
 
-        // R29: interruption and hold, microphone only.
         let held = MeetingShellInputs.make(identity: identity(1), connectionState: .joined, isMuted: true, audioInterruption: .held)
         #expect(availability(.microphone, held).blockedReason == .onHold)
         #expect(!availability(.microphone, held).isEnabled)
@@ -614,7 +606,6 @@ struct PresenterSessionTests {
         #expect(availability(.microphone, paused).blockedReason == .audioInterrupted)
         #expect(availability(.microphone, paused).isEnabled, "a tap toward muted still applies")
 
-        // CC2: End pending is `ending` on the End row only, never on Leave (R09).
         let host = MeetingShellInputs.make(identity: identity(1), connectionState: .joined, isAdmin: true)
         let pending = MeetingControlRowContext.make(phase: .inCall, endTicketPending: true)
         #expect(availability(.endForEveryone, host, pending).blockedReason == .ending)
@@ -637,7 +628,7 @@ struct PresenterSessionTests {
     }
 
     @Test func handFailuresCarryTheirDirection() throws {
-        // CC3: a failed lower maps to its own copy.
+
         let log = CommandLog()
         let shell = presenter(log, joined(isHandRaised: true))
         #expect(shell.toggleHand() == .dispatched)
@@ -645,7 +636,7 @@ struct PresenterSessionTests {
         #expect(shell.finish(log.tickets[0], MeetingActionResult.failed(.ackTimedOut)))
         #expect(row(shell, .hand).failure == .ackTimedOut)
         #expect(row(shell, .hand).failureDirection == .lower)
-        // The next dispatch clears it; a raise that fails reports raise, from the view model's result first.
+
         shell.apply(joined(isHandRaised: false))
         #expect(shell.toggleHand() == .dispatched)
         #expect(row(shell, .hand).failure == .none)
@@ -657,7 +648,7 @@ struct PresenterSessionTests {
     }
 
     @Test func typedMediaFailuresPublishOnTheRowAndClear() {
-        // PLAN-next 7 item 4: typed microphone and camera failures, no feedback token (not tickets).
+
         let log = CommandLog()
         let shell = presenter(log, joined(isMuted: true, isCameraOff: true))
         let sequence = shell.feedbackState.token.sequence
@@ -665,15 +656,15 @@ struct PresenterSessionTests {
         #expect(shell.reportFailure(.microphone, denied))
         #expect(row(shell, .microphone).failure == .permissionDenied)
         #expect(shell.feedbackState.token.sequence == sequence)
-        // A change of the row's state clears it.
+
         shell.apply(joined(isMuted: false, isCameraOff: true))
         #expect(row(shell, .microphone).failure == .none)
-        // The next dispatch clears a camera failure.
+
         #expect(shell.reportFailure(.camera, MeetingActionResult.failed(.deviceUnavailable)))
         #expect(row(shell, .camera).failure == .deviceUnavailable)
         #expect(shell.toggleCamera() == .dispatched)
         #expect(row(shell, .camera).failure == .none)
-        // Non-failures and ticket kinds are ignored; a new call session clears everything.
+
         #expect(!shell.reportFailure(.microphone, MeetingActionResult.completed))
         #expect(!shell.reportFailure(.hand, MeetingActionResult.failed(.unknown)))
         #expect(shell.reportFailure(.screenShare, MeetingActionResult.failed(.permissionDenied)))
@@ -682,7 +673,7 @@ struct PresenterSessionTests {
     }
 
     @Test func confirmationInvokerIsTheAskingSurface() {
-        // S50 PH17 (R09): the Host Controls End dialog belongs to Host Controls.
+
         let log = CommandLog()
         let shell = presenter(log, joined(isAdmin: true))
         shell.requestEndForEveryone(from: MeetingConfirmationInvoker.hostControls)
@@ -693,7 +684,7 @@ struct PresenterSessionTests {
 }
 
 #if os(macOS)
-/// S1C 5.3 view model wiring tests (macOS host: the socket and media stubs never reach the network here).
+
 @MainActor
 @Suite(.serialized)
 struct PresenterSessionViewModelTests {
@@ -741,7 +732,7 @@ struct PresenterSessionViewModelTests {
         refreshes("terminalOutcome") {
             state.terminalOutcome = MeetingTerminalOutcome(id: 1, callSession: 0, kind: .removed, serverText: "")
         }
-        // activeScreenShareUserId and participants feed hasActiveRemoteScreenShare.
+
         state.isScreenSharing = false
         state.participants = ["remote@example.com#web": Participant(id: "remote@example.com#web", isScreenSharing: true)]
         refreshes("activeScreenShareUserId") { state.activeScreenShareUserId = "remote@example.com#web" }
@@ -808,7 +799,7 @@ struct PresenterSessionViewModelTests {
     }
 
     @Test func staleOldRoomKickIsIgnoredByShell() async {
-        // S1-STALE-03: an old-room terminal event leaves the phase unchanged.
+
         let viewModel = makeJoinedViewModel()
         #expect(viewModel.shell.session.phase == .inCall)
         viewModel.socketManager.onKicked?(KickedNotification(reason: "Bye", roomId: "old-room"))
@@ -823,15 +814,14 @@ struct PresenterSessionViewModelTests {
         viewModel.state.connectionState = .disconnected
         var results: [MeetingActionResult] = []
         viewModel.toggleHandRaise { results.append($0) }
-        // S30 CC3: the result says which way the hand was going.
+
         #expect(results == [MeetingActionResult.failed(.notConnected, direction: .raise)])
         #expect(viewModel.shell.toggleHand() == .unavailable)
         #expect(!viewModel.shell.ledger.isPending(.hand))
     }
 
     @Test func handFlagDoesNotStrandAcrossAttemptChange() {
-        // E9 through the pure token helper (the macOS stubs cannot suspend a real acknowledgement here; the
-        // suspended path runs in LocalToggleGuardRecoveryTests).
+
         #expect(MeetingHandToggleTokenPolicy.completionReleasesGuard(completionToken: "a", currentToken: "a"))
         #expect(!MeetingHandToggleTokenPolicy.completionReleasesGuard(completionToken: "a", currentToken: nil))
         #expect(!MeetingHandToggleTokenPolicy.completionReleasesGuard(completionToken: "a", currentToken: "b"))
@@ -852,7 +842,7 @@ struct PresenterSessionViewModelTests {
     }
 
     @Test func audioInterruptionAndHoldReachTheMicrophoneRow() {
-        // R70-6 and RECONCILE R29 through the view model: CallPresence carries the interruption, the row reads it.
+
         let viewModel = makeJoinedViewModel()
         viewModel.state.isMuted = true
         viewModel.reportAudioInterruption(.otherAudio)
@@ -860,7 +850,7 @@ struct PresenterSessionViewModelTests {
         #expect(viewModel.shell.controls.rows.first { $0.id == "microphone" }?.blockedReason == .audioInterrupted)
         viewModel.reportAudioInterruption(.none)
         #expect(viewModel.shell.controls.rows.first { $0.id == "microphone" }?.blockedReason == MeetingBlockedReason.none)
-        // No permission provider yet: the rows match the legacy bar.
+
         #expect(viewModel.makeShellInputs().microphonePermission == .granted)
         #expect(viewModel.makeShellInputs().cameraPermission == .granted)
     }
@@ -869,7 +859,7 @@ struct PresenterSessionViewModelTests {
         let source = try presenterSessionSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
         #expect(source.contains("isRedirectContinuation: redirectContinuationPending && presenceJoinedAtMillis > 0,"))
         #expect(source.contains("audioInterruption: callPresence.snapshot.interruption"))
-        // The hold and resume commands refresh the shell so the row and the notice follow CallPresence.
+
         let start = try #require(source.range(of: "    private func performSystemCallCommand(_ command: SystemCallCommand) {"))
         let end = try #require(source.range(of: "    func reportAudioInterruption(", range: start.upperBound..<source.endIndex))
         let body = String(source[start.upperBound..<end.lowerBound])
@@ -877,8 +867,7 @@ struct PresenterSessionViewModelTests {
     }
 
     @Test func joinRoomChangesTheIdentityInOneRefreshBatch() throws {
-        // A19 source guard: the call-session increment precedes the generation bump; the increment, the bump and
-        // the attempt id lie between the batch begin and end; the batch end precedes the first room write.
+
         let source = try presenterSessionSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
         let start = try #require(source.range(of: "    func joinRoom("))
         let end = try #require(source.range(of: "    func rejoinIfPossible() async {", range: start.upperBound..<source.endIndex))
@@ -904,19 +893,15 @@ struct PresenterSessionViewModelTests {
         #expect(source.contains("outcome: .removed)"))
         #expect(source.contains("outcome: .roomClosed)"))
         #expect(source.contains("recordTerminalOutcome(outcome, serverText: message)\n        state.connectionState = ConnectionState.error"))
-        // WP2-S2a: the join failure keeps only clean server text (S70 7 c, S10 10 j).
-        // Batch 5 integrator (HD request B5-T5 R3d): the outcome carries the pre-cleanup rejoin context.
+
         #expect(source.contains("recordTerminalOutcome(outcome, serverText: classification.serverText, joinContext: preservedJoinContext)\n        state.connectionState = ConnectionState.error"))
         #expect(source.contains("recordTerminalOutcome(.left, serverText: \"\")"))
-        // MUTE (S1C 3.3): the guarded strings stay byte-identical.
+
         #expect(source.contains("state.isMuted = muted ? true : previousMuted"))
         #expect(!source.contains("state.isMuted = !newState"))
     }
 }
 
-/// Waits (bounded by wall-clock time) for a condition the view model's tasks make true. Main actor: the condition
-/// reads view model state, so it is polled on the actor that writes it (a nonisolated async helper would run it on
-/// the global executor).
 @MainActor
 private func presenterSettle(timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
     let clock = ContinuousClock()
@@ -929,15 +914,12 @@ private func presenterSettle(timeout: Duration = .seconds(5), _ condition: () ->
 }
 #endif
 
-/// The texts of the iOS `SocketError` cases, which exist only in the iOS build.
 private struct PresenterHostError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
 }
 
-/// The row with `id`. A missing row records an issue and returns an inert stand-in instead of trapping, so one
-/// broken row fails its test without aborting the whole Swift Testing process.
 private func presenterSessionRow(_ rows: [MeetingControlRow], _ id: MeetingControlID) -> MeetingControlRow {
     if let found = rows.first(where: { $0.id == id.rawValue }) {
         return found

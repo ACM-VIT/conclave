@@ -1,10 +1,5 @@
 import Foundation
 
-/// S20 SL15 (RR3): what the stage actually shows, computed from the laid-out frames. The per-platform reporter calls
-/// this after layout and hands the result to `StagePresenter.reportVisibility(_:)` debounced by 150 ms. A slot counts
-/// when its frame intersects the canvas, it hosts a renderer, the stage is not fully covered by a panel, and it is not
-/// hidden (the minimized self view keeps its renderer attached at opacity 0; the landscape share strip hides with
-/// chrome, S20 8 a).
 enum StageVisibilityPolicy {
     static let debounceMillis = 150.0
     static let coverageNone = "none"
@@ -16,7 +11,7 @@ enum StageVisibilityPolicy {
         var visible: [String] = []
         var share = ""
         if isInPip {
-            // PiP shows only its target (S20 13 d).
+
             if let target = pipTarget {
                 for slot in slots {
                     if slot.id == target.slotId && !slot.userId.isEmpty {
@@ -46,7 +41,6 @@ enum StageVisibilityPolicy {
                                      pipTarget: pipTarget)
     }
 
-    /// Intersects the canvas with at least one point of overlap in each direction.
     static func isOnCanvas(_ frame: StageFrame, viewport: StageViewport) -> Bool {
         let left = max(0.0, frame.x)
         let top = max(0.0, frame.y)
@@ -61,7 +55,7 @@ enum StageConsumerKind: String, CaseIterable, Equatable {
 }
 
 enum StageConsumerAction: String, CaseIterable, Equatable {
-    /// Leave the consumer as it is (every audio consumer, always).
+
     case keep
     case resume
     case pause
@@ -81,13 +75,8 @@ struct StageConsumerDecision: Equatable {
     let action: StageConsumerAction
 }
 
-/// S20 SC6 (RR2, RR4, D16): the consumer policy reads `StageVisibilityReport` instead of layout-independent snapshots.
-/// Video follows what is visible; audio consumers are NEVER paused or closed by visibility, tile hiding or layout, so a
-/// hidden camera-off speaker stays audible (the #177 class of bug: hiding a camera-off tile must not silence its
-/// person). The view model's bandwidth policy calls `visibleVideoUserIds` for its visible set; WP3 keeps the decoding
-/// and simulcast-layer mechanics.
 enum StageConsumerVisibilityPolicy {
-    /// The user ids whose camera or share should decode: visible slots plus the visible share's presenter.
+
     static func visibleVideoUserIds(_ report: StageVisibilityReport) -> [String] {
         var ids: [String] = []
         for id in report.visibleUserIds {
@@ -125,7 +114,6 @@ enum StageConsumerVisibilityPolicy {
     }
 }
 
-/// S20 1 i: the "Raised Hands" and "Speaking" rotors list tiles in slot order.
 enum StageRotorPolicy {
     static func raisedHandSlotIds(slots: [StageSlot], models: [TileChromeModel]) -> [String] {
         var result: [String] = []

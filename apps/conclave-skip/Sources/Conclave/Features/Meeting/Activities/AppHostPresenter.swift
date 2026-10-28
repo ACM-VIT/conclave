@@ -1,19 +1,6 @@
 import Foundation
 import Observation
 
-// S60 0.5 and 13 j (ACT-7): the session-owned app host presenter behind the SDK app card on the stage (S20 owns the
-// card). Native chrome around one versioned, scoped web renderer per active app (D14): status, host lock and close,
-// opening and failure, the Whiteboard tools. Two stored properties, each its own observation unit: `model` (cold: the
-// phase, lock, tag and header counts) and `toolbar` (the embed's status and pending commands), so a tool change never
-// rebuilds the header and a status burst never rebuilds the failure states. Yjs and awareness never reach this
-// presenter (C6-18): the non-observable `ActiveAppSession` relays them. App-owned copy travels as raw values and typed
-// enums; each platform maps them through its copy file (`NativeAppHost+iOS.swift` `AppHostCopy`,
-// `K/ui/apps/AppHostCopy.kt`). ACT-8 adds Spin the Wheel and Watch Together: the embed adds its page data to `status`
-// under `app` (`AppEmbedAppCodec`), which feeds two more observation units, `wheel` and `watch`, read by the card's Spin,
-// Edit Names and Queue controls and by the Activities Wheel and Watch pages; page actions are bridge commands
-// (`AppPageCommandKind`) with the same pending-until-ack rule. Watch search runs natively through the app backend
-// (`WatchSearchService`, `/api/youtube/search`), never in the embed (its page has no network).
-
 enum AppHostPhase: String, CaseIterable, Equatable {
     case opening, ready, readOnly, failed, versionMismatch, closing
 }
@@ -22,17 +9,14 @@ enum AppHostIssue: String, CaseIterable, Equatable {
     case none, loadFailed, timedOut, versionMismatch, rendererGone
 }
 
-/// The card tag under the header (S60 13 f, g).
 enum AppHostTag: String, CaseIterable, Equatable {
     case none, viewOnly, lockedForOthers, reconnecting
 }
 
-/// Whiteboard bridge commands (C6-19, S60 13 j). Wheel and Watch commands are `AppPageCommandKind` (ACT-8).
 enum AppHostCommandKind: String, CaseIterable, Equatable {
     case setTool, setColor, setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export
 }
 
-/// Core actions over the existing view model paths: Close (`closeActiveApp()`) and Lock Editing (`toggleAppsLock()`).
 enum AppHostCoreCommandKind: String, CaseIterable, Equatable {
     case close, setLocked
 }
@@ -42,8 +26,6 @@ struct AppHostCoreCommand: Equatable {
     let flag: Bool
 }
 
-/// The Whiteboard ink colors: the SDK's flat palette (`apps/whiteboard/shared/constants/tools.ts` TOOL_COLORS). User
-/// content, not app palette (S60 13 e, S60R 25); the raw value is the color the embed draws with.
 enum AppInkColor: String, CaseIterable, Equatable {
     case white = "#ffffff"
     case mist = "#e3e3e8"
@@ -67,12 +49,10 @@ enum AppInkColor: String, CaseIterable, Equatable {
     case purple = "#c084fc"
 }
 
-/// Stroke widths (the web's `[` and `]` steps, WhiteboardWebApp.tsx).
 enum AppStrokeWidths {
     static let steps: [Int] = [2, 3, 5, 8, 12]
 }
 
-/// The Shape menu's fill choice.
 enum AppShapeFill: String, CaseIterable, Equatable {
     case outline, filled
 }
@@ -92,8 +72,6 @@ struct AppHostInputs: Equatable {
     }
 }
 
-/// S60 13 j `AppHostModel`, cold part. `reloadSerial` bumps on Try Again: the platform registry then recreates the web
-/// view for the same app session (`app.reloads`); everything else keeps the registered instance (`app.registrySerial`).
 struct AppHostModel: Equatable {
     let revision: Int
     let appId: String
@@ -109,13 +87,12 @@ struct AppHostModel: Equatable {
     let tag: AppHostTag
     let bundleVersion: String
     let editorCount: Int
-    /// ACT-8: the Wheel's name count and the Watch playback state ("playing", "paused" or "none") for the header.
+
     let nameCount: Int
     let playback: String
     let hasEmbed: Bool
     let reloadSerial: Int
-    /// Whether the platform host may hold a web view now (opening, ready, read-only, closing). On a failure the host
-    /// releases it, and Try Again creates a fresh one.
+
     let wantsWebView: Bool
 
     static let empty = AppHostModel(revision: 0, appId: "", appSessionId: "", phase: AppHostPhase.opening, issue: AppHostIssue.none,
@@ -124,7 +101,6 @@ struct AppHostModel: Equatable {
                                     playback: "none", hasEmbed: false, reloadSerial: 0, wantsWebView: false)
 }
 
-/// S60 13 j, hot part: the embed's status and the commands awaiting their `ack`.
 struct AppToolbarModel: Equatable {
     let revision: Int
     let tool: String
@@ -138,9 +114,9 @@ struct AppToolbarModel: Equatable {
     let pageName: String
     let pages: [AppPageModel]
     let elementCount: Int
-    /// `AppHostCommandKind` raw values awaiting an ack (the control shows pending).
+
     let pendingKinds: [String]
-    /// Bumps when an exported PNG is ready (`AppHostPresenter.takeExport()`).
+
     let exportSequence: Int
     let exportFailed: Bool
 
@@ -160,9 +136,6 @@ struct AppHostPendingCommand: Equatable {
     let value: String
 }
 
-// MARK: ACT-8 Spin the Wheel and Watch Together (S60 13)
-
-/// Spin the Wheel bounds (the SDK `wheel/core/doc`). Twin of `WHEEL_LIMITS` in packages/apps-sdk/src/native-embed/protocol.ts.
 enum AppWheelLimits {
     static let maxEntries = 64
     static let label = 48
@@ -170,7 +143,6 @@ enum AppWheelLimits {
     static let name = 64
 }
 
-/// Watch Together bounds for the page data in `status.app`. Twin of `WATCH_LIMITS`.
 enum AppWatchLimits {
     static let queue = 50
     static let requests = 50
@@ -179,27 +151,22 @@ enum AppWatchLimits {
     static let userId = 128
 }
 
-/// Wheel and Watch bridge commands (S60 13 j, C6-19). Raw values equal the outbound envelope types
-/// (`AppBridgeOutboundType`, HD request B8-T2 R1); `AppPagePolicy.outboundType` maps them.
 enum AppPageCommandKind: String, CaseIterable, Equatable {
     case addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults
     case playNow, enqueue, request, approve, decline, cancelRequest, move, remove
 }
 
-/// One name on the wheel (user content, shown verbatim).
 struct WheelEntryModel: Equatable, Identifiable {
     let id: String
     let label: String
 }
 
-/// One settled spin, newest first (the id is the spin id).
 struct WheelResultModel: Equatable, Identifiable {
     let id: String
     let label: String
     let byName: String
 }
 
-/// One Up Next item.
 struct WatchItemModel: Equatable, Identifiable {
     let id: String
     let videoId: String
@@ -207,7 +174,6 @@ struct WatchItemModel: Equatable, Identifiable {
     let byName: String
 }
 
-/// One pending pick from a participant (rides their presence while editing is locked, as on web).
 struct WatchRequestModel: Equatable, Identifiable {
     let id: String
     let videoId: String
@@ -216,15 +182,12 @@ struct WatchRequestModel: Equatable, Identifiable {
     let byName: String
 }
 
-/// A search, trending or classic row. The id is the YouTube video id.
 struct WatchVideoModel: Equatable, Identifiable {
     let id: String
     let title: String
     let channel: String
 }
 
-/// The page data a Wheel or Watch embed adds to `status` under `app` (C6-19 ACT-8). `kind` is "", "wheel" or "watch";
-/// fields the kind does not use keep their empty values. Carried on `AppEmbedStatus.app` (HD request B8-T2 R1).
 struct AppEmbedAppStatus: Equatable {
     let kind: String
     let entries: [WheelEntryModel]
@@ -247,9 +210,6 @@ struct AppEmbedAppStatus: Equatable {
                                          requests: [], myRequestId: "", requestDeclined: false)
 }
 
-/// Parses `status.app` with the rules of protocol.ts `isValidAppStatus` (the shared fixtures in
-/// packages/apps-sdk/src/native-embed/tests/wheel-watch-fixtures.json pin both). Absent is `empty`; anything present
-/// must be one of the two kinds, within the bounds, with valid ids, or the whole status is refused (`nil`, badPayload).
 enum AppEmbedAppCodec {
     static func parse(_ value: Any?) -> AppEmbedAppStatus? {
         guard let value = value else { return AppEmbedAppStatus.empty }
@@ -341,7 +301,6 @@ enum AppEmbedAppCodec {
         return WatchItemModel(id: id, videoId: videoId, title: title, byName: byName)
     }
 
-    /// A bounded string: absent is "" unless required; a required one must have a non-space character; nil refuses.
     static func text(_ value: Any?, limit: Int, required: Bool) -> String? {
         guard let value = value else { return required ? nil : "" }
         guard let string = value as? String, string.count <= limit else { return nil }
@@ -349,15 +308,12 @@ enum AppEmbedAppCodec {
         return string
     }
 
-    /// An optional JSON boolean (absent is `fallback`). Text is refused on both platforms; an iOS number also casts to
-    /// Bool, so the shared fixtures use JSON booleans only.
     static func flag(_ value: Any?, fallback: Bool) -> Bool? {
         guard let value = value else { return fallback }
         if value is String { return nil }
         return value as? Bool
     }
 
-    /// An optional identifier: absent or "" is "", anything else must be a valid identifier.
     static func optionalIdentifier(_ value: Any?) -> String? {
         guard let value = value else { return "" }
         guard let string = value as? String else { return nil }
@@ -366,7 +322,6 @@ enum AppEmbedAppCodec {
     }
 }
 
-/// YouTube links and ids for the Watch page (the SDK `watch/core/youtube/id.ts` `parseVideoId`, ported).
 enum WatchLinkPolicy {
     private static let idCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 
@@ -378,7 +333,6 @@ enum WatchLinkPolicy {
         return true
     }
 
-    /// The video id in a pasted id or link (watch?v=, youtu.be/, shorts/, embed/, live/, v/); "" when there is none.
     static func videoId(_ raw: String) -> String {
         let input = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if input.isEmpty { return "" }
@@ -396,7 +350,7 @@ enum WatchLinkPolicy {
         }
         let isYouTube = host == "youtube.com" || host == "m.youtube.com" || host == "music.youtube.com" || host.hasSuffix(".youtube.com")
         if !isYouTube { return "" }
-        // The first "v" only, like URLSearchParams.get.
+
         if let first = (components.queryItems ?? []).first(where: { $0.name == "v" }), let value = first.value, isValidVideoId(value) {
             return value
         }
@@ -410,7 +364,6 @@ enum WatchLinkPolicy {
         return ""
     }
 
-    /// Not a URL: a loose "?v=" or "&v=" followed by an id, as a last resort.
     private static func looseVideoId(_ input: String) -> String {
         let pieces = input.components(separatedBy: "v=")
         var index = 1
@@ -426,51 +379,38 @@ enum WatchLinkPolicy {
     }
 }
 
-/// What the Watch page's frame may load (S60 13 c, d; D14): the bundle origin plus, for Watch Together only, the
-/// privacy-enhanced YouTube player. Both platform registries ask this (the iOS one through HD request B8-T2 R4), so the
-/// embed page's CSP (`frame-src`, packages/apps-sdk/src/native-embed/build) and the native navigation rules agree.
 enum AppEmbedFramePolicy {
     static let watchFrameOrigin = "https://www.youtube-nocookie.com"
 
-    /// The CSP `frame-src` value for an app's page.
     static func frameSource(appId: String) -> String {
         return appId == "watch" ? watchFrameOrigin : "'none'"
     }
 
-    /// Whether a subframe navigation may load: only the YouTube embed path, only for Watch Together.
     static func allowsSubframe(appId: String, url: String) -> Bool {
         if appId != "watch" { return false }
         return url.lowercased().hasPrefix(watchFrameOrigin + "/embed/")
     }
 
-    /// Whether the page may start sound or video without a tap inside it: the Wheel's spin sounds follow a native Spin
-    /// tap (or someone else's spin) and Watch Together follows the room's playback. The Whiteboard plays nothing.
     static func playsMediaWithoutTap(appId: String) -> Bool {
         return appId == "watch" || appId == "wheel"
     }
 
-    /// Android: whether a subresource request (not the main frame) may go to the network. The Watch page's own CSP
-    /// keeps the page itself off the network (connect-src 'none', hash-only scripts), so only the YouTube frame can
-    /// make such a request; every other app keeps the empty 403 for anything outside the bundle.
     static func allowsNetworkSubresource(appId: String, url: String, isMainFrame: Bool) -> Bool {
         if appId != "watch" || isMainFrame { return false }
         return url.lowercased().hasPrefix("https://")
     }
 }
 
-/// A Watch search or trending answer: the rows, or that search is off on this server (503), or a failure.
 struct WatchSearchOutcome: Equatable {
     let items: [WatchVideoModel]
     let unavailable: Bool
     let failed: Bool
 }
 
-/// The Watch page's search phase (S60 13 f "watch search off").
 enum WatchSearchPhase: String, CaseIterable, Equatable {
     case idle, searching, results, empty, unavailable, failed
 }
 
-/// Spin the Wheel, for the card's Spin and Edit Names and the Activities Wheel page (S60 13 c). Its own observation unit.
 struct WheelPageModel: Equatable {
     let revision: Int
     let entries: [WheelEntryModel]
@@ -482,12 +422,12 @@ struct WheelPageModel: Equatable {
     let canSpin: Bool
     let isFull: Bool
     let isReady: Bool
-    /// Names of people here who are not on the wheel ("Add Everyone Here", "%lld not on the wheel").
+
     let missingNames: [String]
-    /// `AppPageCommandKind` raw values and targets ("kind:target") awaiting an ack.
+
     let pendingKinds: [String]
     let pendingTargets: [String]
-    /// Bumps when a spin settles live here (the native "Winner: %@" announcement).
+
     let winnerSequence: Int
     let winnerLabel: String
 
@@ -511,7 +451,6 @@ struct WheelPageModel: Equatable {
                                       pendingKinds: [], pendingTargets: [], winnerSequence: 0, winnerLabel: "")
 }
 
-/// Watch Together, for the card's Queue and the Activities Watch page (S60 13 c). Its own observation unit.
 struct WatchPageModel: Equatable {
     let revision: Int
     let videoId: String
@@ -521,9 +460,9 @@ struct WatchPageModel: Equatable {
     let requests: [WatchRequestModel]
     let myRequestId: String
     let requestDeclined: Bool
-    /// Play Now, Add to Queue, reorder and remove: the host, or anyone while Everyone Can Control is on.
+
     let canControl: Bool
-    /// A participant while Everyone Can Control is off: picks become requests.
+
     let canRequest: Bool
     let isHost: Bool
     let everyoneCanControl: Bool
@@ -535,7 +474,7 @@ struct WatchPageModel: Equatable {
     let query: String
     let results: [WatchVideoModel]
     let trending: [WatchVideoModel]
-    /// Bumps when a new video's title is known (the native announcement of the selected video).
+
     let titleSequence: Int
 
     func isPending(_ kind: AppPageCommandKind) -> Bool {
@@ -546,12 +485,10 @@ struct WatchPageModel: Equatable {
         return pendingTargets.contains(kind.rawValue + ":" + target)
     }
 
-    /// What a search, trending or classic row does for you now.
     var pickAction: WatchPickAction {
         return AppPagePolicy.pickAction(canControl: canControl, canRequest: canRequest, isPlaying: !videoId.isEmpty)
     }
 
-    /// Your own pending request (the requester's "Pending" row), nil when you have none.
     var myRequest: WatchRequestModel? {
         if myRequestId.isEmpty { return nil }
         return requests.first(where: { $0.id == myRequestId })
@@ -579,8 +516,6 @@ struct AppPagePendingCommand: Equatable {
     let target: String
 }
 
-/// "Or Start with a Classic" (the SDK `watch/web/crowdPicks.ts`): evergreen, embeddable picks that work with no
-/// YouTube key on the server. Titles are content, shown verbatim.
 enum WatchClassics {
     static let items: [WatchVideoModel] = [
         WatchVideoModel(id: "jNQXAC9IVRw", title: "Me at the zoo", channel: "jawed"),
@@ -604,18 +539,13 @@ enum WatchClassics {
     ]
 }
 
-/// What picking a video does on the Watch page (the web's browse modes, WatchEmptyState.tsx): start it for everyone
-/// when nothing plays, add it to Up Next while something plays, or ask the host (Everyone Can Control off).
 enum WatchPickAction: String, CaseIterable, Equatable {
     case none, playNow, enqueue, request
 }
 
-/// Pure Spin the Wheel and Watch Together rules (both platforms' tests pin them).
 enum AppPagePolicy {
     private static let spaceCharacters = " \t\n\r\u{000B}\u{000C}\u{00A0}"
 
-    /// The SDK's label rule (`wheel/core/doc` normalizeLabel): runs of whitespace become one space, trimmed, at most
-    /// 48 characters.
     static func normalizedLabel(_ raw: String) -> String {
         var collapsed = ""
         var pendingSpace = false
@@ -633,8 +563,6 @@ enum AppPagePolicy {
         return AppBridgeCodec.clipped(collapsed, AppWheelLimits.label)
     }
 
-    /// "Add a Name": one name, or a pasted list with one name per line (S60 13 c), normalized, blanks dropped, at most
-    /// `room` names.
     static func wheelLabels(_ raw: String, room: Int) -> [String] {
         var labels: [String] = []
         if room <= 0 { return labels }
@@ -648,8 +576,6 @@ enum AppPagePolicy {
         return labels
     }
 
-    /// "Add Everyone Here" (the web's rosterLabels and missingParticipantLabels, WheelWebApp.tsx): roster names, deduped
-    /// without case, that no name on the wheel already matches without case.
     static func missingNames(roster: [String], entries: [WheelEntryModel]) -> [String] {
         var existing: [String] = []
         for entry in entries {
@@ -669,8 +595,6 @@ enum AppPagePolicy {
         return missing
     }
 
-    /// Commands the room lock governs (protocol.ts APP_EDIT_COMMANDS): Wheel Sounds is local and a request rides
-    /// presence, so a locked participant keeps those.
     static func isEditCommand(_ kind: AppPageCommandKind) -> Bool {
         switch kind {
         case .setSounds, .request, .cancelRequest: return false
@@ -678,7 +602,6 @@ enum AppPagePolicy {
         }
     }
 
-    /// Which app a command belongs to ("wheel" or "watch").
     static func appId(_ kind: AppPageCommandKind) -> String {
         switch kind {
         case .addEntries, .removeEntry, .shuffle, .sort, .clearEntries, .spin, .setRemoveWinner, .setSounds, .clearResults:
@@ -715,13 +638,11 @@ enum AppPagePolicy {
         return canRequest ? WatchPickAction.request : WatchPickAction.none
     }
 
-    /// A pasted link always plays (or asks) right away (S60 13 c `.onSubmit(of: .search)`).
     static func linkAction(canControl: Bool, canRequest: Bool) -> WatchPickAction {
         if canControl { return WatchPickAction.playNow }
         return canRequest ? WatchPickAction.request : WatchPickAction.none
     }
 
-    /// The five HTML entities the YouTube Data API leaves in titles.
     static func decodedTitle(_ raw: String) -> String {
         if !raw.contains("&") { return raw }
         return raw.replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&#39;", with: "'")
@@ -735,35 +656,30 @@ enum AppPagePolicy {
 final class AppHostPresenter {
     private(set) var model: AppHostModel = AppHostModel.empty
     private(set) var toolbar: AppToolbarModel = AppToolbarModel.empty
-    /// ACT-8: Spin the Wheel and Watch Together (the card's Spin, Edit Names and Queue, the Activities pages), each its
-    /// own observation unit, so a names or queue change never rebuilds the header or the Whiteboard toolbar.
+
     private(set) var wheel: WheelPageModel = WheelPageModel.empty
     private(set) var watch: WatchPageModel = WatchPageModel.empty
-    /// `hostActionFailed` for a failed lock or close (S60 13 e, h).
+
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
 
-    /// Core only: Close and Lock Editing (the S1 `onCommand` pattern).
     @ObservationIgnored var onCommand: ((AppHostCoreCommand) -> Void)? = nil
-    /// ACT-8 (HD request B8-T2 R2, `ActivitySession.bindStage()`): opens the Activities panel at an app's page
-    /// (`PanelDestination.activitiesApp` with the app id, S60 R6-5).
+
     @ObservationIgnored var onOpenPage: ((String) -> Void)? = nil
-    /// ACT-8 (HD request B8-T2 R3, the view model): Watch search and trending through the app backend
-    /// (`WatchSearchService`); the fixture sets canned rows. Nil means search is off ("Search is switched off...").
+
     @ObservationIgnored var watchSearch: ((String) async -> WatchSearchOutcome)? = nil
     @ObservationIgnored var watchTrending: (() async -> WatchSearchOutcome)? = nil
-    /// ACT-8 (HD request B8-T2 R3, the view model): display names of everyone in the call, you included, read when the
-    /// Wheel's page data changes, when its page appears and on "Add Everyone Here" (never observed).
+
     @ObservationIgnored var rosterNames: () -> [String] = { return [] }
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
     }
-    /// The relay the platform host attaches its web view to (`ActivityWebViewRegistry`, L6-15).
+
     @ObservationIgnored private(set) var session: ActiveAppSession? = nil
-    /// Debug fixtures show the registry readouts (`app.registrySerial`, `app.reloads`, L6-12).
+
     @ObservationIgnored var showsDebugReadouts = false
 
     @ObservationIgnored private(set) var inputs = AppHostInputs.make()
-    /// Diagnostics for tests (never observed): commands sent, by kind and request id.
+
     @ObservationIgnored private(set) var commandLog: [String] = []
 
     @ObservationIgnored private var appSessionId = ""
@@ -785,7 +701,7 @@ final class AppHostPresenter {
     @ObservationIgnored private var pendingSafetyTask: Task<Void, Never>? = nil
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private var toolbarRevision = 0
-    // ACT-8 page state.
+
     @ObservationIgnored private var appStatus = AppEmbedAppStatus.empty
     @ObservationIgnored private var pagePending: [AppPagePendingCommand] = []
     @ObservationIgnored private var lastWinnerSpinId = ""
@@ -803,17 +719,13 @@ final class AppHostPresenter {
     @ObservationIgnored private var wheelRevision = 0
     @ObservationIgnored private var watchRevision = 0
     @ObservationIgnored private var sawAppStatus = false
-    /// Fixtures only: names the wheel fixture adds once its embed reports the synced (empty) wheel.
+
     @ObservationIgnored var fixtureSeedNames: [String] = []
 
-    /// A close or lock with no answer from the core (an admin action already in flight) stops showing pending.
     static let hostActionSafetyMillis = 15000.0
 
     init() {}
 
-    // MARK: Core hooks
-
-    /// Core only: the relay this presenter drives. Installs the session's event hook.
     func bind(session: ActiveAppSession) {
         self.session = session
         session.onEvent = { [weak self] event in
@@ -823,7 +735,6 @@ final class AppHostPresenter {
         rebuild()
     }
 
-    /// Core only: the app, role, lock and connection (S60 13 j inputs). Equality guarded.
     func apply(_ next: AppHostInputs) {
         if inputs.callSession != 0 && next.callSession != inputs.callSession {
             resetLocal()
@@ -839,7 +750,6 @@ final class AppHostPresenter {
         rebuild()
     }
 
-    /// Core only: the close failed (S60 13 f "closing" returns to the menu item; outcome `hostActionFailed`).
     func closeFailed() {
         if !closePending { return }
         closePending = false
@@ -848,7 +758,6 @@ final class AppHostPresenter {
         rebuild()
     }
 
-    /// Core only: the lock change failed.
     func lockFailed() {
         if !lockPending { return }
         finishLock()
@@ -856,7 +765,6 @@ final class AppHostPresenter {
         rebuild()
     }
 
-    /// Session events (ready, failures, the embed's status and acks).
     func apply(event: ActiveAppEvent) {
         switch event.kind {
         case .lifecycle:
@@ -891,7 +799,7 @@ final class AppHostPresenter {
             if event.status.tool != embedStatus.tool { previousTool = embedStatus.tool }
             let editorsChanged = event.status.editorCount != embedStatus.editorCount
             embedStatus = event.status
-            // ACT-8: a Wheel or Watch embed's page data (HD request B8-T2 R1 carries it on `AppEmbedStatus.app`).
+
             let app = event.status.app
             let headerChanged = app.entries.count != appStatus.entries.count || app.playback != appStatus.playback
             let first = !sawAppStatus && !app.kind.isEmpty
@@ -909,9 +817,6 @@ final class AppHostPresenter {
         }
     }
 
-    // MARK: Actions (views)
-
-    /// Try Again: a fresh web view for the same app session (the registry recreates it on the new `reloadSerial`).
     func retry() {
         if model.hasEmbed == false { return }
         issue = AppHostIssue.none
@@ -924,7 +829,6 @@ final class AppHostPresenter {
         rebuildToolbar()
     }
 
-    /// Close (host, after the confirmation the view owns, R09/D12). Duplicate guarded.
     @discardableResult
     func confirmClose() -> ActivityTapResult {
         if !model.canClose { return ActivityTapResult.explained }
@@ -936,7 +840,6 @@ final class AppHostPresenter {
         return ActivityTapResult.dispatched
     }
 
-    /// Lock Editing (host). Pending until the room's lock matches or the core reports a failure.
     @discardableResult
     func setLocked(_ locked: Bool) -> ActivityTapResult {
         if !model.canLock { return ActivityTapResult.explained }
@@ -949,8 +852,6 @@ final class AppHostPresenter {
         return ActivityTapResult.dispatched
     }
 
-    /// One bridge command with a client-local request id; the control shows pending until the matching `ack` (or the
-    /// 10 s timeout). `value` and `extra` carry the tool, color, width, fill, page id and page name.
     @discardableResult
     func perform(_ kind: AppHostCommandKind, value: String = "", extra: String = "") -> ActivityTapResult {
         guard let session = session else { return ActivityTapResult.explained }
@@ -975,7 +876,6 @@ final class AppHostPresenter {
         return ActivityTapResult.dispatched
     }
 
-    /// S60 13 c: an Apple Pencil tap or squeeze. Tool switches dispatch here; the menus open in the iOS view.
     @discardableResult
     func pencil(_ response: AppPencilResponse) -> ActivityTapResult {
         switch response {
@@ -991,16 +891,12 @@ final class AppHostPresenter {
         }
     }
 
-    /// The exported PNG (base64) once; "" when none is waiting.
     func takeExport() -> String {
         let value = exportPNGBase64
         exportPNGBase64 = ""
         return value
     }
 
-    // MARK: ACT-8 actions (Spin the Wheel, Watch Together)
-
-    /// Edit Names (Wheel) and Queue (Watch): the Activities panel at the app's page (destination `activitiesApp`, R6-5).
     @discardableResult
     func openPage() -> ActivityTapResult {
         let appId = model.appId
@@ -1010,19 +906,16 @@ final class AppHostPresenter {
         return ActivityTapResult.dispatched
     }
 
-    /// The Wheel page appeared: reread the roster for "Add Everyone Here" and "%lld not on the wheel".
     func refreshRoster() {
         rebuildPages()
     }
 
-    /// The card's Spin (the one primary, S60 13 c): needs spin authority, two names and no spin in progress.
     @discardableResult
     func spinWheel() -> ActivityTapResult {
         if !wheel.canSpin { return wheel.isPending(AppPageCommandKind.spin) || wheel.spinning ? ActivityTapResult.ignored : ActivityTapResult.explained }
         return sendPage(AppPageCommandKind.spin)
     }
 
-    /// "Add a Name": one name or a pasted list (one per line), up to the room left on the wheel.
     @discardableResult
     func addWheelNames(_ raw: String) -> ActivityTapResult {
         if !wheel.canEdit { return ActivityTapResult.explained }
@@ -1032,7 +925,6 @@ final class AppHostPresenter {
         return sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": labels])
     }
 
-    /// "Add Everyone Here": everyone in the call whose name is not on the wheel yet.
     @discardableResult
     func addEveryoneToWheel() -> ActivityTapResult {
         if !wheel.canEdit || wheel.isFull { return ActivityTapResult.explained }
@@ -1067,7 +959,6 @@ final class AppHostPresenter {
         return sendPage(AppPageCommandKind.sort)
     }
 
-    /// "Clear Names…" after the view's confirmation.
     @discardableResult
     func clearWheelNames() -> ActivityTapResult {
         if wheel.entries.isEmpty { return ActivityTapResult.ignored }
@@ -1080,7 +971,6 @@ final class AppHostPresenter {
         return sendPage(AppPageCommandKind.setRemoveWinner, payload: ["value": value])
     }
 
-    /// Wheel Sounds is this device's preference (open to everyone, also while locked).
     @discardableResult
     func setWheelSounds(_ value: Bool) -> ActivityTapResult {
         if value == wheel.sounds { return ActivityTapResult.ignored }
@@ -1093,8 +983,6 @@ final class AppHostPresenter {
         return sendPage(AppPageCommandKind.clearResults)
     }
 
-    /// The Watch search field's submit (`.onSubmit(of: .search)`, Android ImeAction.Search): a pasted link plays now
-    /// (or asks the host); anything else searches through the app backend.
     @discardableResult
     func submitWatchSearch(_ raw: String) -> ActivityTapResult {
         if model.appId != "watch" { return ActivityTapResult.explained }
@@ -1131,7 +1019,6 @@ final class AppHostPresenter {
         return ActivityTapResult.dispatched
     }
 
-    /// A search answer; a newer search or a cleared field drops an older one (a test seam).
     func applyWatchSearch(serial: Int, outcome: WatchSearchOutcome) {
         if serial != searchSerial { return }
         searchTask = nil
@@ -1153,7 +1040,6 @@ final class AppHostPresenter {
         rebuildPages()
     }
 
-    /// The field was cleared: back to Trending and the classics.
     func clearWatchSearch() {
         searchSerial += 1
         searchTask?.cancel()
@@ -1165,8 +1051,6 @@ final class AppHostPresenter {
         rebuildPages()
     }
 
-    /// Trending, once per call (the server caches it); a failure lets the next page visit try again. Without the
-    /// backend (search off) only the classics show.
     func loadWatchTrending() {
         if model.appId != "watch" || trendingRequested || !trendingItems.isEmpty { return }
         guard let trending = watchTrending else { return }
@@ -1178,7 +1062,6 @@ final class AppHostPresenter {
         }
     }
 
-    /// A trending answer (a test seam).
     func applyWatchTrending(_ outcome: WatchSearchOutcome) {
         if outcome.failed || outcome.unavailable {
             trendingRequested = !outcome.failed
@@ -1193,7 +1076,6 @@ final class AppHostPresenter {
         rebuildPages()
     }
 
-    /// A search, trending or classic row's action (`WatchPageModel.pickAction`): Play Now, Add to Queue or Request.
     @discardableResult
     func pickWatchVideo(_ video: WatchVideoModel, action: WatchPickAction) -> ActivityTapResult {
         if !WatchLinkPolicy.isValidVideoId(video.id) { return ActivityTapResult.ignored }
@@ -1213,7 +1095,6 @@ final class AppHostPresenter {
         }
     }
 
-    /// Up Next's Play Now.
     @discardableResult
     func playQueuedVideo(_ itemId: String) -> ActivityTapResult {
         if !watch.canControl { return ActivityTapResult.explained }
@@ -1221,8 +1102,6 @@ final class AppHostPresenter {
         return sendPage(AppPageCommandKind.playNow, target: itemId, payload: ["itemId": itemId])
     }
 
-    /// Up Next reorder (host or Everyone Can Control): direction -1 moves up, 1 moves down, `steps` places (Move Up and
-    /// Move Down send one; an iOS drag sends its distance). Clamped to the list.
     @discardableResult
     func moveQueuedVideo(_ itemId: String, direction: Int, steps: Int = 1) -> ActivityTapResult {
         if !watch.canControl { return ActivityTapResult.explained }
@@ -1234,7 +1113,6 @@ final class AppHostPresenter {
         return sendPage(AppPageCommandKind.move, target: itemId, payload: ["itemId": itemId, "direction": direction, "steps": count])
     }
 
-    /// An iOS `.onMove` (one row): the SwiftUI destination is the index before which the row lands.
     @discardableResult
     func moveQueuedVideoRow(from source: Int, to destination: Int) -> ActivityTapResult {
         let queue = watch.queue
@@ -1253,7 +1131,6 @@ final class AppHostPresenter {
         return sendPage(AppPageCommandKind.remove, target: itemId, payload: ["itemId": itemId])
     }
 
-    /// A participant's request: "Add to Queue" (approve) or "Decline", hosts only.
     @discardableResult
     func answerWatchRequest(_ requestId: String, approve: Bool) -> ActivityTapResult {
         if !watch.isHost || !watch.canControl { return ActivityTapResult.explained }
@@ -1262,22 +1139,18 @@ final class AppHostPresenter {
         return sendPage(kind, target: requestId, payload: ["requestId": requestId])
     }
 
-    /// The requester's "Cancel Request".
     @discardableResult
     func cancelWatchRequest() -> ActivityTapResult {
         if watch.myRequestId.isEmpty { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.cancelRequest)
     }
 
-    /// "Everyone Can Control" (host): playback, seeking and the queue. Off means host only, which is the room's app
-    /// lock (as on web, where the lock decides who may write playback), so it rides Lock Editing.
     @discardableResult
     func setWatchEveryoneCanControl(_ value: Bool) -> ActivityTapResult {
         if model.appId != "watch" { return ActivityTapResult.explained }
         return setLocked(!value)
     }
 
-    /// With the S1 reset: nothing pending survives into the next call.
     func reset() {
         resetLocal()
         inputs = AppHostInputs.make()
@@ -1287,8 +1160,6 @@ final class AppHostPresenter {
         rebuildToolbar()
         rebuildPages()
     }
-
-    // MARK: Pure rules
 
     static func isEditCommand(_ kind: AppHostCommandKind) -> Bool {
         switch kind {
@@ -1334,8 +1205,6 @@ final class AppHostPresenter {
         }
     }
 
-    /// The command payload, or nil when the value is not one the embed accepts (validated here so nothing malformed
-    /// crosses the bridge).
     static func payload(_ kind: AppHostCommandKind, value: String, extra: String) -> [String: Any]? {
         switch kind {
         case .setTool:
@@ -1363,8 +1232,6 @@ final class AppHostPresenter {
             return [:]
         }
     }
-
-    // MARK: Private
 
     private func followSession() {
         let current = session?.appSessionId ?? ""
@@ -1412,8 +1279,6 @@ final class AppHostPresenter {
         }
     }
 
-    /// The 10 s command timeout (a test seam, like `GameStagePresenter.fireTimeout`): the control stops showing pending;
-    /// an export that never answered shows its inline failure.
     func fireCommandTimeout(requestId: String) {
         if let pageIndex = pagePending.firstIndex(where: { $0.requestId == requestId }) {
             pagePending.remove(at: pageIndex)
@@ -1439,7 +1304,6 @@ final class AppHostPresenter {
         }
     }
 
-    /// The 15 s ready timeout (a test seam): "Couldn't Open" when the load it was started for still has no `ready`.
     func fireReadyTimeout(appSessionId expectedSession: String, reloadSerial expectedReload: Int) {
         if appSessionId != expectedSession || reloadSerial != expectedReload { return }
         if embedReady || issue != AppHostIssue.none { return }
@@ -1448,7 +1312,6 @@ final class AppHostPresenter {
         rebuild()
     }
 
-    /// True while a ready timeout is armed (tests and the fixture readouts).
     var hasReadyTimer: Bool {
         return readyTimeoutTask != nil
     }
@@ -1566,7 +1429,6 @@ final class AppHostPresenter {
                                   exportFailed: next.exportFailed)
     }
 
-    /// Equal apart from the revision.
     static func sameModel(_ a: AppHostModel, _ b: AppHostModel) -> Bool {
         return a.appId == b.appId && a.appSessionId == b.appSessionId && a.phase == b.phase && a.issue == b.issue
             && a.isLocked == b.isLocked && a.canEdit == b.canEdit && a.canClose == b.canClose && a.canLock == b.canLock
@@ -1588,10 +1450,6 @@ final class AppHostPresenter {
                                                   token: FeedbackToken(sequence: feedbackState.token.sequence + 1, kind: kind))
     }
 
-    // MARK: ACT-8 private
-
-    /// One Wheel or Watch bridge command with a client-local request id, pending until its `ack` or the 10 s timeout.
-    /// The same command for the same target is not sent twice while pending (adding names always goes through).
     @discardableResult
     private func sendPage(_ kind: AppPageCommandKind, target: String = "", payload: [String: Any] = [:]) -> ActivityTapResult {
         guard let session = session else { return ActivityTapResult.explained }
@@ -1615,7 +1473,6 @@ final class AppHostPresenter {
         return ActivityTapResult.dispatched
     }
 
-    /// A spin that settled live in this embed (never a replayed one) becomes the native "Winner: %@" announcement.
     private func noteWinner(_ app: AppEmbedAppStatus, first: Bool) {
         if app.kind != "wheel" { return }
         if first {
@@ -1628,8 +1485,6 @@ final class AppHostPresenter {
         winnerSequence += 1
     }
 
-    /// A newly selected video is announced natively once its title is known; the video already playing when the page
-    /// data first arrives is not.
     private func noteTitle(_ app: AppEmbedAppStatus, first: Bool) {
         if app.kind != "watch" { return }
         if first {
@@ -1645,8 +1500,6 @@ final class AppHostPresenter {
         titleSequence += 1
     }
 
-    /// The wheel fixture's names, added once the embed reports its synced wheel (no socket: the fixture relay records
-    /// the update the embed sends).
     private func seedFixture(_ app: AppEmbedAppStatus) {
         if fixtureSeedNames.isEmpty || app.kind != "wheel" { return }
         let names = fixtureSeedNames
@@ -1669,7 +1522,6 @@ final class AppHostPresenter {
         searchResults = []
     }
 
-    /// The two page models, each published only when something in it changed (its own revision).
     private func rebuildPages() {
         let ready = model.phase == AppHostPhase.ready || model.phase == AppHostPhase.readOnly
         var kinds: [String] = []
@@ -1738,11 +1590,6 @@ final class AppHostPresenter {
     }
 }
 
-// MARK: Fixtures (L6-12)
-
-/// `app-*` fixture states for the S20 SL14 stage fixture (layered on `app-opening` by HD request B7-T1 R5). No socket,
-/// network, audio or capture: a fixture `ActiveAppSession` answers sync with an empty document and records the bytes
-/// the embed would send. The real bundled embed loads from the app bundle (local assets only).
 enum AppHostFixtureState: String, CaseIterable, Equatable {
     case whiteboardReady = "app-whiteboard-ready"
     case whiteboardViewOnly = "app-whiteboard-view-only"
@@ -1763,7 +1610,6 @@ final class AppHostFixtureOwner {
         coreCommands.append(command.kind.rawValue + (command.kind == AppHostCoreCommandKind.setLocked ? (command.flag ? ":on" : ":off") : ""))
     }
 
-    /// ACT-8: Edit Names and Queue open the Activities page (the fixture records the app id).
     private(set) var pages: [String] = []
 
     func recordPage(_ appId: String) {
@@ -1775,11 +1621,6 @@ final class AppHostFixtureOwner {
     func recordSync() { syncs += 1 }
 }
 
-/// ACT-8 `app-*` fixture states for Spin the Wheel and Watch Together (S60 13 l), layered the same way. A separate enum
-/// keeps the ACT-7 states' exhaustive switches intact. No socket, network, audio or capture: the bundled embeds load
-/// from the app; the wheel fixture adds its names through the embed once it reports the synced wheel; Watch search and
-/// trending answer from canned rows (no YouTube request; nothing plays until someone picks a video, which needs the
-/// owner-session network cell).
 enum AppPageFixtureState: String, CaseIterable, Equatable {
     case wheelReady = "app-wheel-ready"
     case wheelViewOnly = "app-wheel-view-only"
@@ -1809,7 +1650,6 @@ enum AppHostFixtures {
         return state(named: raw) != nil || pageState(named: raw) != nil
     }
 
-    /// The SDK app a fixture opens (the stage and launcher layers use it; HD request B8-T2 R6).
     static func appId(named raw: String) -> String {
         guard let page = pageState(named: raw) else { return "whiteboard" }
         switch page {
@@ -1818,8 +1658,6 @@ enum AppHostFixtures {
         }
     }
 
-    /// Binds `presenter` to a fixture relay and scripts the state. Returns the relay (the caller keeps it alive with the
-    /// fixture session).
     @discardableResult
     @MainActor
     static func apply(named raw: String, presenter: AppHostPresenter, owner: AppHostFixtureOwner) -> ActiveAppSession? {
@@ -1862,8 +1700,7 @@ enum AppHostFixtures {
         relay.updateTransport = { [weak owner] _, _ in owner?.recordUpdate() }
         relay.awarenessTransport = { [weak owner] _, _, _ in owner?.recordAwareness() }
         presenter.onCommand = { [weak owner] command in owner?.record(command) }
-        // The stage fixture's `ActivitySession.bindStage()` already routes Edit Names and Queue to the Activities panel;
-        // a bare presenter (tests) records them instead.
+
         if presenter.onOpenPage == nil {
             presenter.onOpenPage = { [weak owner] appId in owner?.recordPage(appId) }
         }

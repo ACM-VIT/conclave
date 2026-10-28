@@ -3,13 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ACT-3 (OUT/PLAN-screens.md section 5, S60 9): the six prompt game scenes. Scene models built once per push from the
-/// projections of packages/sfu/server/games/modules and checked against the module rules (Trivia correct, wrong, no
-/// answer, late spectator, host skip; Bluff rejection with the composer kept and a delayed ack; Would You Rather tie and
-/// zero votes; Most Likely To departed target, self vote and ties; Reaction early tap, held touch, double input and
-/// spectator; Imposter private word separation, abstention, tie and departing target), the outcome tokens once per
-/// transition, the host bar table, one-shot announcements, the fixtures, and source scans of both platforms' scenes and
-/// the B1 pad. The Kotlin half is T/Skip/ACT3PromptBridgeTests.kt (HD request B6-T7 R6), on the same fixtures.
 @MainActor
 struct ACT3PromptGamesTests {
     private final class Recorder {
@@ -50,8 +43,6 @@ struct ACT3PromptGamesTests {
         GameProjectionParser.parse(gameId: gameId, publicPhase: phase, publicViewJSON: view, playerViewJSON: mine)
     }
 
-    // MARK: Trivia (S60 9 l 1)
-
     @Test func triviaQuestionAnsweredRevealAndSpectator() throws {
         let answered = try #require(presenter(.triviaAnswered).scene.trivia)
         #expect(answered.hasAnswered && !answered.canAnswer && answered.isPlayer)
@@ -67,7 +58,7 @@ struct ACT3PromptGamesTests {
         #expect(reveal.outcome == TriviaOutcome.wrong && reveal.correctText == "Saturn")
         let marks = reveal.kitChoices()
         try #require(marks.count >= 2)
-        // Correctness is never color alone: the kit row turns each mark into a glyph and a word.
+
         #expect(marks[0].mark == GameKitMark.wrongPick && marks[1].mark == GameKitMark.correct)
         #expect(marks.map { $0.count } == [2, 3, 0, 1])
         #expect(reveal.hostAction == PromptHostAction.next && reveal.score == 1900 && reveal.rank == 2)
@@ -77,7 +68,6 @@ struct ACT3PromptGamesTests {
         let correct = try #require(presenter([PromptGameFixtures.triviaPush(phase: "reveal", choice: 1)]).scene.trivia)
         #expect(correct.outcome == TriviaOutcome.correct && correct.lastPoints == 650)
 
-        // Late spectator (INM G7): read-only, no outcome, no score, no host bar.
         let spectator = GameStagePresenter()
         spectator.apply(ActivityFixtureScript.gameInputs(.gameSpectator))
         let watching = try #require(spectator.scene.trivia)
@@ -119,8 +109,6 @@ struct ACT3PromptGamesTests {
         #expect(trivia.index(ofChoice: "q9-9") == -1)
     }
 
-    // MARK: Bluff (S60 9 l 2)
-
     @Test func bluffDraftStaysUntilTheAckAndARejectionKeepsTheComposer() throws {
         let recorder = Recorder()
         let games = presenter(.bluffWrite, recorder: recorder)
@@ -130,7 +118,7 @@ struct ACT3PromptGamesTests {
         #expect(games.send(GameMoveIntent.submitBluff("pinkness")) == ActivityTapResult.dispatched)
         let submit = try #require(recorder.commands.last)
         #expect(submit.payloadJSON == #"{"text":"pinkness"}"#)
-        // Delayed ack: the push that records the bluff arrives first; the move stays pending and no second submit goes.
+
         let recorded = GameStageInputs.make(callSession: 1, isActive: true, gameId: "bluff", name: "Bluff", phase: "write",
                                             players: ActivityFixtureScript.players(6, includingYou: true), minPlayers: 1,
                                             publicViewJSON: PromptGameFixtures.publicView(.bluffWrite),
@@ -177,8 +165,6 @@ struct ACT3PromptGamesTests {
         #expect(!spectator.canSubmit && spectator.myBluff.isEmpty && !spectator.hasSubmitted && spectator.score == 0)
     }
 
-    // MARK: Would You Rather (S60 9 l 3)
-
     @Test func wouldYouRatherIsChangeableAndShowsTiesAndZeroVotes() throws {
         let choose = try #require(presenter(.wyrChoose).scene.wouldYouRather)
         #expect(choose.myChoice == 0 && choose.canChoose && choose.kitFirst().isSelected && !choose.kitSecond().isSelected)
@@ -194,8 +180,6 @@ struct ACT3PromptGamesTests {
         #expect(tie.split(nobodyLabel: "x").fractionA == 0.5 && tie.split(nobodyLabel: "x").namesA == ["A1", "A2"])
         #expect(tie.hostAction == PromptHostAction.none && tie.myChoice == -1 && !tie.canChoose)
     }
-
-    // MARK: Most Likely To (S60 9 l 4)
 
     @Test func mostLikelyToNamesADepartedTargetAllowsSelfVotesAndShowsTies() throws {
         let vote = try #require(presenter(.mltVote).scene.mostLikelyTo)
@@ -216,12 +200,10 @@ struct ACT3PromptGamesTests {
         #expect(!single.isTie && single.winnerName == "Avery" && single.candidates.first { $0.isYou }?.isMine == true)
     }
 
-    // MARK: Reaction (S60 9 l 5)
-
     @Test func reactionPadStatesEarlyTapRowsAndOneTap() throws {
         let arming = try #require(presenter(.reactionArming).scene.reaction)
         #expect(arming.padState == ReactionPadState.wait && arming.canTap && arming.round == 2 && arming.isPadPhase)
-        // A tap this device sent shows "Locked In" until the server echoes it (held touch, late event).
+
         #expect(arming.displayedPadState(locallySent: true) == ReactionPadState.locked)
         #expect(PromptScenePolicy.reactionGoKey(arming).isEmpty)
         let go = try #require(presenter(.reactionGo).scene.reaction)
@@ -243,7 +225,6 @@ struct ACT3PromptGamesTests {
         #expect(reveal.results.map { $0.position } == [1, 2, 3, 4, 5, 6] && reveal.results[0].isFastest && reveal.results[1].isYou)
         #expect(reveal.results[3].ms == -1 && reveal.fastestName == "Avery" && reveal.hostAction == PromptHostAction.next)
 
-        // Held touch and double input: the second tap is ignored while the first is pending.
         let recorder = Recorder()
         let games = presenter(.reactionGo, recorder: recorder)
         #expect(games.send(GameMoveIntent.tap()) == ActivityTapResult.dispatched)
@@ -255,8 +236,6 @@ struct ACT3PromptGamesTests {
         #expect(watcher.padState == ReactionPadState.spectating && !watcher.canTap)
         #expect(watcher.displayedPadState(locallySent: false) == ReactionPadState.spectating)
     }
-
-    // MARK: Imposter (S60 9 l 6, Q7)
 
     @Test func imposterWordReachesOnlyASeatedCrewMember() throws {
         let crew = try #require(presenter(.imposterCrew).scene.imposter)
@@ -271,7 +250,7 @@ struct ACT3PromptGamesTests {
         #expect(spectator.role == ImposterRole.spectator && spectator.secretWord.isEmpty && !spectator.showsSecretCard)
         #expect(!spectator.isPlayer && spectator.hostAction == PromptHostAction.none && spectatorGames.chrome.seat == SeatState.watching)
         #expect(!String(describing: spectatorGames.scene).contains("Library"))
-        // A spectator cannot hold a crew word even if a stray player view arrived.
+
         let stray = PromptSceneBuilder.imposter(try #require(projection("imposter", "discuss", PromptGameFixtures.publicView(.imposterCrew),
                                                                          PromptGameFixtures.playerView(.imposterCrew)).imposter),
                                                 context: context(isPlayer: false, isHost: false))
@@ -303,8 +282,6 @@ struct ACT3PromptGamesTests {
             context: context(known: [GameNamedPlayer(id: "r9", name: "Ivo")]))
         #expect(departing.departedName == "Ivo" && departing.myVote.isEmpty)
     }
-
-    // MARK: Host bar, announcements, fixtures
 
     @Test func hostActionsFollowTheTableOnlyForASeatedHost() {
         let host = context()
@@ -354,8 +331,6 @@ struct ACT3PromptGamesTests {
         #expect(PromptGameFixtures.at(0) == "1700000600000")
     }
 
-    // MARK: Source scans (both platforms)
-
     private func sources(_ directory: String, _ ext: String) throws -> String {
         var text = ""
         for file in try stageFiles(under: directory, extensions: [ext]) { text += try stageSource(file) }
@@ -386,27 +361,27 @@ struct ACT3PromptGamesTests {
         let kotlin = try sources("Sources/Conclave/Skip/ui/games/scenes", "kt")
         let flatIOS = stageNormalized(ios)
         let flatKotlin = stageNormalized(kotlin)
-        // Bluff: the draft is view state that survives pushes, kept on a rejection, cleared by a new round only.
+
         #expect(flatIOS.contains("@State private var draft = \"\"") && flatIOS.contains(".onChange(of: scene.round) { draft = \"\" }"))
         #expect(flatIOS.contains("scene.isPlayer && (scene.canSubmit || pending)"))
         #expect(flatKotlin.contains("rememberSaveable(scene.round)") && flatKotlin.contains("scene.isPlayer && (scene.canSubmit || pending)"))
-        // Imposter: the word goes only into the K11 card (composed only while held), never into a plain Text.
+
         #expect(flatIOS.contains("secret: PromptGameCopy.secret(scene)") && flatKotlin.contains("secret = imposterSecret(scene)"))
         for leak in ["Text(scene.secretWord", "Text(imposter.secretWord", "accessibilityLabel(scene.secretWord", "contentDescription = scene.secretWord"] {
             #expect(!ios.contains(leak) && !kotlin.contains(leak), "the word leaks through \(leak)")
         }
-        // Correctness and the winner always come with a glyph and a word next to the success border.
+
         #expect(flatIOS.contains("markText: option.isTruth ? PromptGameCopy.truth() : \"\"") && flatIOS.contains("emphasis: option.isTruth ? .success"))
         #expect(flatIOS.contains("markText: candidate.isWinner ? PromptGameCopy.mostVotes() : \"\"") && flatIOS.contains("emphasis: candidate.isWinner ? .success"))
         #expect(flatIOS.contains("Label(markText, systemImage: ConclaveSymbols.checkmark)"))
         #expect(flatKotlin.contains("markText = if (option.isTruth) truth else \"\"") && flatKotlin.contains("option.isTruth -> PromptRowEmphasis.Success"))
         #expect(flatKotlin.contains("markText = if (candidate.isWinner) mostVotes else \"\"") && flatKotlin.contains("candidate.isWinner -> PromptRowEmphasis.Success"))
         #expect(flatKotlin.contains("Icon(ConclaveIcons.CheckFill0, contentDescription = null"))
-        // Gestures play only for a sent move.
+
         for kind in ["answerLocked", "bluffSubmitted", "voteCast", "revealHeld"] {
             #expect(ios.contains(".conclaveGestureFeedback(." + kind) && kotlin.contains("haptics.gesture(FeedbackKind." + kind + ")"), "\(kind)")
         }
-        // Scenes read typed models only; nothing decorative moves.
+
         for forbidden in ["GameJSONValue", "dictionaryValue", "MeetingState", "MeetingViewModel", "confetti", "withAnimation", ".animation(",
                           "Font.system(size:", "onLongPressGesture"] {
             #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "a scene uses \(forbidden)")
@@ -428,7 +403,6 @@ struct ACT3PromptGamesTests {
         for value in PromptHostAction.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("PromptHostAction." + value.rawValue), "\(value)") }
     }
 
-    /// True after the batch 6 strings merge (HD/strings/B6-T7.json).
     @Test func promptStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
@@ -451,7 +425,6 @@ struct ACT3PromptGamesTests {
         for name in names { #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)") }
     }
 
-    /// True after HD requests B6-T7 R2 and R3 (the shell hooks).
     @Test func theShellRoutesThePromptGamesAndPinsTheirHostBar() throws {
         let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Games/Native/GameShell+iOS.swift"))
         #expect(ios.contains("PromptGameSceneBody(games: games)") && ios.contains("PromptGameHostBar(games: games)"))

@@ -18,23 +18,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import skip.foundation.ProcessInfo
 
-/*
- * S40 CH4 (CHT-6) on Android: the voice message speaker. This file replaces the transpiled output of
- * S/Core/Audio/TtsSpeaker.swift, so it exposes the same members the transpiled view model calls:
- * enqueue(messageId, userId, displayName, text, voiceToken, isOwn), replay(messageId, userId, displayName, text,
- * voiceToken), stop(), reset(), onPlaybackChanged, activeMessageId and the legacy speak(text, userId, displayName).
- * The queue (6 waiting, 250 ms gaps, the active message id), the C6-22 preferences and every rule are the shared
- * TtsPlaybackQueue, VoicePreferences and VoiceMessagePolicy (S/Core/Audio/VoicePreferences.swift); this class only
- * synthesizes.
- *
- * Playback goes through the call audio owner (SYS-2): TextToSpeech and the personal voice player use
- * USAGE_VOICE_COMMUNICATION with CONTENT_TYPE_SPEECH, so speech follows the call's communication device (earpiece,
- * speaker, Bluetooth) and the voice call volume the volume keys control while call audio is live (SY18), never the
- * media stream; nothing here requests audio focus or changes the audio mode, and nothing starts while the owner
- * reports another app's audio, a hold or a media services reset. A personal voice (the sender's voice token) is
- * synthesized by the web route with a 15 s limit, then falls back to the system voice. SET-4 adds the Settings
- * Preview (togglePreview) and the standard voice list (loadStandardVoices).
- */
 internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueue()) {
     private var engine: TextToSpeech? = null
     private var isReady = false
@@ -42,10 +25,10 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
     private var pendingToken = 0
     private var appliedVoiceName: String? = null
     private var player: MediaPlayer? = null
+    private var playerFile: File? = null
     private var personalGeneration = 0
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    /** (message id, user id) while a message plays; ("", "") when idle. */
     internal var onPlaybackChanged: ((String, String) -> Unit)?
         get() = queue.onPlaybackChanged
         set(value) {
@@ -61,24 +44,20 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
         queue.isOutputBlocked = { VoiceMessagePolicy.blocksPlayback(AudioRouteOwner.shared.interruption) }
     }
 
-    /** A received or acknowledged voice message; others' messages are skipped while Play voice messages is off. */
     internal fun enqueue(messageId: String, userId: String, displayName: String, text: String, voiceToken: String, isOwn: Boolean) {
         queue.enqueue(TtsQueueItem.make(messageId = messageId, userId = userId, displayName = displayName, text = text,
             voiceToken = voiceToken), isOwn = isOwn)
     }
 
-    /** Local replay from a voice bubble; only you hear it. */
     internal fun replay(messageId: String, userId: String, displayName: String, text: String, voiceToken: String) {
         queue.replay(TtsQueueItem.make(messageId = messageId, userId = userId, displayName = displayName, text = text,
             voiceToken = voiceToken))
     }
 
-    /** Stops the current message and drops the queue (Stop speaking, the host turning voice messages off). */
     internal fun stop() {
         queue.stop()
     }
 
-    /** Call end: the queue resets; the engine is released so no binding outlives the call. */
     internal fun reset() {
         queue.reset()
         pendingItem = null
@@ -89,16 +68,10 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
         appliedVoiceName = null
     }
 
-    /** The legacy entry point (no message id, so no bubble state); kept until the core moves to enqueue. */
     internal fun speak(text: String, userId: String, displayName: String) {
         enqueue(messageId = "", userId = userId, displayName = displayName, text = text, voiceToken = "", isOwn = false)
     }
 
-    /**
-     * Settings > Voice messages > Preview (S60 2 d, C6-22; SET-4): one fixed sentence (localized by the page) in the
-     * chosen standard voice through the call output, under the reserved VoicePreviewPolicy.messageId, so
-     * activeMessageId tells whether it plays. start false (Stop preview) stops it.
-     */
     internal fun togglePreview(sentence: String, start: Boolean) {
         if (VoicePreviewPolicy.isPreviewPlaying(activeMessageId = queue.activeMessageId)) {
             queue.stop()
@@ -108,13 +81,12 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
         replay(messageId = VoicePreviewPolicy.messageId, userId = "", displayName = "", text = sentence, voiceToken = "")
     }
 
-    // Engine
-
     private fun start(item: TtsQueueItem, token: Int) {
         if (item.voiceToken.isEmpty()) speakSystem(item, token) else startPersonal(item, token)
     }
 
     private fun speakSystem(item: TtsQueueItem, token: Int) {
+        if (!canStartPlayback(token)) return
         val tts = engine
         if (tts == null || !isReady) {
             pendingItem = item
@@ -137,7 +109,7 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
         if (engine != null) return
         val context = ProcessInfo.processInfo.androidContext.applicationContext
         engine = TextToSpeech(context) { status ->
-            // The init listener runs on the main thread.
+
             isReady = status == TextToSpeech.SUCCESS
             val tts = engine
             if (isReady && tts != null) {
@@ -147,7 +119,7 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
                 val token = pendingToken
                 pendingItem = null
                 pendingToken = 0
-                if (item != null && token == queue.activeToken) speakSystem(item, token)
+                if (item != null && canStartPlayback(token)) speakSystem(item, token)
             } else {
                 val token = pendingToken
                 pendingItem = null
@@ -157,10 +129,6 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
         }
     }
 
-    /**
-     * C6-22: the standard voice reaches the engine once per change; a name that is no longer installed falls back to
-     * Automatic (the device language's default voice).
-     */
     private fun applyVoice(tts: TextToSpeech, voiceId: String) {
         appliedVoiceName = voiceId
         if (voiceId.isNotEmpty()) {
@@ -194,13 +162,10 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
         }
     }
 
-    /** Engine callbacks arrive on a binder thread; the queue lives on the main thread and ignores stale tokens. */
     private fun ended(utteranceId: String?) {
         val token = utteranceId?.removePrefix(UTTERANCE_PREFIX)?.toIntOrNull() ?: return
         mainHandler.post { queue.finished(token) }
     }
-
-    // Personal voice (CH4: the web speech route, 15 s, then the system voice)
 
     private fun startPersonal(item: TtsQueueItem, token: Int) {
         val endpoint = VoiceMessagePolicy.defaultSpeechEndpoint()
@@ -220,23 +185,41 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
             } catch (_: Throwable) {
                 null
             }
+            val file = if (bytes == null || bytes.isEmpty()) null else {
+                var prepared: File? = null
+                try {
+                    val context = ProcessInfo.processInfo.androidContext.applicationContext
+                    prepared = File.createTempFile("conclave-voice-", ".mp3", context.cacheDir)
+                    prepared.writeBytes(bytes)
+                    prepared
+                } catch (_: Throwable) {
+                    prepared?.delete()
+                    null
+                }
+            }
             mainHandler.post {
-                if (generation != personalGeneration || queue.activeToken != token) return@post
-                if (bytes == null || bytes.isEmpty() || !playPersonal(bytes, item, token)) speakSystem(item, token)
+                if (generation != personalGeneration || !canStartPlayback(token)) {
+                    file?.delete()
+                    return@post
+                }
+                if (file == null || !playPersonal(file, item, token)) speakSystem(item, token)
             }
         }
     }
 
-    private fun playPersonal(bytes: ByteArray, item: TtsQueueItem, token: Int): Boolean {
+    private fun playPersonal(file: File, item: TtsQueueItem, token: Int): Boolean {
+        if (!canStartPlayback(token)) {
+            file.delete()
+            return false
+        }
         return try {
-            val context = ProcessInfo.processInfo.androidContext.applicationContext
-            val file = File(context.cacheDir, "conclave-voice-message.mp3")
-            file.writeBytes(bytes)
             val created = MediaPlayer()
+            player = created
+            playerFile = file
             created.setAudioAttributes(callAudioAttributes())
             created.setDataSource(file.absolutePath)
             created.setOnPreparedListener { prepared ->
-                if (queue.activeToken == token && player === prepared) prepared.start()
+                if (player === prepared && canStartPlayback(token)) prepared.start() else releasePlayer(prepared)
             }
             created.setOnCompletionListener { finishedPlayer ->
                 releasePlayer(finishedPlayer)
@@ -244,22 +227,35 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
             }
             created.setOnErrorListener { failed, _, _ ->
                 releasePlayer(failed)
-                // A decode or playback failure reads the message with the system voice instead (web parity).
+
                 if (queue.activeToken == token) speakSystem(item, token)
                 true
             }
-            player = created
             created.prepareAsync()
             true
         } catch (_: Throwable) {
             player?.let { releasePlayer(it) }
+            file.delete()
             false
         }
     }
 
     private fun releasePlayer(target: MediaPlayer) {
-        if (player === target) player = null
+        if (player === target) {
+            player = null
+            playerFile?.delete()
+            playerFile = null
+        }
         try { target.release() } catch (_: Throwable) {}
+    }
+
+    internal fun canStartPlayback(token: Int): Boolean {
+        if (token == 0 || queue.activeToken != token) return false
+        if (queue.isOutputBlocked()) {
+            queue.finished(token)
+            return false
+        }
+        return true
     }
 
     private fun cancelPlayback() {
@@ -279,12 +275,7 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
         .build()
 
     internal companion object {
-        /**
-         * The system voices for [languageTag] in the shared order (S60 2 d), read from a short-lived engine whose
-         * init listener runs on the main thread; [onLoaded] runs on the main thread, with an empty list when the
-         * engine is unavailable. The call's own engine is never touched, so loading the list cannot interrupt a
-         * voice message.
-         */
+
         internal fun loadStandardVoices(languageTag: String, onLoaded: (List<VoiceOptionModel>) -> Unit) {
             val context = ProcessInfo.processInfo.androidContext.applicationContext
             var probe: TextToSpeech? = null
@@ -309,7 +300,6 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
             }
         }
 
-        /** The system speech rate the app has always used. */
         internal const val RATE = 0.94f
         internal const val UTTERANCE_PREFIX = "conclave-tts-"
         private val jsonMediaType = "application/json; charset=utf-8".toMediaType()

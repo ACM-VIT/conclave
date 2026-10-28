@@ -1,11 +1,5 @@
 import Foundation
 
-// S60 0.5 (ACT-1): the Activities launcher contract. Everything here crosses into handwritten Kotlin, so it follows
-// D20: String raw-value enums, scalar structs, arrays of structs and optional structs; no associated values, tuples or
-// dictionaries. App-owned copy never travels as text: reasons are typed and each platform maps them through its
-// copy file (L6-14, `ActivitiesCopy+iOS.swift`, `K/ui/copy/ActivitiesCopy.kt`). Server catalog strings (game names,
-// descriptions, option labels and choices) are carried verbatim.
-
 enum ActivityRole: String, CaseIterable, Equatable {
     case host, participant
 }
@@ -34,22 +28,18 @@ enum BrowserFailure: String, CaseIterable, Equatable {
     case none, startFailed, navigateFailed, unavailable, timedOut, loadFailed
 }
 
-/// What a tap did (S30 `ControlTapResult` shape): a gesture haptic plays only for `dispatched`. Named for this surface
-/// so it never collides with the S30 type CTL-1 adds in the same batch; the integrator may alias the two later.
 enum ActivityTapResult: String, CaseIterable, Equatable {
     case dispatched, ignored, explained
 }
 
-/// One running activity (stage priority order, at most 3). `id` is the `ActivityKind` raw value: one live activity
-/// per kind at a time.
 struct NowPlayingModel: Equatable, Identifiable {
     let id: String
     let kind: ActivityKind
-    /// Server game name, verbatim.
+
     let gameName: String
-    /// SDK app id; the name is app-owned copy keyed by it (C6-18).
+
     let appId: String
-    /// Shared browser host label (for example "example.com"), verbatim.
+
     let browserLabel: String
     let round: Int
     let roundTotal: Int
@@ -85,8 +75,6 @@ struct GameChoiceModel: Equatable, Identifiable {
     let label: String
 }
 
-/// One setup option with `showWhen` evaluated (C6-16). `kind` is "select", "number" or "text"; number presets arrive as
-/// choices whose ids are the numbers. `value` is the current choice id or text.
 struct GameOptionModel: Equatable, Identifiable {
     let id: String
     let label: String
@@ -132,7 +120,7 @@ struct BrowserLauncherModel: Equatable {
     let validation: BrowserValidation
     let failure: BrowserFailure
     let hostLabel: String
-    /// Server provider id (for example "chromium"); the copy file maps known ids.
+
     let provider: String
     let hasAudio: Bool
     let isAudioMuted: Bool
@@ -144,8 +132,6 @@ struct BrowserLauncherModel: Equatable {
                                             isAudioMuted: false, canControl: false)
 }
 
-/// The panel's one cold snapshot (S60 7 j). The setup page reads `ActivitiesPresenter.setup` instead (its own stored
-/// property, so option changes never re-evaluate the root list).
 struct ActivitiesSnapshot: Equatable {
     let revision: Int
     let role: ActivityRole
@@ -156,20 +142,20 @@ struct ActivitiesSnapshot: Equatable {
     let votePlayers: Int
     let canOpenVote: Bool
     let canCancelVote: Bool
-    /// The leader's id and name for "Start %@"; `leaderVotes` 0 selects "Start the Leader", disabled (S60 7 f).
+
     let leaderId: String
     let leaderName: String
     let leaderVotes: Int
     let canStartLeader: Bool
     let games: [GameCatalogRow]
-    /// The catalog footer reason (recovering, vote open, game live), `none` for the host hint.
+
     let catalogReason: ActivitiesReason
     let catalogLoading: Bool
     let apps: [AppRowModel]
     let appsLocked: Bool
     let appsLockPending: Bool
     let canLockApps: Bool
-    /// `noAppOpen` while the lock is disabled for want of an open app; `hostOnly` for participants.
+
     let appsReason: ActivitiesReason
     let browser: BrowserLauncherModel
     let isRecovering: Bool
@@ -201,9 +187,6 @@ struct ActivitiesSnapshot: Equatable {
     }
 }
 
-// MARK: Inputs (core to presenter)
-
-/// One server option spec as the core hands it over (from `GameOptionSpec`; `showWhen` through HD request B4-T8 R4).
 struct ActivityOptionInput: Equatable {
     let id: String
     let type: String
@@ -219,7 +202,7 @@ struct ActivityOptionInput: Equatable {
     let choices: [GameChoiceModel]
     let placeholder: String
     let maxLength: Int
-    /// `showWhen`: show only while the select option `showWhenId` holds one of `showWhenEquals`; empty id = always.
+
     let showWhenId: String
     let showWhenEquals: [String]
 
@@ -248,9 +231,6 @@ struct ActivityVoteCount: Equatable {
     let count: Int
 }
 
-/// The schema boundary between the core and the launcher (S1C 3.2 format), built by the view model's
-/// `makeActivitiesInputs()` (HD request B4-T8 R2). The running game's round summary arrives separately through
-/// `ActivitiesPresenter.applyGameSummary(_:)` so game pushes never rebuild the catalog.
 struct ActivitiesInputs: Equatable {
     let callSession: Int
     let isHost: Bool
@@ -261,18 +241,18 @@ struct ActivitiesInputs: Equatable {
     let isVoteOpen: Bool
     let voteCandidates: [ActivityGameInput]
     let voteCounts: [ActivityVoteCount]
-    /// The local person's vote (server `votes` read through the core's identity rule); empty when none.
+
     let myVoteId: String
     let voteCastCount: Int
     let votePlayers: Int
-    /// People in the room (you included), for the player range check.
+
     let playersHere: Int
     let activeAppId: String
     let isAppsLocked: Bool
     let isAppsActionInFlight: Bool
-    /// SDK app ids only (C6-18): names and descriptions are app copy.
+
     let appIds: [String]
-    /// The shared browser capability (C6-20; true until the probe lands).
+
     let isBrowserAvailable: Bool
     let isBrowserActive: Bool
     let isBrowserLaunching: Bool
@@ -314,7 +294,6 @@ struct ActivitiesInputs: Equatable {
     }
 }
 
-/// The running game as the launcher needs it (Now Playing status and the catalog gate), from `GameStagePresenter`.
 struct ActivityGameSummary: Equatable {
     let gameId: String
     let name: String
@@ -328,14 +307,11 @@ struct ActivityGameSummary: Equatable {
                                           playerCount: 0)
 }
 
-// MARK: Commands (presenter to core)
-
 enum ActivitiesCommandKind: String, CaseIterable, Equatable {
     case refresh, startGame, openVote, castVote, cancelVote, endGame, openApp, closeApp, setAppsLocked
     case launchBrowser, navigateBrowser, closeBrowser, toggleBrowserAudio
 }
 
-/// One resolved option value for `startGame` (numbers clamped, select values checked, text trimmed once, here).
 struct ActivityOptionValue: Equatable {
     let id: String
     let isNumber: Bool
@@ -343,7 +319,6 @@ struct ActivityOptionValue: Equatable {
     let text: String
 }
 
-/// What the core performs (the S1 `onCommand` pattern): `id` is a game or app id, `text` a URL, `flag` the lock.
 struct ActivitiesCommand: Equatable {
     let kind: ActivitiesCommandKind
     let id: String

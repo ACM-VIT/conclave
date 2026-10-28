@@ -55,34 +55,14 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/*
- * The in-call action sheet (F00 C17; S30 CL9): the Android More surface. A dark M3 ModalBottomSheet (in-call theme,
- * surfaceContainerLow, the stock drag handle and predictive back, light system bar icons) with an optional recovery
- * notice, the reaction palette (C22; the sheet stays open after a send) or its reason line, a wide Raise hand toggle
- * tile with its pending spinner, a grid of labelled tiles in fixed rows of three (not lazy) and host rows (switch,
- * action and destructive rows, the destructive one last after a divider). S30 5 owns the item set, order and copy;
- * tiles keep their positions during recovery, disabled with a reason line (R10). A tile or row that opens something
- * hides the sheet first and reports the choice only after the hide completes, so no panel or dialog opens from a
- * dismissing sheet (D17). Gesture feedback plays only when the caller reports the action dispatched (S30 5 h, 6 h).
- * Composed only while shown. CTL-5 and CTL-6 (batch 6) added the notice, the reason line, the pending hand, tile
- * badges, spoken labels and switch tiles, and the action and destructive host rows.
- */
-
-/**
- * One grid tile (S30 CL9 MoreTile): an optional status or reason line, the Engaged state, a count badge folded into the
- * line, a spoken label where the visible one is short ("Share invite" for Invite), and a switch tile (Captions) when
- * `switchOn` is set.
- */
 internal data class ConclaveActionTile(
     val id: String, val label: String, val icon: ImageVector, val enabled: Boolean = true, val engaged: Boolean = false,
     val statusLine: String? = null, val dismissesSheet: Boolean = true, val badgeCount: Int = 0,
     val description: String? = null, val switchOn: Boolean? = null,
 )
 
-/** How a host row behaves: a Switch row, an action row, or the destructive row (error color, after a divider). */
 internal enum class ConclaveActionRowKind { Switch, Action, Destructive }
 
-/** One host row in stable order. `dismissesSheet` rows report only after the sheet is gone. */
 internal data class ConclaveActionHostRow(
     val id: String, val label: String, val checked: Boolean = false, val enabled: Boolean = true, val reason: String? = null,
     val kind: ConclaveActionRowKind = ConclaveActionRowKind.Switch, val icon: ImageVector? = null,
@@ -92,7 +72,7 @@ internal data class ConclaveActionHostRow(
 internal object ConclaveActionSheetMetrics {
     const val COLUMNS = 3
     const val TILE_MIN_HEIGHT_DP = 72
-    /** Centered on expanded windows. */
+
     const val MAX_WIDTH_DP = 640
 }
 
@@ -120,10 +100,10 @@ internal fun ConclaveActionSheet(
             contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 0.dp,
             dragHandle = { BottomSheetDefaults.DragHandle() },
-            // Always dark over the stage, so the system bar icons stay light in system light mode (F00 C17 l).
+
             properties = ModalBottomSheetProperties(isAppearanceLightStatusBars = false, isAppearanceLightNavigationBars = false),
         ) {
-            // The sheet's own window registers with the Debug semantics exporter (S40 R40-11).
+
             NativeSemanticsPopupRoot(identifier)
             Column(
                 Modifier.widthIn(max = ConclaveActionSheetMetrics.MAX_WIDTH_DP.dp).fillMaxWidth().align(Alignment.CenterHorizontally)
@@ -132,7 +112,7 @@ internal fun ConclaveActionSheet(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (notice != null) {
-                    // Recovering or offline (S30 5 d): rows stay, blocked ones disabled with their reason lines.
+
                     ConclaveBanner(kind = ConclaveBannerKind.Warning, text = notice, identifier = "$identifier.notice", inCall = true)
                 }
                 if (reactions.isNotEmpty()) {
@@ -146,7 +126,7 @@ internal fun ConclaveActionSheet(
                 }
                 if (handRaised != null) {
                     RaiseHandTile(handRaised, handEnabled && !handPending, handPending, handLabel, handState, "$identifier.hand") { raised ->
-                        // The kind is the intended new state, captured before the tap; it plays only when dispatched.
+
                         val kind = if (raised) FeedbackKind.handRaised else FeedbackKind.handLowered
                         if (onRaiseHand(raised)) haptics.gesture(kind)
                     }
@@ -193,7 +173,6 @@ internal fun ConclaveActionSheet(
     }
 }
 
-/** A host row: a Switch row (`Role.Switch`), an action row with its leading icon, or the destructive row in `error`. */
 @Composable
 private fun HostRow(host: ConclaveActionHostRow, identifier: String, onAction: (Boolean) -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -220,8 +199,6 @@ private fun HostRow(host: ConclaveActionHostRow, identifier: String, onAction: (
     )
 }
 
-/** The wide Raise hand tile: a Switch node, "Raised", "Not raised", "Raising" or "Lowering", R01 Engaged colors while
- *  raised, a small spinner in place of the glyph while the acknowledgment is pending (S30 6 d, F00 C17). */
 @Composable
 private fun RaiseHandTile(
     raised: Boolean, enabled: Boolean, pending: Boolean, labelOverride: String?, stateOverride: String?, identifier: String,
@@ -244,7 +221,7 @@ private fun RaiseHandTile(
         Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             if (pending) {
-                // D15: a system spinner only, no pulse.
+
                 CircularProgressIndicator(Modifier.size(20.dp), color = LocalContentColor.current, strokeWidth = 2.dp)
             } else {
                 Icon(if (raised) ConclaveIcons.FrontHandFill1 else ConclaveIcons.FrontHandFill0, contentDescription = null)
@@ -254,8 +231,6 @@ private fun RaiseHandTile(
     }
 }
 
-/** A labelled tile: icon (with its count badge) over a two-line labelMedium label and the optional status line;
- *  Engaged colors while on. The node speaks the full label and reads the line as its state. */
 @Composable
 private fun ActionTile(tile: ConclaveActionTile, identifier: String, modifier: Modifier, inline: Boolean = false, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -311,7 +286,6 @@ private fun ActionTile(tile: ConclaveActionTile, identifier: String, modifier: M
     }
 }
 
-/** The palette's place while reactions cannot send for a host reason (S30 6 d): one line with the warning glyph. */
 @Composable
 private fun ReactionsNoticeLine(text: String, identifier: String) {
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(identifier).semantics(mergeDescendants = true) { },
@@ -322,12 +296,6 @@ private fun ReactionsNoticeLine(text: String, identifier: String) {
     }
 }
 
-/**
- * The reaction palette (F00 C22): emoji targets of at least 48 dp, evenly spaced, wrapping in the same order when six
- * no longer fit (font scale 2.0, S30 6 d); a reaction already used on a message sits on secondaryContainer and reads as
- * selected. While reactions are off the row stays, disabled, with the reason in each target's state description. The
- * caller plays `reactionSent` only for a dispatched send.
- */
 @Composable
 internal fun ConclaveReactionPalette(
     options: List<ConclavePaletteOption>, identifier: String, onSelect: (ConclavePaletteOption) -> Unit,

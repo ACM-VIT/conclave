@@ -1,73 +1,56 @@
-// The R02 call control surface, call toggles (plain and labelled), panel invokers, Leave, the compact control
-// bar and the top stage chrome (meeting capsule, chrome buttons, route picker) (PN 3.5 A1; F00 C03, C04, C05).
-// This is the only file that may use glass for controls and chrome; the stage chip is never glass and lives in
-// ConclaveStageChip+iOS.swift. The state-to-surface mapping sits in a
-// host-compiled section outside the iOS block, written in plain Swift with no SwiftUI or UIKit type, so the macOS
-// host compiles it and `swift test` checks it against the R02 table (a refinement of TG 4.4's iOS-only block).
+
 
 #if !SKIP
-/// The three visual states of an in-call control. Off is a muted microphone or a camera that is off; Engaged is a
-/// raised hand, a running share or an open panel (glyph shape, not color, separates it from Off, Q9); On is the
-/// rest.
+
 enum ConclaveControlState: String, CaseIterable {
     case off, on, engaged
 }
 
-/// The control outline: call controls and chrome buttons are circles, the meeting capsule is a capsule (C03).
 enum ConclaveControlShape: String, CaseIterable {
     case circle, capsule
 }
 
-/// How a control surface is filled.
 enum ConclaveControlFill: String, CaseIterable {
-    /// Opaque paper (`iosInCallControlOff`), never glass, so the state never depends on what is behind it.
+
     case paper
-    /// Regular Liquid Glass.
+
     case glass
-    /// The opaque fallback (`iosInCallControlFallback`).
+
     case fallback
-    /// The label scrim over video in the lobby preview card (S10 R9): never glass on any OS version.
+
     case scrim
 }
 
-/// Which glyph variant the control draws for its state.
 enum ConclaveControlGlyph: String, CaseIterable {
-    /// The slashed off glyph.
+
     case off
     case on
-    /// The FILL 1 engaged glyph.
+
     case engaged
 }
 
-/// One row of the R02 state table.
 struct ConclaveControlSurfaceSpec: Equatable {
     let fill: ConclaveControlFill
-    /// The opaque fill token; nil for glass.
+
     let fillToken: Int64?
     let glyph: ConclaveControlGlyph
     let glyphToken: Int64
-    /// The 1 pt inner stroke token; nil draws no stroke. The stroke is decorative and never the only affordance.
+
     let strokeToken: Int64?
-    /// Glass with `.interactive()`. Never true for an opaque rendering or a disabled control.
+
     let isInteractive: Bool
     let opacity: Double
 }
 
-/// The R02 state table as a pure function of plain inputs. Pressed is not an input: glass gives the system
-/// interactive response and every opaque rendering dims through its button style.
 enum ConclaveControlSurfaceMapping {
     static let disabledOpacity = 0.4
 
-    /// The stage table (R02), unchanged since WP1-2b.
     static func spec(_ state: ConclaveControlState, glassAvailable: Bool, reduceTransparency: Bool,
                      forceOpaque: Bool, increasedContrast: Bool, isEnabled: Bool) -> ConclaveControlSurfaceSpec {
         return spec(state, context: .stage, glassAvailable: glassAvailable, reduceTransparency: reduceTransparency,
                     forceOpaque: forceOpaque, increasedContrast: increasedContrast, isEnabled: isEnabled)
     }
 
-    /// The table with the surface context (F00 C03 f, C04 f; S10 L2, R9). Only `.stage` takes glass: on the lobby
-    /// card's flat strip the On state is the opaque fallback, and over the lobby video it is the label scrim with the
-    /// border, on every OS version. Off and Engaged are paper everywhere.
     static func spec(_ state: ConclaveControlState, context: ConclaveSurfaceContext, glassAvailable: Bool,
                      reduceTransparency: Bool, forceOpaque: Bool, increasedContrast: Bool,
                      isEnabled: Bool) -> ConclaveControlSurfaceSpec {
@@ -110,8 +93,7 @@ import AVKit
 import SwiftUI
 
 #if DEBUG
-/// Debug only: the gallery's "Force Opaque Controls" switch. Release builds have no such key, and the surface
-/// and the bar read a constant `false` there.
+
 private struct ConclaveForceOpaqueControlsKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -124,14 +106,11 @@ extension EnvironmentValues {
 }
 #endif
 
-/// Where a call control's gesture feedback goes. Production plays through the view-local gesture route; the
-/// Debug gallery records the route's decision and never reaches a haptic engine.
 enum ConclaveGestureRoute {
     case live
     case recordOnly((FeedbackKind) -> Void)
 }
 
-/// Sizes of the call controls (F00 C04 c, C05 c): a 52 pt base scaled with the body style, clamped to [44, 60].
 enum ConclaveCallControlMetrics {
     static let baseDiameter = CGFloat(CompactBarFit.iosBaseDiameter)
 
@@ -143,8 +122,7 @@ enum ConclaveCallControlMetrics {
 }
 
 extension View {
-    /// The R02 control surface: the glass branch only on iOS 26 or later with Reduce Transparency off and no
-    /// Debug force; otherwise the opaque fallback. Fills and strokes come from generated tokens.
+
     func conclaveControlSurface(_ state: ConclaveControlState, isEnabled: Bool,
                                 shape: ConclaveControlShape = .circle,
                                 context: ConclaveSurfaceContext = .stage) -> some View {
@@ -152,8 +130,6 @@ extension View {
     }
 }
 
-/// The outline as one insettable shape, so the glass, the fill and the stroke always share it. A circle control
-/// sits in a square frame; the capsule stretches with its content.
 struct ConclaveControlOutline: InsettableShape {
     let shape: ConclaveControlShape
     var insetAmount: CGFloat = 0
@@ -171,7 +147,6 @@ struct ConclaveControlOutline: InsettableShape {
     }
 }
 
-/// The surface itself. `isPressed` comes from a button style and only dims opaque renderings.
 struct ConclaveControlSurface: ViewModifier {
     let state: ConclaveControlState
     let isEnabled: Bool
@@ -214,7 +189,6 @@ struct ConclaveControlSurface: ViewModifier {
         }
     }
 
-    /// Paper for Off and Engaged, the fallback for On: always opaque, with a system-like press highlight.
     private func opaque(_ content: Content, _ spec: ConclaveControlSurfaceSpec) -> some View {
         content
             .foregroundStyle(HostingTheme.token(spec.glyphToken))
@@ -224,12 +198,10 @@ struct ConclaveControlSurface: ViewModifier {
     }
 }
 
-/// System-like dimming for opaque controls while pressed; no scale bounce (F00 9).
 private enum ConclaveControlPress {
     static let opacity = 0.6
 }
 
-/// The decorative 1 pt inner stroke.
 private struct ConclaveControlStroke: View {
     let token: Int64?
     let shape: ConclaveControlShape
@@ -241,7 +213,6 @@ private struct ConclaveControlStroke: View {
     }
 }
 
-/// Draws a control's glyph inside its circle and applies the surface with the press state.
 private struct ConclaveControlButtonStyle: ButtonStyle {
     let state: ConclaveControlState
     let isEnabled: Bool
@@ -257,7 +228,6 @@ private struct ConclaveControlButtonStyle: ButtonStyle {
     }
 }
 
-/// A call control glyph: flat symbol rendering on iOS 26 and later, the replace transition unless Reduce Motion.
 private struct ConclaveControlGlyphImage: View {
     let systemImage: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -279,7 +249,6 @@ private struct ConclaveControlGlyphImage: View {
     }
 }
 
-/// Reads the scaled base diameter under the bar's text-size cap, for fit arithmetic in a composition.
 struct ConclaveScaledControlDiameter<Content: View>: View {
     @ViewBuilder let content: (CGFloat) -> Content
 
@@ -298,11 +267,6 @@ struct ConclaveScaledControlDiameter<Content: View>: View {
     }
 }
 
-// MARK: Call toggle (F00 C04 c, TG 4.2 toggle.call, OQ-2b-4)
-
-/// Mic, Camera, Raise Hand or Share Screen: a `Button` with the toggle trait (TG 4.2), a constant label and the
-/// state in the value. `feedback` is the gesture kind this tap plays (nil plays nothing, for example a share
-/// whose result arrives as an outcome).
 struct ConclaveCallToggle: View {
     let title: String
     let value: String
@@ -352,7 +316,7 @@ struct ConclaveCallToggle: View {
                 if let kind = toggle.feedback {
                     switch toggle.gestureRoute {
                     case .live:
-                        // An async outcome never plays on the gesture route (F1); its token arrives later.
+
                         if !kind.isAsyncOutcome {
                             tappedKind = kind
                             taps += 1
@@ -381,7 +345,6 @@ struct ConclaveCallToggle: View {
     }
 }
 
-/// Plays the tapped kind through the view-local route in production; the record-only route adds nothing.
 private struct LiveGestureFeedback: ViewModifier {
     let route: ConclaveGestureRoute
     let kind: FeedbackKind
@@ -398,11 +361,6 @@ private struct LiveGestureFeedback: ViewModifier {
     }
 }
 
-// MARK: Panel invokers (Chat, More) and the Chat count badge (F00 C04 c, OQ-2b-7)
-
-/// A panel invoker on the call surface: On while its panel is closed, Engaged while it is open. It plays
-/// nothing (F00 C04 e) and takes no gesture route. The count badge is ink on coral, hidden from accessibility and
-/// folded into the value; it hides while the panel is open and at zero.
 struct ConclaveCallInvoker: View {
     let title: String
     let systemImage: String
@@ -473,14 +431,6 @@ private struct InvokerValue: ViewModifier {
     }
 }
 
-// The count badge is the standalone C06 `ConclaveCountBadge` (ConclaveBadge+iOS.swift, FND-2): ink numerals on
-// coral, never white, "99+" above 99, never read on its own.
-
-// MARK: Leave (F00 C04 c, OD Q9, OQ3)
-
-/// Glyph-only red Leave in the toggles' diameter: opaque `HostingTheme.inCallLeave` (dynamic system red, the
-/// approved `#E9152D` under Increase Contrast, owner OQ4), never glass, with a white glyph. It plays nothing (Q11)
-/// and takes no gesture route. The host End menu arrives with CTL-2.
 struct ConclaveLeaveButton: View {
     let diameter: CGFloat?
     let identifier: String
@@ -529,11 +479,6 @@ private struct ConclaveLeaveButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: Control bar (F00 C05 c)
-
-/// The floating cluster: one `GlassEffectContainer` in the glass branch, a plain `HStack` otherwise; horizontal
-/// only (OQ-2b-11). Each control carries its own surface, so the bar draws no background. Reading order is the
-/// code order, which mirrors in right-to-left layouts, so Leave stays last.
 struct ConclaveControlBar<Content: View>: View {
     let spacing: CGFloat
     let identifier: String
@@ -576,12 +521,6 @@ struct ConclaveControlBar<Content: View>: View {
     }
 }
 
-// MARK: Labelled call toggle (F00 C04 f labelled variant; S10 L2)
-
-/// The lobby preview card toggle: a call toggle with its state caption below ("Muted", "Off"). On the card's flat
-/// strip (`.onSurface`) and over the lobby video (`.overVideo`) it never takes glass. It plays its gesture kind
-/// itself (C04 e), because a custom-drawn toggle gets no system haptic. The caption repeats the value, so it is
-/// hidden from accessibility and the toggle keeps one element with its label and value.
 struct ConclaveLabelledCallToggle: View {
     let title: String
     let value: String
@@ -606,7 +545,7 @@ struct ConclaveLabelledCallToggle: View {
         self.inputLabels = inputLabels
         self.feedback = feedback
         self.gestureRoute = gestureRoute
-        // The lobby surfaces only; a stage context would take glass on a flat surface.
+
         self.context = context == .stage ? .onSurface : context
         self.identifier = identifier
         self.action = action
@@ -631,10 +570,6 @@ struct ConclaveLabelledCallToggle: View {
     }
 }
 
-// MARK: Stage chrome: meeting capsule, chrome buttons, route picker (F00 C03)
-
-/// Where chrome sits: floating over the stage (glass on iOS 26 or later) or inside the lobby preview card, which
-/// never takes glass (S10 R9).
 enum ConclaveChromeContext: String, CaseIterable {
     case stage, lobbyCard
 
@@ -642,17 +577,12 @@ enum ConclaveChromeContext: String, CaseIterable {
 }
 
 enum ConclaveChromeMetrics {
-    /// Chrome button and capsule height (F00 6).
+
     static let height: CGFloat = 44
-    /// The capsule never takes more than this share of the stage width (F00 C03 c).
+
     static let capsuleMaxWidthFraction: CGFloat = 0.6
 }
 
-/// The top-leading meeting capsule (F00 C03 c): one line, the room title (middle truncation), with the lock glyph
-/// when the room is locked and the captions glyph while captions are on. Owner decision 2026-10-28: no visible
-/// subtitle (the two-line capsule read too heavy); the subtitle (participant count, "{name} is presenting") stays
-/// the accessibility value. It is a Button that opens meeting info; label = title, value = subtitle plus "Locked".
-/// Capped at xxxLarge with the Large Content Viewer and a decorative disclosure chevron (F00 7.3).
 struct ConclaveMeetingCapsule: View {
     let title: String
     let subtitle: String
@@ -724,8 +654,6 @@ struct ConclaveMeetingCapsule: View {
     }
 }
 
-/// A round 44 pt chrome button over video: flip camera (inside the self view on iOS), and any other stage action
-/// the screen specs add. Surface On; hidden by the caller while it does not apply (flip while the camera is off).
 struct ConclaveChromeButton: View {
     let title: String
     let value: String?
@@ -761,7 +689,6 @@ struct ConclaveChromeButton: View {
     }
 }
 
-/// The capsule and chrome buttons share the control surface in the On state with the press state.
 private struct ConclaveChromeButtonStyle: ButtonStyle {
     let shape: ConclaveControlShape
     let context: ConclaveChromeContext
@@ -773,10 +700,6 @@ private struct ConclaveChromeButtonStyle: ButtonStyle {
     }
 }
 
-/// The audio route button (F00 C03 c; S30 3 c): the system `AVRoutePickerView` inside a 44 pt On circle. The system
-/// owns the glyph, the route list, its glass and its label. `onPresentingChange` reports the route list opening and
-/// closing so the stage can block chrome auto-hide meanwhile (S30 CC16). Created once per stage; chrome fades never
-/// recreate it (F00 C03 k).
 struct ConclaveRoutePickerButton: View {
     let context: ConclaveChromeContext
     let identifier: String
@@ -834,8 +757,6 @@ private struct ConclaveRoutePickerView: UIViewRepresentable {
     }
 }
 
-/// The top chrome cluster: the capsule and the route button share one `GlassEffectContainer` in the glass branch,
-/// a plain `HStack` otherwise (F00 4 "Containers"). The stage chip never joins it (S20 SR3).
 struct ConclaveTopChromeCluster<Content: View>: View {
     let spacing: CGFloat
     @ViewBuilder let content: () -> Content

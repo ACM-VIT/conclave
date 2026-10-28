@@ -3,21 +3,11 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// STG-2 (OUT/PLAN-screens.md section 5): tile anatomy, active speaker, the tile menu, spotlight and pinning. The pure
-/// `TileFeaturePolicy`, `TileMenuPolicy`, `TileMenuDispatcher` and `SpotlightRailPolicy`, the presenter behavior their
-/// hooks add, the SC2 view model rows (macOS suite) and source scans of the iOS and Compose tile files. Covers S20 3 l1
-/// to l6 (the parts a host can check), 4 l, SC2, SC4 and RECONCILE R19's split (people items arrive with PPL-2). The
-/// Kotlin half is T/Skip/STG2TileBridgeTests.kt.
-///
-/// Dependencies on HD/requests/B4-T5.md (applied by the batch integrator): presenter pin announcements (R4a), the
-/// camera-on featured speaker (R4b, R5a), the S20 4 rail geometry (R6), the SC2 view model rows (R1, R2), the fixture
-/// states (R11) and the strings merge (R13). Tests that need one say so.
 @MainActor
 struct STG2TileTests {
     static let titles = TileMenuTitles(pin: "Pin", unpin: "Unpin", flipCamera: "Flip Camera", minimizeSelfView: "Minimize Self View",
                                        showSelfView: "Show Self View", showFullVideo: "Show Full Video", cropToFill: "Crop to Fill")
 
-    /// `nil` is the iPhone SE viewport, read here on the main actor rather than in a nonisolated default argument.
     private func presenter(_ inputs: StageInputs, viewport: StageViewport? = nil) -> StagePresenter {
         let stage = StagePresenter(shell: MeetingShellPresenter())
         stage.setViewport(viewport ?? StagePoliciesTests.iphoneSE)
@@ -47,18 +37,16 @@ struct STG2TileTests {
         slots.filter { $0.id.hasPrefix("p:") }.map { $0.userId }
     }
 
-    // MARK: Tile menu items (S20 3 f, g; RECONCILE R19)
-
     @Test func remoteTilesOfferPinAndTheFitItem() {
         #expect(TileMenuPolicy.stageItems(context()) == [.pin, .showFullVideo])
         #expect(TileMenuPolicy.stageItems(context(role: .spotlightMain, kind: .spotlight, pinned: true)) == [.unpin, .showFullVideo])
-        // SC4: the slot's fit already carries the per-session override, so the item offers the other one.
+
         #expect(TileMenuPolicy.stageItems(context(fit: .fit)) == [.pin, .cropToFill])
-        // A camera-off tile draws the avatar: no fit item.
+
         #expect(TileMenuPolicy.stageItems(context(cameraOff: true)) == [.pin])
         #expect(TileMenuPolicy.stageItems(context(role: .rail, kind: .presentation)) == [.pin, .showFullVideo])
         #expect(TileMenuPolicy.stageItems(context(role: .spotlightMain, kind: .oneOnOne)) == [.pin, .showFullVideo])
-        // The Flip item is only ever yours.
+
         #expect(!TileMenuPolicy.stageItems(context(canFlip: true)).contains(.flipCamera))
     }
 
@@ -66,23 +54,23 @@ struct STG2TileTests {
         let you = "you"
         let grid = context(slotId: "p:you", userId: you, local: true, canFlip: true)
         #expect(TileMenuPolicy.stageItems(grid) == [.pin, .flipCamera, .showFullVideo])
-        // Android keeps Flip in the top row (S20 6 d).
+
         #expect(TileMenuPolicy.stageItems(context(slotId: "p:you", userId: you, local: true, canFlip: true, offersFlip: false))
                 == [.pin, .showFullVideo])
-        // Floating in 1:1 (S20 3 f): Flip Camera, Minimize Self View, Show Full Video, and no Pin of yourself.
+
         let floating = context(slotId: "p:you", userId: you, role: .selfFloating, kind: .oneOnOne, local: true, canFlip: true)
         #expect(TileMenuPolicy.stageItems(floating) == [.flipCamera, .minimizeSelfView, .showFullVideo])
-        // The floating self view is never a pin target, whatever the kind.
+
         #expect(TileMenuPolicy.stageItems(context(slotId: "p:you", userId: you, role: .selfFloating, kind: .grid, local: true))
                 == [.minimizeSelfView, .showFullVideo])
         #expect(TileMenuPolicy.stageItems(context(slotId: "p:you", userId: you, role: .selfMinimized, kind: .oneOnOne, local: true,
                                                   canFlip: true)) == [.flipCamera, .showSelfView])
         #expect(TileMenuPolicy.stageItems(context(slotId: "p:you", userId: you, role: .selfMinimized, kind: .oneOnOne, local: true,
                                                   canFlip: true, offersFlip: false)) == [.showSelfView])
-        // Alone nobody pins.
+
         #expect(TileMenuPolicy.stageItems(context(slotId: "p:you", userId: you, role: .spotlightMain, kind: .solo, local: true,
                                                   canFlip: true)) == [.flipCamera, .showFullVideo])
-        // Camera off: the chrome snapshot reports no flip, and there is no fit item.
+
         #expect(TileMenuPolicy.stageItems(context(slotId: "p:you", userId: you, local: true, cameraOff: true)) == [.pin])
         #expect(TileMenuPolicy.stageItems(context(slotId: "p:you", userId: you, role: .spotlightMain, kind: .spotlight, local: true,
                                                   pinned: true, offersFlip: false)) == [.unpin, .showFullVideo])
@@ -111,22 +99,22 @@ struct STG2TileTests {
         try #require(sections.count >= 3)
         #expect(sections[0].items.map(\.id) == ["pin", "showFullVideo"])
         #expect(sections[0].items.map(\.title) == ["Pin", "Show Full Video"])
-        // S20 keeps Pin (R19): the people group 0 arrives without its own Pin.
+
         #expect(sections[2].items.map(\.id) == ["message"])
         #expect(ConclaveMenuPolicy.destructiveItemsAreLast(sections))
         for section in sections {
             #expect(ConclaveMenuPolicy.isIconConsistent(section), "\(section.id) mixes icons")
         }
-        // The stage group is complete and preserves action roles/enabled state.
+
         #expect(sections[0].items.map(\.concept) == ["pin", "fit_video"])
         #expect(sections[0].items.allSatisfy { $0.role == .normal && $0.isEnabled })
         #expect(TileMenuPolicy.itemCount(sections) == 5)
-        // No items: no sections at all.
+
         #expect(TileMenuPolicy.sections(context(slotId: "share:r1", role: .share), titles: Self.titles, people: []).isEmpty)
     }
 
     @Test func iosContextMenuHidesUnavailableItemsAndActionsSkipThem() throws {
-        // S20 3 f, l6: in recovery the iOS context menu hides socket actions; Android keeps them disabled with the reason.
+
         let reason = "Unavailable while reconnecting"
         let people = [
             MenuSectionModel(id: "ppl.1", items: [item("mute", "Mute", concept: "mute_person", enabled: false, reason: reason)]),
@@ -142,8 +130,7 @@ struct STG2TileTests {
     }
 
     @Test func dispatcherRoutesPinSelfViewAndFlipThroughCommandsAndWritesTheFit() throws {
-        // The grid-6 roster with your camera on: the flip item dispatches through `StageCameraFlip`, which only flips
-        // while the stage chrome offers it (camera on, no flip in flight; HD B5-T8 R4, SC8). The refusals are STG-3's.
+
         let stage = presenter(StageFixtureScript.base(count: 6, localCameraOn: true))
         var commands: [StageCommand] = []
         stage.onCommand = { command in commands.append(command) }
@@ -160,7 +147,7 @@ struct STG2TileTests {
         #expect(commands.last == StageCommand(kind: .setSelfViewMode, userId: "", value: "minimized"))
         #expect(TileMenuDispatcher.perform("showSelfView", context: menu, stage: stage))
         #expect(commands.last == StageCommand(kind: .setSelfViewMode, userId: "", value: "floating"))
-        // SC4: the fit items write the per-session override; it survives a kind change and clears on reset.
+
         let count = commands.count
         #expect(TileMenuDispatcher.perform("showFullVideo", context: menu, stage: stage))
         #expect(stage.layout.slot(id: "p:r1")?.fit == .fit)
@@ -169,12 +156,10 @@ struct STG2TileTests {
         #expect(TileMenuDispatcher.perform("cropToFill", context: menu, stage: stage))
         #expect(stage.layout.slot(id: "p:r1")?.fit == .fill)
         #expect(commands.count == count)
-        // People items (PPL-2) are not the stage's.
+
         #expect(!TileMenuDispatcher.perform("mute", context: menu, stage: stage))
         #expect(commands.count == count)
     }
-
-    // MARK: Featured speaker and the spotlight main (S20 4 c)
 
     private func videoRoster() -> [StageParticipantInput] {
         [
@@ -194,7 +179,7 @@ struct STG2TileTests {
         #expect(TileFeaturePolicy.spotlightCandidate(speakerUserId: "r3", featuredUserId: "r1", pinnedUserId: "r2", participants: roster) == "")
         #expect(TileFeaturePolicy.spotlightCandidate(speakerUserId: "", featuredUserId: "r1", pinnedUserId: "", participants: roster) == "")
         #expect(TileFeaturePolicy.spotlightCandidate(speakerUserId: "zz", featuredUserId: "r1", pinnedUserId: "", participants: roster) == "")
-        // An audio-only meeting keeps following the speaker.
+
         let audioOnly = StageFixtureScript.roster(count: 4, remoteCamerasOn: false)
         #expect(!TileFeaturePolicy.anyRemoteVideo(audioOnly))
         #expect(TileFeaturePolicy.spotlightCandidate(speakerUserId: "r2", featuredUserId: "r1", pinnedUserId: "", participants: audioOnly) == "r2")
@@ -208,23 +193,23 @@ struct STG2TileTests {
         }
         #expect(main(pin: "r2", featured: "r3") == "r2")
         #expect(main(pin: "you", featured: "r3") == "you")
-        // A stale pin falls through.
+
         #expect(main(pin: "gone", featured: "r3") == "r3")
         #expect(main(featured: "r3") == "r3")
-        // The featured speaker has the camera off while others have video: the first remote with video.
+
         #expect(main(featured: "r2", order: ["r2", "r3", "r1"]) == "r3")
         #expect(main(featured: "") == "r1")
         #expect(main(featured: "you") == "r1")
-        // Nobody has video: the featured speaker, then the first remote.
+
         let audioOnly = StageFixtureScript.roster(count: 4, remoteCamerasOn: false)
         #expect(main(featured: "r2", roster: audioOnly) == "r2")
         #expect(main(featured: "", roster: audioOnly) == "r1")
-        // You are main only when nobody else is on stage.
+
         #expect(main(featured: "", order: []) == "you")
     }
 
     @Test func aBurstOfSpeakersNeverSwapsTheMainAndAHeldSpeakerSwapsOnce() {
-        // S20 4 h, k (SC1 b): featured changes wait 1.2 s and happen at most every 8 s, with the injected clock.
+
         var clock = 100_000.0
         let stage = StagePresenter(shell: MeetingShellPresenter())
         stage.now = { clock }
@@ -248,7 +233,7 @@ struct STG2TileTests {
     }
 
     @Test func aCameraOffSpeakerNeverTakesTheMainWhileOthersHaveVideo() {
-        // Needs R4b and R5a.
+
         var clock = 200_000.0
         let stage = StagePresenter(shell: MeetingShellPresenter())
         stage.now = { clock }
@@ -264,15 +249,13 @@ struct STG2TileTests {
         stage.firePendingPromotion()
         #expect(stage.layout.revision == revision)
         #expect(stage.layout.slots.first?.userId == "r1")
-        // Sidebar with 14 (Auto): you never become main when you speak.
+
         let sidebar = presenter(StageFixtureScript.base(count: 14), viewport: StagePoliciesTests.iphone17e)
         #expect(sidebar.layout.kind == .sidebar)
         #expect(sidebar.layout.slots.first?.userId != StageFixtureScript.localUserId)
         sidebar.speakerChanged(StageFixtureScript.localUserId, atMillis: 1_000)
         #expect(sidebar.pendingPromotionCandidate.isEmpty)
     }
-
-    // MARK: Pinning (S20 4 a, f, g, l)
 
     @Test func pinAnnouncementsSpeakForPinsAndLeavesOnly() {
         let base = StageFixtureScript.base(count: 6)
@@ -281,10 +264,10 @@ struct STG2TileTests {
                 == TilePinAnnouncement(kind: TileFeaturePolicy.pinnedKind, name: "Ben"))
         #expect(TileFeaturePolicy.pinAnnouncement(previous: pinnedBen, next: StageFixtureScript.copy(base, pinnedUserId: "r3"))
                 == TilePinAnnouncement(kind: TileFeaturePolicy.pinnedKind, name: "Cai"))
-        // Unpinning by choice has no copy (S20 4 g) and stays silent.
+
         #expect(TileFeaturePolicy.pinAnnouncement(previous: pinnedBen, next: base) == TilePinAnnouncement.none)
         #expect(TileFeaturePolicy.pinAnnouncement(previous: pinnedBen, next: pinnedBen) == TilePinAnnouncement.none)
-        // The pinned person leaves, whether or not the core already cleared the pin; the later clear is silent.
+
         let withoutBen = StageFixtureScript.roster(count: 6).filter { $0.userId != "r2" }
         let leftPinned = StageFixtureScript.copy(pinnedBen, participants: withoutBen)
         let cleared = TilePinAnnouncement(kind: TileFeaturePolicy.pinClearedKind, name: "Ben")
@@ -292,7 +275,7 @@ struct STG2TileTests {
         #expect(TileFeaturePolicy.pinAnnouncement(previous: pinnedBen, next: StageFixtureScript.copy(leftPinned, pinnedUserId: "")) == cleared)
         #expect(TileFeaturePolicy.pinAnnouncement(previous: leftPinned, next: StageFixtureScript.copy(leftPinned, pinnedUserId: ""))
                 == TilePinAnnouncement.none)
-        // The first snapshot and a new call session never announce; a pin on nobody present never announces.
+
         #expect(TileFeaturePolicy.pinAnnouncement(previous: StageInputs.make(), next: pinnedBen) == TilePinAnnouncement.none)
         let nextSession = StageInputs.make(callSession: 2, isInCall: true, localUserId: "you",
                                            participants: StageFixtureScript.roster(count: 6), pinnedUserId: "r3")
@@ -302,9 +285,9 @@ struct STG2TileTests {
     }
 
     @Test func thePresenterAnnouncesAPinAndThePinnedPersonLeavingOnce() {
-        // Needs R4a.
+
         let stage = presenter(StageFixtureScript.copy(StageFixtureScript.base(count: 6), pinnedUserId: "r3"))
-        // The first snapshot keeps the entry announcement alone.
+
         #expect(stage.announcementLog == ["joined:" + StageFixtureScript.roomLabel])
         stage.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 6), pinnedUserId: "r2"))
         #expect(stage.announcementLog.last == "pinned:Ben")
@@ -312,7 +295,7 @@ struct STG2TileTests {
         let withoutBen = StageFixtureScript.roster(count: 6).filter { $0.userId != "r2" }
         stage.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 6), participants: withoutBen, pinnedUserId: "r2"))
         #expect(stage.announcementLog.last == "pinCleared:Ben")
-        // The pin left the main slot: Auto resumes (grid), and the core's later clear says nothing more.
+
         #expect(stage.layout.kind == .grid)
         let count = stage.announcementLog.count
         stage.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 6), participants: withoutBen, pinnedUserId: ""))
@@ -320,7 +303,7 @@ struct STG2TileTests {
     }
 
     @Test func spotlightPinned9ShowsThreeTilesPlusFiveWithYouLast() throws {
-        // S20 4 l at 375 pt, 390 pt and 360 dp. Needs R6 (the 80 x 107 strip).
+
         let inputs = StageFixtureScript.copy(StageFixtureScript.base(count: 9), pinnedUserId: StageFixtureScript.remoteId(0))
         for viewport in [StagePoliciesTests.iphoneSE, StagePoliciesTests.iphone17e, StagePoliciesTests.android360] {
             let stage = presenter(inputs, viewport: viewport)
@@ -332,14 +315,14 @@ struct STG2TileTests {
             #expect(personIds(Array(rail)) == ["r2", "r3", StageFixtureScript.localUserId], "\(viewport.width)")
             #expect(rail.last?.id == StageSlot.overflowId)
             #expect(stage.layout.overflowCount == 5)
-            // Every rail tile is a 3:4 strip tile above the bar slot.
+
             let frames = stage.currentFrames().filter { frame in rail.contains { $0.id == frame.slotId } }
             #expect(frames.allSatisfy { abs($0.width - 80) < 0.01 && abs($0.height - 107) < 0.01 })
         }
     }
 
     @Test func aPinDuringAShareKeepsThePinMainAndTheShareFirstInTheRail() throws {
-        // S20 4 a, l (D17; web chooseStageMode): Unpin hands the main slot to the share, slot ids unchanged.
+
         let pinned = StageFixtureScript.copy(StageFixtureScript.inputs(for: .presentation), pinnedUserId: StageFixtureScript.remoteId(1))
         let stage = presenter(pinned)
         #expect(stage.layout.kind == .spotlight)
@@ -350,12 +333,12 @@ struct STG2TileTests {
         stage.apply(StageFixtureScript.copy(pinned, pinnedUserId: ""))
         #expect(stage.layout.kind == .presentation)
         #expect(stage.layout.slots.first?.id == StageSlot.shareId("r1") && stage.layout.slots.first?.role == .share)
-        // Needs R6: four strip slots at 375 pt keep r2 visible in the rail.
+
         #expect(stage.layout.slot(id: "p:r2")?.role == .rail)
     }
 
     @Test func aPinnedSelfNeverGetsASecondSlot() {
-        // Needs R5b: pinning yourself with a floating self view used to plan `p:you` twice.
+
         let inputs = StageFixtureScript.copy(StageFixtureScript.base(count: 3, localCameraOn: true), selfViewMode: "floating",
                                              pinnedUserId: StageFixtureScript.localUserId)
         let stage = presenter(inputs)
@@ -363,8 +346,6 @@ struct STG2TileTests {
         #expect(Set(ids).count == ids.count, "duplicate slot ids \(ids)")
         #expect(stage.layout.slots.first?.id == "p:you" && stage.layout.slots.first?.role == .spotlightMain)
     }
-
-    // MARK: Rail geometry (S20 4 c, d)
 
     @Test func theRailFollowsTheS20Geometry() {
         for viewport in [StagePoliciesTests.iphoneSE, StagePoliciesTests.iphone17e, StagePoliciesTests.android360] {
@@ -380,15 +361,13 @@ struct STG2TileTests {
         #expect(abs(SpotlightRailPolicy.tileHeight(StagePoliciesTests.ipadPortrait) - 112.5) < 0.001)
         #expect(SpotlightRailPolicy.capacity(viewport: StagePoliciesTests.ipadPortrait) == 8)
         #expect(SpotlightRailPolicy.capacity(viewport: StagePoliciesTests.ipadLandscape) == 5)
-        // A 673 dp unfolded foldable is medium width: the 160 column.
+
         #expect(SpotlightRailPolicy.tileWidth(StagePoliciesTests.foldUnfolded) == 160)
         #expect(SpotlightRailPolicy.capacity(viewport: StagePoliciesTests.foldUnfolded) == 6)
         #expect(SpotlightRailPolicy.capacity(viewport: StageViewport.zero) == 0)
-        // Needs R6: the layout policy reads the same capacity.
+
         #expect(StageLayoutPolicy.railCapacity(viewport: StagePoliciesTests.iphoneSE) == 4)
     }
-
-    // MARK: Tile overlays (S20 3 c, d, f; 4 c, d)
 
     @Test func overlayDecisionsAndTheUnpinTarget() {
         #expect(TileFeaturePolicy.showsFlipControl(isLocal: true, isShare: false, role: .grid, canFlipCamera: true, density: .normal))
@@ -403,7 +382,7 @@ struct STG2TileTests {
         #expect(TileFeaturePolicy.showsUnpinTarget(role: .spotlightMain, isPinned: true, isShare: false))
         #expect(!TileFeaturePolicy.showsUnpinTarget(role: .rail, isPinned: true, isShare: false))
         #expect(!TileFeaturePolicy.showsUnpinTarget(role: .spotlightMain, isPinned: false, isShare: false))
-        // Centered on the pinned badge (the leading-most top trailing badge), clamped at the tile edge.
+
         #expect(TileFeaturePolicy.unpinTargetTrailingInset(model: model(pinned: true), density: .spotlight, targetSize: 44) == 0)
         #expect(TileFeaturePolicy.unpinTargetTrailingInset(model: model(pinned: true, presenting: true, weak: true), density: .spotlight,
                                                            targetSize: 44) == 54)
@@ -431,7 +410,7 @@ struct STG2TileTests {
                                           videoHeight: 720) == .fill)
         #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.regular, slotWidth: 1180, slotHeight: 664, videoWidth: 720,
                                           videoHeight: 1280) == .fit)
-        // Within 30% keeps fill; past it fits.
+
         #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.expanded, slotWidth: 125, slotHeight: 100, videoWidth: 100,
                                           videoHeight: 100) == .fill)
         #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.expanded, slotWidth: 140, slotHeight: 100, videoWidth: 100,
@@ -441,10 +420,8 @@ struct STG2TileTests {
         #expect(TileFeaturePolicy.toggledFit(.fill) == .fit && TileFeaturePolicy.toggledFit(.fit) == .fill)
     }
 
-    // MARK: Fixture states (R11)
-
     @Test func stg2FixtureStatesBuildTheirCells() throws {
-        // Needs R11a.
+
         let oneOnOne = presenter(StageFixtureScript.inputs(for: try #require(StageFixtureScript.state(named: "oneOnOne-cameraOff"))))
         #expect(oneOnOne.layout.kind == .oneOnOne)
         #expect(oneOnOne.tileChrome.entry(for: "r1").model.isCameraOff)
@@ -461,14 +438,12 @@ struct STG2TileTests {
         #expect(sharePinned.layout.kind == .spotlight && sharePinned.layout.presenterUserId == "r1")
     }
 
-    // MARK: Source scans (iOS views are not compiled by the macOS host)
-
     @Test func iosTileMenuIsAContextMenuWithAChromeOnlyPreview() throws {
         let menu = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/TileMenu+iOS.swift"))
         #expect(menu.contains("content.contextMenu {") && menu.contains("} preview: { TileMenuPreview(model: model, speaking: speaking) }"))
         #expect(menu.contains("ConclaveMenuContent(sections: menu.contextSections"))
         #expect(menu.contains("var contextSections: [MenuSectionModel] { TileMenuPolicy.contextMenuSections(sections) }"))
-        // The preview never holds a renderer (S20 3 l3): chrome over the flat tile fill only.
+
         #expect(menu.contains("HostingTheme.token(DesignTokens.iosInCallTile)"))
         for renderer in ["RendererSlotView", "StageLiveVideo", "RendererProbe(", "RTCMTLVideoView"] {
             #expect(!menu.contains(renderer), "the tile menu preview creates \(renderer)")
@@ -482,9 +457,9 @@ struct STG2TileTests {
         #expect(slot.contains("@Environment(StageChromeVisibility.self) private var chrome: StageChromeVisibility?"))
         #expect(slot.contains(".accessibilityLabel(ConclaveStrings.format(\"Unpin %@\", model.displayName))"))
         #expect(slot.contains("ConclaveStrings.text(\"Camera off\")") && slot.contains("ConclaveStrings.text(\"Back Online\")"))
-        // Overlays never take taps from the stage or add accessibility elements beyond the two buttons.
+
         #expect(slot.components(separatedBy: ".allowsHitTesting(false)").count - 1 >= 2)
-        // The floating flip control and your tile's flip control both fade with chrome.
+
         #expect(slot.components(separatedBy: ".modifier(StageChromeFade())").count - 1 == 2)
     }
 
@@ -505,7 +480,7 @@ struct STG2TileTests {
         #expect(slot.contains("actions = actions,") && slot.contains("accessibilityLongPressLabel = if (menu.hasItems) actionsLabel else null,"))
         #expect(slot.contains("clearAndSetSemantics { contentDescription = label; this.role = Role.Button }"))
         #expect(slot.contains("liveRegion = LiveRegionMode.Polite"))
-        // STG-1 pins stay.
+
         #expect(slot.contains("graphicsLayer { alpha = if (minimized) 0f else 1f }"))
     }
 
@@ -523,7 +498,7 @@ struct STG2TileTests {
             #expect(!text.contains("HapticManager") && !text.contains("@Stable") && !text.contains("ScrollView"), "\(file)")
             #expect(stageMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
         }
-        // Needs R13: every catalog key and resource name the STG-2 views use exists.
+
         let catalog = try stageSource("Sources/Conclave/Resources/Localizable.xcstrings")
         let catalogKeys = try #require(try JSONSerialization.jsonObject(with: Data(catalog.utf8)) as? [String: Any])["strings"] as? [String: Any]
         for file in ["Sources/Conclave/Features/Meeting/Stage/TileMenu+iOS.swift", "Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift"] {
@@ -545,7 +520,7 @@ struct STG2TileTests {
 }
 
 #if os(macOS)
-/// S20 SC2 through the view model (macOS host; no network). Needs HD/requests/B4-T5.md R1 and R2.
+
 @MainActor
 @Suite(.serialized)
 struct STG2PinViewModelTests {
@@ -567,7 +542,6 @@ struct STG2PinViewModelTests {
         return viewModel
     }
 
-    /// `MeetingViewPreferences.save` writes the five layout keys; the test restores them.
     private func withSavedPreferences(_ body: () -> Void) {
         let defaults = UserDefaults.standard
         var saved: [String: Any] = [:]
@@ -587,7 +561,7 @@ struct STG2PinViewModelTests {
             viewModel.togglePin("remote@example.com#remote-session")
             #expect(viewModel.state.pinnedUserId == "remote@example.com#remote-session")
             #expect(viewModel.state.viewMode == .auto)
-            // The pin still shows spotlight on the legacy root (R2) and the native kind reads it directly.
+
             #expect(viewModel.state.resolvedViewMode == .spotlight)
             viewModel.setViewMaxTiles(9)
             #expect(UserDefaults.standard.string(forKey: Self.viewModeKey) == "auto")
@@ -605,7 +579,7 @@ struct STG2PinViewModelTests {
             viewModel.state.viewMode = .auto
             viewModel.state.selfViewMode = .floating
             viewModel.togglePin("remote@example.com#remote-session")
-            // A renderable pin wins in every Layout mode on the legacy root (R2).
+
             viewModel.state.viewMode = .sidebar
             #expect(viewModel.state.resolvedViewMode == .spotlight)
             viewModel.setViewMode(.tiled)

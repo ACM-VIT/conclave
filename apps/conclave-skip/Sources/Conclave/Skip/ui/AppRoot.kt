@@ -3,7 +3,6 @@ package conclave.module
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,13 +69,8 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import java.util.UUID
 
-/**
- * Whether an in-call strip reaches the bottom edge behind the navigation bar. In this fixture the stage strip
- * sits above a system-surface navigation inset (A11), so the navigation bar keeps the system scheme.
- */
 private const val NATIVE_HOSTING_STRIP_REACHES_BOTTOM_EDGE = false
 
-/** Called only by MainActivity's explicit debug launch route, outside SkipUI PresentationRoot. */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Unit) {
@@ -84,7 +78,7 @@ fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Un
     val iconScope = rememberCoroutineScope()
     val icons = remember(iconContext, iconScope) { NativeIconRasterController(iconContext, iconScope) }
     val presenter = remember { NativeHostingPresenter() }
-    // Intentionally inert: the real mapper runs, but this sink never invokes hardware.
+
     val delivery = remember(presenter) { NativeFeedbackDelivery(presenter, sink = {}) }
     val lifetime = remember(presenter) { NativePanelOverlayLifetime(presenter.panels) }
     val stageLifetime = remember { NativeHostingStageLifetime() }
@@ -93,18 +87,17 @@ fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Un
     var mount by remember { mutableIntStateOf(0) }
     val exporter = remember(iconContext) { NativeSemanticsExporter(iconContext) }
     val panelState = presenter.panels.snapshot
-    val systemDark = isSystemInDarkTheme()
+    val systemDark = conclaveUsesDarkAppearance()
     NativeSemanticsExportReceiver(exporter)
     NativeIconRasterBinding(icons, fixtureEligible && panelState.current == null)
     key(mount) { NativeFeedbackConsumer(presenter, delivery, mount) }
-    // Closes the preview only while no panel is current; the panel host's back handler, registered later,
-    // closes an open panel first (PS 8.5).
+
     BackHandler(enabled = panelState.current == null) {
         icons.cancel("preview Back")
         onClose()
     }
     CompositionLocalProvider(LocalRendererLedger provides presenter.renderers) {
-        // Debug-only route: uiautomator dumps expose test tags as resource IDs (PS 8.9).
+
         Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
             NativePanelHost(
                 panels = presenter.panels,
@@ -112,7 +105,7 @@ fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Un
                 focus = focus,
                 readout = readout,
                 systemBars = { inputs ->
-                    // The one system-bar owner here: a system-themed root plus the host's overlay inputs (PS 8.7).
+
                     ConclaveSystemBars(SystemBarPolicy.resolve(rootDark = systemDark, overlayVisible = inputs.overlayVisible,
                         overlayInCall = inputs.overlayInCall, bottomStripInCall = NATIVE_HOSTING_STRIP_REACHES_BOTTOM_EDGE,
                         systemDark = systemDark))
@@ -132,13 +125,8 @@ fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Un
     }
 }
 
-/** One monotonic clock for the diagnostic open timer. */
 private fun hostingUptime(): Double = SystemClock.uptimeMillis() / 1000.0
 
-/**
- * The retained call root of the fixture: the controls list, then the stage strip as a fixed sibling below it,
- * never a lazy-list item, so no scroll can dispose and recreate the stage (PS 8.3, the Android form of L1).
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NativeHostingStage(
@@ -156,7 +144,7 @@ private fun NativeHostingStage(
         Column(Modifier.fillMaxSize()) {
             Scaffold(
                 modifier = Modifier.weight(1f),
-                // The bottom inset belongs to the strips below, not to the controls list.
+
                 contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
                 topBar = {
                     TopAppBar(
@@ -225,7 +213,7 @@ private fun NativeHostingStage(
                             TextButton(onClick = { presenter.resetFixtureSession() }, modifier = Modifier.testTag("fixture.resetSession")) { Text("Reset session") }
                         }
                     }
-                    // WP2-S2b Debug session readout (S1C Q8, OWNER-DEFAULTS Q16).
+
                     item(key = "session") { SessionReadoutSection(MeetingViewModel.shared.shell, FeedbackDeliveryRecords.shared) }
                     item(key = "icons") { NativeHostingIconSection(icons) }
                     item(key = "components.toggle") {
@@ -275,23 +263,17 @@ private fun NativeHostingStage(
                 }
             }
             NativeHostingStageStrip(rows, lifetime)
-            // A system-surface strip behind the navigation bar, so the bar keeps the system scheme while the
-            // stage strip above it stays dark (A11).
+
             Spacer(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
                 .windowInsetsBottomHeight(WindowInsets.navigationBars))
         }
     }
 }
 
-/**
- * The inert stage strip: the original stage line plus one tile per row, each over a renderer probe, in the
- * in-call theme. Tiles take only their row, so a row mutation recomposes its own tile and nothing else.
- */
 @Composable
 private fun NativeHostingStageStrip(rows: NativeHostingRows, lifetime: NativeHostingStageLifetime) {
     val instance = remember { lifetime.create() }
-    // The system surface fills the horizontal safe-drawing insets, so in landscape the dark stage never reaches
-    // under a side navigation bar, whose icons follow the system scheme (A11).
+
     Box(
         Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
@@ -318,7 +300,7 @@ private fun NativeHostingStageStrip(rows: NativeHostingRows, lifetime: NativeHos
 @Composable
 private fun NativeHostingStageTile(row: NativeHostingPerson, modifier: Modifier = Modifier) {
     val ledger = LocalRendererLedger.current
-    // Diagnostic composition counter (P1 item 5); never part of identity.
+
     SideEffect { ledger?.composed(key = row.id) }
     Box(
         modifier.height(96.dp)
@@ -340,11 +322,6 @@ private fun NativeHostingStageTile(row: NativeHostingPerson, modifier: Modifier 
     }
 }
 
-/**
- * Readouts live in the controls list, never in the stage. `panel.style` follows the host; the renderer ledger,
- * tile compositions (P1 item 5), mount counters and open timer are not observable, so they are read after the
- * first frame and on Refresh.
- */
 @Composable
 private fun NativeHostingReadouts(presenter: NativeHostingPresenter, readout: PanelHostReadout) {
     var refresh by remember { mutableIntStateOf(0) }
@@ -368,11 +345,6 @@ private fun NativeHostingReadouts(presenter: NativeHostingPresenter, readout: Pa
     }
 }
 
-/**
- * Debug readouts inside the panel (review m1): the full overlay covers the root readouts and hides them from
- * accessibility while it is open. The style follows the host live; the renderer ledger and tile compositions are
- * read after the panel's first frame and on Refresh. Machine-read, so the values are not localized.
- */
 @Composable
 private fun NativeHostingPanelReadouts(presenter: NativeHostingPresenter, delivery: NativeFeedbackDelivery, readout: PanelHostReadout) {
     var refresh by remember { mutableIntStateOf(0) }
@@ -417,10 +389,6 @@ private fun NativeHostingPersonRow(row: NativeHostingPerson, showsDetails: Boole
     }
 }
 
-/**
- * Rapid Replacement goes through the timed path, so the panel it ends on reports its open latency (review
- * ISSUE 6); the presenter drops the start of the presentation it supersedes.
- */
 private fun rapidPanels(presenter: NativeHostingPresenter) {
     val now = hostingUptime()
     presenter.presentPanel(MeetingPanel.participants, from = PanelInvoker.call, at = now)
@@ -428,7 +396,6 @@ private fun rapidPanels(presenter: NativeHostingPresenter) {
     presenter.presentPanel(MeetingPanel.participants, from = PanelInvoker.more, at = now)
 }
 
-/** Layout panel options with their string resources, written out so every resource name stays greppable. */
 private val NativeHostingLayoutOptions = listOf(
     "grid" to "native_panel_layout_grid",
     "spotlight" to "native_panel_layout_spotlight",
@@ -459,7 +426,7 @@ private fun NativeHostingPanel(
         title = title,
         variant = variant,
         appearance = if (decision.inCallAppearance) PanelAppearance.inCall else PanelAppearance.system,
-        // Fixture-only exercise of the composer layout; production callers pass decision.hasBottomComposer.
+
         hasComposer = settings,
         miniTile = if (decision.showsMiniTile && rows.size > 0) {
             CallMiniTileModel(displayName = rows[0].name, cameraOff = true, isLocal = false, speaking = false)
@@ -507,7 +474,6 @@ private fun NativeHostingPanel(
     }
 }
 
-/** One native single choice, local to the panel; it changes nothing outside it. */
 @Composable
 private fun NativeHostingLayoutChoices() {
     var choice by remember { mutableStateOf(NativeHostingLayoutOptions[0].first) }
@@ -527,16 +493,10 @@ private fun NativeHostingLayoutChoices() {
     }
 }
 
-/**
- * The stage lifetime probe (S10 R12): counts stage creations so host tests and a stand-in CallRoot can prove a
- * renderer host survives panel, theme and route changes (S10 10 l4). Internal, not private, so other Debug roots and
- * the Robolectric suite reuse it; plain storage, never observed, so counting never recomposes anything.
- */
 internal class NativeHostingStageLifetime {
     var creations = 0
         private set
 
-    /** Records one stage creation and returns a short instance identity for the readout. */
     fun create(): String {
         creations++
         return UUID.randomUUID().toString().take(8)

@@ -2,13 +2,6 @@
 import AVFoundation
 import SwiftUI
 
-// S60 2 c `.microphone` (SET-2) on iOS: the microphone choice, the level meter and, where WP3 publishes
-// `canRecordMicTest` (false on iOS until the C6-6 spike, Q8), Record and Replay and Test Gain; Mic Mode opens the
-// system module when the route owner reports it (D22). The page body reads `settings.audio` (phase changes only) and
-// the route snapshot; the 10 Hz level is read only by `SettingsMicLevelRow`. The test runs for the page's lifetime
-// (`.task`), never from appearance callbacks, and stops when the page leaves (Back, panel close). The Android page has
-// no input picker and no Mic Mode (the communication device carries the microphone, 1 d).
-
 struct SettingsMicrophonePage: View {
     let settings: SettingsPresenter
 
@@ -17,8 +10,7 @@ struct SettingsMicrophonePage: View {
         let route = settings.routeOwner.route
         Form {
             if route.inputs.count > 1 {
-                // iOS 26's AVInputPickerInteraction is not adopted yet; the labelled inline picker is the spec's
-                // fallback for every version (2 c), shown only with more than one input.
+
                 Section {
                     Picker(ConclaveStrings.text("Microphone"),
                            selection: Binding(get: { route.currentInputId }, set: { settings.requestInput(id: $0) })) {
@@ -82,8 +74,6 @@ struct SettingsMicrophonePage: View {
     }
 }
 
-/// Record and Replay (C6-6, only while `canRecordMicTest`): "Recording" while the 5 s capture runs, "Stop Playback"
-/// while it replays through the call output.
 private struct SettingsRecordReplayRow: View {
     let settings: SettingsPresenter
     let phase: MicTestPhase

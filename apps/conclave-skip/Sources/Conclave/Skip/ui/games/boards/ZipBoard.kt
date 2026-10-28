@@ -89,30 +89,10 @@ import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-/*
- * S60 12 B4 (ACT-6) on Android: Zip inside the game shell's scrolling column (GameShell.kt routes GameSceneKind.zip to
- * ZipSceneBody and pins ZipHostBar in its bottom bar, HD request B8-T4 R6). The board is one Canvas of N x N flat cells in
- * the two board tokens (ext.gameBoardLight unvisited, ext.gameBoardDark visited and draft), the confirmed path as a 6 dp
- * coral (primaryContainer) line through cell centers and a pending extension as the same line dashed
- * (PathEffect.dashPathEffect). A drag (detectDragGestures, keyed on the grid size and the round, reading the scene through
- * rememberUpdatedState) extends a view-local draft through adjacent cells only, moving back onto the previous cell trims one
- * step, a tap on an adjacent cell extends too (detectTapGestures), and the finger lift sends the full path once
- * (`move {cells}`). Arrow keys and the D-pad step the same draft and Enter sends it (onPreviewKeyEvent). A semantics overlay
- * puts one zero-draw node per cell at the drawn frame (clearAndSetSemantics, like the chess board); the step chooser, shown
- * while TalkBack runs and on demand, lists the eligible next cells as 48 dp buttons. The board never mirrors (D18). The draft
- * is read only in the Canvas draw phase, so a drag redraws without recomposing; the timer and the hint cooldown are their
- * own leaves (S60 12 k).
- */
-
-/** Above this font scale the checkpoint numbers stop growing inside the fixed cells (the iOS board caps at xxLarge). */
 private const val ZipMaxFontScale = 1.3f
 
-/** A fresh empty path (never a shared instance, so nothing can mutate it in place). */
 private val ZipNoPath: skip.lib.Array<Int> get() = skip.lib.Array()
 
-// MARK: Scene
-
-/** The Zip body for every phase after the lobby: playing (player or watching) and a round's or the game's results. */
 @Composable
 internal fun ZipSceneBody(games: GameStagePresenter) {
     val scene = games.scene.zip ?: return
@@ -131,7 +111,6 @@ private fun ZipSceneView(scene: ZipScene, games: GameStagePresenter, isFinished:
     }
 }
 
-/** "Draw one path, fill every cell", "Round 1 of 3 · 12 of 34 cells" and the timer (S60 12 b, g); no accent bar. */
 @Composable
 private fun ZipHeader(scene: ZipScene, games: GameStagePresenter, isFinished: Boolean) {
     val scheme = MaterialTheme.colorScheme
@@ -151,20 +130,12 @@ private fun ZipHeader(scene: ZipScene, games: GameStagePresenter, isFinished: Bo
     }
 }
 
-// MARK: Timer
-
-/** Reads only `countdown`, so the per-second leaf never recomposes the scene. */
 @Composable
 private fun ZipTimerSlot(games: GameStagePresenter) {
     val countdown = games.countdown ?: return
     ZipTimerChip(countdown)
 }
 
-/**
- * "Remaining 2:41" with tabular digits, recomputed once per second only while the lifecycle is at least STARTED, from the
- * server deadline plus the push's clock offset. At 10 s or less it turns ext.warning; TalkBack reads one node ("Remaining
- * 2 minutes, 41 seconds") and hears a polite update at 60 s and 10 s only.
- */
 @Composable
 private fun ZipTimerChip(model: CountdownModel) {
     var nowMillis by remember(model) { mutableDoubleStateOf(System.currentTimeMillis().toDouble()) }
@@ -199,7 +170,7 @@ private fun ZipTimerChip(model: CountdownModel) {
             Text(shown, style = rememberTabular(MaterialTheme.typography.labelLarge), color = if (warning) ext.warning else scheme.onSurface,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
         }
-        // One persistent polite live region whose text changes only at 60 s and 10 s.
+
         Box(Modifier.size(1.dp).semantics {
             liveRegion = LiveRegionMode.Polite
             contentDescription = announcement
@@ -207,17 +178,10 @@ private fun ZipTimerChip(model: CountdownModel) {
     }
 }
 
-// MARK: Phases
-
-/**
- * Playing (S60 12 d, f): your board, the rejected line, your outcome, the controls and the step chooser for a player; a
- * person watching sees the puzzle and the public standings only. The chooser follows TalkBack until "Choose next cell"
- * decides for this round (the choice survives rotation). The draft state is per round.
- */
 @Composable
 private fun ZipPlayingView(scene: ZipScene, games: GameStagePresenter) {
     val access = rememberSystemAccessibility()
-    // 0 follows TalkBack, 1 shown, 2 hidden.
+
     var chooserMode by rememberSaveable(scene.round) { mutableIntStateOf(0) }
     val showsChooser = if (chooserMode == 0) access.touchExploration else chooserMode == 1
     val draft = remember(scene.round) { ZipDraftState() }
@@ -242,11 +206,6 @@ private fun ZipPlayingView(scene: ZipScene, games: GameStagePresenter) {
     }
 }
 
-/**
- * Results (S60 12 f): who solved it first, your outcome, the solution drawn on a read-only board, the scoreboard at the
- * final results of a multi-round game and the standings; participants wait for the host. Next round and Play again are
- * the pinned bars.
- */
 @Composable
 private fun ZipResultsView(scene: ZipScene, games: GameStagePresenter, isFinished: Boolean) {
     val isFinal = isFinished || scene.isFinalRound
@@ -263,7 +222,6 @@ private fun ZipResultsView(scene: ZipScene, games: GameStagePresenter, isFinishe
     }
 }
 
-/** "Solved in 0:15" or "Time’s up", announced once (S60 12 f, i); TalkBack reads the spoken duration. */
 @Composable
 private fun ZipOutcomeLine(scene: ZipScene, games: GameStagePresenter) {
     val name = zipOutcomeResource(scene.myOutcome) ?: return
@@ -273,10 +231,6 @@ private fun ZipOutcomeLine(scene: ZipScene, games: GameStagePresenter) {
     PromptAnnouncement(games, scene.outcomeKey, spoken)
 }
 
-/**
- * S60 12 f: the server refused a path ("That path isn’t allowed. Try again."); the confirmed path is already back on the
- * board and the shell's notice carries the server's own reason. Time and phase refusals are not path rules.
- */
 @Composable
 private fun ZipRejectedLine(games: GameStagePresenter) {
     val state = games.interaction
@@ -286,7 +240,6 @@ private fun ZipRejectedLine(games: GameStagePresenter) {
     }
 }
 
-/** The pinned host bar (S60 12 f): Next round for a seated host at a round's results, pending until that emit's ack. */
 @Composable
 internal fun ZipHostBar(games: GameStagePresenter) {
     val scene = games.scene.zip ?: return
@@ -303,15 +256,6 @@ internal fun ZipHostBar(games: GameStagePresenter) {
     }
 }
 
-// MARK: Draft (view-local)
-
-/**
- * The board's view-local state (S60 12 j, k): the draft while a finger or an arrow-key run is active, and the path a move
- * just sent, drawn dashed beyond the confirmed path until its ack or the push. Only the Canvas draw phase reads the
- * observable fields, so a drag redraws the board and recomposes nothing; every intent goes through
- * `GameStagePresenter.send`, one send per finger lift, key run, step, Undo, Reset or Hint. The touch and key methods return
- * true when they added a cell, so the touched control plays `selectionChanged` (rate-limited to cell changes, S60 12 e).
- */
 internal class ZipDraftState {
     var draft: skip.lib.Array<Int> by mutableStateOf(ZipNoPath)
         private set
@@ -324,22 +268,15 @@ internal class ZipDraftState {
     private var lastCell = -1
     private var pressCell = -1
 
-    /** The path the Canvas draws; `showsSent` is true while a sent move or reset waits for its ack. */
     fun display(confirmed: skip.lib.Array<Int>, showsSent: Boolean): skip.lib.Array<Int> =
         ZipPathPolicy.displayPath(confirmed, draft, isDrafting, if (showsSent) sent else ZipNoPath)
 
-    /** The cell under the finger when it went down (the drag detector reports its start only after the touch slop). */
     fun press(cell: Int) {
         pressCell = cell
     }
 
-    /** The cell a drag starts from: where the finger went down, or the slop position when the press was not seen. */
     fun dragOrigin(fallback: Int): Int = if (pressCell >= 0) pressCell else fallback
 
-    /**
-     * A finger at `cell` (-1 off the board). The first event decides whether this touch draws (it starts on your path or on
-     * a cell the path may take next); later events walk every crossed cell.
-     */
     fun touch(cell: Int, scene: ZipScene): Boolean {
         if (!touchActive) {
             touchActive = true
@@ -360,7 +297,6 @@ internal class ZipDraftState {
         return next.count > before.count
     }
 
-    /** The finger lifted: the full path is sent once when it changed. */
     fun lift(scene: ZipScene, games: GameStagePresenter) {
         val drew = isDrafting
         touchActive = false
@@ -370,13 +306,11 @@ internal class ZipDraftState {
         commit(scene, games)
     }
 
-    /** The system took the gesture away: nothing is sent and the board shows the confirmed path again. */
     fun cancelTouch() {
         if (!touchActive) return
         discardDraft()
     }
 
-    /** An arrow key or the D-pad: one step from the end of the draft (back onto the previous cell trims one). */
     fun key(direction: ZipDirection, scene: ZipScene): Boolean {
         if (!scene.canMove) return false
         val base = if (keyRun) draft else scene.confirmedPath
@@ -393,13 +327,11 @@ internal class ZipDraftState {
         return added
     }
 
-    /** Enter: the key run's path is sent once. */
     fun commitKeys(scene: ZipScene, games: GameStagePresenter) {
         if (!keyRun || touchActive) return
         commit(scene, games)
     }
 
-    /** A chooser button or a cell's accessibility action: the confirmed path plus that cell, sent at once. */
     fun step(cell: Int, scene: ZipScene, games: GameStagePresenter): Boolean {
         discardDraft()
         if (!ZipPathPolicy.canExtend(scene.confirmedPath, cell, scene)) return false
@@ -409,7 +341,6 @@ internal class ZipDraftState {
         return true
     }
 
-    /** Undo: the confirmed path minus its last cell. */
     fun undo(scene: ZipScene, games: GameStagePresenter) {
         discardDraft()
         if (!scene.canUndo) return
@@ -417,7 +348,6 @@ internal class ZipDraftState {
         if (games.send(ZipIntent.move(path)) == ActivityTapResult.dispatched) sent = path
     }
 
-    /** Reset: back to checkpoint 1 (`reset`). */
     fun reset(scene: ZipScene, games: GameStagePresenter) {
         discardDraft()
         if (!scene.canReset) return
@@ -426,14 +356,12 @@ internal class ZipDraftState {
         }
     }
 
-    /** Hint (`hint`): the server extends the path along the solution and starts the 3 s cooldown. */
     fun hint(scene: ZipScene, games: GameStagePresenter) {
         discardDraft()
         if (!scene.canHint) return
         games.send(ZipIntent.hint())
     }
 
-    /** The board went read-only (reconnecting, time up, results). */
     fun discardDraft() {
         if (isDrafting) isDrafting = false
         if (draft.count > 0) draft = ZipNoPath
@@ -451,12 +379,6 @@ internal class ZipDraftState {
     }
 }
 
-// MARK: Board (B4)
-
-/**
- * A square board as wide as the card allows, capped at 360 dp (9 x 9 on a 343 dp card is 38 dp cells), always left to
- * right. `draft` is null for a read-only board (watching, results), which draws `readOnlyPath`.
- */
 @Composable
 private fun ZipBoardSurface(scene: ZipScene, games: GameStagePresenter, draft: ZipDraftState?, readOnlyPath: skip.lib.Array<Int>) {
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
@@ -467,10 +389,6 @@ private fun ZipBoardSurface(scene: ZipScene, games: GameStagePresenter, draft: Z
     }
 }
 
-/**
- * The Canvas, its gestures and keys, and the semantics overlay. The pointer handlers are keyed on the grid size and the
- * round (the puzzle) and read the scene and the drawing gate through rememberUpdatedState.
- */
 @Composable
 private fun ZipBoardLayer(scene: ZipScene, games: GameStagePresenter, draft: ZipDraftState?, readOnlyPath: skip.lib.Array<Int>, side: Double) {
     val state = games.interaction
@@ -552,12 +470,6 @@ private fun ZipBoardLayer(scene: ZipScene, games: GameStagePresenter, draft: Zip
     }
 }
 
-/**
- * One Canvas (S60 12 d, e): unvisited cells ext.gameBoardLight, visited and draft cells ext.gameBoardDark, removed cells
- * outlined and crossed, barriers as 4 dp onSurface lines, the path as a 6 dp primaryContainer (coral) line, solid where
- * confirmed and dashed 6 on 6 beyond it, with a coral dot at its end, and checkpoint discs with onSurface numbers capped
- * for the board. The draft is read here, in the draw phase only.
- */
 @Composable
 private fun ZipCanvas(scene: ZipScene, draft: ZipDraftState?, readOnlyPath: skip.lib.Array<Int>, showsSent: Boolean, side: Double) {
     val scheme = MaterialTheme.colorScheme
@@ -639,11 +551,9 @@ private fun ZipCanvas(scene: ZipScene, draft: ZipDraftState?, readOnlyPath: skip
     }
 }
 
-/** The center of a cell in board pixels (the path runs through centers). */
 private fun zipCenter(cell: Int, cellSide: Float, grid: Int): Offset =
     Offset((ZipPathPolicy.column(cell, grid) + 0.5f) * cellSide, (ZipPathPolicy.row(cell, grid) + 0.5f) * cellSide)
 
-/** The cells `from until to` of `path` joined through their centers. */
 private fun zipLine(path: skip.lib.Array<Int>, from: Int, to: Int, cellSide: Float, grid: Int): Path {
     val line = Path()
     var index = from
@@ -655,11 +565,6 @@ private fun zipLine(path: skip.lib.Array<Int>, from: Int, to: Int, cellSide: Flo
     return line
 }
 
-/**
- * One zero-draw semantics node per cell at its drawn frame (each placed by absolute offset, so rounding never accumulates
- * across a row): "Row 2, column 4, checkpoint 2, next". A cell the path may take next is a button whose click takes that
- * step. A read-only board reads positions, checkpoints and removed cells only.
- */
 @Composable
 private fun ZipCellOverlay(scene: ZipScene, side: Double, interactive: Boolean, canStep: Boolean, onStep: (Int) -> Unit) {
     val cellSide = ZipPathPolicy.cellSide(side, scene.size)
@@ -691,12 +596,6 @@ private fun ZipCellOverlay(scene: ZipScene, side: Double, interactive: Boolean, 
     }
 }
 
-// MARK: Controls and the step chooser
-
-/**
- * Undo, Reset, Hint ("Hint (3 s)" while cooling down, its projected cost read by TalkBack) and Choose next cell as neutral
- * OutlinedButtons in a FlowRow (the path stays the one coral use on the board), then "2 hints used" (S60 12 d). 48 dp.
- */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ZipControls(scene: ZipScene, games: GameStagePresenter, draft: ZipDraftState, chooserShown: Boolean, onToggleChooser: () -> Unit) {
@@ -723,10 +622,6 @@ private fun ZipControls(scene: ZipScene, games: GameStagePresenter, draft: ZipDr
     }
 }
 
-/**
- * Hint with its cooldown in the label, recomputed when the shown second changes and only while the cooldown runs and the
- * lifecycle is at least STARTED.
- */
 @Composable
 private fun ZipHintButton(scene: ZipScene, games: GameStagePresenter, draft: ZipDraftState) {
     var nowMillis by remember(scene.hintReadyAtMillis) { mutableDoubleStateOf(System.currentTimeMillis().toDouble()) }
@@ -753,10 +648,6 @@ private fun ZipHintButton(scene: ZipScene, games: GameStagePresenter, draft: Zip
     }
 }
 
-/**
- * A neutral outlined control (onSurface on the dark card, never coral), 48 dp tall, "In progress" while its move is
- * pending. `selected` is set only for the Choose next cell toggle (a 2 dp border and the selected state as its twin).
- */
 @Composable
 private fun ZipControlButton(
     title: String,
@@ -792,10 +683,6 @@ private fun ZipControlButton(
     }
 }
 
-/**
- * The accessible step chooser (S60 12 d, i): the cells your path may take next as 48 dp TextButtons ("Row 3, column 3",
- * "Row 3, column 4, checkpoint 4"), so drawing is optional; Undo, Reset and Hint sit in the controls row right above.
- */
 @Composable
 private fun ZipStepChooser(scene: ZipScene, games: GameStagePresenter, draft: ZipDraftState) {
     val scheme = MaterialTheme.colorScheme
@@ -826,7 +713,6 @@ private fun ZipStepChooser(scene: ZipScene, games: GameStagePresenter, draft: Zi
     }
 }
 
-/** Everyone's progress (S60 12 f, g), keyed by player id: "12 of 34 cells", "Solved in 0:12 · No hints", "Time’s up". */
 @Composable
 private fun ZipStandingsList(scene: ZipScene) {
     if (scene.standings.count == 0) return
@@ -857,9 +743,6 @@ private fun ZipStandingsList(scene: ZipScene) {
     }
 }
 
-// MARK: Keys, type and copy
-
-/** Arrow keys and the D-pad (S60 12 d); null for any other key. */
 internal fun zipKeyDirection(key: Key): ZipDirection? = when (key) {
     Key.DirectionUp -> ZipDirection.up
     Key.DirectionDown -> ZipDirection.down
@@ -868,13 +751,9 @@ internal fun zipKeyDirection(key: Key): ZipDirection? = when (key) {
     else -> null
 }
 
-/** The checkpoint numbers grow with the font scale up to ZipMaxFontScale, then stay inside the fixed cells. */
 internal fun zipCappedFontSize(size: TextUnit, fontScale: Float): TextUnit =
     if (fontScale <= ZipMaxFontScale || fontScale <= 0f) size else (size.value * ZipMaxFontScale / fontScale).sp
 
-// Resource names per case (S60 12 g, L6-14), plain functions so tests run without composition.
-
-/** The heading resource per phase (the lobby keeps the task line; the shell draws the lobby itself). */
 internal fun zipTitleResource(phase: ZipPhase, isFinal: Boolean): String = when (phase) {
     ZipPhase.lobby, ZipPhase.playing -> "gm_zip_title"
     ZipPhase.results -> if (isFinal) "gm_zip_final" else "gm_zip_round_results"
@@ -892,7 +771,6 @@ internal fun zipStatusResource(status: ZipStandingStatus): String = when (status
     ZipStandingStatus.timedOut -> "gm_zip_time_up"
 }
 
-/** Which notice a role adds to the playing body (pure, for the copy test). */
 internal fun zipRoleNoteResource(role: ZipRole): String? = when (role) {
     ZipRole.player -> null
     ZipRole.spectator -> "gm_err_not_seated"
@@ -904,7 +782,6 @@ private fun zipTitle(scene: ZipScene, isFinished: Boolean): String {
     return if (name == "gm_zip_round_results") conclaveString(name, scene.round) else conclaveString(name)
 }
 
-/** "Round 1 of 3 · 12 of 34 cells" for a player, the round alone for a person watching. */
 @Composable
 private fun zipMeta(scene: ZipScene): String {
     val round = if (scene.roundTotal > 1 && scene.round > 0) conclaveString("act_round_of", scene.round, scene.roundTotal) else ""
@@ -912,7 +789,6 @@ private fun zipMeta(scene: ZipScene): String {
     return promptTwoFacts(round, zipCells(scene.visitedCount, scene.totalCells))
 }
 
-/** "%1$d of %2$d cells", the plural chosen by the total. */
 @Composable
 private fun zipCells(filled: Int, total: Int): String = conclavePlural("gm_zip_cells", total, filled, total)
 
@@ -924,7 +800,6 @@ private fun zipWinner(scene: ZipScene): String =
 private fun zipHintsLine(count: Int): String =
     if (count > 0) conclavePlural("gm_zip_hints_used", count, count) else conclaveString("gm_zip_no_hints")
 
-/** "Solved in 0:12 · No hints", "Time’s up" or "12 of 34 cells"; `spoken` reads the duration in words. */
 @Composable
 private fun zipStatus(row: ZipStandingModel, spoken: Boolean): String {
     val name = zipStatusResource(row.status)
@@ -938,14 +813,12 @@ private fun zipStatus(row: ZipStandingModel, spoken: Boolean): String {
     }
 }
 
-/** "Row 3, column 4, checkpoint 4" (the chooser's button title). */
 @Composable
 private fun zipCellName(cell: ZipCellModel): String {
     val position = conclaveString("gm_zip_cell", cell.row + 1, cell.column + 1)
     return if (cell.checkpoint > 0) position + conclaveString("gm_zip_cell_checkpoint", cell.checkpoint) else position
 }
 
-/** "Row 2, column 4, checkpoint 2, visited", ", end of path", ", next", ", not part of the puzzle" (S60 12 g). */
 @Composable
 private fun zipCellLabel(cell: ZipCellModel, showsProgress: Boolean): String {
     val name = zipCellName(cell)

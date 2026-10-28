@@ -11,12 +11,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import skip.foundation.UserDefaults
 
-/**
- * CHT-6 (S40 CH4, 3 f, 6 c; S60 C6-22) through the transpiled VoicePreferences, VoiceMessageText, VoiceMessagePolicy,
- * TtsPlaybackQueue and TtsRecordingSpeaker, plus the handwritten TtsSpeaker's shared members with the recording
- * speaker as its backend (no TextToSpeech, no sound). The Swift half is T/CHT6VoiceMessagesTests.swift; the same
- * vectors give the same results on both platforms. Pure: no composition.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class CHT6VoiceBridgeTests {
@@ -66,7 +60,7 @@ class CHT6VoiceBridgeTests {
         assertEquals("en-gb-x-rjs-local", stored.standardVoiceId)
         defaults.set("cloned", forKey = VoicePreferences.voiceKindKey)
         assertEquals(VoiceKind.system, VoicePreferences.voiceKind(defaults = defaults))
-        // S40 Q12: no native token path yet, so the composer line names the system voice.
+
         VoicePreferences.setVoiceKind(VoiceKind.personal, defaults = defaults)
         assertEquals(VoiceKind.system, VoicePreferences.composerVoiceKind(defaults = defaults))
         assertEquals(VoiceKind.personal, VoicePreferences.effectiveVoiceKind(preferred = VoiceKind.personal, canUsePersonalVoice = true))

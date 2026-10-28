@@ -4,17 +4,6 @@ import SwiftUI
 import UIKit
 import WebKit
 
-// S60 13 c (ACT-7) on iOS: the SDK app host inside the S20 activity card (always dark). `NativeAppHostBody` is the card
-// body for an app (HD request B7-T1 R2 mounts it in ActivityStage+iOS.swift): the tag row, the canvas (a
-// `UIViewRepresentable` that attaches the one `WKWebView` the `ActivityWebViewRegistry` holds for the app session, so
-// Show Video, panels and rotation never recreate it), the opening and failure states, and the Whiteboard toolbar.
-// `NativeAppHostMenu` is the header's host menu (Lock Editing, Close…; non-hosts see none). The embed draws only the
-// canvas; every tool is native and drives it through bridge commands (S60 Q14). Copy resolves here (`AppHostCopy`,
-// L6-14): the presenter publishes typed values and counts only. ACT-8 adds Spin the Wheel (`WheelCardBar`: Spin and
-// Edit Names) and Watch Together (`AppWatchQueueButton` in the header), the native winner and title announcements, and
-// the two Activities pages (`AppWheelPage`, `AppWatchPage`, system appearance) that HD request B8-T2 R5 pushes.
-
-/// The card body for an SDK app.
 struct NativeAppHostBody: View {
     let host: AppHostPresenter
     let onShowVideo: () -> Void
@@ -73,7 +62,7 @@ struct NativeAppHostBody: View {
         .onAppear { host.session?.setReduceMotion(reduceMotion) }
         .onChange(of: reduceMotion) { _, value in host.session?.setReduceMotion(value) }
         .onChange(of: host.model.wantsWebView) { _, wants in
-            // A failure releases the web view (a fresh one comes with Try Again); the registry keeps it otherwise.
+
             if !wants && !host.model.appSessionId.isEmpty {
                 ActivityWebViewRegistry.shared.release(appSessionId: host.model.appSessionId)
             }
@@ -96,15 +85,13 @@ struct NativeAppHostBody: View {
     }
 }
 
-/// The header's host menu (S60 13 c): "Lock Editing" as a toggle and "Close %@…" (destructive) behind the R09
-/// confirmation. Non-hosts see nothing.
 struct NativeAppHostMenu: View {
     let host: AppHostPresenter
     @State private var confirmsClose = false
 
     var body: some View {
         let model = host.model
-        // ACT-8: Watch Together's "Queue" (everyone) opens Activities at the Watch page (S60 13 c).
+
         if model.appId == "watch" && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.readOnly) {
             AppWatchQueueButton(host: host)
         }
@@ -152,16 +139,12 @@ struct NativeAppHostMenu: View {
     }
 }
 
-/// The card's status line for an app (HD request B7-T1 R2: the header identity reads it): "%lld editing" or
-/// "Editing locked".
 enum AppHostHeader {
     @MainActor
     static func status(_ host: AppHostPresenter) -> String {
         return AppHostCopy.status(host.model)
     }
 }
-
-// MARK: Canvas
 
 struct AppHostCanvas: View {
     let host: AppHostPresenter
@@ -179,7 +162,6 @@ struct AppHostCanvas: View {
     }
 }
 
-/// Attaches the registered web view; never creates or destroys it itself (dismantle only detaches).
 struct AppHostWebViewRepresentable: UIViewRepresentable {
     let host: AppHostPresenter
     let model: AppHostModel
@@ -215,13 +197,11 @@ struct AppHostWebViewRepresentable: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ container: UIView, coordinator: AppHostPencilCoordinator) {
-        // Detach only: the registry keeps the instance for the app session (L6-15).
+
         for view in container.subviews { view.removeFromSuperview() }
     }
 }
 
-/// S60 13 c: the system Pencil preferences mapped through `AppPencilPolicy` (raw values, so the iOS 16 and 17.5 cases
-/// need no availability check). Before iOS 17.5 only the deprecated tap callback exists.
 @MainActor
 final class AppHostPencilCoordinator: NSObject, UIPencilInteractionDelegate {
     var onPencil: (AppPencilResponse) -> Void
@@ -246,8 +226,6 @@ final class AppHostPencilCoordinator: NSObject, UIPencilInteractionDelegate {
         onPencil(AppPencilPolicy.response(rawAction: UIPencilInteraction.preferredSqueezeAction.rawValue))
     }
 }
-
-// MARK: States
 
 struct AppHostTagRow: View {
     let tag: AppHostTag
@@ -295,8 +273,6 @@ struct AppHostOpening: View {
     }
 }
 
-/// "Couldn't Open %@" with Try Again and Show Video (S20 11 copy); the version mismatch adds "Update Conclave to use
-/// %@." and offers no Try Again when this build has no embed for the app.
 struct AppHostFailure: View {
     let host: AppHostPresenter
     let model: AppHostModel
@@ -343,7 +319,6 @@ struct AppHostFailure: View {
     }
 }
 
-/// The empty board (S60 13 g): text only, never intercepting touches. Reads only the element count leaf.
 struct AppBoardEmptyHint: View {
     let host: AppHostPresenter
 
@@ -365,10 +340,6 @@ struct AppBoardEmptyHint: View {
     }
 }
 
-// MARK: Whiteboard toolbar (S60 13 c)
-
-/// A horizontal row of 44 pt labelled tool buttons; menus are native `Menu`s. The selected tool is the surface-high
-/// fill with a strong border and the selected trait (never coral). Keyboard shortcuts act only with a hardware keyboard.
 struct WhiteboardToolbar: View {
     let host: AppHostPresenter
     let onPalette: (AppPencilResponse) -> Void
@@ -426,9 +397,12 @@ struct WhiteboardToolbar: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(ConclaveStrings.text("Whiteboard Tools"))
         .accessibilityIdentifier("app.whiteboard.toolbar")
-        .onChange(of: toolbar.exportSequence) { _, _ in
+        .task(id: toolbar.exportSequence) {
             let png = host.takeExport()
-            if !png.isEmpty { NativeAppExport.share(pngBase64: png) }
+            let sessionId = host.session?.appSessionId
+            if !png.isEmpty {
+                await NativeAppExport.share(pngBase64: png) { host.session?.appSessionId == sessionId && sessionId != nil }
+            }
         }
         .alert(ConclaveStrings.text("Rename Page"), isPresented: $renaming) {
             TextField(ConclaveStrings.text("Page Name"), text: $renameDraft)
@@ -448,7 +422,6 @@ struct WhiteboardToolbar: View {
         }
     }
 
-    /// Tools carry no unmodified key shortcuts: a hardware keyboard types into chat and fields on the same screen.
     private func toolButton(_ tool: AppWhiteboardTool, toolbar: AppToolbarModel) -> some View {
         AppToolButton(title: AppHostCopy.toolName(tool), isSelected: toolbar.tool == tool.rawValue,
                       isPending: toolbar.isPending(AppHostCommandKind.setTool), isEnabled: true) {
@@ -577,7 +550,6 @@ struct AppToolButton: View {
     }
 }
 
-/// One tool cell: in-call raised surface with paper ink; selected is surface-high with a strong border.
 struct AppToolLabel: View {
     let title: String
     let isSelected: Bool
@@ -606,8 +578,6 @@ struct AppToolLabel: View {
     }
 }
 
-/// The Pencil palettes (S60 13 c `.showColorPalette`, `.showInkAttributes`, `.showContextualPalette`): a menu cannot be
-/// opened in code, so the same choices appear in a popover at the canvas.
 struct AppPencilPalette: View {
     let host: AppHostPresenter
     let kind: AppPencilResponse
@@ -666,8 +636,6 @@ struct AppPencilPalette: View {
     }
 }
 
-/// "Open This Link in Safari?" for a user link from the embed; Open shows it in the in-app Safari view (S40 link
-/// policy, `ChatInAppBrowser`), so the call and the stage stay in place.
 struct AppExternalLinkConfirmation: ViewModifier {
     let registry: ActivityWebViewRegistry
 
@@ -689,7 +657,6 @@ struct AppExternalLinkConfirmation: ViewModifier {
     }
 }
 
-/// L6-12 Debug readouts (fixtures only): registry serial, reloads and the bridge's rejection count.
 struct AppHostReadouts: View {
     let host: AppHostPresenter
     let registry: ActivityWebViewRegistry
@@ -710,30 +677,41 @@ struct AppHostReadouts: View {
     }
 }
 
-// MARK: Export and swatches
-
-/// Export (S60 13 c): the PNG the embed returns, offered through the system share sheet. A `ShareLink` needs its item
-/// before the tap and the PNG arrives with the command's ack, so the sheet is presented once it is ready.
 enum NativeAppExport {
-    @MainActor
-    static func share(pngBase64: String) {
-        guard let data = Data(base64Encoded: pngBase64), !data.isEmpty else { return }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("whiteboard-" + String(Int(Date().timeIntervalSince1970)) + ".png")
+    static func prepare(pngBase64: String, directory: URL = FileManager.default.temporaryDirectory) -> URL? {
+        guard let data = Data(base64Encoded: pngBase64), !data.isEmpty else { return nil }
+        let url = directory.appendingPathComponent("whiteboard-" + UUID().uuidString + ".png")
         do {
             try data.write(to: url, options: .atomic)
+            return url
         } catch {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+    }
+
+    @MainActor
+    static func share(pngBase64: String, isCurrent: () -> Bool) async {
+        let file = await Task.detached(priority: .userInitiated) { prepare(pngBase64: pngBase64) }.value
+        guard let url = file else { return }
+        guard !Task.isCancelled, isCurrent() else {
+            await discard(url)
             return
         }
-        var root: UIViewController? = nil
+        var root: UIViewController?
         for scene in UIApplication.shared.connectedScenes {
             guard let windowScene = scene as? UIWindowScene, windowScene.activationState == .foregroundActive else { continue }
             root = windowScene.keyWindow?.rootViewController
         }
-        guard var top = root else { return }
-        while let presented = top.presentedViewController {
-            top = presented
+        guard var top = root else {
+            await discard(url)
+            return
         }
+        while let presented = top.presentedViewController { top = presented }
         let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            Task { await discard(url) }
+        }
         if let popover = controller.popoverPresentationController {
             popover.sourceView = top.view
             popover.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY, width: 1, height: 1)
@@ -741,11 +719,12 @@ enum NativeAppExport {
         }
         top.present(controller, animated: true)
     }
+
+    private static func discard(_ url: URL) async {
+        await Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: url) }.value
+    }
 }
 
-/// User ink is content, not app palette (S60 13 e, S60R 25): the swatch shows the embed's own color value. The
-/// `#rrggbb` value goes opaque through `HostingTheme.token`, the one ARGB-to-color adapter, so no view builds a color
-/// from components.
 enum AppInkSwatch {
     static func color(_ hex: String) -> Color {
         guard hex.count == 7, hex.hasPrefix("#"), let value = UInt32(hex.dropFirst(), radix: 16) else {
@@ -755,10 +734,6 @@ enum AppInkSwatch {
     }
 }
 
-// MARK: Spin the Wheel and Watch Together on the card (S60 13 c, ACT-8)
-
-/// The Wheel card's bottom bar: "Spin" (the card's one primary, coral with the in-call on-coral ink) and "Edit Names"
-/// (opens Activities at the Wheel page). Reads only `host.wheel`.
 struct WheelCardBar: View {
     let host: AppHostPresenter
 
@@ -802,7 +777,6 @@ struct WheelCardBar: View {
     }
 }
 
-/// Watch Together's header button: "Queue" opens Activities at the Watch page (search, Up Next, Requests).
 struct AppWatchQueueButton: View {
     let host: AppHostPresenter
 
@@ -823,8 +797,6 @@ struct AppWatchQueueButton: View {
     }
 }
 
-/// The wheel winner ("Winner: %@") and a newly selected video's title, announced natively (S60 13 i). Zero size;
-/// reads only the two sequence leaves.
 struct AppPageAnnouncer: View {
     let host: AppHostPresenter
 
@@ -847,9 +819,6 @@ struct AppPageAnnouncer: View {
     }
 }
 
-// MARK: Activities pages (S60 13 c, ACT-8; HD request B8-T2 R5 pushes them)
-
-/// The page body when its app is not the room's open app (closed or replaced while the page was up).
 struct AppPageUnavailable: View {
     let appId: String
 
@@ -862,9 +831,6 @@ struct AppPageUnavailable: View {
     }
 }
 
-/// Activities > Spin the Wheel (system appearance): add names (a pasted list adds each line), Add Everyone Here, the
-/// names with swipe to delete, Shuffle, Sort, Clear, Remove Winner, Wheel Sounds and the last 25 results. Reads only
-/// `host.wheel` (and `host.model.appId` for the title).
 struct AppWheelPage: View {
     let host: AppHostPresenter
     @State private var draft = ""
@@ -889,7 +855,7 @@ struct AppWheelPage: View {
                             .disabled(wheel.isFull)
                             .onSubmit { addDraft() }
                             .onChange(of: draft) { _, value in
-                                // Return or a pasted list: every line becomes a name.
+
                                 if value.contains("\n") { addDraft() }
                             }
                             .onChange(of: focused) { _, isFocused in if isFocused { promoteToLarge() } }
@@ -1001,10 +967,6 @@ struct AppWheelPage: View {
     }
 }
 
-/// Activities > Watch Together (system appearance): the system search field (search, or paste a link to play or
-/// request it), Trending and the classics when nothing is queued, Up Next (Play Now, reorder and delete for those who
-/// control), Requests (hosts answer; a requester sees Pending and Cancel Request) and the host's Everyone Can Control.
-/// Reads only `host.watch`.
 struct AppWatchPage: View {
     let host: AppHostPresenter
     @State private var query = ""
@@ -1062,7 +1024,6 @@ struct AppWatchPage: View {
     }
 }
 
-/// What plays now, or the participant's waiting line, and a declined request's note.
 struct AppWatchNowSection: View {
     let watch: WatchPageModel
 
@@ -1092,7 +1053,6 @@ struct AppWatchNowSection: View {
     }
 }
 
-/// Search results and the search states (searching, no results, search off, failed).
 struct AppWatchSearchSection: View {
     let host: AppHostPresenter
     let watch: WatchPageModel
@@ -1135,8 +1095,6 @@ struct AppWatchSearchSection: View {
     }
 }
 
-/// A search, trending or classic row: the title and channel, with the action for you now (Play Now, Add to Queue or
-/// Request). While something plays, those who control can still Play Now from the row's swipe action.
 struct AppWatchVideoRow: View {
     let host: AppHostPresenter
     let watch: WatchPageModel
@@ -1191,7 +1149,6 @@ struct AppWatchVideoRow: View {
     }
 }
 
-/// Up Next: Play Now per row, drag to reorder and swipe to delete for those who control; plain rows otherwise.
 struct AppWatchQueueSection: View {
     let host: AppHostPresenter
     let watch: WatchPageModel
@@ -1269,8 +1226,6 @@ struct AppWatchQueueRow: View {
     }
 }
 
-/// Requests: hosts see every pending pick with "Add to Queue" and "Decline"; a requester sees their own as "Pending"
-/// with "Cancel Request"; the participant footer explains where picks go.
 struct AppWatchRequestsSection: View {
     let host: AppHostPresenter
     let watch: WatchPageModel
@@ -1332,17 +1287,11 @@ struct AppWatchRequestsSection: View {
     }
 }
 
-// MARK: Copy (L6-14)
-
-/// The one exhaustive iOS copy mapping for the app host (Apple title case for controls and tags, sentence case for the
-/// status line). App names are app-owned copy keyed by SDK id (C6-18, `ActivitiesCopy.appName`).
 enum AppHostCopy {
     static func name(_ appId: String) -> String {
         return ActivitiesCopy.appName(appId)
     }
 
-    /// The header status (S60 13 g): Whiteboard "%lld editing" or "Editing locked"; Spin the Wheel "%lld names";
-    /// Watch Together "Playing" or "Paused". Locked apps with nothing else to say read "Editing locked".
     static func status(_ model: AppHostModel) -> String {
         if model.appId.isEmpty { return "" }
         if model.appId == "wheel" && model.nameCount > 0 {
@@ -1373,7 +1322,6 @@ enum AppHostCopy {
         }
     }
 
-    /// An app page whose app is no longer the room's open app.
     static func pageClosed(_ appId: String) -> String {
         return ConclaveStrings.format("App Page Closed %@", name(appId))
     }

@@ -1,15 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S30 5 c, CL16 (CTL-5): the dark fallback sheet the More control opens instead of the native menu whenever the menu
-// would need to scroll (accessibility sizes, the iPhone compact-height column, a long host or webinar menu on a short
-// iPhone). The same `MoreSnapshot` as a List, top to bottom like Android: reactions (the emoji row inline; the sheet
-// stays open across sends), You, Panels, Share, Host (End last in its own section). An action surface, not a content
-// panel, so no background interaction (OD Q8 1 is for content panels); detents medium and large; a "More" heading and
-// a Close button (S30 5 i). Rows that open something (panels, End, a share start) go through `selectAfterDismiss`, so
-// the panel or the End dialog presents from the sheet's `onDismiss`, never from a dismissing sheet (NF 9.1). Rows grow
-// with Dynamic Type (the More control passes the uncapped size). No custom fills: the in-call dark system List (D3).
-
 struct MoreSheet: View {
     let controls: CallControlsPresenter
     let actions: MoreActions
@@ -34,7 +25,6 @@ struct MoreSheet: View {
     }
 }
 
-/// The list reads `more` (rows) and, in its reactions section only, `reactions`.
 private struct MoreSheetList: View {
     let controls: CallControlsPresenter
     let actions: MoreActions
@@ -73,8 +63,6 @@ private struct MoreSheetList: View {
     }
 }
 
-/// The emoji row inline (44 pt targets, labelled), the art row once flat art ships, or the reason row while reactions
-/// cannot send. Sends keep the sheet open (S30 5 f row 1).
 private struct MoreSheetReactions: View {
     let section: MoreSection
     let controls: CallControlsPresenter
@@ -121,8 +109,6 @@ private struct MoreSheetReactionRow: View {
     }
 }
 
-/// One sheet row: the same titles, subtitles and glyphs as the menu. Captions and Lock Meeting are toggles; Layout is
-/// an inline picker plus "Layout Options"; Invite is the same `ShareLink`; Copy Link acts in place with its toast.
 private struct MoreSheetRow: View {
     let item: MoreItem
     let more: MoreSnapshot

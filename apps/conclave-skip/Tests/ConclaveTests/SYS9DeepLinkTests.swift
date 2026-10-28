@@ -3,58 +3,43 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SYS-9 (S70 9 c, d, f, l 1 to 4; S70 0.7 SY14; RECONCILE R42; S10 4 m): the operating-system link layer.
-/// Every check reads the shipped file (the AASA and assetlinks.json in apps/web, the Android manifest, the
-/// entitlements and the xcconfig) and matches sample paths with each platform's own rules (AASA component
-/// globs on iOS, a forward-only advanced-glob model on Android). SYS9AppLinkMatcherTests also feeds the shipped
-/// Android patterns to the framework matcher. Routing after intake is ENT-2 (S10 4).
 @MainActor
 struct SYS9DeepLinkTests {
     private static let appID = "RZGK9VX3KX.com.acmvit.conclave"
     private static let packageName = "com.acmvit.conclave"
     private static let hosts: Set<String> = ["conclave.acmvit.in", "www.conclave.acmvit.in"]
 
-    // S70 9 c: the spec's exclusions, verbatim, and the three includes in order.
     private static let specExclusions = [
         "/book/*", "/api/*", "/sign-in*", "/privacy*", "/delete-account*", "/sfu-admin*", "/schedule*",
     ]
     private static let includes = ["/w/*", "/*-*-*", "/sched-*"]
 
-    // SYS-9 owner policy: strict paths on API 31+, browser fallback on API 28 to 30.
     private static let androidPathSpecs: Set<String> = [
         "pathAdvancedPattern=/w/[a-zA-Z0-9][a-zA-Z0-9-]{0,31}",
         "pathAdvancedPattern=/[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+",
         "pathAdvancedPattern=/sched-[0-9a-fA-F]{8}",
     ]
 
-    // Paths both platforms hand to the app; each parses as a join target (S70 9 f).
     private static let meetingPaths = [
-        "/rose-sora-luffy", // three-word meeting code
-        "/brave-otter-4821", // scheduled meeting code, adjective-noun-NNNN (PRE 3.1)
-        "/w/abc123", // webinar attendee link
+        "/rose-sora-luffy",
+        "/brave-otter-4821",
+        "/w/abc123",
         "/w/team-all-hands",
-        "/sched-1a2b3c4d", // scheduled webinar host room (SY14)
-        "/sched-ule-room", // S10 4 l 6: still a room
+        "/sched-1a2b3c4d",
+        "/sched-ule-room",
     ]
 
-    // Paths neither platform hands to the app: single-word, custom-tenant and two-word codes have no safe
-    // pattern (S10 4 m, S70 9 f), and web-only pages stay in the browser.
     private static let browserPaths = [
         "/", "/acme", "/standup", "/rose-sora", "/w",
         "/sign-in", "/sign-in/callback", "/privacy", "/delete-account", "/sfu-admin", "/schedule", "/schedule/team",
         "/book/ishaan/intro", "/api/sfu/join",
     ]
 
-    // Former Android false positives: these must now remain in the browser on both platforms.
     private static let webOnlyExcludedPaths = [
         "/book/ishaan/30-min-chat", "/schedule/team-sync-call", "/_next/static/chunks/main-app-1a2b.js",
         "/transcript-pcm-processor.js",
     ]
 
-    // S70 9 d fingerprint audit (2026-10-27). FA:C6:...:3B:9C was removed: it is the public React Native
-    // template debug keystore (CN=Android Debug, 2014), the one checked in at apps/mobile/android/app/debug.keystore,
-    // so any APK signed with it could claim conclave.acmvit.in links. The remaining fingerprint is the one the
-    // owner confirms against Play Console app signing; change this list only together with that confirmation.
     private static let auditedReleaseFingerprints = [
         "91:92:9B:89:E1:A9:35:67:4A:9F:F7:7C:9B:36:BD:B9:D4:21:07:41:D6:21:55:38:52:D3:AB:BF:08:80:E9:00",
     ]
@@ -62,19 +47,17 @@ struct SYS9DeepLinkTests {
         "FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C",
     ]
 
-    // MARK: iOS association file (S70 9 c, l 1)
-
     @Test func aasaUsesTheComponentsFormWithExclusionsFirst() throws {
         let text = try sys9RepoSource(sys9AASAPath)
         #expect(!text.hasPrefix("\u{FEFF}"))
         #expect(Data(text.utf8).count < 128 * 1024, "Apple rejects an AASA above 128 KB")
-        // Served at the extensionless path only (Apple reads exactly this name).
+
         #expect(!FileManager.default.fileExists(atPath: sys9RepoPath(sys9AASAPath + ".json")))
 
         let root = try #require(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
         #expect(Set(root.keys) == ["applinks"])
         let applinks = try #require(root["applinks"] as? [String: Any])
-        // No legacy "apps" array; the components form replaces the iOS 12 "paths" form (CE J23).
+
         #expect(Set(applinks.keys) == ["details"])
         let details = try #require(applinks["details"] as? [[String: Any]])
         #expect(details.count == 1)
@@ -86,7 +69,7 @@ struct SYS9DeepLinkTests {
         #expect(!components.isEmpty)
         for component in components {
             #expect(!component.path.isEmpty, "every component matches on the path")
-            // No "?" or "#" keys, so invite and mode query strings still match the includes.
+
             #expect(component.keys.isSubset(of: ["/", "exclude", "comment"]), "\(component.keys.sorted())")
             #expect(!component.comment.isEmpty, "\(component.path) needs a comment")
         }
@@ -100,7 +83,7 @@ struct SYS9DeepLinkTests {
             #expect(exclusions.contains(pattern), "\(pattern) is missing")
         }
         #expect(exclusions.count == Set(exclusions).count, "duplicate exclusion")
-        // No catch-all include: custom-tenant and single-word codes stay on the web (S10 4 m).
+
         for path in Self.includes {
             #expect(path != "*" && path != "/*" && path != "/*/*")
         }
@@ -116,8 +99,6 @@ struct SYS9DeepLinkTests {
         }
     }
 
-    // MARK: Android App Links (S70 9 d, SY14)
-
     @Test func androidAppLinksClaimTheSameMeetingPathsOnBothHosts() throws {
         let manifest = try sys9Source("Android/app/src/main/AndroidManifest.xml")
         let alias = try sys9AppLinkAlias(manifest)
@@ -130,7 +111,7 @@ struct SYS9DeepLinkTests {
             #expect(filter.schemes == ["https"])
             #expect(filter.hosts.count == 1, "\(filter.hosts.sorted())")
             verifiedHosts.formUnion(filter.hosts)
-            // Every data element carries exactly one path, so no filter captures a whole host.
+
             for element in filter.data {
                 let pathKeys = element.keys.filter { $0.hasPrefix("path") }
                 #expect(pathKeys.count == 1, "\(element)")
@@ -138,11 +119,11 @@ struct SYS9DeepLinkTests {
             #expect(filter.pathSpecs == Self.androidPathSpecs, "\(filter.pathSpecs.sorted())")
         }
         #expect(verifiedHosts == Self.hosts)
-        // https appears only inside the verified filters; no plain http link capture.
+
         let httpsCount = manifest.components(separatedBy: "android:scheme=\"https\"").count - 1
         #expect(httpsCount == filters.reduce(0) { $0 + $1.data.count })
         #expect(!manifest.contains("android:scheme=\"http\""))
-        // Kept: singleTask with onNewIntent delivery (CE C30, J6) and the conclave:// scheme (CE C31).
+
         #expect(manifest.contains("android:launchMode=\"singleTask\""))
         #expect(manifest.contains("<data android:scheme=\"conclave\" />"))
     }
@@ -245,11 +226,9 @@ struct SYS9DeepLinkTests {
         }
     }
 
-    // MARK: Parser agreement (RECONCILE R42, S10 0.8 C16; S70 9 l 4)
-
     @Test func parserAndAssociationFilesAgreeOnWebOnlyPaths() throws {
         let prefixes = try sys9ParserWebOnlyPrefixes()
-        // R42 and C16 (ENT-2): the parser's web-only list gains schedule, matching the AASA exclusion.
+
         for segment in ["book", "api", "sign-in", "privacy", "delete-account", "sfu-admin", "schedule"] {
             #expect(prefixes.contains(segment), "\(segment) is missing from webOnlyConclavePathPrefixes")
         }
@@ -259,7 +238,7 @@ struct SYS9DeepLinkTests {
         for segment in prefixes.sorted() {
             webOnlyPaths += ["/\(segment)", "/\(segment)/rose-sora-luffy", "/\(segment)/a-b-c"]
         }
-        // The parser rejects a dotted first segment (static files); the AASA excludes paths with a dot.
+
         webOnlyPaths += ["/transcript-pcm-processor.js", "/.well-known/apple-app-site-association", "/og.png"]
         for path in webOnlyPaths {
             #expect(!sys9AASAHandles(path, components: components), "\(path) is web-only but opens the app on iOS")
@@ -277,13 +256,11 @@ struct SYS9DeepLinkTests {
                 let expectedMode: JoinMode = path.hasPrefix("/w/") ? .webinarAttendee : .meeting
                 #expect(target.joinMode == expectedMode, "\(host)\(path)")
             }
-            // SY14: the scheduled webinar host room keeps its exact code.
+
             let scheduled = NativeJoinLinkParser.parse("https://\(host)/sched-1a2b3c4d", allowRoomCreationForURLs: true)
             #expect(scheduled.roomId == "sched-1a2b3c4d")
         }
     }
-
-    // MARK: Android association file (S70 9 d, l 1)
 
     @Test func assetLinksListOnlyTheAuditedReleaseFingerprint() throws {
         let text = try sys9RepoSource("apps/web/public/.well-known/assetlinks.json")
@@ -308,13 +285,10 @@ struct SYS9DeepLinkTests {
         let env = sys9XcconfigSettings(try sys9Source("Skip.env"))
         let bundleID = try #require(sys9Resolve("PRODUCT_BUNDLE_IDENTIFIER", configuration: "Release", settings: env))
         #expect(bundleID == Self.packageName)
-        // The Skip build plugin sets applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
-        // (Android/app/build.gradle.kts), so the package stays the bundle id while that override is unset.
+
         #expect(!env.contains { $0.name == "ANDROID_APPLICATION_ID" })
         #expect(Self.appID.hasSuffix(".\(bundleID)"))
     }
-
-    // MARK: Entitlements (S70 9 c; S70R 21.2)
 
     @Test func entitlementsAddTheDeveloperDomainInDebugOnly() throws {
         let entitlements = try sys9Plist("Darwin/Entitlements.plist")
@@ -330,7 +304,7 @@ struct SYS9DeepLinkTests {
         #expect(domains.allSatisfy { !$0.contains("mode=") }, "the developer mode lives in the Debug setting only")
 
         let settings = sys9XcconfigSettings(try sys9Source("Darwin/Conclave.xcconfig"))
-        // One entitlements file for every configuration; Debug differs only through the build setting.
+
         #expect(settings.filter { $0.name == "CODE_SIGN_ENTITLEMENTS" }.map { "\($0.conditions)=\($0.value)" } == ["=Entitlements.plist"])
         #expect(settings.filter { $0.name == "CONCLAVE_DEVELOPER_ASSOCIATED_DOMAIN" }.map { $0.conditions } == ["", "[config=Debug]"])
         #expect(settings.filter { $0.name == "CONCLAVE_DEVELOPER_APPLINKS_HOST" }.map { $0.conditions } == [""])
@@ -342,10 +316,9 @@ struct SYS9DeepLinkTests {
         #expect(release.allSatisfy { !$0.contains("mode=") }, "Release never carries a developer domain")
         #expect(debug == production.union(["applinks:conclave.acmvit.in?mode=developer"]), "\(debug.sorted())")
 
-        // The same two hosts on both platforms and in the parser's production host check.
         let entitlementHosts = Set(domains.filter { !$0.contains("$(") }.map { String($0.dropFirst("applinks:".count)) })
         #expect(entitlementHosts == Self.hosts)
-        // The broadcast extension never claims links.
+
         let extensionEntitlements = try sys9Plist("Darwin/ScreenShareExtension/ScreenShareExtension.entitlements")
         #expect(extensionEntitlements["com.apple.developer.associated-domains"] == nil)
     }
@@ -358,8 +331,6 @@ struct SYS9DeepLinkTests {
         let manifest = try sys9Source("Android/app/src/main/AndroidManifest.xml")
         #expect(manifest.contains("<data android:scheme=\"conclave\" />"))
     }
-
-    // MARK: Hygiene (HD RULES 3)
 
     @Test func linkFilesAreDashFree() throws {
         let texts = [
@@ -375,8 +346,6 @@ struct SYS9DeepLinkTests {
         }
     }
 }
-
-// MARK: SYS-9 helpers
 
 private let sys9AASAPath = "apps/web/public/.well-known/apple-app-site-association"
 
@@ -429,8 +398,6 @@ private func sys9FullMatch(_ pattern: String, _ text: String) -> Bool {
     return regex.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
 }
 
-// MARK: AASA components
-
 private struct SYS9Component {
     let path: String
     let exclude: Bool
@@ -455,9 +422,6 @@ private func sys9AASAComponents() throws -> [SYS9Component] {
     }
 }
 
-/// Apple's component matching: the first component whose "/" pattern matches decides, an excluded match keeps
-/// the link in the browser, and no match keeps it in the browser too. In a pattern, "*" is any run of
-/// characters (slashes included) and "?" is one character; matching is case sensitive by default.
 private func sys9AASAHandles(_ path: String, components: [SYS9Component]) -> Bool {
     for component in components where sys9FullMatch(sys9AASAGlobRegex(component.path), path) {
         return !component.exclude
@@ -476,8 +440,6 @@ private func sys9AASAGlobRegex(_ pattern: String) -> String {
     }
     return regex + "$"
 }
-
-// MARK: Android App Link filters
 
 private struct SYS9AppLinkFilter {
     let actions: [String]
@@ -526,8 +488,6 @@ private func sys9AndroidAliasEnabled(apiLevel: Int) throws -> Bool {
     return value == "true"
 }
 
-/// Android merges data elements inside each filter. Uri.getPath() is decoded once before framework matching.
-/// The enabled resource is tested separately: API 28 to 30 does not participate in HTTPS resolution at all.
 private func sys9AndroidCaptures(_ path: String, host: String, filters: [SYS9AppLinkFilter], aliasEnabled: Bool = true) -> Bool {
     guard aliasEnabled else { return false }
     let decoded = path.removingPercentEncoding ?? path
@@ -539,10 +499,6 @@ private func sys9AndroidCaptures(_ path: String, host: String, filters: [SYS9App
     return false
 }
 
-/// A bounded model of the shipped advanced-glob subset: ASCII literals, positive sets/ranges, +, * and {m,n}.
-/// Each token greedily consumes its input and never gives characters back. This deliberately does not turn
-/// the pattern into a regular expression: Android rejects [a-z]+b against ab, unlike a backtracking regex.
-/// Unsupported syntax fails closed. Framework PatternMatcher/IntentFilter tests provide the Android oracle.
 private func sys9AndroidAdvancedGlobMatches(_ pattern: String, _ path: String) -> Bool {
     let bytes = Array(pattern.utf8)
     let input = Array(path.utf8)
@@ -550,7 +506,7 @@ private func sys9AndroidAdvancedGlobMatches(_ pattern: String, _ path: String) -
     var i = 0
     while p < bytes.count {
         var allowed: Set<UInt8> = []
-        if bytes[p] == 91 { // [
+        if bytes[p] == 91 {
             p += 1
             while p < bytes.count && bytes[p] != 93 {
                 if p + 2 < bytes.count && bytes[p + 1] == 45 && bytes[p + 2] != 93 {
@@ -576,7 +532,7 @@ private func sys9AndroidAdvancedGlobMatches(_ pattern: String, _ path: String) -
             minimum = bytes[p] == 43 ? 1 : 0
             maximum = input.count
             p += 1
-        } else if p < bytes.count && bytes[p] == 123 { // {
+        } else if p < bytes.count && bytes[p] == 123 {
             p += 1
             let start = p
             while p < bytes.count && bytes[p] != 125 { p += 1 }
@@ -602,9 +558,6 @@ private func sys9AndroidAdvancedGlobMatches(_ pattern: String, _ path: String) -
     return i == input.count
 }
 
-// MARK: Parser source
-
-/// The parser's web-only first segments, read from its source so the AASA check follows ENT-2's list.
 private func sys9ParserWebOnlyPrefixes() throws -> Set<String> {
     let source = try sys9Source("Sources/Conclave/Core/Networking/NativeJoinLinkParser.swift")
     let body = try #require(
@@ -615,8 +568,6 @@ private func sys9ParserWebOnlyPrefixes() throws -> Set<String> {
     #expect(!prefixes.isEmpty)
     return prefixes
 }
-
-// MARK: xcconfig
 
 private struct SYS9Setting {
     let name: String
@@ -637,9 +588,6 @@ private func sys9XcconfigSettings(_ text: String) -> [SYS9Setting] {
     return settings
 }
 
-/// One setting for one configuration: a matching `[config=...]` assignment overrides the unconditional one
-/// (the xcconfig lists the unconditional line first, so both of Xcode's precedence readings agree), then
-/// `$(NAME)` references expand, an unknown name expanding to nothing as in Xcode.
 private func sys9Resolve(_ name: String, configuration: String, settings: [SYS9Setting], depth: Int = 0) -> String? {
     var base: String?
     var conditional: String?

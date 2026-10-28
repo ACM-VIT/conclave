@@ -3,16 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// CTL-5 (OUT/PLAN-screens.md section 5): More, the iOS native menu with its dark fallback sheet and the Android in-call
-/// action sheet. The shared `MoreMenuPolicy`, the presenter's More intents, `PanelCoordinator.presentFromMore` and the
-/// CL13 More fixtures run here against the real S1 shell and stage; the iOS views (not compiled by the macOS host) and the
-/// Kotlin views are read. The Kotlin half is T/Skip/CTL5CTL6BridgeTests.kt. Covers S30 5 l (unit halves of l1 to l3, l5,
-/// l7, l10 to l13), S30 7 (rows keep their place while recovering or offline, with reasons), CL16 (the menu budget),
-/// CL21 and CC20 (keyboard commands), D17 (panels after the sheet), RECONCILE R8, R14, R18, OQ6 (no Effects row), OQ7
-/// (no voice agent). Not run in the heads-down push.
 @MainActor
 struct CTL5MoreMenuTests {
-    // MARK: Harness
 
     static let identity = MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "ctl5-tests")
 
@@ -28,13 +20,10 @@ struct CTL5MoreMenuTests {
         ControlsFixtureSession(state: state).controls.more.itemIds
     }
 
-    // Batch 7 (TRN-2, SET-5): Transcript and Layout landed, so both rows show between Activities and Settings.
     static let guestIds = ["reactions", "hand", "screenShare", "captions", "flipCamera", "participants", "activities", "transcript",
                            "layout", "settings",
                            "invite", "copyLink", "meetingDetails"]
     static let hostIds = guestIds + ["hostControls", "lockMeeting", "endForEveryone"]
-
-    // MARK: Rows and order (S30 5 c, f, l1, l2)
 
     @Test func guestAndHostRowsFollowThePriorityOrder() {
         let guest = ControlsFixtureSession(state: .guest)
@@ -43,7 +32,7 @@ struct CTL5MoreMenuTests {
         #expect(!guest.controls.more.hasHostSection)
         let host = ControlsFixtureSession(state: .host)
         #expect(host.controls.more.itemIds == Self.hostIds)
-        // The Host section is last (farthest from the control); End is its last row (CL15).
+
         #expect(host.controls.more.sections.last?.id == MoreSectionID.host)
         #expect(MoreMenuPolicy.hostItems(host.controls.more).map { $0.id } == ["hostControls", "lockMeeting", "endForEveryone"])
         #expect(host.controls.more.meetingLink == ControlsFixtureScript.meetingLink && host.controls.more.roomLabel == ControlsFixtureScript.roomLabel)
@@ -51,8 +40,7 @@ struct CTL5MoreMenuTests {
     }
 
     @Test func rowsWhosePanelHasNotLandedStayHiddenAndThereIsNoVoiceAgent() {
-        // PLAN-screens 2: under the call flag a row whose native panel has not landed stays hidden. Batch 7 landed
-        // Transcript (TRN-2), Layout (SET-5) and Effects (SET-6); the Effects row still waits for `effectsPanelAvailable`.
+
         #expect(MoreMenuPolicy.isLanded(.transcript) && MoreMenuPolicy.isLanded(.layout) && MoreMenuPolicy.isLanded(.effects))
         for panel in [MeetingPanel.chat, .participants, .activities, .settings, .webinarQA, .meetingInfo, .hostControls,
                       .transcript, .layout, .effects] {
@@ -63,8 +51,7 @@ struct CTL5MoreMenuTests {
         for hidden in ["effects", "systemVideoEffects"] {
             #expect(!host.controls.more.itemIds.contains(hidden), "\(hidden) shows")
         }
-        // OQ6 default A: the Effects row follows the one availability value (false in production); the system module waits
-        // for CC11.
+
         let hidden = CallControlsInputs.make(rows: host.shell.controls.rows, phase: .inCall, isLocalHost: true,
                                              meetingLink: "https://conclave.acmvit.in/abc", liveNotes: .live, effectsPanelAvailable: false)
         let hiddenSections = MoreMenuPolicy.sections(inputs: hidden, composition: .compact, overflowIds: [], reactions: ReactionPaletteSnapshot.empty)
@@ -75,7 +62,7 @@ struct CTL5MoreMenuTests {
         let sections = MoreMenuPolicy.sections(inputs: inputs, composition: .compact, overflowIds: [], reactions: ReactionPaletteSnapshot.empty)
         #expect(sections.flatMap { $0.items }.contains { $0.kind == .effects })
         #expect(sections.flatMap { $0.items }.contains { $0.kind == .transcript })
-        // Owner OQ7: the AI voice agent is web only.
+
         #expect(!MoreItemID.allCases.map { $0.rawValue }.contains { $0.lowercased().contains("voice") })
     }
 
@@ -83,21 +70,21 @@ struct CTL5MoreMenuTests {
         let session = ControlsFixtureSession(state: .webinarHost)
         let qa = session.controls.more.item(.qa)
         #expect(qa?.count == 2 && qa?.status == .unseen)
-        // RECONCILE R18: hosts and attendees only; a non-host never sees the row.
+
         #expect(ControlsFixtureSession(state: .guest).controls.more.item(.qa) == nil)
-        // Activities names the running game.
+
         let activities = session.controls.more.item(.activities)
         #expect(activities?.status == .running && activities?.statusName == "Trivia")
-        // The More dot marks unseen questions behind More (no waiting count on this host).
+
         #expect(session.controls.bar.control(.more)?.showsDot == true)
         #expect(ControlsFixtureSession(state: .guest).controls.bar.control(.more)?.showsDot == false)
-        // Opening Q&A from More presents with invoker .more.
+
         #expect(session.controls.select(.qa) == .dispatched)
         #expect(session.panelReadout() == "panel=webinarQA invoker=more")
     }
 
     @Test func noRoomLinkHidesInviteAndCopyLink() {
-        // S30 5 l12.
+
         let session = ControlsFixtureSession(state: .noLink)
         #expect(session.controls.more.meetingLink.isEmpty)
         #expect(session.controls.more.item(.invite) == nil && session.controls.more.item(.copyLink) == nil)
@@ -112,17 +99,17 @@ struct CTL5MoreMenuTests {
         }
         wide.controls.setOverflow(ids: ["participants", "hand"])
         #expect(wide.controls.more.itemIds.contains("participants") && wide.controls.more.itemIds.contains("hand"))
-        // A moved Chat gets its own row with the unread count (F00 C05 f).
+
         let guest = CTL5Harness(Self.joined(unreadChatCount: 4))
         #expect(guest.controls.more.item(.chat) == nil)
         guest.controls.setOverflow(ids: ["chat"])
-        // `dropFirst().first`, not `itemIds[1]`: a one-row list fails the expectation instead of trapping the process.
+
         #expect(guest.controls.more.item(.chat)?.count == 4 && guest.controls.more.itemIds.dropFirst().first == "hand")
         #expect(guest.controls.more.section(MoreSectionID.panels)?.items.first?.kind == .chat)
     }
 
     @Test func aMovedChatWithUnreadMessagesPutsTheDotOnMore() {
-        // CHT-8 (batch 6 integrator, HD request B6-T5 R4; S30 5 m, F00 C05 f): no badge without a matching row, reversed.
+
         let unread = CTL5Harness(Self.joined(unreadChatCount: 3))
         #expect(unread.controls.bar.control(.more)?.showsDot == false)
         unread.controls.setOverflow(ids: ["chat"])
@@ -136,8 +123,6 @@ struct CTL5MoreMenuTests {
         #expect(!ControlBarPolicy.chatMovedWithUnread(inputs: read.controls.inputs, overflowIds: ["chat"]))
     }
 
-    // MARK: Recovery and offline (S30 7, R10)
-
     @Test func recoveryAndOfflineKeepEveryRowWithItsReason() {
         #expect(Self.ids(.recovering) == Self.ids(.guest) && Self.ids(.offline) == Self.ids(.guest))
         #expect(Self.ids(.hostRecovering) == Self.ids(.host) && Self.ids(.hostOffline) == Self.ids(.host))
@@ -147,14 +132,14 @@ struct CTL5MoreMenuTests {
             let item = recovering.item(blocked)
             #expect(item?.isEnabled == false && item?.reason == .reconnecting, "\(blocked.rawValue)")
         }
-        // Panels, captions and the local link stay live (S30 7 rule: panels, local preferences and Leave stay available).
+
         for live in [MoreItemID.participants, .activities, .settings, .captions, .invite, .copyLink, .meetingDetails, .hostControls] {
             #expect(recovering.item(live)?.isEnabled == true, "\(live.rawValue)")
         }
         let offline = ControlsFixtureSession(state: .hostOffline).controls.more
         #expect(offline.isRecovering && offline.item(.lockMeeting)?.reason == .offline && offline.item(.hand)?.reason == .offline)
         #expect(offline.item(.endForEveryone)?.reason == .offline && offline.item(.flipCamera)?.reason == .offline)
-        // A disabled row is ignored without a toast (it already shows its reason): S30 7 rule 4.
+
         let session = ControlsFixtureSession(state: .hostRecovering)
         #expect(session.controls.select(.hand) == .ignored && session.counters.toggleHand == 0 && session.controls.explainCount == 0)
         #expect(session.controls.select(.participants) == .dispatched)
@@ -163,7 +148,7 @@ struct CTL5MoreMenuTests {
     }
 
     @Test func aRemotePresenterNamesTheShareReason() {
-        // S30 5 l6 on the compact composition (the wide fixture carries Share on the bar).
+
         let session = ControlsFixtureSession(state: .remoteShare)
         session.controls.setCompositionOverride(.compact)
         let share = session.controls.more.item(.screenShare)
@@ -171,18 +156,16 @@ struct CTL5MoreMenuTests {
         #expect(session.controls.select(.screenShare) == .ignored && session.counters.toggleShare == 0)
     }
 
-    // MARK: Actions (S30 0.5 mapping)
-
     @Test func panelRowsPresentFromMoreOnceAndOnlyOnce() {
         let session = ControlsFixtureSession(state: .guest)
         #expect(session.controls.select(.participants) == .dispatched)
         #expect(session.panelReadout() == "panel=participants invoker=more" && session.counters.panelPresent == 1)
-        // The panel already current: nothing new, nothing played.
+
         #expect(session.controls.select(.participants) == .ignored)
         #expect(session.controls.select(.settings) == .dispatched)
         #expect(session.shell.panels.snapshot.pending?.panel == .settings && session.shell.panels.snapshot.pending?.invoker == .more)
         #expect(session.controls.select(.meetingDetails) == .dispatched)
-        // Every panel row counts as a request, the ignored repeat included.
+
         #expect(session.controls.panelRequestCount == 4)
     }
 
@@ -191,10 +174,10 @@ struct CTL5MoreMenuTests {
         #expect(coordinator.presentFromMore(.participants))
         #expect(coordinator.snapshot.current?.invoker == .more && coordinator.snapshot.current?.panel == .participants)
         #expect(!coordinator.presentFromMore(.participants))
-        // A destination for the current panel is a change (a destination request), never a new presentation.
+
         #expect(coordinator.presentFromMore(.participants, destination: .peopleWaiting))
         #expect(coordinator.destinationRequest?.destination == .peopleWaiting && coordinator.destinationRequest?.invoker == .more)
-        // A replacement queues behind the closing panel with invoker .more.
+
         #expect(coordinator.presentFromMore(.activities))
         #expect(coordinator.snapshot.isDismissing && coordinator.snapshot.pending?.panel == .activities)
         #expect(!coordinator.presentFromMore(.activities))
@@ -208,7 +191,7 @@ struct CTL5MoreMenuTests {
         #expect(session.controls.select(.flipCamera) == .dispatched)
         #expect(session.controls.select(.lockMeeting) == .dispatched && session.controls.more.item(.lockMeeting)?.isOn == true)
         #expect(session.countersReadout().contains("flipCamera=1 captions=1 layout=1 lock=1"))
-        // Without a core (`onRequest` nil) the same rows answer ignored, so the view plays nothing.
+
         let bare = CTL5Harness(Self.joined())
         #expect(bare.controls.select(.captions) == .ignored && bare.controls.select(.flipCamera) == .ignored)
     }
@@ -220,7 +203,7 @@ struct CTL5MoreMenuTests {
         let lock = h.controls.more.item(.lockMeeting)
         #expect(lock?.isPending == true && lock?.isEnabled == false && lock?.status == .pending)
         #expect(h.controls.select(.lockMeeting) == .ignored)
-        // A pending hand reads "Raising" and is disabled (S30 6 f).
+
         #expect(MoreMenuPolicy.handState(MoreItem(id: "hand", kind: .hand, isOn: false, isEnabled: false, isPending: true, reason: .none,
                                                   reasonName: "", status: .pending, statusName: "", count: 0)) == .raising)
     }
@@ -230,7 +213,7 @@ struct CTL5MoreMenuTests {
         let queuedBefore = session.stage.queuedToasts
         #expect(session.controls.select(.copyLink) == .dispatched && session.controls.copyLinkCount == 1)
         #expect(session.stage.toast?.kind == NoticeKind.linkCopied || session.stage.queuedToasts > queuedBefore)
-        // Android API 33 and later: no app snackbar (the system shows its own confirmation).
+
         let quiet = ControlsFixtureSession(state: .guest)
         let toastBefore = quiet.stage.toast?.id
         let queuedQuiet = quiet.stage.queuedToasts
@@ -240,7 +223,7 @@ struct CTL5MoreMenuTests {
     }
 
     @Test func endFromMoreBelongsToMoreAndOnlyToMore() {
-        // R09, S50 PH17: More's dialog for invoker "more"; the iOS Leave control does not present it.
+
         let session = ControlsFixtureSession(state: .host)
         #expect(session.controls.select(.endForEveryone) == .dispatched)
         let leave = session.controls.leaveState
@@ -249,13 +232,13 @@ struct CTL5MoreMenuTests {
         #expect(!MoreMenuPolicy.playsEndPrompt(previousId: leave.confirmationId, leave: leave))
         #expect(!LeaveControlPolicy.presentsDialog(leave, includesMoreInvoker: false))
         #expect(LeaveControlPolicy.presentsDialog(leave, includesMoreInvoker: true))
-        // A recovering host: End stays in place, disabled with its reason; nothing is asked.
+
         let recovering = ControlsFixtureSession(state: .hostRecovering)
         #expect(recovering.controls.select(.endForEveryone) == .ignored && recovering.controls.leaveState.confirmationId == 0)
     }
 
     @Test func rowsThatOpenSomethingWaitForTheSheetToGo() {
-        // D17 and NF 9.1 (Android sheet and iOS fallback sheet); CC15 for a share start.
+
         let more = ControlsFixtureSession(state: .host).controls.more
         for id in [MoreItemID.participants, .activities, .settings, .meetingDetails, .hostControls, .endForEveryone, .invite] {
             if let item = more.item(id) { #expect(MoreMenuPolicy.actsAfterDismiss(item), "\(id.rawValue)") }
@@ -277,31 +260,30 @@ struct CTL5MoreMenuTests {
                                                               "layout", "invite", "copyLink", "meetingDetails", "settings"])
         let webinar = ControlsFixtureSession(state: .webinarHost).controls.more
         #expect(MoreMenuPolicy.tiles(webinar).map { $0.id }.suffix(3) == ["meetingDetails", "qa", "settings"])
-        // Flip and the iOS system module are never Android tiles (S30 5 f rows 6 and 12).
+
         #expect(!MoreMenuPolicy.androidTileOrder.contains(.flipCamera) && !MoreMenuPolicy.androidTileOrder.contains(.systemVideoEffects))
     }
 
-    // MARK: Menu budget (CL16)
-
     @Test func theMenuBudgetChoosesTheMenuOrTheSheet() {
         let guest = ControlsFixtureSession(state: .guest).controls
-        // Batch 7: Transcript adds a one-line row (live notes off) and Layout a two-line row (its mode subtitle).
+        #expect(guest.more.sections.flatMap { $0.items }.filter { MoreMenuPolicy.hasSubtitle($0) }.map { $0.id } == ["captions", "layout"])
+
         #expect(guest.moreMetrics == MoreMenuMetrics(rows: 7, twoLineRows: 2, hasPalette: true, mediumRows: 1, separators: 3))
         #expect(MoreMenuPolicy.estimatedHeight(guest.moreMetrics, textScale: 1) == 588)
         let host = ControlsFixtureSession(state: .host).controls
         #expect(host.moreMetrics == MoreMenuMetrics(rows: 8, twoLineRows: 2, hasPalette: true, mediumRows: 1, separators: 4))
         #expect(MoreMenuPolicy.estimatedHeight(host.moreMetrics, textScale: 1) == 640)
         #expect(MoreMenuPolicy.estimatedHeight(host.moreMetrics, textScale: 23.0 / 17.0) > 700)
-        // 375 x 667 leaves about 575 pt above the control; 390 x 844 about 690 pt.
+
         #expect(!MoreMenuPolicy.usesSheet(estimate: 538, menuSpace: 575, isAccessibilitySize: false, isVerticalBar: false))
         #expect(MoreMenuPolicy.usesSheet(estimate: 538, menuSpace: 500, isAccessibilitySize: false, isVerticalBar: false))
         #expect(MoreMenuPolicy.usesSheet(estimate: 300, menuSpace: 900, isAccessibilitySize: true, isVerticalBar: false))
         #expect(MoreMenuPolicy.usesSheet(estimate: 300, menuSpace: 900, isAccessibilitySize: false, isVerticalBar: true))
         #expect(MoreMenuPolicy.menuHeightReadout(estimate: 537.6, space: 575, usesSheet: false) == "estimate 538 of space 575 form menu")
-        // A blocked palette becomes one two-line reason row.
+
         let recovering = ControlsFixtureSession(state: .recovering).controls.moreMetrics
         #expect(!recovering.hasPalette && recovering.twoLineRows > guest.moreMetrics.twoLineRows)
-        // Metrics stay put when only a count changes (S30 5 k).
+
         let waiting = CTL5Harness(Self.joined(isAdmin: true, pendingUsersCount: 1))
         let before = waiting.controls.moreMetrics
         waiting.shell.apply(Self.joined(isAdmin: true, pendingUsersCount: 2))
@@ -321,8 +303,6 @@ struct CTL5MoreMenuTests {
         #expect(h.controls.reactions.revision == reactions + 1 && h.controls.more.revision == more + 1)
     }
 
-    // MARK: Keyboard commands (S30 1 g, CL21)
-
     @Test func keyboardCommandsFollowTheControlsAndTheRole() {
         let guest = ControlsFixtureSession(state: .guest)
         let visible = guest.controls.commands.items.filter { $0.isVisible }.map { $0.id }
@@ -332,16 +312,14 @@ struct CTL5MoreMenuTests {
         #expect(guest.controls.perform(.participants) == .dispatched && guest.panelReadout() == "panel=participants invoker=call")
         let host = ControlsFixtureSession(state: .host)
         #expect(host.controls.commands.item(.lockMeeting)?.isVisible == true && host.controls.perform(.lockMeeting) == .dispatched)
-        // A blocked command is listed disabled and passes through (keyboard commands explain nothing).
+
         let recovering = ControlsFixtureSession(state: .wideRecovering)
         #expect(recovering.controls.commands.item(.screenShare)?.isEnabled == false)
         #expect(recovering.controls.perform(.screenShare) == .ignored && recovering.controls.explainCount == 0)
-        // Attendees: Raise Hand (with the capability) only.
+
         let attendee = ControlsFixtureSession(state: .attendee)
         #expect(attendee.controls.commands.items.filter { $0.isVisible }.map { $0.id } == ["hand"])
     }
-
-    // MARK: Fixtures (CL13)
 
     @Test func moreFixturesBuildAndReadOut() {
         for state in [ControlsFixtureState.webinarHost, .noLink, .reactionsOff, .hostReactionsOff, .moreHandRaising] {
@@ -355,27 +333,25 @@ struct CTL5MoreMenuTests {
         #expect(ControlsFixtureSession(state: .guest).countersReadout().contains("endRequested=0 endConfirmed=0"))
     }
 
-    // MARK: Source scans (the iOS views are not compiled by the macOS host; Kotlin is read)
-
     @Test func iosMoreIsTheNativeMenuWithTheDarkFallbackSheet() throws {
         let menu = ctl5Normalized(try ctl5Source("Sources/Conclave/Features/Meeting/Controls/MoreMenu+iOS.swift"))
         let sheet = ctl5Normalized(try ctl5Source("Sources/Conclave/Features/Meeting/Controls/MoreSheet+iOS.swift"))
         let cell = ctl5Normalized(try ctl5Source("Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift"))
         let bar = ctl5Normalized(try ctl5Source("Sources/Conclave/Features/Meeting/Controls/CallControlBar+iOS.swift"))
         for text in [menu, sheet] { #expect(text.hasPrefix("#if os(iOS) && !SKIP")) }
-        // CL5, CL16, RECONCILE R8: the priority order, the budget, the fallback sheet in the in-call dark scheme.
+
         #expect(menu.contains(".menuOrder(.priority)"))
         #expect(menu.contains("MoreMenuPolicy.usesSheet(estimate: estimate, menuSpace: Double(menuSpace),"))
         #expect(menu.contains(".presentationDetents([.medium, .large])") && menu.contains(".preferredColorScheme(.dark)"))
         #expect(menu.contains(".sheet(isPresented: $showsSheet, onDismiss: performDeferred)"))
         #expect(menu.contains("controls.stage.setTransientChrome(id: ChromeAutoHidePolicy.moreSheet, open: open)"))
-        // One Host submenu; End destructive last; the palette nearest the control; the medium share row with the F00 payload.
+
         #expect(menu.contains("Label(ConclaveStrings.text(\"Host\"), systemImage: ConclaveSymbols.crownFill)"))
         #expect(menu.contains("Button(role: .destructive)"))
         #expect(menu.contains("ConclaveReactionPalette(options: MoreCopy.paletteOptions(reactions)"))
         #expect(menu.contains("ShareLink(item: url, subject: Text(ConclaveStrings.text(\"Join My Conclave Meeting\")), message: Text(ConclaveStrings.text(\"Join me in this Conclave meeting.\")), preview: SharePreview(Text(more.roomLabel)))"))
         #expect(menu.contains(".accessibilityLabel(ConclaveStrings.text(\"Share Invite\"))"))
-        // Feedback lives on the control and fires only on dispatched (S30 5 h).
+
         for kind in [".reactionSent, trigger: reactionCounter", "handKind, trigger: handCounter", ".linkCopied, trigger: copyCounter",
                      ".selectionChanged, trigger: flipCounter", ".endForEveryonePrompted, trigger: endPromptCounter"] {
             #expect(menu.contains(".conclaveGestureFeedback(" + kind + ")"), "\(kind)")
@@ -383,10 +359,10 @@ struct CTL5MoreMenuTests {
         #expect(menu.contains("if controls.select(MoreItemID.hand) == ControlTapResult.dispatched { onHand(raising) }"))
         #expect(menu.contains("if inSheet && MoreMenuPolicy.actsAfterDismiss(item) {"))
         #expect(menu.contains("MoreMenuPolicy.presentsEndDialog(controls.leaveState)"))
-        // The fallback sheet: a List under a "More" heading with Close.
+
         #expect(sheet.contains("NavigationStack {") && sheet.contains(".navigationTitle(ConclaveStrings.text(\"More\"))"))
         #expect(sheet.contains(".accessibilityLabel(ConclaveStrings.text(\"Close\"))"))
-        // The cell routes More here with the bar's uncapped size and room; the bar keeps its CTL-1 and CTL-2 pins.
+
         #expect(cell.contains("MoreControl(model: model, controls: controls, diameter: diameter, textSize: textSize, menuSpace: menuSpace,"))
         #expect(cell.contains(".disabled(model.reason == ControlBlockedReason.leaving)") && !cell.contains(".disabled(!"))
         #expect(bar.contains(".focusedSceneValue(controls)") && bar.contains("isAccessibilityText: dynamicTypeSize.isAccessibilitySize"))
@@ -407,7 +383,7 @@ struct CTL5MoreMenuTests {
         #expect(commands.contains("CommandMenu(Text(CallCommandsCopy.menuTitle)) { if let controls { CallCommandButtons(controls: controls) } }"))
         #expect(commands.contains("_ = controls.perform(item.command)") && commands.contains(".disabled(!item.isEnabled)"))
         #expect(!commands.contains("conclaveGestureFeedback"), "keyboard commands play nothing")
-        // CC20: registered once by the Darwin scene, iOS only.
+
         #expect(main.contains("#if os(iOS)") && main.contains(".commands { ConclaveCallCommands() }"))
         #expect(main.components(separatedBy: "ConclaveCallCommands()").count - 1 == 1)
         #expect(main.contains(".windowResizability(.contentMinSize)"))
@@ -425,12 +401,12 @@ struct CTL5MoreMenuTests {
         #expect(sheet.contains("NativeMeetingShare.shareMeetingLink(link = more.meetingLink, subject = shareSubject, text = shareText,"))
         #expect(sheet.contains("val postsToast = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU"))
         #expect(sheet.contains("if (controls.copyLink(postsToast = postsToast) == ControlTapResult.dispatched) { haptics.gesture(FeedbackKind.linkCopied) }"))
-        // The component hides first and reports after the hide (D17), for tiles and host rows alike.
+
         #expect(component.components(separatedBy: "scope.launch { sheetState.hide() }.invokeOnCompletion {").count - 1 == 2)
         #expect(component.contains("if (host.kind == ConclaveActionRowKind.Destructive) HorizontalDivider()"))
         #expect(component.contains("ModalBottomSheetProperties(isAppearanceLightStatusBars = false, isAppearanceLightNavigationBars = false)"))
         #expect(component.contains("ConclaveBanner(kind = ConclaveBannerKind.Warning, text = notice, identifier = \"$identifier.notice\", inCall = true)"))
-        // The bar's More opens the sheet and draws Engaged while it shows; More plays nothing.
+
         #expect(bar.contains("CallControlKind.more -> MoreControlCell(controls, control, width)"))
         #expect(bar.contains("if (sheetOpen) MoreSheet(controls, onDismissed = { sheetOpen = false })"))
         #expect(keys.contains("controls.perform(command) != ControlTapResult.ignored"))
@@ -463,16 +439,13 @@ struct CTL5MoreMenuTests {
         let policy = try ctl5Source("Sources/Conclave/Features/Meeting/Controls/MoreMenuPolicy.swift")
         #expect(!policy.contains("#if") && !policy.contains("protocol ") && !policy.contains("inout "))
         #expect(policy.range(of: #"case\s+\w+\("#, options: .regularExpression) == nil)
-        // PanelCoordinator stays inside MeetingPanel.swift's types (Tests/IOSFeedbackAdapter/run.py).
+
         let coordinator = ctl5Normalized(try ctl5Source("Sources/Conclave/Features/Meeting/Panels/PanelCoordinator.swift"))
         #expect(coordinator.contains("func presentFromMore(_ panel: MeetingPanel, destination: PanelDestination = PanelDestination.none, targetId: String = \"\") -> Bool {"))
         #expect(!coordinator.contains("StagePresenter") && !coordinator.contains("CallControls"))
     }
 }
 
-// MARK: Helpers (file-private, so no other suite collides)
-
-/// A standalone shell, stage and controls presenter with the B5-T3 publish hook mirrored; `make` adds controls-only inputs.
 @MainActor
 private final class CTL5Harness {
     let shell = MeetingShellPresenter()

@@ -13,13 +13,6 @@ import org.robolectric.annotation.Config
 import skip.foundation.Data
 import skip.foundation.JSONDecoder
 
-/**
- * ACT-9 through the transpiled browser contract and presenter plus the handwritten Android helpers (the Swift half is
- * T/ACT9BrowserStageTests.swift): BrowserInputURLPolicy, the C6-20 timeouts and capability rules, the probe answer through
- * the Android JSON path, the load-issue mapping against the platform's own SSL error code, the presenter's controller and
- * viewer modes over one load-state contract, the registry refusing a WebView to viewers, the fixtures, and every copy name
- * the card asks for. No composition and no WebView (Robolectric has no WebView provider).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ACT9BrowserBridgeTests {
@@ -145,7 +138,7 @@ class ACT9BrowserBridgeTests {
         assertFalse(viewer.model.showsAddressRow)
         assertEquals("br_shared_by", browserSharerResource(viewer.model))
         assertEquals(ActivityTapResult.explained, viewer.focusKeyboard())
-        // Viewers of a video surface never get a WebView (browser.inputViews = 0).
+
         assertNull(BrowserWebViewRegistry.webView(RuntimeEnvironment.getApplication(), viewer.model, viewer, 0))
         assertFalse(BrowserWebViewRegistry.hasWebView(viewer.model.browserSessionId))
         assertEquals(0, BrowserWebViewRegistry.progressFor(viewer.model.browserSessionId))

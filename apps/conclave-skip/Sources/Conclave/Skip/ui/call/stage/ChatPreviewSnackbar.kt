@@ -39,24 +39,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
-/*
- * S40 8 d (CHT-8; R40-8, RECONCILE R1, R3; F00 C13 d chat variant): the chat preview on the stage toast lane. The lane
- * composes this host beside the F00 C13 host (HD request B6-T5 R2): this one shows stage.toast only while it is a
- * chatPreview, the other host every other kind, and the presenter shows one toast at a time, so at most one snackbar is
- * visible (each host's SnackbarHostState queue stays empty, AND 7.10). The dark stage-lane slot: in-call
- * surfaceContainerHigh #232327 with onSurface content, a 1 dp extended border (the fill alone is 1.264:1 against the
- * stage) and the "View" action in the in-call primary #FF7D66, never capitals. The stock SnackbarHost has no swipe, so the
- * preview wraps its own SwipeToDismissBox (both directions). The whole surface opens Chat at the newest message; View
- * does the same. Display time: 4 s through the system's recommended timeout (counting the action as a control),
- * restarted when the preview updates in place. No sound, no haptic (S20 10 h).
- */
-
-/** A plain holder written during composition, so the preview keeps drawing while the host's exit motion runs. */
 private class RetainedChatPreview {
     var notice: MeetingNotice? = null
 }
 
-/** The chat variant's host: reads stage.toast only and hands the id back through dismissNotice when the preview leaves. */
 @Composable
 internal fun ChatPreviewSnackbarHost(stage: StagePresenter, modifier: Modifier = Modifier) {
     val current = stage.toast
@@ -67,7 +53,7 @@ internal fun ChatPreviewSnackbarHost(stage: StagePresenter, modifier: Modifier =
     val displayed = rememberUpdatedState(retained.notice)
     val shownId by rememberUpdatedState(preview?.id)
     val context = LocalContext.current
-    // One showSnackbar per preview id, Indefinite because this host times it below; never a second while one shows.
+
     LaunchedEffect(preview?.id) {
         val shown = preview
         if (shown == null) {
@@ -76,11 +62,10 @@ internal fun ChatPreviewSnackbarHost(stage: StagePresenter, modifier: Modifier =
         }
         hostState.showSnackbar(message = shown.name, actionLabel = null, withDismissAction = false,
             duration = SnackbarDuration.Indefinite)
-        // Returns only for the host's own accessibility dismiss action; the timer, the swipe and the taps already went
-        // through the presenter (and a new preview id cancels this effect instead).
+
         if (shownId == shown.id) stage.dismissNotice(id = shown.id)
     }
-    // S40 8 m: 4 s, stretched by the accessibility timeout, and started again when the preview updates in place.
+
     LaunchedEffect(preview?.id, preview?.count) {
         val shown = preview ?: return@LaunchedEffect
         delay(chatPreviewTimeoutMillis(context))
@@ -98,7 +83,6 @@ internal fun ChatPreviewSnackbarHost(stage: StagePresenter, modifier: Modifier =
     }
 }
 
-/** One preview: the 24 dp avatar row with the title, the two-line body and the count line, plus the View action. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatPreviewSnackbar(notice: MeetingNotice, onOpen: () -> Unit, onDismiss: () -> Unit) {
@@ -147,7 +131,7 @@ private fun ChatPreviewSnackbar(notice: MeetingNotice, onOpen: () -> Unit, onDis
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.Top,
             ) {
-                // The assistant's mark is the avatar of its identity until the assistant glyph lands (R40-5, CL4).
+
                 ConclaveAvatar(notice.name, if (notice.userId.isEmpty()) null else notice.userId, ConclaveAvatarSize.mention)
                 Column {
                     ChatPreviewTitleRow(title, notice.isPrivate)
@@ -165,7 +149,6 @@ private fun ChatPreviewSnackbar(notice: MeetingNotice, onOpen: () -> Unit, onDis
     }
 }
 
-/** The title row: the name (or the grouping) and, for a private message, the lock glyph with "Private" (S40 8 b). */
 @Composable
 private fun ChatPreviewTitleRow(title: String, isPrivate: Boolean) {
     val scheme = MaterialTheme.colorScheme
@@ -183,14 +166,12 @@ private fun ChatPreviewTitleRow(title: String, isPrivate: Boolean) {
     }
 }
 
-/** One sender: the name; several: "Avery Lee and 2 others" (F00 ds_name_and_others, people other than the newest). */
 @Composable
 internal fun chatPreviewTitle(notice: MeetingNotice): String {
     val others = ChatPreviewPolicy.othersCount(notice)
     return if (others > 0) conclavePlural("ds_name_and_others", others, notice.name, others) else notice.name
 }
 
-/** The body from the presenter's kind and payload (S40 8 g; never a file name). */
 @Composable
 internal fun chatPreviewBody(notice: MeetingNotice): String {
     val text = notice.detail
@@ -204,7 +185,6 @@ internal fun chatPreviewBody(notice: MeetingNotice): String {
     }
 }
 
-/** "Message from Avery Lee: Can you share the deck?", then the private tag and the count line. */
 @Composable
 internal fun chatPreviewLabel(notice: MeetingNotice): String {
     val parts = mutableListOf(conclaveString("chat_preview_label", chatPreviewTitle(notice), chatPreviewBody(notice)))
@@ -213,10 +193,6 @@ internal fun chatPreviewLabel(notice: MeetingNotice): String {
     return parts.joinToString(", ")
 }
 
-/**
- * The display time in milliseconds: the shared 4 s (S20 10 f) through AccessibilityManager.getRecommendedTimeoutMillis
- * on API 29+ with text, icons and controls (the View action), so "Time to take action" stretches it; 4 s on API 28.
- */
 internal fun chatPreviewTimeoutMillis(context: Context): Long {
     val base = ChatPreviewPolicy.displayMillis(isScreenReaderRunning = false).toInt()
     if (Build.VERSION.SDK_INT < 29) return base.toLong()
@@ -224,7 +200,6 @@ internal fun chatPreviewTimeoutMillis(context: Context): Long {
     return ChatPreviewTimeoutApi29.timeout(manager, base).toLong()
 }
 
-/** Version-gated call in its own class, so API 28 never loads it. */
 @RequiresApi(29)
 private object ChatPreviewTimeoutApi29 {
     fun timeout(manager: AccessibilityManager, base: Int): Int = manager.getRecommendedTimeoutMillis(base,

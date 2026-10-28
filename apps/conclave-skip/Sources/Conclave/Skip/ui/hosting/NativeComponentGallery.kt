@@ -70,18 +70,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.Locale
 
-/*
- * Debug-only component gallery for the hosting preview (TG 4.1): typography, haptic and contrast self-checks
- * and the WP1-2b components (buttons, call controls, rows, banners, status views) as flat lazy items with
- * stable keys, never a nested scrolling list. Rows come from cached immutable DTOs built once from the shared
- * catalog and contract (R14). It is inert: no call, media, socket, route, permission or session effect, and no
- * effect loop, so idle frames stay quiet; spinners appear only while "Show loading" is on, and the one animated
- * banner moves only when its switch flips. Haptic specimens and component gestures use the gesture route without
- * a view, so a tap records the decision and nothing reaches the hardware. Component text reports its layout to
- * the clipped-text count through LocalConclaveTextReporter. Strings are Android string resources in sentence
- * case (owner decisions Q13 and Q14).
- */
-
 internal data class NativeGalleryTypeRow(val id: String, val style: ConclaveTextStyle, val weight: ConclaveTextWeight)
 
 internal data class NativeGalleryHapticRow(
@@ -93,15 +81,12 @@ internal data class NativeGalleryContrastRow(
     val requirement: ContrastRequirement, val expected: Double, val ratio: Double,
 )
 
-/** One WP1-2b component specimen in one column; `base` is the catalog ID, `id` the column ID. */
 internal data class NativeGalleryComponentRow(val id: String, val base: String, val section: GallerySection, val inCall: Boolean)
 
-/** The component sections, in catalog order. */
 internal val nativeGalleryComponentSections: List<GallerySection> = listOf(
     GallerySection.buttons, GallerySection.callControls, GallerySection.rows, GallerySection.banners, GallerySection.status,
 )
 
-/** A theme role pair resolved live in both columns; `caption` is a string resource name. */
 internal class NativeGalleryLiveRole(
     val name: String, val caption: String, val foreground: (ColorScheme) -> Color, val background: (ColorScheme) -> Color,
 )
@@ -117,7 +102,6 @@ internal val nativeGalleryLiveRoles: List<NativeGalleryLiveRole> = listOf(
     NativeGalleryLiveRole("error", "native_gallery_live_error", { it.error }, { it.surface }),
 )
 
-/** One snapshot per API level. Gesture rows come first, then outcomes, each in contract order. */
 internal class NativeComponentGalleryRows(val api: Int) {
     val type: List<NativeGalleryTypeRow> = buildList {
         for (style in ConclaveTextStyle.values()) {
@@ -143,12 +127,9 @@ internal class NativeComponentGalleryRows(val api: Int) {
         }
     }
 
-    /** Component specimens in drawing order: In call only for the call controls, both columns for the rest.
-     *  Spinner specimens exist only in the loading list (TG 4.1). */
     val components: List<NativeGalleryComponentRow> = componentRows(showLoading = false)
     val componentsWithLoading: List<NativeGalleryComponentRow> = componentRows(showLoading = true)
 
-    /** Every specimen with a clipping probe on its main text, so the readout can show coverage. */
     val specimenIDs: Set<String> = buildSet {
         for (row in type) add(row.id)
         for (row in haptics) add(row.id)
@@ -165,7 +146,6 @@ internal class NativeComponentGalleryRows(val api: Int) {
     fun components(section: GallerySection, showLoading: Boolean): List<NativeGalleryComponentRow> =
         (if (showLoading) componentsWithLoading else components).filter { it.section == section }
 
-    /** The live mapper against the contract at this API. */
     fun hapticMatches(): Int = haptics.count { hapticConstantName(ConclaveHaptics.constant(it.kind, api)) == it.contract }
 
     private fun componentRows(showLoading: Boolean): List<NativeGalleryComponentRow> = buildList {
@@ -180,14 +160,12 @@ internal class NativeComponentGalleryRows(val api: Int) {
     }
 }
 
-/** One cache per preview lifetime: repeated reads return the identical snapshot. */
 internal class NativeComponentGalleryRowsCache(private val api: Int = Build.VERSION.SDK_INT) {
     private var cached: NativeComponentGalleryRows? = null
 
     fun current(): NativeComponentGalleryRows = cached ?: NativeComponentGalleryRows(api).also { cached = it }
 }
 
-/** Names of the constants the mapper returns, as the contract spells them. */
 internal fun hapticConstantName(constant: Int?): String = when (constant) {
     null -> "none"
     HapticFeedbackConstants.LONG_PRESS -> "LONG_PRESS"
@@ -204,24 +182,13 @@ internal fun hapticConstantName(constant: Int?): String = when (constant) {
     else -> String.format(Locale.ROOT, "UNKNOWN_%d", constant)
 }
 
-/**
- * Clipped and measured specimens, both counted over the same specimen set. A text line counts for the specimen
- * it is reported for (a clipped caption or verdict counts against its row); text outside a specimen is never
- * reported. Clipping is `TextLayoutResult.hasVisualOverflow`. A measurement belongs to one layout configuration
- * (`nativeGalleryConfigurationKey`); measurements from another configuration never count. A specimen keeps its
- * last measurement while its item is scrolled away or its section is collapsed, so scrolling back up to read
- * the count cannot hide a clipped specimen. "No clipped text" means 0 with every specimen measured. Writes
- * happen only when a line's state really changes.
- */
 internal class NativeGalleryOverflow {
-    // "configuration|line" to the specimen the line belongs to.
+
     private val clipped = mutableStateMapOf<String, String>()
     private val measured = mutableStateMapOf<String, String>()
 
-    /** Specimens in `specimens` with a clipped line in this configuration. */
     fun count(configuration: String, specimens: Set<String>): Int = specimensIn(clipped, configuration, specimens)
 
-    /** Specimens in `specimens` measured in this configuration; 0 clipped means something only at full coverage. */
     fun measuredCount(configuration: String, specimens: Set<String>): Int = specimensIn(measured, configuration, specimens)
 
     fun report(configuration: String, specimen: String, line: String, overflow: Boolean) {
@@ -240,12 +207,6 @@ internal class NativeGalleryOverflow {
     }
 }
 
-/**
- * What a measurement is filed under: every setting that changes text layout while the activity keeps running.
- * The activity handles font scale, density, Bold Text (font weight adjustment), locale and layout direction
- * itself (`configChanges` in AndroidManifest.xml), so none of them recreates the gallery state. Numbers, the
- * language tag and the enum name print the same in every locale.
- */
 internal fun nativeGalleryConfigurationKey(
     fontScale: Float, density: Float, widthDp: Int, fontWeightAdjustment: Int, localeTag: String,
     layoutDirection: LayoutDirection, longText: Boolean, showLoading: Boolean = false,
@@ -264,16 +225,12 @@ private fun galleryConfiguration(state: NativeComponentGalleryState): String {
     )
 }
 
-/** Counts that scripts parse print ASCII digits in every locale (TG 4.1). A `%d` in a string resource follows
- *  the per-app locale, which writes Arabic-Indic digits for ar-EG; `Int.toString` never localizes. */
 internal fun asciiCount(value: Int): String = value.toString()
 
-/** A dp width for a script-read readout: one decimal, ASCII digits and a period in every locale. */
 internal fun asciiDp(value: Float): String = String.format(Locale.ROOT, "%.1f", value)
 
 private const val HIGH_TEXT_CONTRAST = "high_text_contrast_enabled"
 
-/** The header's contrast settings: the contrast level (API 34 and later, else null) and high contrast text. */
 internal data class NativeGalleryContrast(val level: Float?, val highTextContrast: Boolean) {
     companion object {
         fun read(context: Context): NativeGalleryContrast = NativeGalleryContrast(
@@ -283,12 +240,6 @@ internal data class NativeGalleryContrast(val level: Float?, val highTextContras
     }
 }
 
-/**
- * Neither contrast setting is a configuration change, so the header would keep a stale value after a change made
- * while the preview is open or in the background. The watcher re-reads both on every change of high contrast
- * text (ContentObserver) or, from API 34, of the contrast level (contrast change listener); the gallery also
- * calls `refresh` on ON_RESUME, the way `rememberReduceMotion` does.
- */
 internal class NativeGalleryContrastWatcher(private val context: Context, private val onChange: (NativeGalleryContrast) -> Unit) {
     private val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) = refresh()
@@ -309,7 +260,6 @@ internal class NativeGalleryContrastWatcher(private val context: Context, privat
     }
 }
 
-/** API 34 calls in their own class, so older devices never load the listener interface. */
 @RequiresApi(34)
 private object GalleryContrastApi34 {
     fun level(context: Context): Float? = context.getSystemService(UiModeManager::class.java)?.contrast
@@ -354,11 +304,11 @@ internal class NativeComponentGalleryState {
     var bannersExpanded by mutableStateOf(false)
     var statusExpanded by mutableStateOf(false)
     var longText by mutableStateOf(false)
-    /** Default off and never saved: the only way a spinner specimen appears (TG 4.1). */
+
     var showLoading by mutableStateOf(false)
-    /** Drives only the animated banner specimen (R5); never saved. */
+
     var bannerVisible by mutableStateOf(false)
-    // Specimen state stays inside the gallery.
+
     var noiseSuppression by mutableStateOf(true)
     var audioRoute by mutableStateOf("speaker")
     var verified by mutableStateOf<Int?>(null)
@@ -412,7 +362,6 @@ internal class NativeComponentGalleryState {
         lastTap = kind to decision
     }
 
-    /** Component gestures (call toggles, the selectable rows). Leave, Chat and More never call it. */
     fun recordControl(decision: GestureHapticDecision) {
         when (decision) {
             GestureHapticDecision.Played, GestureHapticDecision.Recorded -> controlRecorded++
@@ -460,7 +409,6 @@ internal fun NativeComponentGalleryToggle(expanded: Boolean, onExpandedChange: (
     }
 }
 
-/** Emits nothing while collapsed. Sections emit their rows only while expanded. */
 internal fun LazyListScope.nativeComponentGalleryItems(expanded: Boolean, state: NativeComponentGalleryState) {
     if (!expanded) return
     val rows = state.rows.current()
@@ -490,8 +438,6 @@ internal fun LazyListScope.nativeComponentGalleryItems(expanded: Boolean, state:
     }
 }
 
-/** One expanded component section: a header per column, then its specimens; extra readouts where the section
- *  has them (the control taps, the animated banner). */
 private fun LazyListScope.nativeGalleryComponentItems(
     section: GallerySection, rows: NativeComponentGalleryRows, state: NativeComponentGalleryState,
 ) {
@@ -513,7 +459,6 @@ private fun LazyListScope.nativeGalleryComponentItems(
     }
 }
 
-/** Gallery text. A line of a specimen reports its clipping for that specimen; other text is not counted. */
 @Composable
 private fun GalleryText(
     text: String, state: NativeComponentGalleryState, modifier: Modifier = Modifier,
@@ -585,7 +530,6 @@ private fun GalleryShowLoadingToggle(state: NativeComponentGalleryState) {
     }
 }
 
-/** A heading that is also the section's one show or hide control, with its state spoken. */
 @Composable
 private fun GallerySectionToggle(section: GallerySection, state: NativeComponentGalleryState) {
     val expanded = state.isExpanded(section)
@@ -593,7 +537,7 @@ private fun GallerySectionToggle(section: GallerySection, state: NativeComponent
         GallerySection.typography -> conclaveString("native_gallery_typography")
         GallerySection.haptics -> conclaveString("native_gallery_haptics")
         GallerySection.contrast -> conclaveString("native_gallery_contrast")
-        // iOS only; never emitted on Android.
+
         GallerySection.systemProminent -> ""
         GallerySection.buttons -> conclaveString("native_gallery_buttons")
         GallerySection.callControls -> conclaveString("native_gallery_call_controls")
@@ -656,7 +600,7 @@ private fun decisionText(decision: GestureHapticDecision): String = when (decisi
 @Composable
 private fun GalleryHapticRow(row: NativeGalleryHapticRow, first: Boolean, state: NativeComponentGalleryState) {
     val context = LocalContext.current
-    // No view: the real route decides, and nothing reaches the hardware.
+
     val route = remember(context) { ConclaveGestureHaptics(view = null, debuggable = isDebuggableApp(context)) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (first) {
@@ -712,8 +656,6 @@ private fun GallerySwatch(foreground: Color, background: Color) {
     }
 }
 
-/** Theme roles resolved live with `toArgb()` in each column: "App" follows the system, "In call" is always dark.
- *  HostingTheme no longer touches the system bars, so this column cannot flip them. */
 @Composable
 private fun GalleryLiveContrast(inCall: Boolean, state: NativeComponentGalleryState) {
     HostingTheme(inCall = inCall) {
@@ -762,12 +704,8 @@ private fun GalleryContrastRow(row: NativeGalleryContrastRow, state: NativeCompo
     }
 }
 
-// WP1-2b components
-
-/** The hosting list pads its items 16 dp on each side (AppRoot.kt); the full-bleed bar probe cancels it. */
 private val GALLERY_LIST_HORIZONTAL_PADDING = 16.dp
 
-/** "App" follows the system; "In call" is always dark. HostingTheme does not touch the system bars. */
 @Composable
 private fun GalleryColumn(inCall: Boolean, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     HostingTheme(inCall = inCall) {
@@ -784,7 +722,6 @@ private fun GalleryComponentHeader(inCall: Boolean) {
     }
 }
 
-/** Reports every component text line of one specimen to the clipped-text count, for this configuration. */
 @Composable
 private fun rememberComponentReporter(row: NativeGalleryComponentRow, state: NativeComponentGalleryState): ConclaveTextReporter {
     val configuration = galleryConfiguration(state)
@@ -793,7 +730,6 @@ private fun rememberComponentReporter(row: NativeGalleryComponentRow, state: Nat
     }
 }
 
-/** Gestures on component specimens take the real route decision without a view: nothing reaches the hardware. */
 @Composable
 private fun rememberRecordOnlyHaptics(): ConclaveGestureHaptics {
     val context = LocalContext.current
@@ -840,8 +776,6 @@ private fun GalleryButtonSpecimen(row: NativeGalleryComponentRow, state: NativeC
     }
 }
 
-/** Off, On, Engaged and disabled toggles, Leave and the Chat badge, each with its identifier as a measured
- *  caption (the controls themselves draw no text). Leave, Chat and More never touch the control taps readout. */
 @Composable
 private fun GalleryCallControlSpecimen(row: NativeGalleryComponentRow, state: NativeComponentGalleryState, haptics: ConclaveGestureHaptics) {
     val record: (FeedbackKind, GestureHapticDecision) -> Unit = { _, decision -> state.recordControl(decision) }
@@ -880,8 +814,6 @@ private fun GalleryControlRecord(state: NativeComponentGalleryState) {
     }
 }
 
-/** Cancels the hosting list's horizontal content padding with a layout modifier (negative padding throws), so the
- *  probe spans the window. */
 private fun Modifier.fullBleed(horizontal: Dp): Modifier = layout { measurable, constraints ->
     val extra = horizontal.roundToPx()
     val width = constraints.maxWidth + extra * 2
@@ -889,7 +821,6 @@ private fun Modifier.fullBleed(horizontal: Dp): Modifier = layout { measurable, 
     layout(constraints.maxWidth, placeable.height) { placeable.place(-extra, 0) }
 }
 
-/** The resource name of a compact bar control, for the moved readout. */
 private fun compactBarControlResource(id: String): String = when (id) {
     ComponentGalleryCatalog.compactBarMicrophone -> "ds_microphone"
     ComponentGalleryCatalog.compactBarCamera -> "ds_camera"
@@ -898,11 +829,6 @@ private fun compactBarControlResource(id: String): String = when (id) {
     else -> "ds_more_options"
 }
 
-/**
- * The legacy compact set (Mic, Camera, Share Screen, Chat, More, Leave) in a full-bleed item, fitted to the
- * window with the stated move order of OQ-2b-3. "Bar W dp of A dp" reads the bar's intrinsic width and the
- * full-bleed width, both ASCII in every locale.
- */
 @Composable
 private fun GalleryCompactBar(row: NativeGalleryComponentRow, state: NativeComponentGalleryState) {
     val density = LocalDensity.current
@@ -938,7 +864,7 @@ private fun GalleryCompactBar(row: NativeGalleryComponentRow, state: NativeCompo
                                 width = width, feedback = FeedbackKind.cameraOn, haptics = haptics, onGesture = record)
                         }
                         if (!moved.contains(ComponentGalleryCatalog.compactBarShareScreen)) {
-                            // Share Screen is On while idle and Engaged while sharing, never Off (F00 C04 f).
+
                             ConclaveCallToggle(conclaveString("ds_share_screen"), conclaveString("ds_state_off"), ConclaveIcons.PresentToAllFill0,
                                 ConclaveCallControlVisual.On, checked = false, identifier = "${row.id}.shareScreen", onToggle = {},
                                 width = width, haptics = haptics, onGesture = record)
@@ -983,7 +909,7 @@ private fun GalleryRowSpecimen(row: NativeGalleryComponentRow, state: NativeComp
         ComponentGalleryCatalog.toggleRowID ->
             ConclaveToggleRow(state.text(conclaveString("native_gallery_noise_suppression")), state.noiseSuppression, row.id,
                 onCheckedChange = { state.noiseSuppression = it })
-        // Avatar stand-in at palette index 7 (#14B8A6), the C07 color for this name (OQ-2b-8).
+
         ComponentGalleryCatalog.rowPersonID ->
             ConclavePersonRow(state.text(conclaveString("native_gallery_name_avery")), row.id, avatarPaletteIndex = 7,
                 detail = state.text(conclaveString("native_gallery_person_detail")),
@@ -1027,8 +953,6 @@ private fun GalleryBannerMotionToggle(state: NativeComponentGalleryState) {
     }
 }
 
-/** The animated banner (R5): it draws the banner.info component and text, is never counted, and its live
- *  region announces it like production would. */
 @Composable
 private fun GalleryBannerMotion(state: NativeComponentGalleryState) {
     GalleryColumn(inCall = true) {

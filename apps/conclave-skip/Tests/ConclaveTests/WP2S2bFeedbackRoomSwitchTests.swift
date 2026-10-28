@@ -3,13 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// WP2-S2b (PLAN-next 7 item 4; OWNER-DEFAULTS Q16; S70 12 production sink, 0.6 Debug readouts; S10 4): the single
-/// root feedback consumer as the production sink, the `DeliveredTokenKinds` registry, the pure room-switch policy and
-/// the Debug session readout values. The transpiled delivery runs in `T/Skip/FeedbackPanelBridgeTests.kt`; the iOS
-/// consumer compiles only for iOS, so its rules are pinned by source scans here.
 @MainActor
 struct WP2S2bFeedbackRoomSwitchTests {
-    // MARK: Delivered kinds (PLAN-next A9)
 
     @Test func deliveredKindsAreTheShellKindsAndLeftTheLegacyRoute() {
         #expect(Set(DeliveredTokenKinds.kinds) == [.joined, .admitted, .joinFailed, .denied, .removed, .connectionLost, .connectionRestored, .actionRejected])
@@ -19,7 +14,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
             #expect(kind.isAsyncOutcome)
             #expect(!ConclaveHapticFeedback.accepts(kind, route: .legacyOutcome), "\(kind) plays twice")
         }
-        // Every kind the shell can publish is delivered (S1C TOK): the phase kinds, the outcome kinds, actionRejected.
+
         var published: Set<FeedbackKind> = [.actionRejected]
         for kind in MeetingTerminalOutcomeKind.allCases {
             published.insert(MeetingFeedbackTokenPolicy.outcomeKind(kind))
@@ -37,8 +32,6 @@ struct WP2S2bFeedbackRoomSwitchTests {
         #expect(published == Set(DeliveredTokenKinds.kinds))
     }
 
-    // MARK: F1 rules with shell tokens
-
     @Test func aTokenIsDeliveredOnceAndNeverReplayedOnRemountOrPictureInPicture() throws {
         let shell = MeetingShellPresenter()
         let identity = MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "attempt-1")
@@ -54,11 +47,11 @@ struct WP2S2bFeedbackRoomSwitchTests {
         let observed = try #require(ticket)
         #expect(cursor.take(observed, session: state().session, eligible: true) == .joined)
         #expect(cursor.observe(session: state().session, token: state().token, epoch: cursor.epoch, eligible: true) == nil)
-        // Rotation (a new consumer) baselines on the published token: nothing replays.
+
         let rotated = FeedbackDeliveryCursor()
         rotated.attach(session: state().session, current: state().token, eligible: true)
         #expect(rotated.observe(session: state().session, token: state().token, epoch: rotated.epoch, eligible: true) == nil)
-        // PiP or background: ineligible, the token is consumed; returning rebaselines and plays nothing.
+
         rotated.setEligibility(session: state().session, current: state().token, eligible: false)
         let removed = MeetingTerminalOutcome(id: 1, callSession: 1, kind: .removed, serverText: "")
         shell.apply(MeetingShellInputs.make(identity: identity, connectionState: .error, terminalOutcome: removed))
@@ -80,7 +73,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
     }
 
     @Test func productionSinksFollowTheF1Rules() throws {
-        // iOS: one root modifier over the shell stream, production delivery, the final gate before the effect.
+
         let root = try s2bSource("Sources/Conclave/Core/Session/ConclaveRootFeedback+iOS.swift")
         #expect(root.hasPrefix("#if os(iOS) && !SKIP\n"))
         #expect(root.contains("deliversKind: { DeliveredTokenKinds.delivers($0) }"))
@@ -94,11 +87,11 @@ struct WP2S2bFeedbackRoomSwitchTests {
         #expect(delivery.contains("private var eligible: Bool { attached && active && !suspended && ConclaveFeedback.isEnabled(in: defaults) }"))
         #expect(delivery.contains(".onChange(of: delivery.sourceState) { _, _ in delivery.observe(mount: mount) }"))
         #expect(delivery.contains("UIApplication.willResignActiveNotification"))
-        // The fixture stays record-only and accepts every kind.
+
         #expect(delivery.contains("recordOnly: true,\n            deliversKind: { _ in true },"))
         #expect(!delivery.contains("DeliveredTokenKinds"), "the silent adapter probe compiles this file without LegacyHapticRoutes.swift")
         #expect(!delivery.contains("MeetingShellPresenter"))
-        // Android: one public root composable, the view's single-argument haptic, resumed only, delivered kinds only.
+
         let android = try s2bSource("Sources/Conclave/Skip/ui/theme/NativeFeedbackDelivery.kt")
         #expect(android.contains("\n@Composable\nfun ConclaveRootFeedback() {"))
         #expect(android.contains("sink = { ConclaveHaptics.perform(view, it) },"))
@@ -116,8 +109,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
     }
 
     @Test func productionRootsAndTheReadoutAreMountedOnce() throws {
-        // HD request B2-T1 (root files are another lane this batch): one production consumer per platform, outside
-        // the PiP swap and the route switch; the Debug readout inside the hosting preview.
+
         let app = try s2bSource("Sources/Conclave/ConclaveApp.swift")
         #expect(app.components(separatedBy: ".conclaveRootFeedback(shell: MeetingViewModel.shared.shell)").count - 1 == 1)
         let main = try s2bSource("Android/app/src/main/kotlin/Main.kt")
@@ -130,8 +122,6 @@ struct WP2S2bFeedbackRoomSwitchTests {
         let androidPreview = try s2bSource("Sources/Conclave/Skip/ui/AppRoot.kt")
         #expect(androidPreview.contains("SessionReadoutSection(MeetingViewModel.shared.shell, FeedbackDeliveryRecords.shared)"))
     }
-
-    // MARK: Room switch (S10 4 c)
 
     @Test func roomSwitchPolicyMatchesTheS10Table() {
         func decide(
@@ -148,15 +138,15 @@ struct WP2S2bFeedbackRoomSwitchTests {
                 currentJoinMode: current, targetKind: target, targetJoinMode: mode
             ))
         }
-        // Idle: Home and the outcome screen open the target (no prompt, no auto-join).
+
         #expect(decide(.home) == .openLobby)
         #expect(decide(.outcome) == .openLobby)
         #expect(decide(.home, target: .webinar, mode: .webinarAttendee) == .openWebinarLanding)
-        // Lobby editing another room: replace, no prompt.
+
         #expect(decide(.home, lobby: .editing) == .replaceLobby)
         #expect(decide(.home, lobby: .failed) == .replaceLobby)
         #expect(decide(.home, lobby: .editing, sameRoom: true) == .ignore)
-        // Busy: a different room, or the same room in the other join mode, prompts.
+
         for phase in [MeetingPhaseKind.entering, .waiting, .inCall, .recovering] {
             #expect(decide(phase) == .prompt, "\(phase)")
             #expect(decide(phase, sameRoom: true) == .ignore, "\(phase)")
@@ -165,18 +155,16 @@ struct WP2S2bFeedbackRoomSwitchTests {
         }
         #expect(decide(.home, lobby: .connecting) == .prompt)
         #expect(decide(.home, lobby: .waiting) == .prompt)
-        // Sign-in in progress queues; an unparsable Conclave link is the invalid-link notice.
+
         #expect(decide(.inCall, signingIn: true) == .queue)
         #expect(decide(.inCall, target: .invalid) == .invalidLink)
         #expect(decide(.home, signingIn: true, target: .invalid) == .invalidLink)
-        // The pure same-room rule: ids and aliases, trimmed and case-insensitive.
+
         #expect(MeetingRoomSwitchPolicy.isSameRoom(currentRoomId: "lily-zoro-iris", aliases: [], targetRoomId: " LILY-ZORO-IRIS "))
         #expect(MeetingRoomSwitchPolicy.isSameRoom(currentRoomId: "lily-zoro-iris", aliases: ["team-standup"], targetRoomId: "Team-Standup"))
         #expect(!MeetingRoomSwitchPolicy.isSameRoom(currentRoomId: "lily-zoro-iris", aliases: [], targetRoomId: "rose-sora-luffy"))
         #expect(!MeetingRoomSwitchPolicy.isSameRoom(currentRoomId: "", aliases: [], targetRoomId: "  "))
     }
-
-    // MARK: Debug session readout values
 
     @Test func sessionReadoutValuesAreMachineReadable() throws {
         let shell = MeetingShellPresenter()
@@ -207,7 +195,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
                       MeetingSessionReadout.feedback(shell.feedbackState)] {
             #expect(value.unicodeScalars.allSatisfy { $0.isASCII }, "\(value)")
         }
-        // A reason that blocks only toward live shows while the row can still turn off.
+
         let paused = MeetingControlRow(id: "microphone", isVisible: true, isOn: true, isEnabled: true, isPending: false,
                                        blockedReason: .audioInterrupted, hint: .none, badgeCount: 0, failure: .none, failureDirection: .none)
         #expect(MeetingSessionReadout.rowText(paused) == "microphone=on,enabled:audioInterrupted")
@@ -218,7 +206,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
 }
 
 #if os(macOS)
-/// The view model's room-switch inputs (macOS stubs; no network).
+
 @MainActor
 @Suite(.serialized)
 struct WP2S2bRoomSwitchViewModelTests {

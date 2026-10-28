@@ -24,20 +24,8 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import java.util.WeakHashMap
 import skip.foundation.ProcessInfo
 
-/**
- * S70 4 d (SYS-5, SX5): the Android proximity controller. The shared edge writer (CallScreenAwakeState in
- * S/Core/Call/CallScreenAwake.swift) calls [setArmed] once per edge of CallPresenceSnapshot.proximityArmed
- * (ProximityPolicy: receiver route, camera off, not presenting, not in PiP, app active). While armed and with an
- * activity resumed it holds PROXIMITY_SCREEN_OFF_WAKE_LOCK ("conclave:proximity"), only where the level is supported
- * (a tablet without a sensor never holds it), and releases it with RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY so the screen
- * does not flash on at the ear. It reports whether it holds the lock back to the shared writer (the `sys.proximity`
- * readout); near and far come from a sensor listener registered only in debuggable builds and only while the lock
- * is held, and never reach the presence snapshot. Event driven, no polling (4 k). Main thread only.
- *
- * Under Core-Telecom (SY5 spike, not merged) the route rule would read the call endpoint type instead.
- */
 object ProximityController {
-    /** The wake lock tag `dumpsys power` lists (S70 4 l2). */
+
     const val WAKE_LOCK_TAG = "conclave:proximity"
 
     private var wanted = false
@@ -61,21 +49,15 @@ object ProximityController {
         }
     }
 
-    /** Whether the proximity wake lock is held now (Robolectric and the fixture readout). */
     val isHeld: Boolean
         get() = wakeLock?.isHeld == true
 
-    /** Called by the shared writer on each edge of the arming rule. */
     fun setArmed(armed: Boolean) {
         observeHostLifecycle()
         wanted = armed
         applyWanted()
     }
 
-    /**
-     * The task was removed (CallForegroundService.onTaskRemoved): release at once, without waiting for the sensor,
-     * and stay released until the next arming edge.
-     */
     fun releaseNow() {
         wanted = false
         release(waitForNoProximity = false)
@@ -87,7 +69,7 @@ object ProximityController {
         lifecycleObserved = true
         val lifecycle = ProcessLifecycleOwner.get().lifecycle
         hostResumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-        // Adding the observer replays the events up to the current state (ON_RESUME when an activity is resumed).
+
         lifecycle.addObserver(hostObserver)
     }
 
@@ -112,7 +94,7 @@ object ProximityController {
             wakeLock = it
         }
         try {
-            // Untimed on purpose: held only while the arming rule holds, released on every edge and on task removal.
+
             lock.acquire()
         } catch (t: Throwable) {
             debugLog("[Proximity] Failed to acquire the proximity wake lock: ${t}")
@@ -137,7 +119,6 @@ object ProximityController {
         CallScreenAwakeState.shared.reportProximityMonitoring(active = isHeld)
     }
 
-    /** Near and far for the Debug readout only (debuggable builds, while the lock is held). */
     private fun startDebugSensor() {
         if (sensorListener != null) return
         val ctx = context()
@@ -153,7 +134,7 @@ object ProximityController {
 
             override fun onAccuracyChanged(changed: Sensor?, accuracy: Int) = Unit
         }
-        // Without a Handler the events arrive on the main looper, like every other call here.
+
         if (manager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)) {
             sensorListener = listener
         }
@@ -168,10 +149,6 @@ object ProximityController {
     private fun context(): Context = ProcessInfo.processInfo.androidContext
 }
 
-/**
- * Reference-counted View.keepScreenOn holds, so two native roots composed at once (the premeeting host and the call
- * root inside it, or a cross-fade) never clear each other. Main thread only.
- */
 internal object KeepScreenOnHolds {
     private val counts = WeakHashMap<View, Int>()
 
@@ -194,10 +171,6 @@ internal object KeepScreenOnHolds {
     fun holdCount(view: View): Int = counts[view] ?: 0
 }
 
-/**
- * S70 4 d: the Compose-scoped equivalent of FLAG_KEEP_SCREEN_ON. View.keepScreenOn on the content view makes the
- * window carry the flag while any hold is on; the legacy route's SkipUI window flag is independent of it.
- */
 @Composable
 fun KeepScreenOnEffect(on: Boolean) {
     val view = LocalView.current
@@ -209,17 +182,11 @@ fun KeepScreenOnEffect(on: Boolean) {
     }
 }
 
-/**
- * The native roots' keep awake (S70 4 d): follows CallPresenceSnapshot.keepsScreenAwake through the shared edge
- * writer, so it recomposes only on the rule's edges (waiting, connecting, live, recovering and on hold keep the
- * screen on). Request lines in K/ui/home/PremeetingHost.kt, K/ui/call/stage/CallRoot.kt and the system fixture root.
- */
 @Composable
 fun CallKeepScreenOnEffect() {
     KeepScreenOnEffect(CallScreenAwakeState.shared.keepsScreenAwake)
 }
 
-/** The S70 SX1 readouts `sys.awake` and `sys.proximity` for the Debug system fixture, as test tags with ASCII values. */
 @Composable
 fun ScreenAwakeFixtureReadouts(modifier: Modifier = Modifier) {
     val state = CallScreenAwakeState.shared

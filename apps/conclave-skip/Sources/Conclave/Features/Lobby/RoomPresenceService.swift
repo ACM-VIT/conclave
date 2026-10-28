@@ -3,12 +3,6 @@ import Foundation
 import FoundationNetworking
 #endif
 
-// ENT-3 (S10 6 f "Presence", Q5; 0.8 C17): who is already in a room before joining, web parity (the web lobby polls
-// `GET /api/sfu/rooms/<room>` every 10 s with the `x-sfu-client` header; apps/web/src/app/meets-client-page.tsx).
-// The answer is `{ room: { id, userCount } }` or `{ room: null }` (the route turns an SFU 404 into a null room).
-// The presenter owns the 10 s poll task and the collision check; this file only fetches and parses. Transpiled: the
-// Android branch uses the app's OkHttp client (AndroidNativeHttpClient), like the webinar lookup does.
-
 private struct RoomPresenceResponse: Decodable {
     let room: RoomPresenceRoom?
 }
@@ -38,7 +32,6 @@ private struct RoomPresenceError: Error {
 enum RoomPresenceService {
     static let pathPrefix = "/api/sfu/rooms/"
 
-    /// The occupancy endpoint for a room on the app's web origin, or nil for an empty room.
     static func url(roomId: String, baseURL: URL) -> URL? {
         let room = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !room.isEmpty, var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
@@ -50,8 +43,6 @@ enum RoomPresenceService {
         return components.url
     }
 
-    /// The user count from one HTTP answer: a 2xx with a null room or a 404 is an empty room; another status or an
-    /// unreadable body is a failed request (nil, presence hidden). Counts are floored at 0 like the web route does.
     static func userCount(statusCode: Int, body: Data) -> Int? {
         if statusCode == 404 {
             return 0
@@ -64,7 +55,6 @@ enum RoomPresenceService {
         return Int(raw)
     }
 
-    /// One presence request. `clientId` "" sends no tenant header (the server's default tenant).
     static func fetchUserCount(roomId: String, clientId: String) async -> Int? {
         guard let baseURL = NativeAuthService.resolveAppBaseURL(),
               let url = url(roomId: roomId, baseURL: baseURL) else {

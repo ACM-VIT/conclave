@@ -1,14 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 2 c `.voice` (SET-4) on iOS: "Voice Messages". Your Messages (System Voice, or Your Voice once a personal voice is
-// ready), Your Voice (the C6-23 rows only while WP10 publishes `canUsePersonalVoice`; W10-4 is out of this push, so the
-// section shows its footer only, Q12), and Voices You Hear: the standard voice you hear for speakers without a
-// personal voice (C6-22, ships now because receiver-side synthesis runs locally) with Preview on tap only, never on
-// open. The voice list is loaded once per page from the platform speaker; the chosen voice reaches `TtsSpeaker` once
-// through the queue's preference read. `link` maps the recorder push onto the container's path (the Settings panel or
-// the Account sheet in the app scope, where Preview is absent: no call output).
-
 struct SettingsVoicePage<Route: Hashable>: View {
     let settings: SettingsPresenter
     let link: (SettingsRoute) -> Route?
@@ -80,7 +72,6 @@ struct SettingsVoicePage<Route: Hashable>: View {
     }
 }
 
-/// C6-23 rows by phase (only while `canUsePersonalVoice`).
 private struct SettingsPersonalVoiceRows<Route: Hashable>: View {
     let settings: SettingsPresenter
     let chat: SettingsChat
@@ -118,7 +109,6 @@ private struct SettingsPersonalVoiceRows<Route: Hashable>: View {
     }
 }
 
-/// The Your Voice footer: unavailable or guest (Q12), the create failure, or nothing.
 private struct SettingsPersonalVoiceFooter: View {
     let chat: SettingsChat
 

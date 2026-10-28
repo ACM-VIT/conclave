@@ -2,31 +2,15 @@
 import SwiftUI
 import UIKit
 
-// S40 2 (CHT-1): the timeline. A lazy list over the presenter's row ids (the list observes only `timeline`, each row
-// only its entry), short history aligned at the top, following new rows only while at the bottom or for your own send,
-// with a neutral
-// jump pill counting unseen remote messages. iOS 18 reads bottom proximity from scroll geometry; iOS 17 uses a bottom
-// sentinel whose appearance callbacks write a plain reference box plus a value-guarded flag (AGENTS appearance-
-// callback rule). No merge, sort or format in a body; no timers except the one highlight task a jump starts.
-// T3 borrow P8 (S40 2 c composer focus): when the composer's field gains focus and the newest row is at least partly
-// visible, the list scrolls to the newest row (.snappy, instant under Reduce Motion); farther up, the position and the
-// pill stay. Row visibility comes from onScrollVisibilityChange on iOS 18 and from appearance callbacks on iOS 17, both
-// written into a plain reference box. On iOS 17 the newest row is re-pinned once after the keyboard settles, because
-// the bottom anchor there does not follow the container shrinking.
-
-/// The iOS 17 sentinel's reference box: mutating it never invalidates a body.
 private final class ChatBottomSentinelState {
     var isVisible = true
 }
 
-/// P8: which rows are at least partly visible, plus the iOS 17 keyboard re-pin latch. A plain reference box held in
-/// `@State`: the visibility and appearance callbacks write it without invalidating any body, and the focus handler reads
-/// it on demand (AGENTS appearance-callback rule).
 private final class ChatRowVisibilityBox {
-    /// iOS 18: at least this share of a row inside the viewport counts as visible ("at least partly").
+
     static let partlyVisibleThreshold = 0.01
     private(set) var visibleRowIds: Set<String> = []
-    /// iOS 17: set when a focus gain followed to the newest row; the next keyboard show re-pins it once.
+
     var repinsAfterKeyboard = false
 
     func setVisible(_ rowId: String, _ visible: Bool) {
@@ -42,7 +26,6 @@ private final class ChatRowVisibilityBox {
     }
 }
 
-/// One rotor entry (2 c): a row after the unread divider.
 private struct ChatRotorEntry: Identifiable {
     let id: String
     let label: String
@@ -100,7 +83,7 @@ struct ChatTimeline: View {
                 .modifier(ChatBottomProximity(isAtBottom: $isAtBottom))
                 .scrollDismissesKeyboard(.interactively)
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if initialPositioned && !isAtBottom {
+                    if initialPositioned && ChatTimelinePolicy.showsJumpToLatest(isAtBottom: isAtBottom, unseenCount: unseen) {
                         ChatJumpPill(unseen: unseen) { jumpToLatest(proxy, timeline: timeline) }
                             .padding(.bottom, CGFloat(DesignTokens.space8))
                     }
@@ -125,13 +108,11 @@ struct ChatTimeline: View {
         }
     }
 
-    /// Value guarded: the sentinel's callbacks re-fire with body re-runs (AGENTS).
     private func setBottomVisible(_ visible: Bool) {
         sentinel.isVisible = visible
         if isAtBottom != visible { isAtBottom = visible }
     }
 
-    /// Open position (2 c): the destination, else the unread divider, else the newest row; no animation.
     private func place(_ proxy: ScrollViewProxy, timeline: ChatTimelineSnapshot) {
         let target = ChatTimelinePolicy.initialTarget(focusId: timeline.focusId,
                                                      firstUnreadId: timeline.firstUnreadId, newestId: timeline.newestId)
@@ -146,8 +127,6 @@ struct ChatTimeline: View {
         }
     }
 
-    /// INM C2 follow rule: at the bottom or your own send, scroll to the newest; otherwise count unseen remote
-    /// messages only (system rows, reactions and assistant deltas never count).
     private func follow(_ proxy: ScrollViewProxy, timeline: ChatTimelineSnapshot) {
         guard initialPositioned else { return }
         let atBottom = ChatTimelinePlatform.usesScrollGeometry ? isAtBottom : sentinel.isVisible
@@ -171,7 +150,6 @@ struct ChatTimeline: View {
         }
     }
 
-    /// A preview tap or a quote jump: the row scrolls to the middle and gets the 900 ms highlight (2 f).
     private func scrollToFocus(_ proxy: ScrollViewProxy, timeline: ChatTimelineSnapshot) {
         guard !timeline.focusId.isEmpty else { return }
         if reduceMotion {
@@ -207,7 +185,6 @@ struct ChatTimeline: View {
     }
 }
 
-/// Which bottom proximity path runs (2 c, 2 l 5).
 enum ChatTimelinePlatform {
     static var usesScrollGeometry: Bool {
         if #available(iOS 18.0, *) { return true }
@@ -215,9 +192,6 @@ enum ChatTimelinePlatform {
     }
 }
 
-/// iOS 18 separates opening at the newest row from short-content alignment. Only keep the bottom pinned through
-/// size changes while following; a reader looking at history keeps the current position as remote content grows.
-/// iOS 17 starts at the top and the explicit opening destination positions overflowing history.
 private struct ChatTimelineAnchors: ViewModifier {
     let isAtBottom: Bool
 
@@ -233,8 +207,6 @@ private struct ChatTimelineAnchors: ViewModifier {
     }
 }
 
-/// 2 c, iOS 17 only (CHT-7): a leaf that alone reads `chat.tailGrowth`, so a streaming answer's growth re-runs no list
-/// body; it keeps the newest row pinned only while the reader is at the bottom (iOS 18 uses the size-change anchor).
 private struct ChatStreamingFollow17: View {
     let chat: ChatPresenter
     let proxy: ScrollViewProxy
@@ -252,8 +224,6 @@ private struct ChatStreamingFollow17: View {
     }
 }
 
-/// P8: records whether a row is at least partly visible into the plain box. iOS 18 reads the scroll viewport
-/// (`onScrollVisibilityChange`); iOS 17 uses the lazy row's appearance callbacks. Neither writes observed state.
 private struct ChatRowVisibilityProbe: ViewModifier {
     let rowId: String
     let box: ChatRowVisibilityBox
@@ -271,11 +241,6 @@ private struct ChatRowVisibilityProbe: ViewModifier {
     }
 }
 
-/// P8 (S40 2 c, the T3 "follow when at the end" rule with one visibility test on every platform): a leaf that alone
-/// reads `actions.composerFocusRevision`, so a focus gain re-runs no list body. On a focus gain it scrolls to the newest
-/// row only when that row is at least partly visible; otherwise it leaves the position and the unseen pill alone. On
-/// iOS 17 it re-pins the newest row once after the keyboard has settled (the bottom anchor does not follow the
-/// container shrinking there); the latch clears when the keyboard hides or the timeline leaves the screen.
 private struct ChatComposerFocusFollow: View {
     let chat: ChatPresenter
     let actions: ChatRowActions
@@ -326,7 +291,6 @@ private struct ChatComposerFocusFollow: View {
     }
 }
 
-/// iOS 18: at the bottom when within 24 pt of the end, from scroll geometry (fires only when the value changes).
 private struct ChatBottomProximity: ViewModifier {
     @Binding var isAtBottom: Bool
 
@@ -346,18 +310,13 @@ private struct ChatBottomProximity: ViewModifier {
     }
 }
 
-/// CL5: neutral, never coral (one prominent action rule); appears without animation.
 private struct ChatJumpPill: View {
     let unseen: Int
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Label {
-                Text(unseen > 0 ? ConclaveStrings.format("%lld New Messages", unseen) : ConclaveStrings.text("Jump to Latest"))
-            } icon: {
-                Image(systemName: ConclaveSymbols.arrowDown).accessibilityHidden(true)
-            }
+            Text(ConclaveStrings.format("%lld New Messages", unseen))
         }
         .buttonStyle(.bordered)
         .tint(.primary)
@@ -367,22 +326,17 @@ private struct ChatJumpPill: View {
     }
 }
 
-/// 2 c empty state: title, body, visibility line and Ask Conclave AI (hidden when the assistant is unavailable).
 private struct ChatEmptyState: View {
     let chat: ChatPresenter
     let actions: ChatRowActions
 
     var body: some View {
         ContentUnavailableView {
-            Label(ConclaveStrings.text("No Messages Yet"), systemImage: ConclaveSymbols.message)
+            Text(ConclaveStrings.text("No Messages Yet"))
                 .accessibilityAddTraits(.isHeader)
         } description: {
             VStack(spacing: CGFloat(DesignTokens.space8)) {
-                Text(ConclaveStrings.text("Be the first to say something. Share a photo, send a GIF, drop a link or just say hi."))
-                Text(ConclaveStrings.text("Everyone in this call can see messages, including people who join later. Private messages stay between you and the recipient."))
-                if chat.composer.assistant != AssistantAvailability.unavailable {
-                    Text(ConclaveStrings.text("Ask Conclave AI anything. Type @Conclave anywhere in a message."))
-                }
+                Text(ConclaveStrings.text("Say hello to the room."))
             }
         } actions: {
             if chat.composer.assistant != AssistantAvailability.unavailable {

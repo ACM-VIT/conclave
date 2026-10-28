@@ -14,14 +14,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * CHT-4 and CHT-5 through the transpiled chat models, policies and presenter plus the handwritten Android helpers (the
- * Swift halves are T/CHT4PhotoTests.swift and T/CHT5GifEmbedTests.swift): photo sniffing and the prepare plan with the
- * same results as Swift, the attachment flow and the photo send rules, the web embed rules and YouTube ids, the GIF
- * picker's stale-response guard, suppressEmbeds and the GIF send, the Coil request bounded to the box size (3 l 3),
- * the FileProvider directory and authority, and the Custom Tabs fallback to the confirmation without an activity.
- * Pure: no composition.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class CHT4CHT5BridgeTests {
@@ -107,7 +99,7 @@ class CHT4CHT5BridgeTests {
         assertEquals(listOf("https://a.example/x"), urls("https://a.example/x again https://a.example/x"))
         assertEquals(listOf<String>(), urls("https://user@host.example/secret"))
         assertEquals(listOf("https://x.io/y"), urls("(see https://x.io/y)"))
-        // SkipFoundation would write the fragment before the query; the hand-built normalization keeps the order.
+
         assertEquals(listOf("https://a.example/x?y=1&z=2#top"), urls("https://A.example/x?y=1&z=2#top"))
         assertEquals("https://conclave.acmvit.in/api/unfurl?url=https%3A%2F%2Fyoutube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ%26t%3D4%23c",
             LinkEmbedService.unfurlURLString("https://youtube.com/watch?v=dQw4w9WgXcQ&t=4#c", "https://conclave.acmvit.in"))

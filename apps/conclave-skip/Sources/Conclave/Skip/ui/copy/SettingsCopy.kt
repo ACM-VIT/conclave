@@ -1,12 +1,5 @@
 package conclave.module
 
-/*
- * S60 0.6 L6-14 (SET-1, SET-2, SET-4) on Android: the one exhaustive copy mapping for Settings. Every typed reason,
- * phase and raw-value field the transpiled SettingsPresenter publishes resolves here to an app-module string resource
- * name (Material sentence case, prefix set_; the S70 status rows keep their sys_ names), which composition resolves
- * through conclaveString. T/Skip/SettingsTranscriptBridgeTests.kt enumerates every case (SET-3's mappings:
- * T/Skip/SET3VideoBridgeTests.kt). The iOS twin is S/Features/Meeting/Settings/SettingsCopy+iOS.swift.
- */
 internal object SettingsCopy {
     fun sectionName(section: SettingsSection): String = when (section) {
         SettingsSection.audio -> "set_audio"
@@ -52,7 +45,6 @@ internal object SettingsCopy {
         SettingsRowID.version -> "set_version"
     }
 
-    /** The supporting line a row carries under its headline, or null. */
     fun rowDetailName(row: SettingsRowID): String? = when (row) {
         SettingsRowID.microphone -> "set_test_microphone_detail"
         SettingsRowID.noiseSuppression -> "set_noise_suppression_detail"
@@ -63,7 +55,6 @@ internal object SettingsCopy {
         else -> null
     }
 
-    /** App bar titles; pushed page titles stay under 15 characters (S60 2 a). */
     fun pageTitleName(route: SettingsRoute): String = when (route) {
         SettingsRoute.root -> "set_title"
         SettingsRoute.output -> "set_audio_output"
@@ -81,7 +72,6 @@ internal object SettingsCopy {
             hostPageTitleName(SettingsRoutePolicy.peopleRoute(route)?.rawValue)
     }
 
-    /** The visible reason under a disabled row, or null (D10). */
     fun reasonName(reason: SettingsReason): String? = when (reason) {
         SettingsReason.none -> null
         SettingsReason.reconnecting -> "set_available_when_reconnected"
@@ -97,7 +87,6 @@ internal object SettingsCopy {
         SettingsReason.notInAppYet -> "set_voice_not_in_app"
     }
 
-    /** The name field's reason (1 f). */
     fun nameReasonName(reason: SettingsReason): String? =
         if (reason == SettingsReason.reconnecting) "set_name_reconnect" else null
 
@@ -118,7 +107,6 @@ internal object SettingsCopy {
         MicTestPhase.unavailable -> "set_mic_unavailable"
     }
 
-    /** "Saving" and "Saved"; a failure resolves through peopleRenameRefusalOf (S50 ppl_rename_ copy, R38). */
     fun nameStatusName(phase: NameSavePhase): String? = when (phase) {
         NameSavePhase.idle, NameSavePhase.failed -> null
         NameSavePhase.saving -> "set_saving"
@@ -156,9 +144,6 @@ internal object SettingsCopy {
 
     fun signOutMessageName(isHost: Boolean): String = if (isHost) "set_sign_out_host" else "set_sign_out_guest"
 
-    // SET-3 video, screen share and connection (S60 1 g, 2 g)
-
-    /** Camera quality options and the root value (the data-saver preset reads "Data saver" while a ceiling applies). */
     fun cameraPresetName(rawValue: String): String = when (NativeCameraQualityPreset.init(rawValue = rawValue)) {
         NativeCameraQualityPreset.highDefinition -> "set_preset_hd"
         NativeCameraQualityPreset.studio -> "set_preset_studio"
@@ -212,21 +197,18 @@ internal object SettingsCopy {
         else -> "set_balance_both"
     }
 
-    /** The Camera quality footer (2 f). */
     fun cameraQualityFooterName(dataSaverOn: Boolean, qualityCappedByHost: Boolean): String = when {
         dataSaverOn -> "set_quality_data_saver"
         qualityCappedByHost -> "set_host_quality_cap"
         else -> "set_quality_footer"
     }
 
-    /** The preview card status line (1 g), or null. */
     fun previewStatusName(state: PreviewState): String? = when (state) {
         PreviewState.published -> "set_visible_everyone"
         PreviewState.starting, PreviewState.live, PreviewState.interrupted -> "set_only_you"
         else -> null
     }
 
-    /** The preview card's state description: why the camera paused, the permission, or audio only (1 f). */
     fun previewReasonName(reason: SettingsReason): String? = when (reason) {
         SettingsReason.cameraInUse -> "set_camera_in_use"
         SettingsReason.cameraMultitasking -> "set_camera_multitasking"
@@ -236,7 +218,6 @@ internal object SettingsCopy {
         else -> null
     }
 
-    /** The Connection page summary (2 g). */
     fun connectionSummaryName(label: ConnectionQualityLabel): String = when (label) {
         ConnectionQualityLabel.measuring -> "set_connection_measuring"
         ConnectionQualityLabel.good -> "set_connection_good"

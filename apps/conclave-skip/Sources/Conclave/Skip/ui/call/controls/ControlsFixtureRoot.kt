@@ -27,21 +27,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 
-/*
- * S30 0.7 CL13 (CTL-1): the Android Debug controls fixture on the S20 SL14 stage fixture route. MainActivity mounts it
- * for `conclave.stageFixture=controls-<state>` (BuildConfig.DEBUG plus FLAG_DEBUGGABLE; request in HD/requests/B4-T6.md).
- * The native call root with probe renderers and the standalone controls presenter (ControlsFixtureSession, shared with
- * iOS) provided through LocalCallControls. Never MeetingViewModel, WebRTC, audio, capture or network. Readouts sit
- * beside the stage, never inside it (PS 7.6).
- */
-
-/**
- * True for the `controls-<state>` values of `conclave.stageFixture`. Public so MainActivity (the app module sees only
- * public declarations) can route them here without naming the internal `ControlsFixtureScript` (HD request B4-T6 R10).
- */
 fun isControlsFixtureState(stateName: String): Boolean = ControlsFixtureScript.state(named = stateName) != null
 
-/** Called only by MainActivity's explicit debug launch route. */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ControlsFixtureRoot(stateName: String) {
@@ -89,7 +76,7 @@ private fun ControlsFixtureControls(session: ControlsFixtureSession, modifier: M
             ControlsFixtureReadout(session.compositionReadout(), "controls.composition", tick)
             ControlsFixtureReadout(session.explanationReadout(), "controls.explanation", tick)
             ControlsFixtureReadout(session.leaveReadout(), "controls.leave", tick)
-            // CTL-5 and CTL-6 (CL13): More's rows and the hand (the menu budget is iOS only).
+
             ControlsFixtureReadout(session.moreReadout(), "controls.more", tick)
             ControlsFixtureReadout(session.handReadout(), "controls.hand", tick)
             ControlsFixtureReadout(session.routeReadout(), "controls.route", tick)
@@ -105,7 +92,7 @@ private fun ControlsFixtureControls(session: ControlsFixtureSession, modifier: M
 @Composable
 private fun ControlsFixtureButton(title: String, tag: String, onClick: () -> Unit) {
     TextButton(onClick = onClick, modifier = Modifier.heightIn(min = 48.dp).testTag(tag)) {
-        // Debug fixture labels are not user-facing copy (the stage fixture does the same).
+
         Text(title, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
     }
 }

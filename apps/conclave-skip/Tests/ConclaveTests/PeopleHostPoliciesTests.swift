@@ -3,12 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// PPL-1 (OUT/PLAN-screens.md section 5): the Participants panel, person rows, search and sections. The shared
-/// presenter, policies and fixtures run here; the iOS-only and Kotlin sources are read. The Kotlin half is
-/// T/Skip/PeopleHostBridgeTests.kt. Covers S50 0.5 (PeoplePresenter, PersonRowStore, WaitingRowStore), PL1, PL6, PL8,
-/// PL12, R50-1, R50-2, the S50 1 and 2 data contracts and acceptance logic (one-row mutation re-evaluates one row,
-/// speaker changes publish nothing, attendees never appear as rows, destinations scroll once), F00 C10 and C20, and,
-/// on macOS, the PH1, PH11 and PH19 core wiring (HD/requests/B4-T7.md R1, R2).
 @MainActor
 struct PeopleHostPoliciesTests {
     private func makePeople() -> PeoplePresenter {
@@ -30,8 +24,6 @@ struct PeopleHostPoliciesTests {
                           participants: people, isRosterLoaded: loaded, isAdmin: isAdmin)
     }
 
-    // MARK: PL6 order and roles
-
     @Test func orderIsYouHostCoHostsThenJoinSerial() {
         let people = makePeople()
         people.apply(inputs(.host6))
@@ -40,7 +32,7 @@ struct PeopleHostPoliciesTests {
         #expect(ids(people, .inMeeting) == ["u-sam", "u-ishaan", "u-avery", "u-lee"])
         people.apply(inputs(.cohostViewingHost))
         #expect(ids(people, .inMeeting) == ["u-avery", "u-ishaan", "u-lee"])
-        // Join serial, ties by id, an unnumbered id last (the StageOrderPolicy.joinOrder rule).
+
         people.apply(roster(local: "me", [
             PeopleParticipantInput.make(userId: "me", displayName: "Me", isLocal: true),
             PeopleParticipantInput.make(userId: "z", displayName: "Zed"),
@@ -49,7 +41,7 @@ struct PeopleHostPoliciesTests {
             PeopleParticipantInput.make(userId: "c", displayName: "Cy", joinSerial: 1),
         ]))
         #expect(ids(people, .inMeeting) == ["me", "c", "a", "b", "z"])
-        // PH19 (RECONCILE R20): People and the stage read one join order for the same six people.
+
         let stageOrder = StageOrderPolicy.joinOrder(PeopleFixtureScript.stageInputs(for: .host6).participants)
         people.apply(inputs(.host6))
         #expect(Array(ids(people, .inMeeting).dropFirst()) == stageOrder)
@@ -81,7 +73,7 @@ struct PeopleHostPoliciesTests {
         #expect(people.rows.entry(for: "u-sam").model.handOrder == 2)
         #expect(people.rows.entry(for: "u-lee").model.handOrder == 3)
         #expect(people.rows.entry(for: "u-ishaan").model.handOrder == 0)
-        // PH3: untimed (snapshot) hands sort after timed hands, by join serial.
+
         people.apply(roster(local: "me", [
             PeopleParticipantInput.make(userId: "me", displayName: "Me", isLocal: true),
             PeopleParticipantInput.make(userId: "a", displayName: "Al", isHandRaised: true, joinSerial: 3),
@@ -98,7 +90,7 @@ struct PeopleHostPoliciesTests {
         #expect(people.snapshot.sections.first?.id == PeopleSectionID.waiting.rawValue)
         let lee = people.waiting.entry(for: "waiting:p-lee").model
         #expect(lee.serverId == "p-lee" && lee.name == "Lee Park" && lee.isEnabled)
-        // A guest never sees Waiting, and the store forgets the rows.
+
         people.apply(PeopleFixtureScript.peopleInputs(roster: PeopleFixtureScript.roster(for: .guest4), state: .hostWaiting3))
         #expect(people.snapshot.section(.waiting) == nil)
         #expect(!people.waiting.contains("waiting:p-lee"))
@@ -114,12 +106,11 @@ struct PeopleHostPoliciesTests {
         #expect(meeting?.searchKeys == ["ishaan", "avery lee", "lee park", "sam ito", "priya n.", "omar k."])
         #expect(meeting?.names == ["Ishaan", "Avery Lee", "Lee Park", "Sam Ito", "Priya N.", "Omar K."])
         #expect(ids(people, .raisedHands) == ["u-avery"])
-        // Rows: detail, presenting and reconnecting (S50 2 f).
+
         #expect(people.rows.entry(for: "u-lee").model.detail == .presenting)
         #expect(people.rows.entry(for: "u-omar").model.detail == .reconnecting)
         #expect(people.rows.entry(for: "u-omar").model.isReconnecting)
-        // PPL-2 (B5-T1) put the PL7 actions on every row: for a host viewer, muted and camera-off Sam has no host media
-        // item, so the menu starts with group 0 and ends with Remove (S50 3 f). PPL2PeopleActionTests pins the full table.
+
         let samActions = people.rows.entry(for: "u-sam").model.actions
         #expect(!samActions.isEmpty, "row actions arrived with PPL-2")
         #expect(PeopleActionPolicy.groupOrder(samActions).first == 0 && samActions.last?.action == .remove)
@@ -139,8 +130,6 @@ struct PeopleHostPoliciesTests {
         #expect(people.snapshot.section(.inMeeting)?.count == 2)
     }
 
-    // MARK: S50 1 k and 2 k: one row per mutation, nothing per speaker change
-
     @Test func oneRowMutationWritesOneRowAndNoRevision() {
         let people = makePeople()
         people.apply(inputs(.host6))
@@ -155,10 +144,10 @@ struct PeopleHostPoliciesTests {
         #expect(people.snapshot.revision == revision, "a mute is not a structure change")
         #expect(!people.rows.entry(for: "u-sam").model.isMuted)
         #expect(people.rows.entry(for: "u-lee") === lee && lee.model == leeModel)
-        // The same inputs again write nothing.
+
         people.apply(muted)
         #expect(people.rowWriteCount == writes + 1 && people.snapshot.revision == revision)
-        // A rename publishes one revision (its search key changes) and one row.
+
         var renamed: [PeopleFixturePerson] = []
         for person in PeopleFixtureScript.hostSix() {
             renamed.append(person.userId == "u-sam"
@@ -189,13 +178,11 @@ struct PeopleHostPoliciesTests {
         #expect(PeopleFixtureScript.speakerScript(for: .host6).count == 20)
         #expect(people.snapshot.revision == revision && people.rowWriteCount == writes)
         #expect(ids(people, .inMeeting) == order, "People never follows the active speaker (D16)")
-        // The speaking glyph reads the stage's store: one leaf, shared with the tiles.
+
         #expect(people.speaking === stage.speaking)
         #expect(people.speaking.state(for: last).isSpeaking)
         #expect(!people.speaking.state(for: "u-ishaan").isSpeaking)
     }
-
-    // MARK: PL8 search
 
     @Test func searchFiltersSearchKeysOnly() {
         let people = makePeople()
@@ -212,14 +199,12 @@ struct PeopleHostPoliciesTests {
         #expect(PeopleSearchPolicy.resultCount(PeopleSearchPolicy.filter(sections, query: "zz")) == 0)
         #expect(PeopleSearchPolicy.filter(sections, query: "") == sections)
         #expect(!PeopleSearchPolicy.isSearching("   ") && PeopleSearchPolicy.isSearching(" a"))
-        // Substring, not prefix; the RTL name matches too.
+
         #expect(PeopleSearchPolicy.filter(sections, query: "park").first?.rowIds == ["u-lee"])
         people.apply(inputs(.longNames))
         let rtl = PeopleSearchPolicy.filter(people.snapshot.sections, query: "\u{0639}\u{0628}\u{062F}")
         #expect(rtl.first?.rowIds == ["u-long-3"])
     }
-
-    // MARK: S50 1 f container states
 
     @Test func blockedReasonFootersAndTheLoadingRow() {
         #expect(PeopleRowPolicy.blockedReason(phase: "inCall", isNetworkOffline: false) == .none)
@@ -238,7 +223,7 @@ struct PeopleHostPoliciesTests {
         #expect(PeopleRowPolicy.inMeetingFooter(people.snapshot) == .offline)
         people.apply(inputs(.alone))
         #expect(PeopleRowPolicy.inMeetingFooter(people.snapshot) == .alone)
-        // A guest gets no host footer; an unloaded roster shows the loading row, not the alone footer.
+
         people.apply(PeopleFixtureScript.peopleInputs(roster: PeopleFixtureScript.roster(for: .guest4), state: .hostRecovering))
         #expect(PeopleRowPolicy.inMeetingFooter(people.snapshot) == .none)
         people.apply(roster(local: "me", [PeopleParticipantInput.make(userId: "me", displayName: "Me", isLocal: true)], loaded: false))
@@ -269,8 +254,6 @@ struct PeopleHostPoliciesTests {
         #expect(people.attendeeCount == 128, "the attendee count is its own property")
     }
 
-    // MARK: SR7 destinations, lifecycle and the lost-host notice
-
     @Test func destinationsScrollOnceAndRepeatsDoNothing() throws {
         let people = makePeople()
         people.apply(inputs(.hostWaiting3))
@@ -281,14 +264,14 @@ struct PeopleHostPoliciesTests {
         #expect(people.focusRequest == request)
         people.focusRequestHandled(id: request.id)
         #expect(people.focusRequest == nil)
-        // A repeat for the same presentation (an iPad sheet to inspector move) scrolls nothing.
+
         people.panelDidOpen(destination: .peopleWaiting, presentationID: 7)
         #expect(people.focusRequest == nil)
         #expect(people.focusReadout() == "destination=peopleWaiting scrolls=1")
         people.panelDidClose(presentationID: 7)
         people.panelDidOpen(destination: .none, presentationID: 8)
         #expect(people.focusRequest == nil && people.focusReadout() == "destination=none scrolls=0")
-        // A same-panel destination (the knock View with People open) moves the shown list once.
+
         let session = people.shell.panels.snapshot.session
         let raised = PanelDestinationRequest(sequence: 3, session: session, presentationID: 8, panel: .participants,
                                              invoker: .call, destination: .peopleRaisedHands, targetId: "")
@@ -335,7 +318,7 @@ struct PeopleHostPoliciesTests {
         #expect(people.snapshot.section(.waiting) == nil && !people.waiting.contains("waiting:p-lee"))
         people.panelDidClose(presentationID: 11)
         #expect(!people.snapshot.showsLostHostNotice)
-        // With the panel closed, losing host shows nothing; regaining it clears any notice.
+
         let closed = makePeople()
         closed.apply(inputs(.lostHost))
         closed.apply(lost)
@@ -359,8 +342,6 @@ struct PeopleHostPoliciesTests {
         #expect(people.snapshot.sections.isEmpty && people.snapshot.revision > afterSwitch && people.rows.count == 0)
     }
 
-    // MARK: F00 C07 avatar parity (S50 2 l2)
-
     @Test func avatarSeedsMatchTheStageTile() {
         #expect(PeopleRowPolicy.avatarSeed(name: "Avery Lee Smith", userId: "user-1", isLocal: false)
                 == FacehashPresentation.seed(name: "Avery Lee", id: "user-1"))
@@ -374,8 +355,6 @@ struct PeopleHostPoliciesTests {
             #expect(stage.tileChrome.entry(for: id).model.avatarSeed == people.rows.entry(for: id).model.avatarSeed, "\(id)")
         }
     }
-
-    // MARK: PL12 fixtures
 
     @Test func everyFixtureBuildsOverTheSameStageRoster() {
         for state in PeopleFixtureState.allCases {
@@ -394,7 +373,7 @@ struct PeopleHostPoliciesTests {
         #expect(PeopleFixtureScript.openDestination(for: .hostWaiting3) == .peopleWaiting)
         #expect(PeopleFixtureScript.openDestination(for: .hostHands3) == .peopleRaisedHands)
         #expect(PeopleFixtureScript.openDestination(for: .host6) == .none)
-        // people-long-names: 60 to 80 characters, one right-to-left (Arabic) name, one long waiting name.
+
         var hasArabic = false
         for person in PeopleFixtureScript.roster(for: .longNames) where !person.isLocal {
             #expect(person.name.count >= 60 && person.name.count <= 80, "\(person.name.count)")
@@ -424,8 +403,6 @@ struct PeopleHostPoliciesTests {
         #expect(lost.people.snapshot.showsLostHostNotice && lost.people.snapshot.section(.waiting) == nil)
         #expect(lost.countersReadout().contains("lostHost=1"))
     }
-
-    // MARK: Source scans
 
     @Test func sharedPeopleSourcesStayInSkipLite() throws {
         let shared = try peopleFiles(under: "Sources/Conclave/Features/Meeting/People", extensions: ["swift"]).filter { !$0.contains("+iOS") }
@@ -457,14 +434,13 @@ struct PeopleHostPoliciesTests {
                             "@Stable", "@Immutable", "verticalScroll"] {
                 #expect(!text.contains(pattern), "\(file) uses \(pattern)")
             }
-            // PPL-2 (S50 3 c, F00 C16) gives iOS rows a `contextMenu` with a row preview in the iOS-only file; the
-            // transpiled and Kotlin sources still never reach for it (contextMenu does not render on Android).
+
             if !file.contains("+iOS") {
                 #expect(!text.contains("contextMenu"), "\(file) uses contextMenu outside an iOS-only file")
             }
             #expect(peopleMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x|white:)"#, in: text).isEmpty, "\(file) builds a color from a literal")
         }
-        // Views read the presenter only (F00 P1); no view reads MeetingState.
+
         for file in files where file.contains("+iOS") || file.hasSuffix(".kt") {
             let text = peopleCode(try peopleSource(file))
             #expect(!text.contains("MeetingState") && !text.contains("MeetingViewModel"), "\(file) reads the core")
@@ -495,7 +471,7 @@ struct PeopleHostPoliciesTests {
         #expect(rows.contains("ConclavePersonRow(name: PeopleText.displayName(model)"))
         #expect(rows.contains("ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(model.avatarSeed), size: .row)"))
         #expect(rows.contains("static let separator = \" \\u{00B7} \""))
-        // The speaking state is read only by the glyph leaf and the value modifier, never by the row body.
+
         let rowBody = try #require(rows.range(of: "struct PeopleRowView<Trailing: View>: View {"))
         let rowEnd = try #require(rows.range(of: "extension PeopleRowView where Trailing == EmptyView", range: rowBody.upperBound..<rows.endIndex))
         #expect(!String(rows[rowBody.upperBound..<rowEnd.lowerBound]).contains("speaking.isSpeaking"))
@@ -534,7 +510,7 @@ struct PeopleHostPoliciesTests {
         #expect(row.contains("remember(model, showsQueue, queueCount, context) { personRowTexts(context, model, showsQueue, queueCount) }"))
         #expect(row.contains("ConclaveAvatarIdentity.fromSeed(model.avatarSeed)"))
         #expect(row.contains("LocalConclaveExtendedColors.current.handRaised"))
-        // The speaking state is read only by its leaf.
+
         #expect(row.components(separatedBy: "speaking.isSpeaking").count - 1 == 1)
         #expect(row.contains("private fun PeopleSpeakingIcon(speaking: TileSpeakingState) { if (speaking.isSpeaking) {"))
         let fixture = try peopleSource("Sources/Conclave/Skip/ui/people/debug/PeopleFixtureRoot.kt")
@@ -542,14 +518,12 @@ struct PeopleHostPoliciesTests {
         #expect(!fixture.contains("getStringExtra"), "MainActivity reads the extras behind FLAG_DEBUGGABLE")
     }
 
-    /// Fails until the HD/strings/B4-T7.json merge lands (R9), by design, like the earlier slices' catalog tests.
     @Test func peopleStringsExistOnBothPlatforms() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(peopleSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8))
             as? [String: Any])
         let keys = Set((catalog["strings"] as? [String: Any] ?? [:]).keys)
         for file in try peopleFiles(under: "Sources/Conclave/Features/Meeting/People", extensions: ["swift"]) where file.contains("+iOS") {
-            // Swift unicode escapes in a key decode to the catalog's real characters (U+2019, and U+2026 for PPL-2's
-            // "Change Name\u{2026}" style menu items).
+
             let text = try peopleSource(file).replacingOccurrences(of: "\\u{2019}", with: "\u{2019}")
                 .replacingOccurrences(of: "\\u{2026}", with: "\u{2026}")
             for match in peopleCaptures(#"ConclaveStrings\.(?:text|format)\("([^"]+)""#, in: text) {
@@ -563,7 +537,7 @@ struct PeopleHostPoliciesTests {
                 #expect(names.contains(match), "\(file): missing resource \(match)")
             }
         }
-        // S50 0.1: People names use ppl_; values carry U+2019 apostrophes and positional arguments only.
+
         for name in names where name.hasPrefix("ppl_") {
             #expect(!xml.contains("name=\"\(name)\">'"), "\(name)")
         }
@@ -574,10 +548,7 @@ struct PeopleHostPoliciesTests {
 }
 
 #if os(macOS)
-/// PH1, PH11 and PH19 through the view model (macOS host; the socket and media stubs never reach the network).
-/// Depends on HD/requests/B4-T7.md R1 and R2 (`people`, `makePeopleInputs()`, `peopleRefreshCount`,
-/// `onPeopleInputChanged`, `mergedRemoteParticipants`; full names through B4-T1's `chatDisplayName(for:)`, the R1e
-/// alternative to `fullDisplayName(for:)`), which the batch integrator applies.
+
 @MainActor
 @Suite(.serialized)
 struct PeopleViewModelWiringTests {
@@ -604,7 +575,7 @@ struct PeopleViewModelWiringTests {
             change()
             #expect(viewModel.peopleRefreshCount == before, "\(name) refreshed People")
         }
-        // Connection fields reach People once through the S1 publish (phase and offline key), never twice.
+
         refreshesOnce("isNetworkOffline") { state.isNetworkOffline = true }
         refreshesOnce("connectionState") { state.connectionState = ConnectionState.reconnecting }
         refreshesOnce("roomId") { state.roomId = "room-b" }
@@ -626,7 +597,7 @@ struct PeopleViewModelWiringTests {
         refreshesOnce("isCameraOff") { state.isCameraOff = false }
         refreshesOnce("isScreenSharing") { state.isScreenSharing = true }
         refreshesOnce("isHandRaised") { state.isHandRaised = true }
-        // S50 PH1: a speaker change, the attendee feed speaker, audio-only, quality and reactions build nothing.
+
         refreshesNever("activeSpeakerId") { state.activeSpeakerId = "r@example.com#r" }
         refreshesNever("webinarSpeakerUserId") { state.webinarSpeakerUserId = "r@example.com#r" }
         refreshesNever("webinarFeedMode") { state.webinarFeedMode = "manual" }
@@ -649,7 +620,7 @@ struct PeopleViewModelWiringTests {
         #expect(ann?.displayName == "Ann Marie Jones", "no two-word cut (S50 2 j)")
         let bob = inputs.participants.first { $0.userId.hasPrefix("bob") }
         #expect((ann?.joinSerial ?? 0) > 0 && (bob?.joinSerial ?? 0) > (ann?.joinSerial ?? 0))
-        // People and the stage agree on serials (PH19).
+
         let stageAnn = viewModel.makeStageInputs().participants.first { $0.userId.hasPrefix("ann") }
         #expect(stageAnn?.joinSerial == ann?.joinSerial)
         #expect(viewModel.people.snapshot.section(.inMeeting)?.rowIds.first == state.userId)
@@ -664,7 +635,7 @@ struct PeopleViewModelWiringTests {
         #expect(viewModel.makeShellInputs().pendingUsersCount == 2)
         state.isAdmin = false
         #expect(state.pendingUsers.isEmpty && state.adminAllowedUserKeys.isEmpty)
-        // PH11: a non-host never shows a waiting badge, even if a pending entry arrives.
+
         state.pendingUsers = ["p3": "Rae"]
         #expect(viewModel.makeShellInputs().pendingUsersCount == 0)
         #expect(viewModel.people.snapshot.section(.waiting) == nil)
@@ -691,7 +662,6 @@ private func peopleFiles(under directory: String, extensions: Set<String>) throw
     return result.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }.sorted()
 }
 
-/// Code only: comment lines and trailing line comments removed, so prose that names the core never trips a scan.
 private func peopleCode(_ text: String) -> String {
     var lines: [String] = []
     for line in text.components(separatedBy: "\n") {
@@ -718,7 +688,6 @@ private func peopleMatches(_ pattern: String, in text: String) -> [String] {
     }
 }
 
-/// The first capture group of every match.
 private func peopleCaptures(_ pattern: String, in text: String) -> [String] {
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     let range = NSRange(text.startIndex..<text.endIndex, in: text)

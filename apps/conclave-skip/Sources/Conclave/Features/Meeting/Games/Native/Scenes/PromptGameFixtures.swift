@@ -1,13 +1,5 @@
 import Foundation
 
-// S60 9 l (ACT-3): Debug fixture states for the six prompt games, layered on the stage fixture exactly like the ACT-2
-// game states (`CONCLAVE_STAGE_FIXTURE` / `conclave.stageFixture`). No socket, network, audio or capture: the game shell
-// receives scripted pushes shaped like the SFU modules' public and player views (packages/sfu/server/games/modules),
-// and its commands land in the recording `ActivityFixtureOwner` behind the `game.emits` readout. The stage fixture
-// reaches these through `ActivityFixtureScript.stageInputs(named:base:)` and `ActivityFixtureScript.apply(named:...)`
-// (HD request B6-T7 R4) and lists the raw values (R5). Players: you plus Avery (r1), Ben (r2), Cai (r3), Dev (r4) and
-// Eli (r5); you are the seated host unless the state says otherwise.
-
 enum PromptGameFixtureState: String, CaseIterable, Equatable {
     case triviaAnswered = "game-trivia-answered"
     case triviaReveal = "game-trivia-reveal"
@@ -46,7 +38,6 @@ enum PromptGameFixtures {
         }
     }
 
-    /// The server game name (G/*.ts `name`), verbatim.
     static func gameName(_ state: PromptGameFixtureState) -> String {
         switch gameId(state) {
         case "trivia": return "Trivia"
@@ -72,14 +63,11 @@ enum PromptGameFixtures {
         }
     }
 
-    /// What the stage layer shows for the state: the game is live under its server name (S20 11 j).
     static func stageInputs(named raw: String, base: StageInputs) -> StageInputs {
         guard let state = state(named: raw) else { return base }
         let game = ActivityFixtureScript.stageInputs(named: ActivityFixtureState.gameTrivia6.rawValue, base: base)
         return StageFixtureScript.copy(game, isGameActive: true, gameName: gameName(state))
     }
-
-    // MARK: Views (public and player, as the modules project them)
 
     static let roster = "[{\"id\":\"you\",\"name\":\"You\"},{\"id\":\"r1\",\"name\":\"Avery\"},{\"id\":\"r2\",\"name\":\"Ben\"},"
         + "{\"id\":\"r3\",\"name\":\"Cai\"},{\"id\":\"r4\",\"name\":\"Dev\"},{\"id\":\"r5\",\"name\":\"Eli\"}]"
@@ -87,7 +75,6 @@ enum PromptGameFixtures {
         + "{\"id\":\"r2\",\"name\":\"Ben\",\"score\":1200},{\"id\":\"r3\",\"name\":\"Cai\",\"score\":600},"
         + "{\"id\":\"r4\",\"name\":\"Dev\",\"score\":0},{\"id\":\"r5\",\"name\":\"Eli\",\"score\":0}]"
 
-    /// Epoch milliseconds as JSON text. Int64, because a transpiled Swift `Int` is a 32-bit Kotlin `Int`.
     static func now() -> String { at(0) }
     static func at(_ offsetMillis: Double) -> String { String(Int64(serverNow + offsetMillis)) }
 
@@ -181,7 +168,6 @@ enum PromptGameFixtures {
         return "[" + parts.joined(separator: ",") + "]"
     }
 
-    /// The roster with Fen (r6), who leaves in the departed-target state.
     static let rosterWithFen = "[{\"id\":\"you\",\"name\":\"You\"},{\"id\":\"r1\",\"name\":\"Avery\"},"
         + "{\"id\":\"r2\",\"name\":\"Ben\"},{\"id\":\"r3\",\"name\":\"Cai\"},{\"id\":\"r4\",\"name\":\"Dev\"},"
         + "{\"id\":\"r5\",\"name\":\"Eli\"},{\"id\":\"r6\",\"name\":\"Fen\"}]"
@@ -215,7 +201,7 @@ enum PromptGameFixtures {
         case .wyrReveal:
             return "{\"choice\":0}"
         case .mltVote:
-            // The vote points at Fen (r6), who left after it was cast: the second push drops Fen from the roster.
+
             return "{\"yourVote\":\"r6\"}"
         case .mltRevealTie:
             return "{\"yourVote\":\"r1\"}"
@@ -243,7 +229,6 @@ enum PromptGameFixtures {
         state != .imposterSpectator
     }
 
-    /// The pushes the fixture applies in order (one for most states; the departed-target state first shows Fen).
     static func pushes(_ state: PromptGameFixtureState) -> [GameStageInputs] {
         let receivedAt = Date().timeIntervalSince1970 * 1000.0
         var players = ActivityFixtureScript.players(6, includingYou: seated(state))
@@ -265,8 +250,6 @@ enum PromptGameFixtures {
         return [first, last]
     }
 
-    /// One Trivia push for the seated host at `phase` ("question" or "reveal") with `choice` answered (-1 for none), for
-    /// the transition checks on both platforms (the reveal outcome token fires once).
     static func triviaPush(phase: String, choice: Int) -> GameStageInputs {
         let reveal = phase == "reveal"
         var correct = "null"
@@ -280,7 +263,6 @@ enum PromptGameFixtures {
                                     receivedAtMillis: Date().timeIntervalSince1970 * 1000.0)
     }
 
-    /// The Reaction arming push after the server marked the local tap early (the `tapEarly` check on both platforms).
     static func earlyTapPush() -> GameStageInputs {
         let view = publicView(PromptGameFixtureState.reactionArming).replacingOccurrences(of: "\"tappedCount\":0", with: "\"tappedCount\":1")
         return GameStageInputs.make(callSession: 1, isActive: true, gameId: "reaction", name: "Reaction", phase: "arming",
@@ -290,8 +272,6 @@ enum PromptGameFixtures {
                                     receivedAtMillis: Date().timeIntervalSince1970 * 1000.0)
     }
 
-    /// Feeds the activity session for a prompt game state and wires its commands to the recording owner, the way
-    /// `ActivityFixtureScript.apply(named:session:owner:)` does for the ACT-2 states. Nil for any other name.
     @discardableResult
     @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> PromptGameFixtureState? {

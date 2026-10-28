@@ -1,16 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// ENT-3 (S10 6 c, f, g, i, k) and ENT-5 (S10 8, 9: the in-place connecting, waiting and failed states of
-// `EntryStatusBlock`): the iOS pre-join lobby, the `.lobby` destination
-// of the premeeting NavigationStack. System appearance with the dark preview card; a plain `ScrollView { VStack }` so
-// the card is never a lazy cell (F00 P5). Each leaf reads one of the six lobby snapshots: the card `lobbyMedia`, the
-// bottom block `lobbyStatus`, the subtitle `lobbyPresence`, the identity rows `lobbyIdentity`, the link row
-// `lobbyLink`, the audio rows `lobbyAudio` (S10 0.5, 6 k). No glass besides what the system draws for the navigation
-// bar. The bottom action area is opaque so scrolling form text cannot overlap its labels. Intent goes to the core
-// through the presenter (D14).
-// ENT-4 (S10 7): the permission priming rows under the card come from `PermissionPrimingSection`.
-
 struct LobbyView: View {
     let route: PremeetingRoute
     let premeeting: PremeetingPresenter
@@ -18,13 +8,11 @@ struct LobbyView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var viewportSize = CGSize(width: 390, height: 667)
 
-    /// A compact height alone does not guarantee room for a preview beside the form in a narrow window.
     private var isWide: Bool {
         viewportSize.width >= 640 && (horizontalSizeClass == .regular || verticalSizeClass == .compact)
     }
 
     var body: some View {
-        // AnyLayout keeps the card's identity across a rotation, so the preview surface is not recreated.
         let layout = isWide
             ? AnyLayout(HStackLayout(alignment: .top, spacing: 24))
             : AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
@@ -55,12 +43,10 @@ struct LobbyView: View {
     }
 }
 
-/// The rows under the card, in focus order: issue, permission priming (ENT-4), audio, name, invite code, link.
 private struct LobbyControlsColumn: View {
     let premeeting: PremeetingPresenter
 
     var body: some View {
-        // S50 PH20 (RECONCILE R30): the promotion lobby keeps your identity and has no link or Share.
         let isPromotion = premeeting.lobbyStatus?.intent == LobbyIntent.promotion
         VStack(alignment: .leading, spacing: 16) {
             LobbyIssueSection(premeeting: premeeting)
@@ -68,18 +54,17 @@ private struct LobbyControlsColumn: View {
             LobbyAudioSection(premeeting: premeeting)
             if !isPromotion {
                 LobbyIdentitySection(premeeting: premeeting)
-                // SYS-3 (S10 9 c, RECONCILE R5): the waiting-room row under the Audio and Name rows (iOS, O3-gated).
                 AdmissionNotifySection(premeeting: premeeting)
                 LobbyInviteCodeSection(premeeting: premeeting)
-                LobbyGroupedSection {
-                    MeetingLinkRow(premeeting: premeeting)
+                if let link = premeeting.lobbyLink, link.canShare, !link.meetingLink.isEmpty {
+                    LobbyGroupedSection {
+                        MeetingLinkRow(premeeting: premeeting)
+                    }
                 }
             }
         }
     }
 }
-
-// MARK: - Issue rows (S10 6 f; C12 app style)
 
 private struct LobbyIssueSection: View {
     let premeeting: PremeetingPresenter
@@ -114,12 +99,10 @@ private struct LobbyIssueSection: View {
 }
 
 enum LobbyIssueCopy {
-    /// Issue rows show while editing; while connecting only the offline row (S10 8 f: the pending primary stays).
     static func showsRow(_ status: LobbyStatusSnapshot) -> Bool {
         status.mode == .editing || (status.mode == .connecting && status.issue == .offline)
     }
 
-    /// The issue row text, or nil when the issue has no row (invite code issues live in the invite field's footer).
     static func text(_ status: LobbyStatusSnapshot) -> String? {
         switch status.issue {
         case .offline:
@@ -144,8 +127,6 @@ enum LobbyIssueCopy {
     }
 }
 
-// MARK: - Audio (S10 6 c L3)
-
 private struct LobbyAudioSection: View {
     let premeeting: PremeetingPresenter
 
@@ -160,8 +141,6 @@ private struct LobbyAudioSection: View {
         }
     }
 }
-
-// MARK: - Identity (S10 6 c identity row; R38)
 
 private struct LobbyIdentitySection: View {
     let premeeting: PremeetingPresenter
@@ -201,16 +180,13 @@ private struct LobbyIdentitySection: View {
     }
 }
 
-/// The guest name field (40 at most, counter from 30) and Sign In. The field keeps its own text; the presenter gets
-/// every change (it only re-derives the primary's reason and the avatar).
 private struct LobbyGuestNameSection: View {
     let premeeting: PremeetingPresenter
     let identity: LobbyIdentitySnapshot
     @State private var name = ""
 
     var body: some View {
-        LobbyGroupedSection(footer: ConclaveStrings.text("Shown to others in the meeting."),
-                            footerIdentifier: "lobby.name.footer") {
+        LobbyGroupedSection {
             LobbyGroupedRow {
                 HStack(spacing: 8) {
                     ConclaveTextField(ConclaveStrings.text("Your Name"), text: $name, kind: .name, identifier: "lobby.name")
@@ -221,14 +197,19 @@ private struct LobbyGuestNameSection: View {
             }
             LobbyGroupedDivider()
             LobbyGroupedRow {
-                Button(ConclaveStrings.text("Sign In")) { premeeting.openAccount() }
-                    .buttonStyle(.borderless)
-                    .tint(HostingTheme.coralText)
-                    .accessibilityIdentifier("lobby.signIn")
+                Button { premeeting.openAccount() } label: {
+                    Text(ConclaveStrings.text("Sign In"))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, minHeight: 48)
+                        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Capsule())
+                        .overlay { Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 1) }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("lobby.signIn")
             }
         }
         .task(id: identity.routeId) {
-            // Seeds once per lobby from the stored guest record; never on a body re-run.
             if name != identity.guestName {
                 name = identity.guestName
             }
@@ -244,7 +225,6 @@ private struct LobbyGuestNameSection: View {
     }
 }
 
-/// The invite code field, shown after the server asked for one (S10 6 f form errors).
 private struct LobbyInviteCodeSection: View {
     let premeeting: PremeetingPresenter
     @State private var code = ""
@@ -275,8 +255,6 @@ private struct LobbyInviteCodeSection: View {
         }
     }
 }
-
-// MARK: - Bottom block (S10 6 c, 8 c, 9 c: ENT-5's EntryStatusBlock in all four modes)
 
 private struct LobbyBottomBar: ViewModifier {
     let premeeting: PremeetingPresenter
@@ -319,23 +297,17 @@ enum LobbyPrimaryCopy {
     }
 }
 
-// MARK: - Title, presence and chrome
-
-/// The inline title (room label) and the subtitle: presence while editing, "Joining" or "Reconnecting" while
-/// connecting, nothing while waiting (S10 8 c, 9 c); iOS 26 `navigationSubtitle`; iOS 17 to 25 a principal item with
-/// title and caption. Presence changes are not announced (S10 6 i).
 private struct LobbyTitle: ViewModifier {
     let premeeting: PremeetingPresenter
     let route: PremeetingRoute
 
     func body(content: Content) -> some View {
         let status = premeeting.lobbyStatus?.routeId == route.id ? premeeting.lobbyStatus : nil
-        // S10 6 g (RECONCILE R30): the promotion lobby's title is "Join as a Speaker".
         let roomLabel = premeeting.lobbyLink?.roomLabel ?? route.roomId
         let isNewMeeting = status?.intent == LobbyIntent.newMeeting
         let title = status?.intent == LobbyIntent.promotion ? ConclaveStrings.text("Join as a Speaker")
             : (isNewMeeting ? ConclaveStrings.text("New Meeting") : roomLabel)
-        let subtitle = isNewMeeting && status?.mode == .editing ? roomLabel
+        let subtitle = isNewMeeting && status?.mode == .editing ? ""
             : EntryStatusCopy.subtitle(status: status, presence: premeeting.lobbyPresence)
         if #available(iOS 26.0, *) {
             content
@@ -383,7 +355,6 @@ enum LobbyPresenceCopy {
     }
 }
 
-/// Share in the toolbar; while connecting or waiting the back button gives way to Cancel (S10 8, 9).
 private struct LobbyChrome: ViewModifier {
     let premeeting: PremeetingPresenter
     let routeId: Int
@@ -400,7 +371,6 @@ private struct LobbyChrome: ViewModifier {
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     if isPromotion {
-                        // S50 PH20: Cancel declines while still an attendee (`webinar:declineStage`).
                         Button(ConclaveStrings.text("Cancel"), role: .cancel) { premeeting.cancelPromotion() }
                             .accessibilityIdentifier("lobby.promotion.cancel")
                     } else if isBusy {

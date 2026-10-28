@@ -1,13 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 7 (PPL-4): the meeting access pages on iOS. Field text is view state seeded once from `host.drafts` and written
-// back on change (7 c), so validity and the button state derive from the local draft and the draft survives pushes;
-// PH15: a field clears only after its acknowledgement. Remove Code and Block confirm from their buttons (S50 3 j).
-// Failures render inline under the field or button (PL14); "Code saved" shows inline for 2 s (F00 C13, R50-10).
-
-/// Invite Code (S50 7 c): the status, the new code field, Save Code, and Remove Code when one is set. The current code
-/// is never shown (the server returns only whether one is set).
 struct InviteCodePage: View {
     let people: PeoplePresenter
     @State private var draft = ""
@@ -67,7 +60,7 @@ struct InviteCodePage: View {
         .navigationTitle(ConclaveStrings.text("Invite Code"))
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Seeded once per page instance (a guarded write, so a re-fired callback is a no-op).
+
             if !didSeed {
                 didSeed = true
                 draft = host.drafts.meetingCode
@@ -77,7 +70,7 @@ struct InviteCodePage: View {
             host.drafts.meetingCode = value
         }
         .onChange(of: snapshot.inviteCodeSavedSerial) { _, _ in
-            // PH15: the presenter cleared the draft on the acknowledgement; the field follows.
+
             draft = host.drafts.meetingCode
             showsSaved = true
             savedToken += 1
@@ -96,9 +89,6 @@ struct InviteCodePage: View {
     }
 }
 
-/// Access List (S50 7 c): Allow and Block by user key or email, the allowed and blocked lists with swipe Revoke and
-/// Unblock, and the toolbar refresh whose spinner shows exactly while `access.isRefreshing` (no `.refreshable`: the
-/// refresh is fire and forget, so a pull would end at once). Lists refresh once on appear.
 struct AccessListPage: View {
     let people: PeoplePresenter
     @State private var keyDraft = ""
@@ -225,7 +215,7 @@ struct AccessListPage: View {
             host.drafts.accessKey = value
         }
         .onChange(of: snapshot.pendingAccessKeys) { _, _ in
-            // PH15: the presenter clears the draft only after an Allow or Block succeeds.
+
             if host.drafts.accessKey != keyDraft { keyDraft = host.drafts.accessKey }
         }
         .task {
@@ -235,7 +225,6 @@ struct AccessListPage: View {
     }
 }
 
-/// `arrow.clockwise` is a system symbol the manifest has no concept for yet (S50 7 c names it directly).
 enum HostAccessSymbols {
     static let refresh = "arrow.clockwise"
 }

@@ -3,13 +3,6 @@ import AVKit
 import SwiftUI
 import UIKit
 
-// S60 0.6 L6-1, L6-2 and the Settings leaf rows on iOS (SET-1, SET-2). Each row reads one observable source: the route
-// rows read the S30 `AudioRouteSnapshot` straight from `AudioRouteOwner` (1 j: no copy), the level meter reads only
-// `MicLevelMeter`, the name rows read only `DisplayNameEditor`. Rows are icon-free (MPN N57); the route button is the
-// system's `AVRoutePickerView` (D22).
-
-/// L6-1 `RouteOutputRow`: "Output", the route name and the system route picker (44 x 44 pt, coralText tint). Choices
-/// made in the system picker are adopted by the route owner, never fought.
 struct SettingsRouteOutputRow: View {
     let owner: AudioRouteOwner
 
@@ -31,7 +24,6 @@ struct SettingsRouteOutputRow: View {
     }
 }
 
-/// The Microphone row's value: the current input's system name.
 struct SettingsMicrophoneValueRow: View {
     let owner: AudioRouteOwner
 
@@ -50,7 +42,6 @@ enum SettingsRouteNames {
     }
 }
 
-/// Play Test Sound (C6-7): a button whose value becomes "Playing" with a system spinner; disabled while it plays.
 struct SettingsTestSoundRow: View {
     let settings: SettingsPresenter
     let phase: SpeakerTestPhase
@@ -77,8 +68,6 @@ struct SettingsTestSoundRow: View {
     }
 }
 
-/// L6-2 `LevelMeter`: 12 flat segments, filled count from the level; label filled, separator empty (never coral or
-/// green: level is not a status); no animation beyond the value change.
 struct SettingsLevelMeter: View {
     let segments: Int
 
@@ -95,8 +84,6 @@ struct SettingsLevelMeter: View {
     }
 }
 
-/// "Speak to Test" with the meter; the only reader of `MicLevelMeter.segments` (10 Hz, C6-6). One element whose value
-/// updates without announcements (2 i).
 struct SettingsMicLevelRow: View {
     let meter: MicLevelMeter
 
@@ -119,7 +106,6 @@ struct SettingsMicLevelRow: View {
     }
 }
 
-/// The system route picker in a system-appearance row.
 struct SettingsRoutePicker: UIViewRepresentable {
     let onDismiss: () -> Void
 
@@ -153,8 +139,6 @@ struct SettingsRoutePicker: UIViewRepresentable {
     }
 }
 
-/// The Name field (C6-10, R38): a visible "Name" label beside the field (Settings and Contacts pattern), capped at 40
-/// through the shared editor; focus promotes a medium sheet to large (PS 7.3).
 struct SettingsNameRow: View {
     let settings: SettingsPresenter
     let editor: DisplayNameEditor
@@ -183,8 +167,6 @@ struct SettingsNameRow: View {
     }
 }
 
-/// The Account footer: "Saving", "Saved", the mapped refusal with its glyph, the counter from 30 characters and the
-/// reconnecting reason (1 f, 1 g).
 struct SettingsNameStatus: View {
     let settings: SettingsPresenter
     let editor: DisplayNameEditor
@@ -222,8 +204,6 @@ struct SettingsNameStatus: View {
     }
 }
 
-/// The identity row from raw values (1 c `AccountIdentityRow`): "Guest", or the account name with the email or the
-/// provider line; one element.
 struct SettingsIdentityRow: View {
     let account: SettingsAccount
 

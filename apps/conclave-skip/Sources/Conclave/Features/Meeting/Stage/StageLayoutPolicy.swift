@@ -1,28 +1,24 @@
 import Foundation
 
-/// S20 SL1: pure stage geometry, shared by the presenter and both canvases so slots and frames always agree. The
-/// presenter calls `capacity` and `railCapacity` to build `slots` and `overflowCount`; the canvas calls `frames` with the
-/// same viewport. Points on iOS, dp on Android. Allocates only its results (S20 2 k).
 enum StageLayoutPolicy {
-    // S20 2 c grid table.
+
     static let compactPadding = 8.0
     static let compactGap = 8.0
     static let regularPadding = 16.0
     static let regularGap = 12.0
-    /// Compact portrait rows never shrink below max(100, 0.75 x tile width) (web STG-05).
+
     static let rowFloorMinimum = 100.0
     static let rowFloorRatio = 0.75
-    /// Tile height never exceeds 1.5 x tile width (web STG-05).
+
     static let tileHeightMaxRatio = 1.5
-    /// Phones never show more than 8 grid slots (S20 Q1).
+
     static let compactSlotLimit = 8
-    /// Packer cells never shrink below 176 x 99 (16:9).
+
     static let packerMinimumWidth = 176.0
     static let packerMinimumHeight = 99.0
     static let compactHeightMaxColumns = 4
     static let tileAspect = 16.0 / 9.0
-    /// Rails (S20 4 c, d): `SpotlightRailPolicy` (STG-2) owns the strip and column geometry and the capacity.
-    /// Floating self view: the margin and the minimized chip; STG-3's SelfViewSnapPolicy owns the floating size.
+
     static let selfViewMargin = 12.0
     static let selfViewMinimumWidth = 96.0
     static let selfViewMaximumWidth = 140.0
@@ -30,14 +26,10 @@ enum StageLayoutPolicy {
     static let selfMinimizedWidth = 72.0
     static let selfMinimizedHeight = 44.0
 
-    // MARK: Classes
-
-    /// Phones in portrait: compact width and taller than wide.
     static func isCompactPortrait(_ viewport: StageViewport) -> Bool {
         StageSizeClass.isCompact(viewport.widthClass) && !viewport.isLandscape
     }
 
-    /// Phones in landscape: compact height.
     static func isCompactHeight(_ viewport: StageViewport) -> Bool {
         StageSizeClass.isCompact(viewport.heightClass)
     }
@@ -50,20 +42,16 @@ enum StageLayoutPolicy {
         usesRegularSpacing(viewport) ? regularGap : compactGap
     }
 
-    /// iPad and Android 600 dp and wider (S20 2 c third column).
     static func usesRegularSpacing(_ viewport: StageViewport) -> Bool {
         !StageSizeClass.isCompact(viewport.widthClass) && !StageSizeClass.isCompact(viewport.heightClass)
     }
 
-    /// The reserved content rectangle (S20 1 c): the canvas minus the reserved insets and the padding.
     static func contentFrame(_ viewport: StageViewport) -> StageFrame {
         let pad = padding(viewport)
         let width = max(0.0, viewport.width - viewport.insetLeading - viewport.insetTrailing - 2.0 * pad)
         let height = max(0.0, viewport.height - viewport.insetTop - viewport.insetBottom - 2.0 * pad)
         return StageFrame(slotId: "", x: viewport.insetLeading + pad, y: viewport.insetTop + pad, width: width, height: height)
     }
-
-    // MARK: Kind (web parity with chooseStageMode; precedence D17)
 
     static func kind(_ inputs: StageInputs, showsVideoOverActivity: Bool) -> StageKind {
         if inputs.isWebinarAttendee {
@@ -88,8 +76,6 @@ enum StageLayoutPolicy {
         return StageKind.grid
     }
 
-    // MARK: Capacity
-
     static func capacity(viewport: StageViewport, kind: StageKind, count: Int, viewMaxTiles: Int) -> StageCapacity {
         if viewport.isEmpty { return StageCapacity.zero }
         switch kind {
@@ -102,9 +88,6 @@ enum StageLayoutPolicy {
         }
     }
 
-    /// The grid cap (S20 2 c "Cap" row). Compact portrait: the largest even n at most min(viewMaxTiles, 8) whose rows
-    /// at the row floor fit the reserved height; compact height: min(viewMaxTiles, 8, fit at 176 x 99, 4 columns);
-    /// regular: min(viewMaxTiles, fit at 176 x 99).
     static func gridCap(viewport: StageViewport, viewMaxTiles: Int) -> Int {
         let limit = MeetingViewConstants.clampTiles(viewMaxTiles)
         let area = contentFrame(viewport)
@@ -129,7 +112,6 @@ enum StageLayoutPolicy {
         return max(2, min(limit, packerFit(area: area, gap: gap, maxColumns: 0)))
     }
 
-    /// How many 176 x 99 cells fit; `maxColumns` 0 means unbounded.
     static func packerFit(area: StageFrame, gap: Double, maxColumns: Int) -> Int {
         var columns = max(1, Int((area.width + gap) / (packerMinimumWidth + gap)))
         if maxColumns > 0 { columns = min(columns, maxColumns) }
@@ -137,16 +119,10 @@ enum StageLayoutPolicy {
         return columns * rows
     }
 
-    /// Rail slots for spotlight, sidebar, presentation and activity strips (capped at the legacy 8,
-    /// `MeetingViewConstants.stageRailMaxTiles`).
     static func railCapacity(viewport: StageViewport) -> Int {
         SpotlightRailPolicy.capacity(viewport: viewport)
     }
 
-    // MARK: Frames
-
-    /// One frame per slot, in slot order (later frames draw above earlier ones). `selfCorner` is the
-    /// `MeetingSelfViewCorner` raw value.
     static func frames(viewport: StageViewport, kind: StageKind, slots: [StageSlot], selfCorner: String) -> [StageFrame] {
         if viewport.isEmpty || slots.isEmpty { return [] }
         var result: [StageFrame] = []
@@ -191,8 +167,6 @@ enum StageLayoutPolicy {
         return nil
     }
 
-    /// Full-bleed for 1:1, spotlight, share and the program feed (S20 1 c); the content area minus the rail band for
-    /// sidebar and activity cards.
     static func mainFrameFor(viewport: StageViewport, kind: StageKind, hasRail: Bool) -> StageFrame {
         switch kind {
         case .sidebar, .game, .app, .browser:
@@ -210,8 +184,6 @@ enum StageLayoutPolicy {
         }
     }
 
-    /// Compact portrait: two columns (one for a chosen two-person grid), a wide first tile for odd counts, rows of
-    /// min((H - gaps) / rows, 1.5 x width) never below the row floor, centered vertically. Elsewhere: the packer.
     static func gridFramesFor(viewport: StageViewport, slots: [StageSlot]) -> [StageFrame] {
         let area = contentFrame(viewport)
         let gap = StageLayoutPolicy.gap(viewport)
@@ -269,8 +241,6 @@ enum StageLayoutPolicy {
         return result
     }
 
-    /// The tile packer (port of `S/Core/Layout/GridLayout.swift`): the column count with the largest 16:9 tile, ties
-    /// to fewer empty cells; rows centered, the last row centered.
     static func packedFrames(area: StageFrame, gap: Double, slots: [StageSlot], maxColumns: Int) -> [StageFrame] {
         let n = slots.count
         if n == 0 || area.width <= 0 || area.height <= 0 { return [] }
@@ -322,7 +292,6 @@ enum StageLayoutPolicy {
         return result
     }
 
-    /// A bottom strip on compact portrait (leading aligned, above the bar slot), a trailing column elsewhere.
     static func railFramesFor(viewport: StageViewport, slots: [StageSlot]) -> [StageFrame] {
         if slots.isEmpty { return [] }
         let area = contentFrame(viewport)
@@ -349,8 +318,6 @@ enum StageLayoutPolicy {
         return result
     }
 
-    /// The floating self view: a portrait 3:4 tile in every orientation (S20 6 c) in its corner inside the reserved
-    /// insets; the minimized chip sits in the same corner.
     static func selfFrame(viewport: StageViewport, role: StageSlotRole, corner: String, slotId: String) -> StageFrame {
         let width: Double
         let height: Double
@@ -358,7 +325,7 @@ enum StageLayoutPolicy {
             width = selfMinimizedWidth
             height = selfMinimizedHeight
         } else {
-            // S20 6 c (STG-3): portrait 3:4 in every orientation, sized from the short edge (160 on regular width).
+
             width = SelfViewSnapPolicy.floatingWidth(viewport)
             height = SelfViewSnapPolicy.floatingHeight(viewport)
         }
@@ -369,9 +336,6 @@ enum StageLayoutPolicy {
         return StageFrame(slotId: slotId, x: x, y: y, width: width, height: height)
     }
 
-    // MARK: Readout
-
-    /// A deterministic hash of the laid-out frames for the `stage.layout` readout (identical on both platforms).
     static func frameHash(_ frames: [StageFrame]) -> Int {
         var hash = 17
         for frame in frames {
@@ -381,7 +345,6 @@ enum StageLayoutPolicy {
         return hash
     }
 
-    /// Two frames overlap with positive area.
     static func overlaps(_ a: StageFrame, _ b: StageFrame) -> Bool {
         a.x < b.maxX - 0.001 && b.x < a.maxX - 0.001 && a.y < b.maxY - 0.001 && b.y < a.maxY - 0.001
     }

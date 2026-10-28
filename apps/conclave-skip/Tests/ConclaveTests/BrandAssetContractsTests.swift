@@ -9,10 +9,8 @@ import ImageIO
 import Testing
 @testable import Conclave
 
-/// SYS-11 asset audit and source scans (S70 11 l 1, 2, 3, 5 and 6; SX8; SX9). Every asset is read from the
-/// repository, so a regenerated or replaced file is checked as shipped.
 struct BrandAssetContractsTests {
-    // S70 11 l 1: the Icon Composer document is the app icon, with solid fills only.
+
     @Test func appIconDocumentUsesSolidFillsAndAMonoKnockout() throws {
         let document = try brandJSON("Darwin/AppIcon.icon/icon.json")
         for text in brandStrings(in: document) {
@@ -37,7 +35,7 @@ struct BrandAssetContractsTests {
         #expect(brandSolid(letters["fill"]) == ink)
         #expect(brandSolid(mark["fill"]) == brandSRGB(DesignTokens.coral))
         for layer in layers { #expect(layer["glass"] as? Bool == false) }
-        // Clear and Tinted (the "tinted" mono specialization) hide the letters, leaving the knocked-out diamond.
+
         let hidden = try #require(letters["hidden-specializations"] as? [[String: Any]])
         #expect(hidden.count == 1 && hidden[0]["appearance"] as? String == "tinted" && hidden[0]["value"] as? Bool == true)
         #expect(mark["hidden-specializations"] == nil)
@@ -46,7 +44,6 @@ struct BrandAssetContractsTests {
         let assets = try FileManager.default.contentsOfDirectory(atPath: brandPackagePath("Darwin/AppIcon.icon/Assets"))
         #expect(assets.filter { !$0.hasPrefix(".") }.sorted() == ["acm-letters.svg", "conclave-mark.svg"])
 
-        // Both layers carry the pinned brand path verbatim at 82 + 2.15x, today's 860 px diamond on 1024 px.
         let brand = try brandMark()
         let markSVG = try brandSource("Darwin/AppIcon.icon/Assets/conclave-mark.svg")
         let lettersSVG = try brandSource("Darwin/AppIcon.icon/Assets/acm-letters.svg")
@@ -62,25 +59,32 @@ struct BrandAssetContractsTests {
         #expect(brandAttribute("fill", in: lettersSVG) == brandHex(DesignTokens.iosAppOnCoral))
     }
 
-    // S70 11 l 1 and 11 c: no build can pick up the per-size set or the empty package set; iOS 17 stays.
-    // actool (Xcode 27.1) ignores an AppIcon.appiconset next to AppIcon.icon and renders the iOS 17 to 25 images
-    // from the document either way (SYS-11 review F1 experiment), so a kept set would only be dead weight.
     @Test func legacyIconSetsAreGoneAndTheDocumentIsTheAppIcon() throws {
         let files = FileManager.default
         #expect(!files.fileExists(atPath: brandPackagePath("Darwin/Assets.xcassets/AppIcon.appiconset")))
-        // The empty package AppIcon set and the stale purple module AccentColor were the whole package catalog.
+
         #expect(!files.fileExists(atPath: brandPackagePath("Sources/Conclave/Resources/Assets.xcassets")))
         #expect(files.fileExists(atPath: brandPackagePath("Darwin/Assets.xcassets/AccentColor.colorset/Contents.json")))
         let project = try brandSource("Darwin/Conclave.xcodeproj/project.pbxproj")
-        #expect(project.contains("/* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = \"<group>\"; };"))
-        #expect(project.components(separatedBy: "/* AppIcon.icon in Resources */").count - 1 == 2)
+        let plist = try #require(try PropertyListSerialization.propertyList(from: Data(project.utf8), format: nil) as? [String: Any])
+        let objects = try #require(plist["objects"] as? [String: [String: Any]])
+        let referenceID = "5C11A1C02E9F4B7A00D1A001"
+        let buildFileID = "5C11A1C02E9F4B7A00D1A002"
+        let reference = try #require(objects[referenceID])
+        #expect(reference["isa"] as? String == "PBXFileReference")
+        #expect(reference["lastKnownFileType"] as? String == "folder.iconcomposer.icon")
+        #expect(reference["path"] as? String == "AppIcon.icon" && reference["sourceTree"] as? String == "<group>")
+        let buildFile = try #require(objects[buildFileID])
+        #expect(buildFile["isa"] as? String == "PBXBuildFile" && buildFile["fileRef"] as? String == referenceID)
+        #expect(objects.values.filter { $0["isa"] as? String == "PBXBuildFile" && $0["fileRef"] as? String == referenceID }.count == 1)
+        let resources = try #require(objects["499CD43E2AC5B799001AE8D8"]?["files"] as? [String])
+        #expect(resources.filter { $0 == buildFileID }.count == 1)
         let settings = try brandSource("Darwin/Conclave.xcconfig")
         #expect(settings.contains("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n"))
         #expect(settings.contains("IPHONEOS_DEPLOYMENT_TARGET = 17.0\n"))
         #expect(try brandSource("Package.swift").contains(".iOS(.v17)"))
     }
 
-    // S70 11 l 2 and 11 d: vector adaptive layers, a single-path monochrome layer, the generated stage tile.
     @Test func androidAdaptiveIconIsVectorLayersWithASinglePathMonochrome() throws {
         let icon = try brandSource("Android/app/src/main/res/mipmap-anydpi/ic_launcher.xml")
         #expect(icon.contains("<background android:drawable=\"@color/ic_launcher_background\" />"))
@@ -106,8 +110,6 @@ struct BrandAssetContractsTests {
         #expect(try brandColors("values-night")["ic_launcher_background"] == nil)
     }
 
-    // S70 11 l 2, 11 d and S10 1 d: launch themes set the splash color and never override the splash icon. Every
-    // values* resource file is parsed as XML (review F5), so any spelling and any qualifier folder is covered.
     @Test func launchThemesNeverOverrideTheSplashIcon() throws {
         let forbidden: Set<String> = ["android:windowSplashScreenAnimatedIcon", "android:windowSplashScreenIconBackgroundColor",
                                       "android:windowSplashScreenBrandingImage", "android:windowSplashScreenAnimationDuration"]
@@ -124,8 +126,7 @@ struct BrandAssetContractsTests {
             }
         }
         #expect(parsedFiles >= 6)
-        // Until the S10 R4 flip the legacy entry launches dark in light mode too (S10 1 l7): the light splash keeps
-        // the window's own background, which the legacy theme sets dark; night uses the generated launch color.
+
         #expect(backgrounds == ["values-night-v31": ["@color/conclave_window_background"], "values-v31": ["?android:attr/colorBackground"]])
         let night = try brandSource("Android/app/src/main/res/values-night-v31/themes.xml")
         let day = try brandSource("Android/app/src/main/res/values-v31/themes.xml")
@@ -141,7 +142,6 @@ struct BrandAssetContractsTests {
         #expect(!(try brandSource("Android/app/build.gradle.kts")).contains("core-splashscreen"))
     }
 
-    // S70 11 l 3 and l 5, SX8: the status icon is the 24 dp letterless diamond, resolvable by its legal name.
     @Test func statusIconIsTheLetterlessDiamond() throws {
         let xml = try brandSource("Android/app/src/main/res/drawable/conclave_ic_stat.xml")
         let diamond = try brandMark()[0]
@@ -157,8 +157,6 @@ struct BrandAssetContractsTests {
         #expect(resolver.contains("internal fun conclaveColorId(context: Context, name: String): Int"))
     }
 
-    // S70 11 l 5 and SX9: the CallKit glyph is a 40 pt template, one color with alpha, letters dropped. It is the
-    // generated vector of the pinned diamond (review F4), which actool renders at 1x, 2x and 3x.
     @Test func callKitTemplateIsLetterlessSingleColorWithAlpha() throws {
         let folder = "Darwin/Assets.xcassets/CallKitIcon.imageset"
         let names = try FileManager.default.contentsOfDirectory(atPath: brandPackagePath(folder)).filter { !$0.hasPrefix(".") }
@@ -174,17 +172,17 @@ struct BrandAssetContractsTests {
         #expect(brandAttribute("d", in: svg) == (try brandMark()[0]))
         #expect(brandAttribute("width", in: svg) == "40" && brandAttribute("height", in: svg) == "40")
         #expect(brandAttribute("viewBox", in: svg) == "0 0 400 400")
-        // Template art keeps the default paint: one color, coverage in alpha.
+
         #expect(!svg.contains("fill"))
         #if canImport(AppKit)
         let image = try #require(NSImage(contentsOf: URL(fileURLWithPath: brandPackagePath("\(folder)/CallKitIcon.svg"))))
         for size in [40, 80, 120] {
             let raster = try brandRender(image, size: size)
             #expect(raster.alpha(0, 0) == 0 && raster.alpha(size - 1, size - 1) == 0)
-            // Premultiplied black is 0 in every channel, so any second color would show up here.
+
             #expect(raster.maxColorComponent == 0, "\(size) px is not single color")
             #expect((0.5...0.7).contains(raster.opaqueFraction), "\(size) px coverage \(raster.opaqueFraction)")
-            // The letters' box (81.6 to 319.8 by 167.7 to 233.5 of 400) is solid: no letter holes.
+
             let unit = Double(size) / 400
             for y in Int((168 * unit).rounded(.up))..<Int((233 * unit).rounded(.down)) {
                 for x in Int((82 * unit).rounded(.up))..<Int((319 * unit).rounded(.down)) {
@@ -195,8 +193,6 @@ struct BrandAssetContractsTests {
         #endif
     }
 
-    // S70 11 l 6 is not claimed (review F3 and ISSUE 1): the icon mark is not "Conclave" lettering, so no stand-in
-    // ships under the wordmark name, and S10 R2 keeps its plain titleLarge fallback until owner-approved lettering.
     @Test func wordmarkStandInIsWithheld() throws {
         let files = FileManager.default
         #expect(!files.fileExists(atPath: brandPackagePath("Darwin/Assets.xcassets/ConclaveWordmark.imageset")))
@@ -207,12 +203,10 @@ struct BrandAssetContractsTests {
         }
     }
 
-    // S70 11 l 6: the Google mark is the official art, unmodified, original rendering, at 20 pt or dp.
     @Test func googleMarkIsTheUnmodifiedOfficialArt() throws {
         let contents = try brandJSON("Darwin/Assets.xcassets/GoogleGMark.imageset/Contents.json")
         #expect((contents["properties"] as? [String: Any])?["template-rendering-intent"] as? String == "original")
-        // SHA-256 of the art recovered from the official signin-assets.zip renders (sha256 ba884069...);
-        // any recolor, crop or re-encode changes these.
+
         let pinned = ["7a0ab7882c142fa6277f5e5e196ae18b6867aba0b3dac06617892b0f99870667",
                       "bfd1e36a31841512b76c102d4ba506692ee0d3a288b5d37ba3a1b3bc9bcbc6c3",
                       "53f8975c6bc394703b7808556edb638d0c163c6e2eca42ec8709b1e49b965e84",
@@ -230,16 +224,15 @@ struct BrandAssetContractsTests {
             let raster = try brandRaster(file)
             #expect(raster.width == 20 * scale && raster.height == 20 * scale && raster.hasAlpha)
             #expect(raster.alpha(0, 0) == 0)
-            // Multi-color third-party mark: red, yellow, green and blue regions are all present.
+
             let hues = raster.opaqueHueFamilies
             for family in ["red", "yellow", "green", "blue"] { #expect(hues.contains(family), "\(file) lacks \(family)") }
         }
         #expect(!FileManager.default.fileExists(atPath: brandPackagePath("Android/app/src/main/res/drawable/google_g_mark.xml")))
     }
 
-    // SX8 and SC20: generated system drawables and the notification accent, under legal names.
     @Test func systemDrawablesAndAccentAreGeneratedUnderLegalNames() throws {
-        // Every file in every drawable folder, enumerated (review F6): AAPT2 rejects a file named MicFill1.
+
         var files = 0
         for (folder, name) in try brandDrawableFiles() {
             files += 1
@@ -261,9 +254,6 @@ struct BrandAssetContractsTests {
         #expect(try brandColors("values-night")["sys_notification_accent"] == brandARGB(DesignTokens.androidDarkPrimary))
     }
 
-    // SX8 (review F2 and ISSUE 5): by-name lookups only fail at runtime, and the library unit tests cannot see app
-    // resources, so the required SX8 names and every literal name the Skip bridges look up must exist in the app
-    // module. The installed-APK readout is the aapt2 resource audit in the SYS-11 evidence.
     @Test func bridgeLookupNamesExistInTheAppModule() throws {
         let drawables = Set(try brandDrawableFiles().map { String($0.name.prefix { $0 != "." }) })
         let colors = try brandColors("values"), nightColors = try brandColors("values-night")
@@ -305,13 +295,11 @@ struct BrandAssetContractsTests {
     }
 }
 
-// MARK: - Helpers
-
 private struct BrandRaster {
     let width: Int
     let height: Int
     let hasAlpha: Bool
-    let pixels: [UInt8] // premultiplied RGBA
+    let pixels: [UInt8]
 
     func alpha(_ x: Int, _ y: Int) -> UInt8 { pixels[(y * width + x) * 4 + 3] }
 
@@ -365,7 +353,7 @@ private func brandRaster(_ packageRelativePath: String) throws -> BrandRaster {
 }
 
 #if canImport(AppKit)
-/// Renders an image (here a vector asset) into a size x size premultiplied sRGB buffer.
+
 private func brandRender(_ image: NSImage, size: Int) throws -> BrandRaster {
     var pixels = [UInt8](repeating: 0, count: size * size * 4)
     let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
@@ -381,7 +369,6 @@ private func brandRender(_ image: NSImage, size: Int) throws -> BrandRaster {
 }
 #endif
 
-/// Every non-hidden file in every res/drawable* folder of the app module, as (folder, file name).
 private func brandDrawableFiles() throws -> [(folder: String, name: String)] {
     let res = brandPackagePath("Android/app/src/main/res")
     var result: [(folder: String, name: String)] = []
@@ -393,13 +380,11 @@ private func brandDrawableFiles() throws -> [(folder: String, name: String)] {
     return result
 }
 
-/// AAPT2 resource names: lowercase a to z first, then lowercase letters, digits and underscore.
 private func brandLegalResourceName(_ name: String) -> Bool {
     guard let first = name.unicodeScalars.first, first.value >= 0x61 && first.value <= 0x7A else { return false }
     return name.unicodeScalars.allSatisfy { ($0.value >= 0x61 && $0.value <= 0x7A) || ($0.value >= 0x30 && $0.value <= 0x39) || $0 == "_" }
 }
 
-/// Every `item` element of an Android values resource file as (name attribute, trimmed text).
 private func brandResourceItems(_ packageRelativePath: String) throws -> [(name: String, value: String)] {
     let parser = try #require(XMLParser(contentsOf: URL(fileURLWithPath: brandPackagePath(packageRelativePath))))
     let collector = BrandItemCollector()
@@ -431,7 +416,6 @@ private final class BrandItemCollector: NSObject, XMLParserDelegate {
     }
 }
 
-/// The pinned brand mark's subpaths: the diamond first, then the four letter contours.
 private func brandMark() throws -> [String] {
     let svg = try String(contentsOf: brandRepoRoot().appendingPathComponent("packages/ui-tokens/icons/brand/conclave-mark.svg"), encoding: .utf8)
     let d = try #require(brandAttribute("d", in: svg))
@@ -451,7 +435,6 @@ private func brandColors(_ folder: String) throws -> [String: String] {
     return result
 }
 
-/// The single value of `name="..."` in a file (nil when absent or repeated).
 private func brandAttribute(_ name: String, in source: String) -> String? {
     let pattern = "(?:^|[\\s<])" + NSRegularExpression.escapedPattern(for: name) + "=\"([^\"]*)\""
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }

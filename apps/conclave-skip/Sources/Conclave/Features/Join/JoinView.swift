@@ -465,11 +465,11 @@ struct JoinView: View {
         return horizontalSizeClass == UserInterfaceSizeClass.regular
 #endif
     }
-    
+
     enum JoinPhase {
         case auth, join
     }
-    
+
     enum JoinTab {
         case new, join
     }
@@ -537,7 +537,7 @@ struct JoinView: View {
             ZStack {
                 ACMColors.bg
                     .ignoresSafeArea()
-                
+
                 VStack(spacing: 0) {
                     switch phase {
                     case .auth:
@@ -546,7 +546,7 @@ struct JoinView: View {
                                 insertion: .move(edge: .bottom).combined(with: .opacity),
                                 removal: .opacity
                             ))
-                        
+
                     case .join:
                         joinPhase(geometry: geometry)
                             .transition(.opacity)
@@ -556,7 +556,7 @@ struct JoinView: View {
                 #if SKIP
                 .composeModifier { $0.imePadding() }
                 #endif
-                
+
                 if shouldShowLocalLoadingOverlay {
                     loadingOverlay
                 }
@@ -630,7 +630,7 @@ struct JoinView: View {
             stopPreviewCapture()
         }
     }
-    
+
     private func authPhase(geometry: GeometryProxy) -> some View {
         let horizontalPadding = min(24.0, geometry.size.width * 0.08)
         let contentWidth = max(240.0, min(360.0, geometry.size.width - horizontalPadding * 2.0))
@@ -649,7 +649,7 @@ struct JoinView: View {
                         .foregroundStyle(ACMColors.textFaint)
                 }
                 .padding(EdgeInsets(top: 0, leading: 0, bottom: 16, trailing: 0))
-                
+
                 if shouldShowSocialSignIn {
                     ACMGlassGroup(spacing: 12) {
                         VStack(spacing: 12) {
@@ -746,7 +746,7 @@ struct JoinView: View {
 
                 authErrorBanner
                 meetingEndedNoticeBanner
-                
+
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Your name")
                         .font(ACMFont.trial(13, weight: .medium))
@@ -867,8 +867,6 @@ struct JoinView: View {
         .padding(.horizontal, 14)
         .acmGlassRoundedRect(cornerRadius: ACMRadius.lg)
     }
-    
-    // MARK: - Join Phase (Camera preview + Form)
 
     private func joinPhase(geometry: GeometryProxy) -> some View {
         Group {
@@ -936,9 +934,7 @@ struct JoinView: View {
         }
         .frame(height: 42)
     }
-    
-    // MARK: - Camera Preview Section
-    
+
     private var cameraPreviewSection: some View {
         ZStack {
             RoundedRectangle(cornerRadius: previewCornerRadius)
@@ -1069,9 +1065,7 @@ struct JoinView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
     }
-    
-    // MARK: - Join Form Section
-    
+
     private var joinFormSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             if shouldShowJoinTabs {
@@ -1128,9 +1122,7 @@ struct JoinView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-    
-    // MARK: - Tab Switcher
-    
+
     private var tabSwitcher: some View {
         HStack(spacing: 0) {
             newMeetingTabButton
@@ -1145,7 +1137,7 @@ struct JoinView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
     }
-    
+
     private var newMeetingTabButton: some View {
         Button {
             activeTab = .new
@@ -1180,9 +1172,7 @@ struct JoinView: View {
                 .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
-    
-    // MARK: - Form Components
-    
+
     private var newMeetingForm: some View {
         VStack(spacing: joinFormContentSpacing) {
             authErrorBanner
@@ -1264,7 +1254,7 @@ struct JoinView: View {
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
-    
+
     private var formContent: some View {
         Group {
             if activeTab == .new {
@@ -1279,7 +1269,7 @@ struct JoinView: View {
     private var joinFormContentSpacing: CGFloat {
         isRegularSizeClass ? 14.0 : 12.0
     }
-    
+
     private var joinMeetingForm: some View {
         VStack(spacing: joinFormContentSpacing) {
             authErrorBanner
@@ -1560,7 +1550,7 @@ struct JoinView: View {
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
         }
     }
-    
+
     private var roomNameInputSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(isRoutedJoinContext ? "Room" : "Join with a code")
@@ -1614,9 +1604,6 @@ struct JoinView: View {
         )
     }
 
-    /// True when the ONLY thing between the user and Join is an empty name:
-    /// room resolved, invite code (if required) supplied, not busy, and no
-    /// signed-in identity supplying a name.
     private var shouldShowJoinNameHint: Bool {
         guard appState.currentUser == nil,
               !isPrejoinActionBlocked,
@@ -1731,15 +1718,11 @@ struct JoinView: View {
                     .foregroundStyle(ACMColors.borderSubtle)
             }
             .clipShape(RoundedRectangle(cornerRadius: ACMRadius.md))
-            // Match the web's disabled affordance (opacity-50): text color alone
-            // is too subtle on the dark surface, and a silent no-op Join reads
-            // as broken (seen with deep-link arrivals that land with no name).
+
             .opacity(isJoinEnabled || isJoinInProgress ? 1.0 : 0.55)
         }
     }
 
-    /// Deep links land with the room filled but no name; the Join button is
-    /// disabled and, without this, nothing explains why.
     @ViewBuilder
     private var joinNameHint: some View {
         if shouldShowJoinNameHint {
@@ -1791,21 +1774,19 @@ struct JoinView: View {
         .disabled(!isEnabled)
 #endif
     }
-    
-    // MARK: - Loading Overlay
-    
+
     private var loadingOverlay: some View {
         ZStack {
             ACMColors.blackOverlay(0.8)
                 .ignoresSafeArea()
-            
+
             VStack(spacing: 12) {
                 ProgressView()
 #if !SKIP
                     .progressViewStyle(CircularProgressViewStyle(tint: ACMColors.primaryOrange))
 #endif
                     .scaleEffect(1.5)
-                
+
                 Text(viewModel.state.connectionState == ConnectionState.reconnecting ? "Reconnecting…" : "Joining…")
                     .font(ACMFont.trial(15, weight: .medium))
                     .foregroundStyle(ACMColors.textMuted)
@@ -1813,8 +1794,6 @@ struct JoinView: View {
         }
     }
 
-    // MARK: - Computed Properties
-    
     private var resolvedGuestName: String {
         let normalized = normalizeGuestName(guestName)
         if !normalized.isEmpty {
@@ -1961,8 +1940,6 @@ struct JoinView: View {
             return "Account"
         }
     }
-    
-    // MARK: - Actions
 
     private func enterAuthPhase() {
         PerformanceDiagnostics.event("auth_phase_enter")
@@ -2463,9 +2440,9 @@ struct JoinView: View {
             currentProvider: signedInAccountUser?.provider
         )
     }
-    
+
     private func handleCreateRoom() {
-        // WP2-H2 (TG 3.6 row 1): no haptic at the tap; the root feedback consumer plays `joined` when the join lands.
+
         guard !shouldBlockJoinForSystemSuspension() else { return }
         let shouldJoinWithCameraOn = isCameraOn
         viewModel.setPreferredLocalCameraFacing(previewCameraFacing)
@@ -2493,7 +2470,7 @@ struct JoinView: View {
     }
 
     private func handleJoinRoom() {
-        // WP2-H2 (TG 3.6 row 2): no haptic at the tap; the root feedback consumer plays `joined` or `admitted`.
+
         guard !shouldBlockJoinForSystemSuspension() else { return }
         let joinTarget = resolvedJoinTarget(from: roomCode)
         guard !joinTarget.roomId.isEmpty else { return }
@@ -2553,8 +2530,7 @@ struct JoinView: View {
             "Your phone has paused Conclave. Turn off Sleep mode or app restrictions for Conclave, then try again."
         return true
     }
-    
-    // ENT-1 (S10 0.5): the generator and the sanitizer moved to EntryPolicies, shared with the native premeeting route.
+
     private func generateRoomCode() -> String {
         EntryPolicies.generateRoomCode()
     }
@@ -2943,18 +2919,12 @@ struct JoinView: View {
         }
     }
 
-    /// A link arrival lands on the prejoin with the room already filled; when
-    /// no identity or remembered name supplies a display name, put the caret
-    /// in the name field so the one remaining step is obvious. iOS only -
-    /// programmatic focus pops the keyboard over the form on Android, where
-    /// the hint text carries the affordance instead.
     private func focusNameFieldForLinkArrivalIfNeeded() {
 #if !SKIP
         guard appState.currentUser == nil,
               NativeDisplayNameNormalizer.normalize(displayNameInput).isEmpty else { return }
         Task { @MainActor in
-            // Outlast the join phase's clearInputFocusAfterLayout (500ms), and
-            // bump its generation so a pending clear can't steal focus back.
+
             try? await Task.sleep(nanoseconds: 650_000_000)
             guard NativeDisplayNameNormalizer.normalize(displayNameInput).isEmpty else { return }
             inputFocusClearGeneration += 1
@@ -3004,7 +2974,7 @@ struct JoinView: View {
                     viewModel.state.joinFormErrorMessage = nil
                     return
                 }
-                // S20 SC22 (STG-8): the attendee capsule and Webinar Details read the landing title.
+
                 viewModel.state.webinarTitle = trimWhitespaceAndNewlines(webinar.title ?? "")
             }
 
@@ -3117,7 +3087,7 @@ struct JoinView: View {
         setupCamera()
 #endif
     }
-    
+
     private func toggleMic() {
 #if SKIP
         if isMicOn {
@@ -3139,7 +3109,7 @@ struct JoinView: View {
         isMicOn = !isMicOn
 #endif
     }
-    
+
     #if SKIP
     private func cancelAndroidCameraPermissionWaiter() {
         androidCameraPermissionGeneration += 1
@@ -3295,34 +3265,33 @@ struct JoinView: View {
 }
 
 #if os(iOS)
-// MARK: - Camera Preview UIViewRepresentable
 
 struct CameraPreviewRepresentable: UIViewRepresentable {
     let session: AVCaptureSession
-    
+
     func makeUIView(context: Context) -> UIView {
         let view = UIView(frame: .zero)
         view.backgroundColor = .black
-        
+
         let previewLayer = AVCaptureVideoPreviewLayer(session: session)
         previewLayer.videoGravity = .resizeAspectFill
         view.layer.addSublayer(previewLayer)
-        
+
         context.coordinator.previewLayer = previewLayer
-        
+
         return view
     }
-    
+
     func updateUIView(_ uiView: UIView, context: Context) {
         DispatchQueue.main.async {
             context.coordinator.previewLayer?.frame = uiView.bounds
         }
     }
-    
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
-    
+
     class Coordinator {
         var previewLayer: AVCaptureVideoPreviewLayer?
     }
@@ -3330,18 +3299,17 @@ struct CameraPreviewRepresentable: UIViewRepresentable {
 #endif
 
 #if os(macOS)
-// MARK: - macOS Camera Preview Stub
 
 struct CameraPreviewRepresentable: NSViewRepresentable {
     let session: Any?
-    
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.black.cgColor
         return view
     }
-    
+
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 #endif

@@ -1,26 +1,13 @@
 import Foundation
 
-// S60 9 j (ACT-3): the scene models of the six prompt games (Trivia, Bluff, Would You Rather, Most Likely To, Reaction,
-// Imposter). `GameStagePresenter` builds them once per push from the typed projections (GameProjections.swift, C6-15)
-// and publishes them inside `GameScene`, so the scene bodies on both platforms read ready values and never parse JSON.
-// Hidden information stays per player: a scene carries a private field only from the local person's own player view,
-// and only while that person holds a seat (a spectator scene never has a word, a pick or a score). Shared (transpiled):
-// String raw-value enums, scalar structs and arrays of structs only (Skip Lite).
-
-// MARK: Enums
-
-/// The local player's Trivia result at the reveal (S60 9 c "Correct +%lld", "Not quite", "Time's up").
 enum TriviaOutcome: String, CaseIterable, Equatable {
     case none, correct, wrong, timeUp
 }
 
-/// What the Reaction pad (B1) shows (S60 9 j). `locked` is a tap the server took without a time yet, or one this
-/// device sent that the server has not echoed (S60 9 f late event).
 enum ReactionPadState: String, CaseIterable, Equatable {
     case wait, go, early, locked, measured, spectating
 }
 
-/// One row of the Reaction reveal (K9): a measured time, an early tap or no tap.
 enum ReactionResultOutcome: String, CaseIterable, Equatable {
     case time, early, noTap
 }
@@ -29,18 +16,13 @@ enum ImposterRole: String, CaseIterable, Equatable {
     case crew, imposter, spectator
 }
 
-/// The Imposter result line (S60 9 c).
 enum ImposterResultKind: String, CaseIterable, Equatable {
     case none, crewWins, imposterWins, tie
 }
 
-/// The host bar action of a prompt game phase (S60 9 c "Host bar" column). Offered only to a seated host: the engine
-/// rejects any move from someone without a seat (engine.ts applyMove), so an unseated host keeps only End.
 enum PromptHostAction: String, CaseIterable, Equatable {
     case none, skipQuestion, next, skipWriting, revealNow, callVote, endVote
 
-    /// The module move type (G/trivia.ts, bluff.ts, wouldYouRather.ts, mostLikelyTo.ts: `skip`, `next`; G/reaction.ts
-    /// `next`; G/imposter.ts `callVote`, `tally`).
     var moveType: String {
         switch self {
         case .none: return ""
@@ -61,24 +43,20 @@ enum PromptHostAction: String, CaseIterable, Equatable {
     }
 }
 
-// MARK: Trivia (G/trivia.ts publicView 400-451, playerView 453-469)
-
-/// One Trivia option. `id` is stable per question ("q2-1"), never the row offset alone, so a new question never reuses
-/// a row; `index` is what the module's `{choice}` payload carries.
 struct TriviaChoiceModel: Equatable, Identifiable {
     let id: String
     let index: Int
     let text: String
-    /// -1 until the reveal.
+
     let count: Int
     let isCorrect: Bool
     let isMine: Bool
 }
 
 struct TriviaScene: Equatable {
-    /// "question", "reveal" or "results".
+
     let phase: String
-    /// The server's 0-based index.
+
     let questionIndex: Int
     let questionNumber: Int
     let questionTotal: Int
@@ -90,9 +68,9 @@ struct TriviaScene: Equatable {
     let outcome: TriviaOutcome
     let lastPoints: Int
     let score: Int
-    /// 0 when unranked or for a spectator.
+
     let rank: Int
-    /// The correct option's text at the reveal (the "Correct answer: %@" announcement), else "".
+
     let correctText: String
     let isPlayer: Bool
     let hasAnswered: Bool
@@ -101,10 +79,8 @@ struct TriviaScene: Equatable {
 
     var isReveal: Bool { phase == "reveal" }
 
-    /// No question yet ("Waiting for the question.", S60 9 f): generated content can arrive after the phase starts.
     var isWaitingForQuestion: Bool { prompt.isEmpty || options.isEmpty }
 
-    /// The option index for a K3 row id; -1 for an unknown id.
     func index(ofChoice id: String) -> Int {
         for option in options where option.id == id {
             return option.index
@@ -112,7 +88,6 @@ struct TriviaScene: Equatable {
         return -1
     }
 
-    /// K3 rows: counts only at the reveal; the correct option and the local wrong pick marked (glyph and word, D4).
     func kitChoices() -> [GameKitChoice] {
         var result: [GameKitChoice] = []
         let revealed = isReveal
@@ -125,23 +100,20 @@ struct TriviaScene: Equatable {
     }
 }
 
-// MARK: Bluff (G/bluff.ts publicView 389-426, playerView 428-437)
-
 struct BluffOptionModel: Equatable, Identifiable {
     let id: String
     let text: String
-    /// The local player's own bluff (never choosable, the module rejects it).
+
     let isOwn: Bool
-    /// Known only at the reveal (the module sends `kind: "real"` for the truth then, nothing before).
+
     let isTruth: Bool
-    /// The author at the reveal, "" for the truth and before.
+
     let ownerName: String
-    /// -1 before the reveal.
+
     let votes: Int
     let isMine: Bool
 }
 
-/// Points one player won this round (Bluff reveal).
 struct RoundPointsModel: Equatable, Identifiable {
     let id: String
     let name: String
@@ -150,7 +122,7 @@ struct RoundPointsModel: Equatable, Identifiable {
 }
 
 struct BluffScene: Equatable {
-    /// "write", "choose", "reveal" or "results".
+
     let phase: String
     let round: Int
     let roundTotal: Int
@@ -159,11 +131,10 @@ struct BluffScene: Equatable {
     let submittedCount: Int
     let chosenCount: Int
     let totalPlayers: Int
-    /// The submitted bluff as the server stored it (trimmed), private.
+
     let myBluff: String
     let hasSubmitted: Bool
-    /// A seated player in the write phase who has not submitted yet. The composer also stays while a submit is
-    /// pending (the push that records it arrives before the ack), so the draft stays until that ack (S60 9 f).
+
     let canSubmit: Bool
     let canChoose: Bool
     let roundPoints: [RoundPointsModel]
@@ -171,10 +142,8 @@ struct BluffScene: Equatable {
     let isPlayer: Bool
     let hostAction: PromptHostAction
 
-    /// G/bluff.ts MAX_ANSWER_LEN.
     static let maxBluffLength = 60
 
-    /// The truth's text at the reveal (announcement), else "".
     var truthText: String {
         for option in options where option.isTruth {
             return option.text
@@ -182,7 +151,6 @@ struct BluffScene: Equatable {
         return ""
     }
 
-    /// K3 rows for the choose phase: your own bluff disabled with its label, your pick selected.
     func kitChoices(ownLabel: String) -> [GameKitChoice] {
         var result: [GameKitChoice] = []
         for option in options {
@@ -194,10 +162,8 @@ struct BluffScene: Equatable {
     }
 }
 
-// MARK: Would You Rather (G/wouldYouRather.ts publicView 299-318, playerView 320-323)
-
 struct ChoiceScene: Equatable {
-    /// "choose", "reveal" or "results".
+
     let phase: String
     let index: Int
     let total: Int
@@ -209,9 +175,9 @@ struct ChoiceScene: Equatable {
     let namesB: [String]
     let answeredCount: Int
     let totalPlayers: Int
-    /// 0, 1 or -1 (none).
+
     let myChoice: Int
-    /// Changeable until the phase ends (the module overwrites the pick).
+
     let canChoose: Bool
     let isPlayer: Bool
     let hostAction: PromptHostAction
@@ -221,7 +187,6 @@ struct ChoiceScene: Equatable {
 
     var isReveal: Bool { phase == "reveal" }
 
-    /// The module's `{option}` for a K4 id; -1 for an unknown id.
     static func option(forChoice id: String) -> Int {
         if id == firstId { return 0 }
         if id == secondId { return 1 }
@@ -238,22 +203,17 @@ struct ChoiceScene: Equatable {
                       isWrongPick: false, isDisabled: !canChoose)
     }
 
-    /// K5 at the reveal; a side nobody picked reads `nobodyLabel` ("Nobody picked this") instead of an empty name list.
     func split(nobodyLabel: String) -> GameKitSplit {
         GameKitSplit(labelA: optionA, labelB: optionB, countA: countA, countB: countB,
                      namesA: countA <= 0 ? [nobodyLabel] : namesA, namesB: countB <= 0 ? [nobodyLabel] : namesB)
     }
 }
 
-// MARK: Most Likely To (G/mostLikelyTo.ts publicView 259-288, playerView 290-292) and the Imposter vote
-
-/// One person row of a vote (Most Likely To, Imposter). Eligibility comes from the server rules: Most Likely To allows
-/// a self vote (validation.ts requirePlayerTarget default), Imposter does not (`allowSelf: false`).
 struct PersonCandidateModel: Equatable, Identifiable {
     let id: String
     let name: String
     let isYou: Bool
-    /// -1 before the reveal.
+
     let votes: Int
     let isWinner: Bool
     let isMine: Bool
@@ -261,7 +221,7 @@ struct PersonCandidateModel: Equatable, Identifiable {
 }
 
 struct PersonVoteScene: Equatable {
-    /// "vote", "reveal" or "results".
+
     let phase: String
     let index: Int
     let total: Int
@@ -270,11 +230,11 @@ struct PersonVoteScene: Equatable {
     let votedCount: Int
     let totalPlayers: Int
     let winnerName: String
-    /// Two or more names when the top count is shared ("Tied: %@ and %@").
+
     let tiedNames: [String]
     let canVote: Bool
     let isPlayer: Bool
-    /// The person your vote pointed at left mid-vote ("%@ left. Vote again."); "" otherwise.
+
     let departedName: String
     let hostAction: PromptHostAction
 
@@ -292,14 +252,12 @@ struct PersonVoteScene: Equatable {
     }
 }
 
-// MARK: Reaction (G/reaction.ts publicView 169-197, playerView 199-207)
-
 struct ReactionResultModel: Equatable, Identifiable {
     let id: String
-    /// 1-based position: measured times fastest first, then early taps, then people who did not tap.
+
     let position: Int
     let name: String
-    /// -1 without a time.
+
     let ms: Int
     let outcome: ReactionResultOutcome
     let isYou: Bool
@@ -307,12 +265,12 @@ struct ReactionResultModel: Equatable, Identifiable {
 }
 
 struct ReactionScene: Equatable {
-    /// "arming", "go", "reveal" or "results".
+
     let phase: String
     let round: Int
     let roundTotal: Int
     let padState: ReactionPadState
-    /// The local measured time, -1 without one.
+
     let reactionMs: Int
     let tappedCount: Int
     let totalPlayers: Int
@@ -322,12 +280,9 @@ struct ReactionScene: Equatable {
     let isPlayer: Bool
     let hostAction: PromptHostAction
 
-    /// Changes once per phase per round: the pad's one-tap latch resets on it (B1 "`sent` resets on the next phase").
     var phaseKey: String { String(round) + "|" + phase }
     var isPadPhase: Bool { phase == "arming" || phase == "go" }
 
-    /// What the pad draws: a tap this device sent shows "Locked In" until the server echoes it, so a held touch or
-    /// a second input never looks open (S60 9 f held touch, late event).
     func displayedPadState(locallySent: Bool) -> ReactionPadState {
         if !isPlayer { return ReactionPadState.spectating }
         if locallySent && (padState == ReactionPadState.wait || padState == ReactionPadState.go) { return ReactionPadState.locked }
@@ -335,30 +290,27 @@ struct ReactionScene: Equatable {
     }
 }
 
-// MARK: Imposter (G/imposter.ts publicView 315-348, playerView 350-362)
-
 struct ImposterScene: Equatable {
-    /// "reveal", "discuss", "vote" or "result".
+
     let phase: String
     let category: String
     let starterName: String
     let role: ImposterRole
-    /// The crew's word, only in a seated crew member's own scene. Never logged, never in a shared surface, and the
-    /// views compose it only while the K11 card is held (S60 Q7).
+
     let secretWord: String
     let candidates: [PersonCandidateModel]
     let votedCount: Int
     let totalPlayers: Int
     let resultKind: ImposterResultKind
     let imposterName: String
-    /// The word the server reveals publicly at the result.
+
     let revealedWord: String
     let canVote: Bool
     let canCallVote: Bool
     let canTally: Bool
     let isPlayer: Bool
     let myVote: String
-    /// A seated player who cast no vote by the result ("You didn't vote.").
+
     let abstained: Bool
     let departedName: String
     let hostAction: PromptHostAction
@@ -377,16 +329,12 @@ struct ImposterScene: Equatable {
     }
 }
 
-// MARK: Building (once per push)
-
-/// What every builder needs besides the projection. `knownPlayers` remembers names seen during this game, so a vote
-/// target who left can still be named.
 struct PromptSceneContext: Equatable {
     let localId: String
     let isPlayer: Bool
     let isHost: Bool
     let isRecovering: Bool
-    /// The seated players in server order.
+
     let players: [GamePlayerInput]
     let knownPlayers: [GameNamedPlayer]
 
@@ -408,7 +356,6 @@ struct PromptSceneContext: Equatable {
 }
 
 enum PromptSceneBuilder {
-    // MARK: Host bar (S60 9 c)
 
     static func hostAction(kind: String, phase: String, context: PromptSceneContext) -> PromptHostAction {
         if !context.isHost || !context.isPlayer || context.isRecovering { return PromptHostAction.none }
@@ -436,8 +383,6 @@ enum PromptSceneBuilder {
         }
         return PromptHostAction.none
     }
-
-    // MARK: Trivia
 
     static func trivia(_ projection: TriviaProjection, context: PromptSceneContext) -> TriviaScene {
         let phase = projection.phase
@@ -470,8 +415,6 @@ enum PromptSceneBuilder {
                            hostAction: hostAction(kind: GameSceneKind.trivia, phase: phase, context: context))
     }
 
-    /// At the reveal: no answer is "Time's up"; otherwise the public correct index decides (the player view can still
-    /// be the question-phase one for a moment, so its `correct` flag is the fallback, not the rule).
     static func triviaOutcome(_ projection: TriviaProjection, isPlayer: Bool) -> TriviaOutcome {
         if !isPlayer || projection.phase != "reveal" { return TriviaOutcome.none }
         if !projection.hasAnswered { return TriviaOutcome.timeUp }
@@ -482,8 +425,6 @@ enum PromptSceneBuilder {
         if projection.outcome == "wrong" { return TriviaOutcome.wrong }
         return TriviaOutcome.none
     }
-
-    // MARK: Bluff
 
     static func bluff(_ projection: BluffProjection, context: PromptSceneContext) -> BluffScene {
         let phase = projection.phase
@@ -511,8 +452,6 @@ enum PromptSceneBuilder {
                           hostAction: hostAction(kind: GameSceneKind.bluff, phase: phase, context: context))
     }
 
-    // MARK: Would You Rather
-
     static func wouldYouRather(_ projection: WouldYouRatherProjection, context: PromptSceneContext) -> ChoiceScene {
         let phase = projection.phase
         let isPlayer = context.isPlayer
@@ -523,8 +462,6 @@ enum PromptSceneBuilder {
                            canChoose: isPlayer && phase == "choose" && !context.isRecovering, isPlayer: isPlayer,
                            hostAction: hostAction(kind: GameSceneKind.wouldYouRather, phase: phase, context: context))
     }
-
-    // MARK: Most Likely To
 
     static func count(of id: String, among counts: [GameCountEntry]) -> Int {
         for entry in counts where entry.key == id {
@@ -578,8 +515,6 @@ enum PromptSceneBuilder {
                                hostAction: hostAction(kind: GameSceneKind.mostLikelyTo, phase: phase, context: context))
     }
 
-    // MARK: Reaction
-
     static func reaction(_ projection: ReactionProjection, context: PromptSceneContext) -> ReactionScene {
         let phase = projection.phase
         let isPlayer = context.isPlayer
@@ -613,7 +548,7 @@ enum PromptSceneBuilder {
                                                 ms: outcome == ReactionResultOutcome.time ? result.reactionMs : -1, outcome: outcome,
                                                 isYou: result.id == context.localId && !context.localId.isEmpty, isFastest: fastest))
             }
-            // The module lists only people who tapped; everyone else seated did not tap this round.
+
             for player in context.players {
                 var listed = false
                 for result in projection.results where result.id == player.id {
@@ -632,8 +567,6 @@ enum PromptSceneBuilder {
                              totalPlayers: projection.totalPlayers, results: rows, fastestName: projection.winnerName, canTap: canTap,
                              isPlayer: isPlayer, hostAction: hostAction(kind: GameSceneKind.reaction, phase: phase, context: context))
     }
-
-    // MARK: Imposter
 
     static func imposter(_ projection: ImposterProjection, context: PromptSceneContext) -> ImposterScene {
         let phase = projection.phase
@@ -681,11 +614,8 @@ enum PromptSceneBuilder {
     }
 }
 
-// MARK: Outcome feedback (S60 9 h; tokens published by the presenter, RECONCILE R12)
-
 enum PromptOutcomePolicy {
-    /// `gameCorrect` or `gameWrong` once, on the push that moves the local player's question into its reveal. A
-    /// spectator, a timed-out player and a reveal joined mid-way get nothing.
+
     static func trivia(previous: TriviaScene?, next: TriviaScene?) -> FeedbackKind {
         guard let before = previous, let after = next else { return FeedbackKind.none }
         if !after.isPlayer || before.questionIndex != after.questionIndex { return FeedbackKind.none }
@@ -695,7 +625,6 @@ enum PromptOutcomePolicy {
         return FeedbackKind.none
     }
 
-    /// `tapEarly` once, on the push where the server marks the local player's tap early.
     static func reaction(previous: ReactionScene?, next: ReactionScene?) -> FeedbackKind {
         guard let before = previous, let after = next else { return FeedbackKind.none }
         if !after.isPlayer || before.round != after.round { return FeedbackKind.none }
@@ -704,11 +633,8 @@ enum PromptOutcomePolicy {
     }
 }
 
-// MARK: Scene-level policy (both platforms)
-
 enum PromptScenePolicy {
-    /// The pinned host bar action for the current scene (none outside a prompt game, outside play, or for anyone but
-    /// a seated host).
+
     static func hostAction(_ scene: GameScene) -> PromptHostAction {
         if let trivia = scene.trivia { return trivia.hostAction }
         if let bluff = scene.bluff { return bluff.hostAction }
@@ -719,13 +645,11 @@ enum PromptScenePolicy {
         return PromptHostAction.none
     }
 
-    /// Whether `kind` is one of the six prompt games this slice draws (the shell routes them to the prompt scene body).
     static func isPromptGame(_ kind: String) -> Bool {
         kind == GameSceneKind.trivia || kind == GameSceneKind.bluff || kind == GameSceneKind.wouldYouRather
             || kind == GameSceneKind.mostLikelyTo || kind == GameSceneKind.reaction || kind == GameSceneKind.imposter
     }
 
-    /// One-shot announcement keys (S60 9 i); "" when nothing is due.
     static func triviaRevealKey(_ scene: TriviaScene) -> String {
         scene.isReveal && !scene.correctText.isEmpty ? "trivia-reveal-" + String(scene.questionIndex) : ""
     }
@@ -738,7 +662,6 @@ enum PromptScenePolicy {
         scene.isReveal && (scene.isTie || !scene.winnerName.isEmpty) ? "vote-reveal-" + String(scene.index) : ""
     }
 
-    /// The go transition, announced assertively once per round to a player who can still tap.
     static func reactionGoKey(_ scene: ReactionScene) -> String {
         scene.isPlayer && scene.padState == ReactionPadState.go && scene.canTap ? "reaction-go-" + String(scene.round) : ""
     }

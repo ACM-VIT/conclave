@@ -10,15 +10,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * STG-5 and TRN-1 through the transpiled notice policy, presenter and captions models (the Swift halves are
- * T/STG5NoticePolicyTests.swift and T/TRN1CaptionsTests.swift), with the same fixtures: the banner priorities, the
- * Android-only captive portal, quality dismissal, host notice masking, the knock and reconnecting fixtures, the toast
- * queue and coalescing, presence and recovery suppression, the Q4 thresholds, compact sheet suspension (RECONCILE R3),
- * the notice sounds through a recording output, the presenter's one-toast-at-a-time guarantee the dark snackbar host
- * relies on, the live notes policy, catch-up, the caption tail and the Android caption user style. Pure: no
- * composition (only the first composition in a JVM keeps recomposing under Robolectric; PanelStageBridgeTests owns it).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class STG5NoticeBridgeTests {
@@ -129,7 +120,7 @@ class STG5NoticeBridgeTests {
         center.post(StageEvent.make(kind = StageEventKind.actionFailed, detail = "hand"), nowMillis = t + 6_700.0)
         assertEquals(3, center.queue.count)
         assertEquals(NoticeKind.actionFailed, center.queue[0].kind)
-        // The presenter never expires a toast: only the host's dismissal moves the lane.
+
         assertEquals("Avery", center.toast?.name)
         center.dismiss(id = center.toast?.id ?: "", nowMillis = t + 600_000.0)
         assertEquals(NoticeKind.actionFailed, center.toast?.kind)
@@ -172,7 +163,7 @@ class STG5NoticeBridgeTests {
     }
 
     @Test fun aSecondToastWaitsUntilTheHostDismissesTheFirst() {
-        // What the dark snackbar host relies on: one toast at a time, the next one only after dismissNotice(id).
+
         val stage = StagePresenter(shell = MeetingShellPresenter())
         stage.apply(StageFixtureScript.base(count = 4))
         stage.applyNotices(host())

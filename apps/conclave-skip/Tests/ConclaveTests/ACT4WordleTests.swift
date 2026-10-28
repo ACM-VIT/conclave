@@ -3,14 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ACT-4 (OUT/PLAN-screens.md section 5, S60 10): the Wordle board and its input. The scene is built once per push from
-/// the projections of packages/sfu/server/games/modules/wordle.ts and checked against the module (random and player-set
-/// modes, every phase, correct, present, absent and repeated letters, the setter's status-only boards, timeout, results
-/// and rematch); the presenter-local draft (survives unrelated pushes, stays on a rejected guess with `guessInvalid`,
-/// clears once when the server records the guess, never sends a second guess); `wordSolved` once; Next Round for a seated
-/// host; the key width rule; the fixtures; and source scans of both platforms' boards (text and glyph twins, text entry
-/// under a screen reader, hardware keys, the timer leaf, copy for every case, both catalogs, the shell hooks). The Kotlin
-/// half is T/Skip/ACT4WordleBridgeTests.kt (HD request B7-T7 R6).
 @MainActor
 struct ACT4WordleTests {
     private final class Recorder {
@@ -46,7 +38,6 @@ struct ACT4WordleTests {
         scene.keyStates.first { $0.letter == letter }?.state ?? WordleKeyState.unused
     }
 
-    /// G/wordle.ts evaluateGuess: greens first, then yellows from what the greens left in the pool.
     private func evaluate(target: String, guess: String) -> [String] {
         let goal = target.map { String($0) }
         let attempt = guess.map { String($0) }
@@ -64,8 +55,6 @@ struct ACT4WordleTests {
         }
         return feedback
     }
-
-    // MARK: Projection (S60 10 j, l)
 
     @Test func theFixtureGuessesMatchTheModuleEvaluator() throws {
         for json in [WordleFixtures.sloth, WordleFixtures.llama, WordleFixtures.logic, WordleFixtures.lemur, WordleFixtures.lemma,
@@ -88,10 +77,10 @@ struct ACT4WordleTests {
         #expect(scene.myRows.map { $0.word } == ["SLOTH", "LLAMA"] && scene.myRows.allSatisfy { $0.isGuess })
         try #require(scene.myRows.count >= 2)
         #expect(marks(scene.myRows[0]) == [.absent, .present, .present, .absent, .absent])
-        // LLAMA against LEMON: the first L is correct and the repeated L is absent (the target has one L).
+
         #expect(marks(scene.myRows[1]) == [.correct, .absent, .absent, .present, .absent])
         #expect(scene.myRows[1].cells.map { $0.letter } == ["L", "L", "A", "M", "A"])
-        // Keys keep the best known state: L correct beats its absent repeat; O and M in the word; Q never tried.
+
         #expect(key(scene, "L") == .correct && key(scene, "O") == .present && key(scene, "M") == .present)
         #expect(key(scene, "S") == .absent && key(scene, "A") == .absent && key(scene, "Q") == .unused)
         #expect(scene.keyStates.count == 26)
@@ -114,7 +103,7 @@ struct ACT4WordleTests {
         #expect(marks(rows[2]) == [.typed, .typed, .typed, .typed, .empty] && !rows[2].isGuess)
         #expect(rows[3...].allSatisfy { row in row.cells.allSatisfy { $0.state == .empty && $0.letter.isEmpty } })
         #expect(rows[2].cells.map { $0.id } == ["r2c0", "r2c1", "r2c2", "r2c3", "r2c4"])
-        // Letters only, uppercased, at most five: paste and IME text never reach the server otherwise (S60R 22).
+
         #expect(WordleBoardPolicy.normalized("l\u{00E9} mon2Ok", limit: 5) == "LMONO")
         #expect(WordleBoardPolicy.normalized("crane!", limit: 5) == "CRANE")
         #expect(WordleBoardPolicy.normalized("\u{0645}\u{0631}\u{062D}\u{0628}\u{0627}", limit: 5).isEmpty)
@@ -124,7 +113,7 @@ struct ACT4WordleTests {
     }
 
     @Test func keyAndBoardGeometryFollowTheSpec() {
-        // S60 10 c, d: min(32, (width - 36) / 10); 5 x 38 + 4 x 4 = 206.
+
         #expect(abs(WordleBoardPolicy.keyWidth(available: 335) - 29.9) < 0.0001)
         #expect(abs(WordleBoardPolicy.keyWidth(available: 311) - 27.5) < 0.0001)
         #expect(WordleBoardPolicy.keyWidth(available: 420) == 32)
@@ -132,12 +121,10 @@ struct ACT4WordleTests {
         #expect(WordleBoardPolicy.cellSize * 5 + WordleBoardPolicy.gap * 4 == WordleBoardPolicy.boardWidth)
         #expect(WordleBoardPolicy.wideKeyFactor == 1.5 && WordleBoardPolicy.warningSeconds == 10)
         #expect(WordleBoardPolicy.announcedSeconds == [60, 10])
-        // Row three (Enter, seven letters, Delete) is ten key units plus eight gaps: it fits wherever row one fits.
+
         let unit = WordleBoardPolicy.keyWidth(available: 311)
         #expect(unit * 10 + WordleBoardPolicy.gap * 8 <= 311)
     }
-
-    // MARK: Draft (S60 10 f, h, j)
 
     @Test func theDraftLivesInThePresenterAndSurvivesUnrelatedPushes() throws {
         let games = presenter(.guess)
@@ -146,7 +133,7 @@ struct ACT4WordleTests {
         }
         #expect(games.wordleDraft == "LEMO")
         let sceneRevision = games.scene.revision
-        // Ben guesses: the scene changes, the draft does not.
+
         let other = WordleFixtures.playingView(you: WordleFixtures.standing("you", "You", 2, ""), finished: 1)
             .replacingOccurrences(of: "\"r2\",\"playerName\":\"Ben\",\"triesUsed\":2", with: "\"r2\",\"playerName\":\"Ben\",\"triesUsed\":3")
         games.apply(GameStageInputs.make(callSession: 1, isActive: true, gameId: "wordle", name: "Wordle", phase: "playing",
@@ -160,7 +147,7 @@ struct ACT4WordleTests {
         #expect(games.wordleDraft == "LEMON")
         games.typeWordleLetter("S")
         #expect(games.wordleDraft == "LEMON")
-        // A key press never rebuilds the scene (S60 10 k).
+
         #expect(games.scene.revision == sceneRevision + 1)
     }
 
@@ -173,12 +160,12 @@ struct ACT4WordleTests {
         #expect(games.submitWordle() == ActivityTapResult.dispatched)
         let sent = try #require(recorder.commands.last)
         #expect(sent.kind == GameStageCommandKind.move && sent.type == "guess" && sent.payloadJSON == #"{"word":"LEMON"}"#)
-        // Pending: no second guess, no edits racing the ack.
+
         #expect(games.submitWordle() == ActivityTapResult.ignored && recorder.commands.count == 1)
         games.deleteWordleLetter()
         #expect(games.wordleDraft == "LEMON")
         let before = games.feedbackState.token.sequence
-        // The push that records the guess arrives before the ack (gameHandlers.ts broadcasts first).
+
         games.apply(WordleFixtures.playingPush(guesses: [WordleFixtures.sloth, WordleFixtures.llama, WordleFixtures.lemon], outcome: "win"))
         #expect(games.wordleDraft.isEmpty && games.interaction.isPending)
         #expect(games.feedbackState.token.kind == FeedbackKind.wordSolved && games.feedbackState.token.sequence == before + 1)
@@ -188,7 +175,7 @@ struct ACT4WordleTests {
         #expect(!games.interaction.isPending && games.wordleDraft.isEmpty)
         games.apply(WordleFixtures.playingPush(guesses: [WordleFixtures.sloth, WordleFixtures.llama, WordleFixtures.lemon], outcome: "win"))
         #expect(games.feedbackState.token.sequence == before + 1)
-        // Joining an already solved board plays nothing.
+
         let late = presenter([WordleFixtures.playingPush(guesses: [WordleFixtures.lemon], outcome: "win")])
         #expect(late.feedbackState.token.sequence == 0)
     }
@@ -203,7 +190,7 @@ struct ACT4WordleTests {
         #expect(games.wordleDraft == "XYLYX")
         #expect(games.interaction.failure == GameFailure.server && games.interaction.failureServerText == "Not in word list")
         #expect(games.feedbackState.token.kind == FeedbackKind.guessInvalid && games.feedbackState.token.sequence == before + 1)
-        // The same draft can be fixed and sent again.
+
         games.deleteWordleLetter()
         games.typeWordleLetter("Z")
         #expect(games.wordleDraft == "XYLYZ" && games.submitWordle() == ActivityTapResult.dispatched)
@@ -227,7 +214,7 @@ struct ACT4WordleTests {
         let requestId = try #require(slowRecorder.commands.last).requestId
         slow.fireTimeout(requestId: requestId)
         #expect(slow.wordleDraft == "LOGIC" && slow.interaction.failure == GameFailure.server && !slow.interaction.isPending)
-        // Nothing resends on its own; a late push that did record the word clears the draft once.
+
         #expect(slowRecorder.commands.count == 1)
         slow.apply(WordleFixtures.playingPush(guesses: [WordleFixtures.sloth, WordleFixtures.llama, WordleFixtures.logic], outcome: ""))
         #expect(slow.wordleDraft.isEmpty)
@@ -245,8 +232,6 @@ struct ACT4WordleTests {
         #expect(games.wordleDraft.isEmpty && games.scene.wordle == nil)
     }
 
-    // MARK: Modes and phases (S60 10 f, l)
-
     @Test func playerSetModeCoversTheSetterTheWaitingGuesserAndTheWatchingSetter() throws {
         let recorder = Recorder()
         let setter = presenter(.setWord, recorder: recorder)
@@ -256,7 +241,7 @@ struct ACT4WordleTests {
         setter.setWordleDraft("crane")
         #expect(setter.wordleDraft == "CRANE" && setter.submitWordle() == ActivityTapResult.dispatched)
         #expect(recorder.commands.last?.type == "setWord" && recorder.commands.last?.payloadJSON == #"{"word":"CRANE"}"#)
-        // An invalid secret keeps the draft and is not a guess (no `guessInvalid`).
+
         setter.moveAcknowledged(requestId: try #require(recorder.commands.last).requestId, success: false, serverText: "Not in word list")
         #expect(setter.wordleDraft == "CRANE" && setter.feedbackState.token.kind != FeedbackKind.guessInvalid)
 
@@ -270,7 +255,7 @@ struct ACT4WordleTests {
         try #require(watching.liveBoards.count >= 3)
         #expect(watching.liveBoards[0].status == WordleStandingStatus.solved && watching.liveBoards[0].tries == 3)
         #expect(watching.liveBoards[2].status == WordleStandingStatus.outOfTries && watching.liveBoards[2].rows.count == 6)
-        // Status only: marks without letters.
+
         #expect(watching.liveBoards.allSatisfy { board in board.rows.allSatisfy { row in
             row.word.isEmpty && row.cells.allSatisfy { $0.letter.isEmpty } } })
         try #require(watching.liveBoards[0].rows.count >= 3)
@@ -278,8 +263,7 @@ struct ACT4WordleTests {
     }
 
     @Test func onlyTheSettersOwnViewCarriesTheBoards() throws {
-        // A player view that is not the setter's never yields live boards, even if boards were present (the host gains
-        // nobody's guesses), and a spectator gets no private field at all.
+
         let mine = WordleFixtures.playerView(round: 1, isSetter: false, canSetWord: false, canGuess: true, secret: "", guesses: [],
                                              outcome: "", boards: "[{\"playerId\":\"r1\",\"guesses\":[" + WordleFixtures.sloth + "],\"outcome\":null}]")
         let projection = GameProjectionParser.parse(gameId: "wordle", publicPhase: "playing",
@@ -312,7 +296,6 @@ struct ACT4WordleTests {
         #expect(WordleBoardPolicy.solutionRow(round).cells.map { $0.letter }.joined() == "LEMON")
         #expect(marks(WordleBoardPolicy.solutionRow(round)) == [.correct, .correct, .correct, .correct, .correct])
 
-        // Final results: Play Again and End Game in the shell's bar (result retention and rematch), no Next Round.
         let finalGames = presenter(.finalResults)
         let final = try #require(finalGames.scene.wordle)
         #expect(final.isFinalRound && !final.canAdvanceRound && finalGames.chrome.phase == GameChromePhase.results)
@@ -372,8 +355,6 @@ struct ACT4WordleTests {
         #expect(WordleFixtures.apply(named: "game-trivia-6", session: session, owner: ActivityFixtureOwner()) == nil)
     }
 
-    // MARK: Source scans (both platforms)
-
     private let iosPath = "Sources/Conclave/Features/Meeting/Games/Native/Boards/WordleBoard+iOS.swift"
     private let kotlinPath = "Sources/Conclave/Skip/ui/games/boards/WordleBoard.kt"
 
@@ -382,16 +363,16 @@ struct ACT4WordleTests {
         let kotlin = try stageSource(kotlinPath)
         let flatIOS = stageNormalized(ios)
         let flatKotlin = stageNormalized(kotlin)
-        // One accessibility element per row with its letters and marks as text; keys read "E, in the word".
+
         #expect(flatIOS.contains(".accessibilityElement(children: .ignore) .accessibilityLabel(label)"))
         #expect(flatIOS.contains("WordleRowView(row: row, label: WordleCopy.rowSummary(row))"))
         #expect(flatIOS.contains(".accessibilityLabel(WordleCopy.keyLabel(key))"))
         #expect(flatKotlin.contains("clearAndSetSemantics { contentDescription = label }"))
         #expect(flatKotlin.contains(".semantics { contentDescription = label }"))
-        // Glyph twins: a check for the right spot, a dot for in the word.
+
         #expect(flatIOS.contains("Image(systemName: ConclaveSymbols.checkmark)") && flatIOS.contains("Circle() .fill(ink)"))
         #expect(flatKotlin.contains("Icon(ConclaveIcons.CheckFill0, contentDescription = null, tint = ink") && flatKotlin.contains("background(ink, CircleShape)"))
-        // Functional tokens with dark ink on bright fills; never coral.
+
         for token in ["DesignTokens.iosInCallSuccess", "DesignTokens.iosInCallWarning", "DesignTokens.iosInCallSurfaceHigh",
                       "HostingTheme.inCallBorderStrong", "DesignTokens.iosInCallOnControlOff"] {
             #expect(ios.contains(token), "iOS board misses \(token)")
@@ -402,24 +383,24 @@ struct ACT4WordleTests {
         for forbidden in ["coral", "Coral", "primaryContainer", "Color.white", "Color.White"] {
             #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the board uses \(forbidden)")
         }
-        // 38 pt/dp cells, the iOS letter capped for the fixed board with the Large Content Viewer; never mirrored (D18).
+
         #expect(flatIOS.contains(".dynamicTypeSize(...DynamicTypeSize.accessibility1)") && ios.contains(".accessibilityShowsLargeContentViewer"))
         #expect(flatIOS.contains(".environment(\\.layoutDirection, .leftToRight)"))
         #expect(flatKotlin.contains("CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr)"))
         #expect(flatKotlin.contains("Modifier.size(WordleBoardPolicy.cellSize.dp)") && flatIOS.contains("CGFloat(WordleBoardPolicy.cellSize)"))
         #expect(flatKotlin.contains("private val WordleKeyHeight = 48.dp") && flatIOS.contains("static let keyHeight: CGFloat = 44"))
-        // Focus after a marked guess moves to the new row (iOS) or is announced (Android).
+
         #expect(flatIOS.contains("focusedRow = new - 1") && flatKotlin.contains("announcement = newest"))
     }
 
     @Test func textEntryFollowsTheScreenReaderAndHardwareKeysFeedTheSameDraft() throws {
         let flatIOS = stageNormalized(try stageSource(iosPath))
         let flatKotlin = stageNormalized(try stageSource(kotlinPath))
-        // Type Your Guess while VoiceOver or TalkBack runs, until the person chooses.
+
         #expect(flatIOS.contains("@Environment(\\.accessibilityVoiceOverEnabled) private var voiceOver"))
         #expect(flatIOS.contains("textEntry: prefersTextEntry ?? voiceOver"))
         #expect(flatKotlin.contains("if (entryMode == 0) access.touchExploration else entryMode == 1"))
-        // The system keyboard field: characters, no autocorrect, Go; the secret is a secure field.
+
         for fragment in [".textInputAutocapitalization(.characters)", ".autocorrectionDisabled()", ".submitLabel(.go)",
                          ".keyboardType(.asciiCapable)", "SecureField(WordleCopy.secretField(), text: $text)",
                          "games.setWordleDraft(letters)"] {
@@ -430,13 +411,13 @@ struct ACT4WordleTests {
                          "onValueChange = { games.setWordleDraft(it) }"] {
             #expect(flatKotlin.contains(fragment), "Android misses \(fragment)")
         }
-        // Hardware keys: letters, delete and return on iOS; letters, Backspace and Enter on Android.
+
         #expect(flatIOS.contains(".onKeyPress(characters: .letters, phases: .down)") && flatIOS.contains(".onKeyPress(.delete)")
             && flatIOS.contains(".onKeyPress(.return)") && flatIOS.contains(".focusable(canType)"))
         #expect(flatKotlin.contains(".onPreviewKeyEvent { event ->") && flatKotlin.contains("event.key == Key.Backspace")
             && flatKotlin.contains("event.key == Key.Enter || event.key == Key.NumPadEnter")
             && flatKotlin.contains("wordleHardwareLetter(event.utf16CodePoint)"))
-        // Every input reaches the presenter draft; the keys are real buttons.
+
         #expect(flatIOS.contains("games.typeWordleLetter(key.letter)") && flatIOS.contains("games.deleteWordleLetter()"))
         #expect(flatKotlin.contains("games.typeWordleLetter(letterKey.letter)") && flatKotlin.contains("role = Role.Button"))
     }
@@ -468,11 +449,10 @@ struct ACT4WordleTests {
         for value in WordleStandingStatus.allCases {
             #expect(ios.contains("." + value.rawValue) && kotlin.contains("WordleStandingStatus." + value.rawValue), "\(value)")
         }
-        // The one-try plural (S60 10 l): "%lld tries" and `gm_wordle_tries` carry the count.
+
         #expect(ios.contains("ConclaveStrings.format(\"%lld tries\", count)") && kotlin.contains("conclavePlural(\"gm_wordle_tries\", tries, tries)"))
     }
 
-    /// True after the batch 7 strings merge (HD/strings/B7-T7.json).
     @Test func wordleStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
@@ -496,7 +476,6 @@ struct ACT4WordleTests {
         #expect(xml.contains("<plurals name=\"gm_wordle_tries\">"))
     }
 
-    /// True after HD requests B7-T7 R1 to R3 (the scene field and the shell hooks).
     @Test func theShellRoutesWordleAndPinsItsHostBar() throws {
         let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Games/Native/GameShell+iOS.swift"))
         #expect(ios.contains("case GameSceneKind.wordle: WordleSceneBody(games: games)") && ios.contains("WordleHostBar(games: games)"))

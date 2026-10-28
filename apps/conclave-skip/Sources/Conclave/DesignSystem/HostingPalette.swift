@@ -1,5 +1,5 @@
-/// Compatibility names for the original hosting proof. Values come from the
-/// canonical generated native tokens; new consumers use DesignTokens directly.
+
+
 enum HostingPalette {
     static let coral: Int64 = DesignTokens.coral
     static let ink: Int64 = DesignTokens.ink

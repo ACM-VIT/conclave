@@ -1,20 +1,14 @@
 import Foundation
 import Observation
 
-/// S60 0.5 and 7 (ACT-1): the session-owned Activities launcher presenter. Pushed inputs (`apply`), equality-guarded
-/// publishing, no self-observation. Three stored properties, each its own observation unit: `snapshot` (the cold root
-/// list: Now Playing, vote, catalog, apps, browser), `setup` (the pushed setup page) and `dismissSignal` (the panel
-/// closes once a started activity goes live, the legacy auto-close). The presenter never reads `MeetingState`; the
-/// view model performs `onCommand` and reports failures through `commandFailed(_:serverText:)`.
 @MainActor
 @Observable
 final class ActivitiesPresenter {
     private(set) var snapshot: ActivitiesSnapshot = ActivitiesSnapshot.empty
     private(set) var setup: GameSetupModel? = nil
-    /// Grows when a started game, app or browser goes live; the panel dismisses on a change (S60 7 a).
+
     private(set) var dismissSignal: Int = 0
 
-    /// Core only: the view model performs launcher actions (the S1 `onCommand` pattern).
     @ObservationIgnored var onCommand: ((ActivitiesCommand) -> Void)? = nil
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
@@ -23,14 +17,14 @@ final class ActivitiesPresenter {
     @ObservationIgnored private(set) var inputs = ActivitiesInputs.make()
     @ObservationIgnored private(set) var game = ActivityGameSummary.none
     @ObservationIgnored private(set) var onStageKind = ""
-    /// Diagnostics for readouts and tests (never observed).
+
     @ObservationIgnored private(set) var commandLog: [String] = []
     @ObservationIgnored private(set) var beginSetupCount = 0
 
     @ObservationIgnored private var setupGameId = ""
     @ObservationIgnored private var setupPhase = SetupPhase.idle
     @ObservationIgnored private var setupFailureText = ""
-    /// Drafts keyed "gameId/optionId"; text drafts are stored without publishing (the field keeps its own text).
+
     @ObservationIgnored private var drafts: [String: ActivityOptionValue] = [:]
     @ObservationIgnored private var pendingVoteId = ""
     @ObservationIgnored private var endPendingKind = ""
@@ -42,7 +36,7 @@ final class ActivitiesPresenter {
     @ObservationIgnored private var browserFailure = BrowserFailure.none
     @ObservationIgnored private var inlineError = ActivitiesReason.none
     @ObservationIgnored private var inlineErrorText = ""
-    /// The kind a start, open or launch is waiting to see live (auto-dismiss).
+
     @ObservationIgnored private var awaitingLiveKind = ""
     @ObservationIgnored private var slowTask: Task<Void, Never>? = nil
     @ObservationIgnored private var pendingTimeoutTask: Task<Void, Never>? = nil
@@ -50,9 +44,6 @@ final class ActivitiesPresenter {
 
     init() {}
 
-    // MARK: Core hooks
-
-    /// Core only (S1C 3.2): the cold launcher inputs. A new call session starts clean.
     func apply(_ next: ActivitiesInputs) {
         if inputs.callSession != 0 && next.callSession != inputs.callSession {
             reset()
@@ -63,8 +54,6 @@ final class ActivitiesPresenter {
         rebuild()
     }
 
-    /// Core only: the running game's summary, from `GameStagePresenter.summary()` after each game push (equality
-    /// guarded, so a move never rebuilds the launcher).
     func applyGameSummary(_ next: ActivityGameSummary) {
         if next == game { return }
         let previous = game
@@ -72,7 +61,7 @@ final class ActivitiesPresenter {
         if endPendingKind == ActivityKind.game.rawValue && !next.isActive {
             endPendingKind = ""
         }
-        // A new session went live: from nothing, from a finished game (a replacement) or under another game id.
+
         let newSession = !previous.isActive || previous.isFinished || previous.gameId != next.gameId
         if awaitingLiveKind == ActivityKind.game.rawValue && next.isActive && !next.isFinished && newSession {
             awaitingLiveKind = ""
@@ -84,15 +73,12 @@ final class ActivitiesPresenter {
         rebuild()
     }
 
-    /// Core only: the stage's resolved card (`StagePresenter.onActivityResolved`), for Now Playing's Show.
     func setOnStageActivityKind(_ kind: String) {
         if kind == onStageKind { return }
         onStageKind = kind
         rebuild()
     }
 
-    /// Core only: a launcher command the core could not perform. `serverText` is shown verbatim only where the spec
-    /// allows server text (setup failure, inline action failure).
     func commandFailed(_ kind: ActivitiesCommandKind, serverText: String) {
         switch kind {
         case .startGame:
@@ -136,14 +122,10 @@ final class ActivitiesPresenter {
         if let current = setup { publishSetup(current.gameId) }
     }
 
-    // MARK: Actions (views)
-
-    /// Silent refresh on open (two acks, legacy behavior); never blocks the first frame.
     func refresh() {
         send(ActivitiesCommand.make(ActivitiesCommandKind.refresh))
     }
 
-    /// Idempotent: runs from `.task(id:)` / `LaunchedEffect(id)`, so idling on Setup records exactly one call.
     func beginSetup(_ gameId: String) {
         if setupGameId == gameId && setup != nil { return }
         beginSetupCount += 1
@@ -156,7 +138,6 @@ final class ActivitiesPresenter {
         publishSetup(gameId)
     }
 
-    /// Select and number options republish the setup (they can show or hide others, C6-16).
     func setOption(_ optionId: String, value: String) {
         guard let entry = inputs.game(setupGameId), let option = ActivitiesPresenter.option(optionId, in: entry) else { return }
         let key = setupGameId + "/" + optionId
@@ -170,13 +151,11 @@ final class ActivitiesPresenter {
         publishSetup(setupGameId)
     }
 
-    /// The draft text as typed (trimmed only on Start). Stored silently: nothing visible depends on it.
     func setText(_ optionId: String, text: String) {
         if setupGameId.isEmpty { return }
         drafts[setupGameId + "/" + optionId] = ActivityOptionValue(id: optionId, isNumber: false, number: 0, text: text)
     }
 
-    /// The text a field starts from (the draft, else the server default).
     func draftText(_ optionId: String) -> String {
         if let draft = drafts[setupGameId + "/" + optionId] { return draft.text }
         guard let entry = inputs.game(setupGameId), let option = ActivitiesPresenter.option(optionId, in: entry) else { return "" }
@@ -203,8 +182,6 @@ final class ActivitiesPresenter {
         send(ActivitiesCommand.make(ActivitiesCommandKind.openVote))
     }
 
-    /// `dispatched` only when a new choice is sent; `ignored` for the current choice, a duplicate or a pending cast;
-    /// `explained` while blocked (the view shows the reason). The `voteCast` gesture plays only on `dispatched`.
     func castVote(_ gameId: String) -> ActivityTapResult {
         if inputs.isRecovering || !inputs.isVoteOpen { return ActivityTapResult.explained }
         if gameId == inputs.myVoteId || gameId == pendingVoteId || !pendingVoteId.isEmpty { return ActivityTapResult.ignored }
@@ -220,15 +197,12 @@ final class ActivitiesPresenter {
         send(ActivitiesCommand.make(ActivitiesCommandKind.cancelVote))
     }
 
-    /// Starts the vote leader with its defaults; disabled at zero votes (fixes the silent first-candidate start).
     func startLeader() {
         if !snapshot.canStartLeader || snapshot.leaderId.isEmpty { return }
         awaitingLiveKind = ActivityKind.game.rawValue
         send(ActivitiesCommand.make(ActivitiesCommandKind.startGame, id: snapshot.leaderId))
     }
 
-    /// After the confirmation (the invoking surface owns it, R09). `id` is the Now Playing id (the kind raw value). A
-    /// second tap while pending is ignored.
     func requestEnd(_ id: String) {
         if !inputs.isHost || inputs.isRecovering || !endPendingKind.isEmpty { return }
         guard let kind = ActivityKind(rawValue: id) else { return }
@@ -260,7 +234,6 @@ final class ActivitiesPresenter {
         send(ActivitiesCommand.make(ActivitiesCommandKind.setAppsLocked, flag: locked))
     }
 
-    /// Validates under the field first (never on the stage); a valid URL launches or, while active, navigates.
     func submitBrowserURL(_ url: String) {
         if !inputs.isHost || inputs.isRecovering || browserPending != BrowserPhase.idle { return }
         let validation = BrowserURLValidationPolicy.validate(url)
@@ -284,7 +257,6 @@ final class ActivitiesPresenter {
         }
     }
 
-    /// Typing clears a shown validation (the field explains the newest problem only).
     func clearBrowserValidation() {
         if browserValidation == BrowserValidation.none && browserFailure == BrowserFailure.none { return }
         browserValidation = BrowserValidation.none
@@ -305,7 +277,6 @@ final class ActivitiesPresenter {
         rebuild()
     }
 
-    /// With the S1 reset (S1C 3.3 TEAR).
     func reset() {
         cancelSlowTimer()
         cancelPendingTimeout()
@@ -335,15 +306,12 @@ final class ActivitiesPresenter {
         if setup != nil { setup = nil }
     }
 
-    // MARK: Building
-
     private func send(_ command: ActivitiesCommand) {
         commandLog.append(command.kind.rawValue + (command.id.isEmpty ? "" : ":" + command.id))
         if commandLog.count > 20 { commandLog.removeFirst() }
         onCommand?(command)
     }
 
-    /// Pending flags clear on the state that proves the action happened (never on a guess).
     private func settlePending(previous: ActivitiesInputs) {
         if !pendingVoteId.isEmpty && (inputs.myVoteId == pendingVoteId || !inputs.isVoteOpen) {
             pendingVoteId = ""
@@ -493,8 +461,6 @@ final class ActivitiesPresenter {
         }
     }
 
-    // MARK: Timers (injectable sleep; never more than one of each)
-
     private func startSlowTimer() {
         cancelSlowTimer()
         timerSerial += 1
@@ -508,7 +474,6 @@ final class ActivitiesPresenter {
         }
     }
 
-    /// What the slow timer runs (tests call it directly with the current serial).
     func fireSlowTimer(serial: Int) {
         if serial != timerSerial { return }
         slowTask = nil
@@ -536,7 +501,6 @@ final class ActivitiesPresenter {
         }
     }
 
-    /// A command the core dropped never leaves a control pending forever (no failure is invented).
     func firePendingTimeout() {
         pendingTimeoutTask = nil
         pendingVoteId = ""

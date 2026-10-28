@@ -1,12 +1,5 @@
 import Foundation
 
-// MARK: - Zip fixtures (ACT-6, S60 12 l, L6-12)
-
-/// Debug fixture states for Zip, layered on the stage fixture exactly like the ACT-2 to ACT-4 game states
-/// (`CONCLAVE_STAGE_FIXTURE` / `conclave.stageFixture`; HD requests B8-T4 R8 and R9 hook them into `ActivityFixtureScript`
-/// and `StageFixtureState`). No socket, network, audio or capture: module-shaped public and player views (G/zip.ts), and
-/// the shell's commands land in the recording `ActivityFixtureOwner` behind the `game.emits` readout. Players: you plus
-/// Avery (r1), Ben (r2) and Cai (r3); you are the seated host unless the state says otherwise.
 enum ZipFixtureState: String, CaseIterable, Equatable {
     case playing = "game-zip-playing"
     case hintCooldown = "game-zip-hint-cooldown"
@@ -20,12 +13,9 @@ enum ZipFixtureState: String, CaseIterable, Equatable {
     case finalResults = "game-zip-final"
 }
 
-/// One 6 x 6 puzzle with every feature the board draws: eight checkpoints, three barriers and two removed cells. The
-/// solution snakes row by row (zipSolver.ts shapes: the removed cells 5 and 11 are a skippable two-cell segment, the
-/// barriers sit on edges the solution never uses), so every fixture path below is a valid prefix the module accepts.
 enum ZipFixtures {
     static let serverNow = ActivityFixtureScript.serverNow
-    /// The round began 19 s before the push; with a 3 minute limit, 2:41 remain.
+
     static let startOffset = -19000.0
     static let endOffset = 161000.0
     static let size = 6
@@ -35,18 +25,17 @@ enum ZipFixtures {
     static let barriersJSON = "[{\"from\":2,\"to\":8},{\"from\":14,\"to\":20},{\"from\":25,\"to\":31}]"
     static let deadCellsJSON = "[5,11]"
     static let totalCells = 34
-    /// Twelve cells in, checkpoints 1 to 3 visited; the path may take cell 14 (right) or 19 (down) next.
+
     static let playingPath: [Int] = [0, 1, 2, 3, 4, 10, 9, 8, 7, 6, 12, 13]
-    /// A valid path that boxed itself in: cell 12's free neighbor is checkpoint 3, but checkpoint 2 comes first.
+
     static let deadEndPath: [Int] = [0, 1, 7, 13, 19, 18, 12]
-    /// What the rejecting owner answers in `game-zip-rejected` (a zipSolver.ts path rule, verbatim).
+
     static let rejectionText = "Cell already visited"
 
     static func state(named raw: String) -> ZipFixtureState? {
         ZipFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Epoch milliseconds as JSON text. Int64, because a transpiled Swift `Int` is a 32-bit Kotlin `Int`.
     static func at(_ offsetMillis: Double) -> String { String(Int64(serverNow + offsetMillis)) }
 
     static func cellsJSON(_ path: [Int]) -> String {
@@ -57,10 +46,8 @@ enum ZipFixtures {
         return "[" + parts.joined(separator: ",") + "]"
     }
 
-    /// A JSON string, or null for "".
     static func text(_ value: String) -> String { value.isEmpty ? "null" : GameMoveAdapter.quoted(value) }
 
-    /// A standings row; `solvedOffset` is milliseconds after the round start (ignored unless the outcome is "win").
     static func standing(_ id: String, _ name: String, _ filled: Int, _ outcome: String, _ hints: Int, _ solvedOffset: Double) -> String {
         let solved = outcome == "win" ? at(startOffset + solvedOffset) : "null"
         return "{\"playerId\":\"" + id + "\",\"playerName\":\"" + name + "\",\"cellsFilled\":" + String(filled) + ",\"totalCells\":"
@@ -91,7 +78,6 @@ enum ZipFixtures {
             + "],\"result\":" + result + "}"
     }
 
-    /// Your player view; `hintOffset` is milliseconds after the push when Hint is available again (negative: available).
     static func makePlayerView(path: [Int], outcome: String, solvedOffset: Double, hints: Int, hintOffset: Double) -> String {
         let solved = outcome == "win" ? at(startOffset + solvedOffset) : "null"
         let hintAt = hints > 0 ? at(hintOffset) : "0"
@@ -104,8 +90,6 @@ enum ZipFixtures {
     static let finalScores = [score("r1", "Avery", 438), score("you", "You", 393), score("r2", "Ben", 130)]
     static let finalBoard = [board("r1", "Avery", 438), board("you", "You", 393), board("r2", "Ben", 130), board("r3", "Cai", 0)]
 
-    /// The playing standings in the module's order (solvers first by hints then time, the rest by progress): Avery solved
-    /// with no hints, Ben has 8 cells, Cai 3, and `you` (your row) sits where your progress puts it.
     static func playingStandings(you: String, youFilled: Int, youSolved: Bool) -> [String] {
         let avery = standing("r1", "Avery", totalCells, "win", 0, 12000)
         let ben = standing("r2", "Ben", 8, "", 0, 0)
@@ -182,9 +166,6 @@ enum ZipFixtures {
 
     static func seated(_ state: ZipFixtureState) -> Bool { state != ZipFixtureState.spectator }
 
-    /// The pushes the fixture applies in order: one for most states; the reconnecting state first plays the playing state
-    /// and then the same push while recovering. `receivedAtMillis` is the client clock of the push (the countdown and the
-    /// hint cooldown derive from it).
     static func pushes(_ state: ZipFixtureState, receivedAtMillis: Double) -> [GameStageInputs] {
         let isSeated = seated(state)
         let players = ActivityFixtureScript.players(4, includingYou: isSeated)
@@ -202,8 +183,6 @@ enum ZipFixtures {
         return [first, last]
     }
 
-    /// One playing push for the seated host with `path` and `outcome` (module JSON), for the transition checks on both
-    /// platforms (the `gameCorrect` token fires once; a move's pending path ends on the recording push).
     static func playingPush(path: [Int], outcome: String, hints: Int, receivedAtMillis: Double) -> GameStageInputs {
         let solved = outcome == "win"
         let you = standing("you", "You", path.count, outcome, hints, 15000)
@@ -216,17 +195,12 @@ enum ZipFixtures {
                                     receivedAtMillis: receivedAtMillis)
     }
 
-    /// What the stage layer shows for a Zip state: the game is live under its server name (S20 11 j).
     static func stageInputs(named raw: String, base: StageInputs) -> StageInputs {
         if state(named: raw) == nil { return base }
         let game = ActivityFixtureScript.stageInputs(named: ActivityFixtureState.gameTrivia6.rawValue, base: base)
         return StageFixtureScript.copy(game, isGameActive: true, gameName: "Zip")
     }
 
-    /// Feeds the activity session for a Zip state and wires its commands to the recording owner, the way
-    /// `ActivityFixtureScript.apply(named:session:owner:)` does for the ACT-2 states. `game-zip-rejected` answers every move
-    /// with the module's "Cell already visited" after sending one step, so the rejected notice and the restored path show.
-    /// Nil for any other name.
     @discardableResult
     @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ZipFixtureState? {
@@ -252,7 +226,7 @@ enum ZipFixtures {
             session.applyGame(inputs)
         }
         if rejects {
-            // The step onto cell 9 (already visited) as a stale client might send it; the module rejects it.
+
             _ = session.games.send(ZipIntent.move(ZipPathPolicy.stepped(playingPath, to: 9)))
         }
         return fixture

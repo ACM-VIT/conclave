@@ -20,16 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
-/*
- * The toast host (F00 C13; RECONCILE R1). One stock M3 SnackbarHost with a custom slot: in the in-call stage lane
- * every snackbar is the dark variant (in-call surfaceContainerHigh #232327, onSurface #FAFAFA 15.001, action in-call
- * primary #FF7D66 6.246, a 1 dp extended border), never the light inverse snackbar, because owner decision 3 keeps
- * in-call overlays dark. Snackbars inside a system-appearance InCallPage use stageLane = false: stock M3 colors in
- * the page scheme. Actions read "View", "Retry" in stock casing (never forced capitals). The stock host keeps lengthening
- * durations for accessibility and announces through its live region. The queue, coalescing and suspension belong
- * to the S20 lane owner (STG-5): this host shows the one item it is given and reports the result once.
- */
-
 @Composable
 internal fun ConclaveToastHost(
     item: ConclaveToastItem?, identifier: String, onAction: (ConclaveToastItem) -> Unit, onDismiss: (String) -> Unit,
@@ -38,8 +28,7 @@ internal fun ConclaveToastHost(
     val currentAction by rememberUpdatedState(onAction)
     val currentDismiss by rememberUpdatedState(onDismiss)
     val currentItem by rememberUpdatedState(item)
-    // One-shot per toast id: showSnackbar suspends until the toast times out, is acted on or is replaced. No loop, and
-    // nothing runs when no toast shows (F00 C13 k).
+
     LaunchedEffect(item?.id) {
         val shown = item
         if (shown == null) {
@@ -65,14 +54,12 @@ internal fun ConclaveToastHost(
     }
 }
 
-/** Progress stays until its owner removes it. Other durations keep stock accessibility adjustment. */
 internal fun conclaveToastDuration(item: ConclaveToastItem): SnackbarDuration = when {
     item.isProgress -> SnackbarDuration.Indefinite
     item.hasAction -> SnackbarDuration.Long
     else -> SnackbarDuration.Short
 }
 
-/** The dark stage-lane snackbar, with the 24 dp avatar row for chat previews and raised hands (S40 R40-8). */
 @Composable
 private fun ConclaveStageSnackbar(message: String, toast: ConclaveToastItem?, identifier: String, onAction: () -> Unit) {
     val scheme = MaterialTheme.colorScheme

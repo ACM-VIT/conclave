@@ -3,13 +3,7 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// FND-1, foundation pack 1 (OUT/PLAN-screens.md section 5): the adapter and token additions (F00 2.6 A1 to A7,
-/// owner OQ4), motion constants (A5; S10 R3; S20 SR2), the system accessibility readers (S70 13), plurals (S10 R11),
-/// tabular digits (S60 R6-13), the entry components C02, C07, C11, C18, C19 and the C04 labelled toggle, and the
-/// stage lifetime probes (S10 R12). iOS-only and Kotlin sources are not compiled by this macOS host, so their rules
-/// are read from the sources; the Kotlin half runs in T/Skip/FND1FND2BridgeTests.kt.
 struct FND1FoundationPackTests {
-    // MARK: Tokens (A2, OQ4) and the avatar tongue
 
     @Test func leaveHighContrastTokenIsTheApprovedValue() {
         #expect(DesignTokens.iosInCallLeaveHighContrast == 0xFFE9152D)
@@ -22,8 +16,6 @@ struct FND1FoundationPackTests {
         #expect(generator?.contains("\"leaveHighContrast\"") == true)
         #expect(generator?.contains("constant(\"avatarTongue\"") == true)
     }
-
-    // MARK: Adapter members (A1 to A3, A6)
 
     @Test func iosAdapterResolvesContrastAndAppearanceTraits() throws {
         let adapter = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/HostingTheme+iOS.swift"))
@@ -40,15 +32,15 @@ struct FND1FoundationPackTests {
             #expect(adapter.contains("static let \(member) = contrastPair(DesignTokens.\(standard), DesignTokens.\(high))"), "\(member)")
         }
         #expect(adapter.contains("color(traits.accessibilityContrast == .high ? highContrast : standard)"))
-        // A2: dynamic system red at standard contrast, the approved fixed fill under Increase Contrast.
+
         #expect(adapter.contains("if traits.accessibilityContrast == .high { return color(DesignTokens.iosInCallLeaveHighContrast) }"))
         #expect(adapter.contains("return UIColor.systemRed.resolvedColor(with: traits)"))
-        // A3: light and dark status tokens.
+
         for (member, light, dark) in [("statusSuccess", "successLight", "successDark"), ("statusWarning", "warningLight", "warningDark"),
                                       ("statusLive", "liveLight", "liveDark")] {
             #expect(adapter.contains("static let \(member) = appearancePair(light: DesignTokens.\(light), dark: DesignTokens.\(dark))"), "\(member)")
         }
-        // A6.
+
         #expect(adapter.contains("static let disabledOpacity = ConclaveDisabledOpacity.ios"))
         #expect(ConclaveDisabledOpacity.ios == 0.4 && ConclaveDisabledOpacity.android == 0.38)
         #expect(ConclaveControlSurfaceMapping.disabledOpacity == ConclaveDisabledOpacity.ios)
@@ -67,20 +59,18 @@ struct FND1FoundationPackTests {
         #expect(theme.contains("CompositionLocalProvider(LocalConclaveExtendedColors provides if (dark) ConclaveExtendedColorsDark else ConclaveExtendedColorsLight)"))
     }
 
-    // MARK: Call appearance (A7)
-
     @Test func callAppearanceOwnsTheDarkRootAndPublishesTheSystemScheme() throws {
         let text = try fndSource("Sources/Conclave/DesignSystem/iOS/CallAppearance+iOS.swift")
         #expect(text.hasPrefix("#if os(iOS) && !SKIP\n"))
         let flat = normalizedFND(text)
         #expect(flat.contains("if #available(iOS 27.0, *) { content.toolbarColorScheme(.dark, for: .statusBar) } else { content.preferredColorScheme(.dark) }"))
-        #expect(flat.contains(".environment(\\.conclaveSystemColorScheme, sceneScheme ?? inheritedScheme)"))
+        #expect(flat.contains(".environment(\\.conclaveSystemColorScheme, AppearancePreference.shared.mode.colorScheme ?? sceneScheme ?? inheritedScheme)"))
+        #expect(flat.contains(".environment(\\.colorScheme, .dark)"))
+        #expect(flat.contains("case .system: return nil case .light: return .light case .dark: return .dark"))
         #expect(flat.contains("scene.registerForTraitChanges([UITraitUserInterfaceStyle.self], target: self,"))
-        // A nested in-call region never touches the window or the status bar.
+
         #expect(flat.contains("func conclaveInCallRegion() -> some View { environment(\\.colorScheme, .dark) }"))
     }
-
-    // MARK: Motion (A5; S10 R3; S20 SR2)
 
     @Test func motionDurationsAreTheNamedSpecValues() throws {
         #expect(ConclaveMotionDurations.fastMillis == 120)
@@ -99,12 +89,10 @@ struct FND1FoundationPackTests {
             #expect(kotlin.contains("fun <T> \(name)()"), "\(name)")
         }
         #expect(kotlin.contains("easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)"))
-        // The banner motion reads the shared durations on both platforms.
+
         #expect(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveBanner+iOS.swift").contains("ConclaveMotionDurations.fastMillis"))
         #expect(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveBanner.kt").contains("ConclaveMotionDurations.fastMillis"))
     }
-
-    // MARK: System accessibility readers (S70 13)
 
     @Test func iosReaderMappingCoversEverySetting() {
         let standard = SystemAccessibilityMapping.iosState(voiceOver: false, switchControl: false, assistiveAccess: false,
@@ -119,7 +107,7 @@ struct FND1FoundationPackTests {
         let assistive = SystemAccessibilityMapping.iosState(voiceOver: false, switchControl: false, assistiveAccess: true,
                                                             reduceMotion: false, prefersCrossFade: false, differentiateWithoutColor: false)
         #expect(!assistive.isScreenReaderRunning && assistive.blocksAutoHide)
-        // Reduce Motion and Prefer Cross-Fade Transitions both remove travel.
+
         for (reduce, crossFade) in [(true, false), (false, true)] {
             #expect(SystemAccessibilityMapping.iosState(voiceOver: false, switchControl: false, assistiveAccess: false, reduceMotion: reduce,
                                                         prefersCrossFade: crossFade, differentiateWithoutColor: false).reduceMotion)
@@ -136,12 +124,12 @@ struct FND1FoundationPackTests {
                                                         recommendedTimeoutMillis: nil).isScreenReaderRunning)
         #expect(SystemAccessibilityMapping.androidState(touchExploration: false, anyServiceEnabled: true, animatorDurationScale: 1,
                                                         recommendedTimeoutMillis: nil).isScreenReaderRunning)
-        // Remove animations is an animator duration scale of 0, nothing else.
+
         #expect(SystemAccessibilityMapping.androidState(touchExploration: false, anyServiceEnabled: false, animatorDurationScale: 0,
                                                         recommendedTimeoutMillis: nil).reduceMotion)
         #expect(!SystemAccessibilityMapping.androidState(touchExploration: false, anyServiceEnabled: false, animatorDurationScale: 0.5,
                                                          recommendedTimeoutMillis: nil).reduceMotion)
-        // API 29 recommendation, else the 5 s base; a nonsense value keeps the base.
+
         #expect(SystemAccessibilityMapping.androidState(touchExploration: false, anyServiceEnabled: false, animatorDurationScale: 1,
                                                         recommendedTimeoutMillis: 15000).recommendedTimeoutMillis == 15000)
         #expect(SystemAccessibilityMapping.androidState(touchExploration: false, anyServiceEnabled: false, animatorDurationScale: 1,
@@ -170,7 +158,7 @@ struct FND1FoundationPackTests {
                      "addContrastChangeListener", "Lifecycle.Event.ON_RESUME"] {
             #expect(android.contains(call), "\(call)")
         }
-        // Version-gated calls live in their own objects.
+
         for gate in ["@RequiresApi(29)", "@RequiresApi(31)", "@RequiresApi(34)"] { #expect(android.contains(gate), "\(gate)") }
     }
 
@@ -190,8 +178,6 @@ struct FND1FoundationPackTests {
         }
     }
 
-    // MARK: Plurals (S10 R11) and tabular digits (S60 R6-13)
-
     @Test func pluralsAndTabularDigitsHaveOneHelperEach() throws {
         let strings = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/theme/ConclaveStrings.kt"))
         #expect(strings.contains("internal fun conclavePlural(name: String, count: Int, vararg formatArgs: Any): String"))
@@ -201,15 +187,12 @@ struct FND1FoundationPackTests {
         let typography = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/theme/ConclaveTypography.kt"))
         #expect(typography.contains("internal fun TextStyle.tabular(): TextStyle = copy(fontFeatureSettings = \"tnum\")"))
         #expect(typography.contains("internal fun rememberTabular(style: TextStyle): TextStyle = remember(style) { style.tabular() }"))
-        // Nothing else sets the feature by hand.
+
         for file in try fndFiles(under: "Sources/Conclave/Skip/ui", extensions: ["kt"]) where !file.hasSuffix("/ConclaveTypography.kt") {
             #expect(!(try fndSource(file)).contains("fontFeatureSettings"), "\(file)")
         }
     }
 
-    // MARK: Avatar (C07)
-
-    /// F00 C07 l: vectors computed from the web `facehash` hash; the same face on every platform.
     @Test func avatarIdentityMatchesTheWebVectors() {
         let vectors: [(String, String?, String, Int, Int, Int, Int)] = [
             ("Guest", nil, "Guest", 69156280, 8, 0, 9),
@@ -227,7 +210,7 @@ struct FND1FoundationPackTests {
             #expect(FacehashPresentation.hashValue(for: seed) == hash, "\(seed)")
             #expect(identity.paletteIndex == color && identity.faceIndex == face && identity.mouthIndex == mouth, "\(seed)")
         }
-        // "Guest" is magenta on every platform (the legacy Android avatar drew teal).
+
         #expect(ConclaveAvatarIdentity.make(name: "Guest", id: nil).fill == 0xFFE879F9)
         #expect(ConclaveAvatarIdentity.make(name: "", id: "u1").seed == "u1:u1")
         #expect(ConclaveAvatarSize.allCases.map { $0.diameter } == [24, 32, 40, 44, 30, 76, 96])
@@ -247,8 +230,6 @@ struct FND1FoundationPackTests {
         #expect(android.contains("drawWithCache"))
         for word in ["Brush", "blink", "infinite", "LaunchedEffect"] { #expect(!android.contains(word), "\(word)") }
     }
-
-    // MARK: Entry components (C02, C11, C18, C19) and the labelled toggle (C04 f)
 
     @Test func closeAndBackFollowThePlatform() throws {
         let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveButtons+iOS.swift"))
@@ -315,8 +296,6 @@ struct FND1FoundationPackTests {
         #expect(android.contains("val caption = Modifier.clearAndSetSemantics { }"))
     }
 
-    // MARK: Stage lifetime probes (S10 R12)
-
     @Test func stageLifetimeProbesAreExposed() throws {
         let ios = try fndSource("Sources/Conclave/App/PlatformRoot+iOS.swift")
         #expect(ios.contains("\nfinal class HostingStageLifetime {\n"))
@@ -327,8 +306,6 @@ struct FND1FoundationPackTests {
         #expect(!android.contains("private class NativeHostingStageLifetime"))
     }
 
-    // MARK: Catalog and shared models
-
     @Test func foundationSpecimenIDsAreStable() {
         #expect(ComponentGalleryCatalog.foundationSpecimenIDs == [
             "button.icon", "button.close", "button.icon.toggle", "avatar.row", "avatar.chat", "avatar.tile", "avatar.lobby",
@@ -337,7 +314,7 @@ struct FND1FoundationPackTests {
         ])
         let all = ComponentGalleryCatalog.foundationSpecimenIDs + ComponentGalleryCatalog.inCallChromeSpecimenIDs
         #expect(Set(all).count == all.count)
-        // No clash with the WP1-2b component specimens.
+
         #expect(Set(all).isDisjoint(with: Set(ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true).map { $0.replacingOccurrences(of: ".inCall", with: "").replacingOccurrences(of: ".app", with: "") })))
         for id in all { #expect(id.unicodeScalars.allSatisfy { $0.isASCII && $0 != " " }, "\(id)") }
     }
@@ -345,7 +322,7 @@ struct FND1FoundationPackTests {
     @Test func sharedModelsStayInsideSkipLite() throws {
         let text = try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveComponentModels.swift")
         #expect(!text.contains("#if"))
-        // String raw-value enums only, no associated values, no tuples, no function references in maps.
+
         #expect(fndMatches(#"case [a-z][A-Za-z]*\("#, in: text).isEmpty)
         #expect(fndMatches(#"-> \("#, in: text).isEmpty)
         #expect(fndMatches(#"\.map\([A-Za-z.]+\)"#, in: text).isEmpty && !text.contains("compactMap"))
@@ -353,8 +330,6 @@ struct FND1FoundationPackTests {
         #expect(!fndContainsDash(text))
     }
 }
-
-// MARK: Helpers
 
 func normalizedFND(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")

@@ -3,13 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// CHT-3 (OUT/PLAN-screens.md section 5; S40 5, 3 reaction chips, 0.8 CH3, CH21; RECONCILE OQ5): the web reaction
-/// rules, the chips, the presenter's toggle and reactor list, hiding and showing a sender, Report kept hidden
-/// (`canReport` false), the action and accessibility sources on both platforms and the socket wiring. The Kotlin half is
-/// in T/Skip/ChatBridgeTests.kt.
 @MainActor
 struct CHT3MessageActionsTests {
-    // MARK: CH3 rules (meeting-core and apps/web chat-reactions.ts)
 
     @Test func reactionRulesMirrorTheWeb() {
         #expect(ChatReactionRules.emojis == ["👍", "👏", "😂", "❤️", "🎉", "😮", "😢", "🤔"])
@@ -44,13 +39,11 @@ struct CHT3MessageActionsTests {
             ChatReactionInput(emoji: "😂", userIds: ["b"], includesMe: false),
             ChatReactionInput(emoji: "🎉", userIds: [], includesMe: false),
         ]) { id in id == "me" ? "" : (names[id] ?? "") }
-        // A require, not an expect: the indexes below would trap and abort the whole test process.
+
         try #require(chips.count == 2)
         #expect(chips[0].names == ["", "Avery", "Sam"] && chips[0].remaining == 2 && chips[0].isMine && chips[0].count == 5)
         #expect(chips[1].names == ["Sam"] && chips[1].remaining == 0 && !chips[1].isMine)
     }
-
-    // MARK: The presenter's toggle and reactor list
 
     @Test func aToggleSendsTheServerIdAndRespectsTheCap() {
         var log: [ChatCommandRequest] = []
@@ -75,7 +68,7 @@ struct CHT3MessageActionsTests {
         #expect(log.count == before + 1)
         chat.toggleReaction(rowId: "s-3", emoji: "👍")
         #expect(log.count == before + 1)
-        // An acknowledged own message reacts with its server id, never the client row id.
+
         chat.toggleReaction(rowId: "optimistic-4", emoji: "😂")
         #expect(log.last?.messageId == "s-4" && log.last?.rowId == "optimistic-4")
     }
@@ -90,7 +83,7 @@ struct CHT3MessageActionsTests {
             ChatPoliciesTests.peer("s-1", "hi", at: 0, reactions: [ChatReactionInput(emoji: "👍", userIds: ids, includesMe: true)]),
         ]))
         let reactors = chat.reactors(rowId: "s-1", emoji: "👍")
-        // A require, not an expect: the indexes below would trap and abort the whole test process.
+
         try #require(reactors.count == 7)
         #expect(reactors.first?.userId == ChatPoliciesTests.local)
         #expect(reactors[1].name == "Avery Lee" && reactors[2].name == "Sam Rivera")
@@ -98,8 +91,6 @@ struct CHT3MessageActionsTests {
         let chip = ChatPoliciesTests.row(chat, "s-1").reactions.first
         #expect(chip?.names.count == 3 && chip?.remaining == 4)
     }
-
-    // MARK: CH21 hide and show a sender (Q2b, OQ5)
 
     @Test func hidingASenderRemovesTheirRowsAndShowRestoresThemInOrder() {
         let messages = [
@@ -118,7 +109,7 @@ struct CHT3MessageActionsTests {
         #expect(notice.kind == .system && notice.notice == .senderHidden && notice.noticeArgument == "Avery Lee")
         #expect(chat.isSenderHidden(ChatPoliciesTests.avery))
         #expect(log.last?.kind == .hideSender)
-        // New messages from a hidden sender stay out (no rows, no unread).
+
         var more = messages
         more.append(ChatPoliciesTests.peer("s-4", "four", at: 3000, history: false))
         chat.apply(ChatPoliciesTests.inputs(more), change: .messages)
@@ -126,7 +117,7 @@ struct CHT3MessageActionsTests {
         chat.showSender(userId: ChatPoliciesTests.avery)
         #expect(chat.timeline.rowIds == original + ["s-4"])
         #expect(!chat.isSenderHidden(ChatPoliciesTests.avery))
-        // Never yourself or the assistant; reset clears the set.
+
         chat.hideSender(userId: ChatPoliciesTests.local)
         chat.hideSender(userId: ConclaveAssistantChatIdentity.userId)
         #expect(chat.hiddenSenderIds.isEmpty)
@@ -143,8 +134,6 @@ struct CHT3MessageActionsTests {
         let sheet = try chatSource("Sources/Conclave/Skip/ui/chat/MessageActionsSheet.kt")
         #expect(!sheet.contains("chat_action_report"))
     }
-
-    // MARK: Action sources (5 c, 5 d, 5 i)
 
     @Test func theIosMenuAndActionsFollowTheMenuOrder() throws {
         let menu = try chatSource("Sources/Conclave/Features/Meeting/Chat/MessageActions+iOS.swift")

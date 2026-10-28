@@ -1,39 +1,18 @@
 import Foundation
 
-// S60 0.8 C6-19 and S60R 25 (ACT-7): the versioned native embed bridge between the native app host and the bundled SDK
-// renderer (`packages/apps-sdk/src/native-embed/`, `protocol.ts` is the JavaScript twin of this file and
-// `contract-fixtures.json` pins both). Shared and transpiled, so iOS (`WKScriptMessageHandler`) and Android
-// (`WebViewCompat.addWebMessageListener`) validate every message with the same rules before anything is dispatched.
-//
-// Envelope (one JSON object per message, both directions):
-//   { "v": 1, "type": "<type>", "callSessionId": "<id>", "appSessionId": "<id>", "requestId": "<id>", "payload": {...} }
-// Embed to native: ready, sync, update, awareness, status, ack, resize.
-// Native to embed: snapshot, update, awareness, status, resync, close and the host commands: Whiteboard (setTool,
-// setColor, setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export), Spin the
-// Wheel (addEntries, removeEntry, shuffle, sort, clearEntries, spin, setRemoveWinner, setSounds, clearResults) and Watch
-// Together (playNow, enqueue, request, approve, decline, cancelRequest, move, remove; ACT-8). A Wheel or Watch embed adds
-// its page data to `status` under `app` (`AppEmbedAppCodec` in AppHostPresenter.swift).
-// Binary Yjs and awareness payloads travel as base64. The bridge never carries auth tokens, personal API keys or native
-// method names (D14): the embed has no socket and no network (its page CSP sets connect-src 'none'); the native
-// session relays the room's Yjs bytes and nothing else. A rejected message is counted by reason, never logged with its
-// content (S60 13 l).
-
 enum AppBridgeProtocol {
-    /// The envelope version both sides speak. A `ready` with another value is a version mismatch (S60 13 f).
+
     static let version = 1
-    /// The embed bundle's major version this build accepts (`ready.payload.bundleVersion` "1.x.y").
+
     static let bundleMajor = 1
-    /// The `WKScriptMessageHandler` and `addWebMessageListener` object name (S60 13 c, d).
+
     static let handlerName = "conclaveApp"
 
-    /// The bundle origins. iOS serves the bundle from a `WKURLSchemeHandler`; Android from `WebViewAssetLoader`.
     static let iosScheme = "conclave-embed"
     static let iosHost = "app"
     static let iosOrigin = "conclave-embed://app"
     static let androidOrigin = "https://appassets.androidplatform.net"
 
-    /// Size bounds. The SFU limits (packages/sfu/server/socket/handlers/appsHandlers.ts:20-24) bound the relayed
-    /// bytes; the envelope bound leaves room for a 1 MiB snapshot in base64.
     static let envelopeCharacterLimit = 1_572_864
     static let updateByteLimit = 262_144
     static let awarenessByteLimit = 65_536
@@ -43,16 +22,13 @@ enum AppBridgeProtocol {
     static let identifierLimit = 64
     static let pageLimit = 50
     static let pageNameLimit = 40
-    /// A remembered window of embed request ids, so a replayed message is dropped (`duplicateRequest`).
+
     static let requestMemory = 64
 
-    /// The embed must say `ready` within this time after the load starts, else the card shows "Couldn't Open" (S60 13 f).
     static let readyTimeoutMillis = 15000.0
-    /// A host command shows pending until its `ack`, at most this long (S60 13 j).
+
     static let commandTimeoutMillis = 10000.0
 
-    /// The bundled entry for an SDK app id, or "" when this build has no embed for it (the card then shows the version
-    /// mismatch state: "Update Conclave to use %@."). Spin the Wheel and Watch Together since ACT-8.
     static func entryFile(appId: String) -> String {
         if appId == "whiteboard" { return "whiteboard.html" }
         if appId == "wheel" { return "wheel.html" }
@@ -60,21 +36,17 @@ enum AppBridgeProtocol {
         return ""
     }
 
-    /// iOS: the bundle resource name (`Resources/native-embed-whiteboard.html`, flattened by SwiftPM `.process`).
     static func iosResourceName(appId: String) -> String {
         if entryFile(appId: appId).isEmpty { return "" }
         return "native-embed-" + appId
     }
 
-    /// Android: the asset path under `app/src/main/assets/` served by `WebViewAssetLoader` at `/assets/`.
     static func androidAssetPath(appId: String) -> String {
         let file = entryFile(appId: appId)
         if file.isEmpty { return "" }
         return "native-embed/" + file
     }
 
-    /// The fragment that scopes one load: never sent anywhere (a fragment is not part of a request), read once by the
-    /// embed and echoed in every envelope it sends.
     static func fragment(callSessionId: String, appSessionId: String, appId: String) -> String {
         return "#v=" + String(version) + "&callSessionId=" + callSessionId + "&appSessionId=" + appSessionId + "&appId=" + appId
     }
@@ -91,26 +63,22 @@ enum AppBridgeProtocol {
         return androidOrigin + "/assets/" + path + fragment(callSessionId: callSessionId, appSessionId: appSessionId, appId: appId)
     }
 
-    /// Whether a navigation target stays inside the bundle origin (everything else is cancelled; a user link asks first).
     static func isBundleURL(_ url: String, origin: String) -> Bool {
         let lower = url.lowercased()
         let prefix = origin.lowercased() + "/"
         return lower.hasPrefix(prefix)
     }
 
-    /// A user-initiated external link the host may offer to open after the confirmation (S40 link policy).
     static func isOpenableExternalLink(_ url: String) -> Bool {
         let lower = url.lowercased()
         return lower.hasPrefix("https://") || lower.hasPrefix("http://")
     }
 }
 
-/// Embed to native.
 enum AppBridgeInboundType: String, CaseIterable, Equatable {
     case ready, sync, update, awareness, status, ack, resize
 }
 
-/// Native to embed.
 enum AppBridgeOutboundType: String, CaseIterable, Equatable {
     case snapshot, update, awareness, status, resync, close
     case setTool, setColor, setStrokeWidth, setFill, undo, redo, setPage, addPage, renamePage, deletePage, zoomToFit, export
@@ -118,14 +86,11 @@ enum AppBridgeOutboundType: String, CaseIterable, Equatable {
     case playNow, enqueue, request, approve, decline, cancelRequest, move, remove
 }
 
-/// Why an inbound message was dropped. Counted and surfaced by reason only, never with its content.
 enum AppBridgeRejection: String, CaseIterable, Equatable {
     case none, wrongOrigin, notMainFrame, oversized, malformed, versionMismatch, unknownType, wrongCallSession, staleAppSession
     case badRequestId, duplicateRequest, badPayload, payloadTooLarge, notAttached
 }
 
-/// The Whiteboard tools the native toolbar drives (the embed's `ToolKind`, SDK `core/tools/engine.ts`). Shape tools are
-/// rect, ellipse, line and arrow (the Shape menu, S60 13 c).
 enum AppWhiteboardTool: String, CaseIterable, Equatable {
     case select, pan, pen, highlighter, eraser, rect, ellipse, line, arrow, text, sticky, laser
 
@@ -134,14 +99,12 @@ enum AppWhiteboardTool: String, CaseIterable, Equatable {
     }
 }
 
-/// One whiteboard page (S60 13 j `AppPageModel`). The name is user content, shown verbatim.
 struct AppPageModel: Equatable, Identifiable {
     let id: String
     let name: String
     let isCurrent: Bool
 }
 
-/// The embed's own `status` (tool, ink, history, pages, presence). Bounded and typed before it reaches a presenter.
 struct AppEmbedStatus: Equatable {
     let tool: String
     let color: String
@@ -154,7 +117,7 @@ struct AppEmbedStatus: Equatable {
     let pages: [AppPageModel]
     let elementCount: Int
     let editorCount: Int
-    /// ACT-8: a Wheel or Watch embed's page data (`status.app`); empty for the Whiteboard.
+
     let app: AppEmbedAppStatus
 
     static let empty = AppEmbedStatus(tool: AppWhiteboardTool.pen.rawValue, color: "#e3e3e8", strokeWidth: 3, filled: false,
@@ -162,32 +125,30 @@ struct AppEmbedStatus: Equatable {
                                       elementCount: 0, editorCount: 0, app: AppEmbedAppStatus.empty)
 }
 
-/// What the session expects of every inbound envelope.
 struct AppBridgeExpectation: Equatable {
     let origin: String
     let callSessionId: String
     let appSessionId: String
 }
 
-/// One validated inbound message. Fields that the type does not use keep their empty values.
 struct AppBridgeInbound: Equatable {
     let type: String
     let requestId: String
     let version: Int
-    /// `ready`: the bundle's version ("1.0.0") and app id.
+
     let bundleVersion: String
     let appId: String
-    /// `ready` and `sync`: the embed document's state vector; `update`: the Yjs update; `awareness`: the update.
+
     let bytes: Data
-    /// `awareness`: the Yjs client id, -1 when absent.
+
     let clientId: Int
-    /// `ack`: the command's outcome, an error code from the embed (never shown) and the exported PNG for `export`.
+
     let ok: Bool
     let error: String
     let pngBase64: String
-    /// `status`.
+
     let status: AppEmbedStatus
-    /// `resize`.
+
     let width: Int
     let height: Int
 
@@ -212,14 +173,10 @@ struct AppBridgeDecodeResult: Equatable {
     }
 }
 
-/// Parses, validates and encodes envelopes. Pure: no state, so a hostile message can be checked in a unit test on both
-/// platforms (T/ACT7AppHostTests.swift, T/Skip/ACT7AppHostBridgeTests.kt) and against the shared contract fixtures.
 enum AppBridgeCodec {
     private static let identifierCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
     private static let hexCharacters = "0123456789abcdefABCDEF"
 
-    /// Order of checks (each is cheap before the next): origin and frame, size, JSON object, version, type, call and app
-    /// session, request id, then the payload for the type. Replay detection lives in the session (it remembers ids).
     static func decode(raw: String, origin: String, isMainFrame: Bool, expectation: AppBridgeExpectation) -> AppBridgeDecodeResult {
         if !originMatches(origin, expected: expectation.origin) { return AppBridgeDecodeResult.rejected(.wrongOrigin) }
         if !isMainFrame { return AppBridgeDecodeResult.rejected(.notMainFrame) }
@@ -229,8 +186,7 @@ enum AppBridgeCodec {
         let version = Int(versionNumber)
         guard let type = envelope["type"] as? String else { return AppBridgeDecodeResult.rejected(.malformed) }
         guard AppBridgeInboundType(rawValue: type) != nil else { return AppBridgeDecodeResult.rejected(.unknownType) }
-        // A `ready` from another protocol version is reported (the card shows the version mismatch state); any other
-        // message from another version is dropped.
+
         if version != AppBridgeProtocol.version && type != AppBridgeInboundType.ready.rawValue {
             return AppBridgeDecodeResult.rejected(.versionMismatch)
         }
@@ -301,7 +257,6 @@ enum AppBridgeCodec {
         return AppBridgeDecodeResult(rejection: AppBridgeRejection.none, message: message)
     }
 
-    /// One outbound envelope as a JSON string, or "" when it cannot be encoded.
     static func encode(type: AppBridgeOutboundType, callSessionId: String, appSessionId: String, requestId: String,
                        payload: [String: Any]) -> String {
         let envelope: [String: Any] = [
@@ -315,8 +270,6 @@ enum AppBridgeCodec {
         guard let data = try? JSONSerialization.data(withJSONObject: envelope, options: []) else { return "" }
         return String(data: data, encoding: String.Encoding.utf8) ?? ""
     }
-
-    // MARK: Pieces (internal for tests)
 
     static func originMatches(_ origin: String, expected: String) -> Bool {
         if expected.isEmpty { return false }
@@ -344,12 +297,10 @@ enum AppBridgeCodec {
         return true
     }
 
-    /// The largest base64 text for `bytes` decoded bytes (4 characters per 3 bytes, padded).
     static func base64CharacterLimit(_ bytes: Int) -> Int {
         return ((bytes + 2) / 3) * 4
     }
 
-    /// Decodes an optional base64 field with a size bound checked before decoding. Missing means empty.
     static func bytes(_ value: Any?, limit: Int) -> AppBridgeBytes {
         guard let value = value else { return AppBridgeBytes(rejection: AppBridgeRejection.none, data: Data()) }
         guard let text = value as? String else { return AppBridgeBytes(rejection: AppBridgeRejection.badPayload, data: Data()) }
@@ -360,7 +311,6 @@ enum AppBridgeCodec {
         return AppBridgeBytes(rejection: AppBridgeRejection.none, data: data)
     }
 
-    /// The embed's status, bounded: an unknown tool or a malformed color rejects it; pages and names are clipped.
     static func parseStatus(_ payload: [String: Any]) -> AppEmbedStatus? {
         let tool = payload["tool"] as? String ?? AppWhiteboardTool.pen.rawValue
         if AppWhiteboardTool(rawValue: tool) == nil { return nil }
@@ -383,7 +333,7 @@ enum AppBridgeCodec {
         }
         let elementCount = Int(number(payload["elementCount"]) ?? 0)
         let editorCount = Int(number(payload["editorCount"]) ?? 0)
-        // ACT-8: absent is the empty page data; anything else must pass the protocol.ts `isValidAppStatus` rules.
+
         guard let app = AppEmbedAppCodec.parse(payload["app"]) else { return nil }
         return AppEmbedStatus(tool: tool, color: color, strokeWidth: width, filled: payload["filled"] as? Bool ?? false,
                               canUndo: payload["canUndo"] as? Bool ?? false, canRedo: payload["canRedo"] as? Bool ?? false,
@@ -403,8 +353,6 @@ enum AppBridgeCodec {
         return parsed as? [String: Any]
     }
 
-    /// Numbers arrive as Int, Double or NSNumber depending on the platform reader (the GameProjectionJSON rule). No
-    /// Bool check: on iOS an NSNumber 1 also casts to Bool, so such a check would refuse a valid version number.
     static func number(_ value: Any?) -> Double? {
         if let intValue = value as? Int { return Double(intValue) }
         if let doubleValue = value as? Double { return doubleValue }
@@ -413,15 +361,11 @@ enum AppBridgeCodec {
     }
 }
 
-/// A decoded binary field and why it was refused.
 struct AppBridgeBytes: Equatable {
     let rejection: AppBridgeRejection
     let data: Data
 }
 
-/// S60 13 c: the Apple Pencil preferred actions (`UIPencilPreferredAction` raw values, UIPencilInteraction.h:20-41 in
-/// the iPhoneOS 27.1 SDK) mapped to the native toolbar. Pure and shared so the mapping is unit tested without an iOS
-/// availability check (cases 4 to 6 are iOS 16 and 17.5).
 enum AppPencilResponse: String, CaseIterable, Equatable {
     case none, toggleEraser, previousTool, colorMenu, strokeMenu, toolPalette
 }
@@ -434,7 +378,7 @@ enum AppPencilPolicy {
         case 3: return AppPencilResponse.colorMenu
         case 4: return AppPencilResponse.strokeMenu
         case 5: return AppPencilResponse.toolPalette
-        default: return AppPencilResponse.none   // 0 ignore, 6 runSystemShortcut and anything newer
+        default: return AppPencilResponse.none
         }
     }
 }

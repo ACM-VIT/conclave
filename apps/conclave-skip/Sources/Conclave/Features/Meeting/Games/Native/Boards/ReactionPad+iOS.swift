@@ -1,14 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 9 c B1 (ACT-3) on iOS: the Reaction pad. One button that fills the card's width: pointer-down sends exactly one
-// tap (a zero-distance drag, latched until the next phase, so a held touch or a second finger never sends twice);
-// VoiceOver activation and the Space and Return keys call the same action. Arming is the raised surface with "Wait for
-// Green"; go is the in-call success fill with dark ink "Tap Now" (text and state, never color alone, and never white on
-// green, INM G8); an early tap reads "Too Soon" with a warning glyph. Color and text change in one frame (no fade, so
-// timing is fair). `tapValid` plays only for a tap sent while the pad showed go; the go transition is announced once,
-// assertively, so screen reader players can play.
-
 struct ReactionPad: View {
     let scene: ReactionScene
     let games: GameStagePresenter
@@ -69,8 +61,6 @@ struct ReactionPad: View {
         }
     }
 
-    /// One tap per phase: the latch is set only when the tap was actually sent, so a press during another pending move
-    /// can still send on the next press.
     private func fire() {
         if sent || !scene.canTap { return }
         let showedGo = scene.displayedPadState(locallySent: false) == .go

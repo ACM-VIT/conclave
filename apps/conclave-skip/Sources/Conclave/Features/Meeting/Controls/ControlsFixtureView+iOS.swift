@@ -1,11 +1,6 @@
 #if DEBUG && os(iOS) && !SKIP
 import SwiftUI
 
-// S30 0.7 CL13 (CTL-1): the iOS Debug controls fixture on the S20 SL14 stage fixture route. Mounted by the Debug root hook
-// in `ConclaveApp.swift` when `CONCLAVE_STAGE_FIXTURE=controls-<state>` (request in HD/requests/B4-T6.md). The native
-// call root with probe renderers and the standalone controls presenter in the environment, plus scripts and readouts
-// beside the stage (never inside its subtree, PS 7.6). Never `MeetingViewModel`, WebRTC, audio, capture or network.
-
 enum ControlsFixtureLaunch {
     static func state(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> ControlsFixtureState? {
         guard let raw = environment["CONCLAVE_STAGE_FIXTURE"] else { return nil }
@@ -60,7 +55,7 @@ private struct ControlsFixtureControls: View {
 
     private func fixtureButton(_ title: String, identifier: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            // Debug fixture labels are not user-facing copy (the stage fixture does the same).
+
             Text(verbatim: title)
                 .font(.caption.weight(.semibold))
                 .frame(minHeight: 28)
@@ -82,7 +77,7 @@ private struct ControlsFixtureReadouts: View {
             readout(session.compositionReadout(), identifier: "controls.composition")
             readout(session.explanationReadout(), identifier: "controls.explanation")
             readout(session.leaveReadout(), identifier: "controls.leave")
-            // CTL-5 and CTL-6 (CL13): More's rows, the iOS menu budget and the hand.
+
             readout(session.moreReadout(), identifier: "controls.more")
             readout(session.menuHeightReadout(), identifier: "controls.menuHeight")
             readout(session.handReadout(), identifier: "controls.hand")

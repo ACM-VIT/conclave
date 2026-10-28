@@ -11,13 +11,6 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/*
- * S60 4 d, j (SET-6) on Android: personal images from the system photo picker (`PickVisualMedia(ImageOnly)`, AND 15.5)
- * decoded with `ImageDecoder` (API 28 decodes HEIF and WebP as well as JPEG and PNG), scaled along the web's output
- * ladder (`EffectsImagePolicy.attempts`) and re-encoded to JPEG in the app container (`filesDir/conclave-effects`), so
- * the default camera formats are never rejected the way the web PNG, JPEG or WebP rule would. "This image format isn't
- * supported." only when decoding fails. Runs on the IO dispatcher; nothing here touches the camera or the network.
- */
 internal object EffectsPhotoStore {
     private const val DIRECTORY = "conclave-effects"
 
@@ -25,7 +18,6 @@ internal object EffectsPhotoStore {
 
     fun file(context: Context, fileName: String): File = File(directory(context), fileName)
 
-    /** Stores the picked image as `fileName`; `EffectsIssue.none` on success, else the issue to show. */
     suspend fun store(context: Context, uri: Uri, fileName: String, personalCount: Int): EffectsIssue = withContext(Dispatchers.IO) {
         val size = sourceSize(context, uri)
         val early = EffectsImagePolicy.sourceIssue(byteCount = size, personalCount = personalCount)
@@ -64,7 +56,7 @@ internal object EffectsPhotoStore {
                 }
             }
         }
-        // Decoded, but still over the stored cap at the last step of the ladder.
+
         EffectsIssue.complex
     }
 
@@ -73,7 +65,6 @@ internal object EffectsPhotoStore {
         file(context, fileName).delete()
     }
 
-    /** A stored image decoded at tile size (never the full image, 4 k); null when it cannot be read. */
     suspend fun thumbnail(context: Context, fileName: String, maxPixels: Int): Bitmap? = withContext(Dispatchers.IO) {
         val stored = file(context, fileName)
         if (!stored.exists()) return@withContext null
@@ -87,7 +78,6 @@ internal object EffectsPhotoStore {
         }
     }
 
-    /** The picked file's byte size, or 0 when the provider does not say (the decoder still applies the other rules). */
     private fun sourceSize(context: Context, uri: Uri): Int {
         return try {
             context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->

@@ -44,16 +44,6 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 
-/*
- * S50 11 d (PPL-6, PL5): the Android question row. One Column per question reading only its QaQuestionEntry, so a vote
- * change recomposes one row (11 k). Attendees get the upvote FilterChip (selected = secondaryContainer, the count in
- * tabular digits with the canonical R50-4 upvote glyph) that plays `upvoteChanged` after a dispatched toggle. Hosts get a static count, and the row opens the host
- * DropdownMenu on tap or long press (longPress through the gesture route), the same items as TalkBack custom actions;
- * while an action is pending a spinner replaces the menu affordance. Status labels: "Being answered" in `live` with the
- * speaking glyph, "Answered" in `success`, "Waiting" and "Dismissed" in onSurfaceVariant. Static times, no clock.
- */
-
-/** The row's resolved texts (S50 11 g, i), rebuilt only when the model changes. */
 internal data class QaRowTexts(val status: String?, val meta: String, val answeredBy: String?, val description: String, val votes: String)
 
 internal fun qaStatusTextOf(context: Context, model: QaQuestionModel, isHost: Boolean): String? = when (model.status) {
@@ -87,7 +77,6 @@ internal fun qaRowTextsOf(context: Context, model: QaQuestionModel, isHost: Bool
     return QaRowTexts(status = status, meta = meta, answeredBy = answeredBy, description = parts.joinToString(", "), votes = votes)
 }
 
-/** The host action title name for a `QaOrderingPolicy.hostActions` id (S50 11 g). */
 internal fun qaHostActionName(action: String): String = when (action) {
     QaModerationAction.answering -> "qa_answer_live"
     QaModerationAction.answered -> "qa_mark_answered"
@@ -96,7 +85,6 @@ internal fun qaHostActionName(action: String): String = when (action) {
     else -> "qa_reopen"
 }
 
-/** One question (S50 11 d). [onAnswerInWriting] opens the PL10 multi-line dialog for the question id. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun QuestionRow(people: PeoplePresenter, entry: QaQuestionEntry, isHost: Boolean, onAnswerInWriting: (String) -> Unit) {

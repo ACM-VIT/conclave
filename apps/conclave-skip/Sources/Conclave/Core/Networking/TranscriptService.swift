@@ -17,11 +17,6 @@ enum TranscriptRecoveryErrorPolicy {
     }
 }
 
-/// Drives the transcript worker connection and mirrors the web client's SFU
-/// flow: fetch a worker token over socket.io, open the worker WebSocket, and -
-/// for controllers - send `session.start`, then hand the relay start token to
-/// the SFU so the server streams room audio to the transcription worker.
-/// Everyone else simply receives snapshot + delta/final segments to display.
 @MainActor
 final class TranscriptService {
     private let state: TranscriptState
@@ -30,8 +25,7 @@ final class TranscriptService {
     private var webSocket: TranscriptWebSocket?
     private var roomId = ""
     private var startAfterConnect = false
-    // Whether the queued start should be sent as a takeover (captured before
-    // sessionStatus flips to "starting").
+
     private var pendingStartIsTakeover = false
     private var activeStartOptions = TranscriptStartOptions()
     private var pendingRelayStart = false
@@ -40,8 +34,7 @@ final class TranscriptService {
     private var reconnectAttempt = 0
     private var recoverSessionAfterReconnect = false
     private var startedByThisClient = false
-    // Bumped by close()/open() so an in-flight open() that resumes after a close
-    // doesn't resurrect a WebSocket for a torn-down panel.
+
     private var openGeneration = 0
 
     init(state: TranscriptState, socketManager: SocketIOManager) {
@@ -49,10 +42,6 @@ final class TranscriptService {
         self.socketManager = socketManager
     }
 
-    // MARK: - Lifecycle
-
-    /// Opens the worker WebSocket so live captions stream in. Safe to call for
-    /// any participant; capabilities decide who may start/stop.
     func open() async {
         guard state.connectionStatus == .idle || state.connectionStatus == .error else { return }
         state.connectionStatus = .connecting
@@ -64,7 +53,7 @@ final class TranscriptService {
 
         do {
             let token = try await socketManager.getTranscriptToken()
-            // A close() (or a newer open()) landed while we were awaiting the token.
+
             guard generation == openGeneration, !didRequestClose else { return }
             roomId = token.roomId
             state.applyCapabilities(
@@ -94,7 +83,6 @@ final class TranscriptService {
         }
     }
 
-    /// Closes the local WebSocket without stopping the session for everyone else.
     func close() {
         didRequestClose = true
         openGeneration += 1
@@ -114,7 +102,6 @@ final class TranscriptService {
         }
     }
 
-    /// C6-11 Retry (the `unavailable` phase): resets the backoff and connects now.
     func retryConnection() {
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -126,19 +113,14 @@ final class TranscriptService {
         Task { await open() }
     }
 
-    /// RECONCILE R52 (C6-27): the first caller of `getTranscriptSfuRelayStatus()`. The view model probes once on join
-    /// for non-attendees and again after a recovery rejoin (web `useMeetingTranscript`); a failed probe keeps the last
-    /// known value.
     func probeRelayAvailability() async {
         do {
             let status = try await socketManager.getTranscriptSfuRelayStatus()
             state.setRelay(status.available ? RelayAvailability.available : RelayAvailability.unavailable)
         } catch {
-            // Unknown stays unknown; the next probe decides.
+
         }
     }
-
-    // MARK: - Controller actions
 
     func startTranscription(options: TranscriptStartOptions = TranscriptStartOptions()) {
         let isTakeover = state.sessionStatus == "takeover_needed"
@@ -149,8 +131,7 @@ final class TranscriptService {
         }
         state.errorMessage = nil
         state.setIssue(.none)
-        // Capture before overwriting the status: the send may be deferred
-        // until the socket opens, and "starting" would mask the takeover.
+
         pendingStartIsTakeover = isTakeover
         activeStartOptions = options
         recoverSessionAfterReconnect = false
@@ -240,7 +221,7 @@ final class TranscriptService {
         state.beginQuestion(id: id, question: trimmed, timestamp: now)
         let didSend = sendJSON(["type": "qa.ask", "id": id, "question": trimmed])
         if !didSend {
-            // TRN-2 (S60 6 f): typed "not sent" for the native Ask row; the legacy string stays for the legacy panel.
+
             state.markQuestionNotSent(id: id)
             state.applyQuestionUpdate(
                 id: id,
@@ -271,8 +252,6 @@ final class TranscriptService {
         return sendJSON(["type": "minutes.refresh"])
     }
 
-    // MARK: - WebSocket callbacks
-
     private func handleOpen(generation: Int) {
         guard generation == openGeneration, !didRequestClose else { return }
         reconnectTask = nil
@@ -301,7 +280,7 @@ final class TranscriptService {
         guard !didRequestClose, reconnectTask == nil else { return }
         let attempt = reconnectAttempt
         reconnectAttempt += 1
-        // C6-11: 8 failed attempts in a row read as `unavailable` (with Retry); reconnecting continues at the 10 s cap.
+
         state.recordFailedAttempts(reconnectAttempt)
         let reconnectDelaysNanoseconds: [UInt64] = [
             UInt64(500_000_000),
@@ -336,8 +315,7 @@ final class TranscriptService {
     private func sendSessionStart() {
         startedByThisClient = true
         pendingRelayStart = true
-        // When the previous controller stepped away the worker expects a
-        // takeover, not a fresh start (mirrors the web client).
+
         var payload: [String: Any] = [
             "type": pendingStartIsTakeover ? "session.takeover" : "session.start",
             "transportMode": "sfu",
@@ -353,8 +331,6 @@ final class TranscriptService {
         sendJSON(payload)
         pendingStartIsTakeover = false
     }
-
-    // MARK: - Incoming messages
 
     private func handleMessage(_ text: String, generation: Int) {
         guard generation == openGeneration, !didRequestClose else { return }
@@ -427,7 +403,7 @@ final class TranscriptService {
                 state.errorMessage = message
                 state.setIssue(.server, serverText: message)
             }
-            // Don't leave the controls stuck in a busy state on a worker error.
+
             if state.sessionStatus == "starting" || state.sessionStatus == "stopping" {
                 state.sessionStatus = "error"
             }
@@ -514,7 +490,7 @@ final class TranscriptService {
         if let controller = session["controller"] as? [String: Any] {
             let trimmed = (controller["displayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             nextControllerName = trimmed?.isEmpty == false ? trimmed : nil
-            // TRN-2 (web `session.controller.userId`): "Hosted by you" and the controller's Stop (S60 6 f).
+
             nextControllerUserId = ((controller["userId"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             nextControllerName = nil
@@ -535,7 +511,7 @@ final class TranscriptService {
                 state.setIssue(.none)
             }
         }
-        // Web TRN-14: the session start (server clock) drives the catch-up offer for late joiners.
+
         if let startedAt = Self.doubleValue(session["startedAt"]) {
             state.applySessionStartedAt(startedAt)
         } else if let status = session["status"] as? String, status == "idle" {
@@ -577,8 +553,6 @@ final class TranscriptService {
         webSocket.send(text)
         return true
     }
-
-    // MARK: - Parsing helpers
 
     private static func parseSegment(_ dict: [String: Any]) -> TranscriptSegmentModel? {
         guard let itemId = dict["itemId"] as? String else { return nil }
@@ -658,8 +632,6 @@ final class TranscriptService {
         if let numberValue = value as? NSNumber { return numberValue.doubleValue != 0.0 }
         return nil
     }
-
-    // MARK: - URL
 
     static func workerWebSocketURL(token: TranscriptTokenResponse) -> String? {
         guard var components = URLComponents(string: token.workerUrl) else { return nil }

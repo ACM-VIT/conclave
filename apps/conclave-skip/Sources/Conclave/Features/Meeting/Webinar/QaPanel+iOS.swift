@@ -1,15 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 11 c (PPL-6): the Webinar Q&A panel on iOS (`MeetingPanel.webinarQA`; PS 6.2 large only, with the composer for
-// attendees). One `PanelShell` with the R50-2 `QaRoute` path (the written answer page, PL15), a plain `List` that
-// observes `qa.snapshot` (structure) while every row observes its own `QaQuestionEntry`, the segmented sort over
-// `availableSorts` (attendee Top, Recent, Mine; host Top, Recent), the host filter `Menu` in the toolbar, the loading,
-// unavailable and empty states (C14), and for attendees the F00 C19 composer from the one sanctioned composer glass
-// file (the Liquid Glass cluster on iOS 26 and later; the opaque bordered field under Reduce Transparency and below;
-// owner OQ2, RECONCILE R32). System appearance (Default Q8 (6)). Registered by the native call root (HD request
-// B6-T1 R1); the presentation lifecycle drives `qa.panelDidOpen`, the coordinator's dismissal `panelDidClose`.
-
 struct QaPanel: View {
     let people: PeoplePresenter
     let shell: MeetingShellPresenter
@@ -31,20 +22,19 @@ struct QaPanel: View {
                 QaAnswerPage(people: people, questionId: route.answerQuestionId)
             }
         }
-        // The presentation lifecycle: pushing the answer page is not a close (11 c).
+
         .task(id: presentation.request.presentationID) {
             people.platform = NoticePlatform.ios
             people.qa.panelDidOpen(presentationID: presentation.request.presentationID)
         }
         .onChange(of: people.qa.snapshot.isHost) { _, isHost in
-            // A role change pops the answer page; the list follows the new role.
+
             if !isHost && !path.isEmpty { path = [] }
         }
         .accessibilityIdentifier("qa.panel")
     }
 }
 
-/// The list (S50 11 c). Reads `qa.snapshot` only; rows read their entries.
 private struct QaList: View {
     let people: PeoplePresenter
     let request: PanelRequest
@@ -91,7 +81,7 @@ private struct QaList: View {
                 }
             }
             .task(id: request.presentationID) {
-                // R50-3: destination `qaQuestion` scrolls to the question named by `targetId` once.
+
                 if request.destination == PanelDestination.qaQuestion && !request.targetId.isEmpty {
                     proxy.scrollTo(request.targetId, anchor: .top)
                 }
@@ -101,8 +91,6 @@ private struct QaList: View {
     }
 }
 
-/// The segmented sort over `availableSorts` (3 for attendees, 2 for hosts; Mine never appears for hosts). The system
-/// segmented control plays its own feedback.
 private struct QaSortBar: View {
     let qa: WebinarQAPresenter
     let snapshot: QaPanelSnapshot
@@ -110,7 +98,7 @@ private struct QaSortBar: View {
 
     var body: some View {
         if snapshot.availableSorts.count > 1 && snapshot.availability == QaAvailability.available {
-            // The two picker styles are different types, so each branch applies its own.
+
             Group {
                 if dynamicTypeSize.isAccessibilitySize {
                     sortPicker.pickerStyle(.menu)
@@ -136,7 +124,6 @@ private struct QaSortBar: View {
     }
 }
 
-/// The host filter: Open, Answered, Dismissed with their counts (S50 11 c).
 private struct QaFilterMenu: View {
     let qa: WebinarQAPresenter
     let snapshot: QaPanelSnapshot
@@ -157,7 +144,6 @@ private struct QaFilterMenu: View {
     }
 }
 
-/// Loading, unavailable and empty states (S50 11 f) over the list.
 private struct QaEmptyOrLoading: View {
     let snapshot: QaPanelSnapshot
 
@@ -176,7 +162,7 @@ private struct QaEmptyOrLoading: View {
 }
 
 enum QaPanelText {
-    /// One C14 title for every empty list; the message names the case (S50 11 f).
+
     static func emptyTitle(_ snapshot: QaPanelSnapshot) -> String {
         ConclaveStrings.text("No Questions Yet")
     }
@@ -196,7 +182,6 @@ enum QaPanelText {
         return nil
     }
 
-    /// The disabled reason under the composer while reconnecting or offline (S50 11 f).
     static func composerReason(_ raw: String) -> String? {
         if raw == QaComposerReason.offline { return HostText.reason(PeopleActionReason.offline) }
         if raw == QaComposerReason.reconnecting { return HostText.reason(PeopleActionReason.reconnecting) }
@@ -204,10 +189,6 @@ enum QaPanelText {
     }
 }
 
-/// The attendee composer (S50 11 c): view-local text seeded from `qa.drafts.question` and written back on change; Ask
-/// is enabled for 2 to 500 characters while Q&A is on and connected; the counter from 450; the field and Ask disable
-/// while sending; on success the text clears (the presenter's `submitSerial`). With Q&A off the composer is replaced by
-/// the off line. Failures render inline under the field (PL14).
 private struct QaComposer: View {
     let people: PeoplePresenter
     let snapshot: QaPanelSnapshot

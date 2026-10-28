@@ -1,25 +1,16 @@
 import Foundation
 import Observation
 
-/// S50 0.5 and 11 (PPL-6): the Webinar Q&A presenter, a child of `PeoplePresenter` (created and reset with it). Every
-/// action dispatches through the parent, so Q&A shares the one ledger and the one failure path with People and Host
-/// Controls (PH2): keys `qaSubmit:composer`, `qaUpvote:<id>`, `qaModerate:<id>`. Views read only `snapshot`, `unseen`
-/// (its own stored property: only the badges read it) and one `QaQuestionEntry` per row; field text stays view state
-/// written back into `drafts`, so a keystroke never publishes (S50 11 k).
-///
-/// Inputs come from the core on the PH7 path only (`apply`); the presenter never observes the core. The unseen counter
-/// is the core's (PH7, RECONCILE R18): this presenter only reports the open presentation, so the core zeroes it on
-/// open and counts again after close.
 @MainActor
 @Observable
 final class WebinarQAPresenter {
     private(set) var snapshot: QaPanelSnapshot = QaPanelSnapshot.empty
-    /// The role-appropriate unseen count (S20 12 bar badge, S30 More row, the Participants "%lld new" row).
+
     private(set) var unseen: Int = 0
 
     @ObservationIgnored let questions = QaQuestionStore()
     @ObservationIgnored let drafts = QaDrafts()
-    /// Dispatch, ledger and failure path. `weak` (Kotlin has no unowned reference); set once by the parent.
+
     @ObservationIgnored weak var parent: PeoplePresenter?
 
     @ObservationIgnored private(set) var inputs = QaInputs.make()
@@ -31,14 +22,11 @@ final class WebinarQAPresenter {
     @ObservationIgnored private var submitSerial = 0
     @ObservationIgnored private var answeredQuestionId = ""
     @ObservationIgnored private var answerSerial = 0
-    /// `qa.recompose.<id>` (PL12): row evaluations per question; nil in production.
+
     @ObservationIgnored var recompose: PeopleRecomposeLedger? = nil
 
     init() {}
 
-    // MARK: Core hooks
-
-    /// Core only (PH7 path): entries, Q&A state, role, connection and the unseen counter.
     func apply(_ next: QaInputs) {
         applyCount += 1
         let previous = inputs
@@ -47,10 +35,9 @@ final class WebinarQAPresenter {
         }
         inputs = next
         if unseen != next.unseen { unseen = next.unseen }
-        // The Participants "Questions and Answers" row shows the host counter (S50 11 f).
+
         parent?.qaUnseenChanged(next.role == QaRole.host ? next.unseen : 0)
-        // S50 11 f, 12 f: the panel closes itself when the host turns Attendee Q&A off or webinar mode ends, with the
-        // "Q&A is off." announcement; a role change that removes Q&A closes it quietly.
+
         if openPresentationID != 0 && previous.isAvailableToRole && !next.isAvailableToRole
             && previous.callSession == next.callSession {
             let turnedOff = (previous.isQaEnabled && !next.isQaEnabled) || (previous.isWebinarEnabled && !next.isWebinarEnabled)
@@ -59,20 +46,16 @@ final class WebinarQAPresenter {
         rebuild()
     }
 
-    /// The panel host's presentation lifecycle (S50 11 c `.task(id: presentationID)`, Android `onMounted`); pushing the
-    /// iOS answer page is not a close.
     func panelDidOpen(presentationID: Int) {
         if presentationID == 0 || presentationID == openPresentationID { return }
         openPresentationID = presentationID
-        // A host lands on Open each presentation; the attendee sort is kept (a choice, not a filter).
+
         if filter != QaHostFilter.openQuestions {
             filter = QaHostFilter.openQuestions
             rebuild()
         }
     }
 
-    /// From the coordinator's dismissal (through the parent's `panelSnapshotChanged`): inline failures of this panel
-    /// clear (PL14) and the core stores the last-seen marker.
     func panelDidClose(presentationID: Int) {
         if presentationID == 0 || presentationID != openPresentationID { return }
         openPresentationID = 0
@@ -83,7 +66,6 @@ final class WebinarQAPresenter {
         }
     }
 
-    /// The coordinator's snapshot changed: the presentation this presenter opened is gone, so the panel closed.
     func panelSnapshotChanged(current: PanelRequest?) {
         guard openPresentationID != 0 else { return }
         if current == nil || current?.presentationID != openPresentationID || current?.panel != MeetingPanel.webinarQA {
@@ -92,8 +74,6 @@ final class WebinarQAPresenter {
     }
 
     var isPanelOpen: Bool { openPresentationID != 0 }
-
-    // MARK: Sort and filter (S50 11 c, d)
 
     func setSort(_ next: QaSort) {
         let resolved = QaOrderingPolicy.effectiveSort(next, role: inputs.role)
@@ -108,9 +88,6 @@ final class WebinarQAPresenter {
         rebuild()
     }
 
-    // MARK: Actions (S50 11 j)
-
-    /// Attendees only: 2 to 500 characters, Q&A on and connected. The draft stays until the acknowledgement.
     @discardableResult
     func submit(_ text: String) -> ControlTapResult {
         guard snapshot.isAttendee, let parent,
@@ -129,7 +106,6 @@ final class WebinarQAPresenter {
         return result
     }
 
-    /// Attendees only: toggles your vote; the control stays disabled until the acknowledgement (S50 11 f).
     @discardableResult
     func toggleUpvote(id: String) -> ControlTapResult {
         guard snapshot.isAttendee, let parent, let model = questions.model(id), model.isEnabled else {
@@ -140,9 +116,6 @@ final class WebinarQAPresenter {
                                targetName: "")
     }
 
-    /// Hosts only (S50 11 c): Answer Live (`answering`), Mark Answered (`answered`), Dismiss (`dismissed`), Reopen
-    /// (`reopen: true`), or a written answer (`answered` with `answerText`, up to 1,000 characters, Q6). One action per
-    /// question at a time.
     @discardableResult
     func moderate(id: String, action: QaStatus, reopen: Bool, answerText: String) -> ControlTapResult {
         guard snapshot.isHost, let parent, let model = questions.model(id), model.isEnabled else {
@@ -167,7 +140,6 @@ final class WebinarQAPresenter {
                                sourceKey: written.isEmpty ? id : QaFieldID.answer(id), targetName: "")
     }
 
-    /// A host action by its id as `QaOrderingPolicy.hostActions` lists them (menus and swipes pass these).
     @discardableResult
     func perform(hostAction: String, id: String) -> ControlTapResult {
         switch hostAction {
@@ -183,8 +155,6 @@ final class WebinarQAPresenter {
             return ControlTapResult.ignored
         }
     }
-
-    // MARK: Results (from the parent's finish)
 
     func actionFinished(_ entry: HostLedgerEntry, result: HostActionResult) {
         let completed = result.kind == HostActionResultKind.completed
@@ -209,7 +179,6 @@ final class WebinarQAPresenter {
         rebuild()
     }
 
-    /// With the parent's reset (S1C 3.3 TEAR): drafts, sort, filter and phases clear; revisions keep growing.
     func reset() {
         drafts.reset()
         questions.removeAll()
@@ -224,17 +193,12 @@ final class WebinarQAPresenter {
         if unseen != 0 { unseen = 0 }
     }
 
-    // MARK: Keys
-
     static let submitKey = "qaSubmit:composer"
 
     static func upvoteKey(_ id: String) -> String { PeopleCommandKind.qaUpvote.rawValue + ":" + id }
 
     static func moderateKey(_ id: String) -> String { PeopleCommandKind.qaModerate.rawValue + ":" + id }
 
-    // MARK: Rebuild
-
-    /// Recomputes rows and structure from the inputs and the parent's ledger; publishes only what changed.
     func rebuild() {
         let pending = parent?.pendingLedgerEntries() ?? []
         var pendingByQuestion: [String: String] = [:]
@@ -328,9 +292,6 @@ final class WebinarQAPresenter {
         }
     }
 
-    // MARK: Readouts (Debug fixture and tests)
-
-    /// `qa.revision` with the visible ids, for example `rev=3 ids=q1,q2`.
     func revisionReadout() -> String {
         "rev=" + String(snapshot.revision) + " ids=" + (snapshot.questionIds.isEmpty ? "none" : snapshot.questionIds.joined(separator: ","))
     }

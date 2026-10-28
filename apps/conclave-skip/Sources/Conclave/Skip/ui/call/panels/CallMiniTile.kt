@@ -24,7 +24,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-/** What the overlay mini tile shows (PS 8.4). WP3 and WP6 bind it to the active speaker or self. */
 internal data class CallMiniTileModel(
     val displayName: String,
     val cameraOff: Boolean,
@@ -32,13 +31,8 @@ internal data class CallMiniTileModel(
     val speaking: Boolean,
 )
 
-/** Speaking is never color alone (A18): the border also grows from 1 dp to 2 dp, and TalkBack hears "Speaking". */
 internal fun callMiniTileBorderWidthDp(speaking: Boolean): Int = if (speaking) 2 else 1
 
-/**
- * The call in miniature on a full overlay; a tap returns to the call. Flat tile fill, tile radius and no glow.
- * The video slot fills the tile; the fixture puts an inert renderer probe there.
- */
 @Composable
 internal fun CallMiniTile(
     model: CallMiniTileModel,

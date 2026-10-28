@@ -1,19 +1,17 @@
 import Foundation
 
-/// S60 7 (ACT-1): pure catalog, setup and vote rules, shared by the presenter and both test hosts.
 enum ActivitiesCatalogPolicy {
-    /// The SDK app catalog (C6-18): ids only, in the web order.
+
     static let defaultAppIds: [String] = ["whiteboard", "wheel", "watch"]
-    /// Option segments render as a segmented row only up to this many choices (L6-10, both platforms).
+
     static let maxSegments = 4
-    /// The text counter appears this many characters before the limit (S60 7 c).
+
     static let counterLead = 20
-    /// "Still starting" after this long (S60 7 f).
+
     static let slowStartMillis = 5000.0
-    /// Pending launcher actions clear after this long when the core never answered (a dropped command).
+
     static let pendingTimeoutMillis = 15000.0
 
-    /// The key a number choice carries: integral values without a fraction, so "7" never reads "7.0".
     static func numberKey(_ value: Double) -> String {
         let rounded = value.rounded()
         if abs(value - rounded) < 0.0001 { return String(Int(rounded)) }
@@ -27,7 +25,6 @@ enum ActivitiesCatalogPolicy {
         return next
     }
 
-    /// Number presets: the server's, else min, default and max (the legacy rule), clamped and deduplicated.
     static func numberPresets(_ option: ActivityOptionInput) -> [Double] {
         var source = option.presets
         if source.isEmpty {
@@ -45,7 +42,6 @@ enum ActivitiesCatalogPolicy {
         return result
     }
 
-    /// A number choice label: the number plus the server suffix verbatim ("10 min").
     static func numberLabel(_ value: Double, suffix: String) -> String {
         let base = numberKey(value)
         let trimmed = suffix.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -72,7 +68,6 @@ enum ActivitiesCatalogPolicy {
         return false
     }
 
-    /// The value a draft resolves to for the current option (unknown select values fall back to the default).
     static func currentValue(_ option: ActivityOptionInput, draft: ActivityOptionValue?) -> ActivityOptionValue {
         guard let draft = draft else { return defaultValue(option) }
         switch option.type {
@@ -86,7 +81,6 @@ enum ActivitiesCatalogPolicy {
         }
     }
 
-    /// The value sent on Start (C6-16, INM G2): numbers clamped, selects checked, text trimmed and capped once, here.
     static func resolvedForStart(_ option: ActivityOptionInput, draft: ActivityOptionValue?) -> ActivityOptionValue {
         let value = currentValue(option, draft: draft)
         if option.type != GameOptionModel.textKind { return value }
@@ -97,8 +91,6 @@ enum ActivitiesCatalogPolicy {
         return ActivityOptionValue(id: option.id, isNumber: false, number: 0, text: text)
     }
 
-    /// `showWhen` (C6-16): the option shows while the named select option holds one of the listed values. A
-    /// condition naming an unknown option shows the option (older servers never send one).
     static func isVisible(_ option: ActivityOptionInput, among options: [ActivityOptionInput], drafts: [ActivityOptionValue]) -> Bool {
         if option.showWhenId.isEmpty { return true }
         for other in options where other.id == option.showWhenId {
@@ -127,7 +119,7 @@ enum ActivitiesCatalogPolicy {
             }
             current = numberKey(value.number)
             if !choiceExists(current, in: choices) {
-                // A value between presets (an older draft or a server default) still shows as its own choice.
+
                 choices.append(GameChoiceModel(id: current, label: numberLabel(value.number, suffix: option.suffix)))
             }
         case GameOptionModel.selectKind:
@@ -142,7 +134,6 @@ enum ActivitiesCatalogPolicy {
                                isVisible: isVisible(option, among: options, drafts: drafts))
     }
 
-    /// The vote leader: the most votes, the first candidate on a tie; "" when nobody voted yet.
     static func leader(candidates: [ActivityGameInput], counts: [ActivityVoteCount]) -> ActivityGameInput? {
         var best: ActivityGameInput? = nil
         var bestCount = 0
@@ -163,7 +154,6 @@ enum ActivitiesCatalogPolicy {
         return 0
     }
 
-    /// The catalog footer reason, first match wins (S60 7 c): recovering, an open vote, a live game.
     static func catalogReason(isRecovering: Bool, isVoteOpen: Bool, isGameLive: Bool) -> ActivitiesReason {
         if isRecovering { return ActivitiesReason.recovering }
         if isVoteOpen { return ActivitiesReason.voteOpen }
@@ -172,8 +162,6 @@ enum ActivitiesCatalogPolicy {
     }
 }
 
-/// The shared browser URL rules (S60 7 g "validation verbatim from web"), mirroring the view model's
-/// `normalizedBrowserURL(from:)` so the launcher can explain a bad URL under the field before any command.
 enum BrowserURLValidationPolicy {
     static func validate(_ input: String) -> BrowserValidation {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -198,7 +186,6 @@ enum BrowserURLValidationPolicy {
         return BrowserValidation.none
     }
 
-    /// The view model's `hasURLScheme` rule verbatim: letters first, then letters, digits, "+", "." or "-" before a colon.
     static func hasScheme(_ value: String) -> Bool {
         guard let colonIndex = value.firstIndex(of: ":") else { return false }
         let scheme = String(value[..<colonIndex])

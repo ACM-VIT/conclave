@@ -46,19 +46,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
-/*
- * S50 7 d (PPL-4): the meeting access pages on Android. Field text is page state seeded once from `host.drafts` and
- * written back on every change (the 7 c / 8 d draft sync), so validity and the buttons derive from the local text and
- * the draft survives pushes and Back; PH15: a field clears only after its acknowledgement (the presenter clears the
- * draft, the page follows on the saved serial or the pending keys). Remove code and Block confirm through the page's
- * HostConfirmationHost leaf (S50 3 j). "Code saved" and failures with Retry use the page snackbar (PL14, R40-3 slot).
- * Fields and buttons keep a 440 dp maximum width (F00 C01). System appearance; Block in `error`.
- */
-
-/** Fields and buttons on access pages never stretch past 440 dp (S50 7 b). */
 private val AccessFieldMaxWidth = 440.dp
 
-/** Invite code (S50 7 d): status, the new code field, Save code, and Remove code when one is set. */
 @Composable
 internal fun InviteCodePage(people: PeoplePresenter, reservation: PaddingValues, snackbar: SnackbarHostState) {
     val host = people.host
@@ -74,7 +63,7 @@ internal fun InviteCodePage(people: PeoplePresenter, reservation: PaddingValues,
     LaunchedEffect(snapshot.inviteCodeSavedSerial) {
         if (snapshot.inviteCodeSavedSerial == seenSavedSerial) return@LaunchedEffect
         seenSavedSerial = snapshot.inviteCodeSavedSerial
-        // PH15: the presenter cleared the draft on the acknowledgement; the field follows, then one confirmation.
+
         draft = host.drafts.meetingCode
         snackbar.showSnackbar(conclaveStringOf(context, "hst_code_saved"))
     }
@@ -133,12 +122,10 @@ internal fun InviteCodePage(people: PeoplePresenter, reservation: PaddingValues,
     }
 }
 
-/** What one Access list item draws (stable keys and content types, S50 7 k). */
 internal enum class AccessItemKind { Field, Buttons, Footer, Loading, Header, Empty, Allowed, Blocked }
 
 internal data class AccessListItem(val key: String, val kind: AccessItemKind, val value: String = "")
 
-/** The S50 7 b order: field, buttons, footer, Allowed (or its empty line), Blocked (or its empty line). Pure. */
 internal fun accessListItems(access: HostAccessSummary): List<AccessListItem> {
     val items = mutableListOf<AccessListItem>()
     items.add(AccessListItem("field", AccessItemKind.Field))
@@ -155,11 +142,6 @@ internal fun accessListItems(access: HostAccessSummary): List<AccessListItem> {
     return items
 }
 
-/**
- * Access list (S50 7 d): Allow and Block by user key or email, then the allowed and blocked lists with labelled icon
- * buttons. Pull to refresh is state driven (the indicator follows `access.isRefreshing`, AND 7.13); the lists refresh
- * once when the page appears.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AccessListPage(people: PeoplePresenter, reservation: PaddingValues, snackbar: SnackbarHostState) {
@@ -174,7 +156,7 @@ internal fun AccessListPage(people: PeoplePresenter, reservation: PaddingValues,
     val invalid = HostControlsPolicy.showsInvalidAccessKey(keyDraft)
     LaunchedEffect(Unit) { host.refreshAccessLists() }
     LaunchedEffect(snapshot.pendingAccessKeys) {
-        // PH15: the presenter clears the draft only after an Allow or Block succeeds.
+
         if (host.drafts.accessKey != keyDraft) keyDraft = host.drafts.accessKey
     }
     val reason = hostReasonOf(context, snapshot.blockedReason)
@@ -259,7 +241,6 @@ internal fun AccessListPage(people: PeoplePresenter, reservation: PaddingValues,
     }
 }
 
-/** One key: the key text, its value, and a labelled close button (Revoke or Unblock, 48 dp); a spinner while pending. */
 @Composable
 private fun AccessKeyRow(
     key: String, supporting: String?, actionLabel: String, pending: Boolean, enabled: Boolean, identifier: String,

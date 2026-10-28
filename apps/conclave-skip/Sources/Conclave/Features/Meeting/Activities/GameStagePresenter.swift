@@ -1,25 +1,6 @@
 import Foundation
 import Observation
 
-/// S60 0.5 and 8 (ACT-2): the session-owned game shell presenter inside the S20 activity card. Five stored properties,
-/// each its own observation unit (SkipModel backs each with one `MutableState`): `chrome` (the header and seat, per
-/// phase), `scene` (the body, per push), `countdown` (the deadline, once per push; the leaf ticks itself), `results`
-/// (the scoreboard and rematch) and `interaction` (pending and failure, per local move). Pushes are parsed once
-/// (`GameProjectionParser`, C6-15). A move's request id is client-local and bound to that emit's ack: pending clears on
-/// that ack or after a 10 s timeout mapped to `GameFailure.server`, never on a push, because the SFU broadcasts the new
-/// state before it acks the move (gameHandlers.ts:601-651). ACT-3 to ACT-6 extend `scene` with per-game models: ACT-3
-/// builds the six prompt game scenes (S60 9 j) here, once per push, from the typed projections
-/// (`PromptSceneBuilder`, Games/Native/Scenes/PromptGameScenes.swift); private fields come only from the local
-/// person's own player view and only while that person holds a seat. ACT-4 builds the Wordle scene (S60 10 j,
-/// `WordleSceneBuilder` at the end of this file) the same way and keeps the one Wordle draft here
-/// (`wordleDraft`, keyed by the game, the round and the input kind), so the draft survives rotation, Show Video and
-/// unrelated pushes, stays on a rejected guess and clears only when the server records the guess or the round moves on.
-/// ACT-5 builds the chess scene (S60 11 j, `ChessSceneBuilder` at the end of this file) once per push, the FEN parsed
-/// into 64 squares here, and keeps the move in flight as `chessPendingMove` (the piece at its destination with a pending
-/// outline until that move's ack or the push that records it; a rejection restores the position and plays
-/// `moveRejected`). The draw, takeback and resign actions are payload-free moves gated by the projected eligibility.
-/// ACT-6 builds the Zip scene (S60 12 j, ZipSceneBuilder in Games/Native/Boards/ZipScene.swift) once per push; the
-/// draft path stays view-local in the boards until a finger lift, key run or step sends it.
 @MainActor
 @Observable
 final class GameStagePresenter {
@@ -28,31 +9,26 @@ final class GameStagePresenter {
     private(set) var countdown: CountdownModel? = nil
     private(set) var results: GameResultsModel = GameResultsModel.empty
     private(set) var interaction: GameInteractionModel = GameInteractionModel.idle
-    /// Game outcome tokens (S20 0.5 registry: `gameCorrect`, `gameWrong`, `tapEarly`, `guessInvalid`, `wordSolved`,
-    /// `moveRejected`; `gameStarted` stays with the stage presenter, RECONCILE R12).
+
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
-    /// ACT-4 (S60 10 j): the Wordle draft (uppercase A to Z, at most the word length), its own observation unit so a key
-    /// press re-evaluates only the board's draft row and the keys, never the scene (S60 10 k). The secret word a setter
-    /// types and a guess share it; the key below keeps them apart.
+
     private(set) var wordleDraft: String = ""
-    /// ACT-5 (S60 11 f): the chess move in flight as the board draws it, or the rejection that restored the position. Its
-    /// own observation unit, read only by the board and its status line, so dispatching a move re-evaluates nothing else.
+
     private(set) var chessPendingMove: ChessPendingMoveModel = ChessPendingMoveModel.none
 
-    /// Core only: moves, join, rematch and end (the S1 `onCommand` pattern).
     @ObservationIgnored var onCommand: ((GameStageCommand) -> Void)? = nil
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
     }
 
     @ObservationIgnored private(set) var inputs = GameStageInputs.make()
-    /// Diagnostics for readouts and tests (never observed): `game.emits`, parse count.
+
     @ObservationIgnored private(set) var emitLog: [String] = []
     @ObservationIgnored private(set) var parseCount = 0
 
     @ObservationIgnored private var projection = GameProjection.empty
     @ObservationIgnored private var parsedKey = ""
-    /// The client clock of the push the current projection came from (the countdown offset uses it, never a refresh).
+
     @ObservationIgnored private var pushReceivedAtMillis = 0.0
     @ObservationIgnored private var nextRequestNumber = 0
     @ObservationIgnored private var pendingRequestId = ""
@@ -63,20 +39,15 @@ final class GameStagePresenter {
     @ObservationIgnored private var endPending = false
     @ObservationIgnored private var endFailed = false
     @ObservationIgnored private var rematchPending = false
-    /// Names seen during this game (seated players and the module rosters), so a vote target who left can still be
-    /// named ("%@ left. Vote again.", S60 9 f). Cleared when the game changes.
+
     @ObservationIgnored private var knownPlayers: [GameNamedPlayer] = []
-    /// One-shot accessibility announcements already made for this game session (S60 9 i: the reveal, the vote result
-    /// and the Reaction go are announced once, however often a view reappears). Cleared in the lobby and on a new game.
+
     @ObservationIgnored private var announced: [String] = []
-    /// What `wordleDraft` belongs to: the game id plus `WordleScene.draftKey` ("guess-2", "secret-1"); "" when no draft
-    /// can exist. A new key clears the draft (a new round, the word set, the round's results, another game).
+
     @ObservationIgnored private var wordleDraftKey = ""
-    /// The word of the guess or secret in flight, so the push that records it (or its successful ack) clears the draft
-    /// exactly once; a rejection or the timeout keeps the draft (S60 10 f).
+
     @ObservationIgnored private var wordleSubmitted = ""
-    /// ACT-5: the request id of the chess move whose overlay shows (its ack or timeout settles it) and the position it
-    /// was sent from (a push with another position clears the overlay; the request stays pending until its ack).
+
     @ObservationIgnored private var chessMoveRequestId = ""
     @ObservationIgnored private var chessFenAtSend = ""
 
@@ -84,9 +55,6 @@ final class GameStagePresenter {
 
     init() {}
 
-    // MARK: Core hooks
-
-    /// Core only: one game push (public state, player view, identity). Equality guarded; parsed once.
     func apply(_ next: GameStageInputs) {
         if inputs.callSession != 0 && next.callSession != inputs.callSession {
             reset()
@@ -95,7 +63,7 @@ final class GameStagePresenter {
         let previous = inputs
         inputs = next
         if !next.isActive || next.gameId != previous.gameId {
-            // The session ended or another game replaced it: nothing pending can still be answered for it.
+
             clearPending()
             endPending = false
             endFailed = false
@@ -103,7 +71,7 @@ final class GameStagePresenter {
             knownPlayers = []
             announced = []
             wordleSubmitted = ""
-            // ACT-5: the chess move in flight belonged to the old game; its overlay goes on the rebuild below.
+
             chessMoveRequestId = ""
         }
         if next.phase == "lobby" { announced = [] }
@@ -117,7 +85,7 @@ final class GameStagePresenter {
                 ? GameProjectionParser.parse(gameId: next.gameId, publicPhase: next.phase, publicViewJSON: next.publicViewJSON,
                                              playerViewJSON: next.playerViewJSON)
                 : GameProjection.empty
-            // A failure shows until the next push that moved the game on (S60 8 f); a pending move stays pending.
+
             if failure != GameFailure.none && pendingRequestId.isEmpty && previous.isActive {
                 failure = GameFailure.none
                 failureText = ""
@@ -126,21 +94,19 @@ final class GameStagePresenter {
         rebuild()
     }
 
-    /// Core only: the ack of the emit that carried `requestId` (C6-15). An ack for an older request is ignored.
     func moveAcknowledged(requestId: String, success: Bool, serverText: String) {
         if requestId.isEmpty || requestId != pendingRequestId { return }
         cancelTimeout()
         let ackedType = pendingType
         pendingRequestId = ""
         pendingType = ""
-        // ACT-5: whether this ack answers the chess move whose overlay shows (S60 11 f "move pending" and "move rejected").
+
         let isChessMove = !chessMoveRequestId.isEmpty && chessMoveRequestId == requestId
         if isChessMove { settleChessMove(rejected: !success) }
         if success {
             failure = GameFailure.none
             failureText = ""
-            // ACT-4: the server took the guess or the secret word. The push that records it normally arrived first and
-            // already cleared the draft; if the ack won the race, clear it now so the same word is never sent twice.
+
             if (ackedType == WordleIntent.guessType || ackedType == WordleIntent.setWordType) && !wordleSubmitted.isEmpty
                 && wordleDraft == wordleSubmitted {
                 wordleDraft = ""
@@ -149,15 +115,11 @@ final class GameStagePresenter {
             failure = GameFailurePolicy.failure(serverText: serverText)
             failureText = failure == GameFailure.server ? serverText : ""
             if ackedType == WordleIntent.guessType {
-                // S60 10 e, f: a rejected guess ("Not in word list") keeps the draft and plays `guessInvalid`.
+
                 advanceFeedback(FeedbackKind.guessInvalid)
             } else if isChessMove || failure == GameFailure.notAccepted || ackedType == "submit"
                         || (projection.kind == GameSceneKind.zip && ackedType == ZipIntent.moveType) {
-                // A rejected bluff ("That is the real answer. Write a bluff.") is the S60 9 h rejection outcome too; R12
-                // names this presenter's rejection token `moveRejected` (S1 alone publishes `actionRejected`). ACT-5: a
-                // rejected chess move ("Illegal move") plays it once and the board shows the server position again.
-                // ACT-6: a refused Zip path ("That path isn’t allowed. Try again.") plays it once; the board shows
-                // the server’s path again.
+
                 advanceFeedback(FeedbackKind.moveRejected)
             }
         }
@@ -165,24 +127,18 @@ final class GameStagePresenter {
         publishInteraction()
     }
 
-    /// Core only: the stage End failed (S60 8 f "Couldn't end the game. Try again.").
     func endFailed(serverText: String) {
         endPending = false
         endFailed = true
         rebuild()
     }
 
-    /// Core only: the rematch failed; Play Again stops showing "Starting".
     func rematchFailed() {
         if !rematchPending { return }
         rematchPending = false
         rebuild()
     }
 
-    // MARK: Actions (views)
-
-    /// `dispatched` only for a sent move; `ignored` while another move is pending; `explained` when the person cannot
-    /// move (not seated, reconnecting, no game), so the view shows why instead of a silent drop (INM G5).
     func send(_ intent: GameMoveIntent) -> ActivityTapResult {
         if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
         if !inputs.isActive || inputs.isRecovering || chrome.seat != SeatState.player { return ActivityTapResult.explained }
@@ -196,14 +152,13 @@ final class GameStagePresenter {
         publishInteraction()
         startTimeout(requestId: requestId)
         record(stamped.type)
-        // ACT-5: the chess overlay is set before the core sees the command, so a synchronous ack still finds it.
+
         noteChessDispatch(stamped)
         onCommand?(GameStageCommand(kind: GameStageCommandKind.move, type: stamped.type,
                                     payloadJSON: GameMoveAdapter.payloadJSON(stamped), requestId: requestId))
         return ActivityTapResult.dispatched
     }
 
-    /// Asks for a seat; the server grants it at the next round boundary (`game:join`).
     func join() {
         if !inputs.isActive || inputs.isRecovering || chrome.seat != SeatState.canJoin { return }
         record("join")
@@ -218,7 +173,6 @@ final class GameStagePresenter {
         onCommand?(GameStageCommand(kind: GameStageCommandKind.rematch, type: "", payloadJSON: "", requestId: ""))
     }
 
-    /// After the confirmation attached to the End button (R09). A second tap while pending is ignored.
     func requestEnd() {
         if !chrome.canEnd || endPending { return }
         endPending = true
@@ -238,8 +192,6 @@ final class GameStagePresenter {
         if hadEndFailure { rebuild() }
     }
 
-    /// Views only: true the first time `key` is claimed during this game session, so an announcement (the Trivia
-    /// reveal, the vote result, the Reaction go) is posted once even when its view appears again (S60 9 i).
     func claimAnnouncement(_ key: String) -> Bool {
         if key.isEmpty || announced.contains(key) { return false }
         announced.append(key)
@@ -247,32 +199,22 @@ final class GameStagePresenter {
         return true
     }
 
-    // MARK: Wordle draft and moves (ACT-4, S60 10 c, d, f, j)
-
-    /// Views only: one letter from the letter keys or a hardware key. Ignored when the person cannot type (no guess or
-    /// secret is possible, the board is full, or the guess is waiting for its ack).
     func typeWordleLetter(_ letter: String) {
         guard let wordle = scene.wordle, canEditWordleDraft(wordle) else { return }
         setDraft(WordleBoardPolicy.normalized(wordleDraft + letter, limit: wordle.wordLength))
     }
 
-    /// Views only: Delete (the R6-1 `backspace` key) or the hardware delete key removes one letter.
     func deleteWordleLetter() {
         guard let wordle = scene.wordle, canEditWordleDraft(wordle) else { return }
         if wordleDraft.isEmpty { return }
         setDraft(String(wordleDraft.dropLast()))
     }
 
-    /// Views only: the text field ("Your Guess", "Secret Word") and paste. Letters only, uppercased, at most the word
-    /// length; anything else is dropped (S60R 22: never arbitrary scripts into a five-letter server game).
     func setWordleDraft(_ text: String) {
         guard let wordle = scene.wordle, canEditWordleDraft(wordle) else { return }
         setDraft(WordleBoardPolicy.normalized(text, limit: wordle.wordLength))
     }
 
-    /// Views only: Enter, Enter Guess, Go, Return or Set Word. Sends exactly one `guess` or `setWord` move with the full
-    /// draft; the draft stays until the server records the word (S60 10 f), so a rejection keeps it. `ignored` for a
-    /// short draft or while another move is pending; `explained` when the person cannot play this round.
     func submitWordle() -> ActivityTapResult {
         guard let wordle = scene.wordle else { return ActivityTapResult.explained }
         if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
@@ -291,7 +233,7 @@ final class GameStagePresenter {
 
     private func canEditWordleDraft(_ wordle: WordleScene) -> Bool {
         if !wordle.canGuess && !wordle.canSetWord { return false }
-        // The guess in flight is the draft: it stays as sent until the server answers (no edit races the ack).
+
         if !pendingRequestId.isEmpty && (pendingType == WordleIntent.guessType || pendingType == WordleIntent.setWordType) {
             return false
         }
@@ -302,7 +244,6 @@ final class GameStagePresenter {
         if text != wordleDraft { wordleDraft = text }
     }
 
-    /// After each rebuild: a new draft key clears the draft; the push that records the word in flight clears it once.
     private func syncWordleDraft(_ wordle: WordleScene?) {
         var key = ""
         if let wordle = wordle, !wordle.draftKey.isEmpty { key = inputs.gameId + "|" + wordle.draftKey }
@@ -319,12 +260,6 @@ final class GameStagePresenter {
         }
     }
 
-    // MARK: Chess moves and actions (ACT-5, S60 11 c, d, f, j; C6-17)
-
-    /// Views only: the board's destination tap, the promotion choice or the move chooser. Sends one `move {from, to,
-    /// promotion}` when the projection lists it (or, without projected moves, any empty or enemy square, S60R 23); a
-    /// promotion is never sent without the person's choice (no auto-queen). `ignored` for a move the projection does not
-    /// allow or while another move is pending; `explained` when the person cannot move now.
     func sendChessMove(from: String, to: String, promotion: String) -> ActivityTapResult {
         guard let chess = scene.chess else { return ActivityTapResult.explained }
         if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
@@ -333,9 +268,6 @@ final class GameStagePresenter {
         return send(ChessIntent.move(from: from, to: to, promotion: promotion))
     }
 
-    /// Views only: Offer Draw, Accept Draw, Decline, Request Takeback, Accept Takeback, Decline and Resign (after its
-    /// confirmation). Payload-free moves of the module's own types, sent only while the projection makes the person
-    /// eligible (`explained` otherwise).
     func sendChessAction(_ action: ChessAction) -> ActivityTapResult {
         guard let chess = scene.chess else { return ActivityTapResult.explained }
         if !pendingRequestId.isEmpty { return ActivityTapResult.ignored }
@@ -343,7 +275,6 @@ final class GameStagePresenter {
         return send(ChessIntent.action(action))
     }
 
-    /// Inside `send`: a chess move shows its piece at the destination with the pending outline from now on.
     private func noteChessDispatch(_ intent: GameMoveIntent) {
         if intent.type != ChessIntent.moveType || intent.from.isEmpty { return }
         guard let chess = scene.chess else { return }
@@ -354,16 +285,12 @@ final class GameStagePresenter {
         if next != chessPendingMove { chessPendingMove = next }
     }
 
-    /// The move's ack or timeout: the overlay goes; a rejection leaves "Move rejected" until the position changes.
     private func settleChessMove(rejected: Bool) {
         chessMoveRequestId = ""
         let next = rejected ? ChessPendingMoveModel.rejected : ChessPendingMoveModel.none
         if next != chessPendingMove { chessPendingMove = next }
     }
 
-    /// After each rebuild: a push with another position replaces the overlay (the board now shows the server's
-    /// position); the request itself stays pending until its own ack (C6-15). The overlay also goes when the game is no
-    /// longer being played, and a pending piece whose request was dropped with an ended game never lingers.
     private func syncChessPending(_ chess: ChessScene?) {
         guard let chess = chess else {
             chessFenAtSend = ""
@@ -377,14 +304,12 @@ final class GameStagePresenter {
         }
     }
 
-    /// The running game as the launcher needs it (Activities Now Playing and catalog gate).
     func summary() -> ActivityGameSummary {
         if !inputs.isActive { return ActivityGameSummary.none }
         return ActivityGameSummary(gameId: inputs.gameId, name: inputs.name, isActive: true, isFinished: inputs.isFinished,
                                    round: chrome.roundIndex, roundTotal: chrome.roundTotal, playerCount: inputs.players.count)
     }
 
-    /// With the S1 reset (S1C 3.3 TEAR): no timer or pending request survives.
     func reset() {
         cancelTimeout()
         inputs = GameStageInputs.make()
@@ -415,8 +340,6 @@ final class GameStagePresenter {
     }
 
     var hasLiveTimeout: Bool { timeoutTask != nil }
-
-    // MARK: Building
 
     private func record(_ entry: String) {
         emitLog.append(entry)
@@ -466,7 +389,7 @@ final class GameStagePresenter {
         let lobby = GameStagePresenter.lobby(isHost: inputs.isHost, isSeated: isSeated, seat: seat, isRecovering: inputs.isRecovering,
                                              minPlayers: inputs.minPlayers, playerCount: inputs.players.count)
         rememberPlayers()
-        // ACT-3 (S60 9 j): the prompt game scene of this push, built once; private fields only for a seated player.
+
         let context = PromptSceneContext(localId: localId, isPlayer: seat == SeatState.player, isHost: inputs.isHost,
                                          isRecovering: inputs.isRecovering, players: inputs.players, knownPlayers: knownPlayers)
         var trivia: TriviaScene? = nil
@@ -481,20 +404,16 @@ final class GameStagePresenter {
         if let projected = projection.reaction { reaction = PromptSceneBuilder.reaction(projected, context: context) }
         var imposter: ImposterScene? = nil
         if let projected = projection.imposter { imposter = PromptSceneBuilder.imposter(projected, context: context) }
-        // ACT-4 (S60 10 j): the Wordle scene of this push; your rows, outcome and the setter's live boards only from your
-        // own player view while you hold a seat.
+
         var wordle: WordleScene? = nil
         if let projected = projection.wordle { wordle = WordleSceneBuilder.scene(projected, context: context) }
-        // ACT-5 (S60 11 j): the chess scene of this push (the FEN parsed once into 64 squares, the legal moves with their
-        // flags, the clocks with this push's clock offset); your side and eligibility only from your own player view.
+
         var chess: ChessScene? = nil
         if let projected = projection.chess {
             chess = ChessSceneBuilder.scene(projected, context: context, receivedAtMillis: pushReceivedAtMillis,
                                             serverNowMillis: common.serverNowMillis)
         }
-        // ACT-6 (S60 12 j): the Zip scene of this push (checkpoints, barriers, removed cells, the cell models with the
-        // eligible next cells, standings); your path, outcome, hints and hint cooldown (with this push's clock offset) only
-        // from your own player view while you hold a seat and the module counts you in the round.
+
         var zip: ZipScene? = nil
         if let projected = projection.zip {
             zip = ZipSceneBuilder.scene(projected, context: context, serverNowMillis: common.serverNowMillis,
@@ -535,13 +454,12 @@ final class GameStagePresenter {
         case .lobby: return GameSceneKind.lobby
         case .results: return projection.kind
         case .playing:
-            // A seated player waits for their own view before the scene shows (S60 8 f "Loading Your Game View").
+
             if isSeated && !projection.hasPlayerView { return GameSceneKind.privateView }
             return projection.kind
         }
     }
 
-    /// Adds the names of this push (seated players, queued joiners and the vote rosters) to `knownPlayers`.
     private func rememberPlayers() {
         var seen: [GameNamedPlayer] = []
         for player in inputs.players { seen.append(GameNamedPlayer(id: player.id, name: player.name)) }
@@ -575,8 +493,6 @@ final class GameStagePresenter {
                                                   token: FeedbackToken(sequence: feedbackState.token.sequence + 1, kind: kind))
     }
 
-    // MARK: Pure rules
-
     static func seat(isSeated: Bool, isQueued: Bool, canJoinLate: Bool, isFinished: Bool) -> SeatState {
         if isSeated { return SeatState.player }
         if isQueued { return SeatState.joiningNextRound }
@@ -594,7 +510,7 @@ final class GameStagePresenter {
                                   showsJoin: seat == SeatState.canJoin)
         }
         if !isSeated {
-            // Fixes the silent drop of an unseated host's Start (INM G5).
+
             return GameLobbyModel(canStart: false, reason: GameLobbyReason.joinToStart, minPlayers: minPlayers, playerCount: playerCount,
                                   showsJoin: seat == SeatState.canJoin)
         }
@@ -605,7 +521,6 @@ final class GameStagePresenter {
         return GameLobbyModel(canStart: true, reason: GameLobbyReason.none, minPlayers: minPlayers, playerCount: playerCount, showsJoin: false)
     }
 
-    /// "Questions: 7 · Pace: Normal": server labels and choice labels verbatim, in catalog order.
     static func optionSummary(config: [ActivityOptionValue], options: [ActivityOptionInput]) -> [GameOptionSummaryModel] {
         var result: [GameOptionSummaryModel] = []
         for option in options {
@@ -625,7 +540,6 @@ final class GameStagePresenter {
         return result
     }
 
-    /// Ranked rows (ties share a rank), the leader marked, the winner line and tie flag (S60 8 g).
     static func results(common: GameCommonProjection, localId: String, isFinished: Bool, canRematch: Bool, rematchPending: Bool,
                         revision: Int) -> GameResultsModel {
         var rows: [GameScoreboardRow] = []
@@ -649,8 +563,6 @@ final class GameStagePresenter {
                                 scoreboard: rows, canRematch: canRematch, rematchPending: rematchPending)
     }
 
-    // MARK: Timeout (one task; injectable sleep)
-
     private func startTimeout(requestId: String) {
         cancelTimeout()
         let wait = sleep
@@ -662,7 +574,6 @@ final class GameStagePresenter {
         }
     }
 
-    /// What the timeout runs (tests call it directly): an unanswered move becomes the `server` failure.
     func fireTimeout(requestId: String) {
         if requestId != pendingRequestId { return }
         timeoutTask?.cancel()
@@ -671,10 +582,9 @@ final class GameStagePresenter {
         pendingType = ""
         failure = GameFailure.server
         failureText = ""
-        // ACT-5: an unanswered chess move drops its overlay (the next push shows whatever the server holds).
+
         if chessMoveRequestId == requestId { settleChessMove(rejected: false) }
-        // An unanswered guess keeps its draft and nothing is resent on its own (S60 10 f "submitting"); `wordleSubmitted`
-        // stays, so a late push that does record the word still clears the draft once.
+
         publishInteraction()
     }
 
@@ -684,72 +594,55 @@ final class GameStagePresenter {
     }
 }
 
-// MARK: - Wordle scene (ACT-4, S60 10)
-
-// S60 10 j: the Wordle scene models, built once per push from `WordleProjection` (GameProjections.swift; G/wordle.ts
-// publicView 531-597 and playerView 599-621) and published inside `GameScene.wordle`, so both platforms' boards read ready
-// values and never parse JSON. Hidden information stays per player: your rows and outcome come only from your own player
-// view while you hold a seat, and the contestants' boards only from the setter's own view, as marks without letters (the
-// room host never gains anyone's guesses). Shared (transpiled): String raw-value enums, scalar structs and arrays of structs
-// only. They live in this file because ACT-4 owns this presenter and the two board files only.
-
-/// One board letter (S60 10 c, e). `typed` is a draft letter not yet sent; the three marks are the server's green, yellow
-/// and gray, each drawn with a glyph twin and read as text, never color alone.
 enum WordleCellState: String, CaseIterable, Equatable {
     case empty, typed, correct, present, absent
 }
 
-/// The best known state of a letter key (S60 10 c): correct beats present beats absent.
 enum WordleKeyState: String, CaseIterable, Equatable {
     case unused, correct, present, absent
 }
 
-/// G/wordle.ts phases; `results` is a round's results, and the game's at the final round.
 enum WordlePhase: String, CaseIterable, Equatable {
     case lobby, setWord, playing, results
 }
 
-/// Your part in this round: a guesser, the setter watching, or watching without a board (no seat, or a seat granted after
-/// the round began, which the module does not count as a contestant).
 enum WordleRole: String, CaseIterable, Equatable {
     case guesser, setter, spectator
 }
 
-/// Your board's end (G/wordle.ts `myOutcome`: "win", "lose", "timeout").
 enum WordleOutcome: String, CaseIterable, Equatable {
     case none, solved, outOfTries, timedOut
 }
 
-/// A contestant's state in the public standings (`standings[].outcome`).
 enum WordleStandingStatus: String, CaseIterable, Equatable {
     case playing, solved, outOfTries, timedOut
 }
 
 struct WordleCellModel: Equatable, Identifiable {
-    /// "r2c3": row and column, stable for the round.
+
     let id: String
-    /// One uppercase letter; "" for an empty cell and in the setter's status-only boards.
+
     let letter: String
     let state: WordleCellState
 }
 
 struct WordleRowModel: Equatable, Identifiable {
     let id: String
-    /// 0-based; read 1-based ("Row %lld: %@").
+
     let index: Int
     let cells: [WordleCellModel]
-    /// The row's letters ("" for an empty row and in status-only boards).
+
     let word: String
-    /// A row the server marked (a recorded guess).
+
     let isGuess: Bool
 }
 
 struct WordleKeyModel: Equatable, Identifiable {
-    /// The letter.
+
     let id: String
     let letter: String
     let state: WordleKeyState
-    /// The keyboard row: 0 (Q to P), 1 (A to L) or 2 (Z to M).
+
     let row: Int
 }
 
@@ -761,7 +654,6 @@ struct WordleStandingModel: Equatable, Identifiable {
     let isYou: Bool
 }
 
-/// One contestant's board as the setter watches it (S60 10 f): marks only, no letters, with the status twin.
 struct WordleBoardStatusModel: Equatable, Identifiable {
     let id: String
     let name: String
@@ -770,17 +662,14 @@ struct WordleBoardStatusModel: Equatable, Identifiable {
     let rows: [WordleRowModel]
 }
 
-/// S60 10 j. `myRows` holds only the rows the server marked, so it changes per guess; the board adds the draft row from
-/// `GameStagePresenter.wordleDraft` (`WordleBoardPolicy.displayRows`). `solution` and `winnerName` are set at the results
-/// only; the countdown is the shell's.
 struct WordleScene: Equatable {
     let phase: WordlePhase
-    /// 1-based; 0 in the lobby.
+
     let round: Int
     let roundTotal: Int
     let wordLength: Int
     let maxTries: Int
-    /// The "random" word source; false when a player sets the word.
+
     let isRandomWord: Bool
     let role: WordleRole
     let setterName: String
@@ -788,7 +677,7 @@ struct WordleScene: Equatable {
     let canSetWord: Bool
     let canGuess: Bool
     let myRows: [WordleRowModel]
-    /// All 26 letters in keyboard order with their best known state.
+
     let keyStates: [WordleKeyModel]
     let myOutcome: WordleOutcome
     let standings: [WordleStandingModel]
@@ -799,27 +688,23 @@ struct WordleScene: Equatable {
     let finishedCount: Int
     let totalContestants: Int
     let isPlayer: Bool
-    /// Reconnecting: the board is read-only (S60 10 f).
+
     let isReconnecting: Bool
-    /// Next Round for a seated host at a round's results before the final round (G/wordle.ts `nextRound`; the engine
-    /// takes moves only from seated players).
+
     let canAdvanceRound: Bool
 
     var triesUsed: Int { myRows.count }
 
-    /// The draft row shows while your board is open this round (also while reconnecting, read-only).
     var showsDraftRow: Bool {
         role == WordleRole.guesser && phase == WordlePhase.playing && myOutcome == WordleOutcome.none && myRows.count < maxTries
     }
 
-    /// What a draft belongs to: "secret-<round>" for the setter's word, "guess-<round>" for a guess, "" otherwise.
     var draftKey: String {
         if phase == WordlePhase.setWord && isSetter { return "secret-" + String(round) }
         if phase == WordlePhase.playing && role == WordleRole.guesser { return "guess-" + String(round) }
         return ""
     }
 
-    /// One-shot announcement keys (S60 10 i); "" when nothing is due.
     var outcomeKey: String {
         myOutcome == WordleOutcome.none ? "" : "wordle-outcome-" + String(round) + "-" + myOutcome.rawValue
     }
@@ -828,7 +713,6 @@ struct WordleScene: Equatable {
         phase == WordlePhase.results && !solution.isEmpty ? "wordle-result-" + String(round) : ""
     }
 
-    /// The keys of one keyboard row, in order.
     func keys(inRow row: Int) -> [WordleKeyModel] {
         var result: [WordleKeyModel] = []
         for key in keyStates where key.row == row {
@@ -837,7 +721,6 @@ struct WordleScene: Equatable {
         return result
     }
 
-    /// Whether one of your recorded rows is `word`.
     func hasGuessed(_ word: String) -> Bool {
         for row in myRows where row.word == word {
             return true
@@ -910,7 +793,6 @@ enum WordleSceneBuilder {
                            canAdvanceRound: isResults && !projection.isFinalRound && context.isHost && isPlayer && !recovering)
     }
 
-    /// A recorded guess as a row. `showsLetters` is false for the setter's status-only boards (marks without letters).
     static func guessRow(index: Int, word: String, feedback: [String], length: Int, showsLetters: Bool) -> WordleRowModel {
         let upper = word.uppercased()
         var letters: [String] = []
@@ -933,7 +815,6 @@ enum WordleSceneBuilder {
         return WordleRowModel(id: "r" + String(index), index: index, cells: cells, word: showsLetters ? upper : "", isGuess: true)
     }
 
-    /// The 26 keys in keyboard order with the best state your marked rows prove.
     static func keyStates(_ rows: [WordleRowModel]) -> [WordleKeyModel] {
         var result: [WordleKeyModel] = []
         var rowIndex = 0
@@ -947,8 +828,6 @@ enum WordleSceneBuilder {
         return result
     }
 
-    /// Correct beats present beats absent: a letter marked absent in one spot (a repeated letter) keeps the better mark
-    /// it earned elsewhere.
     static func bestState(letter: String, rows: [WordleRowModel]) -> WordleKeyState {
         var best = WordleKeyState.unused
         for row in rows where row.isGuess {
@@ -998,7 +877,6 @@ enum WordleSceneBuilder {
         }
     }
 
-    /// G/wordle.ts `WordleTile`.
     static func parseMark(_ raw: String) -> WordleCellState {
         switch raw {
         case "green": return WordleCellState.correct
@@ -1008,23 +886,20 @@ enum WordleSceneBuilder {
     }
 }
 
-/// Board and keyboard rules both platforms share (S60 10 c, d).
 enum WordleBoardPolicy {
     static let keyboardRows: [String] = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"]
     static let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    /// 38 pt/dp cells with 4 pt/dp gaps: 5 x 38 + 4 x 4 = 206, which fits every phone card.
+
     static let cellSize = 38.0
     static let gap = 4.0
     static let boardWidth = 206.0
-    /// The deliberate game-grid width exception (S60R 22): letter keys at most 32 wide; Enter and Delete 1.5 keys.
+
     static let maxKeyWidth = 32.0
     static let wideKeyFactor = 1.5
-    /// The timer turns the warning color with its "%@ left" twin at 10 s or less, and is announced at 60 s and 10 s.
+
     static let warningSeconds = 10
     static let announcedSeconds: [Int] = [60, 10]
 
-    /// Letters only (A to Z, uppercased), at most `limit`: the letter keys, hardware keys, the text field and paste share
-    /// it, so nothing but game letters ever reaches the server (S60R 22).
     static func normalized(_ text: String, limit: Int) -> String {
         var result = ""
         var count = 0
@@ -1039,13 +914,10 @@ enum WordleBoardPolicy {
         return result
     }
 
-    /// Enter, Enter Guess and Set Word: a full draft while the person can guess or set the word.
     static func canSubmit(_ scene: WordleScene, draft: String) -> Bool {
         (scene.canGuess || scene.canSetWord) && normalized(draft, limit: scene.wordLength).count == scene.wordLength
     }
 
-    /// The rows the board draws: your marked rows, the draft row while your board is open, then empty rows up to the try
-    /// limit. Only the board's draft leaf calls it, so a key press never rebuilds the scene (S60 10 k).
     static func displayRows(_ scene: WordleScene, draft: String) -> [WordleRowModel] {
         var rows: [WordleRowModel] = []
         for row in scene.myRows {
@@ -1063,7 +935,6 @@ enum WordleBoardPolicy {
         return rows
     }
 
-    /// A draft (typed letters, then empty cells) or an empty row.
     static func draftRow(index: Int, draft: String, length: Int) -> WordleRowModel {
         var letters: [String] = []
         for character in draft {
@@ -1080,7 +951,6 @@ enum WordleBoardPolicy {
         return WordleRowModel(id: "r" + String(index), index: index, cells: cells, word: draft, isGuess: false)
     }
 
-    /// The results' solution as correct cells (S60 10 c "solution as five success cells").
     static func solutionRow(_ scene: WordleScene) -> WordleRowModel {
         var feedback: [String] = []
         var count = 0
@@ -1092,16 +962,14 @@ enum WordleBoardPolicy {
                                            length: max(scene.wordLength, scene.solution.count), showsLetters: true)
     }
 
-    /// S60 10 c, d: a letter key is min(32, (width - 36) / 10) wide (ten keys and nine 4 pt/dp gaps across the width).
     static func keyWidth(available: Double) -> Double {
         let width = (available - 9.0 * gap) / 10.0
         return max(1.0, min(maxKeyWidth, width))
     }
 }
 
-/// S60 10 e, h: the outcome tokens this scene adds to the presenter's registry (`guessInvalid` is published on the ack).
 enum WordleOutcomePolicy {
-    /// `wordSolved` once, on the push where your own board turns solved in the same round.
+
     static func solved(previous: WordleScene?, next: WordleScene?) -> FeedbackKind {
         guard let before = previous, let after = next else { return FeedbackKind.none }
         if !after.isPlayer || before.round != after.round { return FeedbackKind.none }
@@ -1110,8 +978,6 @@ enum WordleOutcomePolicy {
     }
 }
 
-/// G/wordle.ts moves (S60 10 j `GameMoveIntent` types): `guess {word}`, `setWord {word}`, `nextRound` (host). The payload
-/// is `GameMoveAdapter`'s `{"word": ...}`; nextRound carries none.
 enum WordleIntent {
     static let guessType = "guess"
     static let setWordType = "setWord"
@@ -1122,14 +988,6 @@ enum WordleIntent {
     static func nextRound() -> GameMoveIntent { GameMoveIntent.make(type: nextRoundType) }
 }
 
-// MARK: - Wordle fixtures (ACT-4, S60 10 l, L6-12)
-
-/// Debug fixture states for Wordle, layered on the stage fixture exactly like the ACT-2 and ACT-3 game states
-/// (`CONCLAVE_STAGE_FIXTURE` / `conclave.stageFixture`; HD requests B7-T7 R4 and R5 hook them into `ActivityFixtureScript`
-/// and `StageFixtureState`). No socket, network, audio or capture: module-shaped public and player views (G/wordle.ts),
-/// and the shell's commands land in the recording `ActivityFixtureOwner` behind the `game.emits` readout. Players: you
-/// plus Avery (r1), Ben (r2) and Cai (r3); you are the seated host unless the state says otherwise. The word is LEMON
-/// (CRANE in the final round).
 enum WordleFixtureState: String, CaseIterable, Equatable {
     case guess = "game-wordle-guess"
     case solved = "game-wordle-solved"
@@ -1151,11 +1009,8 @@ enum WordleFixtures {
         WordleFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Epoch milliseconds as JSON text. Int64, because a transpiled Swift `Int` is a 32-bit Kotlin `Int`.
     static func at(_ offsetMillis: Double) -> String { String(Int64(serverNow + offsetMillis)) }
 
-    // Guesses as G/wordle.ts evaluateGuess marks them against LEMON: SLOTH marks L and O present; LLAMA marks the first L
-    // correct, the repeated L absent (the target has one L) and M present; LEMON solves. Against CRANE: SLATE, BRAKE, CRANE.
     static let sloth = guess("SLOTH", "gray", "yellow", "yellow", "gray", "gray")
     static let llama = guess("LLAMA", "green", "gray", "gray", "yellow", "gray")
     static let logic = guess("LOGIC", "green", "yellow", "gray", "gray", "gray")
@@ -1176,7 +1031,6 @@ enum WordleFixtures {
             + text(outcome) + ",\"solvedAt\":null}"
     }
 
-    /// A JSON string, or null for "".
     static func text(_ value: String) -> String { value.isEmpty ? "null" : GameMoveAdapter.quoted(value) }
 
     static func flag(_ value: Bool) -> String { value ? "true" : "false" }
@@ -1205,7 +1059,6 @@ enum WordleFixtures {
     static let lemonResult = "{\"targetWord\":\"LEMON\",\"winnerId\":\"r1\",\"winnerName\":\"Avery\"}"
     static let craneResult = "{\"targetWord\":\"CRANE\",\"winnerId\":\"r1\",\"winnerName\":\"Avery\"}"
 
-    /// The playing view of round 1 of 3 (random word) with `you` standing as given, 2:41 left.
     static func playingView(you: String, finished: Int) -> String {
         publicView(phase: "playing", source: "random", setterId: "", setterName: "", deadline: at(161000),
                    standings: [standing("r1", "Avery", 3, "win"), standing("r2", "Ben", 2, ""), standing("r3", "Cai", 1, ""), you],
@@ -1304,15 +1157,12 @@ enum WordleFixtures {
         }
     }
 
-    /// The draft the fixture types before it hands over (the draft row shows four typed letters).
     static func draft(_ state: WordleFixtureState) -> String {
         state == WordleFixtureState.guess || state == WordleFixtureState.reconnecting ? "LEMO" : ""
     }
 
     static func seated(_ state: WordleFixtureState) -> Bool { state != WordleFixtureState.spectator }
 
-    /// The pushes the fixture applies in order: one for most states; the reconnecting state first plays the guess state
-    /// (so the draft can be typed) and then the same push while recovering.
     static func pushes(_ state: WordleFixtureState) -> [GameStageInputs] {
         let isSeated = seated(state)
         let players = ActivityFixtureScript.players(4, includingYou: isSeated)
@@ -1331,8 +1181,6 @@ enum WordleFixtures {
         return [first, last]
     }
 
-    /// One random-word playing push for the seated host with `guesses` (module JSON) and `outcome`, for the transition
-    /// checks on both platforms (the `wordSolved` token fires once; the draft clears on the recording push).
     static func playingPush(guesses: [String], outcome: String) -> GameStageInputs {
         let tries = guesses.count
         let view = playingView(you: standing("you", "You", tries, outcome), finished: outcome.isEmpty ? 1 : 2)
@@ -1344,15 +1192,12 @@ enum WordleFixtures {
                                     receivedAtMillis: Date().timeIntervalSince1970 * 1000.0)
     }
 
-    /// What the stage layer shows for a Wordle state: the game is live under its server name (S20 11 j).
     static func stageInputs(named raw: String, base: StageInputs) -> StageInputs {
         if state(named: raw) == nil { return base }
         let game = ActivityFixtureScript.stageInputs(named: ActivityFixtureState.gameTrivia6.rawValue, base: base)
         return StageFixtureScript.copy(game, isGameActive: true, gameName: "Wordle")
     }
 
-    /// Feeds the activity session for a Wordle state and wires its commands to the recording owner, the way
-    /// `ActivityFixtureScript.apply(named:session:owner:)` does for the ACT-2 states. Nil for any other name.
     @discardableResult
     @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> WordleFixtureState? {
@@ -1382,17 +1227,6 @@ enum WordleFixtures {
     }
 }
 
-// MARK: - Chess scene (ACT-5, S60 11)
-
-// S60 11 j: the chess scene models, built once per push from `ChessProjection` (GameProjections.swift; G/chess.ts
-// publicView and playerView) and published inside `GameScene.chess`, so neither platform's board parses anything. The FEN
-// is read into 64 squares here, once (the legacy board parsed it per render, GSG:840). Legal moves come only from the
-// server projection, deduplicated (the module lists a promotion target once per piece), with flags read from the position
-// (promotion, capture, castle, en passant); no legality rule is invented. Your side, role and eligibility come only from
-// your own player view while you hold a seat. The selected square, the board flip and the move chooser are view-local;
-// the move in flight is `GameStagePresenter.chessPendingMove`. Shared (transpiled): String raw-value enums, scalar
-// structs and arrays of structs only. They live in this file because ACT-5 owns this presenter and the two board files.
-
 enum ChessPhase: String, CaseIterable, Equatable {
     case lobby, playing, results
 }
@@ -1401,23 +1235,18 @@ enum ChessMode: String, CaseIterable, Equatable {
     case duel, teams, computer
 }
 
-/// A side of the board; `none` for no side (watching, no offer, no running clock, the winner of a draw).
 enum ChessSide: String, CaseIterable, Equatable {
     case none, white, black
 }
 
-/// The status line (S60 11 f): the lobby, your move, the other side to move, or finished. Check is the scene's own
-/// `isCheck` flag, so "Your Move" and "Check" show together.
 enum ChessStatus: String, CaseIterable, Equatable {
     case waiting, yourMove, toMove, finished
 }
 
-/// Your part (S60 11 j): a duel or solo side, a team captain, a team member (the board is read-only) or watching.
 enum ChessRole: String, CaseIterable, Equatable {
     case white, black, whiteCaptain, blackCaptain, whiteTeam, blackTeam, watching
 }
 
-/// G/chess.ts `ChessResultReason` ("fifty-move" is `fiftyMove`); `none` while the game runs.
 enum ChessResultReason: String, CaseIterable, Equatable {
     case none, checkmate, timeout, resignation, stalemate, threefold, insufficient, fiftyMove, agreement
 }
@@ -1426,48 +1255,43 @@ enum ChessPieceKind: String, CaseIterable, Equatable {
     case king, queen, rook, bishop, knight, pawn
 }
 
-/// The four promotion choices (S60 11 c "Promote To"); the raw value is the module's `promotion` field.
 enum ChessPromotion: String, CaseIterable, Equatable {
     case queen = "q", rook = "r", bishop = "b", knight = "n"
 }
 
-/// The eligibility-gated actions (S60 11 c, C6-17); the raw value is the module's move type, sent without a payload.
 enum ChessAction: String, CaseIterable, Equatable {
     case offerDraw, acceptDraw, declineDraw, requestTakeback, acceptTakeback, declineTakeback, resign
 }
 
-/// Why Request Takeback shows disabled (S60 11 i "eligibility reasons when disabled").
 enum ChessTakebackReason: String, CaseIterable, Equatable {
     case none, notMoved, pending
 }
 
-/// What a board tap does (S60 11 c "tap source then destination is primary").
 enum ChessTapAction: String, CaseIterable, Equatable {
     case none, select, deselect, move, promote
 }
 
-/// How the move chooser reads a destination (S60 11 c: "f3", "takes on e5"; castling and en passant named too).
 enum ChessDestinationKind: String, CaseIterable, Equatable {
     case quiet, capture, enPassant, castle
 }
 
 struct ChessSquareModel: Equatable, Identifiable {
-    /// Algebraic ("e4"), the stable id of the square on both platforms and in the accessibility tree.
+
     let id: String
-    /// 0 (a) to 7 (h).
+
     let file: Int
-    /// 1 to 8.
+
     let rank: Int
-    /// "wN" (color, then K Q R B N P) or "" for an empty square.
+
     let piece: String
     let isLight: Bool
     let isLastMove: Bool
-    /// The king of the side to move while it is in check.
+
     let isCheck: Bool
 }
 
 struct ChessLegalMoveModel: Equatable, Identifiable {
-    /// "e2e4".
+
     let id: String
     let from: String
     let to: String
@@ -1477,9 +1301,6 @@ struct ChessLegalMoveModel: Equatable, Identifiable {
     let isEnPassant: Bool
 }
 
-/// The clocks of one push (S60 11 c): remaining time per side as the server resolved it at `serverNow`, which is the
-/// client clock `referenceMillis` (the push's arrival), so the one timer leaf subtracts only the time since then from the
-/// running side. `moveDeadlineMillis` is the rapid-fire per-move deadline on the client clock (0 when off).
 struct ChessClockModel: Equatable {
     let hasClock: Bool
     let whiteMillis: Double
@@ -1492,10 +1313,9 @@ struct ChessClockModel: Equatable {
 
     static let none = ChessClockModel(hasClock: false, whiteMillis: 0, blackMillis: 0, runningSide: ChessSide.none, referenceMillis: 0,
                                       moveLimitMillis: 0, moveDeadlineMillis: 0, incrementMillis: 0)
-    /// "Low time" under 10 s (S60 11 c): the warning color with its text twin, never a shake.
+
     static let lowTimeMillis = 10000.0
 
-    /// The side's remaining time at `nowMillis` (client clock); only the running side counts down.
     func remainingMillis(_ side: ChessSide, nowMillis: Double) -> Double {
         var base = 0.0
         if side == ChessSide.white { base = whiteMillis }
@@ -1515,15 +1335,12 @@ struct ChessClockModel: Equatable {
         hasClock && remainingMillis(side, nowMillis: nowMillis) < ChessClockModel.lowTimeMillis
     }
 
-    /// Whole seconds shown on a chip, rounded up so "0:01" shows until the flag falls.
     static func wholeSeconds(_ millis: Double) -> Int {
         if millis <= 0 { return 0 }
         return Int((millis / 1000.0).rounded(.up))
     }
 }
 
-/// One move-list row (S60 11 c "1. e4 e5"); SAN stays verbatim. `whiteAutoName` and `blackAutoName` name whom the server
-/// auto-played for when the rapid-fire timer ran out ("Auto-played for %@"), "" otherwise.
 struct ChessMoveRowModel: Equatable, Identifiable {
     let id: String
     let number: Int
@@ -1541,8 +1358,6 @@ struct ChessTeamMemberModel: Equatable, Identifiable {
     let isComputer: Bool
 }
 
-/// A draw offer or a takeback request (S60 11 f). `isYourSide` shows "Draw offered" or "Takeback requested"; `canRespond`
-/// shows Accept and Decline to the opposing captain only.
 struct ChessOfferModel: Equatable {
     let side: ChessSide
     let byName: String
@@ -1554,7 +1369,6 @@ struct ChessOfferModel: Equatable {
     var isActive: Bool { side != ChessSide.none }
 }
 
-/// The end of the game (S60 11 g results); `winner` is `none` for a draw.
 struct ChessResultModel: Equatable {
     let reason: ChessResultReason
     let winner: ChessSide
@@ -1566,8 +1380,6 @@ struct ChessResultModel: Equatable {
     var isFinished: Bool { reason != ChessResultReason.none }
 }
 
-/// The move in flight as the board draws it (S60 11 f "move pending": the piece at the destination with a pending
-/// outline until the ack or the push), or the rejection that restored the position ("Move rejected").
 struct ChessPendingMoveModel: Equatable {
     let from: String
     let to: String
@@ -1581,8 +1393,6 @@ struct ChessPendingMoveModel: Equatable {
     var isPending: Bool { !from.isEmpty }
 }
 
-/// What a tap on `square` does given the view-local selection: the new selection, or a move to send (or to complete
-/// with a promotion choice first).
 struct ChessTapOutcome: Equatable {
     let action: ChessTapAction
     let selected: String
@@ -1590,34 +1400,31 @@ struct ChessTapOutcome: Equatable {
     let to: String
 }
 
-/// S60 11 j. `squares` holds all 64 squares in FEN order (a8 to h8, then down to a1 to h1); the board maps them to the
-/// display order of its orientation (`ChessBoardPolicy.displayOrder`). The pending move and the selection are not here.
 struct ChessScene: Equatable {
     let phase: ChessPhase
     let mode: ChessMode
-    /// The side at the bottom by default: your side, else White. Watching people flip it locally ("Flip Board").
+
     let orientation: ChessSide
     let turnSide: ChessSide
-    /// Your side while you hold one (also as a team member); `none` when watching.
+
     let localSide: ChessSide
     let squares: [ChessSquareModel]
     let legalMoves: [ChessLegalMoveModel]
-    /// False when the projection carries no legal destinations: the chooser then offers every empty or enemy square and
-    /// the server decides (S60R 23).
+
     let hasProjectedLegalMoves: Bool
-    /// The FEN en passant target ("d6") or "".
+
     let passantSquare: String
     let status: ChessStatus
     let isCheck: Bool
     let role: ChessRole
     let teamWhite: [ChessTeamMemberModel]
     let teamBlack: [ChessTeamMemberModel]
-    /// The captain (the one who moves) of each side: a name, the computer's server name, or you.
+
     let whiteMoverName: String
     let whiteMoverIsYou: Bool
     let blackMoverName: String
     let blackMoverIsYou: Bool
-    /// Computer mode with more than one person on the human side ("The room vs the computer").
+
     let isRoomVsComputer: Bool
     let botName: String
     let botSide: ChessSide
@@ -1630,25 +1437,22 @@ struct ChessScene: Equatable {
     let takebackRequest: ChessOfferModel
     let canMove: Bool
     let canOfferDraw: Bool
-    /// Request Takeback shows for a captain while takebacks are allowed; `canRequestTakeback` enables it and
-    /// `takebackReason` says why it is disabled.
+
     let showsTakeback: Bool
     let canRequestTakeback: Bool
     let takebackReason: ChessTakebackReason
     let canResign: Bool
-    /// Watching people may flip the board for themselves (R6-1 `flip_board`).
+
     let canFlip: Bool
     let isReconnecting: Bool
     let isPlayer: Bool
     let result: ChessResultModel
     let fen: String
 
-    /// One-shot announcement keys (S60 11 h: turn, check and result are announced once); "" when nothing is due.
     var turnKey: String { status == ChessStatus.yourMove ? "chess-turn-" + fen : "" }
     var checkKey: String { isCheck && phase == ChessPhase.playing ? "chess-check-" + fen : "" }
     var resultKey: String { result.isFinished ? "chess-result-" + result.reason.rawValue + "-" + String(plyCount) : "" }
 
-    /// The board is read-only: no move is possible for this person now (team member, watching, reconnecting, waiting).
     var isReadOnly: Bool { !canMove }
 
     func square(_ id: String) -> ChessSquareModel? {
@@ -1662,7 +1466,6 @@ struct ChessScene: Equatable {
         return found.piece
     }
 
-    /// The projected move from `from` to `to`, if any.
     func legalMove(from: String, to: String) -> ChessLegalMoveModel? {
         for move in legalMoves where move.from == from && move.to == to {
             return move
@@ -1670,7 +1473,6 @@ struct ChessScene: Equatable {
         return nil
     }
 
-    /// The destinations a selected piece can reach: projected moves, or (without them) every empty or enemy square.
     func destinations(from: String) -> [ChessLegalMoveModel] {
         var result: [ChessLegalMoveModel] = []
         if hasProjectedLegalMoves {
@@ -1688,7 +1490,6 @@ struct ChessScene: Equatable {
         return result
     }
 
-    /// The target squares of `destinations(from:)`, for the board's dots and rings.
     func targets(from: String) -> [String] {
         var result: [String] = []
         for move in destinations(from: from) {
@@ -1697,7 +1498,6 @@ struct ChessScene: Equatable {
         return result
     }
 
-    /// The move from `from` to `to` the person may send (projected, or a candidate square without projected moves).
     func sendableMove(from: String, to: String) -> ChessLegalMoveModel? {
         for move in destinations(from: from) where move.to == to {
             return move
@@ -1705,7 +1505,6 @@ struct ChessScene: Equatable {
         return nil
     }
 
-    /// Move chooser step one (S60 11 c): your pieces that have a destination, in board order.
     func movablePieces() -> [ChessSquareModel] {
         var result: [ChessSquareModel] = []
         if localSide == ChessSide.none { return result }
@@ -1717,7 +1516,7 @@ struct ChessScene: Equatable {
 }
 
 enum ChessSceneBuilder {
-    /// G/chess.ts CHESS_BOT_ID.
+
     static let botId = "@chess-bot"
 
     static func scene(_ projection: ChessProjection, context: PromptSceneContext, receivedAtMillis: Double,
@@ -1859,7 +1658,6 @@ enum ChessSceneBuilder {
                           isPlayer: isPlayer, result: result, fen: projection.fen)
     }
 
-    /// Team rows with names (the computer by its server name, "Computer (medium)").
     static func team(_ members: [ChessTeamMemberProjection], projection: ChessProjection, context: PromptSceneContext) -> [ChessTeamMemberModel] {
         var result: [ChessTeamMemberModel] = []
         for member in members {
@@ -1873,8 +1671,6 @@ enum ChessSceneBuilder {
         return result
     }
 
-    /// "1. e4 e5" rows from the module's move records, with the auto-played names (needs HD request B8-T3 R1 for
-    /// `byName` and `isAuto`).
     static func moveRows(_ moves: [ChessMoveProjection]) -> [ChessMoveRowModel] {
         var rows: [ChessMoveRowModel] = []
         var number = 0
@@ -1958,11 +1754,9 @@ enum ChessSceneBuilder {
     }
 }
 
-/// Board rules both platforms share (S60 11 c, d): square ids, the FEN placement, move flags read from the position, the
-/// display order of an orientation (the board never mirrors under RTL, D18), hit testing and the tap state machine.
 enum ChessBoardPolicy {
     static let files = "abcdefgh"
-    /// The board side caps: a phone card gives about 311 pt/dp (cells about 38); tablets stop at 480; compact height 300.
+
     static let maxSide = 480.0
     static let compactMaxSide = 300.0
     static let squareCount = 64
@@ -1976,7 +1770,6 @@ enum ChessBoardPolicy {
         return -1
     }
 
-    /// "e4" for file 4, rank 4; "" outside the board.
     static func squareId(file: Int, rank: Int) -> String {
         if file < 0 || file > 7 || rank < 1 || rank > 8 { return "" }
         var position = 0
@@ -1987,13 +1780,11 @@ enum ChessBoardPolicy {
         return ""
     }
 
-    /// The square at a FEN-order index (0 is a8, 63 is h1).
     static func squareId(atIndex index: Int) -> String {
         if index < 0 || index >= squareCount { return "" }
         return squareId(file: index % 8, rank: 8 - index / 8)
     }
 
-    /// The FEN-order index of "e4", or -1.
     static func index(of id: String) -> Int {
         var file = -1
         var rank = -1
@@ -2011,8 +1802,6 @@ enum ChessBoardPolicy {
         return (8 - rank) * 8 + file
     }
 
-    /// The FEN piece placement as 64 codes in FEN order ("wN", "bp" never: the kind letter is always uppercase); an
-    /// unreadable placement is an empty board.
     static func placement(_ fen: String) -> [String] {
         var pieces: [String] = []
         for character in fen {
@@ -2034,7 +1823,6 @@ enum ChessBoardPolicy {
         return pieces
     }
 
-    /// One space-separated FEN field (3 is the en passant target, "-" when none).
     static func field(_ fen: String, _ position: Int) -> String {
         var current = 0
         var text = ""
@@ -2074,8 +1862,6 @@ enum ChessBoardPolicy {
         return nil
     }
 
-    /// A move's flags from the position alone (no legality is decided here): a pawn reaching the last rank promotes, an
-    /// enemy on the target or a diagonal pawn step onto the en passant square captures, a king moving two files castles.
     static func legalMove(from: String, to: String, moving: String, target: String, passant: String) -> ChessLegalMoveModel {
         let fromIndex = index(of: from)
         let toIndex = index(of: to)
@@ -2099,7 +1885,6 @@ enum ChessBoardPolicy {
                                    isCastle: isCastle, isEnPassant: isEnPassant)
     }
 
-    /// The 64 square ids top-left first, row by row: White at the bottom reads a8 to h1; Black at the bottom reads h1 to a8.
     static func displayOrder(_ orientation: ChessSide) -> [String] {
         var order: [String] = []
         var position = 0
@@ -2110,15 +1895,12 @@ enum ChessBoardPolicy {
         return order
     }
 
-    /// Where a square sits in the display grid (row * 8 + column) for an orientation, or -1.
     static func displayIndex(of id: String, orientation: ChessSide) -> Int {
         let position = index(of: id)
         if position < 0 { return -1 }
         return orientation == ChessSide.black ? squareCount - 1 - position : position
     }
 
-    /// The 64 squares top-left first for an orientation (the canvas and the accessibility overlay read them in this
-    /// order): the scene's FEN order for White at the bottom, reversed for Black. No square id is parsed per frame.
     static func displayedSquares(_ scene: ChessScene, orientation: ChessSide) -> [ChessSquareModel] {
         if orientation != ChessSide.black { return scene.squares }
         var result: [ChessSquareModel] = []
@@ -2136,7 +1918,6 @@ enum ChessBoardPolicy {
         return ChessSide.none
     }
 
-    /// The orientation the board draws: the scene's (your side, else White), turned around by a watcher's Flip Board.
     static func orientation(_ scene: ChessScene, flipped: Bool) -> ChessSide {
         if flipped && scene.canFlip { return opposite(scene.orientation) }
         return scene.orientation
@@ -2149,7 +1930,6 @@ enum ChessBoardPolicy {
         return ChessDestinationKind.quiet
     }
 
-    /// The square under a point of a board `side` points or pixels wide (the canvas tap); "" outside it.
     static func square(atX x: Double, y: Double, side: Double, orientation: ChessSide) -> String {
         if side <= 0 || x < 0 || y < 0 || x >= side || y >= side { return "" }
         let cell = side / 8.0
@@ -2159,8 +1939,6 @@ enum ChessBoardPolicy {
         return squareId(atIndex: orientation == ChessSide.black ? squareCount - 1 - position : position)
     }
 
-    /// Tap source, then destination (S60 11 c): your piece with a move selects; the same square deselects; a destination
-    /// moves (or asks for the promotion piece first); another piece of yours switches; anything else deselects.
     static func tap(_ scene: ChessScene, selected: String, square: String) -> ChessTapOutcome {
         if !scene.canMove || square.isEmpty {
             return ChessTapOutcome(action: ChessTapAction.none, selected: "", from: "", to: "")
@@ -2180,7 +1958,6 @@ enum ChessBoardPolicy {
         return ChessTapOutcome(action: ChessTapAction.deselect, selected: "", from: "", to: "")
     }
 
-    /// Whether `sendChessMove` may send this: a move the person may make, with a promotion choice exactly when needed.
     static func canSend(_ scene: ChessScene, from: String, to: String, promotion: String) -> Bool {
         if !scene.canMove { return false }
         guard let move = scene.sendableMove(from: from, to: to) else { return false }
@@ -2198,7 +1975,6 @@ enum ChessBoardPolicy {
         }
     }
 
-    /// The piece the board draws on `square` with the move in flight applied (the mover at its destination, promoted).
     static func shownPiece(_ scene: ChessScene, pending: ChessPendingMoveModel, square: String) -> String {
         if pending.isPending {
             if square == pending.from { return "" }
@@ -2213,9 +1989,6 @@ enum ChessBoardPolicy {
     }
 }
 
-/// G/chess.ts moves (S60 11 j intents, C6-17): `move {from, to, promotion}` through `GameMoveAdapter`, and the seven
-/// payload-free actions by their module type. They travel over the existing native `sendGameMove(type:payloadJSON:
-/// requestId:)` path, which already passes any move type through, so the takeback moves need no core change.
 enum ChessIntent {
     static let moveType = "move"
 
@@ -2228,14 +2001,6 @@ enum ChessIntent {
     }
 }
 
-// MARK: - Chess fixtures (ACT-5, S60 11 l, L6-12)
-
-/// Debug fixture states for chess, layered on the stage fixture like the Wordle states (`CONCLAVE_STAGE_FIXTURE` /
-/// `conclave.stageFixture`; HD requests B8-T3 R5 and R6 hook them into `ActivityFixtureScript` and `StageFixtureState`).
-/// No socket, network, audio or capture: module-shaped public and player views whose positions, legal moves and move
-/// records come from chess.js 1.4.0, the library G/chess.ts uses (HD/scratch/B8-T3/positions.cjs), and the shell's
-/// commands land in the recording `ActivityFixtureOwner` behind the `game.emits` readout. You are the seated host unless
-/// the state says otherwise; Avery (r1), Ben (r2) and Cai (r3) are the other players.
 enum ChessFixtureState: String, CaseIterable, Equatable {
     case yourMove = "game-chess-your-move"
     case waiting = "game-chess-waiting"
@@ -2253,7 +2018,6 @@ enum ChessFixtureState: String, CaseIterable, Equatable {
     case reconnecting = "game-chess-reconnecting"
 }
 
-/// One seated person as the module names them in teams and move records.
 struct ChessFixtureSeat: Equatable {
     let id: String
     let name: String
@@ -2268,7 +2032,6 @@ enum ChessFixtures {
     static let cai = ChessFixtureSeat(id: "r3", name: "Cai")
     static let computer = ChessFixtureSeat(id: "@chess-bot", name: "Computer")
 
-    // Positions (chess.js 1.4.0 `fen()` after the plies below).
     static let startFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
     static let openingFen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"
     static let checkFen = "rnbqkbnr/ppp2ppp/3p4/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 1 3"
@@ -2279,7 +2042,6 @@ enum ChessFixtures {
     static let specialFen = "rnbqkbnr/1pp1ppp1/7p/p2pP3/2B5/5N2/PPPP1PPP/RNBQK2R w KQkq d6 0 5"
     static let foolsMateFen = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
 
-    // Legal moves exactly as G/chess.ts `legalMoves` projects them (a promotion target once per piece).
     static let startLegal = "{\"a2\":[\"a3\",\"a4\"],\"b2\":[\"b3\",\"b4\"],\"c2\":[\"c3\",\"c4\"],\"d2\":[\"d3\",\"d4\"],"
         + "\"e2\":[\"e3\",\"e4\"],\"f2\":[\"f3\",\"f4\"],\"g2\":[\"g3\",\"g4\"],\"h2\":[\"h3\",\"h4\"],\"b1\":[\"a3\",\"c3\"],"
         + "\"g1\":[\"f3\",\"h3\"]}"
@@ -2306,7 +2068,6 @@ enum ChessFixtures {
         + "\"g2\":[\"g3\",\"g4\"],\"h2\":[\"h3\",\"h4\"],\"b1\":[\"a3\",\"c3\"],\"d1\":[\"e2\"],\"e1\":[\"e2\",\"f1\",\"g1\"],"
         + "\"h1\":[\"g1\",\"f1\"]}"
 
-    // The plies (SAN, from, to) that reach each position.
     static let openingSan = ["e4", "e5", "Nf3", "Nc6"]
     static let openingFrom = ["e2", "e7", "g1", "b8"]
     static let openingTo = ["e4", "e5", "f3", "c6"]
@@ -2330,7 +2091,6 @@ enum ChessFixtures {
         ChessFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// Epoch milliseconds as JSON text. Int64, because a transpiled Swift `Int` is a 32-bit Kotlin `Int`.
     static func at(_ offsetMillis: Double) -> String { String(Int64(serverNow + offsetMillis)) }
 
     static func text(_ value: String) -> String { value.isEmpty ? "null" : GameMoveAdapter.quoted(value) }
@@ -2341,7 +2101,6 @@ enum ChessFixtures {
         "{\"id\":" + text(seat.id) + ",\"name\":" + text(seat.name) + ",\"captain\":" + flag(captain) + "}"
     }
 
-    /// The module's move records: White moves the even plies, Black the odd ones; `autoPly` was auto-played (rapid fire).
     static func records(san: [String], from: [String], to: [String], white: ChessFixtureSeat, black: ChessFixtureSeat,
                         autoPly: Int) -> [String] {
         var result: [String] = []
@@ -2370,7 +2129,6 @@ enum ChessFixtures {
     static let noClocks = "{\"white\":null,\"black\":null}"
     static let mediumBot = "{\"side\":\"black\",\"level\":\"medium\",\"name\":\"Computer (medium)\"}"
 
-    /// G/chess.ts publicView with the fields the native scene reads.
     static func publicView(phase: String, mode: String, fen: String, turnSide: String, inCheck: Bool, legal: String, moves: [String],
                            white: [String], black: [String], clocks: String, timeControl: String, increment: Int, moveTime: String,
                            takebacks: Bool, bot: String, turnStartedAt: String, drawOffer: String, takeback: String,
@@ -2386,7 +2144,6 @@ enum ChessFixtures {
         return json
     }
 
-    /// G/chess.ts playerView.
     static func playerView(side: String, role: String, canMove: Bool, canResign: Bool, canOfferDraw: Bool, canRespondToDraw: Bool,
                            canRequestTakeback: Bool, canRespondToTakeback: Bool) -> String {
         var json = "{\"side\":" + text(side) + ",\"role\":" + text(role) + ",\"canMove\":" + flag(canMove)
@@ -2396,7 +2153,6 @@ enum ChessFixtures {
         return json
     }
 
-    /// A duel public view between `white` and `black` (5 + 3, takebacks on): the common shape of most states.
     static func duelView(fen: String, turnSide: String, inCheck: Bool, legal: String, moves: [String], white: ChessFixtureSeat,
                          black: ChessFixtureSeat, clocks: String, drawOffer: String, takeback: String) -> String {
         publicView(phase: "playing", mode: "duel", fen: fen, turnSide: turnSide, inCheck: inCheck, legal: legal, moves: moves,
@@ -2524,7 +2280,6 @@ enum ChessFixtures {
         state == ChessFixtureState.checkmate || state == ChessFixtureState.drawAgreed
     }
 
-    /// One push for `state`: you hold a seat (except watching) and host (except watching and the participant's draw).
     static func push(_ state: ChessFixtureState, isRecovering: Bool) -> GameStageInputs {
         let seated = state != ChessFixtureState.spectator
         return GameStageInputs.make(callSession: 1, isActive: true, gameId: "chess", name: "Chess",
@@ -2535,8 +2290,6 @@ enum ChessFixtures {
                                     receivedAtMillis: Date().timeIntervalSince1970 * 1000.0)
     }
 
-    /// The pushes the fixture applies in order: one for most states; the reconnecting state first plays your move and
-    /// then the same push while recovering (the board turns read-only until the snapshot).
     static func pushes(_ state: ChessFixtureState) -> [GameStageInputs] {
         if state == ChessFixtureState.reconnecting {
             return [push(ChessFixtureState.yourMove, isRecovering: false), push(state, isRecovering: true)]
@@ -2544,8 +2297,6 @@ enum ChessFixtures {
         return [push(state, isRecovering: false)]
     }
 
-    /// A playing duel push after `san` plies at `fen` (you White against Avery), for the transition checks on both
-    /// platforms (the recording push that clears the overlay, the start position without a move).
     static func duelPush(fen: String, turnSide: String, legal: String, san: [String], from: [String], to: [String],
                          canRequestTakeback: Bool) -> GameStageInputs {
         let view = duelView(fen: fen, turnSide: turnSide, inCheck: false, legal: legal,
@@ -2559,15 +2310,12 @@ enum ChessFixtures {
                                     receivedAtMillis: Date().timeIntervalSince1970 * 1000.0)
     }
 
-    /// What the stage layer shows for a chess state: the game is live under its server name (S20 11 j).
     static func stageInputs(named raw: String, base: StageInputs) -> StageInputs {
         if state(named: raw) == nil { return base }
         let game = ActivityFixtureScript.stageInputs(named: ActivityFixtureState.gameTrivia6.rawValue, base: base)
         return StageFixtureScript.copy(game, isGameActive: true, gameName: "Chess")
     }
 
-    /// Feeds the activity session for a chess state and wires its commands to the recording owner, the way
-    /// `WordleFixtures.apply(named:session:owner:)` does. Nil for any other name.
     @discardableResult
     @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ChessFixtureState? {

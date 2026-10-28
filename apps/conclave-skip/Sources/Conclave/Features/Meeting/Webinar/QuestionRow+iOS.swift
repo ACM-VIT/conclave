@@ -1,15 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 11 c (PPL-6, PL5): the iOS question row and the upvote control. Each row observes one `QaQuestionEntry`, so a
-// vote change re-evaluates one row (11 k). Attendees get the upvote control (neutral bordered `.tint(.primary)` in both
-// states, `.isSelected` when voted; only the selected glyph uses `coralText`, and the count stays primary, D4; the
-// R50-4 upvote arrow accompanies the count). Hosts get a
-// static count, the trailing `Menu` ("Actions for This Question") with the same items as the context menu (which hides
-// unavailable items, HIG) and the swipes (leading Answer Live or Mark Answered, trailing Dismiss, no full swipe).
-// Static times, no relative clock (11 k).
-
-/// Q&A copy (S50 11 g): Apple title case for titles, menu items and buttons; sentence case for values and states.
 enum QaText {
     static func sortTitle(_ raw: String) -> String {
         switch QaSort(rawValue: raw) ?? QaSort.top {
@@ -27,7 +18,6 @@ enum QaText {
         }
     }
 
-    /// The status label above the question; nil for a pending question that is not yours.
     static func status(_ model: QaQuestionModel, isHost: Bool) -> String? {
         switch model.status {
         case .answering: return ConclaveStrings.text("Being Answered")
@@ -46,7 +36,6 @@ enum QaText {
         Date(timeIntervalSince1970: millis / 1000.0).formatted(date: .omitted, time: .shortened)
     }
 
-    /// "Priya N. · 3:04 PM".
     static func meta(_ model: QaQuestionModel) -> String {
         ConclaveStrings.format("Question Meta %@ %@", asker(model), time(model.askedAtMillis))
     }
@@ -70,7 +59,6 @@ enum QaText {
         }
     }
 
-    /// One element per question (11 i): label = the question, value = status, votes, asker and time, then the answer.
     static func value(_ model: QaQuestionModel, isHost: Bool) -> String {
         var parts: [String] = []
         if let status = status(model, isHost: isHost) { parts.append(status) }
@@ -84,7 +72,6 @@ enum QaText {
     }
 }
 
-/// One question (S50 11 c, PL5).
 struct QuestionRow: View {
     let people: PeoplePresenter
     let entry: QaQuestionEntry
@@ -178,7 +165,6 @@ struct QuestionRow: View {
     }
 }
 
-/// "Being Answered" (live color, the speaking glyph), "Answered" (success), "Waiting" and "Dismissed" (secondary).
 private struct QaStatusLabel: View {
     let status: QaStatus
     let text: String
@@ -201,7 +187,6 @@ private struct QaStatusLabel: View {
     }
 }
 
-/// The host's trailing Menu: every item for the status, disabled ones kept with the reason (menus keep them, F00 C16).
 private struct QaHostMenu: View {
     let people: PeoplePresenter
     let model: QaQuestionModel
@@ -240,7 +225,6 @@ private struct QaHostMenu: View {
     }
 }
 
-/// Host context menu (available items only) and swipes; nothing for attendees.
 private struct QaHostRowActions: ViewModifier {
     let people: PeoplePresenter
     let model: QaQuestionModel

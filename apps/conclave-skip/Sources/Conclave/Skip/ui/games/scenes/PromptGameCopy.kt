@@ -2,13 +2,6 @@ package conclave.module
 
 import androidx.compose.runtime.Composable
 
-/*
- * S60 9 g (ACT-3): the one exhaustive copy mapping for the six prompt game scenes on Android (RC R15): a `when` to gm_
- * resources resolved by name, plurals through conclavePlural, two facts on one line through act_two_facts (never
- * concatenation). Server text (questions, options, bluffs, names, categories) stays verbatim. The resource-name
- * functions are plain so the Robolectric copy test can call them without composition.
- */
-
 internal fun promptHostActionResource(action: PromptHostAction): String? = when (action) {
     PromptHostAction.none -> null
     PromptHostAction.skipQuestion -> "gm_skip_question"
@@ -48,21 +41,17 @@ internal fun imposterResultResource(kind: ImposterResultKind): String? = when (k
     ImposterResultKind.tie -> "gm_imp_tie"
 }
 
-/** The first line of the held secret card per role (the second names the category); null for a spectator. */
 internal fun imposterSecretResource(role: ImposterRole): String? = when (role) {
     ImposterRole.crew -> "gm_imp_word"
     ImposterRole.imposter -> "gm_imp_you"
     ImposterRole.spectator -> null
 }
 
-/** The results kicker: the award for Bluff and Reaction, "Results" otherwise (S60 9 c). */
 internal fun promptAwardResource(kind: String): String = when (kind) {
     GameSceneKind.bluff -> "gm_bluff_best"
     GameSceneKind.reaction -> "gm_reaction_best"
     else -> "gm_results"
 }
-
-// MARK: Shared formatters
 
 @Composable
 internal fun promptHostAction(action: PromptHostAction): String {
@@ -86,8 +75,6 @@ internal fun promptVoted(done: Int, total: Int): String = activitiesVoteCount(do
 
 @Composable
 internal fun promptDeparted(name: String): String = conclaveString("gm_vote_left", name)
-
-// MARK: Trivia
 
 @Composable
 internal fun triviaKicker(scene: TriviaScene): String {
@@ -114,8 +101,6 @@ internal fun triviaStanding(scene: TriviaScene): String? {
     return promptTwoFacts(conclavePlural("gm_points", scene.score, scene.score), conclaveString("gm_rank", scene.rank))
 }
 
-// MARK: Bluff
-
 @Composable
 internal fun bluffKicker(scene: BluffScene): String = when (scene.phase) {
     "write" -> conclaveString("gm_bluff_write")
@@ -123,7 +108,6 @@ internal fun bluffKicker(scene: BluffScene): String = when (scene.phase) {
     else -> promptRound(scene.round, scene.roundTotal)
 }
 
-/** "Bluff by Sam · 2 votes" (or the votes alone for the truth), then "You picked this" and "Your bluff". */
 @Composable
 internal fun bluffRevealLines(option: BluffOptionModel): List<String> {
     val votes = activitiesVotes(maxOf(0, option.votes))
@@ -134,9 +118,6 @@ internal fun bluffRevealLines(option: BluffOptionModel): List<String> {
     return lines
 }
 
-// MARK: Most Likely To
-
-/** "Tied: Avery and Ben"; three or more names put all but the last in the first slot. */
 @Composable
 internal fun promptTied(names: Iterable<String>): String {
     val list = names.toList()
@@ -150,8 +131,6 @@ internal fun promptVoteResult(scene: PersonVoteScene): String = when {
     scene.winnerName.isEmpty() -> ""
     else -> conclaveString("gm_mlt_most_votes_announce", scene.winnerName)
 }
-
-// MARK: Reaction
 
 @Composable
 internal fun reactionPadTitle(state: ReactionPadState, ms: Int): String {
@@ -169,9 +148,6 @@ internal fun reactionResultValue(row: ReactionResultModel): String {
 internal fun reactionFastest(name: String): String =
     if (name.isEmpty()) conclaveString("gm_reaction_nobody") else conclaveString("gm_reaction_fastest", name)
 
-// MARK: Imposter
-
-/** What the held K11 card shows; built for the card, which composes it only while held. */
 @Composable
 internal fun imposterSecret(scene: ImposterScene): String {
     val name = imposterSecretResource(scene.role) ?: return ""

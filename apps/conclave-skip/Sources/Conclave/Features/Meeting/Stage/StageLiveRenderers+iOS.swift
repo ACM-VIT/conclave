@@ -5,12 +5,6 @@ import UIKit
 import WebRTC
 #endif
 
-// S20 14 c (WP3 bridge for the native call root behind the Debug `call` flag). The only stage file that reaches the
-// live media client: it resolves the bound track by user id whenever the slot's `RendererBinding.videoKey` changes,
-// and one `RTCMTLVideoView` per slot is created once and re-attached only when the track instance changes, so a
-// consumer swap never recreates the surface (RR1, SC10's iOS half). Main thread only; never touches a sink inside a
-// frame callback (RR6). The fixture never uses it (probes only).
-
 struct StageLiveVideo: View {
     let slotId: String
     let userId: String
@@ -32,7 +26,7 @@ struct StageLiveVideo: View {
 
 #if canImport(WebRTC)
 enum StageLiveTracks {
-    /// The bound track for a slot, or nil while the binding is empty (camera off, no consumer yet).
+
     @MainActor
     static func track(userId: String, isLocal: Bool, isShare: Bool, videoKey: String) -> RTCVideoTrack? {
         if videoKey.isEmpty { return nil }
@@ -49,7 +43,7 @@ struct StageVideoSurface: UIViewRepresentable {
     let track: RTCVideoTrack?
     let fit: StageVideoFit
     let isMirrored: Bool
-    /// S20 SC11 (STG-7): the slot whose decoded frame size this renderer reports.
+
     var slotId: String = ""
 
     func makeCoordinator() -> Coordinator {
@@ -62,7 +56,7 @@ struct StageVideoSurface: UIViewRepresentable {
         view.isUserInteractionEnabled = false
         view.accessibilityIgnoresInvertColors = true
         apply(to: view)
-        // HD request B4-T6 R8: the delegate reports `setSize:` on the main queue, never inside a frame callback (RR6).
+
         view.delegate = context.coordinator.sizes
         context.coordinator.sizes.configure(slotId: slotId, store: context.environment.rendererFrameSizes)
         context.coordinator.attach(track: track, to: view)
@@ -89,7 +83,7 @@ struct StageVideoSurface: UIViewRepresentable {
 
     final class Coordinator {
         weak var attachedTrack: RTCVideoTrack?
-        /// The view holds its delegate weakly; the coordinator owns it.
+
         let sizes = RendererFrameSizeObserver()
 
         func attach(track: RTCVideoTrack?, to view: RTCMTLVideoView) {

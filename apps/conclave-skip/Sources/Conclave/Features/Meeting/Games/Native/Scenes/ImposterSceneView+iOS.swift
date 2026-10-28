@@ -1,13 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 9 c and Q7 (ACT-3) on iOS, Imposter: reveal and discuss (K1 with the category and who starts, the discuss line,
-// K2 while the reveal runs, and the K11 secret card: press and hold reveals "Your word: %@" with the category, or
-// "You're the Imposter" with the hint; hidden by default for both roles, and the word is not in the view hierarchy at
-// all while hidden), vote (K3 person rows with yourself disabled as "You", the voted count, a departed target), and
-// the result (crew wins, the imposter escapes, or a tie; who it was and the word). Spectators see only the roles
-// secret notice: Imposter is not spectatable, so no seat and no word ever reach them.
-
 struct ImposterSceneView: View {
     let scene: ImposterScene
     let games: GameStagePresenter
@@ -36,8 +29,6 @@ struct ImposterSceneView: View {
     }
 }
 
-/// K11 for the local role. The secret text is built here and handed to the card, which composes it only while held
-/// (or while a VoiceOver "Reveal Word" lasts). `revealHeld` plays once per hold.
 struct ImposterSecretCard: View {
     let scene: ImposterScene
     @State private var holds = 0
@@ -49,7 +40,6 @@ struct ImposterSecretCard: View {
     }
 }
 
-/// K3 person rows for the vote; yourself is never a target (the module rejects a self vote).
 struct ImposterVoteChoices: View {
     let scene: ImposterScene
     let games: GameStagePresenter
@@ -73,7 +63,6 @@ struct ImposterVoteChoices: View {
     }
 }
 
-/// The finished round: the result line, who the imposter was, the word (public now) and an abstention.
 struct ImposterResultView: View {
     let scene: ImposterScene
 

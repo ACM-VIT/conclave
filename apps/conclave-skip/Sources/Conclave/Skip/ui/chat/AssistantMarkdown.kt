@@ -41,15 +41,6 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 
-/*
- * S40 4 d (CHT-7): the native markdown renderer for Conclave AI answers on Android, standalone so Transcript Ask
- * (TRN-2) reuses it. It takes the shared parser's StreamingMarkdownBlocks (S/Shared/NativeStreamingMarkdown.swift,
- * transpiled) and the host's link handler, and holds no state: paragraphs and lists bodyLarge with LinkAnnotation.Url
- * links, headings titleMedium, titleSmall and labelLarge with heading semantics, quotes with a 3 dp outlineVariant
- * rule, code on surfaceContainerHighest (shapes.small) in a horizontal scroll with the system monospace face (the
- * theme's `monospaced()` helper), rules as HorizontalDivider. Blocks are keyed by id, so while an answer streams only
- * the tail block recomposes. No cursor, shimmer or pulse (R13).
- */
 @Composable
 internal fun AssistantMarkdown(
     blocks: List<StreamingMarkdownBlock>,
@@ -120,7 +111,6 @@ private fun AssistantMarkdownBlock(block: StreamingMarkdownBlock, onLink: (Strin
     }
 }
 
-/** One block's inline runs (strong, emphasis, code, strikethrough, links) in [style]. */
 @Composable
 private fun AssistantInlineText(
     block: StreamingMarkdownBlock,
@@ -142,11 +132,6 @@ private fun AssistantInlineText(
     )
 }
 
-/**
- * The shared inline parser's runs as an AnnotatedString (pure, so Robolectric checks it). The streaming tail reads
- * unbalanced markers as open (the parser's rule), so the text does not jump when they close. Links route through
- * [onLink] (chat: the external link confirmation, S40 4 d).
- */
 internal fun assistantAnnotatedText(
     text: String,
     isStreaming: Boolean,

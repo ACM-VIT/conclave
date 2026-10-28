@@ -15,32 +15,6 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.Observer
 import skip.ui.UIApplication
 
-/*
- * ENT-3 (S10 0.5 "Preview capture" row, 6 k, Q16; S60 0.8 C6-8; RECONCILE R22): the Android half of the one WP3 local
- * camera preview owner. It replaces the transpiled output of Core/WebRTC/LocalPreviewController.swift (same base
- * name), so the members, labels and types here match that file exactly; the state machine is the shared, host-tested
- * LocalPreviewPolicy.
- *
- * CameraX Preview only: frames go to a PreviewView surface and nowhere else. There is no track, capturer or producer
- * here, so a preview frame can never reach a producer. The binding is registered with CameraPreviewController, whose
- * releasePreview() the WebRTC client calls before its own Camera2 capture (CameraX and Camera2 cannot both hold the
- * camera): that release closes the publish latch (releasedByCall), exactly like handOffToCall(). The PreviewView uses
- * the TextureView implementation so the last frame stays on screen after the unbind (the hand-off still, Q16 B), and
- * the bitmap is kept as lastFrame for the stage self view.
- *
- * STG-3 (S20 SC8, S60 C6-2, S20 6 f): the same members as the Swift file for the one camera facing and the call camera's
- * system pause. The call's camera reports its facing after a flip or a start (adoptCallFacing) and the WebRTC client's
- * camera events report the pause (noteCallCameraInterruption and noteCallCameraResumed, from any thread; they hop to
- * the main thread here). onCallCameraChange tells the core, which mirrors both into the meeting state once. None of this
- * starts, stops or restarts a capture while the latch is closed.
- *
- * SET-3 (S60 0.8 C6-8, L6-3, 1 f, 1 l11, 1 l12; RECONCILE R22): the same scoped Settings preview members as the Swift
- * file. startScopedPreview reopens a closed latch for the Settings LivePreviewCard while the meeting camera is off;
- * stopScopedPreview stops it and closes the latch again; the WebRTC client's releasePreview() before its Camera2 capture
- * ends it (handleRelease, the same latch). onScopedPreviewChange is the Settings presenter's slot (the lobby keeps
- * onChange). setMirrorPreference carries Mirror My Video (C6-3): the PreviewView mirrors only with the front camera
- * and only while it is on.
- */
 internal class LocalPreviewController internal constructor() {
     companion object {
         val shared: LocalPreviewController by lazy { LocalPreviewController() }
@@ -48,21 +22,18 @@ internal class LocalPreviewController internal constructor() {
 
     internal var onChange: (() -> Unit)? = null
 
-    /** STG-3: called on the main thread after the facing or the call camera's pause changes (S20 SC8, S60 C6-2). */
     internal var onCallCameraChange: (() -> Unit)? = null
 
-    /** SET-3: called on the main thread after every publish, for the Settings presenter's preview card. */
     internal var onScopedPreviewChange: (() -> Unit)? = null
 
-    /** SET-3: the Settings preview owns the running capture. */
     internal var isScopedPreviewActive: Boolean = false
         private set
-    /** SET-3 Debug counters (S60 L6-12 previewStart, previewStop). */
+
     internal var scopedStartCount: Int = 0
         private set
     internal var scopedStopCount: Int = 0
         private set
-    /** C6-3: Mirror My Video (default on). */
+
     internal var mirrorsSelfView: Boolean = true
         private set
     private var scopedReopenedLatch = false
@@ -83,16 +54,13 @@ internal class LocalPreviewController internal constructor() {
     internal val isPublishLatched: Boolean get() = machine.isLatched
     internal val interruption: PreviewInterruption get() = machine.interruption
 
-    /** STG-3 (S20 6 f): why the system holds the call's camera right now; none while it runs. */
     internal var callCameraInterruption: PreviewInterruption = PreviewInterruption.none
         private set
     internal val isCallCameraPaused: Boolean get() = LocalCameraPublication.isPaused(callCameraInterruption)
 
-    /** The hand-off still (Q16 B): the last preview frame, kept until the latch reopens. */
     internal var lastFrame: Bitmap? = null
         private set
 
-    /** Whether the bound camera mirrors (front); the surface reads it. */
     internal var isMirrored: Boolean = true
         private set
 
@@ -108,8 +76,6 @@ internal class LocalPreviewController internal constructor() {
     init {
         CameraPreviewController.onReleased = { released -> onMain { handleRelease(released) } }
     }
-
-    // MARK: Requests from the lobby
 
     fun start(facing: LocalCameraFacing) {
         val facingChanged = facing != this.facing
@@ -148,13 +114,6 @@ internal class LocalPreviewController internal constructor() {
         onCallCameraChange?.invoke()
     }
 
-    // MARK: The call's camera (STG-3: S20 SC8, S60 C6-2, S20 6 f)
-
-    /**
-     * The call's camera reports the facing it resolved after a flip or a start, so the lobby after the call, the
-     * Settings preview and the stage read one facing. Equal reports publish nothing; a closed latch keeps the capture
-     * untouched, an open running preview follows the new facing. Main thread (the core calls it).
-     */
     fun adoptCallFacing(reported: LocalCameraFacing): Boolean {
         if (!LocalCameraPublication.publishes(current = facing, reported = reported)) return false
         facing = reported
@@ -164,7 +123,6 @@ internal class LocalPreviewController internal constructor() {
         return true
     }
 
-    /** The system took (or, with none, returned) the call's camera. Any thread; equal reports publish nothing. */
     fun noteCallCameraInterruption(reason: PreviewInterruption) {
         onMain {
             if (reason != callCameraInterruption) {
@@ -178,12 +136,9 @@ internal class LocalPreviewController internal constructor() {
         noteCallCameraInterruption(PreviewInterruption.none)
     }
 
-    /** The call ended or your camera turned off: no pause carries into the next call or camera start. */
     fun resetCallCamera() {
         noteCallCameraInterruption(PreviewInterruption.none)
     }
-
-    // MARK: The Settings preview (SET-3: S60 C6-8, L6-3)
 
     fun startScopedPreview(facing: LocalCameraFacing) {
         if (isScopedPreviewActive && LocalPreviewPolicy.mayCapture(machine)) {
@@ -215,14 +170,12 @@ internal class LocalPreviewController internal constructor() {
         publish()
     }
 
-    /** The call's camera is about to start: a running Settings preview hands the camera over first. */
     fun releaseScopedPreviewForCallCamera() {
         if (!isScopedPreviewActive) return
         handOffToCall()
         publish()
     }
 
-    /** C6-3: the Mirror My Video preference, pushed by the Settings presenter; applied to the current surface. */
     fun setMirrorPreference(on: Boolean) {
         if (on == mirrorsSelfView) return
         mirrorsSelfView = on
@@ -251,27 +204,20 @@ internal class LocalPreviewController internal constructor() {
         publish()
     }
 
-    // MARK: The surface (K/ui/lobby/LobbyPreviewCard.kt)
-
-    /** One PreviewView per surface; TextureView-backed so the last frame stays after the unbind. */
     fun makePreviewView(context: Context): PreviewView = PreviewView(context).apply {
         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         scaleType = PreviewView.ScaleType.FILL_CENTER
     }
 
-    /** The surface entered composition: frames go to it (no rebind). */
     fun attach(view: PreviewView) {
         previewView = view
         view.scaleX = surfaceScaleX()
         boundPreview?.setSurfaceProvider(view.surfaceProvider)
     }
 
-    /** The surface left composition. The capture keeps its binding; the next surface takes the frames. */
     fun detach(view: PreviewView) {
         if (previewView === view) previewView = null
     }
-
-    // MARK: Private
 
     private fun apply(event: LocalPreviewEvent, interruption: PreviewInterruption = PreviewInterruption.none) {
         val next = LocalPreviewPolicy.next(machine, event = event, interruption = interruption)
@@ -287,7 +233,6 @@ internal class LocalPreviewController internal constructor() {
         onScopedPreviewChange?.invoke()
     }
 
-    /** C6-3: the front camera mirrors only while Mirror My Video is on; the rear camera never mirrors. */
     private fun surfaceScaleX(): Float =
         if (LocalVideoMirrorPolicy.mirrors(isFront = isMirrored, preference = mirrorsSelfView)) -1f else 1f
 
@@ -365,7 +310,6 @@ internal class LocalPreviewController internal constructor() {
         }
     }
 
-    /** A release this controller did not start: the WebRTC client took the camera for the call (the latch). */
     private fun handleRelease(released: Preview?) {
         if (releasingOwnPreview || released == null) return
         if (released !== boundPreview) return

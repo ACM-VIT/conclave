@@ -14,14 +14,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * CHT-7 (S40 4, CH7, CH8) through the transpiled stream parser and collector, the task and row policies, the core
- * assistant store and the presenter, plus the handwritten markdown inline builder. The Swift half is
- * T/CHT7AssistantRowTests.swift; the same vectors give the same results on both platforms: frames parse in any slicing,
- * a failure is a row state and never an answer body, relays follow the web throttle, the `stream:3tasks` fixture plays
- * through the real store, and the busy fixture shows every state but approval (W10-2). Pure: no composition, network or
- * socket.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class CHT7AssistantBridgeTests {
@@ -215,7 +207,7 @@ class CHT7AssistantBridgeTests {
         assertEquals(1, links.size)
         assertEquals("https://x.io", (links[0].item as LinkAnnotation.Url).url)
         assertTrue(text.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
-        // The streaming tail reads an unclosed marker as open, so the text does not jump when it closes.
+
         assertEquals("Bold so far", assistantAnnotatedText("**Bold so far", true, Color.Red, SpanStyle(), { }).text)
     }
 }

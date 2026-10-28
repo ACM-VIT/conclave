@@ -1,28 +1,18 @@
 import Foundation
 
-// S20 0.5 shared stage contract (STG-1, STG-4). Everything here crosses into handwritten Kotlin, so it follows the
-// S1C 3.6 rules: String raw-value enums, scalar structs and arrays of structs, no associated values, no tuples, no
-// protocols. The stage reads only these values plus the S1 `session` and `controls`; never `MeetingState` or
-// `MeetingViewModel` (F00 P1). Notice, attendee and Meeting Details models arrive with STG-5, STG-8 and STG-6.
-
 enum StageKind: String, CaseIterable, Equatable {
     case solo, oneOnOne, grid, spotlight, sidebar, presentation, game, app, browser, attendeeWaiting, attendeeLive
 
-    /// Kinds whose main slot is an activity card (S20 11).
     var isActivity: Bool { self == .game || self == .app || self == .browser }
 }
 
-/// One slot role per S20 2 c. A role is a parameter of the one constant slot structure (SL6), never a wrapper.
 enum StageSlotRole: String, CaseIterable, Equatable {
     case grid, gridWide, spotlightMain, rail, share, activity, selfFloating, selfMinimized, overflow, programFeed, speakerInset
 
-    /// The floating and minimized self view can be dragged and snapped (S20 6).
     var isSelfMovable: Bool { self == .selfFloating || self == .selfMinimized }
 
-    /// Slots that host a renderer (every participant and share role).
     var hostsRenderer: Bool { self != .activity && self != .overflow }
 
-    /// Roles drawn without the grid name pill (the floating and minimized self view).
     var isSelfView: Bool { self == .selfFloating || self == .selfMinimized }
 }
 
@@ -30,40 +20,31 @@ enum StageVideoFit: String, CaseIterable, Equatable {
     case fill, fit
 }
 
-/// iOS compact height moves the bar to a trailing vertical stack (S20 Q2); every other window keeps the bottom bar.
 enum StageChromePlacement: String, CaseIterable, Equatable {
     case bottomBar, trailingStack
 }
 
-/// Why chrome must stay visible (S20 8 f). `screenReader` and `focusInChrome` are view facts (SL8): the presenter
-/// never sets them; `ChromeAutoHidePolicy.effectiveBlocker` folds them in.
 enum AutoHideBlocker: String, CaseIterable, Equatable {
     case none, screenReader, panelOpen, reconnecting, mediaPending, recentlyJoined, noRemoteVideo, presenting, alwaysShow, focusInChrome
 }
 
-/// SC12: the local hand from the S1 hand ticket plus `isHandRaised`.
 enum LocalHandState: String, CaseIterable, Equatable {
     case lowered, raising, raised, lowering
 }
 
-/// SC13 (WP8): the live notes state shown on the capsule.
 enum LiveNotesState: String, CaseIterable, Equatable {
     case off, starting, live, paused, needsAttention
 }
 
-/// The window classes `StageViewport` carries (iOS compact or regular; Android compact, medium or expanded).
 enum StageSizeClass {
     static let compact = "compact"
     static let regular = "regular"
     static let medium = "medium"
     static let expanded = "expanded"
 
-    /// Anything wider than compact uses the packer and the regular gaps (S20 2 c table, third column).
     static func isCompact(_ value: String) -> Bool { value == compact }
 }
 
-/// Set by the canvas through `setViewport`; it never changes when chrome hides (reserved insets are constant).
-/// Points on iOS, dp on Android. Insets are the reserved stage insets of S20 1 c (safe area plus chrome slots).
 struct StageViewport: Equatable {
     let width: Double
     let height: Double
@@ -83,7 +64,6 @@ struct StageViewport: Equatable {
     var isLandscape: Bool { width > height }
 }
 
-/// `StageLayoutPolicy` result for the current viewport (SL1).
 struct StageCapacity: Equatable {
     let gridSlots: Int
     let railSlots: Int
@@ -91,8 +71,6 @@ struct StageCapacity: Equatable {
     static let zero = StageCapacity(gridSlots: 0, railSlots: 0)
 }
 
-/// One slot. `id` is "p:<canonical id>", "share:<canonical id>", "activity" or "overflow": stable across kinds and
-/// roles, so a kind change never recreates a renderer (D15).
 struct StageSlot: Equatable, Identifiable {
     let id: String
     let role: StageSlotRole
@@ -106,8 +84,6 @@ struct StageSlot: Equatable, Identifiable {
     static func shareId(_ userId: String) -> String { "share:" + userId }
 }
 
-/// A laid-out slot frame in canvas coordinates, measured from the leading edge (both platforms mirror it in RTL:
-/// SwiftUI layouts and Compose `placeRelative` flip automatically).
 struct StageFrame: Equatable {
     let slotId: String
     let x: Double
@@ -119,20 +95,19 @@ struct StageFrame: Equatable {
     var maxY: Double { y + height }
 }
 
-/// Read by the canvas only.
 struct StageLayoutSnapshot: Equatable {
     let revision: Int
     let kind: StageKind
     let slots: [StageSlot]
     let overflowCount: Int
-    /// Avatar seeds of the first hidden people, for the "+N" tile (F00 C08 shows at most three).
+
     let overflowSeeds: [String]
     let capacity: StageCapacity
     let pinnedUserId: String
     let featuredUserId: String
     let presenterUserId: String
     let isLocalPresenting: Bool
-    /// `MeetingSelfViewMode` and `MeetingSelfViewCorner` raw values (for example "top-left").
+
     let selfMode: String
     let selfCorner: String
     let activityKind: String
@@ -164,7 +139,6 @@ struct StageLayoutSnapshot: Equatable {
     }
 }
 
-/// The capsule (S20 7). `subtitleKind` is "count", "alone", "presenting" or "youPresenting".
 struct StageCapsuleModel: Equatable {
     let title: String
     let subtitleKind: String
@@ -183,23 +157,21 @@ struct StageCapsuleModel: Equatable {
                                          isLocked: false, captionsOn: false, liveNotes: LiveNotesState.off)
 }
 
-/// The hidden activity chip (S20 7, 11). `kind` is "game", "app" or "browser".
 struct NowPlayingChip: Equatable {
     let kind: String
     let name: String
 }
 
-/// Cold chrome fields only.
 struct StageChromeSnapshot: Equatable {
     let revision: Int
     let canFlipCamera: Bool
     let isFrontCamera: Bool
-    /// STG-3: a flip is in flight (the control is disabled, `StageCameraFlip` dispatches nothing).
+
     let isFlipInFlight: Bool
-    /// STG-3: the system holds your camera; your tile shows "Camera paused".
+
     let isCameraPaused: Bool
     let nowPlaying: NowPlayingChip?
-    /// S30 `AudioRouteKind` raw value: speaker, receiver, bluetooth, wired, usb, hearingAid, unknown (RECONCILE R23).
+
     let routeKind: String
     let routeName: String
     let isAttendee: Bool
@@ -215,8 +187,6 @@ struct StageChromeSnapshot: Equatable {
     }
 }
 
-/// A one-shot event posted by core handlers (SC18; kinds in S20 10 f). STG-1 records them; the STG-5 notice policy
-/// turns them into toasts. The last three fields serve chat previews (S40 R40-4).
 struct StageEvent: Equatable {
     let kind: String
     let userId: String
@@ -233,19 +203,17 @@ struct StageEvent: Equatable {
     }
 }
 
-/// One-shot accessibility announcement; the view resolves the string from `kind` (S20 1 i).
 struct StageAnnouncement: Equatable {
     let id: Int
     let kind: String
     let name: String
 
     static let joinedKind = "joined"
-    /// S30 CC7, 6 i (CTL-6): your own hand change, confirmed by the server.
+
     static let handRaisedKind = "handRaised"
     static let handLoweredKind = "handLowered"
 }
 
-/// One reaction bubble (S20 9). `kind` is the `ReactionKind` raw value ("emoji" or "asset").
 struct ReactionEvent: Equatable, Identifiable {
     let id: Int
     let senderName: String
@@ -255,7 +223,6 @@ struct ReactionEvent: Equatable, Identifiable {
     let label: String
 }
 
-/// What the core hands over per active reaction; the presenter maps the source id to a stable `ReactionEvent.id`.
 struct StageReactionInput: Equatable {
     let sourceId: String
     let senderName: String
@@ -273,8 +240,6 @@ struct StageReactionsSnapshot: Equatable {
     static let empty = StageReactionsSnapshot(revision: 0, events: [], renderLimit: 20)
 }
 
-/// What the stage actually shows (SL15, SC6). `coverage` is "none", "partial" or "full"; `pipTarget` is the S70 0.5
-/// canonical frame (RECONCILE R28).
 struct StageVisibilityReport: Equatable {
     let visibleUserIds: [String]
     let visibleShareUserId: String
@@ -286,7 +251,6 @@ struct StageVisibilityReport: Equatable {
                                             pipTarget: nil)
 }
 
-/// Presenter actions the core performs (the S1 `onCommand` pattern): the presenter never reaches the view model.
 enum StageCommandKind: String, CaseIterable, Equatable {
     case togglePin, clearPin, setSelfViewMode, moveSelfView, flipCamera
 }
@@ -297,7 +261,6 @@ struct StageCommand: Equatable {
     let value: String
 }
 
-/// One roster row as the core sends it. Every id is canonical (`MeetingState.canonicalStageUserId`, SC1 E6).
 struct StageParticipantInput: Equatable {
     let userId: String
     let displayName: String
@@ -311,11 +274,11 @@ struct StageParticipantInput: Equatable {
     let isReconnecting: Bool
     let reconnectReason: String
     let isHost: Bool
-    /// `MeetingState.participantJoinSerials` (S50 PH19, RECONCILE R20): the stage assigns no serials.
+
     let joinSerial: Int
-    /// The renderer binding key (camera); empty while there is no track. WP3 swaps it on a consumer change.
+
     let videoKey: String
-    /// The renderer binding key of this person's screen share; empty while not sharing.
+
     let shareVideoKey: String
 
     static func make(userId: String, displayName: String = "", isLocal: Bool = false, isMuted: Bool = true,
@@ -330,13 +293,9 @@ struct StageParticipantInput: Equatable {
                               shareVideoKey: shareVideoKey)
     }
 
-    /// A web-started AI voice agent (S20 3 f; Owner OQ7): native never starts one, it only recognizes it.
     var isVoiceAgent: Bool { userId.contains("@agent.conclave") || userId.hasPrefix("voice-agent-") }
 }
 
-/// The schema boundary between the core and the stage (S20 0.5, S1C 3.2 format): built by the view model's
-/// `makeStageInputs()` with every id passed through `canonicalStageUserId`, pushed through `StagePresenter.apply(_:)`
-/// on its own refresh path (SC1). Hot values (the speaker, reactions) arrive through their own hooks instead.
 struct StageInputs: Equatable {
     let callSession: Int
     let isInCall: Bool
@@ -344,20 +303,20 @@ struct StageInputs: Equatable {
     let roomLabel: String
     let meetingLink: String
     let participants: [StageParticipantInput]
-    /// `MeetingViewMode` raw value (auto, tiled, spotlight, sidebar) and the Layout preferences.
+
     let viewMode: String
     let viewMaxTiles: Int
     let hideTilesWithoutVideo: Bool
     let selfViewMode: String
     let selfViewCorner: String
-    /// Transient pin (SC2); empty when nobody is pinned.
+
     let pinnedUserId: String
     let activeAppId: String
     let activeAppName: String
     let isBrowserActive: Bool
     let isGameActive: Bool
     let gameName: String
-    /// The presenter's canonical id (remote or local); empty when nobody shares.
+
     let screenShareUserId: String
     let isLocalScreenSharing: Bool
     let isWebinarAttendee: Bool
@@ -365,26 +324,26 @@ struct StageInputs: Equatable {
     let isRoomLocked: Bool
     let captionsOn: Bool
     let liveNotes: LiveNotesState
-    /// SC9: one confirmed "alone" input instead of the private presence maps.
+
     let isAloneConfirmed: Bool
     let canFlipCamera: Bool
     let isFrontCamera: Bool
-    /// STG-3 (S20 6 f, SC8): your camera flip is in flight; the flip control stays visible and disabled.
+
     let isFlipInFlight: Bool
-    /// STG-3 (S20 6 f): the system holds your camera (another app, multitasking, the background, a camera error).
+
     let isCameraPaused: Bool
     let routeKind: String
     let routeName: String
     let isHandRaised: Bool
     let handToggleInFlight: Bool
     let isRecovering: Bool
-    /// A microphone or camera intent is pending (S1 `controls` rows `isPending`).
+
     let isMediaPending: Bool
-    /// When this call session reached the stage; 0 before (S10 R6 a).
+
     let joinedAtMillis: Double
-    /// S60 C6-14 "Always Show Controls" (S20 Q7); false until SET-1 publishes the preference.
+
     let alwaysShowControls: Bool
-    /// iOS only: Effects is the current panel, so the floating self view moves above its sheet (S60 R6-6).
+
     let isEffectsOpen: Bool
 
     static func make(
@@ -442,7 +401,6 @@ struct StageInputs: Equatable {
                     joinedAtMillis: joinedAtMillis, alwaysShowControls: alwaysShowControls, isEffectsOpen: isEffectsOpen)
     }
 
-    /// Present people (you plus remotes who are not leaving); stale ids are already dropped by the core.
     var presentParticipants: [StageParticipantInput] {
         var result: [StageParticipantInput] = []
         for participant in participants {

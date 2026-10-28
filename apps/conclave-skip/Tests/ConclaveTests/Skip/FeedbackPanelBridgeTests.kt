@@ -59,7 +59,7 @@ class FeedbackPanelBridgeTests {
         val view = object : android.view.View(RuntimeEnvironment.getApplication()) {
             override fun performHapticFeedback(constant: Int): Boolean {
                 calls += constant
-                return true // Recording view: never calls Android's actual effect implementation.
+                return true
             }
         }
         val owner = NativeHostingPresenter()
@@ -185,13 +185,13 @@ class FeedbackPanelBridgeTests {
         delivery.deliver(delayed)
         delivery.deliver(delivery.observe())
         assertTrue(received.isEmpty())
-        delivery.updateSuspended(true) // Inert background/PiP simulation.
+        delivery.updateSuspended(true)
         owner.completeNextFixtureAction()
         delivery.deliver(delivery.observe())
         delivery.updateSuspended(false)
         delivery.deliver(delivery.observe())
         assertTrue(received.isEmpty())
-        owner.completeNextFixtureAction(kind = FeedbackKind.sessionExpired) // Android explicitly silent.
+        owner.completeNextFixtureAction(kind = FeedbackKind.sessionExpired)
         delivery.deliver(delivery.observe())
         delivery.deliver(delivery.observe())
         assertTrue(received.isEmpty())
@@ -282,7 +282,7 @@ class FeedbackPanelBridgeTests {
         lifetime.disposed(1, first.presentationID)
         assertEquals(latest, panels.snapshot.current)
         panels.present(MeetingPanel.settings, from = PanelInvoker.settings)
-        panels.dismiss(cancelPending = true) // Explicit Back.
+        panels.dismiss(cancelPending = true)
         panels.dismiss(cancelPending = false)
         lifetime.disposed(1, latest.presentationID)
         assertNull(panels.snapshot.current)
@@ -294,7 +294,7 @@ class FeedbackPanelBridgeTests {
         val lifetime = NativePanelOverlayLifetime(panels)
         panels.present(MeetingPanel.participants, from = PanelInvoker.call)
         panels.present(MeetingPanel.settings, from = PanelInvoker.settings)
-        lifetime.acknowledgeAbsent() // Nothing was ever composed.
+        lifetime.acknowledgeAbsent()
         assertEquals(MeetingPanel.settings, panels.snapshot.current!!.panel)
         val old = panels.snapshot.current!!
         lifetime.mounted(1, old.presentationID)
@@ -307,8 +307,6 @@ class FeedbackPanelBridgeTests {
         assertEquals(fresh, panels.snapshot.current)
         assertTrue(fresh.presentationID > old.presentationID)
     }
-
-    // MARK: WP2-S2b production sink (S70 12 d; F1 rules; PLAN-next A9)
 
     private fun shellIdentity(attempt: Int = 1) =
         MeetingSessionIdentity(callSession = 1, attempt = attempt, attemptToken = "attempt-1-$attempt")
@@ -342,7 +340,7 @@ class FeedbackPanelBridgeTests {
         assertEquals(listOf(FeedbackKind.joined), received)
         assertEquals(1, records.count)
         assertEquals("joined", records.lastKind)
-        // A restore is silent on Android: consumed, never played, never recorded.
+
         shell.apply(shellAt(ConnectionState.reconnecting, attempt = 1, recovering = true))
         shell.apply(shellAt(ConnectionState.joined, attempt = 2))
         assertEquals(FeedbackKind.connectionRestored, shell.feedbackState.token.kind)
@@ -357,13 +355,13 @@ class FeedbackPanelBridgeTests {
         shell.apply(shellAt(ConnectionState.joined))
         val received = mutableListOf<FeedbackKind>()
         val records = FeedbackDeliveryRecords()
-        // Rotation: the activity recreates the root, and the new consumer baselines on the published token.
+
         val rotated = productionDelivery(shell, received, records)
         rotated.setActive(true)
         rotated.attach()
         rotated.deliver(rotated.observe())
         assertTrue(received.isEmpty())
-        // PiP (paused): a token published meanwhile is consumed without an effect and never replayed on resume.
+
         rotated.setActive(false)
         val removed = MeetingTerminalOutcome(id = 1, callSession = 1, kind = MeetingTerminalOutcomeKind.removed, serverText = "")
         shell.apply(MeetingShellInputs.make(identity = shellIdentity(), connectionState = ConnectionState.error, terminalOutcome = removed))
@@ -387,7 +385,7 @@ class FeedbackPanelBridgeTests {
         )
         delivery.setActive(true)
         delivery.attach()
-        // hostAdmitted has a confirm constant but its publisher (S50) is not wired to the root yet: it stays silent.
+
         owner.completeNextFixtureAction(kind = FeedbackKind.hostAdmitted)
         delivery.deliver(delivery.observe())
         assertTrue(received.isEmpty())

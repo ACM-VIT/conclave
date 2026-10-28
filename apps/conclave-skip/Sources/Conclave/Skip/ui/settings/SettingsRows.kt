@@ -38,28 +38,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 1 d (SET-1, SET-2) on Android: the Settings root, one LazyColumn that takes the page reservation (R50-1) with
- * stable keys and content types (1 k), drawing settings.sections (the shared SettingsRowPolicy) as C11 headers and M3
- * ListItems. Every row reads only the snapshot it shows, so a route change recomposes the Audio rows only. Switch rows
- * are one toggleable node with Role.Switch (F00 C09 d); push rows go through onPush with SettingsRoute raw values (the
- * host's PanelPageStack in a call, the local stack in the app scope). No Android in-app haptics switch (the system
- * setting governs, F00 8); selectionChanged plays only on the Camera segmented row, after the flip is dispatched (R13).
- * Failures raised here use the page snackbar (D23), never the stage toast lane.
- *
- * SET-3 (S60 1 d Video and General rows; L6-3): the dark LivePreviewCard is its own list item right before the Camera
- * row (the card rides on the in-call camera facing row, so the shared row ids stay as they are), followed by Mirror my
- * video, Camera quality, Screen share quality and Data saver, then the Video footer; Connection pushes its page.
- */
-
 internal enum class SettingsItemKind { Header, Row, Footer, Card }
 
 internal data class SettingsListItem(val key: String, val kind: SettingsItemKind, val section: SettingsSection, val row: SettingsRowID? = null)
 
-/**
- * Headers, rows, the preview card (SET-3, before the Camera row) and the section footers (host sounds; the Video
- * footer, which shows the host's quality limit while it applies), in S60 1 b order. Pure.
- */
 internal fun settingsListItems(sections: List<SettingsRowSection>): List<SettingsListItem> {
     val items = mutableListOf<SettingsListItem>()
     for (section in sections) {
@@ -77,7 +59,6 @@ internal fun settingsListItems(sections: List<SettingsRowSection>): List<Setting
     return items
 }
 
-/** The root list, shared by the call scope, the app scope (R26) and the attendee scope (R44). */
 @Composable
 internal fun SettingsRootList(
     settings: SettingsPresenter,
@@ -90,6 +71,7 @@ internal fun SettingsRootList(
     val items = remember(sections) { settingsListItems(sections.toList()) }
     var confirmSignOut by remember { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().testTag("settings.root"), contentPadding = reservation) {
+        item("appearance", contentType = "appearance") { AppearanceSettingRow() }
         items(items, key = { it.key }, contentType = { it.kind }) { item ->
             when (item.kind) {
                 SettingsItemKind.Header -> ConclaveSectionHeader(title = conclaveString(SettingsCopy.sectionName(item.section)),
@@ -104,7 +86,6 @@ internal fun SettingsRootList(
         }
     }
     SettingsFlipFailureSnackbar(settings, snackbar)
-    // S70 15 f, l5 (SYS-15): the export opens the chooser once and shows its failure in this page's snackbar.
     DiagnosticsExportEffects(DiagnosticsExportPresenter.shared, snackbar)
     if (confirmSignOut) SettingsSignOutDialog(settings, onDismiss = { confirmSignOut = false })
 }
@@ -174,7 +155,6 @@ private fun SettingsRootRow(
             SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), general.handSoundOn, tag) { settings.setHandSound(it) }
         }
         SettingsRowID.connection -> {
-            // SET-3 (C6-9): pushes the Connection page; the value is the one shared label (R21).
             val general = settings.general
             SettingsNavItem(conclaveString(SettingsCopy.rowName(row)), conclaveString(SettingsCopy.connectionName(general.connection)), tag) {
                 onPush(SettingsRoute.connection.rawValue)
@@ -182,7 +162,6 @@ private fun SettingsRootRow(
         }
         SettingsRowID.mirror -> {
             val video = settings.video
-            // 1 f: Audio Only disables Camera, Mirror and the preview (Data saver stays editable).
             SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), video.mirrorsSelfView, tag, enabled = !video.isAudioOnly,
                 supporting = conclaveString("set_mirror_detail")) { settings.setMirrorsSelfView(it) }
         }
@@ -204,7 +183,6 @@ private fun SettingsRootRow(
                 supporting = conclaveString("set_data_saver_detail"),
                 secondary = if (video.systemDataSaverOn) conclaveString("set_system_data_saver") else null) { settings.setDataSaver(it) }
         }
-        // SYS-3 (S70 2 g): both rows read the process-lifetime SystemNotifications snapshot (K/ui/lobby/NotificationRows.kt).
         SettingsRowID.messageNotifications -> MessageNotificationsItem(tag)
         SettingsRowID.callNotification -> CallNotificationStatusItem(tag)
         SettingsRowID.openLinks -> SettingsOpenLinksItem(settings, tag)
@@ -232,12 +210,10 @@ private fun SettingsRootRow(
             ConclaveValueRow(title = conclaveString("set_version"), value = version, identifier = tag)
         }
         SettingsRowID.exportDiagnostics -> DiagnosticsExportItem(DiagnosticsExportPresenter.shared, tag)
-        // Haptics is iOS only (F00 8); Effects lands with SET-6 (EffectsAvailability).
         SettingsRowID.haptics, SettingsRowID.effects -> Unit
     }
 }
 
-/** The section footers: host sounds (C6-24) and the Video footer with its reasons (1 f, 1 g). */
 @Composable
 private fun SettingsSectionFooterItem(settings: SettingsPresenter, section: SettingsSection) {
     val identifier = "settings.footer.${section.rawValue}"
@@ -251,7 +227,6 @@ private fun SettingsSectionFooterItem(settings: SettingsPresenter, section: Sett
     }
 }
 
-/** A push row: the whole item is a button; Material draws no chevron. */
 @Composable
 internal fun SettingsNavItem(title: String, supporting: String?, identifier: String, enabled: Boolean = true, onClick: () -> Unit) {
     ListItem(
@@ -262,7 +237,6 @@ internal fun SettingsNavItem(title: String, supporting: String?, identifier: Str
     )
 }
 
-/** SwitchRow (F00 C09 d): one toggleable node; the Switch itself takes no clicks. */
 @Composable
 internal fun SettingsSwitchItem(
     title: String, checked: Boolean, identifier: String, enabled: Boolean = true, supporting: String? = null,
@@ -285,7 +259,6 @@ internal fun SettingsSwitchItem(
     )
 }
 
-/** "Audio output" with the current route as supporting text (the S30 AudioRouteSnapshot, read directly). */
 @Composable
 private fun SettingsOutputRow(owner: AudioRouteOwner, identifier: String, onClick: () -> Unit) {
     val route = owner.route
@@ -293,7 +266,6 @@ private fun SettingsOutputRow(owner: AudioRouteOwner, identifier: String, onClic
     SettingsNavItem(conclaveString("set_audio_output"), name, identifier, onClick = onClick)
 }
 
-/** Play test sound (C6-7): "Playing" with a spinner for the tone's length; one tone per tap. */
 @Composable
 private fun SettingsTestSoundItem(settings: SettingsPresenter, identifier: String) {
     val playing = settings.audio.speakerTest == SpeakerTestPhase.playing
@@ -309,10 +281,6 @@ private fun SettingsTestSoundItem(settings: SettingsPresenter, identifier: Strin
     )
 }
 
-/**
- * Camera (C6-2): the segmented Front / Back row (radio rows at font scale 1.5 and above, C21 d). The component's own
- * haptic is silenced so selectionChanged plays only when the flip is dispatched (R13).
- */
 @Composable
 private fun SettingsFacingItem(settings: SettingsPresenter, identifier: String) {
     val video = settings.video
@@ -343,7 +311,6 @@ private fun SettingsFacingItem(settings: SettingsPresenter, identifier: String) 
     )
 }
 
-/** Android 12+ Open Conclave links status (S70 9 g); shown only once its capability input is on. */
 @Composable
 private fun SettingsOpenLinksItem(settings: SettingsPresenter, identifier: String) {
     val general = settings.general
@@ -360,11 +327,6 @@ private fun SettingsOpenLinksItem(settings: SettingsPresenter, identifier: Strin
     }
 }
 
-/**
- * The Name field (C6-10, R38): OutlinedTextField with the visible label, capped at 40 by the shared editor, Words and
- * ImeAction.Done; the refusal is the field's error; Saving, Saved, the counter from 30 and the reconnecting reason sit
- * under it.
- */
 @Composable
 private fun SettingsNameItem(settings: SettingsPresenter, identifier: String) {
     val account = settings.account
@@ -403,7 +365,6 @@ private fun SettingsNameItem(settings: SettingsPresenter, identifier: String) {
     }
 }
 
-/** The identity row from raw values: "Guest", or the account name with the email or the provider line. */
 @Composable
 private fun SettingsIdentityItem(settings: SettingsPresenter, identifier: String) {
     val account = settings.account
@@ -421,7 +382,6 @@ private fun SettingsIdentityItem(settings: SettingsPresenter, identifier: String
     )
 }
 
-/** D23: a failed flip shows in the page snackbar once per failure, never the stage toast lane. */
 @Composable
 private fun SettingsFlipFailureSnackbar(settings: SettingsPresenter, snackbar: SnackbarHostState) {
     val failed = settings.video.flipFailed
@@ -431,7 +391,6 @@ private fun SettingsFlipFailureSnackbar(settings: SettingsPresenter, snackbar: S
     }
 }
 
-/** Q5: Sign out behind a confirmation that states the consequence (F00 C18 d). */
 @Composable
 private fun SettingsSignOutDialog(settings: SettingsPresenter, onDismiss: () -> Unit) {
     val account = settings.account

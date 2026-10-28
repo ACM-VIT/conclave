@@ -2,10 +2,6 @@
 import Accessibility
 import SwiftUI
 
-// S60 L6-5 (ACT-2) on iOS: K1 Prompt, K12 SeatControl, K13 GameNotice and the neutral tag the kit shares. In-call
-// dark surfaces only (the activity card), system text styles with Dynamic Type, flat fills and 1 pt borders.
-
-/// K1: kicker, title and subtitle. The kicker states the task quietly (no accent bars, AGENTS.md game rules).
 struct GameKitPrompt: View {
     let kicker: String
     let title: String
@@ -38,7 +34,6 @@ struct GameKitPrompt: View {
     }
 }
 
-/// A neutral status tag (C06 shape): raised fill, paper text, never coral, never emoji (AGENTS.md game rules).
 struct GameKitTag: View {
     let title: String
 
@@ -53,7 +48,6 @@ struct GameKitTag: View {
     }
 }
 
-/// K12: Join (coral, onCoral ink), or a tag for a queued or watching person; nothing for a seated player.
 struct GameKitSeatControl: View {
     let seat: SeatState
     let onJoin: () -> Void
@@ -83,8 +77,6 @@ struct GameKitSeatControl: View {
     }
 }
 
-/// K13: one notice (failure, spectator, private view, unsupported, reconnecting): glyph, optional title, body and an
-/// optional button. Announced once per text (polite), never by an appearance callback.
 struct GameKitNotice: View {
     let kind: GameKitNoticeKind
     let message: String

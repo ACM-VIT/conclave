@@ -10,14 +10,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * STG-9, ACT-1 and ACT-2 through the transpiled policies and presenters (the Swift halves are T/STG9ActivityStageTests.swift,
- * T/ActivityProjectionTests.swift and T/ACT2GameShellTests.swift): the activity priority with its chip, the launcher
- * snapshots, showWhen, the vote tap results and browser validation, the game projections parsed through the Android
- * JSON path (identical fixtures to Swift, S60R 27 AC-G26), the pending request with its ack and timeout, the move
- * payloads, the handwritten ActivitiesKey and segment-fit helpers, and the copy mappings for every enum case (L6-14).
- * Pure: no composition.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ActivityBridgeTests {
@@ -148,7 +140,7 @@ class ActivityBridgeTests {
         assertNull(ActivitiesKey.decode(null))
         assertEquals(ActivitiesKey(ActivitiesRoute.wheel, "wheel"), ActivitiesKey.from(ActivitiesLanding(ActivitiesRoute.wheel, "wheel", false)))
         assertNull(ActivitiesKey.from(ActivitiesLanding(ActivitiesRoute.root, "", false)))
-        // Four labels of 40 px in a 360 px row at density 1 fit (40 + 50 <= 90); at 2.0 they do not.
+
         assertTrue(gameOptionSegmentsFit(listOf(40f, 40f, 40f, 40f), 360f, 1f))
         assertFalse(gameOptionSegmentsFit(listOf(40f, 40f, 40f, 40f), 360f, 2f))
     }

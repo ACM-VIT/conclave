@@ -3,21 +3,13 @@ import Foundation
 import UIKit
 import UserNotifications
 
-// SYS-3 (S70 2 c, SY19): the iOS side of the local notifications. A thin translator from the shared
-// `SystemNotifications` presenter to `UNUserNotificationCenter`; every rule (when to ask, when to post, what to remove)
-// lives in the shared policies and is host-tested (`T/SYS3NotificationsTests.swift`), this file is covered by a source
-// scan. Authorization is requested only from the waiting-room row (R70-3) or the Message Notifications switch (R70-4),
-// with [.alert, .sound] and no badge; nothing is presented while Conclave is active; no time-sensitive entitlement
-// (interruption level `.active`); the system default sound. No haptics (S70 D7).
-
-/// Builds the platform `LocalNotificationCenter` for the presenter (installed once by `SystemNotifications.shared`).
 enum UserNotificationCenterBridge {
     @MainActor
     static func center(presenter: SystemNotifications) -> LocalNotificationCenter {
         LocalNotificationCenter(
             name: "userNotifications",
             requestAuthorization: { [weak presenter] _ in
-                // One requestAuthorization call per request (S70 2 l3); the answer re-reads the settings.
+
                 Task { @MainActor in
                     let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
                     presenter?.permissionAnswered(granted: granted, answered: true)
@@ -39,7 +31,7 @@ enum UserNotificationCenterBridge {
                 UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
             },
             openSystemSettings: { _ in
-                // iOS 16+: the app's notification settings page (the deployment target is 17.0).
+
                 if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
@@ -47,7 +39,6 @@ enum UserNotificationCenterBridge {
         )
     }
 
-    /// `UNAuthorizationStatus` by the name `NotificationPermissionStatePolicy.iosState(authorization:)` reads.
     static func authorizationName(_ status: UNAuthorizationStatus) -> String {
         switch status {
         case .notDetermined: return "notDetermined"
@@ -59,18 +50,14 @@ enum UserNotificationCenterBridge {
         }
     }
 
-    /// One request, delivered at once (no trigger). Never re-checks the policy: the presenter already decided.
     static func post(_ request: LocalNotificationRequest) {
-        // The last guard: nothing is presented while Conclave is active (S70 2 f "App active").
+
         guard UIApplication.shared.applicationState != .active else { return }
         let content = makeContent(request)
         let notification = UNNotificationRequest(identifier: request.identifier, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(notification) { _ in }
     }
 
-    /// S70 2 c: admission title = the room, body "You’re in. Tap to return to the call."; messages title = the sender,
-    /// subtitle "Private message" or "Mentioned you" (sentence case), body = the text. One thread per room; no
-    /// summary argument (deprecated and ignored since iOS 15).
     static func makeContent(_ request: LocalNotificationRequest) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         switch request.kind {
@@ -99,7 +86,6 @@ enum UserNotificationCenterBridge {
         return content
     }
 
-    /// The message text, or the kind of attachment when there is none (a photo never shows its file name, S40 8 f).
     static func messageBody(_ request: LocalNotificationRequest) -> String {
         if !request.text.isEmpty { return request.text }
         switch request.bodyKind {
@@ -113,26 +99,18 @@ enum UserNotificationCenterBridge {
     }
 }
 
-/// S70 2 c (revision 2): the process-lifetime `UNUserNotificationCenterDelegate`, installed from
-/// `ConclaveAppDelegate.onInit` (reached from `application(_:willFinishLaunchingWithOptions:)`), because a response that
-/// launched the app only arrives when the delegate is set before launch finishes. It forwards to
-/// `SystemNotifications.shared`, which holds the tap until the core installs its handler.
 final class LocalNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     static let shared = LocalNotificationDelegate()
 
-    /// Idempotent; safe from `onInit` on any thread (the center is thread-safe).
     static func install() {
         UNUserNotificationCenter.current().delegate = shared
     }
 
-    /// Never present while Conclave is active (S70 2 c `willPresent` returns []).
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async
         -> UNNotificationPresentationOptions {
         []
     }
 
-    /// Return to the call (`presence.handle(.returnToCall, source: .system, presenceSession:)` in the core) and, for a
-    /// chat notification, Chat at the message.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let info = response.notification.request.content.userInfo
         let kind = info[LocalNotificationTap.kindKey] as? String ?? ""

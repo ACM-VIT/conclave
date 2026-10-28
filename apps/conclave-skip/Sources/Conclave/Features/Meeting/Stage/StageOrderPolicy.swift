@@ -1,13 +1,11 @@
 import Foundation
 
-/// The inputs `StageOrderPolicy.plan` needs to turn an ordered roster into slots (one struct so the call stays
-/// readable on both platforms; no tuples).
 struct StageSlotPlanInputs: Equatable {
     let kind: StageKind
     let isCompactPortrait: Bool
     let capacity: StageCapacity
     let localUserId: String
-    /// Remote ids in display order (join order, then promotions), already filtered by "hide tiles without video".
+
     let remoteOrder: [String]
     let participants: [StageParticipantInput]
     let pinnedUserId: String
@@ -15,7 +13,7 @@ struct StageSlotPlanInputs: Equatable {
     let presenterUserId: String
     let selfViewMode: String
     let webinarSpeakerUserId: String
-    /// SC4: per-session fit overrides, user id to `StageVideoFit` raw value.
+
     let fitOverrides: [String: String]
 }
 
@@ -31,21 +29,13 @@ struct StageSlotPlan: Equatable {
     let overflowSeeds: [String]
 }
 
-/// S20 SL2: stable stage order. Join order comes from the core (`MeetingState.participantJoinSerials`, S50 PH19,
-/// RECONCILE R20); you sit last (S20 Q3); presenters lead strips; nothing reorders while everyone fits. Past the cap a
-/// hidden participant who keeps speaking for 1.2 s takes the slot of the visible remote who spoke longest ago, at most
-/// once per 8 s and only with 4 or more people (web STG-07). Timing lives in the presenter's single promotion task;
-/// these functions are pure.
 enum StageOrderPolicy {
     static let promotionDelayMillis = 1200.0
     static let swapIntervalMillis = 8000.0
     static let minimumParticipantsForSwap = 4
-    /// Before the first swap the interval rule never blocks.
+
     static let neverSwappedMillis = -1_000_000_000_000.0
 
-    // MARK: Order
-
-    /// Remote ids by join serial, ties by id; an id the core has not numbered yet (serial 0) sorts last.
     static func joinOrder(_ participants: [StageParticipantInput]) -> [String] {
         var remotes: [StageParticipantInput] = []
         for participant in participants {
@@ -64,8 +54,6 @@ enum StageOrderPolicy {
         return ids
     }
 
-    /// Keeps the previous display order for people still present, drops people who left and appends newcomers in join
-    /// order, so a join never moves a visible slot (S20 2 c "no reordering while everyone fits").
     static func reconcile(previous: [String], participants: [StageParticipantInput]) -> [String] {
         let joined = joinOrder(participants)
         var result: [String] = []
@@ -78,7 +66,6 @@ enum StageOrderPolicy {
         return result
     }
 
-    /// Exchanges two ids in the display order.
     static func swapped(_ order: [String], promote: String, demote: String) -> [String] {
         var result = order
         var promoteIndex = -1
@@ -95,8 +82,6 @@ enum StageOrderPolicy {
         return result
     }
 
-    /// "Hide tiles without video" (web STG-41): camera-off people leave the stage except the featured speaker and the
-    /// pin; if nobody has video the first remote stays. Audio is never touched by this filter (D16, SC6).
     static func applyHideFilter(_ order: [String], participants: [StageParticipantInput], hideTilesWithoutVideo: Bool,
                                 featuredUserId: String, pinnedUserId: String) -> [String] {
         if !hideTilesWithoutVideo { return order }
@@ -118,8 +103,6 @@ enum StageOrderPolicy {
         return nil
     }
 
-    /// The self view role for the local person, or nil when they are an ordinary tile (S20 2 c: Auto floats you only in
-    /// 1:1 without a share; the self tile sits in the strip over an activity, never floating over a game).
     static func selfRole(selfViewMode: String, kind: StageKind) -> StageSlotRole? {
         if kind == StageKind.solo || kind.isActivity || kind == StageKind.attendeeLive || kind == StageKind.attendeeWaiting {
             return nil
@@ -132,13 +115,10 @@ enum StageOrderPolicy {
         }
     }
 
-    /// Featured speaker fallback before anyone spoke: the presenter, then the first remote in display order.
     static func defaultFeatured(remoteOrder: [String], presenterUserId: String, localUserId: String) -> String {
         if !presenterUserId.isEmpty && presenterUserId != localUserId { return presenterUserId }
         return remoteOrder.first ?? ""
     }
-
-    // MARK: Slots
 
     static func plan(_ inputs: StageSlotPlanInputs) -> StageSlotPlan {
         let local = participant(inputs.localUserId, in: inputs.participants)
@@ -165,7 +145,7 @@ enum StageOrderPolicy {
             let cap = max(2, inputs.capacity.gridSlots)
             var shown: [String] = tiles
             if tiles.count > cap {
-                // cap - 1 people plus "+N"; you stay second to last (S20 2 c "above the cap").
+
                 let localIsTile = hasLocal && localRole == nil
                 let remoteRoom = cap - 1 - (localIsTile ? 1 : 0)
                 shown = []
@@ -276,8 +256,6 @@ enum StageOrderPolicy {
         return StageSlotPlan(slots: slots, overflowCount: overflowCount, overflowSeeds: seeds)
     }
 
-    /// Rail slots up to `capacity`; past it, the first capacity - 2 others, then you (the last visible slot before
-    /// "+N", S20 Q3; over an activity you are always in the strip), then "+N".
     static func railSlots(_ rail: [StageSlot], localUserId: String, capacity: Int) -> StageRailPlan {
         var localSlot: StageSlot? = nil
         var others: [StageSlot] = []
@@ -325,7 +303,6 @@ enum StageOrderPolicy {
         return fallback
     }
 
-    /// Remote ids shown in a participant slot (grid, rail, main), for promotion and visibility.
     static func visibleRemoteIds(_ slots: [StageSlot], localUserId: String) -> [String] {
         var ids: [String] = []
         for slot in slots {
@@ -336,10 +313,6 @@ enum StageOrderPolicy {
         return ids
     }
 
-    // MARK: Featured speaker and promotion (hysteresis 1.2 s and 8 s)
-
-    /// The visible remote whose last speech is oldest (never spoke counts as oldest; ties to the highest join serial).
-    /// Protected ids (the pin, the presenter) never leave.
     static func swapTarget(visibleRemoteIds: [String], lastSpokeAt: [String: Double], participants: [StageParticipantInput],
                            protected: [String]) -> String? {
         var best: String? = nil
@@ -358,15 +331,12 @@ enum StageOrderPolicy {
         return best
     }
 
-    /// How long the promotion task waits: until the speaker has held the floor for 1.2 s and 8 s have passed since
-    /// the last swap.
     static func promotionDelay(nowMillis: Double, speakerSinceMillis: Double, lastSwapMillis: Double) -> Double {
         let hold = speakerSinceMillis + promotionDelayMillis - nowMillis
         let interval = lastSwapMillis + swapIntervalMillis - nowMillis
         return max(0.0, max(hold, interval))
     }
 
-    /// Whether a swap or featured change may fire now (re-checked when the task wakes).
     static func mayPromote(nowMillis: Double, speakerSinceMillis: Double, lastSwapMillis: Double) -> Bool {
         nowMillis - speakerSinceMillis >= promotionDelayMillis - 0.5 && nowMillis - lastSwapMillis >= swapIntervalMillis - 0.5
     }

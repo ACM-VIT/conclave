@@ -15,7 +15,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
-    
+
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
@@ -24,24 +24,20 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
-    <!-- Enables notification-drawer call controls when the user grants notification access. -->
+
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
         <package android:name="androidx.test.orchestrator" tools:node="remove" />
         <package android:name="androidx.test.services" tools:node="remove" />
         <package android:name="com.google.android.apps.common.testing.services" tools:node="remove" />
-        <!-- S40 Q16, S70 8 d: find a browser that supports Custom Tabs (CustomTabsClient.getPackageName) on API 30+. -->
+
         <intent>
             <action android:name="android.support.customtabs.action.CustomTabsService" />
         </intent>
     </queries>
 
-    <!-- android:localeConfig is generated: app/build.gradle.kts turns on
-         androidResources.generateLocaleConfig, which writes the locale config from
-         res/values* (default locale in res/resources.properties) and adds the attribute
-         to the merged manifest. Do not add it here: the manifest merger rejects a
-         hand-written localeConfig while generation is on (S70 14 d, SY13). -->
+
     <application
         android:label="${PRODUCT_NAME}"
         android:name=".AndroidAppMain"
@@ -81,14 +77,7 @@
             </intent-filter>
         </activity>
 
-        <!-- SYS-9: API 28 to 30 keeps HTTPS in the browser. pathAdvancedPattern is only
-             parsed by API 31+, so put verified links on a separately gated alias: an old
-             OS must never ignore the unknown path and turn this into a whole-host filter.
-             The target's singleTask launch mode applies to the alias; launcher and
-             conclave:// continue to target MainActivity directly on every API level.
-             Advanced globs are greedy without backtracking. Meeting token classes exclude
-             their hyphen delimiters; webinar codes exclude slash/dot and stay one segment.
-             Custom-tenant, single/two-word codes, nested paths and static files stay on web. -->
+
         <activity-alias
             android:name=".MeetingAppLinks"
             android:targetActivity=".MainActivity"
@@ -111,7 +100,7 @@
                 <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathAdvancedPattern="/sched-[0-9a-fA-F]{8}" />
             </intent-filter>
         </activity-alias>
-        
+
         <service
             android:name="conclave.module.CallForegroundService"
             android:foregroundServiceType="microphone|camera|mediaPlayback"
@@ -122,14 +111,12 @@
             android:foregroundServiceType="mediaProjection"
             android:exported="false" />
 
-        <!-- Receives the ongoing-call notification + PiP Leave / Mute actions. -->
+
         <receiver
             android:name="conclave.module.CallActionReceiver"
             android:exported="false" />
 
-        <!-- Shares files from the cache directory (S40 CH18: Share Photo in the chat image viewer; TRN-2 and SYS-15
-             reuse it through the paths in res/xml/conclave_file_paths.xml). Never exported; read access is granted per
-             intent. -->
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -140,8 +127,7 @@
                 android:resource="@xml/conclave_file_paths" />
         </provider>
 
-        <!-- Photo Picker backport for API 28 to 29 through Google Play services (S40 CH18, AND 15.5): the system picker
-             needs no storage permission on every supported API level. -->
+
         <service
             android:name="com.google.android.gms.metadata.ModuleDependencies"
             android:enabled="false"

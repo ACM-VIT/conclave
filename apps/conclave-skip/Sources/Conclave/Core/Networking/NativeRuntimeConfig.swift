@@ -9,8 +9,6 @@ enum NativeRuntimeConfig {
         "CONCLAVE_PEOPLE_FIXTURE", "CONCLAVE_CHAT_FIXTURE", "CONCLAVE_TRANSCRIPT_FIXTURE"
     ]
 
-    /// Some device launchers forward app arguments but not target-process environment variables.
-    /// Keep existing environment values authoritative, including an explicitly empty route list.
     static func debugLaunchValue(
         forKey key: String,
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -29,8 +27,6 @@ enum NativeRuntimeConfig {
         return nil
     }
 
-    /// Resolve process launch input once at a fixture's default-argument boundary. A reader passed an explicit
-    /// environment keeps that dictionary unchanged, including an empty dictionary or an empty selector value.
     static func debugLaunchEnvironment(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         arguments: [String] = ProcessInfo.processInfo.arguments

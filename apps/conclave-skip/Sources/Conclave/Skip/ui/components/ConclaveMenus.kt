@@ -21,17 +21,6 @@ import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 
-/*
- * Menus (F00 C16): an anchored M3 DropdownMenu from the shared MenuSectionModel, so the iOS menu, the iOS fallback
- * sheet and this menu read one model. Flat: extraSmall shape, surfaceContainer, no tonal or shadow elevation, a
- * 1 dp outlineVariant border. Sections are separated by dividers; destructive items take the error color and sit
- * last (the model's order); a toggle item is a Checkbox node with a trailing check while on; an unavailable item
- * stays, disabled, with its reason as a second line and in its state description (R10). The anchor's owner opens
- * it (by tap or by long press through combinedClickable, which plays `longPress`). Content composes only while
- * expanded. The menu window registers with the Debug semantics exporter and exposes test tags as resource ids.
- */
-
-/** The Material glyph for a manifest concept used in menus, null for none. Screens may pass their own. */
 internal fun conclaveMenuIcon(concept: String): ImageVector? = when (concept) {
     "raise_hand" -> ConclaveIcons.FrontHandFill0
     "share_screen" -> ConclaveIcons.PresentToAllFill0
@@ -91,7 +80,7 @@ internal fun ConclaveDropdownMenu(
         shadowElevation = 0.dp,
         border = BorderStroke(1.dp, scheme.outlineVariant),
     ) {
-        // The menu's own window registers with the Debug semantics exporter (S40 R40-11).
+
         NativeSemanticsPopupRoot(identifier)
         for ((index, section) in sections.withIndex()) {
             if (index > 0) HorizontalDivider(color = scheme.outlineVariant)

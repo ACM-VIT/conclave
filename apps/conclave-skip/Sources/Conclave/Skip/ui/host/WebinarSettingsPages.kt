@@ -52,26 +52,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/*
- * S50 9 d (PPL-5): Webinar settings and its two pushes (Attendee code, Custom link) on Android, inside every host
- * stack (Participants, the root Host Controls panel, Meeting Details; R50-2 `PeopleRoute.webinar`, `attendeeCode`,
- * `customLink`). A LazyColumn of ListItems on the page reservation (R50-1) in the system appearance; the PL4 switches
- * from Host Controls in `primary` (R06); Max attendees opens the PL10 number dialog with the inline error "Enter a
- * number from 1 to 5,000." (letters, 0 and 5001 send nothing, 9 l); the link row with a trailing copy IconButton and the
- * "Share webinar link" row through the localized share (generating the link first through the one owner, R34);
- * "Rotate link..." confirms through the page's HostConfirmationHost leaf; failures use the page snackbar with Retry
- * (PL14). One config refresh when the page appears (9 k). Turning webinar mode off pops back (9 f).
- */
-
-/** Fields and buttons on the webinar pages never stretch past 440 dp (S50 7 b). */
 private val WebinarFieldMaxWidth = 440.dp
 
-/** What one Webinar settings item draws (stable keys and content types). */
 internal enum class WebinarItemKind { Loading, Header, Watching, Policy, Capacity, Link, LinkText, Share, Rotate, Footer }
 
 internal data class WebinarListItem(val key: String, val kind: WebinarItemKind, val value: String = "")
 
-/** The S50 9 b order: Attendees (watching, public, lock, Q&A, max, code), then Webinar link. Pure. */
 internal fun webinarListItems(snapshot: HostControlsSnapshot): List<WebinarListItem> {
     val items = mutableListOf<WebinarListItem>()
     if (snapshot.isConfigLoading) items.add(WebinarListItem("loading", WebinarItemKind.Loading))
@@ -92,7 +78,6 @@ internal fun webinarListItems(snapshot: HostControlsSnapshot): List<WebinarListI
     return items
 }
 
-/** Copies a link; the system confirms it from API 33, so only API 28 to 32 get the "Link copied" snackbar (9 d). */
 internal fun webinarCopyLink(context: Context, link: String): Boolean {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return false
     clipboard.setPrimaryClip(ClipData.newPlainText(conclaveStringOf(context, "hst_webinar_link"), link))
@@ -110,7 +95,7 @@ internal fun WebinarSettingsPage(people: PeoplePresenter, reservation: PaddingVa
     var showsCapacityDialog by rememberSaveable { mutableStateOf(false) }
     var seenRotation by rememberSaveable { mutableIntStateOf(snapshot.rotatedLinkSerial) }
     LaunchedEffect(Unit) {
-        // 9 j: drafts seed from the server values once; then one config refresh per page appearance.
+
         if (!host.drafts.seededFromServer) {
             host.drafts.capacity = snapshot.webinar.maxAttendees.toString()
             host.drafts.slug = snapshot.webinar.linkSlug
@@ -123,7 +108,7 @@ internal fun WebinarSettingsPage(people: PeoplePresenter, reservation: PaddingVa
     LaunchedEffect(snapshot.rotatedLinkSerial) {
         if (snapshot.rotatedLinkSerial == seenRotation) return@LaunchedEffect
         seenRotation = snapshot.rotatedLinkSerial
-        // 9 f: the new link is copied and announced once.
+
         val fresh = host.snapshot.webinar.linkURL
         if (fresh.isNotEmpty()) {
             webinarCopyLink(context, fresh)
@@ -233,7 +218,6 @@ internal fun WebinarSettingsPage(people: PeoplePresenter, reservation: PaddingVa
     }
 }
 
-/** Reads `host.attendeeCount` only (S50 9 k). */
 @Composable
 private fun WebinarWatchingItem(host: HostControlsPresenter, max: Int) {
     val count = host.attendeeCount
@@ -248,10 +232,6 @@ private fun WebinarWatchingItem(host: HostControlsPresenter, max: Int) {
     )
 }
 
-/**
- * PL10 Max attendees (S50 9 d): the number keyboard, the inline error for text that is not 1 to 5,000 (nothing is
- * sent), Done commits through `host.setMaxAttendees`; the dialog stays open while pending and closes on the save.
- */
 @Composable
 private fun WebinarCapacityDialog(people: PeoplePresenter, onClose: () -> Unit) {
     val host = people.host
@@ -297,7 +277,6 @@ private fun WebinarCapacityDialog(people: PeoplePresenter, onClose: () -> Unit) 
     )
 }
 
-/** Attendee code (S50 9 d: mirrors 7 d with its own strings). The current code is never shown. */
 @Composable
 internal fun AttendeeCodePage(people: PeoplePresenter, reservation: PaddingValues, snackbar: SnackbarHostState, onPop: () -> Unit) {
     val host = people.host
@@ -374,10 +353,6 @@ internal fun AttendeeCodePage(people: PeoplePresenter, reservation: PaddingValue
     }
 }
 
-/**
- * Custom link (S50 9 d): the field sanitized live to a to z, 0 to 9 and hyphens (at most 32), the rule as its
- * supporting text (Save stays disabled under 3 characters with the rule visible), Save link and Clear link.
- */
 @Composable
 internal fun CustomLinkPage(people: PeoplePresenter, reservation: PaddingValues, snackbar: SnackbarHostState, onPop: () -> Unit) {
     val host = people.host

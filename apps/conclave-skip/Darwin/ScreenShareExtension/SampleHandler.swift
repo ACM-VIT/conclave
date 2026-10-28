@@ -1,21 +1,4 @@
-//
-//  SampleHandler.swift
-//  ScreenShareExtension
-//
-//  ReplayKit Broadcast Upload Extension. Captures the device screen, throttles
-//  frames, JPEG-encodes them, and streams the framed payload over the App Group
-//  AF_UNIX socket owned by the main app's ScreenShareSocketServer.
-//
-//  This target stays pure Swift + ReplayKit so it can run inside the broadcast
-//  extension without importing the Skip-transpiled Conclave module.
-//
-//  SYS-10 (S70 10 c, g): the system alert iOS shows when the broadcast
-//  finishes reads a localized, friendly sentence from this extension's own
-//  String Catalog (its process cannot read the app's Bundle.module): an in-app
-//  stop says "Screen sharing stopped.", a lost connection says why, and a start
-//  that never connected (or that the app gave up on) says "Couldn't start
-//  screen sharing. Try again." Device audio stays off (S70 O6, SY23).
-//
+
 
 import CoreGraphics
 import CoreImage
@@ -68,7 +51,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
   private let lifecycleStateKey = "conclave.screenShare.lifecycle.state"
   private let lifecycleUpdatedAtKey = "conclave.screenShare.lifecycle.updatedAt"
   private let stopRequestedAtKey = "conclave.screenShare.lifecycle.stopRequestedAt"
-  /// `ScreenShareBroadcastStopReason` raw value the app writes with the stop request ("person" or "startTimeout").
+
   private let stopReasonKey = "conclave.screenShare.lifecycle.stopReason"
   private var broadcastStartedAt: TimeInterval = 0
 
@@ -127,9 +110,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     with sampleBufferType: RPSampleBufferType
   ) {
     guard !didFinishBroadcast else { return }
-    // S70 10 a, O6 and SY23 (RECONCILE R43): `.audioApp` buffers would be forwarded only once iOS device audio
-    // ships (`ScreenShareCapabilityPolicy.iosDeviceAudioShips` is false in v1, pending a physical-device cell for
-    // the extension's 50 MB budget); `.audioMic` is never used (the picker hides the microphone button).
+
     guard sampleBufferType == .video else { return }
     if wasStopRequestedByMainApp() {
       finishBroadcast(stopReasonRequestedByMainApp())
@@ -259,15 +240,14 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
   }
 
-  /// Why the extension finishes the broadcast; each reads its own system alert sentence (S70 10 g).
   private enum FinishReason {
-    /// The person stopped from the app.
+
     case stoppedByApp
-    /// The app gave up on a start whose socket never connected (its 8 s grace).
+
     case startTimeout
-    /// The socket dropped after the share was live and did not come back in time.
+
     case connectionLost
-    /// The socket never connected within this extension's own initial timeout.
+
     case neverConnected
   }
 
@@ -295,7 +275,6 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
   }
 
-  /// The localized sentence iOS shows in its system alert when the broadcast finishes (S70 10 c, g).
   private static func alertMessage(for reason: FinishReason) -> String {
     switch reason {
     case .stoppedByApp:

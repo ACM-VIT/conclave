@@ -1,8 +1,6 @@
 #if os(iOS) && !SKIP
 import Foundation
 
-/// The CallKit calls the presence adapter makes (S70 SX2): the real `CXProvider` and `CXCallController`
-/// (`CallKitManager`), or `FakeCallProvider` for the scripted system fixture cells.
 @MainActor
 protocol CallProviding: AnyObject {
     var actionHandler: CallProviderActionHandler? { get set }
@@ -16,7 +14,6 @@ protocol CallProviding: AnyObject {
     func reportEnded(uuid: UUID, failed: Bool)
 }
 
-/// The provider delegate's actions, answered with fulfill (true) or fail (false).
 @MainActor
 protocol CallProviderActionHandler: AnyObject {
     func providerSetMuted(uuid: UUID, muted: Bool) -> Bool
@@ -25,8 +22,6 @@ protocol CallProviderActionHandler: AnyObject {
     func providerDidReset()
 }
 
-/// SX1 fake provider: records each CallKit call instead of making it, and answers every request as accepted. A
-/// requested mute or end echoes back through the action handler, as CallKit does for every requested transaction.
 @MainActor
 final class FakeCallProvider: CallProviding {
     weak var actionHandler: CallProviderActionHandler?
@@ -74,12 +69,6 @@ final class FakeCallProvider: CallProviding {
     }
 }
 
-/// S70 SX2: a thin translator from `CallKitReportPolicy.reports(old:new:hasReportedConnected:)` (pure, host-tested)
-/// to a `CallProviding`. It owns the per-call bookkeeping: the UUID mapped to its presence session, `reportedMuted`
-/// (so the `perform CXSetMutedCallAction` echo of an in-app mute returns `.alreadyInEffect` and is fulfilled) and
-/// `pendingLocalEndUUID` (so the `perform CXEndCallAction` echo of a local leave is fulfilled without calling
-/// `handle(.leave)` a second time). It fulfills only on `.dispatched` or `.alreadyInEffect`. No haptics: the system
-/// plays its own (S70 D7).
 @MainActor
 final class CallKitPresenceAdapter: CallProviderActionHandler {
     static let shared = CallKitPresenceAdapter(provider: CallKitManager.shared)
@@ -100,7 +89,6 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
         provider.actionHandler = self
     }
 
-    /// The adapter entry the platform installs on `presence` (S70 0.5 fan-out).
     func makeAdapter(for presence: CallPresence) -> CallPresenceAdapter {
         self.presence = presence
         return CallPresenceAdapter(name: "callKit") { [weak self] old, new in
@@ -114,8 +102,6 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
             perform(report)
         }
     }
-
-    // MARK: - Reports
 
     private func perform(_ report: CallKitReport) {
         switch report.kind {
@@ -142,7 +128,7 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
 
     private func startCall(_ report: CallKitReport) {
         if let previous = activeUUID {
-            // Never leave a call behind: a stale one ends as failed before the next starts.
+
             provider.reportEnded(uuid: previous, failed: true)
         }
         let uuid = UUID()
@@ -159,8 +145,7 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
             if accepted {
                 self.presence?.reportSurface(.callKit, status: .active)
             } else {
-                // Another app owns the call UI or CallKit is unavailable (O9): the meeting continues with no system
-                // call UI and no in-app notice; the audio session activates directly (S70 5 c fallback).
+
                 self.activeUUID = nil
                 self.hasReportedConnected = false
                 self.reportedMuted = nil
@@ -169,7 +154,6 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
         }
     }
 
-    /// The first update of a call goes out at once; later name or video changes are debounced 1 s.
     private func scheduleUpdate(_ report: CallKitReport) {
         guard let uuid = activeUUID else { return }
         if !hasReportedConnected && pendingUpdate == nil && updateDebounceTask == nil {
@@ -196,8 +180,7 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
         guard let uuid = activeUUID else { return }
         let previousMuted = reportedMuted
         guard previousMuted != muted else { return }
-        // Set before the request: CallKit's echo through perform CXSetMutedCallAction then finds the call already in
-        // this state and is fulfilled with no second toggle.
+
         reportedMuted = muted
         provider.requestSetMuted(uuid: uuid, muted: muted) { [weak self] accepted in
             guard let self, !accepted, self.activeUUID == uuid, self.reportedMuted == muted else { return }
@@ -205,8 +188,6 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
         }
     }
 
-    /// S70 5 c: the hold banner's Resume requests one `CXSetHeldCallAction(onHold: false)`; CallKit's echo then
-    /// reaches `providerSetHeld`, which dispatches `.resume` (the call stays muted, O2).
     func requestResumeFromHold() {
         guard let uuid = activeUUID else { return }
         provider.requestSetHeld(uuid: uuid, onHold: false) { _ in }
@@ -222,7 +203,7 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
         updateDebounceTask = nil
         switch kind {
         case .localEndRequest:
-            // The system records a local end; its echo is fulfilled without a second leave.
+
             pendingLocalEndUUID = uuid
             provider.requestEnd(uuid: uuid) { [weak self] accepted in
                 guard let self, !accepted, self.pendingLocalEndUUID == uuid else { return }
@@ -245,16 +226,13 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
         report.title.isEmpty ? ConclaveStrings.text("Conclave Meeting") : report.title
     }
 
-    // MARK: - CallProviderActionHandler
-
     func providerSetMuted(uuid: UUID, muted: Bool) -> Bool {
         guard uuid == activeUUID, let presence else { return false }
         let previousMuted = reportedMuted
         reportedMuted = muted
         let result = presence.handle(muted ? .mute : .unmute, source: .callKit, presenceSession: activePresenceSession)
         if !result.fulfillsSystemAction {
-            // .duplicate (an unmute while a mute owns the guard), .unavailable (attendee) and .stale fail back, so
-            // the system button stays muted.
+
             reportedMuted = previousMuted
         }
         return result.fulfillsSystemAction
@@ -268,13 +246,12 @@ final class CallKitPresenceAdapter: CallProviderActionHandler {
 
     func providerEnd(uuid: UUID) -> Bool {
         if uuid == pendingLocalEndUUID {
-            // The echo of our own local leave: fulfill, no second leave.
+
             pendingLocalEndUUID = nil
             return true
         }
         guard uuid == activeUUID, let presence else { return true }
-        // A system end (end button, Watch, CarPlay, AirPods): the system's own action is the end, so the adapter
-        // requests nothing more when the leave reaches the snapshot.
+
         let session = activePresenceSession
         activeUUID = nil
         hasReportedConnected = false

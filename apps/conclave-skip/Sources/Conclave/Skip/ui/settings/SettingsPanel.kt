@@ -40,16 +40,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-/*
- * S60 1 d (SET-1) on Android. In a call, MeetingPanel.settings is an InCallPage in lazyList mode (R40-3, R50-1) in the
- * system appearance, with the page snackbar (D23) and the host's PanelPageStack for pushed pages (L6-11; Back pops a
- * page before it closes the panel, predictive back moves the page, PS 8.5). Outside a call, Account > Settings is the
- * app-scope screen (RECONCILE R26, S10 5 d `SettingsKey`): a Scaffold with its own saved page stack over the same
- * SettingsPresenter content and stores. The attendee variant (R44) renders the same root list inside Webinar details.
- * Registered by the native call root (HD request B6-T2 R3). SET-3: the call-scope page stops the Settings preview
- * when the activity stops (scene background, C6-8).
- */
-
 @Composable
 internal fun SettingsPage(
     settings: SettingsPresenter,
@@ -72,12 +62,12 @@ internal fun SettingsPage(
         settings.panelDidOpen()
         onDispose {
             settings.panelDidClose()
-            // L6-3: the presentation's preview view goes with it.
+
             SettingsPreviewRenderers.release(request.presentationID)
         }
     }
     LaunchedEffect(request.presentationID) {
-        // R6-5: the voice message hint lands on the Voice page, once per presentation.
+
         if (pages != null && !pages.isNested) {
             for (page in SettingsRoutePolicy.initialPath(destination = request.destination)) pages.push(page.rawValue)
         }
@@ -101,7 +91,7 @@ internal fun SettingsPage(
         isNested = pages?.isNested == true,
         onBack = { pages?.pop() },
     ) { reservation ->
-        // L6-3: the preview card keeps one PreviewView per presentation.
+
         CompositionLocalProvider(LocalSettingsPresentationId provides request.presentationID) {
             SettingsPageContent(settings, people, top, reservation, snackbar, onPush = { pages?.push(it) },
                 onOpenTranscript = { panels.present(MeetingPanel.transcript, from = PanelInvoker.settings) })
@@ -109,7 +99,6 @@ internal fun SettingsPage(
     }
 }
 
-/** A destination for the open panel (SR7): `settingsVoice` pushes the Voice page in place. */
 @Composable
 private fun SettingsDestinationLeaf(panels: PanelCoordinator, presentationID: Int, pages: PanelPageStack?) {
     val sequence = panels.latestDestination(presentationID)?.sequence ?: 0
@@ -123,7 +112,6 @@ private fun SettingsDestinationLeaf(panels: PanelCoordinator, presentationID: In
     }
 }
 
-/** C6-8: the activity stopping (the scene went to the background) stops the Settings preview. */
 @Composable
 private fun SettingsBackgroundLeaf(settings: SettingsPresenter) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -136,7 +124,6 @@ private fun SettingsBackgroundLeaf(settings: SettingsPresenter) {
     }
 }
 
-/** Host loss pops host pages (S50 12); a demotion to attendee closes the panel with "Settings closed" (1 a). */
 @Composable
 private fun SettingsRoleLeaf(settings: SettingsPresenter, pages: PanelPageStack?, onClose: () -> Unit) {
     val general = settings.general
@@ -157,24 +144,18 @@ private fun SettingsRoleLeaf(settings: SettingsPresenter, pages: PanelPageStack?
     }
 }
 
-/** The saved page stack of the app-scope screen (raw values of SettingsRoute). */
 private val settingsStackSaver = listSaver<SnapshotStateList<String>, String>(
     save = { it.toList() },
     restore = { saved -> mutableStateListOf<String>().apply { addAll(saved) } },
 )
 
-/**
- * RECONCILE R26: Account > Settings outside a call (the premeeting `SettingsKey`, HD request B6-T2 R4). A Scaffold
- * in the system appearance with its own saved page stack; Back pops a page first (predictive back through
- * BackHandler), then leaves through [onBack]. The presenter is the app scope: same stores, no core, no in-call rows.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AppSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
-    // S70 15 a (R70-4, RECONCILE R26): outside a call, About still offers Export Diagnostics (after a failed join).
+
     val settings = remember {
         SettingsPresenter(scope = SettingsScope.app).also {
-            // SYS-3 (S70 2 g, R26): the notification rows outside a call too.
+
             val notifications = SystemNotifications.shared.snapshot
             it.apply(SettingsInputs.make(
                 messageNotificationsAvailable = true,
@@ -218,7 +199,7 @@ internal fun AppSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier
         containerColor = scheme.surface,
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
-        // The list scrolls behind the navigation bar; its inset becomes the list's bottom padding.
+
         val body = PaddingValues(start = padding.calculateStartPadding(layoutDirection), top = padding.calculateTopPadding(),
             end = padding.calculateEndPadding(layoutDirection), bottom = 0.dp)
         val reservation = PaddingValues(bottom = padding.calculateBottomPadding() + 16.dp)
@@ -230,10 +211,6 @@ internal fun AppSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier
     }
 }
 
-/**
- * RECONCILE R44: the attendee-filtered call scope inside Webinar details (HD request B6-T2 R5): the same root list;
- * only the privacy policy pushes, through the container's own page key.
- */
 @Composable
 internal fun SettingsAttendeeContent(settings: SettingsPresenter, reservation: PaddingValues, snackbar: SnackbarHostState,
                                      onOpenPrivacy: () -> Unit) {

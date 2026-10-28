@@ -4,18 +4,8 @@ import Observation
 import SwiftUI
 import UIKit
 
-// S40 3 c (photos, GIFs), 9 (image viewer), CHT-4 and CHT-5 on iOS. The bounded loader (ImageIO thumbnails at the box
-// size times a fixed decode scale, one in-memory cache per URL and size, decoding off the main actor), the
-// fixed-geometry image box every media element uses (the same frame in loading, loaded and failed phases, AGENTS
-// appearance rule), the GIF view (ImageIO `CGAnimateImageDataWithBlock` only while on screen; the first frame under
-// Reduce Motion or with Auto-Play Animated Images off), and the photo viewer: a push inside the chat's navigation stack
-// with the iOS 18 zoom transition on a sheet host, a page sheet on an inspector host, never a full-screen cover (D13).
-// The viewer follows the system appearance; a tap hides the chrome and turns the backdrop black (Q5).
-
-/// iOS copy for photos, GIFs, link cards, the GIF page and the viewer (S40 3 g, 6 g, 7 g, 9 g). Apple title case for
-/// controls and titles, sentence case for status lines, values and labels.
 enum ChatMediaCopy {
-    /// Photo failures and route blocks (3 g, 6 g); falls back to the CHT-1 to CHT-3 reasons.
+
     static func failureReason(_ failure: ChatFailure) -> String {
         switch failure {
         case .photoTooLarge: return ConclaveStrings.text("Photos can be up to 6 MB.")
@@ -29,7 +19,6 @@ enum ChatMediaCopy {
         }
     }
 
-    /// The attach menu's disabled reason (6 f).
     static func attachReason(_ reason: String) -> String {
         switch reason {
         case "privateTextOnly": return ConclaveStrings.text("Private messages are text only.")
@@ -39,7 +28,6 @@ enum ChatMediaCopy {
         }
     }
 
-    /// The attachment chip's status line (6 g).
     static func attachmentStatus(_ attachment: ChatAttachmentState) -> String {
         switch attachment.phase {
         case .preparing: return ConclaveStrings.text("Preparing…")
@@ -59,19 +47,16 @@ enum ChatMediaCopy {
     static var openPhoto: String { ConclaveStrings.text("Open Photo") }
     static var retryPhoto: String { ConclaveStrings.text("Retry Loading Photo") }
 
-    /// "Photo from Avery Lee" plus the caption (never the upload file name, 3 i, 9 g).
     static func photoLabel(_ row: ChatRowModel) -> String {
         let label = ConclaveStrings.format("Photo from %@", ChatCopy.senderName(row))
         if row.photoCaptionIsEmpty || row.plainText.isEmpty { return label }
         return label + ", " + row.plainText
     }
 
-    /// The viewer subtitle "Avery Lee, 3:41 PM".
     static func viewerSubtitle(_ row: ChatRowModel) -> String {
         ConclaveStrings.format("Chat Photo Subtitle %@ %@", ChatCopy.senderName(row), ChatCopy.time(row.timestampMillis))
     }
 
-    /// A GIF, sticker or clip element's label (3 i, 7 g): the title, else the kind.
     static func gifLabel(title: String, kind: ChatGifKind) -> String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
@@ -85,7 +70,6 @@ enum ChatMediaCopy {
     static var clipTag: String { ConclaveStrings.text("Clip") }
 }
 
-/// Canonical attachment, playback and link concepts for CHT-4 and CHT-5.
 enum ChatMediaSymbols {
     static let addAttachment = ConclaveSymbols.plus
     static let photo = ConclaveSymbols.photo
@@ -101,20 +85,15 @@ private struct ChatPhotoNamespaceKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    /// The chat panel's namespace for the iOS 18 photo zoom transition (the row thumbnail is the source).
+
     var chatPhotoNamespace: Namespace.ID? {
         get { self[ChatPhotoNamespaceKey.self] }
         set { self[ChatPhotoNamespaceKey.self] = newValue }
     }
 }
 
-// MARK: - Loader
-
-/// The bounded decoder (S40 3 c, k; fixes the unbounded decode in AGENTS "Known deferred caveat"): bytes from a file or
-/// the shared URL cache, an ImageIO thumbnail at the requested pixel size, one `NSCache` keyed by URL and size.
 enum ChatImageLoader {
-    /// Boxes decode at this scale on every device, so the cache key never depends on the display (a remount always
-    /// hits the cache and never flashes the placeholder).
+
     static let decodeScale: CGFloat = 3
 
     static let cache: NSCache<NSString, UIImage> = {
@@ -127,7 +106,6 @@ enum ChatImageLoader {
         cache.object(forKey: key(url, maxPixel))
     }
 
-    /// The decoded image, or nil when the bytes cannot be read or decoded. Never decodes on the main actor.
     static func load(_ url: String, maxPixel: Int) async -> UIImage? {
         if let hit = cached(url, maxPixel: maxPixel) { return hit }
         guard let data = await loadData(url) else { return nil }
@@ -140,7 +118,6 @@ enum ChatImageLoader {
         return decoded
     }
 
-    /// The raw bytes of a `file://` or http(s) URL, read off the main actor.
     static func loadData(_ url: String) async -> Data? {
         guard let parsed = URL(string: url) else { return nil }
         if parsed.isFileURL {
@@ -155,7 +132,6 @@ enum ChatImageLoader {
         return (200..<300).contains(status) ? result.0 : nil
     }
 
-    /// ImageIO thumbnail with the longest edge at most `maxPixel`, orientation applied (never upscaled).
     static func decode(_ data: Data, maxPixel: Int) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [
@@ -168,7 +144,6 @@ enum ChatImageLoader {
         return UIImage(cgImage: image)
     }
 
-    /// The pixel size a box of this size decodes at.
     static func pixels(_ width: CGFloat, _ height: CGFloat) -> Int {
         Int((max(width, height) * decodeScale).rounded(.up))
     }
@@ -178,10 +153,6 @@ enum ChatImageLoader {
     }
 }
 
-/// One media box with a fixed frame in every phase: loading shows the placeholder fill and a system spinner, loaded
-/// the image (fill and clip, or fit), failed the photo glyph (with the retry line for photo rows). The first frame
-/// comes from the cache when it is there, so a remount never flashes or changes size. With `onOpen` a loaded box is a
-/// button; with `retriesOnTap` a failed box retries on tap (3 f) and offers "Retry Loading Photo".
 struct ChatImageBox: View {
     let url: String
     let width: CGFloat
@@ -246,7 +217,7 @@ struct ChatImageBox: View {
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .contentShape(Rectangle())
-        // The tap is live only when it does something, so an enclosing Button (an embed card) keeps its own tap.
+
         .gesture(TapGesture().onEnded { handleTap() }, including: tapEnabled ? .gesture : .subviews)
         .accessibilityAddTraits(tapEnabled ? .isButton : [])
         .accessibilityActions {
@@ -298,10 +269,6 @@ private struct ChatImageRequestKey: Equatable {
     let attempt: Int
 }
 
-// MARK: - GIF animation
-
-/// A GIF or sticker in a fixed box: animated through ImageIO while on screen; the first frame only under Reduce Motion
-/// or with Auto-Play Animated Images off (S40 3 c, 3 l 4). Clips are posters (no inline player in this slice).
 struct ChatAnimatedImage: View {
     let url: String
     let width: CGFloat
@@ -335,7 +302,7 @@ struct ChatAnimatedImage: View {
                 }
                 .frame(width: width, height: height)
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                // Value guarded: appearance callbacks re-fire with body re-runs (AGENTS).
+
                 .onAppear { if !isVisible { isVisible = true } }
                 .onDisappear { if isVisible { isVisible = false } }
                 .task(id: url) {
@@ -350,8 +317,6 @@ struct ChatAnimatedImage: View {
     }
 }
 
-/// Plays the frames with `CGAnimateImageDataWithBlock` only while `isAnimating`; stopping sets the block's stop flag.
-/// ImageIO decodes on its own queue and delivers frames on the main queue.
 private struct ChatAnimatedImageRepresentable: UIViewRepresentable {
     let data: Data
     let isAnimating: Bool
@@ -416,9 +381,6 @@ final class ChatAnimatedImageView: UIImageView {
     }
 }
 
-// MARK: - Viewer (S40 9)
-
-/// The viewer's loaded image and share file, owned by the page (released with it, 9 k).
 @MainActor
 @Observable
 final class ChatPhotoViewerModel {
@@ -430,15 +392,13 @@ final class ChatPhotoViewerModel {
 }
 
 enum ChatPhotoViewerPlatform {
-    /// iOS 17 to 25 show the subtitle as a line in the content (no `navigationSubtitle`).
+
     static var showsInlineSubtitle: Bool {
         if #available(iOS 26.0, *) { return false }
         return true
     }
 }
 
-/// The viewer pushed inside the chat stack (sheet host): iOS 18 zoom transition from the row thumbnail, plain push on
-/// iOS 17; title "Photo", the iOS 26 subtitle, Share in the toolbar; a tap toggles the chrome and the black backdrop.
 struct ChatPhotoViewerPage: View {
     let entry: ChatRowEntry
     @State private var model = ChatPhotoViewerModel()
@@ -460,8 +420,6 @@ struct ChatPhotoViewerPage: View {
     }
 }
 
-/// The inspector host's page sheet (a 320 pt column is too small for a photo): no navigation stack of its own, so the
-/// header carries Close, the title, the subtitle and Share.
 struct ChatPhotoViewerSheet: View {
     let entry: ChatRowEntry
     let onClose: () -> Void
@@ -496,7 +454,6 @@ private struct ChatPhotoZoomDestination: ViewModifier {
     }
 }
 
-/// iOS 26 `navigationSubtitle`; iOS 17 to 25 show the subtitle line in the content instead.
 private struct ChatPhotoViewerSubtitle: ViewModifier {
     let text: String
 
@@ -509,7 +466,6 @@ private struct ChatPhotoViewerSubtitle: ViewModifier {
     }
 }
 
-/// Share Photo: the original bytes as a file (Save Image comes from the share sheet); disabled until they load.
 private struct ChatPhotoShareControl: View {
     let model: ChatPhotoViewerModel
 
@@ -623,8 +579,6 @@ private struct ChatPhotoViewerContent: View {
         .background(Color(uiColor: .systemBackground))
     }
 
-    /// The row's cached thumbnail shows at once; then the full image at screen size and a shareable file copy of the
-    /// original bytes (9 f, k).
     private func load(maxPixel: Int) async {
         if model.image == nil, let thumbnail = ChatImageLoader.cached(row.photoURL, maxPixel: ChatImageLoader.pixels(240, 180)) {
             model.image = thumbnail
@@ -649,7 +603,6 @@ private struct ChatPhotoViewerContent: View {
     }
 }
 
-/// The viewer's share copy: the original bytes in the caches directory with the sniffed extension.
 enum ChatPhotoShareFile {
     static func write(_ data: Data) -> URL? {
         var header: [UInt8] = []
@@ -672,8 +625,6 @@ enum ChatPhotoShareFile {
     }
 }
 
-/// Pinch to 4x, double tap to zoom to the tapped point, single tap toggles the chrome; one accessibility element with
-/// the photo label (the system zoom gestures announce the level).
 private struct ChatZoomableImage: UIViewRepresentable {
     let image: UIImage
     let label: String

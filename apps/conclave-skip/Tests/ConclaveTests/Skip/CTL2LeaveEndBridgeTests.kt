@@ -11,14 +11,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * CTL-2 through the transpiled Leave policy, controls presenter, S1 shell, STG-5 notice center and CL13 End fixtures (the
- * Swift half is T/CTL2LeaveEndTests.swift): who gets the host menu (S30 4 f), the Android menu order with End on top
- * (CL15, RECONCILE R8), the dialog per invoker (R09, S50 PH17), one End dispatch per confirmation (S1-DUP-02), the
- * progress toast and the Retry failure (CC7, 4 l3, l4), Leave available throughout (R09), and LeaveCache carrying the new
- * fields (CL14). Pure: no composition (PanelStageBridgeTests owns the one composition per JVM). Not run in the heads-down
- * push.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class CTL2LeaveEndBridgeTests {
@@ -34,7 +26,6 @@ class CTL2LeaveEndBridgeTests {
 
     private val titles = LeaveMenuTitles(leave = "Leave", endForEveryone = "End…", reconnecting = "R", offline = "O", ending = "N")
 
-    /** The S1 shell, stage and controls with the HD/requests/B5-T3.md R1 publish hook mirrored. */
     private class Harness(inputs: MeetingShellInputs, admitFirst: MeetingShellInputs? = null) {
         val shell = MeetingShellPresenter()
         val stage = StagePresenter(shell = shell)
@@ -91,7 +82,7 @@ class CTL2LeaveEndBridgeTests {
         assertTrue(LeaveControlPolicy.showsHostMenu(host.leave(), isAccessibilityText = false))
         assertTrue(LeaveControlPolicy.offersEndAction(host.leave()))
         assertEquals(true, host.controls.bar.control(CallControlKind.leave)?.hasShortcut)
-        // Android: End on top, a divider (the section break), then Leave call; iOS declares Leave first.
+
         assertEquals(listOf(listOf("endForEveryone"), listOf("leave")),
             ids(LeaveControlPolicy.menuSections(host.leave(), titles = titles, endOnTop = true)))
         assertEquals(listOf(listOf("leave"), listOf("endForEveryone")),
@@ -100,7 +91,7 @@ class CTL2LeaveEndBridgeTests {
         for (section in android) {
             for (item in section.items) assertEquals("", item.concept)
         }
-        // Recovering host: the menu stays, End disabled with its reason, Leave available (4 l7).
+
         val recoveringHost = Harness(recovering(isAdmin = true), admitFirst = joined(isAdmin = true))
         assertEquals(ControlBlockedReason.reconnecting, recoveringHost.leave().endBlockedReason)
         assertTrue(LeaveControlPolicy.showsHostMenu(recoveringHost.leave(), isAccessibilityText = false))
@@ -126,7 +117,7 @@ class CTL2LeaveEndBridgeTests {
         assertEquals(NoticeKind.endingForEveryone, h.stage.toast?.kind)
         assertEquals(NoticeSeverity.progress, h.stage.toast?.severity)
         assertEquals(false, h.controls.bar.control(CallControlKind.leave)?.isBlocked)
-        // S1-DUP-02: a second confirm of the same id dispatches nothing.
+
         assertEquals(ControlTapResult.ignored, h.controls.confirmEndForEveryone(id = id, postRecap = false))
         assertEquals(1, h.endCommands())
         assertEquals(1, h.controls.endingNoticeCount)
@@ -155,14 +146,14 @@ class CTL2LeaveEndBridgeTests {
         assertEquals(1, h.controls.endFailedNoticeCount)
         assertEquals(FeedbackKind.actionRejected, h.shell.feedbackState.token.kind)
         assertTrue(LeaveControlPolicy.offersEndAction(h.leave()))
-        // Retry re-presents the dialog with a fresh id (End never runs without a new confirm).
+
         h.stage.performNoticeAction(noticeId = toast.id, actionId = NoticeAction.retry)
         assertEquals(EndPhase.confirming, h.leave().endPhase)
         assertNotEquals(firstId, h.leave().confirmationId)
         assertEquals(1, h.endCommands())
         h.controls.cancelEnd(id = h.leave().confirmationId)
         assertEquals(0, h.leave().confirmationId)
-        // R09: Leave after a failed End.
+
         assertEquals(ControlTapResult.dispatched, h.controls.leave())
         assertEquals(MeetingShellCommand.leave, h.commands.last())
     }
@@ -189,7 +180,7 @@ class CTL2LeaveEndBridgeTests {
         assertFalse(LeaveControlPolicy.presentsDialog(snapshot(0, ""), includesMoreInvoker = true))
         assertTrue(LeaveControlPolicy.playsPrompt(previousId = 0, leave = more, includesMoreInvoker = true))
         assertFalse(LeaveControlPolicy.playsPrompt(previousId = 4, leave = more, includesMoreInvoker = true))
-        // Losing host while confirming closes the dialog (S1 ROLE).
+
         val h = Harness(joined(isAdmin = true))
         h.controls.selectLeaveMenuItem(LeaveControlPolicy.endItemId)
         h.push(joined(isAdmin = false))
@@ -212,7 +203,7 @@ class CTL2LeaveEndBridgeTests {
         assertTrue(failed.countersReadout().contains("endRequested=1 endConfirmed=1"))
         val recoveringHost = ControlsFixtureSession(state = ControlsFixtureState.hostRecovering)
         assertEquals(ControlBlockedReason.reconnecting, recoveringHost.controls.leaveState.endBlockedReason)
-        // CL14: the cache carries the host menu facts and the transpiled snapshot for the shared policy.
+
         val cached = LeaveCache(recoveringHost.controls).current()
         assertTrue(cached.showsEndForEveryone)
         assertEquals(ControlBlockedReason.reconnecting, cached.endBlockedReason)

@@ -1,10 +1,5 @@
 import Foundation
 
-// S60 0.5 and 8 (ACT-2): the game shell contract inside the S20 activity card. Shared (transpiled), D20 rules. The
-// presenter publishes five stored properties (chrome, scene, countdown, results, interaction) so a move's pending and
-// failure states touch only `interaction` and the scene controls, never the header (8 k). ACT-3 to ACT-6 extend
-// `GameScene` with their per-game scene models built from the typed projections in GameProjections.swift.
-
 enum SeatState: String, CaseIterable, Equatable {
     case player, joiningNextRound, canJoin, watching
 }
@@ -17,35 +12,29 @@ enum GameChromePhase: String, CaseIterable, Equatable {
     case lobby, playing, results, unsupported
 }
 
-/// Why the lobby's Start is not offered (S60 8 f). `needsPlayers` disables Start with "%@ needs at least %lld players.".
 enum GameLobbyReason: String, CaseIterable, Equatable {
     case none, needsPlayers, joinToStart, hostStarts, reconnecting
 }
 
-/// One countdown, derived once per push: the server deadline plus the client minus server clock offset at the push,
-/// so the leaf computes `deadlineMillis + serverOffsetMillis - now` without trusting the device clock (S60R 21).
 struct CountdownModel: Equatable {
     let deadlineMillis: Double
     let serverOffsetMillis: Double
     let durationMillis: Double
 
-    /// Whole seconds left at `nowMillis` (client clock), never negative; rounds up so "1 s" shows until it ends.
     func secondsLeft(nowMillis: Double) -> Int {
         let remaining = deadlineMillis + serverOffsetMillis - nowMillis
         if remaining <= 0 { return 0 }
         return Int((remaining / 1000.0).rounded(.up))
     }
 
-    /// Fraction of the phase left (1 at the start, 0 at the deadline); 0 without a duration.
     func fractionLeft(nowMillis: Double) -> Double {
         if durationMillis <= 0 { return 0 }
         let remaining = deadlineMillis + serverOffsetMillis - nowMillis
         return min(1.0, max(0.0, remaining / durationMillis))
     }
 
-    /// The "5 s left" warning threshold (S60 8 e).
     static let warningSeconds = 5
-    /// Polite announcements at exactly these second marks (S60 8 i).
+
     static let announcedSeconds: [Int] = [10, 5]
 }
 
@@ -57,8 +46,6 @@ struct GamePlayerModel: Equatable, Identifiable {
     let hasActed: Bool
 }
 
-/// One scoreboard row (S60 0.5 `GameScoreRow`; renamed because the legacy `Games/GamePresentation.swift` already declares
-/// `GameScoreRow` in this module).
 struct GameScoreboardRow: Equatable, Identifiable {
     let id: String
     let rank: Int
@@ -71,10 +58,10 @@ struct GameScoreboardRow: Equatable, Identifiable {
 struct GameChromeModel: Equatable {
     let revision: Int
     let gameId: String
-    /// Server game name, verbatim.
+
     let name: String
     let phase: GameChromePhase
-    /// 1-based round; 0 in the lobby or for games without rounds.
+
     let roundIndex: Int
     let roundTotal: Int
     let seat: SeatState
@@ -99,7 +86,6 @@ struct GameChromeModel: Equatable {
     }
 }
 
-/// Changes on every local move; read only by scene controls and K13 (8 k).
 struct GameInteractionModel: Equatable {
     let revision: Int
     let pendingRequestId: String
@@ -118,7 +104,6 @@ struct GameInteractionModel: Equatable {
     }
 }
 
-/// A server option label and its choice label or number, verbatim ("Questions: 7", "Pace: Normal").
 struct GameOptionSummaryModel: Equatable, Identifiable {
     let id: String
     let label: String
@@ -135,13 +120,6 @@ struct GameLobbyModel: Equatable {
     static let empty = GameLobbyModel(canStart: false, reason: GameLobbyReason.hostStarts, minPlayers: 0, playerCount: 0, showsJoin: false)
 }
 
-/// The body's model (S60 0.5 `GameScene`). `kind` is a `GameSceneKind` value; `projection` is the push parsed once.
-/// ACT-3 to ACT-6 add their per-game scene models here (built from `projection`), so the bodies never parse JSON.
-/// ACT-3: the six prompt game scenes (S60 9 j, Games/Native/Scenes/PromptGameScenes.swift); at most one is set, and
-/// private fields come only from the local person's own player view while that person holds a seat.
-/// ACT-4: the Wordle scene (S60 10 j, declared with its builder at the end of GameStagePresenter.swift).
-/// ACT-5: the chess scene (S60 11 j, declared with its builder at the end of GameStagePresenter.swift).
-/// ACT-6: the Zip scene (S60 12 j, declared with its builder in Games/Native/Boards/ZipScene.swift).
 struct GameScene: Equatable {
     let revision: Int
     let kind: String
@@ -190,10 +168,6 @@ struct GameResultsModel: Equatable {
     }
 }
 
-// MARK: Intents
-
-/// A flat move intent (S60 9 j, D20) with static constructors. `requestId` is filled by the presenter (client-local,
-/// bound to that emit's ack, C6-15). `choice` is -1 when unused.
 struct GameMoveIntent: Equatable {
     let type: String
     let choice: Int
@@ -224,20 +198,18 @@ struct GameMoveIntent: Equatable {
     static func tap() -> GameMoveIntent { make(type: "tap") }
     static func callVote() -> GameMoveIntent { make(type: "callVote") }
     static func tally() -> GameMoveIntent { make(type: "tally") }
-    /// Trivia `{choice}` (an option index).
+
     static func answer(_ index: Int) -> GameMoveIntent { make(type: "answer", choice: index) }
-    /// Bluff `{text}`.
+
     static func submitBluff(_ text: String) -> GameMoveIntent { make(type: "submit", text: text) }
-    /// Bluff `{optionId}`.
+
     static func chooseBluff(_ optionId: String) -> GameMoveIntent { make(type: "choose", optionId: optionId) }
-    /// Would You Rather `{option}` (0 or 1).
+
     static func choose(_ option: Int) -> GameMoveIntent { make(type: "choose", choice: option) }
-    /// Most Likely To and Imposter `{target}`.
+
     static func vote(_ target: String) -> GameMoveIntent { make(type: "vote", target: target) }
 }
 
-/// Emits exactly each module's validated payload (S60R 21: never built from labels). Returns the raw JSON object the
-/// socket layer passes through (`GameJSONValue(rawJSON:)`, both platforms), "" for a payload-free move.
 enum GameMoveAdapter {
     static func payloadJSON(_ intent: GameMoveIntent) -> String {
         switch intent.type {
@@ -268,8 +240,6 @@ enum GameMoveAdapter {
         }
     }
 
-    /// A JSON string literal: quotes, backslashes and the whitespace controls escaped. Text fields never produce
-    /// other control characters (single-line fields), so the transpiled loop stays on plain characters.
     static func quoted(_ value: String) -> String {
         var result = "\""
         for character in value {
@@ -291,7 +261,6 @@ enum GameMoveAdapter {
     }
 }
 
-/// SFU acknowledgement strings mapped explicitly (C6-15); module errors stay verbatim as `server`.
 enum GameFailurePolicy {
     static func failure(serverText: String) -> GameFailure {
         switch serverText.trimmingCharacters(in: .whitespacesAndNewlines) {
@@ -305,15 +274,11 @@ enum GameFailurePolicy {
     }
 }
 
-// MARK: Inputs and commands
-
 struct GamePlayerInput: Equatable {
     let id: String
     let name: String
 }
 
-/// The schema boundary between the core and the game shell, built by the view model on every game push
-/// (`makeGameStageInputs()`, HD request B4-T8 R2) and parsed once by the presenter.
 struct GameStageInputs: Equatable {
     let callSession: Int
     let isActive: Bool
@@ -324,20 +289,20 @@ struct GameStageInputs: Equatable {
     let pendingJoiners: [GamePlayerInput]
     let isFinished: Bool
     let canJoinLate: Bool
-    /// The public rematch config (text options omitted by the server), for the lobby summary.
+
     let config: [ActivityOptionValue]
-    /// The catalog option specs of this game (labels and choice labels for the summary).
+
     let options: [ActivityOptionInput]
     let minPlayers: Int
     let publicViewJSON: String
     let playerViewJSON: String
-    /// The server's canonical id for you (`GameStateResponse.selfId`, adopted, HD request B4-T8 R4); empty until sent.
+
     let selfId: String
-    /// The core's identity rule over `players` (`isLocalIdentityUserId`) until `selfId` arrives.
+
     let localPlayerId: String
     let isHost: Bool
     let isRecovering: Bool
-    /// The client clock when this push arrived, for the countdown offset.
+
     let receivedAtMillis: Double
 
     static func make(callSession: Int = 0, isActive: Bool = false, gameId: String = "", name: String = "", phase: String = "",
@@ -353,7 +318,6 @@ struct GameStageInputs: Equatable {
                         receivedAtMillis: receivedAtMillis)
     }
 
-    /// The id the shell treats as you: the server's when it sent one.
     var localId: String { selfId.isEmpty ? localPlayerId : selfId }
 }
 
@@ -361,8 +325,6 @@ enum GameStageCommandKind: String, CaseIterable, Equatable {
     case move, join, rematch, end
 }
 
-/// What the core performs. A move carries its client-local request id; the core answers through
-/// `GameStagePresenter.moveAcknowledged(requestId:success:serverText:)` from that emit's ack (C6-15).
 struct GameStageCommand: Equatable {
     let kind: GameStageCommandKind
     let type: String

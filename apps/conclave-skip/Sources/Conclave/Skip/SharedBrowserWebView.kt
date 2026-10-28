@@ -23,13 +23,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 
-/*
- * Legacy shared browser WebView (ACT-9, S60 14 m): used only by the legacy SharedBrowserLayoutView (through
- * NativeWebView) on the default, non-native call route. The native call root never reaches it: the browser card
- * renders the WebRTC track and the controller's noVNC input layer through K/ui/browser/BrowserSurface.kt and
- * BrowserWebViewRegistry.kt (SSL errors surfaced, renderer crashes handled, no signed URL logged). Kept unchanged until
- * the legacy route retires (CALL-FLIP, WP11); do not add native-path features here.
- */
 private fun String.webViewLogUrl(): String {
     val trimmed = trim()
     return if (trimmed.length <= 180) trimmed else trimmed.take(177) + "..."

@@ -33,16 +33,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 8 (ACT-2) on Android: everything every game shares inside the S20 activity card. ActivityStage.kt (STG-9) draws
- * the card, identity and Show video; this file supplies the header's trailing actions (K12 seat control and the host
- * End, whose AlertDialog composes in the in-call theme the call root provides, R09) and the body: lobby, private-view
- * loading, spectator and failure notices, results with the scoreboard and rematch, the unsupported fallback, and the
- * generic scene ACT-3 to ACT-6 replace per game. Each leaf reads only the presenter property it shows (8 k), and the
- * bars sit pinned at the bottom of the card inside the card's IME padding.
- */
-
-/** The card header's trailing slot for a game. */
 @Composable
 internal fun GameShellHeaderActions(games: GameStagePresenter) {
     val chrome = games.chrome
@@ -69,7 +59,6 @@ internal fun GameShellHeaderActions(games: GameStagePresenter) {
     if (prompt) GameShellEndDialog(games, chrome.name, onDismiss = { prompt = false })
 }
 
-/** The End confirmation (S60 7 g copy). */
 @Composable
 internal fun GameShellEndDialog(games: GameStagePresenter, name: String, onDismiss: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -85,7 +74,6 @@ internal fun GameShellEndDialog(games: GameStagePresenter, name: String, onDismi
     )
 }
 
-/** The card body for a game: a scrolling scene and the pinned bar below it. */
 @Composable
 internal fun GameShellBody(games: GameStagePresenter, storeURL: String, onShowVideo: () -> Unit) {
     Column(Modifier.fillMaxSize().testTag("game.body")) {
@@ -100,9 +88,8 @@ internal fun GameShellBody(games: GameStagePresenter, storeURL: String, onShowVi
     }
 }
 
-/** Reconnecting, move failures and the End failure (K13), each in a polite live region. */
 @Composable
-private fun GameShellNotices(games: GameStagePresenter) {
+internal fun GameShellNotices(games: GameStagePresenter) {
     val interaction = games.interaction
     val chrome = games.chrome
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -118,7 +105,6 @@ private fun GameShellNotices(games: GameStagePresenter) {
     }
 }
 
-/** The scene switch. ACT-3 to ACT-6 add their per-game bodies here, keyed by `scene.kind`. */
 @Composable
 private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVideo: () -> Unit) {
     val scene = games.scene
@@ -127,14 +113,14 @@ private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVi
     when (scene.kind) {
         GameSceneKind.lobby -> GameLobbyBody(scene, chrome)
         GameSceneKind.privateView -> GameKitNotice(GameKitNoticeKind.privateView, conclaveString("gm_private_loading_body"))
-        // ACT-3 (S60 9): the prompt game scenes, playing and results (K/ui/games/scenes).
+
         GameSceneKind.trivia, GameSceneKind.bluff, GameSceneKind.wouldYouRather, GameSceneKind.mostLikelyTo,
         GameSceneKind.reaction, GameSceneKind.imposter -> PromptGameSceneBody(games)
-        // ACT-4 (S60 10): Wordle, every phase (K/ui/games/boards/WordleBoard.kt).
+
         GameSceneKind.wordle -> WordleSceneBody(games)
-        // ACT-5 (S60 11): chess, playing and results (K/ui/games/boards/ChessBoard.kt).
+
         GameSceneKind.chess -> ChessSceneBody(games)
-        // ACT-6 (S60 12): Zip, every phase after the lobby (K/ui/games/boards/ZipBoard.kt).
+
         GameSceneKind.zip -> ZipSceneBody(games)
         GameSceneKind.unsupported -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             GameKitNotice(
@@ -155,7 +141,6 @@ private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVi
     }
 }
 
-/** Lobby (S60 8 b, f): kicker, "Waiting to start", the option summary, the players and the start hint. */
 @Composable
 private fun GameLobbyBody(scene: GameScene, chrome: GameChromeModel) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -167,10 +152,6 @@ private fun GameLobbyBody(scene: GameScene, chrome: GameChromeModel) {
     }
 }
 
-/**
- * The generic playing body: round, the server's prompt text, the countdown leaf, who acted and the scoreboard; the
- * spectator notice replaces any self status for a person without a seat (INM G7).
- */
 @Composable
 private fun GameGenericSceneBody(scene: GameScene, chrome: GameChromeModel, games: GameStagePresenter) {
     val common = scene.projection.common
@@ -196,14 +177,12 @@ private fun GameGenericSceneBody(scene: GameScene, chrome: GameChromeModel, game
     }
 }
 
-/** Reads only `countdown`, so the per-second leaf never recomposes the scene. */
 @Composable
 private fun GameShellCountdownSlot(games: GameStagePresenter) {
     val countdown = games.countdown ?: return
     GameKitCountdown(countdown)
 }
 
-/** Results: the winner line, the scoreboard and, for participants, "Waiting for the host". */
 @Composable
 private fun GameResultsBody(games: GameStagePresenter) {
     val results = games.results
@@ -217,9 +196,8 @@ private fun GameResultsBody(games: GameStagePresenter) {
     }
 }
 
-/** The pinned bar: Start game or Join in the lobby; Play again and End game in the results (host only). */
 @Composable
-private fun GameShellBottomBar(games: GameStagePresenter) {
+internal fun GameShellBottomBar(games: GameStagePresenter) {
     val chrome = games.chrome
     val scene = games.scene
     val results = games.results
@@ -242,18 +220,17 @@ private fun GameShellBottomBar(games: GameStagePresenter) {
                 onSecondary = { prompt = true },
             )
         } else if (chrome.phase == GameChromePhase.playing) {
-            // ACT-3 (S60 9 c): the prompt game host bar (seated host only).
+
             PromptGameHostBar(games)
-            // ACT-4 (S60 10 f): Next round at a Wordle round's results (seated host only).
+
             WordleHostBar(games)
-            // ACT-6 (S60 12 f): Next round at a Zip round's results (seated host only).
+
             ZipHostBar(games)
         }
     }
     if (prompt) GameShellEndDialog(games, chrome.name, onDismiss = { prompt = false })
 }
 
-/** The server's prompt text for the generic body (verbatim), or "". */
 @Composable
 private fun gameShellPromptTitle(projection: GameProjection): String {
     projection.trivia?.let { return it.prompt }

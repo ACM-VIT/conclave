@@ -30,17 +30,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
-/*
- * S50 2 d (PPL-1): the Android person row, a Material 3 ListItem (F00 C10 with the PL1 and PL3 deltas). The row reads
- * only its PersonRowEntry; the speaking glyph is a leaf on the S20 TileSpeakingState, so a speaker change recomposes the
- * leaf, never the row (S50 2 k). The whole row is one merged node: name and sub line as its text, the states as its
- * state description, and the speaking leaf's "Speaking" description merged in while it shows. When PPL-2 gives the row
- * actions the whole row becomes the one clickable target that opens the DropdownMenu (PL3; long press opens the same
- * menu and plays longPress) with the trailing MoreVertFill0 decorative inside it. Texts are resolved once per model
- * change, never per frame.
- */
-
-/** The row's resolved texts (S50 2 g), rebuilt only when the model changes. */
 internal data class PersonRowTexts(val name: String, val sub: String?, val states: String, val actionsLabel: String)
 
 internal fun personRowTexts(context: Context, model: PersonRowModel, showsQueue: Boolean, queueCount: Int): PersonRowTexts {
@@ -50,14 +39,14 @@ internal fun personRowTexts(context: Context, model: PersonRowModel, showsQueue:
     when (model.role) {
         PersonRole.host -> parts.add(conclaveStringOf(context, "ds_tag_host"))
         PersonRole.coHost -> parts.add(conclaveStringOf(context, "ds_tag_cohost"))
-        // Attendees are never roster rows (PH12); attendee hand-queue rows arrive with PPL-5.
+
         else -> {}
     }
     when (model.detail) {
         PersonDetail.presenting -> parts.add(conclaveStringOf(context, "ppl_detail_presenting"))
         PersonDetail.reconnecting -> parts.add(conclaveStringOf(context, "ppl_detail_reconnecting"))
         PersonDetail.stageInvited -> parts.add(conclaveStringOf(context, "ppl_detail_invited"))
-        // PPL-5 (S50 10 g): attendee hand-queue rows read "Attendee".
+
         PersonDetail.attendee -> parts.add(conclaveStringOf(context, "ds_attendee"))
         else -> {}
     }
@@ -67,7 +56,7 @@ internal fun personRowTexts(context: Context, model: PersonRowModel, showsQueue:
         val current = sub
         sub = if (current == null) part else conclaveStringOf(context, "ppl_sub_join", current, part)
     }
-    // State values in the S50 2 i order (Speaking joins through the leaf's own description).
+
     val states = mutableListOf<String>()
     if (model.isHandRaised) {
         states.add(conclaveStringOf(context, "ds_state_hand_raised"))
@@ -84,11 +73,6 @@ internal fun personRowTexts(context: Context, model: PersonRowModel, showsQueue:
         actionsLabel = conclaveStringOf(context, "ppl_actions_for", name))
 }
 
-/**
- * One person (S50 2 d). [onOpenMenu] is PPL-2's: null while the row has no actions, so the row is a plain merged node
- * with no click and no MoreVertFill0; [menu] is the row's DropdownMenu, anchored at the trailing edge; [actions] are the
- * same items as TalkBack custom actions on the merged node (S50 3 i, AX4).
- */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun PersonRow(
@@ -109,7 +93,7 @@ internal fun PersonRow(
     val identity = remember(model.avatarSeed) { ConclaveAvatarIdentity.fromSeed(model.avatarSeed) }
     val haptics = rememberConclaveHaptics()
     val identifier = "people.row.$sectionId.${model.id}"
-    // people.recompose.<section>:<rowId> (PL12): the fixture ledger counts row compositions; production passes none.
+
     SideEffect { probe?.record("$sectionId:${model.id}") }
     val click = if (onOpenMenu != null) {
         Modifier.combinedClickable(
@@ -145,10 +129,6 @@ internal fun PersonRow(
     }
 }
 
-/**
- * Status icons, only for notable states, in the S50 2 c order: speaking (leaf), raised hand in handRaised with the
- * queue number before it in Raised Hands, presenting, camera off, muted, reconnecting. 20 dp, onSurfaceVariant.
- */
 @Composable
 private fun PeopleStatusIcons(model: PersonRowModel, speaking: TileSpeakingState, showsQueue: Boolean) {
     val tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -157,7 +137,7 @@ private fun PeopleStatusIcons(model: PersonRowModel, speaking: TileSpeakingState
     if (model.isHandRaised) {
         Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
             if (showsQueue && model.handOrder > 0) {
-                // The queue position is read from the state description, so the digit is not a node of its own.
+
                 ConclaveText(String.format(Locale.getDefault(), "%d", model.handOrder), line = "people.row.queue",
                     style = rememberTabular(MaterialTheme.typography.labelLarge), color = hand,
                     modifier = Modifier.clearAndSetSemantics { })
@@ -171,10 +151,6 @@ private fun PeopleStatusIcons(model: PersonRowModel, speaking: TileSpeakingState
     if (model.isReconnecting) Icon(ConclaveIcons.SignalWifiBadFill0, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
 }
 
-/**
- * The only hot read of a row (S50 2 k): a static glyph that appears and disappears with no animation. Its description
- * merges into the row's node, so TalkBack hears "Speaking" without the row reading the speaking state.
- */
 @Composable
 private fun PeopleSpeakingIcon(speaking: TileSpeakingState) {
     if (speaking.isSpeaking) {

@@ -2,15 +2,6 @@ package conclave.module
 
 import androidx.compose.runtime.Composable
 
-/*
- * S60 L6-14 (ACT-1, STG-9): the one exhaustive copy mapping for the Activities surface and the activity card on
- * Android. Every reason, phase and raw value maps through a `when` to an app-module string resource resolved by name
- * (Material sentence case, owner decision Q13; prefixes act_, app_, br_, stg_ and the shared set_ recovery line).
- * Server catalog strings stay verbatim. T/Skip/ActivityBridgeTests.kt and T/ActivityProjectionTests.swift enumerate
- * every enum case and check the names exist (RC R15).
- */
-
-/** App copy keyed by SDK id (C6-18): the SDK's own sentence-case names never reach a surface. */
 internal fun activitiesAppNameResource(appId: String): String = when (appId) {
     "whiteboard" -> "app_whiteboard"
     "wheel" -> "app_wheel"
@@ -58,8 +49,6 @@ internal fun activitiesNowPlayingStatus(item: NowPlayingModel): String = when (i
     ActivityKind.browser -> if (item.browserLabel.isEmpty()) conclaveString("act_live") else item.browserLabel
 }
 
-// MARK: End and Close (R09)
-
 @Composable
 internal fun activitiesEndTitle(item: NowPlayingModel): String = when (item.kind) {
     ActivityKind.game -> conclaveString("act_end_game")
@@ -85,9 +74,6 @@ internal fun activitiesEndDialogMessage(item: NowPlayingModel): String = when (i
 internal fun activitiesEndConfirm(item: NowPlayingModel): String =
     if (item.kind == ActivityKind.game) conclaveString("act_end_confirm") else conclaveString("act_close_confirm")
 
-// MARK: Reasons (exhaustive)
-
-/** The resource for a reason; null for `none` and for `actionFailed` with server text (shown verbatim). */
 internal fun activitiesReasonResource(reason: ActivitiesReason): String? = when (reason) {
     ActivitiesReason.none -> null
     ActivitiesReason.recovering -> "set_available_when_reconnected"
@@ -111,8 +97,6 @@ internal fun activitiesReason(reason: ActivitiesReason, setup: GameSetupModel? =
     val name = activitiesReasonResource(reason) ?: return null
     return conclaveString(name)
 }
-
-// MARK: Catalog, vote, setup
 
 @Composable
 internal fun activitiesPlayerRange(minPlayers: Int, maxPlayers: Int): String =
@@ -147,8 +131,6 @@ internal fun activitiesSetupFooter(setup: GameSetupModel): String? = when (setup
 
 @Composable
 internal fun activitiesCharacterCount(count: Int, limit: Int): String = conclaveString("act_char_count", count, limit)
-
-// MARK: Browser
 
 internal fun activitiesValidationResource(value: BrowserValidation): String? = when (value) {
     BrowserValidation.none -> null
@@ -185,8 +167,6 @@ internal fun activitiesProviderTitle(provider: String): String = when (provider.
     "chromium", "local", "" -> conclaveString("br_provider_chromium")
     else -> conclaveString("br_provider_cloud")
 }
-
-// MARK: Card (S20 11 g)
 
 @Composable
 internal fun activitiesCardPhase(phase: ActivityCardPhase, name: String): String? = when (phase) {

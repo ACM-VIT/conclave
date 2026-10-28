@@ -15,18 +15,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-/**
- * UI-owned ephemeral cursor over one outcome stream. The Debug fixture supplies a recording sink; the production root
- * (WP2-S2b, [ConclaveRootFeedback]) supplies the view's single-argument haptic, admits the source's documented kinds,
- * and records each effect for sys.feedbackRecords.
- */
 internal class NativeFeedbackDelivery(
     private val source: () -> FeedbackSourceState,
     private val sink: (FeedbackKind) -> Unit,
     private val deliversKind: (FeedbackKind) -> Boolean = { true },
     private val records: FeedbackDeliveryRecords? = null,
 ) {
-    /** The Debug hosting fixture: every kind, recording sink. */
+
     constructor(presenter: NativeHostingPresenter, sink: (FeedbackKind) -> Unit) : this(
         source = { FeedbackSourceState(session = presenter.feedbackState.session, token = presenter.feedbackState.token) },
         sink = sink,
@@ -46,7 +41,6 @@ internal class NativeFeedbackDelivery(
     private fun checkMain() = check(Looper.myLooper() == Looper.getMainLooper())
     private fun eligible() = active && !suspended
 
-    /** The consumed stream's current state; read during composition so Compose observes it. */
     fun sourceState(): FeedbackSourceState = source()
 
     fun attach() {
@@ -87,7 +81,7 @@ internal class NativeFeedbackDelivery(
         if (delivery == null) return
         refresh()
         val kind = cursor.take(delivery, session = source().session, eligible = eligible()) ?: return
-        // Source-scoped admission keeps shell, native premeeting and native call ownership separate.
+
         if (!deliversKind(kind)) return
         if (ConclaveHaptics.constant(kind) == null) return
         intendedCount++
@@ -104,17 +98,16 @@ internal class NativeFeedbackDelivery(
     }
 }
 
-/** Exactly one consumer per stream at the root, independent of panel composition. */
 @Composable
 internal fun NativeFeedbackConsumer(delivery: NativeFeedbackDelivery, mount: Int) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    val state = delivery.sourceState() // Observe generated state during composition.
+    val state = delivery.sourceState()
     val epoch = delivery.exposureEpoch
     DisposableEffect(delivery, lifecycle, mount) {
         delivery.setActive(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         delivery.attach()
         val observer = LifecycleEventObserver { _, _ ->
-            // Synchronous: pause/event/resume cannot hide behind Compose coalescing.
+
             delivery.setActive(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         }
         lifecycle.addObserver(observer)
@@ -128,25 +121,16 @@ internal fun NativeFeedbackConsumer(delivery: NativeFeedbackDelivery, mount: Int
     }
 }
 
-/** The Debug hosting fixture's consumer (AppRoot.kt). */
 @Composable
 internal fun NativeFeedbackConsumer(
     presenter: NativeHostingPresenter,
     delivery: NativeFeedbackDelivery,
     mount: Int,
 ) {
-    presenter.feedbackState // The fixture presenter's observed state.
+    presenter.feedbackState
     NativeFeedbackConsumer(delivery, mount)
 }
 
-/**
- * WP2-S2b: the single root consumer of production outcome tokens (S70 12 d; F1 rules). It delivers the shell's
- * feedbackState through the activity view's single-argument performHapticFeedback (the system touch-feedback setting
- * governs; no in-app preference, Q11), only for DeliveredTokenKinds and only while the activity is RESUMED. Main.kt
- * composes it once at the top of setContent, outside the PiP and route switch (HD request B2-T1): a PiP swap never
- * remounts it, a rotation recreates it with a baselined cursor, and tokens published while paused (PiP, background)
- * are consumed without an effect and never replayed. Public because the app module composes it.
- */
 @Composable
 fun ConclaveRootFeedback() {
     val shell = MeetingViewModel.shared.shell
@@ -159,7 +143,7 @@ fun ConclaveRootFeedback() {
             records = FeedbackDeliveryRecords.shared,
         )
     }
-    // SYS-4 (PS 9.4): PiP (and the API 35 transition into it) suspends delivery; resuming rebaselines, nothing replays.
+
     val pipSuspended = PipController.feedbackSuspended
     LaunchedEffect(delivery, pipSuspended) { delivery.updateSuspended(pipSuspended) }
     NativeFeedbackConsumer(delivery, mount = 0)
@@ -175,7 +159,6 @@ fun ConclaveRootFeedback() {
     }
 }
 
-/** The production admission/source seam, also used with a recording sink by the bridge tests. */
 internal fun nativeCallFeedbackDelivery(
     source: NativeCallFeedbackSource,
     sink: (FeedbackKind) -> Unit,

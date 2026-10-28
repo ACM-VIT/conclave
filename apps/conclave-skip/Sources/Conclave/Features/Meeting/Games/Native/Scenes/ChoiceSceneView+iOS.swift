@@ -1,10 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 9 c (ACT-3) on iOS, Would You Rather: choose (K1, K2, K4 two large options separated by "or", changeable until
-// the phase ends, "%lld of %lld chose"), reveal (sticky K5 split with counts and names per side; a side nobody picked
-// says so; everyone but the seated host reads "Waiting for the host").
-
 struct ChoiceSceneView: View {
     let scene: ChoiceScene
     let games: GameStagePresenter
@@ -30,7 +26,6 @@ struct ChoiceSceneView: View {
     }
 }
 
-/// K4; a new side is sent, your current side again is not. `voteCast` plays only for a sent pick (S60 9 h).
 struct ChoiceButtons: View {
     let scene: ChoiceScene
     let games: GameStagePresenter

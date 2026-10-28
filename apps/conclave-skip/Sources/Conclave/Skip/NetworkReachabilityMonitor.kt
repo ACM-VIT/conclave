@@ -17,24 +17,16 @@ import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import skip.foundation.ProcessInfo
 
-/**
- * The core's one device-conditions source (replaces the transpiled `NetworkReachabilityMonitor.swift`, same members):
- * reachability and the quality hint, plus SYS-6 (S70 6 d, SY22, O10): the captive-portal flag from the active
- * network's capabilities, the thermal level (PowerManager thermal status listener, API 29+ only: API 28 registers
- * nothing, so it has no thermal adaptation and no toast) and battery saver (ACTION_POWER_SAVE_MODE_CHANGED, every
- * level). Every callback runs on the main thread; the captive-portal, thermal and power callbacks fire only when
- * their value changes.
- */
 internal class NetworkReachabilityMonitor {
     internal var onStatusChanged: ((Boolean) -> Unit)? = null
     internal var onQualityHintChanged: ((ConnectionQuality) -> Unit)? = null
-    /** S70 SY22 (S20 10 f banner 2): the active network needs a sign-in (captive portal, not validated). */
+
     internal var onCaptivePortalChanged: ((Boolean) -> Unit)? = null
-    /** S70 6 d (O10): the thermal level, API 29+ only. */
+
     internal var onThermalLevelChanged: ((SystemThermalLevel) -> Unit)? = null
-    /** S70 6 d (O10): battery saver on or off. */
+
     internal var onLowPowerModeChanged: ((Boolean) -> Unit)? = null
-    /** SET-3 (S60 C6-5): Android Data Saver restricts this app on the active metered network. */
+
     internal var onSystemDataSaverChanged: ((Boolean) -> Unit)? = null
     private var lastSystemDataSaver: Boolean? = null
     private var dataSaverReceiver: BroadcastReceiver? = null
@@ -50,7 +42,7 @@ internal class NetworkReachabilityMonitor {
     private var lastLoggedOffline: Boolean? = null
     private var lastLoggedQualityReason: String? = null
     private var lastCaptivePortal: Boolean? = null
-    /** A PowerManager.OnThermalStatusChangedListener (API 29), held untyped so API 28 never sees the class. */
+
     private var thermalListener: Any? = null
     private var powerSaveReceiver: BroadcastReceiver? = null
     private var lastThermalLevel: SystemThermalLevel? = null
@@ -138,7 +130,6 @@ internal class NetworkReachabilityMonitor {
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
-    /** S70 SY22: the active network reports a captive portal and is not validated (the shared rule). */
     @SuppressLint("MissingPermission")
     private fun currentCaptivePortal(): Boolean {
         val network = connectivityManager.activeNetwork ?: return false
@@ -156,10 +147,6 @@ internal class NetworkReachabilityMonitor {
         onCaptivePortalChanged?.invoke(isCaptivePortal)
     }
 
-    /**
-     * SET-3 (S60 C6-5): Data Saver is on for this app (RESTRICT_BACKGROUND_STATUS_ENABLED) and the active network is
-     * metered (Data Saver restricts metered networks only, as iOS Low Data Mode is per network).
-     */
     private fun currentSystemDataSaver(): Boolean {
         return try {
             connectivityManager.restrictBackgroundStatus == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED &&
@@ -216,8 +203,6 @@ internal class NetworkReachabilityMonitor {
             details = "quality=${qualityHint.quality} offline=$isOffline reason=${qualityHint.reason}"
         )
     }
-
-    // System pressure (S70 6 d, O10, SY22)
 
     private fun startSystemPressureListeners() {
         val power = powerManager ?: return

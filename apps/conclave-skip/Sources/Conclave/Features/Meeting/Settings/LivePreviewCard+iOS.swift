@@ -6,16 +6,6 @@ import UIKit
 import WebRTC
 #endif
 
-// S60 0.6 L6-3 (SET-3; C6-3, C6-8; 1 c, 1 f, 1 i, 1 k, 1 l11, 1 l12; RECONCILE R22) on iOS: the dark 4:3 LivePreviewCard
-// inside the system-appearance Settings list. It reads `settings.video` only. The capture belongs to the one WP3
-// `LocalPreviewController` (the presenter asks it through `previewHooks`); this card draws its surface and offers Start
-// Preview and Stop Preview. One renderer per panel presentation (`SettingsPreviewRendererCache`, keyed by the
-// presentation id): scrolling the card away detaches the renderer from the capture session or the sent track and
-// scrolling back re-attaches the same renderer; the card's `.task` reports on and off screen (30 s off screen stops
-// the preview, C6-8) and the scene phase reports the background. While the meeting camera is on the card shows the sent
-// track ("Visible to everyone"). Mirroring follows Mirror My Video for the front camera only (C6-3). Never glass.
-
-/// The Settings panel's presentation id, so the card keeps one renderer per presentation (0 outside the panel).
 private struct SettingsPresentationIDKey: EnvironmentKey {
     static let defaultValue = 0
 }
@@ -51,7 +41,7 @@ struct SettingsLivePreviewCard: View {
             .modifier(SettingsPreviewCardActions(settings: settings, video: video))
             .accessibilityIdentifier("settings.preview.card")
             .task {
-                // Task scoped (AGENTS.md): on screen while the row is alive in the list, off screen when it leaves.
+
                 settings.previewCardVisible(true)
                 await SettingsTaskLifetime.waitForCancellation()
                 settings.previewCardVisible(false)
@@ -62,7 +52,6 @@ struct SettingsLivePreviewCard: View {
     }
 }
 
-/// The VoiceOver Start Preview / Stop Preview action (the buttons are visible too, 1 i).
 private struct SettingsPreviewCardActions: ViewModifier {
     let settings: SettingsPresenter
     let video: SettingsVideo
@@ -79,7 +68,7 @@ private struct SettingsPreviewCardActions: ViewModifier {
 }
 
 enum SettingsPreviewCardText {
-    /// The reason first (why the camera paused, the permission, Audio Only), else the status line, else "Camera Off".
+
     static func value(_ video: SettingsVideo) -> String {
         if let reason = SettingsCopy.previewReason(video.previewReason) { return reason }
         if let status = SettingsCopy.previewStatus(video.preview) { return status }
@@ -139,7 +128,6 @@ private struct SettingsLivePreviewContent: View {
     }
 }
 
-/// Off, or the camera was unavailable: the camera glyph (and, when unavailable, a short caption).
 private struct SettingsPreviewIdle: View {
     let video: SettingsVideo
 
@@ -166,7 +154,6 @@ private struct SettingsPreviewIdle: View {
     }
 }
 
-/// A flat label on the opaque scrim (status lines and "Camera paused").
 private struct SettingsPreviewCaption: View {
     let text: String
 
@@ -181,7 +168,6 @@ private struct SettingsPreviewCaption: View {
     }
 }
 
-/// "Camera access is off" with Open Settings (F00 C18 intrinsic copy).
 private struct SettingsPreviewBlocked: View {
     let settings: SettingsPresenter
 
@@ -203,7 +189,6 @@ private struct SettingsPreviewBlocked: View {
     }
 }
 
-/// Start Preview or Stop Preview: a flat capsule on the scrim, 44 pt tall; disabled while interrupted (1 l11).
 private struct SettingsPreviewButton: View {
     let settings: SettingsPresenter
     let video: SettingsVideo
@@ -230,20 +215,17 @@ private struct SettingsPreviewButton: View {
     }
 }
 
-// MARK: - The surface (one renderer per presentation)
-
 enum SettingsPreviewSurfaceMode: Equatable {
     case none, local, published
 }
 
-/// Keeps one renderer per Settings presentation; a new presentation makes a new renderer and drops the old one.
 @MainActor
 final class SettingsPreviewRendererCache {
     static let shared = SettingsPreviewRendererCache()
 
     private var key = -1
     private var host: SettingsPreviewHostView?
-    /// Debug renderer counter (1 l12): renderers created; scrolling out and back keeps it unchanged.
+
     private(set) var creationCount = 0
 
     func hostView(for presentationID: Int) -> SettingsPreviewHostView {
@@ -256,7 +238,6 @@ final class SettingsPreviewRendererCache {
         return made
     }
 
-    /// The panel closed: the renderer is detached and dropped.
     func release(presentationID: Int) {
         guard key == presentationID else { return }
         host?.detach()
@@ -266,8 +247,6 @@ final class SettingsPreviewRendererCache {
     }
 }
 
-/// The renderer: the capture session's preview layer for the local preview, or a Metal view on the sent track while
-/// the meeting camera is on. Detached (no session, no sink) while the card is off screen.
 final class SettingsPreviewHostView: UIView {
     private let previewView = SettingsPreviewLayerView()
     #if canImport(WebRTC)
@@ -309,7 +288,7 @@ final class SettingsPreviewHostView: UIView {
             }
             previewView.isHidden = false
             if let connection = previewView.previewLayer.connection, connection.isVideoMirroringSupported {
-                // C6-3: the front camera mirrors only while Mirror My Video is on; the rear camera never does.
+
                 if connection.automaticallyAdjustsVideoMirroring { connection.automaticallyAdjustsVideoMirroring = false }
                 if connection.isVideoMirrored != mirrored { connection.isVideoMirrored = mirrored }
             }
@@ -322,7 +301,6 @@ final class SettingsPreviewHostView: UIView {
         }
     }
 
-    /// Off screen or closed: no session and no sink; the renderer itself stays for this presentation.
     @MainActor
     func detach() {
         previewView.previewLayer.session = nil
@@ -358,13 +336,11 @@ final class SettingsPreviewLayerView: UIView {
     override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
 
     var previewLayer: AVCaptureVideoPreviewLayer {
-        // The layer class above makes this cast always succeed.
+
         layer as! AVCaptureVideoPreviewLayer
     }
 }
 
-/// Hosts the presentation's renderer; scrolling the row away dismantles this container (detaching the renderer) and
-/// scrolling back re-embeds the same renderer.
 final class SettingsPreviewContainerView: UIView {
     private(set) var host: SettingsPreviewHostView?
 
@@ -386,7 +362,7 @@ struct SettingsPreviewSurface: UIViewRepresentable {
     let key: Int
     let mode: SettingsPreviewSurfaceMode
     let mirrored: Bool
-    /// Re-applies when a new local preview session starts.
+
     let sessionId: Int
 
     func makeUIView(context: Context) -> SettingsPreviewContainerView {

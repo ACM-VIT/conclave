@@ -1,17 +1,5 @@
 package conclave.module
 
-/*
- * S30 CL14 (CTL-1): Kotlin caches over the transpiled CallControlsPresenter, on the NativeHostingRowsCache pattern
- * (K/ui/hosting/NativeHostingRows.kt): one cache per presenter lifetime (remember(controls)); every read goes through
- * the observed property, even on a hit, so Compose stays subscribed; a snapshot rebuilds only on a new revision and an
- * unchanged control keeps its exact CallControlUi instance, so only the changed cell recomposes under key(id). Only
- * Kotlin scalars and transpiled String enums cross into the cell composables; no stability annotations on Skip
- * collections (R14). CTL-2 reads LeaveCache in LeaveControl.kt; CTL-5 and CTL-6 (MoreSheet.kt) read MoreCache and
- * ReactionsCache; CTL-3 (AudioRouteSheet.kt) reads AudioRouteCache; CTL-4 (the Camera cell, MediaShortcutMenu.kt) reads
- * MediaShortcutsCache.
- */
-
-/** One bar control as Kotlin scalars. `gesture` is ControlBarPolicy.gestureKind for the model (S30 1 h). */
 internal data class CallControlUi(
     val id: String,
     val kind: CallControlKind,
@@ -33,7 +21,6 @@ internal data class CallControlUi(
             appliesAfterReconnect == model.appliesAfterReconnect && badgeCount == model.badgeCount &&
             showsDot == model.showsDot && hasShortcut == model.hasShortcut
 
-    /** The bar's leaving state: every control is disabled, not explained (S30 1 f). */
     val isLeaving: Boolean get() = reason == ControlBlockedReason.leaving
 
     companion object {
@@ -55,7 +42,6 @@ internal data class CallControlUi(
     }
 }
 
-/** `controls.bar` as Kotlin values; `snapshot` stays the transpiled value for the shared fit arithmetic. */
 internal class ControlBarUi(source: ControlBarSnapshot, previous: ControlBarUi? = null) {
     val snapshot: ControlBarSnapshot = source
     val revision: Int = source.revision
@@ -76,7 +62,7 @@ internal class ControlBarCache(private val presenter: CallControlsPresenter) {
     private var cached: ControlBarUi? = null
 
     fun current(): ControlBarUi {
-        // Always read the observed property, even on a cache hit, to keep Compose subscribed.
+
         val state = presenter.bar
         val previous = cached
         if (previous != null && previous.revision == state.revision) return previous
@@ -84,10 +70,6 @@ internal class ControlBarCache(private val presenter: CallControlsPresenter) {
     }
 }
 
-/**
- * `controls.leaveState` as Kotlin values (CTL-2's Leave control, host menu and End dialog read it). `snapshot` stays the
- * transpiled value for the shared LeaveControlPolicy (menu rows, the End action, which dialogs this control presents).
- */
 internal data class LeaveUi(
     val revision: Int,
     val canEndForEveryone: Boolean,
@@ -131,10 +113,6 @@ internal class LeaveCache(private val presenter: CallControlsPresenter) {
     }
 }
 
-/**
- * `controls.more` as Kotlin values (CTL-5, CL14): the tiles in the S30 5 d order and the host rows from the shared
- * MoreMenuPolicy, so the sheet never re-derives order or visibility. `snapshot` stays the transpiled value.
- */
 internal class MoreUi(source: MoreSnapshot) {
     val snapshot: MoreSnapshot = source
     val revision: Int = source.revision
@@ -155,7 +133,7 @@ internal class MoreCache(private val presenter: CallControlsPresenter) {
     private var cached: MoreUi? = null
 
     fun current(): MoreUi {
-        // Always read the observed property, even on a cache hit, to keep Compose subscribed.
+
         val state = presenter.more
         val previous = cached
         if (previous != null && previous.revision == state.revision) return previous
@@ -163,7 +141,6 @@ internal class MoreCache(private val presenter: CallControlsPresenter) {
     }
 }
 
-/** `controls.reactions` as Kotlin values (CTL-6, CL14): read only by the reaction rows, so sends never touch the tiles. */
 internal class ReactionsUi(source: ReactionPaletteSnapshot) {
     val revision: Int = source.revision
     val availability: ReactionAvailability = source.availability
@@ -183,10 +160,6 @@ internal class ReactionsCache(private val presenter: CallControlsPresenter) {
     }
 }
 
-/**
- * `controls.route` as Kotlin values (CTL-3, CL14): the route sheet's rows from the shared RoutePickerPolicy, rebuilt only
- * on a new route revision. `snapshot` stays the transpiled value for the shared dismissal rules.
- */
 internal class AudioRouteUi(source: AudioRouteSnapshot) {
     val snapshot: AudioRouteSnapshot = source
     val revision: Int = source.revision
@@ -201,7 +174,7 @@ internal class AudioRouteCache(private val presenter: CallControlsPresenter) {
     private var cached: AudioRouteUi? = null
 
     fun current(): AudioRouteUi {
-        // Always read the observed property (the route owner's snapshot through the presenter), even on a cache hit.
+
         val state = presenter.route
         val previous = cached
         if (previous != null && previous.revision == state.revision) return previous
@@ -209,13 +182,12 @@ internal class AudioRouteCache(private val presenter: CallControlsPresenter) {
     }
 }
 
-/** `controls.shortcuts` as Kotlin values (CTL-4, CL14): the Camera control's long-press items. */
 internal class MediaShortcutsUi(source: MediaShortcutSnapshot) {
     val snapshot: MediaShortcutSnapshot = source
     val revision: Int = source.revision
     val camera: List<MediaShortcutItem> = buildList { for (item in source.camera) add(item) }
     val hasEnabledCameraItem: Boolean = MediaShortcutPolicy.hasEnabledItem(source.camera)
-    /** The items TalkBack lists as custom actions (S30 2 d, AX4). */
+
     val accessibilityItems: List<MediaShortcutItem> = buildList { for (item in MediaShortcutPolicy.accessibilityItems(source.camera)) add(item) }
 }
 
@@ -223,7 +195,7 @@ internal class MediaShortcutsCache(private val presenter: CallControlsPresenter)
     private var cached: MediaShortcutsUi? = null
 
     fun current(): MediaShortcutsUi {
-        // Always read the observed property, even on a cache hit.
+
         val state = presenter.shortcuts
         val previous = cached
         if (previous != null && previous.revision == state.revision) return previous

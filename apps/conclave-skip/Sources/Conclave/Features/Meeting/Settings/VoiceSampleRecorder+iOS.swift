@@ -1,12 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 0.6 L6-13 (SET-4) on iOS: the `VoiceSampleRecorder` view on the "Record Voice" page. It drives C6-23 through the
-// presenter and never owns a recorder: the core pauses the meeting microphone for the take and restores the mute
-// intent afterwards (HD request B6-T2 R1, generation rules). Ticking parts (remaining time, level) read only the
-// `VoiceRecorderModel` leaf, so a take never republishes `SettingsChat`. Reachable only while `canUsePersonalVoice`
-// (W10-4 is out of this push). No motion beyond the static level bar; "Creating" uses a system spinner (2 h).
-
 struct SettingsVoiceRecordPage: View {
     let settings: SettingsPresenter
     @Environment(\.dismiss) private var dismiss
@@ -57,14 +51,13 @@ struct SettingsVoiceRecordPage: View {
             Button(ConclaveStrings.text("Cancel"), role: .cancel) {}
         }
         .onChange(of: phase) { _, next in
-            // Success pops to Voice Messages, which shows "Ready" (2 f).
+
             if next == PersonalVoicePhase.ready { dismiss() }
         }
         .accessibilityIdentifier("settings.page.voiceRecord")
     }
 }
 
-/// The ticking leaf: "Keep speaking, %lld s left" (a polite live region updated every 10 s, 2 i) and the flat level bar.
 private struct SettingsVoiceRecorderProgress: View {
     let model: VoiceRecorderModel
     let isRecording: Bool
@@ -126,7 +119,6 @@ private struct SettingsVoiceConsentToggle: View {
     }
 }
 
-/// "Create My Voice": disabled until 60 s and consent (2 f).
 private struct SettingsVoiceCreateButton: View {
     let settings: SettingsPresenter
     let model: VoiceRecorderModel

@@ -4,17 +4,6 @@ import MetricKit
 import os
 import UIKit
 
-// S70 15 c (SYS-15) on iOS: the platform parts behind `DiagnosticsPlatformHooks`.
-// - Spans: OSSignposter intervals (iOS 15), one signpost id per call session; milestones are signpost events. Names
-//   are literals (OSSignposter requires static strings), one switch case per span kind and milestone.
-// - Logs: `Logger` categories call, audio, pip, recovery, links and share under subsystem com.acmvit.conclave (CE O3).
-//   Only codes and phases are interpolated, both `.public`; nothing else is logged.
-// - MetricKit: one `MXMetricManagerSubscriber` added once at launch. Crash, hang, CPU exception, disk write exception
-//   and app launch diagnostics (immediate delivery from iOS 15) become structural payloads in the local store (7 days
-//   or 2 MB): versions, numeric codes, durations and the call stack tree. No message text (the Objective-C exception's
-//   composed message and arguments are never read).
-// - The ring is flushed on `didEnterBackgroundNotification` inside a background task, off the main thread.
-
 enum CallDiagnosticsIOS {
     static let subsystem = "com.acmvit.conclave"
 
@@ -49,7 +38,7 @@ enum CallDiagnosticsIOS {
             ProcessInfo.processInfo.systemUptime * 1000.0
         }
         hooks.debugBlockMainThread = { millis in
-            // AC-SI18-1: Debug only (the facade checks the build); MetricKit reports hangs over 250 ms.
+
             Thread.sleep(forTimeInterval: Double(millis) / 1000.0)
         }
         hooks.debugLaunchForcesRedactionFailure = {
@@ -58,7 +47,6 @@ enum CallDiagnosticsIOS {
         return hooks
     }
 
-    /// S70 15 l5 (Debug only): `CONCLAVE_DIAG_FORCE_REDACTION_FAILURE=1` in the launch environment.
     static func launchForcesRedactionFailure() -> Bool {
         #if DEBUG
         return ProcessInfo.processInfo.environment["CONCLAVE_DIAG_FORCE_REDACTION_FAILURE"] == "1"
@@ -67,7 +55,6 @@ enum CallDiagnosticsIOS {
         #endif
     }
 
-    /// App version with build, OS version and the device class only (no model, no name, no identifier).
     @MainActor
     static func platformInfo() -> DiagnosticsPlatformInfo {
         let bundle = Bundle.main
@@ -80,16 +67,14 @@ enum CallDiagnosticsIOS {
     }
 }
 
-/// OSSignposter intervals and events (S70 15 c; they also feed the PLAN performance protocol, S70 16 k).
 @MainActor
 final class CallDiagnosticsSignposts {
     private let signposter = OSSignposter(subsystem: CallDiagnosticsIOS.subsystem, category: "call")
     private var signpostSession = -1
     private var signpostId = OSSignpostID.invalid
-    /// Open interval states by span id (bounded by the facade's 32 open spans).
+
     private var states: [Int: OSSignpostIntervalState] = [:]
 
-    /// One signpost id per call session.
     private func signpost(for callSession: Int) -> OSSignpostID {
         if callSession != signpostSession {
             signpostSession = callSession
@@ -161,7 +146,6 @@ final class CallDiagnosticsSignposts {
     }
 }
 
-/// The six `Logger` categories (S70 15 c). Codes and phases are vocabulary values, so they are logged `.public`.
 enum CallDiagnosticsLog {
     static let call = Logger(subsystem: CallDiagnosticsIOS.subsystem, category: "call")
     static let audio = Logger(subsystem: CallDiagnosticsIOS.subsystem, category: "audio")
@@ -192,8 +176,6 @@ enum CallDiagnosticsLog {
     }
 }
 
-/// The one MetricKit subscriber per process (S70 15 c, k). Payloads arrive off the main thread and go straight to the
-/// store; nothing prompts the person (S70 15 f: a crash payload arrives on the next launch and is stored silently).
 final class CallDiagnosticsMetricSubscriber: NSObject, MXMetricManagerSubscriber {
     private static var installed: CallDiagnosticsMetricSubscriber?
     private let store: DiagnosticsFileStore
@@ -218,7 +200,6 @@ final class CallDiagnosticsMetricSubscriber: NSObject, MXMetricManagerSubscriber
     }
 }
 
-/// MetricKit diagnostics to structural payloads: versions, numeric codes, durations and the call stack tree only.
 enum CallDiagnosticsMetricPayloads {
     static func records(from payloads: [MXDiagnosticPayload]) -> [DiagnosticsStoredPayload] {
         var result: [DiagnosticsStoredPayload] = []
@@ -236,7 +217,7 @@ enum CallDiagnosticsMetricPayloads {
                     fields.append(DiagnosticsPayloadFactory.number("signal", value.doubleValue))
                 }
                 if let reason = crash.exceptionReason {
-                    // The exception's name and type only; its composed message and arguments can carry free text.
+
                     if let field = DiagnosticsPayloadFactory.text("exceptionName", reason.exceptionName) {
                         fields.append(field)
                     }
@@ -281,7 +262,6 @@ enum CallDiagnosticsMetricPayloads {
         return result
     }
 
-    /// App version, OS version, build and architecture (MXMetaData's region format and device type are not read).
     private static func baseFields(_ diagnostic: MXDiagnostic) -> [DiagnosticsField] {
         var fields: [DiagnosticsField] = []
         let candidates = [
@@ -298,13 +278,11 @@ enum CallDiagnosticsMetricPayloads {
         return fields
     }
 
-    /// The call stack tree's JSON (binary names, UUIDs, offsets and sample counts).
     private static func tree(_ tree: MXCallStackTree) -> String {
         String(data: tree.jsonRepresentation(), encoding: .utf8) ?? ""
     }
 }
 
-/// S70 15 c: the ring is flushed when the app goes to the background, inside a background task so the write finishes.
 @MainActor
 enum CallDiagnosticsBackgroundFlush {
     private static var observer: NSObjectProtocol?

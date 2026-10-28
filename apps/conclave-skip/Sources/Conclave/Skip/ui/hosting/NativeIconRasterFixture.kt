@@ -46,7 +46,6 @@ internal data class IconRasterRequest(
     val painterKey: String get() = "${artwork.id}.$density"
 }
 
-/** Finite matrix: 920 primary LTR, 32 directional RTL cycles (three frames each) and 111 nonmirroring 72px RTL controls. */
 internal fun iconRasterCases(plan: IconRasterPlan): List<IconRasterRequest> = buildList {
     fun addCase(a: NativeIconArtwork, dp: Int = 24, density: Int = 3,
                 direction: LayoutDirection = LayoutDirection.Ltr, repetition: String = "primary") {
@@ -83,14 +82,12 @@ internal fun requireIconStructure(vector: ImageVector, mirror: Boolean) {
 internal fun requireMainThread() { check(Looper.myLooper() == Looper.getMainLooper()) { "main thread required" } }
 private fun isDebuggable(context: Context) = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
-/** One run per process, whichever controller owns it. */
 private object IconRunLease {
     val occupied = AtomicBoolean(false)
     var busy by mutableStateOf(false)
 }
 private class IconPainterBinding(val request: IconRasterRequest, val painter: Painter)
 
-/** Root lifetime, not a lazy-list-item lifetime. Owns one job and drains exports on cancellation. */
 internal class NativeIconRasterController(context: Context, private val scope: CoroutineScope) {
     private val app = context.applicationContext
     private var eligible by mutableStateOf(false)
@@ -98,7 +95,7 @@ internal class NativeIconRasterController(context: Context, private val scope: C
     var busy by mutableStateOf(false); private set
     var status by mutableStateOf("Idle; explicit Start required"); private set
     var current by mutableStateOf<IconRasterRequest?>(null); private set
-    /** Bumped between readiness frames: an unrelated recomposition of the painter scope. */
+
     var recompositionProbe by mutableIntStateOf(0); private set
     private var job: Job? = null
     private var journal: IconRasterJournal? = null
@@ -166,13 +163,11 @@ internal class NativeIconRasterController(context: Context, private val scope: C
         var terminalFailure: String? = null
         var preservationFailure: String? = null
         try {
-            // The run deadline is checked at every case boundary and inside the locked commit decision,
-            // so no coroutine timeout can race the journal's terminal commit.
+
             val deadline = SystemClock.elapsedRealtime() + ICON_RASTER_RUN_MS
-            // The incomplete index is published first, even when a cancellation is already pending, so a
-            // started run keeps its directory, index and reason unless private storage itself fails.
+
             withContext(NonCancellable + Dispatchers.IO) { session.open() }
-            // Hashing stops on cancellation; the identity, or the reason it is missing, reaches the next revision.
+
             withContext(Dispatchers.IO) { session.identify(iconPackageIdentity(app) { isActive }) }
             var cycleHash: String? = null
             for (request in cases) {
@@ -208,7 +203,7 @@ internal class NativeIconRasterController(context: Context, private val scope: C
                     readinessFailure = failure.toString()
                     throw failure
                 } finally {
-                    // Sole bitmap ownership moves to the bounded IO transaction, which always finishes.
+
                     withContext(NonCancellable + Dispatchers.IO) { session.export(request, captures, readinessFailure) }
                 }
                 checkLive(session, request)
@@ -216,8 +211,7 @@ internal class NativeIconRasterController(context: Context, private val scope: C
             }
             checkLive(session)
             withContext(Dispatchers.IO) {
-                // Explicit, lifecycle, eligibility and disposal cancellation reach journal.cancel() under the
-                // terminal lock. Job state and the deadline are read again at the locked commit decision.
+
                 val owner = coroutineContext[Job]
                 check(session.finish { owner?.isActive == true && SystemClock.elapsedRealtime() <= deadline }) {
                     "cancelled before terminal commit"
@@ -233,8 +227,7 @@ internal class NativeIconRasterController(context: Context, private val scope: C
                     catch (failure: Throwable) { preservationFailure = "index preservation failed: $failure" }
                 }
             } finally {
-                // Main thread, even when a cancelled caller discards the dispatched IO result. The journal names
-                // only what it finished writing, which may be nothing.
+
                 status = if (session.isComplete()) "Complete; ${session.path}"
                     else listOfNotNull("Incomplete", terminalFailure ?: cancelReason ?: "run ended before completion",
                         preservationFailure, session.retained()).joinToString("; ")
@@ -245,7 +238,6 @@ internal class NativeIconRasterController(context: Context, private val scope: C
     }
 }
 
-/** Public painter draw into a software sRGB bitmap with explicit pixels, density and direction. */
 internal fun captureIcon(painter: Painter, request: IconRasterRequest, frame: Int): IconCapture {
     requireMainThread()
     val bitmap = Bitmap.createBitmap(request.pixels, request.pixels, Bitmap.Config.ARGB_8888, true, ColorSpace.get(ColorSpace.Named.SRGB))
@@ -273,7 +265,7 @@ internal fun NativeIconRasterBinding(controller: NativeIconRasterController, fix
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer); controller.release("raster binding disposed") }
     }
-    // Equal writes are quiet; a false value cancels an active run with its own reason.
+
     SideEffect { controller.eligibility(fixtureEligible) }
     val request = controller.current ?: return
     key(request.painterKey) {

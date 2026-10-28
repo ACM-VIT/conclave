@@ -10,14 +10,10 @@ enum ConclaveFeedback {
         defaults.object(forKey: preferenceKey) as? Bool ?? true
     }
 
-    /// `SensoryFeedback.start` and `.stop` only play on watchOS, so share and transcription starts use
-    /// impact(medium) and stops impact(light) (owner decision Q11). `FeedbackHapticContract` is the oracle.
     static func sensory(_ kind: FeedbackKind) -> SensoryFeedback? {
         sensoryMapping(kind).feedback
     }
 
-    /// The feedback for a kind and its token in the contract's spelling, from one switch. Self-checks compare
-    /// the tokens, because `SensoryFeedback` equality does not tell impact weights apart on iOS 27.1.
     static func sensoryMapping(_ kind: FeedbackKind) -> (token: String, feedback: SensoryFeedback?) {
         switch kind {
         case .micOn, .micOff, .cameraOn, .cameraOff, .handLowered, .pieceMoved, .revealHeld,
@@ -53,10 +49,9 @@ enum ConclaveFeedback {
 @MainActor
 @Observable
 final class IOSFeedbackDelivery {
-    /// The outcome stream this delivery consumes. Read during `body`, so SwiftUI observes the source's published state.
+
     @ObservationIgnored private let source: @MainActor () -> FeedbackSourceState
-    /// WP2-S2b: the production sink plays only the token-route kinds (`ConclaveRootFeedback+iOS.swift`); the fixture
-    /// accepts every kind.
+
     @ObservationIgnored private let deliversKind: (FeedbackKind) -> Bool
     @ObservationIgnored private let records: FeedbackDeliveryRecords?
     @ObservationIgnored private let cursor = FeedbackDeliveryCursor()
@@ -70,10 +65,9 @@ final class IOSFeedbackDelivery {
     private(set) var lastKind = "none"
     private(set) var effect: FeedbackDelivery? = nil
     private(set) var preferenceEnabled: Bool
-    /// The Debug fixture never enables hardware effects or audio; the production root consumer does (WP2-S2b).
+
     let recordOnly: Bool
 
-    /// The Debug hosting fixture: record-only, every kind.
     convenience init(presenter: NativeHostingPresenter, defaults: UserDefaults = .standard) {
         self.init(
             source: { FeedbackSourceState(session: presenter.feedbackState.session, token: presenter.feedbackState.token) },
@@ -101,7 +95,6 @@ final class IOSFeedbackDelivery {
         cursor.attach(session: state.session, current: state.token, eligible: false)
     }
 
-    /// The current state of the consumed stream.
     var sourceState: FeedbackSourceState { source() }
 
     private var eligible: Bool { attached && active && !suspended && ConclaveFeedback.isEnabled(in: defaults) }
@@ -111,7 +104,7 @@ final class IOSFeedbackDelivery {
     }
 
     func attach(mount: Int, active: Bool) {
-        // Mounts increase within this delivery's lifetime. Never let an old task reclaim it.
+
         if let latestMount, mount < latestMount { return }
         guard !owns(mount) else { return }
         latestMount = mount
@@ -162,7 +155,6 @@ final class IOSFeedbackDelivery {
         submit(prepareObservation(mount: mount), mount: mount)
     }
 
-    // The real adapter's prepare/take seam also permits delayed-delivery tests without a physical sink.
     func prepareObservation(mount: Int) -> FeedbackDelivery? {
         guard owns(mount) else { return nil }
         refresh()
@@ -171,7 +163,7 @@ final class IOSFeedbackDelivery {
     }
 
     func gesture() {
-        // This root action deliberately targets the currently attached consumer.
+
         guard let mount = latestMount, owns(mount) else { return }
         refresh()
         submit(cursor.gesture(kind: .selectionChanged, session: source().session, eligible: eligible), mount: mount)
@@ -180,7 +172,7 @@ final class IOSFeedbackDelivery {
     private func submit(_ delivery: FeedbackDelivery?, mount: Int) {
         guard let delivery else { return }
         if recordOnly {
-            // Same final gate and mapper, with a recording sink instead of a physical effect.
+
             if consume(delivery, mount: mount) != nil {
                 intendedCount += 1
                 lastKind = delivery.kind.rawValue
@@ -191,14 +183,14 @@ final class IOSFeedbackDelivery {
     }
 
     func consume(_ delivery: FeedbackDelivery, mount: Int) -> SensoryFeedback? {
-        // Check ownership before take: an old modifier must not steal a new owner's ticket.
+
         guard owns(mount) else { return nil }
-        // Read preference, lifecycle and session again at delivery, not only when queued.
+
         guard let kind = cursor.take(delivery, session: source().session, eligible: eligible) else { return nil }
-        // Single-path invariant (PLAN-next A9): a kind still on its legacy route never plays here too.
+
         guard deliversKind(kind), let feedback = ConclaveFeedback.sensory(kind) else { return nil }
         if !recordOnly, let records {
-            // Recorded after the view update that asked for the effect, never during it.
+
             Task { @MainActor in records.record(kind) }
         }
         return feedback

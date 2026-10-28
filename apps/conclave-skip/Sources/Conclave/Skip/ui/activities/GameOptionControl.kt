@@ -32,16 +32,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 L6-10 (ACT-1) on Android: one setup option. The server label sits above its control. Up to four choices or presets
- * render as a SingleChoiceSegmentedButtonRow when every label fits its segment, measured at the current font scale
- * (C21 measured overflow, so Chess "Rapid fire" segments fall back at the default size on a 360 dp phone); otherwise
- * radio rows (ConclaveSelectableRows, C09). More than four choices, including the five-preset Time limit, are a
- * ListItem opening the Material single-choice AlertDialog. Text keeps what was typed (trimmed only on Start, INM G2)
- * with a counter 20 characters before the limit. Choices play selectionChanged through the gesture route.
- */
-
-/** Whether every label fits its share of the row: label width plus the segment's padding and selected check. */
 internal fun gameOptionSegmentsFit(labelWidthsPx: List<Float>, rowWidthPx: Float, density: Float): Boolean {
     if (labelWidthsPx.isEmpty()) return true
     val segment = rowWidthPx / labelWidthsPx.size

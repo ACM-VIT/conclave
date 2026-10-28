@@ -3,21 +3,15 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// STG-1 (OUT/PLAN-screens.md section 5): the call root, StagePresenter and the grid layouts. Pure policies and the
-/// presenter run here; iOS-only and Kotlin sources are read. The Kotlin half is T/Skip/StageBridgeTests.kt; STG-4's
-/// chrome policy is T/STG4ChromeAutoHideTests.swift. Covers S20 1 l, 2 l, 14 l (Tier A), SC1 (b, c), SC3, SC4, SC6,
-/// SC10, SL1, SL2, SL4, SL14, SL15 and the 0.5 outcome-token ownership table.
 @MainActor
 struct StagePoliciesTests {
-    // MARK: Viewports (S20 2 c worked caps; insets are safe area plus the reserved chrome slots)
 
-    /// iPhone SE (3rd generation): safe areas 20 and 0; top 20 + 44 + 12, bottom 0 + 52 + 12.
     static let iphoneSE = StageViewport(width: 375, height: 667, insetTop: 76, insetBottom: 64, insetLeading: 0, insetTrailing: 0,
                                         widthClass: StageSizeClass.compact, heightClass: StageSizeClass.regular, placement: .bottomBar)
-    /// iPhone 17e: safe areas 47 and 34.
+
     static let iphone17e = StageViewport(width: 390, height: 844, insetTop: 103, insetBottom: 98, insetLeading: 0, insetTrailing: 0,
                                          widthClass: StageSizeClass.compact, heightClass: StageSizeClass.regular, placement: .bottomBar)
-    /// 360 x 800 dp: status 24 + 48 + 12, three-button navigation 48 + 64 + 12.
+
     static let android360 = StageViewport(width: 360, height: 800, insetTop: 84, insetBottom: 124, insetLeading: 0, insetTrailing: 0,
                                           widthClass: StageSizeClass.compact, heightClass: StageSizeClass.medium, placement: .bottomBar)
     static let androidLandscape = StageViewport(width: 800, height: 360, insetTop: 84, insetBottom: 76, insetLeading: 0, insetTrailing: 48,
@@ -45,23 +39,21 @@ struct StagePoliciesTests {
         stage.layout.slots.filter { $0.id.hasPrefix("p:") }
     }
 
-    // MARK: SL1 capacity and frames (S20 2 l1)
-
     @Test func capsMatchTheWorkedSizes() {
         #expect(StageLayoutPolicy.gridCap(viewport: Self.iphoneSE, viewMaxTiles: 16) == 6)
         #expect(StageLayoutPolicy.gridCap(viewport: Self.iphone17e, viewMaxTiles: 16) == 8)
         #expect(StageLayoutPolicy.gridCap(viewport: Self.android360, viewMaxTiles: 16) == 8)
-        // The Layout preference still bounds the cap; the cap is even on phones.
+
         #expect(StageLayoutPolicy.gridCap(viewport: Self.iphone17e, viewMaxTiles: 4) == 4)
         #expect(StageLayoutPolicy.gridCap(viewport: Self.iphone17e, viewMaxTiles: 5) == 4)
         #expect(StageLayoutPolicy.gridCap(viewport: Self.iphoneSE, viewMaxTiles: 2) == 2)
-        // Never above 8 on compact width; regular windows use the packer and can exceed it.
+
         for viewport in Self.allViewports where StageSizeClass.isCompact(viewport.widthClass) {
             #expect(StageLayoutPolicy.gridCap(viewport: viewport, viewMaxTiles: 49) <= 8)
         }
         #expect(StageLayoutPolicy.gridCap(viewport: Self.ipadPortrait, viewMaxTiles: 49) > 8)
         #expect(StageLayoutPolicy.gridCap(viewport: Self.androidLandscape, viewMaxTiles: 49) <= 8)
-        // The worked row floors (S20 2 c).
+
         let se = StageLayoutPolicy.contentFrame(Self.iphoneSE)
         #expect(abs(se.height - 511) < 0.001 && abs((se.width - 8) / 2 - 175.5) < 0.001)
         let e17 = StageLayoutPolicy.contentFrame(Self.iphone17e)
@@ -79,7 +71,7 @@ struct StagePoliciesTests {
                 let stage = presenter(tiled(count), viewport: viewport)
                 #expect(stage.layout.kind == .grid)
                 let frames = stage.currentFrames()
-                // One frame per slot; the slot count equals the cap once the roster no longer fits.
+
                 #expect(frames.count == stage.layout.slots.count, "\(viewport.width)x\(viewport.height) n=\(count)")
                 if count > cap {
                     #expect(stage.layout.slots.count == cap)
@@ -100,7 +92,7 @@ struct StagePoliciesTests {
                     for b in frames[(index + 1)...] {
                         #expect(!StageLayoutPolicy.overlaps(a, b), "\(a.slotId) overlaps \(b.slotId)")
                         if abs(a.y - b.y) < 0.01 && b.x > a.x {
-                            // Exact gaps between neighbours in a row.
+
                             #expect(abs(b.x - a.maxX - gap) < 0.01 || b.x - a.maxX > gap)
                         }
                     }
@@ -114,7 +106,7 @@ struct StagePoliciesTests {
         #expect(se.layout.kind == .grid)
         #expect(personSlots(se).count == 5 && se.layout.overflowCount == 7)
         #expect(se.layout.slots.last?.id == StageSlot.overflowId)
-        // You sit second to last, just before "+N".
+
         try #require(se.layout.slots.count >= 2)
         #expect(se.layout.slots[se.layout.slots.count - 2].userId == StageFixtureScript.localUserId)
         #expect(se.layout.overflowSeeds.count == 3)
@@ -134,7 +126,7 @@ struct StagePoliciesTests {
         #expect(abs(frames[0].width - content.width) < 0.01)
         let four = presenter(StageFixtureScript.base(count: 4))
         #expect(!four.layout.slots.contains { $0.role == .gridWide })
-        // Landscape and regular windows use the packer, never a wide tile.
+
         let landscape = presenter(StageFixtureScript.base(count: 5), viewport: Self.androidLandscape)
         #expect(!landscape.layout.slots.contains { $0.role == .gridWide })
     }
@@ -152,23 +144,21 @@ struct StagePoliciesTests {
         let oneOnOneFrames = oneOnOne.currentFrames()
         try #require(oneOnOneFrames.count >= 2)
         let selfFrame = oneOnOneFrames[1]
-        // Default corner bottom right, inside the reserved insets with a 12 pt margin.
+
         #expect(abs(selfFrame.maxX - (375 - 12)) < 0.01 && abs(selfFrame.maxY - (667 - 64 - 12)) < 0.01)
         let share = presenter(StageFixtureScript.inputs(for: .presentation))
         #expect(share.layout.kind == .presentation)
         #expect(share.layout.slots.first?.id == StageSlot.shareId(StageFixtureScript.remoteId(0)))
         #expect(share.layout.slots.first?.fit == .fit)
-        // The presenter leads the strip.
+
         try #require(share.layout.slots.count >= 2)
         #expect(share.layout.slots[1].userId == StageFixtureScript.remoteId(0))
         let activity = presenter(StageFixtureScript.inputs(for: .nowPlaying))
         #expect(activity.layout.kind == .game)
         #expect(activity.layout.slots.first?.id == StageSlot.activityId)
-        // The self tile sits in the strip over an activity, never floating (AGENTS.md game stage rules).
+
         #expect(activity.layout.slots.contains { $0.userId == StageFixtureScript.localUserId && $0.role == .rail })
     }
-
-    // MARK: Kind chooser (S20 2 c, D17, web chooseStageMode)
 
     @Test func kindChooserFollowsTheWebPrecedence() {
         let base = StageFixtureScript.base(count: 4)
@@ -181,13 +171,13 @@ struct StagePoliciesTests {
         #expect(StageLayoutPolicy.kind(StageFixtureScript.base(count: 12), showsVideoOverActivity: false) == .grid)
         #expect(StageLayoutPolicy.kind(StageFixtureScript.copy(base, viewMode: "spotlight"), showsVideoOverActivity: false) == .spotlight)
         #expect(StageLayoutPolicy.kind(StageFixtureScript.copy(base, viewMode: "sidebar"), showsVideoOverActivity: false) == .sidebar)
-        // A pin wins over a share; a share wins over the layout choice.
+
         let sharing = StageFixtureScript.copy(base, screenShareUserId: "r1")
         #expect(StageLayoutPolicy.kind(sharing, showsVideoOverActivity: false) == .presentation)
         #expect(StageLayoutPolicy.kind(StageFixtureScript.copy(sharing, pinnedUserId: "r2"), showsVideoOverActivity: false) == .spotlight)
-        // A stale pin (nobody by that id) never pins.
+
         #expect(StageLayoutPolicy.kind(StageFixtureScript.copy(base, pinnedUserId: "gone"), showsVideoOverActivity: false) == .grid)
-        // Activities win unless Show Video is on.
+
         let game = StageFixtureScript.copy(sharing, isGameActive: true)
         #expect(StageLayoutPolicy.kind(game, showsVideoOverActivity: false) == .game)
         #expect(StageLayoutPolicy.kind(game, showsVideoOverActivity: true) == .presentation)
@@ -197,8 +187,6 @@ struct StagePoliciesTests {
                                        showsVideoOverActivity: false) == .attendeeLive)
     }
 
-    // MARK: SL2 order (SC3, RECONCILE R20)
-
     @Test func joinOrderIsStableYouLastAndAJoinNeverMovesAVisibleSlot() {
         let roster = [
             StageParticipantInput.make(userId: "zed", joinSerial: 2),
@@ -207,7 +195,7 @@ struct StagePoliciesTests {
             StageParticipantInput.make(userId: "bo", joinSerial: 1),
             StageParticipantInput.make(userId: "new", joinSerial: 0),
         ]
-        // Join serials from the core, never ids; an unnumbered id sorts last.
+
         #expect(StageOrderPolicy.joinOrder(roster) == ["bo", "zed", "amy", "new"])
         #expect(StageOrderPolicy.reconcile(previous: ["amy", "bo"], participants: roster) == ["amy", "bo", "zed", "new"])
         #expect(StageOrderPolicy.swapped(["a", "b", "c"], promote: "c", demote: "a") == ["c", "b", "a"])
@@ -218,7 +206,7 @@ struct StagePoliciesTests {
         next.append(StageParticipantInput.make(userId: "r9", displayName: "Late", isCameraOff: false, joinSerial: 9, videoKey: "probe:r9"))
         stage.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 4), participants: next))
         #expect(personSlots(stage).map(\.userId) == ["r1", "r2", "r3", "r9", "you"])
-        // A leaver's slot goes at once and nothing else moves.
+
         stage.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 4), participants: next.filter { $0.userId != "r2" }))
         #expect(personSlots(stage).map(\.userId) == ["r1", "r3", "r9", "you"])
     }
@@ -233,8 +221,6 @@ struct StagePoliciesTests {
             #expect(StageOrderPolicy.selfRole(selfViewMode: "floating", kind: kind) == nil)
         }
     }
-
-    // MARK: Speaker isolation and promotion (SC1 b, S20 2 l3)
 
     @Test func speakerChangesInAFittingGridOnlyLightTheRing() {
         let stage = presenter(StageFixtureScript.inputs(for: .grid6))
@@ -253,7 +239,7 @@ struct StagePoliciesTests {
         #expect(stage.capsule == capsule && stage.chrome == chrome)
         #expect(personSlots(stage).map { stage.tileChrome.entry(for: $0.userId).model } == entries)
         #expect(stage.promotionTasksStarted == 0 && !stage.hasLivePromotionTask)
-        // Exactly one tile speaks at a time.
+
         let speaking = personSlots(stage).filter { stage.speaking.isSpeaking($0.userId) }
         #expect(speaking.count == 1)
     }
@@ -273,7 +259,7 @@ struct StagePoliciesTests {
         #expect(abs(stage.pendingPromotionDelayMillis - 1_200) < 0.001)
         #expect(stage.hasLivePromotionTask)
         #expect(stage.layout.revision == revision)
-        // Waking early re-arms instead of swapping (never sooner than 1.2 s).
+
         clock += 600
         stage.firePendingPromotion()
         #expect(stage.layout.revision == revision)
@@ -281,7 +267,7 @@ struct StagePoliciesTests {
         stage.firePendingPromotion()
         #expect(stage.layout.revision == revision + 1)
         #expect(StageOrderPolicy.visibleRemoteIds(stage.layout.slots, localUserId: "you").contains(hidden))
-        // The next hidden speaker waits for the 8 s interval.
+
         let another = StageFixtureScript.remoteId(9)
         #expect(!StageOrderPolicy.visibleRemoteIds(stage.layout.slots, localUserId: "you").contains(another))
         clock += 100
@@ -293,7 +279,7 @@ struct StagePoliciesTests {
         clock += 900
         stage.firePendingPromotion()
         #expect(stage.layout.revision == revision + 2)
-        // Below four people nobody swaps.
+
         let small = StagePresenter(shell: MeetingShellPresenter())
         small.setViewport(Self.iphoneSE)
         small.apply(StageFixtureScript.base(count: 3))
@@ -328,7 +314,7 @@ struct StagePoliciesTests {
         clock += 1
         stage.firePendingPromotion()
         #expect(stage.layout.featuredUserId == "r4")
-        // A pin freezes the featured speaker.
+
         stage.apply(StageFixtureScript.copy(StageFixtureScript.inputs(for: .spotlight), pinnedUserId: "r2"))
         stage.speakerChanged("r5", atMillis: clock)
         #expect(stage.pendingPromotionCandidate.isEmpty)
@@ -354,8 +340,6 @@ struct StagePoliciesTests {
         #expect(stage.layout.slots.isEmpty)
     }
 
-    // MARK: SL6 constant slot ids (S20 2 l4)
-
     @Test func rolesSweepKeepsOneSlotIdForYourRenderer() {
         let stage = StagePresenter(shell: MeetingShellPresenter())
         stage.setViewport(Self.iphone17e)
@@ -370,8 +354,6 @@ struct StagePoliciesTests {
         #expect(roles == [.grid, .rail, .spotlightMain, .selfFloating, .selfMinimized])
     }
 
-    // MARK: SL4 per-id stores (SC10, F00 P2)
-
     @Test func tileWritesAreScopedAndBindingSwapsPublishNoLayout() throws {
         let stage = presenter(StageFixtureScript.inputs(for: .grid6))
         let r2 = stage.tileChrome.entry(for: "r2")
@@ -383,12 +365,12 @@ struct StagePoliciesTests {
         rows[index] = StageParticipantInput.make(userId: old.userId, displayName: old.displayName, isMuted: !old.isMuted,
                                                  isCameraOff: old.isCameraOff, joinSerial: old.joinSerial, videoKey: old.videoKey)
         stage.apply(StageFixtureScript.copy(StageFixtureScript.inputs(for: .grid6), participants: rows))
-        // One tile's chrome changed; the entry object is reused; no layout revision.
+
         #expect(stage.tileChrome.entry(for: "r2") === r2)
         #expect(r2.model.isMuted == !old.isMuted)
         #expect(stage.tileChrome.entry(for: "r3").model == r3Before)
         #expect(stage.layout.revision == revision)
-        // A consumer swap writes only the renderer binding (SC10).
+
         let binding = stage.bindings.binding(for: StageSlot.participantId("r2"))
         #expect(binding.videoKey == "probe:r2")
         rows[index] = StageParticipantInput.make(userId: old.userId, displayName: old.displayName, isMuted: !old.isMuted,
@@ -402,7 +384,7 @@ struct StagePoliciesTests {
     }
 
     @Test func fitOverridesSurviveKindChangesAndClearOnReset() {
-        // SC4: a per-session fit override map in the presenter.
+
         let stage = presenter(StageFixtureScript.inputs(for: .grid6))
         stage.setFit(.fit, userId: "r1")
         #expect(stage.layout.slots.first { $0.userId == "r1" }?.fit == .fit)
@@ -412,8 +394,6 @@ struct StagePoliciesTests {
         stage.apply(StageFixtureScript.inputs(for: .grid6))
         #expect(stage.layout.slots.first { $0.userId == "r1" }?.fit == .fill)
     }
-
-    // MARK: Capsule, hand, chrome, announcements, tokens
 
     @Test func capsuleSubtitleHandAndChromeSnapshots() {
         let grid = presenter(StageFixtureScript.inputs(for: .grid6LockedCaptions))
@@ -425,13 +405,13 @@ struct StagePoliciesTests {
         let local = presenter(StageInputs.make(callSession: 1, localUserId: "you",
                                                participants: StageFixtureScript.roster(count: 3), isLocalScreenSharing: true))
         #expect(local.capsule.subtitleKind == StageCapsuleModel.youPresentingKind)
-        // SC12: raising shows within the tap's frame (the in-flight ticket), then raised.
+
         #expect(StagePresenter.handState(isRaised: false, inFlight: true) == .raising)
         #expect(StagePresenter.handState(isRaised: true, inFlight: false) == .raised)
         #expect(StagePresenter.handState(isRaised: true, inFlight: true) == .lowering)
         #expect(StagePresenter.handState(isRaised: false, inFlight: false) == .lowered)
         #expect(presenter(StageFixtureScript.inputs(for: .handRaising)).localHand == .raising)
-        // Flip is offered only while your camera is on; Now Playing only for a hidden activity.
+
         #expect(!grid.chrome.canFlipCamera)
         #expect(presenter(StageFixtureScript.inputs(for: .oneOnOne)).chrome.canFlipCamera)
         let playing = presenter(StageFixtureScript.inputs(for: .nowPlaying))
@@ -466,7 +446,7 @@ struct StagePoliciesTests {
         #expect(stage.feedbackState.token.kind == .transcriptionStarted)
         stage.apply(StageFixtureScript.copy(StageFixtureScript.inputs(for: .grid4), liveNotes: .paused))
         #expect(stage.feedbackState.token.kind == .transcriptionStopped)
-        // S20 0.5 registry (RECONCILE R12): one publisher per kind. The S20 kinds never appear in the S1 shell.
+
         let stageKinds: [FeedbackKind] = [.hostMutedYou, .cameraOffByHost, .handLoweredByHost, .becameHost, .lostHost, .shareStarted,
                                           .shareStopped, .shareStoppedBySystem, .transcriptionStarted, .transcriptionStopped, .gameStarted]
         let shellKinds: [FeedbackKind] = [.joined, .admitted, .connectionLost, .joinFailed, .denied, .removed, .connectionRestored, .actionRejected]
@@ -499,13 +479,11 @@ struct StagePoliciesTests {
         let revision = six.reactions.revision
         six.reactionsChanged(StageFixtureScript.reactions(count: 25))
         #expect(six.reactions.events.map(\.id) == ids && six.reactions.revision == revision)
-        // The queue caps at 30 (MeetingReactionConstants.maxActiveReactions).
+
         six.reactionsChanged(StageFixtureScript.reactions(count: 40))
         #expect(six.reactions.events.count == MeetingReactionConstants.maxActiveReactions)
         #expect(six.layout.revision == presenter(StageFixtureScript.inputs(for: .reactionsBurst25)).layout.revision)
     }
-
-    // MARK: SL15 visibility and SC6 audio (#177 class)
 
     @Test func visibilityCountsOnlyVisibleUncoveredRendererSlots() {
         let stage = presenter(StageFixtureScript.inputs(for: .grid12))
@@ -521,12 +499,12 @@ struct StagePoliciesTests {
         let pip = StageVisibilityPolicy.report(frames: frames, slots: stage.layout.slots, viewport: Self.iphoneSE, kind: .grid,
                                                coverage: "none", chromeHidden: false, isInPip: true, pipTarget: target)
         #expect(pip.visibleUserIds == ["r1"])
-        // The minimized self view keeps its renderer at opacity 0 and is not visible.
+
         let minimized = presenter(StageFixtureScript.rolesSweepStep(4), viewport: Self.iphone17e)
         let mini = StageVisibilityPolicy.report(frames: minimized.currentFrames(), slots: minimized.layout.slots, viewport: Self.iphone17e,
                                                 kind: minimized.layout.kind, coverage: "none", chromeHidden: false, isInPip: false, pipTarget: nil)
         #expect(!mini.visibleUserIds.contains("you"))
-        // Reports are equality guarded before they reach the core.
+
         var calls = 0
         stage.onVisibilityChanged = { _ in calls += 1 }
         stage.reportVisibility(report)
@@ -535,7 +513,7 @@ struct StagePoliciesTests {
     }
 
     @Test func hiddenCameraOffSpeakerKeepsTheirTileAndStaysAudible() {
-        // S20 2 l6 and 14 l (SC6): hide tiles without video with a camera-off featured speaker.
+
         let stage = presenter(StageFixtureScript.inputs(for: .hideTiles))
         #expect(!personSlots(stage).contains { $0.userId == "r2" } && !personSlots(stage).contains { $0.userId == "r3" })
         stage.speakerChanged("r2", atMillis: 1_000)
@@ -544,7 +522,7 @@ struct StagePoliciesTests {
         let report = StageVisibilityPolicy.report(frames: stage.currentFrames(), slots: stage.layout.slots, viewport: Self.iphoneSE,
                                                   kind: stage.layout.kind, coverage: "none", chromeHidden: false, isInPip: false,
                                                   pipTarget: nil)
-        // A fake client applies the policy: every consumer the stage hides keeps its audio.
+
         let client = FakeStageConsumerClient(consumers: [
             StageConsumerInput(consumerId: "a-r2", userId: "r2", kind: .audio, isPaused: false),
             StageConsumerInput(consumerId: "a-r3", userId: "r3", kind: .audio, isPaused: false),
@@ -555,7 +533,7 @@ struct StagePoliciesTests {
         client.apply(StageConsumerVisibilityPolicy.decisions(consumers: client.consumers, report: report, receiveVideo: true))
         #expect(client.pausedAudio.isEmpty, "audio paused: \(client.pausedAudio)")
         #expect(client.paused == ["v-r9"])
-        // Fully covered, in the background or audio only: still no audio pause.
+
         for receive in [true, false] {
             for coverage in ["none", "partial", "full"] {
                 let other = StageVisibilityReport(visibleUserIds: [], visibleShareUserId: "", coverage: coverage, isInPip: false, pipTarget: nil)
@@ -569,20 +547,17 @@ struct StagePoliciesTests {
     }
 
     @Test func bothMediaClientsLimitTheVisibilityPolicyToWebcamVideo() throws {
-        // RR4 at the client: the bandwidth policy only touches webcam video consumers, so a visibility set can never
-        // pause audio (the #177 guard on the native side).
+
         let ios = stageNormalized(try stageSource("Sources/Conclave/Core/WebRTC/WebRTCClient.swift"))
         #expect(ios.contains("guard var info = consumers[consumerId], info.kind == \"video\", info.type == ProducerType.webcam.rawValue else { continue }"))
         let android = stageNormalized(try stageSource("Sources/Conclave/Skip/WebRTCClient+Android.kt"))
         #expect(android.contains("if (info.kind != \"video\" || info.type != ProducerType.webcam.rawValue) continue"))
     }
 
-    // MARK: SL14 fixture
-
     @Test func everyFixtureStateBuildsAndMagicTapCountsOnce() {
         for state in StageFixtureState.allCases {
             let session = StageFixtureSession(state: state)
-            // The recovering states: STG-1, STG-6 Meeting Details, ACT-1/2 activities (HD B4-T8) and ACT-9 browser (HD B8-T1).
+
             let recovers = state == StageFixtureState.recovering || state == StageFixtureState.meetingInfoRecovering
                 || state == StageFixtureState.activitiesRecovering || state == StageFixtureState.browserReconnecting
             #expect(session.shell.session.phase == (recovers ? MeetingPhaseKind.recovering : MeetingPhaseKind.inCall), "\(state.rawValue)")
@@ -590,7 +565,7 @@ struct StagePoliciesTests {
         }
         let session = StageFixtureSession(state: .grid6)
         session.magicTap()
-        // S20 1 l4: the fixture button and the Magic Tap action call the same closure; the counter moves by exactly 1.
+
         #expect(session.counters.toggleMicrophone == 1)
         session.minimize()
         #expect(session.counters.minimize == 1 && session.counters.leave == 0)
@@ -598,7 +573,7 @@ struct StagePoliciesTests {
         #expect(StageFixtureScript.pattern(named: nil) == .staticPattern)
         #expect(StageFixtureScript.pattern(named: "live") == .livePattern)
         #expect(RendererProbePattern.allCases.map(\.rawValue) == ["none", "static", "live"])
-        // Pin through the presenter command: the scripted core pins and the stage spotlights.
+
         session.stage.togglePin(userId: "r2")
         #expect(session.stage.layout.kind == .spotlight && session.stage.layout.pinnedUserId == "r2")
         #expect(session.panelReadout() == "none")
@@ -607,7 +582,7 @@ struct StagePoliciesTests {
     }
 
     @Test func rendererLedgerBalancesAcrossTwentyCycles() {
-        // S20 14 l (Tier A) and PS 6.3: 20 create and release cycles balance; unaffected keys keep their serials.
+
         let ledger = RendererIdentityLedger()
         let keep = ledger.created(key: "p:r1", slot: .stage)
         for cycle in 0..<20 {
@@ -618,8 +593,6 @@ struct StagePoliciesTests {
         #expect(ledger.counts(.stage).created == 21 && ledger.counts(.stage).released == 20)
         #expect(ledger.serial(for: "p:r1") == keep)
     }
-
-    // MARK: Source scans
 
     @Test func stageSourcesStayFlatDashFreeAndOffTheCore() throws {
         let files = try stageFiles(under: "Sources/Conclave/Features/Meeting/Stage", extensions: ["swift"])
@@ -639,12 +612,12 @@ struct StagePoliciesTests {
             }
             #expect(stageMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
             #expect(stageMatches(#"Color\(0x"#, in: text).isEmpty, "\(file) builds a color from a literal")
-            // Only the WP3 bridges reach the live media client (F00 P1).
+
             if !file.hasSuffix("StageLiveRenderers+iOS.swift") && !file.hasSuffix("SlotView.kt") {
                 #expect(!text.contains("MeetingViewModel.shared"), "\(file) reads the view model")
             }
         }
-        // Shared stage files are Skip Lite: no protocols, no associated values, no tuples, no function-reference maps.
+
         for file in try stageFiles(under: "Sources/Conclave/Features/Meeting/Stage", extensions: ["swift"]) where !file.contains("+iOS") {
             let text = try stageSource(file)
             #expect(!text.contains("#if"), "\(file) is shared and must not branch by platform")
@@ -663,9 +636,9 @@ struct StagePoliciesTests {
         #expect(root.contains("ZStack { StageCanvas(stage: stage, renderers: renderers, chrome: chromeVisibility)"))
         #expect(root.contains(".conclaveCallAppearance()") && root.contains(".environment(\\.colorScheme, .dark)"))
         #expect(root.contains("NativePanelInspectorHost(coordinator: shell.panels") && root.contains("NativePanelSheetHost(coordinator: shell.panels"))
-        // The root body reads no stage or chrome state (its evaluation count stays 1 across layout revisions).
+
         let body = try #require(root.range(of: "var body: some View {"))
-        let end = try #require(root.range(of: "/// Panel content inside", range: body.upperBound..<root.endIndex))
+        let end = try #require(root.range(of: "struct CallPanelContent: View {", range: body.upperBound..<root.endIndex))
         let rootBody = String(root[body.upperBound..<end.lowerBound])
         for read in ["stage.layout", "stage.kind", "chromeVisibility.state", "stage.capsule", "stage.autoHideBlocker"] {
             #expect(!rootBody.contains(read), "the root body reads \(read)")
@@ -673,11 +646,12 @@ struct StagePoliciesTests {
         let canvas = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/StageCanvas+iOS.swift"))
         #expect(canvas.contains("struct StageSlotLayout: Layout"))
         #expect(canvas.contains(".layoutValue(key: StageSlotIdKey.self, value: slot.id)"))
-        #expect(canvas.contains("stage.setViewport(next)") && canvas.contains(".ignoresSafeArea()"))
+        #expect(canvas.contains("stage.setViewport(next)") && canvas.contains("StageViewportPolicy.iOS("))
+        #expect(canvas.contains(".frame(width: CGFloat(viewport.width), height: CGFloat(viewport.height))"))
         #expect(canvas.contains(".accessibilityRotor(Text(ConclaveStrings.text(\"Raised Hands\")))"))
         #expect(canvas.contains(".accessibilityRotor(Text(ConclaveStrings.text(\"Speaking\")))"))
         let slot = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift"))
-        // One constant structure: the tile chrome with the renderer as its first child for every role.
+
         #expect(slot.components(separatedBy: "ConclaveTileChrome(").count - 1 == 1)
         #expect(slot.contains(".transaction { transaction in transaction.animation = nil } .accessibilityHidden(true) .accessibilityIgnoresInvertColors()"))
         #expect(slot.contains(".opacity(slot.role == .selfMinimized ? 0 : 1)"))
@@ -694,14 +668,14 @@ struct StagePoliciesTests {
         #expect(root.contains("if (covered) hideFromAccessibility()"))
         let canvas = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt"))
         #expect(canvas.contains("key(slot.id) {") && canvas.contains("placeRelative(x, y)"))
-        // SYS-4 (S70 3 d, HD request B5-T4 R9): the PiP window never reaches the presenter's viewport.
+
         #expect(canvas.contains("SideEffect { if (!inPip) stage.setViewport(viewport) }"))
         let slot = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/SlotView.kt"))
         #expect(slot.contains("rendererKey = \"stage:$slotId\", clearBeforeAttach = false"))
         #expect(slot.contains("graphicsLayer { alpha = if (minimized) 0f else 1f }"))
         #expect(slot.contains("putExtra(Intent.EXTRA_TITLE, roomLabel)") && slot.contains("Intent.createChooser(intent, null)"))
         let renderer = stageNormalized(try stageSource("Sources/Conclave/Skip/VideoRenderer.kt"))
-        // Tier B identity hooks (PS 10.2): only with a provided ledger; the sink never moves inside onFrame.
+
         #expect(renderer.contains("val ledger = LocalRendererLedger.current"))
         #expect(renderer.contains("attachIdentity(ledger, rendererLifecycleKey.toString())"))
         #expect(renderer.contains("renderer.releaseIdentity()"))
@@ -726,9 +700,7 @@ struct StagePoliciesTests {
 }
 
 #if os(macOS)
-/// SC1 wiring through the view model (macOS host; the socket and media stubs never reach the network). Depends on the
-/// core edits in HD/requests/B3-T2.md R1 and R2 (`stage`, `makeStageInputs()`, `stageRefreshCount`,
-/// `canonicalStageUserId(_:)`, `participantJoinSerials`), which the batch integrator applies.
+
 @MainActor
 @Suite(.serialized)
 struct StageViewModelWiringTests {
@@ -791,14 +763,14 @@ struct StageViewModelWiringTests {
         refreshesOnce("hideTilesWithoutVideo") { state.hideTilesWithoutVideo = true }
         refreshesOnce("selfViewMode") { state.selfViewMode = .floating }
         refreshesOnce("selfViewCorner") { state.selfViewCorner = .topLeft }
-        // Fields only S1 reads never build stage inputs (S1C 3.2 table minus the S20 0.5 table).
+
         refreshesNever("joinFormErrorMessage") { state.joinFormErrorMessage = "Invalid" }
         refreshesNever("meetingEndedNoticeMessage") { state.meetingEndedNoticeMessage = "Ended" }
         refreshesNever("waitingMessage") { state.waitingMessage = "Waiting" }
         refreshesNever("isReactionsDisabled") { state.isReactionsDisabled = true }
-        // A game push with unchanged presence builds nothing (SC1 E4).
+
         refreshesNever("gamePublicState") { state.gamePublicState = nil }
-        // The hot hooks never build stage inputs either (SC1 E5).
+
         refreshesNever("activeSpeakerId") { state.activeSpeakerId = "r@example.com#r" }
         refreshesNever("activeReactions") { state.activeReactions = [] }
     }
@@ -812,7 +784,7 @@ struct StageViewModelWiringTests {
         #expect(state.canonicalStageUserId("remote@example.com#remote-session") == "remote@example.com#remote-session")
         #expect(state.canonicalStageUserId("") == nil && state.canonicalStageUserId(nil) == nil)
         #expect(state.canonicalStageUserId("stranger@example.com#elsewhere") == nil)
-        // SC1 d: a speaker id equal to sfuUserId lights your tile.
+
         state.activeSpeakerId = "local@example.com"
         #expect(viewModel.stage.speakerUserId == state.userId)
         state.activeSpeakerId = "remote@example.com#remote-session"
@@ -830,20 +802,19 @@ struct StageViewModelWiringTests {
         let ann = rows.first { $0.userId.hasPrefix("ann") }?.joinSerial ?? 0
         let bob = rows.first { $0.userId.hasPrefix("bob") }?.joinSerial ?? 0
         #expect(ann > 0 && bob > ann)
-        // A recovery resync rebuilds the roster but keeps the serials (S50 PH19).
+
         viewModel.state.participants.removeAll()
         viewModel.markRemoteParticipantPresent("bob@example.com#s2")
         viewModel.markRemoteParticipantPresent("ann@example.com#s1")
         let again = viewModel.makeStageInputs().participants.filter { !$0.isLocal }
         #expect(again.first { $0.userId.hasPrefix("ann") }?.joinSerial == ann)
         #expect(again.first { $0.userId.hasPrefix("bob") }?.joinSerial == bob)
-        // The stage and People read the same order.
+
         #expect(StageOrderPolicy.joinOrder(again).first?.hasPrefix("ann") == true)
     }
 }
 #endif
 
-/// The SC6 fake client: records which consumers a policy would pause.
 @MainActor
 final class FakeStageConsumerClient {
     private(set) var consumers: [StageConsumerInput]

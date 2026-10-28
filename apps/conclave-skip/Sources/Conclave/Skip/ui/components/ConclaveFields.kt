@@ -79,19 +79,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
-/*
- * Text fields, the composer and its parts, search and segmented controls (F00 C19, C20, C21; S40 6 d, CL3, R40-6;
- * S60 R6-8). The text stays in the caller's local state (keystrokes never reach a presenter until submit, F00 C19
- * k). Single-line fields are OutlinedTextFields with the label, the error as supporting text and isError; the
- * composer is a TextField on surfaceContainerHighest with no indicator, radius 20, growing to six lines with the
- * Send glyph (primary, auto-mirrored in RTL), on a String value or on a TextFieldState (T3 borrow P4). Hardware Enter
- * sends once per press (an auto-repeat is consumed) and Shift+Enter adds a newline; a screen's own hardware keys run
- * first. No send haptic (Q11). Android composers are always the opaque field (owner OQ2 changes iOS only). Search is
- * an OutlinedTextField pinned under the app bar, never the SearchBar family (it opens a window over the stage, AND
- * 7.7).
- */
-
-/** What a single-line field holds; picks the keyboard, capitalization and IME action (F00 C19 d). */
 internal enum class ConclaveTextFieldKind { Name, Code, Text }
 
 @Composable
@@ -121,20 +108,12 @@ internal fun ConclaveTextField(
     )
 }
 
-/** The near-limit counter ("38/40") with tabular digits and the description "38 of 40 characters", visible from
- *  [visibleFrom] characters (S10 DisplayNamePolicy: cap 40, visible from 30). Composers pass
- *  ConclaveComposerCounterPolicy.visibleFrom (90%), or 0 in voice mode where it always shows.
- *  [announcesBands] is opt-in (S40 6 i; T3 borrow P9; only the chat composer and the Q&A question pass true): the
- *  counter is spoken once when it appears and at every crossing between near and over, never per character, through
- *  ConclaveCounterBandAnnouncer. Every other caller keeps the silent counter. */
 @Composable
 internal fun ConclaveCharacterCounter(
     count: Int, limit: Int, visibleFrom: Int, identifier: String, modifier: Modifier = Modifier, announcesBands: Boolean = false,
 ) {
     val band = ConclaveComposerCounterPolicy.band(count = count, limit = limit, visibleFrom = visibleFrom)
-    // Called before the hidden return, so it stays in the composition while the counter is hidden and sees every band
-    // change (hidden to near and hidden to over included). It emits no layout node, so it never adds the composer
-    // column's 8 dp spacing under the field at rest.
+
     if (announcesBands) ConclaveCounterBandAnnouncer(count, limit, band)
     if (band == ConclaveCounterBand.hidden) return
     val scheme = MaterialTheme.colorScheme
@@ -148,17 +127,6 @@ internal fun ConclaveCharacterCounter(
     )
 }
 
-/**
- * P9 (T3 borrow; S40 6 i): an opted-in counter's band, spoken once per crossing as ConclaveComposerCounterPolicy
- * .announces decides (hidden to near or over, and between near and over; never inside a band and never on the way
- * back to hidden). The band last seen is kept in a plain holder that survives the counter's hidden stretches, so a
- * recomposition never repeats it and a counter composed already in a band (a reopened panel) stays quiet. The text is
- * the one composed at the crossing (the count description, for example 900 of 1000 characters, or the over-limit
- * plural). It is posted from SideEffect through View.announceForAccessibility (as AppPageAnnouncer and AudioPages do):
- * Compose's accessibility delegate reports a live region change only for a node that was already in the previous
- * semantics snapshot, so a polite node that appears with the counter is silent, and a node kept while the counter is
- * hidden would be an extra spaced child of the composer column.
- */
 @Composable
 private fun ConclaveCounterBandAnnouncer(count: Int, limit: Int, band: ConclaveCounterBand) {
     val view = LocalView.current
@@ -176,8 +144,6 @@ private fun ConclaveCounterBandAnnouncer(count: Int, limit: Int, band: ConclaveC
     }
 }
 
-/** P9: the counter's spoken copy for a band (S40 6 g): the count description near the limit, the over-limit plural past
- *  it, "" while hidden. */
 @Composable
 private fun conclaveCounterAnnouncement(band: ConclaveCounterBand, count: Int, limit: Int): String = when (band) {
     ConclaveCounterBand.hidden -> ""
@@ -188,22 +154,8 @@ private fun conclaveCounterAnnouncement(band: ConclaveCounterBand, count: Int, l
     }
 }
 
-/** P9: the band the announcer last saw; a plain field, never Compose state, so writing it recomposes nothing. */
 private class ConclaveCounterBandMemory(var band: ConclaveCounterBand)
 
-// Composer (F00 C19 d; S40 6 d, CL3, R40-6)
-
-/**
- * The composer field row: an optional [attach] control (an IconButton opening a DropdownMenu, the screen's) centred on
- * the field's one-line height, then a TextField growing to six lines with Send in its bottom trailing band (enabled
- * only when [sendEnabled]; while disabled, [sendDisabledReason] is its state description, S40 6 i). IME Send sends
- * only when [sendEnabled] (Q13). Hardware keys go through conclaveComposerKey: [onHardwareKey] first (the screen's
- * suggestion keys), then Enter and NumPadEnter send once per press and Shift+Enter adds a newline. [sendLabel]
- * replaces "Send" ("Ask", "Send voice message"). [modifier] is the row's; [fieldModifier] is the TextField's own, for
- * a screen that needs the field itself (a FocusRequester or a focus observer: on the row, a hardware keyboard's
- * focus request lands on the attach control first). The InCallPage composer slot applies imePadding. Transcript Ask
- * and Q&A use this value overload; the chat composer uses the TextFieldState overload below.
- */
 @Composable
 internal fun ConclaveComposerField(
     placeholder: String, value: String, onValueChange: (String) -> Unit, sendEnabled: Boolean, onSend: () -> Unit,
@@ -237,13 +189,6 @@ internal fun ConclaveComposerField(
     }
 }
 
-/**
- * The same composer row on a [TextFieldState] (T3 borrow P4): the material3 1.4.0 state TextField, so the screen can
- * receive keyboard images, pasted images and drops through one contentReceiver and keep native text paste and undo.
- * Six lines (TextFieldLineLimits.MultiLine), IME Send through onKeyboardAction only when [sendEnabled] (Q13), and the
- * same Send, attach slot, colors, hardware keys and [fieldModifier] as the value overload. While Send is disabled an
- * IME Send calls [onSendBlocked] instead (never onSend), so the screen can say why (S40 6 i; T3 borrow P6).
- */
 @Composable
 internal fun ConclaveComposerField(
     placeholder: String, state: TextFieldState, sendEnabled: Boolean, onSend: () -> Unit, identifier: String,
@@ -276,13 +221,6 @@ internal fun ConclaveComposerField(
     }
 }
 
-/**
- * The composer's hardware keys (S40 6 d and 6 l8; T3 borrow P1 and P2). [onHardwareKey] sees every key event first,
- * KeyDown and KeyUp, so a screen that consumes Escape can consume its KeyUp as well; returning true consumes the event.
- * Then Enter and NumPadEnter on KeyDown without Shift: the first press sends when Send is enabled and an auto-repeat
- * (repeatCount above 0) is consumed without sending, so a held key sends once and never fills the field with newlines.
- * Shift+Enter falls through to the field as a newline. The soft keyboard's Send is an IME action, not a key event.
- */
 internal fun conclaveComposerKey(
     event: KeyEvent, sendEnabled: Boolean, onSend: () -> Unit, onHardwareKey: ((KeyEvent) -> Boolean)?,
 ): Boolean {
@@ -299,19 +237,13 @@ internal fun conclaveComposerKey(
     return false
 }
 
-/** IME Send on the state field (Q13): sends only while Send is enabled and runs no default action, so a blocked Send
- *  keeps the draft and the keyboard. A blocked press goes to [onSendBlocked] (the screen posts the reason, P6), never
- *  to [onSend]. */
 internal fun conclaveComposerImeSend(
     sendEnabled: Boolean, onSendBlocked: (() -> Unit)? = null, onSend: () -> Unit,
 ): KeyboardActionHandler = KeyboardActionHandler { if (sendEnabled) onSend() else onSendBlocked?.invoke() }
 
-/** The disabled Send's state description (S40 6 i, AX2): the reason while Send is disabled and one is given. */
 internal fun conclaveSendStateDescription(sendEnabled: Boolean, reason: String): String? =
     if (!sendEnabled && reason.isNotEmpty()) reason else null
 
-/** The attach control centred on the field's one-line height (T3 borrow P5): level with a single line of text, then
- *  in the bottom band as the field grows to six lines. */
 @Composable
 private fun ConclaveComposerAttachSlot(attach: @Composable () -> Unit) {
     Box(Modifier.heightIn(min = TextFieldDefaults.MinHeight), contentAlignment = Alignment.Center) {
@@ -319,8 +251,6 @@ private fun ConclaveComposerAttachSlot(attach: @Composable () -> Unit) {
     }
 }
 
-/** Keep Send level with the attach control as the field grows. The native trailing slot above reserves text
- *  space without centring the action halfway up a multiline draft. End alignment also follows RTL. */
 @Composable
 private fun ConclaveComposerSendSlot(modifier: Modifier, send: @Composable () -> Unit) {
     Box(modifier.width(48.dp).heightIn(min = TextFieldDefaults.MinHeight), contentAlignment = Alignment.Center) {
@@ -328,8 +258,6 @@ private fun ConclaveComposerSendSlot(modifier: Modifier, send: @Composable () ->
     }
 }
 
-/** Send: the glyph in primary while enabled and onSurface at the disabled opacity otherwise (auto-mirrored in RTL);
- *  the disabled reason is its state description, so TalkBack never hears a bare disabled Send. */
 @Composable
 private fun ConclaveComposerSend(identifier: String, sendEnabled: Boolean, onSend: () -> Unit, sendLabel: String?, reason: String) {
     val scheme = MaterialTheme.colorScheme
@@ -346,7 +274,6 @@ private fun ConclaveComposerSend(identifier: String, sendEnabled: Boolean, onSen
     }
 }
 
-/** The composer container: surfaceContainerHighest in every state and no indicator (S40 6 e). */
 @Composable
 private fun conclaveComposerColors(): TextFieldColors {
     val scheme = MaterialTheme.colorScheme
@@ -360,11 +287,6 @@ private fun conclaveComposerColors(): TextFieldColors {
     )
 }
 
-/**
- * The composer column (S40 6 d): [accessories] above the field row (suggestions, reply bar, attachment chip, link
- * preview, mode row, notice line), the [field] row, then the [footer] (the counter). Default 16 by 8 [contentPadding],
- * which a page that already owns the gutter can override; 8 between rows, without animation (S40 6 h).
- */
 @Composable
 internal fun ConclaveComposerStack(
     identifier: String, modifier: Modifier = Modifier, accessories: @Composable ColumnScope.() -> Unit = {},
@@ -386,8 +308,6 @@ internal fun ConclaveComposerStack(
     }
 }
 
-/** The reply bar (S40 6 d, CL3): a 3 dp primary rule, the title and a two-line preview read as one polite node,
- *  then Cancel as its own 48 dp button. */
 @Composable
 internal fun ConclaveComposerReplyBar(
     title: String, preview: String, cancelLabel: String, identifier: String, onCancel: () -> Unit, modifier: Modifier = Modifier,
@@ -411,12 +331,6 @@ internal fun ConclaveComposerReplyBar(
     }
 }
 
-/**
- * The attachment chip (S40 6 d, CL3): an optional [thumbnail], the title, a status line ("Uploading 42%", "Ready to
- * send" or the failure reason with the error glyph), the linear indicator while preparing or uploading ([progress]
- * null is indeterminate), Try again after a failure, and Remove. Flat surfaceContainerLow with a 1 dp outlineVariant
- * border.
- */
 @Composable
 internal fun ConclaveComposerAttachmentChip(
     title: String, status: String, phase: ConclaveAttachmentPhase, removeLabel: String, identifier: String, onRemove: () -> Unit,
@@ -463,22 +377,12 @@ internal fun ConclaveComposerAttachmentChip(
     }
 }
 
-/** One status or notice line above the field (a blocked-send reason, a gate, an implicit private target), announced
- *  once politely when it appears or changes (S40 6 i). */
 @Composable
 internal fun ConclaveComposerStatusLine(text: String, identifier: String, modifier: Modifier = Modifier) {
     ConclaveText(text, line = identifier, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier.fillMaxWidth().testTag(identifier).semantics { liveRegion = LiveRegionMode.Polite })
 }
 
-// Search (F00 C20)
-
-/**
- * The search field pinned under the TopAppBar: a decorative leading search glyph, a clear button while there is a
- * query, a circle shape and the Search IME action. Filter the cached snapshot with ConclaveSearchPolicy as people
- * type; clearing keeps focus in the field. With [resultCount] set, a hidden polite live region speaks the count
- * while searching (TalkBack coalesces fast changes; no timer runs here).
- */
 @Composable
 internal fun ConclaveSearchField(
     query: String, onQueryChange: (String) -> Unit, identifier: String, modifier: Modifier = Modifier,
@@ -515,20 +419,11 @@ internal fun ConclaveSearchField(
     }
 }
 
-/** No results (C14 empty): the search glyph and "No results". */
 @Composable
 internal fun ConclaveSearchNoResults(identifier: String, modifier: Modifier = Modifier) {
     ConclaveEmptyStatus(conclaveString("ds_no_results"), "", ConclaveIcons.SearchFill0, identifier, modifier)
 }
 
-// Segmented control (F00 C21; S60 R6-8)
-
-/**
- * Two to four mutually exclusive options: a SingleChoiceSegmentedButtonRow (40 dp, selected secondaryContainer, no
- * coral). A change plays `selectionChanged` through the gesture route. When labels do not fit (font scale 1.5 and up)
- * [fallback] rows become C09 selectable rows and [fallback] menu becomes a dropdown in the same row (setup and
- * settings rows, so a page's Start stays above the fold). Callers pass transpiled arrays as lists (`.toList()`).
- */
 @Composable
 internal fun ConclaveSegmentedRow(
     options: List<ConclaveSegmentModel>, selectedId: String, identifier: String, onSelect: (String) -> Unit,
@@ -568,7 +463,6 @@ internal fun ConclaveSegmentedRow(
     }
 }
 
-/** The in-row fallback: the current value as a text button opening a flat dropdown of radio items. */
 @Composable
 private fun ConclaveSegmentedMenu(
     options: List<ConclaveSegmentModel>, selectedId: String, identifier: String, onSelect: (String) -> Unit, modifier: Modifier,
@@ -615,8 +509,6 @@ private fun ConclaveSegmentedMenu(
     }
 }
 
-/** A view switch at the top of a panel (the Transcript view switch, S60 R6-8): a PrimaryTabRow. Tab changes play
- *  nothing (S60 6 e). */
 @Composable
 internal fun ConclaveTabSwitch(
     options: List<ConclaveSegmentModel>, selectedId: String, identifier: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier,

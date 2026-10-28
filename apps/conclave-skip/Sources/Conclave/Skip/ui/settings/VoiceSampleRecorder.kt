@@ -36,14 +36,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 0.6 L6-13 (SET-4) on Android: the VoiceSampleRecorder on the "Record voice" page. It drives C6-23 through the
- * presenter and never owns a recorder: the core pauses the meeting microphone for the take and restores the mute intent
- * afterwards (HD request B6-T2 R1). Ticking parts read only the VoiceRecorderModel leaf. Reachable only while
- * canUsePersonalVoice (W10-4 is out of this push). Back mid-take asks "Discard recording?"; leaving the page any other
- * way mid-take discards the take, so the meeting microphone always returns to its prior intent.
- */
-
 @Composable
 internal fun SettingsVoiceRecordPage(settings: SettingsPresenter, reservation: PaddingValues) {
     val phase = settings.chat.personalVoice
@@ -58,7 +50,7 @@ internal fun SettingsVoiceRecordPage(settings: SettingsPresenter, reservation: P
         }
     }
     LaunchedEffect(phase) {
-        // Success pops to Voice messages, which shows "Ready" (2 f).
+
         if (phase == PersonalVoicePhase.ready) pages?.pop()
     }
     val scheme = MaterialTheme.colorScheme
@@ -100,11 +92,10 @@ internal fun SettingsVoiceRecordPage(settings: SettingsPresenter, reservation: P
     }
 }
 
-/** The ticking leaf: remaining time (tabular; a polite live region announced every 10 s, 2 i) and the flat level bar. */
 @Composable
 private fun SettingsVoiceRecorderProgress(model: VoiceRecorderModel, isRecording: Boolean) {
     val left = model.secondsLeft
-    // The spoken text moves in 10 s steps, so the polite live region announces every 10 s, not every second.
+
     val interval = VoiceRecorderPolicy.announcementIntervalSeconds
     val bucket = ((left + interval - 1) / interval) * interval
     val announcement = conclaveString("set_keep_speaking", bucket)
@@ -147,7 +138,6 @@ private fun SettingsVoiceRecorderControls(settings: SettingsPresenter, phase: Pe
     }
 }
 
-/** Consent (the Material consent idiom): a Checkbox row whose label is the full consent sentence. */
 @Composable
 private fun SettingsVoiceConsentItem(settings: SettingsPresenter, recorder: VoiceRecorderModel) {
     val consent = recorder.consent

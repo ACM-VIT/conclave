@@ -3,14 +3,6 @@ package conclave.module
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
-/*
- * Extended color roles (F00 2.5, 2.6 A4): the functional and in-call colors Material 3 has no role for. Screens
- * read LocalConclaveExtendedColors.current, which HostingTheme(inCall:) provides, so a screen never picks a
- * ...Light or ...Dark token itself. Every value is a generated DesignTokens constant. In-call equals dark. The
- * high-contrast border and scrim exist in the tokens and are selected here only when WP4 maps the contrast reader
- * (owner Q10); HostingTheme passes highContrast = false until then.
- */
-
 internal data class ConclaveExtendedColors(
     val success: Color,
     val warning: Color,
@@ -18,14 +10,14 @@ internal data class ConclaveExtendedColors(
     val onWarning: Color,
     val onLive: Color,
     val handRaised: Color,
-    /** The 2 dp speaking stroke. */
+
     val speaking: Color,
-    /** Leave: white glyph on callEnd is 3.923, glyph only. */
+
     val callEnd: Color,
     val onCallEnd: Color,
     val stage: Color,
     val tile: Color,
-    /** Flat translucent black behind text and chrome over video (64%, 80% high contrast). */
+
     val labelScrim: Color,
     val toolbar: Color,
     val toggleOnContainer: Color,
@@ -34,14 +26,13 @@ internal data class ConclaveExtendedColors(
     val onToggleOff: Color,
     val toggleEngagedContainer: Color,
     val onToggleEngaged: Color,
-    /** 1 dp decorative borders: 8% black light, 14% paper dark (32% each under high contrast). */
+
     val border: Color,
-    /** S60 R6-7: the light and dark board squares of the always-dark game card (the same pair in every set). */
+
     val gameBoardLight: Color,
     val gameBoardDark: Color,
 )
 
-/** The resolved set for one appearance. In-call surfaces pass dark = true. */
 internal fun conclaveExtendedColors(dark: Boolean, highContrast: Boolean = false): ConclaveExtendedColors =
     ConclaveExtendedColors(
         success = Color(if (dark) DesignTokens.androidExtendedSuccessDark else DesignTokens.androidExtendedSuccessLight),
@@ -76,5 +67,4 @@ internal fun conclaveExtendedColors(dark: Boolean, highContrast: Boolean = false
 internal val ConclaveExtendedColorsLight = conclaveExtendedColors(dark = false)
 internal val ConclaveExtendedColorsDark = conclaveExtendedColors(dark = true)
 
-/** Provided by HostingTheme; the light set outside any theme (previews and host tests). */
 internal val LocalConclaveExtendedColors = staticCompositionLocalOf { ConclaveExtendedColorsLight }

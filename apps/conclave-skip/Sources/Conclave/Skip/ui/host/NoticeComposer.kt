@@ -34,16 +34,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 
-/*
- * S50 8 d (PPL-4): the notice composer on Android. The text and the level are page state seeded once from
- * `host.drafts` and written back on every change, so the counter, the error and Send update per keystroke and the draft
- * survives Back (8 d, k: nothing publishes until Send). The level is the F00 C21 segmented row (selectionChanged on a
- * change; radio rows from font scale 1.5). The preview is the F00 C12 in-call banner drawn statically inside
- * `HostingTheme(inCall = true)`, one node labelled "Preview: Info notice, From ...", never a live region. Send is the
- * page's coral action (primaryContainer); "Notice sent" and failures with Retry use the page snackbar (PL14, R40-3).
- */
-
-/** The preview's maximum width matches the stage banner (S50 8 b). */
 private val NoticePreviewMaxWidth = 560.dp
 
 internal fun noticeLevelNameOf(context: Context, level: String): String = when (level) {
@@ -58,7 +48,6 @@ internal fun noticeBannerKind(level: String): ConclaveBannerKind = when (level) 
     else -> ConclaveBannerKind.Info
 }
 
-/** The S20 host notice wording ("From %1$s:" then the text); an empty draft previews the field label. */
 internal fun noticePreviewTextOf(context: Context, sender: String, message: String): String {
     val trimmed = message.trim()
     val shown = if (trimmed.isEmpty()) conclaveStringOf(context, "hst_message_label") else trimmed
@@ -83,7 +72,7 @@ internal fun NoticeComposerPage(people: PeoplePresenter, reservation: PaddingVal
     LaunchedEffect(snapshot.noticeSentSerial) {
         if (snapshot.noticeSentSerial == seenSentSerial) return@LaunchedEffect
         seenSentSerial = snapshot.noticeSentSerial
-        // The presenter cleared the draft on the acknowledgement (8 c); the field follows, then one confirmation.
+
         draft = host.drafts.noticeText
         snackbar.showSnackbar(conclaveStringOf(context, "hst_notice_sent"))
     }

@@ -3,23 +3,12 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// CHT-7 (OUT/PLAN-screens.md section 5; S40 4, 0.8 CH7 and CH8, Q3, Q4): Conclave AI rows. The incremental stream
-/// parser and its collector (a failure is never an answer), the history without private messages, the transcript
-/// context, the failure kinds, the web task rules, the row state policy and the first sentence, the core store (the
-/// asker's stream, the web relay throttle, the 100 ms refresh coalescing, relayed packets for everyone else, Try Again),
-/// the presenter's typed row entries (deltas never touch the timeline, one completion announcement, the iOS 17 follow
-/// counter), the `stream:3tasks` fixture through the real store, and the view, service and Android client sources (no
-/// shimmer or pulse, streamed reads on both platforms, the standalone markdown renderer). The last two tests need HD
-/// requests B6-T4 R1 and R2 (the relay packet fields and the view model's assistant region) and stay red until the
-/// integrator applies them. The Kotlin half is T/Skip/CHT7AssistantBridgeTests.kt. No network, socket or audio.
 @MainActor
 struct CHT7AssistantRowTests {
     static let local = "jordan@example.com#s1"
     static let avery = "avery@example.com#w1"
-    /// Noon UTC, as in ChatPoliciesTests.
-    static let base = 1_800_014_400_000.0
 
-    // MARK: Stream parser and collector (CH7)
+    static let base = 1_800_014_400_000.0
 
     @Test func theParserReadsFramesInAnySlicing() {
         let parser = NativeConclaveAssistantStreamParser()
@@ -84,8 +73,6 @@ struct CHT7AssistantRowTests {
         #expect(result.content == "Final text." && result.relay?.signature == "signed")
     }
 
-    // MARK: History and transcript (Q4, CH7)
-
     @Test func theHistoryLeavesOutPrivateMessagesAndFailures() {
         let image = ChatImageAttachment(id: "i", url: "https://x/i.png", fileName: "i.png", mimeType: "image/png", size: 10)
         let gif = ChatGifAttachment(id: "g", title: "Party", url: "https://x/g.gif", previewUrl: nil, pageUrl: nil, width: nil,
@@ -137,8 +124,6 @@ struct CHT7AssistantRowTests {
         #expect(ConclaveAssistantFailurePolicy.kind(message: "Ask Conclave a question.") == .empty)
         #expect(ConclaveAssistantFailurePolicy.kind(message: "The Internet connection appears to be offline.") == .generic)
     }
-
-    // MARK: Shared policies
 
     @Test func stepsMergeLikeTheWeb() {
         var tasks: [AssistantTask] = []
@@ -193,8 +178,6 @@ struct CHT7AssistantRowTests {
         #expect(StreamingMarkdownParser.plainText(in: "# Title\n\nLine one\nline two\n\n---\n```\ncode\n```") ==
                 "Title\nLine one line two\ncode")
     }
-
-    // MARK: The core store (CH7, CH8)
 
     @Test func theAskersStreamUpdatesTheStateAndThrottlesRelays() {
         let clock = CHT7Clock()
@@ -257,7 +240,7 @@ struct CHT7AssistantRowTests {
         store.applyRelay(answerId: "r", reasoning: "Look", reasoningDone: true,
                          tasks: [ConclaveAssistantRelayTask(id: "w", kind: "web_search", status: "done")], done: true, errored: false)
         input = store.input(forMessageId: "r")
-        // `tasks.first`, not `tasks[0]`: an empty list fails the expectation instead of trapping the test process.
+
         #expect(input?.reasoning == "Looking" && input?.reasoningDone == true && input?.isDone == true
                 && input?.tasks.first?.isDone == true)
         store.applyRelay(answerId: "i", reasoning: "", reasoningDone: false, tasks: [], done: true, errored: true)
@@ -282,8 +265,6 @@ struct CHT7AssistantRowTests {
         store.reset()
         #expect(!store.hasAnswer("a") && store.input(forMessageId: "b") == nil)
     }
-
-    // MARK: The presenter's assistant rows (S40 4 k, 4 i, 2 c)
 
     @Test func deltasRewriteOneEntryAndNeverTheTimeline() {
         let chat = Self.presenter([Self.answer("", input: ChatAssistantInput.make(isAsker: true))])
@@ -354,8 +335,6 @@ struct CHT7AssistantRowTests {
         #expect(chat.tailGrowth == before + 1, "completion always moves it")
     }
 
-    // MARK: Fixture (S40 0.9 stream:3tasks)
-
     @Test func streamThreeTasksPlaysThroughTheRealStore() {
         let steps = ChatFixtureScript.streamScript()
         var listedIds: [String] = []
@@ -400,8 +379,6 @@ struct CHT7AssistantRowTests {
         #expect(ChatFixtureScriptName(rawValue: "stream:3tasks") == .stream3tasks)
     }
 
-    // MARK: Sources
-
     @Test func theRowsStayStaticAndTheRendererStandsAlone() throws {
         let iosRow = try chatSource("Sources/Conclave/Features/Meeting/Chat/AssistantRow+iOS.swift")
         let iosMarkdown = try chatSource("Sources/Conclave/Features/Meeting/Chat/AssistantMarkdown+iOS.swift")
@@ -419,7 +396,7 @@ struct CHT7AssistantRowTests {
         #expect(kotlinRow.contains("CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp"))
         #expect(kotlinRow.contains("AnimatedVisibility(visible = expanded, enter = expandVertically()"))
         #expect(kotlinRow.contains("if (reduceMotion)") && kotlinRow.contains("role = Role.Button"))
-        // TRN-2 reuses the renderers: no chat presenter or chat actions inside them.
+
         for text in [iosMarkdown, kotlinMarkdown] {
             #expect(!text.contains("ChatPresenter") && !text.contains("ChatRowActions"))
         }
@@ -451,7 +428,6 @@ struct CHT7AssistantRowTests {
         #expect(shimmerHost.contains("struct NativeTextShimmer: View"), "the legacy screens keep their shimmer")
     }
 
-    /// Red until the integrator merges HD/strings/B6-T4.json (request R6).
     @Test func assistantStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(
             with: Data(chatSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
@@ -478,10 +454,6 @@ struct CHT7AssistantRowTests {
         }
     }
 
-    // MARK: The core half (HD/requests/B6-T4.md R1, R2; red until the integrator applies them)
-
-    /// The asker forwards the route's packet unchanged: the process fields survive a decode and encode (the SFU checks the
-    /// signature over them), and an absent query stays absent.
     @Test func theRelayPacketKeepsItsSignedProcessFields() throws {
         let json = """
         {"id":"a","roomId":"r","channelId":"c","requesterUserId":"u","questionMessageId":"q","content":"Hi","done":false,\
@@ -514,8 +486,6 @@ struct CHT7AssistantRowTests {
         #expect(kotlin.contains("decodeConclaveAssistantPacket(args.firstOrNull())"))
         #expect(kotlin.contains("payload.put(\"reasoningDone\", true)") && kotlin.contains("payload.put(\"tasks\", array)"))
     }
-
-    // MARK: Helpers
 
     static func event(_ kind: NativeConclaveAssistantStreamEventKind, delta: String = "", error: String = "",
                       relay: ConclaveAssistantRelayPacket? = nil) -> NativeConclaveAssistantStreamEvent {
@@ -555,7 +525,6 @@ struct CHT7AssistantRowTests {
     }
 }
 
-/// A test clock the store and presenter read.
 final class CHT7Clock {
     var value = 0.0
 }

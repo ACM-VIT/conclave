@@ -4,13 +4,9 @@ import Observation
 import UIKit
 #endif
 
-// MARK: - Meeting Header
-
 enum MeetingHeaderLayout {
     static let roomPillMaxWidth: CGFloat = 152.0
-    // 32pt pills plus the header's 12pt vertical padding on each edge.
-    // Connection notices are positioned from this stable edge as overlays;
-    // the stage itself begins here with no permanently reserved banner gap.
+
     static let barHeight: CGFloat = 56.0
 }
 
@@ -20,7 +16,7 @@ struct MeetingHeaderView: View {
     let participantCount: Int
     var showsParticipantsButton: Bool = true
     let onParticipantsPressed: () -> Void
-    
+
     var body: some View {
         ACMGlassGroup(spacing: 12) {
             HStack(spacing: 12) {

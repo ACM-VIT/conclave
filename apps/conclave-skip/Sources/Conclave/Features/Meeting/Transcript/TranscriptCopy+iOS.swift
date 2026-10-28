@@ -1,12 +1,6 @@
 #if os(iOS) && !SKIP
 import Foundation
 
-// TRN-2 (S60 0.6 L6-14, 6 g): the one exhaustive copy mapping for the Transcript panel on iOS (Apple title case,
-// String Catalog keys in `Resources/Localizable.xcstrings`, HD/strings/B7-T5.json). Every typed phase, reason and kind
-// the transpiled `TranscriptPresenter` publishes resolves here through a `switch`; T/TRN2TranscriptPanelTests.swift
-// enumerates every case. Provider and model names (OpenAI, Sarvam, GPT-5.6 Terra) are product names and stay verbatim.
-// The Android twin is `K/ui/copy/TranscriptCopy.kt`.
-
 enum TranscriptCopy {
     static var title: String { ConclaveStrings.text("Transcript") }
     static var viewSwitchLabel: String { ConclaveStrings.text("Transcript View") }
@@ -19,16 +13,12 @@ enum TranscriptCopy {
         }
     }
 
-    // MARK: Menu (6 c)
-
     static var moreActions: String { ConclaveStrings.text("More Transcript Actions") }
     static var export: String { ConclaveStrings.text("Export Transcript") }
     static var copy: String { ConclaveStrings.text("Copy Transcript") }
     static var postRecap: String { ConclaveStrings.text("Post Recap to Chat") }
     static var stopMenu: String { ConclaveStrings.text("Stop Live Notes\u{2026}") }
     static var shareTitle: String { ConclaveStrings.text("Conclave Transcript") }
-
-    // MARK: Start card (6 f, g)
 
     static var kicker: String { ConclaveStrings.text("Live Notes") }
     static var beta: String { ConclaveStrings.text("Beta") }
@@ -61,7 +51,6 @@ enum TranscriptCopy {
     static var provider: String { ConclaveStrings.text("Provider") }
     static var assistant: String { ConclaveStrings.text("Assistant") }
 
-    /// Product names, not translated.
     static func providerName(_ provider: TranscriptProvider) -> String {
         provider.label
     }
@@ -80,8 +69,6 @@ enum TranscriptCopy {
         case .needsKeys: return ConclaveStrings.text("Keys are used only for this session and are never stored.")
         }
     }
-
-    // MARK: Status (6 f, g)
 
     static func status(_ status: TranscriptStatusKind) -> String {
         switch status {
@@ -109,17 +96,12 @@ enum TranscriptCopy {
     static var stop: String { ConclaveStrings.text("Stop\u{2026}") }
     static var copied: String { ConclaveStrings.text("Copied") }
 
-    // MARK: Stop dialog (6 c)
-
     static var stopTitle: String { ConclaveStrings.text("Stop Live Notes for Everyone?") }
     static var stopMessage: String { ConclaveStrings.text("The transcript and minutes so far stay available to export.") }
     static var stopConfirm: String { ConclaveStrings.text("Stop Live Notes") }
     static var cancel: String { ConclaveStrings.text("Cancel") }
     static var tryAgain: String { ConclaveStrings.text("Try Again") }
 
-    // MARK: Issues (6 f, g)
-
-    /// The issue banner; the server text verbatim for `.server`, nothing for `.none`.
     static func issue(_ issue: TranscriptIssue, serverText: String) -> String {
         switch issue {
         case .none: return ""
@@ -132,15 +114,11 @@ enum TranscriptCopy {
 
     static var stopFailed: String { ConclaveStrings.text("Couldn\u{2019}t stop live notes. Try again.") }
 
-    // MARK: Bodies (6 f)
-
     static var loading: String { ConclaveStrings.text("Loading Live Notes") }
     static var unavailableTitle: String { ConclaveStrings.text("Live Notes Are Unavailable") }
     static var unavailableBody: String { ConclaveStrings.text("Couldn\u{2019}t reach live notes.") }
     static var relayUnavailableTitle: String { ConclaveStrings.text("Live Notes Aren\u{2019}t Available") }
     static var relayUnavailableBody: String { ConclaveStrings.text("Live notes aren\u{2019}t available in this meeting.") }
-
-    // MARK: Transcript tab (6 g)
 
     static var listeningTitle: String { ConclaveStrings.text("Listening for the Room") }
     static var listeningBody: String { ConclaveStrings.text("As people speak, their words appear here live, captioned for everyone.") }
@@ -151,19 +129,15 @@ enum TranscriptCopy {
         ConclaveStrings.format("Resumed at %@", clock(millis))
     }
 
-    /// "You" for your own rows, the speaker otherwise, "Speaker" when the name is missing.
     static func speaker(_ name: String, isYou: Bool) -> String {
         if isYou { return ConclaveStrings.text("You") }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? ConclaveStrings.text("Speaker") : trimmed
     }
 
-    /// The locale's short time (no fixed 24-hour clock, 6 m).
     static func clock(_ millis: Double) -> String {
         Date(timeIntervalSince1970: millis / 1000.0).formatted(Date.FormatStyle.dateTime.hour().minute())
     }
-
-    // MARK: Ask tab (6 g)
 
     static var askEmptyTitle: String { ConclaveStrings.text("Ask the Meeting") }
     static var askEmptyBody: String { ConclaveStrings.text("Get a private answer drawn from everything that\u{2019}s been said. Only you see it.") }
@@ -179,7 +153,6 @@ enum TranscriptCopy {
     static var youAsked: String { ConclaveStrings.text("You asked") }
     static var conclaveAnswered: String { ConclaveStrings.text("Conclave answered") }
 
-    /// A settled row's line: worker text for an error when it has some, else the app copy; "" for live states.
     static func askState(_ state: AskRowState, errorText: String) -> String {
         switch state {
         case .thinking: return ConclaveStrings.text("Thinking")
@@ -189,8 +162,6 @@ enum TranscriptCopy {
         case .timedOut: return ConclaveStrings.text("No answer yet.")
         }
     }
-
-    // MARK: Minutes (6 c, g)
 
     static func section(_ section: MinutesSection) -> String {
         switch section {
@@ -220,7 +191,6 @@ enum TranscriptCopy {
         }
     }
 
-    /// "Updated 2 min ago" through `RelativeDateTimeFormatter` against `nowMillis`.
     static func minutesStatus(_ kind: MinutesStatusKind, updatedAtMillis: Double, nowMillis: Double) -> String {
         switch kind {
         case .automatic: return ConclaveStrings.text("Minutes build automatically")
@@ -240,7 +210,6 @@ enum TranscriptCopy {
     static func owner(_ name: String) -> String { ConclaveStrings.format("Owner: %@", name) }
     static func due(_ text: String) -> String { ConclaveStrings.format("Due: %@", text) }
 
-    /// The Minutes recap row value (6 f Recap): "" when idle; the failure line sits under the row.
     static func recapValue(_ phase: RecapPhase) -> String {
         switch phase {
         case .idle: return ""
@@ -249,8 +218,6 @@ enum TranscriptCopy {
         case .failed: return ConclaveStrings.text("Couldn\u{2019}t post the recap.")
         }
     }
-
-    // MARK: Announcements (6 g, i)
 
     static func announcement(_ kind: TranscriptAnnouncementKind) -> String {
         switch kind {
@@ -265,8 +232,6 @@ enum TranscriptCopy {
         }
     }
 
-    // MARK: Export (6 j: localized headings)
-
     static func exportLabels(roomId: String) -> TranscriptExportLabels {
         TranscriptExportLabels(
             title: ConclaveStrings.format("Meeting Transcript - %@", roomId),
@@ -275,8 +240,6 @@ enum TranscriptCopy {
             openQuestions: section(MinutesSection.openQuestions), followUps: section(MinutesSection.followUps),
             transcript: ConclaveStrings.text("Transcript"), speaker: ConclaveStrings.text("Speaker"))
     }
-
-    // MARK: End dialog recap variant (S30 4 g, CC8)
 
     static var endRecapMessage: String { ConclaveStrings.text("Conclave can post a recap of the meeting to chat before the call ends.") }
     static var endPostRecap: String { ConclaveStrings.text("Post Recap and End") }

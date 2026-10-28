@@ -11,7 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -87,24 +86,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import skip.ui.UIApplication
 
-/*
- * S40 3 d (photos, GIFs), 6 d (picker copy), 9 d (image viewer), CHT-4 and CHT-5 on Android. The shared prepare step's
- * codec (`ChatPhotoCodec`, called from ChatPhotoPreparer.swift under `#if SKIP`: ImageDecoder at a bounded target size,
- * then `Bitmap.compress(JPEG, 85)`), the picker copy into the caches directory off the main thread, the Coil 3 requests
- * bounded to the box size (`coil-compose` and `coil-gif` 3.4.0 in K/skip.yml; coil-gif's animated decoder registers
- * itself, and a static first frame comes from the bitmap decoder under Remove animations), the fixed-geometry image box
- * every media element uses, and the full-screen viewer Dialog with pinch and double-tap zoom (1 to 4), the chrome and
- * black backdrop toggle (Q5) and Share through the FileProvider (res/xml/conclave_file_paths.xml). The viewer follows
- * the system appearance; system back and predictive back dismiss it.
- */
-
-/** CH6: the Android codec for the shared prepare step. Blocking; ChatPhotoPreparer calls it off the main thread. */
 internal object ChatPhotoCodec {
-    /**
-     * Decodes [inputPath] with its longest edge at most [maxDimension] (never upscaled, EXIF orientation applied by
-     * ImageDecoder) and writes a JPEG at [quality] to [outputPath]. Returns the bytes written, or -1 when the platform
-     * cannot decode or write it (an AVIF before Android 12, a damaged file).
-     */
+
     @JvmStatic
     fun transcodeToJpeg(inputPath: String, outputPath: String, maxDimension: Int, quality: Int): Int {
         return try {
@@ -130,22 +113,14 @@ internal object ChatPhotoCodec {
     }
 }
 
-/** A picked, pasted or dropped image copied into the caches directory (the presenter gets the file URL, CH6). */
 internal class ChatPickedFile(val fileUrl: String, val mimeType: String, val fileName: String)
 
-/** CH6 files: the picker copy (size from OpenableColumns.SIZE first) and the viewer's FileProvider share. */
 internal object ChatPhotoFiles {
-    /** The FileProvider authority declared in AndroidManifest.xml (`${applicationId}.fileprovider`). */
+
     fun authority(context: Context): String = context.packageName + ".fileprovider"
 
-    /** The caches subdirectory shared with ChatPhotoPreparer and the FileProvider `chat_photos` path. */
     fun directory(context: Context): File = File(context.cacheDir, ChatPhotoPreparer.directoryName).apply { mkdirs() }
 
-    /**
-     * Copies the picker URI into a cache file through ContentResolver on Dispatchers.IO. Returns null when it cannot be
-     * read; returns a file with an empty URL and [ChatFailure.photoTooLarge] semantics through [tooLarge] when the
-     * declared size is already above the prepare step's input cap (no copy).
-     */
     suspend fun copyToCache(context: Context, uri: Uri, tooLarge: () -> Unit): ChatPickedFile? = withContext(Dispatchers.IO) {
         val resolver = context.contentResolver
         var name = "photo"
@@ -177,7 +152,6 @@ internal object ChatPhotoFiles {
         ChatPickedFile(Uri.fromFile(target).toString(), mime, name)
     }
 
-    /** The viewer's share copy: the photo's bytes in `chat-photos/share/` (inside the FileProvider path). */
     suspend fun shareFile(context: Context, url: String): File? = withContext(Dispatchers.IO) {
         runCatching {
             val folder = File(directory(context), "share").apply { mkdirs() }
@@ -192,10 +166,6 @@ internal object ChatPhotoFiles {
         }.getOrNull()
     }
 
-    /**
-     * Share Photo (9 d): ACTION_SEND with the FileProvider URI through the chooser, PiP auto-enter suppressed around it
-     * (the NativeMeetingShare pattern, S70 8 d).
-     */
     fun share(context: Context, file: File, title: String): Boolean {
         return try {
             val uri = FileProvider.getUriForFile(context, authority(context), file)
@@ -221,9 +191,8 @@ internal object ChatPhotoFiles {
     }
 }
 
-/** Coil 3 requests bounded to the box size (fixes the unbounded decode in AGENTS "Known deferred caveat"). */
 internal object ChatImageRequests {
-    /** [animate] false decodes the first frame only (Remove animations, S40 3 d). */
+
     fun request(context: Context, url: String, widthPx: Int, heightPx: Int, animate: Boolean, crossfadeMillis: Int): ImageRequest {
         val builder = ImageRequest.Builder(context)
             .data(url)
@@ -234,11 +203,6 @@ internal object ChatImageRequests {
     }
 }
 
-/**
- * One media box with a fixed size in every phase (loading: the placeholder fill and a 24 dp spinner; loaded: the image
- * cropped; failed: the image glyph and the optional retry line). With [onOpen] a loaded box opens on tap; with
- * [retriesOnTap] a failed box retries on tap and exposes "Retry loading photo".
- */
 @Composable
 internal fun ChatImageBox(
     url: String, width: Dp, height: Dp, modifier: Modifier = Modifier, shape: Shape = RoundedCornerShape(8.dp),
@@ -307,7 +271,6 @@ internal fun ChatImageBox(
     }
 }
 
-/** The Android copy for photos, GIFs, link cards, the GIF sheet and the viewer (S40 3 g, 6 g, 7 g, 9 g). */
 internal object ChatMediaCopyAndroid {
     @Composable
     fun failureReason(failure: ChatFailure): String = when (failure) {
@@ -338,7 +301,6 @@ internal object ChatMediaCopyAndroid {
         else -> ""
     }
 
-    /** "Photo from Avery Lee" plus the caption (never the upload file name). */
     @Composable
     fun photoLabel(row: ChatRowModel): String {
         val label = conclaveString("chat_photo_label", ChatCopyAndroid.senderName(row))
@@ -357,11 +319,6 @@ internal object ChatMediaCopyAndroid {
     }
 }
 
-/**
- * S40 9 d: the full-screen viewer Dialog in the system theme. Coil at screen size (the row's cached thumbnail shows
- * first), pinch and double-tap zoom 1 to 4, a tap toggles the chrome and the black backdrop (the dialog's bar icons
- * follow), Share through the FileProvider chooser with PiP auto-enter suppressed, system and predictive back dismiss.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ChatImageViewer(presenter: ChatPresenter, rowId: String, onDismiss: () -> Unit) {
@@ -380,7 +337,7 @@ internal fun ChatImageViewer(presenter: ChatPresenter, rowId: String, onDismiss:
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         HostingTheme {
-            val dark = isSystemInDarkTheme()
+            val dark = conclaveUsesDarkAppearance()
             val view = LocalView.current
             SideEffect {
                 val window = (view.parent as? DialogWindowProvider)?.window
@@ -485,7 +442,7 @@ internal fun ChatImageViewer(presenter: ChatPresenter, rowId: String, onDismiss:
                         }
                     }
                     if (!immersive && !row.photoCaptionIsEmpty && row.plainText.isNotEmpty()) {
-                        // A lazy column, so a long caption scrolls at font scale 2.0 (9 l).
+
                         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 160.dp).background(scheme.surface)) {
                             item {
                                 ConclaveText(row.plainText, line = "chat.photoViewer.caption", style = MaterialTheme.typography.bodyLarge,

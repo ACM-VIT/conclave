@@ -8,19 +8,6 @@ import UIKit
 import WebRTC
 #endif
 
-// S70 3 c (SYS-4, SY6; SX4; RECONCILE R28): the content of the iOS video-call PiP window. `AVSampleBufferDisplayLayer`
-// is the documented video-call PiP source on the iOS 17 floor (the iOS 18 `MTKView` path is an optimization only), so
-// the PiP target's decoded WebRTC frames are turned into `CMSampleBuffer`s marked
-// `kCMSampleAttachmentKey_DisplayImmediately` and enqueued through the layer's `sampleBufferRenderer` (iOS 17), which is
-// safe to feed from the decode thread. `RTCCVPixelBuffer` frames go in directly; I420 frames are copied into NV12
-// buffers from a `CVPixelBufferPool`. The renderer is attached to a track only while PiP is possible or showing
-// (PipLifetimeMachine: the scene resigned during a live call, detached when PiP stops or the app is active), and it is
-// added to and removed from tracks on the main thread by `PipVideoTrackSink` (VideoView.swift), never inside a frame
-// callback (`apps/conclave-skip/AGENTS.md` media invariants). It never reports frame sizes: the stage renderer of the
-// same slot already does (R70-10).
-
-/// The view inside `AVPictureInPictureVideoCallViewController`: a display layer that fills its bounds, turned by the
-/// frames' rotation (the layer itself does not rotate). Created once per process, never per target (S70 3 c).
 final class SampleBufferVideoCallView: UIView {
     let displayLayer = AVSampleBufferDisplayLayer()
     private var rotationDegrees = 0
@@ -43,13 +30,11 @@ final class SampleBufferVideoCallView: UIView {
         layer.addSublayer(displayLayer)
     }
 
-    /// A camera fills the window; a share is shown whole (S70 3 f).
     func setFitsWholeFrame(_ fits: Bool) {
         let gravity: AVLayerVideoGravity = fits ? .resizeAspect : .resizeAspectFill
         if displayLayer.videoGravity != gravity { displayLayer.videoGravity = gravity }
     }
 
-    /// 0, 90, 180 or 270 from the frame; main thread.
     func apply(rotationDegrees degrees: Int) {
         if degrees == rotationDegrees { return }
         rotationDegrees = degrees
@@ -68,15 +53,13 @@ final class SampleBufferVideoCallView: UIView {
         CATransaction.commit()
     }
 
-    /// Drops what is queued and the shown image (the sink detached or swapped to another person).
     func clear() {
         displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
     }
 }
 
 #if canImport(WebRTC)
-/// An `RTCVideoRenderer` that enqueues the target's frames on a `SampleBufferVideoCallView`. Frames arrive on the
-/// WebRTC decode thread; all conversion state sits behind one lock, and the only main-thread hop is a rotation change.
+
 final class PipSampleBufferRenderer: NSObject, RTCVideoRenderer {
     private let videoRenderer: AVSampleBufferVideoRenderer
     private weak var view: SampleBufferVideoCallView?
@@ -96,7 +79,6 @@ final class PipSampleBufferRenderer: NSObject, RTCVideoRenderer {
         super.init()
     }
 
-    /// Frames shown and frames dropped since the process started (the `sys.pip` diagnostics; never observed).
     var counts: (rendered: Int, dropped: Int) {
         lock.lock()
         defer { lock.unlock() }
@@ -104,7 +86,7 @@ final class PipSampleBufferRenderer: NSObject, RTCVideoRenderer {
     }
 
     func setSize(_ size: CGSize) {
-        // The stage renderer of the same slot reports the decoded size (R70-10); nothing to do here.
+
     }
 
     func renderFrame(_ frame: RTCVideoFrame?) {
@@ -115,7 +97,7 @@ final class PipSampleBufferRenderer: NSObject, RTCVideoRenderer {
             droppedCount += 1
             return
         }
-        // A decoder interruption (the app was suspended) fails the renderer until it is flushed.
+
         if videoRenderer.status == .failed {
             videoRenderer.flush()
         }
@@ -131,8 +113,6 @@ final class PipSampleBufferRenderer: NSObject, RTCVideoRenderer {
         }
     }
 
-    // MARK: Conversion (decode thread, under `lock`)
-
     private func pixelBuffer(from buffer: RTCVideoFrameBuffer) -> CVPixelBuffer? {
         if let native = buffer as? RTCCVPixelBuffer, !native.requiresCropping() {
             return native.pixelBuffer
@@ -140,8 +120,6 @@ final class PipSampleBufferRenderer: NSObject, RTCVideoRenderer {
         return nv12(from: buffer.toI420())
     }
 
-    /// `toI420()` returns the I420 protocol, which Swift imports as `RTCI420BufferProtocol` because the class
-    /// `RTCI420Buffer` (RTCNativeI420Buffer.h) shares its name; the planar protocol it inherits has no such clash.
     private func nv12(from source: RTCYUVPlanarBuffer) -> CVPixelBuffer? {
         let width = Int(source.width)
         let height = Int(source.height)
@@ -198,7 +176,7 @@ final class PipSampleBufferRenderer: NSObject, RTCVideoRenderer {
 
     private func sampleBuffer(for pixelBuffer: CVPixelBuffer) -> CMSampleBuffer? {
         if let current = format, CMVideoFormatDescriptionMatchesImageBuffer(current, imageBuffer: pixelBuffer) {
-            // Reuse the description while the buffers keep their format.
+
         } else {
             var description: CMVideoFormatDescription?
             guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixelBuffer,

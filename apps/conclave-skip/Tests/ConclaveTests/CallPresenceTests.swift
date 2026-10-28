@@ -3,12 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SYS-1 (S70 0.5, 0.6 SX1 to SX3 and SX11, 0.7 SY1, SY2, SY4, 1 l): the CallPresence snapshot, its command table,
-/// the adapter fan-out and the pure system policies. The iOS adapter and the Kotlin service are not compiled by this
-/// host, so their rules are pinned by source scans; the transpiled policies also run in `T/Skip/SystemBridgeTests.kt`.
 @MainActor
 struct CallPresenceTests {
-    // MARK: Helpers
 
     private final class Recorder {
         var changes: [(CallPresenceSnapshot, CallPresenceSnapshot)] = []
@@ -50,8 +46,6 @@ struct CallPresenceTests {
         )
     }
 
-    // MARK: Phase and end-reason tables (SY1)
-
     @Test func phaseTableMapsEverySessionPhase() {
         let expected: [MeetingPhaseKind: CallPresencePhase] = [
             .home: .idle, .outcome: .idle, .entering: .connecting, .waiting: .waiting,
@@ -90,8 +84,6 @@ struct CallPresenceTests {
         }
     }
 
-    // MARK: Command table (every SystemCommandResult row)
-
     @Test func everyCommandResultRow() {
         func snapshot(_ phase: MeetingPhaseKind, muted: Bool, attendee: Bool = false, held: Bool = false) -> CallPresenceSnapshot {
             let recorder = Recorder()
@@ -112,7 +104,7 @@ struct CallPresenceTests {
         }
         let liveUnmuted = snapshot(.inCall, muted: false)
         let liveMuted = snapshot(.inCall, muted: true)
-        // Mute: already muted (every CallKit echo of an in-app mute) or dispatched; never dropped while pending.
+
         #expect(result(.mute, liveMuted) == .alreadyInEffect)
         #expect(result(.mute, liveUnmuted) == .dispatched)
         #expect(result(.mute, liveUnmuted, pending: true) == .dispatched)
@@ -121,24 +113,24 @@ struct CallPresenceTests {
         #expect(result(.mute, snapshot(.waiting, muted: false)) == .dispatched)
         #expect(result(.mute, snapshot(.entering, muted: false)) == .dispatched)
         #expect(result(.mute, CallPresenceSnapshot.idle) == .alreadyInEffect)
-        // Unmute: already unmuted; a mute owns the guard (fail closed); attendee; recovering records intent.
+
         #expect(result(.unmute, liveUnmuted) == .alreadyInEffect)
         #expect(result(.unmute, liveMuted) == .dispatched)
         #expect(result(.unmute, liveMuted, pending: true) == .duplicate)
         #expect(result(.unmute, snapshot(.inCall, muted: true, attendee: true)) == .unavailable)
         #expect(result(.unmute, snapshot(.recovering, muted: true)) == .dispatched)
         #expect(result(.unmute, snapshot(.waiting, muted: true)) == .unavailable)
-        // Leave: dispatched in any call phase, already in effect once ending or idle.
+
         #expect(result(.leave, liveUnmuted) == .dispatched)
         #expect(result(.leave, snapshot(.waiting, muted: true)) == .dispatched)
         #expect(result(.leave, snapshot(.leaving, muted: true)) == .alreadyInEffect)
         #expect(result(.leave, CallPresenceSnapshot.idle) == .alreadyInEffect)
-        // Hold, resume and return to call.
+
         for kind in [SystemCallCommandKind.hold, .resume, .returnToCall] {
             #expect(result(kind, liveMuted) == .dispatched, "\(kind)")
             #expect(result(kind, CallPresenceSnapshot.idle) == .unavailable, "\(kind)")
         }
-        // Stale: any command from another presence session.
+
         for kind in SystemCallCommandKind.allCases {
             #expect(result(kind, liveUnmuted, session: liveUnmuted.presenceSession + 1) == .stale, "\(kind)")
         }
@@ -158,10 +150,9 @@ struct CallPresenceTests {
         presence.apply(inputs(.inCall, callSession: 2, isMuted: false))
         #expect(presence.snapshot.presenceSession == first + 1)
 
-        // A mute posted in the old session changes nothing.
         #expect(presence.handle(.mute, source: .notification, presenceSession: first) == .stale)
         #expect(recorder.commands.isEmpty)
-        // An absolute mute while already muted never toggles back on.
+
         presence.apply(inputs(.inCall, callSession: 2, isMuted: true))
         #expect(presence.handle(.mute, source: .notification, presenceSession: presence.snapshot.presenceSession) == .alreadyInEffect)
         #expect(recorder.commands.isEmpty)
@@ -173,7 +164,7 @@ struct CallPresenceTests {
         let presence = makePresence(recorder)
         presence.apply(inputs(.entering))
         presence.apply(inputs(.inCall, isMuted: false))
-        // The in-app mute reaches the snapshot first; CallKit's echo then finds it in effect.
+
         presence.apply(inputs(.inCall, isMuted: true))
         #expect(presence.handle(.mute, source: .callKit, presenceSession: presence.snapshot.presenceSession) == .alreadyInEffect)
         #expect(recorder.commands.isEmpty)
@@ -184,7 +175,7 @@ struct CallPresenceTests {
         let presence = makePresence(recorder)
         presence.onCommand = { command in
             recorder.commands.append(command)
-            // The core applies the leave: the session phase becomes leaving.
+
             presence.apply(self.inputs(.leaving, outcome: .left))
         }
         presence.apply(inputs(.entering))
@@ -211,8 +202,6 @@ struct CallPresenceTests {
         #expect(recorder.commands.map { $0.kind } == [.hold, .resume])
     }
 
-    // MARK: Fan-out (S70 0.5)
-
     @Test func oneInputChangeGivesOneAdapterCallAndAnEqualInputNone() throws {
         let recorder = Recorder()
         let second = Recorder()
@@ -231,7 +220,7 @@ struct CallPresenceTests {
         try #require(recorder.changes.count == 2)
         #expect(recorder.changes[1].0.phase == .connecting && recorder.changes[1].1.phase == .live)
         #expect(recorder.changes[1].1.revision == recorder.changes[1].0.revision + 1)
-        // An input no adapter-visible field depends on (pending microphone) publishes nothing.
+
         presence.apply(inputs(.inCall, isMuted: false, isMicrophonePending: true))
         #expect(recorder.changes.count == 2)
     }
@@ -260,7 +249,7 @@ struct CallPresenceTests {
         presence.apply(inputs(.entering))
         #expect(presence.snapshot.presenceSession == 1)
         presence.apply(inputs(.inCall, joinedAtMillis: 1000))
-        // A same-room redirect: new call session, the teardown clears the room, phases may pass through home.
+
         presence.apply(inputs(.home, callSession: 2, isRedirectContinuation: true, roomLabel: ""))
         #expect(presence.snapshot.phase == .connecting)
         #expect(presence.snapshot.presenceSession == 1)
@@ -268,7 +257,7 @@ struct CallPresenceTests {
         presence.apply(inputs(.inCall, callSession: 2, joinedAtMillis: 1000))
         #expect(presence.snapshot.presenceSession == 1)
         #expect(presence.snapshot.callSession == 2)
-        // A real end and a new call start a new presence session.
+
         presence.apply(inputs(.home, callSession: 2, outcome: .endedByHost))
         #expect(presence.snapshot.phase == .idle && presence.snapshot.endReason == .endedByHost)
         presence.apply(inputs(.entering, callSession: 3))
@@ -289,8 +278,6 @@ struct CallPresenceTests {
         #expect(!presence.snapshot.cameraContinuesInBackground)
     }
 
-    // MARK: CallKit rules (SY2, 1 l1)
-
     @Test func scriptedSessionYieldsExactlyTheCallKitReports() throws {
         let presence = CallPresence()
         var reports: [CallKitReport] = []
@@ -298,7 +285,7 @@ struct CallPresenceTests {
         presence.adapters = CallPresenceAdapters([
             CallPresenceAdapter(name: "callKitPolicy") { old, new in
                 let next = CallKitReportPolicy.reports(old: old, new: new, hasReportedConnected: connected)
-                // The adapter's own bookkeeping: connected once per call.
+
                 for report in next {
                     if report.kind == .startCall || report.kind == .endCall { connected = false }
                     if report.kind == .reportConnected { connected = true }
@@ -357,15 +344,13 @@ struct CallPresenceTests {
         live.apply(inputs(.entering, isMuted: true))
         let connecting = live.snapshot
         let startReports = CallKitReportPolicy.reports(old: CallPresenceSnapshot.idle, new: connecting, hasReportedConnected: false)
-        // A muted start mirrors the mute once.
+
         #expect(startReports.map { $0.kind } == [.startCall, .reportConnecting, .updateCall, .setMuted])
         live.apply(inputs(.inCall, isMuted: false))
         let unmuted = live.snapshot
         #expect(CallKitReportPolicy.reports(old: connecting, new: unmuted, hasReportedConnected: false).map { $0.kind } == [.reportConnected, .setMuted])
         #expect(CallKitReportPolicy.reports(old: connecting, new: unmuted, hasReportedConnected: true).map { $0.kind } == [.setMuted])
     }
-
-    // MARK: Android notification policies (SY4, 1 l3, 1 l4)
 
     @Test func notificationPostPolicyFollowsThePhase() {
         let presence = CallPresence()
@@ -426,8 +411,6 @@ struct CallPresenceTests {
         #expect(NotificationChannelMigrationPolicy.postingChannelId(.keepLegacyBlocked) == "conclave_call_channel")
     }
 
-    // MARK: System fixture (SX1)
-
     @Test func systemFixtureScriptsReachTheirStates() {
         let expected: [SystemFixtureState: String] = [
             .presenceWaiting: "waiting/none/inactive/1",
@@ -439,9 +422,9 @@ struct CallPresenceTests {
             .presenceOnHold: "onHold/none/inactive/1",
             .presenceAttendee: "live/none/inactive/1",
             .presenceEnded: "idle/none/inactive/1",
-            // Batch 5 integrator (HD request B5-T4 R19): the PiP fixture is a live call.
+
             .pipSpeaker: "live/none/inactive/1",
-            // Batch 6 integrator (HD request B6-T8 R5): the receiver fixture is a live call.
+
             .receiverCameraOff: "live/none/inactive/1",
         ]
         for state in SystemFixtureState.allCases {
@@ -460,8 +443,6 @@ struct CallPresenceTests {
         #expect(SystemFixtureScript.state(named: "missing") == nil)
     }
 
-    // MARK: Source scans (iOS adapter, Kotlin service, no haptics)
-
     @Test func iosCallKitAdapterKeepsItsBookkeeping() throws {
         let adapter = try callPresenceSource("Sources/Conclave/Core/Call/CallKitPresenceAdapter+iOS.swift")
         #expect(adapter.hasPrefix("#if os(iOS) && !SKIP\n"))
@@ -479,7 +460,7 @@ struct CallPresenceTests {
     }
 
     @Test func systemSurfacesNeverPlayHaptics() throws {
-        // S70 12 l3: no gesture route, legacy route or token publish inside the system call layer.
+
         let files = [
             "Sources/Conclave/Core/Call/CallPresenceState.swift", "Sources/Conclave/Core/Call/CallPresenceSync.swift",
             "Sources/Conclave/Core/Call/CallKitPresenceAdapter+iOS.swift", "Sources/Conclave/Core/Call/CallKitManager.swift",
@@ -525,7 +506,7 @@ struct CallPresenceTests {
     }
 
     @Test func sysStringResourcesExistForEveryNameTheBuilderAsks() throws {
-        // Merged by the integrator from HD/strings/B1-T2.json into the app-module strings.xml.
+
         let xml = try callPresenceSource("Android/app/src/main/res/values/strings.xml")
         for name in ["sys_call_fallback_title", "sys_call_waiting", "sys_call_joining", "sys_call_reconnecting",
                      "sys_call_on_hold", "sys_call_mute", "sys_call_unmute",

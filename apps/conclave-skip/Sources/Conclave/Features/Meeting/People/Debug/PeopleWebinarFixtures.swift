@@ -1,13 +1,6 @@
 import Foundation
 import Observation
 
-// S50 PL12 webinar and Q&A fixture scripts (PPL-5 to PPL-7), shared (transpiled) so both platforms and both test hosts
-// read the same states. Each run builds a People fixture session over a base roster, applies the webinar and Q&A inputs
-// of the state and installs a scripted `onCommand` that acknowledges after the PL12 delays. No view model, WebRTC,
-// audio, capture or network (OD Q19). The demotion states (`demoted-with-slug`, `demoted-no-slug`) exercise the view
-// model's socket handoff and are host tests, not presenter fixtures.
-
-/// Webinar and Q&A fixture states (S50 PL12 table). Raw values are the launch values.
 enum PeopleWebinarFixtureState: String, CaseIterable, Equatable {
     case webinarHostHands4 = "webinar-host-hands-4"
     case webinarHostInvited = "webinar-host-invited"
@@ -19,10 +12,9 @@ enum PeopleWebinarFixtureState: String, CaseIterable, Equatable {
     case stageInvite = "stage-invite"
 }
 
-/// One scripted acknowledgement: after `delayMillis`, success or a typed failure.
 struct PeopleFixtureAck: Equatable {
     let delayMillis: Double
-    /// A `HostActionFailure` raw value, or "" for success.
+
     let failure: String
 }
 
@@ -31,7 +23,7 @@ enum PeopleWebinarFixtureScript {
     static let omarQueue = "a-omar"
     static let minaQueue = "a-mina"
     static let joQueue = "a-jo"
-    /// The attendee viewer's own id in the attendee states (Priya N., S50 PL12).
+
     static let attendeeSelf = "a-priya#s1"
 
     static func state(named raw: String) -> PeopleWebinarFixtureState? {
@@ -49,13 +41,10 @@ enum PeopleWebinarFixtureScript {
             || state == PeopleWebinarFixtureState.qaHostPromotedMidcall
     }
 
-    /// The base People state the run builds over (the host roster, or the guest roster for attendee states).
     static func baseState(_ state: PeopleWebinarFixtureState) -> PeopleFixtureState {
         isAttendee(state) ? PeopleFixtureState.guest4 : PeopleFixtureState.host6
     }
 
-    /// webinar-host-hands-4: Priya (0 s), Omar (20 s), Mina (40 s), Jo (60 s); webinar-host-invited moves Mina to the
-    /// invited rows.
     static func handQueue(_ state: PeopleWebinarFixtureState) -> [PeopleWebinarHandInput] {
         let base = PeopleFixtureScript.baseMillis
         switch state {
@@ -77,8 +66,6 @@ enum PeopleWebinarFixtureScript {
         state == PeopleWebinarFixtureState.webinarHostInvited ? [PeopleStageInviteInput(userId: minaQueue, displayName: "Mina T.")] : []
     }
 
-    /// The People inputs: the base roster with webinar mode on, 128 watching, the queue and invites; attendee states
-    /// join as an attendee.
     static func peopleInputs(_ state: PeopleWebinarFixtureState) -> PeopleInputs {
         let base = PeopleFixtureScript.inputs(for: baseState(state))
         let attendee = isAttendee(state)
@@ -92,8 +79,6 @@ enum PeopleWebinarFixtureScript {
             stageInvites: invites(state))
     }
 
-    /// qa-attendee-5: 1 answering (12 votes), 2 pending of which 1 is yours, 1 answered with text, 1 of yours dismissed.
-    /// qa-host-open-7: 7 open, 2 answered, 1 dismissed. qa-host-answered: the 2 answered.
     static func entries(_ state: PeopleWebinarFixtureState, localUserId: String) -> [QaEntryInput] {
         let base = PeopleFixtureScript.baseMillis
         switch state {
@@ -138,7 +123,6 @@ enum PeopleWebinarFixtureScript {
             blockedReason: MeetingBlockedReason.none.rawValue, entries: entries(state, localUserId: localUserId), unseen: 0)
     }
 
-    /// The PL12 "Acks" column per command kind.
     static func ack(_ state: PeopleWebinarFixtureState, kind: PeopleCommandKind) -> PeopleFixtureAck? {
         switch kind {
         case .bringOnStage: return PeopleFixtureAck(delayMillis: 200.0, failure: "")
@@ -150,18 +134,16 @@ enum PeopleWebinarFixtureScript {
         }
     }
 
-    /// qa-attendee-off turns Q&A off 2 s after the panel opens; stage-invite delivers `webinar:promoted` after 1 s.
     static let qaOffDelayMillis = 2000.0
     static let promotionDelayMillis = 1000.0
     static let promotedByName = "Ishaan"
 }
 
-/// One webinar or Q&A fixture run over a People fixture session (the stage, People and Q&A share one shell).
 @MainActor
 final class PeopleWebinarFixtureSession {
     let state: PeopleWebinarFixtureState
     let base: PeopleFixtureSession
-    /// `people.counters`: command kinds dispatched, newest last.
+
     private(set) var commandLog: [String] = []
     private(set) var qaInputs: QaInputs
 
@@ -180,7 +162,6 @@ final class PeopleWebinarFixtureSession {
 
     var people: PeoplePresenter { base.people }
 
-    /// The scripted acknowledgement: the PL12 delay, then the result through `finish` (core contract, PH2).
     private func answer(_ command: PeopleCommand, _ ticket: HostActionTicket) {
         commandLog.append(command.kind.rawValue)
         guard let ack = PeopleWebinarFixtureScript.ack(state, kind: command.kind) else { return }
@@ -195,8 +176,6 @@ final class PeopleWebinarFixtureSession {
         }
     }
 
-    /// The real transport sends a question snapshot as well as an acknowledgement. Mirror that authoritative update
-    /// in the local fixture only after the ticket is accepted; a reset or stale completion must not resurrect it.
     private func publishUpvote(_ command: PeopleCommand) {
         let current = qaInputs
         var entries: [QaEntryInput] = []
@@ -219,7 +198,6 @@ final class PeopleWebinarFixtureSession {
         base.people.qa.apply(qaInputs)
     }
 
-    /// qa-attendee-off: the host turns Attendee Q&A off (the open panel closes with "Q&A is off.").
     func turnQaOff() {
         let current = qaInputs
         qaInputs = QaInputs.make(callSession: current.callSession, attempt: current.attempt, localUserId: current.localUserId,
@@ -229,7 +207,6 @@ final class PeopleWebinarFixtureSession {
         base.people.qa.apply(qaInputs)
     }
 
-    /// stage-invite: `webinar:promoted` from Ishaan.
     func deliverPromotion() {
         base.people.presentStageInvitation(promotedByName: PeopleWebinarFixtureScript.promotedByName,
                                            rejoinRoomId: StageFixtureScript.roomLabel)

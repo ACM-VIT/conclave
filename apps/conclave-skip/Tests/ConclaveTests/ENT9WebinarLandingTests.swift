@@ -3,10 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-// ENT-9 (S10 12, 0.5 task table, 0.6 L7; RECONCILE R41; S10 Q7): the webinar attendee landing's shared policy, the
-// premeeting presenter's `webinarLanding` route, the lookup service's scalars, the L9 fixtures and the platform
-// files' source rules. Mirrors T/Skip/ENT9WebinarLandingBridgeTests.kt.
-
 @MainActor
 struct ENT9WebinarLandingTests {
     private static let link = "https://conclave.acmvit.in/w/design-systems-week"
@@ -52,7 +48,6 @@ struct ENT9WebinarLandingTests {
                             link: answer.link)
     }
 
-    /// The session inputs a scripted attendee attempt produces (the view model's `makePremeetingInputs()`).
     private static func inputs(callSession: Int = 1, phase: MeetingPhaseKind, notice: MeetingNoticeKind = .none,
                                noticeText: String = "", outcomeId: Int = 0, outcomeKind: MeetingTerminalOutcomeKind? = nil,
                                serverText: String = "", isWebinarAttendee: Bool = true, admitted: Bool = false,
@@ -65,7 +60,6 @@ struct ENT9WebinarLandingTests {
                               joinFailureCategory: category, joinFailureCode: code, entrySocketConnected: socketConnected)
     }
 
-    /// A visible landing that answered `answer`.
     private func openAnswered(_ answer: WebinarLookupAnswer, hooks: ENT9HookRecorder, clock: ENT9Clock = ENT9Clock(),
                               guestName: String = "Avery") async -> PremeetingPresenter {
         hooks.answers = [answer]
@@ -76,8 +70,6 @@ struct ENT9WebinarLandingTests {
         _ = await ent9Settle { presenter.webinar?.status != .loading }
         return presenter
     }
-
-    // MARK: Policy (S10 12 c, f; web PRE-51 to PRE-53)
 
     @Test func lookupStatusFollowsTheWebOpenRule() {
         let now = Self.t0
@@ -129,10 +121,10 @@ struct ENT9WebinarLandingTests {
     }
 
     @Test func attendeeJoinFailuresMapToTheirStates() {
-        // SFU joinRoom.ts attendee sentences through the classifier (S10 12 f).
+
         #expect(WebinarLandingPolicy.joinFailureStatus(category: "unknown", diagnosticCode: "message.unrecognized",
                                                        serverText: "Webinar is not live.") == .waitingForHost)
-        // The classifier's real answer for the SFU sentence: a clean sentence no row knows, kept as the server text.
+
         let notLive = MeetingErrorClassifier.classify(serverMessage: "Webinar is not live.", context: .join)
         #expect(notLive.category == .rejectedByServer && notLive.serverText == "Webinar is not live.")
         #expect(WebinarLandingPolicy.joinFailureStatus(category: notLive.category.rawValue, diagnosticCode: notLive.diagnosticCode,
@@ -160,7 +152,7 @@ struct ENT9WebinarLandingTests {
     }
 
     @Test func theNameIsNeededOnlyForAGuestWithoutOneAndCapsAt40() {
-        // RECONCILE R41: the landing name becomes the guest identity; 40 at most.
+
         #expect(WebinarLandingPolicy.needsName(isSignedIn: false, accountName: ""))
         #expect(WebinarLandingPolicy.needsName(isSignedIn: false, accountName: "   "))
         #expect(!WebinarLandingPolicy.needsName(isSignedIn: false, accountName: "Avery"))
@@ -203,7 +195,7 @@ struct ENT9WebinarLandingTests {
     }
 
     @Test func theCountdownRangeIsClampedAndSplitIntoParts() {
-        // S10 12 c, l6: a ClosedRange traps when its lower bound passes the upper one (the app woke after the start).
+
         #expect(WebinarLandingPolicy.countdownEndMillis(startsAtMillis: Self.t0, nowMillis: Self.t0 + 5000.0) == Self.t0 + 5000.0)
         #expect(WebinarLandingPolicy.countdownEndMillis(startsAtMillis: Self.t0 + 5000.0, nowMillis: Self.t0) == Self.t0 + 5000.0)
         #expect(WebinarLandingPolicy.countdown(remainingMillis: 761000.0) == WebinarCountdown(hours: 0, minutes: 12, seconds: 41))
@@ -215,8 +207,6 @@ struct ENT9WebinarLandingTests {
         #expect(WebinarLandingPolicy.shareLink(slug: Self.slug, serverLink: " https://example.org/w/x ") == "https://example.org/w/x")
         #expect(WebinarLandingPolicy.shareLink(slug: Self.slug, serverLink: "") == EntryPolicies.recentLink(roomId: Self.slug, isWebinar: true))
     }
-
-    // MARK: Lookup service scalars (S10 12 j)
 
     @Test func theLookupProjectionBecomesScalars() throws {
         let json = """
@@ -238,10 +228,8 @@ struct ENT9WebinarLandingTests {
         #expect(WebinarLookupAnswer.unscheduled.outcome == .notScheduled && WebinarLookupAnswer.lookupFailed.outcome == .failed)
     }
 
-    // MARK: Presenter (S10 12 j, l2)
-
     @Test func aWebinarLinkOpensTheLandingAndNeverJoinsOnArrival() async {
-        // S10 12 l2, Q7: a stored identity still waits for Start Watching.
+
         let hooks = ENT9HookRecorder()
         hooks.answers = [Self.live()]
         hooks.repeatsLastAnswer = true
@@ -277,7 +265,7 @@ struct ENT9WebinarLandingTests {
     }
 
     @Test func theNameFieldCapsAt40AndGatesStartWatching() async {
-        // S10 12 l5, RECONCILE R41.
+
         let hooks = ENT9HookRecorder()
         let presenter = await openAnswered(Self.live(), hooks: hooks, guestName: "")
         #expect(presenter.webinar?.status == .openNow && presenter.webinar?.needsName == true)
@@ -303,7 +291,7 @@ struct ENT9WebinarLandingTests {
                                     category: MeetingErrorCategory.lockedByHost.rawValue, code: "message.locked"))
         #expect(presenter.path.last?.kind == .webinarLanding && presenter.lobbyStatus == nil, "no failed lobby is pushed")
         #expect(presenter.webinar?.status == .locked && presenter.webinar?.action == .backHome)
-        // A generic failure offers Try Again, which joins again with one tap.
+
         presenter.apply(Self.inputs(callSession: 2, phase: .entering))
         presenter.apply(Self.inputs(callSession: 2, phase: .outcome, outcomeId: 2, outcomeKind: .joinFailed,
                                     category: MeetingErrorCategory.serverUnreachable.rawValue, code: "url.unreachable"))
@@ -312,7 +300,7 @@ struct ENT9WebinarLandingTests {
         presenter.retryWebinar()
         #expect(hooks.joins.count == 2)
         #expect(presenter.webinar?.status == .joining, "Try Again shows Getting You In before the session moves")
-        // Back to Home ends the S1 failure with the landing (no later failed lobby).
+
         presenter.apply(Self.inputs(callSession: 3, phase: .entering))
         presenter.apply(Self.inputs(callSession: 3, phase: .outcome, outcomeId: 3, outcomeKind: .joinFailed,
                                     serverText: "Webinar is full."))
@@ -336,7 +324,7 @@ struct ENT9WebinarLandingTests {
         #expect(await ent9Settle { hooks.joins.count == 2 }, "the refetch that reads open retries the join")
         presenter.apply(Self.inputs(callSession: 2, phase: .entering))
         #expect(presenter.webinar?.status == .waitingForHost, "the automatic retry keeps saying it waits")
-        // An ended answer ends the wait.
+
         presenter.apply(Self.inputs(callSession: 2, phase: .outcome, outcomeId: 2, outcomeKind: .joinFailed,
                                     serverText: "Webinar is not live."))
         hooks.answers = [Self.status(Self.live(), "ended")]
@@ -393,7 +381,7 @@ struct ENT9WebinarLandingTests {
         presenter.cancelJoin()
         #expect(hooks.commands == [PremeetingCommand.leave.rawValue])
         #expect(presenter.webinar?.status == .openNow, "Cancel returns the landing to its lookup state")
-        // Back while a join this landing started is under way never lets it continue unseen.
+
         presenter.startWatching()
         presenter.setPath([])
         #expect(hooks.commands.last == PremeetingCommand.leave.rawValue)
@@ -401,7 +389,7 @@ struct ENT9WebinarLandingTests {
     }
 
     @Test func earlyFlipsToOpenOnTheWakeOrOnSceneActive() async {
-        // S10 12 c, l6 and the 0.5 task table: one refetch while visible, one open wake-up while early.
+
         let hooks = ENT9HookRecorder()
         let clock = ENT9Clock()
         let presenter = await openAnswered(Self.scheduled(startsIn: 60000.0, earlyMinutes: 0), hooks: hooks, clock: clock)
@@ -477,8 +465,6 @@ struct ENT9WebinarLandingTests {
         #expect(presenter.home.recents.isEmpty || presenter.home.recents.first?.routeKind == .webinarLanding)
     }
 
-    // MARK: L9 fixtures (S10 12 l)
-
     @Test func everyWebinarFixtureOpensTheLandingThroughTheIntake() {
         let states = PremeetingFixtureState.allCases.filter { WebinarLandingFixtureScript.isWebinarFixture($0) }
         #expect(states.count == 18)
@@ -533,8 +519,6 @@ struct ENT9WebinarLandingTests {
         #expect(toCall.premeeting.recentRecords.first?.roomId == WebinarLandingFixtureScript.slug)
     }
 
-    // MARK: Source rules (S10 12 c, d, k, l3, l7; RULES 3)
-
     @Test func theIOSLandingFollowsTheSpec() throws {
         let view = try ent9Source("Sources/Conclave/Features/Join/WebinarLandingView+iOS.swift")
         let countdown = try ent9Source("Sources/Conclave/Features/Join/CountdownText+iOS.swift")
@@ -581,8 +565,7 @@ struct ENT9WebinarLandingTests {
     }
 
     @Test func noPathRequestsMediaOrAPermissionOrHost() throws {
-        // S10 12 l3, invariant 6: the landing files never ask for a permission or a preview, and the one join is an
-        // attendee join with no host request and no room creation.
+
         let files = [
             "Sources/Conclave/Features/Join/WebinarLandingView+iOS.swift", "Sources/Conclave/Features/Join/CountdownText+iOS.swift",
             "Sources/Conclave/Features/Join/EventEditView+iOS.swift", "Sources/Conclave/Features/Join/WebinarLandingInputs.swift",
@@ -607,7 +590,7 @@ struct ENT9WebinarLandingTests {
         #expect(hooks.contains("viewModel.state.webinarTitle = request.title viewModel.joinRoom("), "the title before the join (SC22)")
         let wiring = try ent9Source("Sources/Conclave/Features/Home/PremeetingAppWiring.swift")
         #expect(wiring.contains("WebinarLandingProductionHooks.install(presenter: presenter, viewModel: viewModel, appState: appState)"))
-        // Shared files stay transpilable.
+
         for file in ["Sources/Conclave/Features/Join/WebinarLandingInputs.swift", "Sources/Conclave/Features/Join/WebinarLandingFixtures.swift",
                      "Sources/Conclave/Features/Join/WebinarLandingProductionHooks.swift",
                      "Sources/Conclave/Core/Networking/NativeWebinarLookupService.swift"] {
@@ -619,12 +602,10 @@ struct ENT9WebinarLandingTests {
     }
 }
 
-/// A clock the tests move (the presenter reads it through `nowMillis`).
 final class ENT9Clock {
     var now = 1793102400000.0
 }
 
-/// Records the landing's hooks (no network, no call) and the presenter's commands.
 @MainActor
 private final class ENT9HookRecorder {
     let hooks = WebinarLandingHooks()
@@ -635,7 +616,7 @@ private final class ENT9HookRecorder {
     var commands: [String] = []
 
     init() {
-        // Weak captures: a presenter task that outlives a failed test never touches a freed recorder.
+
         hooks.lookup = { [weak self] slug, clientId in
             guard let self else { return WebinarLookupAnswer.lookupFailed }
             self.lookups.append(slug + "|" + clientId)
@@ -656,8 +637,6 @@ private final class ENT9HookRecorder {
     }
 }
 
-/// Waits (bounded) for a condition the landing's tasks make true. Main actor: the condition reads presenter state, so
-/// it is polled on the actor that writes it (a nonisolated async helper would run it on the global executor).
 @MainActor
 private func ent9Settle(seconds: Double = 2.0, _ condition: () -> Bool) async -> Bool {
     let attempts = Int(seconds * 500.0)
@@ -673,7 +652,6 @@ private func ent9Source(_ packageRelativePath: String) throws -> String {
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 
-/// Whitespace collapsed to single spaces, so a pin fails only when the code changes.
 private func ent9Flat(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }

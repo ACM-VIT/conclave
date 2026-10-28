@@ -8,7 +8,6 @@ import androidx.compose.ui.graphics.vector.PathBuilder
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
-/** Hand-authored coordinates from the recovered mathematical contract, independent of conversion. */
 internal object NativeIconGeometryFixtures {
     private fun fixture(name: String, block: PathBuilder.() -> Unit): ImageVector =
         ImageVector.Builder(name, 24.dp, 24.dp, 960f, 960f).apply {

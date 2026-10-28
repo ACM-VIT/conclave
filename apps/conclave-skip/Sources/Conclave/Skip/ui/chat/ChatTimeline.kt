@@ -43,14 +43,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 
-/*
- * S40 2 d (CHT-1): the timeline, a reversed LazyColumn (newest at index 0, at the bottom) keyed by row id with the
- * row kind as content type; short conversations align at the top and read oldest to newest. The cache reverses the
- * presenter's ids once per revision. A new row follows only while
- * at the bottom (captured before the insert) or for your own send; otherwise remote messages count into the jump
- * pill. Rows read only their own entry, so a reaction or delivery write recomposes one item. No timers in the list
- * (the 900 ms highlight is one effect keyed by the focus request).
- */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ChatTimeline(
@@ -84,19 +76,18 @@ internal fun ChatTimeline(
     }
     val snapshot = reversed.snapshot
     LaunchedEffect(Unit) {
-        // Opening is one request, so unread history cannot race a focus destination or an animated newest scroll.
+
         placement.focusRequest = snapshot.focusRequest
         placement.newestId = snapshot.newestId
         val target = ChatTimelinePolicy.initialTarget(focusId = snapshot.focusId,
             firstUnreadId = snapshot.firstUnreadId, newestId = snapshot.newestId)
-        // In a reversed list offset zero puts this divider at the bottom, hiding the unread row below it.
-        // Use the measured viewport to keep the divider near the upper third and the first unread in view.
+
         val offset = if (target == "unread") {
             val layout = snapshotFlow { listState.layoutInfo }
                 .first { it.viewportEndOffset > it.viewportStartOffset }
             -(layout.viewportEndOffset - layout.viewportStartOffset) * 2 / 3
         } else 0
-        // Arrivals before the first layout can move the reversed index without changing the destination.
+
         val index = cache.current().ids.indexOf(target)
         if (index >= 0) listState.scrollToItem(index, offset)
         initialPositioned = true
@@ -114,7 +105,7 @@ internal fun ChatTimeline(
     LaunchedEffect(snapshot.focusRequest, initialPositioned) {
         val focus = snapshot.focusId
         if (!initialPositioned || focus.isEmpty() || focus !in reversed.ids) return@LaunchedEffect
-        // New messages do not cancel an in-progress destination scroll or its highlight lifetime.
+
         if (snapshot.focusRequest != placement.focusRequest) {
             placement.focusRequest = snapshot.focusRequest
             val index = reversed.ids.indexOf(focus)
@@ -124,7 +115,7 @@ internal fun ChatTimeline(
         delay(900)
         if (highlightId == focus) highlightId = ""
     }
-    // T3 borrow P8 (2 d composer focus): read inside its own scope, so a focus gain recomposes no list or row.
+
     ChatComposerFocusFollow(listState, reduceMotion) { actions.composerFocusRevision }
     Column(Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -144,7 +135,7 @@ internal fun ChatTimeline(
                 }
             }
         }
-        if (initialPositioned && !atBottom) {
+        if (initialPositioned && ChatTimelinePolicy.showsJumpToLatest(isAtBottom = atBottom, unseenCount = unseen)) {
             FilledTonalButton(
                 onClick = {
                     unseen = 0
@@ -153,13 +144,12 @@ internal fun ChatTimeline(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp).testTag("chat.jumpPill"),
             ) {
-                Icon(ConclaveIcons.ArrowDownwardFill0, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
-                val label = if (unseen > 0) conclavePlural("chat_jump_new", unseen, unseen) else conclaveString("chat_jump_latest")
+                val label = conclavePlural("chat_jump_new", unseen, unseen)
                 ConclaveText(label, line = "chat.jumpPill.label")
             }
         }
     }
-    // The pill's tap scrolls through this effect so the button lambda stays a plain state write.
+
     LaunchedEffect(jumpRequests) {
         if (jumpRequests > 0) {
             if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
@@ -167,19 +157,11 @@ internal fun ChatTimeline(
     }
 }
 
-/** Effect bookkeeping does not invalidate the list or its rows. */
 private class ChatTimelinePlacement {
     var newestId = ""
     var focusRequest = 0
 }
 
-/**
- * T3 borrow P8 (S40 2 d composer focus, the T3 "follow when at the end" rule with one visibility test on every
- * platform): when the composer's field gains focus (`revision` moves past the value seen at first composition), the
- * effect runs [ChatFocusFollow.follow]: while the newest row is at least partly visible the reversed list scrolls to
- * index 0 (instantly under Remove animations); farther up, the position and the jump pill stay. `revision` is read
- * here, in this effect's own scope.
- */
 @Composable
 internal fun ChatComposerFocusFollow(listState: LazyListState, reduceMotion: Boolean, revision: () -> Int) {
     val current = revision()
@@ -190,18 +172,11 @@ internal fun ChatComposerFocusFollow(listState: LazyListState, reduceMotion: Boo
     }
 }
 
-/** P8: the one visibility rule and the focus follow it gates. */
 internal object ChatFocusFollow {
-    /** The newest row (index 0 of the reversed list) is at least partly inside the viewport. */
+
     fun newestVisible(listState: LazyListState): Boolean =
         listState.layoutInfo.visibleItemsInfo.any { it.index == 0 }
 
-    /**
-     * The focus gain's effect body (the Robolectric tests drive it directly): while the newest row is at least partly
-     * visible, scrolls the reversed list to index 0 (instantly under Remove animations, else animated on the caller's
-     * frame clock) and returns true; farther up it leaves the position alone and returns false. The check runs before
-     * the IME insets shrink the list, and the reversed list keeps index 0 at the bottom while it shrinks.
-     */
     suspend fun follow(listState: LazyListState, reduceMotion: Boolean): Boolean {
         if (!newestVisible(listState)) return false
         if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
@@ -209,7 +184,6 @@ internal object ChatFocusFollow {
     }
 }
 
-/** 2 d empty state: F00 C14 column, then Ask Conclave AI (hidden when the assistant is unavailable). */
 @Composable
 private fun ChatEmptyState(presenter: ChatPresenter, actions: ChatRowActions) {
     val showsAssistant = presenter.composer.assistant != AssistantAvailability.unavailable
@@ -218,19 +192,12 @@ private fun ChatEmptyState(presenter: ChatPresenter, actions: ChatRowActions) {
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ConclaveEmptyStatus(
-            title = conclaveString("chat_empty_title"),
-            body = conclaveString("chat_empty_body"),
-            icon = ConclaveIcons.ChatBubbleFill0,
-            identifier = "chat.empty.status",
-        )
-        ConclaveText(conclaveString("chat_empty_visibility"), line = "chat.empty.visibility",
+        ConclaveText(conclaveString("chat_empty_title"), line = "chat.empty.title",
+            style = MaterialTheme.typography.titleMedium)
+        ConclaveText(conclaveString("chat_empty_greeting"), line = "chat.empty.body",
             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center)
         if (showsAssistant) {
-            ConclaveText(conclaveString("chat_empty_assistant"), line = "chat.empty.assistant",
-                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center)
             FilledTonalButton(onClick = { actions.focusComposer("@Conclave ") }, modifier = Modifier.testTag("chat.askAssistant")) {
                 ConclaveText(conclaveString("chat_ask_assistant"), line = "chat.askAssistant.label")
             }
@@ -238,7 +205,6 @@ private fun ChatEmptyState(presenter: ChatPresenter, actions: ChatRowActions) {
     }
 }
 
-/** 2 d day separator: centered labelSmall in onSurfaceVariant, a heading. */
 @Composable
 internal fun ChatDayRow(row: ChatRowModel) {
     val context = LocalContext.current
@@ -250,7 +216,6 @@ internal fun ChatDayRow(row: ChatRowModel) {
     )
 }
 
-/** 2 d unread divider: HorizontalDivider plus labelMedium "New messages", a heading. */
 @Composable
 internal fun ChatUnreadDivider() {
     Row(

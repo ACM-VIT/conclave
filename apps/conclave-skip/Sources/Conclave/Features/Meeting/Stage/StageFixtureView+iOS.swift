@@ -1,11 +1,6 @@
 #if DEBUG && os(iOS) && !SKIP
 import SwiftUI
 
-// S20 SL14 (STG-1, STG-4): the iOS Debug stage fixture root. Mounted by the Debug root hook in `ConclaveApp.swift` when
-// `CONCLAVE_STAGE_FIXTURE=<state>` is set (request in HD/requests/B3-T2.md); `CONCLAVE_STAGE_FIXTURE_PATTERN=live`
-// switches the probes to the live pattern and `CONCLAVE_STAGE_FORCE_SCREEN_READER=1` makes auto-hide and toasts behave
-// as if VoiceOver ran. Standalone presenters only: never `MeetingViewModel`, WebRTC, audio, capture or network.
-
 enum StageFixtureLaunch {
     static func state(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> StageFixtureState? {
         guard let raw = environment["CONCLAVE_STAGE_FIXTURE"] else { return nil }
@@ -35,20 +30,17 @@ struct StageFixtureView: View {
                      renderers: StageRendererProvider.probes(ledger: session.renderers, pattern: session.pattern),
                      forceScreenReader: session.forceScreenReader, activitySession: session.activity,
                      webinarLinkProvider: { await session.ensureWebinarLink() })
-                // STG-3 (S20 SL14, HD request B5-T8 R10): one renderTargetResize per settled share zoom.
+
                 .environment(\.stageRenderTargetResize, { session.counters.recordRenderTargetResize() })
-            // Readouts and scripts sit beside the stage, never inside its subtree (PS 7.6), so refreshing them never
-            // re-evaluates a tile or a renderer.
+
             StageFixtureControls(session: session)
         }
         .task {
-            // S40 0.9 (HD request B4-T1 R2): `CONCLAVE_CHAT_FIXTURE=<state>` layers the chat fixture on this stage
-            // fixture and opens Chat. The driver stays alive through `ChatDiagnostics.driver`.
+
             if let chatState = ChatFixtureLaunch.state() {
                 _ = ChatFixtureDriver.installOnStage(state: chatState, shell: session.shell)
             }
-            // TRN-2 (S60 L6-12, HD request B7-T5 R5): `CONCLAVE_TRANSCRIPT_FIXTURE=<state>` layers the Transcript fixture
-            // (FakeTranscriptOwner) on this stage fixture and opens the panel.
+
             if let transcriptState = TranscriptFixtureDriver.fixtureState(named: NativeRuntimeConfig.debugLaunchValue(forKey: "CONCLAVE_TRANSCRIPT_FIXTURE")) {
                 TranscriptFixtureDriver.installOnStage(state: transcriptState, shell: session.shell)
             }
@@ -116,10 +108,10 @@ private struct StageFixtureReadouts: View {
             readout(session.settingsCallsReadout(), identifier: "wp3.calls")
             readout(session.speakerTestReadout(), identifier: "speakerTest.count")
             readout(session.voicePreviewReadout(), identifier: "voicePreview.count")
-            // SET-5, SET-6 (L6-12): the Layout panel's intents and the fake WP10 engine's calls.
+
             readout(session.layoutCallsReadout(), identifier: "layout.calls")
             readout(session.effectsCallsReadout(), identifier: "wp10.calls")
-            // SET-3 (S60 2 l3, l4): Connection polls and the last publish ceiling.
+
             readout(session.statsPollsReadout(), identifier: "stats.polls")
             readout(session.publishCeilingReadout(), identifier: "wp3.ceiling")
             readout(session.captionsReadout(), identifier: "stage.captions.readout")

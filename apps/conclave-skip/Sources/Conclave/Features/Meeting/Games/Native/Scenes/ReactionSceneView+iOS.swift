@@ -1,10 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 9 c (ACT-3) on iOS, Reaction: arming and go draw the B1 pad (Boards/ReactionPad+iOS.swift) with the tapped
-// count; spectators get the same pad read-only ("Players are tapping"); the reveal shows who was fastest and K9 ranked
-// rows ("%lld ms", "too soon", "no tap"). Results are the shell's K8 with "Sharpest reflexes" (PromptResultsBody).
-
 struct ReactionSceneView: View {
     let scene: ReactionScene
     let games: GameStagePresenter

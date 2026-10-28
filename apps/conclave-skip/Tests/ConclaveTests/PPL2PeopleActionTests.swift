@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// PPL-2 (OUT/PLAN-screens.md section 5): row actions, confirmations and the tile-menu people items. The shared policy
-/// (PL7 table and group order, RECONCILE R19 tile items), the PH2 ledger and command seam, PH16 failure mapping, PL14
-/// placement by origin (RECONCILE R2), the S50 3 j confirmation flow (Remove and Block, Make Host with no optimistic
-/// role write), the rename flow (Q14, RECONCILE R38) on the shared S60 C6-10 DisplayNameEditor, and source pins for the
-/// iOS-only and Kotlin views. The Kotlin half is T/Skip/PPL2PPL4BridgeTests.kt.
 @MainActor
 struct PPL2PeopleActionTests {
     private let me = "u-ishaan"
@@ -19,7 +14,6 @@ struct PPL2PeopleActionTests {
         return PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
     }
 
-    /// Ishaan hosts; Avery is a co-host; Priya is an unmuted participant with a known user key.
     private func hostRoster(attempt: Int = 1, phase: String = MeetingPhaseKind.inCall.rawValue, isAdmin: Bool = true,
                             hostUserId: String = "u-ishaan", local: String = "u-ishaan") -> PeopleInputs {
         PeopleInputs.make(
@@ -38,7 +32,6 @@ struct PPL2PeopleActionTests {
         people.rows.entry(for: rowId).model.actions.map { $0.action }
     }
 
-    /// Installs a recording command seam and returns the log.
     private final class CommandLog {
         var commands: [PeopleCommand] = []
         var tickets: [HostActionTicket] = []
@@ -53,8 +46,6 @@ struct PPL2PeopleActionTests {
         return log
     }
 
-    // MARK: PL7 table and order (S50 3 f, 3 l1)
-
     @Test func hostViewerSeesHostMediaFirstOnAnUnmutedParticipant() {
         let people = makePeople()
         people.apply(hostRoster())
@@ -64,7 +55,7 @@ struct PPL2PeopleActionTests {
         #expect(actions.last?.action == .remove)
         #expect(actionIds(people, priya).contains(.makeCoHost))
         #expect(actionIds(people, priya).contains(.makeHost))
-        // Swipe: Mute then Remove, and Mute equals the top menu item (IOS 9.2).
+
         #expect(PeopleActionPolicy.swipeActions(actions).map { $0.action } == [.mute, .remove])
     }
 
@@ -84,7 +75,7 @@ struct PPL2PeopleActionTests {
         #expect(!onHost.contains(.remove))
         #expect(!onHost.contains(.makeHost))
         #expect(onHost.contains(.mute))
-        // Q1: only the primary host transfers the role.
+
         #expect(!actionIds(people, priya).contains(.makeHost))
         #expect(actionIds(people, priya).contains(.remove))
     }
@@ -103,11 +94,9 @@ struct PPL2PeopleActionTests {
         let mute = people.rows.entry(for: priya).model.actions.first { $0.action == .mute }
         #expect(mute?.isEnabled == false)
         #expect(mute?.reason == MeetingBlockedReason.reconnecting.rawValue)
-        // Pin stays available (local, never blocked).
+
         #expect(people.rows.entry(for: priya).model.actions.first { $0.action == .pin }?.isEnabled == true)
     }
-
-    // MARK: RECONCILE R19: tile items equal the row items minus Admit and Deny
 
     @Test func tileItemsEqualTheRowItemsMinusAdmitAndDeny() {
         let people = makePeople()
@@ -123,7 +112,7 @@ struct PPL2PeopleActionTests {
                                         reasonReconnecting: "r", reasonOffline: "o", reasonNotJoined: "n", reasonPending: "p",
                                         reasonRenameDisabled: "d")
         let sections = PeopleActionPolicy.menuSections(PeopleActionPolicy.tileActions(actions), titles: titles)
-        // The stage drops the people Pin (S20 keeps Pin), everything else keeps the People order.
+
         let context = TileMenuContext(slotId: "p:" + priya, userId: priya, role: StageSlotRole.grid, kind: StageKind.grid,
                                       fit: StageVideoFit.fill, isLocal: false, isPinned: false, isCameraOff: true,
                                       canFlipCamera: false, offersFlipItem: false)
@@ -138,8 +127,6 @@ struct PPL2PeopleActionTests {
         #expect(ids.last == PersonActionID.remove.rawValue)
     }
 
-    // MARK: PH2 ledger and dispatch (S50 3 l6)
-
     @Test func oneTapEmitsOneCommandAndADuplicateIsIgnored() throws {
         let people = makePeople()
         people.apply(hostRoster())
@@ -151,12 +138,12 @@ struct PPL2PeopleActionTests {
         #expect(log.commands.first?.targetId == priya)
         #expect(people.rows.entry(for: priya).model.pendingAction == PersonActionID.mute.rawValue)
         #expect(people.pendingKeys() == ["mute:" + priya])
-        // A pending row disables its host items with "In Progress".
+
         let remove = people.rows.entry(for: priya).model.actions.first { $0.action == .remove }
         #expect(remove?.reason == PeopleActionReason.pending)
         #expect(people.finish(log.tickets[0], HostActionResult.completed))
         #expect(people.rows.entry(for: priya).model.pendingAction.isEmpty)
-        // A finished ticket never finishes twice.
+
         #expect(!people.finish(log.tickets[0], HostActionResult.completed))
     }
 
@@ -189,8 +176,6 @@ struct PPL2PeopleActionTests {
         #expect(PeopleActionPolicy.rowPendingAction(PeopleCommandKind.block.rawValue) == PersonActionID.remove.rawValue)
     }
 
-    // MARK: Confirmations (S50 3 j, 3 l5)
-
     @Test func removeAndBlockDispatchesOneBlockAndNoKick() {
         let people = makePeople()
         people.apply(hostRoster())
@@ -199,7 +184,7 @@ struct PPL2PeopleActionTests {
         let confirmation = people.confirmation
         #expect(confirmation?.kind == .remove)
         #expect(confirmation?.canBlock == true)
-        // Row sources anchor the dialog to the target row's entry only.
+
         #expect(people.rows.entry(for: priya).confirmation == confirmation)
         #expect(people.rows.entry(for: avery).confirmation == nil)
         #expect(log.commands.isEmpty)
@@ -238,7 +223,7 @@ struct PPL2PeopleActionTests {
         #expect(log.commands.map { $0.kind } == [.makeHost])
         try #require(log.tickets.count > 0)
         #expect(people.finish(log.tickets[0], HostActionResult.completed))
-        // Roles change only when the core's host inputs change (D10).
+
         #expect(people.rows.entry(for: priya).model.role == .participant)
         #expect(people.snapshot.viewerRole == .host)
     }
@@ -248,15 +233,13 @@ struct PPL2PeopleActionTests {
         people.apply(hostRoster())
         people.perform(.makeCoHost, rowId: priya, source: PeopleActionSource.tileMenu)
         #expect(people.confirmation?.source == PeopleActionSource.tileMenu)
-        // Tile-menu confirmations belong to the stage host, never to a row.
+
         #expect(people.rows.entry(for: priya).confirmation == nil)
         people.apply(PeopleInputs.make(callSession: 1, attempt: 1, phase: MeetingPhaseKind.inCall.rawValue, localUserId: me,
                                        participants: [PeopleParticipantInput.make(userId: me, displayName: "Ishaan", isLocal: true)],
                                        isRosterLoaded: true, isAdmin: true, hostUserId: me, hostUserIds: [me]))
         #expect(people.confirmation == nil)
     }
-
-    // MARK: PL14 placement by origin (RECONCILE R2) and PH16 copy
 
     @Test func panelOriginFailuresStayInThePanelAndStageOriginFailuresToast() throws {
         let people = makePeople()
@@ -267,7 +250,7 @@ struct PPL2PeopleActionTests {
         people.finish(try #require(log.tickets.first), HostActionResult.failed(.rejectedByServer))
         #expect(people.lastFailure?.placement == HostFailurePlacement.panelInline.rawValue)
         #expect(people.lastFailure?.sourceKey == priya)
-        // Retry re-dispatches the same command with a new ticket.
+
         people.retry(failureId: people.lastFailure?.id ?? 0)
         try #require(log.commands.count == 2)
         #expect(people.lastFailure == nil)
@@ -280,7 +263,6 @@ struct PPL2PeopleActionTests {
         #expect(people.lastFailure?.placement == HostFailurePlacement.panelSnackbar.rawValue)
         people.dismissFailure(id: people.lastFailure?.id ?? 0)
 
-        // Tile menu (stage origin): the S20 toast lane, nothing stored in the panel.
         people.perform(.mute, rowId: priya, source: PeopleActionSource.tileMenu)
         try #require(log.tickets.count > 3)
         people.finish(log.tickets[3], HostActionResult.failed(.superAdmin))
@@ -320,8 +302,6 @@ struct PPL2PeopleActionTests {
         #expect(PeopleFailureCopy.kind(action: "mute", failure: "rejectedByServer", sourceKey: priya) == PeopleFailureCopy.mute)
     }
 
-    // MARK: Rename (S50 3 c, 3 d; Q14; RECONCILE R38; S60 C6-10)
-
     @Test func aRenameRefusalKeepsTheDraftAndDisabledLastsTheSession() throws {
         let people = makePeople()
         people.apply(hostRoster())
@@ -354,7 +334,7 @@ struct PPL2PeopleActionTests {
         #expect(editor.isDisabledForSession)
         #expect(editor.refusal == HostActionFailure.renameDisabled.rawValue)
         #expect(flagChanges == 1)
-        // The flag refuses later saves without calling the core.
+
         editor.save = { _ in HostActionResult.completed }
         let second = await editor.rename("Other")
         #expect(second.typedFailure == .renameDisabled)
@@ -365,8 +345,6 @@ struct PPL2PeopleActionTests {
         let third = await editor.rename("Other")
         #expect(third.kind == .completed)
     }
-
-    // MARK: Source pins (iOS-only and Kotlin views, the core seam)
 
     @Test func confirmationsAreSystemDialogsOnBothPlatforms() throws {
         let ios = try ppl2Source("Sources/Conclave/Features/Meeting/People/PeopleActions+iOS.swift")
@@ -392,7 +370,7 @@ struct PPL2PeopleActionTests {
         #expect(body.contains("socketManager.transferHost(userId: userId)"))
         #expect(!body.contains("hostUserId ="))
         #expect(!body.contains("applyHostSnapshot("))
-        // PH2: the one command switch reports every exit through people.finish.
+
         #expect(vm.contains("func performPeopleCommand(_ command: PeopleCommand, _ ticket: HostActionTicket)"))
         #expect(vm.contains("_ = self?.people.finish(ticket, result)"))
     }

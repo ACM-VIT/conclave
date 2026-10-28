@@ -1,9 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// ENT-7 (S10 5 c; RECONCILE OQ9): the privacy policy page pushed from Account, in the system appearance with system
-// text styles and Dynamic Type. The text is `PrivacyPolicyDocument` (verbatim, never translated until the legal
-// update); "View on the Web" opens the hosted policy for the app's backend (`PrivacyPolicyDestination`).
 struct PrivacyPolicyScreen: View {
     var body: some View {
         ScrollView {
@@ -25,7 +22,6 @@ struct PrivacyPolicyScreen: View {
     }
 }
 
-/// Headings carry the header trait, so VoiceOver's headings rotor walks the sections.
 private struct PrivacyPolicyBlockView: View {
     let block: PrivacyPolicyBlock
 

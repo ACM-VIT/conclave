@@ -24,12 +24,6 @@ internal object VideoRendererShared {
     val eglBase: EglBase = EglBase.create()
 }
 
-/**
- * S20 SC11 and S70 R70-10 (STG-7): the stage's renderer frame-size store (StagePresenter.frameSizes), provided by the
- * native call root. Only renderers keyed "stage:<slotId>" report into it, on the main thread, after the frame callback
- * already hopped there for the aspect ratio; the sink never moves for it (RR6). Null everywhere else (legacy views, PiP,
- * mini tiles), where nothing reports.
- */
 internal val LocalRendererFrameSizes = staticCompositionLocalOf<RendererFrameSizeStore?> { null }
 
 private object VideoRendererReleaseDispatcher {
@@ -70,8 +64,7 @@ private fun TextureVideoTrackView(
     val context = LocalContext.current
     val eglBase = VideoRendererShared.eglBase
     val rendererLifecycleKey = rendererKey ?: track?.id() ?: "floating"
-    // Tier B identity counts (PS 10.2, S20 14 j): only where a root provides the ledger (the native call root's
-    // fixture); the legacy call root provides none, so production counts nothing.
+
     val ledger = LocalRendererLedger.current
     val renderer = remember(context, rendererLifecycleKey) {
         TextureEglVideoRenderer(context).apply {
@@ -98,7 +91,6 @@ private fun TextureVideoTrackView(
         }
     }
 
-    // STG-7: decoded frame sizes for the PiP target frame (stage slots only).
     val frameSizes = LocalRendererFrameSizes.current
     val frameSlotId = RendererFrameSizeStore.slotId(rendererKey = rendererLifecycleKey.toString())
     DisposableEffect(renderer, frameSizes, frameSlotId) {
@@ -161,7 +153,6 @@ private class TextureEglVideoRenderer(
         updateLayoutAspectRatio()
     }
 
-    /** Main thread only (the remember factory). A `pip:` key counts in the pip slot (PipContent.kt), others in stage. */
     fun attachIdentity(ledger: RendererIdentityLedger?, key: String) {
         if (ledger == null || identityLedger != null) return
         identityLedger = ledger
@@ -175,7 +166,6 @@ private class TextureEglVideoRenderer(
         identityLedger = null
     }
 
-    /** Main thread only. Points the renderer at a stage slot's frame-size entry and reports a size it already knows. */
     fun attachFrameSizes(store: RendererFrameSizeStore?, slotId: String) {
         if (store === frameSizeStore && slotId == frameSizeSlotId) return
         detachFrameSizes()
@@ -185,7 +175,6 @@ private class TextureEglVideoRenderer(
         reportFrameSize()
     }
 
-    /** Main thread only. The renderer left its slot: forget the slot's size. */
     fun detachFrameSizes() {
         val store = frameSizeStore
         if (store != null && frameSizeSlotId.isNotEmpty()) store.remove(slotId = frameSizeSlotId)
@@ -193,7 +182,6 @@ private class TextureEglVideoRenderer(
         frameSizeSlotId = ""
     }
 
-    /** Main thread only; the store is equality guarded, so an unchanged size republishes nothing. */
     private fun reportFrameSize() {
         val store = frameSizeStore ?: return
         if (frameSizeSlotId.isEmpty() || frameWidth <= 0 || frameHeight <= 0) return
@@ -270,7 +258,7 @@ private class TextureEglVideoRenderer(
         if (initialized && !released && hasEglSurface) {
             hasEglSurface = false
             surfaceReleaseInFlight = true
-            // Avoid blocking the UI thread while WebRTC tears down EGL during PiP/self-view churn.
+
             eglRenderer.releaseEglSurface {
                 surface.release()
                 post {

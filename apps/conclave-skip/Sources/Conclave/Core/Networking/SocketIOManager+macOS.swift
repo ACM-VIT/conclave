@@ -31,7 +31,7 @@ final class SocketIOManager {
     var onWebinarAttendeeCountChanged: ((WebinarAttendeeCountChangedNotification) -> Void)?
     var onWebinarFeedChanged: ((WebinarFeedChangedNotification) -> Void)?
     var onWebinarParticipantJoined: ((WebinarParticipantJoinedNotification) -> Void)?
-    /// S50 PH7, PH8, PH9 (PPL-5 to PPL-7).
+
     var onWebinarQaChanged: ((WebinarQaChangedNotification) -> Void)?
     var onWebinarQaSnapshot: ((WebinarQaSnapshot) -> Void)?
     var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Void)?
@@ -63,7 +63,7 @@ final class SocketIOManager {
 
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
-    /// S40 CH3: `chat:reactionChanged` (the complete set for one message).
+
     var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?
     var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Void)?
     var onReaction: ((Reaction) -> Void)?
@@ -76,7 +76,7 @@ final class SocketIOManager {
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
     var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
-    /// S50 PH5.
+
     var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
@@ -88,15 +88,10 @@ final class SocketIOManager {
     var onAdminMediaEnforced: ((AdminMediaEnforcedNotification) -> Void)?
     var onAdminBulkMediaEnforced: ((AdminBulkMediaEnforcedNotification) -> Void)?
 
-    /// Host-test seam (this macOS stub only; iOS and Android never compile
-    /// it). Acknowledgements the local toggles await pass through this gate,
-    /// so a test can hold one, as a slow SFU acknowledgement would, and later
-    /// release or fail it.
     var testCallGate: (@MainActor (String) async throws -> Void)?
-    /// Host-test seams for chat (S40 CH2, CH3): a send or reaction acknowledgement that fails, and the reaction set
-    /// a successful `chat:react` returns.
+
     var testSendChatError: Error?
-    /// S40 CH5 (CHT-5): whether the last send carried `suppressEmbeds`.
+
     var testLastSendSuppressedEmbeds = false
     var testChatReactionError: Error?
     var testChatReactionResult: [ChatMessageReaction]?
@@ -248,11 +243,11 @@ final class SocketIOManager {
             )
         )
     }
-    /// S50 PH6.
+
     func setImageAttachmentsEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse {
         RoomPolicyMutationResponse(success: true, error: nil, changed: nil, locked: nil, noGuests: nil, disabled: nil, enabled: enabled, policies: nil)
     }
-    /// S50 PH5.
+
     func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?) async throws -> ParticipantMediaPermissionsResponse {
         ParticipantMediaPermissionsResponse(success: true, error: nil, unmuteAllowed: unmuteAllowed, videoAllowed: videoAllowed)
     }
@@ -290,16 +285,16 @@ final class SocketIOManager {
     func rotateWebinarLink() async throws -> WebinarLinkResponse {
         WebinarLinkResponse(slug: "", link: "", publicAccess: false, linkVersion: 0)
     }
-    /// S50 PH10.
+
     func updateWebinarQaEnabled(_ enabled: Bool) async throws -> WebinarConfigSnapshot {
         WebinarConfigSnapshot(roomId: nil, enabled: nil, publicAccess: nil, locked: nil, maxAttendees: nil, attendeeCount: nil, requiresInviteCode: nil, linkSlug: nil, feedMode: nil, qaEnabled: enabled)
     }
-    /// S50 PH8 (test stubs record nothing; the host tests drive the presenter seam).
+
     func promoteWebinarAttendee(userId: String) async throws { }
     func demoteWebinarParticipant(userId: String) async throws { }
     func setWebinarHandRaised(_ raised: Bool) async throws -> Bool { raised }
     func declineWebinarStage() async throws { }
-    /// S50 PH7.
+
     func submitWebinarQuestion(_ question: String) async throws -> String { "" }
     func upvoteWebinarQuestion(id: String) async throws -> WebinarQaUpvoteResponse {
         WebinarQaUpvoteResponse(success: true, upvotes: nil, hasUpvoted: nil)

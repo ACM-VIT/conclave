@@ -1,23 +1,14 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S40 3 c (CL6) and 6 c (link preview), CHT-5 on iOS. A card reads one ready `ChatEmbedEntry` (the presenter adds a
-// URL to a row only once its card is ready, CH16), so it appears once with fixed geometry: a 240 pt card with a 16:9
-// image box or a 64 pt thumbnail, fixed line counts, and never resizes after it appears. Each card is one Button that
-// opens the link through the chat's link policy (the in-app browser for http and https, D23; YouTube and X stay in
-// front because SFSafariViewController does not hand universal links to other apps). Views never start a fetch: the
-// composer preview asks the presenter (`requestLinkPreview`) after its 450 ms debounce.
-
-/// CL6 geometry (fixed in every phase).
 enum ChatEmbedLayout {
-    /// The card width, the same as a photo row's box, so cards fit the 320 pt inspector column.
+
     static let cardWidth: CGFloat = 240
     static let largeImageHeight: CGFloat = 135
     static let thumbSize: CGFloat = 64
     static let previewThumb: CGFloat = 40
 }
 
-/// One link card (3 c): large page or image, thumbnail page, YouTube, or an X post with up to four media cells.
 struct LinkEmbedCard: View {
     let entry: ChatEmbedEntry
     let rowId: String
@@ -40,7 +31,6 @@ struct LinkEmbedCard: View {
     }
 }
 
-/// The iOS copy for cards and the composer preview (3 g, 6 g).
 enum ChatEmbedCopy {
     static func cardLabel(_ model: ChatEmbedModel) -> String {
         switch model.kind {
@@ -106,7 +96,6 @@ private struct ChatEmbedCardBody: View {
     }
 }
 
-/// The fixed 16:9 image box at the top of a large card; YouTube adds the play glyph.
 private struct ChatEmbedLargeImage: View {
     let url: String
     let showsPlay: Bool
@@ -126,7 +115,6 @@ private struct ChatEmbedLargeImage: View {
     }
 }
 
-/// Site (caption, secondary), title (subheadline semibold, 2 lines), description (footnote, secondary, 2 lines).
 private struct ChatEmbedText: View {
     let site: String
     let title: String
@@ -158,7 +146,6 @@ private struct ChatEmbedText: View {
     }
 }
 
-/// An X post: author and handle, the text (4 lines) and a grid of 1 to 4 fixed cells.
 private struct ChatEmbedPost: View {
     let model: ChatEmbedModel
 
@@ -191,7 +178,6 @@ private struct ChatEmbedPost: View {
     }
 }
 
-/// One cell 16:9; two side by side; three or four in a 2 by 2 grid (fixed cells, so the card never resizes).
 private struct ChatEmbedMediaGrid: View {
     let media: [ChatEmbedMedia]
 
@@ -222,15 +208,12 @@ private struct ChatEmbedMediaGrid: View {
     }
 }
 
-/// S40 6 c link preview above the field: the draft's first embeddable URL after a 450 ms pause, shown once its card is
-/// ready, with Remove (the send then carries `suppressEmbeds`). The entry comes from the presenter, never a fetch here.
 struct ChatComposerLinkPreview: View {
     let chat: ChatPresenter
     let draft: String
     @Binding var dismissedURL: String
     @State private var entry: ChatEmbedEntry?
 
-    /// The composer preview debounce (web ChatPanel.tsx, S40 D19).
     static let debounceMillis: UInt64 = 450
 
     var body: some View {
@@ -274,7 +257,7 @@ struct ChatComposerLinkPreview: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
             ConclaveComposerDismissButton(title: ChatEmbedCopy.removeLinkPreview, identifier: "chat.composer.linkPreview.remove") {
-                // The draft's URL (the entry key), not the card's final URL: the send compares the draft's first URL.
+
                 dismissedURL = entry?.url ?? ""
             }
             .accessibilityHint(ChatEmbedCopy.removeLinkPreviewHint)

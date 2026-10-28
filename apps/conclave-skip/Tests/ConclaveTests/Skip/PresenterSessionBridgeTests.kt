@@ -14,11 +14,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * WP2-S1 (contract-wp2-first-slice 5.4): the six fixture families against the transpiled MeetingShellPresenter,
- * MeetingActionLedger and policies, driven with MeetingShellInputs.make named arguments and a recording onCommand.
- * Covers 19 of the 20 scenario ids (the stale old-room terminal event needs the view model and runs in Swift).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class PresenterSessionBridgeTests {
@@ -89,11 +84,9 @@ class PresenterSessionBridgeTests {
         return invalidations
     }
 
-    // MARK: Stale callbacks
-
     @Test
     fun staleCallbacks() {
-        // S1-STALE-01: a finish from an earlier attempt is dropped and quiet.
+
         val recorder = Recorder()
         val shell = presenter(recorder, joined())
         assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
@@ -105,7 +98,6 @@ class PresenterSessionBridgeTests {
         }
         assertEquals(0, invalidations)
 
-        // S1-STALE-02: a double finish of one ticket is accepted once.
         assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
         val second = recorder.tickets[1]
         assertTrue(shell.finish(second, MeetingActionResult.completed))
@@ -113,11 +105,9 @@ class PresenterSessionBridgeTests {
         assertFalse(row(shell, MeetingControlID.hand).isPending)
     }
 
-    // MARK: Room switch
-
     @Test
     fun roomSwitch() {
-        // S1-ROOM-01: one coherent publish: pending cancelled, panels reset to the new session, feedback baseline.
+
         val recorder = Recorder()
         val shell = presenter(recorder, joined(isAdmin = true))
         assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
@@ -139,11 +129,9 @@ class PresenterSessionBridgeTests {
         assertNull(shell.panels.snapshot.current)
         assertEquals(MeetingActionResultKind.cancelled, shell.ledger.result(of = recorder.tickets[0].id)?.kind)
 
-        // S1-ROOM-02: late callbacks from room A after B starts are dropped.
         assertFalse(shell.finish(recorder.tickets[0], MeetingActionResult.failed(MeetingActionFailure.ackTimedOut)))
         assertEquals(MeetingActionFailure.none, row(shell, MeetingControlID.hand).failure)
 
-        // S1-ROOM-03: admission and recovery do not start a call session.
         assertFalse(MeetingCallSessionPolicy.startsNewCallSession(isRecoveryJoin = true, reuseExistingSocket = false, previousConnectionState = ConnectionState.reconnecting))
         assertFalse(MeetingCallSessionPolicy.startsNewCallSession(isRecoveryJoin = false, reuseExistingSocket = true, previousConnectionState = ConnectionState.waiting))
         assertFalse(MeetingCallSessionPolicy.startsNewCallSession(isRecoveryJoin = false, reuseExistingSocket = true, previousConnectionState = ConnectionState.joining))
@@ -153,19 +141,16 @@ class PresenterSessionBridgeTests {
         assertEquals(MeetingActionResultKind.interrupted, shell.ledger.result(of = recorder.tickets[1].id)?.kind)
     }
 
-    // MARK: Lost acknowledgment
-
     @Test
     fun lostAcknowledgment() {
-        // S1-ACK-01: the iOS timeout text classifies as ackTimedOut.
+
         assertEquals(MeetingActionFailure.ackTimedOut, MeetingActionFailurePolicy.classify(message = "Timed out waiting for the SFU"))
-        // S1-ACK-02: the Kotlin timeout exception classifies as ackTimedOut.
+
         val kotlinTimeout = skip.lib.ErrorException("Timed out waiting for setHandRaised acknowledgement")
         assertEquals(MeetingActionFailure.ackTimedOut, MeetingActionFailurePolicy.classify(kotlinTimeout))
         assertEquals(MeetingActionFailure.socketReplaced,
             MeetingActionFailurePolicy.classify(skip.lib.ErrorException("Socket changed before setHandRaised acknowledgement")))
 
-        // S1-ACK-03: the server event still drives isOn after a failed ack.
         val recorder = Recorder()
         val shell = presenter(recorder, joined())
         assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
@@ -175,7 +160,6 @@ class PresenterSessionBridgeTests {
         shell.apply(joined(isHandRaised = true))
         assertTrue(row(shell, MeetingControlID.hand).isOn)
 
-        // S1-ACK-04: recovery start interrupts the pending hand ticket and the later ack is dropped.
         val recovery = Recorder()
         val recovering = presenter(recovery, joined())
         assertEquals(MeetingDispatch.dispatched, recovering.toggleHand())
@@ -185,11 +169,9 @@ class PresenterSessionBridgeTests {
         assertFalse(recovering.finish(recovery.tickets[0], MeetingActionResult.completed))
     }
 
-    // MARK: Duplicate action
-
     @Test
     fun duplicateAction() {
-        // S1-DUP-01: a second hand tap while pending dispatches nothing and publishes nothing.
+
         val recorder = Recorder()
         val shell = presenter(recorder, joined(isAdmin = true))
         assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
@@ -199,14 +181,12 @@ class PresenterSessionBridgeTests {
         assertEquals(0, invalidations)
         assertEquals(listOf(MeetingShellCommand.toggleHand), recorder.commands)
 
-        // S1-DUP-02: a double confirm dispatches end once.
         shell.requestEndForEveryone(from = MeetingConfirmationInvoker.more)
         val confirmation = shell.session.confirmation!!
         assertEquals(MeetingDispatch.dispatched, shell.confirmEndForEveryone(id = confirmation.id))
         assertEquals(MeetingDispatch.duplicate, shell.confirmEndForEveryone(id = confirmation.id))
         assertEquals(1, recorder.commands.count { it == MeetingShellCommand.endForEveryone })
 
-        // S1-DUP-03 (S30 CC21): toward muted or off while pending dispatches; toward live or on is a duplicate.
         val media = Recorder()
         assertEquals(MeetingDispatch.dispatched, presenter(media, joined(isMuted = false, micToggleInFlight = true)).toggleMicrophone())
         assertEquals(MeetingDispatch.duplicate, presenter(media, joined(isMuted = true, micToggleInFlight = true)).toggleMicrophone())
@@ -215,11 +195,9 @@ class PresenterSessionBridgeTests {
         assertEquals(listOf(MeetingShellCommand.toggleMicrophone, MeetingShellCommand.toggleCamera), media.commands)
     }
 
-    // MARK: Role change
-
     @Test
     fun roleChange() {
-        // S1-ROLE-01: host loss clears the end confirmation and hides host rows.
+
         val recorder = Recorder()
         val shell = presenter(recorder, joined(isAdmin = true))
         shell.requestEndForEveryone(from = MeetingConfirmationInvoker.call)
@@ -229,7 +207,6 @@ class PresenterSessionBridgeTests {
         assertFalse(row(shell, MeetingControlID.endForEveryone).isVisible)
         assertEquals(MeetingBlockedReason.hostOnly, row(shell, MeetingControlID.endForEveryone).blockedReason)
 
-        // S1-ROLE-02: an attendee blocks media rows with reason attendee.
         shell.apply(joined(isWebinarAttendee = true))
         for (id in listOf(MeetingControlID.microphone, MeetingControlID.camera, MeetingControlID.screenShare, MeetingControlID.hand)) {
             assertEquals("$id", MeetingBlockedReason.attendee, row(shell, id).blockedReason)
@@ -237,7 +214,6 @@ class PresenterSessionBridgeTests {
         }
         assertEquals(MeetingDispatch.unavailable, shell.toggleMicrophone())
 
-        // S1-ROLE-03: a pending end survives host loss until its result.
         val ending = Recorder()
         val host = presenter(ending, joined(isAdmin = true))
         host.requestEndForEveryone(from = MeetingConfirmationInvoker.more)
@@ -247,14 +223,12 @@ class PresenterSessionBridgeTests {
         assertTrue(host.finish(ending.tickets[0], MeetingActionResult.completed))
     }
 
-    // MARK: One-row updates
-
     @Test
     fun oneRowUpdates() {
         val recorder = Recorder()
         val shell = presenter(recorder, joined())
         val cache = MeetingControlRowsCache(shell)
-        // S1-ROW-01: a hand toggle changes only the hand row.
+
         val before = cache.current()
         shell.apply(joined(isHandRaised = true))
         val after = cache.current()
@@ -268,7 +242,6 @@ class PresenterSessionBridgeTests {
             }
         }
 
-        // S1-ROW-02: the unread count changes only the chat row.
         shell.apply(joined(isHandRaised = true, unreadChatCount = 3))
         val chat = cache.current()
         assertEquals(after.revision + 1, chat.revision)
@@ -280,7 +253,6 @@ class PresenterSessionBridgeTests {
             }
         }
 
-        // S1-ROW-03: recovery keeps ids and order and explains blocked rows.
         shell.apply(joined(isHandRaised = true, isRecoveringConnection = true, connectionState = ConnectionState.reconnecting, unreadChatCount = 3))
         val ids = shell.controls.rows.toList().map { it.id }
         assertEquals(MeetingControlID.values().map { it.rawValue }, ids)
@@ -288,7 +260,6 @@ class PresenterSessionBridgeTests {
         assertEquals(MeetingControlHint.appliesAfterReconnect, row(shell, MeetingControlID.microphone).hint)
         assertTrue(row(shell, MeetingControlID.microphone).isEnabled)
 
-        // S1-ROW-04: duplicate inputs leave the revision unchanged and publish nothing.
         val revision = shell.controls.revision
         val invalidations = observe({ shell.controls; shell.session; shell.entry }) {
             shell.apply(joined(isHandRaised = true, isRecoveringConnection = true, connectionState = ConnectionState.reconnecting, unreadChatCount = 3))
@@ -296,8 +267,6 @@ class PresenterSessionBridgeTests {
         assertEquals(0, invalidations)
         assertEquals(revision, shell.controls.revision)
     }
-
-    // MARK: Kotlin caches (3.5)
 
     @Test
     fun cacheHitStillSubscribes() {
@@ -344,8 +313,6 @@ class PresenterSessionBridgeTests {
         shell.apply(joined(callSession = 2, connectionState = ConnectionState.error))
         assertTrue(recorder.commands.isEmpty())
     }
-
-    // MARK: WP2-S2a contract amendments (same scenarios as PresenterSessionTests)
 
     @Test
     fun s2aPhaseRowsAndSessionFacts() {
@@ -394,7 +361,6 @@ class PresenterSessionBridgeTests {
         assertEquals(MeetingBlockedReason.ending, MeetingControlAvailabilityPolicy.row(MeetingControlID.endForEveryone, inputs = host, context = ending).blockedReason)
         assertTrue(MeetingControlAvailabilityPolicy.row(MeetingControlID.leave, inputs = host, context = ending).isEnabled)
 
-        // CC3: a failed lower carries its direction; PH17: the confirmation invoker is the asking surface.
         val recorder = Recorder()
         val shell = presenter(recorder, joined(isAdmin = true, isHandRaised = true))
         assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
@@ -405,7 +371,6 @@ class PresenterSessionBridgeTests {
         assertEquals("hostControls", shell.session.confirmation?.invoker)
         assertEquals("hostControls", MeetingSessionUi.from(shell.session).confirmationInvoker)
 
-        // PLAN-next 7 item 4: a typed microphone failure publishes on the row and clears with the row's state.
         val failure = MeetingErrorClassifier.actionResult(
             MeetingErrorClassifier.classify(serverMessage = "Microphone permission not granted", context = MeetingErrorContext.media)
         )
@@ -415,7 +380,6 @@ class PresenterSessionBridgeTests {
         assertEquals(MeetingActionFailure.none, row(shell, MeetingControlID.microphone).failure)
     }
 
-    /** S70 7 l1: the transpiled message table equals MeetingErrorClassifierTests.messageRows. */
     @Test
     fun classifierTableMatchesSwift() {
         val rows = listOf(
@@ -470,7 +434,7 @@ class PresenterSessionBridgeTests {
         for ((text, context, expected) in rows) {
             assertEquals(text, expected, MeetingErrorClassifier.classify(serverMessage = text, context = context).category)
         }
-        // Android-only evidence (S70 7 d): ErrorException(message) reads the message table; Java classes are typed.
+
         val wrapped = skip.lib.ErrorException("Socket not connected")
         assertEquals(MeetingErrorCategory.serverUnreachable, MeetingErrorClassifier.classify(wrapped, context = MeetingErrorContext.hostAction).category)
         assertEquals("cancelled", MeetingAndroidErrorTypes.categoryName(java.util.concurrent.CancellationException("stop"), false, 28))
@@ -485,7 +449,7 @@ class PresenterSessionBridgeTests {
         val typed = MeetingErrorClassifier.classify(skip.lib.ErrorException(java.net.SocketTimeoutException("slow")), context = MeetingErrorContext.join)
         assertEquals(MeetingErrorCategory.timedOut, typed.category)
         assertEquals("android.timedOut", typed.diagnosticCode)
-        // HTTP and Retry-After (RECONCILE R48).
+
         val draining = MeetingErrorClassifier.classify(httpStatus = 503, retryAfterSeconds = 5, serverMessage = "Meeting servers are draining. Try again shortly.", context = MeetingErrorContext.join)
         assertEquals(MeetingErrorCategory.serverRestarting, draining.category)
         assertEquals(5, draining.retryAfterSeconds)

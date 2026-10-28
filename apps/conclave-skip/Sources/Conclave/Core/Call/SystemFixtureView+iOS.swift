@@ -1,10 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-/// S70 SX1 Debug system fixture root (iOS). Mounted by the Debug seam in `ConclaveApp.swift` when the launch
-/// environment has `CONCLAVE_SYSTEM_FIXTURE=<state>` (HD request B1-T2); `CONCLAVE_SYSTEM_FIXTURE_PROVIDER=real`
-/// selects the real CallKit provider for the physical cell 1 l7. It drives a standalone `CallPresence` through the
-/// real CallKit adapter and never WebRTC, audio, capture or the network. Readouts carry the SX1 keys as identifiers.
 struct SystemFixtureView: View {
     @State private var session: SystemFixtureSession
     @State private var adapter: CallKitPresenceAdapter
@@ -16,9 +12,9 @@ struct SystemFixtureView: View {
         let adapter = CallKitPresenceAdapter(provider: provider)
         session.presence.adapters = CallPresenceAdapters([
             adapter.makeAdapter(for: session.presence),
-            // SYS-5 (S70 4, SX1): keep awake and proximity follow the fixture's snapshot.
+
             CallScreenAwake.makePresenceAdapter(),
-            // SYS-15 (AC-SI18-2): fixture join and leave cycles drive the diagnostics ring and spans.
+
             CallDiagnostics.shared.makePresenceAdapter()
         ])
         _session = State(initialValue: session)
@@ -47,12 +43,12 @@ struct SystemFixtureView: View {
                 Button(ConclaveStrings.text("Speaker")) { session.setAudioRoute(.speaker) }
             }
             #if DEBUG
-            // SYS-15 (AC-SI18-1, AC-SI18-2): sys.diagListeners, sys.diagBuffer, a test error and a test hang.
+
             DiagnosticsFixtureSection()
             #endif
         }
         .task {
-            // Once per mount, never from an appearance callback that could write observed state again.
+
             guard !started else { return }
             started = true
             session.start()
@@ -61,7 +57,7 @@ struct SystemFixtureView: View {
 }
 
 enum SystemFixtureLaunch {
-    /// The fixture state from the Debug launch environment, or nil for an ordinary launch.
+
     static func state(environment: [String: String] = ProcessInfo.processInfo.environment) -> SystemFixtureState? {
         #if DEBUG
         guard let raw = environment["CONCLAVE_SYSTEM_FIXTURE"] else { return nil }

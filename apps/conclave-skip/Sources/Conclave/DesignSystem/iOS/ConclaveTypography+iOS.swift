@@ -2,9 +2,6 @@
 import SwiftUI
 import UIKit
 
-/// SF Pro through Dynamic Type text styles only (TG 2.2). Each style scales on its own curve, and Bold Text
-/// is honored by the system font. New screens use `.font(.body)` and friends directly; this adapter serves
-/// the gallery and the optional legacy shim.
 extension ConclaveTextStyle {
     var textStyle: Font.TextStyle {
         switch self {
@@ -22,7 +19,6 @@ extension ConclaveTextStyle {
         }
     }
 
-    /// The UIKit style behind `textStyle`, for the gallery's resolved point-size readout.
     var uiTextStyle: UIFont.TextStyle {
         switch self {
         case .largeTitle: return .largeTitle

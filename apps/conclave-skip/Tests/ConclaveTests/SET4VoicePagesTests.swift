@@ -3,15 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SET-4 (OUT/PLAN-screens.md section 5; S60 2 voice pages, 0.6 L6-13, 0.8 C6-22, C6-23 gated; S40 Q12; S60 Q12): the
-/// Voice Messages page and the personal voice recorder on the fake WP3 owner. The standard voice list rules
-/// (`VoicePreviewPolicy`), the C6-22 stores written through the presenter (one change reaches `TtsSpeaker` through
-/// the queue's preference read), Preview counted per tap and never on open, personal voice rows hidden without
-/// `canUsePersonalVoice` (W10-4 is out, so production stays there), the recorder flow on fake capture (the meeting mic
-/// paused for the take and restored, `micPause` then `micRestore`), the silent host speaker's Preview, and sources.
 @MainActor
 struct SET4VoicePagesTests {
-    // MARK: Standard voices (2 c, 2 d)
 
     @Test func voiceOptionsKeepTheCurrentLanguageInOneOrder() {
         let voices = [
@@ -40,10 +33,10 @@ struct SET4VoicePagesTests {
         #expect(VoicePreferences.standardVoiceId(defaults: defaults) == "v1")
         #expect(presenter.chat.standardVoiceId == "v1")
         #expect(core.calls == ["preferenceChanged"])
-        // The voice disappears from the list: Automatic (2 f).
+
         presenter.setStandardVoices([VoiceOptionModel(id: "v2", name: "Two", languageTag: "en-US")])
         #expect(presenter.chat.standardVoiceId == "")
-        // The speaker's queue reads the stored id once per change (C6-22).
+
         let queue = TtsPlaybackQueue()
         queue.schedulesTimers = false
         queue.preferences = { VoicePreferences.snapshot(defaults: defaults) }
@@ -55,7 +48,7 @@ struct SET4VoicePagesTests {
     @Test func previewCountsPerTapNeverOnOpenAndIsCallOnly() {
         let (presenter, core) = Self.make(.voiceUnavailable)
         presenter.panelDidOpen()
-        // Opening sends no voice command; the only call is the SET-3 mirror sync to the preview owner (B7-T3).
+
         #expect(presenter.voicePreviewCount == 0 && core.calls == ["mirrorOn"])
         #expect(presenter.toggleStandardVoicePreview(sentence: "Sample") == .dispatched)
         #expect(presenter.voicePreviewCount == 1)
@@ -71,8 +64,6 @@ struct SET4VoicePagesTests {
         #expect(!app.chat.canPreviewStandardVoice)
         #expect(app.toggleStandardVoicePreview(sentence: "Sample") == .ignored)
     }
-
-    // MARK: Personal voice (Q12, C6-23)
 
     @Test func personalVoiceStaysHiddenWithoutTheCapability() {
         let (signedIn, _) = Self.make(.voiceUnavailable)
@@ -103,7 +94,7 @@ struct SET4VoicePagesTests {
     }
 
     @Test func theRecorderPausesTheMeetingMicForTheTakeAndNeedsSixtySecondsAndConsent() {
-        // A capable session with no personal voice recorded yet.
+
         let fresh = SettingsPresenter(scope: .call, platform: .ios, defaults: Self.freshDefaults())
         let freshCore = SettingsRecordingCore()
         freshCore.install(on: fresh)
@@ -117,7 +108,7 @@ struct SET4VoicePagesTests {
         #expect(fresh.recorder.secondsLeft == 30 && !fresh.recorder.canCreate)
         let chatRevision = fresh.chat.revision
         for second in 31...61 { fresh.voiceSampleProgress(elapsedSeconds: second, level: 0.2) }
-        // A ticking take never republishes the snapshots (2 k, 2 l6).
+
         #expect(fresh.chat.revision == chatRevision && fresh.audio.revision == rootRevision)
         fresh.stopVoiceSample()
         #expect(fresh.chat.personalVoice == .review && !fresh.recorder.canCreate)
@@ -147,8 +138,6 @@ struct SET4VoicePagesTests {
         #expect(!VoiceRecorderPolicy.shouldAnnounce(secondsLeft: 0))
     }
 
-    // MARK: Speaker (TtsSpeaker Preview on the silent host)
-
     @Test func theHostSpeakerPlaysThePreviewUnderTheReservedIdSilently() {
         let speaker = TtsSpeaker()
         speaker.queue.schedulesTimers = false
@@ -160,8 +149,6 @@ struct SET4VoicePagesTests {
         #expect(speaker.activeMessageId == "")
         #expect(TtsSpeaker.standardVoiceOptions().isEmpty)
     }
-
-    // MARK: Sources
 
     @Test func voiceSourcesLoadTheListOncePerPageAndPreviewOnTapOnly() throws {
         let ios = try Self.source("Sources/Conclave/Features/Meeting/Settings/VoicePages+iOS.swift")
@@ -178,7 +165,7 @@ struct SET4VoicePagesTests {
         let speakerKotlin = try Self.source("Sources/Conclave/Skip/TtsSpeaker.kt")
         #expect(speakerKotlin.contains("internal fun togglePreview(sentence: String, start: Boolean)"))
         #expect(speakerKotlin.contains("internal fun loadStandardVoices(languageTag: String, onLoaded: (List<VoiceOptionModel>) -> Unit)"))
-        // The voice list never touches the call's engine.
+
         #expect(speakerKotlin.contains("var probe: TextToSpeech? = null"))
         let recorderIOS = try Self.source("Sources/Conclave/Features/Meeting/Settings/VoiceSampleRecorder+iOS.swift")
         #expect(recorderIOS.contains("confirmationDialog(ConclaveStrings.text(\"Discard Recording?\")"))
@@ -186,8 +173,6 @@ struct SET4VoicePagesTests {
         #expect(recorderKotlin.contains("BackHandler(enabled = midTake)"))
         #expect(recorderKotlin.contains("settings.discardVoiceSample()"))
     }
-
-    // MARK: Helpers
 
     static func make(_ state: SettingsFixtureState, defaults: UserDefaults = SET4VoicePagesTests.freshDefaults())
         -> (SettingsPresenter, SettingsRecordingCore) {
@@ -199,7 +184,6 @@ struct SET4VoicePagesTests {
         return (presenter, core)
     }
 
-    /// Nonisolated: `make`'s default argument calls it, and default arguments are evaluated outside the main actor.
     nonisolated static func freshDefaults() -> UserDefaults {
         let suite = "set4-voice-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard

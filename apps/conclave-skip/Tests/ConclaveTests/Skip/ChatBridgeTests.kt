@@ -13,13 +13,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * CHT-1 to CHT-3 through the transpiled chat models, policies and presenter (the Swift halves are
- * T/ChatPoliciesTests.swift, T/CHT2ComposerPolicyTests.swift and T/CHT3MessageActionsTests.swift): the web linkify
- * vectors and the UTF-16 counts with the same results as Swift (CH17, CH20), the D24 route order, row identity across
- * the acknowledgement (CH1), reactions (CH3), hide and show a sender (CH21), the reversed timeline cache built once
- * per revision (2 d) and the row actions' clipboard path (5 d). Pure: no composition.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ChatBridgeTests {

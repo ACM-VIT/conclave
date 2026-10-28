@@ -124,7 +124,7 @@ internal object SocketEvent {
     val browserNavigate = SfuClientEvent.browserNavigate.rawValue
     val browserClose = SfuClientEvent.browserClose.rawValue
     val browserGetState = SfuClientEvent.browserGetState.rawValue
-    /** C6-20 (ACT-9): the capability probe; SfuClientEvent.browserGetCapabilities lands with HD request B8-T1 R2. */
+
     val browserGetCapabilities = SfuClientEvent.browserGetCapabilities.rawValue
     val browserActivity = SfuClientEvent.browserActivity.rawValue
     val appsOpen = SfuClientEvent.appsOpen.rawValue
@@ -219,12 +219,6 @@ internal object SocketEvent {
     val gameVote = SfuServerEvent.gameVote.rawValue
 }
 
-/// Raw consume-response fields, carrying rtpParameters as the verbatim JSON
-/// string mediasoup gave us rather than a re-encoded Swift struct. Skip's
-/// JSONEncoder cannot encode the `[String: String]` codec `parameters` map
-/// (it throws "Tuple2 cannot be cast to Encodable"), so any round-trip of
-/// RtpParameters/RtpCapabilities through the Codable structs crashes on
-/// Android. We therefore keep these blobs as raw JSON end-to-end.
 internal class ConsumeRawResult(
     internal val id: String,
     internal val producerId: String,
@@ -249,9 +243,6 @@ internal class SocketIOManager {
     internal var connectionError: Error? = null
         private set
 
-    /// The router's RTP capabilities exactly as the server sent them in the
-    /// joinRoom ack. Passed verbatim to mediasoup `Device.load()` - see
-    /// ConsumeRawResult for why we avoid re-encoding the Codable struct.
     internal var routerRtpCapabilitiesJson: String? = null
         private set
 
@@ -312,7 +303,7 @@ internal class SocketIOManager {
     internal var onChatMessage: ((ChatMessage) -> Unit)? = null
     internal var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Unit)? = null
     internal var onChatReactionChanged: ((ChatReactionChangedNotification) -> Unit)? = null
-    /** S40 CH7 (CHT-7): a relayed assistant packet's process state, before its text reaches onChatMessage. */
+
     internal var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Unit)? = null
     internal var onReaction: ((Reaction) -> Unit)? = null
 
@@ -324,7 +315,7 @@ internal class SocketIOManager {
     internal var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Unit)? = null
     internal var onDmStateChanged: ((DmStateChangedNotification) -> Unit)? = null
     internal var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Unit)? = null
-    /** S50 PH5: the room's participant media permissions (also sent at join). */
+
     internal var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Unit)? = null
     internal var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Unit)? = null
     internal var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Unit)? = null
@@ -612,9 +603,6 @@ internal class SocketIOManager {
                 throw ErrorException(errorMessage)
             }
 
-            // Stash the router rtpCapabilities verbatim BEFORE decoding - mediasoup
-            // Device.load() wants this JSON, and re-encoding the decoded struct
-            // crashes Skip's JSONEncoder (AnyCodable codec params -> Tuple2).
             extractRawObjectField(data, "rtpCapabilities")?.let { routerRtpCapabilitiesJson = it }
             val response = decodeJoinRoomResponse(data)
             val resolvedRoomId = response.roomId ?: requestedRoomId
@@ -639,11 +627,7 @@ internal class SocketIOManager {
     }
 
     internal suspend fun createProducerTransport(): TransportResponse {
-        // These two SFU handlers take ONLY an ack callback (no data arg):
-        //   socket.on("createProducerTransport", (callback) => …)
-        // Emitting an empty `{}` payload first would shift the args so the
-        // server binds `callback` to the object and respond() silently no-ops,
-        // hanging the client. Emit with the ack alone, matching the web client.
+
         val data = emitAckOnly(SocketEvent.createProducerTransport)
         return JSONDecoder().decode(TransportResponse::class, from = data)
     }
@@ -669,11 +653,6 @@ internal class SocketIOManager {
         return JSONDecoder().decode(RestartIceResponse::class, from = data)
     }
 
-    /// Send the producer's rtpParameters (the verbatim JSON mediasoup handed us
-    /// in the Transport's onProduce listener) without round-tripping it through
-    /// the RtpParameters Codable struct, which Skip's JSONEncoder cannot encode.
-    /// The request is assembled as a JSONObject so `toSocketPayload` passes it
-    /// through untouched.
     internal suspend fun produceRaw(
         transportId: String,
         kind: String,
@@ -703,9 +682,6 @@ internal class SocketIOManager {
         return response.producerId
     }
 
-    /// Consume using the router rtpCapabilities verbatim JSON, and return the
-    /// server's rtpParameters as raw JSON for mediasoup `RecvTransport.consume()`.
-    /// Same rationale as produceRaw: avoid the AnyCodable encode crash.
     internal suspend fun consumeRaw(
         producerId: String,
         rtpCapabilitiesJson: String,
@@ -920,11 +896,6 @@ internal class SocketIOManager {
         emit(SocketEvent.setConsumerPreferences, payload)
     }
 
-    /// Snapshot the room's current producers (producer-sync safety net). The SFU
-    /// handler takes ONLY an ack callback - emit with no payload via emitAckOnly.
-    /// Returns the whole response object; the caller iterates `.producers` (a
-    /// bare list return trips Skip's Array/List bridging). Throws on failure;
-    /// the caller's do/catch swallows it.
     internal suspend fun getProducers(): GetProducersResponse {
         val data = emitAckOnly(SocketEvent.getProducers)
         return decodeGetProducersResponse(data)
@@ -965,10 +936,6 @@ internal class SocketIOManager {
         return notification.toChatMessage(activeRoomId)
     }
 
-    /**
-     * S40 CH3: toggles your reaction on a retained message. The SFU handler is `(data, callback)`; it answers
-     * `{ success, reactions }` (the authoritative set) or `{ error }`, which [emit] throws.
-     */
     internal suspend fun toggleChatReaction(messageId: String, emoji: String): skip.lib.Array<ChatMessageReaction> {
         val payload = JSONObject()
             .put("messageId", messageId)
@@ -978,9 +945,7 @@ internal class SocketIOManager {
     }
 
     internal suspend fun authorizeChatImageUpload(): ChatImageUploadAuthorization {
-        // The server handler is `(_data, callback)`: send an empty payload so
-        // the ack callback binds to the second slot (ack-only emits never get
-        // answered by this handler).
+
         val data = emit(SocketEvent.chatImageUploadAuthorize, JSONObject())
         return JSONDecoder().decode(ChatImageUploadAuthorizationAck::class, from = data).authorization()
     }
@@ -1009,8 +974,7 @@ internal class SocketIOManager {
             .put("timestamp", packet.timestamp)
             .put("expiresAt", packet.expiresAt)
             .put("signature", packet.signature)
-        // S40 CH7 (CHT-7): the signed process state, only when present. The SFU rebuilds the signing input from these
-        // fields (a dropped field fails the signature) and rejects a task whose query is not a string (never put null).
+
         val reasoning = packet.reasoning
         if (!reasoning.isNullOrEmpty()) payload.put("reasoning", reasoning)
         if (packet.reasoningDone == true) payload.put("reasoningDone", true)
@@ -1073,16 +1037,11 @@ internal class SocketIOManager {
         return decodeRoomPolicyMutationResponse(data)
     }
 
-    /** S50 PH6: `setImageAttachmentsEnabled` (adminHandlers.ts:1383-1404); the ack carries `enabled`. */
     internal suspend fun setImageAttachmentsEnabled(enabled: Boolean): RoomPolicyMutationResponse {
         val data = emit(SocketEvent.setImageAttachmentsEnabled, mapOf("enabled" to enabled))
         return decodeRoomPolicyMutationResponse(data)
     }
 
-    /**
-     * S50 PH5: `setParticipantMediaPermissions` (adminHandlers.ts:1444-1478). A null permission is left out of the
-     * payload, so the SFU keeps it; turning one off also closes the matching live producers server side.
-     */
     internal suspend fun setParticipantMediaPermissions(unmuteAllowed: Boolean?, videoAllowed: Boolean?): ParticipantMediaPermissionsResponse {
         val payload = mutableMapOf<String, Any>()
         if (unmuteAllowed != null) payload["unmuteAllowed"] = unmuteAllowed
@@ -1214,17 +1173,11 @@ internal class SocketIOManager {
         return JSONDecoder().decode(BrowserStateNotification::class, from = data)
     }
 
-    /**
-     * C6-20 (ACT-9): browser:getCapabilities is an `async (callback) =>` handler, so the probe is emitted ack-only with
-     * NO data argument (AGENTS.md "Socket Ack Shapes"; JSONObject() would bind to the callback), with the web's 22 s
-     * timeout. A timeout throws and the caller treats it as unavailable.
-     */
     internal suspend fun getBrowserCapabilities(): BrowserCapabilitiesResponse {
         val data = emitAckOnly(SocketEvent.browserGetCapabilities, timeoutMs = SharedBrowserTimeouts.capabilitiesAckMillis.toLong())
         return JSONDecoder().decode(BrowserCapabilitiesResponse::class, from = data)
     }
 
-    /** Launch, navigate and close wait up to 45 s (C6-20, WEB APP-40). */
     internal suspend fun launchBrowser(url: String): LaunchBrowserResponse {
         val request = LaunchBrowserRequest(url = url)
         val data = emit(SocketEvent.browserLaunch, request, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())
@@ -1237,7 +1190,6 @@ internal class SocketIOManager {
         return JSONDecoder().decode(LaunchBrowserResponse::class, from = data)
     }
 
-    /** browser:close is `async (callback) =>`: ack-only, no data argument. */
     internal suspend fun closeBrowser() {
         emitAckOnly(SocketEvent.browserClose, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())
     }
@@ -1414,41 +1366,34 @@ internal class SocketIOManager {
         return isConnected && socket != null && !activeRoomId.isNullOrBlank()
     }
 
-    /** S50 PH10: Attendee Q&A through `webinar:updateConfig` (SFU webinar.ts:347-350). */
     internal suspend fun updateWebinarQaEnabled(enabled: Boolean): WebinarConfigSnapshot {
         return updateWebinarConfig(JSONObject().put("qaEnabled", enabled))
     }
 
-    /** S50 PH8: `webinar:promoteAttendee` (`(data, callback)`, host only); the SFU tells only the attendee. */
     internal suspend fun promoteWebinarAttendee(userId: String) {
         emit(SocketEvent.webinarPromoteAttendee, mapOf("userId" to userId))
     }
 
-    /** S50 PH8: `webinar:demoteParticipant`; on an attendee it only revokes the stage invite. */
     internal suspend fun demoteWebinarParticipant(userId: String) {
         emit(SocketEvent.webinarDemoteParticipant, mapOf("userId" to userId))
     }
 
-    /** S50 PH8, S20 Q10: the attendee hand (`webinar:setHandRaised`); the ack echoes `raised`. */
     internal suspend fun setWebinarHandRaised(raised: Boolean): Boolean {
         val data = emit(SocketEvent.webinarSetHandRaised, mapOf("raised" to raised))
         val obj = dataObject(data) ?: return raised
         return boolField(obj, "raised") ?: raised
     }
 
-    /** S50 PH8: `webinar:declineStage` is a `(callback)` handler, so it is emitted ack-only (no payload). */
     internal suspend fun declineWebinarStage() {
         emitAckOnly(SocketEvent.webinarDeclineStage)
     }
 
-    /** S50 PH7: `webinar:qa:submit`; returns the new question id. */
     internal suspend fun submitWebinarQuestion(question: String): String {
         val data = emit(SocketEvent.webinarQaSubmit, mapOf("question" to question))
         val obj = dataObject(data) ?: return ""
         return stringField(obj, "id") ?: ""
     }
 
-    /** S50 PH7: `webinar:qa:upvote`; the ack carries the viewer's own `upvotes` and `hasUpvoted`. */
     internal suspend fun upvoteWebinarQuestion(id: String): WebinarQaUpvoteResponse {
         val data = emit(SocketEvent.webinarQaUpvote, mapOf("id" to id))
         val obj = dataObject(data) ?: return WebinarQaUpvoteResponse(success = true, upvotes = null, hasUpvoted = null)
@@ -1459,7 +1404,6 @@ internal class SocketIOManager {
         )
     }
 
-    /** S50 PH7: `webinar:qa:moderate` (answering, answered, dismissed, reopen; a written answer up to 1,000). */
     internal suspend fun moderateWebinarQuestion(id: String, action: String, answerText: String?) {
         val payload = mutableMapOf<String, Any>("id" to id, "action" to action)
         if (answerText != null) payload["answerText"] = answerText
@@ -1687,9 +1631,6 @@ internal class SocketIOManager {
         return array
     }
 
-    /// Emit an event whose SFU handler takes ONLY the ack callback (no data
-    /// argument). The socket.io Java client treats a trailing Ack as the ack and
-    /// sends zero data args, so the server's `(callback) => …` binds correctly.
     private suspend fun emitAckOnly(event: String, timeoutMs: Long = ACK_TIMEOUT_MS): Data {
         val socket = socket ?: throw ErrorException("Socket not connected")
         return withAckTimeout(event, timeoutMs) {
@@ -2451,9 +2392,6 @@ internal class SocketIOManager {
         return ""
     }
 
-    /// Pull a nested JSON object field out of an ack payload as its verbatim
-    /// JSON string (used to keep mediasoup capability/parameter blobs raw rather
-    /// than re-encoding the decoded Codable struct, which crashes Skip's encoder).
     private fun extractRawObjectField(data: Data, field: String): String? {
         return try {
             val obj = JSONObject(dataToString(data))
@@ -2677,7 +2615,7 @@ internal class SocketIOManager {
             webinarRequiresInviteCode = boolField(obj, "webinarRequiresInviteCode"),
             webinarAttendeeCount = intField(obj, "webinarAttendeeCount"),
             webinarMaxAttendees = intField(obj, "webinarMaxAttendees"),
-            // S50 PH10: Attendee Q&A on.
+
             webinarQaEnabled = boolField(obj, "webinarQaEnabled"),
             displayNameSnapshot = displayNameSnapshot
         )
@@ -2813,7 +2751,6 @@ internal class SocketIOManager {
         )
     }
 
-    /** S40 CH7 (CHT-7): the relayed answer's process state, hand-rolled like the other decoders. */
     private fun decodeConclaveAssistantPacket(value: Any?): ConclaveAssistantMessageNotification? {
         val obj = jsonObject(value) ?: return null
         val id = stringField(obj, "id") ?: return null
@@ -2861,7 +2798,6 @@ internal class SocketIOManager {
         )
     }
 
-    /** S40 CH3: the wire `reactions` array (emoji plus every reactor id); entries without an emoji are skipped. */
     private fun decodeChatReactionsArray(array: JSONArray?): skip.lib.Array<ChatMessageReaction> {
         val reactions = mutableListOf<ChatMessageReaction>()
         if (array == null) return skip.lib.Array(reactions)
@@ -2881,7 +2817,6 @@ internal class SocketIOManager {
         return skip.lib.Array(reactions)
     }
 
-    /** S40 CH3: `chat:reactionChanged`, hand-rolled like the other chat decoders. */
     private fun decodeChatReactionChanged(value: Any?): ChatReactionChangedNotification? {
         val obj = jsonObject(value) ?: return decode<ChatReactionChangedNotification>(value)
         val messageId = stringField(obj, "messageId") ?: return null
@@ -3522,7 +3457,7 @@ internal class SocketIOManager {
 
         socket.on(SocketEvent.conclaveMessage, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
-            // S40 CH7 (CHT-7): the packet's process state first; its text then goes through the chat pipeline.
+
             decodeConclaveAssistantPacket(args.firstOrNull())?.let { packet ->
                 if (eventRoomIdMatchesActiveOrPending(packet.roomId, allowMissingRoomId = true)) {
                     onConclaveAssistantPacket?.invoke(packet)

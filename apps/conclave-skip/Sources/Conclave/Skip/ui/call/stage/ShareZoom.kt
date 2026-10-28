@@ -55,26 +55,8 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/*
- * STG-3 (S20 5 d, e, f, g, h, i, k; SL7): share viewing on Android. ShareZoomState is the share slot's view-local zoom
- * and pan (never published, S20 5 j). ShareZoomBox wraps every slot's renderer with the same structure (D15): for the
- * main share slot of a remote presenter it adds pinch (1x to 4x) with pan once zoomed and double tap (1x and 2x at the
- * tap point, the single tap delayed past the double-tap window and still toggling chrome); elsewhere the gestures are
- * off and the transforms are identity, so a share moving between the rail and main keeps its TextureView.
- *
- * Legibility: graphicsLayer only magnifies a buffer already scaled to the view (TextureEglVideoRenderer never sets the
- * SurfaceTexture buffer size), so the layer transform runs only while the fingers move or a settle animates. When a
- * pinch or a double tap settles, the TextureView is laid out once at the zoomed size inside the clipToBounds container
- * (capped at the decoded frame, ShareZoomPolicy.layoutScale); the TextureView resizes its buffer to its new bounds and
- * the layer scale returns to the remainder. One render-target resize per settled zoom, none per gesture frame
- * (S20 5 k, l). The shared rules are ShareZoomPolicy; units are pixels of the slot.
- */
-
-/** The fixture's `stage.counters` renderTargetResize hook (S20 SL14). Production provides nothing. */
 internal val LocalStageRenderTargetResize = staticCompositionLocalOf<(() -> Unit)?> { null }
 
-/** One share slot's zoom. `live` is read only inside graphicsLayer, `layoutScale` only in layout, `settled` by the
- *  Reset zoom chip and the share node, so a gesture frame recomposes nothing. */
 internal class ShareZoomState {
     var live by mutableStateOf(ShareZoomValue.identity)
         private set
@@ -139,10 +121,6 @@ internal class ShareZoomState {
     fun steppedTarget(zoomIn: Boolean): ShareZoomValue = ShareZoomPolicy.stepped(live, zoomIn = zoomIn, slotWidth = slotWidth,
         slotHeight = slotHeight, videoWidth = videoWidth, videoHeight = videoHeight)
 
-    /**
-     * Settles at `target`: a `zoomSnap` spring on the live value (the 250 ms double tap, the spring back of an overshoot),
-     * instant under "Remove animations" (S20 5 h); the TextureView is laid out at the settled size only when it is done.
-     */
     fun settle(target: ShareZoomValue, scope: CoroutineScope, reduceMotion: Boolean, onResize: (() -> Unit)?) {
         token += 1
         val expected = token
@@ -174,7 +152,6 @@ internal class ShareZoomState {
         }
     }
 
-    /** The slot resized (rotation, the rail and main roles, a side pane): zoom resets to 1x (S20 5 c, d). */
     fun slotSizeChanged(width: Int, height: Int, onResize: (() -> Unit)?) {
         val first = slotWidth == 0.0 && slotHeight == 0.0
         if (width.toDouble() == slotWidth && height.toDouble() == slotHeight) return
@@ -194,11 +171,6 @@ internal class ShareZoomState {
     }
 }
 
-/**
- * Wraps a slot's renderer (every role). The TextureView is laid out at slot x `layoutScale`, centered, and transformed by
- * the live value; pointer coordinates, `place` and the layer translation are all physical (a shared screen never
- * mirrors), so no right-to-left conversion is needed here.
- */
 @Composable
 internal fun ShareZoomBox(
     state: ShareZoomState, zoomable: Boolean, slotId: String, stage: StagePresenter, modifier: Modifier = Modifier,
@@ -236,8 +208,7 @@ internal fun ShareZoomBox(
                         state.settle(state.doubleTapTarget(at), scope, reduce, onResize)
                     },
                     onTap = {
-                        // The share slot's single tap waits out the double-tap window (S20 5 d), then toggles chrome like a
-                        // tap on the stage (S20 8 d) and clears the bar hold (S30 CC16).
+
                         stage.stageTapped()
                         chrome?.send(ChromeVisibilityEvent.tap)
                     },
@@ -259,7 +230,6 @@ internal fun ShareZoomBox(
     }
 }
 
-/** Lays the renderer out at slot x `layoutScale` (read in layout only: one relayout per settled zoom), centered. */
 private fun Modifier.shareZoomLayout(state: ShareZoomState): Modifier = layout { measurable, constraints ->
     val width = constraints.maxWidth
     val height = constraints.maxHeight
@@ -272,11 +242,6 @@ private fun Modifier.shareZoomLayout(state: ShareZoomState): Modifier = layout {
     }
 }
 
-/**
- * Pinch with pan (S20 5 d): the transform detector's slop rules, with the pan counted only once the share is zoomed or
- * while two fingers are down, and an end callback for the settle. A single finger on an unzoomed share is left to the
- * tap detector and the stage.
- */
 private suspend fun PointerInputScope.detectShareZoomGestures(
     canPan: () -> Boolean, onStart: (Offset) -> Unit, onChange: (Float, Offset) -> Unit, onEnd: () -> Unit,
 ) {
@@ -314,11 +279,6 @@ private suspend fun PointerInputScope.detectShareZoomGestures(
     }
 }
 
-/**
- * The share slot's placeholder under the chrome (S20 5 c, d, f): your own share shows "You're presenting" with the share
- * glyph on surfaceContainer, never a preview of your screen (Q8); a remote share whose track is pending shows the
- * presenter's avatar and "%1$s is presenting" with no spinner. Only a remote share reads its binding.
- */
 @Composable
 internal fun SharePlaceholder(model: TileChromeModel, binding: RendererBinding, isShare: Boolean, modifier: Modifier = Modifier) {
     if (!isShare) return
@@ -343,10 +303,6 @@ internal fun SharePlaceholder(model: TileChromeModel, binding: RendererBinding, 
     }
 }
 
-/**
- * The flat Reset zoom chip (SR3, S20 5 f): top end of the share's content area, below the reserved top row, after a zoom
- * past 1x. Chips stay while chrome hides.
- */
 @Composable
 internal fun ShareResetZoomChip(state: ShareZoomState, zoomable: Boolean, onReset: () -> Unit, modifier: Modifier = Modifier) {
     if (!zoomable || !state.settled.isZoomed) return
@@ -361,7 +317,6 @@ internal fun ShareResetZoomChip(state: ShareZoomState, zoomable: Boolean, onRese
         modifier = modifier.padding(top = top, end = end), onClick = onReset)
 }
 
-/** The share node's words (S20 5 g, i): "Shared screen from %1$s" (yours: "You're presenting") and "Zoom 2x". */
 @Composable
 internal fun shareNodeLabel(model: TileChromeModel): String =
     if (model.isLocal) conclaveString("stg_you_presenting") else conclaveString("stg_shared_screen_from", model.displayName)
@@ -375,12 +330,10 @@ internal fun shareZoomValue(state: ShareZoomState, zoomable: Boolean): String {
     return conclaveString("stg_zoom_value", String.format(Locale.getDefault(), digits, spoken))
 }
 
-/** "%1$s started presenting" for the stage's one live region (S20 5 g, i); CallRoot falls back to this. */
 @Composable
 internal fun shareAnnouncementText(announcement: StageAnnouncement): String? =
     if (announcement.kind == ShareAnnouncementPolicy.presentingKind) conclaveString("stg_announce_presenting", announcement.name) else null
 
-/** TalkBack custom actions (S20 5 d, i): Zoom in, then Zoom out and Reset zoom once zoomed. */
 @Composable
 internal fun rememberShareZoomActions(state: ShareZoomState, zoomable: Boolean, slotId: String, stage: StagePresenter): List<ConclaveTileAction> {
     val zoomIn = conclaveString("stg_zoom_in")

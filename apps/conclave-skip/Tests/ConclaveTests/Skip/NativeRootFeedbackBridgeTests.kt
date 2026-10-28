@@ -6,7 +6,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** The real Android delivery adapter and production call-source factory, with recording sinks only. */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class NativeRootFeedbackBridgeTests {
@@ -156,7 +155,7 @@ class NativeRootFeedbackBridgeTests {
         premeeting.onCommand = { commands += it }
         val received = mutableListOf<FeedbackKind>()
         val records = FeedbackDeliveryRecords()
-        // Same source, whitelist and real adapter as PremeetingRootFeedback; sink replaced with a recorder.
+
         val delivery = NativeFeedbackDelivery(
             source = { FeedbackSourceState(session = premeeting.feedbackState.session, token = premeeting.feedbackState.token) },
             sink = { received += it },

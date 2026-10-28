@@ -3,19 +3,6 @@ import Foundation
 import AVFoundation
 #endif
 
-// S40 CH4 (CHT-6): the voice message speaker. The queue (6 waiting, 250 ms gaps, the active message id), the
-// preference keys and every rule live in VoicePreferences.swift, shared with Android; K/TtsSpeaker.kt replaces this
-// file's transpiled output there, so this file only synthesizes. Both speakers expose the same members, because the
-// transpiled view model calls them: `enqueue(messageId:userId:displayName:text:voiceToken:isOwn:)`,
-// `replay(messageId:userId:displayName:text:voiceToken:)`, `stop()`, `reset()`, `onPlaybackChanged`,
-// `activeMessageId`, plus the legacy `speak(text:userId:displayName:)` and SET-4's Settings Preview
-// (`togglePreview(sentence:start:)`); the standard voice list is a platform helper each Voice page calls itself.
-//
-// Playback goes through the call audio owner (SYS-2): the synthesizer and the personal voice player use the app's
-// audio session that CallAudioSession configures for the call, so speech follows the call's route (receiver, speaker,
-// Bluetooth); nothing here changes the category, activates the session or sends speech into the call, and nothing
-// starts while the owner reports another app's audio, a hold or a media services reset.
-
 #if os(iOS) && !SKIP
 @MainActor
 final class TtsSpeaker {
@@ -29,11 +16,9 @@ final class TtsSpeaker {
     private var personalTask: Task<Void, Never>? = nil
     private var player: AVAudioPlayer? = nil
     private var playerDelegate: TtsAudioPlayerDelegate? = nil
-    /// The system speech rate and pitch the app has always used (0.94 of the default rate).
+
     static let rateFactor: Float = 0.94
 
-    /// (message id, user id) while a message plays; ("", "") when idle. The core writes `activeTtsMessageId` and
-    /// `ttsSpeakerId` from it.
     var onPlaybackChanged: ((String, String) -> Void)? {
         get { queue.onPlaybackChanged }
         set { queue.onPlaybackChanged = newValue }
@@ -44,7 +29,7 @@ final class TtsSpeaker {
     }
 
     init(queue: TtsPlaybackQueue? = nil) {
-        // A default argument runs outside the main actor, so the main-actor queue is made here.
+
         let queue = queue ?? TtsPlaybackQueue()
         self.queue = queue
         queue.onStart = { [weak self] item, token in
@@ -61,39 +46,28 @@ final class TtsSpeaker {
         }
     }
 
-    /// A received or acknowledged voice message; others' messages are skipped while Play Voice Messages is off.
     func enqueue(messageId: String, userId: String, displayName: String, text: String, voiceToken: String, isOwn: Bool) {
         queue.enqueue(TtsQueueItem.make(messageId: messageId, userId: userId, displayName: displayName, text: text,
                                         voiceToken: voiceToken), isOwn: isOwn)
     }
 
-    /// Local replay from a voice bubble; only you hear it.
     func replay(messageId: String, userId: String, displayName: String, text: String, voiceToken: String) {
         queue.replay(TtsQueueItem.make(messageId: messageId, userId: userId, displayName: displayName, text: text,
                                        voiceToken: voiceToken))
     }
 
-    /// Stops the current message and drops the queue (Stop Speaking, the host turning voice messages off).
     func stop() {
         queue.stop()
     }
 
-    /// Call end.
     func reset() {
         queue.reset()
     }
 
-    /// The legacy entry point (no message id, so no bubble state); kept until the core moves to `enqueue`.
     func speak(text: String, userId: String, displayName: String) {
         enqueue(messageId: "", userId: userId, displayName: displayName, text: text, voiceToken: "", isOwn: false)
     }
 
-    // MARK: Settings Preview (S60 2 c, C6-22; SET-4)
-
-    /// Settings > Voice Messages > Preview: one fixed sentence (`sentence`, localized by the page) in the chosen
-    /// standard voice through the call output, under the reserved `VoicePreviewPolicy.messageId`, so
-    /// `activeMessageId` tells whether it plays. `start` false (Stop Preview) stops it; a voice message playing at that
-    /// moment is replaced, as a bubble replay replaces it.
     func togglePreview(sentence: String, start: Bool) {
         if VoicePreviewPolicy.isPreviewPlaying(activeMessageId: queue.activeMessageId) {
             queue.stop()
@@ -103,7 +77,6 @@ final class TtsSpeaker {
         replay(messageId: VoicePreviewPolicy.messageId, userId: "", displayName: "", text: sentence, voiceToken: "")
     }
 
-    /// The system voices for `languageTag` (the preferred language by default), in the shared order (S60 2 c).
     static func standardVoiceOptions(languageTag: String = Locale.preferredLanguages.first ?? Locale.current.identifier) -> [VoiceOptionModel] {
         var voices: [VoiceOptionModel] = []
         for voice in AVSpeechSynthesisVoice.speechVoices() {
@@ -111,8 +84,6 @@ final class TtsSpeaker {
         }
         return VoicePreviewPolicy.options(voices, languageTag: languageTag)
     }
-
-    // MARK: Engine
 
     private func start(_ item: TtsQueueItem, token: Int) {
         if item.voiceToken.isEmpty {
@@ -123,9 +94,10 @@ final class TtsSpeaker {
     }
 
     private func speakSystem(_ item: TtsQueueItem, token: Int) {
+        guard canStartPlayback(token: token) else { return }
         let speech = speechSynthesizer()
         if speech.isSpeaking || speech.isPaused {
-            // The stopped utterance reports a cancel with its old token, which the queue ignores.
+
             speech.stopSpeaking(at: .immediate)
         }
         let utterance = AVSpeechUtterance(string: item.text)
@@ -140,7 +112,7 @@ final class TtsSpeaker {
     private func speechSynthesizer() -> AVSpeechSynthesizer {
         if let existing = synthesizer { return existing }
         let created = AVSpeechSynthesizer()
-        // The call's session (CallAudioSession owns category, mode and activation); speech never enters the call.
+
         created.usesApplicationAudioSession = true
         created.mixToTelephonyUplink = false
         created.delegate = speechDelegate
@@ -148,8 +120,6 @@ final class TtsSpeaker {
         return created
     }
 
-    /// C6-22: the standard voice reaches the engine once per change; an identifier that is no longer installed falls
-    /// back to Automatic (the preferred language's default voice).
     private func voice(for item: TtsQueueItem) -> AVSpeechSynthesisVoice? {
         if item.appliesVoice || !hasResolvedVoice || resolvedVoiceId != item.voiceId {
             hasResolvedVoice = true
@@ -171,8 +141,6 @@ final class TtsSpeaker {
         queue.finished(token: token)
     }
 
-    // MARK: Personal voice (CH4: `/api/tts/speech`, 15 s, then the system voice)
-
     private func startPersonal(_ item: TtsQueueItem, token: Int) {
         let endpoint = VoiceMessagePolicy.defaultSpeechEndpoint()
         guard !endpoint.isEmpty, let url = URL(string: endpoint) else {
@@ -189,7 +157,6 @@ final class TtsSpeaker {
         }
     }
 
-    /// One session whose whole request (connect, synthesis and download) ends after 15 s.
     private nonisolated static let personalSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = VoiceMessagePolicy.personalVoiceTimeoutMillis / 1000.0
@@ -215,6 +182,7 @@ final class TtsSpeaker {
     }
 
     private func playPersonal(_ data: Data, item: TtsQueueItem, token: Int) -> Bool {
+        guard canStartPlayback(token: token) else { return false }
         guard let created = try? AVAudioPlayer(data: data) else { return false }
         let delegate = TtsAudioPlayerDelegate()
         delegate.onFinish = { [weak self] succeeded in
@@ -223,7 +191,7 @@ final class TtsSpeaker {
         created.delegate = delegate
         created.volume = 1.0
         created.prepareToPlay()
-        guard created.play() else { return false }
+        guard canStartPlayback(token: token), created.play() else { return false }
         player = created
         playerDelegate = delegate
         return true
@@ -236,9 +204,18 @@ final class TtsSpeaker {
         if succeeded {
             queue.finished(token: token)
         } else {
-            // A decode failure reads the message with the system voice instead (web parity).
+
             speakSystem(item, token: token)
         }
+    }
+
+    func canStartPlayback(token: Int) -> Bool {
+        guard token != 0, queue.activeToken == token else { return false }
+        guard !queue.isOutputBlocked() else {
+            queue.finished(token: token)
+            return false
+        }
+        return true
     }
 
     private func cancelPlayback() {
@@ -254,7 +231,6 @@ final class TtsSpeaker {
     }
 }
 
-/// Speech ends (finished or cancelled) hop to the main actor with the utterance identity.
 @MainActor
 private final class TtsSpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
     var onFinish: ((ObjectIdentifier) -> Void)? = nil
@@ -274,7 +250,6 @@ private final class TtsSpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
     }
 }
 
-/// The personal voice player's end (true) or decode failure (false), on the main actor.
 @MainActor
 private final class TtsAudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
     var onFinish: ((Bool) -> Void)? = nil
@@ -292,8 +267,7 @@ private final class TtsAudioPlayerDelegate: NSObject, AVAudioPlayerDelegate {
     }
 }
 #else
-/// The macOS test host (and the transpile pass, whose output K/TtsSpeaker.kt replaces): the same members and the real
-/// queue, but silent: every message ends as soon as it starts, so host tests never make a sound.
+
 @MainActor
 final class TtsSpeaker {
     let queue: TtsPlaybackQueue
@@ -346,7 +320,6 @@ final class TtsSpeaker {
         replay(messageId: VoicePreviewPolicy.messageId, userId: "", displayName: "", text: sentence, voiceToken: "")
     }
 
-    /// No system voices on the silent host.
     static func standardVoiceOptions(languageTag: String = "") -> [VoiceOptionModel] {
         []
     }

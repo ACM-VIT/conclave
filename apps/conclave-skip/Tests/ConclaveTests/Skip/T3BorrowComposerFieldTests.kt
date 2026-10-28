@@ -13,13 +13,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import android.view.KeyEvent as NativeKeyEvent
 
-/**
- * T3B-1, the Android half (T3BorrowComposerComponentTests is the Swift half): the composer field's hardware keys (the
- * screen's hook first, then Enter and NumPadEnter once per press with auto-repeats consumed, Shift+Enter a newline),
- * the IME Send rule on the TextFieldState overload (Q13), the disabled Send reason, the counter bands through the
- * transpiled shared policy, and the attach slot height. The Conclave test classpath has no Compose UI test artifacts,
- * so the composables are covered through their pure helpers and real android.view.KeyEvent instances.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class T3BorrowComposerFieldTests {
@@ -36,16 +29,16 @@ class T3BorrowComposerFieldTests {
         val onSend = { sends += 1 }
         assertTrue(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_ENTER), true, onSend, null))
         assertEquals(1, sends)
-        // A held Enter: the auto-repeats are consumed (no newline reaches the field) and nothing more is sent.
+
         assertTrue(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_ENTER, repeat = 1), true, onSend, null))
         assertTrue(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_ENTER, repeat = 12), true, onSend, null))
         assertEquals(1, sends)
-        // KeyUp passes through, as before.
+
         assertFalse(conclaveComposerKey(key(up, NativeKeyEvent.KEYCODE_ENTER), true, onSend, null))
-        // A disabled Send: Enter is still consumed, so a blocked press never inserts a newline, and nothing is sent.
+
         assertTrue(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_ENTER), false, onSend, null))
         assertEquals(1, sends)
-        // Shift+Enter falls through to the field as a newline, held or not.
+
         assertFalse(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_ENTER, shift = true), true, onSend, null))
         assertFalse(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_ENTER, repeat = 3, shift = true), true, onSend, null))
         assertEquals(1, sends)
@@ -59,7 +52,7 @@ class T3BorrowComposerFieldTests {
         assertFalse(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_NUMPAD_ENTER, shift = true), true, onSend, null))
         assertFalse(conclaveComposerKey(key(up, NativeKeyEvent.KEYCODE_NUMPAD_ENTER), true, onSend, null))
         assertEquals(1, sends)
-        // Other keys are the field's.
+
         assertFalse(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_A), true, onSend, null))
         assertFalse(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_DPAD_DOWN), true, onSend, null))
         assertEquals(1, sends)
@@ -69,7 +62,7 @@ class T3BorrowComposerFieldTests {
         var sends = 0
         val onSend = { sends += 1 }
         val seen = mutableListOf<String>()
-        // A screen with its suggestion list open: it takes Enter (insert the row), the arrows and Escape, both phases.
+
         val listOpen: (KeyEvent) -> Boolean = { event ->
             val native = event.nativeKeyEvent
             seen.add("${native.keyCode}:${native.action}")
@@ -83,7 +76,7 @@ class T3BorrowComposerFieldTests {
         assertTrue(conclaveComposerKey(key(up, NativeKeyEvent.KEYCODE_ESCAPE), true, onSend, listOpen))
         assertEquals(listOf("${NativeKeyEvent.KEYCODE_ENTER}:$down", "${NativeKeyEvent.KEYCODE_DPAD_DOWN}:$down",
             "${NativeKeyEvent.KEYCODE_ESCAPE}:$down", "${NativeKeyEvent.KEYCODE_ESCAPE}:$up"), seen)
-        // A screen that passes leaves Enter to the field's own rule.
+
         val listHidden: (KeyEvent) -> Boolean = { false }
         assertTrue(conclaveComposerKey(key(down, NativeKeyEvent.KEYCODE_ENTER), true, onSend, listHidden))
         assertEquals(1, sends)
@@ -97,10 +90,9 @@ class T3BorrowComposerFieldTests {
         conclaveComposerImeSend(true) { sends += 1 }.onKeyboardAction { defaults += 1 }
         conclaveComposerImeSend(false) { sends += 1 }.onKeyboardAction { defaults += 1 }
         assertEquals(1, sends)
-        // No default action: a blocked IME Send keeps the draft and the keyboard.
+
         assertEquals(0, defaults)
-        // P6 (fix pass): a blocked IME Send goes to onSendBlocked once (the screen posts the reason) and never to onSend;
-        // an enabled one never calls onSendBlocked (Q13 unchanged).
+
         var blocked = 0
         conclaveComposerImeSend(false, { blocked += 1 }) { sends += 1 }.onKeyboardAction { defaults += 1 }
         assertEquals(1, blocked)
@@ -135,7 +127,7 @@ class T3BorrowComposerFieldTests {
     }
 
     @Test fun attachSlotIsTheOneLineFieldHeight() {
-        // The 48 dp attach button is centred on the 56 dp single-line field and stays in its bottom band as it grows.
+
         assertEquals(56.dp, TextFieldDefaults.MinHeight)
         assertEquals(4.0, ConclaveComposerMetrics.fieldTrailingGap, 0.0)
         assertEquals(6, ConclaveComposerMetrics.maximumLines)

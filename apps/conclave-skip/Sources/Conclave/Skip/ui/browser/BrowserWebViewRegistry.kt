@@ -25,31 +25,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
-/*
- * S60 L6-15 and 14 d (ACT-9) on Android: the shared browser's web engine registry (never transpiled). Keyed by
- * browserSessionId, it creates the one WebView on the first host appearance for that id and releases it when the
- * session ends (BrowserStagePresenter.onSessionEnded), when the card fails (the body's wantsWebView turns false), on Try
- * again (a new reload serial), on a role change and with releaseAll(), never on recomposition, so Show video, panels,
- * rotation and PiP keep the same instance. The view lives in a MutableContextWrapper whose base context follows the
- * current activity.
- *
- * The load-state contract (S60 14 d): onPageStarted and onPageFinished, main-frame onReceivedError and
- * onReceivedHttpError, onReceivedSslError shown as the failure state (the handshake is cancelled, never proceeded, and
- * never silently), and onRenderProcessGone returning true (failure state, the dead view released, the call survives).
- * Each report carries the session id and reload serial the WebView was created for, so a late callback from a replaced
- * view changes nothing. Isolation: JavaScript and DOM storage on (noVNC needs them), file and content access off, no
- * pop-up windows, http, https and about only. The input layer is transparent (setBackgroundColor(TRANSPARENT)) and the
- * one bundled CSS script hides the noVNC canvas; the Keyboard toggle runs the one bundled focus script. Viewers' touches
- * never reach the page. Nothing here logs a URL (noVNC and Live View URLs can be signed).
- */
 internal object BrowserWebViewRegistry {
-    /** L6-12 browser.inputViews: WebViews that take touches and keys (the controller's); viewers hold none. */
+
     var inputViews by mutableIntStateOf(0)
         private set
-    /** WebViews created (fixtures read it to prove one instance survives layout changes). */
+
     var registrySerial by mutableIntStateOf(0)
         private set
-    /** The current page's load progress (0 to 100) and the session it belongs to; read only by the progress leaf. */
+
     var pageProgress by mutableIntStateOf(0)
         private set
     var pageProgressSessionId by mutableStateOf("")
@@ -72,7 +55,6 @@ internal object BrowserWebViewRegistry {
         var loadedTarget = ""
     }
 
-    /** The registered WebView for the card's browser session, created on first use; null when the card must not hold one. */
     fun webView(context: Context, model: BrowserStageModel, presenter: BrowserStagePresenter, stageArgb: Int): WebView? {
         val id = model.browserSessionId
         if (!model.wantsWebView || id.isEmpty()) return null
@@ -93,7 +75,7 @@ internal object BrowserWebViewRegistry {
         val entry = Entry(webView, wrapper, id, model.reloadSerial, model.webViewRole, model.keyboardSerial, model.inputInteractive)
         entries[id] = entry
         presenter.onSessionEnded = { endedId -> release(endedId) }
-        // The first load reports loadStarted (the presenter publishes), so it runs after this composition pass.
+
         main.post {
             if (entries[id] !== entry) return@post
             sync(entry, presenter.model, presenter)
@@ -103,7 +85,6 @@ internal object BrowserWebViewRegistry {
         return webView
     }
 
-    /** Stops loading, drops the clients and destroys the WebView. */
     fun release(id: String) {
         val entry = entries.remove(id) ?: return
         (entry.webView.parent as? ViewGroup)?.removeView(entry.webView)
@@ -119,17 +100,14 @@ internal object BrowserWebViewRegistry {
         scheduleCountRefresh()
     }
 
-    /** Terminal call end and tests: no hidden WebView keeps running. */
     fun releaseAll() {
         for (id in entries.keys.toList()) release(id)
     }
 
     fun hasWebView(id: String): Boolean = entries.containsKey(id)
 
-    /** The progress leaf's value for a session (0 when another session or none is loading). */
     fun progressFor(id: String): Int = if (pageProgressSessionId == id) pageProgress else 0
 
-    /** Loads a changed target, applies interactivity and runs the focus script once per Keyboard tap. */
     private fun sync(entry: Entry, model: BrowserStageModel, presenter: BrowserStagePresenter) {
         if (model.browserSessionId != entry.browserSessionId) return
         val interactive = model.inputInteractive
@@ -193,9 +171,9 @@ internal object BrowserWebViewRegistry {
         webView.overScrollMode = View.OVER_SCROLL_NEVER
         webView.isFocusable = model.inputInteractive
         webView.isFocusableInTouchMode = model.inputInteractive
-        // The pixels are the remote browser's; TalkBack uses the native address row instead (S60 14 i).
+
         webView.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        // Viewers (and everyone while reconnecting or failed) never reach the page.
+
         webView.setOnTouchListener { _, _ -> !isInteractive(id) }
         with(webView.settings) {
             javaScriptEnabled = true
@@ -246,13 +224,13 @@ internal object BrowserWebViewRegistry {
             }
 
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                // Never proceed past a bad certificate; the page's own host fails the card instead of a silent cancel.
+
                 handler?.cancel()
                 if (isMainFrameTarget(id, error?.url)) report(presenter, id, serial, BrowserLoadIssue.sslFailed)
             }
 
             override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
-                // The view is unusable after this: release it, show the failure state, keep the call running.
+
                 report(presenter, id, serial, BrowserLoadIssue.rendererGone)
                 main.post { release(id) }
                 return true

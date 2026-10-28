@@ -22,14 +22,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
-/*
- * Status views (F00 C14): loading, empty, error with retry, and offline. Progress is the standard
- * CircularProgressIndicator, never the expressive loading indicator; it exists only while something loads, so
- * idle frames stay quiet (R13). Titles are headings; the retry is tonal, keeping coral for the screen's primary
- * action. Columns fill the width rather than the height, so they also work inside a lazy list.
- */
-
-/** Loading: the spinner carries the label for accessibility; the visible label is not read twice. */
 @Composable
 internal fun ConclaveLoadingStatus(identifier: String, modifier: Modifier = Modifier, label: String? = null) {
     val text = label ?: conclaveString("ds_loading")
@@ -54,7 +46,6 @@ internal fun ConclaveErrorStatus(
     StatusColumn(title, body, icon, identifier, modifier, retryTitle ?: conclaveString("ds_try_again"), onRetry)
 }
 
-/** Offline with canonical artwork and component copy (F00 C14 g, S70 7 g). */
 @Composable
 internal fun ConclaveOfflineStatus(identifier: String, modifier: Modifier = Modifier, onRetry: (() -> Unit)? = null) {
     StatusColumn(conclaveString("ds_offline_title"), conclaveString("ds_offline_body"), ConclaveIcons.WifiOffFill0,
@@ -72,7 +63,7 @@ private fun StatusColumn(
         Icon(icon, contentDescription = null, modifier = Modifier.size(48.dp), tint = scheme.onSurfaceVariant)
         ConclaveText(title, line = "$identifier.title", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center,
             modifier = Modifier.semantics { heading() })
-        // An empty body (search no results, F00 C20) draws no blank line.
+
         if (body.isNotEmpty()) {
             ConclaveText(body, line = "$identifier.body", style = MaterialTheme.typography.bodyMedium,
                 color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)

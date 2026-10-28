@@ -34,16 +34,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
-/*
- * S60 2 d `Voice` (SET-4) on Android: "Voice messages". Your messages: a radio list System voice / Your voice (Your voice
- * disabled until a personal voice is ready). Your voice: the C6-23 rows only while canUsePersonalVoice (W10-4 is out of
- * this push, so the section shows its reason only, Q12). Voices you hear: "Standard voice" opening a single-choice
- * AlertDialog of Automatic plus the TextToSpeech voices for the current locale (loaded once per page from a short-lived
- * engine, never the call's), Preview on tap only (call scope only: it plays through the call output), and
- * "Text-to-speech settings" when the system screen resolves (the engine and its default voice are system-owned, D22).
- * selectionChanged plays on radio rows only (2 h).
- */
-
 @Composable
 internal fun SettingsVoicePage(settings: SettingsPresenter, reservation: PaddingValues, snackbar: SnackbarHostState, onPush: (String) -> Unit) {
     val chat = settings.chat
@@ -60,7 +50,7 @@ internal fun SettingsVoicePage(settings: SettingsPresenter, reservation: Padding
         }
     }
     LaunchedEffect(chat.personalVoice) {
-        // D23: a failure raised on this page shows in the page snackbar.
+
         if (chat.personalVoice == PersonalVoicePhase.failed) snackbar.showSnackbar(message = failedText)
     }
     val currentVoiceName = chat.standardVoices.toList().firstOrNull { it.id == chat.standardVoiceId }
@@ -144,7 +134,6 @@ internal fun SettingsVoicePage(settings: SettingsPresenter, reservation: Padding
     }
 }
 
-/** "%1$s, %2$s": the system voice name and its language, both verbatim from the engine and the locale. */
 @Composable
 internal fun settingsVoiceLabel(voice: VoiceOptionModel): String {
     val language = Locale.forLanguageTag(voice.languageTag).displayName
@@ -162,7 +151,6 @@ private fun SettingsVoiceKindRow(kind: VoiceKind, selected: Boolean, enabled: Bo
     )
 }
 
-/** C6-23 rows by phase (only while canUsePersonalVoice). */
 @Composable
 private fun SettingsPersonalVoiceItems(settings: SettingsPresenter, chat: SettingsChat, onPush: (String) -> Unit, onDelete: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -194,7 +182,6 @@ private fun SettingsPersonalVoiceItems(settings: SettingsPresenter, chat: Settin
     }
 }
 
-/** Preview / Stop preview (C6-22): one fixed sentence through the call output; nothing plays on open. */
 @Composable
 private fun SettingsVoicePreviewItem(settings: SettingsPresenter, chat: SettingsChat) {
     val sentence = conclaveString("set_preview_sentence")
@@ -204,7 +191,6 @@ private fun SettingsVoicePreviewItem(settings: SettingsPresenter, chat: Settings
     }
 }
 
-/** The Material single-choice dialog: Automatic plus the engine's voices for the current locale. */
 @Composable
 private fun SettingsStandardVoiceDialog(chat: SettingsChat, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
     val voices = chat.standardVoices.toList()

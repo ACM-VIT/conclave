@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// FND-2, foundation pack 2 (OUT/PLAN-screens.md section 5): in-call chrome (C03 capsule, chrome buttons, route
-/// picker; S20 SR3 stage chip), badges (C06), tile chrome (C08 with S20 SR4), the toast host with the dark Android
-/// snackbar slot (C13; RECONCILE R1), menus and the reaction palette (C16, C22), the Android action sheet (C17; S30
-/// CL9), the audio route list (S30 CL8) and the in-call banner lane (C12). Policies run here; iOS-only and Kotlin
-/// sources are read. The Kotlin half is T/Skip/FND1FND2BridgeTests.kt.
 @MainActor
 struct FND2InCallChromeTests {
     private static func model(muted: Bool = false, cameraOff: Bool = false, hand: Bool = false, pinned: Bool = false,
@@ -19,10 +14,8 @@ struct FND2InCallChromeTests {
                         isVoiceAgent: false)
     }
 
-    // MARK: Tile chrome (C08, S20 SR4)
-
     @Test func tileDensityFollowsTheSlotSize() {
-        // F00 C08 l: the dense switch at 160 x 130.
+
         #expect(TileChromePolicy.density(width: 160, height: 130, isSpotlight: false) == .dense)
         #expect(TileChromePolicy.density(width: 200, height: 138.9, isSpotlight: false) == .dense)
         #expect(TileChromePolicy.density(width: 166.9, height: 200, isSpotlight: false) == .dense)
@@ -57,9 +50,9 @@ struct FND2InCallChromeTests {
     @Test func tileChromeKeepsTheRendererBelowAndTheSpeakerInALeaf() throws {
         let ios = try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveTileChrome+iOS.swift")
         let flat = normalizedFND(ios)
-        // The renderer is the first layer and Smart Invert leaves it alone.
+
         #expect(flat.contains("ZStack { renderer() .accessibilityIgnoresInvertColors()"))
-        // Only leaves read the speaking state: the ring, the pill waveform and the value modifier.
+
         #expect(ios.components(separatedBy: ".isSpeaking").count - 1 == 4)
         #expect(flat.contains(".strokeBorder(HostingTheme.coralFill, lineWidth: 2) .opacity(state.isSpeaking ? 1 : 0)"))
         #expect(flat.contains(".accessibilityElement(children: .ignore)"))
@@ -71,11 +64,9 @@ struct FND2InCallChromeTests {
         #expect(android.contains("Modifier.combinedClickable(hapticFeedbackEnabled = false,"))
         #expect(android.contains("haptics.gesture(FeedbackKind.longPress)"))
         #expect(android.contains("contentDescription = name stateDescription = states if (custom.isNotEmpty()) customActions = custom"))
-        // No lazy container may hold a renderer (P5).
+
         #expect(!android.contains("LazyRow") && !android.contains("LazyColumn") && !android.contains("LazyVerticalGrid"))
     }
-
-    // MARK: Surface contexts (C03 f, C04 f; S10 R9)
 
     @Test func surfaceContextsSelectTheRightFill() {
         for glass in [false, true] {
@@ -95,7 +86,7 @@ struct FND2InCallChromeTests {
                 #expect(video.strokeToken == (contrast ? DesignTokens.iosInCallBorderHighContrast : DesignTokens.iosInCallBorder))
             }
         }
-        // Off and Engaged stay paper in every context.
+
         for context in ConclaveSurfaceContext.allCases {
             for state in [ConclaveControlState.off, .engaged] {
                 #expect(ConclaveControlSurfaceMapping.spec(state, context: context, glassAvailable: true, reduceTransparency: false,
@@ -103,8 +94,6 @@ struct FND2InCallChromeTests {
             }
         }
     }
-
-    // MARK: Chrome and the stage chip (C03, S20 SR3)
 
     @Test func chromeSitsInTheGlassEntryAndChipsNeverTakeGlass() throws {
         let control = try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveCallControl+iOS.swift")
@@ -130,8 +119,6 @@ struct FND2InCallChromeTests {
         #expect(android.contains("ConclaveChromeButton(conclaveString(\"ds_minimize_call\"), ConclaveIcons.ArrowBackFill0,"))
     }
 
-    // MARK: Badges (C06)
-
     @Test func badgeRulesAndTagsHoldOnBothPlatforms() throws {
         #expect(!ConclaveBadgeCount.isVisible(0) && ConclaveBadgeCount.isVisible(1))
         #expect(ConclaveBadgeCount.displayed(99) == 99 && !ConclaveBadgeCount.isCapped(99))
@@ -141,7 +128,7 @@ struct FND2InCallChromeTests {
         #expect(ios.contains(".foregroundStyle(HostingTheme.onCoral)"))
         #expect(ios.contains("case .cohost: return ConclaveStrings.text(\"Co-Host\")"))
         #expect(ios.contains(".background(Color(uiColor: .tertiarySystemFill), in: Capsule())"))
-        // The call control reuses the standalone badge (the extracted C06).
+
         let control = try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveCallControl+iOS.swift")
         #expect(!control.contains("private struct ConclaveCountBadge"))
         let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveBadge.kt"))
@@ -149,16 +136,13 @@ struct FND2InCallChromeTests {
         #expect(android.contains("ConclavePersonTag.cohost -> conclaveString(\"ds_tag_cohost\")"))
     }
 
-    // MARK: Toasts (C13, RECONCILE R1)
-
     @Test func darkSnackbarSlotUsesTheInCallRoles() throws {
         let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveToastHost.kt"))
         #expect(android.contains("containerColor = scheme.surfaceContainerHigh, contentColor = scheme.onSurface, actionContentColor = scheme.primary,"))
         #expect(android.contains("modifier = Modifier.border(1.dp, ext.border, shape)"))
         #expect(android.contains("Snackbar(data, shape = MaterialTheme.shapes.small)"), "in-page snackbars stay stock")
         #expect(!android.contains("textAllCaps") && !android.contains("uppercase"))
-        // The archived pairs: 15.001 and 6.246 on #232327.
-        // Keyed lookup only: a duplicate id fails galleryCatalogKeysStableUniqueAndDashFree, it never aborts the run.
+
         let pairs = Dictionary(ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         #expect(abs((pairs["contrast.snackbar.text"]?.ratio ?? 0) - 15.001) < 0.001)
         #expect(abs((pairs["contrast.snackbar.action"]?.ratio ?? 0) - 6.246) < 0.001)
@@ -181,8 +165,6 @@ struct FND2InCallChromeTests {
                                      avatarId: "", isFailure: false)
         #expect(item.hasAction && item.hasAvatar)
     }
-
-    // MARK: Menus, palette and the action sheet (C16, C17, C22)
 
     @Test func menuPolicyKeepsGroupsIconCompleteAndDestructiveLast() {
         func item(_ id: String, concept: String = "", role: MenuItemRole = .normal) -> MenuItemModel {
@@ -211,7 +193,7 @@ struct FND2InCallChromeTests {
         let sheet = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt"))
         #expect(sheet.contains("HostingTheme(inCall = true) {"))
         #expect(sheet.contains("rememberModalBottomSheetState(skipPartiallyExpanded = true)"))
-        // A panel tile reports only after the hide completes: no panel from a dismissing sheet.
+
         #expect(sheet.contains("scope.launch { sheetState.hide() }.invokeOnCompletion { if (!sheetState.isVisible) { onDismiss() onTile(tile) } }"))
         #expect(sheet.contains(".toggleable(value = raised, enabled = enabled, role = Role.Switch, onValueChange = onToggle)"))
         #expect(sheet.contains("haptics.gesture(FeedbackKind.reactionSent)"))
@@ -228,8 +210,6 @@ struct FND2InCallChromeTests {
         #expect(!list.contains("haptics"), "the caller plays selectionChanged; automatic changes never reach the list")
     }
 
-    // MARK: Banner lane (C12)
-
     @Test func bannerLaneStaysOneBannerWideAndOutsideTiles() throws {
         let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveBanner+iOS.swift"))
         #expect(ios.contains("static let maxWidth: CGFloat = 560"))
@@ -241,8 +221,6 @@ struct FND2InCallChromeTests {
         #expect(android.contains("val ext = if (inCall) ConclaveExtendedColorsDark else LocalConclaveExtendedColors.current"))
         #expect(!android.contains("isSystemInDarkTheme"))
     }
-
-    // MARK: Catalog
 
     @Test func inCallChromeSpecimenIDsAndPairsAreStable() {
         #expect(ComponentGalleryCatalog.inCallChromeSpecimenIDs == [
@@ -257,7 +235,7 @@ struct FND2InCallChromeTests {
             ("contrast.snackbarInPage.dark.text", 16.118), ("contrast.snackbarInPage.dark.action", 4.882),
             ("contrast.tagLight", 6.556), ("contrast.tagDark", 5.270), ("contrast.routeRadio", 7.398),
         ]
-        // Keyed lookup only: a duplicate id fails galleryCatalogKeysStableUniqueAndDashFree, it never aborts the run.
+
         let pairs = Dictionary(ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (id, ratio) in expected {
             let pair = pairs[id]

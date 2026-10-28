@@ -11,27 +11,15 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.content.ContextCompat
 
-/*
- * S70 SX3 / SY4: the Android call notification (CallStyle on API 31+, the compat standard layout with the same
- * actions below). Resources are resolved by name through an injected resolver, because this handwritten bridge
- * compiles in the Skip library module, which cannot see the app module's R (ConclaveStrings.kt, ConclaveResources.kt).
- * Robolectric asserts the names it asks for and the "[name]" fallback with a recording resolver; the resolved
- * resources are checked on the silent AVD (S70 1 l5).
- */
-
-/** Names to values for the call notification (SX3). */
 interface ConclaveResourceResolver {
-    /** The string resource, or "[name]" when it is missing, so a typo is visible. */
+
     fun string(name: String): String
 
-    /** The drawable id, or 0 when it is missing. */
     fun drawable(name: String): Int
 
-    /** The resolved color, or null when it is missing. */
     fun color(name: String): Int?
 }
 
-/** Production resolver: app-module resources by name, cached per name. */
 internal class ContextResourceResolver(private val context: Context) : ConclaveResourceResolver {
     private val drawables = HashMap<String, Int>()
     private val colors = HashMap<String, Int?>()
@@ -49,10 +37,6 @@ internal class ContextResourceResolver(private val context: Context) : ConclaveR
     }
 }
 
-/**
- * Scalars only, so a snapshot crosses into the service through Intent extras. Built from the CallPresence snapshot
- * by the bridge with the shared NotificationPostPolicy, so status text, action and chronometer follow one policy.
- */
 internal data class CallNotificationModel(
     val presenceSession: Int,
     val title: String,
@@ -61,9 +45,9 @@ internal data class CallNotificationModel(
     val isCameraOn: Boolean,
     val isPresenting: Boolean,
     val isAttendee: Boolean,
-    /** CallNotificationStatusKind raw value. */
+
     val status: String,
-    /** CallNotificationActionKind raw value. */
+
     val action: String,
     val showsChronometer: Boolean,
 ) {
@@ -130,7 +114,6 @@ internal object CallNotificationBuilder {
     const val ACTION_RETURN_TO_CALL = "conclave.app.action.RETURN_TO_CALL"
     const val MAIN_ACTIVITY_CLASS = "conclave.module.MainActivity"
 
-    // One request code per action, so their PendingIntents never replace each other.
     private const val REQUEST_CONTENT = 10
     private const val REQUEST_MUTE = 11
     private const val REQUEST_UNMUTE = 12
@@ -142,7 +125,7 @@ internal object CallNotificationBuilder {
         val name = model.title.ifEmpty { res.string("sys_call_fallback_title") }
         val person = Person.Builder().setName(name).setImportant(true).build()
         val hangUp = actionIntent(context, ACTION_HANG_UP, REQUEST_HANG_UP, model.presenceSession)
-        // Hang up is the system's own label and glyph (S70 D5); never End for everyone.
+
         val style = NotificationCompat.CallStyle.forOngoingCall(person, hangUp).setIsVideo(model.isCameraOn)
         val smallIcon = res.drawable("conclave_ic_stat").takeIf { it != 0 } ?: android.R.drawable.ic_menu_call
         val builder = NotificationCompat.Builder(context, channelId)
@@ -155,7 +138,7 @@ internal object CallNotificationBuilder {
             .setOnlyAlertOnce(true)
             .setSilent(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-        // One coral, never colorized (S70 D4): white text on coral is 3.105:1.
+
         res.color("sys_notification_accent")?.let { builder.setColor(it) }
 
         val statusName = NotificationPostPolicy.statusResourceName(statusKind(model.status))
@@ -185,7 +168,6 @@ internal object CallNotificationBuilder {
         return builder.build()
     }
 
-    /** Absolute action broadcasts to CallActionReceiver, keyed on the presence session they were posted in. */
     fun actionIntent(context: Context, action: String, requestCode: Int, presenceSession: Int): PendingIntent {
         val intent = Intent(context, CallActionReceiver::class.java).apply {
             this.action = action
@@ -194,7 +176,6 @@ internal object CallNotificationBuilder {
         return PendingIntent.getBroadcast(context, requestCode, intent, PENDING_FLAGS)
     }
 
-    /** The notification body brings the current call surface forward (returnToCall, S70 0.5). */
     fun returnToCallIntent(context: Context, presenceSession: Int): PendingIntent {
         val intent = Intent().apply {
             setClassName(context.packageName, MAIN_ACTIVITY_CLASS)
@@ -212,12 +193,10 @@ internal object CallNotificationBuilder {
         CallNotificationActionKind.values().firstOrNull { it.rawValue == raw } ?: CallNotificationActionKind.none
 }
 
-/** The notification manager calls the channel setup needs, so the migration matrix runs against a fake in tests. */
 internal interface CallChannelStore {
-    /** The channel's importance, or null when it does not exist. */
+
     fun importance(id: String): Int?
 
-    /** hasUserSetImportance() on API 29+, null below or when the channel does not exist. */
     fun userSetImportance(id: String): Boolean?
 
     fun createCallChannel(id: String, name: String, description: String)
@@ -238,7 +217,7 @@ internal class NotificationManagerChannelStore(private val manager: Notification
 
     override fun createCallChannel(id: String, name: String, description: String) {
         if (Build.VERSION.SDK_INT < 26) return
-        // DEFAULT so the call is not filed among silent notifications; no sound, no vibration, no badge.
+
         val channel = NotificationChannel(id, name, NotificationManager.IMPORTANCE_DEFAULT).apply {
             this.description = description
             setSound(null, null)
@@ -257,7 +236,6 @@ internal class NotificationManagerChannelStore(private val manager: Notification
 
 internal data class CallChannelResult(val channelId: String, val blocked: Boolean)
 
-/** S70 1 d channel migration matrix (NotificationChannelMigrationPolicy). Never deletes a channel the person set. */
 internal object CallChannelSetup {
     fun ensure(store: CallChannelStore, api: Int, res: ConclaveResourceResolver): CallChannelResult {
         val newId = NotificationChannelMigrationPolicy.channelId

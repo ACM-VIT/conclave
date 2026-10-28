@@ -2,13 +2,6 @@
 import SwiftUI
 import UIKit
 
-/// Debug-only component gallery inside the hosting preview (TG 4.1): typography, haptic, contrast and
-/// system-prominent self-checks, and the WP1-2b components (buttons, call controls, rows, banners and status
-/// views). It is collapsed by default and each section builds its rows only while it is expanded, the same lazy
-/// pattern as the icon gallery. It is inert: nothing here plays a haptic, starts media or a session, uses the
-/// network or runs a timer. Haptic specimens and call controls record the gesture route's decision. Spinners
-/// appear only while Show Loading is on. Strings come from the module String Catalog (Q14); Apple title case for
-/// controls and titles (Q13).
 struct NativeComponentGalleryDisclosure: View {
     @State private var expanded = false
 
@@ -26,7 +19,7 @@ struct NativeComponentGalleryDisclosure: View {
 
 private struct NativeComponentGalleryContent: View {
     @State private var longText = false
-    // Show Loading and Force Opaque Controls start off and are never saved.
+
     @State private var showLoading = false
     @State private var forceOpaque = false
     @State private var overflow = GalleryOverflowLedger()
@@ -114,18 +107,6 @@ private struct GalleryHeader: View {
     }
 }
 
-// MARK: Environment and clipping readouts
-
-/// Counts specimens drawn shorter than their ideal height for the same width, which is what truncation or
-/// clipping looks like. A measurement belongs to one layout configuration (text size, Bold Text, Long Text and
-/// size classes, which change with iPhone rotation before layout); measurements from another configuration
-/// never count. A specimen keeps its last measurement while its row is scrolled away or its section is
-/// collapsed, so scrolling back up to read the count cannot hide a truncation, and the readout shows how many
-/// specimens were measured in the current configuration. "No clipped text" means 0 truncated with every
-/// specimen measured. Heights live outside observation, so a report only invalidates the readout when a set
-/// really changes. A specimen whose layout does not depend on the new configuration (the System Prominent
-/// rows ignore Long Text) never reports again after a switch, so its last measurement is filed under the new
-/// configuration too (WP1-2a r3 residual R1); a row that does change reports its new heights over it.
 @MainActor
 @Observable
 private final class GalleryOverflowLedger {
@@ -156,8 +137,6 @@ private final class GalleryOverflowLedger {
         update(key)
     }
 
-    /// The probe's configuration changed. Heights already reported under the new key win; otherwise the
-    /// specimen's latest heights, unchanged because its layout did not change, are filed under it.
     func refile(id: String, to key: String) {
         if shown[key] == nil, let height = latestShown[id] { shown[key] = height }
         if ideal[key] == nil, let height = latestIdeal[id] { ideal[key] = height }
@@ -177,7 +156,6 @@ private final class GalleryOverflowLedger {
     }
 }
 
-/// The ledger and the layout configuration that measurements are filed under.
 private struct GalleryProbe {
     let ledger: GalleryOverflowLedger
     let configuration: String
@@ -187,11 +165,6 @@ private struct GalleryProbe {
     }
 }
 
-/// Measures one specimen stack. Each probed stack gives its first line, the one in the larger font,
-/// `.layoutPriority(1)`. A VStack offers its least flexible line an equal share of the row first, so a two-line
-/// title2 or title3 sample next to a three-line caption was cut to one line although the row had room for both.
-/// With the priority the first line is sized first and every line gets its full height whenever the row has
-/// room. A row that really is short still cuts its last line, and this probe reports that.
 private struct TruncationProbe: ViewModifier {
     let id: String
     let probe: GalleryProbe
@@ -202,7 +175,7 @@ private struct TruncationProbe: ViewModifier {
         content
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { ledger.reportShown(key, id: id, $0) }
             .background(alignment: .topLeading) {
-                // The same content at its ideal height for this width, never drawn or spoken.
+
                 content
                     .fixedSize(horizontal: false, vertical: true)
                     .hidden()
@@ -255,8 +228,6 @@ private struct GalleryEnvironmentReadout: View {
     }
 }
 
-// MARK: Typography
-
 private struct TypeSpecimenRows: View {
     let longText: Bool
     let probe: GalleryProbe
@@ -292,7 +263,6 @@ private struct TypeSpecimenRow: View {
         .accessibilityIdentifier(id)
     }
 
-    /// The resolved size follows the current content size category; "by default" is the Large category.
     private var caption: String {
         let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(dynamicTypeSize))
         let now = Double(UIFont.preferredFont(forTextStyle: style.uiTextStyle, compatibleWith: traits).pointSize)
@@ -306,8 +276,6 @@ private struct TypeSpecimenRow: View {
         value.formatted(.number.precision(.fractionLength(0...1)))
     }
 }
-
-// MARK: Haptics (record only)
 
 private struct HapticRecord {
     var recorded = 0
@@ -371,7 +339,6 @@ private struct HapticSpecimenRows: View {
         return ConclaveStrings.machineReadable("%lld of %lld match", matched, FeedbackHapticContract.rows.count)
     }
 
-    /// The real route decision, with the preference and app state read now. Nothing reaches a haptic engine.
     private func tap(_ kind: FeedbackKind) {
         record.add(kind, ConclaveGestureFeedback.decision(
             for: kind,
@@ -380,8 +347,6 @@ private struct HapticSpecimenRows: View {
         ))
     }
 
-    /// The iOS mapper against the contract table, by the token the mapper returns with each feedback value.
-    /// `SensoryFeedback` equality would count a wrong impact weight as a match on iOS 27.1.
     private static func matchCount() -> Int {
         FeedbackHapticContract.rows.filter { ConclaveFeedback.sensoryMapping($0.kind).token == $0.ios }.count
     }
@@ -422,13 +387,8 @@ private struct HapticSpecimenRow: View {
     }
 }
 
-// MARK: Contrast
-
 private enum GalleryColor {
-    /// Resolves a color in a view's environment and converts its sRGB components to ARGB for the shared
-    /// contrast function. Nil when a component lies outside sRGB by more than float noise: a ratio of the
-    /// clamped color would not describe the drawn one. The 0.0005 tolerance is under a seventh of one 8-bit
-    /// step, so a tolerated component rounds to the same byte as the exact boundary value.
+
     static func argb(_ color: Color, in environment: EnvironmentValues) -> Int64? {
         let resolved = color.resolve(in: environment)
         let components = [resolved.opacity, resolved.red, resolved.green, resolved.blue]
@@ -436,7 +396,6 @@ private enum GalleryColor {
         return components.reduce(Int64(0)) { $0 * 256 + Int64((min(max($1, 0), 1) * 255).rounded()) }
     }
 
-    /// The live verdict for two resolved colors, or a note when either lies outside sRGB.
     static func verdict(_ foreground: Color, on background: Color, in environment: EnvironmentValues,
                         _ requirement: ContrastRequirement) -> String {
         guard let top = argb(foreground, in: environment), let bottom = argb(background, in: environment) else {
@@ -486,7 +445,6 @@ private struct ContrastSwatch: View {
     }
 }
 
-/// Swatch and text side by side, stacked at accessibility text sizes.
 private struct ContrastRowLayout<Texts: View>: View {
     let foreground: Color
     let background: Color
@@ -522,7 +480,6 @@ private struct ContrastSpecimenRows: View {
     }
 }
 
-/// One live pair: a name for the identifier, a caption, and two colors resolved per column.
 private struct LiveContrastSpec {
     let name: String
     let caption: String
@@ -531,8 +488,6 @@ private struct LiveContrastSpec {
     var requirement: ContrastRequirement = .text
 }
 
-/// System and trait-dependent colors resolved in each column's environment (light or dark, standard or
-/// increased contrast). The In call column is dark whatever the system appearance.
 private struct LiveContrastRows: View {
     let inCall: Bool
     let longText: Bool
@@ -553,13 +508,12 @@ private struct LiveContrastRows: View {
                                           foreground: HostingTheme.coralText, background: rowBackground))
             specs.append(LiveContrastSpec(name: "secondaryText", caption: ConclaveStrings.text("Secondary text on the row background"),
                                           foreground: HostingTheme.secondaryText, background: rowBackground))
-            // The live system color, which Increase Contrast darkens; the fixed launch color is a token pair.
+
             specs.append(LiveContrastSpec(name: "secondaryTextGrouped", caption: ConclaveStrings.text("Secondary text on the system grouped background"),
                                           foreground: HostingTheme.secondaryText, background: Color(uiColor: .systemGroupedBackground)))
         }
         if inCall {
-            // WP1-2b: the Leave glyph on the dynamic system red, a glyph pair (3:1). Under Increase Contrast it reads
-            // about 2.94 until FND-1 ships the approved iosInCallLeaveHighContrast fill (owner OQ4).
+
             specs.append(LiveContrastSpec(name: "leaveWhite", caption: ConclaveStrings.text("White glyph on the Leave red"),
                                           foreground: HostingTheme.token(DesignTokens.neutralWhite), background: Color(uiColor: .systemRed),
                                           requirement: .nonText))
@@ -578,8 +532,6 @@ private struct LiveContrastRows: View {
     }
 }
 
-/// Every probed specimen, so the readout can say how many were measured in the current configuration. The
-/// spinner specimens count only while Show Loading draws them.
 private enum GallerySpecimens {
     @MainActor static func ids(showLoading: Bool) -> Set<String> {
         showLoading ? withLoading : idle
@@ -654,11 +606,6 @@ private struct TokenContrastRow: View {
     }
 }
 
-// MARK: System-prominent chrome (A17, Q12)
-
-/// How system-prominent chrome draws against the coral AccentColor. A white system label on the dark accent
-/// fails (2.51, and 2.27 with increased contrast), so a kept prominent style takes the coral fill with an
-/// onCoral label instead (Q12). Specimen buttons do nothing.
 private struct SystemProminentSpecimens: View {
     let probe: GalleryProbe
 
@@ -696,8 +643,6 @@ private struct ProminentColumn: View {
     }
 }
 
-// BEGIN system.prominent specimens
-/// iOS 26 prominent glass, availability guarded. The only glass style in the WP1-2a sources.
 private struct GlassProminentSpecimens: View {
     let inCall: Bool
     let probe: GalleryProbe
@@ -722,7 +667,6 @@ private struct GlassProminentSpecimens: View {
         }
     }
 }
-// END system.prominent specimens
 
 private struct ProminentSpecimen<Specimen: View>: View {
     let id: String
@@ -745,7 +689,6 @@ private struct ProminentSpecimen<Specimen: View>: View {
         .modifier(TruncationProbe(id: columnID, probe: probe))
     }
 
-    /// onCoral on the coral fill for the corrected styles; otherwise the system's white label on the accent.
     private var readout: String {
         if onCoral {
             return ConclaveStrings.format("On coral label on coral fill: %@",
@@ -787,8 +730,6 @@ private struct ConfirmationActionReadout: View {
     }
 }
 
-/// The In call page is dark, toolbar items included, on a dark stage-colored bar, without touching the
-/// window appearance.
 private struct InCallNavigationBar: ViewModifier {
     let enabled: Bool
 
@@ -806,10 +747,6 @@ private struct InCallNavigationBar: ViewModifier {
     }
 }
 
-// MARK: Components (WP1-2b)
-
-/// Draws a section's specimens in the App column (system appearance) and the In call column (always dark, on the
-/// stage color, without touching the window). Call controls exist only in a call, so they skip the App column.
 private struct ComponentColumns<Column: View>: View {
     let inCallOnly: Bool
     @ViewBuilder let column: (Bool) -> Column
@@ -828,8 +765,6 @@ private struct ComponentColumns<Column: View>: View {
     }
 }
 
-/// One component specimen with its identifier underneath, measured as one stack. The component goes first and
-/// is sized first. Components carry no line cap of their own (OQ-2b-5), so the probe sees real truncation.
 private struct ComponentSpecimen<Specimen: View>: View {
     let id: String
     let probe: GalleryProbe
@@ -847,7 +782,6 @@ private struct ComponentSpecimen<Specimen: View>: View {
     }
 }
 
-/// A list row specimen: the row itself is the list row, so it keeps its system chevron, traits and separators.
 private struct RowSpecimen<Row: View>: View {
     let id: String
     let probe: GalleryProbe
@@ -859,8 +793,6 @@ private struct RowSpecimen<Row: View>: View {
             .modifier(TruncationProbe(id: id, probe: probe))
     }
 }
-
-// MARK: Buttons
 
 private struct ButtonSpecimens: View {
     let longText: Bool
@@ -897,10 +829,6 @@ private struct ButtonSpecimens: View {
     }
 }
 
-// MARK: Call controls (In call only)
-
-/// Off, On, Engaged and disabled toggles, Leave, the Chat badge and the compact bar. Taps record the gesture
-/// route's decision in the Control Taps readout; Leave, Chat and More never change it (Q11, F00 C04 e).
 private struct CallControlSpecimens: View {
     let forceOpaque: Bool
     let probe: GalleryProbe
@@ -924,7 +852,6 @@ private struct CallControlSpecimens: View {
         }
     }
 
-    /// The real route decision with the preference and app state read now; nothing reaches a haptic engine.
     private var route: ConclaveGestureRoute {
         .recordOnly { kind in
             record.add(kind, ConclaveGestureFeedback.decision(
@@ -987,8 +914,6 @@ private struct CallControlSpecimens: View {
     }
 }
 
-/// The legacy compact set (Mic, Camera, Share Screen, Chat, More, Leave) fitted to the width it gets, with the
-/// stated move order of OQ-2b-3; the readout names what moved to More.
 private struct FittedCompactBar: View {
     let identifier: String
     let movedID: String
@@ -1011,7 +936,6 @@ private struct FittedCompactBar: View {
     }
 }
 
-/// The plan for a measured width; nil until the width is known, which draws every control.
 private func compactBarPlan(scaled: CGFloat, available: CGFloat) -> CompactBarPlan? {
     guard available > 0 else { return nil }
     return CompactBarFit.iosPlan(controlIDs: ComponentGalleryCatalog.compactBarControls + [CompactBarFit.leaveControlID],
@@ -1036,7 +960,6 @@ private func compactBarControlName(_ id: String) -> String {
     }
 }
 
-/// The composition itself: real controls, the plan's diameter and spacing, Leave last.
 private struct CompactBarComposition: View {
     let plan: CompactBarPlan?
     let scaled: CGFloat
@@ -1060,7 +983,7 @@ private struct CompactBarComposition: View {
                                    feedback: .cameraOn, gestureRoute: route, identifier: identifier + ".camera") {}
             }
             if !moved.contains(ComponentGalleryCatalog.compactBarShareScreen) {
-                // Share Screen is On while idle and Engaged while sharing, never Off (F00 C04 f).
+
                 ConclaveCallToggle(title: ConclaveStrings.text("Share Screen"), value: ConclaveStrings.text("Off"),
                                    systemImage: ConclaveSymbols.rectangleOnRectangle, state: .on, diameter: diameter,
                                    gestureRoute: route, identifier: identifier + ".shareScreen") {}
@@ -1078,8 +1001,6 @@ private struct CompactBarComposition: View {
     }
 }
 
-/// The full-bleed probe (TG 4.2, PN 3.5 R6): the bar in a plain full-width stack, so no inset-grouped margin
-/// narrows it. "Bar W pt of A pt" reads the bar's intrinsic width and the width inside the safe area, in ASCII.
 private struct CompactBarProbePage: View {
     let forceOpaque: Bool
     let route: ConclaveGestureRoute
@@ -1119,8 +1040,6 @@ private struct CompactBarProbePage: View {
     }
 }
 
-// MARK: Rows
-
 private struct RowSpecimens: View {
     let longText: Bool
     let probe: GalleryProbe
@@ -1158,7 +1077,7 @@ private struct RowSpecimens: View {
             ConclaveToggleRow(title: galleryText(ConclaveStrings.text("Noise Suppression"), longText: longText),
                               isOn: $noiseSuppression, identifier: id)
         case ComponentGalleryCatalog.rowPersonID:
-            // Avatar stand-in at palette index 7 (#14B8A6), the C07 color for this name (OQ-2b-8).
+
             ConclavePersonRow(name: galleryText(ConclaveStrings.text("Avery"), longText: longText),
                               detail: galleryText(ConclaveStrings.text("Presenting"), longText: longText),
                               statusValue: ConclaveStrings.text("Muted, Hand Raised"),
@@ -1184,10 +1103,6 @@ private struct RowDestinationPage: View {
     }
 }
 
-// MARK: Banners
-
-/// Static banners never animate and never announce here (the silent gallery suppresses announcements and shows
-/// what a production banner would say). Only the motion specimen appears and disappears; it is not counted.
 private struct BannerSpecimens: View {
     let longText: Bool
     let showLoading: Bool
@@ -1244,8 +1159,6 @@ private struct BannerSpecimens: View {
         }
     }
 }
-
-// MARK: Status views
 
 private struct StatusSpecimens: View {
     let longText: Bool

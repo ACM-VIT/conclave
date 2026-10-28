@@ -32,19 +32,10 @@ CODE_SIGNING_REQUIRED[sdk=iphoneos*] = YES
 CODE_SIGN_STYLE = Automatic
 CODE_SIGN_ENTITLEMENTS = Entitlements.plist
 
-// SYS-9 (S70 9 c): the Debug-only developer associated domain that Entitlements.plist
-// reads as $(CONCLAVE_DEVELOPER_ASSOCIATED_DOMAIN). Debug adds a developer mode association,
-// which a team-signed build on a device with Associated Domains Development turned on fetches
-// straight from the host instead of Apple's CDN; point it at a tunnel by passing
-// CONCLAVE_DEVELOPER_APPLINKS_HOST=<host> on the xcodebuild command line. Release repeats the
-// production host, which the system collapses, so no developer domain ever ships.
 CONCLAVE_DEVELOPER_APPLINKS_HOST = conclave.acmvit.in
 CONCLAVE_DEVELOPER_ASSOCIATED_DOMAIN = applinks:conclave.acmvit.in
 CONCLAVE_DEVELOPER_ASSOCIATED_DOMAIN[config=Debug] = applinks:$(CONCLAVE_DEVELOPER_APPLINKS_HOST)?mode=developer
 
-// Debug device signing stays automatic by default. Headless builds can inject
-// manual profile values on the xcodebuild command line without committing one
-// developer's profile names to the project.
 CONCLAVE_DEBUG_CODE_SIGN_STYLE = Automatic
 CONCLAVE_DEBUG_CODE_SIGN_IDENTITY = Apple Development
 CONCLAVE_DEVELOPMENT_TEAM =

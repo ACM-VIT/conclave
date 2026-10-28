@@ -3,14 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// PPL-3 (OUT/PLAN-screens.md section 5): admissions and the raised hands queue. Waiting rows with Deny and Admit (S50
-/// PL2, 4 c to 4 f) on the PH2 ledger, Admit All acting at once and Deny All confirming from the Waiting header, the
-/// header actions (`PeopleHeaderActions`, S50 1 c), the silent stale entry, failure copy and placement by origin (PL14),
-/// the "%lld admitted" and new-knock announcements (S50 4 g, 4 i), one Lower All shared with Host Controls (S50 5,
-/// Q4, Q9), the hand queue order surviving speaker changes, the S20 10 knock banner (View opens People at Waiting,
-/// Admit and Admit All go through People, the assertive read suppressed while Participants is current) and the PL12
-/// fixtures with scripted acks, plus source pins for the iOS-only and Kotlin views. The Kotlin half is
-/// T/Skip/PPL3AdmissionsBridgeTests.kt.
 @MainActor
 struct PPL3AdmissionsHandsTests {
     private let me = "u-ishaan"
@@ -37,8 +29,6 @@ struct PPL3AdmissionsHandsTests {
         return log
     }
 
-    /// Ishaan hosts (or, with `isAdmin` false, Avery hosts and Ishaan is a participant); Avery and Sam raise hands
-    /// 30 s apart when `hands` is true (PH3 times).
     private func inputs(_ waiting: [PeopleWaitingInput], phase: String = MeetingPhaseKind.inCall.rawValue,
                         isAdmin: Bool = true, isNetworkOffline: Bool = false, hands: Bool = false) -> PeopleInputs {
         PeopleInputs.make(
@@ -64,8 +54,6 @@ struct PPL3AdmissionsHandsTests {
         people.snapshot.section(section)?.rowIds ?? []
     }
 
-    // MARK: Waiting rows (S50 PL2, 4 c to 4 f)
-
     @Test func waitingRowsAdmitAndDenyWithOneCommandPerTap() throws {
         let people = makePeople()
         let log = record(people)
@@ -77,24 +65,24 @@ struct PPL3AdmissionsHandsTests {
         #expect(people.perform(.admit, rowId: "waiting:p-lee", source: PeopleActionSource.rowMenu) == .ignored)
         #expect(people.perform(.deny, rowId: "waiting:p-lee", source: PeopleActionSource.swipe) == .ignored)
         try #require(log.commands.count == 1)
-        // The pending id exactly as the server sent it (S50 0.5), keyed `admit:<waiting key>` (S50 4 j).
+
         #expect(log.commands[0].kind == .admit && log.commands[0].targetId == "p-lee")
         #expect(log.tickets[0].key == "admit:waiting:p-lee")
         let pending = people.waiting.entry(for: "waiting:p-lee").model
         #expect(pending.pendingAction == PersonActionID.admit.rawValue && !pending.isEnabled)
         #expect(pending.reason == PeopleActionReason.pending)
         #expect(people.waiting.entry(for: "waiting:p-sam").model.isEnabled, "the other rows stay available")
-        // Person actions never reach a waiting row; Admit never reaches a person row.
+
         #expect(people.perform(.mute, rowId: "waiting:p-sam", source: PeopleActionSource.rowMenu) == .ignored)
         #expect(people.perform(.admit, rowId: "u-sam", source: PeopleActionSource.rowMenu) == .ignored)
-        // The server drops the row, then acknowledges: one hostAdmitted.
+
         let before = people.feedbackState.token.sequence
         people.apply(inputs([three[1], three[2]]))
         #expect(people.finish(log.tickets[0], HostActionResult.completed))
         #expect(people.feedbackState.token.kind == .hostAdmitted && people.feedbackState.token.sequence == before + 1)
         #expect(rowIds(people, .waiting) == ["waiting:guest-71a2", "waiting:p-sam"])
         #expect(!people.waiting.contains("waiting:p-lee"))
-        // Deny never confirms (one person, they can ask again) and publishes the silent hostDenied outcome.
+
         #expect(people.perform(.deny, rowId: "waiting:p-sam", source: PeopleActionSource.rowMenu) == .dispatched)
         #expect(people.confirmation == nil)
         try #require(log.tickets.count > 1)
@@ -109,12 +97,12 @@ struct PPL3AdmissionsHandsTests {
         let header = people.headerActions
         #expect(header.showsAdmitAll && header.isAdmitAllEnabled && header.isDenyAllEnabled)
         #expect(header.hasActions(PeopleSectionID.waiting.rawValue) && header.reason == MeetingBlockedReason.none.rawValue)
-        // One waiting: the row buttons only (S50 4 c), so no Deny All dialog either.
+
         people.apply(inputs([three[0]]))
         #expect(!people.headerActions.showsAdmitAll && !people.headerActions.hasActions(PeopleSectionID.waiting.rawValue))
         people.requestDenyAll()
         #expect(people.confirmation == nil)
-        // None waiting: no section, no header action, no empty text.
+
         people.apply(inputs([]))
         #expect(people.snapshot.section(.waiting) == nil && !people.headerActions.showsAdmitAll)
     }
@@ -152,7 +140,7 @@ struct PPL3AdmissionsHandsTests {
         let dialog = try #require(people.confirmation)
         #expect(dialog.kind == .denyAll && dialog.count == 3 && dialog.source == PeopleActionSource.sectionHeader)
         #expect(log.commands.isEmpty, "Deny All asks first")
-        // Someone leaves while the dialog is open: the title count follows, the dialog stays.
+
         people.apply(inputs([three[0], three[1]]))
         #expect(people.confirmation?.id == dialog.id && people.confirmation?.count == 2)
         people.confirm(id: dialog.id, block: false)
@@ -162,7 +150,7 @@ struct PPL3AdmissionsHandsTests {
         people.apply(inputs([]))
         people.finish(log.tickets[0], HostActionResult.completed)
         #expect(people.feedbackState.token.kind == .hostDenied && people.snapshot.section(.waiting) == nil)
-        // The dialog closes once fewer than two wait (the header no longer offers it).
+
         people.apply(inputs(three))
         people.requestDenyAll()
         #expect(people.confirmation != nil)
@@ -216,7 +204,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(failure.targetName == "Lee Park" && failure.placement == HostFailurePlacement.panelInline.rawValue)
         #expect(PeopleFailureCopy.kind(action: failure.action, failure: failure.failure, sourceKey: failure.sourceKey)
                 == PeopleFailureCopy.admit)
-        // Retry re-dispatches the same command on the same key.
+
         people.retry(failureId: failure.id)
         #expect(log.commands.count == 2 && log.commands[1].targetId == "p-lee" && log.tickets[1].key == "admit:waiting:p-lee")
         let rejected = HostActionFailure.rejectedByServer.rawValue
@@ -227,7 +215,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(PeopleFailureCopy.kind(action: "bulk", failure: rejected, sourceKey: "panelists") == PeopleFailureCopy.muteAll)
         #expect(PeopleFailureCopy.kind(action: "bulk", failure: rejected, sourceKey: HostBulkID.lowerAllHands.rawValue)
                 == PeopleFailureCopy.hands)
-        // A typed reason keeps the shared sentence (S50 3 g).
+
         #expect(PeopleFailureCopy.kind(action: "admit", failure: HostActionFailure.rateLimited.rawValue, sourceKey: "waiting:p-lee")
                 == PeopleFailureCopy.rateLimited)
         #expect(PeopleAdmissionsPolicy.isHeaderBulkSource("raisedHands") && PeopleAdmissionsPolicy.isHeaderBulkSource("inMeeting"))
@@ -237,18 +225,18 @@ struct PPL3AdmissionsHandsTests {
     @Test func aNewKnockWhileParticipantsIsOpenIsAnnouncedOnce() {
         let people = makePeople()
         people.apply(inputs([three[0]]))
-        // Closed panel: no People announcement (the stage banner reads it).
+
         people.apply(inputs([three[0], three[1]]))
         #expect(!people.stage.announcementLog.contains { $0.hasPrefix(PeopleAnnouncementKind.knock) })
         people.panelDidOpen(destination: .none, presentationID: 7)
         people.apply(inputs(three))
         #expect(people.stage.announcementLog.last == PeopleAnnouncementKind.knock + ":guest-71a2")
         let count = people.stage.announcementLog.count
-        // The same list again (any other rebuild) and people leaving announce nothing.
+
         people.apply(inputs(three))
         people.apply(inputs([three[0]]))
         #expect(people.stage.announcementLog.count == count)
-        // Several new knocks in one update: one counted announcement.
+
         people.apply(inputs(three + [PeopleWaitingInput(id: "p-rae", displayName: "Rae")]))
         #expect(people.stage.announcementLog.last == PeopleAnnouncementKind.knockMany + ":3")
         #expect(PeopleAdmissionsPolicy.newRequests(previous: ["p-lee"], current: [three[0], three[1]]).map { $0.id } == ["p-sam"])
@@ -264,8 +252,6 @@ struct PPL3AdmissionsHandsTests {
         #expect(people.headerActions == PeopleHeaderActions.none && people.snapshot.section(.waiting) == nil)
         #expect(!people.stage.notices.knockActionsPending)
     }
-
-    // MARK: Header actions (S50 1 c) and the pure policy
 
     @Test func headerActionsPolicyGatesOnRoleCountsAndFlights() {
         let none = MeetingBlockedReason.none.rawValue
@@ -314,7 +300,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(failure.sourceKey == PeopleSectionID.inMeeting.rawValue)
         #expect(PeopleFailureCopy.kind(action: failure.action, failure: failure.failure, sourceKey: failure.sourceKey)
                 == PeopleFailureCopy.muteAll)
-        // An open dialog closes when you are alone; alone, the header offers nothing.
+
         people.requestMuteAll()
         #expect(people.confirmation != nil)
         people.apply(alone())
@@ -322,8 +308,6 @@ struct PPL3AdmissionsHandsTests {
         people.requestMuteAll()
         #expect(people.confirmation == nil)
     }
-
-    // MARK: Raised hands queue (S50 5)
 
     @Test func lowerAllActsAtOnceForHostsAndSharesTheHostControlsFlight() throws {
         let people = makePeople()
@@ -341,7 +325,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(people.host.dispatchBulk(.lowerAllHands) == .ignored, "Host Controls' Lower All Hands is the same flight")
         #expect(people.lowerAllHands() == .ignored)
         #expect(log.commands.count == 1)
-        // admin:handsCleared lowers every hand, then the acknowledgement: one hostBulkApplied.
+
         let before = people.feedbackState.token.sequence
         people.apply(inputs([], hands: false))
         people.finish(log.tickets[0], HostActionResult.completed)
@@ -382,7 +366,7 @@ struct PPL3AdmissionsHandsTests {
     }
 
     @Test func aPendingUserAndAnAttendeeHandKeepDistinctKeys() {
-        // S50 4 l: the same raw id as a waiting request and an attendee hand; neither is dropped by canonicalization.
+
         let people = makePeople()
         people.apply(PeopleInputs.make(
             callSession: 1, attempt: 1, phase: MeetingPhaseKind.inCall.rawValue, localUserId: me,
@@ -400,7 +384,7 @@ struct PPL3AdmissionsHandsTests {
         let session = PeopleFixtureSession(state: .hostHands3)
         let order = rowIds(session.people, .raisedHands)
         #expect(order == ["u-avery", "u-sam", "u-lee"])
-        // PL12: scripted raise times 30 s apart.
+
         let raised = session.inputs.participants.filter { $0.isHandRaised }.sorted { $0.raisedAtMillis < $1.raisedAtMillis }
         #expect(raised.map { $0.userId } == ["u-avery", "u-sam", "u-lee"])
         try #require(raised.count > 2)
@@ -411,8 +395,6 @@ struct PPL3AdmissionsHandsTests {
         #expect(rowIds(session.people, .raisedHands) == order && session.people.snapshot.revision == revision)
     }
 
-    /// PH3 through the core (HD/requests/B8-T8.md R1, R2): the server's raise times order the queue, not join order.
-    /// Fails until that request lands (the queue then follows join serials), by design, like the catalog tests.
     @Test func serverRaiseTimesOrderTheCoreQueue() async {
         let viewModel = MeetingViewModel()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
@@ -422,7 +404,7 @@ struct PPL3AdmissionsHandsTests {
         let ann = "ann@example.com#web-session"
         let bo = "bo@example.com#web-session"
         let cy = "cy@example.com#web-session"
-        // Presence (and so join serials) in the order Ann, Bo, Cy; hands went up Bo, Cy, Ann.
+
         let raises: [(String, Double)] = [(ann, 3_000), (bo, 1_000), (cy, 2_000)]
         for (userId, time) in raises {
             viewModel.appendPendingPreAckRosterEvent(PendingPreAckRosterEvent.handRaised(HandRaisedNotification(
@@ -432,8 +414,6 @@ struct PPL3AdmissionsHandsTests {
         func canonical(_ id: String) -> String { viewModel.state.canonicalStageUserId(id) ?? id }
         #expect(viewModel.people.snapshot.section(.raisedHands)?.rowIds == [canonical(bo), canonical(cy), canonical(ann)])
     }
-
-    // MARK: Knock banner (S20 10 f row 8) through People
 
     @Test func knockBannerActionsGoThroughPeopleOnTheStageOrigin() throws {
         let shell = MeetingShellPresenter()
@@ -456,11 +436,11 @@ struct PPL3AdmissionsHandsTests {
         #expect(people.lastFailure == nil, "stage origin: the toast lane, never the panel (PL14)")
         #expect(stage.noticesReadout().contains("toast=" + PeopleFailurePlacementPolicy.stageNoticeKind))
         #expect(stage.banner?.actions.last?.isEnabled == true)
-        // View opens People at Waiting.
+
         stage.performNoticeAction(noticeId: banner.id, actionId: NoticeAction.view)
         let current = try #require(shell.panels.snapshot.current)
         #expect(current.panel == .participants && current.destination == .peopleWaiting)
-        // Two or more waiting: Admit All, the same command as the header, with the count for the announcement.
+
         people.apply(inputs(three))
         stage.applyNotices(StageNoticeInputs.make(callSession: 1, isHost: true, localUserId: me, participantCount: 3,
                                                   pendingUserIds: ["guest-71a2", "p-lee", "p-sam"]))
@@ -501,8 +481,6 @@ struct PPL3AdmissionsHandsTests {
                 == [NoticeAction.make(NoticeAction.view), NoticeAction.make(NoticeAction.admitAll, isEnabled: false)])
     }
 
-    // MARK: PL12 fixtures with scripted acks
-
     @Test func waitingFixtureOpensThroughTheKnockBannerAndAdmitsAfterTheAck() throws {
         let session = PeopleFixtureSession(state: .hostWaiting3)
         session.holdsAcks = true
@@ -516,7 +494,7 @@ struct PPL3AdmissionsHandsTests {
         session.people.panelDidOpen(destination: current.destination, presentationID: current.presentationID)
         #expect(session.people.focusRequest?.sectionId == PeopleSectionID.waiting.rawValue)
         #expect(session.people.headerActions.showsAdmitAll)
-        // Admit on one row: removed after the scripted ack with one hostAdmitted.
+
         #expect(session.people.perform(.admit, rowId: "waiting:p-lee", source: PeopleActionSource.rowMenu) == .dispatched)
         #expect(session.queuedAcks.count == 1 && session.noticesReadout().contains("knock=3:pending"))
         let before = session.people.feedbackState.token.sequence
@@ -525,7 +503,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(session.people.feedbackState.token.kind == .hostAdmitted && session.people.feedbackState.token.sequence == before + 1)
         #expect(session.noticesReadout().contains("knock=2:ready") && session.countersReadout().contains("acks=1"))
         #expect(session.actionsReadout().contains("token=hostAdmitted#"))
-        // Deny All asks first, then empties Waiting after the ack; the knock banner leaves with it.
+
         session.people.requestDenyAll()
         let dialog = try #require(session.people.confirmation)
         #expect(session.queuedAcks.isEmpty)
@@ -545,7 +523,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(session.people.snapshot.section(.raisedHands) == nil)
         #expect(session.people.feedbackState.token.kind == .hostBulkApplied && session.people.feedbackState.token.sequence == before + 1)
         #expect(session.actionsReadout().contains("token=hostBulkApplied#"))
-        // The guest fixture shows no Lower All and no knock banner.
+
         let guest = PeopleFixtureSession(state: .guest4)
         #expect(!guest.people.headerActions.showsLowerAll && guest.noticesReadout().contains("knock=none"))
     }
@@ -561,11 +539,9 @@ struct PPL3AdmissionsHandsTests {
         #expect(PeopleFixtureScript.ackDelayMillis == 150)
     }
 
-    // MARK: Source pins (iOS-only and Kotlin views)
-
     @Test func iosWaitingRowsAndHeadersFollowTheSpecStyles() throws {
         let rows = ppl3Normalized(try ppl3Source("Sources/Conclave/Features/Meeting/People/PeopleRows+iOS.swift"))
-        // Admit All is the screen's one coral fill with the ink label; Admit is tonal, Deny borderless secondary.
+
         #expect(rows.contains(".buttonStyle(.borderedProminent) .tint(HostingTheme.coralFill)"))
         #expect(rows.components(separatedBy: "HostingTheme.coralFill").count - 1 == 1)
         #expect(rows.contains(".foregroundStyle(HostingTheme.onCoral)"))

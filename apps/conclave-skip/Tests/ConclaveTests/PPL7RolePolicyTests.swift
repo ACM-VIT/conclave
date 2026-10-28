@@ -3,13 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// PPL-7 (OUT/PLAN-screens.md section 5): role-change safety, stage promotion and demotion. PeopleRolePolicy (PL13: the
-/// S50 12 f table of what closes, pops, clears or announces on each role, target or session change) as table tests,
-/// the presenter applying it (lost host interrupts host tickets silently and keeps your rename; a host move announces
-/// the new host and closes Make Host; recovery keeps a dialog open with its confirm disabled), the attendee stage
-/// invitation (PH9: one at a time, Accept starts the PH20 promotion lobby, Not Now and Back decline), the premeeting
-/// promotion lobby (R30), the demotion outcome (Q12, R47), and source pins for the view model handoff and the
-/// platform layers.
 @MainActor
 struct PPL7RolePolicyTests {
     private let me = "u-ishaan"
@@ -25,8 +18,6 @@ struct PPL7RolePolicyTests {
         PeopleRoleState.make(callSession: session, attempt: attempt, viewerRole: role, hostUserId: host, hostName: name,
                              isWebinarEnabled: webinar, isWebinarQaEnabled: qa, blockedReason: blocked.rawValue)
     }
-
-    // MARK: PL13 table (S50 12 f)
 
     @Test func becomingHostRefreshesTheConfigAndClosesNothing() {
         let effects = PeopleRolePolicy.effects(previous: state(.participant), next: state(.coHost))
@@ -52,7 +43,7 @@ struct PPL7RolePolicyTests {
         #expect(effects.closesMakeHostDialog)
         #expect(effects.announcement == PeopleAnnouncementKind.newHost && effects.announcementName == "Avery Lee")
         #expect(!effects.has(.lostHost), "the former host stays a co-host")
-        // Becoming the host yourself announces nothing here.
+
         let mine = PeopleRolePolicy.effects(previous: state(.coHost, host: "u-avery"), next: state(.host, host: "u-ishaan"))
         #expect(mine.has(.hostMoved) && mine.announcement.isEmpty)
     }
@@ -99,8 +90,6 @@ struct PPL7RolePolicyTests {
         #expect(PeopleRolePolicy.demotionOutcome(slug: "  ") == .homeNotice)
     }
 
-    // MARK: The presenter applies the table
-
     private func hostPeople() -> (PeoplePresenter, CommandLog) {
         let shell = MeetingShellPresenter()
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
@@ -132,19 +121,18 @@ struct PPL7RolePolicyTests {
         people.beginRename()
         people.submitRename("Ishaan K")
         #expect(log.commands.map(\.kind) == [.mute, .changeName])
-        // Lee's row is pending its mute, so its items are disabled and further taps ignored (S50 3 f "action pending",
-        // PPL-2); the open host dialog is Remove on Avery's row, which has nothing in flight.
+
         #expect(people.perform(.remove, rowId: "u-lee", source: PeopleActionSource.rowMenu) == .ignored)
         people.perform(.remove, rowId: "u-avery", source: PeopleActionSource.rowMenu)
         #expect(people.confirmation?.kind == .remove)
         people.apply(hostInputs(isAdmin: false, hostId: "u-avery"))
         #expect(people.lastRoleChange.contains(PeopleRoleChangeKind.lostHost.rawValue))
         #expect(people.confirmation == nil)
-        // The mute ticket finished as interrupted: its late result is refused and posts nothing.
+
         try #require(log.tickets.count > 1)
         #expect(!people.finish(log.tickets[0], HostActionResult.failed(.rejectedByServer)))
         #expect(people.lastFailure == nil)
-        // The rename is yours, not a host action: it still completes.
+
         #expect(people.finish(log.tickets[1], HostActionResult.completed))
     }
 
@@ -175,8 +163,6 @@ struct PPL7RolePolicyTests {
         #expect(people.confirmation?.isConfirmEnabled == true)
     }
 
-    // MARK: PH9 stage invitation (attendee side)
-
     private func attendeePeople() -> (PeoplePresenter, CommandLog) {
         let shell = MeetingShellPresenter()
         let people = PeoplePresenter(shell: shell, stage: StagePresenter(shell: shell))
@@ -202,7 +188,7 @@ struct PPL7RolePolicyTests {
         people.presentStageInvitation(promotedByName: "Avery Lee", rejoinRoomId: "design-week")
         let second = people.stageInvitation
         #expect(second?.id != first?.id && second?.promotedByName == "Avery Lee")
-        // A stale id does nothing.
+
         people.acceptStageInvitation(id: first?.id ?? 0)
         #expect(people.stageInvitation != nil && accepted.isEmpty)
         people.acceptStageInvitation(id: second?.id ?? 0)
@@ -219,13 +205,11 @@ struct PPL7RolePolicyTests {
         people.declineStageInvitation(id: id)
         #expect(log.commands.map(\.kind) == [.declineStage])
         #expect(people.stageInvitation == nil)
-        // Hosts never get an invitation.
+
         let (host, _) = hostPeople()
         host.presentStageInvitation(promotedByName: "Ishaan", rejoinRoomId: "r")
         #expect(host.stageInvitation == nil)
     }
-
-    // MARK: PH20 promotion lobby (S10 6, RECONCILE R30)
 
     @Test func thePromotionLobbyJoinsAsASpeakerOrDeclines() {
         let premeeting = PremeetingPresenter()
@@ -249,11 +233,9 @@ struct PPL7RolePolicyTests {
         #expect(commands.count == 2, "Cancel after the close sends nothing")
     }
 
-    // MARK: Source pins
-
     @Test func theViewModelHandsOffDemotionAndPromotionQuietly() throws {
         let vm = try ppl7Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        // PH9: the flag is set synchronously in the socket callback, before the server-side disconnect.
+
         #expect(vm.contains("self.beginDemotionHandoff(notification)\n            Task { @MainActor in"))
         #expect(vm.contains("premeeting.showHomeNotice(HomeNoticeKind.movedToAudience)"))
         #expect(vm.contains("joinMode: JoinMode.webinarAttendee,"))

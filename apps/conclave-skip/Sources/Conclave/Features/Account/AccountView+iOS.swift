@@ -4,21 +4,9 @@ import AuthenticationServices
 import CryptoKit
 import SwiftUI
 
-// ENT-7 (S10 5 c): the iOS Account sheet in the system appearance. A `.large` sheet with its own NavigationStack and
-// an inset grouped List: signed in, the profile, Sign Out, Privacy Policy and Delete Account; signed out, the value
-// line, Sign in with Apple first and Continue with Google at the same height (HIG, App Review 4.8), the guest name and
-// Privacy Policy. It observes `account.snapshot` only; rows are leaf views. SET-1 (RECONCILE R26, S10 5 c) adds the
-// "Settings" row before Privacy Policy, which pushes the app-scope Settings content (`AccountRoute.settings`, the S60
-// root list with the app row set) on this sheet's stack; its Voice Messages page pushes `AccountRoute.settingsVoice`.
-// No coral fill here: the providers are brand or neutral and coralText is only the tint.
-
-/// Pushed pages of the Account sheet's own stack: the privacy policy, the app-scope Settings (RECONCILE R26) and its
-/// Voice Messages page (the only Settings page the app scope pushes besides the privacy policy).
 enum AccountRoute: String, Hashable, CaseIterable {
     case privacy, settings, settingsVoice, settingsCameraQuality, settingsCameraAdvanced
 
-    /// The app-scope Settings root pushes onto this stack: the privacy policy, the Voice Messages page and Camera
-    /// Quality with its Advanced page (SET-3); share, connection and host pages are call only.
     static func settingsLink(_ route: SettingsRoute) -> AccountRoute? {
         switch route {
         case .privacy: return AccountRoute.privacy
@@ -35,19 +23,13 @@ enum AccountSymbols {
 }
 
 enum AccountAssets {
-    /// SYS-11 brand asset (S70 11 a, RECONCILE R37): Google's multi-color mark in the app asset catalog, original
-    /// rendering, never tinted.
     static let googleMark = "GoogleGMark"
 }
 
-/// The sheet content (`PremeetingRoot`'s account sheet, HD request B4-T3 R6). Close sits at `.topBarTrailing` with
-/// the plain "Close" label (S10 R10) and, like the swipe, is disabled while the account is being deleted.
 struct AccountView: View {
     let premeeting: PremeetingPresenter
     let account: AccountPresenter
     @State private var path: [AccountRoute] = []
-    /// RECONCILE R26: the app-scope Settings content source (no call, no core); it reads and writes the same preference
-    /// stores as the in-call panel.
     @State private var appSettings = AccountView.makeAppSettings()
 
     var body: some View {
@@ -77,11 +59,8 @@ struct AccountView: View {
         .modifier(AccountDismissGuard(account: account))
     }
 
-    /// RECONCILE R26 with S70 15 a (R70-4): the app scope offers Export Diagnostics too, which matters most after a
-    /// failed join, when no call exists.
     private static func makeAppSettings() -> SettingsPresenter {
         let settings = SettingsPresenter(scope: SettingsScope.app)
-        // SYS-3 (S70 2 c, R26): one Message Notifications preference in a call and outside one.
         let notifications = SystemNotifications.shared.snapshot
         settings.apply(SettingsInputs.make(messageNotificationsAvailable: true,
                                            messageNotificationsOn: notifications.messageNotificationsPreference,
@@ -111,15 +90,11 @@ private struct AccountDismissGuard: ViewModifier {
     }
 }
 
-/// The Account list. `usesRouteLinks`: inside the sheet the Privacy row pushes `AccountRoute.privacy` on the sheet's
-/// stack; on a pushed premeeting `.account` page (never used on iOS, where Account is a sheet) it pushes the page
-/// directly, because the premeeting stack's path holds `PremeetingRoute` values only.
 struct AccountList: View {
     let account: AccountPresenter
     let usesRouteLinks: Bool
     @State private var confirmDelete = false
-    /// Both providers start at 50 pt and grow with Dynamic Type together.
-    @ScaledMetric(relativeTo: .body) private var providerHeight: CGFloat = 50
+    @ScaledMetric(relativeTo: .body) private var providerHeight: CGFloat = 56
 
     var body: some View {
         let snapshot = account.snapshot
@@ -156,12 +131,8 @@ struct AccountList: View {
                     }
                 }
             } else {
-                Section {
-                    Text(ConclaveStrings.text("Sign in to keep your name and host meetings from any device."))
-                        .font(.subheadline)
-                        .accessibilityIdentifier("account.valueLine")
-                } footer: {
-                    AccountValueFooter(snapshot: snapshot)
+                if snapshot.context == .accountDeleted || snapshot.providersState == .none {
+                    Section { AccountValueFooter(snapshot: snapshot) }
                 }
                 AccountProvidersSection(account: account, snapshot: snapshot, providerHeight: providerHeight)
                 AccountGuestNameSection(initialName: snapshot.guestName, isEnabled: !snapshot.isBusy,
@@ -174,7 +145,7 @@ struct AccountList: View {
         }
         .listStyle(.insetGrouped)
         .tint(HostingTheme.coralText)
-        .navigationTitle(ConclaveStrings.text("Account"))
+        .navigationTitle(snapshot.isSignedIn ? ConclaveStrings.text("Account") : ConclaveStrings.text("Sign In"))
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(ConclaveStrings.text("Delete Your Account?"), isPresented: $confirmDelete,
                             titleVisibility: .visible) {
@@ -195,7 +166,6 @@ struct AccountList: View {
     }
 }
 
-/// Profile row read as one element: "Avery Lee, avery@example.com, Signed in with Google" (S10 5 i).
 private struct AccountProfileSection: View {
     let snapshot: AccountSnapshot
 
@@ -222,7 +192,6 @@ private struct AccountProfileSection: View {
     }
 }
 
-/// A text row that shows a trailing spinner while its action runs (Sign Out, Delete Account pending, S10 5 c).
 private struct AccountPendingButton: View {
     let title: String
     let isPending: Bool
@@ -245,8 +214,6 @@ private struct AccountPendingButton: View {
     }
 }
 
-/// S10 5 c (RECONCILE R26): "Settings" pushes the app-scope Settings on the sheet's stack. Only inside the sheet: the
-/// pushed premeeting Account page (never used on iOS) has no stack that can hold `AccountRoute` values.
 private struct AccountSettingsRow: View {
     let usesRouteLink: Bool
 
@@ -280,7 +247,6 @@ private struct AccountPrivacyRow: View {
     }
 }
 
-/// Signed-out footer under the value line: the deletion notice and the no-providers copy (S10 5 f).
 private struct AccountValueFooter: View {
     let snapshot: AccountSnapshot
 
@@ -298,8 +264,6 @@ private struct AccountValueFooter: View {
     }
 }
 
-/// The provider section (S10 5 c, f): loading, failed with Try Again, or Apple above Google. Apple takes the height
-/// Google draws at, so neither is smaller than the other at any text size.
 private struct AccountProvidersSection: View {
     let account: AccountPresenter
     let snapshot: AccountSnapshot
@@ -332,7 +296,7 @@ private struct AccountProvidersSection: View {
                     AccountAppleButton(account: account,
                                        isPending: snapshot.pendingProvider == AuthProviderKind.apple.rawValue,
                                        isEnabled: !snapshot.isBusy, height: max(providerHeight, googleHeight))
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                         .listRowBackground(Color.clear)
                 }
                 if snapshot.offersGoogle {
@@ -342,7 +306,7 @@ private struct AccountProvidersSection: View {
                                             if abs(height - googleHeight) > 0.5 { googleHeight = height }
                                         },
                                         action: { account.signInWithGoogle() })
-                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                         .listRowBackground(Color.clear)
                 }
             } footer: {
@@ -356,8 +320,6 @@ private struct AccountProvidersSection: View {
     }
 }
 
-/// The system Sign in with Apple button, black in light and white in dark (S10 5 l1). The raw nonce lives in a
-/// reference box (never observed state) between the request and the completion; its SHA-256 goes to Apple.
 private struct AccountAppleButton: View {
     let account: AccountPresenter
     let isPending: Bool
@@ -381,17 +343,19 @@ private struct AccountAppleButton: View {
         .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
         .frame(maxWidth: .infinity)
         .frame(height: height)
+        .clipShape(Capsule())
         .disabled(!isEnabled)
-        .overlay {
+        .overlay(alignment: .trailing) {
             if isPending {
                 ProgressView()
+                    .tint(colorScheme == .dark ? .black : .white)
+                    .padding(.trailing, 20)
             }
         }
         .accessibilityIdentifier("account.apple")
     }
 }
 
-/// Continue with Google: neutral bordered row with the decorative brand mark; the label is the text alone (S10 5 i).
 private struct AccountGoogleButton: View {
     let isPending: Bool
     let isEnabled: Bool
@@ -401,7 +365,7 @@ private struct AccountGoogleButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 12) {
                 if isPending {
                     ProgressView()
                 } else {
@@ -413,11 +377,17 @@ private struct AccountGoogleButton: View {
                         .accessibilityHidden(true)
                 }
                 Text(ConclaveStrings.text("Continue with Google"))
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
             }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 20)
             .frame(maxWidth: .infinity, minHeight: minHeight)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
+            .overlay { Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 1) }
+            .contentShape(Capsule())
         }
-        .buttonStyle(.bordered)
-        .tint(Color.primary)
+        .buttonStyle(.plain)
         .disabled(!isEnabled)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.height
@@ -428,8 +398,6 @@ private struct AccountGoogleButton: View {
     }
 }
 
-/// The guest name (S10 5 c, f): a local draft, committed on Return, focus loss and disappearance (never per
-/// keystroke), capped at 40 with the shared counter from 30 characters.
 private struct AccountGuestNameSection: View {
     let isEnabled: Bool
     let onCommit: (String) -> Void
@@ -469,7 +437,6 @@ private struct AccountGuestNameSection: View {
             Text(ConclaveStrings.text("Guest"))
         } footer: {
             HStack(alignment: .firstTextBaseline) {
-                Text(ConclaveStrings.text("Shown to others when you join as a guest."))
                 Spacer(minLength: 8)
                 ConclaveCharacterCounter(count: draft.count, limit: AccountGuestNamePolicy.limit,
                                          visibleFrom: AccountGuestNamePolicy.counterThreshold,
@@ -478,8 +445,6 @@ private struct AccountGuestNameSection: View {
         }
     }
 }
-
-// MARK: - Apple authorization
 
 private final class AccountAppleNonceBox {
     var raw = ""
@@ -496,7 +461,6 @@ enum AccountAppleNonce {
 }
 
 enum AccountAppleCompletion {
-    /// A credential goes to the presenter (then the coordinator); a cancellation is silent; anything else fails.
     @MainActor
     static func handle(_ result: Result<ASAuthorization, Error>, nonce: String, account: AccountPresenter) {
         switch result {
@@ -518,10 +482,7 @@ enum AccountAppleCompletion {
     }
 }
 
-// MARK: - Copy
-
 enum AccountCopy {
-    /// The info row (S10 5 f). A deletion shows as a footer instead.
     static func contextText(_ context: AccountContext) -> String? {
         switch context {
         case .signInRequired:
@@ -554,7 +515,6 @@ enum AccountCopy {
         }
     }
 
-    /// Footer copy changes are announced once (VoiceOver would not move to them).
     static func announce(_ text: String?) {
         guard let text, !text.isEmpty else { return }
         AccessibilityNotification.Announcement(text).post()

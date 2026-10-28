@@ -3,17 +3,9 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SET-1 (OUT/PLAN-screens.md section 5; S60 0.5, 0.6 L6-11, L6-14, 1, 0.8 C6-10, C6-13, C6-14, C6-28; RECONCILE R26,
-/// R44; S70 R70-4): the one Settings content source. Row sets per scope (call, call as attendee, app) and platform, the
-/// route rules (L6-11, R6-3, R6-5), the preference stores shared by both scopes (C6-28), the account and sign-out
-/// guards (C6-10, Q5), the copy contract (every case maps to a catalog key or resource name, RC R15) and source rules
-/// for the native files. Nothing here touches media: the fake WP3 owner (`SettingsRecordingCore`) records commands.
-/// The Kotlin half is T/Skip/SettingsTranscriptBridgeTests.kt. The copy-contract tests need HD/strings/B6-T2.json merged.
 @MainActor
 struct SettingsTranscriptPoliciesTests {
     static let all = SettingsRowCapabilities.make(hostAlertSounds: true, hasAccountIdentity: true, isSignedIn: true)
-
-    // MARK: Row sets (1 a, 1 c, 1 l1, 1 l7b)
 
     @Test func callScopeParticipantRowsFollowTheSectionOrder() throws {
         let sections = SettingsRowPolicy.sections(scope: .call, isAttendee: false, isHost: false, platform: .ios,
@@ -79,8 +71,6 @@ struct SettingsTranscriptPoliciesTests {
         #expect(android == [.alwaysShowControls, .privacy, .version])
     }
 
-    // MARK: Routes (L6-11, R6-3, R6-5)
-
     @Test func routesMapDestinationsAndHostPages() {
         #expect(SettingsRoutePolicy.initialPath(destination: .settingsVoice) == [.voice])
         #expect(SettingsRoutePolicy.initialPath(destination: .settingsAudio).isEmpty)
@@ -99,12 +89,10 @@ struct SettingsTranscriptPoliciesTests {
         #expect(!SettingsRoutePolicy.isAvailable(.voiceRecord, canUsePersonalVoice: false))
         #expect(SettingsRoutePolicy.isAvailable(.voiceRecord, canUsePersonalVoice: true))
         #expect(SettingsRoutePolicy.isAvailable(.cameraQuality, canUsePersonalVoice: true))
-        // L6-11: the 18 cases, raw values stable (Android saves the stack by raw value).
+
         #expect(SettingsRoute.allCases.count == 18)
         #expect(SettingsRoute.hostCustomLink.rawValue == "hostCustomLink")
     }
-
-    // MARK: Stores (C6-1, C6-13, C6-14, C6-22, C6-24, C6-28)
 
     @Test func settingsStoresUseTheirKeysAndDefaults() {
         #expect(SettingsPreferences.noiseSuppressionKey == "conclave.pref.noiseSuppression")
@@ -132,7 +120,7 @@ struct SettingsTranscriptPoliciesTests {
         #expect(!call.audio.noiseSuppressionOn)
         #expect(!call.chat.showsChatPreviews)
         #expect(call.general.alwaysShowControls)
-        // The app scope has no core: preference writes dispatch nothing anyone handles and no media command exists.
+
         #expect(!app.dispatchedKinds.contains(SettingsCommandKind.setNoiseSuppression.rawValue))
     }
 
@@ -160,15 +148,13 @@ struct SettingsTranscriptPoliciesTests {
         #expect(presenter.chat.revision == before + 1)
     }
 
-    // MARK: Snapshots (0.5, 1 f, 1 k)
-
     @Test func snapshotsAreEqualityGuardedAndPerSection() {
         let presenter = SettingsPresenter(scope: .call, platform: .ios, defaults: Self.freshDefaults())
         presenter.apply(SettingsFixtureState.guest.inputs())
         let audio = presenter.audio.revision, video = presenter.video.revision, account = presenter.account.revision
         presenter.apply(SettingsFixtureState.guest.inputs())
         #expect(presenter.audio.revision == audio && presenter.video.revision == video)
-        // A camera facing change republishes Video only.
+
         let flipped = SettingsInputs.make(callSession: 1, roomId: "fixture-room", isJoined: true, isMuted: false, isFrontCamera: false,
                                           canFlipCamera: true, connection: .good, savedDisplayName: "Avery Lee", account: .guest,
                                           noiseSuppressionLive: true, hasCore: true)
@@ -203,8 +189,6 @@ struct SettingsTranscriptPoliciesTests {
         #expect(core.calls == ["setCameraFacing"])
     }
 
-    // MARK: Account (C6-10, R38, Q5)
-
     @Test func namePolicyStatusAndEditability() {
         #expect(SettingsNamePolicy.status(isSaving: true, refusal: "", draft: "A", saved: "B", hasEdited: true) == .saving)
         #expect(SettingsNamePolicy.status(isSaving: false, refusal: "renameRateLimited", draft: "A", saved: "B", hasEdited: true) == .failed)
@@ -226,7 +210,7 @@ struct SettingsTranscriptPoliciesTests {
         #expect(commands.count == 1 && commands[0].kind == .signOut)
         try #require(commands.count == 1)
         #expect(presenter.account.signOutPending)
-        // A completion for another generation or after a room switch applies nothing.
+
         presenter.signOutFinished(generation: commands[0].generation + 1)
         #expect(presenter.account.signOutPending)
         presenter.signOutFinished(generation: commands[0].generation)
@@ -257,16 +241,13 @@ struct SettingsTranscriptPoliciesTests {
         #expect(!presenter.account.signOutPending)
     }
 
-    // MARK: Copy contract (L6-14, RC R15)
-
     @Test func everyIOSCopyKeyIsInTheCatalog() throws {
         let catalog = try Self.catalogKeys()
         let source = try Self.source("Sources/Conclave/Features/Meeting/Settings/SettingsCopy+iOS.swift")
         let keys = Self.catalogKeysUsed(in: source)
         #expect(keys.count > 60)
         for key in keys { #expect(catalog.contains(key), "missing catalog key: \(key)") }
-        // Every case of every enum the copy maps appears in a switch (exhaustive by the compiler); spot-check the
-        // reason and section mappings name every case.
+
         for reason in SettingsReason.allCases where reason != .none {
             #expect(source.contains("case ." + reason.rawValue) || source.contains(", ." + reason.rawValue), "\(reason)")
         }
@@ -288,8 +269,6 @@ struct SettingsTranscriptPoliciesTests {
         }
     }
 
-    // MARK: Sources (RULES 3, AGENTS appearance callbacks, Skip Lite)
-
     @Test func settingsSourcesFollowThePlatformRules() throws {
         for file in Self.iosFiles + Self.kotlinFiles + Self.sharedFiles {
             let text = try Self.source(file)
@@ -300,7 +279,7 @@ struct SettingsTranscriptPoliciesTests {
         for file in Self.iosFiles {
             let text = try Self.source(file)
             #expect(text.hasPrefix("#if os(iOS) && !SKIP"), "\(file)")
-            // Lifetimes are task scoped; appearance callbacks re-fire on body re-runs (AGENTS.md).
+
             #expect(!text.contains(".onAppear") && !text.contains(".onDisappear"), "\(file)")
         }
         for file in Self.kotlinFiles {
@@ -328,8 +307,6 @@ struct SettingsTranscriptPoliciesTests {
         #expect(app.contains("internal fun AppSettingsScreen(onBack: () -> Unit"))
         #expect(app.contains("SettingsPresenter(scope = SettingsScope.app)"))
     }
-
-    // MARK: Helpers
 
     static let sharedFiles = [
         "Sources/Conclave/Features/Meeting/Settings/SettingsPresenter.swift",
@@ -380,7 +357,6 @@ struct SettingsTranscriptPoliciesTests {
         return Set(matches(#"<(?:string|plurals) name="([a-z0-9_]+)""#, in: text))
     }
 
-    /// `ConclaveStrings.text("...")` and `.format("...")` keys with `\u{...}` escapes resolved.
     static func catalogKeysUsed(in text: String) -> [String] {
         matches(#"ConclaveStrings\.(?:text|format)\("((?:[^"\\]|\\.)*)""#, in: text).map { unescape($0) }
     }

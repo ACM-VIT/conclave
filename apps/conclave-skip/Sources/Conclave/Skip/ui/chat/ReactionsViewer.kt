@@ -27,13 +27,6 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/*
- * S40 5 d (CHT-3): the reactions viewer on Android. Overlay: a ModalBottomSheet; side pane: an in-pane page with Back
- * (R40-12, ChatPanel). Both hold a PrimaryScrollableTabRow ("All 9", then one tab per emoji with its count) and a list
- * of every reactor built once from `presenter.reactors(rowId, emoji)` (wire user ids, you first; the chip names hold
- * only three). Read only (web viewer parity).
- */
-
 private class ChatReactorItem(val key: String, val userId: String, val name: String, val emoji: String, val isYou: Boolean)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,7 +48,6 @@ internal fun ReactionsViewerSheet(presenter: ChatPresenter, actions: ChatRowActi
     }
 }
 
-/** The tabs and the reactor list (shared by the sheet and the side-pane page). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ReactionsViewerContent(presenter: ChatPresenter, rowId: String) {

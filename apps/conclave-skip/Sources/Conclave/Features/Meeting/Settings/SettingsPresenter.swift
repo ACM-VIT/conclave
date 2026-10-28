@@ -1,33 +1,10 @@
 import Foundation
 import Observation
 
-// S60 0.5, 1, 2 (SET-1, SET-2, SET-4): the one Settings content source for both scopes (RECONCILE R26). `call` is
-// `MeetingPanel.settings` (and its attendee-filtered variant, R44, pushed from Webinar Details); `app` is Account >
-// Settings outside a call (S10 5), with the same rows, components and preference stores, so a preference reads the
-// same in and out of a call. Transpiled for both platforms (Skip Lite: String raw-value enums, scalar structs, arrays
-// of structs, closures, no self-observation). The core pushes `SettingsInputs` through `apply(_:)`; the presenter
-// publishes five equality-guarded snapshots (one stored property per section family, so a route change redraws only
-// the Audio section) plus the row list, and forwards media and core intents through one `onCommand` closure. Hot
-// values live in their own leaves (`MicLevelMeter` at 10 Hz while the Microphone page is visible, `VoiceRecorderModel`
-// while a take runs), so a ticking value never republishes a snapshot (S60 2 k). Reasons and phases are typed enums;
-// every platform resolves them through its one copy file (L6-14: `SettingsCopy+iOS.swift`, `K/ui/copy/SettingsCopy.kt`).
-//
-// SET-3 (S60 2 video, screen share and connection rows, 0.6 L6-3, 0.8 C6-3, C6-4, C6-5, C6-8, C6-9, C6-29; RECONCILE
-// R22, R40, R43; S70 SY22): the Video section grows the preview card, Mirror My Video, Camera Quality (presets as encoder
-// ceilings over `NativeMediaQualityPreferences`), Screen Share Quality with Share Device Audio, and Data Saver (the
-// switch OR the system signal); General > Connection pushes the Connection page whose details are the
-// `ConnectionStatsModel` leaf. Preference writes reach the core through `preferenceChanged` (the core re-runs its publish
-// resolver and receive policy); the preview goes through the one WP3 `LocalPreviewController` (`previewHooks`), never a
-// screen.
-
-// MARK: - Vocabulary (S60 0.5)
-
-/// R26: `app` = Account > Settings outside a call (S10 5); `call` = `MeetingPanel.settings`.
 enum SettingsScope: String, CaseIterable, Equatable {
     case app, call
 }
 
-/// Why a row is shown: available, shown disabled with a reason, or absent (D11: a missing capability hides the row).
 enum SettingsCapability: String, CaseIterable, Equatable {
     case available, unavailable, hidden
 }
@@ -49,12 +26,10 @@ enum NameSavePhase: String, CaseIterable, Equatable {
     case idle, saving, saved, failed
 }
 
-/// S70 2 c.
 enum NotificationPermission: String, CaseIterable, Equatable {
     case notDetermined, granted, denied
 }
 
-/// Android 12+ App Links state (S70 9).
 enum LinkVerification: String, CaseIterable, Equatable {
     case verified, notVerified, unknown
 }
@@ -63,13 +38,10 @@ enum AccountKind: String, CaseIterable, Equatable {
     case none, guest, signedIn
 }
 
-/// C6-23. `unavailable` until WP10 publishes `canUsePersonalVoice` (W10-4 is out of this push).
 enum PersonalVoicePhase: String, CaseIterable, Equatable {
     case unavailable, none, recording, review, creating, ready, failed, deleting
 }
 
-/// The row policy's platform input: Haptics is iOS only (F00 8), Caption Style and the Android status rows are
-/// Android only, and iOS has Output plus Microphone where Android has Audio output plus Test microphone (1 d).
 enum SettingsPlatform: String, CaseIterable, Equatable {
     case ios, android
 
@@ -82,14 +54,10 @@ enum SettingsPlatform: String, CaseIterable, Equatable {
     }
 }
 
-/// S60 1 b section order.
 enum SettingsSection: String, CaseIterable, Equatable {
     case audio, video, captions, chat, host, general, account, about
 }
 
-/// Every row the root can draw. Rows whose page or capability belongs to a later slice (camera quality, screen
-/// share quality, mirror, Data Saver, effects: SET-3, SET-6; Export Diagnostics: SYS-15; message notifications and
-/// the Android status rows: SYS-3 and S70 9) stay out of the list until their capability input turns true.
 enum SettingsRowID: String, CaseIterable, Equatable {
     case output, microphone, noiseSuppression, testSound
     case cameraFacing, mirror, cameraQuality, screenShareQuality, dataSaver, effects
@@ -107,28 +75,20 @@ struct SettingsRowSection: Equatable, Identifiable {
     let rows: [SettingsRowID]
 }
 
-/// A preference the presenter wrote; the core refreshes whatever reads it (`preferenceChanged`). SET-3: `mirror` (the
-/// stage self view), `cameraQuality`, `screenShareQuality` and `dataSaver` (the publish resolver, and the receive policy
-/// for Data Saver), `shareDeviceAudio` (read by the next screen-share start).
 enum SettingsPreferenceID: String, CaseIterable, Equatable {
     case noiseSuppression, captions, chatPreviews, playVoiceMessages, voiceKind, standardVoice, alwaysShowControls
     case haptics, knockSound, handSound
     case mirror, cameraQuality, screenShareQuality, dataSaver, shareDeviceAudio
 }
 
-// MARK: - Preference stores (C6-1, C6-14, C6-24; F00 8)
-
-/// The Settings-owned preference keys. Nonisolated (UserDefaults is thread-safe), so the WebRTC clients read the noise
-/// suppression value when they build a microphone source and the core reads the rest when it builds stage inputs.
-/// Captions (C6-13) and the voice keys (C6-22) keep their own stores (`CaptionsPreference`, `VoicePreferences`).
 enum SettingsPreferences {
-    /// C6-1, default on.
+
     static let noiseSuppressionKey = "conclave.pref.noiseSuppression"
-    /// C6-14, default off; read by the S20 `AutoHideBlocker` through `StageInputs.alwaysShowControls`.
+
     static let alwaysShowControlsKey = "conclave.pref.alwaysShowControls"
-    /// F00 8, default on; the same key `ConclaveFeedback.preferenceKey` reads on iOS.
+
     static let hapticsKey = "conclave.pref.haptics"
-    /// C6-24, host only, default off; read through `StageNoticeInputs.knockSoundOn` and `handSoundOn`.
+
     static let knockSoundKey = "conclave.pref.knockSound"
     static let handSoundKey = "conclave.pref.handSound"
 
@@ -178,7 +138,6 @@ enum SettingsPreferences {
     }
 }
 
-/// Every stored preference the root shows, read in one pass (on open, after a write).
 struct SettingsPreferenceValues: Equatable {
     let noiseSuppressionOn: Bool
     let captionsOn: Bool
@@ -190,7 +149,7 @@ struct SettingsPreferenceValues: Equatable {
     let hapticsOn: Bool
     let knockSoundOn: Bool
     let handSoundOn: Bool
-    /// SET-3 (C6-3, C6-5 switch only, C6-29, C6-4).
+
     let mirrorsSelfView: Bool
     let dataSaverOn: Bool
     let shareDeviceAudioOn: Bool
@@ -218,10 +177,6 @@ struct SettingsPreferenceValues: Equatable {
     }
 }
 
-// MARK: - Snapshots (S60 0.5; one stored property each)
-
-/// Route name, inputs, the current input and Mic Mode come from the S30 `AudioRouteSnapshot` (CC4), which the pages
-/// read directly from `AudioRouteOwner` (no copy here).
 struct SettingsAudio: Equatable {
     let revision: Int
     let noiseSuppressionOn: Bool
@@ -233,7 +188,7 @@ struct SettingsAudio: Equatable {
     let canRecordMicTest: Bool
     let micPhase: MicTestPhase
     let isMuted: Bool
-    /// 0 to 2, the test only (Q8); meaningful while `canRecordMicTest`.
+
     let testGain: Double
 
     static let empty = SettingsAudio(revision: 0, noiseSuppressionOn: true, noiseSuppression: SettingsCapability.available,
@@ -242,9 +197,6 @@ struct SettingsAudio: Equatable {
                                      canRecordMicTest: false, micPhase: MicTestPhase.idle, isMuted: true, testGain: 1.0)
 }
 
-/// The Advanced page values (S60 0.5 `CameraLimitsModel`), for the camera and, with the same shape, the screen share:
-/// raw values of `NativeMediaResolution`, `NativeCameraContentHint` / `NativeScreenShareContentHint` and
-/// `NativeMediaDegradationPreference`, plus the options the device supports (D11) and the bitrate slider's range.
 struct CameraLimitsModel: Equatable {
     let resolution: String
     let frameRate: Int
@@ -264,49 +216,45 @@ struct CameraLimitsModel: Equatable {
                                          pressureOptions: [], minBitrateKbps: 150, maxBitrateKbps: 6_000, bitrateStepKbps: 50)
 }
 
-/// The Video rows (SET-1 camera facing; SET-3 preview, mirror, quality, Data Saver, share quality). SET-6 adds the
-/// effects availability.
 struct SettingsVideo: Equatable {
     let revision: Int
-    /// "front" or "back".
+
     let cameraFacing: String
     let canFlipCamera: Bool
     let flipReason: SettingsReason
     let isFlipInFlight: Bool
-    /// Inline Video footer (iOS) or page snackbar (Android) until the next flip (D23).
+
     let flipFailed: Bool
     let isCameraOn: Bool
     let isAudioOnly: Bool
-    /// C6-3 Mirror My Video (the preference; it applies to the front camera only).
+
     let mirrorsSelfView: Bool
-    /// The picker's selection, a `NativeCameraQualityPreset` raw value (Auto, HD, Studio, Custom; D21).
+
     let cameraPreset: String
-    /// What is sent: "data-saver" while Data Saver or the host's limit applies the ceiling, else `cameraPreset`
-    /// (1 f: "Camera Quality value shows the effective preset").
+
     let effectiveCameraPreset: String
     let presets: [String]
     let qualityCappedByHost: Bool
     let custom: CameraLimitsModel
-    /// C6-5: the switch value, the person's preference OR the system signal.
+
     let dataSaverOn: Bool
-    /// The system signal holds Data Saver on: the switch is disabled with the reason.
+
     let systemDataSaverOn: Bool
     let screenSharePreset: String
     let screenSharePresets: [String]
     let screenShareCustom: CameraLimitsModel
     let showsScreenShareQuality: Bool
-    /// "Changes apply to an active share right away."
+
     let isScreenSharing: Bool
-    /// C6-29 (RECONCILE R43): the switch shows only while the S70 10 capability holds.
+
     let canShareDeviceAudio: Bool
     let shareDeviceAudioOn: Bool
-    /// L6-3 / C6-8: the one `PreviewState` (RECONCILE R22); `published` while the meeting camera is on (the card shows
-    /// the sent track).
+
     let preview: PreviewState
     let previewReason: SettingsReason
-    /// Keys the card's renderer (a new local preview session or the published track).
+
     let previewSessionId: Int
-    /// Start Preview is offered (off or unavailable, camera off, not Audio Only).
+
     let canStartPreview: Bool
 
     static let empty = SettingsVideo(revision: 0, cameraFacing: "front", canFlipCamera: false, flipReason: SettingsReason.none,
@@ -326,18 +274,18 @@ struct SettingsChat: Equatable {
     let liveNotes: LiveNotesState
     let showsChatPreviews: Bool
     let playsVoiceMessages: Bool
-    /// The stored choice; the effective voice is personal only while it is ready (S40 Q12).
+
     let voiceKind: VoiceKind
     let effectiveVoiceKind: VoiceKind
     let canUsePersonalVoice: Bool
     let personalVoice: PersonalVoicePhase
     let personalVoiceReason: SettingsReason
-    /// "" = Automatic (2 c, C6-22).
+
     let standardVoiceId: String
-    /// The system voices for the current language, loaded by the Voice page from the platform speaker.
+
     let standardVoices: [VoiceOptionModel]
     let standardPreview: SpeakerTestPhase
-    /// Preview plays through the call output (the core's speaker), so it exists only in a call with a core attached.
+
     let canPreviewStandardVoice: Bool
 
     static let empty = SettingsChat(revision: 0, captionsOn: false, liveNotes: LiveNotesState.off, showsChatPreviews: true,
@@ -357,18 +305,18 @@ struct SettingsGeneral: Equatable {
     let knockSoundOn: Bool
     let handSoundOn: Bool
     let alwaysShowControls: Bool
-    /// iOS only (F00 8).
+
     let hapticsOn: Bool
     let connection: ConnectionQualityLabel
     let lowBandwidth: Bool
     let isRecovering: Bool
-    /// S70 2 c: the iOS row value is the preference AND the granted permission.
+
     let messageNotificationsOn: Bool
     let notificationPermission: NotificationPermission
-    /// Android: the ongoing-call channel is enabled (S70 1, 2).
+
     let callNotificationEnabled: Bool
     let linkVerification: LinkVerification
-    /// About > Export Diagnostics (S70 15).
+
     let canExportDiagnostics: Bool
 
     static let empty = SettingsGeneral(revision: 0, scope: SettingsScope.call, isAttendee: false, showsHostSection: false,
@@ -383,18 +331,17 @@ struct SettingsGeneral: Equatable {
 struct SettingsAccount: Equatable {
     let revision: Int
     let savedDisplayName: String
-    /// False for the session after an S50 Q14 `renameDisabled` refusal from either surface (RECONCILE R38), while
-    /// reconnecting or offline, and for attendees.
+
     let canEditName: Bool
     let nameReason: SettingsReason
     let account: AccountKind
     let accountName: String
     let accountEmail: String
-    /// apple, google, email
+
     let accountProvider: String
-    /// Single flight, generation and room guard (C6-10).
+
     let signOutPending: Bool
-    /// Picks the sign-out message (host controls are lost).
+
     let isHost: Bool
 
     static let empty = SettingsAccount(revision: 0, savedDisplayName: "", canEditName: false, nameReason: SettingsReason.none,
@@ -402,10 +349,6 @@ struct SettingsAccount: Equatable {
                                        signOutPending: false, isHost: false)
 }
 
-// MARK: - Inputs (pushed by the core; HD request B6-T2 R1)
-
-/// What the core knows. Every capability that belongs to a later slice defaults to false, so its row stays hidden
-/// until that slice turns it on (D11, R70-4).
 struct SettingsInputs: Equatable {
     let callSession: Int
     let roomId: String
@@ -430,15 +373,15 @@ struct SettingsInputs: Equatable {
     let accountName: String
     let accountEmail: String
     let accountProvider: String
-    /// C6-6: false on both platforms until a WP3 capture path exists (Q8).
+
     let canRecordMicTest: Bool
-    /// C6-1: the WebRTC client can replace the live microphone track (`WebRTCClient.supportsLiveNoiseSuppressionChange`).
+
     let noiseSuppressionLive: Bool
-    /// C6-24: the core feeds the knock and hand switches into the S20 notice sound player.
+
     let hostAlertSoundsAvailable: Bool
-    /// R44: Always Show Controls appears for attendees only when the attendee viewer auto-hides its chrome.
+
     let attendeeChromeAutoHides: Bool
-    /// The core installed its command handler (speaker test, preview, sign-out all need it).
+
     let hasCore: Bool
     let canUsePersonalVoice: Bool
     let hasPersonalVoice: Bool
@@ -451,16 +394,16 @@ struct SettingsInputs: Equatable {
     let linkVerificationAvailable: Bool
     let linkVerification: LinkVerification
     let canExportDiagnostics: Bool
-    /// SET-3: Screen Share Quality shows where screen sharing exists (`MeetingState.isScreenShareSupported`).
+
     let isScreenShareSupported: Bool
     let isScreenSharing: Bool
-    /// C6-4: the server's `setVideoQuality` low (the host limited video quality for this meeting).
+
     let qualityCappedByHost: Bool
-    /// C6-5: iOS Low Data Mode or Android Data Saver (the core's monitor signal).
+
     let systemDataSaverOn: Bool
-    /// C6-29 / S70 10 (RECONCILE R43): false until the screen-share owner publishes the capability.
+
     let canShareDeviceAudio: Bool
-    /// D11: the device camera's largest capture height and frame rate (0 = unknown, every option listed).
+
     let cameraMaxHeight: Int
     let cameraMaxFrameRate: Int
 
@@ -505,28 +448,26 @@ struct SettingsInputs: Equatable {
     }
 }
 
-// MARK: - Commands (S60 0.5 actions that reach the core)
-
 enum SettingsCommandKind: String, CaseIterable, Equatable {
-    /// `text` = `SettingsPreferenceID` raw value; the store is already written.
+
     case preferenceChanged
-    /// C6-1: `flag` = on; one track replacement per change, the newest mute intent wins.
+
     case setNoiseSuppression
-    /// C6-7: one test tone through the voice route.
+
     case playTestSound
-    /// C6-6: the platform meter source starts and stops with the Microphone page.
+
     case startMicTest, stopMicTest
-    /// C6-6 Record and Replay and Test Gain (`number`); only while `canRecordMicTest`.
+
     case recordMicSample, replayMicSample, setTestGain
-    /// iOS Mic Mode (S30 CC11).
+
     case showSystemMicModes
-    /// C6-2: `flag` = front.
+
     case setCameraFacing
-    /// C6-22: `text` = the localized sample sentence, `flag` = start (false stops).
+
     case toggleVoicePreview
-    /// C6-23 (gated by `canUsePersonalVoice`): the meeting microphone pauses for a take and its mute intent returns.
+
     case startVoiceSample, stopVoiceSample, playVoiceSample, createPersonalVoice, hearPersonalVoice, deletePersonalVoice
-    /// C6-10: `generation` = the sign-out generation; the core calls `signOutFinished(generation:)` when done.
+
     case signOut
 }
 
@@ -543,9 +484,6 @@ struct SettingsCommand: Equatable {
     }
 }
 
-// MARK: - Row policy (S60 1 a, 1 c scope comment, 1 l7b; RECONCILE R26, R44)
-
-/// The capabilities the row list depends on beyond scope, role and platform.
 struct SettingsRowCapabilities: Equatable {
     let noiseSuppression: Bool
     let mirror: Bool
@@ -576,10 +514,6 @@ struct SettingsRowCapabilities: Equatable {
     }
 }
 
-/// The one shared row list for every scope (unit tested on both platforms). Empty sections are dropped. In-call rows
-/// (route, test sound, camera facing, share quality, effects, connection, the Account name and host rows) never
-/// render in the app scope; the attendee filter keeps only Data Saver, the General rows that apply to a viewer and
-/// About (R44).
 enum SettingsRowPolicy {
     static func sections(scope: SettingsScope, isAttendee: Bool, isHost: Bool, platform: SettingsPlatform,
                          capabilities: SettingsRowCapabilities) -> [SettingsRowSection] {
@@ -664,7 +598,6 @@ enum SettingsRowPolicy {
         return result
     }
 
-    /// The list with the section added, or unchanged for an empty section (a returned copy, Skip Lite).
     private static func appended(_ result: [SettingsRowSection], _ section: SettingsSection,
                                  _ rows: [SettingsRowID]) -> [SettingsRowSection] {
         if rows.isEmpty { return result }
@@ -674,22 +607,17 @@ enum SettingsRowPolicy {
     }
 }
 
-// MARK: - Audio policies (SET-2: C6-1, C6-6, C6-7)
-
 enum SettingsAudioPolicy {
-    /// C6-1: "Applies the next time you join." only in a call whose client cannot replace the live track.
+
     static func noiseSuppressionReason(scope: SettingsScope, liveChangeSupported: Bool) -> SettingsReason {
         if scope == SettingsScope.call && !liveChangeSupported { return SettingsReason.appliesNextJoin }
         return SettingsReason.none
     }
 
-    /// C6-6: a muted call shows "Unmute to test your microphone." instead of a meter (iOS tracks stay disabled and
-    /// Android mutes the audio device module while muted).
     static func micTestReason(isMuted: Bool) -> SettingsReason {
         isMuted ? SettingsReason.unmuteToTest : SettingsReason.none
     }
 
-    /// The flip row's reason: Audio Only blocks the camera (1 f).
     static func flipReason(isAudioOnly: Bool, isRecovering: Bool) -> SettingsReason {
         if isAudioOnly { return SettingsReason.audioOnly }
         if isRecovering { return SettingsReason.reconnecting }
@@ -697,12 +625,10 @@ enum SettingsAudioPolicy {
     }
 }
 
-/// L6-2 `LevelMeter`: 12 flat segments at 10 Hz while the Microphone page is visible (C6-6).
 enum MicLevelPolicy {
     static let segmentCount = 12
     static let intervalMillis = 100.0
-    /// The stats `audioLevel` is RMS derived (speech sits around 0.02 to 0.3), so the meter fills on a square-root
-    /// curve and a normal voice reaches the middle segments.
+
     static func filledSegments(level: Double) -> Int {
         if level <= 0 { return 0 }
         let clamped = level >= 1 ? 1.0 : level
@@ -713,22 +639,19 @@ enum MicLevelPolicy {
     }
 }
 
-/// C6-7: the one test tone both clients synthesize and play through the voice route (iOS `AVAudioPlayer` on the call
-/// session, Android `AudioTrack` with `USAGE_VOICE_COMMUNICATION`), tap only, never automatic.
 enum TestTonePolicy {
     static let frequencyHz = 880.0
     static let durationMillis = 500.0
     static let sampleRate = 16000
     static let amplitude = 0.25
     static let fadeMillis = 15.0
-    /// How long the row reads "Playing": the tone plus a short tail.
+
     static let playingMillis = 700.0
 
     static var sampleCount: Int {
         Int(Double(sampleRate) * durationMillis / 1000.0)
     }
 
-    /// One sample in -1 to 1 with a short fade in and out, so the tone never clicks.
     static func sample(_ index: Int) -> Double {
         let count = sampleCount
         if index < 0 || index >= count { return 0 }
@@ -743,11 +666,8 @@ enum TestTonePolicy {
     }
 }
 
-// MARK: - Video policies (SET-3: C6-3, C6-4, C6-5, C6-8, D11, D21)
-
 enum SettingsVideoPolicy {
-    /// The camera limits the encoder gets for these settings (the core's publish resolver without the transient
-    /// system ceiling): the Debug readout and the fake owner's `setPublishCeiling` value (2 l4).
+
     static func publishCeiling(camera: NativeCameraQualitySettings, dataSaverOn: Bool,
                                qualityCappedByHost: Bool) -> NativeResolvedCameraPublishSettings {
         let capped = DataSaverPolicy.appliesPublishCeiling(dataSaverOn: dataSaverOn, qualityCappedByHost: qualityCappedByHost)
@@ -755,7 +675,6 @@ enum SettingsVideoPolicy {
                                                               systemSendCeiling: NativeSystemSendCeiling.unconstrained)
     }
 
-    /// The Camera Quality value: the data-saver tier while a ceiling applies, else the picker's selection.
     static func effectivePreset(selection: NativeCameraQualityPreset, dataSaverOn: Bool, qualityCappedByHost: Bool) -> String {
         if DataSaverPolicy.appliesPublishCeiling(dataSaverOn: dataSaverOn, qualityCappedByHost: qualityCappedByHost) {
             return NativeCameraQualityPreset.dataSaver.rawValue
@@ -802,8 +721,6 @@ enum SettingsVideoPolicy {
     }
 }
 
-/// What the WP3 preview owner reports to Settings (S60 C6-8): its one `PreviewState`, the session that keys the card's
-/// renderer, the interruption reason, and whether the running capture is the Settings preview.
 struct SettingsPreviewReading: Equatable {
     let state: PreviewState
     let sessionId: Int
@@ -814,14 +731,10 @@ struct SettingsPreviewReading: Equatable {
                                             isScoped: false)
 }
 
-/// L6-3 / C6-8 card rules (pure, unit tested on both platforms).
 enum SettingsPreviewPolicy {
-    /// The capture stops after the card stays off screen this long (C6-8).
+
     static let offScreenStopMillis = 30_000.0
 
-    /// The card's state: off outside a participant call and in Audio Only; `published` while the meeting camera is on
-    /// (the card shows the sent track); the Settings preview's own state while it runs; `blocked` after a denied
-    /// camera permission; else off.
     static func state(isParticipantInCall: Bool, isAudioOnly: Bool, isCameraOn: Bool, reading: SettingsPreviewReading,
                       permissionBlocked: Bool) -> PreviewState {
         if !isParticipantInCall || isAudioOnly { return PreviewState.off }
@@ -834,8 +747,6 @@ enum SettingsPreviewPolicy {
         return PreviewState.off
     }
 
-    /// The card's reason: Audio Only, the camera permission, or why the system paused the camera (read as the card's
-    /// accessibility value, 1 f).
     static func reason(state: PreviewState, interruption: PreviewInterruption, isAudioOnly: Bool) -> SettingsReason {
         if isAudioOnly { return SettingsReason.audioOnly }
         if state == PreviewState.blocked { return SettingsReason.permissionDenied }
@@ -847,31 +758,25 @@ enum SettingsPreviewPolicy {
         }
     }
 
-    /// Start Preview is offered while the card is off or the camera was unavailable; never while interrupted (1 l11),
-    /// starting, live, published or blocked (blocked offers Open Settings instead).
     static func canStart(state: PreviewState, isParticipantInCall: Bool, isAudioOnly: Bool) -> Bool {
         isParticipantInCall && !isAudioOnly && (state == PreviewState.off || state == PreviewState.unavailable)
     }
 
-    /// Stop Preview is offered while the Settings preview runs (starting, live or interrupted).
     static func canStop(state: PreviewState) -> Bool {
         state == PreviewState.starting || state == PreviewState.live || state == PreviewState.interrupted
     }
 }
 
-/// The presenter's door to the one WP3 preview owner (RECONCILE R22). `live()` drives `LocalPreviewController.shared`
-/// and the camera permission provider; the fake WP3 owner (`SettingsRecordingCore`) replaces every closure, so tests
-/// and fixtures never touch a camera.
 @MainActor
 final class SettingsPreviewHooks {
     var start: (LocalCameraFacing) -> Void = { _ in }
     var stop: () -> Void = {}
     var read: () -> SettingsPreviewReading = { SettingsPreviewReading.off }
-    /// Installs (or, with nil, removes) the owner's change callback for the presenter.
+
     var observe: ((() -> Void)?) -> Void = { _ in }
     var setMirror: (Bool) -> Void = { _ in }
     var cameraPermission: () -> MediaPermissionState = { MediaPermissionState.granted }
-    /// Android may ask again after a denial while the system allows it (S10 7 d); iOS asks once.
+
     var canAskCameraAgain: () -> Bool = { false }
     var requestCameraPermission: (@escaping (Bool) -> Void) -> Void = { completion in completion(true) }
     var openSystemSettings: () -> Void = {}
@@ -913,11 +818,8 @@ final class SettingsPreviewHooks {
     }
 }
 
-// MARK: - Account policies (C6-10, RECONCILE R38)
-
 enum SettingsNamePolicy {
-    /// The status under the Name field: Saving, the mapped refusal, Saved (after an edit that reached the server), or
-    /// nothing.
+
     static func status(isSaving: Bool, refusal: String, draft: String, saved: String, hasEdited: Bool) -> NameSavePhase {
         if isSaving { return NameSavePhase.saving }
         if !refusal.isEmpty { return NameSavePhase.failed }
@@ -928,7 +830,6 @@ enum SettingsNamePolicy {
         return NameSavePhase.idle
     }
 
-    /// "Reconnect before updating your name." while recovering or offline (1 f).
     static func reason(isRecovering: Bool, isOffline: Bool) -> SettingsReason {
         (isRecovering || isOffline) ? SettingsReason.reconnecting : SettingsReason.none
     }
@@ -938,8 +839,6 @@ enum SettingsNamePolicy {
     }
 }
 
-/// C6-10: the sign-out single flight's completion guard, moved here from the legacy Settings sheet (SSV:76-86; HD
-/// request B6-T2 R7 deletes the old copy). A completion applies only for the current generation and room.
 enum SettingsSignOutCompletionPolicy {
     static func shouldApply(
         generation: Int,
@@ -952,12 +851,10 @@ enum SettingsSignOutCompletionPolicy {
     }
 }
 
-// MARK: - Voice recorder policy (C6-23, L6-13)
-
 enum VoiceRecorderPolicy {
     static let minimumSeconds = 60
     static let maximumSeconds = 120
-    /// The remaining-time line is a polite live region updated every 10 s, not every second (2 i).
+
     static let announcementIntervalSeconds = 10
 
     static func secondsLeftToMinimum(elapsedSeconds: Int) -> Int {
@@ -978,10 +875,6 @@ enum VoiceRecorderPolicy {
     }
 }
 
-// MARK: - Hot leaves
-
-/// L6-2: the mic level, read only by the meter leaf. Publishes only when the filled segment count changes, so 10 Hz
-/// samples never invalidate more than one leaf (S60 2 k).
 @MainActor
 @Observable
 final class MicLevelMeter {
@@ -1001,7 +894,6 @@ final class MicLevelMeter {
     }
 }
 
-/// L6-13 / C6-23: the recorder's ticking parts, read only by the recorder leaf views.
 @MainActor
 @Observable
 final class VoiceRecorderModel {
@@ -1031,8 +923,6 @@ final class VoiceRecorderModel {
     }
 }
 
-// MARK: - Presenter
-
 @MainActor
 @Observable
 final class SettingsPresenter {
@@ -1041,32 +931,29 @@ final class SettingsPresenter {
     private(set) var chat: SettingsChat = SettingsChat.empty
     private(set) var general: SettingsGeneral = SettingsGeneral.empty
     private(set) var account: SettingsAccount = SettingsAccount.empty
-    /// The sections and rows to draw (`SettingsRowPolicy`); only the root list reads it.
+
     private(set) var sections: [SettingsRowSection] = []
 
     let micLevel = MicLevelMeter()
     let recorder = VoiceRecorderModel()
-    /// C6-9: the Connection page's details (1 Hz while the page is visible); the core installs `stats.source`.
+
     let stats = ConnectionStatsModel()
     let scope: SettingsScope
     let platform: SettingsPlatform
 
-    /// Core only: each intent reaches the existing implementation (HD request B6-T2 R1). Never called from `apply`.
     @ObservationIgnored var onCommand: ((SettingsCommand) -> Void)? = nil
-    /// C6-10: the core's one rename intent (`MeetingViewModel.displayNameEditor`). `weak`: Kotlin has no unowned.
+
     @ObservationIgnored weak var nameEditor: DisplayNameEditor? = nil
-    /// C6-6: the sender's media-source audio level, 0 to 1 (`WebRTCClient.sampleLocalMicrophoneLevel()`); polled at
-    /// 10 Hz only while the Microphone page is visible and the mic is unmuted.
+
     @ObservationIgnored var micLevelSource: (() -> Double)? = nil
-    /// The single routing authority (S30 CC4); tests substitute their own.
+
     @ObservationIgnored var routeOwner: AudioRouteOwner = AudioRouteOwner.shared
-    /// C6-8 (RECONCILE R22): the one WP3 preview owner; the fake WP3 owner replaces it.
+
     @ObservationIgnored var previewHooks: SettingsPreviewHooks = SettingsPreviewHooks.live()
-    /// The preview card may bind the live media client's sent track (production). The fake WP3 owner turns it off, so
-    /// a fixture or a test never reaches the media client (the card draws its dark surface instead).
+
     @ObservationIgnored var usesLiveRenderers = true
     @ObservationIgnored var defaults: UserDefaults
-    /// Test seam (milliseconds).
+
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(millis * 1_000_000.0))
     }
@@ -1089,7 +976,6 @@ final class SettingsPresenter {
     @ObservationIgnored private var isPreviewCardOnScreen = false
     @ObservationIgnored private var previewOffScreenToken = 0
 
-    // Debug readouts and tests (L6-12: speakerTest.count, micTest.phase, voicePreview.count, wp3.calls).
     @ObservationIgnored private(set) var speakerTestCount = 0
     @ObservationIgnored private(set) var micTestSubscribeCount = 0
     @ObservationIgnored private(set) var micTestStopCount = 0
@@ -1098,12 +984,11 @@ final class SettingsPresenter {
     @ObservationIgnored private(set) var voiceSampleCount = 0
     @ObservationIgnored private(set) var dispatchedKinds: [String] = []
     @ObservationIgnored private(set) var applyCount = 0
-    /// SET-3 readouts (L6-12 `wp3.calls` `previewStart`, `previewStop`; 2 l4 `setPublishCeiling`).
+
     @ObservationIgnored private(set) var previewStartCount = 0
     @ObservationIgnored private(set) var previewStopCount = 0
     @ObservationIgnored private(set) var publishCeilingChangeCount = 0
-    /// The Name field changed during this presentation, so "Saved" may show once the save lands (read by the status
-    /// leaf when the editor's saving state changes).
+
     @ObservationIgnored private(set) var hasEditedName = false
 
     init(scope: SettingsScope = SettingsScope.call, platform: SettingsPlatform = SettingsPlatform.current,
@@ -1115,9 +1000,6 @@ final class SettingsPresenter {
         rebuild()
     }
 
-    // MARK: Inputs
-
-    /// Core only. A new call session cancels the speaker test, the mic test and a pending sign-out.
     func apply(_ next: SettingsInputs) {
         applyCount += 1
         guard next != inputs else { return }
@@ -1126,8 +1008,7 @@ final class SettingsPresenter {
         if previous.callSession != next.callSession {
             resetSession()
         }
-        // C6-8: the meeting camera took over (the clients already released the preview), Audio Only blocks the camera,
-        // or the person became an attendee: a running Settings preview stops.
+
         if previewReading.isScoped && (!next.isCameraOff || next.isAudioOnly || next.isAttendee) {
             stopPreview()
         }
@@ -1144,7 +1025,6 @@ final class SettingsPresenter {
         rebuild()
     }
 
-    /// Re-reads every store (the panel opened, or another surface such as More's captions toggle wrote one).
     func refreshPreferences() {
         let next = SettingsPreferenceValues.read(defaults: defaults)
         guard next != prefs else { return }
@@ -1152,8 +1032,6 @@ final class SettingsPresenter {
         rebuild()
     }
 
-    /// The panel or the app-scope page appeared (once per presentation, task scoped on iOS, a DisposableEffect on
-    /// Android).
     func panelDidOpen() {
         hasEditedName = false
         refreshPreferences()
@@ -1165,8 +1043,6 @@ final class SettingsPresenter {
         }
     }
 
-    /// The panel closed: the pending name saves now (C6-10), a mic test still running stops and so does the Settings
-    /// preview (C6-8: one `previewStop` on close, 1 l12).
     func panelDidClose() {
         nameEditor?.flush()
         stopMicTest()
@@ -1178,9 +1054,6 @@ final class SettingsPresenter {
         }
     }
 
-    // MARK: Audio (SET-2)
-
-    /// C6-1: the store is written in both scopes; in a call the core replaces the live microphone track once.
     func setNoiseSuppression(_ on: Bool) {
         guard audio.noiseSuppression == SettingsCapability.available, prefs.noiseSuppressionOn != on else { return }
         SettingsPreferences.setNoiseSuppression(on, defaults: defaults)
@@ -1191,7 +1064,6 @@ final class SettingsPresenter {
         }
     }
 
-    /// C6-7: one tone per tap; "Playing" for the tone's length; never while one plays.
     @discardableResult
     func playTestSound() -> ControlTapResult {
         guard scope == SettingsScope.call, inputs.hasCore, speakerTest == SpeakerTestPhase.idle else {
@@ -1213,7 +1085,6 @@ final class SettingsPresenter {
         return ControlTapResult.dispatched
     }
 
-    /// S30 CC4: the Android Audio output page (and the R70-2 Bluetooth access row) through the route owner.
     @discardableResult
     func requestRoute(id: String) -> ControlTapResult {
         guard scope == SettingsScope.call else { return ControlTapResult.ignored }
@@ -1225,7 +1096,6 @@ final class SettingsPresenter {
         return ControlTapResult.dispatched
     }
 
-    /// S30 CC4: the iOS microphone choice.
     func requestInput(id: String) {
         guard scope == SettingsScope.call, id != routeOwner.route.currentInputId else { return }
         routeOwner.requestInput(id: id)
@@ -1236,7 +1106,6 @@ final class SettingsPresenter {
         dispatch(SettingsCommand.make(SettingsCommandKind.showSystemMicModes))
     }
 
-    /// C6-6: starts the 10 Hz meter for the Microphone page. Idempotent (one subscription per page lifetime).
     func startMicTest() {
         guard scope == SettingsScope.call, !micRunning else { return }
         micRunning = true
@@ -1256,7 +1125,6 @@ final class SettingsPresenter {
         }
     }
 
-    /// Leaving the page (Back, panel close) stops the meter; the level returns to zero.
     func stopMicTest() {
         guard micRunning else { return }
         micRunning = false
@@ -1268,9 +1136,6 @@ final class SettingsPresenter {
         dispatch(SettingsCommand.make(SettingsCommandKind.stopMicTest))
     }
 
-    /// iOS `.task { await settings.runMicTest() }`: runs for the page's lifetime and stops on cancellation, never from
-    /// appearance callbacks (AGENTS.md "Appearance-Callback Render Loop"). Android uses `startMicTest()` and
-    /// `stopMicTest()` from a DisposableEffect instead.
     func runMicTest() async {
         startMicTest()
         let token = micRunToken
@@ -1294,7 +1159,6 @@ final class SettingsPresenter {
         dispatch(SettingsCommand.make(SettingsCommandKind.replayMicSample))
     }
 
-    /// The core reports the end of a 5 s capture or of the replay.
     func micSampleFinished() {
         guard micPhase == MicTestPhase.recording || micPhase == MicTestPhase.replaying else { return }
         micPhase = micRunning && !inputs.isMuted ? MicTestPhase.metering : MicTestPhase.idle
@@ -1310,9 +1174,6 @@ final class SettingsPresenter {
         dispatch(SettingsCommand.make(SettingsCommandKind.setTestGain, number: clamped))
     }
 
-    // MARK: Video (SET-1 camera row)
-
-    /// C6-2 / R13: dispatched only for a change the gate allows; Android plays `selectionChanged` on `.dispatched`.
     @discardableResult
     func setCameraFacing(front: Bool) -> ControlTapResult {
         guard scope == SettingsScope.call, video.canFlipCamera, !video.isFlipInFlight else { return ControlTapResult.ignored }
@@ -1322,9 +1183,6 @@ final class SettingsPresenter {
         return ControlTapResult.dispatched
     }
 
-    // MARK: Video (SET-3: C6-3, C6-4, C6-5, C6-8, C6-29)
-
-    /// C6-3: the store, the renderers' observed value and the preview owner; the core refreshes the stage self view.
     func setMirrorsSelfView(_ on: Bool) {
         guard prefs.mirrorsSelfView != on else { return }
         NativeVideoPreferences.setMirrorsSelfView(on, defaults: defaults)
@@ -1333,8 +1191,6 @@ final class SettingsPresenter {
         preferenceWritten(SettingsPreferenceID.mirror)
     }
 
-    /// C6-5: disabled (and on) while the system signal holds it; the core re-runs the publish resolver and the
-    /// receive policy.
     func setDataSaver(_ on: Bool) {
         guard !inputs.systemDataSaverOn, prefs.dataSaverOn != on else { return }
         NativeVideoPreferences.setDataSaver(on, defaults: defaults)
@@ -1342,8 +1198,6 @@ final class SettingsPresenter {
         preferenceWritten(SettingsPreferenceID.dataSaver)
     }
 
-    /// C6-4: a preset is an encoder ceiling (`NativeMediaQualityPolicy.cameraPreset`); disabled while Data Saver is on.
-    /// Returns `.dispatched` for a change (Android plays `selectionChanged` then, 2 h).
     @discardableResult
     func setCameraPreset(_ rawValue: String) -> ControlTapResult {
         guard !video.dataSaverOn, video.presets.contains(rawValue),
@@ -1359,7 +1213,6 @@ final class SettingsPresenter {
         return ControlTapResult.dispatched
     }
 
-    /// Advanced (2 c): any change makes the preset Custom; options are limited to what the device supports (D11).
     func setCameraResolution(_ rawValue: String) {
         guard video.custom.resolutions.contains(rawValue), let resolution = NativeMediaResolution(rawValue: rawValue) else { return }
         var camera = prefs.quality.camera
@@ -1407,7 +1260,6 @@ final class SettingsPresenter {
         saveCamera(camera)
     }
 
-    /// "Restore Recommended Settings": Auto.
     func restoreRecommendedQuality() {
         let auto = NativeMediaQualityPolicy.defaultSettings.camera
         guard prefs.quality.camera != auto else { return }
@@ -1478,23 +1330,17 @@ final class SettingsPresenter {
         saveScreenShare(auto)
     }
 
-    /// C6-29: only while the capability holds (the switch is hidden otherwise).
     func setShareDeviceAudio(_ on: Bool) {
         guard video.canShareDeviceAudio, prefs.shareDeviceAudioOn != on else { return }
         NativeVideoPreferences.setShareDeviceAudio(on, defaults: defaults)
         preferenceWritten(SettingsPreferenceID.shareDeviceAudio)
     }
 
-    /// The camera limits the encoder gets now (Debug readout; the fake owner's `setPublishCeiling` value).
     func publishCeiling() -> NativeResolvedCameraPublishSettings {
         SettingsVideoPolicy.publishCeiling(camera: prefs.quality.camera, dataSaverOn: video.dataSaverOn,
                                            qualityCappedByHost: inputs.qualityCappedByHost)
     }
 
-    // MARK: Preview (C6-8, L6-3)
-
-    /// Start Preview: local only, never handed to a producer. Asks for the camera once when the system has not yet;
-    /// a denied permission shows "Camera access is off" with Open Settings.
     func startPreview() {
         guard scope == SettingsScope.call, video.canStartPreview else { return }
         let permission = previewHooks.cameraPermission()
@@ -1519,7 +1365,6 @@ final class SettingsPresenter {
         beginPreview()
     }
 
-    /// Stop Preview (and every other stop: panel close, background, 30 s off screen, the meeting camera taking over).
     func stopPreview() {
         guard previewReading.isScoped else { return }
         previewStopCount += 1
@@ -1528,13 +1373,10 @@ final class SettingsPresenter {
         previewChanged()
     }
 
-    /// Open Settings from the blocked card (F00 C18 intrinsic).
     func openCameraSettings() {
         previewHooks.openSystemSettings()
     }
 
-    /// The card entered (true) or left (false) the screen (task scoped on iOS, composition on Android). Off screen for
-    /// 30 s stops the preview (C6-8); the renderer itself is kept per presentation by the card.
     func previewCardVisible(_ visible: Bool) {
         isPreviewCardOnScreen = visible
         previewOffScreenToken += 1
@@ -1548,12 +1390,10 @@ final class SettingsPresenter {
         }
     }
 
-    /// The scene went to the background: the preview stops (C6-8).
     func previewSceneBackgrounded() {
         stopPreview()
     }
 
-    /// The preview owner published (state, session, interruption or ownership).
     func previewChanged() {
         let next = previewHooks.read()
         guard next != previewReading else { return }
@@ -1563,8 +1403,6 @@ final class SettingsPresenter {
         }
         rebuildVideo()
     }
-
-    // MARK: Captions, chat and voice (C6-13, C6-22)
 
     func setCaptions(_ on: Bool) {
         guard prefs.captionsOn != on else { return }
@@ -1584,7 +1422,6 @@ final class SettingsPresenter {
         preferenceWritten(SettingsPreferenceID.playVoiceMessages)
     }
 
-    /// "Your Voice" is selectable only while the personal voice is ready (2 c).
     func setVoiceKind(_ kind: VoiceKind) {
         guard prefs.voiceKind != kind else { return }
         if kind == VoiceKind.personal && personalVoice != PersonalVoicePhase.ready { return }
@@ -1592,7 +1429,6 @@ final class SettingsPresenter {
         preferenceWritten(SettingsPreferenceID.voiceKind)
     }
 
-    /// "" = Automatic. Reaches `TtsSpeaker` once through the queue's preference read (C6-22).
     func setStandardVoice(_ voiceId: String) {
         let trimmed = voiceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard prefs.standardVoiceId != trimmed else { return }
@@ -1600,15 +1436,12 @@ final class SettingsPresenter {
         preferenceWritten(SettingsPreferenceID.standardVoice)
     }
 
-    /// The Voice page loaded the platform's voices for the current language (iOS `AVSpeechSynthesisVoice`, Android
-    /// `TextToSpeech.getVoices()`); a chosen voice no longer installed reads as Automatic (2 f).
     func setStandardVoices(_ voices: [VoiceOptionModel]) {
         guard voices != standardVoices else { return }
         standardVoices = voices
         rebuildChat()
     }
 
-    /// C6-22 Preview: one fixed sentence (`sentence`, localized by the page) through the call output, on tap only.
     @discardableResult
     func toggleStandardVoicePreview(sentence: String) -> ControlTapResult {
         guard chat.canPreviewStandardVoice else { return ControlTapResult.ignored }
@@ -1617,8 +1450,6 @@ final class SettingsPresenter {
         dispatch(SettingsCommand.make(SettingsCommandKind.toggleVoicePreview, text: sentence, flag: starting))
         return ControlTapResult.dispatched
     }
-
-    // MARK: Personal voice (C6-23; hidden until `canUsePersonalVoice`)
 
     func startVoiceSample() {
         guard inputs.canUsePersonalVoice, personalVoice != PersonalVoicePhase.recording else { return }
@@ -1636,7 +1467,6 @@ final class SettingsPresenter {
         dispatch(SettingsCommand.make(SettingsCommandKind.stopVoiceSample))
     }
 
-    /// The core's capture progress (one call per second; the level at 10 Hz). The 120 s cap stops the take.
     func voiceSampleProgress(elapsedSeconds: Int, level: Double) {
         guard personalVoice == PersonalVoicePhase.recording else { return }
         recorder.progress(elapsedSeconds: elapsedSeconds, level: level)
@@ -1666,7 +1496,6 @@ final class SettingsPresenter {
         rebuildChat()
     }
 
-    /// Redo, or leaving the recorder after "Discard Recording?".
     func discardVoiceSample() {
         guard personalVoice == PersonalVoicePhase.recording || personalVoice == PersonalVoicePhase.review
                 || personalVoice == PersonalVoicePhase.failed else { return }
@@ -1701,8 +1530,6 @@ final class SettingsPresenter {
         rebuildChat()
     }
 
-    // MARK: Host and general (C6-14, C6-24, F00 8)
-
     func setKnockSound(_ on: Bool) {
         guard general.hostAlertSoundsAvailable, prefs.knockSoundOn != on else { return }
         SettingsPreferences.setKnockSound(on, defaults: defaults)
@@ -1727,8 +1554,6 @@ final class SettingsPresenter {
         preferenceWritten(SettingsPreferenceID.haptics)
     }
 
-    // MARK: Account (C6-10)
-
     func editDisplayName(_ value: String) {
         guard account.canEditName else { return }
         hasEditedName = true
@@ -1739,8 +1564,6 @@ final class SettingsPresenter {
         nameEditor?.flush()
     }
 
-    /// Q5: behind a confirmation (the views own it). Single flight with the generation and room guard; there is no
-    /// failure state, because local sign-out always completes and remote revocation is best effort (1 j).
     func signOut() {
         guard scope == SettingsScope.call, inputs.hasCore, account.account == AccountKind.signedIn, !signOutPending else { return }
         signOutGeneration += 1
@@ -1756,8 +1579,6 @@ final class SettingsPresenter {
         signOutPending = false
         rebuildAccount()
     }
-
-    // MARK: Internals
 
     private func resetSession() {
         speakerTestToken += 1
@@ -1846,15 +1667,14 @@ final class SettingsPresenter {
     }
 
     private func rebuildSections() {
-        // SET-3: Mirror, Camera Quality and Data Saver exist on every device (D11 limits the options, not the rows);
-        // Screen Share Quality only where screen sharing exists.
+
         let capabilities = SettingsRowCapabilities.make(
             noiseSuppression: audio.noiseSuppression != SettingsCapability.hidden,
             mirror: true,
             cameraQuality: true,
             screenShareQuality: inputs.isScreenShareSupported,
             dataSaver: true,
-            // SET-6 (OQ6 default A, HD request B7-T2 R9): the Effects row follows the one gate (false in production).
+
             effects: EffectsAvailabilityPolicy.showsPanelEntry(EffectsAvailabilityPolicy.production(canShowSystemVideoEffects: false)),
             hostAlertSounds: inputs.hostAlertSoundsAvailable,
             messageNotifications: inputs.messageNotificationsAvailable,
@@ -2032,15 +1852,9 @@ final class SettingsPresenter {
     }
 }
 
-// MARK: - Panel fixtures (L6-12 `settings-*`, `voice-*`; silent, no media)
-
-/// Named fixture states for the S20 SL14 panel harness and the host tests. Each builds inputs only; media effects are
-/// recorded by `SettingsRecordingCore` (the fake WP3 owner of L6-12), never performed.
 enum SettingsFixtureState: String, CaseIterable, Equatable {
     case guest, host, attendee, mic, muted, audioOnly, recovering, voiceUnavailable, voiceReady
-    /// SET-3 (L6-12 `settings-video`, `settings-camera-on`, `settings-system-data-saver`, `settings-host-cap`): camera
-    /// off with screen sharing (the preview card offers Start Preview), camera on (the card is published), the system
-    /// data saver signal, and the host's quality limit.
+
     case video, cameraOn, systemDataSaver, hostQualityCap
 
     func inputs(callSession: Int = 1) -> SettingsInputs {
@@ -2110,20 +1924,15 @@ enum SettingsFixtureState: String, CaseIterable, Equatable {
     }
 }
 
-/// The fake WP3 owner (L6-12 `wp3.calls`): records every command instead of touching media, the network or the
-/// server, scripts the mic level and answers the speaker preview, the sign-out and the personal voice calls. SET-3: it
-/// replaces the preview owner (`previewStart`, `previewStop`, scripted states and interruptions), records
-/// `setPublishCeiling` with the resolved ceiling for every quality or Data Saver change (2 l4), scripts the connection
-/// stats reading and keeps the card off the live media client.
 @MainActor
 final class SettingsRecordingCore {
     private(set) var calls: [String] = []
     var scriptedLevel: Double = 0.0
-    /// C6-9: the reading the stats leaf gets (nil = no data).
+
     var scriptedStats: ConnectionStatsCounters? = nil
-    /// The camera permission the fake preview owner reports.
+
     var scriptedCameraPermission: MediaPermissionState = MediaPermissionState.granted
-    /// 2 l4 readout: the last ceiling the fake owner received.
+
     private(set) var lastPublishCeiling: NativeResolvedCameraPublishSettings? = nil
     private(set) var previewReading: SettingsPreviewReading = SettingsPreviewReading.off
     private weak var presenter: SettingsPresenter?
@@ -2161,14 +1970,12 @@ final class SettingsRecordingCore {
         return total
     }
 
-    /// Scripts what the preview owner reports (an interruption, its end, a failure).
     func scriptPreview(state: PreviewState, interruption: PreviewInterruption = PreviewInterruption.none) {
         previewReading = SettingsPreviewReading(state: state, sessionId: previewSession, interruption: interruption,
                                                 isScoped: previewReading.isScoped)
         previewObserver?()
     }
 
-    /// The meeting camera took the camera (the clients' hand-off): the preview stops being the Settings preview.
     func scriptCallCameraTookOver() {
         previewReading = SettingsPreviewReading(state: PreviewState.published, sessionId: previewSession,
                                                 interruption: PreviewInterruption.none, isScoped: false)

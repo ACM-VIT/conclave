@@ -9,7 +9,6 @@ struct NativeSymbolSpecimen: Identifiable {
     let symbol: String?
 }
 
-/// Inert opt-in rows inside the existing fixture List. No navigation, session or media owner.
 struct NativeIconGalleryDisclosure: View {
     @State private var expanded = false
     @State private var microphoneOn = true
@@ -23,13 +22,13 @@ struct NativeIconGalleryDisclosure: View {
                 microphoneSample
                 captionsSample
                 NativeCloseSample()
-                // List rows stay lazy; each row builds its Image only when it is displayed.
+
                 ForEach(NativeSymbolCatalog.rows) { specimen in
                     NativeSymbolGalleryRow(specimen: specimen)
                 }
             }
         } label: {
-            // On the label only: on the group it would replace every row and sample identifier.
+
             Text("Icon Gallery")
                 .accessibilityIdentifier("icons.gallery.toggle")
         }
@@ -69,7 +68,6 @@ struct NativeIconGalleryDisclosure: View {
     }
 }
 
-/// The system close role where available, otherwise an explicitly labeled `xmark`. Inert.
 private struct NativeCloseSample: View {
     var body: some View {
         HStack(spacing: 12) {
@@ -107,7 +105,7 @@ private struct NativeSymbolGalleryRow: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(specimen.caption)
-                // The raw literal stays visible for reviewers but is never spoken.
+
                 Text(specimen.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)

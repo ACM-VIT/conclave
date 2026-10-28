@@ -1,16 +1,16 @@
-# This file contains the fastlane.tools configuration
-# for the Android release build.
-# You can find the documentation at https://docs.fastlane.tools
 
-# Load the shared native app properties.
+
+
+
+
 require('dotenv')
 Dotenv.load '../../Skip.env'
 
 default_platform(:android)
 
-# Build with the checked-in Gradle wrapper (Android/gradlew, Gradle 9.7.1 with
-# a pinned distribution SHA-256) and the JDK the Android gates are verified
-# with, rather than whatever Gradle or JDK the machine happens to have.
+
+
+
 gradle_bin = File.expand_path("../gradlew", __dir__)
 jdk21_home = (ENV['HOMEBREW_PREFIX'] ? ENV['HOMEBREW_PREFIX'] : "/opt/homebrew") + "/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
 ENV['JAVA_HOME'] ||= jdk21_home if File.directory?(jdk21_home)

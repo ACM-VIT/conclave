@@ -39,17 +39,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 9 d B1 (ACT-3) on Android: the Reaction pad. One button that fills the card's width: pointer-down sends exactly one
- * tap (awaitFirstDown inside awaitEachGesture, latched until the next phase, so a held touch or a second finger never
- * sends twice); the TalkBack click action and the Space and Enter keys call the same action. Arming is
- * surfaceContainerHigh with "Wait for green"; go is ext.success with dark ink (ext.onWarning, the in-call dark text
- * token on bright status fills) "Tap now": text and state, never color alone, never white on green (INM G8). An early
- * tap reads "Too soon" with the warning glyph. Color and text change in one frame (no transition runs, so timing
- * is fair). `tapValid` plays only for a tap sent while the pad showed go; the go transition is announced once in an
- * assertive live region so TalkBack players can play.
- */
-
 @Composable
 internal fun ReactionPad(scene: ReactionScene, games: GameStagePresenter) {
     var sent by remember(scene.phaseKey) { mutableStateOf(false) }

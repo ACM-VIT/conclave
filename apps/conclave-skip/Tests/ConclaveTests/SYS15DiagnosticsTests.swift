@@ -3,16 +3,9 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SYS-15 (OUT/PLAN-screens.md section 5; S70 15, 0.6 SX7, 0.7 SY16, R70-4, O8): the 200-event code-only ring, the
-/// structural redaction policy, spans and milestones over a recording platform seam, the presence adapter across 20 join
-/// and leave cycles (AC-SI18-2), the 7 days or 2 MB store, the always-written export (15 f), the redaction test (15 l4),
-/// the forced redaction failure (15 l5), the export presenter, and source scans of the iOS and Android platform parts
-/// (S70 O14: no iOS-hosted test bundle). Not run in the heads-down push.
 @MainActor
 struct SYS15DiagnosticsTests {
-    // MARK: Helpers
 
-    /// The recording seam (S70 15 l2): every platform call is counted; the clocks are scripted.
     @MainActor
     final class RecordingHooks {
         var now = 1_000.0
@@ -24,9 +17,6 @@ struct SYS15DiagnosticsTests {
         var processStates: [String] = []
         var installs = 0
 
-        /// The closures hold the recorder strongly: several tests pass `RecordingHooks().make()` and never keep the
-        /// recorder, so an unowned capture read a freed object and aborted the test process (G2 round 3). The recorder
-        /// never holds the hooks, so there is no cycle.
         func make() -> DiagnosticsPlatformHooks {
             let hooks = DiagnosticsPlatformHooks()
             hooks.beginInterval = { name, _, _ in self.begins.append(name) }
@@ -73,8 +63,6 @@ struct SYS15DiagnosticsTests {
                               detail: "")
     }
 
-    // MARK: S70 15 c: the ring
-
     @Test func theRingKeepsTheNewest200InOrder() {
         let ring = DiagnosticsBreadcrumbRing(capacity: DiagnosticsLimits.breadcrumbCapacity)
         for index in 0..<250 {
@@ -90,8 +78,6 @@ struct SYS15DiagnosticsTests {
         small.append(breadcrumb("test.b"))
         #expect(small.snapshot().map { $0.code } == ["test.a", "test.b"])
     }
-
-    // MARK: S70 15 j: structural redaction
 
     @Test func codesPhasesAndDetailsComeFromFixedVocabularies() {
         for code in ["socket.timeout", "http.503", "message.timedOut", "phase.live", "call.end.userLeft", "android.offline",
@@ -126,7 +112,7 @@ struct SYS15DiagnosticsTests {
     }
 
     @Test func everyClassifierCodeIsAllowed() throws {
-        // Every literal code the S70 7 classifier can produce passes, so a classified failure is never rejected.
+
         let source = try sys15Source("Sources/Conclave/Core/Session/MeetingErrorClassifier.swift")
         var codes: [String] = []
         for marker in ["code: \"", "diagnosticCode: \""] {
@@ -142,7 +128,7 @@ struct SYS15DiagnosticsTests {
         for code in codes where !code.hasSuffix(".") {
             #expect(DiagnosticsRedactionPolicy.isAllowedCode(code), "\(code)")
         }
-        // The two prefixes completed at run time.
+
         #expect(DiagnosticsRedactionPolicy.isAllowedCode("http.503"))
         #expect(DiagnosticsRedactionPolicy.isAllowedCode("android.serverUnreachable"))
         let classified = MeetingErrorClassifier.classify(serverMessage: "Request timed out", context: .join)
@@ -164,18 +150,16 @@ struct SYS15DiagnosticsTests {
         #expect(events[2].detail == "chat")
         #expect(diagnostics.rejectedCount == 1)
         #expect(!events.contains { $0.code.contains("PINEAPPLE") || $0.detail.contains("PINEAPPLE") })
-        // Logs carry the category, the code and the phase only.
+
         #expect(recording.logs == ["call diag.rejectedCode launch", "call socket.timeout other", "call message.unrecognized launch"])
     }
-
-    // MARK: S70 15 c, j: spans and milestones
 
     @Test func spansBalanceEndOnceAndRejectUnknownNames() {
         let recording = RecordingHooks()
         let diagnostics = CallDiagnostics(store: temporaryStore(), hooks: recording.make())
         let mute = diagnostics.span(DiagnosticsSpanKind.mute.rawValue, callSession: 4)
         #expect(!mute.isInert && mute.callSession == 4)
-        // One span per kind and session.
+
         #expect(diagnostics.span(DiagnosticsSpanKind.mute.rawValue, callSession: 4) == mute)
         recording.now += 180
         #expect(diagnostics.end(mute) == 180)
@@ -186,7 +170,7 @@ struct SYS15DiagnosticsTests {
         #expect(diagnostics.spanBeginCount == diagnostics.spanEndCount && diagnostics.openSpanCount == 0)
         let last = diagnostics.events.last
         #expect(last?.code == "span.mute" && last?.kind == DiagnosticsEventKind.spanEnd.rawValue && last?.durationMillis == 180)
-        // The open-span bound drops (and closes) the oldest.
+
         for session in 0..<(DiagnosticsLimits.maxOpenSpans + 3) {
             diagnostics.span(DiagnosticsSpanKind.route.rawValue, callSession: session)
         }
@@ -219,8 +203,6 @@ struct SYS15DiagnosticsTests {
         #expect(DiagnosticsTimingBridge.milestone(forTiming: "join_socket_join_room") == .joinedResponse)
         #expect(DiagnosticsTimingBridge.milestone(forTiming: "meeting_sheet_open") == nil)
     }
-
-    // MARK: S70 0.5 presence: phase spans
 
     @Test func presenceDrivesJoinRecoveryPipAndCleanupSpans() {
         let recording = RecordingHooks()
@@ -269,7 +251,6 @@ struct SYS15DiagnosticsTests {
         #expect(diagnostics.openSpanCount == 0)
     }
 
-    /// AC-SI18-2 (S70 15 l2): 20 fixture join and leave cycles leave one listener set and a bounded buffer.
     @Test func twentyJoinAndLeaveCyclesKeepOneListenerSetAndABoundedBuffer() {
         let recording = RecordingHooks()
         let diagnostics = CallDiagnostics(store: temporaryStore(), hooks: recording.make())
@@ -305,8 +286,6 @@ struct SYS15DiagnosticsTests {
         #expect(diagnostics.presenceAdapterCount == 1)
     }
 
-    // MARK: S70 15 c: the local store (7 days or 2 MB)
-
     @Test func retentionDropsOlderThanSevenDaysThenTheOldestOverTwoMegabytes() {
         let day = 24.0 * 60.0 * 60.0 * 1000.0
         let now = 100.0 * day
@@ -320,7 +299,7 @@ struct SYS15DiagnosticsTests {
         #expect(DiagnosticsLimits.retentionMillis == 7 * day)
         #expect(DiagnosticsRetentionPolicy.namesToDelete(records, nowMillis: now) == ["a", "b"])
         #expect(DiagnosticsRetentionPolicy.namesToDelete(Array(records.prefix(2)), nowMillis: now) == ["a"])
-        // The breadcrumb files count toward the cap.
+
         #expect(DiagnosticsRetentionPolicy.namesToDelete(Array(records.suffix(2)), nowMillis: now, reservedBytes: 400_000) == ["c"])
         #expect(DiagnosticsRetentionPolicy.namesToDelete([], nowMillis: now).isEmpty)
     }
@@ -343,7 +322,7 @@ struct SYS15DiagnosticsTests {
         #expect(kept.count == 2, "four 800 KB payloads keep the newest two under 2 MB")
         #expect(kept.reduce(0) { $0 + $1.byteCount } <= DiagnosticsLimits.maxStoreBytes)
         #expect(kept.map { $0.payload.createdAtMillis } == [now - 2_000, now - 1_000])
-        // A structurally unclean payload is never stored.
+
         let unclean = DiagnosticsStoredPayload(kind: "chat", createdAtMillis: now, fields: [], detailJSON: "")
         #expect(!store.writePayload(unclean))
     }
@@ -359,17 +338,15 @@ struct SYS15DiagnosticsTests {
         #expect(diagnostics.flushCount == 1)
         let previous = store.launchHousekeeping(nowMillis: first.wall + 1_000)
         #expect(previous?.events.map { $0.code } == ["socket.timeout", "lifecycle.background"])
-        // The next launch adopts it; a launch with no newer ring keeps the same previous ring.
+
         let next = CallDiagnostics(store: store, hooks: RecordingHooks().make())
         next.adoptPrevious(previous)
         #expect(next.previousProcessEvents.count == 2)
         #expect(store.launchHousekeeping(nowMillis: first.wall + 2_000)?.events.count == 2)
-        // Older than the retention window: deleted.
+
         #expect(store.launchHousekeeping(nowMillis: first.wall + DiagnosticsLimits.retentionMillis + 10_000) == nil)
         #expect(store.readBreadcrumbs(DiagnosticsFileStore.previousBreadcrumbsName) == nil)
     }
-
-    // MARK: S70 15 f: the export
 
     @Test func theExportAlwaysWritesMetadataEvenWhenTheStoreIsEmpty() async throws {
         let store = temporaryStore()
@@ -392,27 +369,26 @@ struct SYS15DiagnosticsTests {
         let counters = try #require(object["counters"] as? [String: Any])
         #expect(counters["sys.diagBuffer"] as? Int == 0)
         #expect(counters["frame.slow"] as? Int == 2)
-        // The export itself is recorded afterwards, so the next file shows it.
+
         #expect(diagnostics.events.last?.code == "diag.exported")
         #expect(exportFiles(store).count == 1)
-        // A second export keeps only the newest file.
+
         recording.wall += 61_000
         _ = try await diagnostics.exportRedacted()
         #expect(exportFiles(store) == ["conclave-diagnostics-20251028-142334.json"])
     }
 
-    /// S70 15 l4: a fixture whose roster, chat and room code contain marker strings yields an export with none of them.
     @Test func markersFromTheRosterChatAndRoomCodeNeverReachTheExport() async throws {
         let store = temporaryStore()
         let recording = RecordingHooks()
-        // Real wall time, so the payload below is inside the 7-day window when the store prunes on write.
+
         recording.wall = DiagnosticsClock.wallMillis()
         let diagnostics = CallDiagnostics(store: store, hooks: recording.make())
         let roster = ["Zelda Quartermaine", "Bartholomew Ng"]
         let chat = "PINEAPPLE-MARKER-7 see you at the standup"
         let roomCode = "lily-zoro-iris"
         diagnostics.sensitiveValues = { roster + [roomCode, "zq@example.com"] }
-        // Every way free text could try to enter the ring.
+
         diagnostics.record(code: roomCode)
         diagnostics.record(code: "message." + roster[0])
         diagnostics.record(code: chat, phase: roster[1])
@@ -421,7 +397,7 @@ struct SYS15DiagnosticsTests {
         diagnostics.recordFailure(ClassifiedError(category: .rejectedByServer, context: .chat, serverText: chat,
                                                   diagnosticCode: "message.unrecognized", retryAfterSeconds: 0))
         diagnostics.presenceDidChange(from: Self.snapshot(phase: .idle, callSession: 0), to: Self.snapshot(phase: .connecting, callSession: 2))
-        // A platform detail blob that happens to contain a marker is withheld, not exported.
+
         let leaky = DiagnosticsPayloadFactory.payload(kind: .crash, createdAtMillis: recording.wall - 1_000,
                                                       fields: [DiagnosticsPayloadFactory.number("signal", 11)],
                                                       detailJSON: "{\"binaryName\": \"Zelda Quartermaine\"}")
@@ -436,7 +412,6 @@ struct SYS15DiagnosticsTests {
         #expect(text.contains("message.unrecognized"))
     }
 
-    /// S70 15 f, l5: a failed redaction check refuses the export and writes no file.
     @Test func aForcedRedactionFailureRefusesTheExportAndWritesNoFile() async {
         let store = temporaryStore()
         let diagnostics = CallDiagnostics(store: store, hooks: RecordingHooks().make())
@@ -456,7 +431,7 @@ struct SYS15DiagnosticsTests {
     @Test func aStoreFileOutsideTheVocabularyFailsTheRedactionCheck() async throws {
         let store = temporaryStore()
         let diagnostics = CallDiagnostics(store: store, hooks: RecordingHooks().make())
-        // Written around writePayload (an older format or a tampered file).
+
         let tampered = DiagnosticsStoredPayload(kind: "crash", createdAtMillis: DiagnosticsClock.wallMillis(),
                                                 fields: [DiagnosticsField(key: "note", isNumber: false, number: 0,
                                                                           text: "Zelda's room? lily-zoro-iris!")],
@@ -517,8 +492,6 @@ struct SYS15DiagnosticsTests {
         #expect(odd.detailJSON.isEmpty)
     }
 
-    // MARK: The Settings row (R70-4)
-
     @Test func thePresenterSharesOnceAndShowsAFailureOnce() async {
         let store = temporaryStore()
         let diagnostics = CallDiagnostics(store: store, hooks: RecordingHooks().make())
@@ -536,7 +509,7 @@ struct SYS15DiagnosticsTests {
         #expect(presenter.phase == .failed && presenter.failureRevision == 1)
         #expect(presenter.takePendingFailure() && !presenter.takePendingFailure(), "the failure shows once")
         #expect(presenter.takePendingShare().isEmpty)
-        // One export at a time.
+
         diagnostics.debugForcesRedactionFailure = false
         presenter.export()
         await presenter.exportAndWait()
@@ -558,8 +531,6 @@ struct SYS15DiagnosticsTests {
         }
         #expect(DiagnosticsReadout.listenersKey == "sys.diagListeners" && DiagnosticsReadout.bufferKey == "sys.diagBuffer")
     }
-
-    // MARK: Source scans (S70 O14)
 
     @Test func theIOSPartsUseSignpostsLoggerCategoriesMetricKitAndTheBackgroundFlush() throws {
         let platform = try sys15Source("Sources/Conclave/Core/Diagnostics/CallDiagnostics+iOS.swift")
@@ -585,7 +556,7 @@ struct SYS15DiagnosticsTests {
                       "appLaunchDiagnostics"] {
             #expect(platform.contains("payload.\(field)"), "\(field)")
         }
-        // No free text from MetricKit: no exception message, arguments, region format or device type.
+
         for forbidden in [".composedMessage", ".arguments", ".regionFormat", ".deviceType", "jsonRepresentation() ?? payload",
                           "payload.jsonRepresentation()"] {
             #expect(!platform.contains(forbidden), "\(forbidden)")
@@ -625,7 +596,7 @@ struct SYS15DiagnosticsTests {
         #expect(kotlin.contains("info.reason == ApplicationExitInfo.REASON_ANR"))
         #expect(kotlin.contains("ByteArray(DiagnosticsLimits.anrTraceBytes)"))
         #expect(kotlin.contains("DiagnosticsPayloadFactory.exitRecord("))
-        // Exit reasons are read off the main thread, once.
+
         let install = try sys15Body(kotlin, from: "fun installDiagnosticsListeners(store: DiagnosticsFileStore) {",
                                     to: "private fun enableDebugStrictMode()")
         #expect(install.contains("if (diagnosticsListenersInstalled) return"))
@@ -635,15 +606,15 @@ struct SYS15DiagnosticsTests {
         #expect(kotlin.contains("Lifecycle.Event.ON_STOP") && kotlin.contains("CallDiagnostics.shared.applicationDidEnterBackground()"))
         #expect(kotlin.contains("StrictMode.ThreadPolicy.Builder().detectAll().penaltyLog().build()"))
         #expect(kotlin.contains("StrictMode.VmPolicy.Builder().detectAll().penaltyLog().build()"))
-        // The slow-frame monitor stays verbose-only; its counts join the export.
+
         #expect(kotlin.contains("if (verboseLogsEnabled()) {\n            startSlowFrameMonitor()\n        }"))
         #expect(kotlin.contains("verySlowFrames.incrementAndGet() else slowFrames.incrementAndGet()"))
-        // The share: FileProvider URI, read grant, JSON, chooser title, PiP suppression.
+
         #expect(kotlin.contains("FileProvider.getUriForFile(context, context.packageName + FILE_PROVIDER_SUFFIX, file)"))
         #expect(kotlin.contains("type = \"application/json\"") && kotlin.contains("addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)"))
         #expect(kotlin.contains("Intent.createChooser(buildDiagnosticsSendIntent(uri, title), title)"))
         #expect(kotlin.contains("PipManager.suppressNextAutoEnter(\"diagnostics_share\")"))
-        // The row: a clickable ListItem with the button role, the footer as supporting text, no trailing glyph.
+
         let item = try sys15Body(kotlin, from: "internal fun DiagnosticsExportItem(", to: "internal fun DiagnosticsExportEffects(")
         #expect(item.contains("clickable(enabled = !exporting, role = Role.Button)"))
         #expect(item.contains("conclaveString(\"sys_diag_export\")") && item.contains("conclaveString(\"sys_diag_footer\")"))
@@ -652,7 +623,7 @@ struct SYS15DiagnosticsTests {
         #expect(effects.contains("conclaveString(\"sys_diag_failed\")") && effects.contains("conclaveString(\"ds_retry\")"))
         #expect(effects.contains("conclaveString(\"sys_diag_share_title\")"))
         #expect(effects.contains("snackbar.showSnackbar(message = failure, actionLabel = retry"))
-        // Logs are verbose-only and carry codes.
+
         #expect(kotlin.contains("if (!verboseLogsEnabled()) return\n        Log.i(DIAG_TAG, \"$category $code phase=$phase\")"))
     }
 
@@ -690,25 +661,24 @@ struct SYS15DiagnosticsTests {
         }
         for file in shared {
             let text = try sys15Source(file)
-            // Skip Lite: no UI import, no inout, no function-reference maps, no isLetter; S70 O8: no network client.
+
             for forbidden in ["import UIKit", "import SwiftUI", "inout ", ".map(String.init)", "compactMap(", "isLetter",
                               "indirect ", "URLSession", "URLRequest", "OkHttp"] {
                 #expect(!text.contains(forbidden), "\(file) uses \(forbidden)")
             }
         }
-        // S70 O8: nothing in the diagnostics folder talks to a network.
+
         let kotlin = try sys15Source("Sources/Conclave/Skip/NativePerformanceDiagnostics.kt")
         for forbidden in ["OkHttp", "HttpURLConnection", "URL(\"http", "PostHog", "posthog"] {
             #expect(!kotlin.contains(forbidden), "\(forbidden)")
         }
-        // Identifiers in the perf logs stay private; names stay public.
+
         let perf = try sys15Source("Sources/Conclave/Shared/PerformanceDiagnostics.swift")
         #expect(perf.contains("\\(details, privacy: .private)") && !perf.contains("\\(details, privacy: .public)"))
         #expect(perf.contains("CallDiagnostics.shared.install()"))
         #expect(perf.contains("DiagnosticsTimingBridge.milestone(forTiming: name)"))
     }
 
-    /// HD/strings/B7-T4.json merged by the integrator (fails until the merge).
     @Test func diagnosticsStringsAreInBothCatalogs() throws {
         let catalog = try sys15Source("Sources/Conclave/Resources/Localizable.xcstrings")
         for key in ["Export Diagnostics", "Creates a file without names, messages or meeting codes that you can send to support.",
@@ -721,7 +691,6 @@ struct SYS15DiagnosticsTests {
         }
     }
 
-    /// The hooks HD/requests/B7-T4.md asks other owners for (fail until the batch 7 integrator applies them).
     @Test func requestedHooksAreWired() throws {
         let viewModel = try sys15Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
         #expect(viewModel.contains("CallDiagnostics.shared.makePresenceAdapter()"))
@@ -752,7 +721,6 @@ private struct SYS15SourceRangeMissing: Error {
     let marker: String
 }
 
-/// The text between `start` and the first `end` after it.
 private func sys15Body(_ source: String, from start: String, to end: String) throws -> String {
     guard let startRange = source.range(of: start) else { throw SYS15SourceRangeMissing(marker: start) }
     guard let endRange = source.range(of: end, range: startRange.upperBound..<source.endIndex) else {

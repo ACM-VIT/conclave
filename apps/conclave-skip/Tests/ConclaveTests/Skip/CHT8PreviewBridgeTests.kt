@@ -11,14 +11,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * CHT-8 through the transpiled chat preview policy, notice center, stage presenter and stage fixture (the Swift half is
- * T/CHT8UnreadPreviewTests.swift), with the same fixtures: the CH12 unread rules, bodies that never show a file name,
- * the R40-4 event, the in-place update with the count line, "and 2 others", the drops (Chat current, a suspended lane,
- * previews off, attendees, your own messages), /clear and hide sender, the tap that opens Chat at the newest message,
- * the chat preview fixture states and the snackbar host's display time on API 28. Pure: no composition (only the first
- * composition in a JVM keeps recomposing under Robolectric; PanelStageBridgeTests owns it).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class CHT8PreviewBridgeTests {

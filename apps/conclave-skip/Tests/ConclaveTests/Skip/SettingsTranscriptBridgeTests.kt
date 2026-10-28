@@ -12,13 +12,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import skip.foundation.UserDefaults
 
-/**
- * SET-1, SET-2 and SET-4 through the transpiled SettingsRowPolicy, SettingsRoutePolicy, SettingsPreferences,
- * SettingsPresenter, MicLevelPolicy, TestTonePolicy and VoicePreviewPolicy, plus the handwritten SettingsCopy mapping
- * (every case of every enum it maps resolves to a set_, sys_, stg_ or ds_ name). The Swift halves are
- * T/SettingsTranscriptPoliciesTests.swift, T/SET2AudioPagesTests.swift and T/SET4VoicePagesTests.swift; the same vectors
- * give the same results on both platforms. Pure: no composition, no media, no sound.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class SettingsTranscriptBridgeTests {

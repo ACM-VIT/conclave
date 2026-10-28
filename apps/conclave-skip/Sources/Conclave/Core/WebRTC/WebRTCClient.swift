@@ -49,9 +49,6 @@ enum WebcamVideoCodecPolicy {
     }
 }
 
-/// VP8 camera publishing intentionally uses spatial-only adaptation. A single
-/// temporal layer avoids the extra encoder/pacer dependencies that can inflate
-/// receive jitter after mediasoup switches between simulcast spatial layers.
 enum WebcamTemporalLayerPolicy {
     static let temporalLayerCount = 1
     static let receiveTemporalLayer = 0
@@ -63,10 +60,6 @@ struct ConsumerGenerationIdentity: Hashable, Sendable {
     let generation: Int
 }
 
-/// Removal must prove ownership of both the consumer map slot and the rendered
-/// track slot. During an overlapping handoff, predecessor and successor share
-/// a producer/participant track key, so key-only cleanup can erase the live
-/// successor when the predecessor's asynchronous close callback arrives.
 enum ConsumerGenerationRemovalPolicy {
     static func ownsConsumerSlot(
         expected: ConsumerGenerationIdentity,
@@ -118,9 +111,6 @@ enum PlannedWebcamConsumerResetOutcome: String, Sendable {
     case attemptsExhausted = "attempts_exhausted"
 }
 
-/// Pure policy for the native planned receive-generation reset. Runtime code
-/// deliberately feeds it only consume-response/RTP facts, never publisher
-/// declarations or UI assumptions.
 enum PlannedWebcamConsumerResetPolicy {
     static let topLayerSustainMilliseconds: Int64 = 1_250
     static let startupDeadlineMilliseconds: Int64 = 15_000
@@ -239,8 +229,6 @@ import Mediasoup
 import UIKit
 import WebRTC
 
-// MARK: - Video Track Wrapper
-
 @MainActor
 final class VideoTrackWrapper: ObservableObject, Identifiable {
     let id: String
@@ -329,17 +317,6 @@ private actor FirstDecodedVideoFrameSignal {
     }
 }
 
-/// A sink on the decoded `RTCVideoTrack`, not on the UI renderer. It latches
-/// exactly one decoded frame even when the tile is off-screen, then detaches so
-/// steady-state rendering and bandwidth behavior are unchanged.
-///
-/// `renderFrame` runs on WebRTC's decode thread while the native
-/// VideoBroadcaster holds its sink lock, and `RTCVideoTrack.remove` needs that
-/// same lock (via a blocking hop to the worker thread), so detaching inside the
-/// callback deadlocks remote video. The first frame signals immediately and
-/// dispatches the detach to the main queue, where the tile renderers are
-/// attached and detached too. `isFinished` and `track` are claimed under the
-/// lock, so exactly one of that detach and `cancel()` removes the renderer.
 private final class FirstDecodedVideoFrameRenderer: NSObject, RTCVideoRenderer {
     private let lock = NSLock()
     private weak var track: RTCVideoTrack?
@@ -371,7 +348,7 @@ private final class FirstDecodedVideoFrameRenderer: NSObject, RTCVideoRenderer {
         Task {
             await signal.markDecoded()
         }
-        // Never detach synchronously here (see the type comment).
+
         DispatchQueue.main.async { [weak trackToDetach] in
             trackToDetach?.remove(self)
         }
@@ -396,18 +373,12 @@ private final class FirstDecodedVideoFrameRenderer: NSObject, RTCVideoRenderer {
     }
 }
 
-// MARK: - WebRTC Client (Mediasoup)
-
 private struct ScreenFrameEncoderDelivery: @unchecked Sendable {
     let frame: RTCVideoFrame
     let source: RTCVideoSource
     let capturer: RTCVideoCapturer
 }
 
-/// WebRTC's capturer callback may synchronously wait on its encoder queue.
-/// Calling it on MainActor makes the entire meeting UI stop accepting taps.
-/// This pump runs that callback on a dedicated serial queue and coalesces any
-/// backlog to the newest frame, bounding retained pixel buffers to two.
 private final class ScreenFrameEncoderPump: @unchecked Sendable {
     private let queue = DispatchQueue(
         label: "com.acmvit.conclave.screenshare.encoder",
@@ -494,17 +465,12 @@ private struct MediaProducerCreationResult: @unchecked Sendable {
     let producer: Producer
 }
 
-/// Carries a send-side producer or transport onto the serial send-transport
-/// queue. `device` keeps the mediasoup Device (which owns the RTP
-/// capabilities the native transport points into) alive until the queued
-/// close has run behind any in-flight create.
 private struct SendTransportOperationHandle: @unchecked Sendable {
     var producer: Producer?
     var transport: SendTransport?
     var device: Device?
 }
 
-/// S60 C6-1 (SET-2): the live microphone producer and the replacement track crossing to its send queue.
 private struct AudioTrackReplacementHandle: @unchecked Sendable {
     let producer: Producer
     let track: RTCAudioTrack
@@ -512,8 +478,6 @@ private struct AudioTrackReplacementHandle: @unchecked Sendable {
 
 @MainActor
 final class WebRTCClient: NSObject, ObservableObject {
-
-    // MARK: - Published State
 
     @Published private(set) var localVideoTrack: VideoTrackWrapper?
     var onLocalAudioEnabledChanged: ((Bool) -> Void)?
@@ -524,28 +488,13 @@ final class WebRTCClient: NSObject, ObservableObject {
     var onLocalVideoProducerLost: (() -> Void)?
     var onPlannedConsumerResetOutcome: ((String) -> Void)?
 
-    /// When true, mutating localAudioEnabled/localVideoEnabled does NOT fire the
-    /// onLocal*EnabledChanged callbacks. The binding handlers hop through
-    /// `Task { @MainActor }` (async), so on the reconnect-rejoin path a cleanup()
-    /// that fired them would land AFTER the VM restored the user's mute/camera
-    /// intent and flip it back - leaving an unmuted user rejoining muted. The
-    /// rejoin teardown sets this via cleanup(notifyLocalState: false).
     private var suppressLocalStateCallbacks = false
     private(set) var localAudioEnabled: Bool = false {
         didSet { if !suppressLocalStateCallbacks { onLocalAudioEnabledChanged?(localAudioEnabled) } }
     }
-    /// Bumped by every local microphone mute (`setAudioEnabled(false)`,
-    /// `suspendLocalAudioForRecovery()`). `startProducingAudio` compares it
-    /// across its off-main producer create, so a mute that lands while no
-    /// producer exists yet (recovery, server-enforced, or user) is never
-    /// overridden by committing a live, unmuted microphone.
+
     private var localAudioMuteIntentGeneration = 0
-    /// Whether the user wants the microphone live. True on every live commit
-    /// (start, unmuted replacement, `setAudioEnabled(true)`); false on every
-    /// mute or suspend (set before any await) and in cleanup.
-    /// Route recovery, capture reassertion and bandwidth refresh require this
-    /// too: a mute still awaiting its ack must never be undone by committing
-    /// or resuming a live microphone.
+
     private var localAudioIntentEnabled = false
     var hasLocalAudioProducer: Bool {
         isUsableProducer(audioProducer) &&
@@ -560,12 +509,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     private(set) var localVideoEnabled: Bool = false {
         didSet { if !suppressLocalStateCallbacks { onLocalVideoEnabledChanged?(localVideoEnabled) } }
     }
-    /// Bumped by every local camera-off: `setVideoEnabled(false)`,
-    /// `suspendLocalVideoForRecovery()`, `closeLocalVideoProducer()` and a
-    /// webcam `closeLocalMedia` without an id. A camera enable compares it across its
-    /// acknowledgement and a camera start across every await, as the
-    /// microphone compares `localAudioMuteIntentGeneration`, so a late
-    /// acknowledgement or a start never turns a newer camera-off back on.
+
     private var localVideoOffIntentGeneration = 0
     var hasLocalVideoProducer: Bool {
         isUsableProducer(videoProducer) &&
@@ -577,14 +521,10 @@ final class WebRTCClient: NSObject, ObservableObject {
     @Published private(set) var remoteVideoTracks: [String: VideoTrackWrapper] = [:]
     @Published private(set) var connectionState: RTCPeerConnectionState = .new
 
-    // MARK: - Mediasoup Core
-
     var device: Device?
     private var runtimeIceServersJSON: String?
     private var configurationGeneration = 0
-    /// True once configure() has set up the mediasoup Device for a session and
-    /// before cleanup() tears it down. Lets the rejoin path detect a still-live
-    /// prior session that must be torn down before reconfiguring.
+
     var isConfigured: Bool { device != nil }
 
     func hasBrokenTransport() -> Bool {
@@ -621,9 +561,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         var isAdaptivelyPaused: Bool
         var lifecycleRole: ConsumerGenerationLifecycleRole
         var plannedResetCompleted: Bool
-        // Key under which the video track is stored in remoteVideoTracks:
-        // "{userId}" for webcam, "{userId}-screen" for a screen-share - so a
-        // user's webcam and screen tracks coexist instead of overwriting.
+
         var trackKey: String = ""
     }
 
@@ -638,7 +576,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     private var remoteConsumerPreferenceRetryTask: Task<Void, Never>?
     private var remoteConsumerPreferencePolicyRevision = 0
     private var remoteVideoReceiveEnabled = true
-    /// SET-3 (S60 C6-5): the effective Data Saver of the last receive policy pass (kept for its retries).
+
     private var remoteReceiveDataSaver = false
     private struct PlannedConsumerResetCandidate {
         let predecessor: ConsumerGenerationIdentity
@@ -667,9 +605,6 @@ final class WebRTCClient: NSObject, ObservableObject {
     private static let remoteConsumerPreferenceEmitSpacingNanoseconds: UInt64 = 75_000_000
     private static let remoteConsumerPreferenceRetryDelayNanoseconds: UInt64 = 1_000_000_000
 
-    /// The consumer id we hold for a remote producer (the consumers map is keyed
-    /// by consumer id, not producer id). Used by the producer-sync safety net to
-    /// re-assert resume on a consumer that may have been left server-paused.
     func consumerId(forProducer producerId: String) -> String? {
         consumers
             .filter {
@@ -680,17 +615,10 @@ final class WebRTCClient: NSObject, ObservableObject {
             .key
     }
 
-    /// Presence check for producer-sync de-duplication. Unlike
-    /// consumerId(forProducer:), this intentionally counts staged/displaced
-    /// overlap generations without exposing either to periodic controls.
     func hasConsumerGeneration(forProducer producerId: String) -> Bool {
         consumers.values.contains { $0.producerId == producerId }
     }
 
-    /// Await a decoded frame from the exact currently registered consumer.
-    /// A timeout returns `false`; task cancellation and consumer removal throw
-    /// `CancellationError`. The one-frame renderer is installed before resume,
-    /// so a fast decoder cannot beat observation registration.
     func waitForFirstDecodedVideoFrame(
         consumerId: String,
         timeoutMilliseconds: Int
@@ -821,10 +749,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         Int64(ProcessInfo.processInfo.systemUptime * 1_000)
     }
 
-    /// Cancel the current wait/attempt without clearing its owner slot. The
-    /// owner's completion path always reschedules queued work, including after
-    /// cancellation; its token prevents an older completion from clearing a
-    /// newer coordinator installed during teardown/reconfiguration.
     private func wakePlannedConsumerResetCoordinator() {
         if let plannedConsumerResetCoordinatorTask {
             plannedConsumerResetCoordinatorTask.cancel()
@@ -1243,8 +1167,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                     rollbackWasAlreadyAcknowledged = registrationError.rollbackAcknowledged
                 } else if error.localizedDescription.lowercased().contains("timed out") ||
                             error.localizedDescription.lowercased().contains("timeout") {
-                    // A consume ACK timeout can hide a server-created generation
-                    // whose id never reached us. Retrying would be unsafe.
+
                     rollbackWasAlreadyAcknowledged = false
                 }
             }
@@ -1468,8 +1391,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             "successorId=\(successorId ?? "-")",
             "attempt=\(attempt)",
             "elapsedMs=\(elapsedMs)",
-            // Decoder proof is not UI-render proof. Keep this explicitly
-            // unmeasured until the visible renderer supplies timestamps.
+
             "visibleInterruptionMs=unmeasured"
         ].joined(separator: " ")
         debugLog("[WebRTC][consumer-reset] \(report)")
@@ -1777,8 +1699,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    /// SET-3 (S60 C6-5): `dataSaver` is the effective Data Saver (the switch OR the system signal); it lowers what this
-    /// client receives through `DataSaverPolicy.reducesReceive`, like the legacy low quality flag.
     func applyRemoteConsumerBandwidthPolicy(
         focusedUserIds: Set<String>,
         visibleUserIds: Set<String>,
@@ -1793,9 +1713,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         let policyRevision = remoteConsumerPreferencePolicyRevision
         remoteVideoReceiveEnabled = receiveVideo
         remoteReceiveDataSaver = dataSaver
-        // Policy generations are part of reset ownership. Cancel a sleeping or
-        // in-flight reset immediately so stale top-layer evidence cannot cross
-        // a receive-disable or adaptive downgrade boundary.
+
         wakePlannedConsumerResetCoordinator()
         guard let socketManager else { return }
 
@@ -2039,7 +1957,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         let emergencyKeepVideo = isEmergency && emergencyKeepWebcamUserId == info.userId
         let isPoor = isEmergency || connectionQuality == .poor
         let isFair = connectionQuality == .fair
-        // SET-3 (C6-5): Data Saver reduces what you receive like the legacy low quality flag.
+
         let isReducedReceive = DataSaverPolicy.reducesReceive(isLowQuality: videoQuality == .low,
                                                               dataSaverOn: remoteReceiveDataSaver)
         let isConstrained = isPoor || isFair || isReducedReceive
@@ -2088,11 +2006,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         )
     }
 
-    // MARK: - RTP Capabilities (from server)
-
     var serverRtpCapabilities: RtpCapabilities?
-
-    // MARK: - Media Sources and Tracks
 
     static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -2110,15 +2024,12 @@ final class WebRTCClient: NSObject, ObservableObject {
     var rtcLocalVideoTrack: RTCVideoTrack?
     var rtcLocalAudioTrack: RTCAudioTrack?
 
-    // MARK: - Camera State
-
     var currentCameraPosition: AVCaptureDevice.Position = .front
     var currentCameraFacing: LocalCameraFacing {
         currentCameraPosition == .front ? .front : .back
     }
     var captureSession: AVCaptureSession?
-    /// S70 3 c (SYS-4): the camera keeps publishing in PiP and in a non-frontmost iPad window (iOS 16+, no entitlement
-    /// at the iOS 17 floor). CallPresence reads it for `cameraContinuesInBackground`.
+
     private(set) var isMultitaskingCameraAccessEnabled = false
     private var currentVideoQuality: VideoQuality = .standard
     private var currentLocalBandwidthQuality: ConnectionQuality = .unknown
@@ -2144,30 +2055,15 @@ final class WebRTCClient: NSObject, ObservableObject {
     private var webcamTopologyWakeTask: Task<Void, Never>?
     private var webcamTopologyControlGeneration = 0
     private var intentionalLocalVideoProducerCloseIds: Set<String> = []
-    /// Audio twin of `intentionalLocalVideoProducerCloseIds`. A microphone
-    /// replacement (bandwidth refresh, route recovery) displaces its
-    /// predecessor on the SFU, which broadcasts `producerClosed` for it to the
-    /// owner before acking the successor; the off-main create lets that event
-    /// reach the view model first, so it must not tear down the live mic.
+
     private var intentionalLocalAudioProducerCloseIds: Set<String> = []
-    /// The in-flight `startProducingAudio`. Concurrent starts join it instead
-    /// of racing a second produce: the SFU keeps only the later producer, so
-    /// two overlapping creates would commit the one it already closed.
+
     private var audioStartTask: Task<Void, Error>?
-    /// S60 C6-7: the Settings test tone, kept alive until it finishes (`playTestTone()`).
+
     private var testTonePlayer: AVAudioPlayer?
-    /// libmediasoupclient's SendTransport/SendHandler state is unsynchronized,
-    /// so every blocking send-side call (producer create and close, transport
-    /// close, ICE restart) runs on the serial queue of the transport it
-    /// touches, one at a time and in FIFO order, like mediasoup-client's
-    /// AwaitQueue. Each send transport gets its own queue, created and
-    /// dropped with it, so an old session's create still blocked on its
-    /// produce ack never stalls the next session's transport. Never `sync`
-    /// onto one: a create blocks it until `onProduce` finishes on the
-    /// MainActor.
+
     private var sendTransportOperationQueue: DispatchQueue?
-    /// Keep each producer's queue until its close finishes. A second close
-    /// while the first is queued must not fall through to a newer transport.
+
     private var sendProducerOperationQueues: [ObjectIdentifier: DispatchQueue] = [:]
     private var lastWebcamProducerSignalingError: Error?
     private var audioProducerBandwidthQuality: ConnectionQuality = .unknown
@@ -2219,14 +2115,11 @@ final class WebRTCClient: NSObject, ObservableObject {
         let videoGoogleStartBitrate: Int
     }
 
-    // MARK: - Audio Session
-
     var audioSession = AVAudioSession.sharedInstance()
-    /// The platform target the route owner told this client to apply (S30 CC4). The person's explicit choice lives
-    /// in `AudioRouteOwner.preferredRouteIntent`, so clearing a target whose device left never erases it.
+
     private var selectedAudioInputId: String?
     private var selectedAudioOutputId: String?
-    /// The single routing authority this client is the iOS backend of (SYS-2); tests may substitute their own.
+
     var routeOwnerOverride: AudioRouteOwner?
     var routeOwner: AudioRouteOwner { routeOwnerOverride ?? AudioRouteOwner.shared }
     private var routeOwnerAttached = false
@@ -2234,15 +2127,10 @@ final class WebRTCClient: NSObject, ObservableObject {
     private var localVideoTrackSequence = 0
     private var screenVideoTrackSequence = 0
 
-    // MARK: - Socket Manager Reference
-
     weak var socketManager: SocketIOManager?
 
-    // MARK: - Setup
-
     func configure(socketManager: SocketIOManager, rtpCapabilities: RtpCapabilities, iceServersJSON: String?) {
-        // S70 5 c: WebRTC manual audio before the first peer connection; the route owner's backend before any
-        // route report (SYS-2).
+
         CallAudioSession.shared.prepareWebRTCManualAudio()
         ensureRouteOwnerAttached()
         configurationGeneration += 1
@@ -2267,8 +2155,6 @@ final class WebRTCClient: NSObject, ObservableObject {
             debugLog("[WebRTC] Failed to load device capabilities: \(error)")
         }
     }
-
-    // MARK: - Transport Creation
 
     func createTransports() async throws {
         try await createSendTransportIfNeeded()
@@ -2401,17 +2287,11 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Produce Local Media
-
     func startProducingAudio() async throws {
-        // Captured before the first await: a mute during transport creation,
-        // the permission prompt or the producer create cancels this start. A
-        // later unmute starts its own producer.
+
         let muteIntentGeneration = localAudioMuteIntentGeneration
         let generation = configurationGeneration
-        // Single-flight: join an in-flight start rather than racing a second
-        // produce (the SFU displaces and closes the earlier producer). A mute
-        // or teardown that lands while joining cancels this start too.
+
         while let inFlight = audioStartTask {
             _ = try? await inFlight.value
             if audioStartTask == inFlight {
@@ -2444,8 +2324,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             throw WebRTCError.noTransport
         }
         if hasLocalAudioProducer {
-            // This start may have waited behind another one and a MainActor
-            // hop; a mute that landed since the caller's capture wins.
+
             guard localAudioMuteIntentGeneration == muteIntentGeneration else {
                 debugLog("[WebRTC] Microphone start cancelled by a mute before resuming")
                 return
@@ -2478,16 +2357,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
         try configureCallAudioSession()
 
-        // The track stays disabled until commit, so a mute that lands during
-        // the off-main create never has a live microphone to silence.
         let microphone = createMicrophoneAudioTrack()
         let producer = try await createMicrophoneProducer(on: sendTransport, track: microphone.track)
-        // The off-main create suspends this actor, so never commit over newer
-        // state. A torn-down session or replaced transport is stale. Another
-        // start that already committed, or a mute applied meanwhile, wins
-        // without an error (callers treat "session was replaced" as a reason
-        // to rejoin): committing would orphan a second unmutable producer or
-        // override the mute with a live microphone.
+
         let isSameSession = generation == configurationGeneration
         let isStale = !isSameSession || self.sendTransport !== sendTransport
         if isStale || audioProducer != nil || localAudioMuteIntentGeneration != muteIntentGeneration {
@@ -2522,16 +2394,11 @@ final class WebRTCClient: NSObject, ObservableObject {
         debugLog("[WebRTC] Audio producer created: \(producer.id)")
     }
 
-    /// Returns the track disabled. Every caller enables it only when it
-    /// commits the producer live, so a mute that lands during the off-main
-    /// create cannot leave an unpaused, audible microphone behind.
     private func createMicrophoneAudioTrack() -> (source: RTCAudioSource, track: RTCAudioTrack) {
-        // S60 C6-1: every new microphone source follows the Settings preference (`conclave.pref.noiseSuppression`,
-        // default on); `applyNoiseSuppression(_:)` passes the new value explicitly.
+
         createMicrophoneAudioTrack(noiseSuppression: SettingsPreferences.noiseSuppression())
     }
 
-    /// The same, with an explicit `googNoiseSuppression` value; the track is returned disabled.
     private func createMicrophoneAudioTrack(noiseSuppression: Bool) -> (source: RTCAudioSource, track: RTCAudioTrack) {
         let audioConstraints = RTCMediaConstraints(
             mandatoryConstraints: nil,
@@ -2581,8 +2448,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    /// A replacement created unpaused that a mute overtook: pause it on the
-    /// SFU too (toggleMute acts on the slot's current producer).
     private func markMicrophoneProducerMuted(_ producerId: String, reason: String) async {
         do {
             try await socketManager?.toggleMute(producerId: producerId, paused: true)
@@ -2653,10 +2518,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func startProducingVideo() async throws {
-        // Captured before the first await: a camera-off during transport
-        // creation, the permission prompt or the producer create cancels this
-        // start, as a mute cancels a microphone start. A later camera-on
-        // starts its own producer.
+
         let offIntentGeneration = localVideoOffIntentGeneration
         try await createSendTransportIfNeeded()
         guard let sendTransport = sendTransport else {
@@ -2728,20 +2590,13 @@ final class WebRTCClient: NSObject, ObservableObject {
                 label: "camera"
             )
             pendingProducer = producer
-            // The off-main create suspends this actor. If the session was torn
-            // down or the camera was turned off meanwhile, tell the SFU (same
-            // session only) and let the catch below stop this attempt.
+
             let isSameSession = generation == configurationGeneration
             let isStale = !isSameSession || self.sendTransport !== sendTransport
             let isCancelled = localVideoOffIntentGeneration != offIntentGeneration
             guard !isStale, !isCancelled, videoCapturer === capturer else {
                 if !isStale, isCancelled {
-                    // A camera-off landed during the create: never publish.
-                    // Stop this attempt's media before the awaited SFU close,
-                    // so no frame flows meanwhile; drop it without an error and
-                    // without reporting the camera on, and clear only capture
-                    // state it still owns (a newer start may have installed
-                    // its own).
+
                     pendingProducer = nil
                     track.isEnabled = false
                     closeSendProducer(producer)
@@ -2760,10 +2615,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 if isStale || videoCapturer == nil {
                     throw WebRTCError.staleConfiguration
                 }
-                // A newer start in the same session owns the camera: drop this
-                // attempt without an error, like the microphone start (callers
-                // treat "session was replaced" as a reason to rejoin), and leave
-                // the shared camera state to the winner.
+
                 pendingProducer = nil
                 closeSendProducer(producer)
                 await capturer.stopCapture()
@@ -2793,15 +2645,11 @@ final class WebRTCClient: NSObject, ObservableObject {
             )
             localVideoTrack = trackWrapper
 
-            // The producer already starts with the resolved bandwidth parameters.
-            // Reapplying them while the native sender is still being created can crash
-            // physical iOS devices inside WebRTC's sender parameter update path.
             debugLog("[WebRTC] Video producer created: \(producer.id)")
         } catch {
             closeSendProducer(pendingProducer)
             await capturer.stopCapture()
-            // Only reset shared camera state this attempt still owns; a newer
-            // start may have installed its own capturer while this one awaited.
+
             if videoCapturer === capturer {
                 videoCapturer = nil
                 videoSource = nil
@@ -2815,8 +2663,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     func startCameraCapture() throws {
         guard let capturer = videoCapturer else { return }
-        // SET-3 (S60 C6-8, RECONCILE R22): a running Settings preview hands the camera over before this capturer starts,
-        // so two captures never compete and the preview never reaches the producer.
+
         LocalPreviewController.shared.releaseScopedPreviewForCallCamera()
 
         guard let camera = getCameraDevice(position: currentCameraPosition) else {
@@ -2830,7 +2677,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         let format = try selectFormat(for: camera, targetWidth: profile.width, targetHeight: profile.height)
         let fps = try selectFPS(for: format, targetFPS: profile.fps)
 
-        // Must be set before the session starts running (AVCaptureSession.h).
         let session = capturer.captureSession
         if !session.isRunning && session.isMultitaskingCameraAccessSupported && !session.isMultitaskingCameraAccessEnabled {
             session.isMultitaskingCameraAccessEnabled = true
@@ -2928,9 +2774,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             guard index == 0 else { return spec.scaleResolutionDownBy }
             switch connectionQuality {
             case .emergency, .poor:
-                // Native capture stays at 640x360 on constrained links for
-                // broad device-format support. Keep the only active layer at
-                // 320x180 instead of double-scaling standard quality to 160x90.
+
                 return min(spec.scaleResolutionDownBy, 2)
             default:
                 return spec.scaleResolutionDownBy
@@ -2996,8 +2840,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    /// A true mediasoup simple producer: one VP8 encoding, no RID fan-out, and
-    /// the same full-resolution camera track already feeding the predecessor.
     private func webcamSingleReceiverEncodings() -> [RTCRtpEncodingParameters] {
         let encoding = RTCRtpEncodingParameters()
         encoding.isActive = true
@@ -3009,8 +2851,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         return [encoding]
     }
 
-    /// The compensating topology is always the known-good standard VP8 ladder.
-    /// Adaptive sender updates may constrain it later without changing topology.
     private func restoredAdaptiveWebcamEncodings() -> [RTCRtpEncodingParameters] {
         webcamEncodings(for: currentVideoQuality, connectionQuality: .good)
     }
@@ -3138,11 +2978,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         return [encoding]
     }
 
-    /// mediasoup's Swift wrapper synchronously waits for its `onProduce`
-    /// callback. That callback performs async socket signaling on MainActor, so
-    /// invoking `createProducer` on MainActor deadlocks until iOS's scene-update
-    /// watchdog kills the app. Run the blocking wrapper call off-main; awaiting
-    /// it keeps this actor re-entrant so `onProduce` can complete normally.
     private func createScreenProducerOffMain(
         on transport: SendTransport,
         track: RTCVideoTrack,
@@ -3175,12 +3010,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         return try requireRegisteredProducer(result.producer, label: "screen", queue: queue)
     }
 
-    /// The microphone and webcam twin of `createScreenProducerOffMain`: the
-    /// same blocking `onProduce` round trip deadlocks MainActor for these
-    /// producers too. Values that read actor state (codec options, encodings,
-    /// appData) are resolved by the caller before the hop. The actor is
-    /// re-entrant while this awaits, so callers must re-check their
-    /// generation/transport guards before committing the returned producer.
     private func createProducerOffMain(
         on transport: SendTransport,
         track: RTCMediaStreamTrack,
@@ -3217,8 +3046,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         DispatchQueue(label: "conclave.webrtc.send-transport", qos: .userInitiated)
     }
 
-    /// The serial queue of `transport`. Only the current send transport takes
-    /// new work; a create on a replaced or torn-down one is stale.
     private func sendOperationQueue(for transport: SendTransport) throws -> DispatchQueue {
         guard transport === sendTransport, let queue = sendTransportOperationQueue else {
             throw WebRTCError.staleConfiguration
@@ -3226,9 +3053,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         return queue
     }
 
-    /// Runs one blocking libmediasoupclient send-side call on the serial queue
-    /// of the transport it touches and resumes the caller with its result.
-    /// The MainActor stays free while it waits, so `onProduce` can finish.
     @discardableResult
     private func performSendTransportOperation<T: Sendable>(
         on queue: DispatchQueue,
@@ -3241,13 +3065,9 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    /// Closes a send-side producer behind any in-flight create on the native
-    /// SendTransport it was created on. Callers drop their reference right
-    /// away.
     private func closeSendProducer(_ producer: Producer?) {
         guard let producer else { return }
-        // Every usable producer is registered before it reaches a caller. An
-        // absent registration means its native close has already completed.
+
         guard let queue = sendProducerOperationQueues[ObjectIdentifier(producer)] else { return }
         closeSendProducer(producer, on: queue)
     }
@@ -3257,8 +3077,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         queue.async { [weak self] in
             handle.producer?.close()
             Task { @MainActor [weak self] in
-                // Retain the producer until removing its registration, so its
-                // ObjectIdentifier cannot be reused by a new producer first.
+
                 if let producer = handle.producer {
                     self?.sendProducerOperationQueues.removeValue(forKey: ObjectIdentifier(producer))
                 }
@@ -3266,8 +3085,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    /// Closes a send transport on its own queue, behind any in-flight create
-    /// on it, keeping the Device alive until then.
     private func closeSendTransport(_ transport: SendTransport?, on queue: DispatchQueue?, device: Device?) {
         guard let transport else { return }
         let handle = SendTransportOperationHandle(transport: transport, device: device)
@@ -3317,8 +3134,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
         return max(1, min(targetFPS, maxFrameRate))
     }
-
-    // MARK: - Consume Remote Media
 
     private enum ConsumerRegistrationVisibility {
         case currentVisible
@@ -3475,8 +3290,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         consumer.delegate = self
         consumer.resume()
 
-        // A user can produce a webcam AND a screen-share at once - store them
-        // under distinct keys so one never overwrites the other.
         let isScreenVideo = (producerType == "screen" && response.kind == "video")
         let trackKey = isScreenVideo ? "\(producerUserId)-screen" : producerUserId
         nextConsumerGeneration += 1
@@ -3541,9 +3354,6 @@ final class WebRTCClient: NSObject, ObservableObject {
             firstDecodedVideoFrameRenderers[consumerIdentity] = firstFrameRenderer
         }
 
-        // Request a keyframe on the initial video consume so the decoder gets a
-        // fresh IDR immediately instead of showing nothing/garbage until the
-        // producer's next natural keyframe.
         if visibility == .currentVisible,
            response.kind == "video",
            producerType == ProducerType.webcam.rawValue {
@@ -3569,9 +3379,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 consumers[response.id] = resumedInfo
             }
         } catch {
-            // A consumer is not usable until the SFU has resumed its server
-            // half. Do not leave a locally registered, server-paused track
-            // behind: MeetingViewModel must be able to retry this producer.
+
             if let info = consumers[response.id] {
                 removeConsumer(
                     consumerId: response.id,
@@ -3689,10 +3497,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         predecessorConsumerId: String,
         socket: SocketIOManager
     ) async -> Bool {
-        // Run cleanup in an unstructured MainActor task so cancellation of the
-        // reset coordinator cannot cancel the bounded abort-ACK retry sequence
-        // that fences a late consume completion. The caller still waits for
-        // the result before another consumer-reset attempt can begin.
+
         let confirmation = Task { @MainActor in
             do {
                 _ = try await socket.abortConsumerHandoffAndWait(
@@ -3753,7 +3558,6 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
         }
 
-        // User left entirely (empty producerId path) - clear both their slots.
         if producerId.isEmpty, !userId.isEmpty {
             for key in Array(remoteVideoTracks.keys) where trackKeyMatchesUser(key, userId: userId) {
                 remoteVideoTracks.removeValue(forKey: key)
@@ -3761,9 +3565,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    /// Close one exact consumer generation without invalidating the producer.
-    /// This is the predecessor-close primitive required by a future overlapping
-    /// consumer handoff after its successor has decoded a frame.
     func closeConsumer(consumerId: String) {
         guard let info = consumers[consumerId] else { return }
         removeConsumer(
@@ -3819,14 +3620,12 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Media Control
-
     func setAudioEnabled(_ enabled: Bool) async throws {
         let previous = localAudioEnabled
         if !enabled {
             localAudioMuteIntentGeneration += 1
             localAudioIntentEnabled = false
-            // Silence capture even if signaling or the producer disappeared.
+
             audioProducer?.pause()
             rtcLocalAudioTrack?.isEnabled = false
             localAudioEnabled = false
@@ -3863,14 +3662,11 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
         } catch {
             guard generation == configurationGeneration else { throw error }
-            // A later mute or a different producer owns capture now. Neither
-            // a late success nor a rollback may change that owner's state.
+
             guard localAudioMuteIntentGeneration == muteIntentGeneration,
                   audioProducer === producer, !producer.closed else { return }
             if !enabled {
-                // A failed mute fails closed: keep the producer paused and the
-                // track silent (nothing audible leaves the device whatever the
-                // SFU applied) and let the caller report the error.
+
                 rtcLocalAudioTrack?.isEnabled = false
                 localAudioEnabled = false
                 debugLog("[WebRTC] Failed to signal audio mute; kept the local mute: \(error)")
@@ -3895,12 +3691,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    /// Applies a privacy-critical local mute immediately while the signaling
-    /// connection is unavailable. The user's intent is republished by the
-    /// meeting view model after recovery; no socket acknowledgement is needed
-    /// (or possible) here. The view model also calls this for a mute while no
-    /// usable producer exists, so an in-flight `startProducingAudio` drops its
-    /// producer instead of committing it live.
     func suspendLocalAudioForRecovery() {
         localAudioMuteIntentGeneration += 1
         localAudioIntentEnabled = false
@@ -3916,8 +3706,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     func reassertLocalAudioProducerUnmuted() async throws {
         guard let socket = socketManager else { throw WebRTCError.notConfigured }
         guard let producer = audioProducer else { throw WebRTCError.noTransport }
-        // Every live commit sets the intent, so a live microphone without it
-        // has a mute awaiting its ack: never resume over that.
+
         guard hasLocalAudioProducer, localAudioEnabled, localAudioIntentEnabled else { return }
 
         let generation = configurationGeneration
@@ -3926,8 +3715,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         producer.resume()
         rtcLocalAudioTrack?.isEnabled = true
         try await socket.toggleMute(producerId: producer.id, paused: false)
-        // A teardown, a mute or a replacement that landed during the ack owns
-        // capture now: an orphaned confirmation reasserts nothing.
+
         guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
         guard localAudioMuteIntentGeneration == muteIntentGeneration,
               audioProducer === producer, !producer.closed else { return }
@@ -3944,8 +3732,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         let generation = configurationGeneration
         let offIntentGeneration = localVideoOffIntentGeneration
         let previous = localVideoEnabled
-        // The capturer an enable starts (when the camera was off), so a failure
-        // with no producer left can stop exactly that capture.
+
         let enableCapturer = videoCapturer
         do {
             if enabled {
@@ -3961,9 +3748,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 producer.pause()
             }
             try await socket.toggleCamera(producerId: producer.id, paused: !enabled)
-            // A teardown, a newer camera-off or a replacement producer that
-            // landed during the ack owns the camera now: a late success must
-            // not touch its state.
+
             guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }
             guard localVideoOffIntentGeneration == offIntentGeneration,
                   videoProducer === producer, !producer.closed else { return }
@@ -3977,18 +3762,12 @@ final class WebRTCClient: NSObject, ObservableObject {
                 await capturer?.stopCapture()
             }
         } catch {
-            // Roll back only while this call still owns the camera. After a
-            // teardown, rethrow and touch nothing. A newer camera-off or a
-            // replacement producer owns the camera; with no producer left,
-            // rethrow so the caller can recreate one.
+
             guard generation == configurationGeneration else { throw error }
             guard localVideoOffIntentGeneration == offIntentGeneration else { return }
             guard videoProducer === producer else {
                 if videoProducer == nil {
-                    // A same-session path cleared the producer without
-                    // stopping capture: stop the capture this enable started
-                    // (only while it is still the current capturer), then let
-                    // the caller recreate a producer.
+
                     if enabled, !previous, let enableCapturer, videoCapturer === enableCapturer {
                         await enableCapturer.stopCapture()
                     }
@@ -4013,9 +3792,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    /// Stops local camera capture without touching signaling. Capture the old
-    /// capturer before suspension so replacement media cannot be stopped if
-    /// reconnect setup completes while `stopCapture()` is awaiting.
     func suspendLocalVideoForRecovery() async {
         localVideoOffIntentGeneration += 1
         invalidateWebcamReceiverCapacityAuthority()
@@ -4044,7 +3820,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func closeLocalVideoProducer() async {
-        // A camera-off: cancels a camera start still in flight.
+
         localVideoOffIntentGeneration += 1
         guard let producerId = videoProducer?.id else {
             await clearLocalWebcamCaptureState()
@@ -4074,7 +3850,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         rtcLocalVideoTrack = nil
         localVideoTrack?.isEnabled = false
         localVideoTrack = nil
-        // As closeLocalMedia: clear only state this close still owns.
+
         let capturer = videoCapturer
         await capturer?.stopCapture()
         if videoCapturer === capturer {
@@ -4104,9 +3880,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         let isWebcam = type == ProducerType.webcam.rawValue
         let isScreen = type == ProducerType.screen.rawValue
 
-        // Closing whatever camera there is (no id: a server camera-off) is a
-        // camera-off: it cancels a camera start still in flight. A close by
-        // id (the SFU closed that producer) is not an intent.
         if kind == "video", isWebcam, producerId == nil {
             localVideoOffIntentGeneration += 1
         }
@@ -4130,9 +3903,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             localVideoTrack?.isEnabled = false
             localVideoTrack = nil
             rtcLocalVideoTrack = nil
-            // A newer camera-on can install its own capturer, or commit its
-            // producer, while this stop is awaited: clear only state this
-            // close still owns.
+
             let capturer = videoCapturer
             await capturer?.stopCapture()
             if videoCapturer === capturer {
@@ -4249,22 +4020,14 @@ final class WebRTCClient: NSObject, ObservableObject {
         evaluateWebcamTopologyTransition()
     }
 
-    /// The SFU may broadcast predecessor closure before the new produce call
-    /// returns. Consume the marker before MeetingViewModel clears camera state
-    /// or schedules recovery; the successor reference is committed separately.
     func consumeIntentionalLocalVideoProducerClose(producerId: String) -> Bool {
         intentionalLocalVideoProducerCloseIds.remove(producerId) != nil
     }
 
-    /// Microphone twin of `consumeIntentionalLocalVideoProducerClose`: the
-    /// predecessor of an in-flight microphone replacement is closed by the SFU
-    /// on purpose, so the view model must not tear down the mic or restart it.
     func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool {
         intentionalLocalAudioProducerCloseIds.remove(producerId) != nil
     }
 
-    /// Must precede the replacement create: the SFU broadcasts the
-    /// predecessor's close before acking its successor.
     private func markIntentionalLocalAudioProducerClose(_ producerId: String) {
         if intentionalLocalAudioProducerCloseIds.count >= 32 {
             intentionalLocalAudioProducerCloseIds.removeAll()
@@ -4559,11 +4322,9 @@ final class WebRTCClient: NSObject, ObservableObject {
             if intentionalLocalVideoProducerCloseIds.count >= 32 {
                 intentionalLocalVideoProducerCloseIds.removeAll()
             }
-            // Must precede createProducer: server replacement can broadcast the
-            // predecessor close before the callback returns its successor id.
+
             intentionalLocalVideoProducerCloseIds.insert(oldProducer.id)
-            // Off-main for the same onProduce deadlock; the staleness guard
-            // below already re-checks state after this suspension.
+
             let producer = try await createProducerOffMain(
                 on: sendTransport,
                 track: track,
@@ -4596,8 +4357,6 @@ final class WebRTCClient: NSObject, ObservableObject {
                 throw WebRTCError.staleConfiguration
             }
 
-            // Commit successor first. Any queued predecessor notification now
-            // cannot clear this producer even if its intentional marker was used.
             videoProducer = producer
             webcamProducerTopology = targetTopology
             localVideoTrack = VideoTrackWrapper(
@@ -4706,8 +4465,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func refreshLocalMediaForQualitySettings() async {
-        // iOS updates live sender parameters and capture constraints in
-        // updateMediaPublishConfiguration, so no producer replacement is needed.
+
     }
 
     func updateVideoQuality(_ quality: VideoQuality) {
@@ -4832,9 +4590,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         var pendingTrack: RTCAudioTrack?
         let generation = configurationGeneration
         defer {
-            // A cleanup during the off-main create owns the local-state
-            // callbacks (a rejoin suppresses them on purpose); reporting a
-            // mute for the torn-down session would flip the restored intent.
+
             if generation == configurationGeneration {
                 suppressLocalStateCallbacks = previousSuppressLocalStateCallbacks
                 audioBandwidthRefreshInFlight = false
@@ -4847,9 +4603,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         do {
             try configureCallAudioSession()
             let oldTrack = rtcLocalAudioTrack
-            // Captured before the create: a mute that lands meanwhile (even one
-            // still awaiting its toggleMute ack, while localAudioEnabled is
-            // still true) must not be undone by committing a live microphone.
+
             let muteIntentGeneration = localAudioMuteIntentGeneration
             let microphone = createMicrophoneAudioTrack()
             pendingTrack = microphone.track
@@ -4858,14 +4612,12 @@ final class WebRTCClient: NSObject, ObservableObject {
             do {
                 nextProducer = try await createMicrophoneProducer(on: sendTransport, track: microphone.track)
             } catch {
-                // The SFU never displaced the predecessor.
+
                 intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
                 throw error
             }
             pendingProducer = nextProducer
-            // The off-main create suspends this actor. A torn-down session, a
-            // replaced transport, or another owner of the microphone wins:
-            // drop the replacement instead of committing it over newer state.
+
             guard generation == configurationGeneration,
                   self.sendTransport === sendTransport,
                   audioProducer === oldProducer else {
@@ -4880,10 +4632,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 pendingProducer = nil
                 return
             }
-            // The SFU displaced and closed the predecessor before acking this
-            // producer, so never fall back to it: commit the replacement, and
-            // keep it paused and server-muted if a mute landed meanwhile (or
-            // its ack did: localAudioEnabled is false).
+
             let muted = isLocalAudioMuteInEffect(since: muteIntentGeneration) ||
                 !localAudioEnabled ||
                 !localAudioIntentEnabled
@@ -4911,11 +4660,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    /// Installs a microphone replacement whose create already returned, so
-    /// the SFU has displaced (and closed) `oldProducer`. A replacement that a
-    /// mute overtook is committed paused with its track disabled (the caller
-    /// then server-mutes it); otherwise it goes live. The predecessor is
-    /// closed locally only: a second `closeProducer` round trip finds nothing.
     private func commitMicrophoneReplacement(
         _ nextProducer: Producer,
         microphone: (source: RTCAudioSource, track: RTCAudioTrack),
@@ -4943,15 +4687,12 @@ final class WebRTCClient: NSObject, ObservableObject {
         oldTrack?.isEnabled = false
     }
 
-    /// True when a mute landed after `muteIntentGeneration` was captured and
-    /// no later unmute superseded it.
     private func isLocalAudioMuteInEffect(since muteIntentGeneration: Int) -> Bool {
         localAudioMuteIntentGeneration != muteIntentGeneration && !localAudioIntentEnabled
     }
 
     func refreshLocalVideoProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async {
-        // iOS exposes live RTCRtpSender parameters, so applyLocalBandwidthProfile
-        // already updates webcam bitrate/FPS/layer caps without a producer churn.
+
     }
 
     func refreshLocalScreenProducerForBandwidthProfile(connectionQuality: ConnectionQuality) async {
@@ -5062,8 +4803,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Get Video Track for Rendering
-
     func getLocalVideoTrack() -> RTCVideoTrack? {
         return rtcLocalVideoTrack
     }
@@ -5094,10 +4833,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         return normalized.components(separatedBy: "#").first ?? normalized
     }
 
-    // MARK: - Active Speaker (audio levels)
-
-    /// Reads `audioLevel` (0.0-1.0, RMS-derived) from local producer and remote
-    /// consumer WebRTC stats. The shared VM picks the loudest above a threshold.
     func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] {
         var levels: [String: Double] = [:]
         for (_, info) in consumers where info.kind == "audio" {
@@ -5144,9 +4879,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         return best
     }
 
-    // MARK: - Video freeze watchdog
-
-    // Last decode progress + consecutive stall count per remote video consumer.
     private var videoFreezeStats: [String: (frames: Double, bytes: Double, stalls: Int)] = [:]
 
     private static func statsNumber(_ obj: [String: Any], _ key: String) -> Double? {
@@ -5155,8 +4887,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         if let n = obj[key] as? NSNumber { return n.doubleValue }
         return nil
     }
-
-    // MARK: - Connection quality
 
     private static let outgoingBandwidthFairBps = 500_000.0
     private static let outgoingBandwidthPoorBps = 240_000.0
@@ -5707,12 +5437,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         return nil
     }
 
-    /// Mirrors the web freeze watchdog: for each remote VIDEO consumer, if
-    /// framesDecoded stays flat while real media still flows (bytesReceived
-    /// climbs >= threshold) across 2 consecutive checks, the decoder is stuck on
-    /// a stale frame - request a keyframe (PLI) so it un-freezes. A frozen decoder
-    /// that keeps receiving RTP is invisible to track-mute callbacks, so this is
-    /// the only path that recovers it. Driven from the VM poll (~every 2s).
     func checkVideoFreezes() async {
         let minStallByteDelta: Double = 8000
         let stallSamplesBeforePLI = 2
@@ -5729,11 +5453,7 @@ final class WebRTCClient: NSObject, ObservableObject {
                 stalls = stuck ? prev.stalls + 1 : 0
             }
             if stalls >= stallSamplesBeforePLI {
-                // Still frozen - request a keyframe. Do NOT reset the stall
-                // counter: if this PLI is lost on a congested link, the next
-                // ~2s poll still sees frames flat and re-requests immediately,
-                // instead of waiting out two fresh stall windows (~4s of dead
-                // video). The counter resets to 0 naturally once frames advance.
+
                 try? await socketManager?.resumeConsumer(consumerId: consumerId, requestKeyFrame: true)
             }
             videoFreezeStats[consumerId] = (frames: sample.frames, bytes: sample.bytes, stalls: stalls)
@@ -5745,8 +5465,6 @@ final class WebRTCClient: NSObject, ObservableObject {
             remoteConsumerPreferenceInFlightIds.remove(key)
         }
     }
-
-    // MARK: - Cleanup
 
     func cleanup(
         notifyLocalState: Bool = true,
@@ -5779,8 +5497,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         audioBandwidthRefreshInFlight = false
         screenBandwidthRefreshInFlight = false
         intentionalLocalAudioProducerCloseIds.removeAll()
-        // An old-session start fails its own generation check; a start for the
-        // next session must not wait behind its signaling.
+
         audioStartTask = nil
         audioCaptureReassertionTask?.cancel()
         audioCaptureReassertionTask = nil
@@ -5818,17 +5535,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         videoSource = nil
         audioSource = nil
 
-        // Reset the produce-state flags. The VM (and this client) is now a
-        // process-wide singleton reused across calls, so leaving them stale-true
-        // would make the NEXT join's unmute / camera-on take the resume branch
-        // (`guard let producer = audioProducer else { return }`) against a
-        // now-nil producer - silently producing nothing (inaudible / black tile,
-        // no error). They're otherwise only cleared by onTransportClose, which
-        // cannot fire here since the producers are nilled before the transport
-        // closes. Resetting them makes a reused client create fresh producers.
-        // On a rejoin (notifyLocalState:false) suppress the change callbacks so
-        // their async @MainActor hop doesn't land after the VM restores the
-        // user's mute/camera intent and flip it back.
         suppressLocalStateCallbacks = !notifyLocalState
         localAudioIntentEnabled = false
         localAudioEnabled = false
@@ -5838,8 +5544,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         localVideoTrack = nil
         remoteVideoTracks.removeAll()
 
-        // Queued on the old transport's own queue, so the next session's
-        // transport never waits behind this one's in-flight create.
         closeSendTransport(sendTransport, on: sendTransportOperationQueue, device: device)
         receiveTransport?.close()
         sendTransport = nil
@@ -5857,8 +5561,6 @@ final class WebRTCClient: NSObject, ObservableObject {
 
         debugLog("[WebRTC] Cleanup complete")
     }
-
-    // MARK: - Legacy Camera Session (for preview without producing)
 
     func getCaptureSession() -> AVCaptureSession? {
         if captureSession == nil {
@@ -5893,8 +5595,6 @@ final class WebRTCClient: NSObject, ObservableObject {
         captureSession = nil
     }
 
-    // MARK: - JSON Helpers
-
     func encodeJSONString<T: Encodable>(_ value: T) throws -> String {
         let data = try JSONEncoder().encode(value)
         return String(data: data, encoding: .utf8) ?? "{}"
@@ -5906,8 +5606,6 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
 }
-
-// MARK: - Mediasoup Delegates
 
 extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, ProducerDelegate, ConsumerDelegate {
     nonisolated func onConnect(transport: any Transport, dtlsParameters: String) {
@@ -6015,7 +5713,7 @@ extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, Produce
 
     nonisolated func onTransportClose(in producer: Producer) {
         Task { @MainActor in
-            // Its transport already closed it natively, so a later close is a no-op.
+
             self.sendProducerOperationQueues.removeValue(forKey: ObjectIdentifier(producer))
             if producer.id == self.audioProducer?.id {
                 self.audioProducer = nil
@@ -6061,11 +5759,8 @@ extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, Produce
     }
 }
 
-// MARK: - Audio Device Routing (iOS)
-
 extension WebRTCClient {
-    /// Join, foreground, background and the healthy-producer reassert (VM sites, S70 5 c): configure-only while
-    /// CallKit owns the call; the refused fallback activates inside `CallAudioSession`.
+
     func activateCallAudioSession() {
         ensureRouteOwnerAttached()
         do {
@@ -6090,9 +5785,6 @@ extension WebRTCClient {
         callAudioSessionOptions()
     }
 
-    /// Category, mode and options, then the activation `AudioActivationPolicy` allows (none while CallKit owns the
-    /// call; `setActive(true)` lives only in `CallAudioSession`'s refused fallback), then the route owner's target.
-    /// The capture ladder passes `applyRoutes: false`: it re-asserts capture, never the route (S70 5 c).
     private func configureCallAudioSession(applyRoutes: Bool = true) throws {
         try CallAudioSession.configureCallCategory(on: audioSession, options: callAudioSessionOptions())
         try CallAudioSession.shared.activateIfAllowed(site: .webRTCConfigure)
@@ -6102,8 +5794,7 @@ extension WebRTCClient {
     }
 
     private func reassertLocalAudioCaptureState() {
-        // A mute still awaiting its ack leaves localAudioEnabled true; only
-        // the intent says the user wants this microphone live.
+
         guard localAudioEnabled, localAudioIntentEnabled else { return }
         guard hasLocalAudioProducer else {
             onLocalAudioProducerLost?()
@@ -6137,8 +5828,7 @@ extension WebRTCClient {
     }
 
     private func restartLocalAudioCaptureAfterRouteChange() {
-        // Never start while a mute awaits its ack (intent false): the
-        // replacement would be committed live after the mute finished.
+
         guard localAudioEnabled,
               localAudioIntentEnabled,
               hasLocalAudioProducer,
@@ -6170,7 +5860,7 @@ extension WebRTCClient {
     }
 
     private func recreateLocalAudioProducerAfterRouteChange(previousTrack: RTCAudioTrack) async {
-        // Captured before the create, as in the bandwidth refresh.
+
         let muteIntentGeneration = localAudioMuteIntentGeneration
         guard
             localAudioEnabled,
@@ -6205,16 +5895,12 @@ extension WebRTCClient {
             do {
                 nextProducer = try await createMicrophoneProducer(on: sendTransport, track: microphone.track)
             } catch {
-                // The SFU never displaced the predecessor.
+
                 intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)
                 throw error
             }
             pendingProducer = nextProducer
 
-            // A teardown, a replaced transport, or another owner of the
-            // microphone during the off-main create wins: silence the
-            // replacement before the close round trip and only restore the old
-            // track if it is still live.
             guard generation == configurationGeneration,
                   self.sendTransport === sendTransport,
                   audioProducer === oldProducer else {
@@ -6229,9 +5915,7 @@ extension WebRTCClient {
                 restoreRouteRecoveryTrackIfCurrent(previousTrack, muteIntentGeneration: muteIntentGeneration)
                 return
             }
-            // The SFU already displaced and closed the predecessor: commit the
-            // replacement, paused and server-muted if a mute landed meanwhile
-            // (or its ack did: localAudioEnabled is false).
+
             let muted = isLocalAudioMuteInEffect(since: muteIntentGeneration) ||
                 !localAudioEnabled ||
                 !localAudioIntentEnabled
@@ -6265,11 +5949,6 @@ extension WebRTCClient {
         }
     }
 
-    /// `restartLocalAudioCaptureAfterRouteChange` disabled `previousTrack`
-    /// before recreating. Re-enable it only while it is still the live,
-    /// unmuted microphone track the user wants live: a mute (even one still
-    /// awaiting its ack), cleanup, or replacement that landed before or during
-    /// the off-main create already set its final state.
     private func restoreRouteRecoveryTrackIfCurrent(_ previousTrack: RTCAudioTrack, muteIntentGeneration: Int) {
         guard !isLocalAudioMuteInEffect(since: muteIntentGeneration) else { return }
         if localAudioEnabled, localAudioIntentEnabled, rtcLocalAudioTrack === previousTrack {
@@ -6324,16 +6003,11 @@ extension WebRTCClient {
         devices.append(device)
     }
 
-    /// Microphone inputs reported by AVAudioSession (built-in mic, wired headset,
-    /// any connected Bluetooth HFP device). The port UID is the stable selection id.
     func availableAudioInputs() -> [AudioDevice] {
         let inputs = audioSession.availableInputs ?? []
         return inputs.map { AudioDevice(id: $0.uid, label: $0.portName) }
     }
 
-    /// Output routes. Built-in Speaker / Receiver (earpiece) are always offered;
-    /// any connected Bluetooth/wired output is added from the active route. The
-    /// id is a synthetic key we interpret in `selectAudioOutput`.
     func availableAudioOutputs() -> [AudioDevice] {
         var devices: [AudioDevice] = [
             AudioDevice(id: "speaker", label: "Speaker"),
@@ -6382,23 +6056,16 @@ extension WebRTCClient {
         }
     }
 
-    /// A person's microphone choice (legacy Settings picker): the route owner records the intent and applies it
-    /// through `applyOwnerInputTarget(_:)`.
     func selectAudioInput(_ deviceId: String) {
         ensureRouteOwnerAttached()
         routeOwner.requestInput(id: deviceId)
     }
 
-    /// A person's output choice (legacy Settings picker): it becomes the route owner's explicit intent, applied
-    /// through `applyOwnerOutputTarget(_:)` (S30 CC4: one routing authority).
     func selectAudioOutput(_ deviceId: String) {
         ensureRouteOwnerAttached()
         routeOwner.requestRoute(id: deviceId)
     }
 
-    // MARK: Route owner backend (SYS-2, S30 CC4)
-
-    /// Installs this client as the iOS backend of the route owner and the route source of `CallAudioSession`.
     func ensureRouteOwnerAttached() {
         guard !routeOwnerAttached else { return }
         routeOwnerAttached = true
@@ -6430,7 +6097,6 @@ extension WebRTCClient {
         }
     }
 
-    /// Owner-instructed output (a person's request, a restore, a fallback): the old `selectAudioOutput` body.
     private func applyOwnerOutputTarget(_ deviceId: String) -> Bool {
         let trimmed = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
         scheduleRouteRequestTimeoutCheck()
@@ -6447,14 +6113,11 @@ extension WebRTCClient {
         }
     }
 
-    /// A route chosen in system UI is already active: record it as the target so later configure paths keep it
-    /// instead of reverting it (S70 5 c: adopt, never fight).
     private func adoptOwnerOutputTarget(_ deviceId: String) {
         let trimmed = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
         selectedAudioOutputId = trimmed.isEmpty ? nil : trimmed
     }
 
-    /// Owner-instructed microphone input: the old `selectAudioInput` body.
     private func applyOwnerInputTarget(_ deviceId: String) -> Bool {
         let trimmed = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
@@ -6481,8 +6144,6 @@ extension WebRTCClient {
         routeOwner.publish(routePlatformState())
     }
 
-    /// S30 3 d: a requested switch that has not landed after 3 s fails; the owner keeps no timer, so the backend
-    /// checks a little after.
     private func scheduleRouteRequestTimeoutCheck() {
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 3_100_000_000)
@@ -6490,10 +6151,6 @@ extension WebRTCClient {
         }
     }
 
-    /// The routes present now, in the owner's vocabulary (S30 0.5, RECONCILE R23). The device's own receiver and
-    /// speaker are always listed (no receiver on iPad), then every external input and output, one row per device
-    /// (a headset's input and output ports can carry different UIDs and names). Names are the system's
-    /// port names (S30 3 g).
     func routePlatformState() -> AudioRoutePlatformState {
         let isPhone = UIDevice.current.userInterfaceIdiom == .phone
         var options: [AudioRouteOption] = []
@@ -6501,14 +6158,14 @@ extension WebRTCClient {
             options.append(AudioRouteOption(id: "receiver", kind: .receiver, name: ConclaveStrings.text("iPhone"), isConnecting: false))
         }
         options.append(AudioRouteOption(id: "speaker", kind: .speaker, name: ConclaveStrings.text("Speaker"), isConnecting: false))
-        // Outputs first, so an active device keeps its output UID.
+
         let ports = audioSession.currentRoute.outputs + (audioSession.availableInputs ?? [])
         for port in ports {
             let kind = Self.routeKind(for: port.portType)
             guard kind != .speaker, kind != .receiver else { continue }
             if port.portType == .builtInMic { continue }
             if kind == .unknown && !audioSession.currentRoute.outputs.contains(where: { $0.uid == port.uid }) { continue }
-            // One row per device: a wired or USB headset lists its microphone and its output under different names.
+
             let isDuplicate = options.contains { option in
                 option.id == port.uid ||
                     (option.kind == kind && (option.name == port.portName || kind == .wired || kind == .usb))
@@ -6560,7 +6217,6 @@ extension WebRTCClient {
         }
     }
 
-    /// Microphone inputs: the device's own microphone carries the receiver kind (the phone itself).
     static func inputKind(for port: AVAudioSession.Port) -> AudioRouteKind {
         port == .builtInMic ? .receiver : routeKind(for: port)
     }
@@ -6584,8 +6240,6 @@ extension WebRTCClient {
         }
     }
 
-    /// The input that belongs to an output id: the same UID, else (a Bluetooth headset whose output port carries a
-    /// different UID, as the route owner may list it) the hands-free input with the output's name.
     private func matchingCallInput(forOutputId outputId: String) -> AVAudioSessionPortDescription? {
         let inputs = audioSession.availableInputs ?? []
         if let sameId = inputs.first(where: { $0.uid == outputId }) {
@@ -6622,7 +6276,7 @@ extension WebRTCClient {
 
     private func applySelectedAudioRoutes() throws {
         normalizeSelectedAudioRoutes()
-        // The change this apply causes is the owner's own, not a choice made in system UI.
+
         routeOwner.noteOwnRouteRequest(targetId: selectedAudioOutputId ?? "")
 
         if let selectedAudioInputId {
@@ -6666,21 +6320,14 @@ extension WebRTCClient {
         }
     }
 
-    /// The legacy Settings "Test speaker" now plays the one shared test tone (S60 C6-7).
     func testSpeaker() {
         playTestTone()
     }
 
-    // MARK: - Settings video and connection (S60 C6-3, C6-9, D11; SET-3)
-
-    /// C6-3: whether your own local renderers mirror now: the front camera with Mirror My Video on. The sent stream is
-    /// never mirrored (`LocalVideoMirrorPolicy.mirrorsSentStream`): `RTCCameraVideoCapturer` delivers unmirrored frames
-    /// and nothing here flips them.
     var mirrorsLocalVideo: Bool {
         LocalVideoMirrorPolicy.mirrors(isFront: currentCameraFacing == .front, preference: LocalVideoMirrorPreference.shared.isOn)
     }
 
-    /// D11: the current camera's largest capture height and frame rate, so Advanced lists only what it supports.
     func cameraCaptureCapability() -> CameraCaptureCapability {
         guard let device = getCameraDevice(position: currentCameraPosition) else { return CameraCaptureCapability.unknown }
         var maxHeight: Int32 = 0
@@ -6695,8 +6342,6 @@ extension WebRTCClient {
         return CameraCaptureCapability(maxHeight: Int(maxHeight), maxFrameRate: Int(maxFrameRate))
     }
 
-    /// C6-9: one raw reading of the transports' stats for the Connection page (cumulative counters only; the shared
-    /// `ConnectionStatsPolicy` windows them, so the quality sampler's own windows are untouched). Nil without stats.
     func sampleConnectionStatsCounters() -> ConnectionStatsCounters? {
         var send: [[String: Any]] = []
         var receive: [[String: Any]] = []
@@ -6783,18 +6428,8 @@ extension WebRTCClient {
         (obj["nominated"] as? Bool) == true || (obj["state"] as? String) == "succeeded"
     }
 
-    // MARK: - Settings audio (S60 C6-1, C6-6, C6-7; SET-2)
-
-    /// C6-1: the live microphone track can be replaced with a source built with the new noise suppression value
-    /// (mediasoup `Producer.replaceTrack`, no renegotiation). [Unverified on device: if a device cell shows the
-    /// change does not take effect live, set this to false and the row reads "Applies the next time you join."]
     var supportsLiveNoiseSuppressionChange: Bool { true }
 
-    /// C6-1: builds a new microphone source with `enabled` as its `googNoiseSuppression` value, creates its track
-    /// disabled, replaces the live producer's track on the producer's send queue (AGENTS.md: every blocking send-side
-    /// call runs there), then enables the new track only if the newest mute intent is unmuted, re-checked after the
-    /// await. The producer is never closed or recreated (zero producerClose). Without a live microphone it returns
-    /// false and the next microphone start reads the stored preference.
     func applyNoiseSuppression(_ enabled: Bool) async -> Bool {
         guard let producer = audioProducer, !producer.closed,
               let queue = sendProducerOperationQueues[ObjectIdentifier(producer)] else { return false }
@@ -6811,7 +6446,7 @@ extension WebRTCClient {
             return false
         }
         guard generation == configurationGeneration, audioProducer === producer, !producer.closed else {
-            // The producer went away during the await; whatever replaced it builds its own source from the preference.
+
             microphone.track.isEnabled = false
             return false
         }
@@ -6819,21 +6454,16 @@ extension WebRTCClient {
         audioSource = microphone.source
         rtcLocalAudioTrack = microphone.track
         previousTrack?.isEnabled = false
-        // The newest intent wins: a mute that landed during the await left `localAudioIntentEnabled` false.
+
         microphone.track.isEnabled = localAudioIntentEnabled && localAudioEnabled
         return true
     }
 
-    /// C6-6: the sender's media-source audio level (0 to 1) for the Settings meter, polled at 10 Hz only while the
-    /// Microphone page is visible; 0 while muted (the track is disabled then).
     func sampleLocalMicrophoneLevel() -> Double {
         guard localAudioEnabled, rtcLocalAudioTrack?.isEnabled == true, let audioProducer else { return 0 }
         return Self.parseAudioLevel(audioProducer.stats) ?? 0
     }
 
-    /// C6-7: one test tone (`TestTonePolicy`) through the voice route: an `AVAudioPlayer` on the call's
-    /// `AVAudioSession` (CallAudioSession owns category, mode and activation), so it plays wherever call audio plays.
-    /// Tap only, never automatic.
     func playTestTone() {
         testTonePlayer?.stop()
         guard let player = try? AVAudioPlayer(data: Self.testToneWAVData()) else { return }
@@ -6844,7 +6474,6 @@ extension WebRTCClient {
         }
     }
 
-    /// 16-bit mono PCM of `TestTonePolicy` wrapped in a WAV header.
     private static func testToneWAVData() -> Data {
         let count = TestTonePolicy.sampleCount
         let rate = UInt32(TestTonePolicy.sampleRate)
@@ -6875,17 +6504,11 @@ extension WebRTCClient {
     }
 }
 
-// MARK: - ICE Server Model
-
 private struct IceServer: Encodable {
     let urls: [String]
     let username: String?
     let credential: String?
 }
-
-// MARK: - Errors
-
-// MARK: - Screen Sharing
 
 extension WebRTCClient {
     var screenCapturer: RTCVideoCapturer? {
@@ -6896,24 +6519,24 @@ extension WebRTCClient {
         screenVideoTrackSequence += 1
         return "screen\(screenVideoTrackSequence)"
     }
-    
+
     private var screenVideoCapturer: RTCVideoCapturer? {
         get { objc_getAssociatedObject(self, &screenCapturerKey) as? RTCVideoCapturer }
         set { objc_setAssociatedObject(self, &screenCapturerKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
     }
-    
+
     func startScreenSharing() async throws {
         try await createSendTransportIfNeeded()
         guard let sendTransport = sendTransport else {
             throw WebRTCError.noTransport
         }
-        
+
         let screenSource = Self.factory.videoSource()
         resetScreenFrameLimiter()
         updateScreenCaptureProfile(connectionQuality: currentLocalBandwidthQuality)
         self.screenVideoSource = screenSource
         self.screenVideoCapturer = RTCVideoCapturer(delegate: screenSource)
-        
+
         let screenTrack = Self.factory.videoTrack(with: screenSource, trackId: nextScreenVideoTrackId())
         screenTrack.isEnabled = true
         self.rtcScreenTrack = screenTrack
@@ -6936,7 +6559,7 @@ extension WebRTCClient {
             screenProducer = producer
             screenProducerBandwidthQuality = currentLocalBandwidthQuality
             evaluateWebcamTopologyTransition()
-            // As above, defer any later bandwidth changes until after creation.
+
             debugLog("[WebRTC] Screen sharing producer created: \(producer.id)")
         } catch {
             screenTrack.isEnabled = false
@@ -6948,23 +6571,22 @@ extension WebRTCClient {
             throw error
         }
     }
-    
+
     func stopScreenSharing() async {
         closeSendProducer(screenProducer)
         screenProducer = nil
         screenProducerBandwidthQuality = .unknown
         evaluateWebcamTopologyTransition()
-        
+
         rtcScreenTrack?.isEnabled = false
         rtcScreenTrack = nil
         screenVideoSource = nil
         screenVideoCapturer = nil
         resetScreenFrameLimiter()
-        
+
         debugLog("[WebRTC] Screen sharing stopped")
     }
-    
-    /// Feed a video frame from screen capture to WebRTC
+
     func feedScreenFrame(_ frame: RTCVideoFrame) {
         guard let source = screenVideoSource,
               let capturer = screenVideoCapturer else { return }
@@ -6995,12 +6617,12 @@ extension WebRTCClient {
         lastForwardedScreenFrameNs = 0
         screenFrameEncoderPump.reset()
     }
-    
+
     private var screenVideoSource: RTCVideoSource? {
         get { objc_getAssociatedObject(self, &screenSourceKey) as? RTCVideoSource }
         set { objc_setAssociatedObject(self, &screenSourceKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
     }
-    
+
     fileprivate var rtcScreenTrack: RTCVideoTrack? {
         get { objc_getAssociatedObject(self, &screenTrackKey) as? RTCVideoTrack }
         set { objc_setAssociatedObject(self, &screenTrackKey, newValue, .OBJC_ASSOCIATION_RETAIN) }

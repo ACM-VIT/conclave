@@ -17,14 +17,6 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/*
- * Badges and tags (F00 C06). Badges are never their own node: the owner's description or state description carries
- * the count ("Chat, 3 unread"), tags fold into the row's text and tile badges into the tile's state description.
- * Count and dot are primaryContainer with onPrimaryContainer numerals (ink on coral 6.374, never white); tags are
- * neutral, never coral.
- */
-
-/** The count badge: "99+" above 99, nothing at zero, cleared from semantics. */
 @Composable
 internal fun ConclaveCountBadge(count: Int, identifier: String, modifier: Modifier = Modifier) {
     if (!ConclaveBadgeCount.isVisible(count)) return
@@ -34,13 +26,11 @@ internal fun ConclaveCountBadge(count: Int, identifier: String, modifier: Modifi
     }
 }
 
-/** The dot badge (More has unseen content): a content-less 6 dp Badge, cleared from semantics. */
 @Composable
 internal fun ConclaveDotBadge(modifier: Modifier = Modifier) {
     Badge(modifier = modifier.clearAndSetSemantics { }, containerColor = MaterialTheme.colorScheme.primaryContainer)
 }
 
-/** An anchor with a count badge (or a dot when [showsDot] and the count is zero) at its top end, mirrored in RTL. */
 @Composable
 internal fun ConclaveBadgedAnchor(
     count: Int, identifier: String, modifier: Modifier = Modifier, showsDot: Boolean = false, anchor: @Composable () -> Unit,
@@ -54,7 +44,6 @@ internal fun ConclaveBadgedAnchor(
     ) { anchor() }
 }
 
-/** A role tag after a name: a small neutral pill, labelMedium in onSurfaceVariant (6.556 light, 5.270 dark). */
 @Composable
 internal fun ConclaveTag(tag: ConclavePersonTag, identifier: String, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
@@ -64,7 +53,6 @@ internal fun ConclaveTag(tag: ConclavePersonTag, identifier: String, modifier: M
     }
 }
 
-/** Android sentence case: "Host", "Co-host", "You" (S50 R50-5 keeps `ds_tag_cohost` as "Co-host"). */
 @Composable
 internal fun conclaveTagTitle(tag: ConclavePersonTag): String = when (tag) {
     ConclavePersonTag.host -> conclaveString("ds_tag_host")
@@ -72,11 +60,6 @@ internal fun conclaveTagTitle(tag: ConclavePersonTag): String = when (tag) {
     else -> conclaveString("ds_tag_you")
 }
 
-/**
- * A tile status badge: 24 dp (16 dp dense). Hand raised is the hand-raised fill with the on-warning glyph (11.855
- * in the dark set); pinned and presenting sit on the label scrim with an onSurface glyph; weak connection puts the
- * warning glyph on the scrim. Decorative.
- */
 @Composable
 internal fun ConclaveTileBadge(kind: ConclaveTileBadgeKind, size: Dp, modifier: Modifier = Modifier) {
     val ext = LocalConclaveExtendedColors.current

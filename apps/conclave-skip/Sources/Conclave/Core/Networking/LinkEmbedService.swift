@@ -3,24 +3,12 @@ import Foundation
 import FoundationNetworking
 #endif
 
-// S40 CH16 (CHT-5): chat link embeds. `LinkEmbedPolicy` ports the web's `extractEmbedUrls` and `getYouTubeVideoId`
-// (apps/web/src/app/lib/link-embeds.ts) by hand, walking one-character strings like ChatLinkifyPolicy (no portable
-// regex on both platforms; every class used is ASCII or whitespace, so iOS graphemes and Android UTF-16 units give the
-// same result). `LinkEmbedService` fetches `GET {appBaseURL}/api/unfurl?url=` through the app backend (participant
-// addresses never reach the target site) and maps the payload to `ChatEmbedModel`. `ChatEmbedStore` is the session
-// cache the chat presenter owns: one fetch per URL for the whole call, "no card" results cached too, and only the
-// presenter starts a fetch (when it builds a row, or for the composer preview); views read entries.
-
-/// The pure embed rules (web parity, S40 D19).
 enum LinkEmbedPolicy {
-    /// At most this many cards per message (MAX_EMBEDS_PER_MESSAGE).
+
     static let maxEmbedsPerMessage = 2
     private static let trailingPunctuation = "),.!?;:"
     private static let youTubeIdCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 
-    /// The embeddable URLs of a message, deduped and capped: only links typed explicitly as links ("https://...",
-    /// "http://..." or "www...."; bare domains linkify but never embed), the same trailing punctuation trim as the
-    /// linkifier, nothing containing "@", and a link wrapped in angle brackets ("<https://...>") is suppressed.
     static func embedURLs(_ content: String, max: Int = maxEmbedsPerMessage) -> [String] {
         var urls: [String] = []
         if max <= 0 { return urls }
@@ -38,7 +26,7 @@ enum LinkEmbedPolicy {
                 end += 1
             }
             if end == prefixEnd {
-                // `[^\s<>]+` needs at least one character after the prefix; no match at this position.
+
                 index += 1
                 continue
             }
@@ -63,15 +51,10 @@ enum LinkEmbedPolicy {
         return urls
     }
 
-    /// The first embeddable URL of a draft (the composer preview, S40 6 c); "" when none.
     static func firstEmbedURL(_ draft: String) -> String {
         embedURLs(draft, max: 1).first ?? ""
     }
 
-    /// The `new URL(href).href` normalization the web dedupes on: the scheme and host lowercased and an empty path
-    /// written as "/"; the path, query and fragment stay exactly as typed. Built by hand instead of re-serialized
-    /// through `URLComponents`, so both platforms give the same string (SkipFoundation writes the fragment before the
-    /// query and re-encodes the query). "" when the URL does not parse or has no host.
     static func normalizedURL(_ href: String) -> String {
         guard let host = URLComponents(string: href)?.host, !host.isEmpty else { return "" }
         let chars = ChatLinkifyPolicy.characters(href)
@@ -98,7 +81,6 @@ enum LinkEmbedPolicy {
         return scheme + "://" + authority + (rest.hasPrefix("/") ? rest : "/" + rest)
     }
 
-    /// A YouTube video id from watch, shorts, live, embed and youtu.be URLs; "" otherwise.
     static func youTubeVideoId(_ rawURL: String) -> String {
         guard let components = URLComponents(string: rawURL), let rawHost = components.host else { return "" }
         var host = rawHost.lowercased()
@@ -125,14 +107,11 @@ enum LinkEmbedPolicy {
         "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg"
     }
 
-    /// The host without "www." for a card's site line; "" when the URL does not parse.
     static func displayHost(_ url: String) -> String {
         guard let host = URLComponents(string: url)?.host?.lowercased() else { return "" }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
-    /// Unfurl asset paths ("/api/unfurl/asset?url=...") resolve against the app base URL; absolute http and https
-    /// URLs pass; anything else is dropped ("").
     static func resolvedAssetURL(_ candidate: String, baseURL: String) -> String {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "" }
@@ -180,7 +159,6 @@ enum LinkEmbedPolicy {
     }
 }
 
-/// `UnfurlResponsePayload` (apps/web/src/app/lib/link-embeds.ts); every field optional, like the web types.
 private struct LinkEmbedUnfurlPayload: Decodable {
     let preview: LinkEmbedUnfurlPreview?
 }
@@ -225,14 +203,10 @@ private struct AndroidLinkEmbedHTTPResponse: Decodable {
 }
 #endif
 
-/// The unfurl client. Reached only through `ChatEmbedStore.fetcher`, which the core sets (the fixture sets a canned
-/// fetcher), so no chat view calls it.
 enum LinkEmbedService {
-    /// X posts show at most four media cells.
+
     static let maxPostMedia = 4
 
-    /// The card for one URL, or nil when it has none. YouTube links always have a card (the web renders the player
-    /// card from the id alone): the unfurl adds the title, the thumbnail falls back to the public one.
     static func fetchPreview(url: String) async -> ChatEmbedModel? {
         let videoId = LinkEmbedPolicy.youTubeVideoId(url)
         guard let baseURL = NativeAuthService.resolveAppBaseURL(),
@@ -254,11 +228,8 @@ enum LinkEmbedService {
         return decodeModel(body, requestURL: url, baseURL: baseURL.absoluteString)
     }
 
-    /// RFC 3986 unreserved characters: everything else in the target URL is percent-encoded, so its "&", "=", "+",
-    /// "?" and "#" stay inside the one `url` parameter on both platforms (`urlQueryAllowed` keeps them raw).
     private static let queryValueAllowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
-    /// `{scheme}://{host}[:port]/api/unfurl?url={encoded}`, built by hand (no `URLComponents` query serialization).
     static func unfurlURL(for url: String, baseURL: URL) -> URL? {
         guard let components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
               let scheme = components.scheme, let host = components.host, !host.isEmpty else { return nil }
@@ -271,14 +242,11 @@ enum LinkEmbedService {
         return URL(string: string)
     }
 
-    /// The pure half of `unfurlURL` (both platforms' tests pin it): "" when the URL cannot be encoded.
     static func unfurlURLString(for url: String, origin: String) -> String {
         guard let encoded = url.addingPercentEncoding(withAllowedCharacters: queryValueAllowed) else { return "" }
         return origin + "/api/unfurl?url=" + encoded
     }
 
-    /// Maps an unfurl body to a card (pure, tested with canned payloads). `data` nil or a null preview means no card,
-    /// except for YouTube links.
     static func decodeModel(_ data: Data?, requestURL: String, baseURL: String) -> ChatEmbedModel? {
         let videoId = LinkEmbedPolicy.youTubeVideoId(requestURL)
         var preview: LinkEmbedUnfurlPreview? = nil
@@ -376,26 +344,21 @@ enum LinkEmbedService {
     }
 }
 
-/// CH16: the chat presenter's session cache of embed entries. `request(_:)` (presenter only) creates the entry and
-/// starts one fetch; a resolved entry (card or none) stays for the session, so remounts and duplicate links never
-/// refetch. `entry(for:)` never fetches (views call it). Not observable itself; each entry is.
 @MainActor
 final class ChatEmbedStore {
-    /// Set by the core (`LinkEmbedService.fetchPreview`) or the fixture (canned cards). While nil nothing is
-    /// requested, so a URL seen before the wiring is fetched on a later rebuild instead of being cached as none.
+
     var fetcher: ((String) async -> ChatEmbedModel?)? = nil
-    /// The presenter rebuilds the rows that wait for this URL.
+
     var onResolved: ((String) -> Void)? = nil
     private var entries: [String: ChatEmbedEntry] = [:]
     private var tasks: [String: Task<Void, Never>] = [:]
-    /// A detached placeholder for unknown URLs (never fetched, never stored).
+
     private let missing = ChatEmbedEntry(url: "", phase: ChatEmbedPhase.none)
-    /// Fetches started this session (tests and the fixture readout).
+
     private(set) var fetchCount = 0
 
     init() {}
 
-    /// The entry for a URL; a detached placeholder when unknown. Never starts a fetch.
     func entry(for url: String) -> ChatEmbedEntry {
         entries[url] ?? missing
     }
@@ -406,8 +369,6 @@ final class ChatEmbedStore {
 
     var count: Int { entries.count }
 
-    /// Presenter only: the entry for a URL, starting its one fetch the first time. Returns the placeholder while no
-    /// fetcher is set.
     @discardableResult
     func request(_ url: String) -> ChatEmbedEntry {
         if url.isEmpty { return missing }
@@ -428,14 +389,12 @@ final class ChatEmbedStore {
         return entry
     }
 
-    /// Fixtures and tests: a resolved entry without a fetch.
     func seed(_ url: String, model: ChatEmbedModel?) {
         let entry = entries[url] ?? ChatEmbedEntry(url: url)
         entries[url] = entry
         entry.resolve(model)
     }
 
-    /// Drops every entry with the session (a new call, `ChatPresenter.reset()`).
     func reset() {
         for task in tasks.values {
             task.cancel()

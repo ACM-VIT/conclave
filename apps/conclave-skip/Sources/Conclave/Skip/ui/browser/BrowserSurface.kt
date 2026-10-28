@@ -67,26 +67,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 
-/*
- * S60 14 d and L6-9 (ACT-9) on Android: the shared browser card body inside the S20 activity card (always dark), mounted
- * by ActivityStage.kt for the browser kind. Viewers render only the WebRTC track of the remote browser (the stage's
- * VideoTrackView keyed "stage:browser", so its decoded frame size lands in the stage's frame-size store); the controller
- * adds the noVNC input layer, the registry's transparent WebView inside the same aspect-locked Box as the renderer (16:9
- * until the first frame), with the bundled CSS hiding the canvas. Without a video track (Kitesurf, a Chromium service
- * with video off, fixtures) the noVNC or Live View page is the visible surface, interactive only for the controller.
- * Every failure shows the one failure state; the call continues. The address row is an OutlinedTextField with a URI
- * keyboard (no capitalization, no autocorrect, IME Go), Go (primaryContainer, the coral) and Keyboard; the host menu is
- * an IconButton(MoreVertFill0) DropdownMenu. Only the card body pads for the IME (ActivityStage.kt). Copy comes from
- * BrowserCopy.kt; the presenter publishes typed values only.
- */
-
-/** The browser card body (ActivityStage.kt's browser branch). */
 @Composable
 internal fun BrowserStageBody(browser: BrowserStagePresenter, stage: StagePresenter, onShowVideo: () -> Unit, modifier: Modifier = Modifier) {
     val model = browser.model
     val ext = LocalConclaveExtendedColors.current
     LaunchedEffect(model.wantsWebView, model.browserSessionId) {
-        // A failure (or losing control over a video surface) releases the WebView; Try again creates a fresh one.
+
         if (!model.wantsWebView && model.browserSessionId.isNotEmpty()) BrowserWebViewRegistry.release(model.browserSessionId)
     }
     Column(modifier.fillMaxSize().testTag("browser.body.${model.load.rawValue}").semantics { isTraversalGroup = true }) {
@@ -104,8 +90,6 @@ internal fun BrowserStageBody(browser: BrowserStagePresenter, stage: StagePresen
     }
 }
 
-// MARK: Address row (controller)
-
 @Composable
 private fun BrowserAddressRow(browser: BrowserStagePresenter, model: BrowserStageModel) {
     val scheme = MaterialTheme.colorScheme
@@ -113,7 +97,7 @@ private fun BrowserAddressRow(browser: BrowserStagePresenter, model: BrowserStag
     var seededURL by rememberSaveable { mutableStateOf(model.pageURL) }
     var focused by remember { mutableStateOf(false) }
     LaunchedEffect(model.pageURL) {
-        // The field follows later pages while it is not being edited.
+
         if (model.pageURL != seededURL && !focused) {
             seededURL = model.pageURL
             draft = model.pageURL
@@ -182,8 +166,6 @@ private fun BrowserAddressRow(browser: BrowserStagePresenter, model: BrowserStag
     }
 }
 
-// MARK: Video area
-
 @Composable
 private fun BrowserVideoArea(browser: BrowserStagePresenter, model: BrowserStageModel, stage: StagePresenter, onShowVideo: () -> Unit,
                              modifier: Modifier) {
@@ -192,7 +174,7 @@ private fun BrowserVideoArea(browser: BrowserStagePresenter, model: BrowserStage
     val sharer = browserSharer(model) ?: ""
     val hint = if (model.canControl) "" else conclaveString("br_viewer_hint")
     Box(modifier.background(ext.stage).clipToBounds()) {
-        // The video is pixels: one node with the site and the sharer; the input layer is never exposed as web content.
+
         Box(
             Modifier.fillMaxSize().testTag("browser.surface.${model.surface.rawValue}").clearAndSetSemantics {
                 contentDescription = if (hint.isEmpty()) label else "$label. $hint"
@@ -210,7 +192,6 @@ private fun BrowserVideoArea(browser: BrowserStagePresenter, model: BrowserStage
     }
 }
 
-/** The renderer and the WebView: one aspect-locked Box for a video surface, the whole area for a live view surface. */
 @Composable
 private fun BrowserSurfaceLayer(browser: BrowserStagePresenter, model: BrowserStageModel) {
     when (model.surface) {
@@ -230,10 +211,6 @@ private fun BrowserSurfaceLayer(browser: BrowserStagePresenter, model: BrowserSt
     }
 }
 
-/**
- * The browser video through the stage renderer: the TextureView is keyed "stage:browser", so it survives a consumer
- * swap, moves its sink on the main thread (RR6) and reports its frame size into LocalRendererFrameSizes.
- */
 @Composable
 private fun BrowserVideoRenderer(videoUserId: String, videoTrackKey: String) {
     val track = remember(videoUserId, videoTrackKey) {
@@ -243,7 +220,6 @@ private fun BrowserVideoRenderer(videoUserId: String, videoTrackKey: String) {
         clearBeforeAttach = false)
 }
 
-/** Forwards the decoded frame size (the box aspect and the first-frame signal); reads only the store's revision. */
 @Composable
 private fun BrowserFrameSizeRelay(store: RendererFrameSizeStore, browser: BrowserStagePresenter) {
     val revision = store.revision
@@ -253,7 +229,6 @@ private fun BrowserFrameSizeRelay(store: RendererFrameSizeStore, browser: Browse
     }
 }
 
-/** The thin progress bar at the top of the video area while the controller's page loads (a registry leaf). */
 @Composable
 private fun BrowserPageProgressBar(browserSessionId: String, modifier: Modifier) {
     val scheme = MaterialTheme.colorScheme
@@ -267,7 +242,6 @@ private fun BrowserPageProgressBar(browserSessionId: String, modifier: Modifier)
     )
 }
 
-/** Starting, failed and reconnecting (S60 14 f); loading and live draw nothing over the surface. */
 @Composable
 private fun BrowserStateOverlay(browser: BrowserStagePresenter, model: BrowserStageModel, onShowVideo: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -302,7 +276,6 @@ private fun BrowserStateOverlay(browser: BrowserStagePresenter, model: BrowserSt
     }
 }
 
-/** "The shared browser couldn't load." with Try again and Show video; announced once through the live region. */
 @Composable
 private fun BrowserFailureView(browser: BrowserStagePresenter, model: BrowserStageModel, onShowVideo: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -334,9 +307,6 @@ private fun BrowserFailureView(browser: BrowserStagePresenter, model: BrowserSta
     }
 }
 
-// MARK: Footer (who is sharing, local audio)
-
-/** "You're sharing" or "Shared by %1$s", and the local audio switch for everyone when the browser has audio. */
 @Composable
 private fun BrowserFooterRow(browser: BrowserStagePresenter, model: BrowserStageModel, sharer: String?) {
     val scheme = MaterialTheme.colorScheme
@@ -353,7 +323,7 @@ private fun BrowserFooterRow(browser: BrowserStagePresenter, model: BrowserStage
         }
         if (model.showsAudioControl) {
             val playing = !model.isAudioMuted
-            // One Switch node for the whole control; muting is local only, so no feedback plays (S60 14 e).
+
             Row(
                 Modifier.heightIn(min = 48.dp).toggleable(value = playing, role = Role.Switch, onValueChange = { browser.toggleAudio() })
                     .testTag("browser.audio"),
@@ -367,12 +337,6 @@ private fun BrowserFooterRow(browser: BrowserStagePresenter, model: BrowserStage
     }
 }
 
-// MARK: Host menu (ActivityStage.kt's header)
-
-/**
- * The host menu (S60 14 d): Mute or Unmute browser audio, Session info (provider detail, Q3) and Close shared browser
- * behind the S60 7 g confirmation. Participants get no menu.
- */
 @Composable
 internal fun BrowserStageMenu(browser: BrowserStagePresenter) {
     val model = browser.model
@@ -443,9 +407,6 @@ internal fun BrowserStageMenu(browser: BrowserStagePresenter) {
     }
 }
 
-// MARK: WebView host
-
-/** Attaches the registry's WebView; never creates or destroys it itself (onRelease only detaches, L6-15). */
 @Composable
 private fun BrowserWebViewHost(browser: BrowserStagePresenter, model: BrowserStageModel, modifier: Modifier) {
     val stageArgb = LocalConclaveExtendedColors.current.stage.toArgb()
@@ -466,13 +427,11 @@ private fun BrowserWebViewHost(browser: BrowserStagePresenter, model: BrowserSta
     )
 }
 
-// MARK: Debug readouts (fixtures only, L6-12)
-
 @Composable
 private fun BrowserReadouts(browser: BrowserStagePresenter) {
     val tertiary = MaterialTheme.colorScheme.onSurfaceVariant
     val style = MaterialTheme.typography.labelSmall
-    // Machine-readable readouts, not copy: identifier, "=", value.
+
     val readouts = listOf(
         "browser.inputViews" to BrowserWebViewRegistry.inputViews.toString(),
         "browser.load" to browser.model.load.rawValue,

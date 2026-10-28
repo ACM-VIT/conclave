@@ -4,12 +4,6 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-// S60 0.6 L6-7 (SET-6) on iOS: `EffectTile`, a 64 x 64 pt flat thumbnail with its caption, a 2 pt coral ring and a
-// 20 pt check badge when selected and a system spinner while the engine applies it (4 c, e, h: no animation on the
-// ring or badge). One accessibility element: the effect name, the value "Selected" or "Applying", the button trait plus
-// `.isSelected` (4 i). Thumbnails are flat (R12): catalog art ships with the WP10 engine, so a catalog tile shows a flat
-// raised surface with a concept glyph, and a personal tile its stored JPEG decoded at tile size.
-
 enum EffectTileMetrics {
     static let thumbnail: CGFloat = 64
     static let cornerRadius: CGFloat = 12
@@ -74,7 +68,6 @@ struct EffectTile: View {
     }
 }
 
-/// The flat thumbnail: the stored personal image at tile size, else the raised in-call surface with a glyph.
 private struct EffectThumbnail: View {
     let item: EffectItem
     @State private var image: UIImage? = nil
@@ -105,7 +98,6 @@ private struct EffectThumbnail: View {
     }
 }
 
-/// The Add Photo tile's face (the `PhotosPicker` label, 4 c): the same geometry as a tile.
 struct EffectAddPhotoFace: View {
     let isEnabled: Bool
 
@@ -134,9 +126,6 @@ struct EffectAddPhotoFace: View {
     }
 }
 
-/// Personal images in the app container (S60 4 j): decoded with `CGImageSource` (HEIC and HEIF arrive as JPEG through
-/// `preferredItemEncoding: .compatible`; PNG and WebP decode as they are), scaled along the web's output ladder and
-/// stored as JPEG under Application Support. Nonisolated and synchronous: callers run it off the main actor.
 enum EffectsPhotoStore {
     static let directoryName = "conclave-effects"
 
@@ -149,7 +138,6 @@ enum EffectsPhotoStore {
         directory()?.appendingPathComponent(fileName, isDirectory: false)
     }
 
-    /// Stores `data` as `fileName`; `.none` on success, else the issue to show.
     static func store(_ data: Data, fileName: String, personalCount: Int) -> EffectsIssue {
         let early = EffectsImagePolicy.sourceIssue(byteCount: data.count, personalCount: personalCount)
         if early != EffectsIssue.none { return early }
@@ -194,7 +182,6 @@ enum EffectsPhotoStore {
         try? FileManager.default.removeItem(at: target)
     }
 
-    /// A stored image decoded at tile size (never the full image, 4 k).
     static func thumbnail(fileName: String, maxPixels: Int) -> UIImage? {
         guard let target = url(fileName: fileName), let source = CGImageSourceCreateWithURL(target as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [

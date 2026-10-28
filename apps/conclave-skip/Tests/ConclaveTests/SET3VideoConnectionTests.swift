@@ -3,17 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SET-3 (OUT/PLAN-screens.md section 5; S60 2 video, screen share and connection rows, 0.6 L6-3, 0.8 C6-3, C6-4,
-/// C6-5, C6-8, C6-9, C6-29; RECONCILE R22, R40, R43; S70 SY22): the Video rows and pages on the fake WP3 owner
-/// (`SettingsRecordingCore`). Presets are encoder ceilings (one `setPublishCeiling` with the resolved value per
-/// change, persisted), Data Saver is the switch OR the system signal and composes with the transient system ceiling,
-/// the rear camera never mirrors and the sent stream never does, the preview latch never publishes (zero
-/// `producerCreate`, one `previewStop` on close, 30 s off screen stops it, the interruption fixture reads "Camera
-/// paused"), and the Connection details poll at 1 Hz only while subscribed (zero polls after unsubscribing). Source
-/// pins cover both WebRTC clients and both preview owners. Nothing here touches a camera, a transport or a sound.
 @MainActor
 struct SET3VideoConnectionTests {
-    // MARK: Rows (1 a, 1 c, 1 l7b; R26, R40, R44)
 
     @Test func videoRowsFollowTheScopeAndTheScreenShareCapability() {
         let (call, _) = Self.make(.video)
@@ -23,7 +14,7 @@ struct SET3VideoConnectionTests {
         let app = SettingsPresenter(scope: .app, platform: .ios, defaults: Self.freshDefaults())
         #expect(app.sections.first { $0.section == .video }?.rows == [.mirror, .cameraQuality, .dataSaver])
         let (attendee, _) = Self.make(.attendee)
-        // R40, R44: the attendee keeps Data Saver only.
+
         #expect(attendee.sections.first { $0.section == .video }?.rows == [.dataSaver])
         #expect(!SettingsRowPolicy.rows(call.sections).contains(.effects))
     }
@@ -36,8 +27,6 @@ struct SET3VideoConnectionTests {
         #expect(SettingsRoutePolicy.advancedRoute(for: .screenShareQuality) == .screenShareAdvanced)
         #expect(SettingsRoutePolicy.advancedRoute(for: .connection) == nil)
     }
-
-    // MARK: Stores (C6-3, C6-4, C6-5, C6-29, C6-28)
 
     @Test func videoStoresUseTheirKeysAndDefaults() {
         #expect(NativeVideoPreferences.mirrorSelfViewKey == "conclave.pref.mirrorSelfView")
@@ -62,8 +51,6 @@ struct SET3VideoConnectionTests {
         app.setMirrorsSelfView(true)
     }
 
-    // MARK: Presets as encoder ceilings (C6-4, 2 l4, D21)
-
     @Test func aPresetIsPersistedAndRecordsOneCeilingWithItsValue() {
         let defaults = Self.freshDefaults()
         let (presenter, core) = Self.make(.video, defaults: defaults)
@@ -76,7 +63,7 @@ struct SET3VideoConnectionTests {
         #expect(ceiling?.width == 1920 && ceiling?.height == 1080 && ceiling?.frameRate == 30 && ceiling?.maxBitrateBps == 3_000_000)
         #expect(NativeMediaQualityPreferences.load(defaults: defaults).camera.preset == .highDefinition)
         #expect(presenter.video.cameraPreset == "high-definition" && presenter.video.effectiveCameraPreset == "high-definition")
-        // The data-saver preset is the Data Saver switch, never a picker option (D21).
+
         #expect(presenter.setCameraPreset("data-saver") == .ignored)
     }
 
@@ -128,7 +115,7 @@ struct SET3VideoConnectionTests {
         #expect(core.count("setPublishCeiling") == 0)
         presenter.setScreenShareFrameRate(30)
         #expect(presenter.video.screenSharePreset == "custom")
-        // C6-29: hidden and ignored without the S70 10 capability.
+
         #expect(!presenter.video.canShareDeviceAudio)
         presenter.setShareDeviceAudio(true)
         #expect(!NativeVideoPreferences.shareDeviceAudio(defaults: defaults))
@@ -148,8 +135,6 @@ struct SET3VideoConnectionTests {
         #expect(NativeQualityOptions.snappedBitrate(99_999, minimum: 150, maximum: 6_000, step: 50) == 6_000)
         #expect(NativeQualityOptions.snappedBitrate(1_274, minimum: 150, maximum: 6_000, step: 50) == 1_250)
     }
-
-    // MARK: Data Saver (C6-5, S70 SY22)
 
     @Test func theSystemSignalHoldsDataSaverOnAndDisabled() {
         let defaults = Self.freshDefaults()
@@ -175,8 +160,6 @@ struct SET3VideoConnectionTests {
         #expect(!DataSaverPolicy.reducesReceive(isLowQuality: false, dataSaverOn: false))
     }
 
-    // MARK: Mirror (C6-3)
-
     @Test func onlyTheFrontCameraMirrorsAndTheSentStreamNever() {
         #expect(LocalVideoMirrorPolicy.mirrors(isFront: true, preference: true))
         #expect(!LocalVideoMirrorPolicy.mirrors(isFront: true, preference: false))
@@ -200,8 +183,6 @@ struct SET3VideoConnectionTests {
         presenter.panelDidClose()
     }
 
-    // MARK: Preview (C6-8, L6-3, 1 l11, 1 l12)
-
     @Test func thePreviewIsLocalOnlyAndStopsOnceWhenThePanelCloses() {
         let (presenter, core) = Self.make(.video)
         presenter.panelDidOpen()
@@ -209,7 +190,7 @@ struct SET3VideoConnectionTests {
         presenter.startPreview()
         #expect(core.count("previewStart") == 1)
         #expect(presenter.video.preview == .live && !presenter.video.canStartPreview)
-        // The publish latch: the fake owner never saw a producer.
+
         #expect(core.count("producerCreate") == 0)
         presenter.panelDidClose()
         #expect(core.count("previewStop") == 1)
@@ -253,7 +234,7 @@ struct SET3VideoConnectionTests {
         presenter.previewCardVisible(false)
         for _ in 0..<20 { await Task.yield() }
         #expect(core.count("previewStop") == 1)
-        // Coming back on screen within the window cancels the stop.
+
         presenter.startPreview()
         presenter.previewCardVisible(false)
         presenter.previewCardVisible(true)
@@ -295,8 +276,6 @@ struct SET3VideoConnectionTests {
         #expect(SettingsPreviewPolicy.canStop(state: .interrupted) && !SettingsPreviewPolicy.canStop(state: .published))
         #expect(SettingsPreviewPolicy.offScreenStopMillis == 30_000)
     }
-
-    // MARK: Connection (C6-9, 2 l3)
 
     @Test func statsPollAt1HzOnlyWhileSubscribed() async {
         let model = ConnectionStatsModel()
@@ -349,8 +328,6 @@ struct SET3VideoConnectionTests {
         #expect(ConnectionStatsPolicy.intervalMillis == 1000)
     }
 
-    // MARK: Copy (L6-14)
-
     @Test func everySET3IOSKeyIsInTheCatalogAndEveryAndroidNameResolves() throws {
         let catalog = try SettingsTranscriptPoliciesTests.catalogKeys()
         let names = try SettingsTranscriptPoliciesTests.androidStringNames()
@@ -366,8 +343,6 @@ struct SET3VideoConnectionTests {
             }
         }
     }
-
-    // MARK: Sources (RULES 3, AGENTS appearance callbacks, media invariants)
 
     @Test func set3SourcesFollowThePlatformRules() throws {
         for file in Self.iosFiles + Self.kotlinFiles + Self.sharedFiles {
@@ -391,12 +366,12 @@ struct SET3VideoConnectionTests {
             #expect(SettingsTranscriptPoliciesTests.matches(#"\.(?:compactMap|map)\([A-Za-z.]+\)"#, in: text).isEmpty, "\(file)")
             #expect(!text.contains("import SwiftUI") && !text.contains("import UIKit"), "\(file)")
         }
-        // The pages run their subscriptions for their lifetime only.
+
         let pages = try Self.source("Sources/Conclave/Features/Meeting/Settings/VideoPages+iOS.swift")
         #expect(pages.contains("await settings.stats.observe()"))
         let android = try Self.source("Sources/Conclave/Skip/ui/settings/VideoPages.kt")
         #expect(android.contains("stats.subscribe()") && android.contains("onDispose { stats.unsubscribe() }"))
-        // The card keeps one renderer per presentation and stays out of the stage renderer ledger.
+
         let card = try Self.source("Sources/Conclave/Skip/ui/settings/LivePreviewCard.kt")
         #expect(card.contains("CompositionLocalProvider(LocalRendererLedger provides null)"))
         #expect(card.contains("settings.previewCardVisible(true)") && card.contains("onDispose { settings.previewCardVisible(false) }"))
@@ -420,10 +395,10 @@ struct SET3VideoConnectionTests {
         #expect(kotlin.contains("internal fun sampleConnectionStatsCounters(): ConnectionStatsCounters?"))
         #expect(kotlin.contains("dataSaver: Boolean = false,"))
         #expect(kotlin.contains("dataSaver = remoteReceiveDataSaver,"))
-        // The receive policy reads Data Saver through the shared rule on both platforms.
+
         #expect(ios.contains("DataSaverPolicy.reducesReceive(isLowQuality: videoQuality == .low,"))
         #expect(kotlin.contains("DataSaverPolicy.reducesReceive("))
-        // The sent stream is never mirrored (C6-3) and the Settings preview hands the camera over first (C6-8).
+
         #expect(!ios.contains("isVideoMirrored = true"))
         #expect(ios.contains("LocalPreviewController.shared.releaseScopedPreviewForCallCamera()"))
         #expect(kotlin.contains("CameraPreviewController.releasePreview()"))
@@ -438,7 +413,7 @@ struct SET3VideoConnectionTests {
             #expect(swift.contains(member), "Swift \(member)")
             #expect(kotlin.contains(member), "Kotlin \(member)")
         }
-        // The preview never reaches a producer: neither owner has a track, capturer or producer API.
+
         for text in [swift, kotlin] {
             #expect(!text.contains("createProducer") && !text.contains("produce("))
         }
@@ -447,16 +422,14 @@ struct SET3VideoConnectionTests {
 
     @Test func theCeilingSectionsStayFreeOfStoresSoTheSystemPressureRulesHold() throws {
         let source = try Self.source("Sources/Conclave/Core/WebRTC/MediaQualitySettings.swift")
-        let ceiling = try #require(Self.section(source, from: "// MARK: Publish ceilings", to: "static func baseVideoQuality"))
-        let pressure = try #require(Self.section(source, from: "// MARK: - System pressure", to: nil))
+        let ceiling = try #require(Self.section(source, from: "static func publishTier(of camera:", to: "static func baseVideoQuality"))
+        let pressure = try #require(Self.section(source, from: "enum NativePublishTier:", to: nil))
         for text in [ceiling, pressure] {
             #expect(!text.contains("UserDefaults") && !text.contains("NativeMediaQualityPreferences") && !text.contains(".save("))
         }
-        let video = try #require(Self.section(source, from: "// MARK: - Video preferences and options", to: "// MARK: - System pressure"))
+        let video = try #require(Self.section(source, from: "enum NativeVideoPreferences {", to: "enum NativePublishTier:"))
         #expect(video.contains("enum NativeVideoPreferences") && video.contains("enum DataSaverPolicy"))
     }
-
-    // MARK: Helpers
 
     static let sharedFiles = [
         "Sources/Conclave/Features/Meeting/Settings/SettingsPresenter.swift",
@@ -495,7 +468,6 @@ struct SET3VideoConnectionTests {
                                 bytesReceived: nil, videoCodec: "")
     }
 
-    /// Nonisolated: `make`'s default argument calls it, and default arguments are evaluated outside the main actor.
     nonisolated static func freshDefaults() -> UserDefaults {
         let suite = "set3-video-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
@@ -515,7 +487,6 @@ struct SET3VideoConnectionTests {
     }
 }
 
-/// Tiny readable helpers for the expectations above.
 enum SettingsCopyContract {
     static func previewStatusIsPublished(_ state: PreviewState) -> Bool {
         state == .published

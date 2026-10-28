@@ -3,24 +3,18 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-7 (S10 5): Account, sign-in, guest identity, deletion and privacy. The presenter as a state machine (provider
-/// rules per platform, the generation guard, silent cancellation, deletion outcomes, contexts, guest name, tokens), the
-/// identity rules, the typed auth errors, the L9 account fixtures, the verbatim privacy text, and source scans of both
-/// platforms' screens. Mirrors `T/Skip/ENT7AccountBridgeTests.kt`. `ENT7AccountHookTests` at the end needs HD requests
-/// B4-T3 R1 to R10 (the premeeting presenter's `account` and `openPrivacyPolicy()`, the Home file hooks).
 @MainActor
 struct ENT7AccountTests {
-    // MARK: Provider rules (S10 5 c, d, f, l6; Q10)
 
     @Test func iosOffersAppleFirstAndGoogleOnlyBesideItWhileAndroidOffersGoogleAlone() {
         func offer(_ apple: Bool, _ google: Bool, configured: Bool = true, _ platform: AccountPlatform) -> AccountProviderOffer {
             AccountProvidersPolicy.offer(listsApple: apple, listsGoogle: google, googleConfigured: configured, platform: platform)
         }
         #expect(offer(true, true, .ios) == AccountProviderOffer(offersApple: true, offersGoogle: true))
-        // App Review 4.8: Google without Apple offers nothing on iOS.
+
         #expect(offer(false, true, .ios) == AccountProviderOffer(offersApple: false, offersGoogle: false))
         #expect(offer(true, false, .ios) == AccountProviderOffer(offersApple: true, offersGoogle: false))
-        // A build without the Google client id never shows Google.
+
         #expect(offer(true, true, configured: false, .ios) == AccountProviderOffer(offersApple: true, offersGoogle: false))
         #expect(offer(false, true, .android) == AccountProviderOffer(offersApple: false, offersGoogle: true))
         #expect(offer(true, true, .android) == AccountProviderOffer(offersApple: false, offersGoogle: true))
@@ -60,14 +54,14 @@ struct ENT7AccountTests {
         presenter.retryProviders()
         #expect(recorder.count(.loadProviders) == 2)
         #expect(presenter.snapshot.providersState == .loading)
-        // A late answer for the first fetch is dropped.
+
         presenter.providersLoaded(generation: first, listsApple: true, listsGoogle: true)
         #expect(presenter.snapshot.providersState == .loading)
         try #require(recorder.requests.count > 1)
         presenter.providersLoaded(generation: recorder.requests[1].generation, listsApple: true, listsGoogle: true)
         #expect(presenter.snapshot.providersState == .ready)
         #expect(presenter.snapshot.offersApple && presenter.snapshot.offersGoogle)
-        // Cached for the process: the next presentation fetches nothing (S10 5 k).
+
         presenter.didDismiss()
         presenter.didPresent()
         #expect(recorder.count(.loadProviders) == 2)
@@ -81,8 +75,6 @@ struct ENT7AccountTests {
         #expect(failing.count(.loadProviders) == 2, "a failed fetch is retried on the next presentation")
     }
 
-    // MARK: Sign-in (S10 5 c, f, h; l7)
-
     @Test func googleSignInDisablesEverythingWhilePendingAndSucceedsWithOneToken() throws {
         let recorder = ENT7Recorder()
         let presenter = ent7Presenter(recorder: recorder)
@@ -95,14 +87,14 @@ struct ENT7AccountTests {
         #expect(recorder.count(.signInWithGoogle) == 1, "both providers disable while one is pending")
         #expect(!presenter.beginAppleSignIn())
         let generation = try #require(recorder.requests.last).generation
-        // The coordinator stores the user first (the identity push), then reports success.
+
         presenter.apply(ent7SignedIn(provider: "google"))
         presenter.finishSignIn(generation: generation, outcome: .succeeded)
         #expect(presenter.snapshot.isSignedIn && presenter.snapshot.provider == "google")
         #expect(presenter.snapshot.pendingProvider.isEmpty && !presenter.snapshot.isBusy)
         #expect(recorder.feedback == [.signInSucceeded])
         #expect(recorder.signingIn == [true, false])
-        // A replayed answer or a republish plays nothing more.
+
         presenter.finishSignIn(generation: generation, outcome: .succeeded)
         presenter.apply(ent7SignedIn(provider: "google"))
         #expect(recorder.feedback == [.signInSucceeded])
@@ -121,7 +113,7 @@ struct ENT7AccountTests {
         presenter.finishSignIn(generation: try #require(recorder.requests.last).generation, outcome: .failed)
         #expect(presenter.snapshot.errorKind == .signInFailed)
         #expect(!presenter.snapshot.isSignedIn)
-        // The next attempt clears the failure.
+
         presenter.signInWithGoogle()
         #expect(presenter.snapshot.errorKind == .none)
     }
@@ -182,8 +174,6 @@ struct ENT7AccountTests {
         #expect(!android.beginAppleSignIn(), "Android never offers Apple (Q10)")
     }
 
-    // MARK: Sign out and deletion (S10 5 c, d, f, j; invariant 8)
-
     @Test func signOutShowsAPendingRowUntilTheCoordinatorFinishes() throws {
         let recorder = ENT7Recorder()
         let presenter = ent7Presenter(signedIn: true, recorder: recorder)
@@ -217,7 +207,7 @@ struct ENT7AccountTests {
         presenter.deleteAccount()
         #expect(presenter.snapshot.errorKind == .none)
         let generation = try #require(recorder.requests.last).generation
-        // Invariant 8: the coordinator signs out locally only after the server deleted the account.
+
         presenter.apply(AccountPresenterInputs.make(platform: .ios))
         presenter.finishDelete(generation: generation, succeeded: true)
         #expect(!presenter.snapshot.isSignedIn && !presenter.snapshot.isDeleting)
@@ -227,8 +217,6 @@ struct ENT7AccountTests {
         presenter.didDismiss()
         #expect(presenter.snapshot.context == .none)
     }
-
-    // MARK: Contexts, guest name, identity
 
     @Test func contextsFollowTheS10Table() {
         #expect(AccountContextPolicy.context(isSignedIn: true, deleted: true, signInRequired: true, expired: true) == .none)
@@ -315,8 +303,6 @@ struct ENT7AccountTests {
         #expect(AccountPresenterInputs.from(user: nil, googleConfigured: true, platform: .ios) == AccountPresenterInputs.make(platform: .ios))
     }
 
-    // MARK: Typed auth errors (owned NativeAuthService copy, S10 5 m)
-
     @Test func typedAuthErrorsKeepTheLegacyMessages() throws {
         let legacy = NativeAuthError(message: "Webinar lookup failed.")
         #expect(legacy.kind == .unknown && legacy.errorDescription == "Webinar lookup failed.")
@@ -338,7 +324,7 @@ struct ENT7AccountTests {
                                  ("ERROR_INVALID_RESPONSE", "invalid_response"), ("ERROR_FAILED", "failed")] {
             #expect(bridge.contains("const val \(constant) = \"\(code)\""), "\(constant)")
         }
-        // Five-argument callbacks everywhere; the legacy join screen still reads the unchanged messages.
+
         #expect(bridge.contains("private var pendingCallback: ((String?, String?, String?, String?, String?) -> Unit)? = null"))
         #expect(bridge.contains("\"Google Sign-In was cancelled.\""))
         #expect(bridge.contains("is NoCredentialException -> ERROR_NO_CREDENTIAL"))
@@ -347,8 +333,6 @@ struct ENT7AccountTests {
         #expect(service.contains("nsError.domain == GIDSignInError.errorDomain && nsError.code == GIDSignInError.canceled.rawValue"))
         #expect(service.contains("statusCode == 401 || statusCode == 403 ? NativeAuthErrorKind.rejected : NativeAuthErrorKind.server"))
     }
-
-    // MARK: L9 account fixtures (S10 5 l)
 
     @Test func fixtureStatesScriptEveryS10CellWithoutTheNetwork() {
         for state in AccountFixtureState.allCases {
@@ -392,7 +376,7 @@ struct ENT7AccountTests {
             }
             #expect(!responder.handledRequests.contains(.refreshSession))
         }
-        // Any other premeeting state still answers the account button without the network.
+
         let premeeting = PremeetingPresenter()
         let account = AccountPresenter()
         let responder = AccountFixtureScript.install(fixtureState: "home", account: account, premeeting: premeeting,
@@ -402,8 +386,6 @@ struct ENT7AccountTests {
         #expect(account.snapshot.providersState == .ready)
         #expect(responder.handledRequests == [.loadProviders])
     }
-
-    // MARK: Privacy policy (RECONCILE OQ9, S10 Q13)
 
     @Test func privacyTextIsTheLegacyTextVerbatim() throws {
         let blocks = PrivacyPolicyDocument.blocks
@@ -446,31 +428,29 @@ struct ENT7AccountTests {
         }
     }
 
-    // MARK: Source scans
-
     @Test func theIOSAccountFollowsS10FiveC() throws {
         let source = try ent7Source("Sources/Conclave/Features/Account/AccountView+iOS.swift")
         let flat = ent7Flat(source)
         #expect(flat.contains("SignInWithAppleButton(.continue) { request in"))
         #expect(flat.contains(".signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)"))
-        // Apple above Google, the same height at every text size (HIG; App Review 4.8).
+
         let apple = try #require(flat.range(of: "if snapshot.offersApple { AccountAppleButton("))
         let google = try #require(flat.range(of: "if snapshot.offersGoogle { AccountGoogleButton("))
         #expect(apple.lowerBound < google.lowerBound)
-        #expect(flat.contains("@ScaledMetric(relativeTo: .body) private var providerHeight: CGFloat = 50"))
+        #expect(flat.contains("@ScaledMetric(relativeTo: .body) private var providerHeight: CGFloat = 56"))
         #expect(flat.contains("height: max(providerHeight, googleHeight)"))
         #expect(flat.contains("Image(AccountAssets.googleMark) .renderingMode(.original)"))
         #expect(flat.contains("static let googleMark = \"GoogleGMark\""))
         #expect(flat.contains("request.nonce = AccountAppleNonce.sha256(raw)"))
         #expect(flat.contains("let cancelled = (error as? ASAuthorizationError)?.code == .canceled"))
-        // F00 C15 large detent; S10 R10 plain "Close" at .topBarTrailing; Close and swipe disabled while deleting.
+
         #expect(flat.contains(".presentationDetents([.large])"))
         #expect(flat.contains("ConclaveCloseButton(title: nil, identifier: \"account.close\", action: action) .disabled(!account.snapshot.canDismiss)"))
         #expect(flat.contains("content.interactiveDismissDisabled(!account.snapshot.canDismiss)"))
         #expect(flat.contains(".confirmationDialog(ConclaveStrings.text(\"Delete Your Account?\"), isPresented: $confirmDelete, titleVisibility: .visible)"))
         #expect(flat.contains("Button(ConclaveStrings.text(\"Delete Account\"), role: .destructive) { account.deleteAccount() }"))
         #expect(flat.contains(".listStyle(.insetGrouped)"))
-        // R26 (SET-1): the Settings row pushes the app-scope Settings on the sheet's own stack.
+
         #expect(source.contains("ConclaveStrings.text(\"Settings\")") && source.contains("case privacy, settings, settingsVoice, settingsCameraQuality, settingsCameraAdvanced"))
         #expect(flat.contains("case .settings: SettingsAppScopeList(settings: appSettings, link: { AccountRoute.settingsLink($0) })"))
         #expect(!source.contains(".preferredColorScheme"))
@@ -496,7 +476,7 @@ struct ENT7AccountTests {
         #expect(acknowledge.lowerBound < show.lowerBound, "acknowledged before it shows, so it never repeats")
         #expect(flat.contains("contentWindowInsets = WindowInsets.safeDrawing"))
         #expect(!source.contains("ModalBottomSheet") && !source.contains("FlexibleBottomSheet"))
-        // R26 (SET-1): the Settings row shows once the premeeting host passes onOpenSettings (HD request B6-T2 R2 e).
+
         #expect(flat.contains("if (onOpenSettings != null) { item(\"settings\") {"))
         let privacy = ent7Flat(try ent7Source("Sources/Conclave/Skip/ui/account/PrivacyPolicyScreen.kt"))
         #expect(privacy.contains("uriHandler.openUri(PrivacyPolicyDestination.urlString)"))
@@ -536,7 +516,7 @@ struct ENT7AccountTests {
             #expect(!text.contains(".isLetter"), "\(file)")
             #expect(!text.contains("import AuthenticationServices") && !text.contains("import CryptoKit"), "\(file)")
         }
-        // S10 5 l2: no user-visible string names build settings or credentials (catalog, strings.xml, the fragment).
+
         let catalog = try ent7Source("Sources/Conclave/Resources/Localizable.xcstrings")
         let xml = try ent7Source("Android/app/src/main/res/values/strings.xml")
         for text in [catalog, xml] {
@@ -592,7 +572,6 @@ struct ENT7AccountTests {
     ]
 }
 
-/// The hooks HD requests B4-T3 R1 to R10 add to B4-T2's Home files (apply them first).
 @MainActor
 struct ENT7AccountHookTests {
     @Test func openingAccountFetchesProvidersOnceAndClosingCancelsASignIn() throws {
@@ -645,7 +624,7 @@ struct ENT7AccountHookTests {
 
     @Test func theRequestedHooksAreInPlace() throws {
         let presenter = ent7Flat(try ent7Source("Sources/Conclave/Features/Home/PremeetingPresenter.swift"))
-        // R2: the lobby's signInRequired issue opens Account with its context; R3: both dismissal paths.
+
         #expect(presenter.contains("self.account.setContext(AccountContext.signInRequired)"))
         #expect(presenter.contains("self.account.didPresent()"))
         #expect(presenter.contains("if hadAccount && !PremeetingPresenter.containsAccount(routes) {"))
@@ -671,8 +650,6 @@ struct ENT7AccountHookTests {
         }
     }
 }
-
-// MARK: - Helpers
 
 @MainActor
 private final class ENT7Recorder {
@@ -712,7 +689,6 @@ private func ent7Source(_ packageRelativePath: String) throws -> String {
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 
-/// Whitespace collapsed to single spaces, so a pin fails only when the code changes.
 private func ent7Flat(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }

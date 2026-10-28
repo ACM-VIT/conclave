@@ -114,7 +114,6 @@ export function renderNativeTokens(tokens = native) {
   }
   function colors(path, value, keys, nameFor) {
     expectKeys(value, keys, `native.${path}`);
-    lines.push(`    // ${path}`);
     for (const key of keys) constant(nameFor(key), "Int64", `0x${argb(value[key], `native.${path}.${key}`)}`);
     lines.push("");
   }
@@ -135,7 +134,6 @@ export function renderNativeTokens(tokens = native) {
     ["radius", radiusKeys, (key) => `radius${capitalized(key)}`],
   ]) {
     expectKeys(tokens[group], keys, `native.${group}`);
-    lines.push(`    // ${group}`);
     for (const key of keys) {
       const value = tokens[group][key];
       if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -149,7 +147,6 @@ export function renderNativeTokens(tokens = native) {
     throw new Error("native.avatar.palette must contain 16 ARGB colors in identity order");
   }
   const avatarColors = Array.from(tokens.avatar.palette, (value, i) => `0x${argb(value, `native.avatar.palette[${i}]`)}`);
-  lines.push("    // avatar");
   constant("avatarPalette", "[Int64]", `[${avatarColors.join(", ")}]`);
   constant("avatarRing", "Int64", `0x${argb(tokens.avatar.ring, "native.avatar.ring")}`);
   constant("avatarTongue", "Int64", `0x${argb(tokens.avatar.tongue, "native.avatar.tongue")}`);

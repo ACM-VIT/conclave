@@ -24,29 +24,27 @@ struct NativeGoogleIdentityToken {
     let email: String?
 }
 
-/// ENT-7 (S10 5 m): what went wrong, typed. The native Account screens map the kind to their own copy and never show
-/// `message`, which stays developer-facing (logs, and the legacy join screen, unchanged until its route is retired).
 enum NativeAuthErrorKind: String, CaseIterable, Equatable {
-    /// The person closed the provider sheet: silent (S10 5 f).
+
     case cancelled
-    /// This build has no client id or the server has no auth base URL: the provider row stays hidden.
+
     case notConfigured
-    /// No window or activity to present from.
+
     case unavailable
-    /// A provider request is already running.
+
     case inProgress
     case timedOut
-    /// The request never reached the server (offline, DNS, TLS).
+
     case network
-    /// The server answered with an error status or `success: false`.
+
     case server
-    /// The server refused the credential (401 or 403).
+
     case rejected
-    /// A provider or server answer without the token or user it should carry.
+
     case invalidResponse
-    /// No account to choose on this device (Android Credential Manager).
+
     case noCredential
-    /// The provider SDK reported another failure.
+
     case providerFailed
     case unknown
 }
@@ -424,8 +422,7 @@ enum NativeAuthService {
     private static func resolveDebugAppBaseURL() -> URL? {
         for key in appBaseURLConfigKeys {
             #if DEBUG && !SKIP
-            // Preserve key order: the canonical key precedes aliases. For each key, environment
-            // precedes an explicit Debug launch argument, which precedes bundled configuration.
+
             let launchValue = NativeRuntimeConfig.debugLaunchValue(forKey: key)
             #else
             let launchValue = ProcessInfo.processInfo.environment[key]
@@ -518,8 +515,6 @@ enum NativeAuthService {
         #endif
     }
 
-    /// ENT-7: the kind of any error an auth call throws. Errors this service builds carry their kind; a transport
-    /// error from URLSession is a network failure; anything else is unknown (the Account screen shows its generic copy).
     static func errorKind(_ error: Error) -> NativeAuthErrorKind {
         if let authError = error as? NativeAuthError {
             return authError.kind
@@ -532,8 +527,6 @@ enum NativeAuthService {
         return .unknown
     }
 
-    /// ENT-7: the typed error codes `NativeGoogleSignInBridge.kt` reports beside its log message (its ERROR_
-    /// constants). An empty or unknown code is a provider failure.
     static func kind(forGoogleBridgeCode code: String) -> NativeAuthErrorKind {
         switch code {
         case "cancelled":
@@ -555,7 +548,6 @@ enum NativeAuthService {
         }
     }
 
-    /// 401 and 403 refuse the credential; every other error status is a server failure.
     private static func statusKind(_ statusCode: Int) -> NativeAuthErrorKind {
         statusCode == 401 || statusCode == 403 ? NativeAuthErrorKind.rejected : NativeAuthErrorKind.server
     }
@@ -892,7 +884,6 @@ private enum NativeGoogleSignInBridgeIOS {
         GIDSignIn.sharedInstance.handle(url)
     }
 
-    /// The person closed the Google sheet (`kGIDSignInErrorCodeCanceled`): silent in the Account screen.
     private static func isCancellation(_ error: Error) -> Bool {
         let nsError = error as NSError
         return nsError.domain == GIDSignInError.errorDomain && nsError.code == GIDSignInError.canceled.rawValue

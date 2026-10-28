@@ -2,18 +2,6 @@
 import Accessibility
 import SwiftUI
 
-// S60 10 B2 (ACT-4) on iOS: Wordle inside the game shell's scroll view (GameShell+iOS.swift routes `GameSceneKind.wordle`
-// to `WordleSceneBody` and pins `WordleHostBar` in its bottom bar, HD request B7-T7 R2). The board is six rows of five
-// 38 pt cells with 4 pt gaps; each row is one accessibility element that reads its letters and marks as text, and every
-// mark has a glyph twin (a check for the right spot, a dot for in the word), so correctness is never color alone. Input
-// is the letter keys (default), the system keyboard ("Type Your Guess", the default while VoiceOver runs) or a hardware
-// keyboard; all three feed the one presenter draft (`GameStagePresenter.wordleDraft`). The board and the keys never mirror
-// in right-to-left layouts (D18). Only the newly marked row changes and marks appear in one frame (no flip). The timer is
-// its own leaf over `countdown`, the board's draft row reads `wordleDraft`, the keys read `keyStates` (S60 10 k).
-
-// MARK: Scene
-
-/// The Wordle body for every phase: setting the word, playing, a round's results and the final results.
 struct WordleSceneBody: View {
     let games: GameStagePresenter
 
@@ -48,8 +36,6 @@ struct WordleSceneView: View {
     }
 }
 
-/// "Round 1 of 3 · Guess the Word", "5 letters · 6 tries" and the timer chip (S60 10 b, g). The card header above already
-/// carries the game's identity, so this states the task quietly (no accent bar, AGENTS.md game rules).
 struct WordleHeader: View {
     let scene: WordleScene
     let games: GameStagePresenter
@@ -78,9 +64,6 @@ struct WordleHeader: View {
     }
 }
 
-// MARK: Timer (K2 variant)
-
-/// Observes only `countdown`, so the per-second leaf never re-evaluates the scene.
 struct WordleTimerSlot: View {
     let games: GameStagePresenter
 
@@ -91,9 +74,6 @@ struct WordleTimerSlot: View {
     }
 }
 
-/// "2:41" with tabular digits, once per second only while the scene is active (stopped in the background, recomputed on
-/// resume), from the server deadline plus the push's clock offset. At 10 s or less it turns the warning color and reads
-/// "0:09 left" (the text twin); VoiceOver hears "%@ left" at 60 s and 10 s only.
 struct WordleTimerChip: View {
     let model: CountdownModel
     @Environment(\.scenePhase) private var scenePhase
@@ -140,10 +120,6 @@ private struct WordleTimerFace: View {
     }
 }
 
-// MARK: Phases
-
-/// Set the word (S60 10 c, f): the setter types the secret into a secure field ("Set Word" at five letters); everyone else
-/// reads who is choosing. A rejected word keeps the draft (the shell shows the server's reason).
 struct WordleSetWordView: View {
     let scene: WordleScene
     let games: GameStagePresenter
@@ -151,7 +127,7 @@ struct WordleSetWordView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if scene.isSetter {
-                // The setter keeps the field (disabled while reconnecting or while the word is in flight).
+
                 PromptLine(text: WordleCopy.youPick(scene.wordLength))
                 WordleSecretEntry(scene: scene, games: games)
             } else {
@@ -165,14 +141,11 @@ struct WordleSetWordView: View {
     }
 }
 
-/// Playing (S60 10 c, f): your board, its outcome and the input for a guesser; the setter watches the standings and the
-/// status-only boards; a spectator reads the standings.
 struct WordlePlayingView: View {
     let scene: WordleScene
     let games: GameStagePresenter
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
-    /// nil follows VoiceOver (text entry while it runs); "Type Your Guess" and "Use Letter Keys" set it while this round's
-    /// board shows (the view is new each round, because the results phase sits between rounds).
+
     @State private var prefersTextEntry: Bool? = nil
 
     var body: some View {
@@ -199,8 +172,6 @@ struct WordlePlayingView: View {
     }
 }
 
-/// The letter keys or the text field, and the switch between them ("Type Your Guess" with the letter keys, "Use Letter
-/// Keys" with the field). The `keyboard` concept glyph joins "Type Your Guess" when the R6-1 icon lands (HD request R7).
 struct WordleInputArea: View {
     let scene: WordleScene
     let games: GameStagePresenter
@@ -235,8 +206,6 @@ struct WordleInputArea: View {
     }
 }
 
-/// Results (S60 10 c, f): the solution as correct cells, the winner line, your outcome and board, the standings (and the
-/// scoreboard at the final results); participants wait for the host. Next Round and Play Again are the pinned bars.
 struct WordleResultsView: View {
     let scene: WordleScene
     let games: GameStagePresenter
@@ -270,7 +239,6 @@ struct WordleResultsView: View {
     }
 }
 
-/// "You solved it", "Out of tries", "Time ran out", announced once (S60 10 f, i).
 struct WordleOutcomeLine: View {
     let scene: WordleScene
     let games: GameStagePresenter
@@ -284,7 +252,6 @@ struct WordleOutcomeLine: View {
     }
 }
 
-/// The pinned host bar (S60 10 f): Next Round for a seated host at a round's results, pending until that emit's ack.
 struct WordleHostBar: View {
     let games: GameStagePresenter
 
@@ -299,11 +266,6 @@ struct WordleHostBar: View {
     }
 }
 
-// MARK: Board (B2)
-
-/// Your rows: the marked guesses, the draft row while your board is open and empty rows up to six. Read-only at the
-/// results (no draft read, so typing elsewhere never touches it). After a guess is marked, VoiceOver focus moves to that
-/// row's summary (S60 10 i).
 struct WordleBoard: View {
     let scene: WordleScene
     let games: GameStagePresenter
@@ -327,8 +289,6 @@ struct WordleBoard: View {
     }
 }
 
-/// One row as one accessibility element ("Row 2: S, not in the word, L, in the word, ..."); long press at the largest
-/// text sizes shows the word in the Large Content Viewer (geometry-bound board, F00 5).
 struct WordleRowView: View {
     let row: WordleRowModel
     let label: String
@@ -348,9 +308,6 @@ struct WordleRowView: View {
     }
 }
 
-/// A 38 pt cell. Fills: correct `iosInCallSuccess`, in the word `iosInCallWarning` (both with dark ink above 4.5:1),
-/// not in the word `iosInCallSurfaceHigh` with paper ink; empty and typed cells are outlined (`inCallBorderStrong`).
-/// The accent never marks correctness (S60 10 e).
 struct WordleCellView: View {
     let cell: WordleCellModel
 
@@ -372,8 +329,6 @@ struct WordleCellView: View {
     }
 }
 
-/// The glyph twin of a mark: a check for the right spot, a dot for in the word, nothing otherwise (the row's text
-/// carries all three for VoiceOver).
 struct WordleMarkGlyph: View {
     let mark: WordleCellState
     let ink: Color
@@ -399,8 +354,6 @@ struct WordleMarkGlyph: View {
     }
 }
 
-/// The setter's view of every contestant (S60 10 f): small status-only boards (marks without letters), each one
-/// accessibility element with the name and status as text.
 struct WordleLiveBoards: View {
     let scene: WordleScene
 
@@ -438,7 +391,6 @@ struct WordleLiveBoards: View {
     }
 }
 
-/// Who solved and in how many tries, who is still playing (S60 10 g), keyed by player id.
 struct WordleStandingsList: View {
     let scene: WordleScene
 
@@ -474,12 +426,6 @@ struct WordleStandingsList: View {
     }
 }
 
-// MARK: Input
-
-/// The letter keys (S60 10 c): three rows, keys 44 pt tall and min(32, (width - 36) / 10) wide (the deliberate game-grid
-/// exception; text entry is the full-size alternative), Enter and Delete one and a half keys wide, each key reflecting
-/// the best known state of its letter with the same glyph twins. Hardware letters, delete and return feed the same
-/// draft while the keys have focus. No per-key haptic (the outcomes carry `guessInvalid` and `wordSolved`).
 struct WordleLetterKeyboard: View {
     let scene: WordleScene
     let games: GameStagePresenter
@@ -544,8 +490,6 @@ struct WordleLetterKeyboard: View {
     }
 }
 
-/// Text entry (S60 10 c): the system keyboard, letters A to Z only, at most five, autocapitalized, no autocorrect, Go
-/// submits; paste keeps letters only. A 44 pt "Enter Guess" button. The field mirrors the presenter draft both ways.
 struct WordleTextEntry: View {
     let scene: WordleScene
     let games: GameStagePresenter
@@ -602,7 +546,6 @@ struct WordleTextEntry: View {
     }
 }
 
-/// The setter's secure field ("Secret Word") and "Set Word" (S60 10 c, f); the same letter filter as a guess.
 struct WordleSecretEntry: View {
     let scene: WordleScene
     let games: GameStagePresenter
@@ -655,8 +598,6 @@ struct WordleSecretEntry: View {
     }
 }
 
-/// One keyboard row: letter keys min(32, (width - 36) / 10) wide, Enter and Delete one and a half keys, 4 pt gaps,
-/// centered, 44 pt tall. A custom layout, so the width rule holds without a GeometryReader.
 struct WordleKeyRowLayout: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? CGFloat(WordleBoardPolicy.boardWidth)
@@ -687,7 +628,6 @@ struct WordleKeyRowLayout: Layout {
     }
 }
 
-/// A key's width in letter-key units (1, or 1.5 for Enter and Delete).
 struct WordleKeyWidthFactor: LayoutValueKey {
     static let defaultValue: CGFloat = 1
 }
@@ -696,7 +636,6 @@ enum WordleKeyMetrics {
     static let keyHeight: CGFloat = 44
 }
 
-/// One letter key: the letter, its state's fill and glyph twin, and "E, in the word" for VoiceOver (S60 10 i).
 struct WordleLetterKey: View {
     let key: WordleKeyModel
     let enabled: Bool
@@ -729,7 +668,6 @@ struct WordleLetterKey: View {
     }
 }
 
-/// Enter (text) and Delete (canonical R6-1 backspace artwork).
 struct WordleWideKey: View {
     let title: String
     let symbol: String
@@ -775,9 +713,6 @@ struct WordleWideKey: View {
     }
 }
 
-// MARK: Style and copy
-
-/// Canonical R6-1 Wordle concepts.
 enum WordleSymbols {
     static let backspace = ConclaveSymbols.deleteBackward
 }
@@ -789,7 +724,6 @@ struct WordleCellStyle {
     let borderWidth: CGFloat
 }
 
-/// S60 10 e tokens: functional colors with text and glyph twins, never the accent; dark ink on success and warning.
 enum WordleStyle {
     static func cell(_ state: WordleCellState) -> WordleCellStyle {
         let paper = HostingTheme.token(DesignTokens.iosInCallText)
@@ -836,7 +770,6 @@ enum WordleStyle {
     }
 }
 
-/// S60 10 g, exhaustive iOS copy (L6-14): Apple title case for controls and headings, sentence case for lines.
 enum WordleCopy {
     static func title(_ scene: WordleScene, isFinished: Bool) -> String {
         let rounds = scene.roundTotal > 1 && scene.round > 0
@@ -894,7 +827,6 @@ enum WordleCopy {
 
     static func wordWas(_ word: String) -> String { ConclaveStrings.format("The word was %@", word) }
 
-    /// "1 try", "3 tries" (a plural catalog entry, S60 10 l).
     static func tries(_ count: Int) -> String { ConclaveStrings.format("%lld tries", count) }
 
     static func status(_ status: WordleStandingStatus, tries count: Int) -> String {
@@ -927,7 +859,6 @@ enum WordleCopy {
         }
     }
 
-    /// "Row 2: S, not in the word, L, in the word, ..." or "Row 4, empty".
     static func rowSummary(_ row: WordleRowModel) -> String {
         var parts: [String] = []
         for cell in row.cells where !cell.letter.isEmpty {
@@ -937,17 +868,14 @@ enum WordleCopy {
         return ConclaveStrings.format("Row %lld: %@", row.index + 1, parts.joined(separator: ", "))
     }
 
-    /// "2:41" in the current locale's digits.
     static func clock(_ seconds: Int) -> String {
         Duration.seconds(max(0, seconds)).formatted(.time(pattern: .minuteSecond))
     }
 
-    /// "2 minutes, 41 seconds" for VoiceOver.
     static func spokenDuration(_ seconds: Int) -> String {
         Duration.seconds(max(0, seconds)).formatted(.units(allowed: [.minutes, .seconds], width: .wide))
     }
 
-    /// "2:41 left"; its own key, because "%@ left" is the toast for a person who left.
     static func timeLeft(_ value: String) -> String { ConclaveStrings.format("Wordle Time Left %@", value) }
 }
 #endif

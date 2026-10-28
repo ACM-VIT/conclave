@@ -3,13 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SYS-2 (S70 5, 0.6 SX11, 0.7 SY3, SY17, SY18; S30 0.5 and CC4; S10 0.8 C2; RECONCILE R23, R24, R29; S70 O2):
-/// the activation policy (with its recording session seam), the route-change table, the interruption model and the
-/// route owner, plus source scans for the iOS session owner and the Android client, which this host does not
-/// compile. The transpiled policies and owner also run in `T/Skip/SYS2AudioRouteBridgeTests.kt`.
 @MainActor
 struct SYS2AudioRoutingTests {
-    // MARK: Helpers
 
     private final class Clock {
         var now: Double = 1_000_000
@@ -26,8 +21,6 @@ struct SYS2AudioRoutingTests {
         var refreshState: AudioRoutePlatformState? = nil
         weak var owner: AudioRouteOwner?
 
-        /// The closures hold the fake strongly so the owner never reads a freed fake (an unowned read aborts the whole
-        /// Swift Testing process). The fake holds the owner weakly, so there is no cycle.
         func make(for owner: AudioRouteOwner) -> AudioRouteBackend {
             self.owner = owner
             return AudioRouteBackend(
@@ -78,8 +71,6 @@ struct SYS2AudioRoutingTests {
         AudioRouteState(previousId: previous, currentId: current, defaultId: defaultId)
     }
 
-    // MARK: AudioActivationPolicy (S70 5 c, SX11, 5 l7)
-
     @Test func mayActivateOnlyWhileNoCallKitCallOwnsTheSession() {
         for status in CallSurfaceStatus.allCases {
             let expected = !(status == .active || status == .starting)
@@ -91,8 +82,7 @@ struct SYS2AudioRoutingTests {
     }
 
     @Test func scriptedCallUnderCallKitMakesZeroSelfActivations() {
-        // The recording session seam: join, foreground, background, route change, the WebRTC configure paths and
-        // the end of an interruption, all while CallKit owns the call (S70 5 l7, readout sys.selfActivations 0).
+
         let recorder = AudioActivationRecorder()
         recorder.setSurface(.callKit, status: .starting)
         recorder.request(.webRTCConfigure)
@@ -116,7 +106,7 @@ struct SYS2AudioRoutingTests {
         }
         #expect(recorder.selfActivations == sites.count)
         #expect(AudioActivationPolicy.everyActivationEnablesWebRTCAudio(recorder.steps))
-        // No CallKit at all (unavailable, O9) behaves the same.
+
         #expect(AudioActivationPolicy.steps(site: .callBegin, surface: .none, status: .inactive)
             == [.setCategory, .setActive, .enableWebRTCAudio, .applyRoute])
     }
@@ -136,13 +126,11 @@ struct SYS2AudioRoutingTests {
         #expect(AudioActivationPolicy.activationSteps(site: .webRTCConfigure, surface: .callKit, status: .active).isEmpty)
         #expect(AudioActivationPolicy.activationSteps(site: .webRTCConfigure, surface: .callKit, status: .refused)
             == [.setActive, .enableWebRTCAudio])
-        // The media services rebuild is the one documented self-activation under CallKit.
+
         let reset = AudioActivationPolicy.steps(site: .mediaServicesReset, surface: .callKit, status: .active)
         #expect(reset.first == .disableWebRTCAudio)
         #expect(AudioActivationPolicy.everyActivationEnablesWebRTCAudio(reset))
     }
-
-    // MARK: AudioRouteChangePolicy (S70 5 c table, 5 l1)
 
     @Test func iosReasonRawValuesMapOntoOneVocabulary() {
         let expected: [Int: AudioRouteChangeReason] = [
@@ -164,7 +152,6 @@ struct SYS2AudioRoutingTests {
         #expect(restore.targetId == "bt-1")
         #expect(restore.postsRouteChanged && restore.restartsCapture)
 
-        // A different device arrives while the explicit choice's device is still here: follow it, clear the choice.
         let adopt = AudioRouteChangePolicy.action(
             reason: .newDeviceAvailable, intent: intent("speaker", present: "speaker", was: true),
             current: route("speaker", "wired-1", "wired-1"), pendingOwnRequest: false
@@ -174,7 +161,6 @@ struct SYS2AudioRoutingTests {
         #expect(adopt.intentId.isEmpty)
         #expect(adopt.postsRouteChanged)
 
-        // A lost device keeps its claim while another arrives.
         let keepClaim = AudioRouteChangePolicy.action(
             reason: .newDeviceAvailable, intent: intent("bt-1", present: "", was: false),
             current: route("speaker", "wired-1", "wired-1"), pendingOwnRequest: false
@@ -182,7 +168,6 @@ struct SYS2AudioRoutingTests {
         #expect(keepClaim.kind == .adoptNewDevice)
         #expect(keepClaim.intentId == "bt-1")
 
-        // Android: the platform kept its target, the default order picks the newcomer.
         let android = AudioRouteChangePolicy.action(
             reason: .newDeviceAvailable, intent: intent("out:2", present: "out:2", was: true),
             current: route("out:2", "out:2", "out:30"), pendingOwnRequest: false
@@ -200,7 +185,7 @@ struct SYS2AudioRoutingTests {
         #expect(lost.intentId == "bt-1")
         #expect(lost.targetId == "speaker")
         #expect(lost.postsRouteChanged)
-        // A present intent is the fallback.
+
         let toIntent = AudioRouteChangePolicy.action(
             reason: .oldDeviceUnavailable, intent: intent("receiver", present: "receiver", was: true),
             current: route("wired-1", "speaker", "speaker"), pendingOwnRequest: false
@@ -238,7 +223,7 @@ struct SYS2AudioRoutingTests {
             )
             #expect(reapply.kind == .reapplyIntent, "\(reason)")
             #expect(reapply.targetId == "bt-1")
-            // Restored to where it was: the route did not change, so no toast.
+
             #expect(!reapply.postsRouteChanged)
             let keep = AudioRouteChangePolicy.action(
                 reason: reason, intent: intent("bt-1", present: "", was: false),
@@ -280,8 +265,6 @@ struct SYS2AudioRoutingTests {
         #expect(!AudioRouteChangePolicy.isOwnRequest(requestMillis: -1, targetId: "", currentId: "bt-1", nowMillis: 1_200))
     }
 
-    // MARK: AudioInterruptionPolicy (S70 5 c, 5 d, 5 l2)
-
     @Test func interruptionsToggleOtherAudioAndAHoldIsSticky() {
         #expect(AudioInterruptionPolicy.next(current: .none, event: .began) == .otherAudio)
         #expect(AudioInterruptionPolicy.next(current: .otherAudio, event: .ended) == .none)
@@ -298,8 +281,6 @@ struct SYS2AudioRoutingTests {
         #expect(AudioInterruptionPolicy.beganEvent(reasonRawValue: 4) == .began)
     }
 
-    // MARK: AudioRouteOwner (S30 CC4, S70 5 f, R11)
-
     @Test func headsetLossFallsBackWithoutErasingIntentAndTheReturnRestoresIt() {
         let clock = Clock()
         let backend = FakeBackend()
@@ -309,7 +290,6 @@ struct SYS2AudioRoutingTests {
         owner.callAudioDidStart()
         owner.publish(state([receiver, speaker, airPods], current: "speaker", defaultId: "bt-1"))
 
-        // The person chooses AirPods: switching until the platform lands there, no event.
         owner.requestRoute(id: "bt-1")
         #expect(owner.route.phase == .switching)
         #expect(owner.route.pendingId == "bt-1")
@@ -321,7 +301,6 @@ struct SYS2AudioRoutingTests {
         #expect(owner.preferredRouteIntent == "bt-1")
         #expect(events.isEmpty)
 
-        // AirPods leave: fall back to the speaker with one event; the intent stays.
         clock.now += 10_000
         let lost = owner.handleRouteChange(.oldDeviceUnavailable, previousId: "bt-1", state: state([receiver, speaker], current: "receiver", defaultId: "speaker"))
         #expect(lost.kind == .fallBack)
@@ -330,14 +309,13 @@ struct SYS2AudioRoutingTests {
         #expect(events.count == 1)
         #expect(events.first?.name == "Speaker")
         #expect(events.first?.kind == AudioRouteEvent.routeChangedKind)
-        // The override the fallback apply causes is the owner's own: no adoption, no second event.
+
         clock.now += 200
         let landed = owner.handleRouteChange(.routeOverride, previousId: "receiver", state: state([receiver, speaker], current: "speaker", defaultId: "speaker"))
         #expect(landed.kind == .confirmOwnRequest)
         #expect(owner.preferredRouteIntent == "bt-1")
         #expect(events.count == 1)
 
-        // AirPods return while the system stays on the speaker: restore with one event.
         clock.now += 10_000
         let back = owner.handleRouteChange(.newDeviceAvailable, previousId: "speaker", state: state([receiver, speaker, airPods], current: "speaker", defaultId: "bt-1"))
         #expect(back.kind == .restoreIntent)
@@ -386,7 +364,6 @@ struct SYS2AudioRoutingTests {
         #expect(backend.applied.isEmpty)
         #expect(events.isEmpty)
 
-        // Within 2 s after the iOS route list closes, even a platform apply moments before does not hide the choice.
         owner.noteSystemRoutePickerDismissed()
         clock.now += 500
         owner.noteOwnRouteRequest(targetId: "")
@@ -416,7 +393,6 @@ struct SYS2AudioRoutingTests {
         #expect(failures == ["bt-1"])
         #expect(owner.preferredRouteIntent.isEmpty)
 
-        // A refusal fails at once; the next request clears the failure.
         backend.accepts = false
         owner.requestRoute(id: "receiver")
         #expect(owner.route.phase == .failed)
@@ -456,7 +432,7 @@ struct SYS2AudioRoutingTests {
         let backend = FakeBackend()
         let owner = makeOwner(clock, backend)
         owner.setPrejoinIntent(outputKind: AudioRouteKind.bluetooth.rawValue, inputId: "")
-        // Nothing applies before call audio starts (the lobby never routes, S10 0.8 C2).
+
         #expect(backend.applied.isEmpty)
         backend.refreshState = state([receiver, speaker], current: "speaker", defaultId: "speaker")
         owner.callAudioDidStart()
@@ -509,7 +485,6 @@ struct SYS2AudioRoutingTests {
         #expect(presence.snapshot.interruption == .none)
         #expect(!presence.snapshot.isMuted)
 
-        // CallKit hold (O2): the interruption that comes with it never overwrites `held`; only resume clears it.
         let session = presence.snapshot.presenceSession
         #expect(presence.handle(.hold, source: .callKit, presenceSession: session) == .dispatched)
         #expect(presence.snapshot.phase == .onHold)
@@ -537,8 +512,6 @@ struct SYS2AudioRoutingTests {
         #expect(owner.preferredRouteIntent.isEmpty)
     }
 
-    // MARK: Source scans (S70 5 l6, SY3, SY17, SY18; guards)
-
     @Test func setActiveTrueLivesOnlyInTheRefusedFallback() throws {
         let session = try sys2Source("Sources/Conclave/Core/Call/CallAudioSession.swift")
         let code = sys2Code(session)
@@ -554,9 +527,9 @@ struct SYS2AudioRoutingTests {
         let configure = try sys2Body(webRTC, from: "private func configureCallAudioSession(applyRoutes: Bool = true) throws {", to: "private func reassertLocalAudioCaptureState() {")
         #expect(configure.contains("try CallAudioSession.shared.activateIfAllowed(site: .webRTCConfigure)"))
         #expect(configure.contains("CallAudioSession.configureCallCategory(on: audioSession"))
-        // The capture ladder re-asserts capture, never the route.
+
         #expect(webRTC.contains("try self.configureCallAudioSession(applyRoutes: false)"))
-        // The reconnect guard of testReconnectPreservesCallAudioRoutingAndVisibleRoster stays.
+
         #expect(webRTC.contains("if !preserveCallAudioRouting {\n            try? audioSession.setActive(false)"))
     }
 
@@ -589,16 +562,16 @@ struct SYS2AudioRoutingTests {
         let reapply = try sys2Body(android, from: "private fun reapplyCallAudioRoute(forceCaptureRestart: Boolean = false) {", to: "private fun notifyCallAudioRouteChanged() {")
         #expect(!reapply.contains("BluetoothConnect"))
         #expect(reapply.contains("reportPendingRouteChange()"))
-        // The route sheet row is the request point (R70-2); a person's in-context selection keeps its own.
+
         #expect(android.contains("private fun requestBluetoothAccessFromRouteSheet() {"))
         #expect(android.contains("requestBluetoothAccess = { requestBluetoothAccessFromRouteSheet() }"))
         #expect(sys2Count("PermissionHelper.requestBluetoothConnectPermission", in: android) == 2)
-        // Focus is the interruption signal; no READ_PHONE_STATE.
+
         #expect(android.contains("AudioRouteOwnerBridge.interruptionEvent(change)"))
         #expect(!android.contains("READ_PHONE_STATE"))
-        // The communication device listener no longer re-applies over a system choice.
+
         #expect(android.contains("handleCommunicationDeviceChanged(device)"))
-        // The reconnect guard stays.
+
         #expect(android.contains("if (!preserveCallAudioRouting) {\n            releaseCallAudioMode()"))
         let bridge = sys2Code(try sys2Source("Sources/Conclave/Skip/AudioRouteOwnerBridge.kt"))
         #expect(bridge.contains("AudioManager.STREAM_VOICE_CALL"))
@@ -618,7 +591,7 @@ struct SYS2AudioRoutingTests {
         ]
         for path in files {
             let code = sys2Code(try sys2Source(path))
-            // No haptics for automatic or system events (R11, D7); never a mute write (mute intent is untouched).
+
             for forbidden in ["HapticManager", "ConclaveHapticFeedback", "ConclaveHaptics", "performHapticFeedback",
                               "UIImpactFeedbackGenerator", "toggleMute", "isMuted =", "setAudioEnabled", "gradient", "Gradient"] {
                 #expect(!code.contains(forbidden), "\(path) contains \(forbidden)")
@@ -642,8 +615,6 @@ struct SYS2AudioRoutingTests {
         }
     }
 
-    /// Pins the hooks HD/requests/B2-T4.md R1, R2, R3, R5 and R6 add to files this slice does not own; it holds once
-    /// the batch integrator has applied them.
     @Test func requestedCoreHooksAreWired() throws {
         let viewModel = sys2Code(try sys2Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"))
         let normalize = try sys2Body(viewModel, from: "private func normalizeSelectedAudioDeviceState() {", to: "func executeChatCommand(")
@@ -666,7 +637,7 @@ struct SYS2AudioRoutingTests {
     }
 
     @Test func routeStringsAreInTheCatalogs() throws {
-        // Merged by the integrator from HD/strings/B2-T4.json.
+
         let xml = try sys2Source("Android/app/src/main/res/values/strings.xml")
         for name in ["ctl_route_phone", "ctl_route_speaker", "ctl_route_bluetooth", "ctl_route_wired", "ctl_route_usb", "ctl_route_hearing_aid"] {
             #expect(xml.contains("<string name=\"\(name)\""), "missing \(name)")
@@ -682,7 +653,6 @@ private func sys2Source(_ packageRelativePath: String) throws -> String {
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 
-/// The text without whole-line comments (`//`, `///`, `/**`, ` *`), so prose never satisfies or breaks a scan.
 private func sys2Code(_ text: String) -> String {
     text.components(separatedBy: "\n").filter { line in
         let trimmed = line.trimmingCharacters(in: .whitespaces)

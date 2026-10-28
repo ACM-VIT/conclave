@@ -1,17 +1,8 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 2 (PPL-1): the iOS person row (F00 C10 with the PL1 deltas), the waiting row, section headers and footers, and
-// the row copy. The row reads only its `PersonRowEntry`; the speaking glyph and the "Speaking" value are leaves on the
-// S20 `TileSpeakingState`, so a speaker change re-evaluates the leaf, never the row (S50 2 k). The info part is the
-// WP1-2b `ConclavePersonRow` (one combined element) with the C07 avatar in its leading slot; the trailing control is
-// its own element. PPL-2 passes the row `Menu` through `trailing` and the accessibility actions through `onAction`
-// (PeopleActions+iOS.swift); PPL-3 (S50 4, 5) adds the waiting row's Deny and Admit with the Admit swipe and the
-// section headers' host actions (Admit All and Deny All, Lower All, Mute All...), with the section-header dialogs.
-
-/// Row and section copy (S50 1 g, 2 g): Apple title case for titles and headers, sentence case for values.
 enum PeopleText {
-    /// The middle-dot separator of the sub line (S50 2 c, U+00B7).
+
     static let separator = " \u{00B7} "
 
     static func displayName(_ model: PersonRowModel) -> String {
@@ -19,8 +10,6 @@ enum PeopleText {
         return model.name
     }
 
-    /// The role word (the F00 C06 tag string, R50-5). Attendees are never roster rows (PH12); the attendee hand-queue
-    /// rows and their F00 C10 "Attendee" detail arrive with PPL-5.
     static func roleWord(_ role: PersonRole) -> String? {
         switch role {
         case .host: return ConclaveStrings.text("Host")
@@ -39,7 +28,6 @@ enum PeopleText {
         }
     }
 
-    /// "You · Host", "Co-Host · Presenting"; an unnamed you shows "You" as the name, never "You · You" (S50 2 f).
     static func subLine(_ model: PersonRowModel) -> String? {
         var parts: [String] = []
         if model.isSelf && !model.name.isEmpty { parts.append(ConclaveStrings.text("You")) }
@@ -49,7 +37,6 @@ enum PeopleText {
         return parts.isEmpty ? nil : parts.joined(separator: separator)
     }
 
-    /// One element per row: the name with the role folded in ("Avery Lee, Co-Host", S50 2 i).
     static func label(_ model: PersonRowModel) -> String {
         var parts = [displayName(model)]
         if model.isSelf && !model.name.isEmpty { parts.append(ConclaveStrings.text("You")) }
@@ -57,8 +44,6 @@ enum PeopleText {
         return parts.joined(separator: ", ")
     }
 
-    /// The value in fixed order after "Speaking" (S50 2 i): Hand Raised, the queue position in Raised Hands,
-    /// Presenting, Camera Off, Muted, Reconnecting; only present states.
     static func valueParts(_ model: PersonRowModel, queueCount: Int, showsQueue: Bool) -> [String] {
         var parts: [String] = []
         if model.isHandRaised {
@@ -93,19 +78,16 @@ enum PeopleText {
         }
     }
 
-    /// The waiting row's value (S50 4 f, 4 i): the reason while its buttons are unavailable, else nothing.
     static func waitingValue(_ model: WaitingRowModel) -> String {
         if !model.pendingAction.isEmpty || model.isEnabled { return "" }
         return reason(model.reason)
     }
 
-    /// A header action's value: "In Progress" while in flight, the reason while recovering or offline.
     static func headerValue(pending: Bool, reason raw: String) -> String {
         if pending { return ConclaveStrings.text("In Progress") }
         return reason(raw)
     }
 
-    /// The unavailable reasons a waiting row or header action can carry (S50 4 f).
     static func reason(_ raw: String) -> String {
         switch raw {
         case PeopleActionReason.reconnecting, PeopleActionReason.notJoined:
@@ -116,13 +98,11 @@ enum PeopleText {
         }
     }
 
-    /// Sections whose header can carry host actions (S50 1 c).
     static func headerCanHaveActions(_ id: String) -> Bool {
         id == PeopleSectionID.waiting.rawValue || id == PeopleSectionID.raisedHands.rawValue
             || id == PeopleSectionID.inMeeting.rawValue || id == PeopleSectionID.panelists.rawValue
     }
 
-    /// The dialog a header presents (S50 3 j).
     static func headerConfirmationKind(_ id: String) -> PeopleConfirmationKind? {
         if id == PeopleSectionID.waiting.rawValue { return PeopleConfirmationKind.denyAll }
         if id == PeopleSectionID.inMeeting.rawValue || id == PeopleSectionID.panelists.rawValue {
@@ -142,23 +122,21 @@ enum PeopleText {
 }
 
 enum PeopleRowMetrics {
-    /// Status glyph spacing (S50 2 c).
+
     static let glyphSpacing: CGFloat = 6
-    /// The trailing control target (44 pt, S50 2 i).
+
     static let trailingTarget: CGFloat = 44
 }
 
-/// One person (S50 2 c). `trailing` is the row's own element after the info (PPL-2's `Menu`); while an action is
-/// pending a system spinner replaces it.
 struct PeopleRowView<Trailing: View>: View {
     let entry: PersonRowEntry
     let speaking: TileSpeakingState
-    /// `PeopleSectionID` raw value: Raised Hands shows the queue number before the hand.
+
     let sectionId: String
-    /// The Raised Hands count, for "1 of 3 in queue".
+
     let queueCount: Int
     let probe: PeopleRecomposeLedger?
-    /// PPL-2 (AX4): every available menu item is a named action on the row's one element.
+
     let onAction: ((PersonActionID) -> Void)?
     let trailing: (PersonRowModel) -> Trailing
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -177,12 +155,12 @@ struct PeopleRowView<Trailing: View>: View {
 
     var body: some View {
         let model = entry.model
-        // people.recompose.<section>:<rowId> (PL12): the fixture ledger counts row evaluations; production passes none.
+
         let _ = probe?.record(sectionId + ":" + model.id)
         let showsQueue = sectionId == PeopleSectionID.raisedHands.rawValue
         Group {
             if dynamicTypeSize.isAccessibilitySize {
-                // The glyph cluster moves under the name and is never truncated (S50 2 c).
+
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 12) {
                         info(model, showsQueue: showsQueue)
@@ -227,7 +205,7 @@ struct PeopleRowView<Trailing: View>: View {
 }
 
 extension PeopleRowView where Trailing == EmptyView {
-    /// A row with no trailing control (PPL-1: rows carry no actions until PPL-2's policy).
+
     init(entry: PersonRowEntry, speaking: TileSpeakingState, sectionId: String, queueCount: Int, probe: PeopleRecomposeLedger?) {
         self.init(entry: entry, speaking: speaking, sectionId: sectionId, queueCount: queueCount, probe: probe, onAction: nil) { _ in
             EmptyView()
@@ -235,8 +213,6 @@ extension PeopleRowView where Trailing == EmptyView {
     }
 }
 
-/// The value modifier alone reads the speaking state, so "Speaking" joins the value without re-evaluating the row
-/// (the F00 C08 tile pattern).
 private struct PeopleRowValue: ViewModifier {
     let parts: [String]
     let speaking: TileSpeakingState
@@ -249,9 +225,6 @@ private struct PeopleRowValue: ViewModifier {
     }
 }
 
-/// Status glyphs, only for notable states, in the S50 2 c order: speaking (leaf), raised hand in the warning color
-/// with the queue number before it in Raised Hands, presenting, camera off, muted, reconnecting. Decorative: the value
-/// carries the states.
 private struct PeopleStatusGlyphs: View {
     let model: PersonRowModel
     let speaking: TileSpeakingState
@@ -286,7 +259,6 @@ private struct PeopleStatusGlyphs: View {
     }
 }
 
-/// The only hot read of a row (S50 2 k): a static glyph that appears and disappears, no animation (S50 2 h).
 private struct PeopleSpeakingGlyph: View {
     let speaking: TileSpeakingState
 
@@ -298,11 +270,6 @@ private struct PeopleSpeakingGlyph: View {
     }
 }
 
-/// One waiting request (S50 PL2, 4 c): avatar and name, then Deny (`.borderless` with the secondary tint, mirroring
-/// Android's TextButton) and the tonal Admit (C01 `.bordered` `.tint(.primary)`, never a coral fill), both at least
-/// 44 pt tall; at accessibility sizes the buttons move under the name. Swipe: leading Admit (full swipe, gray, 3 c),
-/// trailing Deny. While its own action is in flight the two buttons become one spinner with "In Progress";
-/// recovering, offline or a bulk admission disables them with the reason as the row's value. Reads only its entry.
 struct PeopleWaitingRowView: View {
     let people: PeoplePresenter
     let entry: WaitingRowEntry
@@ -347,7 +314,7 @@ struct PeopleWaitingRowView: View {
     }
 
     private func info(_ model: WaitingRowModel) -> some View {
-        // The name exactly as the server sent it (a raw key stays a raw key, S50 4 f).
+
         ConclavePersonRow(name: model.name, lineLimit: 2, identifier: "people.row." + model.id) {
             ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(model.avatarSeed), size: .row)
         }
@@ -395,9 +362,6 @@ struct PeopleWaitingRowView: View {
     }
 }
 
-/// The section heading (F00 C11, S50 1 c): title and count combined into one header element; for hosts, header actions
-/// follow as separate buttons (Admit All and the Deny All overflow on Waiting, Lower All on Raised Hands, Mute All...
-/// on the roster). Header actions hide while a search query is active, because they act on everyone, not the matches.
 struct PeopleSectionHeader: View {
     let people: PeoplePresenter
     let section: PeopleSection
@@ -414,8 +378,6 @@ struct PeopleSectionHeader: View {
     }
 }
 
-/// The only reader of `people.headerActions` (and of the section-header dialog, S50 3 j), so a pending Admit All
-/// re-evaluates this header and nothing else (S50 4 k).
 private struct PeopleSectionHeaderWithActions: View {
     let people: PeoplePresenter
     let section: PeopleSection
@@ -426,7 +388,7 @@ private struct PeopleSectionHeaderWithActions: View {
         if actions.hasActions(section.id) {
             Group {
                 if dynamicTypeSize.isAccessibilitySize {
-                    // The actions sit under the heading at accessibility sizes (S50 1 c, the ViewThatFits fallback).
+
                     VStack(alignment: .leading, spacing: 4) {
                         PeopleHeaderTitle(section: section)
                         HStack(spacing: 8) {
@@ -451,7 +413,6 @@ private struct PeopleSectionHeaderWithActions: View {
     }
 }
 
-/// "Waiting, 3": the title and count as one header element; the actions stay separate buttons (S50 4 c, 4 i).
 private struct PeopleHeaderTitle: View {
     let section: PeopleSection
 
@@ -468,7 +429,6 @@ private struct PeopleHeaderTitle: View {
     }
 }
 
-/// The header buttons for one section, every target at least 44 x 44 pt (gallery `header.waiting`).
 private struct PeopleHeaderButtons: View {
     let people: PeoplePresenter
     let sectionId: String
@@ -490,8 +450,6 @@ private struct PeopleHeaderButtons: View {
         }
     }
 
-    /// Admit All is this screen's one coral fill (F00 C10 e) with the ink label (C01, Q12); the overflow Menu holds
-    /// Deny All... (S50 4 c).
     private var waitingButtons: some View {
         HStack(spacing: 4) {
             Button {
@@ -531,7 +489,6 @@ private struct PeopleHeaderButtons: View {
         }
     }
 
-    /// Lower All and Mute All...: C01 text style (`.borderless`, `coralText`), a spinner while in flight.
     private func textAction(title: String, pending: Bool, isEnabled: Bool, identifier: String,
                             action: @escaping () -> Void) -> some View {
         Button {
@@ -556,8 +513,6 @@ private struct PeopleHeaderButtons: View {
     }
 }
 
-/// The section-header dialogs (S50 3 j): Deny All from the Waiting header, Mute All... from the roster header, each
-/// presented by its header and filtered by kind.
 private struct PeopleHeaderConfirmation: ViewModifier {
     let people: PeoplePresenter
     let kind: PeopleConfirmationKind?

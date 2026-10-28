@@ -64,16 +64,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 
-/*
- * ENT-9 (S10 12 d, e, f, g, h, i, k; RECONCILE R41; S10 Q7): the Android webinar attendee landing, the pushed
- * `WebinarLandingKey` destination of the premeeting NavDisplay, handwritten Compose Material 3 in the system
- * appearance. A scrolling Column (few children): the status tag, the title (a heading) and "Hosted by", then the
- * block for the status; the one primaryContainer action (Start watching) in the bottom bar while open. Every part reads
- * the one `PremeetingPresenter.webinar` snapshot, which never changes once a second: the countdown is its own leaf
- * (CountdownText). While joining the Close icon replaces Back and BackHandler cancels (the host's back path), so the
- * gesture never previews Home. ON_RESUME and ON_PAUSE tell the presenter, which runs the 20 s refetch only while
- * resumed. No preview, capture, permission prompt or sound on any path (invariant 6); no haptic on Start watching.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun WebinarLandingScreen(premeeting: PremeetingPresenter, key: PremeetingKey.WebinarLandingKey, onBack: () -> Unit) {
@@ -111,7 +101,6 @@ internal fun WebinarLandingScreen(premeeting: PremeetingPresenter, key: Premeeti
     }
 }
 
-/** ON_RESUME and ON_PAUSE drive the presenter's refetch and re-run the status policy on resume (S10 12 c, d). */
 @Composable
 private fun WebinarLifecycleEffect(premeeting: PremeetingPresenter) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -127,8 +116,6 @@ private fun WebinarLifecycleEffect(premeeting: PremeetingPresenter) {
         onDispose { lifecycle.removeObserver(observer) }
     }
 }
-
-// MARK: Top and bottom bars
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -149,7 +136,6 @@ private fun WebinarTopBar(premeeting: PremeetingPresenter, joining: Boolean, onB
     )
 }
 
-/** S10 12 d: Start watching only while open, disabled until a needed name or invite code exists; above the IME. */
 @Composable
 private fun WebinarPrimaryBar(premeeting: PremeetingPresenter, routeId: Int) {
     val snapshot = premeeting.webinar?.takeIf { it.routeId == routeId } ?: return
@@ -170,9 +156,6 @@ private fun WebinarPrimaryBar(premeeting: PremeetingPresenter, routeId: Int) {
     }
 }
 
-// MARK: Header
-
-/** The tag, the title (a heading) and "Hosted by". Stable parameters, so the countdown never recomposes it (12 l4). */
 @Composable
 private fun WebinarHeader(tag: WebinarLandingTag, title: String, hostName: String) {
     SideEffect { WebinarLandingDiagnostics.headerCompositions += 1 }
@@ -193,7 +176,7 @@ private fun WebinarHeader(tag: WebinarLandingTag, title: String, hostName: Strin
             modifier = Modifier.testTag("webinar.host"),
         )
         if (NativeRouteFlags.shared.premeetingFixture.isNotEmpty()) {
-            // S10 12 l4 (fixture route only): the header's composition count, flat while the countdown ticks.
+
             val readout = "webinar.header.compositions " + WebinarLandingDiagnostics.headerCompositions +
                 " countdown " + WebinarLandingDiagnostics.countdownCompositions
             Box(Modifier.size(1.dp).testTag("webinar.header.compositions").semantics { contentDescription = readout })
@@ -201,7 +184,6 @@ private fun WebinarHeader(tag: WebinarLandingTag, title: String, hostName: Strin
     }
 }
 
-/** A small neutral pill (C06): Live adds the ext.live dot, never the color alone (S10 12 d, i; F00 A4). */
 @Composable
 private fun WebinarStatusTag(tag: WebinarLandingTag) {
     val scheme = MaterialTheme.colorScheme
@@ -220,8 +202,6 @@ private fun WebinarStatusTag(tag: WebinarLandingTag) {
     }
 }
 
-// MARK: Status blocks (S10 12 f)
-
 @Composable
 private fun WebinarStatusContent(premeeting: PremeetingPresenter, snapshot: WebinarLandingSnapshot, snackbarHostState: SnackbarHostState) {
     when (snapshot.status) {
@@ -234,7 +214,6 @@ private fun WebinarStatusContent(premeeting: PremeetingPresenter, snapshot: Webi
     }
 }
 
-/** Early: the countdown card ("You're a little early", the leaf, the plural opens note), Add to calendar, Share link. */
 @Composable
 private fun WebinarEarlyContent(premeeting: PremeetingPresenter, snapshot: WebinarLandingSnapshot, snackbarHostState: SnackbarHostState) {
     val context = LocalContext.current
@@ -284,8 +263,6 @@ private fun WebinarEarlyContent(premeeting: PremeetingPresenter, snapshot: Webin
     }
 }
 
-/** Open: the name field when needed (40, counter from 30, R41), the invite field when needed, the attendee note. The
- *  fields keep their own text, seeded from the presenter's drafts when they come back after Cancel. */
 @Composable
 private fun WebinarOpenContent(premeeting: PremeetingPresenter, snapshot: WebinarLandingSnapshot) {
     val scheme = MaterialTheme.colorScheme
@@ -297,7 +274,7 @@ private fun WebinarOpenContent(premeeting: PremeetingPresenter, snapshot: Webina
                 label = conclaveString("pm_your_name"),
                 value = name,
                 onValueChange = { raw ->
-                    // R41: typing stops at 40 (the 41st character is rejected).
+
                     val capped = DisplayNamePolicy.capped(raw)
                     name = capped
                     premeeting.setWebinarName(capped)
@@ -339,7 +316,6 @@ private fun WebinarOpenContent(premeeting: PremeetingPresenter, snapshot: Webina
         modifier = Modifier.testTag("webinar.attendeeNote"))
 }
 
-/** Getting you in, Almost there and the wait for the host: the standard spinner with a static title (R13). */
 @Composable
 private fun WebinarProgressRow(status: WebinarLandingStatus) {
     val scheme = MaterialTheme.colorScheme
@@ -357,8 +333,6 @@ private fun WebinarProgressRow(status: WebinarLandingStatus) {
     }
 }
 
-/** C14: locked, full, not available, ended, cancelled (Back to home) and a failed lookup or join (Try again). The action
- *  is tonal; primaryContainer stays for Start watching. */
 @Composable
 private fun WebinarStatusMessage(premeeting: PremeetingPresenter, snapshot: WebinarLandingSnapshot) {
     val icon = when (snapshot.status) {
@@ -377,7 +351,6 @@ private fun WebinarStatusMessage(premeeting: PremeetingPresenter, snapshot: Webi
     }
 }
 
-/** S10 12 i: opening, the wait for the host and the end announce once, on a change only (one 1 dp live region). */
 @Composable
 private fun WebinarAnnouncer(routeId: Int, status: WebinarLandingStatus?) {
     val context = LocalContext.current
@@ -399,10 +372,6 @@ private fun WebinarAnnouncer(routeId: Int, status: WebinarLandingStatus?) {
     }
 }
 
-// MARK: Calendar (S10 12 d, l7)
-
-/** The system event editor through ACTION_INSERT (no calendar permission). False when no calendar app resolves, or
- *  when the L9 fixture disabled the resolver (12 l7), so the caller shows "No calendar app found." instead of crashing. */
 internal fun openWebinarCalendarEditor(context: Context, snapshot: WebinarLandingSnapshot, resolverDisabled: Boolean): Boolean {
     if (resolverDisabled) return false
     val title = if (snapshot.title.isEmpty()) conclaveStringOf(context, "pm_webinar_title") else snapshot.title
@@ -417,15 +386,12 @@ internal fun openWebinarCalendarEditor(context: Context, snapshot: WebinarLandin
     }
 }
 
-/** The prefilled insert intent (tests read its extras). */
 internal fun webinarCalendarIntent(title: String, startMillis: Long, endMillis: Long, link: String): Intent =
     Intent(Intent.ACTION_INSERT, CalendarContract.Events.CONTENT_URI)
         .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, startMillis)
         .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, endMillis)
         .putExtra(CalendarContract.Events.TITLE, title)
         .putExtra(CalendarContract.Events.DESCRIPTION, link)
-
-// MARK: Copy (S10 12 g; Android sentence case)
 
 @Composable
 private fun webinarTagTitle(tag: WebinarLandingTag): String = when (tag) {
@@ -451,7 +417,6 @@ private fun webinarMessageBody(status: WebinarLandingStatus): String {
     return if (name.isEmpty()) "" else conclaveString(name)
 }
 
-/** Resource names, so tests can check every status maps to copy. */
 internal fun webinarMessageTitleName(status: WebinarLandingStatus): String = when (status) {
     WebinarLandingStatus.locked -> "pm_webinar_locked"
     WebinarLandingStatus.full -> "pm_webinar_full"
@@ -476,7 +441,6 @@ private fun webinarAnnouncementOf(context: Context, status: WebinarLandingStatus
     else -> ""
 }
 
-/** S10 12 l4: composition counters (the fixture readout and the Robolectric tests read them). */
 internal object WebinarLandingDiagnostics {
     var headerCompositions = 0
     var countdownCompositions = 0

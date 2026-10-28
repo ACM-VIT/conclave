@@ -10,15 +10,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * TRN-2 (S60 6, C6-11, C6-12, C6-26; S30 CC8) through the transpiled incremental feed, the Transcript presenter, the
- * fixtures' FakeTranscriptOwner, the recap coordinator and the recap overlay policy, plus the handwritten copy map and
- * export helper. The Swift half is T/TRN2TranscriptPanelTests.swift; the same fixtures give the same results: a partial
- * delta on 2,000 segments touches at most three groups and rebuilds nothing, the states table, Stop confirming and
- * failing, Ask settling at 30 s, the finals-only export named for the room, Post Recap and End with the 30 s cap, and
- * every copy resource name resolving (red until HD/strings/B7-T5.json is merged). Pure: no composition (only the first
- * composition in a JVM keeps recomposing under Robolectric; PanelStageBridgeTests owns it).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class TRN2TranscriptBridgeTests {
@@ -170,7 +161,7 @@ class TRN2TranscriptBridgeTests {
         settled.sendRecap = { true }
         settled.endCall = { settledEnds += 1 }
         settled.postAndEnd()
-        settled.noteAssistantAnswerSettled(atMillis = settled.requestedAtMillis + 1.0, failed = false)
+        settled.noteAssistantAnswerSettled(answerId = settled.requestedAnswerId, atMillis = settled.requestedAtMillis + 1.0, failed = false)
         assertEquals(1, settledEnds)
     }
 
@@ -181,7 +172,7 @@ class TRN2TranscriptBridgeTests {
             endBlockedReason = ControlBlockedReason.none)
         assertTrue(RecapPolicy.leaveSnapshot(base, recap = RecapControlsState(offersRecap = true, isPostingBeforeEnd = false)).offersRecap)
         val posting = RecapPolicy.leaveSnapshot(base, recap = RecapControlsState(offersRecap = true, isPostingBeforeEnd = true))
-        assertFalse(posting.offersRecap) // no second recap while one posts
+        assertFalse(posting.offersRecap)
         val guest = LeaveSnapshot(revision = 1, canEndForEveryone = false, leavePhase = LeavePhase.idle, endPhase = EndPhase.idle,
             confirmationId = 0, confirmationInvoker = "", offersRecap = false, endFailure = "none", showsEndForEveryone = false,
             endBlockedReason = ControlBlockedReason.none)
@@ -212,9 +203,7 @@ class TRN2TranscriptBridgeTests {
         for (kind in MinutesStatusKind.allCases) names.add(TranscriptCopy.minutesStatus(kind))
         for (phase in RecapPhase.allCases) TranscriptCopy.recapValue(phase)?.let { names.add(it) }
         for (kind in TranscriptAnnouncementKind.allCases) TranscriptCopy.announcement(kind)?.let { names.add(it) }
-        // The library test module has no app resources (TypographyHapticsGalleryBridgeTests), so the resources themselves
-        // are checked against strings.xml and HD/strings/B7-T5.json by the Swift contract test; here every name a mapping
-        // returns must be in the declared list, which has no duplicates.
+
         val missing = names.filter { it !in TranscriptCopy.allNames }.distinct()
         assertEquals(emptyList<String>(), missing)
         assertEquals(TranscriptCopy.allNames.size, TranscriptCopy.allNames.toSet().size)

@@ -23,15 +23,12 @@ private const val ICON_RASTER_RUN_BYTES = 64L * 1024 * 1024
 private const val ICON_RASTER_ENCODE_MS = 5_000L
 private const val ICON_RASTER_IDENTITY_MS = 120_000L
 
-// Every format here uses Locale.ROOT: %d writes the default locale's digits (Arabic-Indic under ar-EG,
-// Bengali under bn-BD), which the ASCII file-name check rejects.
 internal fun iconSHA256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
     .digest(bytes).joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 255) }
 
-/** Pixel protocol: top-left row-major straight sRGB RGBA8, RGB zero where alpha is zero. */
 internal fun iconPixels(bitmap: Bitmap): ByteArray {
     require(bitmap.width in 1..ICON_RASTER_MAX_PIXELS && bitmap.height in 1..ICON_RASTER_MAX_PIXELS)
-    // getPixels returns straight (unpremultiplied) sRGB ARGB, unlike premultiplied storage bytes.
+
     val pixels = IntArray(bitmap.width * bitmap.height)
     bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
     val rgba = ByteArray(pixels.size * 4)
@@ -45,7 +42,6 @@ internal fun iconPixels(bitmap: Bitmap): ByteArray {
     return rgba
 }
 
-/** [left, top, right, bottom] with right/bottom exclusive, or null when no pixel reaches the threshold. */
 internal fun iconAlphaBounds(rgba: ByteArray, width: Int, threshold: Int): IntArray? {
     require(rgba.size == width * width * 4 && threshold in 1..255)
     var left = width; var top = width; var right = -1; var bottom = -1
@@ -62,7 +58,6 @@ internal class IconCapture(val bitmap: Bitmap, val rgba: ByteArray, val frame: I
     val visible = rgba.indices.any { it % 4 == 3 && rgba[it] != 0.toByte() }
 }
 
-/** Package, build and APK identity for the index; streams the APK once on IO within a deadline. [live] stops it early. */
 internal fun iconPackageIdentity(context: Context, live: () -> Boolean = { true }): JSONObject {
     val app = context.applicationContext
     val started = SystemClock.elapsedRealtime()
@@ -85,11 +80,6 @@ internal fun iconPackageIdentity(context: Context, live: () -> Boolean = { true 
         .put("api", Build.VERSION.SDK_INT).put("build", Build.FINGERPRINT).put("abis", JSONArray(Build.SUPPORTED_ABIS.toList()))
 }
 
-/**
- * IO-owned private journal below the canonical cache root. Every revision is an immutable index file;
- * failures keep captures, partial files and reasons. COMPLETE.json is written last, or never.
- * The first incomplete index needs no package identity, so it precedes APK hashing and every capture.
- */
 internal class IconRasterJournal(
     private val cacheRoot: File, val plan: IconRasterPlan, val expected: Int,
     val id: String = UUID.randomUUID().toString(),
@@ -102,7 +92,7 @@ internal class IconRasterJournal(
     private var bytesWritten = 0L
     private var completedCases = 0
     @Volatile private var opened = false
-    /** Newest immutable index revision that was completely written and synced. */
+
     @Volatile private var lastIndex: String? = null
     private val terminalLock = Any()
     private val cancellation = AtomicReference<String?>(null)
@@ -112,8 +102,6 @@ internal class IconRasterJournal(
     val path: String get() = "cache/wp1-icon-raster/$id"
     val runDirectory: File get() = directory
 
-    /** Publishes the request before waiting for the terminal lock, so any request that precedes the
-     *  locked commit decision is observed by it. Returns false once the run has committed. */
     fun cancel(reason: String): Boolean {
         if (complete) return false
         cancellation.compareAndSet(null, reason)
@@ -122,7 +110,6 @@ internal class IconRasterJournal(
     fun cancellationReason(): String? = cancellation.get()
     fun isComplete(): Boolean = complete
 
-    /** Status tail for a run that did not complete. Names only files this journal finished writing. */
     fun retained(): String {
         val last = lastIndex
         return when {
@@ -135,7 +122,7 @@ internal class IconRasterJournal(
     fun open() {
         check(!opened)
         require(Regex("[a-zA-Z0-9-]{1,64}").matches(id))
-        // Canonicalize first: /data/user/0 is itself a symlink to /data/data on Android.
+
         val base = File(cacheRoot.canonicalFile, "wp1-icon-raster")
         check(base.isDirectory || base.mkdir()) { "cannot create raster root" }
         check(base.canonicalFile == base) { "symlink in private raster root" }
@@ -147,7 +134,6 @@ internal class IconRasterJournal(
         checkpoint("incomplete", "created; package identity pending; no capture accepted")
     }
 
-    /** Indexes carry a null identity until this succeeds, and completion is refused without one. */
     fun identify(identity: JSONObject) {
         check(opened && packageIdentity == null)
         packageIdentity = identity
@@ -184,7 +170,7 @@ internal class IconRasterJournal(
             .put("elapsedMs", SystemClock.elapsedRealtime() - started)
             .put("nativeInterruptionLimit", "Synchronous compression cannot be interrupted; image size, write deadline and ownership draining bound it.")
         val name = "index-%04d.json".format(Locale.ROOT, revision++)
-        // The immutable revision is published before the convenience pointer is replaced.
+
         val bytes = index.toString(2).toByteArray(Charsets.UTF_8)
         exclusive(name, bytes)
         lastIndex = name
@@ -198,7 +184,6 @@ internal class IconRasterJournal(
 
     fun beginCase(request: IconRasterRequest) { checkpoint("incomplete", "capturing ${request.key}") }
 
-    /** Receives sole ownership of the captures; even a cancelled run awaits this bounded transaction. */
     fun export(request: IconRasterRequest, captures: List<IconCapture>, readinessFailure: String?) {
         var exportError: Throwable? = null
         try {
@@ -280,7 +265,6 @@ internal class IconRasterJournal(
         if (opened) checkpoint("incomplete", reason)
     }
 
-    /** [stillLive] reports the owning job; cancellation by either route before the commit point wins. */
     fun finish(stillLive: () -> Boolean): Boolean {
         check(packageIdentity != null) { "package identity missing" }
         check(completedCases == expected && failures.length() == 0 && caseFailures.length() == 0) { "incomplete case set" }
@@ -299,7 +283,7 @@ internal class IconRasterJournal(
                     failure(reason)
                     return false
                 }
-                // The atomic rename of a complete, synced marker is the commit point. Nothing is written after it.
+
                 Files.move(pending.toPath(), owned("COMPLETE.json").toPath(), StandardCopyOption.ATOMIC_MOVE)
                 complete = true
             }

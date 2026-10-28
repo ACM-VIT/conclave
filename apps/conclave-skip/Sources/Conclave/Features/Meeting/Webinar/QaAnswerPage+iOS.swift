@@ -1,14 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 11 c, PL15 (PPL-6): "Answer in Writing" as a push inside the Q&A PanelShell stack (`QaRoute`), because an alert
-// hosts only a single-line field with no counter (HIG H-19) and composing surfaces get full height (H-03). A `Form`
-// with the question, a multi-line field (`lineLimit(4...12)`), the counter footer from 900 and a `.confirmationAction`
-// "Post Answer" (disabled when the trimmed draft is empty, over 1,000 or pending). The draft is view-local, seeded
-// from `qa.drafts.answers[id]` and written back on change; on success the presenter clears it and the page pops; on
-// failure the inline line shows the mapped copy with Retry and the draft stays.
-
-/// The Q&A stack's one route type (R50-2: a struct in the iOS-only view file, no shared route enum).
 struct QaRoute: Hashable {
     let answerQuestionId: String
 }
@@ -74,7 +66,7 @@ struct QaAnswerPage: View {
             qa.drafts.answers[questionId] = value
         }
         .onChange(of: qa.snapshot.answerSerial) { _, _ in
-            // The presenter cleared the draft on the acknowledgement; the page pops and the answer shows indented.
+
             if qa.snapshot.answeredQuestionId == questionId { dismiss() }
         }
         .accessibilityIdentifier("qa.answer.page")

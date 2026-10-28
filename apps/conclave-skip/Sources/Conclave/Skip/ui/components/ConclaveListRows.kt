@@ -37,13 +37,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.semantics.heading
 import java.util.Locale
 
-/*
- * List rows (F00 C09) and the person row (F00 C10) as Material 3 ListItems. Each row is one accessibility node
- * (clickable, toggleable or selectable merge their content); trailing controls of the waiting row stay their own
- * nodes. Text wraps; maxLines defaults to no cap (OQ-2b-5).
- */
-
-/** A title with its value as supporting text, read as one node. */
 @Composable
 internal fun ConclaveValueRow(title: String, value: String, identifier: String, modifier: Modifier = Modifier) {
     ListItem(
@@ -53,7 +46,6 @@ internal fun ConclaveValueRow(title: String, value: String, identifier: String, 
     )
 }
 
-/** A navigation row: the whole row is a button and, by Material convention, draws no chevron. */
 @Composable
 internal fun ConclaveNavigationRow(title: String, identifier: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     ListItem(
@@ -62,7 +54,6 @@ internal fun ConclaveNavigationRow(title: String, identifier: String, onClick: (
     )
 }
 
-/** A settings switch row: one Switch node for the whole row; the Switch itself takes no clicks. */
 @Composable
 internal fun ConclaveToggleRow(
     title: String, checked: Boolean, identifier: String, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier,
@@ -74,7 +65,6 @@ internal fun ConclaveToggleRow(
     )
 }
 
-/** A destructive row: the headline in the error role, never coral. */
 @Composable
 internal fun ConclaveDestructiveRow(title: String, identifier: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     ListItem(
@@ -83,13 +73,8 @@ internal fun ConclaveDestructiveRow(title: String, identifier: String, onClick: 
     )
 }
 
-/** One choice of a single-choice group. */
 internal data class ConclaveSelectableOption(val id: String, val title: String)
 
-/**
- * A single-choice group: radio rows inside `selectableGroup()`. A choice plays `selectionChanged` through the
- * gesture route (F00 8); the Debug gallery passes a record-only route and records each decision.
- */
 @Composable
 internal fun ConclaveSelectableRows(
     options: List<ConclaveSelectableOption>, selectedId: String, identifier: String, onSelect: (String) -> Unit,
@@ -112,9 +97,6 @@ internal fun ConclaveSelectableRows(
     }
 }
 
-// Person row (F00 C10, OQ-2b-8)
-
-/** The leading avatar stand-in until FND-1's C07 avatar: a flat palette circle, decorative, no text. */
 @Composable
 internal fun ConclaveAvatarStandIn(paletteIndex: Int, modifier: Modifier = Modifier) {
     val palette = DesignTokens.avatarPalette
@@ -123,10 +105,6 @@ internal fun ConclaveAvatarStandIn(paletteIndex: Int, modifier: Modifier = Modif
         .clearAndSetSemantics { })
 }
 
-/**
- * A person: avatar, name, optional detail and status glyphs, read as one node whose state description carries
- * the status ("Muted, hand raised"). Status glyphs have no description of their own.
- */
 @Composable
 internal fun ConclavePersonRow(
     name: String, identifier: String, avatarPaletteIndex: Int, modifier: Modifier = Modifier, detail: String? = null,
@@ -151,10 +129,6 @@ internal fun ConclavePersonRow(
     )
 }
 
-/**
- * The C10 waiting variant: the name is one node, then Deny (text) and Admit (tonal, never coral) as separate
- * focusable buttons described with the name ("Deny Sam", "Admit Sam").
- */
 @Composable
 internal fun ConclaveWaitingPersonRow(
     name: String, identifier: String, avatarPaletteIndex: Int, onDeny: () -> Unit, onAdmit: () -> Unit,
@@ -183,13 +157,6 @@ internal fun ConclaveWaitingPersonRow(
     )
 }
 
-// MARK: Section header and footer (F00 C11)
-
-/**
- * A section header: titleSmall in onSurfaceVariant (never coral), the optional count at the end with tabular digits,
- * one merged heading node so the count reads with the title ("In this meeting, 5"). Long titles wrap; the count
- * stays. Empty sections are not rendered (the caller's rule).
- */
 @Composable
 internal fun ConclaveSectionHeader(title: String, identifier: String, modifier: Modifier = Modifier, count: Int? = null) {
     val scheme = MaterialTheme.colorScheme
@@ -208,7 +175,6 @@ internal fun ConclaveSectionHeader(title: String, identifier: String, modifier: 
     }
 }
 
-/** A section footer: bodySmall in onSurfaceVariant with 16 dp margins ("Only you see this layout."). */
 @Composable
 internal fun ConclaveSectionFooter(text: String, identifier: String, modifier: Modifier = Modifier) {
     ConclaveText(text, line = "$identifier.text", style = MaterialTheme.typography.bodySmall,

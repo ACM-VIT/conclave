@@ -1,15 +1,6 @@
 import Foundation
 import Observation
 
-/// WP2-S1 meeting shell presenter (contract-wp2-first-slice 3.2 to 3.4). One per view model, keyed by call session.
-/// The view model pushes `MeetingShellInputs` through `apply(_:)`; the presenter publishes three cached,
-/// equality-guarded snapshots (`session`, `controls`, `entry`) plus `feedbackState`, owns the action ledger and a
-/// per-session `PanelCoordinator`, and forwards intents through one closure. It never stores microphone or camera
-/// intent (S1C MUTE): rows derive from the authoritative inputs.
-///
-/// Shells read these snapshots, never view model fields (`MeetingViewModel.shared.shell`). It follows the
-/// transpile-proven `NativeHostingPresenter` shape; it cannot self-observe `MeetingState` (SkipModel has no
-/// `withObservationTracking`), which is why the core pushes inputs.
 @MainActor
 @Observable
 final class MeetingShellPresenter {
@@ -17,31 +8,19 @@ final class MeetingShellPresenter {
     private(set) var controls: MeetingControlRowsState = MeetingShellPresenter.initialControls()
     private(set) var entry: MeetingEntrySnapshot = MeetingShellPresenter.entrySnapshot(MeetingShellInputs.make())
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
-    /// Reset to the new call session on every call-session change (S1C SES). Instantiated here; its API is the
-    /// WP1 `PanelCoordinator` (`S/Features/Meeting/Panels/PanelCoordinator.swift`).
+
     let panels = PanelCoordinator(session: 0)
-    /// The action ledger (S1C LED). Not observable; rows publish its pending state.
+
     let ledger = MeetingActionLedger()
-    /// S40 0.5: the session-owned chat presenter, created with the shell so it lives for the whole call and opening
-    /// the panel reads finished rows. The core feeds it (`requestChatRefresh`); it resets itself when the call session
-    /// changes and the core resets it on leave. The native call root reaches it as `shell.chat`; the chat fixture
-    /// installs into the stage fixture shell's instance.
+
     let chat = ChatPresenter()
-    /// S60 0.5 (SET-1): the session's Settings presenter (`MeetingPanel.settings` and the attendee-filtered variant in
-    /// Webinar Details, RECONCILE R26, R44). Created with the shell; the core feeds it (`requestSettingsRefresh`) and it
-    /// resets its pending work itself when the call session changes. The native call root reaches it as
-    /// `shell.settings`; the stage fixture shell's instance serves the panel fixture.
+
     let settings = SettingsPresenter(scope: SettingsScope.call)
-    /// S60 0.5 (TRN-2): the session's Transcript presenter (`MeetingPanel.transcript`). Created with the shell and bound
-    /// once to the core's `TranscriptState` (`bind(state:)`); the core pushes `TranscriptInputs` and resets it on leave.
-    /// The native call root reaches it as `shell.transcript`; the Transcript fixture binds the stage fixture shell's
-    /// instance to its own state (HD request B7-T5 R5).
+
     let transcript = TranscriptPresenter()
-    /// Core only: the view model forwards each intent to its existing implementation (S1C E8). Never called from
-    /// `apply(_:)`.
+
     @ObservationIgnored var onCommand: ((MeetingShellCommand, MeetingActionTicket?) -> Void)? = nil
-    /// Test seam (S1C 5.2 coherence spy): called after every publication with the published snapshots. Never set in
-    /// production code.
+
     @ObservationIgnored var onPublish: ((MeetingSessionSnapshot, MeetingControlRowsState, MeetingShellFeedbackState) -> Void)? = nil
     @ObservationIgnored private var inputs = MeetingShellInputs.make()
     @ObservationIgnored private var publishedPhase: MeetingPhaseKind = .home
@@ -51,17 +30,17 @@ final class MeetingShellPresenter {
     @ObservationIgnored private var leaveFailure: MeetingActionFailure = .none
     @ObservationIgnored private var endFailure: MeetingActionFailure = .none
     @ObservationIgnored private var admittedThisSession = false
-    /// Published as `session.hasBeenAdmittedThisSession` (S10 R6 c): the session reached `inCall` at least once.
+
     @ObservationIgnored private var joinedThisSession = false
     @ObservationIgnored private var entryOrigin: MeetingEntryOrigin = .initial
-    /// WP2-S2a typed media failures, each with the row's `isOn` when it failed: a later change of that row clears it.
+
     @ObservationIgnored private var micFailure: MeetingActionFailure = .none
     @ObservationIgnored private var micFailureIsOn = false
     @ObservationIgnored private var cameraFailure: MeetingActionFailure = .none
     @ObservationIgnored private var cameraFailureIsOn = false
     @ObservationIgnored private var screenShareFailure: MeetingActionFailure = .none
     @ObservationIgnored private var screenShareFailureIsOn = false
-    /// S30 CC3: the direction of the pending hand ticket and of the last hand failure.
+
     @ObservationIgnored private var pendingHandDirection: MeetingActionDirection = .none
     @ObservationIgnored private var handFailureDirection: MeetingActionDirection = .none
     @ObservationIgnored private var lastOutcomeTokenID = 0
@@ -97,13 +76,9 @@ final class MeetingShellPresenter {
         )
     }
 
-    /// The inputs the presenter last accepted (diagnostics and tests).
     var currentInputs: MeetingShellInputs { inputs }
 
-    /// How many times any snapshot was assigned (S1C risk row "publish storms"; tests read it).
     var snapshotPublishCount: Int { publishCount }
-
-    // MARK: - Core
 
     func apply(_ next: MeetingShellInputs) {
         guard next != inputs else { return }
@@ -112,7 +87,7 @@ final class MeetingShellPresenter {
         var pendingToken: FeedbackKind = .none
 
         if next.identity.callSession != previous.identity.callSession {
-            // S1C SES: a new call session cancels everything in one coherent publish.
+
             ledger.cancelAll()
             confirmation = nil
             handFailure = .none
@@ -122,8 +97,7 @@ final class MeetingShellPresenter {
             pendingHandDirection = .none
             clearMediaFailures()
             if next.isRedirectContinuation && joinedThisSession {
-                // R70-11: a same-meeting server redirect keeps the admission, so the stage stays and the redirected
-                // join plays no second `joined`; a failure from here on is a rejoin failure.
+
                 entryOrigin = .recovery
             } else {
                 admittedThisSession = false
@@ -134,18 +108,17 @@ final class MeetingShellPresenter {
             setFeedback(MeetingShellFeedbackState(session: next.identity.callSession, token: FeedbackToken.baseline))
         } else if next.identity.attempt != previous.identity.attempt
                     || next.identity.attemptToken != previous.identity.attemptToken {
-            // A recovery rejoin, an admission or a cleanup: pending tickets are interrupted, so the UI never waits
-            // for an acknowledgement that can no longer land.
+
             ledger.interruptAll()
         }
 
         if !previous.isRecoveringConnection && next.isRecoveringConnection {
-            // S1C ACK: R10 disables socket mutations during recovery.
+
             ledger.interrupt(kinds: [MeetingActionKind.hand, MeetingActionKind.endForEveryone])
         }
         clearMediaFailuresThatChanged(next)
         if previous.isAdmin && !next.isAdmin {
-            // S1C ROLE: host loss clears the confirmation; a pending end keeps waiting for its result.
+
             confirmation = nil
         }
         if !previous.isWebinarAttendee && next.isWebinarAttendee {
@@ -154,7 +127,7 @@ final class MeetingShellPresenter {
         }
 
         if let outcome = next.currentOutcome, outcome.id != lastOutcomeTokenID {
-            // S1C TEAR: after a terminal outcome nothing is pending and no panel is open.
+
             lastOutcomeTokenID = outcome.id
             ledger.cancelAll()
             confirmation = nil
@@ -190,8 +163,6 @@ final class MeetingShellPresenter {
         publishAll(resolution: resolution)
     }
 
-    /// Resolves a ticket the view model dispatched. Stale (another identity), duplicate and interrupted completions
-    /// are dropped quietly and publish nothing.
     @discardableResult
     func finish(_ ticket: MeetingActionTicket, _ result: MeetingActionResult) -> Bool {
         guard ledger.finish(ticket, result: result, currentIdentity: inputs.identity) else { return false }
@@ -209,13 +180,11 @@ final class MeetingShellPresenter {
         return true
     }
 
-    // MARK: - Intents (views)
-
     @discardableResult
     func toggleMicrophone() -> MeetingDispatch {
         let row = currentRow(.microphone)
         guard row.isVisible, row.isEnabled else { return .unavailable }
-        // CC21: a tap toward muted while an unmute is pending still dispatches; the view model applies it at once.
+
         let dispatch = MeetingPendingMediaTapPolicy.microphoneTap(isPending: row.isPending, isMuted: inputs.isMuted)
         guard dispatch == .dispatched else { return dispatch }
         if micFailure != .none {
@@ -262,13 +231,12 @@ final class MeetingShellPresenter {
         handFailure = .none
         handFailureDirection = .none
         pendingHandDirection = inputs.isHandRaised ? .lower : .raise
-        // Pending is visible in the same frame as the tap (S1C PUB).
+
         publishAll(resolution: MeetingPhasePolicy.resolve(inputs))
         onCommand?(.toggleHand, ticket)
         return .dispatched
     }
 
-    /// `invoker` is a `MeetingConfirmationInvoker` value (S50 PH17): the dialog shows on the surface that asked.
     func requestEndForEveryone(from invoker: String) {
         let row = currentRow(.endForEveryone)
         guard row.isVisible, row.isEnabled, !row.isPending, confirmation == nil else { return }
@@ -277,7 +245,6 @@ final class MeetingShellPresenter {
         publishAll(resolution: MeetingPhasePolicy.resolve(inputs))
     }
 
-    /// Accepts only the current confirmation id, once.
     @discardableResult
     func confirmEndForEveryone(id: Int) -> MeetingDispatch {
         guard let current = confirmation, current.id == id else { return .duplicate }
@@ -319,10 +286,6 @@ final class MeetingShellPresenter {
         if let onCommand = onCommand { onCommand(.retry, nil) }
     }
 
-    /// Core only (WP2-S2a, PLAN-next 7 item 4): a typed microphone, camera or screen share failure the view model
-    /// classified (`MeetingErrorClassifier`). It publishes the row failure and no feedback token: these are not
-    /// tickets, and the S20 banners and toasts carry them (S70 7 e). Cleared by the next dispatch of that row, by a
-    /// change of the row's state, and by a new call session. Other kinds and non-failures are ignored.
     @discardableResult
     func reportFailure(_ kind: MeetingActionKind, _ result: MeetingActionResult) -> Bool {
         guard result.kind == .failed, result.failure != .none else { return false }
@@ -346,8 +309,6 @@ final class MeetingShellPresenter {
     func dismissOutcome() {
         if let onCommand = onCommand { onCommand(.dismissOutcome, nil) }
     }
-
-    // MARK: - Publication
 
     private func currentRow(_ id: MeetingControlID) -> MeetingControlRow {
         for row in controls.rows {
@@ -378,7 +339,6 @@ final class MeetingShellPresenter {
         screenShareFailure = .none
     }
 
-    /// A media failure stands until its row's state moves away from the state it failed in.
     private func clearMediaFailuresThatChanged(_ next: MeetingShellInputs) {
         if micFailure != .none && !next.isMuted != micFailureIsOn {
             micFailure = .none
@@ -401,7 +361,7 @@ final class MeetingShellPresenter {
     }
 
     private func advanceFeedback(_ kind: FeedbackKind) {
-        // Only accepted async outcomes advance the sequence (F1 rules, FeedbackKind.isAsyncOutcome).
+
         guard kind != .none, kind.isAsyncOutcome else { return }
         let token = FeedbackToken(sequence: feedbackState.token.sequence + 1, kind: kind)
         setFeedback(MeetingShellFeedbackState(session: feedbackState.session, token: token))

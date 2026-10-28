@@ -51,19 +51,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/*
- * S60 4 d (SET-6) on Android: MeetingPanel.effects in the in-call theme. In compact and medium windows it ships as the
- * WP1-3c in-call bottom sheet (NativePanelHost + LayoutSheetHost, opening expanded at its content height). Because a
- * modal sheet dims the stage and has no background interaction, the sheet carries its own preview (Meet pattern, AAPPS
- * 6.15): a 3:4 card 200 dp tall bound to your local track (camera on) or the C6-8 local-only preview (after "Preview my
- * camera"), never a stage renderer moved, at most one per presentation (4 k). Then the PrimaryTabRow (Backgrounds,
- * Filters, Appearance) and one LazyVerticalGrid of 72 dp tiles (Blur, Backgrounds, Personal with Add photo), the
- * Appearance switches (Android keeps the app effects; there are no system effects here, OQ6 default A) and the
- * publish-cap footer; the header holds "Remove all" while anything is applied. The expanded side pane hosts the same
- * grid in an InCallPage. Hidden until an engine publishes `.panel` (OQ6 default A). `EffectsLobbySheet` presents the
- * same content over the lobby (RECONCILE R31) through the same sheet host.
- */
-
 @Composable
 internal fun EffectsPage(
     effects: EffectsPresenter,
@@ -82,7 +69,7 @@ internal fun EffectsPage(
         onDispose { effects.panelDidClose() }
     }
     if (variant == InCallPageVariant.Sheet) {
-        // The sheet variant: the host's ModalBottomSheet frames it; the page acknowledges when it disposes (C3).
+
         DisposableEffect(Unit) {
             onMounted()
             onDispose { onDisposed() }
@@ -116,11 +103,6 @@ internal fun EffectsPage(
     }
 }
 
-/**
- * RECONCILE R31, S60 4 a: the Effects content as an in-call sheet over the lobby. Choices apply to the lobby preview
- * through the one LocalPreviewController (nothing is published) and persist into the call. The lobby presents it (HD
- * request B7-T2 R7); `onClosed` runs after the sheet's hide completes and its content disposed.
- */
 @Composable
 internal fun EffectsLobbySheet(effects: EffectsPresenter, onClosed: () -> Unit, preview: @Composable (EffectsSnapshot) -> Unit) {
     var dismissing by remember { mutableStateOf(false) }
@@ -145,7 +127,6 @@ internal fun EffectsLobbySheet(effects: EffectsPresenter, onClosed: () -> Unit, 
     }
 }
 
-/** The one grid both hosts draw. Reads only `effects.snapshot` (4 k). */
 @Composable
 internal fun EffectsGrid(
     effects: EffectsPresenter,
@@ -161,7 +142,7 @@ internal fun EffectsGrid(
     val scope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableStateOf(EffectsCatalog.backgrounds) }
     var replacingId by remember { mutableStateOf("") }
-    // 4 j: the system photo picker; the URI becomes a stored JPEG off the main thread; cancelling changes nothing.
+
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val replacing = replacingId
         replacingId = ""
@@ -265,7 +246,6 @@ private fun LazyGridScope.fullSpan(key: String, content: @Composable () -> Unit)
     item(key = key, span = { GridItemSpan(maxLineSpan) }) { content() }
 }
 
-/** One grid section of the shown tab (4 d): Backgrounds splits into Blur, Backgrounds and Personal. */
 internal data class EffectSection(val id: String, val titleName: String, val items: List<EffectItem>)
 
 internal fun effectSections(tab: String, items: List<EffectItem>): List<EffectSection> {
@@ -286,7 +266,6 @@ private fun effectTitle(item: EffectItem): String {
     return conclaveString(name)
 }
 
-/** The sheet header (4 d): the title and "Remove all" while anything is applied (no haptic, 4 h). */
 @Composable
 private fun EffectsHeader(effects: EffectsPresenter, snapshot: EffectsSnapshot, title: String) {
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -298,7 +277,6 @@ private fun EffectsHeader(effects: EffectsPresenter, snapshot: EffectsSnapshot, 
     }
 }
 
-/** Preparing, the camera line with Preview and Turn on for everyone, the blocked camera's settings and the issue row. */
 @Composable
 private fun EffectsStatus(effects: EffectsPresenter, snapshot: EffectsSnapshot) {
     val scheme = MaterialTheme.colorScheme
@@ -343,10 +321,6 @@ private fun EffectsStatus(effects: EffectsPresenter, snapshot: EffectsSnapshot) 
     }
 }
 
-/**
- * The in-sheet preview (4 d, k): 3:4, 200 dp tall, centered. The slot draws the local track or the local-only preview;
- * the card labels the preview "Only visible to you" and an interrupted camera "Camera paused" (4 l9).
- */
 @Composable
 private fun EffectsPreviewCard(snapshot: EffectsSnapshot, preview: @Composable (EffectsSnapshot) -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -378,7 +352,6 @@ private fun EffectsPreviewCard(snapshot: EffectsSnapshot, preview: @Composable (
     }
 }
 
-/** The Appearance switches (4 d): Studio lighting, Studio look and Framing with Recenter; no haptic (D8). */
 @Composable
 private fun EffectsAppearanceRows(effects: EffectsPresenter, snapshot: EffectsSnapshot, containerColor: Color) {
     val items = snapshot.tab(EffectsCatalog.appearance)?.items

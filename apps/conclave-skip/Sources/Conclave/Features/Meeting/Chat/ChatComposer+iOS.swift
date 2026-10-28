@@ -6,24 +6,6 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-// S40 6 (CHT-2): the composer on iOS, in the FND-3 composer bar (iOS 26 `safeAreaBar` with the glass cluster from
-// the one sanctioned composer glass file, Owner OQ2 (2026-10-26); the opaque bordered field under Reduce Transparency
-// and on iOS 17 to 25). Keystrokes stay in view state; the draft is written to `ChatDraftStore` after 500 ms idle and
-// on disappear (R40-7), never to the view model. Every send goes through `chat.send` (ChatComposerPolicy.route, D24);
-// no send, command, attach or recipient haptic (Q11). CHT-4 and CHT-5: the attach control joins the cluster (Photo
-// Library and GIFs and Stickers; an item unavailable in the mode stays in the menu, disabled with its reason), the
-// attachment chip and the link preview sit above the field, the system paste control appears while the pasteboard
-// holds an image (no paste prompt), iPad drops land as files, and every photo reaches the presenter as a file copied
-// into the caches directory off the main actor (CH6). Voice is CHT-6.
-//
-// T3 borrow (R/t3-borrow/PLAN.md, patterns only, written fresh): P1 hardware keys for the suggestion list (Up and
-// Down move a flat highlight with wrap-around, skipping dimmed rows; Return and Tab insert; a row whose insert text
-// equals the draft sends; Escape hides the list for this trigger), only while a hardware keyboard is attached, so
-// touch behaviour never changes; P2 no hardware key acts while an IME composes, and a held Return sends once; P3 the
-// field gets focus back after Photo Library or the GIF page only when it had it and VoiceOver is off (AX12); P4 one
-// photo intake at a time; P6 one Send reason from `ChatComposerPolicy.sendBlock`; P7 the gate line reads the delayed
-// `composer.gateLine`; P8 a focus gain tells the timeline (`composerDidFocus`); P9 the counter announces its bands.
-
 struct ChatComposer: View {
     let chat: ChatPresenter
     let actions: ChatRowActions
@@ -33,23 +15,20 @@ struct ChatComposer: View {
     @State private var showsPhotoPicker = false
     @State private var pickedItem: PhotosPickerItem? = nil
     @State private var pasteboardHasImage = false
-    /// CHT-5: the composer preview the person removed; the next send carries `suppressEmbeds` (6 c).
+
     @State private var dismissedPreviewURL = ""
-    /// P1: set from `GCKeyboard.coalesced` on appear and on connect and disconnect; no highlight, trait or key
-    /// handling without it.
+
     @State private var hasHardwareKeyboard = false
-    /// P1: the highlighted row id and the query it belongs to; the body derives the effective highlight.
+
     @State private var highlightedId = ""
     @State private var highlightQueryKey = ""
-    /// P1: the trigger key Escape dismissed ("" when none).
+
     @State private var dismissedSuggestionKey = ""
-    /// P4: a paste or picker copy still running; every other intake is refused meanwhile.
+
     @State private var photoIntakeInFlight = false
-    /// P3: whether the field had focus when Photo Library or the GIF page opened. A plain box (never observed), so the
-    /// GIF return can read it from `onAppear` without invalidating the body.
+
     @State private var focusMemo = ChatComposerFocusMemo()
-    /// P1: the Tab or Escape whose press the list used, so its held repeats are swallowed too. A plain box (never
-    /// observed), written and read in the key handlers only.
+
     @State private var keyMemo = ChatComposerKeyMemo()
     @FocusState private var focused: Bool
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
@@ -94,8 +73,7 @@ struct ChatComposer: View {
             if composer.inlineNotice != ChatFailure.none {
                 ConclaveComposerStatusLine(text: ChatMediaCopy.failureReason(composer.inlineNotice), identifier: "chat.composer.notice")
             }
-            // P7: the line follows the delayed gate (shown after 400 ms closed, held at least 400 ms); Send and its
-            // reason follow the real gate at once.
+
             if !ChatCopy.gateLine(composer.gateLine).isEmpty {
                 ConclaveComposerStatusLine(text: ChatCopy.gateLine(composer.gateLine), identifier: "chat.composer.gate")
             }
@@ -109,8 +87,7 @@ struct ChatComposer: View {
                     .focused($focused)
                     .disabled(composer.gate == ChatSendGate.locked)
                     .onKeyPress(.return, phases: [.down, .repeat]) { press in
-                        // Hardware Return sends and Shift+Return inserts a newline; the software keyboard's Return
-                        // stays a newline (the Messages convention, Q13). A held Return sends once (P2).
+
                         hardwareReturn(press, suggestions: suggestions, isComposing: ChatTextInputProbe.isComposing())
                     }
                     .onKeyPress(keys: [.upArrow, .downArrow], phases: [.down, .repeat]) { press in
@@ -137,12 +114,29 @@ struct ChatComposer: View {
             ConclaveCharacterCounter(count: count, limit: limit,
                                      visibleFrom: composer.isVoiceMode ? 0 : ConclaveComposerCounterPolicy.visibleFrom(limit: limit),
                                      identifier: "chat.composer.counter", announcesBands: true)
+            if showsPhotoPicker {
+                VStack(spacing: CGFloat(DesignTokens.space4)) {
+                    HStack {
+                        Text(ConclaveStrings.text("Photo Library"))
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Button(ConclaveStrings.text("Done")) { showsPhotoPicker = false }
+                            .accessibilityIdentifier("chat.photos.close")
+                    }
+                    PhotosPicker(selection: $pickedItem, matching: .images, preferredItemEncoding: .current) {
+                        Text(ConclaveStrings.text("Photo Library"))
+                    }
+                    .photosPickerStyle(.compact)
+                    .frame(height: 180)
+                    .accessibilityIdentifier("chat.photos.inline")
+                }
+            }
         }
         .task(id: composer.draftKey) {
             switchDraft(to: composer.draftKey)
         }
         .task(id: text) {
-            // R40-7: written after 500 ms idle (the task restarts on every keystroke), never per keystroke.
+
             try? await Task.sleep(nanoseconds: UInt64(ChatDraftStore.writeDelayMillis * 1_000_000))
             if Task.isCancelled { return }
             chat.drafts.setText(text, for: loadedKey)
@@ -160,7 +154,7 @@ struct ChatComposer: View {
             focused = true
         }
         .onChange(of: focused) { _, now in
-            // P8 (S40 2 c): the timeline follows a focus gain only when the newest row is visible.
+
             if now { actions.composerDidFocus() }
         }
         .onChange(of: composer.inlineNotice) { _, notice in
@@ -168,22 +162,21 @@ struct ChatComposer: View {
             postPolite(ChatMediaCopy.failureReason(notice))
         }
         .onAppear {
-            // P3: back from the GIF page (popped after a pick or by Back). Reads and clears the plain box only.
+
             restoreFocus(wasFocused: focusMemo.takeGifs())
         }
         .onDisappear {
             chat.drafts.setText(text, for: loadedKey)
         }
-        // CH6: the picker item is loaded as a file copied into the caches directory (HEIC arrives as JPEG with the
-        // compatible encoding); cancelling the picker changes nothing.
-        .photosPicker(isPresented: $showsPhotoPicker, selection: $pickedItem, matching: .images, preferredItemEncoding: .compatible)
+
         .onChange(of: showsPhotoPicker) { _, showing in
-            // P3: the picker closed by pick or cancel.
+
             if !showing { restoreFocus(wasFocused: focusMemo.takePhotoPicker()) }
         }
         .onChange(of: pickedItem) { _, item in
             guard let item else { return }
             pickedItem = nil
+            showsPhotoPicker = false
             guard acceptsPhotoIntake() else { return }
             photoIntakeInFlight = true
             Task { @MainActor in
@@ -192,12 +185,11 @@ struct ChatComposer: View {
                 chat.attachPhoto(fileURL: file.url.absoluteString, mimeType: file.mimeType, fileName: file.fileName)
             }
         }
-        // iPad drag and drop of images, as files (CH6). P4: refused (and the copies deleted) while a photo exists or
-        // another intake is still copying.
+
         .dropDestination(for: ChatPickedImageFile.self) { files, _ in
             acceptDroppedPhotos(files)
         }
-        // The paste control shows only while the pasteboard holds an image; `hasImages` shows no paste prompt.
+
         .task {
             refreshPasteboard()
             refreshHardwareKeyboard()
@@ -221,7 +213,6 @@ struct ChatComposer: View {
         if pasteboardHasImage != hasImage { pasteboardHasImage = hasImage }
     }
 
-    /// P1: the live hardware keyboard check, mirrored into state for the highlight. Called from event handlers only.
     @discardableResult
     private func refreshHardwareKeyboard() -> Bool {
         let attached = GCKeyboard.coalesced != nil
@@ -229,8 +220,6 @@ struct ChatComposer: View {
         return attached
     }
 
-    /// R40-7: drafts are keyed by room and recipient. A switch saves the current text under the old key and loads the
-    /// new key's draft; when the new key has none, the text you were writing moves with you.
     private func switchDraft(to key: String) {
         guard key != loadedKey || !hasLoaded else { return }
         let stored = chat.drafts.text(for: key)
@@ -248,10 +237,6 @@ struct ChatComposer: View {
         hasLoaded = true
     }
 
-    // MARK: Hardware keys (T3 borrow P1, P2)
-
-    /// P1, P2: Return in the order `ChatComposerPolicy.returnKeyAction` gives (composing, software keyboard and Shift
-    /// pass through; a repeat is swallowed; a highlighted row inserts unless it equals the draft; otherwise send).
     private func hardwareReturn(_ press: KeyPress, suggestions: ChatComposerSuggestions, isComposing: Bool) -> KeyPress.Result {
         let action = ChatComposerPolicy.returnKeyAction(isHardwareKeyboard: refreshHardwareKeyboard(),
                                                         isShift: press.modifiers.contains(.shift), isComposing: isComposing,
@@ -272,8 +257,6 @@ struct ChatComposer: View {
         }
     }
 
-    /// P1: Up and Down move the highlight (wrap-around, dimmed rows skipped) while the list shows; otherwise the
-    /// caret moves as usual. Each move is announced politely with the row's title and second line.
     private func hardwareArrow(_ press: KeyPress, suggestions: ChatComposerSuggestions, isComposing: Bool) -> KeyPress.Result {
         guard !isComposing, refreshHardwareKeyboard(), suggestions.isVisible else { return .ignored }
         let delta = press.key == .upArrow ? -1 : 1
@@ -285,9 +268,6 @@ struct ChatComposer: View {
         return .handled
     }
 
-    /// P1: Tab inserts the highlighted row like Return (never a send); Escape hides the list for this trigger. Both
-    /// act on the press only (`phases: .down`); a press they used is remembered, so its held repeats are swallowed by
-    /// `hardwareTabOrEscapeRepeat` and a held Tab never inserts and then moves focus (Android consumes them the same way).
     private func hardwareTabOrEscape(_ press: KeyPress, suggestions: ChatComposerSuggestions, isComposing: Bool) -> KeyPress.Result {
         let result = tabOrEscapeAction(press, suggestions: suggestions, isComposing: isComposing)
         keyMemo.handledKey = result == .handled ? press.key : nil
@@ -306,15 +286,11 @@ struct ChatComposer: View {
         return .handled
     }
 
-    /// P1: the repeats of a held Tab or Escape. Swallowed only when the list used that key's press (it never acts
-    /// again); every other repeat goes to the field and the system as usual.
     private func hardwareTabOrEscapeRepeat(_ press: KeyPress, isComposing: Bool) -> KeyPress.Result {
         guard !isComposing, refreshHardwareKeyboard(), keyMemo.handledKey == press.key else { return .ignored }
         return .handled
     }
 
-    /// P1: after every draft change, keep the Escape dismissal only for the same trigger and drop a highlight that
-    /// belongs to another query (both value guarded; this is an event handler, never the body).
     private func syncSuggestionState(draft: String) {
         let trigger = ChatComposerPolicy.suggestionTrigger(draft: draft)
         let kept = ChatComposerPolicy.dismissedKey(after: trigger, current: dismissedSuggestionKey)
@@ -326,9 +302,6 @@ struct ChatComposer: View {
         }
     }
 
-    // MARK: Send (P6)
-
-    /// The field's value names the mode, so the label stays "Message" (6 i).
     private func modeValue(_ composer: ChatComposerSnapshot) -> String {
         var parts: [String] = []
         if let recipient = composer.privateTo { parts.append(ConclaveStrings.format("Private to %@", recipient.name)) }
@@ -341,7 +314,6 @@ struct ChatComposer: View {
         _ = dispatchSend()
     }
 
-    /// Sends the draft; the field clears only when the presenter dispatched it. The keyboard stays up (P3).
     private func dispatchSend() -> ChatSendResult {
         let result = dismissedPreviewURL.isEmpty ? chat.send(text: text)
             : chat.send(text: text, suppressEmbedsFor: dismissedPreviewURL)
@@ -353,8 +325,6 @@ struct ChatComposer: View {
         return result
     }
 
-    /// P6: a hardware Return. A gate or photo block (refused silently by the presenter) posts its reason politely once
-    /// per press; route and limit blocks announce their own inline notice; an empty draft posts nothing.
     private func sendFromKeyboard() {
         let composer = chat.composer
         let block = ChatComposerPolicy.sendBlock(text: text, gate: composer.gate, isVoiceMode: composer.isVoiceMode,
@@ -368,10 +338,9 @@ struct ChatComposer: View {
         postPolite(ChatCopy.sendBlockReason(block, overBy: overBy, attachment: composer.attachment))
     }
 
-    // MARK: Focus (P3)
-
     private func openPhotoLibrary() {
         focusMemo.photoPickerWasFocused = focused
+        focused = false
         showsPhotoPicker = true
     }
 
@@ -380,18 +349,11 @@ struct ChatComposer: View {
         actions.openGifs()
     }
 
-    /// P3: verify first. UIKit often gives the field its first responder back after a dismissal by itself (cell R6),
-    /// so this only sets focus once when it is still missing, when the field had it before and VoiceOver is off
-    /// (AX12: under VoiceOver focus returns to the invoker). No sleeps and no retry loop.
     private func restoreFocus(wasFocused: Bool) {
         guard ChatComposerPolicy.restoresComposerFocus(wasFocused: wasFocused, assistiveTechRunning: voiceOverEnabled) else { return }
         if !focused { focused = true }
     }
 
-    // MARK: Photo intake (P4)
-
-    /// P4: a paste, picker or drop is accepted only while the presenter can take a photo and no other copy is running;
-    /// otherwise it is refused at once with the notice that applies ("Send one attachment at a time.").
     private func acceptsPhotoIntake() -> Bool {
         if !photoIntakeInFlight && chat.canAcceptPhoto { return true }
         let composer = chat.composer
@@ -405,15 +367,13 @@ struct ChatComposer: View {
 
     private func pasteImage(_ providers: [NSItemProvider]) {
         guard acceptsPhotoIntake() else { return }
-        // Set before the asynchronous copy starts, so a second paste or a drop meanwhile is refused.
+
         photoIntakeInFlight = true
         ChatPickedImageFile.attachFirst(providers, to: chat) {
             photoIntakeInFlight = false
         }
     }
 
-    /// The drop already copied its files into caches; a refused drop deletes them and returns false. Only the first
-    /// image is taken (one photo per message); the rest are deleted and the notice says why.
     private func acceptDroppedPhotos(_ files: [ChatPickedImageFile]) -> Bool {
         guard let file = files.first else { return false }
         guard acceptsPhotoIntake() else {
@@ -434,8 +394,6 @@ struct ChatComposer: View {
     }
 }
 
-/// P3: the focus the field had when a picker opened. A plain reference held in `@State`: writing it never invalidates
-/// the body (the appearance-callback rule, AGENTS.md), and each value is read once.
 private final class ChatComposerFocusMemo {
     var photoPickerWasFocused = false
     var gifsWasFocused = false
@@ -453,14 +411,10 @@ private final class ChatComposerFocusMemo {
     }
 }
 
-/// P1: the hardware Tab or Escape whose press the suggestion list used (nil when the last press passed through). A plain
-/// reference held in `@State`, like `ChatComposerFocusMemo`: the key handlers write and read it, the body never does.
 private final class ChatComposerKeyMemo {
     var handledKey: KeyEquivalent? = nil
 }
 
-/// P1: the suggestion state the composer body derives once per draft (pure; nothing here writes state). The list,
-/// the key handlers and the announcements all read this one value.
 private struct ChatComposerSuggestions {
     let trigger: ChatSuggestionTrigger
     let queryKey: String
@@ -468,9 +422,9 @@ private struct ChatComposerSuggestions {
     let commands: [ChatCommandRow]
     let items: [ChatSuggestionItem]
     let isPrivateMode: Bool
-    /// False when nothing matches or Escape dismissed this trigger.
+
     let isVisible: Bool
-    /// The effective highlight: "" without a hardware keyboard, while hidden or when no row is available.
+
     let highlight: String
 
     var highlightedInsert: String {
@@ -495,7 +449,6 @@ private struct ChatComposerSuggestions {
                                        isPrivateMode: isPrivateMode, isVisible: isVisible, highlight: highlight)
     }
 
-    /// The polite text for an arrow move onto `itemId`: the row's title and its second line.
     func announcement(for itemId: String) -> String {
         for option in mentions where ChatComposerPolicy.mentionItemId(option.id) == itemId {
             return ChatCopy.suggestionAnnouncement(title: ChatCopy.mentionTitle(option),
@@ -508,8 +461,6 @@ private struct ChatComposerSuggestions {
     }
 }
 
-/// 6 c recipient row and the implicit private line: the recipient menu shows only when private messages are on and
-/// someone else is here; "Will be sent privately to %@" reads the shared implicit-target rule (the SFU's lookup).
 private struct ChatComposerModeRow: View {
     let chat: ChatPresenter
     let composer: ChatComposerSnapshot
@@ -553,10 +504,6 @@ private struct ChatComposerModeRow: View {
     }
 }
 
-/// 6 c suggestions: commands for a bare `/word`, mentions for a trailing `@word` (a mention wins); a list inside the
-/// bar (never a popover) on the flat secondary surface, 4.5 rows then scrolling; unavailable rows dimmed with their
-/// reason. P1: with a hardware keyboard one row carries the flat `systemFill` highlight (never coral) and the
-/// selected trait; rows appear without animation (6 h) and a press never takes focus from the field.
 private struct ChatSuggestionList: View {
     let suggestions: ChatComposerSuggestions
     let isPrivateMode: Bool
@@ -584,7 +531,7 @@ private struct ChatSuggestionList: View {
                     .background(Color(uiColor: .secondarySystemBackground),
                                 in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous))
                     .onChange(of: suggestions.highlight) { _, highlight in
-                        // Keeps the highlighted row on screen past the 4.5 visible rows (no animation, 6 h).
+
                         guard !highlight.isEmpty else { return }
                         proxy.scrollTo(highlight)
                     }
@@ -592,7 +539,7 @@ private struct ChatSuggestionList: View {
             }
         }
         .onChange(of: count) { _, next in
-            // 6 i: a polite "%lld suggestions" when the list appears or changes size.
+
             guard next > 0 else { return }
             var attributed = AttributedString(ConclaveStrings.format("%lld suggestions", next))
             attributed.accessibilitySpeechAnnouncementPriority = .low
@@ -671,8 +618,6 @@ private struct ChatSuggestionList: View {
         .id(itemId)
     }
 
-    /// The draft after a tap on a row: its item's insert text (`insertingMention` replaces the trailing `@query`,
-    /// `insertingCommand` gives the command's insert text), the same text Return and Tab insert.
     private func insertText(_ itemId: String) -> String {
         for item in suggestions.items where item.id == itemId {
             return item.insertText
@@ -681,7 +626,6 @@ private struct ChatSuggestionList: View {
     }
 }
 
-/// P1: the highlighted row's flat fill (`systemFill`, small continuous radius; never coral, no animation).
 private struct ChatSuggestionHighlight: View {
     let isHighlighted: Bool
 
@@ -693,8 +637,6 @@ private struct ChatSuggestionHighlight: View {
     }
 }
 
-/// S40 6 c attach control: a Menu whose label is the add-attachment glyph in the 44 pt glass circle (the cluster draws
-/// the material). Items unavailable in the current mode stay in the menu, disabled, with the reason as a second line.
 private struct ChatAttachMenu: View {
     let chat: ChatPresenter
     let composer: ChatComposerSnapshot
@@ -743,9 +685,6 @@ private struct ChatAttachMenu: View {
     }
 }
 
-/// S40 6 c attachment chip (FND-3 component): the thumbnail from the local file, "Photo", the status line ("Preparing",
-/// "Uploading 42%", "Ready to send" or the reason), the system linear indicator while preparing or uploading, Try Again
-/// after a failure, and Remove. Absent while there is no photo.
 private struct ChatAttachmentRow: View {
     let chat: ChatPresenter
     let attachment: ChatAttachmentState
@@ -780,10 +719,6 @@ private struct ChatAttachmentRow: View {
     }
 }
 
-/// T3 borrow P2: whether the focused text input holds marked text (an IME composition, for example Japanese or
-/// Chinese candidates). Every hardware key handler stays out of the way while it does, so the IME gets Return, the
-/// arrows, Tab and Escape. The first responder is found with a public responder-chain action sent to a nil target
-/// (UIKit delivers it to the first responder); the weak box never retains it.
 @MainActor
 private enum ChatTextInputProbe {
     static func isComposing() -> Bool {
@@ -802,14 +737,12 @@ private enum ChatFirstResponderReport {
 }
 
 extension UIResponder {
-    /// T3 borrow P2: the first responder reports itself to `ChatTextInputProbe`.
+
     @objc fileprivate func conclaveReportFirstResponder(_ sender: Any?) {
         ChatFirstResponderReport.responder = self
     }
 }
 
-/// CH6: a picked, pasted or dropped image as a file. The import copies the file into the caches directory inside the
-/// transfer (off the main actor), so no image bytes ever cross the main actor; the presenter gets the file URL.
 struct ChatPickedImageFile: Transferable {
     let url: URL
     let mimeType: String
@@ -830,8 +763,6 @@ struct ChatPickedImageFile: Transferable {
         return ChatPickedImageFile(url: destination, mimeType: mime, fileName: source.lastPathComponent)
     }
 
-    /// The paste control's payload: the first image provider's file, copied while the system's temporary file exists.
-    /// `completion` runs on the main actor after the hand-over or a failure (P4 clears its in-flight flag there).
     static func attachFirst(_ providers: [NSItemProvider], to chat: ChatPresenter, completion: @escaping @MainActor () -> Void) {
         guard let provider = providers.first else {
             Task { @MainActor in completion() }
@@ -850,7 +781,6 @@ struct ChatPickedImageFile: Transferable {
         }
     }
 
-    /// P4: deletes copies a refused (or surplus) drop already made in caches.
     static func discard(_ files: [ChatPickedImageFile]) {
         for file in files {
             try? FileManager.default.removeItem(at: file.url)

@@ -3,12 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// PPL-5 (OUT/PLAN-screens.md section 5): Webinar Settings and webinar People for hosts. PH10 `qaEnabled` decoding, the
-/// webinar host sections (attendee hand queue by `raisedAt`, panelists, invited rows, the queue-known footer), Bring on
-/// Stage and Cancel Invite through the one ledger (PH2, PH8), Move to Audience only for role participant, the PH9
-/// interim invite rules (Q15), the Webinar Settings field rules (capacity, custom link), the Host Controls webinar seams
-/// (Attendee Q&A switch, rotation serial, field saves), the S20 Q10 attendee hand capability in S1, and source pins for
-/// the socket surface on every platform file and the platform pages. Nothing here runs a socket or a view.
 @MainActor
 struct PPL5WebinarSettingsTests {
     private let me = "u-ishaan"
@@ -55,8 +49,6 @@ struct PPL5WebinarSettingsTests {
         PeopleWebinarHandInput.make(userId: "a-omar", displayName: "Omar K.", raisedAtMillis: 2000.0),
     ]
 
-    // MARK: PH10
-
     @Test func qaEnabledDecodesFromTheConfigAndTheJoinAck() throws {
         let config = try JSONDecoder().decode(WebinarConfigSnapshot.self, from: Data(#"{"enabled":true,"qaEnabled":false}"#.utf8))
         #expect(config.qaEnabled == false)
@@ -71,8 +63,6 @@ struct PPL5WebinarSettingsTests {
         #expect(join.webinarQaEnabled == true)
     }
 
-    // MARK: S50 10: webinar People for hosts
-
     @Test func webinarHostsSeeTheQueueByRaisedAtThenPanelistsThenAttendees() {
         let (people, _) = webinarPeople(queue: Self.fourHands)
         let ids = people.snapshot.sections.map(\.id)
@@ -84,7 +74,7 @@ struct PPL5WebinarSettingsTests {
         #expect(priya.role == .attendee && priya.detail == .attendee)
         #expect(priya.handOrder == 1 && priya.isHandRaised)
         #expect(priya.actions.map(\.action) == [.bringOnStage])
-        // The meeting Raised Hands section is not shown in webinar mode; panelists are the roster rows.
+
         #expect(people.snapshot.section(.panelists)?.rowIds.contains("u-lee") == true)
         #expect(people.snapshot.section(.inMeeting) == nil)
     }
@@ -105,7 +95,7 @@ struct PPL5WebinarSettingsTests {
         try #require(log.commands.count == 1)
         #expect(log.commands[0].kind == .bringOnStage && log.commands[0].targetId == "a-priya")
         #expect(people.rows.entry(for: "attendee:a-priya").model.pendingAction == PersonActionID.bringOnStage.rawValue)
-        // A duplicate tap emits nothing.
+
         #expect(people.perform(.bringOnStage, rowId: "attendee:a-priya", source: PeopleActionSource.rowMenu) == .ignored)
         #expect(log.commands.count == 1)
         #expect(people.finish(log.tickets[0], HostActionResult.completed))
@@ -139,7 +129,7 @@ struct PPL5WebinarSettingsTests {
         let lee = people.rows.entry(for: "u-lee").model.actions.map(\.action)
         let avery = people.rows.entry(for: "u-avery").model.actions.map(\.action)
         #expect(lee.contains(.moveToAudience))
-        // The SFU refuses any admin target, co-hosts included (webinarInteractionHandlers.ts:411-417).
+
         #expect(!avery.contains(.moveToAudience))
     }
 
@@ -168,25 +158,21 @@ struct PPL5WebinarSettingsTests {
         #expect(!people.rows.contains("attendee:a-priya"))
     }
 
-    // MARK: PH9 interim invites (Q15)
-
     @Test func interimInvitesFollowEachRemovalRule() {
         var invites = WebinarStageInvitePolicy.added([:], userId: "a-mina#s1", name: "Mina T.")
         #expect(invites["a-mina#s1"] == "Mina T.")
-        // A new hand from the invited attendee removes the invite.
+
         #expect(WebinarStageInvitePolicy.afterQueue(invites, previousQueueIds: [], queueIds: ["a-mina#s1"]).isEmpty)
         #expect(WebinarStageInvitePolicy.afterQueue(invites, previousQueueIds: ["a-mina#s1"], queueIds: ["a-mina#s1"]).count == 1)
-        // A panelist join with the same user key means they accepted.
+
         #expect(WebinarStageInvitePolicy.afterPanelistJoin(invites, joinedUserId: "a-mina#s2").isEmpty)
         #expect(WebinarStageInvitePolicy.afterPanelistJoin(invites, joinedUserId: "u-lee#s1").count == 1)
-        // Webinar mode off clears them; Cancel Invite removes one.
+
         #expect(WebinarStageInvitePolicy.afterWebinarMode(invites, isWebinarEnabled: false).isEmpty)
         invites = WebinarStageInvitePolicy.added(invites, userId: "a-jo#s1", name: "Jo B.")
         #expect(WebinarStageInvitePolicy.removed(invites, userId: "a-jo#s1").count == 1)
         #expect(WebinarStageInvitePolicy.rows(invites).map(\.displayName) == ["Jo B.", "Mina T."])
     }
-
-    // MARK: S50 9: Webinar Settings rules
 
     @Test func capacityRejectsZeroOverTheCapAndLetters() {
         #expect(WebinarSettingsPolicy.showsCapacityError("0"))
@@ -221,7 +207,7 @@ struct PPL5WebinarSettingsTests {
         people.finish(log.tickets[log.tickets.count - 1], HostActionResult.completed)
         #expect(host.snapshot.savedSerial == saved + 1 && host.snapshot.savedField == HostFieldID.capacity)
         #expect(host.drafts.capacity == "750")
-        // A rotation acknowledgement bumps the serial the views copy and announce on.
+
         host.requestRotateLink()
         let confirmation = people.confirmation
         #expect(confirmation?.kind == .rotateWebinarLink)
@@ -229,12 +215,10 @@ struct PPL5WebinarSettingsTests {
         let rotated = host.snapshot.rotatedLinkSerial
         people.finish(log.tickets[log.tickets.count - 1], HostActionResult.completed)
         #expect(host.snapshot.rotatedLinkSerial == rotated + 1)
-        // Webinar mode off makes the webinar pages unreachable (they pop, S50 9 f).
+
         host.apply(HostControlsInputs.make(callSession: 1, isWebinarEnabled: false))
         #expect(!host.isWebinarSettingsReachable)
     }
-
-    // MARK: S20 Q10: the attendee hand in S1
 
     @Test func theAttendeeHandRowFollowsTheCapability() {
         let shell = MeetingShellPresenter()
@@ -247,12 +231,10 @@ struct PPL5WebinarSettingsTests {
                                             attendeeCanRaiseHand: true))
         hand = shell.controls.rows.first(where: { $0.id == MeetingControlID.hand.rawValue })
         #expect(hand?.isVisible == true && hand?.isEnabled == true)
-        // The microphone stays attendee-blocked: only the hand gains a path.
+
         let mic = shell.controls.rows.first(where: { $0.id == MeetingControlID.microphone.rawValue })
         #expect(mic?.blockedReason == .attendee)
     }
-
-    // MARK: Source pins (socket surface, view model, platform pages)
 
     @Test func everySocketFileCarriesTheWebinarSurface() throws {
         let ios = try ppl5Source("Sources/Conclave/Core/Networking/SocketIOManager.swift")
@@ -271,7 +253,7 @@ struct PPL5WebinarSettingsTests {
             #expect(symbol.contains(callback), "symbol file \(callback)")
             #expect(mac.contains(callback), "macOS stub \(callback)")
         }
-        // `webinar:declineStage` is a `(callback)` handler: ack-only on both clients (AGENTS "Socket Ack Shapes").
+
         #expect(ios.contains("emitAckOnly(event: SocketEvent.webinarDeclineStage)"))
         #expect(kotlin.contains("emitAckOnly(SocketEvent.webinarDeclineStage)"))
         #expect(kotlin.contains("webinarQaEnabled = boolField(obj, \"webinarQaEnabled\")"))

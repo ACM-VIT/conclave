@@ -3,20 +3,12 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SET-5 (OUT/PLAN-screens.md section 5; S60 3, PLAN-next 3.7 WP1-3c, OWNER-DEFAULTS Q4 and Q8 6, RECONCILE R9 and R40,
-/// S60 Q15): the Layout panel's presenter and policy, its feed from the stage presenter, the scripted fixture core
-/// (selecting Spotlight changes the stage kind, Audio Only keeps the camera off), the WP1-3c policy rows (the Android
-/// bottom sheet for Layout and Effects in compact and medium windows, partial coverage, the partial-state rule), and
-/// source pins on both platforms (dark through PanelShell, one Stepper, the stable Slider, the experimental opt-in only
-/// inside K/ui/call/panels, test tags on the sheet content root). Nothing here builds a view or touches media.
 @MainActor
 struct SET5LayoutPanelTests {
     private static let phone = StageViewport(width: 390, height: 844, insetTop: 103, insetBottom: 98, insetLeading: 0, insetTrailing: 0,
                                              widthClass: StageSizeClass.compact, heightClass: StageSizeClass.regular, placement: .bottomBar)
     private static let tablet = StageViewport(width: 820, height: 1180, insetTop: 80, insetBottom: 84, insetLeading: 0, insetTrailing: 0,
                                               widthClass: StageSizeClass.regular, heightClass: StageSizeClass.regular, placement: .bottomBar)
-
-    // MARK: Policy (3 c, d, f, j)
 
     @Test func snapshotFollowsTheInputsAndTheRouterBounds() {
         let phone = LayoutPanelPolicy.snapshot(LayoutPanelInputs.make(viewMode: "spotlight", viewMaxTiles: 60, isPhone: true))
@@ -36,15 +28,13 @@ struct SET5LayoutPanelTests {
     }
 
     @Test func positionShowsOnlyWhileTheSelfViewFloats() {
-        // 3 f, 3 l4: In a Tile hides it; Floating and Minimized show it; Auto follows the resolved role.
+
         #expect(!LayoutPanelPolicy.showsPosition(selfMode: "tile", isSelfFloating: true))
         #expect(LayoutPanelPolicy.showsPosition(selfMode: "floating", isSelfFloating: false))
         #expect(LayoutPanelPolicy.showsPosition(selfMode: "minimized", isSelfFloating: false))
         #expect(LayoutPanelPolicy.showsPosition(selfMode: "auto", isSelfFloating: true))
         #expect(!LayoutPanelPolicy.showsPosition(selfMode: "auto", isSelfFloating: false))
     }
-
-    // MARK: Presenter (3 j, l3)
 
     @Test func everySetterDispatchesOncePerRealChange() throws {
         let presenter = LayoutPanelPresenter()
@@ -54,7 +44,7 @@ struct SET5LayoutPanelTests {
         #expect(presenter.setViewMode("auto") == .ignored, "the current mode writes nothing")
         #expect(presenter.setViewMode("grid") == .ignored, "an unknown mode writes nothing")
         #expect(presenter.setViewMode("spotlight") == .dispatched)
-        // The slider drag (3 l3): each distinct value once, never a repeat or a value outside 2 to 49.
+
         #expect(presenter.setMaxTiles(16) == .ignored)
         #expect(presenter.setMaxTiles(17) == .dispatched)
         #expect(presenter.setMaxTiles(50) == .ignored && presenter.setMaxTiles(1) == .ignored)
@@ -67,7 +57,7 @@ struct SET5LayoutPanelTests {
         try #require(commands.count == 6)
         #expect(commands[0].value == "spotlight" && commands[1].number == 17 && commands[2].flag && commands[5].flag)
         #expect(presenter.callsReadout() == "setViewMode,setViewMaxTiles,setHideTilesWithoutVideo,setSelfViewMode,setSelfViewCorner,setAudioOnly")
-        // The snapshot never changed: the core owns the preferences and answers through the inputs.
+
         #expect(presenter.snapshot.mode == "auto" && presenter.snapshot.maxTiles == 16)
     }
 
@@ -79,12 +69,10 @@ struct SET5LayoutPanelTests {
         #expect(presenter.snapshot.revision == revision)
         presenter.apply(LayoutPanelInputs.make(callSession: 1, isPinActive: true))
         #expect(presenter.snapshot.revision == revision + 1 && presenter.snapshot.isPinActive)
-        // A new session with the same visible values republishes nothing (3 k).
+
         presenter.apply(LayoutPanelInputs.make(callSession: 2, isPinActive: true))
         #expect(presenter.snapshot.revision == revision + 1)
     }
-
-    // MARK: The stage feeds it (3 j: no new core fields)
 
     @Test func theStageFeedsTheLayoutPanelFromItsOwnState() {
         let stage = StagePresenter(shell: MeetingShellPresenter())
@@ -94,21 +82,19 @@ struct SET5LayoutPanelTests {
         let snapshot = stage.layoutPanel.snapshot
         #expect(snapshot.mode == "sidebar" && snapshot.maxTiles == 9 && snapshot.hideTilesWithoutVideo)
         #expect(snapshot.isPinActive && snapshot.phoneCap == 8)
-        // Audio Only arrives through the notice inputs (MS:208).
+
         stage.applyNotices(StageFixtureScript.noticeBase(isAudioOnly: true))
         #expect(stage.layoutPanel.snapshot.isAudioOnly)
-        // 1:1 on Auto floats you, so Position shows; a tablet omits the phone cap.
+
         let solo = StagePresenter(shell: MeetingShellPresenter())
         solo.setViewport(Self.tablet)
         solo.apply(StageFixtureScript.base(count: 2, localCameraOn: true))
         #expect(solo.layoutPanel.snapshot.showsPosition && solo.layoutPanel.snapshot.phoneCap == 0)
         solo.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 2, localCameraOn: true), selfViewMode: "tile"))
         #expect(!solo.layoutPanel.snapshot.showsPosition)
-        // The Effects lift never reaches the stored corner the panel shows.
+
         #expect(solo.layoutPanelInputs().selfViewCorner == "bottom-right")
     }
-
-    // MARK: Fixture (3 l2, l4, l5; L6-12 `layout-*`)
 
     @Test func layoutFixtureOpensTheSheetAndSpotlightChangesTheStageKind() {
         let session = StageFixtureSession(state: .layoutGrid6)
@@ -119,7 +105,7 @@ struct SET5LayoutPanelTests {
         #expect(session.stage.layoutPanel.setViewMode("spotlight") == .dispatched)
         #expect(session.stage.layout.kind == .spotlight, "3 l2: the fixture stage kind follows the choice")
         #expect(session.stage.layoutPanel.snapshot.mode == "spotlight")
-        // Slot ids are stable across kinds, so no renderer is recreated (S20 SL6, 3 k).
+
         #expect(Set(session.stage.layout.slots.map { $0.id }).isSubset(of: before.union(["overflow"])))
         #expect(session.layoutCallsReadout() == "setViewMode")
         #expect(session.stage.layoutPanel.setMaxTiles(4) == .dispatched)
@@ -132,7 +118,7 @@ struct SET5LayoutPanelTests {
         #expect(floating.stage.layoutPanel.snapshot.showsPosition, "3 l4: Floating shows Position")
         #expect(floating.stage.layoutPanel.setSelfViewMode("tile") == .dispatched)
         #expect(!floating.stage.layoutPanel.snapshot.showsPosition, "3 l4: In a Tile hides Position")
-        // 3 l5: Audio Only on shows the S20 banner and turns the camera off; off leaves the camera off.
+
         let audio = StageFixtureSession(state: .layoutAudioOnly)
         audio.stage.setViewport(Self.phone)
         #expect(audio.stage.layoutPanel.snapshot.isAudioOnly)
@@ -142,8 +128,6 @@ struct SET5LayoutPanelTests {
         let local = audio.stage.inputs.participant(StageFixtureScript.localUserId)
         #expect(local?.isCameraOff == true, "turning Audio Only off never turns the camera back on")
     }
-
-    // MARK: WP1-3c policy rows (PLAN-next 3.7, PS 8.6)
 
     @Test func androidCompactAndMediumWindowsShowLayoutAndEffectsAsABottomSheet() {
         let phone = PanelPresentationPolicy.androidWindow(width: 360, height: 800)
@@ -163,26 +147,23 @@ struct SET5LayoutPanelTests {
                 #expect(PanelPresentationPolicy.stageInteractiveDetent(resolved) == nil)
                 if sheet { #expect(resolved.appearance == .inCall, "Q8 6: dark from every invoker") }
             }
-            // Owner default Q8 2: the expanded side pane keeps every panel beside the stage.
+
             #expect(PanelPresentationPolicy.style(window: tablet, platform: .android, panel: panel, sideStylesEnabled: true) == .sidePane)
             #expect(PanelPresentationPolicy.style(window: tablet, platform: .android, panel: panel, sideStylesEnabled: false)
                     == (sheet ? .bottomSheet : .overlay))
-            // iOS is unchanged: sheets and the inspector.
+
             #expect(PanelPresentationPolicy.style(window: PanelWindow(width: 390, height: 844, horizontalRegular: false, verticalRegular: true),
                                                   platform: .iOS, panel: panel) == .sheet)
         }
-        // The partial state (S60 3 d, 4 d, R9): Layout opens partially expanded, Effects expanded; both expanded at
-        // accessibility text sizes; 640 dp wide at most.
+
         #expect(!PanelPresentationPolicy.bottomSheetSkipsPartialState(.layout))
         #expect(PanelPresentationPolicy.bottomSheetSkipsPartialState(.layout, isAccessibilitySize: true))
         #expect(PanelPresentationPolicy.bottomSheetSkipsPartialState(.effects))
         #expect(PanelPresentationPolicy.bottomSheetSkipsPartialState(.effects, isAccessibilitySize: true))
         #expect(PanelPresentationPolicy.bottomSheetMaxWidth == 640)
-        // The S20 toast lane suspends under it (RECONCILE R3).
+
         #expect(MeetingNoticePolicy.suspendsToastLane(style: .bottomSheet))
     }
-
-    // MARK: Sources (3 c, d; PLAN-next 3.7 rules)
 
     @Test func iosLayoutPanelIsDarkThroughTheShellWithSystemControls() throws {
         let ios = try Self.source("Sources/Conclave/Features/Meeting/Settings/LayoutPanel+iOS.swift")
@@ -220,7 +201,7 @@ struct SET5LayoutPanelTests {
         #expect(stageMatches(#"Text\(\s*""#, in: page).isEmpty)
         let root = stageNormalized(try Self.source("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt"))
         #expect(root.contains("LayoutPage( layout = stage.layoutPanel,"))
-        // The experimental M3 opt-in stays inside K/ui/call/panels among this slice's Android files.
+
         for file in ["Sources/Conclave/Skip/ui/settings/LayoutPanel.kt", "Sources/Conclave/Skip/ui/effects/EffectsPanel.kt",
                      "Sources/Conclave/Skip/ui/effects/EffectTile.kt", "Sources/Conclave/Skip/ui/effects/EffectsCopy.kt",
                      "Sources/Conclave/Skip/ui/effects/EffectsPhotoStore.kt"] {
@@ -247,8 +228,6 @@ struct SET5LayoutPanelTests {
         #expect(stageMatches(#"\.(map|compactMap|flatMap)\(\w+(\.init)?\)"#, in: shared).isEmpty, "function-reference map")
     }
 
-    // MARK: Strings (L6-14; red until the integrator merges HD/strings/B7-T2.json)
-
     @Test func layoutStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(Self.source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
@@ -265,15 +244,12 @@ struct SET5LayoutPanelTests {
         }
     }
 
-    // MARK: Helpers
-
     static func source(_ path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         return try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
     }
 }
 
-/// The first capture group of every match.
 private func set5Captures(_ pattern: String, in text: String) -> [String] {
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     let ns = text as NSString

@@ -32,11 +32,6 @@ object CameraPreviewController {
     private var activePreview: Preview? = null
     private var releaseGeneration = 0L
 
-    /**
-     * ENT-3 (S10 0.5 "Preview capture" row, RECONCILE R22): told after every release with the preview it unbound, so
-     * the native lobby's LocalPreviewController sees the WebRTC client take the camera (its publish latch) and the
-     * legacy preview keeps its own behavior. Set once by LocalPreviewController.
-     */
     internal var onReleased: ((Preview?) -> Unit)? = null
 
     fun releasePreview() {
@@ -88,7 +83,6 @@ object CameraPreviewController {
     }
 }
 
-/** Shared with the native lobby's LocalPreviewController (ENT-3): one camera choice rule for both previews. */
 internal data class PreviewCameraSelection(
     val selector: CameraSelector,
     val mirrored: Boolean,

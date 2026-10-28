@@ -23,12 +23,6 @@ import skip.foundation.Bundle
 import skip.foundation.ProcessInfo
 import skip.ui.UIApplication
 
-/*
- * ENT-7 (S10 5 d, m): every callback carries (token, name, email, errorCode, errorMessage). The code is one of the
- * ERROR_ constants below and is what the native Account screen reads (NativeAuthService.kind(forGoogleBridgeCode:)
- * maps it to NativeAuthErrorKind); the message stays developer-facing for logs and the legacy join screen, which
- * still shows it, so its wording is unchanged.
- */
 object NativeGoogleSignInBridge {
     private const val SIGN_IN_TIMEOUT_MS = 120_000L
 
@@ -91,7 +85,7 @@ object NativeGoogleSignInBridge {
                 executor = mainExecutor,
                 callback = object : CredentialManagerCallback<GetCredentialResponse, GetCredentialException> {
                     override fun onResult(result: GetCredentialResponse) {
-                        // A cancelled or timed-out request must not finish a later attempt.
+
                         if (pendingCancellation !== cancellation) return
                         try {
                             val credential = result.credential
@@ -129,7 +123,6 @@ object NativeGoogleSignInBridge {
         }
     }
 
-    /** The typed code of a Credential Manager failure: the system sheet closed, no Google account, or another error. */
     internal fun errorCode(error: GetCredentialException): String = when (error) {
         is GetCredentialCancellationException -> ERROR_CANCELLED
         is NoCredentialException -> ERROR_NO_CREDENTIAL
@@ -163,7 +156,7 @@ object NativeGoogleSignInBridge {
                 },
             )
         } catch (exception: Exception) {
-            // Provider cleanup must not prevent signing out of the app session.
+
             android.util.Log.w("ConclaveAuth", "Could not clear credential provider state.")
         }
     }

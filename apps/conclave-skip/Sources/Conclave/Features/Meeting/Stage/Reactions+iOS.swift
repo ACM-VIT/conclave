@@ -1,12 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S20 9 (STG-4, SL9): the reaction burst layer. A sibling overlay that reads only `stage.reactions` (hot state in one
-// leaf layer), draws at most `renderLimit` bubbles in a leading column above the toast lane, passes every touch
-// through and is hidden from VoiceOver (decorative and frequent). Each bubble starts its own scoped animation once,
-// guarded by a start flag in a reference box (appearance callbacks can re-fire when a body re-runs, AGENTS.md
-// "Appearance-Callback Render Loop"), and nothing redraws once the last bubble has faded.
-
 struct ReactionBurstLayer: View {
     let stage: StagePresenter
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -31,7 +25,7 @@ private struct ReactionBurstColumn: View {
             }
         }
         .padding(.leading, CGFloat(StageReactionPolicy.leadingInset))
-        // Rises from above the toast lane (bar slot plus one toast height) to below the banner lane.
+
         .padding(.bottom, StageCanvasMetrics.barReserve + 64)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         .allowsHitTesting(false)
@@ -39,7 +33,6 @@ private struct ReactionBurstColumn: View {
     }
 }
 
-/// A plain start flag: mutating it never invalidates the bubble.
 private final class ReactionStartBox {
     var started = false
 }
@@ -87,7 +80,7 @@ private struct ReactionBubble: View {
         let riseSeconds = StageReactionPolicy.riseMillis / 1000.0
         let lifetime = StageReactionPolicy.lifetimeMillis / 1000.0
         if reduceMotion {
-            // Appear in place, hold, fade out; no travel (S20 9 h).
+
             withAnimation(.easeIn(duration: StageReactionPolicy.reducedFadeInMillis / 1000.0)) { appear = 1 }
             let fadeOut = StageReactionPolicy.reducedFadeOutMillis / 1000.0
             withAnimation(.easeOut(duration: fadeOut).delay(lifetime - fadeOut)) { fade = 0 }

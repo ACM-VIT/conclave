@@ -11,12 +11,6 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationManagerCompat
 
-/**
- * Keeps call media alive in the background and shows the ongoing call notification (S70 1 d, Phase A). It posts
- * what CallNotificationBuilder builds from the CallPresence snapshot (the bridge sends it as Intent extras), migrates
- * the notification channel without defeating a person's choice, and reports its foreground-service types and
- * surface status back to CallPresence. It never observes the snapshot.
- */
 class CallForegroundService : Service() {
     companion object {
         const val NOTIFICATION_ID = 1
@@ -24,15 +18,13 @@ class CallForegroundService : Service() {
         const val ACTION_START = "conclave.app.action.START_CALL"
         const val ACTION_STOP = "conclave.app.action.STOP_CALL"
         const val ACTION_UPDATE = "conclave.app.action.UPDATE_CALL"
-        /** SX1: the system fixture starts the service with the mediaPlayback type alone (never microphone or camera). */
+
         const val EXTRA_FIXTURE = "conclave.systemFixture"
 
-        /** True between a successful startForeground and the stop. Read on the main thread by the bridge. */
         @Volatile
         var isRunning: Boolean = false
             private set
 
-        /** The last posted model, for the sticky restart while a call still exists in the process. */
         @Volatile
         internal var lastModel: CallNotificationModel? = null
     }
@@ -41,7 +33,6 @@ class CallForegroundService : Service() {
     private var fixtureOnly = false
     private var callWakeLock: PowerManager.WakeLock? = null
 
-    /** S70 4 l5 (SYS-5): whether the partial CPU wake lock is held (Robolectric; the AVD cell reads `dumpsys power`). */
     internal val isCallWakeLockHeld: Boolean
         get() = callWakeLock?.isHeld == true
 
@@ -58,8 +49,7 @@ class CallForegroundService : Service() {
                     ensureCallWakeLock()
                     startOrUpdateForeground()
                 } catch (t: Throwable) {
-                    // A start refused in the background (ForegroundServiceStartNotAllowedException and siblings) is
-                    // retried on the next foreground (S70 1 f "Start refused").
+
                     debugLog("[Call] Failed to start or update the foreground call service: ${t}")
                     CallActionDispatcher.reportSurface(CallSurfaceStatus.refused)
                     if (!isRunning) {
@@ -90,14 +80,6 @@ class CallForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /**
-     * Swiping Conclave away from Recents is a Leave (S70 1 d, matching the iOS termination rule): a removed task
-     * never leaves a headless call. The leave runs now, on the main thread, before the process can go.
-     *
-     * S70 4 d (SYS-5): both wake locks are released first, before the leave runs, so nothing the leave does can leak
-     * them: the untimed partial CPU lock (also released on ACTION_STOP and in onDestroy) and the proximity lock
-     * (released at once, without waiting for the sensor, since no screen is left to protect).
-     */
     override fun onTaskRemoved(rootIntent: Intent?) {
         releaseCallWakeLock()
         ProximityController.releaseNow()
@@ -149,11 +131,6 @@ class CallForegroundService : Service() {
         androidx.core.content.ContextCompat.checkSelfPermission(this, permission) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
 
-    /**
-     * MICROPHONE whenever RECORD_AUDIO is granted (not only while unmuted, so a background unmute from the shade never
-     * re-calls startForeground with a new while-in-use type), CAMERA while the camera is on and CAMERA is granted,
-     * MEDIA_PLAYBACK always on API 29+. The system fixture holds MEDIA_PLAYBACK alone.
-     */
     private fun foregroundServiceTypeMask(current: CallNotificationModel?): Int {
         if (Build.VERSION.SDK_INT < 29) return 0
         var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
@@ -167,10 +144,6 @@ class CallForegroundService : Service() {
         return type
     }
 
-    // startForeground stays valid without POST_NOTIFICATIONS (Android 13+): the call keeps running and the
-    // notification is listed only in the system Task Manager. MeetingViewModel asks for the permission after the
-    // meeting settles and re-posts on a grant (CallNotificationBridge.repostCurrent), so the notification appears
-    // mid-call.
     private fun startOrUpdateForeground() {
         val current = model
         val resolver = ContextResourceResolver(this)
@@ -221,20 +194,16 @@ class CallForegroundService : Service() {
     }
 }
 
-/**
- * The call notification's absolute Mute, Unmute and Hang up actions and the PiP RemoteActions. Each notification
- * intent carries the presence session it was posted in, so a stale tap returns .stale and changes nothing.
- */
 class CallActionReceiver : BroadcastReceiver() {
     companion object {
-        /** Legacy PiP RemoteAction (windows posted before SY7); PipManager now posts absolute actions. */
+
         const val ACTION_TOGGLE_MUTE = "conclave.app.action.CALL_TOGGLE_MUTE"
-        /** Legacy PiP RemoteAction (windows posted before SY7); PipManager now posts absolute actions. */
+
         const val ACTION_LEAVE = "conclave.app.action.CALL_LEAVE"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        // SYS-4 (S70 3 d): the absolute PiP RemoteActions (PIP_MUTE, PIP_UNMUTE, PIP_LEAVE) with their presence session.
+
         if (PipManager.handleActionIntent(intent)) return
         val session = intent.getIntExtra(CallNotificationModel.EXTRA_PRESENCE_SESSION, -1)
         when (intent.action) {

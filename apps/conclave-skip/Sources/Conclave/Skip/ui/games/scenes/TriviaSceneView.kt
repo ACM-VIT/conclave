@@ -12,13 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 9 d (ACT-3) on Android, Trivia: question (K1 with the category and progress, K2, K3 options as selectable
- * surfaces with the radio role, the answered count), reveal (the correct option with ext.success, the check glyph and
- * "Correct"; your wrong pick with colorScheme.error, the close glyph and "Your answer"; every count; your outcome line),
- * and the spectator view (read-only, no self line). The correct answer is announced once.
- */
-
 @Composable
 internal fun TriviaSceneView(scene: TriviaScene, games: GameStagePresenter) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.trivia"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -43,7 +36,6 @@ internal fun TriviaSceneView(scene: TriviaScene, games: GameStagePresenter) {
     }
 }
 
-/** K3 options; the only composable that reads `interaction`. `answerLocked` plays only for a sent answer. */
 @Composable
 private fun TriviaChoices(scene: TriviaScene, games: GameStagePresenter) {
     val interaction = games.interaction

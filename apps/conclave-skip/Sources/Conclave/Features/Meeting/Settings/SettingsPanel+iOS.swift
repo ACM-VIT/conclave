@@ -2,27 +2,11 @@
 import SwiftUI
 import UIKit
 
-// S60 1 c (SET-1) on iOS: `MeetingPanel.settings` in the system appearance, one `PanelShell` with a path over
-// `SettingsRoute` (R40-9, L6-11) and one `navigationDestination(for:)`. Large detent on open (PS 6.2); the inspector on
-// regular x regular (F00 C15). The root is a grouped `Form` drawing `settings.sections` (SettingsRowPolicy), each section
-// a leaf that reads only its own snapshot, so a route change redraws Audio only (1 k). The same root list renders the
-// app scope inside the Account sheet (RECONCILE R26, `SettingsAppScopeList`) and the attendee scope inside Webinar
-// Details (R44, `SettingsAttendeeList`), each mapping the root's pushes onto its own stack through `link`. Lifetimes are
-// task scoped (AGENTS.md: appearance callbacks re-fire on body re-runs). No glass, no haptics (system controls play
-// their own, D8). Mounted by the native call root (HD request B6-T2 R3).
-//
-// SET-3 (S60 1 c Video and General rows, 2 c pages; L6-3): the Video section draws the dark LivePreviewCard before the
-// Camera row (the card belongs to the in-call participant rows, so it rides on the camera facing row instead of a row
-// id of its own), Mirror My Video, Camera Quality, Screen Share Quality and Data Saver with the Video footer; General >
-// Connection pushes the Connection page; `SettingsPage` routes the quality, Advanced and Connection pages
-// (VideoPages+iOS.swift).
-
 enum SettingsAnchor {
     static let audio = "settings.section.audio"
 }
 
 enum SettingsTaskLifetime {
-    /// Suspends until the enclosing task is cancelled (the view left the hierarchy).
     static func waitForCancellation() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(60))
@@ -55,11 +39,8 @@ struct SettingsPanel: View {
                     .navigationDestination(for: SettingsRoute.self) { route in
                         SettingsPage(route: route, settings: settings, people: people)
                     }
-                    // L6-3: the preview card keeps one renderer per presentation.
                     .environment(\.settingsPresentationID, presentation.request.presentationID)
                     .task(id: presentation.request.presentationID) {
-                        // Once per presentation (1 l10): the Mic shortcut's destination scrolls to Audio; the voice
-                        // hint's destination pushes the Voice page (R6-5).
                         let destination = presentation.request.destination
                         if SettingsRoutePolicy.scrollsToAudio(destination: destination) {
                             proxy.scrollTo(SettingsAnchor.audio, anchor: .top)
@@ -70,7 +51,6 @@ struct SettingsPanel: View {
             }
         }
         .onChange(of: path.count) { previous, next in
-            // A push from a medium detent promotes to large (PS 7.3, RECONCILE R34).
             if next > previous { adapter.promoteToLarge() }
         }
         .background {
@@ -81,8 +61,6 @@ struct SettingsPanel: View {
     }
 }
 
-/// Zero-size leaf: the presentation lifetime (open and close), the R6-5 destination while open, host loss popping
-/// host pages (S50 12) and the demotion close with "Settings closed." (1 a).
 private struct SettingsPanelLeaves: View {
     let settings: SettingsPresenter
     let panels: PanelCoordinator
@@ -101,7 +79,6 @@ private struct SettingsPanelLeaves: View {
                 settings.panelDidOpen()
                 await SettingsTaskLifetime.waitForCancellation()
                 settings.panelDidClose()
-                // L6-3: the presentation's preview renderer goes with it.
                 SettingsPreviewRendererCache.shared.release(presentationID: presentationID)
             }
             .onChange(of: destinationSequence) { _, _ in
@@ -120,8 +97,6 @@ private struct SettingsPanelLeaves: View {
     }
 }
 
-/// The root list, shared by the three row sets (R26, R44). `link` maps a root push onto the container's path; nil
-/// hides the row (the attendee container offers only the privacy policy).
 struct SettingsRootList<Route: Hashable>: View {
     let settings: SettingsPresenter
     let link: (SettingsRoute) -> Route?
@@ -129,6 +104,7 @@ struct SettingsRootList<Route: Hashable>: View {
 
     var body: some View {
         Form {
+            Section { AppearanceSettingRow() }
             ForEach(settings.sections) { section in
                 SettingsSectionView(section: section, settings: settings, link: link, onOpenTranscript: onOpenTranscript)
             }
@@ -215,7 +191,6 @@ private struct SettingsVideoSection<Route: Hashable>: View {
             ForEach(rows, id: \.self) { row in
                 switch row {
                 case .cameraFacing:
-                    // L6-3: the preview card sits above the Camera row (both are in-call participant rows).
                     SettingsLivePreviewCard(settings: settings)
                         .listRowInsets(EdgeInsets())
                     LabeledContent(SettingsCopy.rowTitle(.cameraFacing)) {
@@ -250,7 +225,6 @@ private struct SettingsVideoSection<Route: Hashable>: View {
                         .disabled(video.systemDataSaverOn)
                         .accessibilityIdentifier("settings.row.dataSaver")
                 default:
-                    // Effects lands with SET-6 (EffectsAvailability); hidden until then (D11).
                     EmptyView()
                 }
             }
@@ -279,7 +253,6 @@ private struct SettingsVideoSection<Route: Hashable>: View {
             }
         }
         .onChange(of: video.flipFailed) { _, failed in
-            // D23: inline at the source with one polite announcement, never the stage toast lane.
             if failed { SettingsTaskLifetime.announce(ConclaveStrings.text("Couldn\u{2019}t switch cameras. Try again.")) }
         }
     }
@@ -288,7 +261,6 @@ private struct SettingsVideoSection<Route: Hashable>: View {
         Binding(get: { video.cameraFacing }, set: { settings.setCameraFacing(front: $0 == "front") })
     }
 
-    /// Segmented, or a menu at accessibility sizes (different style types, so two branches; 1 c).
     @ViewBuilder
     private func facingPicker(_ video: SettingsVideo) -> some View {
         if dynamicTypeSize.isAccessibilitySize {
@@ -426,7 +398,6 @@ private struct SettingsGeneralSection<Route: Hashable>: View {
             ForEach(rows, id: \.self) { row in
                 switch row {
                 case .connection:
-                    // SET-3 (C6-9): pushes the Connection page; the value is the one shared label (R21).
                     if let value = link(SettingsRoute.connection) {
                         NavigationLink(value: value) {
                             LabeledContent(SettingsCopy.rowTitle(.connection), value: SettingsCopy.connectionValue(general.connection))
@@ -437,7 +408,6 @@ private struct SettingsGeneralSection<Route: Hashable>: View {
                             .accessibilityIdentifier("settings.row.connection")
                     }
                 case .messageNotifications:
-                    // SYS-3 (S70 2 c): the switch reads preference AND granted; turning it on asks once.
                     MessageNotificationsRow(notifications: SystemNotifications.shared)
                 case .alwaysShowControls:
                     Toggle(SettingsCopy.rowTitle(.alwaysShowControls),
@@ -447,7 +417,6 @@ private struct SettingsGeneralSection<Route: Hashable>: View {
                     Toggle(SettingsCopy.rowTitle(.haptics), isOn: Binding(get: { general.hapticsOn }, set: { settings.setHaptics($0) }))
                         .accessibilityIdentifier("settings.row.haptics")
                 default:
-                    // Call notification and Open Conclave links are Android rows (S70 2 g, 9 g).
                     EmptyView()
                 }
             }
@@ -537,7 +506,6 @@ private struct SettingsAboutSection<Route: Hashable>: View {
                         .textSelection(.enabled)
                         .accessibilityIdentifier("settings.row.version")
                 case .exportDiagnostics:
-                    // S70 15 b, e (R70-4): a Button with no chevron, its footer under the title; failure inline (D20).
                     DiagnosticsExportRow(presenter: DiagnosticsExportPresenter.shared)
                 default:
                     EmptyView()
@@ -549,8 +517,6 @@ private struct SettingsAboutSection<Route: Hashable>: View {
     }
 }
 
-/// The pushed pages (section 2). Host mirror cases render the S50 pages (R6-3); pages of later slices keep an empty
-/// titled page so a stray push still pops cleanly.
 struct SettingsPage: View {
     let route: SettingsRoute
     let settings: SettingsPresenter
@@ -567,7 +533,6 @@ struct SettingsPage: View {
         case .privacy:
             PrivacyPolicyScreen()
         case .cameraQuality, .cameraAdvanced, .screenShareQuality, .screenShareAdvanced, .connection:
-            // SET-3 (S60 2 c): VideoPages+iOS.swift.
             SettingsVideoPage(route: route, settings: settings, link: { route in route })
         default:
             if let page = SettingsRoutePolicy.peopleRoute(route) {
@@ -597,8 +562,6 @@ private struct SettingsPendingPage: View {
     }
 }
 
-/// RECONCILE R26: Account > Settings outside a call, pushed on the Account sheet's own stack (`AccountRoute.settings`).
-/// The app-scope presenter reads the same stores as the call scope; no core is attached.
 struct SettingsAppScopeList<Route: Hashable>: View {
     let settings: SettingsPresenter
     let link: (SettingsRoute) -> Route?
@@ -616,7 +579,6 @@ struct SettingsAppScopeList<Route: Hashable>: View {
     }
 }
 
-/// RECONCILE R44: the attendee-filtered call scope pushed from Webinar Details (HD request B6-T2 R5 mounts it there).
 struct SettingsAttendeeList<Route: Hashable>: View {
     let settings: SettingsPresenter
     let link: (SettingsRoute) -> Route?

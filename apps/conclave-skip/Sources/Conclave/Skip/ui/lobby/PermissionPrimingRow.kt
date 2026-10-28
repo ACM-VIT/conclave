@@ -27,18 +27,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-/*
- * ENT-4 (S10 7 b, d, e, f, g, h, i): permission priming in context on Android, handwritten Compose Material 3. The first
- * tap on a lobby toggle asks through PermissionHelper's serialized queue (one prompt at a time, 120 s timeout). After a
- * first refusal the system still allows one more prompt, so a warning ConclaveBanner under the card explains and offers
- * Allow (the same toggle intent again, which asks) and Not now (hides the row for this lobby); after a permanent
- * denial the row's action becomes Open settings (ACTION_APPLICATION_DETAILS_SETTINGS through PermissionHelper). The
- * camera's Open settings and restricted states live in the card overlay (in-call theme, FilledTonalButton), never in
- * a second row. Which row shows is PermissionPrimingPolicy's call (shared with iOS). No haptics: the system dialog
- * was the interaction (7 e, h). Returning from Settings re-reads the permissions on ON_RESUME (7 d).
- */
-
-/** The rows under the card, microphone first. Not now is per lobby route (it resets when another lobby opens). */
 @Composable
 internal fun PermissionPrimingRows(premeeting: PremeetingPresenter, routeId: Int) {
     val media = premeeting.lobbyMedia?.takeIf { it.routeId == routeId } ?: return
@@ -63,11 +51,6 @@ internal fun PermissionPrimingRows(premeeting: PremeetingPresenter, routeId: Int
     }
 }
 
-/**
- * One priming row: `ConclaveBanner(kind = warning, text, actions)` (S10 7 d). Rationale: the reason with Allow and
- * Not now; permanently denied: title and body with Open settings; restricted: title and body, no action. The banner
- * text is a polite live region, so the row is announced once when it appears (7 i).
- */
 @Composable
 internal fun PermissionPrimingRow(
     model: PermissionPrimingModel,
@@ -108,11 +91,6 @@ internal fun PermissionPrimingRow(
     )
 }
 
-/**
- * S10 7 d: the camera overlay inside the card (composed in HostingTheme(inCall = true) by the card): title, body and a
- * tonal Open settings; restricted has no button. One traversal group whose title is a polite live region, so it is
- * announced once when it appears.
- */
 @Composable
 internal fun PermissionPrimingCardOverlay(priming: PermissionPrimingKind, onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
@@ -144,11 +122,6 @@ internal fun PermissionPrimingCardOverlay(priming: PermissionPrimingKind, onOpen
     }
 }
 
-/**
- * S10 7 d "Return: re-read on ON_RESUME": coming back from Settings (or a split-screen Settings pane, which never stops
- * the activity) re-reads the permissions through the lobby's appearance path. The first resume after composition is
- * skipped: the lobby's own appearance has just read them.
- */
 @Composable
 internal fun PermissionPrimingResumeEffect(premeeting: PremeetingPresenter, routeId: Int) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -167,7 +140,6 @@ internal fun PermissionPrimingResumeEffect(premeeting: PremeetingPresenter, rout
     }
 }
 
-/** The toggle's state description reason (S10 7 i: "stateDescription adds the same reason"); "" for none. */
 @Composable
 internal fun permissionReasonText(kind: LobbyMediaKind, reason: PermissionPrimingKind): String {
     val camera = kind == LobbyMediaKind.camera
@@ -181,7 +153,7 @@ internal fun permissionReasonText(kind: LobbyMediaKind, reason: PermissionPrimin
 }
 
 internal object PermissionPrimingUi {
-    /** The microphone keeps ENT-3's test tags (`lobby.microphone.denied`, `lobby.microphone.openSettings`). */
+
     fun identifierBase(kind: LobbyMediaKind): String =
         if (kind == LobbyMediaKind.camera) "lobby.camera" else "lobby.microphone"
 

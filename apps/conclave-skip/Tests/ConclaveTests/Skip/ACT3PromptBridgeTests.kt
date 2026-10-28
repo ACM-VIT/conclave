@@ -9,11 +9,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * ACT-3 through the transpiled scene builders and the game presenter (the Swift half is T/ACT3PromptGamesTests.swift):
- * the same PromptGameFixtures pushes, parsed through the Android JSON path (S60R 27 AC-G26), the outcome tokens, the
- * host bar table and the copy mapping for every enum case (L6-14). Pure: no composition.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ACT3PromptBridgeTests {

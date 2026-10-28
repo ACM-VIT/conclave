@@ -3,16 +3,10 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// CHT-2 (OUT/PLAN-screens.md section 5; S40 6, 0.8 CH10, CH11, CH20, R40-7): the shared composer policy (route order,
-/// UTF-16 limits, implicit private targets, suggestions, command rows), the presenter's send gate and inline notice,
-/// drafts keyed by room and recipient, and the composer sources (FND-3 component, no send or command haptic). The
-/// Kotlin half is in T/Skip/ChatBridgeTests.kt.
 @MainActor
 struct CHT2ComposerPolicyTests {
     private let privateMode = ChatComposerMode(privateToUserId: "avery@example.com#w1", isVoiceMode: false, privateEnabled: true,
                                                voiceEnabled: true)
-
-    // MARK: D24 route order
 
     @Test func everyDraftTakesTheSameRouteOrder() {
         let route = ChatComposerPolicy.route
@@ -23,7 +17,7 @@ struct CHT2ComposerPolicyTests {
         #expect(route("hello", privateMode) == ChatRoute(kind: .privateText, wireText: "/dm avery@example.com#w1 hello", failure: .none))
         #expect(route("@Conclave hi", .everyone) == ChatRoute(kind: .assistant, wireText: "@Conclave hi", failure: .none))
         #expect(route("  hello  ", .everyone) == ChatRoute(kind: .publicText, wireText: "hello", failure: .none))
-        // Unknown `/word` text sends as a normal message (INM C9).
+
         #expect(route("/word hi", .everyone).kind == .publicText)
         #expect(route("   ", .everyone).kind == .blocked)
         let voice = ChatComposerMode(privateToUserId: "", isVoiceMode: true, privateEnabled: true, voiceEnabled: true)
@@ -70,13 +64,11 @@ struct CHT2ComposerPolicyTests {
         #expect(chat.composer.reply != nil && log.last?.rowId == "s-1")
         chat.send(text: "answer")
         #expect(chat.composer.reply == nil && log.last?.messageId == "s-1")
-        // Replying to a private message switches to private mode with that person (6 f).
+
         let privateChat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([ChatPoliciesTests.peer("s-2", "secret", at: 0, isDirect: true)]))
         privateChat.beginReply(rowId: "s-2")
         #expect(privateChat.composer.privateTo?.userId == ChatPoliciesTests.avery && privateChat.composer.reply?.isPrivate == true)
     }
-
-    // MARK: CH20 UTF-16 limits
 
     @Test func limitsCountUtf16UnitsLikeTheSfu() {
         let thumbs = String(repeating: "👍", count: 600)
@@ -88,7 +80,7 @@ struct CHT2ComposerPolicyTests {
         let nearLimit = String(repeating: "a", count: 988) + family
         #expect(ChatComposerPolicy.limitLength(text: nearLimit, isVoice: false) == 999)
         #expect(!ChatComposerPolicy.isOverLimit(text: nearLimit, isVoiceMode: false))
-        // The private body is counted without its prefix; a typed voice draft against 500.
+
         #expect(ChatComposerPolicy.limitLength(text: "/dm avery " + String(repeating: "b", count: 1000), isVoice: false) == 1000)
         let voice = "/tts " + String(repeating: "c", count: 501)
         #expect(ChatComposerPolicy.limit(text: voice, isVoiceMode: false) == 500)
@@ -99,8 +91,6 @@ struct CHT2ComposerPolicyTests {
         #expect(!ChatComposerPolicy.canSend(text: "hi", gate: .offline, isVoiceMode: false))
         #expect(ConclaveComposerCounterPolicy.visibleFrom(limit: 1000) == 900)
     }
-
-    // MARK: Implicit private targets (CC:190-221 and the SFU lookup)
 
     @Test func implicitPrivateTargetsFollowTheSfuLookupOrder() {
         let avery = ChatRecipient(userId: "avery@example.com#w1", name: "Avery Lee", avatarSeed: "")
@@ -127,8 +117,6 @@ struct CHT2ComposerPolicyTests {
                                                          privateEnabled: true) == ChatImplicitTarget.none)
     }
 
-    // MARK: Suggestions and command rows (6 c, 6 g)
-
     @Test func suggestionsOfferCommandsForABareSlashAndMentionsForATrailingAt() throws {
         let rows = ChatComposerPolicy.commandRows(privateEnabled: true, voiceEnabled: true, isPrivateMode: false)
         #expect(rows.count == 12 && rows.map { $0.id } == ChatCommand.primaryCommands.map { $0.rawValue })
@@ -139,7 +127,7 @@ struct CHT2ComposerPolicyTests {
         let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([]))
         let options = chat.composer.mentionOptions
         #expect(options.first?.isAssistant == true)
-        // A require, not an expect: the index below would trap and abort the whole test process.
+
         try #require(options.count == 4)
         #expect(options[1].isYou)
         #expect(ChatComposerPolicy.mentionSuggestions(draft: "hi @av", options: options).first?.name == "Avery Lee")
@@ -158,8 +146,6 @@ struct CHT2ComposerPolicyTests {
         #expect(privateMode.first(where: { $0.id == "tts" })?.reason == "privateTextOnly")
         #expect(privateMode.first(where: { $0.id == "leave" })?.isAvailable == true)
     }
-
-    // MARK: R40-7 drafts
 
     @Test func draftsAreKeyedByRoomAndRecipientAndDroppedOnReset() {
         let store = ChatDraftStore()
@@ -180,8 +166,6 @@ struct CHT2ComposerPolicyTests {
         #expect(chat.drafts.count == 0)
     }
 
-    // MARK: Sources: FND-3 component, CH11, no send haptic (Q11)
-
     @Test func theComposerUsesTheSharedComponentAndPlaysNoSendHaptic() throws {
         let ios = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatComposer+iOS.swift")
         #expect(ios.contains("ConclaveComposerField(identifier: \"chat.composer.cluster\")"))
@@ -201,7 +185,7 @@ struct CHT2ComposerPolicyTests {
 
     @Test func nativeCommandsKeepTheirGuardedDirectionalBranches() throws {
         let vm = try chatSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        // The end is searched after the start, so a reordered file reports an issue instead of trapping on the range.
+
         guard let start = vm.range(of: "private func sendNativeChat("),
               let end = vm.range(of: "private func sendRetainedChat(", range: start.upperBound..<vm.endIndex) else {
             Issue.record("sendNativeChat not found")
@@ -212,7 +196,8 @@ struct CHT2ComposerPolicyTests {
         for forbidden in ["toggleMute()", "toggleCamera()", "toggleHandRaise", "shell.", "state.errorMessage"] {
             #expect(!body.contains(forbidden), "sendNativeChat uses \(forbidden)")
         }
-        #expect(vm.contains("if isMuteToggleInFlight, !state.isMuted {\n                        // A mute is never dropped behind a pending unmute.\n                        applyLocalMuteNow(context: currentSocketEventContext())"))
+        let flat = vm.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        #expect(flat.contains("if isMuteToggleInFlight, !state.isMuted { applyLocalMuteNow(context: currentSocketEventContext())"))
         #expect(vm.contains("applyLocalCameraOffNow(context: currentCallActionContext())"))
     }
 }

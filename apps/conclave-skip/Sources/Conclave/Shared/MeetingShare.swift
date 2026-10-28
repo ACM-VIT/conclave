@@ -3,11 +3,6 @@ import Foundation
 import UIKit
 #endif
 
-// ENT-8 (S20 0.7 SC21; RECONCILE R14): the legacy share and copy helpers. The native surfaces never call them (they
-// use ShareLink and UIPasteboard on iOS, `NativeMeetingShare.shareMeetingLink(link, subject, text, title)` on Android,
-// with the `linkCopied` gesture and no success haptic). The share payload here is the same F00 payload as every other
-// surface ("Join My Conclave Meeting" / "Join me in this Conclave meeting." plus the link); the legacy screens keep
-// their haptics until their own slices replace them.
 @MainActor
 enum MeetingShare {
     @discardableResult

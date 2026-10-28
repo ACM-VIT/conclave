@@ -262,7 +262,7 @@ struct ActiveAppLayoutView: View {
     }
 
     private var hasActiveAppSyncSnapshot: Bool {
-        // C6-18 (ACT-7, HD request B7-T1 R3): Yjs bytes live in the non-observable ActiveAppSession now.
+
         viewModel.state.activeAppId != nil && viewModel.state.activeAppHasRoomData
     }
 

@@ -3,16 +3,6 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-// TRN-2 (S60 6 c): the Transcript panel on iOS (`MeetingPanel.transcript`; PS 6.2 large only, composer panel, system
-// appearance). One `PanelShell` (its inline title "Transcript" and its one Close, C02); the trailing toolbar `Menu`
-// (Export through `ShareLink`, Copy, Post Recap to Chat, Stop Live Notes…); the view switch, status bar and issue
-// banner in the top bar (`conclaveTopBar`: iOS 26 `safeAreaBar`, 17 to 25 `safeAreaInset`); the start card with the
-// pinned Start Notes / Resume Notes; the Transcript list on the S40 timeline pieces (lazy stack, bottom anchored,
-// follow only while pinned, Jump to Latest); Ask over S40 CL1 bubbles with the CHT-7 markdown renderer and the one
-// F00 C19 composer (the Liquid Glass cluster on iOS 26 and later from the one sanctioned composer file, opaque below
-// and under Reduce Transparency; owner OQ2, RECONCILE R32); Minutes as an inset grouped list with the recap row. Views
-// read the presenter's snapshot and leaves only (F00 P1). Registered by the native call root (HD request B7-T5 R4).
-
 struct TranscriptPanel: View {
     let transcript: TranscriptPresenter
     let panels: PanelCoordinator
@@ -31,7 +21,7 @@ struct TranscriptPanel: View {
         }
         .onDisappear { transcript.panelDidClose() }
         .onChange(of: panels.destinationRequest) { _, _ in
-            // R40-2: a destination for the panel that is already current (the catch-up banner while Transcript is open).
+
             guard let request = panels.latestDestination(for: presentation.request.presentationID) else { return }
             transcript.panelDidOpen(destination: request.destination)
         }
@@ -39,12 +29,11 @@ struct TranscriptPanel: View {
     }
 }
 
-/// The content inside the shell: the body for the phase, the menu, the stop confirmation, Copy feedback and the
-/// one-shot announcements.
 private struct TranscriptPanelContent: View {
     let transcript: TranscriptPresenter
     @State private var copyCount = 0
     @State private var showsCopied = false
+    @State private var copyTask: Task<Void, Never>?
 
     var body: some View {
         let snapshot = transcript.snapshot
@@ -56,7 +45,7 @@ private struct TranscriptPanelContent: View {
             }
             .conclaveGestureFeedback(.linkCopied, trigger: copyCount)
             .task(id: copyCount) {
-                // 6 c: "Copied" on the status row for 1.8 s; event driven, never an appearance callback.
+
                 guard copyCount > 0 else { return }
                 showsCopied = true
                 try? await Task.sleep(nanoseconds: 1_800_000_000)
@@ -66,9 +55,7 @@ private struct TranscriptPanelContent: View {
             .confirmationDialog(TranscriptCopy.stopTitle,
                                 isPresented: Binding(get: { transcript.snapshot.stop == StopPhase.confirming },
                                                      set: { shown in
-                                                         // The button action and this dismissal may arrive in either
-                                                         // order: cancel on the next turn, when a confirm has already
-                                                         // moved the stop on (cancelStop then does nothing).
+
                                                          if shown { return }
                                                          Task { @MainActor in transcript.cancelStop() }
                                                      }),
@@ -81,18 +68,26 @@ private struct TranscriptPanelContent: View {
                 Text(TranscriptCopy.stopMessage)
             }
             .modifier(TranscriptPanelAnnouncer(transcript: transcript))
+            .onDisappear { copyTask?.cancel() }
     }
 
     private func copy() {
-        let room = transcript.inputs.roomId
-        UIPasteboard.general.string = transcript.copyText(labels: TranscriptCopy.exportLabels(roomId: room),
-                                                          timeLabel: { TranscriptCopy.clock($0) })
-        transcript.noteCopied()
-        copyCount += 1
+        copyTask?.cancel()
+        let callSession = transcript.inputs.callSession
+        let snapshot = transcript.exportSnapshot(labels: TranscriptCopy.exportLabels(roomId: transcript.inputs.roomId))
+        copyTask = Task { @MainActor in
+            let file = await Task.detached(priority: .userInitiated) {
+                snapshot.file(timeLabel: { TranscriptCopy.clock($0) })
+            }.value
+            guard !Task.isCancelled, transcript.inputs.callSession == callSession else { return }
+            UIPasteboard.general.string = file.content
+            transcript.noteCopied()
+            copyCount += 1
+        }
     }
+
 }
 
-/// The body for the phase (6 f).
 private struct TranscriptPanelBody: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
@@ -119,8 +114,6 @@ private struct TranscriptPanelBody: View {
         }
     }
 }
-
-// MARK: Menu (6 c)
 
 private struct TranscriptPanelMenu: View {
     let transcript: TranscriptPresenter
@@ -164,27 +157,53 @@ private struct TranscriptPanelMenu: View {
     }
 }
 
-/// Export (6 l 3): the finals-only Markdown file `conclave-<room>-transcript.md`, built when the share sheet asks for
-/// it (never per body), written into the temporary directory.
 struct TranscriptPanelExportItem: Transferable {
     let presenter: TranscriptPresenter
+    let expectedCallSession: Int
+
+    @MainActor
+    init(presenter: TranscriptPresenter) {
+        self.presenter = presenter
+        expectedCallSession = presenter.inputs.callSession
+    }
 
     static let contentType: UTType = UTType(filenameExtension: "md", conformingTo: .plainText) ?? .plainText
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: TranscriptPanelExportItem.contentType) { item in
-            let file = await MainActor.run {
-                item.presenter.exportFile(labels: TranscriptCopy.exportLabels(roomId: item.presenter.inputs.roomId),
-                                          timeLabel: { TranscriptCopy.clock($0) })
+            let input = try await MainActor.run {
+                guard item.presenter.inputs.callSession == item.expectedCallSession else { throw CancellationError() }
+                return (item.presenter.exportSnapshot(labels: TranscriptCopy.exportLabels(roomId: item.presenter.inputs.roomId)),
+                 item.presenter.inputs.callSession)
             }
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent(file.fileName)
-            try file.content.write(to: url, atomically: true, encoding: .utf8)
-            return SentTransferredFile(url)
+            let prepared = try await Task.detached(priority: .userInitiated) {
+                let file = input.0.file(timeLabel: { TranscriptCopy.clock($0) })
+                let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+                let url = directory.appendingPathComponent(file.fileName)
+                do {
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try file.content.write(to: url, atomically: true, encoding: .utf8)
+                    return (url, directory, file.byteCount)
+                } catch {
+                    try? FileManager.default.removeItem(at: directory)
+                    throw error
+                }
+            }.value
+            do {
+                try Task.checkCancellation()
+                return try await MainActor.run {
+                    try Task.checkCancellation()
+                    guard item.presenter.inputs.callSession == input.1 else { throw CancellationError() }
+                    item.presenter.recordExport(byteCount: prepared.2, callSession: input.1)
+                    return SentTransferredFile(prepared.0)
+                }
+            } catch {
+                await Task.detached { try? FileManager.default.removeItem(at: prepared.1) }.value
+                throw error
+            }
         }
     }
 }
-
-// MARK: Start card (6 c, f)
 
 private struct TranscriptPanelStartCard: View {
     let transcript: TranscriptPresenter
@@ -303,7 +322,6 @@ private struct TranscriptPanelStartCard: View {
         .padding(.vertical, CGFloat(DesignTokens.space8))
     }
 
-    /// The draft survives a reopen within the call (6 j); the keys come back empty after a close.
     private func seed() {
         if didSeed { return }
         didSeed = true
@@ -335,7 +353,6 @@ private struct TranscriptPanelCoverageLine: View {
     }
 }
 
-/// A neutral tag ("Beta", "View Only"): never coral (C06).
 private struct TranscriptPanelTag: View {
     let title: String
 
@@ -348,8 +365,6 @@ private struct TranscriptPanelTag: View {
             .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
     }
 }
-
-// MARK: Session (tabs, status, lists)
 
 private struct TranscriptPanelSession: View {
     let transcript: TranscriptPresenter
@@ -364,7 +379,6 @@ private struct TranscriptPanelSession: View {
     }
 }
 
-/// Reads `transcript.tab` alone, so a tab change never re-runs the top bar.
 private struct TranscriptPanelTabContent: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
@@ -414,8 +428,6 @@ private struct TranscriptPanelTopBar: View {
     }
 }
 
-/// Phase with its glyph or spinner, the host line (or "Copied" for 1.8 s), and the controller's Pause or Resume and
-/// Stop… (44 pt minimum height, 6 c).
 private struct TranscriptPanelStatusRow: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
@@ -468,7 +480,6 @@ private struct TranscriptPanelStatusRow: View {
         .padding(.vertical, CGFloat(DesignTokens.space4))
     }
 
-    /// Ended: Start Notes on the status bar uses the Options draft (the keys it needs must be filled on the start card).
     private var endedStartOptions: TranscriptStartOptions {
         let drafts = transcript.drafts
         return TranscriptKeyPolicy.options(provider: drafts.provider, assistantModel: drafts.assistantModel,
@@ -484,8 +495,6 @@ private struct TranscriptPanelStatusRow: View {
     }
 }
 
-/// A static dot for Live (statusLive, with the text twin) and Paused (statusWarning); the system spinner while
-/// starting, stopping or reconnecting; nothing once ended. No pulse (R13).
 private struct TranscriptPanelStatusGlyph: View {
     let status: TranscriptStatusKind
 
@@ -503,8 +512,6 @@ private struct TranscriptPanelStatusGlyph: View {
     }
 }
 
-/// The issue row (F00 C12, system palette): no permission, controls reconnecting, relay failed with Try Again, server
-/// text verbatim; and the stop failure with Try Again.
 private struct TranscriptPanelIssueBanner: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
@@ -535,9 +542,6 @@ private struct TranscriptPanelIssueBanner: View {
     }
 }
 
-// MARK: Transcript list (6 c, L6-4)
-
-/// The iOS 17 sentinel's reference box: mutating it never invalidates a body (AGENTS appearance-callback rule).
 private final class TranscriptPanelBottomSentinel {
     var isVisible = true
 }
@@ -584,7 +588,7 @@ private struct TranscriptPanelFeedList: View {
                     TranscriptPanelFollowLeaf(feed: feed, proxy: proxy, isPinned: { pinned })
                 }
                 .overlay(alignment: .bottom) {
-                    // 6 h: the pill fades in 120 ms (opacity only), scoped to the pill so no list content animates.
+
                     TranscriptPanelJumpPill {
                         jump(proxy, to: feed.newestId)
                     }
@@ -604,7 +608,6 @@ private struct TranscriptPanelFeedList: View {
         TranscriptPanelPlatform.usesScrollGeometry ? isAtBottom : sentinel.isVisible
     }
 
-    /// Value guarded: the sentinel's callbacks re-fire with body re-runs.
     private func setBottomVisible(_ visible: Bool) {
         sentinel.isVisible = visible
         if isAtBottom != visible { isAtBottom = visible }
@@ -617,8 +620,6 @@ private struct TranscriptPanelFeedList: View {
     }
 }
 
-/// The follow rule (6 c): an event handler on the newest row id plus its revision, so growth inside the live row is
-/// followed while pinned and never otherwise. A zero-size leaf: it alone reads the newest revision.
 private struct TranscriptPanelFollowLeaf: View {
     let feed: TranscriptFeed
     let proxy: ScrollViewProxy
@@ -642,7 +643,6 @@ enum TranscriptPanelPlatform {
     }
 }
 
-/// iOS 18: keep a growing live row pinned (S40 `SizeChangeBottomAnchor`).
 private struct TranscriptPanelSizeChangeAnchor: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
@@ -653,7 +653,6 @@ private struct TranscriptPanelSizeChangeAnchor: ViewModifier {
     }
 }
 
-/// iOS 18: at the bottom within 24 pt, from scroll geometry (S40 `BottomProximity`).
 private struct TranscriptPanelBottomProximity: ViewModifier {
     @Binding var isAtBottom: Bool
 
@@ -670,7 +669,6 @@ private struct TranscriptPanelBottomProximity: ViewModifier {
     }
 }
 
-/// S40 CL5: neutral latest affordance with canonical decorative artwork.
 private struct TranscriptPanelJumpPill: View {
     let action: () -> Void
 
@@ -691,7 +689,6 @@ private struct TranscriptPanelJumpPill: View {
     }
 }
 
-/// One row (L6-4 `TranscriptGroupRow` or `PauseMarkerRow`); reads only its own model.
 private struct TranscriptPanelRowView: View {
     let row: TranscriptRowModel
 
@@ -739,8 +736,6 @@ private struct TranscriptPanelRowView: View {
     }
 }
 
-// MARK: Ask (6 c)
-
 private struct TranscriptPanelAskView: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
@@ -787,7 +782,7 @@ private struct TranscriptPanelAskList: View {
             } actions: {
                 VStack(spacing: CGFloat(DesignTokens.space8)) {
                     ForEach(TranscriptCopy.askSuggestions, id: \.self) { suggestion in
-                        // Fills the field, never sends; tonal so the coral prominent action stays the only coral one.
+
                         Button(suggestion) { onSuggestion(suggestion) }
                             .buttonStyle(.bordered)
                             .tint(.primary)
@@ -837,7 +832,6 @@ private struct TranscriptPanelAskList: View {
     }
 }
 
-/// A new question scrolls to it; a streaming answer's growth is followed only while pinned (S40 `StreamingFollow17`).
 private struct TranscriptPanelAskFollowLeaf: View {
     let thread: AskThread
     let proxy: ScrollViewProxy
@@ -857,8 +851,6 @@ private struct TranscriptPanelAskFollowLeaf: View {
     }
 }
 
-/// One question (trailing, coral with onCoral ink) and its answer (leading, neutral), S40 CL1. Thinking is static
-/// "Thinking" plus the system spinner (R13); answers render the CHT-7 markdown renderer; failures carry Try Again.
 private struct TranscriptPanelAskRow: View {
     let row: AskRow
     let onRetry: () -> Void
@@ -927,8 +919,6 @@ private struct TranscriptPanelAskRow: View {
     }
 }
 
-/// The one F00 C19 composer (no attach control for Ask): the Liquid Glass cluster on iOS 26 and later, the opaque
-/// bordered field below and under Reduce Transparency (owner OQ2). The footnote sits above the field.
 private struct TranscriptPanelAskComposer: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
@@ -960,8 +950,6 @@ private struct TranscriptPanelAskComposer: View {
         if transcript.askQuestion(draft) { draft = "" }
     }
 }
-
-// MARK: Minutes (6 c)
 
 private struct TranscriptPanelMinutesList: View {
     let transcript: TranscriptPresenter
@@ -1014,7 +1002,6 @@ private struct TranscriptPanelMinutesList: View {
     }
 }
 
-/// The status row; the relative time refreshes once a minute while Minutes is visible (6 k, the only timer).
 private struct TranscriptPanelMinutesStatus: View {
     let updating: Bool
     let updatedAtMillis: Double
@@ -1040,8 +1027,6 @@ private struct TranscriptPanelMinutesStatus: View {
     }
 }
 
-/// D23: "Post Recap to Chat" with its detail; value "Posting" with a spinner, then "Posted"; a failure line with Try
-/// Again under it. The announcements come from the presenter (one per change).
 private struct TranscriptPanelRecapRow: View {
     let transcript: TranscriptPresenter
     let recap: RecapPhase
@@ -1107,10 +1092,6 @@ private struct TranscriptPanelMinutesEntryRow: View {
     }
 }
 
-// MARK: Announcements (6 i)
-
-/// Speaks the presenter's one-shot announcements politely, and with VoiceOver on and the Transcript tab visible each
-/// newly finalized line at most once every 2 s (never partials).
 private struct TranscriptPanelAnnouncer: ViewModifier {
     let transcript: TranscriptPresenter
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
@@ -1142,7 +1123,7 @@ private struct TranscriptPanelFinalizedAnnouncer: View {
                 guard line.serial > 0, !line.text.isEmpty else { return }
                 let wait = 2.0 - Date().timeIntervalSince(lastSpokenAt)
                 if wait > 0 {
-                    // A newer line restarts this task, so only the latest of a burst is spoken.
+
                     try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                     if Task.isCancelled { return }
                 }
@@ -1153,8 +1134,6 @@ private struct TranscriptPanelFinalizedAnnouncer: View {
             }
     }
 }
-
-// MARK: Debug fixture bar (L6-12)
 
 #if DEBUG
 private struct TranscriptPanelFixtureBar: View {

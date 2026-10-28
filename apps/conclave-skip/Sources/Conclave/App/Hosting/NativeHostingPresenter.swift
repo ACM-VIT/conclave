@@ -1,6 +1,5 @@
 import Observation
 
-/// Fixture state for the opt-in native hosting preview. It has no call or service dependencies.
 struct NativeHostingRow: Equatable, Identifiable {
     let id: String
     let name: String
@@ -24,7 +23,6 @@ struct NativeHostingFeedbackState: Equatable {
     let acceptedCount: Int
 }
 
-/// Captures the callback's original identity, including when it outlives a fixture session.
 private struct NativeHostingCompletion {
     let actionID: Int
     let session: Int
@@ -35,9 +33,9 @@ private struct NativeHostingCompletion {
 @Observable
 final class NativeHostingPresenter {
     let panels = PanelCoordinator(session: 1)
-    /// Tier A renderer-host counts for this preview only (PS 6.5); not observable, so counting never invalidates.
+
     let renderers = RendererIdentityLedger()
-    /// Diagnostic panel open latency (PS 11); not observable either.
+
     let openTimer = PanelOpenTimer()
     private(set) var feedbackState = NativeHostingFeedbackState(session: 1, token: .baseline, acceptedCount: 0)
     private var completedActions: Set<Int> = []
@@ -77,10 +75,6 @@ final class NativeHostingPresenter {
         })
     }
 
-    /// Presents a fixture panel and starts the open timer for the presentation this request creates, keyed by the
-    /// presentation ID read back right after the request. A quiet request creates nothing and starts nothing, also
-    /// after the first frame, and the starts of presentations the coordinator no longer holds (superseded,
-    /// cancelled or reset before their first frame) are dropped here.
     func presentPanel(_ panel: MeetingPanel, from invoker: PanelInvoker, at seconds: Double) {
         let before = panels.snapshot
         panels.present(panel, from: invoker)
@@ -97,7 +91,6 @@ final class NativeHostingPresenter {
         openTimer.openRequested(presentationID: request.presentationID, at: seconds)
     }
 
-    /// Fixture completion acceptance does not depend on any view or haptics preference.
     @discardableResult
     func completeFixtureAction(actionID: Int, expectedSession: Int, kind: FeedbackKind,
                                source: NativeHostingActionSource = .inAppOutcome) -> Bool {
@@ -142,24 +135,19 @@ final class NativeHostingPresenter {
     }
 }
 
-/// Present-to-first-frame time per presentation (PS 11, `panel.openLatency`). Simulator and emulator
-/// diagnostics only, never an acceptance measurement. Callers pass one monotonic clock in seconds.
 final class PanelOpenTimer {
     private var requested: [Int: Double] = [:]
     private(set) var lastPresentationID = 0
     private(set) var lastMilliseconds = -1
 
-    /// Starts not yet consumed by a first frame.
     var startCount: Int { requested.count }
 
-    /// The first request for a presentation wins; repeats keep the original start.
     func openRequested(presentationID: Int, at seconds: Double) {
         if requested[presentationID] == nil {
             requested[presentationID] = seconds
         }
     }
 
-    /// Keeps only the starts of the given presentations, so a presentation that can no longer show leaves none.
     func discardStarts(keeping presentationIDs: [Int]) {
         var kept: [Int: Double] = [:]
         for presentationID in presentationIDs {
@@ -172,8 +160,6 @@ final class PanelOpenTimer {
         }
     }
 
-    /// Consumes the start on the content's first frame and returns the latency in milliseconds, or -1 when
-    /// no open was requested for this presentation (a reopen after a migration, for example).
     @discardableResult
     func firstFrame(presentationID: Int, at seconds: Double) -> Int {
         guard let start = requested[presentationID] else { return -1 }

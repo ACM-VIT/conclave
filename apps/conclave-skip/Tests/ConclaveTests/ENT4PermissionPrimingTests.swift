@@ -3,12 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-4 (S10 7 a to l, 0.8 C12; S70 14 c): permission priming in context. The one MediaPermissionState mapping in
-/// EntryPolicies (iOS authorization answers, the Android facts and the permanent-denial rule), the priming policy (what
-/// shows where, the drawn toggle state, the toggle reason), the stale-answer generations and the cleanup rule, the
-/// presenter paths through the lobby hooks, the production request wiring on the macOS host, the L9 fixture
-/// permissions, and source scans of both platforms' priming views, PermissionHelper and the purpose strings. Nothing
-/// here can show a system prompt: the macOS host stubs every request.
 @MainActor
 struct ENT4PermissionPrimingTests {
     private static let link = "https://conclave.acmvit.in/rose-sora-luffy"
@@ -39,23 +33,21 @@ struct ENT4PermissionPrimingTests {
                                          device: device, avatarName: "Avery", avatarSeed: "")
     }
 
-    // MARK: The one mapping (S10 7 j; EntryPolicies)
-
     @Test func everyPlatformAnswerMapsToOneLobbyState() {
         #expect(EntryPolicies.mediaPermissionState(authorization: .authorized, hasDevice: true) == .granted)
         #expect(EntryPolicies.mediaPermissionState(authorization: .notDetermined, hasDevice: true) == .notDetermined)
         #expect(EntryPolicies.mediaPermissionState(authorization: .denied, hasDevice: true) == .denied)
         #expect(EntryPolicies.mediaPermissionState(authorization: .restricted, hasDevice: true) == .restricted)
         for authorization in PlatformCaptureAuthorization.allCases {
-            // No camera hardware wins over any answer: the card explains instead of asking (S10 6 f, 7 f).
+
             #expect(EntryPolicies.mediaPermissionState(authorization: authorization, hasDevice: false) == .unavailable)
         }
-        // iOS asks exactly once.
+
         #expect(EntryPolicies.iosCanAskAgain(.notDetermined))
         for state in [MediaPermissionState.granted, .denied, .restricted, .unavailable] {
             #expect(!EntryPolicies.iosCanAskAgain(state), "\(state)")
         }
-        // Android: granted, then the remembered launch decides between notDetermined and denied.
+
         #expect(EntryPolicies.androidMediaPermissionState(hasDevice: true, isGranted: true, wasRequested: true) == .granted)
         #expect(EntryPolicies.androidMediaPermissionState(hasDevice: true, isGranted: false, wasRequested: false) == .notDetermined)
         #expect(EntryPolicies.androidMediaPermissionState(hasDevice: true, isGranted: false, wasRequested: true) == .denied)
@@ -63,14 +55,14 @@ struct ENT4PermissionPrimingTests {
     }
 
     @Test func androidAsksAgainUntilADenialIsPermanent() {
-        // Before the first request, while the system wants a rationale, after a dismissed first prompt.
+
         #expect(EntryPolicies.androidCanAskAgain(isGranted: false, wasRequested: false, showsRationale: false, isBlocked: true))
         #expect(EntryPolicies.androidCanAskAgain(isGranted: false, wasRequested: true, showsRationale: true, isBlocked: true))
         #expect(EntryPolicies.androidCanAskAgain(isGranted: false, wasRequested: true, showsRationale: false, isBlocked: false))
         #expect(EntryPolicies.androidCanAskAgain(isGranted: true, wasRequested: true, showsRationale: false, isBlocked: true))
-        // Permanently denied: Open settings instead (S10 7 d).
+
         #expect(!EntryPolicies.androidCanAskAgain(isGranted: false, wasRequested: true, showsRationale: false, isBlocked: true))
-        // "Request returns denied and rationale false": permanent after a request that had a rationale, or a repeat.
+
         #expect(!EntryPolicies.androidDenialBlocks(rationaleBefore: false, rationaleAfter: true, previousDenials: 0), "denied once")
         #expect(!EntryPolicies.androidDenialBlocks(rationaleBefore: true, rationaleAfter: true, previousDenials: 3))
         #expect(EntryPolicies.androidDenialBlocks(rationaleBefore: true, rationaleAfter: false, previousDenials: 1), "second refusal")
@@ -79,8 +71,6 @@ struct ENT4PermissionPrimingTests {
         #expect(EntryPolicies.androidDenialBlocks(rationaleBefore: false, rationaleAfter: false, previousDenials: 1),
                 "a prompt that no longer shows")
     }
-
-    // MARK: The priming policy (S10 7 c, d, f)
 
     @Test func primingFollowsTheStatesTable() {
         for supports in [false, true] {
@@ -93,15 +83,15 @@ struct ENT4PermissionPrimingTests {
             #expect(PermissionPrimingPolicy.priming(permission: .denied, canAskAgain: false, supportsRationale: supports,
                                                     rationaleDismissed: false) == .openSettings)
         }
-        // iOS has no rationale flow: a denial routes to Settings even if a prompt were left.
+
         #expect(PermissionPrimingPolicy.priming(permission: .denied, canAskAgain: true, supportsRationale: false,
                                                 rationaleDismissed: false) == .openSettings)
-        // Android: explain and ask again; Not now hides it.
+
         #expect(PermissionPrimingPolicy.priming(permission: .denied, canAskAgain: true, supportsRationale: true,
                                                 rationaleDismissed: false) == .rationale)
         #expect(PermissionPrimingPolicy.priming(permission: .denied, canAskAgain: true, supportsRationale: true,
                                                 rationaleDismissed: true) == .none)
-        // Placement: the microphone in a row; the camera in the card except the Android rationale.
+
         #expect(PermissionPrimingPolicy.placement(kind: .microphone, priming: .openSettings) == .row)
         #expect(PermissionPrimingPolicy.placement(kind: .microphone, priming: .restricted) == .row)
         #expect(PermissionPrimingPolicy.placement(kind: .microphone, priming: .rationale) == .row)
@@ -113,16 +103,16 @@ struct ENT4PermissionPrimingTests {
     }
 
     @Test func togglesDrawOffWhileATapCannotGrantThemAndSayWhy() {
-        // The intent shows while the system can still grant it: granted, the prompt up, an Android ask-again.
+
         #expect(PermissionPrimingPolicy.displaysOn(intentOn: true, permission: .granted, canAskAgain: false))
         #expect(PermissionPrimingPolicy.displaysOn(intentOn: true, permission: .notDetermined, canAskAgain: true))
         #expect(PermissionPrimingPolicy.displaysOn(intentOn: true, permission: .denied, canAskAgain: true))
-        // Intent on with access revoked reads Off (S10 7 f); no intent never reads On.
+
         #expect(!PermissionPrimingPolicy.displaysOn(intentOn: true, permission: .denied, canAskAgain: false))
         #expect(!PermissionPrimingPolicy.displaysOn(intentOn: true, permission: .restricted, canAskAgain: false))
         #expect(!PermissionPrimingPolicy.displaysOn(intentOn: true, permission: .unavailable, canAskAgain: false))
         #expect(!PermissionPrimingPolicy.displaysOn(intentOn: false, permission: .granted, canAskAgain: true))
-        // The reason is the Settings or restricted explanation, never the rationale (a tap still asks then).
+
         #expect(PermissionPrimingPolicy.toggleReason(permission: .denied, canAskAgain: false, supportsRationale: false) == .openSettings)
         #expect(PermissionPrimingPolicy.toggleReason(permission: .denied, canAskAgain: true, supportsRationale: true) == .none)
         #expect(PermissionPrimingPolicy.toggleReason(permission: .restricted, canAskAgain: false, supportsRationale: true) == .restricted)
@@ -130,30 +120,30 @@ struct ENT4PermissionPrimingTests {
     }
 
     @Test func rowsListTheMicrophoneFirstAndKeepTheCameraInTheCard() {
-        // iOS: a denied microphone is a Settings row; a denied camera is the card overlay only.
+
         let iosDenied = media(micPermission: .denied, cameraPermission: .denied)
         #expect(PermissionPrimingPolicy.rows(media: iosDenied, supportsRationale: false, microphoneRationaleDismissed: false,
                                              cameraRationaleDismissed: false)
                 == [PermissionPrimingModel(kind: .microphone, priming: .openSettings, placement: .row)])
         #expect(iosDenied.preview == .blocked)
-        // Android, both refused once: two rationale rows, microphone first; the card keeps the avatar.
+
         let once = media(micPermission: .denied, cameraPermission: .denied, canAskAgainMicrophone: true, canAskAgainCamera: true)
         #expect(PermissionPrimingPolicy.rows(media: once, supportsRationale: true, microphoneRationaleDismissed: false,
                                              cameraRationaleDismissed: false)
                 == [PermissionPrimingModel(kind: .microphone, priming: .rationale, placement: .row),
                     PermissionPrimingModel(kind: .camera, priming: .rationale, placement: .row)])
         #expect(!PermissionPrimingPolicy.showsCameraOverlay(permission: .denied, canAskAgain: true, supportsRationale: true))
-        // Not now hides only its own row.
+
         #expect(PermissionPrimingPolicy.rows(media: once, supportsRationale: true, microphoneRationaleDismissed: true,
                                              cameraRationaleDismissed: false)
                 == [PermissionPrimingModel(kind: .camera, priming: .rationale, placement: .row)])
-        // Restricted: a microphone row without a button and the camera in the card.
+
         let restricted = media(micPermission: .restricted, cameraPermission: .restricted)
         #expect(PermissionPrimingPolicy.rows(media: restricted, supportsRationale: true, microphoneRationaleDismissed: false,
                                              cameraRationaleDismissed: false)
                 == [PermissionPrimingModel(kind: .microphone, priming: .restricted, placement: .row)])
         #expect(restricted.preview == .blocked)
-        // Granted and undetermined: nothing (the lobby is the context; the first tap asks).
+
         #expect(PermissionPrimingPolicy.rows(media: media(micPermission: .notDetermined, cameraPermission: .notDetermined),
                                              supportsRationale: true, microphoneRationaleDismissed: false,
                                              cameraRationaleDismissed: false).isEmpty)
@@ -169,8 +159,6 @@ struct ENT4PermissionPrimingTests {
         #expect(snapshot.canAskAgainMicrophone && !snapshot.canAskAgainCamera, "each device's ask-again is published")
         #expect(!snapshot.canAskAgainAndroid, "the combined flag stays both together")
     }
-
-    // MARK: Stale answers and cleanup (S10 7 j; invariant 7)
 
     @Test func generationsDropStaleAnswersPerDevice() {
         var generations = LobbyPermissionGenerations.initial
@@ -195,8 +183,6 @@ struct ENT4PermissionPrimingTests {
         #expect(!LobbyPermissionCleanupPolicy.cancelsRequests(mode: .editing, isCallRoot: false, handedOff: true))
     }
 
-    // MARK: Presenter paths (S10 7 c, d, f, l3)
-
     @Test func onlyAToggleTapAsksAndARefusalFailsClosedOnce() {
         let hooks = ENT4HookRecorder()
         let presenter = presenter(hooks: hooks)
@@ -204,7 +190,7 @@ struct ENT4PermissionPrimingTests {
         presenter.applyPermissions(microphone: .notDetermined, camera: .notDetermined, canAskAgainMicrophone: true,
                                    canAskAgainCamera: true)
         presenter.lobbyDidAppear(routeId: routeId)
-        // 7 l3: opening the lobby asks for nothing.
+
         #expect(hooks.permissionRequests.isEmpty)
         presenter.setCameraIntent(true)
         #expect(hooks.permissionRequests == ["camera"])
@@ -215,16 +201,16 @@ struct ENT4PermissionPrimingTests {
         presenter.apply(PremeetingInputs.make(accountName: "Avery"))
         presenter.applyPermissions(microphone: .notDetermined, camera: .denied, canAskAgainMicrophone: true,
                                    canAskAgainCamera: false)
-        // iOS after the refusal: the overlay explains; a tap asks nothing and changes nothing.
+
         #expect(presenter.lobbyMedia?.preview == .blocked)
         presenter.setCameraIntent(true)
         #expect(hooks.permissionRequests == ["camera"] && hooks.intents.count == 2)
-        // Android refused once: the tap (or Allow) asks again and shows the intent.
+
         presenter.applyPermissions(microphone: .denied, camera: .denied, canAskAgainMicrophone: true, canAskAgainCamera: false)
         presenter.setMicIntent(true)
         #expect(hooks.permissionRequests == ["camera", "microphone"])
         #expect(hooks.intents.last == "true:false")
-        // Restricted: nothing at all.
+
         presenter.applyPermissions(microphone: .restricted, camera: .restricted, canAskAgainMicrophone: false,
                                    canAskAgainCamera: false)
         presenter.apply(PremeetingInputs.make(accountName: "Avery"))
@@ -232,7 +218,7 @@ struct ENT4PermissionPrimingTests {
         presenter.setMicIntent(true)
         presenter.setCameraIntent(true)
         #expect(hooks.intents.count == before && hooks.permissionRequests.count == 2)
-        // Open Settings reaches the provider hook only.
+
         presenter.openSystemSettings()
         #expect(hooks.settingsOpened == 1)
     }
@@ -250,13 +236,11 @@ struct ENT4PermissionPrimingTests {
                                                     permission: snapshot?.cameraPermission ?? .denied,
                                                     canAskAgain: snapshot?.canAskAgainCamera ?? false), "reads Off")
         #expect(hooks.previewCalls.isEmpty)
-        // Back from Settings with access granted: the kept intent starts the preview (S10 7 f "granted later").
+
         presenter.applyPermissions(microphone: .granted, camera: .granted, canAskAgainMicrophone: false, canAskAgainCamera: false)
         #expect(hooks.previewCalls == ["start:front"])
         #expect(presenter.lobbyMedia?.preview != .blocked)
     }
-
-    // MARK: Production request wiring on the macOS host (no prompt exists here)
 
     #if os(macOS)
     @Test func theRequestStartsAfterTheIntentAndAStaleOneIsDropped() async {
@@ -265,13 +249,13 @@ struct ENT4PermissionPrimingTests {
         presenter.lobbyDidAppear(routeId: routeId)
         presenter.applyPermissions(microphone: .notDetermined, camera: .notDetermined, canAskAgainMicrophone: true,
                                    canAskAgainCamera: true)
-        // Deferred by one main-actor turn: nothing is read synchronously.
+
         LobbyProductionHooks.request("microphone", presenter: presenter)
         #expect(presenter.currentDeviceInputs.micPermission == .notDetermined)
-        // The host stub grants the microphone and reports no camera; the status push follows the answer.
+
         #expect(await ent4Settle { presenter.currentDeviceInputs.micPermission == .granted })
         #expect(presenter.currentDeviceInputs.cameraPermission == .unavailable)
-        // A request the lobby cancelled before it started never runs (S10 7 j).
+
         presenter.applyPermissions(microphone: .notDetermined, camera: .notDetermined, canAskAgainMicrophone: true,
                                    canAskAgainCamera: true)
         let before = LobbyProductionHooks.permissionGenerations
@@ -283,8 +267,6 @@ struct ENT4PermissionPrimingTests {
         #expect(presenter.currentDeviceInputs.cameraPermission == .notDetermined, "the cancelled request never pushed")
     }
     #endif
-
-    // MARK: L9 fixtures (S10 7 l; notDetermined from the fixture only)
 
     @Test func theFixturePermissionsCoverEveryPrimingState() {
         #expect(PermissionPrimingFixture.states.count == 5)
@@ -311,8 +293,6 @@ struct ENT4PermissionPrimingTests {
         #expect(rows(PermissionPrimingFixture.denied, android: true) == [.openSettings])
         #expect(rows(PermissionPrimingFixture.restricted, android: false) == [.restricted])
     }
-
-    // MARK: Source scans (both platforms)
 
     static let iosFiles = [
         "Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift",
@@ -350,7 +330,7 @@ struct ENT4PermissionPrimingTests {
             #expect(ent4Matches(#"(?:Text|Button|Label|navigationTitle|Section|LabeledContent|Picker|TextField)\(\s*""#, in: text).isEmpty,
                     "\(file) has a literal label")
         }
-        // S10 7 h: no animation and no haptic for priming.
+
         let row = try ent4Source("Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift")
         for pattern in ["withAnimation", ".animation(", ".transition(", "sensoryFeedback", "HapticManager", "onAppear"] {
             #expect(!row.contains(pattern), "the iOS priming row uses \(pattern)")
@@ -386,7 +366,7 @@ struct ENT4PermissionPrimingTests {
         #expect(!card.contains("LobbyCameraPermissionOverlay"))
         #expect(card.contains(".accessibilityHint(hint(.microphone))") && card.contains(".accessibilityHint(hint(.camera))"))
         #expect(card.contains("premeeting.setMicIntent(!micOn)") && card.contains("premeeting.setCameraIntent(!cameraOn)"))
-        // The Settings route (S10 7 c): the system URL, through the provider only.
+
         let services = try ent4Source("Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift")
         #expect(services.contains("UIApplication.openSettingsURLString"))
     }
@@ -426,19 +406,19 @@ struct ENT4PermissionPrimingTests {
         #expect(helper.contains("EntryPolicies.androidMediaPermissionState("))
         #expect(helper.contains("EntryPolicies.androidCanAskAgain("))
         #expect(helper.contains("EntryPolicies.androidDenialBlocks("))
-        // The launch is noted right before the system dialog, inside the one serialized queue (invariant 18).
+
         let note = try #require(raw.range(of: "noteMediaPermissionLaunch(requestCode, activity)"))
         let launch = try #require(raw.range(of: "ActivityCompat.requestPermissions(", range: note.upperBound..<raw.endIndex))
         #expect(note.lowerBound < launch.lowerBound)
         #expect(helper.contains("if (permissions.isNotEmpty()) recordMediaPermissionAnswer(MEDIA_KIND_MICROPHONE, granted)"))
         #expect(helper.contains("if (permissions.isNotEmpty()) recordMediaPermissionAnswer(MEDIA_KIND_CAMERA, granted)"))
-        // Pins other slices rely on stay (notifications, the permission dialog suppression, the queue).
+
         #expect(helper.contains("answered = permissions.isNotEmpty()"))
         #expect(helper.contains("finishNotificationsPermission(false, answered = false)"))
         #expect(helper.contains("PipManager.suppressForExternalHandoff(ExternalHandoffKind.permissionDialog)"))
         #expect(helper.contains("NOTIFICATIONS_REQUEST_CODE -> notificationsPermissionWaiters"))
         #expect(!raw.contains("rememberLauncherForActivityResult"), "one prompt owner: the serialized queue")
-        // The lobby's Swift side no longer marks a request before it is launched.
+
         let services = try ent4Source("Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift")
         #expect(!services.contains("markMediaPermissionRequested"))
         #expect(services.contains("EntryPolicies.mediaPermissionState(authorization: cameraAuthorization()"))
@@ -447,7 +427,7 @@ struct ENT4PermissionPrimingTests {
     }
 
     @Test func noPromptOutsideTheLobbyToggles() throws {
-        // S10 7 l3: launch, Home and the Join sheet never ask; notifications are never asked in the lobby (7 d).
+
         let quiet = [
             "Sources/Conclave/Features/Home/HomeView+iOS.swift",
             "Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift",
@@ -464,7 +444,7 @@ struct ENT4PermissionPrimingTests {
                 #expect(!text.contains(pattern), "\(file) asks through \(pattern)")
             }
         }
-        // The production refresh reads status only.
+
         let services = try ent4Source("Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift")
         let start = try #require(services.range(of: "hooks.refreshDevices = {"))
         let end = try #require(services.range(of: "hooks.fetchPresence", range: start.upperBound..<services.endIndex))
@@ -472,7 +452,7 @@ struct ENT4PermissionPrimingTests {
     }
 
     @Test func thePurposeStringsAreTheHonestCopy() throws {
-        // S10 7 c and 0.8 C12 (landed with SYS-14; S70 14 c: the catalog is the single source). 7 l4 audit.
+
         let camera = "Conclave uses your camera so people in your meeting can see you."
         let microphone = "Conclave uses your microphone so people in your meeting can hear you."
         let plist = try ent4Source("Darwin/Info.plist")
@@ -490,7 +470,7 @@ struct ENT4PermissionPrimingTests {
     }
 
     @Test func everyPrimingStringResolves() throws {
-        // Passes after the batch 7 strings merge (HD/strings/B7-T8.json).
+
         let data = try #require(try ent4Source("Sources/Conclave/Resources/Localizable.xcstrings").data(using: .utf8))
         let catalog = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         let keys = Set((try #require(catalog["strings"] as? [String: Any])).keys)
@@ -509,30 +489,27 @@ struct ENT4PermissionPrimingTests {
         }
     }
 
-    // MARK: Integrator requests (HD/requests/B7-T8.md; fail until applied)
-
     @Test func requestedHooksAreApplied() throws {
-        // R1: the presenter cancels pending requests when the lobby leaves outside the hand-off.
+
         let presenterSource = ent4Flat(try ent4Source("Sources/Conclave/Features/Home/PremeetingPresenter.swift"))
         #expect(presenterSource.contains("LobbyPermissionCleanupPolicy.cancelsRequests("))
         #expect(presenterSource.contains("lobbyHooks?.cancelPermissionRequests?()"))
-        // R2: the labelled toggle's state description adds the reason; the caption stays the plain state.
+
         let control = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/components/ConclaveCallControl.kt"))
         #expect(control.contains("stateReason: String = \"\""))
         #expect(control.contains("stateText = if (stateReason.isEmpty()) stateText else \"$stateText, $stateReason\""))
-        // R3: the five priming fixture states run through the L9 session.
+
         for raw in PermissionPrimingFixture.states {
             #expect(PremeetingFixtureScript.state(named: raw) != nil, "fixture state \(raw)")
         }
-        // R4: the overlay's text pair is in the gallery catalog.
-        // A lookup, not `Dictionary(uniqueKeysWithValues:)`: a duplicate id elsewhere in the catalog must not trap here.
+
         let pair = ComponentGalleryCatalog.contrastPairs.first { $0.id == "contrast.inCallText.tile" }
         #expect(pair != nil && abs((pair?.ratio ?? 0) - 17.767) < 0.001)
     }
 
     #if os(macOS)
     @Test func theFixtureStatesShowTheirPermissionsWithoutAPrompt() {
-        // Needs R3. The fixture's hooks have no request, so a tap only shows the intent.
+
         for raw in PermissionPrimingFixture.states {
             guard let state = PremeetingFixtureScript.state(named: raw),
                   let expected = PermissionPrimingFixture.permissions(forState: raw) else {
@@ -551,7 +528,6 @@ struct ENT4PermissionPrimingTests {
     #endif
 }
 
-/// Records every hook the presenter calls (no media, no network, no prompt).
 @MainActor
 private final class ENT4HookRecorder {
     let hooks = LobbyCoreHooks()
@@ -594,7 +570,6 @@ private func ent4Source(_ packageRelativePath: String) throws -> String {
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 
-/// Whitespace collapsed to single spaces, so a pin fails only when the code changes.
 private func ent4Flat(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
@@ -607,7 +582,6 @@ private func ent4Matches(_ pattern: String, in text: String) -> [String] {
     }
 }
 
-/// The English value of an InfoPlist catalog key (`localizations.en.stringUnit.value`).
 private func ent4CatalogValue(_ strings: [String: Any], _ key: String) -> String? {
     guard let entry = strings[key] as? [String: Any],
           let localizations = entry["localizations"] as? [String: Any],

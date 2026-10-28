@@ -4,45 +4,35 @@ import SafariServices
 import SwiftUI
 import UIKit
 
-// S40 1 (CHT-1): the chat panel container on iOS. A large sheet on iPhone and iPad compact, the trailing inspector on
-// regular x regular (both from the WP1-3b panel hosts); the content of PanelShell with its one shared navigation stack
-// (R40-9): chat adds no stack, title or Close of its own. Content follows the system appearance (D3). Views read the
-// presenter's snapshots and row entries only (F00 P1), never the meeting state or the view model.
-
-/// Pages pushed in the shell's stack (iOS-only view code, not a transpiled DTO).
 enum ChatPage: Hashable {
     case reactions(rowId: String)
     case addReaction(rowId: String)
-    /// CHT-4: the photo viewer (sheet host; an inspector host shows a page sheet instead, S40 9 c).
+
     case photo(rowId: String)
-    /// CHT-5: the GIF, sticker and clip page (S40 7 c).
+
     case gifs
 }
 
-/// One per panel (2 c): rows receive the same reference on every timeline change, so SwiftUI's input diffing skips
-/// unchanged rows. Rows never read its observed properties; only the panel reads the link confirmation.
 @MainActor
 @Observable
 final class ChatRowActions {
     @ObservationIgnored let chat: ChatPresenter
     @ObservationIgnored var push: (ChatPage) -> Void = { _ in }
-    /// Pops the top page (the GIF page after a pick, S40 7 f).
+
     @ObservationIgnored var pop: () -> Void = {}
-    /// The panel host: an inspector shows the photo viewer as a page sheet, a sheet host pushes it (S40 9 c).
+
     @ObservationIgnored var hostStyle = PanelHostStyle.sheet
-    /// The row whose photo the inspector host's page sheet shows; "" when none. Only the panel reads it.
+
     var photoSheetRowId = ""
-    /// Bumped to focus the composer (Reply, Send Private Message, Ask Conclave AI; S40 Q11).
+
     private(set) var focusRequest = 0
-    /// T3 borrow P8 (S40 2 c composer focus): bumped by the composer each time its field gains focus. Only the
-    /// timeline's small follow leaf reads it, so a focus gain re-runs no list or row body.
+
     private(set) var composerFocusRevision = 0
-    /// Text the composer inserts with the next focus ("@Conclave " from the empty state).
+
     @ObservationIgnored var pendingInsert = ""
-    /// D23: a link that leaves Conclave waits here for its confirmation.
+
     var pendingExternalURL: URL? = nil
-    /// S40 4 c (CHT-7): a link in a Conclave AI answer waits here for the external link confirmation (every assistant
-    /// link confirms first, WEB CHT-32).
+
     var pendingAssistantURL: URL? = nil
 
     init(chat: ChatPresenter) {
@@ -54,8 +44,6 @@ final class ChatRowActions {
         focusRequest += 1
     }
 
-    /// P8: the composer's field gained focus (`.onChange(of: focused)` to true). The timeline scrolls to the newest row
-    /// only when that row is at least partly visible; otherwise the position and the jump pill stay.
     func composerDidFocus() {
         composerFocusRevision += 1
     }
@@ -88,18 +76,14 @@ final class ChatRowActions {
         chat.retry(rowId: rowId)
     }
 
-    /// S40 4 f: the asker's Try Again on a failed answer.
     func retryAssistant(_ rowId: String) {
         chat.retryAssistant(rowId: rowId)
     }
 
-    /// S40 4 c: an answer's link asks first ("Open External Link?").
     func openAssistantLink(_ url: URL) {
         pendingAssistantURL = url
     }
 
-    /// Open Link: http and https in the in-app browser (meeting links route in the app, `openLink`); another app's
-    /// link opens at once, since this dialog was its confirmation.
     func confirmAssistantLink() {
         guard let url = pendingAssistantURL else { return }
         pendingAssistantURL = nil
@@ -111,7 +95,6 @@ final class ChatRowActions {
         }
     }
 
-    /// Copy Link: the pasteboard plus the "Copied" announcement (iOS shows nothing else, 5 c).
     func copyAssistantLink() {
         guard let url = pendingAssistantURL else { return }
         pendingAssistantURL = nil
@@ -143,7 +126,6 @@ final class ChatRowActions {
         push(.addReaction(rowId: rowId))
     }
 
-    /// S40 9: a push on a sheet host (iOS 18 zoom from the thumbnail), a page sheet on an inspector host.
     func openPhoto(_ rowId: String) {
         if hostStyle == PanelHostStyle.inspector {
             photoSheetRowId = rowId
@@ -152,25 +134,19 @@ final class ChatRowActions {
         }
     }
 
-    /// S40 7: the GIF page (pushed; one sheet at a time, D12).
     func openGifs() {
         push(.gifs)
     }
 
-    /// A card's entry (CH16): read only, never a fetch (the presenter fetched it when it built the row).
     func embed(_ url: String) -> ChatEmbedEntry {
         chat.embeds.entry(for: url)
     }
 
-    /// Cards and clip posters open through the same link policy as message links (D23).
     func openURLString(_ value: String) {
         guard let url = URL(string: value) else { return }
         openLink(url)
     }
 
-    /// D23, RECONCILE R25: Conclave meeting links route in the app (S10 4, the join prompt while a call is live);
-    /// http and https open in the in-app browser so the call stays in front; anything else confirms first, except
-    /// `tel:` (the system call prompt is the confirmation).
     func openLink(_ url: URL) {
         let kind = NativeJoinLinkParser.classify(url.absoluteString)
         if kind == NativeJoinLinkKind.meeting || kind == NativeJoinLinkKind.webinar {
@@ -196,8 +172,6 @@ final class ChatRowActions {
     }
 }
 
-/// D23: `SFSafariViewController` from the top view controller with `.overFullScreen`, so the stage and the chat
-/// sheet stay in the hierarchy (renderers are not detached); Done returns to the chat where it was.
 enum ChatInAppBrowser {
     @MainActor
     static func present(_ url: URL) {
@@ -219,8 +193,6 @@ enum ChatInAppBrowser {
     }
 }
 
-/// What the native call root shows for `.chat` (request against CallRoot+iOS.swift): the shell with the chat's own
-/// path, plus the presenter's open and close and same-panel destinations (R40-2).
 struct ChatPanelHost: View {
     let chat: ChatPresenter
     let panels: PanelCoordinator
@@ -253,13 +225,12 @@ struct ChatPanelHost: View {
     }
 }
 
-/// The chat content inside the shell: the policy banner, the timeline, the composer bar and the pushed pages.
 struct ChatPanel: View {
     let chat: ChatPresenter
     @Binding var path: [ChatPage]
     let hostStyle: PanelHostStyle
     @State private var actions: ChatRowActions
-    /// The iOS 18 photo zoom transition's namespace (rows are the sources, the viewer page the destination).
+
     @Namespace private var photoNamespace
 
     init(chat: ChatPresenter, path: Binding<[ChatPage]>, hostStyle: PanelHostStyle = PanelHostStyle.sheet) {
@@ -300,14 +271,13 @@ struct ChatPanel: View {
                 }
             }
             .onChange(of: hostStyle) { _, style in
-                // A sheet to inspector migration keeps the panel; the viewer follows the new host (S40 9 c).
+
                 actions.hostStyle = style
             }
             .accessibilityIdentifier("chat.panel")
     }
 }
 
-/// S40 9 c: on an inspector host the photo viewer is a page sheet (no other sheet is up; never a full-screen cover).
 private struct ChatPhotoSheetHost: ViewModifier {
     let chat: ChatPresenter
     @Bindable var actions: ChatRowActions
@@ -322,7 +292,6 @@ private struct ChatPhotoSheetHost: ViewModifier {
     }
 }
 
-/// 2 f: the locked banner for guests and the host note, above the timeline. Reads only `chat.panel`.
 private struct ChatPolicyBanner: View {
     let chat: ChatPresenter
 
@@ -347,7 +316,6 @@ private struct ChatPolicyBanner: View {
     }
 }
 
-/// D23 confirmation for links that leave Conclave.
 private struct ChatExternalLinkConfirmation: ViewModifier {
     @Bindable var actions: ChatRowActions
 
@@ -370,15 +338,12 @@ private struct ChatExternalLinkConfirmation: ViewModifier {
 
     private var externalMessage: String {
         let body = ConclaveStrings.text("This link opens another app.")
-        // SYS-8 (S70 R70-5, RECONCILE R25): the camera line follows CallPresence through the presenter.
+
         if !actions.chat.showsCameraLine { return body }
         return body + " " + ConclaveStrings.text("Your camera pauses while you're outside Conclave.")
     }
 }
 
-/// S40 4 c, g (CHT-7): the confirmation for a link in a Conclave AI answer: "This link opens a website outside
-/// Conclave. Only open links you trust." with the host (another app's link: "This link opens another app." plus the
-/// camera line while the camera does not continue in the background, S70 R70-5); Open Link, Copy Link, Cancel.
 private struct ChatAssistantLinkConfirmation: ViewModifier {
     @Bindable var actions: ChatRowActions
 
@@ -412,7 +377,6 @@ private struct ChatAssistantLinkConfirmation: ViewModifier {
     }
 }
 
-/// 2 i: posts the presenter's one-shot announcement (new messages, copied, an answer completed) at low priority.
 private struct ChatAnnouncementPoster: ViewModifier {
     let chat: ChatPresenter
 
@@ -431,7 +395,6 @@ private struct ChatAnnouncementPoster: ViewModifier {
     }
 }
 
-/// CH22: the Debug fixture's script bar, only while a fixture driver is installed (never in release builds).
 private struct ChatFixtureBarHost: ViewModifier {
     func body(content: Content) -> some View {
         #if DEBUG
@@ -448,7 +411,6 @@ private struct ChatFixtureBarHost: ViewModifier {
     }
 }
 
-/// Pages pushed in the shell's stack.
 private struct ChatPageView: View {
     let page: ChatPage
     let chat: ChatPresenter

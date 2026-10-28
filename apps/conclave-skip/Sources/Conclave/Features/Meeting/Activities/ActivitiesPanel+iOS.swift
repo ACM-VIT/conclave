@@ -1,14 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 7 (ACT-1) on iOS: the Activities launcher (`MeetingPanel.activities`). One `PanelShell` with a path over the
-// iOS-only `ActivitiesPage` (route plus id, L6-11), so a `NavigationLink` keeps the system chevron and still carries
-// the game id. Medium and large, opening medium with the stage usable, the inspector on regular x regular (D6), system
-// appearance. The root list observes only `activities.snapshot`; the setup page observes only `activities.setup`.
-// Confirmations and failures stay where the person looks (D23): inline at the row, never the stage toast lane.
-// Mounted by the native call root (HD request B4-T8 R5).
-
-/// The pushed page value (iOS only; Kotlin uses `ActivitiesKey`).
 struct ActivitiesPage: Hashable {
     let route: ActivitiesRoute
     let id: String
@@ -32,7 +24,7 @@ struct ActivitiesPanel: View {
                     ActivitiesPageView(page: page, session: session)
                 }
         }
-        // The presentation lifecycle (never the list's onAppear): refresh once and land on the destination.
+
         .task(id: presentation.request.presentationID) {
             session.activities.refresh()
             land(ActivitiesDestinationPolicy.landing(destination: presentation.request.destination,
@@ -51,8 +43,6 @@ struct ActivitiesPanel: View {
     }
 }
 
-/// Zero-size observers: the auto-dismiss once a started activity is live (legacy auto-close) and same-panel
-/// destination requests (SR7), so the root list never reads them.
 private struct ActivitiesPanelLeaves: View {
     let session: ActivitySession
     let presentationID: Int
@@ -75,8 +65,6 @@ private struct ActivitiesPanelLeaves: View {
             }
     }
 }
-
-// MARK: Root list
 
 private struct ActivitiesRootList: View {
     let session: ActivitySession
@@ -157,8 +145,6 @@ private struct ActivitiesRootList: View {
     }
 }
 
-/// One running activity: title and status combined with the Show action; End as its own destructive row; an end
-/// failure inline with Try Again (D23), announced once.
 private struct NowPlayingRow: View {
     let item: NowPlayingModel
     let session: ActivitySession
@@ -423,8 +409,6 @@ private struct BrowserSection: View {
     }
 }
 
-// MARK: Pages
-
 private struct ActivitiesPageView: View {
     let page: ActivitiesPage
     let session: ActivitySession
@@ -436,7 +420,7 @@ private struct ActivitiesPageView: View {
         case .browser:
             BrowserLauncherPage(activities: session.activities)
         case .wheel:
-            // ACT-8 (S60 13 c): system appearance pages in the Activities stack (NativeAppHost+iOS.swift).
+
             AppWheelPage(host: session.appHost)
         case .watch:
             AppWatchPage(host: session.appHost)
@@ -446,9 +430,6 @@ private struct ActivitiesPageView: View {
     }
 }
 
-/// Setup (S60 7 c): the server description and player range, the visible options, and Start pinned at the bottom
-/// (`safeAreaBar` on iOS 26 for the scroll edge effect, `safeAreaInset` on 17 to 25). `beginSetup` runs from
-/// `.task(id:)`, idempotent, never `onAppear`.
 private struct GameSetupPage: View {
     let gameId: String
     let activities: ActivitiesPresenter
@@ -484,7 +465,6 @@ private struct GameSetupPage: View {
     }
 }
 
-/// Observes only `setup` (phase, reason): the pinned Start, its pending label and the footer line.
 private struct SetupStartBar: View {
     let activities: ActivitiesPresenter
 
@@ -521,8 +501,6 @@ private struct SetupStartBar: View {
     }
 }
 
-/// The browser launcher (S60 7 c): the Website field with a URL keyboard, validation under the field, the provider
-/// for hosts, and Launch Shared Browser or Go pinned at the bottom.
 private struct BrowserLauncherPage: View {
     let activities: ActivitiesPresenter
     @State private var url = ""
@@ -578,7 +556,6 @@ private struct BrowserLauncherPage: View {
     }
 }
 
-/// The pinned primary: `safeAreaBar` (iOS 26, scroll edge effect) or `safeAreaInset` (17 to 25).
 private struct PinnedBottomBar<Bar: View>: ViewModifier {
     @ViewBuilder let bar: () -> Bar
 

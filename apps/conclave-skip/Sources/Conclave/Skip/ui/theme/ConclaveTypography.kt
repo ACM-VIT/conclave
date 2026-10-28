@@ -8,11 +8,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 
-/** Material 3 baseline roles on the system sans-serif, which is Roboto on AOSP and Pixel (owner decision Q3).
- *  No font family, density or font scale override; sizes are sp, so text follows the system font scale. */
 internal val ConclaveTypography = Typography()
 
-/** The Material 3 role each shared text style renders with (TG 2.4). */
 internal fun ConclaveTextStyle.role(typography: Typography): TextStyle = when (this) {
     ConclaveTextStyle.largeTitle -> typography.headlineLarge
     ConclaveTextStyle.title -> typography.headlineMedium
@@ -35,29 +32,20 @@ internal val ConclaveTextWeight.fontWeight: FontWeight
         ConclaveTextWeight.bold -> FontWeight.W700
     }
 
-/** Pure mapping for host tests: the role itself when the weight is the role default, otherwise a copy that
- *  changes only the weight. */
 internal fun ConclaveTextStyle.textStyle(typography: Typography, weight: ConclaveTextWeight): TextStyle {
     val role = role(typography)
     val target = weight.fontWeight
     return if (role.fontWeight == target) role else role.copy(fontWeight = target)
 }
 
-/** Remembered per style, weight and theme typography, so recomposition does not allocate. */
 @Composable
 internal fun ConclaveTextStyle.textStyle(weight: ConclaveTextWeight = ConclaveTextWeight.regular): TextStyle {
     val typography = MaterialTheme.typography
     return remember(this, weight, typography) { textStyle(typography, weight) }
 }
 
-/**
- * Tabular digits for counters, timers and scores (F00 5; S60 R6-13). material3 Text has no fontFeatureSettings
- * parameter, so the feature rides on the style. The pure form is for host tests; composables use the remembered
- * form, which allocates once per base style.
- */
 internal fun TextStyle.tabular(): TextStyle = copy(fontFeatureSettings = "tnum")
 
-/** S40 4 d (CHT-7): the system monospace face for code in assistant answers (no bundled font). */
 internal fun TextStyle.monospaced(): TextStyle = copy(fontFamily = FontFamily.Monospace)
 
 @Composable

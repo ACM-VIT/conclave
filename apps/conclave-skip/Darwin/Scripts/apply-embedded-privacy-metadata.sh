@@ -1,13 +1,6 @@
 #!/bin/sh
 set -eu
 
-# Copies the checked-in privacy manifests into the embedded Conclave, WebRTC and
-# Mediasoup frameworks, then re-signs each framework it touched.
-#
-# Purpose strings are not written here (SYS-14, S70 14 c and SY12): Darwin/Info.plist
-# declares only the keys the app uses and Darwin/InfoPlist.xcstrings localizes them,
-# so the catalog is the single source. Never patch purpose strings into the built
-# app, framework, bundle or extension plists from this phase.
 
 FRAMEWORKS_DIR="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH:-${WRAPPER_NAME}/Frameworks}"
 MANIFEST_DIR="${SRCROOT}/PrivacyManifests"

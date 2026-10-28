@@ -39,40 +39,20 @@ final class WebRTCClient {
     var onLocalAudioProducerLost: (() -> Void)?
     var onLocalVideoProducerLost: (() -> Void)?
 
-    /// Host-test seam (this macOS stub only; iOS and Android never compile
-    /// it). The media calls the local toggles and a join attempt await pass
-    /// through this gate, so a test can hold one mid-await, as a slow SFU
-    /// acknowledgement would, and later release or fail it.
     var testCallGate: (@MainActor (String) async throws -> Void)?
-    /// Host-test seam: whether `closeLocalMedia(kind:...)` finds a local
-    /// producer of that kind, "audio" or "video", or "screen" for a screen
-    /// producer (the stub has none by default).
+
     var testClosesLocalMedia: (@MainActor (String) -> Bool)?
-    /// Host-test seam modelling the real clients' media session: `configure`
-    /// and `cleanup` bump it at entry, a teardown or close drops the local
-    /// producers, and a start commits its producer only if no teardown
-    /// landed while it was held.
+
     private(set) var configurationGeneration = 0
-    /// Host-test seam: synchronous media calls, which cannot pass the async
-    /// gate, are reported here.
+
     var testCallLog: (@MainActor (String) -> Void)?
-    /// Host-test seam modelling the real clients' microphone (off by
-    /// default). An unmute or a microphone start commits a live microphone
-    /// after its gate only if no local mute (`setAudioEnabled(false)`,
-    /// `suspendLocalAudioForRecovery()`) landed meanwhile, as both clients
-    /// fence by `localAudioMuteIntentGeneration`, and it reports that through
-    /// `onLocalAudioEnabledChanged`, as they do.
+
     var testModelsLocalAudioState = false
-    /// Host-test seam modelling the real clients' camera state reports (off
-    /// by default): a committed camera start reports on, and a close or a
-    /// suspend reports off, through `onLocalVideoEnabledChanged`. Unlike the
-    /// real clients, a start here does not cancel itself on a camera-off; the
-    /// view model must not rely on that.
+
     var testReportsLocalVideoState = false
-    /// Host-test seam: whether `canSwitchCamera()` finds a second camera.
+
     var testCanSwitchCamera = false
-    /// Host-test seam: local state reports this stub made to a listener, so
-    /// a test can wait until the view model has handled every one.
+
     private(set) var testLocalMediaReportCount = 0
     private var testLocalAudioMuteIntent = 0
     private var testLocalAudioLive = false
@@ -138,7 +118,7 @@ final class WebRTCClient {
             hasLocalAudioProducer = true
             return
         }
-        // Both clients drop a start that a mute overtook.
+
         guard muteIntent == testLocalAudioMuteIntent else { return }
         hasLocalAudioProducer = true
         testCommitLiveMicrophone()
@@ -187,7 +167,7 @@ final class WebRTCClient {
     func setAudioEnabled(_ enabled: Bool) async throws {
         let muteIntent = testLocalAudioMuteIntent
         if !enabled, testModelsLocalAudioState {
-            // Both clients silence a mute before its acknowledgement.
+
             testApplyLocalMute()
         }
         try await testCallGate?("setAudioEnabled(\(enabled))")
@@ -224,11 +204,10 @@ final class WebRTCClient {
         try? await testCallGate?("closeLocalVideoProducer")
     }
     func closeLocalScreenProducer() async { }
-    /// Host-test seam: the one awaited media-layer call of the host build's
-    /// screen-share toggle, which has no screen capture.
+
     func testUnsupportedScreenShare() async { try? await testCallGate?("screenShare") }
     func closeLocalMedia(kind: String, type: String, producerId: String? = nil) async -> Bool {
-        // A screen producer is "screen" to the seam and in the call log.
+
         let isScreen = type == ProducerType.screen.rawValue
         let name = isScreen ? "screen" : kind
         guard testClosesLocalMedia?(name) == true else {
@@ -243,10 +222,10 @@ final class WebRTCClient {
             hasLocalVideoProducer = false
             testReportLocalVideo(false)
         default:
-            // The stub models no screen capture state.
+
             break
         }
-        // The iOS client awaits the capture stop after clearing the producer.
+
         try? await testCallGate?("closeLocalMedia(\(name))")
         return true
     }
@@ -297,16 +276,13 @@ final class WebRTCClient {
     func selectAudioOutput(_ deviceId: String) { }
     func testSpeaker() { }
 
-    // S60 C6-1, C6-6, C6-7 (SET-2): the silent host has no microphone and plays nothing.
     var supportsLiveNoiseSuppressionChange: Bool { false }
     func applyNoiseSuppression(_ enabled: Bool) async -> Bool { false }
     func sampleLocalMicrophoneLevel() -> Double { 0 }
     func playTestTone() { }
 
-    // S60 C6-3, C6-5, C6-9, D11 (SET-3): the silent host has no camera and no transports.
-    /// Host-test seam: the Data Saver value of the last receive policy pass (C6-5).
     private(set) var testLastReceiveDataSaver = false
-    /// Host-test seam: the reading `sampleConnectionStatsCounters()` returns (nil = no stats).
+
     var testConnectionStats: ConnectionStatsCounters?
     var mirrorsLocalVideo: Bool {
         LocalVideoMirrorPolicy.mirrors(isFront: currentCameraFacing == .front, preference: LocalVideoMirrorPreference.shared.isOn)

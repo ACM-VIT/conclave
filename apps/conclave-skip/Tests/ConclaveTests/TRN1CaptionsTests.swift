@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// TRN-1 (OUT/PLAN-screens.md section 5; S60 5 l, C6-11, C6-13, C6-27; S20 SC13; RECONCILE R12, R52): the typed live
-/// notes vocabulary, the phase and link mapping, `LiveNotesPolicy` (the only producer of the stage state), catch-up
-/// eligibility, the relay gate on Start, the transcript stream rule for attendees, the caption line (newest segment,
-/// tail cut, partial versus final), the captions leaf (at most 10 publishes per second, hidden after 6 s of silence),
-/// the captions preference and the strip sources. The Kotlin twins live in T/Skip/STG5NoticeBridgeTests.kt.
 @MainActor
 struct TRN1CaptionsTests {
     final class Clock {
@@ -21,8 +16,6 @@ struct TRN1CaptionsTests {
         TranscriptSegmentModel(itemId: id, sequence: sequence, speakerUserId: speaker.lowercased(), speakerDisplayName: speaker,
                                text: text, startMs: at, isFinal: final)
     }
-
-    // MARK: Typed state (C6-11)
 
     @Test func liveNotesPolicyTable() {
         let none = TranscriptIssue.none
@@ -51,7 +44,7 @@ struct TRN1CaptionsTests {
         #expect(TranscriptPhasePolicy.link(connectionStatus: .connected, failedAttempts: 0) == .connected)
         #expect(TranscriptPhasePolicy.link(connectionStatus: .connecting, failedAttempts: 3) == .reconnecting)
         #expect(TranscriptPhasePolicy.link(connectionStatus: .connecting, failedAttempts: 8) == .failed)
-        // The state carries the same derivations and publishes stage changes through its hook.
+
         let state = TranscriptState()
         var refreshes = 0
         state.onStageInputChanged = { refreshes += 1 }
@@ -80,7 +73,7 @@ struct TRN1CaptionsTests {
         #expect(CatchUpPolicy.minutes(phase: .idle, sessionStartedAtMillis: start, joinedAtMillis: start + 444_000, isAttendee: false) == 0)
         #expect(CatchUpPolicy.minutes(phase: .live, sessionStartedAtMillis: start, joinedAtMillis: start + 444_000, isAttendee: true) == 0)
         #expect(CatchUpPolicy.minutes(phase: .live, sessionStartedAtMillis: 0, joinedAtMillis: start, isAttendee: false) == 0)
-        // Once per call: the banner never returns after it was dismissed (STG-5 center).
+
         let center = MeetingNoticeCenter()
         let offer = StageNoticeInputs.make(callSession: 1, localUserId: "you", catchUpMinutes: 2)
         _ = center.applyState(offer, nowMillis: 0)
@@ -88,7 +81,7 @@ struct TRN1CaptionsTests {
         center.dismiss(id: center.banner?.id ?? "", nowMillis: 1)
         _ = center.applyState(StageNoticeInputs.make(callSession: 1, localUserId: "you", catchUpMinutes: 3), nowMillis: 2)
         #expect(center.banner == nil)
-        // An open Transcript hides the offer.
+
         let fresh = MeetingNoticeCenter()
         fresh.setCurrentPanel(MeetingPanel.transcript.rawValue, nowMillis: 0)
         _ = fresh.applyState(offer, nowMillis: 0)
@@ -113,13 +106,11 @@ struct TRN1CaptionsTests {
         let state = TranscriptState()
         state.setRelay(.unavailable)
         #expect(state.relay == .unavailable)
-        // The service probes the relay through the one socket call (the first caller, R52).
+
         let service = try? stageSource("Sources/Conclave/Core/Networking/TranscriptService.swift")
         #expect(service?.contains("try await socketManager.getTranscriptSfuRelayStatus()") == true)
         #expect(service?.contains("state.setRelay(status.available ? RelayAvailability.available : RelayAvailability.unavailable)") == true)
     }
-
-    // MARK: Caption line (S60 5 j, C6-11)
 
     @Test func theCaptionLineKeepsTheNewestWordsOfALongMonologue() {
         var words: [String] = []
@@ -156,11 +147,9 @@ struct TRN1CaptionsTests {
         state.applyFinal(segment("p", 2, "Sam", "and then we ship", final: true))
         #expect(lines.map(\.text) == ["and then", "and then we", "and then we ship"])
         #expect(lines.map(\.isFinal) == [false, false, true])
-        // Legacy presentation is unchanged.
+
         #expect(state.orderedSegments.map(\.itemId) == ["h", "p"])
     }
-
-    // MARK: Captions leaf (S20 10 k, S60 5 k and l)
 
     @Test func thirtyDeltasPerSecondPublishAtMostTenTimes() {
         let clock = Clock()
@@ -173,14 +162,14 @@ struct TRN1CaptionsTests {
         for index in 1...30 {
             clock.millis += 1000.0 / 30.0
             feed.update(CaptionLine(speakerName: "Avery", text: "word " + String(index), isFinal: false, updatedAtMillis: 0, isVisible: true))
-            // The trailing publish the flush task would run once 100 ms passed.
+
             if feed.pending != nil && clock.millis - feed.lastPublishMillis >= CaptionLinePolicy.minimumIntervalMillis {
                 feed.flushPending()
             }
         }
         #expect(feed.publishCount - start <= 10)
         #expect(feed.publishCount - start >= 5)
-        // The newest text always lands.
+
         clock.millis += 200
         feed.flushPending()
         #expect(feed.line.text == "word 30")
@@ -204,7 +193,7 @@ struct TRN1CaptionsTests {
         #expect(!feed.line.isVisible)
         feed.reset()
         #expect(feed.line == CaptionLine.empty && !feed.hasLiveTimers)
-        // Partial text draws in the secondary ink on both platforms (S60 R6-12).
+
         let ios = try stageSource("Sources/Conclave/Features/Meeting/Stage/CaptionsStrip+iOS.swift")
         #expect(ios.contains("line.isFinal ? ink : (appearance.foreground ?? HostingTheme.inCallTextSecondary)"))
         #expect(ios.contains(".accessibilityLabel(ConclaveStrings.text(\"Open Transcript\"))"))
@@ -227,7 +216,7 @@ struct TRN1CaptionsTests {
         #expect(!attendee.stage.captionsActive && !attendee.stage.captions.line.isVisible, "attendees get no strip")
         let off = StageFixtureSession(state: .grid4)
         #expect(!off.stage.captionsActive)
-        // Captions on with notes paused hide the strip; a delta while inactive writes nothing.
+
         let stage = StagePresenter(shell: MeetingShellPresenter())
         stage.captions.sleep = TRN1CaptionsTests.longSleep
         stage.apply(StageFixtureScript.copy(StageFixtureScript.base(count: 4), captionsOn: true, liveNotes: .paused))

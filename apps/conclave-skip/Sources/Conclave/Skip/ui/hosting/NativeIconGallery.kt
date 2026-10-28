@@ -19,7 +19,6 @@ internal data class NativeIconArtwork(
     val mirrors: Boolean, val vector: () -> ImageVector,
 )
 
-/** Build-time binding semantics. The owning control speaks them; the vector never does. */
 internal data class NativeIconBinding(
     val id: String, val caption: String, val role: String, val label: String?, val value: String?,
     val fillBasis: String, val decisionId: String?, val vector: () -> ImageVector,
@@ -29,7 +28,6 @@ internal data class NativeIconBinding(
             decisionId?.let { "$fillBasis $it" } ?: fillBasis).joinToString("; ")
 }
 
-/** Inert, opt-in gallery. Rows instantiate vectors only when the lazy list composes them. */
 @Composable
 internal fun NativeIconGalleryControls(controller: NativeIconRasterController) {
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -39,7 +37,7 @@ internal fun NativeIconGalleryControls(controller: NativeIconRasterController) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Constructed vectors: ${constructed?.toString() ?: "not counted"}",
                 modifier = Modifier.weight(1f).testTag("icons.lazy.count"))
-            // Reading isInitialized never constructs a vector.
+
             TextButton(onClick = { constructed = ConclaveIcons.initializedCount() },
                 modifier = Modifier.heightIn(min = 48.dp).testTag("icons.lazy.refresh")) { Text("Count") }
         }
@@ -61,7 +59,7 @@ internal fun NativeIconGalleryControls(controller: NativeIconRasterController) {
 
 @Composable
 private fun NativeIconBindingRow(row: NativeIconBinding) {
-    // Status-style specimen: the glyph is decorative and merges with its caption text.
+
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("icons.binding.${row.id}").semantics(mergeDescendants = true) {},
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(imageVector = row.vector(), contentDescription = null, modifier = Modifier.size(24.dp))
@@ -76,14 +74,14 @@ private fun NativeIconBindingRow(row: NativeIconBinding) {
 private fun NativeIconSampleControls() {
     var microphone by rememberSaveable { mutableStateOf(true) }
     var captions by rememberSaveable { mutableStateOf(false) }
-    // Owner-labeled switch: the localized owner supplies label and value; the glyph stays decorative.
+
     Box(Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("icons.sample.microphone")
         .toggleable(value = microphone, role = Role.Switch, onValueChange = { microphone = it })
         .semantics { contentDescription = "Microphone"; stateDescription = if (microphone) "On" else "Muted" },
         contentAlignment = Alignment.Center) {
         Icon(if (microphone) ConclaveIcons.MicFill1 else ConclaveIcons.MicOffFill1, contentDescription = null)
     }
-    // Switch row: the row owns the Switch role; its leading glyph is decorative.
+
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("icons.sample.captions")
         .toggleable(value = captions, role = Role.Switch, onValueChange = { captions = it })
         .semantics { stateDescription = if (captions) "On" else "Off" },

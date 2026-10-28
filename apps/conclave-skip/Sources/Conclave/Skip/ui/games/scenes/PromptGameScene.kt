@@ -28,14 +28,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 9 (ACT-3) on Android: the body of the six prompt games inside the game shell's scrolling column (GameShell.kt
- * routes their scene kinds here and pins PromptGameHostBar in its bottom bar, HD request B6-T7 R3). Each scene reads the
- * typed scene model the presenter built once per push; controls read `interaction` in their own composable, and the
- * countdown stays its own leaf (S60 8 k). No decorative motion: answers lock, reveals and scores appear in one frame.
- */
-
-/** Switches on the prompt game scene; results (the shell's finished phase) have their own per game bodies. */
 @Composable
 internal fun PromptGameSceneBody(games: GameStagePresenter) {
     val scene = games.scene
@@ -59,7 +51,6 @@ internal fun PromptGameSceneBody(games: GameStagePresenter) {
     }
 }
 
-/** The pinned host bar of a prompt game phase (S60 9 c): one primary for a seated host, pending until that emit's ack. */
 @Composable
 internal fun PromptGameHostBar(games: GameStagePresenter) {
     val action = PromptScenePolicy.hostAction(games.scene)
@@ -76,14 +67,12 @@ internal fun PromptGameHostBar(games: GameStagePresenter) {
     }
 }
 
-/** Reads only `countdown`, so the per-second leaf never recomposes the scene. */
 @Composable
 internal fun PromptCountdownSlot(games: GameStagePresenter) {
     val countdown = games.countdown ?: return
     GameKitCountdown(countdown)
 }
 
-/** K13 for a person without a seat: never a self line, Join when the server allows a late seat (S60 8 f). */
 @Composable
 internal fun PromptSpectatorNotice(games: GameStagePresenter, message: String = "") {
     val canJoin = games.chrome.seat == SeatState.canJoin
@@ -95,30 +84,20 @@ internal fun PromptSpectatorNotice(games: GameStagePresenter, message: String = 
     )
 }
 
-/** A quiet secondary line (counts, standings) with tabular digits. */
 @Composable
 internal fun PromptLine(text: String) {
     if (text.isEmpty()) return
     Text(text, style = rememberTabular(MaterialTheme.typography.bodySmall), color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
-/** A headline line (an outcome, a winner, a result). */
 @Composable
 internal fun PromptHeadline(text: String, modifier: Modifier = Modifier) {
     if (text.isEmpty()) return
     Text(text, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, modifier = modifier)
 }
 
-/**
- * How a read-only reveal row stands out: the success border with its glyph and word, or the 2 dp primaryContainer
- * selection border of your own pick (a non-text indicator next to its "You picked this" or "Your answer" line).
- */
 internal enum class PromptRowEmphasis { None, Success, Selected }
 
-/**
- * A read-only reveal row (Bluff truth and authors, Most Likely To counts): the option, a marked word with its glyph,
- * detail lines and an optional count, merged into one semantics node. Correctness is never color alone.
- */
 @Composable
 internal fun PromptResultRow(
     id: String,
@@ -161,10 +140,6 @@ internal fun PromptResultRow(
     }
 }
 
-/**
- * One-shot announcement (S60 9 i): the text enters a 1 dp live region the first time `key` is claimed for this game
- * session, so recomposition or the card coming back never repeats it. Assertive only for the Reaction "Tap now".
- */
 @Composable
 internal fun PromptAnnouncement(games: GameStagePresenter, key: String, text: String, assertive: Boolean = false) {
     var spoken by remember { mutableStateOf("") }
@@ -177,10 +152,6 @@ internal fun PromptAnnouncement(games: GameStagePresenter, key: String, text: St
     })
 }
 
-/**
- * The finished phase per game (S60 9 c): K8 with the award for the scored games, the wrap for Would You Rather and
- * Most Likely To (no score invented), the Imposter result lines; participants read "Waiting for the host".
- */
 @Composable
 internal fun PromptResultsBody(games: GameStagePresenter, scene: GameScene) {
     val isHost = games.chrome.isHost
@@ -198,7 +169,6 @@ internal fun PromptResultsBody(games: GameStagePresenter, scene: GameScene) {
     }
 }
 
-/** Trivia, Bluff and Reaction results: the award as the kicker, the winner line and K8. */
 @Composable
 internal fun PromptScoredResults(games: GameStagePresenter, kind: String) {
     val results = games.results

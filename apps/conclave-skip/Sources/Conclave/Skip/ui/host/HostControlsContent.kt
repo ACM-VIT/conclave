@@ -28,15 +28,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
-/*
- * S50 6 d (PPL-4): Host Controls on Android. HostControlsContent is one LazyColumn that takes the page reservation
- * (R50-1), with no app bar or back stack of its own, so Participants (a pushed page on the host's PanelPageStack),
- * the root Host Controls panel (MeetingPanel.hostControls), Meeting Details (S20 15) and Settings (S60 R6-3) render the
- * same content; pushes go through `onPush` with `PeopleRoute` raw values, which every container keys its stack by
- * (R50-2). System appearance; M3 switches in primary (R06); the End dialog is composed on this page (PH17, R09).
- */
-
-/** The pages of a host stack (R50-2), the webinar pages included (PPL-5, S50 9). */
 @Composable
 internal fun HostPageContent(people: PeoplePresenter, route: String, reservation: PaddingValues, snackbar: SnackbarHostState,
                              onPush: (String) -> Unit, onPop: () -> Unit = {}) {
@@ -53,7 +44,6 @@ internal fun HostPageContent(people: PeoplePresenter, route: String, reservation
     PeopleFailureSnackbar(people, snackbar)
 }
 
-/** The page title name for a host route (S50 6 g, 7 g, 8 g). */
 internal fun hostPageTitleName(route: String?): String = when (route) {
     PeopleRoute.inviteCode.rawValue -> "hst_invite_title"
     PeopleRoute.accessList.rawValue -> "hst_access_title"
@@ -64,12 +54,10 @@ internal fun hostPageTitleName(route: String?): String = when (route) {
     else -> "hst_title"
 }
 
-/** What one Host Controls item draws (stable keys and content types, S50 6 k). */
 internal enum class HostItemKind { Loading, Header, Bulk, Policy, Link, Footer, End }
 
 internal data class HostListItem(val key: String, val kind: HostItemKind, val value: String = "")
 
-/** The S50 6 b order: Everyone, Meeting access, Participant media, Chat and messages, Notice, Webinar, End. Pure. */
 internal fun hostListItems(snapshot: HostControlsSnapshot): List<HostListItem> {
     val items = mutableListOf<HostListItem>()
     if (snapshot.isConfigLoading) items.add(HostListItem("loading", HostItemKind.Loading))
@@ -96,7 +84,6 @@ internal fun hostListItems(snapshot: HostControlsSnapshot): List<HostListItem> {
     return items
 }
 
-/** The Host Controls list (S50 6 d). Losing host shows the unavailable state (S50 6 c, 12). */
 @Composable
 internal fun HostControlsContent(people: PeoplePresenter, reservation: PaddingValues, onPush: (String) -> Unit) {
     val snapshot = people.host.snapshot
@@ -127,7 +114,6 @@ internal fun HostControlsContent(people: PeoplePresenter, reservation: PaddingVa
     }
 }
 
-/** A push row (Invite code, Access list, Send a notice, Webinar settings) with its value as supporting text. */
 @Composable
 private fun HostLinkRow(people: PeoplePresenter, snapshot: HostControlsSnapshot, route: String, onPush: (String) -> Unit) {
     val identifier = "host.$route"
@@ -159,17 +145,12 @@ private fun HostLinkRow(people: PeoplePresenter, snapshot: HostControlsSnapshot,
     )
 }
 
-/** Reads `host.attendeeCount` only (S50 6 k). */
 @Composable
 private fun HostWatchingValue(host: HostControlsPresenter) {
     val count = host.attendeeCount
     ConclaveText(conclavePlural("hst_watching", count, count), line = "host.webinar.watching")
 }
 
-/**
- * End call for everyone (S50 6 d): the S1 confirmation with invoker `hostControls` (PH17) is an F00 C18 AlertDialog on
- * this page, confirm in error; Leave stays on the bar while ending (R09). A failure shows under the row with Retry.
- */
 @Composable
 private fun HostEndRow(people: PeoplePresenter, snapshot: HostControlsSnapshot) {
     val shell = people.shell
@@ -212,7 +193,6 @@ private fun HostEndRow(people: PeoplePresenter, snapshot: HostControlsSnapshot) 
     }
 }
 
-/** The S1 End row's last failure in this call session. */
 internal fun hostEndFailed(shell: MeetingShellPresenter): Boolean {
     for (row in shell.controls.rows) {
         if (row.id == MeetingControlID.endForEveryone.rawValue) return row.failure != MeetingActionFailure.none
@@ -220,10 +200,6 @@ internal fun hostEndFailed(shell: MeetingShellPresenter): Boolean {
     return false
 }
 
-/**
- * `MeetingPanel.hostControls` as a root panel (S50 6 a; opens from More's host section): an InCallPage in lazyList mode
- * whose page stack starts at Host Controls (R50-2). Registered by the native call root (HD request B5-T1 R3).
- */
 @Composable
 internal fun HostControlsPage(
     people: PeoplePresenter,
@@ -241,7 +217,7 @@ internal fun HostControlsPage(
     val snackbar = remember { SnackbarHostState() }
     val available = people.host.snapshot.isAvailable
     LaunchedEffect(available) {
-        // S50 12: losing host pops any pushed page; the root shows the unavailable state.
+
         if (!available) pages?.popToRoot()
     }
     InCallPage(

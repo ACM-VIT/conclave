@@ -3,24 +3,12 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-// S20 10 c (STG-5, SL10): the iOS notice lanes over the dark stage. The banner lane sits under the top chrome slot (and
-// under the status chips while they show), the toast lane above the bar slot, and the captions strip (SL11) between
-// them, above the toast. Each lane observes only its own presenter property (`banner`, `toast`, `captionsActive`) plus
-// the cold `noticeGeometry`; the lanes are overlays outside the tile layout, so a notice never moves a tile, and their
-// anchors come from the reserved viewport insets, so they stay put while chrome hides. Banners use F00 C12
-// (`ConclaveBanner`, one announcement per new banner), toasts F00 C13 (`ConclaveToastHost` times them and hands the id
-// back through `dismissNotice(id:)`; an action toast persists under VoiceOver, Switch Control or the fixture
-// screen-reader override). No haptics in either lane (S20 10 h).
-
-/// Fixed lane spacing (points): the chips row under the top row is one 44 pt chip target plus the 8 pt gap.
 enum NoticeLaneMetrics {
     static let chipRow: CGFloat = 52
     static let toastGap: CGFloat = 8
     static let maxToastWidth: CGFloat = 560
 }
 
-/// The layer CallRoot mounts as a sibling of the chrome. On the live route it installs the notice sound output and
-/// removes it when the call root goes away; the fixture's probes never install it (no audio in a silent run).
 struct NoticeLanesLayer: View {
     let stage: StagePresenter
     let forceScreenReader: Bool
@@ -47,7 +35,6 @@ struct NoticeLanesLayer: View {
     }
 }
 
-/// Banner lane: reads `stage.banner` and the cold geometry only.
 struct NoticeBannerLane: View {
     let stage: StagePresenter
 
@@ -64,8 +51,6 @@ struct NoticeBannerLane: View {
     }
 }
 
-/// The one banner. Host notices longer than the lane's four lines expand in place ("More" and "Less", view-local); the
-/// catch-up banner is itself a button that opens Transcript at Minutes (S20 10 f row 13).
 struct NoticeBannerView: View {
     let stage: StagePresenter
     @State private var expanded = false
@@ -111,7 +96,7 @@ struct NoticeBannerView: View {
         case NoticeAction.expand:
             expanded.toggle()
         case NoticeAction.openSettings:
-            // The app's page in Settings (camera or microphone access); iOS has no captive portal banner.
+
             if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
         default:
             stage.performNoticeAction(noticeId: notice.id, actionId: actionId)
@@ -119,8 +104,6 @@ struct NoticeBannerView: View {
     }
 }
 
-/// The bottom column: the captions strip above the toast, anchored above the bar slot and narrowed to clear a
-/// bottom-corner self view.
 struct NoticeBottomLanes: View {
     let stage: StagePresenter
     let forceScreenReader: Bool
@@ -142,9 +125,6 @@ struct NoticeBottomLanes: View {
     }
 }
 
-/// Toast lane: reads `stage.toast` only. The hosts time the toast and report it back. CHT-8 (S40 8 c): a chat preview
-/// draws the chat variant (`ChatPreviewToast+iOS.swift`); every other kind keeps the F00 C13 toast. Both hosts stay
-/// mounted, so each animates its own exit; the presenter shows one toast at a time.
 struct NoticeToastLane: View {
     let stage: StagePresenter
     let screenReader: Bool
@@ -161,8 +141,6 @@ struct NoticeToastLane: View {
     }
 }
 
-/// iOS copy for the notice catalog (S20 10 g; S70 5 g, 6 g, 7 g; S30 4 g): sentence case text, Apple title case
-/// action titles. Keys are the String Catalog entries in HD/strings/B4-T4.json.
 enum NoticeCopy {
     static func bannerKind(_ notice: MeetingNotice) -> ConclaveBannerKind {
         switch notice.severity {
@@ -221,7 +199,7 @@ enum NoticeCopy {
             }
             return ConclaveStrings.text("Camera access is off. Turn it on in Settings.")
         default:
-            // Captive portal and notifications priming are Android only.
+
             return ""
         }
     }
@@ -285,7 +263,7 @@ enum NoticeCopy {
             return ConclaveStrings.format("Audio switched to %@", notice.name)
         case NoticeKind.actionFailed:
             if notice.detail == "hand" { return ConclaveStrings.text("Couldn’t raise your hand. Try again.") }
-            // S20 6 g (STG-3, HD request B5-T8 R14): the flip failure toast with Retry.
+
             if notice.detail == "flipCamera" { return ConclaveStrings.text("Couldn’t switch cameras. Try again.") }
             return ConclaveStrings.text("That didn’t go through. Try again.")
         case NoticeKind.rateLimited:
@@ -298,8 +276,7 @@ enum NoticeCopy {
         case NoticeKind.qualityLowered:
             return ConclaveStrings.text("Video quality is lower to keep your device cool.")
         case NoticeKind.chatPreview:
-            // The S40 chat variant (title line, private tag, count line) arrives with the chat slices; until then the
-            // generic toast shows the sender (or the F00 grouping) and the newest text.
+
             let title = notice.senderCount > 1
                 ? ConclaveStrings.format("%@ and %lld others", notice.name, notice.senderCount - 1) : notice.name
             return notice.detail.isEmpty ? title : title + ": " + notice.detail
@@ -314,17 +291,16 @@ enum NoticeCopy {
         case NoticeKind.linkCopied:
             return ConclaveStrings.text("Link copied")
         case PeopleFailurePlacementPolicy.stageNoticeKind:
-            // S50 PL14: a tile-menu People failure ("Couldn't mute Avery Lee." and the typed reasons, S50 3 g).
+
             return PeopleActionText.stageToast(notice)
         case NoticeKind.blockedExplanation:
-            // S30 CC7 (CTL-1, HD request B4-T6 R4): the controls' explanation table names the blocked control's reason.
+
             if let explanation = ControlBarPolicy.explanation(fromNotice: notice), let text = CallControlsCopy.toast(explanation) {
                 return text
             }
             return ConclaveStrings.text("That didn’t go through. Try again.")
         case NoticeKind.shareFailed:
-            // S70 10 g (SYS-10): "Couldn’t start screen sharing. Try again." or, for deniedBySystem,
-            // "Screen sharing isn’t allowed on this device."
+
             return ConclaveStrings.text(ScreenShareFailurePolicy.iosCopyKey(detail: notice.detail))
         default:
             return ConclaveStrings.text("That didn’t go through. Try again.")
@@ -332,8 +308,6 @@ enum NoticeCopy {
     }
 }
 
-/// SC24 on iOS: the bundled chime through `AVAudioPlayer` on the active call session (WebRTC keeps it in
-/// `.playAndRecord`), so it follows the call's audio route; the category is never changed here. No vibration.
 @MainActor
 enum NoticeSoundOutput {
     private static var players: [String: AVAudioPlayer] = [:]

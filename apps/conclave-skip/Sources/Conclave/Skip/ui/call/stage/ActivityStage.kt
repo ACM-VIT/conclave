@@ -45,21 +45,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/*
- * S20 11 and SL12 (STG-9) on Android: the activity takeover container in the canvas `activity` slot. One flat card
- * (Surface surfaceContainer, RoundedCornerShape(16.dp), BorderStroke(1.dp, ext.border)) with a header owned here
- * (identity, the name as a heading, the status line, the Show video IconToggleButton, then the trailing host or seat
- * actions spec 60 places) and a body slot: the game shell (ACT-2), the SDK app host (ACT-7) or the shared browser
- * surface (ACT-9, K/ui/browser/BrowserSurface.kt) with their opening and failed states. Only the card body pads for
- * the IME (windowInsetsPadding(ime.only(Bottom)), fixing the untested legacy Android IME, INM G3), so the stage height
- * never changes. People stay in the strip with you included; no floating self view over the card. The container reads only layout.activityKind; the body reads its
- * own presenter, so game pushes never recompose the stage (S20 11 k).
- */
-
-/** The session's activity presenters, provided once by the call root (HD request B4-T8 R5); null outside it. */
 internal val LocalActivitySession = staticCompositionLocalOf<ActivitySession?> { null }
 
-/** The `activity` slot content (SlotView's activity branch, HD request B4-T8 R6). */
 @Composable
 internal fun ActivityStageCard(stage: StagePresenter, modifier: Modifier = Modifier) {
     val kind = stage.layout.activityKind
@@ -75,11 +62,18 @@ private fun ActivityStageCardContent(kind: String, stage: StagePresenter, sessio
         color = MaterialTheme.colorScheme.surfaceContainer,
         border = BorderStroke(1.dp, ext.border),
     ) {
-        Column(Modifier.fillMaxSize()) {
-            ActivityStageHeader(kind, stage, session)
-            HorizontalDivider(color = ext.border)
-            Box(Modifier.weight(1f).fillMaxWidth().windowInsetsPadding(WindowInsets.ime.only(WindowInsetsSides.Bottom))) {
-                ActivityStageBody(kind, stage, session)
+        if (activityStageKind(kind) == ActivityKind.game && session != null &&
+            session.games.scene.kind == GameSceneKind.chess && session.games.scene.chess != null) {
+            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.ime.only(WindowInsetsSides.Bottom))) {
+                ChessSceneBody(session.games, cardHeader = { compact -> ActivityStageHeader(kind, stage, session, compact) })
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                ActivityStageHeader(kind, stage, session)
+                HorizontalDivider(color = ext.border)
+                Box(Modifier.weight(1f).fillMaxWidth().windowInsetsPadding(WindowInsets.ime.only(WindowInsetsSides.Bottom))) {
+                    ActivityStageBody(kind, stage, session)
+                }
             }
         }
     }
@@ -93,10 +87,6 @@ internal fun activityStageIcon(raw: String, appId: String): ImageVector = when (
     ActivityKind.browser -> ConclaveIcons.PublicFill0
 }
 
-/**
- * The chip and announcement name (HD request B4-T8 R7: the Now Playing chip calls this, so an app chip shows the
- * app's localized name, never its id).
- */
 @Composable
 internal fun activityStageDisplayName(kind: String, name: String): String = when (activityStageKind(kind)) {
     ActivityKind.game -> if (name.isEmpty()) conclaveString("act_game") else name
@@ -104,10 +94,6 @@ internal fun activityStageDisplayName(kind: String, name: String): String = when
     ActivityKind.browser -> conclaveString("br_title")
 }
 
-/**
- * `activityStarted` and `activityEnded` (S20 11 g); null for any other announcement kind. `name` is the encoded
- * ActivityStagePolicy.announcementName (kind and raw name), decoded here so an app reads its localized name.
- */
 @Composable
 internal fun activityStageAnnouncement(kind: String, name: String): String? {
     val display = activityStageDisplayName(ActivityStagePolicy.announcedKind(name), ActivityStagePolicy.announcedName(name))
@@ -118,10 +104,6 @@ internal fun activityStageAnnouncement(kind: String, name: String): String? {
     }
 }
 
-/**
- * The card's identity: a game reads the shell's chrome (per phase), a live browser card its BrowserStageModel (ACT-9),
- * an app (or the browser before its card has a session) the Now Playing row.
- */
 private data class ActivityStageIdentityParts(val name: String, val status: String, val appId: String)
 
 @Composable
@@ -133,26 +115,38 @@ private fun activityStageIdentity(kind: String, session: ActivitySession?): Acti
         return ActivityStageIdentityParts(activityStageDisplayName(kind, chrome.name), gameHeaderStatus(chrome), "")
     }
     if (activityKind == ActivityKind.browser && session.browser.model.isActive) {
-        // ACT-9 (S60 14 b, g): the site and the state from the browser card's model ("example.com · Live").
+
         return ActivityStageIdentityParts(conclaveString("br_title"), browserHeaderStatus(session.browser.model), "")
     }
     val item = session.activities.snapshot.nowPlayingItem(kind = activityKind)
         ?: return ActivityStageIdentityParts(activityStageDisplayName(kind, ""), "", "")
-    // ACT-7 (HD request B7-T1 R2): an app's status comes from its host ("%1$d editing", "Editing locked").
+
     val hostStatus = if (activityKind == ActivityKind.app) nativeAppHostStatus(session.appHost) else ""
     return ActivityStageIdentityParts(activitiesNowPlayingTitle(item), hostStatus.ifEmpty { activitiesNowPlayingStatus(item) }, item.appId)
 }
 
-/** Identity, Show video, then the trailing actions; the header's controls precede the body in reading order. */
 @Composable
-private fun ActivityStageHeader(kind: String, stage: StagePresenter, session: ActivitySession?) {
-    val scheme = MaterialTheme.colorScheme
+private fun ActivityStageHeader(kind: String, stage: StagePresenter, session: ActivitySession?, stacked: Boolean = false) {
     val parts = activityStageIdentity(kind, session)
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    if (stacked) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ActivityStageHeaderIdentity(kind, parts, Modifier.fillMaxWidth())
+            ActivityStageHeaderActions(kind, stage, session)
+        }
+    } else {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            ActivityStageHeaderIdentity(kind, parts, Modifier.weight(1f))
+            ActivityStageHeaderActions(kind, stage, session)
+        }
+    }
+}
+
+@Composable
+private fun ActivityStageHeaderIdentity(kind: String, parts: ActivityStageIdentityParts, modifier: Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Icon(activityStageIcon(kind, parts.appId), contentDescription = null, tint = scheme.onSurface)
         Column(Modifier.weight(1f)) {
             Text(parts.name, style = MaterialTheme.typography.titleMedium, color = scheme.onSurface, maxLines = 1,
@@ -162,8 +156,12 @@ private fun ActivityStageHeader(kind: String, stage: StagePresenter, session: Ac
                     overflow = TextOverflow.Ellipsis)
             }
         }
-        // Show video is local and reversible: the card leaves the stage and the Now Playing chip brings it back, so the
-        // visible toggle always reads "Showing activity".
+    }
+}
+
+@Composable
+private fun ActivityStageHeaderActions(kind: String, stage: StagePresenter, session: ActivitySession?) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         ConclaveIconToggleButton(
             description = conclaveString("stg_show_video"),
             stateText = conclaveString("stg_showing_activity"),
@@ -177,10 +175,10 @@ private fun ActivityStageHeader(kind: String, stage: StagePresenter, session: Ac
             if (activityStageKind(kind) == ActivityKind.game) {
                 GameShellHeaderActions(session.games)
             } else if (activityStageKind(kind) == ActivityKind.app) {
-                // ACT-7 (HD request B7-T1 R2): Lock editing and Close in the host menu (S60 13 d).
+
                 NativeAppHostMenu(session.appHost)
             } else if (session.browser.model.isActive) {
-                // ACT-9 (S60 14 d): the browser host menu (audio, Session info, Close with its confirmation).
+
                 BrowserStageMenu(session.browser)
             } else {
                 ActivityCloseButton(activityStageKind(kind), session.activities)
@@ -189,7 +187,6 @@ private fun ActivityStageHeader(kind: String, stage: StagePresenter, session: Ac
     }
 }
 
-/** The Now Playing Close for the browser before its card has a session, with its confirmation (R09); participants get none. */
 @Composable
 private fun ActivityCloseButton(kind: ActivityKind, activities: ActivitiesPresenter) {
     val item = activities.snapshot.nowPlayingItem(kind = kind) ?: return
@@ -228,20 +225,16 @@ private fun ActivityStageBody(kind: String, stage: StagePresenter, session: Acti
     if (activityStageKind(kind) == ActivityKind.game) {
         GameShellBody(session.games, session.storeURL, onShowVideo = { stage.setShowsVideoOverActivity(true) })
     } else if (activityStageKind(kind) == ActivityKind.app) {
-        // ACT-7 (HD request B7-T1 R2): the one retained WebView per app session, its states and the tools.
+
         NativeAppHostBody(session.appHost, onShowVideo = { stage.setShowsVideoOverActivity(true) })
     } else if (session.browser.model.isActive) {
-        // ACT-9 (S60 14 d): the WebRTC video, the controller's input layer, the address row and the states.
+
         BrowserStageBody(session.browser, stage, onShowVideo = { stage.setShowsVideoOverActivity(true) })
     } else {
         ActivityWebBody(kind, stage, session)
     }
 }
 
-/**
- * The shared browser before its card has a session (ACT-9): "Opening %1$s" with a system spinner, or "Couldn't open
- * %1$s" with Retry and Show video (S60R 25). A live body belongs to the browser surface (one retained WebView).
- */
 @Composable
 private fun ActivityWebBody(kind: String, stage: StagePresenter, session: ActivitySession) {
     val phase = session.cardPhase(kind = kind)

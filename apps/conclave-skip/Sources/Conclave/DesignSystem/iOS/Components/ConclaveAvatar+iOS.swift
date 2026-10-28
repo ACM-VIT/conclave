@@ -1,17 +1,12 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-/// The deterministic identity avatar (F00 C07): a flat palette circle with a 1 pt white 18% inner ring, white eyes
-/// from one of four variants and a mouth from one of ten, the same face as web and Android for the same (name,
-/// id). Flat fill only, no 3D tilt, no blink (O5). It is decorative when a name sits beside it (the default);
-/// otherwise its label is the name. Row and chat sizes scale with the body text; tile and lobby sizes do not.
-/// Smart Invert leaves it alone, like the video it stands in for.
 struct ConclaveAvatar: View {
     let identity: ConclaveAvatarIdentity
     let size: ConclaveAvatarSize
-    /// Overrides the size's diameter (tiles size the avatar from the slot density).
+
     let diameter: CGFloat?
-    /// The spoken name when the avatar stands alone; nil when a name is adjacent.
+
     let standaloneLabel: String?
     let identifier: String?
 
@@ -20,7 +15,6 @@ struct ConclaveAvatar: View {
                   standaloneLabel: standaloneLabel, identifier: identifier)
     }
 
-    /// Takes the identity a presenter already cached (F00 C07 k).
     init(identity: ConclaveAvatarIdentity, size: ConclaveAvatarSize, diameter: CGFloat? = nil,
          standaloneLabel: String? = nil, identifier: String? = nil) {
         self.identity = identity
@@ -81,7 +75,6 @@ private struct AvatarSemantics: ViewModifier {
     }
 }
 
-/// The face geometry: the legacy Facehash shapes (web-parity paths) on a token fill. Static, no timers.
 struct ConclaveAvatarFace: View {
     let identity: ConclaveAvatarIdentity
     let diameter: CGFloat

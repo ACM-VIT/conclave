@@ -13,14 +13,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * SYS-15 (S70 15 c, d, j, l2, l4; SY16) on Android against the transpiled diagnostics policies, store and facade and
- * the handwritten NativePerformanceDiagnostics helpers: the 200-event ring, structural redaction, 7 days or 2 MB,
- * UTC stamps, spans over a recording seam, 20 presence cycles with one listener set and a bounded buffer, the
- * always-written export with no marker strings, the ANR trace sanitizer, the process state summary, exit reason names
- * and the share intent. Trace sections, exit records and the chooser itself are silent AVD cells. Not run in the
- * heads-down push.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class SYS15DiagnosticsBridgeTests {
@@ -65,8 +57,6 @@ class SYS15DiagnosticsBridgeTests {
     private fun crumb(code: String) = DiagnosticsBreadcrumb(code = code, phase = "live", kind = "event", atMillis = 1.0,
         attempt = 1, durationMillis = -1.0, detail = "")
 
-    // MARK: S70 15 c, j: the transpiled policies
-
     @Test
     fun theRingKeepsTheNewest200AndRedactionIsStructural() {
         val ring = DiagnosticsBreadcrumbRing(capacity = DiagnosticsLimits.breadcrumbCapacity)
@@ -106,8 +96,6 @@ class SYS15DiagnosticsBridgeTests {
         assertEquals("12", DiagnosticsJSON.number(12.0))
         assertEquals("0", DiagnosticsJSON.number(Double.NaN))
     }
-
-    // MARK: AC-SI18-2 (S70 15 l2)
 
     @Test
     fun twentyPresenceCyclesKeepOneListenerSetBalancedSpansAndABoundedBuffer() {
@@ -156,13 +144,11 @@ class SYS15DiagnosticsBridgeTests {
         assertEquals(DiagnosticsRedactionPolicy.rejectedCode, diagnostics.events.toList().last().code)
     }
 
-    // MARK: S70 15 f, l4: the export (written synchronously through the store, as the detached task does)
-
     @Test
     fun theExportCarriesMetadataAndNoMarkerStrings() {
         val store = store()
         val recording = Recording()
-        // Real wall time, so the payload below is inside the 7-day window when the store prunes on write.
+
         recording.wall = System.currentTimeMillis().toDouble()
         val diagnostics = CallDiagnostics(store = store, hooks = recording.hooks())
         diagnostics.sensitiveValues = { skip.lib.Array(listOf("Zelda Quartermaine", "lily-zoro-iris")) }
@@ -183,21 +169,19 @@ class SYS15DiagnosticsBridgeTests {
         assertFalse(text.lowercase().contains("zelda"))
         assertFalse(text.contains("lily-zoro-iris"))
         assertTrue(text.contains("socket.timeout"))
-        // The exit record is exported with its fields; its trace detail named a marker, so it is withheld.
+
         assertEquals(1, json.getJSONArray("payloads").length())
         assertEquals(1, json.getJSONObject("counters").getInt("diag.withheldPayloads"))
         assertTrue(File(outcome.path).name.startsWith(DiagnosticsFileStore.exportPrefix))
 
         diagnostics.debugForcesRedactionFailure = true
         val refused = store.export(diagnostics.makeExportInput())
-        // Robolectric runs a debuggable application, so the Debug-only seam applies here.
+
         if (DiagnosticsBuild.isDebug) {
             assertEquals(DiagnosticsExportFailure.redactionCheckFailed, refused.failure)
             assertEquals("", refused.path)
         }
     }
-
-    // MARK: S70 15 d: the handwritten Android helpers
 
     @Test
     fun anrTracesKeepOnlyFramesAndPlainThreadNames() {

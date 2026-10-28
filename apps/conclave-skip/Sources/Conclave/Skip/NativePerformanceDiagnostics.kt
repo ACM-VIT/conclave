@@ -51,25 +51,10 @@ import org.json.JSONObject
 import skip.foundation.ProcessInfo
 import skip.ui.UIApplication
 
-/*
- * ConclavePerf logging (verbose-only, unchanged) plus the Android half of SYS-15 (S70 15 d, SX7), reached from the
- * transpiled CallDiagnostics facade through DiagnosticsPlatformHooks.android() (S/Core/Diagnostics/CallDiagnostics.swift):
- * - spans: android.os.Trace async sections (API 29) named `conclave.<span>`; API 28 gets paired zero-length synchronous
- *   sections (`conclave.<span>.begin` / `.end`), because synchronous sections must nest on one thread;
- * - exit reasons: at launch, off the main thread, ActivityManager.getHistoricalProcessExitReasons(package, 0, 5) (API 30)
- *   stores reason, timestamp, importance, status and memory, the call session and phase stamped by
- *   setProcessStateSummary, and for REASON_ANR the sanitized frames of the first 64 KB of the trace. Below API 30 only
- *   the breadcrumb file exists;
- * - frame health: the existing slow-frame monitor stays verbose-only (CE O5, O6); its counts join the export;
- * - Debug builds enable StrictMode thread and VM policies with log penalties;
- * - the ring is flushed when the process stops (ProcessLifecycleOwner ON_STOP);
- * - the Settings row (sys_diag_export), its share sheet through the FileProvider `exports` path and the D20 snackbar.
- * Never logged or stored: credentials, tokens, room links or codes, names, chat, transcripts, keys, game secrets, SDP.
- */
 object NativePerformanceDiagnostics {
     private const val TAG = "ConclavePerf"
     private const val DIAG_TAG = "ConclaveDiag"
-    /** Debug only (S70 15 l5): `adb shell setprop log.tag.ConclaveDiagFail DEBUG` forces a failed redaction check. */
+
     private const val FORCE_FAILURE_TAG = "ConclaveDiagFail"
     private const val SLOW_FRAME_NS = 50_000_000L
     private const val VERY_SLOW_FRAME_NS = 100_000_000L
@@ -78,9 +63,9 @@ object NativePerformanceDiagnostics {
     private const val TRACE_PREFIX = "conclave."
     private const val PREFS_NAME = "conclave.diagnostics"
     private const val PREF_LAST_EXIT_TIMESTAMP = "lastExitTimestamp"
-    /** The FileProvider authority declared in AndroidManifest.xml. */
+
     private const val FILE_PROVIDER_SUFFIX = ".fileprovider"
-    /** setProcessStateSummary keeps at most 128 bytes. */
+
     private const val PROCESS_STATE_SUMMARY_BYTES = 128
     private const val MAX_TRACE_LINES = 2_000
     private const val MAX_TRACE_LINE_LENGTH = 240
@@ -98,7 +83,6 @@ object NativePerformanceDiagnostics {
     private val slowFrames = AtomicInteger(0)
     private val verySlowFrames = AtomicInteger(0)
 
-    /** S70 15 c: the ring is written when the app goes to the background (every activity stopped). */
     private val backgroundObserver = LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_STOP) {
             CallDiagnostics.shared.applicationDidEnterBackground()
@@ -187,14 +171,10 @@ object NativePerformanceDiagnostics {
         )
     }
 
-    // MARK: SYS-15 hooks (DiagnosticsPlatformHooks.android())
-
-    /** Monotonic milliseconds (S70 15 c breadcrumb time). */
     fun monotonicMillis(): Double = SystemClock.elapsedRealtime().toDouble()
 
     fun isDebuggable(): Boolean = AndroidRuntimeConfig.isDebuggable()
 
-    /** S70 15 d: an async trace section per span (API 29), paired synchronous marks on API 28. */
     fun traceBegin(name: String, cookie: Int) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -204,7 +184,7 @@ object NativePerformanceDiagnostics {
                 Trace.endSection()
             }
         } catch (_: Throwable) {
-            // Telemetry never blocks a call action (S70 15 k).
+
         }
     }
 
@@ -220,7 +200,6 @@ object NativePerformanceDiagnostics {
         }
     }
 
-    /** A milestone: a zero-length synchronous section. */
     fun traceInstant(name: String) {
         try {
             Trace.beginSection(traceSectionName(name))
@@ -229,22 +208,16 @@ object NativePerformanceDiagnostics {
         }
     }
 
-    /** `conclave.<name>`, at most 127 characters (the platform limit). */
     internal fun traceSectionName(name: String): String {
         val full = TRACE_PREFIX + name
         return if (full.length > 120) full.substring(0, 120) else full
     }
 
-    /** Codes and phases only, verbose builds only (logcat is not an export). */
     fun logCode(category: String, code: String, phase: String) {
         if (!verboseLogsEnabled()) return
         Log.i(DIAG_TAG, "$category $code phase=$phase")
     }
 
-    /**
-     * S70 15 d: stamps the opaque call session and phase into the process state summary (API 30), so the next launch's
-     * exit record says what the process was doing. Called on phase changes only.
-     */
     fun stampProcessState(callSession: Int, phase: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         try {
@@ -254,13 +227,11 @@ object NativePerformanceDiagnostics {
         }
     }
 
-    /** `s=<session>;p=<phase>` in UTF-8, at most 128 bytes. */
     internal fun processStateSummary(callSession: Int, phase: String): ByteArray {
         val bytes = "s=$callSession;p=$phase".toByteArray(Charsets.UTF_8)
         return if (bytes.size > PROCESS_STATE_SUMMARY_BYTES) bytes.copyOf(PROCESS_STATE_SUMMARY_BYTES) else bytes
     }
 
-    /** The session and phase back from a summary; (0, "") when absent or unreadable. */
     internal fun parseProcessStateSummary(bytes: ByteArray?): Pair<Int, String> {
         if (bytes == null || bytes.isEmpty()) return Pair(0, "")
         var session = 0
@@ -278,7 +249,6 @@ object NativePerformanceDiagnostics {
         return Pair(session, phase)
     }
 
-    /** ApplicationExitInfo reason names (the integer constants of API 30 to 34). */
     internal fun exitReasonName(reason: Int): String = when (reason) {
         0 -> "unknown"
         1 -> "exitSelf"
@@ -311,7 +281,6 @@ object NativePerformanceDiagnostics {
 
     fun osVersion(): String = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
 
-    /** The device class only (no model, no identifier). */
     fun deviceClass(): String = try {
         val width = ProcessInfo.processInfo.androidContext.resources.configuration.smallestScreenWidthDp
         if (width >= 600) "tablet" else "phone"
@@ -319,22 +288,16 @@ object NativePerformanceDiagnostics {
         "phone"
     }
 
-    /** The verbose-only slow-frame monitor's counts (CE O5, O6), joined to the export. */
     fun slowFrameCount(): Int = slowFrames.get()
 
     fun verySlowFrameCount(): Int = verySlowFrames.get()
 
     fun frameMonitorActive(): Boolean = frameMonitorStarted
 
-    /** S70 SX1 `sys.setCommunicationDevice` and `sys.volumeStream` (HD request B2-T4 R7, carried here). */
     fun setCommunicationDeviceCount(): Int = AudioRouteOwnerBridge.setCommunicationDeviceCount
 
     fun volumeStream(): Int = AudioRouteOwnerBridge.volumeStream(AudioRouteOwnerBridge.isCallAudioLive)
 
-    /**
-     * The one listener set per process (S70 15 k): the lifecycle flush and Debug StrictMode on the main thread, and the
-     * exit-reason reader on a background thread (API 30). Later calls do nothing.
-     */
     internal fun installDiagnosticsListeners(store: DiagnosticsFileStore) {
         if (diagnosticsListenersInstalled) return
         diagnosticsListenersInstalled = true
@@ -361,13 +324,11 @@ object NativePerformanceDiagnostics {
         }
     }
 
-    /** Debug only: StrictMode thread and VM policies with log penalties (S70 15 d). */
     private fun enableDebugStrictMode() {
         StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().detectAll().penaltyLog().build())
         StrictMode.setVmPolicy(StrictMode.VmPolicy.Builder().detectAll().penaltyLog().build())
     }
 
-    /** New exit records since the last launch, each stored as one payload (never on the main thread). */
     @RequiresApi(Build.VERSION_CODES.R)
     private fun collectExitReasons(context: Context, store: DiagnosticsFileStore) {
         try {
@@ -402,7 +363,6 @@ object NativePerformanceDiagnostics {
         }
     }
 
-    /** The first 64 KB of an ANR trace, reduced to stack frames (thread names kept only when they are plain words). */
     @RequiresApi(Build.VERSION_CODES.R)
     private fun readAnrTrace(info: ApplicationExitInfo): String {
         return try {
@@ -422,17 +382,12 @@ object NativePerformanceDiagnostics {
         }
     }
 
-    /** `{"traceLines": [...]}` from sanitized trace text, or "" when nothing is kept. */
     internal fun traceJSON(text: String): String {
         val lines = sanitizedTraceLines(text)
         if (lines.isEmpty()) return ""
         return JSONObject().put("traceLines", JSONArray(lines)).toString()
     }
 
-    /**
-     * Keeps only stack frames ("at ...", "native: ..."), lock and wait lines and thread headers; a thread name that is
-     * not a plain word (HTTP client threads carry URLs) becomes "thread-<n>". Lines are cut at 240 characters, 2000 at most.
-     */
     internal fun sanitizedTraceLines(text: String): List<String> {
         val result = mutableListOf<String>()
         var threadIndex = 0
@@ -464,7 +419,6 @@ object NativePerformanceDiagnostics {
     internal fun isSafeThreadName(name: String): Boolean =
         name.isNotEmpty() && name.length <= 40 && name.all { SAFE_THREAD_NAME_CHARACTERS.indexOf(it) >= 0 }
 
-    /** Debug only (AC-SI18-1): a deliberate main-thread block, long enough for an ANR when input is pending. */
     fun debugBlockMainThread(millis: Int) {
         if (!AndroidRuntimeConfig.isDebuggable() || millis <= 0) return
         try {
@@ -473,16 +427,9 @@ object NativePerformanceDiagnostics {
         }
     }
 
-    /** S70 15 l5: the Debug launch switch for the forced redaction failure (read once by CallDiagnostics.install()). */
     fun debugForcesRedactionFailure(): Boolean =
         AndroidRuntimeConfig.isDebuggable() && Log.isLoggable(FORCE_FAILURE_TAG, Log.DEBUG)
 
-    // MARK: SYS-15 export share (S70 15 b: one JSON file through the system share sheet)
-
-    /**
-     * ACTION_SEND with the FileProvider URI (res/xml/conclave_file_paths.xml `exports`, cache/exports/) through the
-     * chooser titled "Conclave diagnostics", PiP auto-enter suppressed around it (S70 8 d). False when nothing opened.
-     */
     fun shareDiagnosticsFile(context: Context, path: String, title: String): Boolean {
         return try {
             val file = File(path)
@@ -503,7 +450,6 @@ object NativePerformanceDiagnostics {
         }
     }
 
-    /** The ACTION_SEND intent (no chooser), so tests can read its extras. */
     fun buildDiagnosticsSendIntent(uri: Uri, title: String): Intent = Intent(Intent.ACTION_SEND).apply {
         type = "application/json"
         putExtra(Intent.EXTRA_STREAM, uri)
@@ -512,8 +458,6 @@ object NativePerformanceDiagnostics {
         clipData = ClipData.newRawUri(title, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-
-    // MARK: Existing perf helpers
 
     private fun startSlowFrameMonitor() {
         if (frameMonitorStarted) return
@@ -569,11 +513,6 @@ object NativePerformanceDiagnostics {
         AndroidRuntimeConfig.isDebuggable() || Log.isLoggable(TAG, Log.DEBUG)
 }
 
-/**
- * S70 15 b, e, i (R70-4) on Android: About > "Export diagnostics", a clickable M3 ListItem with Role.Button, the footer
- * sentence as its supporting text (and so its description), no trailing glyph. Mounted by SettingsRows.kt (HD request
- * B7-T4 R2); the call scope and the app scope share the one presenter.
- */
 @Composable
 internal fun DiagnosticsExportItem(presenter: DiagnosticsExportPresenter, identifier: String) {
     val exporting = presenter.phase == DiagnosticsExportPhase.exporting
@@ -586,11 +525,6 @@ internal fun DiagnosticsExportItem(presenter: DiagnosticsExportPresenter, identi
     )
 }
 
-/**
- * The export's two one-shot effects, composed once per Settings list (the call scope's InCallPage and the app scope's
- * Scaffold both pass their page snackbar): a written file opens the chooser once; a refused or failed export shows the
- * D20 snackbar `sys_diag_failed` once with `ds_retry`, never the stage toast lane (S70 15 f, l5).
- */
 @Composable
 internal fun DiagnosticsExportEffects(presenter: DiagnosticsExportPresenter, snackbar: SnackbarHostState) {
     val context = LocalContext.current
@@ -617,11 +551,6 @@ internal fun DiagnosticsExportEffects(presenter: DiagnosticsExportPresenter, sna
     }
 }
 
-/**
- * S70 SX1 Debug system fixture rows (AC-SI18-1, AC-SI18-2): the `sys.diagListeners` and `sys.diagBuffer` readouts as test
- * tags with ASCII values, a classified test error and a deliberate 6 s main-thread hang (an ANR with pending input).
- * Debug only: the facade ignores both commands in Release. Mounted by SystemFixtureRoot.kt (HD request B7-T4 R6).
- */
 @Composable
 fun DiagnosticsFixtureReadouts(modifier: Modifier = Modifier) {
     var tick by remember { mutableIntStateOf(0) }

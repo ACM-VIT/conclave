@@ -26,7 +26,7 @@ class NativeHostingBridgeTests {
         val onChanged: (Any) -> Unit = { invalidations++ }
         observer.start()
         try {
-            // SnapshotStateObserver is the read/invalidation boundary used by Compose.
+
             observer.observeReads(scope, onChanged) { cache.current() }
             presenter.setDetailsVisible(false)
             Snapshot.sendApplyNotifications()
@@ -46,7 +46,6 @@ class NativeHostingBridgeTests {
             assertFalse(before[1].isSelected)
             assertTrue(after[1].isSelected)
 
-            // Cache hits still subscribe, while duplicate and unknown actions are quiet.
             invalidations = 0
             observer.observeReads(scope, onChanged) { cache.current() }
             presenter.setRowSelected(id = "robin", selected = true)
@@ -93,7 +92,6 @@ class NativeHostingBridgeTests {
         }
     }
 
-    /** WP2-S2b: the transpiled readout values equal the Swift ones (WP2S2bFeedbackRoomSwitchTests). */
     @Test
     fun sessionReadoutValuesMatchSwift() {
         val shell = MeetingShellPresenter()

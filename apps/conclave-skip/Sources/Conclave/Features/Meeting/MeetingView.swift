@@ -10,8 +10,7 @@ enum MeetingChatOverlayLayout {
         isAndroid: Bool,
         isRegularSizeClass: Bool
     ) -> CGFloat {
-        // Docked panel: a fixed right dock on iPad/desktop, a full-width sheet on
-        // phones (matches the web chat: `w-full sm:w-[360px]`).
+
         return isRegularSizeClass ? 380.0 : containerWidth
     }
 
@@ -21,8 +20,7 @@ enum MeetingChatOverlayLayout {
         keyboardInset: CGFloat,
         isAndroid: Bool
     ) -> CGFloat {
-        // The composer sits at the very bottom of the panel; only inset for the
-        // home indicator / keyboard, not for the (now-covered) controls bar.
+
         let basePadding = max(inputFocused ? (isAndroid ? 12.0 : 20.0) : 12.0, safeAreaBottom)
         return basePadding + keyboardInset
     }
@@ -32,9 +30,7 @@ enum MeetingChatOverlayLayout {
         inputFocused: Bool,
         isAndroid: Bool
     ) -> CGFloat {
-        // Full-height docked panel (top to bottom), not a floating card.
-        // While typing on iOS, guarantee enough height for the header, a few
-        // messages, and the composer even if the keyboard inset misreports.
+
         let floor = inputFocused && !isAndroid ? 220.0 : 0.0
         return max(availableHeight, floor)
     }
@@ -133,16 +129,9 @@ struct MeetingView: View {
                             onParticipantsPressed: { openMeetingSheet(.participants) }
                         )
 
-                        // Cross-fade when the stage changes KIND (grid to
-                        // spotlight, game takeover, share start/stop). The
-                        // value scoping keeps ambient withAnimation calls and
-                        // state churn from animating stage internals; tiles
-                        // own their glide via ACMMotion.tileGlide.
                         meetingStage(containerSize: geometry.size)
                             .animation(ACMMotion.stageSwap, value: stageKind)
 
-                        // Keep this in-flow. On Android, a bottom overlay can
-                        // duplicate Skip's Compose-backed icons at the stage top.
                         ControlsBarView(
                             viewModel: viewModel,
                             availableWidth: geometry.size.width - geometry.safeAreaInsets.leading - geometry.safeAreaInsets.trailing,
@@ -165,17 +154,10 @@ struct MeetingView: View {
                         .padding(.top, 8)
                         .padding(.bottom, max(12.0, geometry.safeAreaInsets.bottom))
                     }
-                    // The stage is edge-to-edge in portrait. Header and controls
-                    // own their internal spacing; a hard 6pt column inset left
-                    // the solo tile visibly floating inside a black gutter.
-                    // Preserve only real landscape/notch safe-area insets.
+
                     .padding(.leading, geometry.safeAreaInsets.leading)
                     .padding(.trailing, geometry.safeAreaInsets.trailing)
 
-                    // Connection and moderation notices float over the stage
-                    // immediately below the header. Keeping this out of the
-                    // VStack removes the old 58pt empty slot while preserving a
-                    // stable video layout when a notice appears or disappears.
                     MeetingBannerOverlay(
                         viewModel: viewModel,
                         onShowParticipants: { openMeetingSheet(.participants) }
@@ -184,21 +166,12 @@ struct MeetingView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
                     if viewModel.state.isChatOpen && !viewModel.state.isWebinarAttendee {
-                        // This container already sits inside the top safe area
-                        // on both platforms, so only clear the in-flow meeting
-                        // header (~58pt); adding the inset doubled the gap and
-                        // on Android the inset read 0 and buried the header.
+
                         let chatTopPadding = 60.0
-                        // Keep the dock anchored below the meeting header while
-                        // the keyboard animates. Moving a fixed-height dock from
-                        // top to bottom alignment on focus places its header
-                        // halfway down the screen and clips the mention row.
+
                         let chatAlignment = Alignment.topTrailing
                         let chatKeyboardInset = 0.0
-                        // Once iOS shortens this GeometryReader to the keyboard
-                        // top, safeAreaInsets.bottom represents that keyboard
-                        // region rather than the physical home indicator. Do
-                        // not feed it back into the composer as a second inset.
+
                         let chatSafeAreaBottom = chatInputFocused && !isAndroidChatLayout
                             ? 0.0
                             : geometry.safeAreaInsets.bottom
@@ -208,10 +181,7 @@ struct MeetingView: View {
                             keyboardInset: chatKeyboardInset,
                             isAndroid: isAndroidChatLayout
                         )
-                        // Keep the dock itself full-height. The composer owns
-                        // the safe-area / keyboard inset so the opaque panel
-                        // continues covering the meeting controls while its
-                        // input stays immediately above the keyboard.
+
                         let chatMaxHeight = chatOverlayMaxHeight(
                             for: geometry.size.height - chatTopPadding,
                             inputFocused: chatInputFocused
@@ -229,10 +199,7 @@ struct MeetingView: View {
                             )
                             .frame(width: chatOverlayWidth(for: geometry.size.width))
                             #if SKIP
-                            // No computed height on Android: the panel fills
-                            // whatever the Compose insets leave, so the
-                            // keyboard resizes it instead of clipping the
-                            // composer (Jetchat inset pattern).
+
                             .frame(maxHeight: .infinity)
                             #else
                             .frame(height: chatMaxHeight)
@@ -246,9 +213,7 @@ struct MeetingView: View {
                         )
                         .padding(.top, chatTopPadding)
                         #if SKIP
-                        // navigationBars BEFORE ime: the reverse order re-adds
-                        // the nav inset on top of the keyboard (the classic
-                        // Compose double-padding bug).
+
                         .composeModifier { $0.navigationBarsPadding().imePadding() }
                         #endif
                     }
@@ -294,9 +259,7 @@ struct MeetingView: View {
                 get: { viewModel.state.isTranscriptOpen },
                 set: { viewModel.state.isTranscriptOpen = $0 }
             )) {
-                // The transcript stream is meeting-scoped, not sheet-scoped: closing
-                // the panel must not tear down a session this user may be controlling.
-                // It's opened on first appear and closed on meeting teardown.
+
                 TranscriptPanelView(viewModel: viewModel)
             }
         }
@@ -307,12 +270,7 @@ struct MeetingView: View {
         #endif
         .preferredColorScheme(.dark)
         #if SKIP
-        // Use the zero-parameter onChange overload on Android. SkipUI backs
-        // onChange with rememberSaveable; under the recomposition churn the
-        // entry-overlay fade induces, the two-parameter form can restore a
-        // null `oldValue` and crash on Kotlin's non-null param check
-        // (checkNotNullParameter). The no-arg closure never receives that
-        // value, so it is immune - and these handlers ignore both params.
+
         .onChange(of: viewModel.state.isChatOpen ? "open" : "closed") {
             if !viewModel.state.isChatOpen {
                 chatInputFocused = false
@@ -346,9 +304,6 @@ struct MeetingView: View {
         #endif
     }
 
-    /// Discrete stage surface identity - mirrors the meetingStage branch
-    /// order. The cross-fade animation is keyed to this so it fires only on
-    /// surface swaps, never on state churn inside a surface.
     private var stageKind: String {
         if viewModel.state.isWebinarAttendee {
             if viewModel.state.hasActiveScreenShare { return "webinar-present" }
@@ -400,8 +355,7 @@ struct MeetingView: View {
                 )
             )
         } else if viewModel.state.gamePublicState != nil {
-            // A running game owns the stage; play is interactive and timed,
-            // so it outranks a passive screen share on a phone.
+
             stageSwapTransition(
                 GameStageLayoutView(
                     viewModel: viewModel,
@@ -430,10 +384,6 @@ struct MeetingView: View {
     }
 }
 
-/// Isolates the short-lived reaction collection from the meeting root. A
-/// reaction arrives and expires on a timer; observing that hot state directly
-/// in `MeetingView` needlessly rebuilt the full stage, controls, and open-sheet
-/// underlay twice for every reaction.
 private struct MeetingReactionOverlayLayer: View {
     @Bindable var viewModel: MeetingViewModel
 
@@ -451,9 +401,7 @@ private struct MeetingReactionOverlayLayer: View {
 }
 
 #if canImport(UIKit) && !SKIP
-/// Chat is already a full dock and should use SwiftUI's keyboard-reduced
-/// proposal. Other meeting inputs manage overlap locally and keep the call
-/// canvas full-height so opening a keyboard never collapses the stage.
+
 private struct MeetingKeyboardSafeAreaPolicy: ViewModifier {
     let allowsSystemAvoidance: Bool
 
@@ -576,8 +524,7 @@ private struct MeetingSheetPresenter: View {
 
 @ViewBuilder
 private func stageSwapTransition<Content: View>(_ content: Content) -> some View {
-    // SkipUI maps this to Compose fadeIn/fadeOut, so both platforms get the
-    // same cross-fade, driven by the stageKind-scoped animation upstream.
+
     content.transition(.opacity)
 }
 

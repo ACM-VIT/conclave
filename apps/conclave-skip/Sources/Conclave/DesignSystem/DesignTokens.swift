@@ -2,7 +2,6 @@
 import Foundation
 
 enum DesignTokens {
-    // brand
     static let coral: Int64 = 0xFFF95F4A
     static let coralDeep: Int64 = 0xFFB94333
     static let coralBright: Int64 = 0xFFFF7D66
@@ -11,7 +10,6 @@ enum DesignTokens {
     static let ink: Int64 = 0xFF0A0A0B
     static let paper: Int64 = 0xFFFAFAFA
 
-    // neutral
     static let neutralWhite: Int64 = 0xFFFFFFFF
     static let neutralBlack: Int64 = 0xFF000000
     static let neutralTransparent: Int64 = 0x00000000
@@ -36,17 +34,14 @@ enum DesignTokens {
     static let neutralStage: Int64 = 0xFF0A0A0B
     static let neutralInkDeep: Int64 = 0xFF050506
 
-    // status.light
     static let successLight: Int64 = 0xFF166534
     static let warningLight: Int64 = 0xFF92400E
     static let liveLight: Int64 = 0xFF1D4ED8
 
-    // status.dark
     static let successDark: Int64 = 0xFF22C55E
     static let warningDark: Int64 = 0xFFFBBF24
     static let liveDark: Int64 = 0xFF60A5FA
 
-    // ios.app
     static let iosAppTextSecondaryLight: Int64 = 0xFF636366
     static let iosAppTextSecondaryLightHighContrast: Int64 = 0xFF48484A
     static let iosAppCoralFill: Int64 = 0xFFF95F4A
@@ -59,7 +54,6 @@ enum DesignTokens {
     static let iosAppLaunchBackgroundLight: Int64 = 0xFFF2F2F7
     static let iosAppLaunchBackgroundDark: Int64 = 0xFF000000
 
-    // ios.inCall
     static let iosInCallStage: Int64 = 0xFF0A0A0B
     static let iosInCallTile: Int64 = 0xFF131316
     static let iosInCallSurface: Int64 = 0xFF18181B
@@ -90,11 +84,9 @@ enum DesignTokens {
     static let iosInCallLive: Int64 = 0xFF60A5FA
     static let iosInCallLeaveHighContrast: Int64 = 0xFFE9152D
 
-    // ios.game
     static let iosGameBoardLight: Int64 = 0xFF71717A
     static let iosGameBoardDark: Int64 = 0xFF3F3F46
 
-    // android.light
     static let androidLightPrimary: Int64 = 0xFFB94333
     static let androidLightOnPrimary: Int64 = 0xFFFFFFFF
     static let androidLightPrimaryContainer: Int64 = 0xFFF95F4A
@@ -144,7 +136,6 @@ enum DesignTokens {
     static let androidLightOnTertiaryFixed: Int64 = 0xFF18181B
     static let androidLightOnTertiaryFixedVariant: Int64 = 0xFF3F3F46
 
-    // android.dark
     static let androidDarkPrimary: Int64 = 0xFFFF7D66
     static let androidDarkOnPrimary: Int64 = 0xFF0A0A0B
     static let androidDarkPrimaryContainer: Int64 = 0xFFF95F4A
@@ -194,7 +185,6 @@ enum DesignTokens {
     static let androidDarkOnTertiaryFixed: Int64 = 0xFF18181B
     static let androidDarkOnTertiaryFixedVariant: Int64 = 0xFF3F3F46
 
-    // android.inCall
     static let androidInCallPrimary: Int64 = 0xFFFF7D66
     static let androidInCallOnPrimary: Int64 = 0xFF0A0A0B
     static let androidInCallPrimaryContainer: Int64 = 0xFFF95F4A
@@ -244,7 +234,6 @@ enum DesignTokens {
     static let androidInCallOnTertiaryFixed: Int64 = 0xFF18181B
     static let androidInCallOnTertiaryFixedVariant: Int64 = 0xFF3F3F46
 
-    // android.extended
     static let androidExtendedSuccessLight: Int64 = 0xFF166534
     static let androidExtendedSuccessDark: Int64 = 0xFF22C55E
     static let androidExtendedWarningLight: Int64 = 0xFF92400E
@@ -278,7 +267,6 @@ enum DesignTokens {
     static let androidExtendedGameBoardLight: Int64 = 0xFF71717A
     static let androidExtendedGameBoardDark: Int64 = 0xFF3F3F46
 
-    // space
     static let space2: Double = 2
     static let space4: Double = 4
     static let space8: Double = 8
@@ -290,7 +278,6 @@ enum DesignTokens {
     static let space40: Double = 40
     static let space48: Double = 48
 
-    // radius
     static let radiusSmall: Double = 8
     static let radiusMedium: Double = 12
     static let radiusTile: Double = 16
@@ -300,7 +287,6 @@ enum DesignTokens {
     static let radiusBubbleTailAndroid: Double = 4
     static let radiusExtraSmallAndroid: Double = 4
 
-    // avatar
     static let avatarPalette: [Int64] = [0xFFF95F4A, 0xFFFF007A, 0xFF7C5CFF, 0xFF2DA8A8, 0xFF4F86F7, 0xFF3FA66A, 0xFFF59E0B, 0xFF14B8A6, 0xFFE879F9, 0xFF38BDF8, 0xFFFF8A3D, 0xFFFB7185, 0xFFC084FC, 0xFF6366F1, 0xFF10B981, 0xFFFF5EAE]
     static let avatarRing: Int64 = 0x2EFFFFFF
     static let avatarTongue: Int64 = 0xFFFF8FB1

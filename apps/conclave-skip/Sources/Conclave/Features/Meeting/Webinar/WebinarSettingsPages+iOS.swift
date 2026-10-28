@@ -2,22 +2,12 @@
 import SwiftUI
 import UIKit
 
-// S50 9 (PPL-5): Webinar Settings and its two pushes (Attendee Code, Custom Link) on iOS, inside every host stack
-// (Participants, the root Host Controls panel, Meeting Details; R50-2 `PeopleRoute.webinar`, `.attendeeCode`,
-// `.customLink`). A grouped `Form` in the system appearance (Default Q8 (6)), green system switches (R06), the PL4
-// pending switches from Host Controls, the 7 c draft sync (local `@State` seeded once from `host.drafts`, written back
-// on change; drafts seed from server values only while `seededFromServer` is false, 9 j), inline PL14 failures under
-// the affected row or field, and one config refresh when the page appears (not per sub-page, 9 k). Turning webinar
-// mode off while a webinar page is showing pops it (9 f).
-
-/// Webinar Settings copy (S50 9 g): Apple title case for rows, titles and buttons; sentence case for footers.
 enum WebinarSettingsText {
     static func watching(count: Int, max: Int) -> String {
         ConclaveStrings.format("Watching Count %lld %lld", count, max)
     }
 }
 
-/// Webinar Settings (S50 9 c). `link` maps a page into the container's route type (R50-2).
 struct WebinarSettingsPage<Route: Hashable>: View {
     let people: PeoplePresenter
     let link: (PeopleRoute) -> Route
@@ -66,7 +56,7 @@ struct WebinarSettingsPage<Route: Hashable>: View {
             }
             Section {
                 if !webinar.linkURL.isEmpty {
-                    // The link reads in full and wraps at slashes at any text size (9 l).
+
                     Text(webinar.linkURL)
                         .textSelection(.enabled)
                         .lineLimit(nil)
@@ -87,7 +77,7 @@ struct WebinarSettingsPage<Route: Hashable>: View {
                         }
                     }
                 }
-                // Copy of an existing link still works while recovering (9 f).
+
                 .disabled(webinar.linkURL.isEmpty && blocked)
                 .conclaveGestureFeedback(.linkCopied, trigger: copyFeedback)
                 .accessibilityIdentifier("webinar.copy")
@@ -120,7 +110,7 @@ struct WebinarSettingsPage<Route: Hashable>: View {
         .navigationTitle(ConclaveStrings.text("Webinar Settings"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // The number pad has no return key: Done commits and dismisses it (9 c).
+
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button(ConclaveStrings.text("Done")) { commitCapacity() }
@@ -130,7 +120,7 @@ struct WebinarSettingsPage<Route: Hashable>: View {
         .onAppear {
             guard !didAppear else { return }
             didAppear = true
-            // 9 j: drafts seed from the server values once; later server updates never fight an untouched draft.
+
             if !host.drafts.seededFromServer {
                 host.drafts.capacity = String(webinar.maxAttendees)
                 host.drafts.slug = webinar.linkSlug
@@ -150,7 +140,7 @@ struct WebinarSettingsPage<Route: Hashable>: View {
             if host.snapshot.savedField == HostFieldID.capacity { capacityText = host.drafts.capacity }
         }
         .onChange(of: snapshot.rotatedLinkSerial) { _, _ in
-            // 9 f: the new link is copied and announced once.
+
             let fresh = host.snapshot.webinar.linkURL
             guard !fresh.isEmpty else { return }
             UIPasteboard.general.string = fresh
@@ -168,7 +158,6 @@ struct WebinarSettingsPage<Route: Hashable>: View {
         .accessibilityIdentifier("host.page.webinar")
     }
 
-    /// Stepper with a number field (1 to 5,000, step 10) and the inline error; nothing is sent while invalid.
     private func maxAttendeesRow(pending: Bool, blocked: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Stepper(onIncrement: { stepCapacity(by: 10) }, onDecrement: { stepCapacity(by: -10) }) {
@@ -217,8 +206,6 @@ struct WebinarSettingsPage<Route: Hashable>: View {
         people.host.setMaxAttendees(value)
     }
 
-    /// Share Webinar Link: the system share sheet once a link exists; before that the row generates it through the one
-    /// owner (R34) with a row spinner, and the share row appears when the link arrives.
     @ViewBuilder
     private func shareRow(webinar: WebinarSettingsModel, blocked: Bool) -> some View {
         if let url = URL(string: webinar.linkURL), !webinar.linkURL.isEmpty {
@@ -248,7 +235,6 @@ struct WebinarSettingsPage<Route: Hashable>: View {
         }
     }
 
-    /// Copy (9 c): generates first when no link exists, then copies with the `linkCopied` gesture and "Copied" for 2 s.
     private func copyLink() {
         let host = people.host
         Task {
@@ -262,7 +248,6 @@ struct WebinarSettingsPage<Route: Hashable>: View {
     }
 }
 
-/// Reads `host.attendeeCount` only (S50 9 k), so a join or leave among attendees updates one leaf.
 private struct WebinarWatchingValue: View {
     let host: HostControlsPresenter
     let max: Int
@@ -273,7 +258,6 @@ private struct WebinarWatchingValue: View {
     }
 }
 
-/// Attendee Code (S50 9 c: mirrors 7 c with its own strings). The current code is never shown.
 struct AttendeeCodePage: View {
     let people: PeoplePresenter
     @Environment(\.dismiss) private var dismiss
@@ -365,8 +349,6 @@ struct AttendeeCodePage: View {
     }
 }
 
-/// Custom Link (S50 9 c): the field sanitized live to a to z, 0 to 9 and hyphens (at most 32), the rule as the footer
-/// (Save stays disabled under 3 characters with the rule visible), Save Link and Clear Link.
 struct CustomLinkPage: View {
     let people: PeoplePresenter
     @Environment(\.dismiss) private var dismiss

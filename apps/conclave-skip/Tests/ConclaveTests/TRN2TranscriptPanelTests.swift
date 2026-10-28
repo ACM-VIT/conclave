@@ -3,14 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// TRN-2 (OUT/PLAN-screens.md section 5; S60 6, 0.5 TranscriptPresenter, 0.6 L6-4, L6-14, 0.8 C6-11, C6-12, C6-26; S30 0.8
-/// CC8; RECONCILE R12, R52): the incremental transcript feed (C6-11: binary insertion, regrouping limited to the touched
-/// group and its neighbours, per-row revisions, stored edge-triggered `hasContent`, no rebuild during a partial stream on
-/// a 2,000-segment fixture), the presenter's snapshot table on the `transcript-*` fixtures, Stop confirming and failing,
-/// Ask rows settling on a worker error, a reconnect or 30 s, Minutes, the finals-only localized export, the recap
-/// (offersRecap, Post Recap and End with the 30 s cap, End Now) through `CallControlsPresenter`, `liveNotesFailed` once
-/// per session, and source contracts for the iOS and Android files (copy completeness, no glass outside the composer
-/// file, FileProvider export). The Kotlin half is T/Skip/TRN2TranscriptBridgeTests.kt. Not run in the heads-down push.
 @MainActor
 struct TRN2TranscriptPanelTests {
     final class Clock {
@@ -37,12 +29,10 @@ struct TRN2TranscriptPanelTests {
                                                        openQuestions: "Open Questions", followUps: "Follow-Ups",
                                                        transcript: "Transcript", speaker: "Speaker")
 
-    // MARK: Incremental feed (C6-11)
-
     @Test func theEngineGroupsLikeTheLegacyPolicyWithoutSorting() throws {
         let engine = TranscriptFeedEngine()
         var all: [TranscriptSegmentModel] = []
-        // Out of order arrivals, a speaker change, a lull that splits one speaker, a late final that merges two groups.
+
         let arrivals = [
             segment("c", 3, "sam", "three", at: 3_000), segment("a", 1, "avery", "one", at: 1_000),
             segment("e", 5, "avery", "five", at: 200_000), segment("b", 2, "avery", "two", at: 2_000),
@@ -59,7 +49,7 @@ struct TRN2TranscriptPanelTests {
         #expect(engine.segments.map { $0.itemId } == ["a", "b", "c", "d", "e", "f"])
         #expect(engine.sortCount == 0 && engine.fullRebuildCount == 0)
         #expect(engine.hasMarker(before: 2), "a lull of at least 3 minutes puts a marker before Avery's second group")
-        // The partial finalizes in place: the same groups, the text and finality patched.
+
         engine.upsert(segment("d", 4, "sam", "four done", at: 4_000))
         try #require(engine.groups.count > 1)
         #expect(engine.groups[1].text == "three four done" && engine.groups[1].isFinal)
@@ -84,7 +74,7 @@ struct TRN2TranscriptPanelTests {
         #expect(feed.rebuildCount == rebuilds, "transcript.rebuilds stays 0 during a partial stream")
         #expect(state.feedEngine.sortCount == sorts && state.feedEngine.fullRebuildCount == engineRebuilds)
         #expect(state.legacyRebuildCount == 0, "the native route never regroups the legacy presentation")
-        // Only the touched rows changed revision: at most the newest group (and a new row for a new speaker group).
+
         var changed = 0
         for id in rowIds where feed.row(id).revision != revisions[id] { changed += 1 }
         #expect(changed <= 3)
@@ -134,14 +124,12 @@ struct TRN2TranscriptPanelTests {
         #expect(!youRows.isEmpty, "the local user's groups read You")
         let long = fixture(.long)
         #expect(long.presenter.feed.rowIds.contains { $0.hasPrefix(TranscriptFeed.markerPrefix) })
-        // A partial that grows the newest row keeps its id and bumps its revision (the follow key).
+
         let before = feed.newestRevision
         let newest = feed.newestId
         driver.growNewestByFiveLines()
         #expect(feed.newestRevision != before || feed.newestId != newest)
     }
-
-    // MARK: Snapshot table (6 f, 6 l 1, 1b)
 
     @Test func fixtureSnapshotsMatchTheStatesTable() {
         let idle = fixture(.idle).presenter.snapshot
@@ -189,8 +177,6 @@ struct TRN2TranscriptPanelTests {
         #expect(driver.presenter.tab == .minutes, "a reopen keeps the last tab")
     }
 
-    // MARK: Stop (6 l 2)
-
     @Test func stopConfirmsRecordsOneCallAndEndsReadable() {
         let driver = fixture(.liveController)
         let presenter = driver.presenter
@@ -218,8 +204,6 @@ struct TRN2TranscriptPanelTests {
         #expect(presenter.callLog == ["stop", "stop"] && presenter.snapshot.stop == .stopping)
     }
 
-    // MARK: Ask (6 l 6)
-
     @Test func askRowsSettleOnWorkerErrorReconnectAndThirtySeconds() throws {
         let driver = fixture(.liveController)
         let presenter = driver.presenter
@@ -241,14 +225,14 @@ struct TRN2TranscriptPanelTests {
         clock.millis += 1_500
         presenter.expireAskRows()
         #expect(presenter.ask.row(silentId).state == .timedOut && !presenter.hasAskTimer)
-        // A reconnect settles a pending row with the app copy.
+
         driver.run(.askSilence)
         presenter.askQuestion("What are the action items?")
         try #require(presenter.ask.rowIds.count > 2)
         let pendingId = presenter.ask.rowIds[2]
         driver.state.connectionStatus = .connecting
         #expect(presenter.ask.row(pendingId).state == .error && presenter.ask.row(pendingId).errorText.isEmpty)
-        // A worker error settles with the worker text.
+
         driver.state.connectionStatus = .connected
         driver.run(.askSilence)
         presenter.askQuestion("Who owns the deck?")
@@ -275,8 +259,6 @@ struct TRN2TranscriptPanelTests {
         presenter.panelDidClose()
         #expect(presenter.drafts.ask == "half a question" && presenter.drafts.providerKey.isEmpty, "keys clear on close")
     }
-
-    // MARK: Minutes (6 l 7, 13)
 
     @Test func minutesSectionsStatusAndRefresh() throws {
         let driver = fixture(.minutes)
@@ -307,8 +289,6 @@ struct TRN2TranscriptPanelTests {
         #expect(presenter.callLog == ["postRecap"])
     }
 
-    // MARK: Export (6 l 3)
-
     @Test func exportIsFinalsOnlyLocalizedAndNamedForTheRoom() {
         let driver = fixture(.liveController)
         let presenter = driver.presenter
@@ -325,8 +305,6 @@ struct TRN2TranscriptPanelTests {
         let minutes = fixture(.minutes).presenter.exportFile(labels: Self.labels, timeLabel: { _ in "t" }).content
         #expect(minutes.contains("## Action Items") && minutes.contains("- Send the deck to the design group (Avery Lee - Friday)"))
     }
-
-    // MARK: Keys and coverage (6 c Options)
 
     @Test func keyCoverageFollowsTheWebStartCard() {
         #expect(TranscriptKeyPolicy.coverage(provider: .openAI, keysKnown: false, openAICovered: true, sarvamCovered: true) == .unknown)
@@ -358,8 +336,6 @@ struct TRN2TranscriptPanelTests {
         #expect(!relay.presenter.start(options: TranscriptStartOptions()) && relay.presenter.callLog.isEmpty)
     }
 
-    // MARK: liveNotesFailed (RECONCILE R12)
-
     @Test func liveNotesFailedPublishesOncePerSession() {
         let driver = fixture(.liveController)
         let presenter = driver.presenter
@@ -369,8 +345,6 @@ struct TRN2TranscriptPanelTests {
         driver.state.recordFailedAttempts(TranscriptPhasePolicy.maxFailedAttempts)
         #expect(presenter.feedbackState.token.sequence == start + 1, "once per call session")
     }
-
-    // MARK: Recap and End (S30 CC8)
 
     @Test func recapPolicyAndTheLeaveOverlay() {
         #expect(RecapPolicy.canPostToChat(isChatLocked: true, isHost: true, isAttendee: false, isJoined: true))
@@ -394,7 +368,7 @@ struct TRN2TranscriptPanelTests {
         recap.now = { clock.millis }
         recap.sleep = TRN2TranscriptPanelTests.longSleep
         var sent = 0
-        recap.sendRecap = { sent += 1; return true }
+        recap.sendRecap = { _ in sent += 1; return true }
         recap.endCall = { _ = host.controls.finishRecapAndEnd() }
         recap.onChange = {
             host.controls.applyRecap(RecapControlsState(offersRecap: true, isPostingBeforeEnd: recap.isPostingBeforeEnd))
@@ -416,18 +390,18 @@ struct TRN2TranscriptPanelTests {
         #expect(sent == 1 && recapCommands == [.postAndEnd] && host.endCommands == 0)
         #expect(host.leave.confirmationId == 0 && host.leave.endPhase == .postingRecap)
         #expect(host.controls.feedbackState.token.kind == .recapPostingStarted)
-        // An answer older than the request does not end the call; a newer one does.
-        recap.noteAssistantAnswerSettled(atMillis: clock.millis - 5_000, failed: false)
+
+        recap.noteAssistantAnswerSettled(answerId: recap.requestedAnswerId, atMillis: clock.millis - 5_000, failed: false)
         #expect(host.endCommands == 0)
-        recap.noteAssistantAnswerSettled(atMillis: clock.millis + 10, failed: false)
+        recap.noteAssistantAnswerSettled(answerId: recap.requestedAnswerId, atMillis: clock.millis + 10, failed: false)
         #expect(host.endCommands == 1 && recap.endCount == 1 && host.leave.endPhase != .postingRecap)
-        // The 30 s cap on a second host.
+
         let capped = RecapCoordinator()
         let capClock = Clock()
         capped.now = { capClock.millis }
         capped.sleep = TRN2TranscriptPanelTests.longSleep
         var ended = 0
-        capped.sendRecap = { true }
+        capped.sendRecap = { _ in true }
         capped.endCall = { ended += 1 }
         #expect(capped.postAndEnd() && capped.isPostingBeforeEnd && capped.hasCapTimer)
         capClock.millis += 29_000
@@ -436,17 +410,17 @@ struct TRN2TranscriptPanelTests {
         capClock.millis += 1_000
         capped.expireIfDue()
         #expect(ended == 1 && !capped.isPostingBeforeEnd)
-        // End Now ends at once; a recap the core cannot send ends at once too.
+
         let now = RecapCoordinator()
         var nowEnded = 0
         now.sleep = TRN2TranscriptPanelTests.longSleep
-        now.sendRecap = { true }
+        now.sendRecap = { _ in true }
         now.endCall = { nowEnded += 1 }
         now.postAndEnd()
         now.endNow()
         #expect(nowEnded == 1)
         let refused = RecapCoordinator()
-        refused.sendRecap = { false }
+        refused.sendRecap = { _ in false }
         #expect(!refused.postAndEnd() && refused.phase == .failed)
     }
 
@@ -459,7 +433,7 @@ struct TRN2TranscriptPanelTests {
         #expect(host.controls.confirmEndForEveryone(id: id, postRecap: true) == .dispatched)
         #expect(host.endCommands == 1 && host.leave.endPhase == .ending)
         #expect(host.controls.endNowDuringRecap() == .ignored)
-        // Without the recap on offer `postRecap` is the plain End.
+
         let plain = CTL2LeaveEndTests.Harness(CTL2LeaveEndTests.joined(isAdmin: true))
         plain.controls.onRecap = { _ in Issue.record("no recap without the offer"); return true }
         _ = plain.controls.selectLeaveMenuItem(LeaveControlPolicy.endItemId)
@@ -473,11 +447,11 @@ struct TRN2TranscriptPanelTests {
         recap.now = { clock.millis }
         recap.sleep = TRN2TranscriptPanelTests.longSleep
         var changes = 0
-        recap.sendRecap = { true }
+        recap.sendRecap = { _ in true }
         recap.onChange = { changes += 1 }
         #expect(recap.postToChat() && recap.phase == .posting)
         #expect(!recap.postToChat())
-        recap.noteAssistantAnswerSettled(atMillis: clock.millis + 1, failed: false)
+        recap.noteAssistantAnswerSettled(answerId: recap.requestedAnswerId, atMillis: clock.millis + 1, failed: false)
         #expect(recap.phase == .posted && changes == 2)
         #expect(recap.postToChat())
         clock.millis += RecapPolicy.capMillis
@@ -486,8 +460,6 @@ struct TRN2TranscriptPanelTests {
         recap.reset()
         #expect(recap.phase == .idle && !recap.hasCapTimer)
     }
-
-    // MARK: Policies
 
     @Test func viewPolicyTables() {
         #expect(TranscriptViewPolicy.body(phase: .idle, relay: .unavailable) == .relayUnavailable)
@@ -508,8 +480,6 @@ struct TRN2TranscriptPanelTests {
         #expect(TranscriptTab.allCases.count == 3 && StopPhase.allCases.count == 4 && RecapPhase.allCases.count == 4
                 && KeyCoverage.allCases.count == 4 && AskRowState.allCases.count == 6 && MinutesSection.allCases.count == 6)
     }
-
-    // MARK: Source contracts (L6-14, OQ2, C6-26)
 
     @Test func everyEnumCaseHasCopyOnBothPlatforms() throws {
         let ios = try stageSource("Sources/Conclave/Features/Meeting/Transcript/TranscriptCopy+iOS.swift")
@@ -535,7 +505,7 @@ struct TRN2TranscriptPanelTests {
                         "Android copy misses \(type).\(name)")
             }
         }
-        // Every key the iOS copy names exists in the catalog or in HD/strings/B7-T5.json (merged by the integrator).
+
         let catalog = try stageSource("Sources/Conclave/Resources/Localizable.xcstrings")
         let fragment = (try? String(contentsOfFile: "/Users/ishaan/Documents/conclave-overhaul-recovery-20261023/heads-down/strings/B7-T5.json",
                                     encoding: .utf8)) ?? ""
@@ -606,7 +576,7 @@ struct TRN2TranscriptPanelTests {
     }
 
     @Test func theCallRootRegistersTheTranscriptPanel() throws {
-        // HD request B7-T5 R4 (the call root is B7-T2's this batch): red until the integrator applies it.
+
         let ios = try stageSource("Sources/Conclave/Features/Meeting/Stage/CallRoot+iOS.swift")
         #expect(ios.contains("TranscriptPanel(transcript: shell.transcript"))
         let android = try stageSource("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt")

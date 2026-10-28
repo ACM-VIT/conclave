@@ -3,15 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SET-6 (OUT/PLAN-screens.md section 5; S60 4, 0.6 L6-7, 0.8 C6-21, 0.7 R6-6 and R6-10; RECONCILE R9, R28, R31, OQ6;
-/// S30 Q7): the EffectsAvailability gate (OQ6 default A: production publishes no panel, so every entry stays hidden;
-/// iOS offers only the system module once WP3 can show it), the picker on the fake WP10 engine (one `select` per tile,
-/// zero `producerCreate`, one S1 camera intent for Turn On for Everyone), the camera states, the personal image rules,
-/// the iOS system effects blocks, the iOS self view lift while Effects is open (R6-6) and source pins on both platforms.
-/// Nothing here segments, captures or publishes.
 @MainActor
 struct SET6EffectsTests {
-    // MARK: Gate (OQ6 default A; 4 l1)
 
     @Test func productionPublishesNoPanelAndAndroidNothingAtAll() {
         #expect(!EffectsAvailabilityPolicy.shippedEnginePublishesPanel)
@@ -23,12 +16,12 @@ struct SET6EffectsTests {
             #expect(EffectsAvailabilityPolicy.showsPanelEntry(availability) == (availability == .panel))
             #expect(EffectsAvailabilityPolicy.showsSystemModuleEntry(availability) == (availability == .systemModule))
         }
-        // A presenter with no engine: hidden, no tabs, nothing selectable, nothing dispatched.
+
         let presenter = EffectsPresenter(scope: .call, platform: .ios, defaults: Self.freshDefaults())
         presenter.apply(EffectsFixtureState.cameraOn.inputs())
         #expect(presenter.snapshot.availability == .hidden && presenter.snapshot.tabs.isEmpty && !presenter.snapshot.tilesEnabled)
         #expect(presenter.select(id: EffectsCatalog.blur) == .ignored && presenter.dispatched.isEmpty)
-        // The stage fixture without an engine keeps the panel closed.
+
         let hidden = StageFixtureSession(state: .effectsHidden)
         #expect(hidden.stage.effects.snapshot.availability == .hidden && hidden.panelReadout() == "none")
     }
@@ -46,8 +39,6 @@ struct SET6EffectsTests {
         #expect(EffectsCameraPolicy.canPreview(.off) && !EffectsCameraPolicy.canPreview(.interrupted))
     }
 
-    // MARK: The fake engine (4 l3, l4, l5)
-
     @Test func selectingBlurRecordsOneSelectAndMarksTheTile() {
         let (presenter, engine) = Self.make(.cameraOn)
         #expect(presenter.snapshot.availability == .panel && presenter.snapshot.tilesEnabled)
@@ -58,7 +49,7 @@ struct SET6EffectsTests {
         #expect(blur?.isSelected == true && blur?.isProcessing == false)
         #expect(presenter.select(id: EffectsCatalog.blur) == .ignored, "the current choice dispatches nothing (no second haptic)")
         #expect(presenter.snapshot.active.map { $0.id } == [EffectsCatalog.blur] && presenter.snapshot.showsPublishCap)
-        // An Appearance row toggles; a filter is a second single choice.
+
         #expect(presenter.select(id: EffectsCatalog.studioLook) == .dispatched)
         #expect(presenter.select(id: "sparkles") == .dispatched)
         #expect(presenter.snapshot.active.count == 3)
@@ -95,7 +86,7 @@ struct SET6EffectsTests {
         #expect(cameraIntents == 1 && engine.mediaCalls == ["previewStart", "previewStop"])
         #expect(engine.count("producerCreate") == 0, "4 l4: the preview never publishes")
         #expect(presenter.snapshot.camera == .on && !presenter.snapshot.canTurnCameraOn)
-        // Closing the panel stops a running preview.
+
         let (other, otherEngine) = Self.make(.cameraOff)
         other.startPreview()
         other.panelDidClose()
@@ -118,8 +109,6 @@ struct SET6EffectsTests {
         #expect(preparing.snapshot.isPreparing)
     }
 
-    // MARK: Personal images (4 j, l6)
-
     @Test func personalImageRulesFollowTheWebLimitsAndTheNativeFormats() {
         #expect(EffectsImagePolicy.sourceIssue(byteCount: 1_000, personalCount: 8) == .limit)
         #expect(EffectsImagePolicy.sourceIssue(byteCount: 13 * 1024 * 1024, personalCount: 0) == .size)
@@ -132,7 +121,7 @@ struct SET6EffectsTests {
         #expect(EffectsImagePolicy.attempts.map { $0.maxDimension } == [1600, 1400, 1200, 960])
         #expect(EffectsImagePolicy.acceptedTypes.contains("image/heic") && EffectsImagePolicy.acceptedTypes.contains("image/webp"))
         #expect(EffectsImagePolicy.personalId("a.jpg") == "personal:a.jpg" && EffectsImagePolicy.fileName(fromPersonalId: "personal:a.jpg") == "a.jpg")
-        // Through the presenter: eight kept, the ninth refused with the limit copy; a removed shown image falls back to None.
+
         let (presenter, engine) = Self.make(.cameraOn)
         for index in 0..<8 {
             #expect(presenter.canBeginAddingPersonalImage())
@@ -166,8 +155,6 @@ struct SET6EffectsTests {
         #expect(EffectsPreferences.list(" a, b ,a,,c ") == ["a", "b", "c"])
     }
 
-    // MARK: iOS system effects (4 c, l8; C6-21)
-
     @Test func systemEffectsBlockAppEffectsAndCenterStageGoesToTheCaptureOwner() {
         let (portrait, engine) = Self.make(.portrait)
         let blurTiles = portrait.snapshot.tab(EffectsCatalog.backgrounds)?.items.filter { $0.kind == .blur } ?? []
@@ -182,7 +169,7 @@ struct SET6EffectsTests {
         #expect(stageCam.setCenterStage(true) == .ignored)
         let (studio, _) = Self.make(.studioLight)
         #expect(studio.snapshot.system.studioLightSupported && studio.snapshot.system.studioLightOn)
-        // Android has no system effects: zeroed and Center Stage ignored.
+
         let android = EffectsPresenter(scope: .call, platform: .android, defaults: Self.freshDefaults())
         FakeEffectsEngine().install(on: android)
         android.apply(EffectsFixtureState.centerStage.inputs())
@@ -190,8 +177,6 @@ struct SET6EffectsTests {
         android.showSystemVideoEffects()
         #expect(android.count(.showSystemVideoEffects) == 0)
     }
-
-    // MARK: The iOS self view lift (R6-6, RECONCILE R28)
 
     @Test func effectsLiftsTheFloatingSelfViewOnIosOnly() {
         #expect(EffectsSelfViewPolicy.liftsSelfView(platform: .ios, isEffectsOpen: true))
@@ -213,8 +198,6 @@ struct SET6EffectsTests {
         }
     }
 
-    // MARK: Fixtures (L6-12 `effects-*`)
-
     @Test func effectsFixturesOpenThePanelOnTheFakeEngine() {
         let session = StageFixtureSession(state: .effectsCameraOff)
         #expect(session.panelReadout() == "panel=effects invoker=call destination=none")
@@ -222,13 +205,11 @@ struct SET6EffectsTests {
         session.stage.effects.startPreview()
         #expect(session.effectsCallsReadout() == "wp10=none wp3=previewStart")
         #expect(session.stage.effects.turnCameraOnForEveryone() == .dispatched)
-        // The S1 camera intent reached the scripted core once: your roster row has the camera on.
+
         #expect(session.stage.inputs.participant(StageFixtureScript.localUserId)?.isCameraOff == false)
         let portrait = StageFixtureSession(state: .effectsPortrait)
         #expect(portrait.stage.effects.snapshot.system.portraitActive)
     }
-
-    // MARK: Sources
 
     @Test func iosEffectsSourcesDeferToTheSystemAndStayDark() throws {
         let panel = try Self.source("Sources/Conclave/Features/Meeting/Effects/EffectsPanel+iOS.swift")
@@ -290,11 +271,9 @@ struct SET6EffectsTests {
         let shared = try Self.source("Sources/Conclave/Features/Meeting/Effects/EffectsPresenter.swift")
         #expect(stageMatches(#"\bprotocol\s"#, in: shared).isEmpty && stageMatches(#"case\s+\w+\("#, in: shared).isEmpty)
         #expect(stageMatches(#"\.(map|compactMap|flatMap)\(\w+(\.init)?\)"#, in: shared).isEmpty)
-        // The only platform branch in the shared file is the platform input itself.
+
         #expect(shared.components(separatedBy: "#if SKIP").count - 1 == 1)
     }
-
-    // MARK: Strings (L6-14; red until the integrator merges HD/strings/B7-T2.json)
 
     @Test func effectsStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(Self.source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
@@ -319,8 +298,6 @@ struct SET6EffectsTests {
         }
     }
 
-    // MARK: Helpers
-
     static func make(_ state: EffectsFixtureState) -> (EffectsPresenter, FakeEffectsEngine) {
         let presenter = EffectsPresenter(scope: .call, platform: .ios, defaults: Self.freshDefaults())
         let engine = FakeEffectsEngine()
@@ -342,7 +319,6 @@ struct SET6EffectsTests {
     }
 }
 
-/// The first capture group of every match.
 private func set6Captures(_ pattern: String, in text: String) -> [String] {
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
     let ns = text as NSString

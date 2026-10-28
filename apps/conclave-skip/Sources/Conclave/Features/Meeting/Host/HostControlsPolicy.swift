@@ -1,17 +1,13 @@
 import Foundation
 
-/// S50 6 to 8 (shared, pure): policy and bulk rows from the core inputs and the ledger, the validation rules for the
-/// access key, the notice and the webinar fields, and the ledger keys. Both platforms and both test hosts call these.
 enum HostControlsPolicy {
-    /// `admin:broadcastNotice` caps the text at 2,000 characters (adminHandlers.ts:38); the counter shows from 1,800.
+
     static let noticeLimit = 2000
     static let noticeCounterFrom = 1800
-    /// The view model's access key rule (non-empty, at most 256, no control characters; S50 7 j).
+
     static let accessKeyLimit = 256
     static let capacityMin = 1
     static let capacityMax = 5000
-
-    // MARK: Ledger keys (S50 6 j)
 
     static func policyKey(_ id: HostPolicyID) -> String { "policy:" + id.rawValue }
 
@@ -21,9 +17,6 @@ enum HostControlsPolicy {
 
     static func fieldKey(_ field: String) -> String { "field:" + field }
 
-    // MARK: Policies (PL4)
-
-    /// The server state each switch shows (S50 6 j): positive phrasing, so "Allow Chat" is on while chat is unlocked.
     static func isOn(_ id: HostPolicyID, inputs: HostControlsInputs) -> Bool {
         switch id {
         case .lockMeeting: return inputs.isRoomLocked
@@ -42,7 +35,6 @@ enum HostControlsPolicy {
         }
     }
 
-    /// Every switch in `HostPolicyID` order. `requested` maps a pending policy's raw value to the value it asked for.
     static func policyRows(_ inputs: HostControlsInputs, blockedReason: String, pendingPolicies: [String],
                            requested: [String: Bool]) -> [HostPolicyRow] {
         var rows: [HostPolicyRow] = []
@@ -57,10 +49,6 @@ enum HostControlsPolicy {
         return rows
     }
 
-    // MARK: Bulk (S50 6 f)
-
-    /// Mute Everyone and Turn Off Everyone's Camera always show; Stop All Screen Shares only while someone shares;
-    /// Lower All Hands only while a hand is up.
     static func bulkRows(blockedReason: String, hasActiveShare: Bool, anyHandRaised: Bool, pendingBulk: [String]) -> [HostBulkRow] {
         var rows: [HostBulkRow] = []
         let blocked = blockedReason != MeetingBlockedReason.none.rawValue
@@ -76,7 +64,6 @@ enum HostControlsPolicy {
         return rows
     }
 
-    /// Q9: the bulk media actions confirm; Lower All Hands acts at once.
     static func confirmationKind(_ id: HostBulkID) -> PeopleConfirmationKind? {
         switch id {
         case .muteAll: return PeopleConfirmationKind.muteAll
@@ -95,9 +82,6 @@ enum HostControlsPolicy {
         }
     }
 
-    // MARK: Access (S50 7)
-
-    /// Sorted at apply time (7 k), never in a body.
     static func accessSummary(_ inputs: HostControlsInputs) -> HostAccessSummary {
         let allowed = inputs.allowedKeys.sorted()
         let locked = inputs.lockedAllowedKeys.sorted()
@@ -108,7 +92,6 @@ enum HostControlsPolicy {
                                  blocked: blocked)
     }
 
-    /// The view model's normalization (`normalizedAdminAccessUserKey`), or nil when the key is not valid.
     static func normalizedAccessKey(_ value: String) -> String? {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if normalized.isEmpty || normalized.count > accessKeyLimit { return nil }
@@ -119,19 +102,14 @@ enum HostControlsPolicy {
         return normalized
     }
 
-    /// The field shows "Enter a valid user key or email." only for text that is present but invalid (7 f).
     static func showsInvalidAccessKey(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty && normalizedAccessKey(value) == nil
     }
 
-    // MARK: Invite code (S50 7 c)
-
     static func canSaveInviteCode(_ draft: String, isPending: Bool, isBlocked: Bool) -> Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isPending && !isBlocked
     }
-
-    // MARK: Notice (S50 8)
 
     static func showsNoticeCounter(_ count: Int) -> Bool { count >= noticeCounterFrom }
 
@@ -146,9 +124,6 @@ enum HostControlsPolicy {
         HostNoticeLevel.all.contains(level) ? level : HostNoticeLevel.info
     }
 
-    // MARK: Webinar fields (S50 9, PPL-5 pages)
-
-    /// The view model's slug rule (3 to 32 lowercase letters, digits or hyphens).
     static func isValidSlug(_ slug: String) -> Bool {
         let trimmed = slug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.count < 3 || trimmed.count > 32 { return false }
@@ -159,7 +134,6 @@ enum HostControlsPolicy {
         return true
     }
 
-    /// The capacity as typed, or nil outside 1 to 5,000.
     static func capacity(_ text: String) -> Int? {
         guard let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
         if value < capacityMin || value > capacityMax { return nil }

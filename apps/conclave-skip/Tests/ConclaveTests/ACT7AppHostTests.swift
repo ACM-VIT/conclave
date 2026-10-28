@@ -3,14 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ACT-7 (OUT/PLAN-screens.md section 5, S60 13, 0.5 AppHostPresenter, L6-8, L6-15, C6-18, C6-19, C6-25, Q14): the
-/// native embed bridge codec against the shared contract fixtures (packages/apps-sdk/src/native-embed/
-/// contract-fixtures.json, also run by the SDK's node contract test), hostile message rejection without content, the
-/// relay moved out of the view model (`ActiveAppSession`: snapshot first, buffered remote bytes, a reconnect that sends
-/// nothing twice, read-only, version mismatch, replaced sessions), a cursor flood that publishes nothing observable, the
-/// app host presenter (phases, tags, pending until ack, timeouts, close and lock with their failure outcome, Try Again,
-/// Wheel and Watch until ACT-8), the Pencil mapping, and source scans of both platforms' hosts and registries. The Kotlin
-/// half is T/Skip/ACT7AppHostBridgeTests.kt.
 @MainActor
 struct ACT7AppHostTests {
     private final class Wire {
@@ -50,7 +42,7 @@ struct ACT7AppHostTests {
                           version: Int = 1, appSessionId: String? = nil) -> String {
         let object: [String: Any] = ["v": version, "type": type, "callSessionId": session.callSessionId,
                                      "appSessionId": appSessionId ?? session.appSessionId, "requestId": requestId, "payload": payload]
-        // A bad payload fails this test instead of aborting the whole run (an invalid object raises, it never throws).
+
         guard JSONSerialization.isValidJSONObject(object), let data = try? JSONSerialization.data(withJSONObject: object),
               let text = String(data: data, encoding: .utf8) else {
             Issue.record("the \(type) envelope is not a JSON object")
@@ -71,8 +63,6 @@ struct ACT7AppHostTests {
             try? await Task.sleep(nanoseconds: 1_000_000)
         }
     }
-
-    // MARK: Codec and contract fixtures
 
     @Test func codecMatchesTheSharedContractFixtures() throws {
         let data = try Data(contentsOf: act7RepoRoot().appendingPathComponent("packages/apps-sdk/src/native-embed/contract-fixtures.json"))
@@ -142,8 +132,6 @@ struct ACT7AppHostTests {
         #expect(AppPencilPolicy.response(rawAction: 6) == .none)
         #expect(AppPencilPolicy.response(rawAction: 99) == .none)
     }
-
-    // MARK: Relay (ActiveAppSession, C6-18)
 
     @Test func hostileMessagesAreRejectedAndCountedWithoutContent() {
         let wire = Wire()
@@ -322,8 +310,6 @@ struct ACT7AppHostTests {
         #expect(viewModel.activeAppSession.pendingRemote.count <= ActiveAppSession.pendingItemLimit)
     }
 
-    // MARK: Presenter (S60 0.5, 13 j)
-
     private func host(_ wire: Wire, inputs: AppHostInputs) -> (AppHostPresenter, ActiveAppSession) {
         let presenter = AppHostPresenter()
         presenter.sleep = { _ in try? await Task.sleep(nanoseconds: 60_000_000_000) }
@@ -333,6 +319,7 @@ struct ACT7AppHostTests {
         presenter.bind(session: relay)
         relay.begin(appId: inputs.appId, callSessionId: Self.call, isReadOnly: !AppHostPresenter.canEdit(
             isAttendee: inputs.isAttendee, isHost: inputs.isHost, isLocked: inputs.isLocked))
+        relay.acceptPrimedSnapshot(wire.syncResponse, appSessionId: relay.appSessionId)
         presenter.apply(inputs)
         relay.attachBridge(appSessionId: relay.appSessionId) { [wire] json in wire.delivered.append(json) }
         return (presenter, relay)
@@ -472,8 +459,6 @@ struct ACT7AppHostTests {
         #expect(AppHostFixtures.state(named: "app-nope") == nil)
     }
 
-    // MARK: Source scans
-
     @Test func hostsAndRegistriesKeepTheIsolationRules() throws {
         let ios = try act7Source("Sources/Conclave/Features/Meeting/Activities/NativeAppHost+iOS.swift")
         let iosRegistry = try act7Source("Sources/Conclave/Features/Meeting/Activities/ActivityWebViewRegistry+iOS.swift")
@@ -525,7 +510,6 @@ struct ACT7AppHostTests {
         #expect(FileManager.default.fileExists(atPath: act7RepoRoot().appendingPathComponent("packages/apps-sdk/scripts/native-embed-contract-test.mjs").path))
     }
 
-    /// True after the batch 7 strings merge (HD/strings/B7-T1.json).
     @Test func appHostStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: act7PackageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
         let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])

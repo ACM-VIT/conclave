@@ -14,10 +14,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.w3c.dom.Element
 
-/** SYS-9: use Android's real forward-only matcher on the paths read from the shipped manifest.
- * The library test has no app resources: versioned enabled resources are read from source here;
- * packaged alias resolution and cold/warm singleTask delivery still require the app runtime gate.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [31])
 class SYS9AppLinkMatcherTests {
@@ -44,7 +40,7 @@ class SYS9AppLinkMatcherTests {
         for (host in hosts) {
             for (path in accepted) {
                 assertTrue("$host$path", captures(filters, "https://$host$path"))
-                // Query and fragment stay outside the path matcher.
+
                 assertTrue("$host$path with invite", captures(filters, "https://$host$path?invite=abc#join"))
                 val target = NativeJoinLinkParser.parse("https://$host$path", allowRoomCreationForURLs = true)
                 assertFalse("parser rejects $path", target.roomId.isEmpty())
@@ -94,8 +90,7 @@ class SYS9AppLinkMatcherTests {
     }
 
     @Test fun placeholderWebinarPathsStillFailClosedAtParserIntake() {
-        // Manifest matching validates shape, not whether a webinar code was issued. No regex lookahead is
-        // available to exclude reserved words; retain the parser's explicit invalid-link behavior.
+
         for (path in listOf("/w/null", "/w/undefined")) {
             assertTrue(captures(manifestFilters(), "https://${hosts[0]}$path"))
             assertEquals("", NativeJoinLinkParser.parse("https://${hosts[0]}$path").roomId)

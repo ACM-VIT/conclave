@@ -61,16 +61,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/*
- * S60 6 d (TRN-2): the Transcript panel on Android, one InCallPage in the system theme (content panels follow the system
- * appearance) in lazyList mode with a static composer slot (PanelPresentationPolicy.hasBottomComposer(.transcript), so
- * the mini tile never moves between corners; an empty slot keeps it at TopEnd). The app bar overflow (InCallPage
- * `actions`) holds Export, Copy, Post recap to chat and Stop live notes; the PrimaryTabRow (FND-3 ConclaveTabSwitch)
- * switches Transcript, Ask and Minutes with no haptic; the status row carries Pause/Resume and Stop for controllers;
- * the start card is a LazyColumn with the Start bar in the composer slot (above the IME and the mini tile). Copy and
- * recap feedback use the page snackbar (D23). Registered in the native call root by request (HD request B7-T5 R4); the
- * page reads only the presenter's snapshot and leaves.
- */
 @Composable
 internal fun TranscriptPage(
     presenter: TranscriptPresenter,
@@ -94,7 +84,7 @@ internal fun TranscriptPage(
     DisposableEffect(presenter) {
         onDispose { presenter.panelDidClose() }
     }
-    // R40-2: a destination for the panel that is already current (the catch-up banner while Transcript is open).
+
     val destination = panels.destinationRequest
     LaunchedEffect(destination?.sequence) {
         val latest = panels.latestDestination(request.presentationID) ?: return@LaunchedEffect
@@ -107,7 +97,7 @@ internal fun TranscriptPage(
     val recapPosted = conclaveString("trn_recap_posted")
     val recapFailed = conclaveString("trn_recap_failed")
     val tryAgain = conclaveString("ds_try_again")
-    // D23: recap results are page snackbars on Android (the toast lane receives nothing, 6 l 13).
+
     val announcement = presenter.announcement
     LaunchedEffect(announcement?.id) {
         val kind = announcement?.kind ?: return@LaunchedEffect
@@ -192,11 +182,6 @@ internal fun TranscriptPage(
     }
 }
 
-/**
- * Page-local state shared by the composer slot and the lists: the Ask draft and the Options draft (seeded from the
- * presenter's per-call drafts and written back, so they survive tab switches and a reopen; the keys come back empty
- * after a close, 6 j), and the open menu and dialog flags.
- */
 internal class TranscriptPageState(val presenter: TranscriptPresenter) {
     var askDraft by mutableStateOf("")
     var provider by mutableStateOf(TranscriptProvider.openAI)
@@ -253,7 +238,6 @@ internal class TranscriptPageState(val presenter: TranscriptPresenter) {
     }
 }
 
-/** The app bar overflow (6 d): Export, Copy, Post recap to chat and Stop live notes (error color). */
 @Composable
 private fun TranscriptOverflowMenu(
     presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, page: TranscriptPageState, onExport: () -> Unit, onCopy: () -> Unit,
@@ -316,7 +300,6 @@ private fun TranscriptOverflowMenu(
     }
 }
 
-/** "Stop live notes for everyone?" (6 g): the FND-1 ConclaveDialog with the error-colored confirm and Cancel. */
 @Composable
 private fun TranscriptStopDialog(presenter: TranscriptPresenter) {
     val title = conclaveString("trn_stop_title")
@@ -330,7 +313,6 @@ private fun TranscriptStopDialog(presenter: TranscriptPresenter) {
         onDismiss = { presenter.cancelStop() })
 }
 
-/** The tab row, the status row, the issue banner and (Debug) the fixture bar above the lists. */
 @Composable
 private fun TranscriptSessionHeader(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, tab: TranscriptTab, page: TranscriptPageState) {
     val tabs = snapshot.tabs.toList()
@@ -346,7 +328,6 @@ private fun TranscriptSessionHeader(presenter: TranscriptPresenter, snapshot: Tr
     }
 }
 
-/** Status text with its dot or spinner and the host line, then OutlinedButton Pause/Resume and OutlinedButton(error) Stop. */
 @Composable
 private fun TranscriptStatusRow(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, page: TranscriptPageState) {
     val scheme = MaterialTheme.colorScheme
@@ -418,7 +399,6 @@ private fun TranscriptStatusRow(presenter: TranscriptPresenter, snapshot: Transc
     }
 }
 
-/** The issue row (F00 C12, system palette) and the stop failure, each with Try again where it applies. */
 @Composable
 private fun TranscriptIssueBanner(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot) {
     val tryAgain = conclaveString("ds_try_again")
@@ -442,11 +422,6 @@ private fun TranscriptIssueBanner(presenter: TranscriptPresenter, snapshot: Tran
     )
 }
 
-/**
- * The start card (6 d): kicker in primary with the "Beta" tag, the title, the blurb, Show options / Hide options, the
- * provider segmented row (C21), the assistant model ListItem opening a single-choice dialog, the key fields, and the
- * coverage ListItem with its status icon. View only: the card without options.
- */
 @Composable
 private fun TranscriptStartCard(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, page: TranscriptPageState, reservation: PaddingValues) {
     val scheme = MaterialTheme.colorScheme
@@ -544,7 +519,6 @@ private fun TranscriptStartCard(presenter: TranscriptPresenter, snapshot: Transc
     }
 }
 
-/** The assistant model chooser (6 d: a single-choice AlertDialog). */
 @Composable
 private fun TranscriptModelDialog(page: TranscriptPageState) {
     AlertDialog(
@@ -582,7 +556,6 @@ private fun TranscriptModelDialog(page: TranscriptPageState) {
     )
 }
 
-/** A key field: masked, no autocorrect, labelled (6 d). */
 @Composable
 private fun TranscriptKeyField(label: String, value: String, onValueChange: (String) -> Unit, identifier: String) {
     OutlinedTextField(
@@ -597,7 +570,6 @@ private fun TranscriptKeyField(label: String, value: String, onValueChange: (Str
     )
 }
 
-/** A neutral tag ("Beta", "View only"): never coral (C06). */
 @Composable
 private fun TranscriptTag(text: String, identifier: String) {
     val scheme = MaterialTheme.colorScheme
@@ -608,7 +580,6 @@ private fun TranscriptTag(text: String, identifier: String) {
     }
 }
 
-/** Start notes / Resume notes in the composer slot (primaryContainer), above the IME and the mini tile (6 d). */
 @Composable
 private fun TranscriptStartBar(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, page: TranscriptPageState) {
     val ready = TranscriptKeyPolicy.hasRequiredKeys(provider = page.provider, keysKnown = snapshot.keysKnown,
@@ -629,7 +600,6 @@ private fun TranscriptStartBar(presenter: TranscriptPresenter, snapshot: Transcr
     )
 }
 
-/** One hidden polite live region owned by the page, never on rows (6 i): started, paused, stopped, answer ready. */
 @Composable
 private fun TranscriptAnnouncementRegion(presenter: TranscriptPresenter) {
     val announcement = presenter.announcement ?: return
@@ -641,10 +611,6 @@ private fun TranscriptAnnouncementRegion(presenter: TranscriptPresenter) {
     })
 }
 
-/**
- * With TalkBack on and the Transcript tab visible, each newly finalized line in a hidden polite live region, at most
- * once every 2 s (only the latest of a burst), never partials (6 i).
- */
 @Composable
 private fun TranscriptFinalizedRegion(feed: TranscriptFeed) {
     var spoken by remember { mutableStateOf("") }
@@ -665,7 +631,6 @@ private fun TranscriptFinalizedRegion(feed: TranscriptFeed) {
     })
 }
 
-/** L6-12: the Debug fixture's script bar and the `transcript.calls` readout (only while a fixture driver is installed). */
 @Composable
 private fun TranscriptFixtureBar() {
     var refresh by remember { mutableStateOf(0) }

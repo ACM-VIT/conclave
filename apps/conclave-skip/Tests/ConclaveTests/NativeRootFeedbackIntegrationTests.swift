@@ -3,8 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// Production publisher selection plus the shared delivery cursor. Platform adapters are covered below on iOS and
-/// in NativeRootFeedbackBridgeTests on Android; all sinks are recording-only, with no view model or network owner.
 @MainActor
 struct NativeRootFeedbackIntegrationTests {
     @MainActor
@@ -48,8 +46,6 @@ struct NativeRootFeedbackIntegrationTests {
         }
     }
 
-    /// Drives the same shared cursor and production source/allowlist with the canonical platform mapper. This is
-    /// host-testable selection/lifecycle evidence; it does not claim to execute the iOS platform adapter.
     @MainActor
     private final class RecordingConsumer {
         let source: NativeCallFeedbackSource

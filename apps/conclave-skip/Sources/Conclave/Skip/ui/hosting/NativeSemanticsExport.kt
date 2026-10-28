@@ -43,35 +43,13 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.Locale
 
-/*
- * Debug-only semantics exporter (PLAN A15). A uiautomator dump has bounds, labels, text and tags but no
- * stateDescription, heading, pane title, live region or traversal data, which the native screens rely on. This
- * walks the Compose semantics tree of the hosting preview through ViewRootForTest.semanticsOwner (public at
- * the pinned compose-ui) and writes ASCII JSON to the app cache:
- *
- *   adb shell am broadcast -a conclave.debug.EXPORT_SEMANTICS -p com.acmvit.conclave
- *   adb exec-out run-as com.acmvit.conclave cat cache/wp1-semantics/latest.json
- *
- * The receiver exists only while the Debug preview is composed, and only senders that hold DUMP (adb shell)
- * reach it, so an export also works while a panel covers the preview's own button. The newest 20 exports are
- * kept; older ones are deleted after each write. Node order is the
- * semantics tree order, not TalkBack's sorted traversal; bounds, traversal groups and indices are exported so
- * the order can be derived, and TalkBack stays the spoken check.
- *
- * S40 R40-11 (FND-3): nodes also carry their custom accessibility action labels and the long-click label, and every
- * sheet, dialog and dropdown popup root registers its own window through NativeSemanticsPopupRoot (popups are
- * separate Compose roots that the hosting LocalView walk cannot reach). Each registered root is exported as its own
- * merged and unmerged trees; the popup content sets testTagsAsResourceId, which the activity root does not reach.
- */
-
 internal const val NATIVE_SEMANTICS_EXPORT_ACTION = "conclave.debug.EXPORT_SEMANTICS"
 internal const val NATIVE_SEMANTICS_EXPORT_DIRECTORY = "wp1-semantics"
-/** Exports kept in the cache; older ones are deleted after each write, so a scripted matrix stays bounded. */
+
 internal const val NATIVE_SEMANTICS_EXPORTS_KEPT = 20
 private const val SEMANTICS_EXPORT_MAX_NODES = 4_000
 private const val SEMANTICS_EXPORT_MAX_BYTES = 8 * 1024 * 1024
 
-/** One exported node. Property order is the JSON key order. Bounds are window pixels. */
 internal data class SemanticsExportNode(
     val id: Int,
     val parent: Int,
@@ -98,14 +76,12 @@ internal data class SemanticsExportNode(
     val top: Float,
     val right: Float,
     val bottom: Float,
-    /** Labels of SemanticsActions.CustomActions, in order (S40 R40-11). */
+
     val customActions: List<String> = emptyList(),
-    /** The OnLongClick action's label, null without a long click or a label. */
+
     val onLongClickLabel: String? = null,
 )
 
-/** A deterministic writer: fixed key order, Locale.ROOT numbers, and every non-ASCII character escaped, so
- *  the file stays ASCII and parsable under any locale, Arabic-Indic digits included (icon review M1). */
 internal object NativeSemanticsJson {
     fun string(value: String?): String {
         if (value == null) return "null"
@@ -132,7 +108,6 @@ internal object NativeSemanticsJson {
 
     fun number(value: Float): String = if (value.isFinite()) String.format(Locale.ROOT, "%.1f", value) else "null"
 
-    /** Three decimals, so header scales such as font scale 0.85 and 1.15 keep their identity (bounds use one). */
     fun scale(value: Float): String = if (value.isFinite()) String.format(Locale.ROOT, "%.3f", value) else "null"
 
     fun flag(value: Boolean?): String = when (value) {
@@ -157,7 +132,6 @@ internal object NativeSemanticsJson {
         "bounds" to listOf(n.left, n.top, n.right, n.bottom).joinToString(",", "[", "]") { number(it) },
     ).joinToString(",", "{", "}") { (key, value) -> string(key) + ":" + value }
 
-    /** `header` values are already encoded; each tree prints one node per line. */
     fun document(header: List<Pair<String, String>>, trees: List<Pair<String, List<SemanticsExportNode>>>): String {
         val fields = header.map { (key, value) -> string(key) + ": " + value } +
             trees.map { (key, nodes) -> string(key) + ": [" + nodes.joinToString(",\n", "\n", "\n") { node(it) } + "]" }
@@ -165,7 +139,6 @@ internal object NativeSemanticsJson {
     }
 }
 
-/** Pre-order walk. With merging enabled, merged descendants are not separate nodes, as TalkBack sees it. */
 internal fun semanticsExportNodes(root: SemanticsNode, limit: Int = SEMANTICS_EXPORT_MAX_NODES): List<SemanticsExportNode> {
     val out = ArrayList<SemanticsExportNode>()
     fun visit(node: SemanticsNode, parent: Int, depth: Int) {
@@ -211,7 +184,6 @@ private fun semanticsExportNode(node: SemanticsNode, parent: Int, depth: Int): S
     )
 }
 
-/** One per preview root. The button and the broadcast share it, so the status line shows either. */
 internal class NativeSemanticsExporter(context: Context) {
     private val app = context.applicationContext
     private var revision = 0
@@ -259,7 +231,7 @@ internal class NativeSemanticsExporter(context: Context) {
         val bytes = NativeSemanticsJson.document(header, listOf("merged" to merged, "unmerged" to unmerged) + popups)
             .toByteArray(Charsets.US_ASCII)
         check(bytes.size <= SEMANTICS_EXPORT_MAX_BYTES) { "export larger than the bound" }
-        // Canonicalize first: /data/user/0 is itself a symlink to /data/data on Android.
+
         val base = File(app.cacheDir.canonicalFile, NATIVE_SEMANTICS_EXPORT_DIRECTORY)
         check(base.isDirectory || base.mkdir()) { "cannot create the export directory" }
         check(base.canonicalFile == base) { "symlink in the export directory" }
@@ -271,10 +243,6 @@ internal class NativeSemanticsExporter(context: Context) {
     }
 }
 
-/**
- * Popup roots (sheets, dialogs, dropdown menus) composed in their own windows, in registration order (S40 R40-11).
- * Main thread only; entries exist only in debuggable apps (NativeSemanticsPopupRoot checks) and leave on dispose.
- */
 internal object NativeSemanticsPopupRoots {
     private class Entry(val name: String, var count: Int)
 
@@ -293,10 +261,8 @@ internal object NativeSemanticsPopupRoots {
         if (entry.count <= 0) roots.remove(view)
     }
 
-    /** The registered root names, in order. */
     fun names(): List<String> = roots.values.map { it.name }
 
-    /** Two trees per root that has a Compose semantics owner: `popup.<index>.<name>.merged` and `.unmerged`. */
     fun trees(): List<Pair<String, List<SemanticsExportNode>>> {
         val out = ArrayList<Pair<String, List<SemanticsExportNode>>>()
         var index = 0
@@ -310,16 +276,11 @@ internal object NativeSemanticsPopupRoots {
         return out
     }
 
-    /** Tests only. */
     fun clear() {
         roots.clear()
     }
 }
 
-/**
- * Registers the window this composable runs in as a popup root while it is composed. Call it once inside each
- * sheet, dialog and dropdown content (it draws nothing). Release builds never register.
- */
 @Composable
 internal fun NativeSemanticsPopupRoot(name: String) {
     val view = LocalView.current
@@ -331,7 +292,6 @@ internal fun NativeSemanticsPopupRoot(name: String) {
     }
 }
 
-/** The export directory: immutable exports, the `latest.json` pointer and pruning. */
 internal object NativeSemanticsExportFiles {
     private val exportName = Regex("""export-(\d+)-(\d+)\.json""")
 
@@ -339,7 +299,7 @@ internal object NativeSemanticsExportFiles {
         val file = File(base, name)
         check(file.createNewFile()) { "export already exists" }
         FileOutputStream(file).use { it.write(bytes); it.fd.sync() }
-        // The immutable export is complete before the convenience pointer is replaced.
+
         val pending = File(base, "latest.json.tmp")
         FileOutputStream(pending).use { it.write(bytes); it.fd.sync() }
         Files.move(pending.toPath(), File(base, "latest.json").toPath(),
@@ -347,7 +307,6 @@ internal object NativeSemanticsExportFiles {
         prune(base, keep)
     }
 
-    /** Deletes all but the newest `keep` exports, ordered by the time and revision in their names. Other files stay. */
     fun prune(base: File, keep: Int) {
         val exports = base.listFiles().orEmpty().mapNotNull { file ->
             exportName.matchEntire(file.name)?.let { match ->
@@ -358,8 +317,6 @@ internal object NativeSemanticsExportFiles {
     }
 }
 
-/** Registers the export broadcast when the app is debuggable and returns the receiver, else null. Only senders
- *  that hold DUMP (adb shell) reach it. */
 internal fun registerNativeSemanticsExportReceiver(context: Context, onExport: () -> Unit): BroadcastReceiver? {
     if (!isDebuggableApp(context)) return null
     val receiver = object : BroadcastReceiver() {
@@ -372,7 +329,6 @@ internal fun registerNativeSemanticsExportReceiver(context: Context, onExport: (
     return receiver
 }
 
-/** Registers the Debug-only broadcast for the composition's lifetime. Release builds never register. */
 @Composable
 internal fun NativeSemanticsExportReceiver(exporter: NativeSemanticsExporter) {
     val view = LocalView.current

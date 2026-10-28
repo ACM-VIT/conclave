@@ -12,14 +12,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * CTL-1 and STG-7 through the transpiled controls policy, presenter, fixtures and caches, and the PiP target policy (the
- * Swift halves are T/ControlsPoliciesTests.swift and T/STG7OrientationPipTests.swift): compositions and order, the S30 7
- * matrix on the bar, CC21, CC18, the CompactBarFit arithmetic at 360, 412 and 600 dp, the CL13 fixture cells, the CL14
- * cache reuse, the R01 mapping of CallControlVisual, the S20 13 d target order and the R70-10 frame and store rules.
- * Pure: no composition (only the first composition in a JVM keeps recomposing under Robolectric, PanelStageBridgeTests
- * owns it). Not run in the heads-down push.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ControlsBridgeTests {
@@ -68,7 +60,7 @@ class ControlsBridgeTests {
         assertEquals(ControlBarAxis.horizontal, compactRow.axis)
         val column = ControlBarPolicy.layout(width = ControlsWindowClass.compact, height = ControlsWindowClass.compact, isPhone = true, isAttendee = false)
         assertEquals(ControlBarAxis.vertical, column.axis)
-        // Android never reports a phone: phone landscape keeps the bottom toolbar; 600 x 480 dp is wide (Q13, R7).
+
         val androidLandscape = ControlBarPolicy.layout(width = ControlsWindowClass.regular, height = ControlsWindowClass.compact, isPhone = false, isAttendee = false)
         assertEquals(ControlBarComposition.compact, androidLandscape.composition)
         assertEquals(ControlBarAxis.horizontal, androidLandscape.axis)
@@ -89,12 +81,12 @@ class ControlsBridgeTests {
         assertTrue(offline.commands.isEmpty())
         assertEquals(1, offline.explanations.size)
         assertEquals(ControlBlockedReason.offline, offline.explanations[0].reason)
-        // CC7: the presenter posts the toast to the stage; the lanes read the explanation back from the notice.
+
         val notice = ControlBarPolicy.explanationNotice(offline.explanations[0])
         assertEquals(NoticeKind.blockedExplanation, notice.kind)
         assertEquals(ControlBlockedReason.offline, ControlBarPolicy.explanation(fromNotice = notice)?.reason)
         assertEquals(CallControlKind.screenShare, ControlBarPolicy.explanation(fromNotice = notice)?.kind)
-        // CC21: a Mic tap toward muted while an unmute is pending still dispatches; toward live while a mute is pending does not.
+
         val unmutePending = Harness(joined(isMuted = false, micToggleInFlight = true))
         assertEquals(ControlTapResult.dispatched, unmutePending.controls.tap(CallControlKind.microphone))
         assertEquals(listOf(MeetingShellCommand.toggleMicrophone), unmutePending.commands)
@@ -111,9 +103,7 @@ class ControlsBridgeTests {
         assertEquals(before + 1, h.refreshes)
         assertEquals(CallControlVisual.engaged, h.model(CallControlKind.participants)?.visual)
         assertEquals(MeetingPanel.participants.rawValue, h.shell.panels.currentPanelName)
-        // A second tap closes it (one refresh); the host's acknowledgment clears Engaged (one refresh). Chat tapped while
-        // Participants is still current would only queue behind its dismissal (PanelCoordinator.present), as in the
-        // Swift twin ControlsPoliciesTests.invokersToggleTheirPanelAndDrawEngagedFromTheSnapshot.
+
         assertEquals(ControlTapResult.dispatched, h.controls.tap(CallControlKind.participants))
         assertEquals(before + 2, h.refreshes)
         assertTrue(h.shell.panels.snapshot.isDismissing)
@@ -122,7 +112,7 @@ class ControlsBridgeTests {
         h.shell.panels.didDismiss(session = h.shell.panels.snapshot.session, presentationID = closing!!.presentationID)
         assertEquals(before + 3, h.refreshes)
         assertEquals(CallControlVisual.on, h.model(CallControlKind.participants)?.visual)
-        // Chat open hides its badge (1 f).
+
         h.controls.tap(CallControlKind.chat)
         assertEquals(MeetingPanel.chat.rawValue, h.shell.panels.currentPanelName)
         assertEquals(CallControlVisual.engaged, h.model(CallControlKind.chat)?.visual)
@@ -194,8 +184,6 @@ class ControlsBridgeTests {
         assertEquals(DesignTokens.androidExtendedToggleEngagedContainer, conclaveCallToggleColors(callControlVisual(CallControlVisual.engaged)).container)
     }
 
-    // STG-7
-
     private fun person(id: String, local: Boolean = false, cameraOn: Boolean = true, serial: Int): StageParticipantInput =
         StageParticipantInput.make(userId = id, displayName = id, isLocal = local, isMuted = false, isCameraOff = !cameraOn,
             joinSerial = serial, videoKey = if (cameraOn) "probe:$id" else "")
@@ -240,7 +228,6 @@ class ControlsBridgeTests {
     }
 }
 
-/** A transpiled Swift array as a Kotlin list (file-private, so nested harness classes can use it). */
 private fun <T> list(array: skip.lib.Array<T>): List<T> {
     val result = mutableListOf<T>()
     for (element in array) result.add(element)

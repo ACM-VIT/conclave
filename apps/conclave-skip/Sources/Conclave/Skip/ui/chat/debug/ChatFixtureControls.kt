@@ -20,13 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
-/*
- * S40 0.9, CH22 (CHT-1 to CHT-3): the Android Debug chat fixture controls. The stage fixture root installs
- * ChatFixtureDriver into its shell's chat presenter when the intent extra `conclave.chatFixture` names a state
- * (request R3 in HD/requests/B4-T1.md); the chat panel then shows this bar above the timeline. Labels are Debug-only
- * verbatim data (the script names), tags `chat.fixture.<script>`, readouts `chat.fixture.actions` and
- * `chat.openLatency`. Never shown unless a fixture driver is installed.
- */
 @Composable
 internal fun ChatFixtureControlsBar(driver: ChatFixtureDriver) {
     var refresh by remember { mutableIntStateOf(0) }
@@ -46,7 +39,7 @@ internal fun ChatFixtureControlsBar(driver: ChatFixtureDriver) {
                 ConclaveText(refreshLabel, line = "chat.fixture.refresh.label", style = MaterialTheme.typography.labelSmall)
             }
         }
-        // Keyed by the refresh counter so a script tap re-reads the plain (unobserved) driver readouts.
+
         key(refresh) {
             val noActions = "actions: none"
             val actionsText = if (driver.actionsReadout.isEmpty()) noActions else driver.actionsReadout
@@ -61,10 +54,6 @@ internal fun ChatFixtureControlsBar(driver: ChatFixtureDriver) {
     }
 }
 
-/**
- * T3 borrow P7 (R8): `chat.composer.gateLine`, the gate the status line draws, the real gate and the show counter. It
- * reads `presenter.composer` (through the readout) in its own scope, so the delayed line's publish refreshes it.
- */
 @Composable
 private fun ChatGateLineReadout(driver: ChatFixtureDriver) {
     ConclaveText(driver.gateLineReadout, line = "chat.composer.gateLine", style = MaterialTheme.typography.labelSmall,

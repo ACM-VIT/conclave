@@ -2,11 +2,8 @@
 import Foundation
 import Testing
 
-/// SYS-14 localization infrastructure (S70 14 c, d and l 1, 2, 6; S70 0.7 SY12, SY13; S70 16 c, d and l 5;
-/// S10 0.8 C12, purpose strings part). Every check reads the shipped source file, so a regenerated project,
-/// manifest or catalog is checked as it will build.
 struct SYS14LocalizationInfraTests {
-    // S70 16 c: the only purpose strings the app declares, with their final copy (S10 7 c for camera and microphone).
+
     private static let purposeStrings: [String: String] = [
         "NSCameraUsageDescription": "Conclave uses your camera so people in your meeting can see you.",
         "NSMicrophoneUsageDescription": "Conclave uses your microphone so people in your meeting can hear you.",
@@ -14,7 +11,6 @@ struct SYS14LocalizationInfraTests {
         "NSPhotoLibraryAddUsageDescription": "Conclave saves images to your photo library only when you choose to save them.",
     ]
 
-    // S70 16 d: the full allowed uses-permission set (SY5's Telecom pair is spike-branch only).
     private static let androidPermissions: Set<String> = [
         "INTERNET", "ACCESS_NETWORK_STATE", "RECORD_AUDIO", "CAMERA", "MODIFY_AUDIO_SETTINGS", "VIBRATE",
         "BLUETOOTH", "BLUETOOTH_CONNECT", "FOREGROUND_SERVICE", "FOREGROUND_SERVICE_MICROPHONE",
@@ -22,7 +18,6 @@ struct SYS14LocalizationInfraTests {
         "WAKE_LOCK", "POST_NOTIFICATIONS",
     ]
 
-    // S70 16 l 5 and SY12: Info.plist declares only the purpose strings the app uses, in final copy, and no voip mode.
     @Test func appInfoPlistDeclaresOnlyTheUsedPurposeStrings() throws {
         let plist = try sys14Plist("Darwin/Info.plist")
         let declared = Set(plist.keys.filter { $0.hasSuffix("UsageDescription") || $0.hasSuffix("UsageDescriptionDictionary") })
@@ -30,7 +25,7 @@ struct SYS14LocalizationInfraTests {
         for (key, copy) in Self.purposeStrings {
             let value = plist[key] as? String
             #expect(value == copy, "\(key)")
-            // Sentence case, one sentence, resolved text (S70 16 g; S70 14 g).
+
             #expect(value?.hasPrefix("Conclave ") == true && value?.hasSuffix(".") == true, "\(key)")
             #expect(value?.dropLast().contains(Character(".")) == false, "\(key) must be one sentence")
             #expect(value?.contains("$(") == false, "\(key)")
@@ -39,7 +34,7 @@ struct SYS14LocalizationInfraTests {
         #expect(plist["NSLocationTemporaryUsageDescriptionDictionary"] == nil)
         #expect(plist["UIBackgroundModes"] as? [String] == ["audio"])
         #expect(plist["CFBundleDisplayName"] as? String == "Conclave")
-        // CFBundleDevelopmentRegion stays English (CE N12) and the bundle claims no other localization.
+
         #expect(plist["CFBundleDevelopmentRegion"] as? String == "$(DEVELOPMENT_LANGUAGE)")
         if let localizations = plist["CFBundleLocalizations"] as? [String] {
             #expect(localizations == ["en"])
@@ -47,7 +42,6 @@ struct SYS14LocalizationInfraTests {
         #expect(try sys14Source("Package.swift").contains("defaultLocalization: \"en\""))
     }
 
-    // S70 14 c and SY12: Darwin/InfoPlist.xcstrings is the single source for the purpose strings and the display name.
     @Test func infoPlistCatalogLocalizesEveryPurposeStringAndTheDisplayName() throws {
         let plist = try sys14Plist("Darwin/Info.plist")
         let catalog = try sys14JSON("Darwin/InfoPlist.xcstrings")
@@ -59,42 +53,46 @@ struct SYS14LocalizationInfraTests {
         #expect(Set(strings.keys) == expected, "\(Set(strings.keys).symmetricDifference(expected).sorted())")
         for key in expected.sorted() {
             let entry = try #require(strings[key] as? [String: Any], "missing \(key)")
-            #expect((entry["comment"] as? String)?.isEmpty == false, "uncommented \(key)")
+            #expect(entry["comment"] == nil, "unexpected translator prose: \(key)")
             #expect(entry["extractionState"] as? String == "manual", "\(key)")
             let localizations = try #require(entry["localizations"] as? [String: Any], "\(key)")
-            // Shipped languages only: English until a real translation ships (S70 14 c).
+
             #expect(Array(localizations.keys) == ["en"], "\(key) claims \(localizations.keys.sorted())")
             let unit = (localizations["en"] as? [String: Any])?["stringUnit"] as? [String: Any]
             #expect(unit?["state"] as? String == "translated", "\(key)")
-            // The plist value is the fallback; it must never disagree with the catalog.
+
             #expect(unit?["value"] as? String == plist[key] as? String, "\(key) differs from Darwin/Info.plist")
         }
     }
 
-    // S70 14 c and l 2: the app target ships the catalog and the project claims only English.
     @Test func xcodeProjectShipsTheInfoPlistCatalogAndClaimsOnlyEnglish() throws {
-        let project = try sys14Source("Darwin/Conclave.xcodeproj/project.pbxproj")
-        #expect(project.contains("/* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = \"<group>\"; };"))
-        #expect(project.components(separatedBy: "/* InfoPlist.xcstrings */ = {isa = PBXFileReference;").count - 1 == 1)
-        #expect(project.components(separatedBy: "/* InfoPlist.xcstrings in Resources */").count - 1 == 2)
-        let appResources = try sys14Block(after: "499CD43E2AC5B799001AE8D8 /* Resources */ = {", in: project)
-        #expect(appResources.contains("/* InfoPlist.xcstrings in Resources */,"))
-        let extensionResources = try sys14Block(after: "D8437152ED65B65BAD66390E /* Resources */ = {", in: project)
-        #expect(!extensionResources.contains("InfoPlist.xcstrings"), "the broadcast extension gets its own catalog (S70 10 c)")
-        #expect(project.contains("developmentRegion = en;"))
-        let regions = try sys14Block(after: "knownRegions = (", in: project, until: ");")
-            .split(whereSeparator: { $0 == "," || $0.isWhitespace })
-            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
-            .filter { !$0.isEmpty }
-        #expect(regions == ["en", "Base"])
-        // Pseudolanguage launch arguments (Default Q14) are available in the shared scheme and off by default.
+        let project = try sys14Plist("Darwin/Conclave.xcodeproj/project.pbxproj")
+        let objects = try #require(project["objects"] as? [String: [String: Any]])
+        let referenceID = "9E14C0A12F0B4D2A00C1A141"
+        let buildFileID = "9E14C0A12F0B4D2A00C1A142"
+        let reference = try #require(objects[referenceID])
+        #expect(reference["isa"] as? String == "PBXFileReference")
+        #expect(reference["lastKnownFileType"] as? String == "text.json.xcstrings")
+        #expect(reference["path"] as? String == "InfoPlist.xcstrings" && reference["sourceTree"] as? String == "<group>")
+        #expect(objects.values.filter { $0["isa"] as? String == "PBXFileReference" && $0["path"] as? String == "InfoPlist.xcstrings" }.count == 1)
+        let buildFile = try #require(objects[buildFileID])
+        #expect(buildFile["isa"] as? String == "PBXBuildFile" && buildFile["fileRef"] as? String == referenceID)
+        #expect(objects.values.filter { $0["isa"] as? String == "PBXBuildFile" && $0["fileRef"] as? String == referenceID }.count == 1)
+        let appResources = try #require(objects["499CD43E2AC5B799001AE8D8"]?["files"] as? [String])
+        #expect(appResources.filter { $0 == buildFileID }.count == 1)
+        let extensionResources = try #require(objects["D8437152ED65B65BAD66390E"]?["files"] as? [String])
+        #expect(!extensionResources.contains(buildFileID), "the broadcast extension gets its own catalog (S70 10 c)")
+        let projectID = try #require(project["rootObject"] as? String)
+        let configuration = try #require(objects[projectID])
+        #expect(configuration["developmentRegion"] as? String == "en")
+        #expect(configuration["knownRegions"] as? [String] == ["en", "Base"])
+
         let scheme = try sys14Source("Darwin/Conclave.xcodeproj/xcshareddata/xcschemes/Conclave App.xcscheme")
         let arguments = sys14Matches(#"argument = "([^"]+)"\s*isEnabled = "(YES|NO)""#, in: scheme)
         #expect(arguments.map { $0[0] } == ["-NSDoubleLocalizedStrings YES", "-AppleTextDirection YES", "-NSForceRightToLeftWritingDirection YES"])
         #expect(arguments.allSatisfy { $0[1] == "NO" })
     }
 
-    // S70 14 c: the template translations are gone, so neither platform claims a language it does not ship.
     @Test func catalogsAndResourcesClaimOnlyShippedLanguages() throws {
         var iosLanguages = Set<String>()
         for path in ["Sources/Conclave/Resources/Localizable.xcstrings", "Darwin/InfoPlist.xcstrings"] {
@@ -121,35 +119,33 @@ struct SYS14LocalizationInfraTests {
                 }
             }
         }
-        // English only until translations ship; a shipped translation lands on both platforms in one change.
+
         #expect(iosLanguages.isEmpty)
         #expect(androidLanguages.isEmpty, "\(androidLanguages.sorted())")
         #expect(androidLanguages == iosLanguages)
     }
 
-    // S70 14 d and SY13: AGP generates android:localeConfig from res/values*; English is the unqualified locale.
     @Test func androidGeneratesTheLocaleConfigFromShippedResources() throws {
         let gradle = sys14Normalized(try sys14Source("Android/app/build.gradle.kts"))
         #expect(gradle.contains("androidResources { generateLocaleConfig = true }"))
         #expect(gradle.components(separatedBy: "generateLocaleConfig").count - 1 == 1)
-        // OD WP1-2a: en-XA and ar-XB on debug builds only (also pinned by DesignContractsTests).
+
         #expect(gradle.contains("buildTypes { debug { isPseudoLocalesEnabled = true } release {"))
         let properties = try sys14Source("Android/app/src/main/res/resources.properties")
             .split(whereSeparator: { $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespaces) }
         #expect(properties.contains("unqualifiedResLocale=en-US"))
         let manifest = try sys14Source("Android/app/src/main/AndroidManifest.xml")
-        // The manifest merger rejects a hand-written localeConfig while generation is on.
+
         #expect(!manifest.contains("android:localeConfig="))
         #expect(!FileManager.default.fileExists(atPath: sys14PackagePath("Android/app/src/main/res/xml/locales_config.xml")))
         #expect(manifest.contains("android:supportsRtl=\"true\""))
-        // A per-app language change recomposes instead of recreating the activity (CE N11).
+
         let changes = try #require(sys14Matches(#"android:configChanges="([^"]+)""#, in: manifest).first?.first)
         let kinds = Set(changes.split(separator: "|").map { String($0) })
         #expect(kinds.isSuperset(of: ["locale", "layoutDirection"]))
     }
 
-    // S70 16 l 5 and SY13: the uses-permission set equals the 16 d list and the two storage removals stay.
     @Test func androidManifestPermissionsMatchTheReleaseDeclarationList() throws {
         let manifest = try sys14Source("Android/app/src/main/AndroidManifest.xml")
         let entries = sys14Matches(#"<uses-permission\s+android:name="android\.permission\.([A-Z_]+)"([^>]*)/>"#, in: manifest)
@@ -165,7 +161,6 @@ struct SYS14LocalizationInfraTests {
         }
     }
 
-    // SY12: the build phase copies privacy manifests only and never writes purpose strings into built plists.
     @Test func privacyMetadataPhaseNeverWritesPurposeStrings() throws {
         let script = try sys14Source("Darwin/Scripts/apply-embedded-privacy-metadata.sh")
         #expect(script.hasPrefix("#!/bin/sh\nset -eu\n"))
@@ -180,12 +175,17 @@ struct SYS14LocalizationInfraTests {
         #expect(script.contains("resign_code_bundle_if_needed \"${framework_path}\""))
         #expect(script.contains("--preserve-metadata=identifier,entitlements,flags"))
         let project = try sys14Source("Darwin/Conclave.xcodeproj/project.pbxproj")
-        #expect(project.contains("DED5F813849FF18CBE9AFB5A /* Embed App Extensions */,\n\t\t\t\t8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */,"))
+        let plist = try #require(try PropertyListSerialization.propertyList(from: Data(project.utf8), format: nil) as? [String: Any])
+        let objects = try #require(plist["objects"] as? [String: [String: Any]])
+        let phases = try #require(objects["499CD4382AC5B799001AE8D8"]?["buildPhases"] as? [String])
+        let embedIndex = try #require(phases.firstIndex(of: "DED5F813849FF18CBE9AFB5A"))
+        let privacyIndex = try #require(phases.firstIndex(of: "8D0E0D6B2E5A4A71B57E90C1"))
+        #expect(privacyIndex == embedIndex + 1)
+        #expect(objects["DED5F813849FF18CBE9AFB5A"]?["isa"] as? String == "PBXCopyFilesBuildPhase")
+        #expect(objects["8D0E0D6B2E5A4A71B57E90C1"]?["isa"] as? String == "PBXShellScriptBuildPhase")
         #expect(project.contains("shellScript = \"sh \\\"${SRCROOT}/Scripts/apply-embedded-privacy-metadata.sh\\\"\\n\";"))
     }
 
-    // S70 14 l 6 (dash half; casing stays with labelCasingFollowsOwnerRule): no en or em dash in any catalog,
-    // resource or declaration file this slice owns or creates.
     @Test func catalogsResourcesAndDeclarationsAreDashFree() throws {
         var files = [
             "Darwin/Info.plist", "Darwin/InfoPlist.xcstrings", "Darwin/Scripts/apply-embedded-privacy-metadata.sh",
@@ -204,8 +204,6 @@ struct SYS14LocalizationInfraTests {
         }
     }
 }
-
-// MARK: SYS-14 source helpers
 
 private func sys14PackagePath(_ packageRelativePath: String) -> String {
     URL(fileURLWithPath: #filePath)
@@ -229,21 +227,18 @@ private func sys14JSON(_ packageRelativePath: String) throws -> [String: Any] {
     try #require(try JSONSerialization.jsonObject(with: Data(sys14Source(packageRelativePath).utf8)) as? [String: Any])
 }
 
-/// The text after `start` up to the first `until`, so a check reads one pbxproj section only.
 private func sys14Block(after start: String, in source: String, until end: String = "};") throws -> String {
     let startRange = try #require(source.range(of: start), "missing \(start)")
     let endRange = try #require(source.range(of: end, range: startRange.upperBound..<source.endIndex), "missing \(end) after \(start)")
     return String(source[startRange.upperBound..<endRange.lowerBound])
 }
 
-/// Shell source with `#` comment lines removed, so a scan reads commands only.
 private func sys14Code(_ script: String) -> String {
     script.split(separator: "\n", omittingEmptySubsequences: false)
         .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
         .joined(separator: "\n")
 }
 
-/// Collapses every run of whitespace to one space, so pins fail only when the code changes.
 private func sys14Normalized(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }

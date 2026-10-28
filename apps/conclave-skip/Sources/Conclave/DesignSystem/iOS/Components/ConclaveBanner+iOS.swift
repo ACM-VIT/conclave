@@ -2,41 +2,31 @@
 import Accessibility
 import SwiftUI
 
-/// The visual kinds of a banner (F00 C12). Which banner shows, its priority and its copy belong to the S20
-/// notice catalog and the banner lane (STG-5), not to this component.
 enum ConclaveBannerKind: String, CaseIterable {
     case info, warning, error, success, reconnecting
 }
 
-/// Where a banner sits: the always-dark call surface or a system-appearance screen.
 enum ConclaveBannerSurface: String, CaseIterable {
     case inCall, app
 }
 
-/// One banner action, drawn as a borderless text button after the text.
 struct ConclaveBannerAction: Identifiable {
     let title: String
     let identifier: String
     let action: () -> Void
-    /// S20 SR5 `NoticeAction.isEnabled`: Retry Now stays visible but disabled while an attempt is in flight.
+
     var isEnabled: Bool = true
-    /// S70 6 i: why a disabled action is disabled ("Retrying now" for Retry Now), read as its hint; "" for none.
+
     var disabledHint: String = ""
 
     var id: String { identifier }
 }
 
-/// Banner motion (F00 9, C12 h): an 8 pt move plus opacity over 120 ms, opacity only under Reduce Motion. The
-/// values are the shared A5 durations (`ConclaveMotionDurations`, `motion.fast`).
 enum ConclaveBannerMotion {
     static let duration = Double(ConclaveMotionDurations.fastMillis) / 1000.0
     static let travel = CGFloat(ConclaveMotionDurations.bannerTravel)
 }
 
-/// A flat banner with a 1 pt border and radius 12, never glass (F00 0.4 O7). A static banner reads as one
-/// element; with actions or Dismiss the text comes first and each control stays its own element. Production posts
-/// one announcement per new banner text; the silent Debug gallery passes `announces: false`. Text wraps; the
-/// `lineLimit` defaults to none (OQ-2b-5) and the lane (STG-5) sets its four-line cap.
 struct ConclaveBanner: View {
     let kind: ConclaveBannerKind
     let text: String
@@ -112,8 +102,6 @@ struct ConclaveBanner: View {
         .onChange(of: text) { announce() }
     }
 
-    /// At most one announcement per banner text, however often the body re-runs (a reference box, never observed
-    /// view state, so the appearance callback cannot loop).
     private func announce() {
         guard announces, announced.text != text else { return }
         announced.text = text
@@ -135,7 +123,6 @@ struct ConclaveBanner: View {
         return HostingTheme.inCallBorder
     }
 
-    /// Status colors by surface (F00 C12 e) through the A1 and A3 adapter members; never coral as a warning.
     private var glyphColor: Color {
         switch kind {
         case .info, .reconnecting:
@@ -155,7 +142,6 @@ enum ConclaveBannerMetrics {
     static let dismissTarget: CGFloat = 44
 }
 
-/// The canonical status glyph, or a system spinner while reconnecting.
 private struct BannerGlyph: View {
     let kind: ConclaveBannerKind
     let color: Color
@@ -182,12 +168,10 @@ private struct BannerGlyph: View {
     }
 }
 
-/// Holds the last announced text outside observation.
 private final class BannerAnnouncementLatch {
     var text: String?
 }
 
-/// Shows and hides a banner with the banner motion. The animation is scoped to this container.
 struct ConclaveBannerPresence<Content: View>: View {
     let isPresented: Bool
     @ViewBuilder let content: () -> Content
@@ -208,19 +192,13 @@ struct ConclaveBannerPresence<Content: View>: View {
     }
 }
 
-// MARK: In-call banner lane (F00 C12 c; S20 10 f)
-
 enum ConclaveBannerLaneMetrics {
-    /// F00 C12 c: the lane never grows wider than this, centered under the capsule.
+
     static let maxWidth: CGFloat = 560
-    /// F00 C12 f: up to four lines in the lane; the full text stays in the accessibility element.
+
     static let lineLimit = 4
 }
 
-/// The in-call banner lane: the one banner the S20 presenter publishes (highest priority wins, STG-5 decides),
-/// under the capsule with `space8` from it, at most 560 pt wide. It is an overlay outside the tile layout, so it
-/// never moves tiles, and it stays when chrome auto-hides (MTU 6 item 3). Enter and exit use the banner motion.
-/// `content` draws the banner for the current notice (in-call surface, four-line cap).
 struct ConclaveBannerLane<Content: View>: View {
     let noticeID: String?
     let identifier: String

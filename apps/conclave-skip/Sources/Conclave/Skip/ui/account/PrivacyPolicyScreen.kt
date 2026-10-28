@@ -31,13 +31,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/*
- * ENT-7 (S10 5 d; RECONCILE OQ9): the privacy policy page (`PrivacyKey`) pushed from Account. The text is the shared
- * PrivacyPolicyDocument, verbatim and untranslated until the legal update; headings are titleMedium with heading
- * semantics, paragraphs bodyLarge. "View on the web" opens the hosted policy for the app's backend
- * (PrivacyPolicyDestination.urlString, the helper the legacy page never used).
- */
-
 private const val PRIVACY_BULLET = "•"
 
 @OptIn(ExperimentalMaterial3Api::class)

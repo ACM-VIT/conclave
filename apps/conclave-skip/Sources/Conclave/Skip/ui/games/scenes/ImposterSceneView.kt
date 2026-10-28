@@ -12,15 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 9 d and Q7 (ACT-3) on Android, Imposter: reveal and discuss (K1 with the category and who starts, the discuss
- * line, K2 while the reveal runs, and the K11 secret card: press and hold reveals the word with the category, or the
- * imposter line with the hint; hidden by default for both roles, the word not composed at all while hidden and the
- * hidden face's semantics cleared), vote (K3 person rows with yourself disabled as "You", the voted count, a departed
- * target), and the result lines. Spectators see only the roles secret notice: Imposter is not spectatable, so no seat
- * and no word ever reach them.
- */
-
 @Composable
 internal fun ImposterSceneView(scene: ImposterScene, games: GameStagePresenter) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.imposter"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -38,7 +29,6 @@ internal fun ImposterSceneView(scene: ImposterScene, games: GameStagePresenter) 
     }
 }
 
-/** K11 for the local role; `revealHeld` plays once per hold. */
 @Composable
 private fun ImposterSecretCard(scene: ImposterScene) {
     val haptics = rememberConclaveHaptics()
@@ -50,7 +40,6 @@ private fun ImposterSecretCard(scene: ImposterScene) {
     )
 }
 
-/** K3 person rows for the vote; yourself is never a target (the module rejects a self vote). */
 @Composable
 private fun ImposterVoteChoices(scene: ImposterScene, games: GameStagePresenter) {
     val interaction = games.interaction
@@ -71,7 +60,6 @@ private fun ImposterVoteChoices(scene: ImposterScene, games: GameStagePresenter)
     }
 }
 
-/** The finished round: the result line, who the imposter was, the word (public now) and an abstention. */
 @Composable
 internal fun ImposterResultView(scene: ImposterScene) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.imposter.result"), verticalArrangement = Arrangement.spacedBy(8.dp)) {

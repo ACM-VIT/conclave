@@ -12,14 +12,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * ACT-6 through the transpiled Zip scene, the path policy and the game presenter (the Swift half is T/ACT6ZipTests.swift):
- * the same ZipFixtures pushes parsed through the Android JSON path, the eligible next cells the step chooser lists, the
- * path rules (diagonal, revisit, removed cell, barrier, checkpoint order), the module payloads, the outcome tokens, the
- * read-only states, the view-local draft (ZipDraftState: one send per lift, key runs, steps, Undo, a cancelled touch
- * sends nothing), the key mapping, the checkpoint font cap and the resource name for every enum case (L6-14). Pure: no
- * composition. The token checks are true after HD requests B8-T4 R1 to R3.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ACT6ZipBridgeTests {
@@ -53,12 +45,12 @@ class ACT6ZipBridgeTests {
     @Test fun pathRulesAndDraftPoliciesMatchTheModule() {
         val scene = presenter(ZipFixtureState.playing).scene.zip!!
         val path = ZipFixtures.playingPath
-        assertFalse(ZipPathPolicy.canExtend(path, 20, scene)) // diagonal
-        assertFalse(ZipPathPolicy.canExtend(path, 7, scene)) // revisit
-        assertFalse(ZipPathPolicy.canExtend(cells(0, 1, 2, 3, 4), 5, scene)) // removed cell
-        assertFalse(ZipPathPolicy.canExtend(cells(0, 1, 2), 8, scene)) // barrier
+        assertFalse(ZipPathPolicy.canExtend(path, 20, scene))
+        assertFalse(ZipPathPolicy.canExtend(path, 7, scene))
+        assertFalse(ZipPathPolicy.canExtend(cells(0, 1, 2, 3, 4), 5, scene))
+        assertFalse(ZipPathPolicy.canExtend(cells(0, 1, 2), 8, scene))
         assertTrue(ZipPathPolicy.canExtend(cells(0, 1, 2), 3, scene))
-        assertFalse(ZipPathPolicy.canExtend(ZipFixtures.deadEndPath, 6, scene)) // checkpoint 3 before 2
+        assertFalse(ZipPathPolicy.canExtend(ZipFixtures.deadEndPath, 6, scene))
         assertEquals(listOf(14, 15, 16), ZipPathPolicy.cellsBetween(13, 16, 6).toList())
         assertEquals(path.toList() + listOf(14, 15, 16), ZipPathPolicy.dragged(path, 13, 16, scene).toList())
         assertEquals(path.toList(), ZipPathPolicy.afterStep(ZipPathPolicy.stepped(path, 14), 13, scene).toList())
@@ -137,29 +129,28 @@ class ACT6ZipBridgeTests {
         val games = presenter(ZipFixtureState.playing, sent)
         val scene = games.scene.zip!!
         val draft = ZipDraftState()
-        // A finger from the head across two cells: one send with the full path.
+
         assertFalse(draft.touch(13, scene))
         assertTrue(draft.touch(15, scene))
         assertEquals(ZipFixtures.playingPath.toList() + listOf(14, 15), draft.display(scene.confirmedPath, false).toList())
         draft.lift(scene, games)
         assertEquals(1, sent.size)
         assertEquals("{\"cells\":[0,1,2,3,4,10,9,8,7,6,12,13,14,15]}", sent.last().payloadJSON)
-        // While pending the sent path is what the board shows.
+
         assertEquals(ZipFixtures.playingPath.count + 2, draft.display(scene.confirmedPath, true).count)
         games.moveAcknowledged(sent.last().requestId, true, "")
-        // A touch that starts on a blocked cell draws nothing and sends nothing.
+
         assertFalse(draft.touch(35, scene))
         assertFalse(draft.touch(34, scene))
         draft.lift(scene, games)
         assertEquals(1, sent.size)
-        // A cancelled touch sends nothing.
+
         draft.touch(19, scene)
         draft.cancelTouch()
         draft.lift(scene, games)
         assertEquals(1, sent.size)
         assertFalse(draft.isDrafting)
-        // A key run: down, then right is checkpoint 5 out of order (blocked), left is free, then Enter sends once; up back
-        // onto the confirmed path discards the run.
+
         assertTrue(draft.key(ZipDirection.down, scene))
         assertFalse(draft.key(ZipDirection.right, scene))
         assertTrue(draft.key(ZipDirection.left, scene))
@@ -172,7 +163,7 @@ class ACT6ZipBridgeTests {
         assertFalse(draft.isDrafting)
         draft.commitKeys(scene, games)
         assertEquals(2, sent.size)
-        // A step from the chooser and Undo each send once.
+
         assertTrue(draft.step(14, scene, games))
         assertEquals(3, sent.size)
         games.moveAcknowledged(sent.last().requestId, true, "")

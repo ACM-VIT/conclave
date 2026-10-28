@@ -6,7 +6,7 @@ import FoundationNetworking
 struct NativeScheduledWebinar: Decodable {
     let linkSlug: String?
     let title: String?
-    /// ENT-9 (S10 12 c "Hosted by"): the public projection's host name, link and invite-code flag.
+
     let hostName: String?
     let scheduledStartAt: Double?
     let scheduledEndAt: Double?
@@ -20,7 +20,6 @@ struct NativeScheduledWebinar: Decodable {
         opensForAttendee(nowMillis: Date().timeIntervalSince1970 * 1000.0)
     }
 
-    /// The same rule with the clock as input (the landing's `WebinarLandingPolicy.isOpen` mirrors it).
     func opensForAttendee(nowMillis: Double) -> Bool {
         let normalizedStatus = status?.lowercased() ?? ""
         if normalizedStatus == "ended" || normalizedStatus == "cancelled" {
@@ -37,7 +36,6 @@ struct NativeScheduledWebinar: Decodable {
     }
 }
 
-/// ENT-9: one lookup told apart into a scheduled webinar, a plain link with no schedule and a failed request.
 struct NativeWebinarLookupResult {
     let outcome: WebinarLookupOutcome
     let webinar: NativeScheduledWebinar?
@@ -61,14 +59,12 @@ private struct AndroidNativeWebinarHTTPResponse: Decodable {
 #endif
 
 enum NativeWebinarLookupService {
-    /// The legacy JoinView lookup: the scheduled webinar, or nil for every other answer (unchanged behavior).
+
     static func fetchScheduledWebinar(slug: String, clientId overrideClientId: String? = nil) async -> NativeScheduledWebinar? {
         let result = await fetchLookupResult(slug: slug, clientId: overrideClientId)
         return result.outcome == WebinarLookupOutcome.found ? result.webinar : nil
     }
 
-    /// ENT-9 (S10 12 j): the landing's lookup as scalars. A webinar of another tenant reads as no schedule, like the
-    /// legacy lookup (which then joined); `""` uses the app's client id.
     static func lookup(slug: String, clientId overrideClientId: String) async -> WebinarLookupAnswer {
         let result = await fetchLookupResult(slug: slug, clientId: overrideClientId)
         switch result.outcome {
@@ -82,7 +78,6 @@ enum NativeWebinarLookupService {
         }
     }
 
-    /// The public projection as the landing's scalars (epoch milliseconds, 0 when absent).
     static func answer(from webinar: NativeScheduledWebinar) -> WebinarLookupAnswer {
         WebinarLookupAnswer(
             outcome: WebinarLookupOutcome.found,
@@ -125,7 +120,7 @@ enum NativeWebinarLookupService {
         }
 
         guard let webinar = decoded.scheduledWebinar else {
-            // The API answers `scheduledWebinar: null` for a webinar link with no schedule (its SFU lookup was 404).
+
             return NativeWebinarLookupResult(outcome: WebinarLookupOutcome.notScheduled, webinar: nil)
         }
         if let webinarClientId = webinar.clientId, !webinarClientId.isEmpty, webinarClientId != clientId {

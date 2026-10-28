@@ -1,10 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 9 c (ACT-3) on iOS, Most Likely To: vote (K1 "Who Is Most Likely %@", K2, K3 person rows from the server's list,
-// self allowed as the server allows, vote changeable; a target who left clears your vote with "%@ left. Vote again."),
-// reveal (sticky: counts, the winner marked "Most votes" in text and glyph, ties named, announced once).
-
 struct PersonVoteSceneView: View {
     let scene: PersonVoteScene
     let games: GameStagePresenter
@@ -46,7 +42,6 @@ struct PersonVoteSceneView: View {
     }
 }
 
-/// K3 person rows; your current vote again sends nothing. `voteCast` plays only for a sent vote.
 struct PersonVoteChoices: View {
     let scene: PersonVoteScene
     let games: GameStagePresenter

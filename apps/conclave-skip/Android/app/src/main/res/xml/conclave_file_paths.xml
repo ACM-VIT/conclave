@@ -1,10 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- FileProvider paths (androidx.core.content.FileProvider, authority ${applicationId}.fileprovider in
-     AndroidManifest.xml). Cache directories only, never internal files or external storage.
-     chat_photos: S40 CH18, the chat image viewer's share copies (cache/chat-photos/share/) and prepared photos.
-     exports: S60 C6-26 (TRN-2) transcript exports, cache/exports/conclave-<room>-transcript.md, shared as a content://
-     URI with FLAG_GRANT_READ_URI_PERMISSION (K/ui/transcript/TranscriptExport.kt); SYS-15 diagnostics exports use the
-     same folder (a subfolder of cache/exports/ is covered by this path). -->
+
 <paths>
     <cache-path name="chat_photos" path="chat-photos/" />
     <cache-path name="exports" path="exports/" />

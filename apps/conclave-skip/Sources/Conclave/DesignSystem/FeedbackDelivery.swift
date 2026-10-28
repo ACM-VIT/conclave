@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 
-/// An ephemeral native effect, never persisted or acknowledged back to the outcome owner.
 struct FeedbackDelivery: Equatable {
     let session: Int
     let epoch: Int
@@ -9,7 +8,6 @@ struct FeedbackDelivery: Equatable {
     let kind: FeedbackKind
 }
 
-/// Plain UI-owned state. Lifecycle callbacks update it synchronously, even between renders.
 final class FeedbackDeliveryCursor {
     private(set) var session: Int? = nil
     private(set) var sequence = 0
@@ -37,7 +35,7 @@ final class FeedbackDeliveryCursor {
 
     func observe(session: Int, token: FeedbackToken, epoch: Int, eligible: Bool) -> FeedbackDelivery? {
         guard self.session == session, self.epoch == epoch, token.sequence > sequence else { return nil }
-        // Suppression consumes this UI observation, never the domain completion.
+
         sequence = token.sequence
         pending = nil
         guard self.eligible && eligible else { return nil }
@@ -49,7 +47,6 @@ final class FeedbackDeliveryCursor {
         return prepare(kind: kind)
     }
 
-    /// Recheck immediately before the platform effect. A ticket can be taken only once.
     func take(_ delivery: FeedbackDelivery, session: Int, eligible: Bool) -> FeedbackKind? {
         guard pending == delivery else { return nil }
         pending = nil
@@ -67,16 +64,11 @@ final class FeedbackDeliveryCursor {
     }
 }
 
-/// One published outcome stream as a root consumer reads it (WP2-S2b): the source's session and its latest token. The
-/// shell (`MeetingShellFeedbackState`), the Debug hosting fixture and, with ENT-1, the premeeting presenter each feed
-/// one consumer, and each stream is deduplicated by its own sequence (S10 0.5).
 struct FeedbackSourceState: Equatable {
     let session: Int
     let token: FeedbackToken
 }
 
-/// WP2-S2b `sys.feedbackRecords` (S70 0.6 Debug readouts, 12 l4): the effects the production root consumers asked the
-/// platform for in this process. Only the Debug session readout reads it; a fixture start resets it.
 @MainActor
 @Observable
 final class FeedbackDeliveryRecords {

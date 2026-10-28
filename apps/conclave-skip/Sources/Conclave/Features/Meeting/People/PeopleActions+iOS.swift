@@ -1,15 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 3 (PPL-2): the iOS row actions. One shared action table (PeopleActionPolicy, PL7) feeds the trailing row `Menu`,
-// the row `contextMenu` with a row preview (unavailable items hidden, HIG), the trailing swipe (Mute, Remove) and the
-// named accessibility actions (AX4); confirmations are system dialogs anchored to the row for the row sources (3 j),
-// the stage hosts the tile-menu ones in the in-call theme (R50-9, RECONCILE R19); Change Name is the PL10 alert that
-// re-presents with the draft on a refusal (3 c); Participants row failures render once in a C12 banner pinned at the
-// top of the List (PL14). Copy: S50 3 g is the single source for every people item on every surface.
-
-/// S50 3 g, 6 g, 7 g copy for the action surfaces (Apple title case for items, titles and buttons; sentence case for
-/// messages and failures).
 enum PeopleActionText {
     static func titles(name: String) -> PeopleActionTitles {
         PeopleActionTitles(
@@ -40,24 +31,20 @@ enum PeopleActionText {
         PeopleText.displayName(model)
     }
 
-    /// "Actions for %@" on the trailing Menu (S50 2 i).
     static func menuLabel(_ model: PersonRowModel) -> String {
         ConclaveStrings.format("Actions for %@", displayName(model))
     }
 
-    /// The menu symbol for a manifest concept (F00 7.3); R50-4 concepts have none yet, so their groups are icon-free.
     static func symbol(_ item: MenuItemModel) -> String? {
         ConclaveMenuSymbols.symbol(for: item.concept)
     }
-
-    // MARK: Confirmations (S50 3 g, 6 g, 7 g)
 
     struct DialogCopy {
         let title: String
         let message: String
         let confirm: String
         let isDestructive: Bool
-        /// "Remove and Block" when the core knows the key (PH13, Q7).
+
         let blockTitle: String?
     }
 
@@ -101,7 +88,7 @@ enum PeopleActionText {
                               message: ConclaveStrings.text("Everyone who is presenting stops sharing."),
                               confirm: ConclaveStrings.text("Stop All Shares"), isDestructive: false, blockTitle: nil)
         case .clearAttendeeCode:
-            // S50 9 g: the attendee code page mirrors 7 c with its own strings.
+
             return DialogCopy(title: ConclaveStrings.text("Remove Attendee Code?"),
                               message: ConclaveStrings.text("Attendees can watch without a code."),
                               confirm: ConclaveStrings.text("Remove Code"), isDestructive: true, blockTitle: nil)
@@ -119,8 +106,6 @@ enum PeopleActionText {
                               confirm: ConclaveStrings.text("Rotate Link"), isDestructive: true, blockTitle: nil)
         }
     }
-
-    // MARK: Failures (PL14 copy, S50 3 g, 6 g, 7 g, 8 g; RECONCILE R17)
 
     static func failure(_ model: HostActionFailureModel) -> String {
         failure(kind: PeopleFailureCopy.kind(action: model.action, failure: model.failure, sourceKey: model.sourceKey),
@@ -161,7 +146,7 @@ enum PeopleActionText {
         case PeopleFailureCopy.qaRateLimited: return ConclaveStrings.text("You\u{2019}re sending questions too quickly.")
         case PeopleFailureCopy.qaTooShort: return ConclaveStrings.text("Ask a longer question.")
         case PeopleFailureCopy.qaModerate: return ConclaveStrings.text("Couldn\u{2019}t update the question.")
-        // PPL-3 (S50 4 g, 5 g).
+
         case PeopleFailureCopy.admit: return ConclaveStrings.format("Couldn’t admit %@.", name)
         case PeopleFailureCopy.admitAll: return ConclaveStrings.text("Couldn’t admit everyone.")
         case PeopleFailureCopy.deny: return ConclaveStrings.format("Couldn’t deny %@.", name)
@@ -170,15 +155,11 @@ enum PeopleActionText {
         }
     }
 
-    /// The stage toast for a tile-menu failure (S20 10, PL14 stage placement); the notice carries the action and the
-    /// typed failure in its detail.
     static func stageToast(_ notice: MeetingNotice) -> String {
         let kind = PeopleFailureCopy.kind(action: PeopleFailurePlacementPolicy.stageAction(notice.detail),
                                           failure: PeopleFailurePlacementPolicy.stageFailure(notice.detail), sourceKey: notice.userId)
         return failure(kind: kind, name: notice.name, sourceKey: notice.userId)
     }
-
-    // MARK: Rename (S50 3 c, 3 g; RECONCILE R38)
 
     static func renameRefusal(_ raw: String) -> String {
         switch HostActionFailure(rawValue: raw) {
@@ -201,8 +182,6 @@ enum PeopleActionText {
                                             limit: DisplayNamePolicy.limit, counterFrom: DisplayNamePolicy.counterThreshold)
     }
 
-    // MARK: Announcements (S50 3 i, 6 f, 8 i; the S20 one-shot channel)
-
     static func announcement(_ announcement: StageAnnouncement) -> String? {
         switch announcement.kind {
         case PeopleAnnouncementKind.madeCoHost: return ConclaveStrings.format("%@ is now a co-host.", announcement.name)
@@ -220,7 +199,7 @@ enum PeopleActionText {
         case PeopleAnnouncementKind.questionSent: return ConclaveStrings.text("Your question was sent.")
         case PeopleAnnouncementKind.qaOff: return ConclaveStrings.text("Q&A is off.")
         case PeopleAnnouncementKind.newHost: return ConclaveStrings.format("%@ is now the host.", announcement.name)
-        // PPL-3 (S50 4 g, 4 i): `name` carries the count as digits for the counted kinds.
+
         case PeopleAnnouncementKind.admittedAll:
             return ConclaveStrings.format("%lld admitted", Int(announcement.name) ?? 0)
         case PeopleAnnouncementKind.knock: return ConclaveStrings.format("%@ wants to join", announcement.name)
@@ -231,10 +210,6 @@ enum PeopleActionText {
     }
 }
 
-// MARK: Row surfaces
-
-/// The trailing row `Menu` (S50 3 c): groups as system sections in the PL7 order, unavailable items kept disabled with
-/// their reason (R10). Content builds only when the menu opens.
 struct PeopleRowMenu: View {
     let people: PeoplePresenter
     let model: PersonRowModel
@@ -264,8 +239,6 @@ struct PeopleRowMenu: View {
     }
 }
 
-/// The row's context menu with a row preview (no renderer), the trailing swipe, and the row-anchored confirmation
-/// dialog (S50 3 c, 3 j). It reads only this row's entry, so a dialog re-evaluates one row (3 k).
 struct PeopleRowActionsModifier: ViewModifier {
     let people: PeoplePresenter
     let entry: PersonRowEntry
@@ -312,7 +285,6 @@ struct PeopleRowActionsModifier: ViewModifier {
     }
 }
 
-/// The row-anchored system dialog (iOS 26 action sheets originate from their source; a popover on iPad, R09).
 private struct PeopleRowConfirmation: ViewModifier {
     let people: PeoplePresenter
     let entry: PersonRowEntry
@@ -330,7 +302,6 @@ private struct PeopleRowConfirmation: ViewModifier {
     }
 }
 
-/// One confirm (destructive in system red for destructive kinds, never coral), "Remove and Block" when offered, Cancel.
 struct PeopleDialogButtons: View {
     let people: PeoplePresenter
     let confirmation: PeopleConfirmation
@@ -353,7 +324,6 @@ struct PeopleDialogButtons: View {
     }
 }
 
-/// The context menu preview: avatar, name and sub line; never a renderer (S50 3 c).
 private struct PeopleRowPreview: View {
     let model: PersonRowModel
 
@@ -368,7 +338,6 @@ private struct PeopleRowPreview: View {
     }
 }
 
-/// AX4: every available item is a named action on the row's one element.
 struct PeopleRowAccessibilityActions: ViewModifier {
     let model: PersonRowModel
     let onAction: ((PersonActionID) -> Void)?
@@ -387,10 +356,6 @@ struct PeopleRowAccessibilityActions: ViewModifier {
     }
 }
 
-// MARK: Panel leaves
-
-/// PL14 inline placement for Participants row actions: one C12 app banner pinned at the top of the List with Retry and
-/// Dismiss; it reads only `people.lastFailure`.
 struct PeopleFailureBannerSection: View {
     let people: PeoplePresenter
 
@@ -407,7 +372,6 @@ struct PeopleFailureBannerSection: View {
     }
 }
 
-/// Which failures the Participants banner shows (row actions and the rename refusal are not host page fields).
 enum PeopleFailureScope {
     static func isRowFailure(_ failure: HostActionFailureModel) -> Bool {
         guard let kind = PeopleCommandKind(rawValue: failure.action) else { return false }
@@ -416,8 +380,7 @@ enum PeopleFailureScope {
              .makeCoHost, .makeHost, .moveToAudience, .bringOnStage, .cancelStageInvite:
             return true
         case .bulk:
-            // PPL-3: Lower All and Mute All... started from a Participants header report here; the same bulk actions
-            // from Host Controls report on their own rows there (PL14 inline at the source).
+
             return PeopleAdmissionsPolicy.isHeaderBulkSource(failure.sourceKey)
         default:
             return false
@@ -425,8 +388,6 @@ enum PeopleFailureScope {
     }
 }
 
-/// S50 3 c: the Change Name alert (PL10), one per panel. A refusal re-presents it with the draft and the reason; the
-/// input stops at 40 and the message shows the counter from 30 (RECONCILE R38).
 struct PeopleRenameAlertHost: ViewModifier {
     let people: PeoplePresenter
     @State private var draft = ""
@@ -451,11 +412,8 @@ struct PeopleRenameAlertHost: ViewModifier {
     }
 }
 
-// MARK: Stage host (R50-9)
-
 extension View {
-    /// The tile-menu confirmations (source `tileMenu`) over the stage in the in-call theme (S20 3 j, R50-9, RECONCILE
-    /// R19). The native call root attaches it once (HD request B5-T1 R3).
+
     func peopleStageConfirmations(_ people: PeoplePresenter?) -> some View {
         modifier(PeopleStageConfirmationHost(people: people))
     }

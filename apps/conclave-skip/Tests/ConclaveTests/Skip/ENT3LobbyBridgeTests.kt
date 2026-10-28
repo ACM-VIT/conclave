@@ -13,11 +13,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * ENT-3 and ENT-8 (S10 6, 0.5 lobby snapshots, 0.6 L8, L12, 0.8 C1, C2; S20 SC21, SC23; RECONCILE R14, R22, R50): the
- * transpiled lobby presenter, policies and link builder as Kotlin sees them, the Android lobby caches and route rows,
- * and the share intent. Mirrors `T/ENT3LobbyTests.swift` and `T/ENT8MeetingLinkBuilderTests.swift`.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ENT3LobbyBridgeTests {

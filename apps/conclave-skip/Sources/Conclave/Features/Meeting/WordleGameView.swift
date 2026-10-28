@@ -1,10 +1,5 @@
 import SwiftUI
 
-/// Native Wordle round UI. Renders the guess grid, an informational keyboard,
-/// live standings, and the set-word / playing / results phases. Parses the same
-/// server projection the web client consumes (`publicView` + per-player
-/// `playerView`) and drives moves through `sendGameMove`. Lobby is handled by
-/// the generic games sheet, so this view only covers set-word/playing/results.
 struct WordleGameView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
@@ -17,11 +12,9 @@ struct WordleGameView: View {
     @State private var secretDraft = ""
     @State private var tick = 0
     @State private var tickerTask: Task<Void, Never>?
-    // server clock minus device clock (ms), so the countdown tracks the server's
-    // deadline instead of a possibly-skewed device clock.
+
     @State private var serverClockOffsetMs: Double = 0.0
 
-    // Wordle palette (matches the web client so cross-platform play looks identical).
     private let wordleGreen = acmColor(red: 83.0, green: 141.0, blue: 78.0)
     private let wordleYellow = acmColor(red: 181.0, green: 159.0, blue: 59.0)
     private let wordleGray = acmColor(red: 58.0, green: 58.0, blue: 60.0)
@@ -32,8 +25,6 @@ struct WordleGameView: View {
         ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
         ["Z", "X", "C", "V", "B", "N", "M"]
     ]
-
-    // MARK: - Parsed state
 
     private var phase: String { publicView?.string("phase") ?? activeGame.phase }
     private var wordLength: Int { max(1, publicView?.int("wordLength") ?? 5) }
@@ -77,12 +68,12 @@ struct WordleGameView: View {
         .onAppear { startTicker() }
         .onDisappear { stopTicker() }
         .onChange(of: phase) {
-            // New round/phase: drop any stale drafts.
+
             guessDraft = ""
             secretDraft = ""
         }
         .onChange(of: myGuesses.count) {
-            // The server accepted a guess (a new row landed); safe to clear now.
+
             guessDraft = ""
         }
         .onChange(of: serverNow) {
@@ -91,8 +82,6 @@ struct WordleGameView: View {
             }
         }
     }
-
-    // MARK: - Header
 
     private var header: some View {
         HStack(alignment: .top, spacing: ACMSpacing.sm) {
@@ -139,8 +128,6 @@ struct WordleGameView: View {
         }
     }
 
-    // MARK: - Set word
-
     private var setWordSection: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.sm) {
             if canSetWord {
@@ -153,8 +140,6 @@ struct WordleGameView: View {
             }
         }
     }
-
-    // MARK: - Playing
 
     private var playingSection: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.md) {
@@ -177,8 +162,6 @@ struct WordleGameView: View {
             standingsList
         }
     }
-
-    // MARK: - Results
 
     private var resultsSection: some View {
         VStack(alignment: .leading, spacing: ACMSpacing.sm) {
@@ -221,8 +204,6 @@ struct WordleGameView: View {
             }
         }
     }
-
-    // MARK: - Word grid
 
     private var wordGrid: some View {
         VStack(spacing: 4) {
@@ -288,8 +269,6 @@ struct WordleGameView: View {
         }
     }
 
-    // MARK: - Keyboard (informational)
-
     private var keyboardStates: [String: String] {
         var result: [String: String] = [:]
         for guess in myGuesses {
@@ -332,8 +311,6 @@ struct WordleGameView: View {
         default: return keyIdleBg
         }
     }
-
-    // MARK: - Standings
 
     private var standingsList: some View {
         VStack(spacing: 6) {
@@ -414,10 +391,6 @@ struct WordleGameView: View {
         }
     }
 
-    // MARK: - Shared styling
-
-    // Flat title/subtitle block - no accent bar. The stage chrome already
-    // carries the game identity; this row just states the task, quietly.
     private func statusBlock(title: String, subtitle: String?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
@@ -482,8 +455,6 @@ struct WordleGameView: View {
             }
     }
 
-    // MARK: - Bindings + actions
-
     private var guessBinding: Binding<String> {
         Binding(
             get: { guessDraft },
@@ -518,8 +489,7 @@ struct WordleGameView: View {
 
     private func submitGuess() {
         guard isGuessReady else { return }
-        // Keep the draft until the server accepts it (a new row appears / phase
-        // advances), so a rejected or dropped move doesn't lose the typed word.
+
         viewModel.sendGameMove(type: "guess", payload: GameJSONValue.object(["word": guessDraft]))
     }
 
@@ -537,15 +507,13 @@ struct WordleGameView: View {
         }
     }
 
-    // MARK: - Countdown
-
     private var remainingSeconds: Int? {
         guard let deadline else { return nil }
-        _ = tick // re-evaluated each tick to keep the countdown live
+        _ = tick
         let serverNowMs = Date().timeIntervalSince1970 * 1000.0 + serverClockOffsetMs
         let remaining = (deadline - serverNowMs) / 1000.0
         if remaining <= 0 { return 0 }
-        // Ceiling without FloatingPointRoundingRule (keep it Skip-safe).
+
         let whole = Int(remaining)
         return remaining > Double(whole) ? whole + 1 : whole
     }
@@ -566,8 +534,6 @@ struct WordleGameView: View {
         tickerTask = nil
     }
 
-    // MARK: - Helpers
-
     private func stateRank(_ state: String?) -> Int {
         switch state {
         case "green": return 3
@@ -577,8 +543,6 @@ struct WordleGameView: View {
         }
     }
 
-    /// Splits a string into single-character strings. Skip does not support the
-    /// `Array(someString)` initializer, so iterate explicitly.
     private func letters(of value: String) -> [String] {
         var result: [String] = []
         for character in value {

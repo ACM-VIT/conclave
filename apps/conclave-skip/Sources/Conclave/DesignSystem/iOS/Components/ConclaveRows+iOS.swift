@@ -1,12 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// List rows (F00 C09) and the person row (F00 C10) for `List(.insetGrouped)` and the dark panels. Rows use the
-// native controls, so they keep the system semantics, chevrons and haptics: the toggle row is the green system
-// switch, never tinted (R06), and adds no haptic of its own (F00 8). Titles wrap; `lineLimit` defaults to none
-// (OQ-2b-5) for screens whose geometry needs a cap.
-
-/// A title with a value (C09). At accessibility text sizes the value moves under the title.
 struct ConclaveValueRow: View {
     let title: String
     let value: String
@@ -30,7 +24,6 @@ struct ConclaveValueRow: View {
     }
 }
 
-/// A navigation row with the system chevron and traits; never a hand-drawn chevron (C09).
 struct ConclaveNavigationRow<Destination: View>: View {
     let title: String
     let identifier: String
@@ -46,7 +39,6 @@ struct ConclaveNavigationRow<Destination: View>: View {
     }
 }
 
-/// A settings switch row: the native green `Toggle`, untinted (R06).
 struct ConclaveToggleRow: View {
     let title: String
     @Binding var isOn: Bool
@@ -58,7 +50,6 @@ struct ConclaveToggleRow: View {
     }
 }
 
-/// A destructive row: the destructive role, so the system draws it red.
 struct ConclaveDestructiveRow: View {
     let title: String
     let identifier: String
@@ -72,8 +63,6 @@ struct ConclaveDestructiveRow: View {
     }
 }
 
-/// One choice of a single-choice group: a checkmark row with the selected trait (C09). It plays nothing on iOS
-/// (F00 C09 e).
 struct ConclaveSelectableRow: View {
     let title: String
     let isSelected: Bool
@@ -106,10 +95,6 @@ enum ConclaveRowMetrics {
     static let avatarDiameter: CGFloat = 40
 }
 
-// MARK: Person row (F00 C10, OQ-2b-8)
-
-/// The leading avatar stand-in until FND-1's C07 avatar: a flat circle from the avatar palette at a stated index,
-/// hidden from accessibility, with no text and no contrast pair.
 struct ConclaveAvatarStandIn: View {
     let paletteIndex: Int
     @ScaledMetric(relativeTo: .body) private var diameter = ConclaveRowMetrics.avatarDiameter
@@ -123,8 +108,6 @@ struct ConclaveAvatarStandIn: View {
     }
 }
 
-/// A person: a leading slot, the name and an optional detail, and status glyphs that accessibility never reads on
-/// their own. The name and detail are one element; `statusValue` carries the status ("Muted, Hand Raised").
 struct ConclavePersonRow<Leading: View>: View {
     let name: String
     let detail: String?
@@ -175,8 +158,6 @@ extension ConclavePersonRow where Leading == ConclaveAvatarStandIn {
     }
 }
 
-/// The C10 waiting variant: Deny (text) and Admit (tonal, never coral) are separate focusable elements labelled
-/// with the name, after the combined name element.
 struct ConclaveWaitingPersonRow: View {
     let name: String
     let avatarPaletteIndex: Int
@@ -259,11 +240,6 @@ private struct PersonStatusValue: ViewModifier {
     }
 }
 
-// MARK: Section header and footer (F00 C11)
-
-/// A section header with an optional count, for `Section { } header: { }`: the system header style (title case
-/// on iOS 26, no forced capitals, never coral), one combined element with the header trait, so the count reads
-/// with the title ("In This Meeting, 5"). The count keeps tabular digits; long titles wrap and the count stays.
 struct ConclaveSectionHeader: View {
     let title: String
     let count: Int?
@@ -291,7 +267,6 @@ struct ConclaveSectionHeader: View {
     }
 }
 
-/// A section footer: explanatory text in the system footer style ("Only you see this layout.").
 struct ConclaveSectionFooter: View {
     let text: String
     let identifier: String

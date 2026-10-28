@@ -1,29 +1,19 @@
 import Foundation
 import Observation
 
-/// S50 0.5 (PPL-4): the Host Controls presenter, a child of `PeoplePresenter` (created and reset with it). Every action
-/// dispatches through the parent, so People and Host Controls share one ledger and one failure path (PH2). Views read
-/// only `snapshot` and `attendeeCount` (its own stored property, so a watching count never republishes the snapshot,
-/// S50 6 k) and keep field text in their own state, written back into `drafts` (7 c, 8 c, 8 d).
-///
-/// Inputs: the core's host-config inputs (`apply`, the host presenter path of PH1) and the roster-derived facts from
-/// the parent's rebuild (`peopleChanged`). Pending switch intent (`requestedOn`, PL4) lives here; server state changes
-/// only on the acknowledgement.
 @MainActor
 @Observable
 final class HostControlsPresenter {
     private(set) var snapshot: HostControlsSnapshot = HostControlsSnapshot.empty
-    /// Own stored property: only the Watching value and the Webinar Settings row read it (S50 6 k).
+
     private(set) var attendeeCount: Int = 0
 
     @ObservationIgnored let drafts = HostDrafts()
-    /// Dispatch, ledger and failure path. `weak` (Kotlin has no unowned reference); set once by the parent.
+
     @ObservationIgnored weak var parent: PeoplePresenter?
-    /// R34: the core's webinar link generation (`generateWebinarLink()`); fixtures install a scripted one. Called only
-    /// through `ensureWebinarLink()`, which keeps it single flight.
+
     @ObservationIgnored var linkProvider: (() async -> String?)? = nil
-    /// PPL-5 (S50 9 j): the core's `refreshWebinarConfigNow()`, called once when Webinar Settings appears (not per
-    /// sub-page); fixtures leave it nil.
+
     @ObservationIgnored var configRefresher: (() -> Void)? = nil
 
     @ObservationIgnored private(set) var inputs = HostControlsInputs.make()
@@ -46,9 +36,6 @@ final class HostControlsPresenter {
 
     init() {}
 
-    // MARK: Inputs
-
-    /// Core only (PH1 host presenter path): policies, access lists, webinar config, PH14 loading, End.
     func apply(_ next: HostControlsInputs) {
         applyCount += 1
         let previous = inputs
@@ -61,7 +48,6 @@ final class HostControlsPresenter {
         rebuild()
     }
 
-    /// From the parent's rebuild: the viewer's role, the S1 blocked reason and the roster facts the bulk rows read.
     func peopleChanged(isHostViewer: Bool, blockedReason: String, hasActiveShare: Bool, anyHandRaised: Bool) {
         if self.isHostViewer == isHostViewer && self.blockedReason == blockedReason && self.hasActiveShare == hasActiveShare
             && self.anyHandRaised == anyHandRaised {
@@ -74,10 +60,6 @@ final class HostControlsPresenter {
         rebuild()
     }
 
-    // MARK: Actions (S50 6 to 8)
-
-    /// PL4: dispatches only on a change (no toggle drift) and sets `requestedOn` before the next read, so the knob
-    /// moves once and stays until the acknowledgement or the failure.
     @discardableResult
     func setPolicy(_ id: HostPolicyID, on: Bool) -> ControlTapResult {
         guard snapshot.isAvailable, let row = snapshot.policy(id), row.isEnabled, row.isOn != on, let parent else {
@@ -91,8 +73,6 @@ final class HostControlsPresenter {
         return result
     }
 
-    /// Q9: the media bulk actions ask first through the parent's confirmation (source `hostControls`); Lower All Hands
-    /// acts at once.
     @discardableResult
     func requestBulk(_ id: HostBulkID) -> ControlTapResult {
         guard snapshot.isAvailable, let row = snapshot.bulkRow(id), row.isVisible, row.isEnabled, let parent else {
@@ -105,7 +85,6 @@ final class HostControlsPresenter {
         return dispatchBulk(id)
     }
 
-    /// After the confirmation (or directly for Lower All Hands).
     @discardableResult
     func dispatchBulk(_ id: HostBulkID) -> ControlTapResult {
         guard let parent else { return ControlTapResult.ignored }
@@ -113,7 +92,6 @@ final class HostControlsPresenter {
                                source: PeopleActionSource.hostControls, sourceKey: id.rawValue, targetName: "")
     }
 
-    /// PH15: the draft stays until the acknowledgement; the field clears only on success.
     @discardableResult
     func setMeetingInviteCode(_ code: String) -> ControlTapResult {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -141,7 +119,6 @@ final class HostControlsPresenter {
                                sourceKey: HostFieldID.inviteCode, targetName: "")
     }
 
-    /// Fire and forget (VM `refreshAdminAccessLists()`); its progress is `access.isRefreshing` (S50 7 c).
     func refreshAccessLists() {
         guard snapshot.isAvailable, let parent else { return }
         parent.dispatch(PeopleCommand.make(PeopleCommandKind.refreshAccessLists), key: "refreshAccessLists:all",
@@ -181,7 +158,6 @@ final class HostControlsPresenter {
                                source: PeopleActionSource.hostControls, sourceKey: HostFieldID.accessKey, targetName: normalized)
     }
 
-    /// S50 8: the level rides in the command's `targetId` (info, warning, error).
     @discardableResult
     func sendNotice(_ text: String, level: String) -> ControlTapResult {
         guard snapshot.isAvailable, HostControlsPolicy.canSendNotice(text, isPending: false, isBlocked: false), let parent else {
@@ -249,8 +225,6 @@ final class HostControlsPresenter {
                                sourceKey: HostFieldID.customLink, targetName: "")
     }
 
-    /// R34: the one owner of webinar link generation. A link that exists returns at once; concurrent callers (Share
-    /// Webinar Link, Meeting Details, Webinar Settings) share one in-flight generation.
     func ensureWebinarLink() async -> String? {
         let current = snapshot.webinar.linkURL
         if !current.isEmpty { return current }
@@ -272,14 +246,12 @@ final class HostControlsPresenter {
         return link.isEmpty ? nil : link
     }
 
-    /// S50 9 j: one config refresh when Webinar Settings appears, never per sub-page.
     func refreshWebinarConfig() {
         guard snapshot.isAvailable else { return }
         configRefreshCount += 1
         configRefresher?()
     }
 
-    /// S50 9 a, 6 c: the Webinar Settings row shows while webinar mode is on; turning it off pops the page.
     var isWebinarSettingsReachable: Bool { snapshot.isAvailable && snapshot.webinar.enabled }
 
     func requestRotateLink() {
@@ -300,15 +272,11 @@ final class HostControlsPresenter {
         return result
     }
 
-    /// PH17: the S1 confirmation with invoker `hostControls`, so the dialog belongs to Host Controls (R09).
     func requestEndForEveryone() {
         guard snapshot.isAvailable, snapshot.canEndForEveryone, let parent else { return }
         parent.shell.requestEndForEveryone(from: MeetingConfirmationInvoker.hostControls)
     }
 
-    // MARK: Results (from the parent's finish)
-
-    /// A retry asks for the same switch value again.
     func willRetry(_ entry: HostLedgerEntry) {
         if entry.command.kind == PeopleCommandKind.setPolicy {
             requested[entry.command.text] = entry.command.flag
@@ -347,7 +315,7 @@ final class HostControlsPresenter {
                 noteSaved(HostFieldID.attendeeCode)
             }
         case .setLinkSlug, .clearLinkSlug:
-            // The field now shows the server's slug; the draft reseeds from it (S50 9 j).
+
             if completed {
                 drafts.slug = entry.command.kind == PeopleCommandKind.setLinkSlug ? entry.command.text : ""
                 noteSaved(HostFieldID.customLink)
@@ -371,7 +339,6 @@ final class HostControlsPresenter {
         savedSerial += 1
     }
 
-    /// With the parent's reset (S1C 3.3 TEAR): drafts, pending intent and phases clear; revisions keep growing.
     func reset() {
         drafts.reset()
         requested = [:]
@@ -390,9 +357,6 @@ final class HostControlsPresenter {
         if attendeeCount != 0 { attendeeCount = 0 }
     }
 
-    // MARK: Rebuild
-
-    /// Recomputes the snapshot from the inputs and the parent's ledger; publishes only a changed snapshot.
     func rebuild() {
         let pendingKeys = parent?.pendingKeys() ?? []
         var pendingPolicies: [String] = []
@@ -445,8 +409,6 @@ final class HostControlsPresenter {
         }
     }
 
-    /// S50 6 f "Changed by another host": an announcement only while the panel is current and nothing local is pending
-    /// for that switch.
     private func announceRemoteChanges(previous: HostControlsInputs, next: HostControlsInputs) {
         guard let parent, isHostViewer, parent.isPanelOpen, previous.callSession == next.callSession, applyCount > 1 else { return }
         for id in [HostPolicyID.lockMeeting, HostPolicyID.allowGuests, HostPolicyID.allowUnmute, HostPolicyID.allowVideo,

@@ -15,13 +15,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * FND-1 and FND-2, the Android half (FND1FoundationPackTests and FND2InCallChromeTests are the Swift half): the
- * extended color roles (F00 2.6 A4), the motion specs (A5), plurals (S10 R11) and tabular digits (S60 R6-13), the
- * system accessibility reader's API gating (S70 13 d), the avatar parity and geometry (C07), the tile policy
- * (C08, S20 SR4), the route icons (S30 CL8) and the stage lifetime probe (S10 R12), through the transpiled shared
- * types. Composables are covered by their pure helpers.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class FND1FND2BridgeTests {
@@ -37,11 +30,11 @@ class FND1FND2BridgeTests {
         assertEquals(Color(DesignTokens.androidExtendedBorderDark), dark.border)
         assertEquals(Color(DesignTokens.androidExtendedBorderDarkHighContrast), conclaveExtendedColors(dark = true, highContrast = true).border)
         assertEquals(Color(DesignTokens.androidExtendedLabelScrimHighContrast), conclaveExtendedColors(dark = true, highContrast = true).labelScrim)
-        // The R01 roles equal the pure call-control mapping (callToggleColorsMatchR01 checks the values).
+
         assertEquals(Color(conclaveCallToggleColors(ConclaveCallControlVisual.Off).container), dark.toggleOffContainer)
         assertEquals(Color(conclaveCallToggleColors(ConclaveCallControlVisual.Engaged).content), dark.onToggleEngaged)
         assertEquals(Color(conclaveLeaveColors.container), dark.callEnd)
-        // Theme-independent roles are the same in both sets; the cached sets are the factory results.
+
         assertEquals(light.speaking, dark.speaking)
         assertEquals(light.stage, dark.stage)
         assertEquals(dark, ConclaveExtendedColorsDark)
@@ -73,14 +66,13 @@ class FND1FND2BridgeTests {
 
     @Test fun pluralLookupIsByNameAndByType() {
         val app = RuntimeEnvironment.getApplication()
-        // The library test cannot see the app module's resources (like BrandResourceBridgeTests): a missing name shows
-        // "[name]", and the lookup asks for the plurals type in the context's own package.
+
         assertEquals(0, conclavePluralId(app, "ds_more_participants"))
         assertEquals("[ds_more_participants]", conclavePluralOf(app, "ds_more_participants", 3, 3))
         val framework = object : ContextWrapper(app) {
             override fun getPackageName(): String = "android"
         }
-        // A string name is not a plural: the type is part of the lookup.
+
         assertEquals(0, conclavePluralId(framework, "ok"))
     }
 
@@ -137,7 +129,7 @@ class FND1FND2BridgeTests {
             assertEquals(v.seed, v.face, identity.faceIndex)
             assertEquals(v.seed, v.mouth, identity.mouthIndex)
         }
-        // "Guest" is magenta on Android too (the legacy avatar drew teal).
+
         assertEquals(0xFFE879F9L, ConclaveAvatarIdentity.make(name = "Guest", id = null).fill)
     }
 
@@ -149,7 +141,7 @@ class FND1FND2BridgeTests {
         val total = layout.eyesHeight + 120f * 0.08f + layout.mouthHeight
         assertEquals((120f - total) / 2f, layout.eyesTop, 0.001f)
         assertEquals(120f * 0.32f, layout.mouthWidth, 0.001f)
-        // Small avatars keep the 6 dp minimum mouth and the 1.4 dp minimum stroke, in pixels.
+
         val small = ConclaveAvatarGeometry.layout(diameter = 24f, faceIndex = 3, mouthIndex = 9, density = 3f)
         assertEquals(18f, small.mouthWidth, 0.001f)
         assertEquals(4.2f, small.strokeWidth, 0.001f)
@@ -205,7 +197,7 @@ class FND1FND2BridgeTests {
         assertSame(ConclaveIcons.PhoneInTalkFill0, conclaveRouteIcon("receiver"))
         assertSame(ConclaveIcons.BluetoothFill0, conclaveRouteIcon("bluetooth"))
         assertSame(ConclaveIcons.HeadphonesFill0, conclaveRouteIcon("wired"))
-        // CL11 fallback until the usb and hearing concepts land in the manifest.
+
         assertSame(ConclaveIcons.UsbFill0, conclaveRouteIcon("usb"))
         assertSame(ConclaveIcons.HearingFill0, conclaveRouteIcon("hearingAid"))
         for (kind in listOf("speaker", "unknown")) assertSame(kind, ConclaveIcons.VolumeUpFill0, conclaveRouteIcon(kind))
@@ -225,7 +217,7 @@ class FND1FND2BridgeTests {
     }
 
     @Test fun surfaceContextsAllowGlassOnTheStageOnly() {
-        // The R02 mapping is iOS host code; the shared context rule is what Android sees.
+
         assertTrue(ConclaveSurfaceContext.stage.allowsGlass)
         assertFalse(ConclaveSurfaceContext.overVideo.allowsGlass)
         assertFalse(ConclaveSurfaceContext.onSurface.allowsGlass)

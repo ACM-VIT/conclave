@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-6 (S10 10, 2 Rejoin card, 0.6 L5, 0.8 C3, C5; RECONCILE R4, R47; R08 via OWNER-DEFAULTS Q16): the outcome
-/// mapping (denied, removed, connection lost and server disconnected to the outcome screen; ended and room closed to a
-/// Home notice), the outcome model's actions with and without the view model's rejoin context, Rejoin and Try Again
-/// through `rejoinLastMeeting`, the Rejoin card keeping the previous intent, the fixtures and the views on both
-/// platforms. The transpiled presenter also runs in `T/Skip/ENT5ENT6BridgeTests.kt`.
 @MainActor
 struct ENT6OutcomeTests {
     private static let room = "lily-zoro-iris"
@@ -38,8 +33,6 @@ struct ENT6OutcomeTests {
                               roomLabel: Self.room, hasBeenAdmittedThisSession: true, entryOrigin: origin,
                               currentRoomId: Self.room, rejoinRoomId: rejoin, joinFailureCategory: category)
     }
-
-    // MARK: Policies (S10 0.8 C3, 10 f)
 
     @Test func theRejoinContextFollowsTheC3Table() {
         for kind in [MeetingTerminalOutcomeKind.connectionLost, .serverDisconnected] {
@@ -86,8 +79,6 @@ struct ENT6OutcomeTests {
         #expect(OutcomeModelPolicy.serverDetail(variant: .removed, serverText: "xhr poll error", failure: .none) == "", "noise is never shown")
     }
 
-    // MARK: R08 mapping (S10 10 f; Q16)
-
     @Test func outcomesMapToTheScreenOrAHomeNotice() {
         for kind in [MeetingTerminalOutcomeKind.denied, .removed, .connectionLost, .serverDisconnected] {
             let presenter = presenter()
@@ -96,7 +87,7 @@ struct ENT6OutcomeTests {
             #expect(presenter.root.showsOutcome, "\(kind)")
             #expect(presenter.outcome != nil && presenter.path.isEmpty, "\(kind)")
         }
-        // A failed rejoin (recovery) is the outcome screen; an initial failure is the lobby inline.
+
         let rejoinFailed = presenter()
         rejoinFailed.apply(inCall())
         rejoinFailed.apply(outcome(.joinFailed, origin: .recovery))
@@ -116,8 +107,6 @@ struct ENT6OutcomeTests {
         #expect(closed.home.noticeKind == .roomClosed)
     }
 
-    // MARK: Rejoin and Try Again (S10 0.8 C3, 10 j, l6)
-
     @Test func rejoinOnTheOutcomeScreenOpensTheRejoinLobbyAndAsksOnce() {
         let recorder = Recorder()
         let presenter = presenter(recorder: recorder)
@@ -130,13 +119,13 @@ struct ENT6OutcomeTests {
         #expect(presenter.outcome == nil)
         #expect(presenter.path.count == 1 && presenter.path.first?.kind == .lobby)
         #expect(presenter.lobbyStatus?.intent == .rejoin)
-        // The core joins: the same lobby shows Connecting (no second push).
+
         let routeId = presenter.path.first?.id
         presenter.apply(PremeetingInputs.make(callSession: 2, phase: .entering, roomLabel: Self.room, currentRoomId: Self.room,
                                               rejoinRoomId: Self.room))
         #expect(presenter.path.first?.id == routeId)
         #expect(presenter.lobbyStatus?.mode == .connecting)
-        // The dismissed outcome stays dismissed if the core republishes it before clearing it.
+
         let other = self.presenter(recorder: Recorder())
         other.apply(inCall(rejoin: Self.room))
         other.apply(outcome(.serverDisconnected, id: 9, rejoin: Self.room))
@@ -154,7 +143,7 @@ struct ENT6OutcomeTests {
         #expect(presenter.outcome?.failure == .failedNetwork)
         presenter.performOutcomeAction(.tryAgain)
         #expect(recorder.commands == [.rejoinLastMeeting])
-        // The rejoin fails at once (initial): the rejoin lobby's inline Try Again asks the context again.
+
         presenter.apply(PremeetingInputs.make(callSession: 2, phase: .entering, roomLabel: Self.room, currentRoomId: Self.room,
                                               rejoinRoomId: Self.room))
         presenter.apply(PremeetingInputs.make(callSession: 2, phase: .outcome, outcomeId: 11, outcomeKind: .joinFailed,
@@ -176,24 +165,22 @@ struct ENT6OutcomeTests {
         #expect(presenter.rejoinCommandCount == 0)
     }
 
-    // MARK: The Rejoin card (S10 2 j; RECONCILE R4)
-
     @Test func theRejoinCardConnectsWithTheContextAndOpensEditableWithout() {
         let recorder = Recorder()
         let presenter = presenter(recorder: recorder)
         presenter.bootstrap(user: nil, recents: PremeetingFixtureScript.recents(for: .home, nowMillis: Self.now))
         #expect(presenter.home.rejoin != nil)
-        // No context (a relaunch): the lobby opens editable with Join, nothing reaches the core.
+
         presenter.rejoin()
         #expect(recorder.commands.isEmpty)
         #expect(presenter.lobbyStatus?.intent == .rejoin && presenter.lobbyStatus?.mode == .editing)
         presenter.setPath([])
-        // With the view model's context for that room: Rejoin connects with the previous intent (the core restores it).
+
         presenter.apply(PremeetingInputs.make(rejoinRoomId: "rose-sora-luffy"))
         presenter.rejoin()
         #expect(recorder.commands == [.rejoinLastMeeting])
         #expect(presenter.path.last?.roomId == "rose-sora-luffy")
-        // A context for another room never auto-connects this card.
+
         presenter.setPath([])
         presenter.apply(PremeetingInputs.make(rejoinRoomId: "maple-goku-tulip"))
         presenter.rejoin()
@@ -231,8 +218,6 @@ struct ENT6OutcomeTests {
         #expect(presenter.path.last?.roomId == "rose-sora-luffy")
     }
 
-    // MARK: Fixtures (S10 10 l1)
-
     @Test func theOutcomeFixturesReachTheirRows() {
         let expectations: [PremeetingFixtureState: (PremeetingPresenter) -> Bool] = [
             .outcomeDenied: { $0.outcome?.variant == .denied && $0.outcome?.primary == .backHome },
@@ -249,7 +234,7 @@ struct ENT6OutcomeTests {
             defer { session.stop() }
             #expect(check(session.premeeting), "\(state)")
         }
-        // The scripted rejoin restores the previous intent and shows Connecting, with no view model (R4).
+
         let session = PremeetingFixtureSession(state: .homeRejoin)
         session.start()
         defer { session.stop() }
@@ -258,8 +243,6 @@ struct ENT6OutcomeTests {
         #expect(session.premeeting.lobbyMedia?.micIntentOn == PremeetingFixtureScript.rejoinMicOn)
         #expect(session.premeeting.lobbyMedia?.cameraIntentOn == PremeetingFixtureScript.rejoinCameraOn)
     }
-
-    // MARK: Source scans
 
     @Test func theOutcomeViewsFollowTheSpec() throws {
         let ios = try ent6Source("Sources/Conclave/Features/Outcome/OutcomeView+iOS.swift")
@@ -297,18 +280,16 @@ struct ENT6OutcomeTests {
         #expect(!policies.contains("import SwiftUI") && !policies.contains("ConclaveStrings"), "10 l7: no user-visible English in the model")
     }
 
-    /// Passes after the integrator applies HD request B5-T5 R3.
     @Test func theViewModelKeepsTheRejoinContext() throws {
         let viewModel = ent6Flat(try ent6Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"))
         #expect(viewModel.contains("captureRejoinContext(kind, joinContext: joinContext ?? lastJoinContext)"))
         #expect(viewModel.contains("recordTerminalOutcome(outcome, serverText: classification.serverText, joinContext: preservedJoinContext)"))
-        #expect(viewModel.contains("case .rejoinLastMeeting: // ENT-6 (S10 0.8 C3, HD request B5-T5 R3). rejoinLastMeeting()"))
+        #expect(viewModel.contains("case .rejoinLastMeeting: rejoinLastMeeting()"))
         #expect(viewModel.contains("rejoinRoomId: rejoinContext?.roomId ?? \"\","))
         #expect(viewModel.contains("serverRestartText: state.serverRestartNotice ?? \"\","))
         #expect(viewModel.contains("rejoinJoinCount += 1 if let override = rejoinJoinOverride { override(context) return } joinRoom( roomId: context.roomId, displayName: context.displayName, socketDisplayName: context.socketDisplayName, user: context.user, isHost: context.isHost, joinMode: context.joinMode, meetingInviteCode: context.meetingInviteCode, webinarInviteCode: context.webinarInviteCode, clientId: context.clientId, allowRoomCreation: context.allowRoomCreation )"))
     }
 
-    /// Passes after the integrator merges `HD/strings/B5-T5.json` (the outcome copy itself was merged in batch 3).
     @Test func outcomeStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent6Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
@@ -327,7 +308,6 @@ struct ENT6OutcomeTests {
     }
 }
 
-/// The S1 notice the shell publishes with each Home outcome (S1C PHASE): host-ended and closed carry a notice.
 private enum PremeetingRootPolicyHelpers {
     static func notice(for kind: MeetingTerminalOutcomeKind) -> MeetingNoticeKind {
         switch kind {
@@ -346,7 +326,6 @@ private func ent6Source(_ packageRelativePath: String) throws -> String {
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 
-/// Whitespace collapsed to single spaces, so a pin fails only when the code changes.
 private func ent6Flat(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
@@ -360,8 +339,7 @@ private func ent6Matches(_ pattern: String, in text: String) -> [String] {
 }
 
 #if os(macOS)
-/// S10 0.8 C3 on the view model (macOS stubs; no network: `rejoinJoinOverride` replaces the join). Needs HD request
-/// B5-T5 R3.
+
 @MainActor
 @Suite(.serialized)
 struct ENT6RejoinCoreDeltaTests {
@@ -397,10 +375,10 @@ struct ENT6RejoinCoreDeltaTests {
         #expect(viewModel.rejoinContext?.roomId == "room-a")
         #expect(viewModel.makePremeetingInputs().rejoinRoomId == "room-a")
         #expect(viewModel.premeeting.outcome?.primary == .rejoin)
-        // The teardown ends with cleanup() clearing lastJoinContext; the rejoin context outlives it.
+
         #expect(await ent6Settle { viewModel.lastJoinContext == nil })
         #expect(viewModel.rejoinContext?.meetingInviteCode == "invite-123")
-        // Rejoin: exactly one join with the original room, invite code and client id, and the previous intent (R4).
+
         viewModel.state.isMuted = true
         viewModel.rejoinLastMeeting()
         #expect(viewModel.rejoinJoinCount == 1)
@@ -412,7 +390,7 @@ struct ENT6RejoinCoreDeltaTests {
     }
 
     @Test func aRemovalLeavesNothingToRejoin() async {
-        // S10 10 l6: after removed (like denied, ended and closed) no rejoin context exists.
+
         let viewModel = joinedViewModel()
         viewModel.socketManager.onKicked?(KickedNotification(reason: nil, roomId: "room-a"))
         #expect(await ent6Settle { viewModel.shell.session.outcome?.kind == .removed })
@@ -433,8 +411,6 @@ struct ENT6RejoinCoreDeltaTests {
     }
 }
 
-/// Waits for a condition the view model's tasks make true. Main actor: the condition reads view model state, so it
-/// is polled on the actor that writes it (a nonisolated async helper would run it on the global executor).
 @MainActor
 private func ent6Settle(_ condition: () -> Bool) async -> Bool {
     for _ in 0..<1000 {

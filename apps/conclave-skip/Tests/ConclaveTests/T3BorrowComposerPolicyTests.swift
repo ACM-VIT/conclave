@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// T3B-2 (R/t3-borrow/PLAN.md section 4; P1, P2, P3, P6 and the views of P4, P7, P8): the shared composer policies
-/// (suggestion triggers, the per-trigger Escape dismissal, the highlight, the Return table, one Send reason, the photo
-/// intake notice, the menu focus and restore rules) and source scans of the iOS and Android composers. The Kotlin
-/// half (the composer's own key handler driven with real Android key events, the TextFieldState draft helpers and the
-/// clip URIs) is T/Skip/T3BorrowComposerBridgeTests.kt.
 @MainActor
 struct T3BorrowComposerPolicyTests {
     private static let iosComposer = "Sources/Conclave/Features/Meeting/Chat/ChatComposer+iOS.swift"
@@ -18,8 +13,6 @@ struct T3BorrowComposerPolicyTests {
     private func item(_ id: String, _ available: Bool = true) -> ChatSuggestionItem {
         ChatSuggestionItem(id: id, insertText: "/" + id, isAvailable: available)
     }
-
-    // MARK: P1 triggers and the Escape dismissal
 
     @Test func triggersFollowTheTrailingToken() {
         let mention = ChatComposerPolicy.suggestionTrigger(draft: "hi @av")
@@ -38,27 +31,25 @@ struct T3BorrowComposerPolicyTests {
 
     @Test func escapeHidesTheListForThisTriggerUntilTheTriggerGoes() {
         var dismissed = ""
-        // Escape on "hi @av".
+
         dismissed = ChatComposerPolicy.suggestionTrigger(draft: "hi @av").key
-        // More letters in the same token: still hidden.
+
         var trigger = ChatComposerPolicy.suggestionTrigger(draft: "hi @ave")
         dismissed = ChatComposerPolicy.dismissedKey(after: trigger, current: dismissed)
         #expect(ChatComposerPolicy.isDismissed(trigger: trigger, dismissedKey: dismissed))
-        // The "@" deleted: the trigger is gone and so is the dismissal.
+
         trigger = ChatComposerPolicy.suggestionTrigger(draft: "hi ")
         dismissed = ChatComposerPolicy.dismissedKey(after: trigger, current: dismissed)
         #expect(dismissed.isEmpty && !ChatComposerPolicy.isDismissed(trigger: trigger, dismissedKey: dismissed))
-        // "@" typed again at the same index: the list shows.
+
         trigger = ChatComposerPolicy.suggestionTrigger(draft: "hi @")
         dismissed = ChatComposerPolicy.dismissedKey(after: trigger, current: dismissed)
         #expect(!ChatComposerPolicy.isDismissed(trigger: trigger, dismissedKey: dismissed))
-        // Another trigger resolving clears it too.
+
         let other = ChatComposerPolicy.dismissedKey(after: ChatComposerPolicy.suggestionTrigger(draft: "/h"), current: "mention:3")
         #expect(other.isEmpty)
         #expect(!ChatComposerPolicy.isDismissed(trigger: ChatSuggestionTrigger.none, dismissedKey: "none:0"))
     }
-
-    // MARK: P1 highlight
 
     @Test func arrowsWrapBothWaysAndSkipUnavailableRows() {
         let items = [item("a"), item("b", false), item("c")]
@@ -78,7 +69,7 @@ struct T3BorrowComposerPolicyTests {
         #expect(ChatComposerPolicy.resolvedHighlight(currentId: "", items: items, highlightQuery: "", currentQuery: "q") == "help")
         #expect(ChatComposerPolicy.resolvedHighlight(currentId: "tts", items: items, highlightQuery: "q", currentQuery: "q") == "tts")
         #expect(ChatComposerPolicy.resolvedHighlight(currentId: "tts", items: items, highlightQuery: "q", currentQuery: "q2") == "help")
-        // A refilter (same query, the list changed): kept while the row is still there and available.
+
         let refiltered = [item("dm"), item("tts")]
         #expect(ChatComposerPolicy.resolvedHighlight(currentId: "tts", items: refiltered, highlightQuery: "q", currentQuery: "q") == "tts")
         #expect(ChatComposerPolicy.resolvedHighlight(currentId: "help", items: refiltered, highlightQuery: "q", currentQuery: "q") == "dm")
@@ -97,7 +88,7 @@ struct T3BorrowComposerPolicyTests {
         let commands = ChatComposerPolicy.suggestionItems(draft: "/", mentionOptions: [], commandRows: rows, isPrivateMode: false)
         #expect(commands.map { $0.id } == ChatComposerPolicy.commandSuggestions(draft: "/", rows: rows).map { "c:" + $0.id })
         #expect(commands.first == ChatSuggestionItem(id: "c:help", insertText: "/help", isAvailable: true))
-        // Requires before every `[1]` here: an index past a short policy list would trap and abort the whole test process.
+
         try #require(commands.count > 1)
         #expect(commands[1].insertText == "/dm ")
         let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([]))
@@ -105,23 +96,21 @@ struct T3BorrowComposerPolicyTests {
         let mentions = ChatComposerPolicy.suggestionItems(draft: "hi @", mentionOptions: options, commandRows: rows, isPrivateMode: false)
         #expect(mentions.map { $0.id } == ChatComposerPolicy.mentionSuggestions(draft: "hi @", options: options).map { "m:" + $0.id })
         #expect(mentions.allSatisfy { $0.insertText.hasPrefix("hi @") && $0.insertText.hasSuffix(" ") })
-        // Private mode dims the assistant row (D24); it stays in the list, skipped by the arrows.
+
         let privateItems = ChatComposerPolicy.suggestionItems(draft: "hi @", mentionOptions: options, commandRows: rows, isPrivateMode: true)
         #expect(privateItems.first?.isAvailable == false && privateItems.dropFirst().allSatisfy { $0.isAvailable })
         try #require(privateItems.count > 1)
         let firstPerson = privateItems[1].id
         #expect(ChatComposerPolicy.resolvedHighlight(currentId: "", items: privateItems, highlightQuery: "", currentQuery: "") == firstPerson)
-        // A dimmed command row (private messages off) is skipped too.
+
         let off = ChatComposerPolicy.commandRows(privateEnabled: false, voiceEnabled: true, isPrivateMode: false)
         let offItems = ChatComposerPolicy.suggestionItems(draft: "/", mentionOptions: [], commandRows: off, isPrivateMode: false)
         #expect(ChatComposerPolicy.movedHighlight(currentId: "c:help", items: offItems, delta: 1) == "c:tts")
-        // Built from lists the view already has: the same rows.
+
         let fromLists = ChatComposerPolicy.suggestionItemsFor(mentions: ChatComposerPolicy.mentionSuggestions(draft: "hi @", options: options),
                                                               commands: [], draft: "hi @", isPrivateMode: false)
         #expect(fromLists == mentions)
     }
-
-    // MARK: P1, P2 Return
 
     @Test func theReturnTableHasOneOrder() {
         func action(hardware: Bool = true, shift: Bool = false, composing: Bool = false, repeated: Bool = false,
@@ -129,18 +118,18 @@ struct T3BorrowComposerPolicyTests {
             ChatComposerPolicy.returnKeyAction(isHardwareKeyboard: hardware, isShift: shift, isComposing: composing, isRepeat: repeated,
                                                suggestionsVisible: visible, highlightedInsert: insert, draft: draft)
         }
-        // P2: an IME composing owns Return, even repeated and with a list.
+
         #expect(action(composing: true) == .ignore)
         #expect(action(composing: true, repeated: true, visible: true, insert: "/help") == .ignore)
-        // The software keyboard's Return is a newline (Q13), whatever the list shows.
+
         #expect(action(hardware: false) == .ignore)
         #expect(action(hardware: false, visible: true, insert: "/help", draft: "/") == .ignore)
         #expect(action(shift: true) == .ignore)
         #expect(action(shift: true, repeated: true) == .ignore)
-        // P2: a held Return sends once; its repeats are swallowed.
+
         #expect(action(repeated: true) == .consume)
         #expect(action(repeated: true, visible: true, insert: "/help", draft: "/") == .consume)
-        // P1: a highlighted row inserts; an exact match sends (a Conclave decision).
+
         #expect(action(visible: true, insert: "/help", draft: "/") == .insertSuggestion)
         #expect(action(visible: true, insert: "/raise", draft: "/raise") == .send)
         #expect(action(visible: true, insert: "/raise", draft: " /raise ") == .send)
@@ -149,8 +138,6 @@ struct T3BorrowComposerPolicyTests {
         #expect(action(visible: false, insert: "/help", draft: "/") == .send)
         #expect(action() == .send)
     }
-
-    // MARK: P6 one Send reason
 
     @Test func sendBlockIsTheOneSourceOfCanSend() {
         let texts = ["", "   ", "hello", String(repeating: "a", count: 1001), "/tts " + String(repeating: "b", count: 501), "/tts hi"]
@@ -179,7 +166,7 @@ struct T3BorrowComposerPolicyTests {
         }
         #expect(rows == 6 * 6 * 2 * 6)
         let ready = attachments[3]
-        // The precedence canSend always had: the gate, the photo, a ready photo's caption limit, empty, the limit.
+
         #expect(ChatComposerPolicy.sendBlock(text: "", gate: .reconnecting, isVoiceMode: false, attachment: attachments[2]) == .reconnecting)
         #expect(ChatComposerPolicy.sendBlock(text: "hi", gate: .notJoined, isVoiceMode: false, attachment: .none) == .notJoined)
         #expect(ChatComposerPolicy.sendBlock(text: "hi", gate: .offline, isVoiceMode: false, attachment: .none) == .offline)
@@ -204,9 +191,6 @@ struct T3BorrowComposerPolicyTests {
         #expect(!ChatComposerPolicy.announcesBlockedSend(.empty) && !ChatComposerPolicy.announcesBlockedSend(.overLimit))
     }
 
-    /// The presenter's own answers line up with the policy: gate and photo blocks come back `blocked` with no notice
-    /// (so the view posts the reason), an empty draft comes back `empty` (nothing posted), a limit block names its
-    /// notice (the notice announces itself).
     @Test func thePresenterRefusesGateBlocksSilentlyAndLimitBlocksWithANotice() {
         let closed = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([], gate: .reconnecting))
         #expect(closed.send(text: "hi") == .blocked && closed.composer.inlineNotice == ChatFailure.none)
@@ -214,8 +198,6 @@ struct T3BorrowComposerPolicyTests {
         let open = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([]))
         #expect(open.send(text: String(repeating: "a", count: 1001)) == .blocked && open.composer.inlineNotice == .tooLong)
     }
-
-    // MARK: P4 photo intake
 
     @Test func aRefusedPhotoIntakeNamesWhy() {
         func notice(gate: ChatSendGate = .allowed, isPrivate: Bool = false, photos: Bool = true, attached: Bool = false,
@@ -232,8 +214,6 @@ struct T3BorrowComposerPolicyTests {
         #expect(notice(gate: .locked) == ChatFailure.none)
     }
 
-    // MARK: P3 keyboard and focus
-
     @Test func menusDecideFocusAtOpenAndFocusReturnsOnlyWhenItWasThere() {
         #expect(!ChatComposerPolicy.composerMenuIsFocusable(imeWasVisible: true, touchExploration: false))
         #expect(ChatComposerPolicy.composerMenuIsFocusable(imeWasVisible: true, touchExploration: true))
@@ -243,8 +223,6 @@ struct T3BorrowComposerPolicyTests {
         #expect(!ChatComposerPolicy.restoresComposerFocus(wasFocused: true, assistiveTechRunning: true))
         #expect(!ChatComposerPolicy.restoresComposerFocus(wasFocused: false, assistiveTechRunning: false))
     }
-
-    // MARK: Sources: iOS
 
     @Test func everyIOSHardwareKeyHandlerStepsAsideWhileAnIMEComposes() throws {
         let ios = try chatSource(Self.iosComposer)
@@ -257,8 +235,7 @@ struct T3BorrowComposerPolicyTests {
         #expect(ios.contains(".onKeyPress(.return, phases: [.down, .repeat])"))
         #expect(ios.contains(".onKeyPress(keys: [.upArrow, .downArrow], phases: [.down, .repeat])"))
         #expect(ios.contains(".onKeyPress(keys: [.tab, .escape], phases: .down)"))
-        // A held Tab or Escape: the action handler stays `.down` only, and a separate `.repeat` handler swallows the
-        // repeats of a press the list used (and only those), so a held Tab never inserts and then moves focus.
+
         #expect(ios.contains(".onKeyPress(keys: [.tab, .escape], phases: .repeat) { press in\n                        hardwareTabOrEscapeRepeat(press, isComposing: ChatTextInputProbe.isComposing())"))
         #expect(ios.contains("keyMemo.handledKey = result == .handled ? press.key : nil"))
         #expect(ios.contains("guard !isComposing, refreshHardwareKeyboard(), keyMemo.handledKey == press.key else { return .ignored }"))
@@ -266,7 +243,7 @@ struct T3BorrowComposerPolicyTests {
         #expect(ios.contains("return input.markedTextRange != nil"))
         #expect(ios.contains("UIApplication.shared.sendAction(#selector(UIResponder.conclaveReportFirstResponder(_:)), to: nil, from: nil, for: nil)"))
         #expect(ios.contains("static weak var responder: UIResponder?"))
-        // Hardware keyboard only: the live check, kept in state for the highlight, refreshed on connect and disconnect.
+
         #expect(ios.contains("let attached = GCKeyboard.coalesced != nil"))
         #expect(ios.contains("publisher(for: .GCKeyboardDidConnect)") && ios.contains("publisher(for: .GCKeyboardDidDisconnect)"))
         #expect(ios.contains("showsHighlight: hasHardwareKeyboard"))
@@ -278,8 +255,7 @@ struct T3BorrowComposerPolicyTests {
         #expect(ios.contains(".background(Color(uiColor: .secondarySystemBackground),\n                                in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous))"))
         #expect(ios.contains("RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusSmall), style: .continuous)\n                .fill(Color(uiColor: .systemFill))"))
         #expect(ios.components(separatedBy: ".accessibilityAddTraits(isHighlighted ? [.isSelected] : [])").count - 1 == 2)
-        // Each end marker is searched after its start, so a reordered file records an issue instead of trapping on the
-        // range (here and in the two section reads below).
+
         guard let start = ios.range(of: "private struct ChatSuggestionHighlight: View {"),
               let end = ios.range(of: "private struct ChatAttachMenu: View {", range: start.upperBound..<ios.endIndex) else {
             Issue.record("highlight view not found")
@@ -290,7 +266,7 @@ struct T3BorrowComposerPolicyTests {
         for motion in ["withAnimation", ".animation(", ".transition("] {
             #expect(!ios.contains(motion), "the composer animates with \(motion)")
         }
-        // Arrow moves are announced politely with the row's title and second line.
+
         #expect(ios.contains("postPolite(suggestions.announcement(for: next))"))
         #expect(ios.contains("attributed.accessibilitySpeechAnnouncementPriority = .low"))
     }
@@ -299,7 +275,7 @@ struct T3BorrowComposerPolicyTests {
         let ios = try chatSource(Self.iosComposer)
         #expect(ios.contains("@Environment(\\.accessibilityVoiceOverEnabled) private var voiceOverEnabled"))
         guard let start = ios.range(of: "private func restoreFocus(wasFocused: Bool) {"),
-              let end = ios.range(of: "// MARK: Photo intake (P4)", range: start.upperBound..<ios.endIndex) else {
+              let end = ios.range(of: "private func acceptsPhotoIntake() -> Bool {", range: start.upperBound..<ios.endIndex) else {
             Issue.record("restoreFocus not found")
             return
         }
@@ -327,7 +303,7 @@ struct T3BorrowComposerPolicyTests {
         #expect(ios.contains("if !photoIntakeInFlight && chat.canAcceptPhoto { return true }"))
         #expect(ios.contains("photoIntakeInFlight = true\n        ChatPickedImageFile.attachFirst(providers, to: chat) {"))
         #expect(ios.contains("guard acceptsPhotoIntake() else {\n            ChatPickedImageFile.discard(files)\n            return false"))
-        // The existing pins (CHT2, CHT4) stay byte-identical.
+
         #expect(ios.contains("ConclaveComposerField(identifier: \"chat.composer.cluster\")"))
         #expect(ios.contains("ConclaveComposerStack(identifier: \"chat.composer\")"))
         #expect(ios.contains("chat.send(text: text)") && ios.contains("GCKeyboard.coalesced != nil"))
@@ -361,11 +337,9 @@ struct T3BorrowComposerPolicyTests {
         #expect(body.components(separatedBy: "case .").count - 1 == ChatSendBlock.allCases.count - 1)
     }
 
-    // MARK: Sources: Android
-
     @Test func theAndroidComposerTakesKeysMenusAndContentTheBorrowedWay() throws {
         let kotlin = try chatSource(Self.androidComposer)
-        // P4: one content receiver on the composer column of a TextFieldState field; no separate drop target.
+
         #expect(kotlin.components(separatedBy: "contentReceiver(").count - 1 == 1)
         #expect(!kotlin.contains("dragAndDropTarget("))
         #expect(kotlin.contains("Column(Modifier.fillMaxWidth().testTag(\"chat.composer\").contentReceiver(receiver)"))
@@ -376,7 +350,7 @@ struct T3BorrowComposerPolicyTests {
         #expect(kotlin.contains("@OptIn(ExperimentalFoundationApi::class)\n@Composable\ninternal fun ChatComposer("))
         #expect(kotlin.components(separatedBy: "@OptIn(ExperimentalLayoutApi::class)\n@Composable\nprivate fun Chat").count - 1 == 2)
         #expect(!kotlin.contains("@file:OptIn"))
-        // P3: popup focus decided at open time, Back for the non-focusable menu.
+
         let lines = kotlin.components(separatedBy: "\n")
         let popupLines = lines.filter { $0.contains("PopupProperties(focusable = false)") }
         #expect(popupLines.count == 2)
@@ -385,7 +359,7 @@ struct T3BorrowComposerPolicyTests {
         #expect(kotlin.contains("capture = ChatFocusCapture.capture(isFieldFocused(), imeVisible, chatTouchExplorationOn(context))"))
         #expect(kotlin.contains("if (ChatComposerPolicy.restoresComposerFocus(capture.wasFocused, chatTouchExplorationOn(context))) {"))
         #expect(kotlin.contains("if (capture.imeWasVisible) keyboard?.show()"))
-        // P1, P2: hardware keys only, a held Enter consumed, Escape and Tab releases consumed with their press.
+
         #expect(kotlin.contains("LocalConfiguration.current.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO"))
         #expect(kotlin.contains("val isRepeat = event.nativeKeyEvent.repeatCount > 0"))
         #expect(kotlin.contains("ChatReturnKeyAction.consume -> true"))
@@ -395,28 +369,26 @@ struct T3BorrowComposerPolicyTests {
         }
         #expect(kotlin.contains("Modifier.semantics { selected = true }") && kotlin.contains("scheme.surfaceContainerHighest, MaterialTheme.shapes.small"))
         #expect(kotlin.contains("color = scheme.surfaceContainerLow,") && kotlin.contains("shape = MaterialTheme.shapes.medium,"))
-        // P6, P7, P8, P9 through the other tasks' contracts.
+
         #expect(kotlin.contains("sendDisabledReason = sendReason,") && kotlin.contains("onHardwareKey = { event ->"))
         #expect(kotlin.contains("ChatCopyAndroid.gateLine(composer.gateLine)") && !kotlin.contains("ChatCopyAndroid.gateLine(composer.gate)"))
         #expect(kotlin.contains("if (now && !focusMemory.fieldFocused) actions.composerDidFocus()"))
         #expect(kotlin.contains("\"chat.composer.counter\", Modifier.align(Alignment.End), announcesBands = true)"))
-        // P3, P8: the focus requester and the focus observer sit on the TextField (fieldModifier), never on the row,
-        // whose first focus target with a hardware keyboard is the attach button.
+
         #expect(kotlin.contains("fieldModifier = Modifier.focusRequester(focus).onFocusChanged { state ->"))
         #expect(!kotlin.contains("modifier = Modifier.focusRequester(focus)"))
-        // P6: a blocked IME Send reaches the same handler as a blocked hardware Enter, and each blocked press is spoken
-        // once through the view (a fresh live node per press would be silent).
+
         #expect(kotlin.contains("onSendBlocked = sendFromKeyboard,"))
         #expect(kotlin.contains("ChatBlockedSendAnnouncer(blockedPress, chatSendBlockReason(blockedBlock, count - limit, composer.attachment))"))
         #expect(kotlin.contains("LaunchedEffect(press) {\n        if (press > 0 && reason.isNotEmpty()) {\n            @Suppress(\"DEPRECATION\")\n            view.announceForAccessibility(reason)"))
         #expect(!kotlin.contains("key(press)"))
-        // P1: the arrow-move node is composed with the list and gets its text only on a move.
+
         #expect(kotlin.contains("if (moveText.isNotEmpty()) contentDescription = moveText"))
         #expect(!kotlin.contains("if (moveText.isNotEmpty()) {"))
-        // P3: the GIF picker's capture outlives a composer the side pane's GIF page removed.
+
         #expect(kotlin.contains("actions.gifsFocusCapture = capture"))
         #expect(kotlin.contains("if (!actions.showsGifs) actions.takeGifsFocusCapture()?.let { restoreFocus(it) }"))
-        // The existing pins (CHT2, CHT4) stay byte-identical.
+
         #expect(kotlin.contains("ConclaveComposerField(") && kotlin.contains("presenter.send(text, \"\")"))
         #expect(kotlin.contains("ActivityResultContracts.PickVisualMedia()") && kotlin.contains("ChatPhotoFiles.copyToCache(context, uri)"))
         #expect(kotlin.contains("PipManager.suppressForExternalHandoff(ExternalHandoffKind.photoPicker)") && !kotlin.contains("readBytes"))
@@ -437,8 +409,6 @@ struct T3BorrowComposerPolicyTests {
             #expect(kotlin.contains(row), "\(row)")
         }
     }
-
-    // MARK: Sources: rules for every owned file
 
     @Test func theOwnedFilesKeepTheOwnerRules() throws {
         let files = [Self.iosComposer, Self.androidComposer, Self.iosCopy, Self.policy,

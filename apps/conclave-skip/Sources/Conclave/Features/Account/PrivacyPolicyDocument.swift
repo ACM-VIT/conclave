@@ -1,11 +1,5 @@
 import Foundation
 
-// ENT-7 (S10 5 c, d; RECONCILE OQ9, S10 Q13): the privacy policy text for the native Privacy Policy pages, verbatim
-// from the legacy `PrivacyPolicyContentView` (S/Shared/PrivacyPolicyView.swift) in the same order. The owner deferred
-// the legal update (OQ9): keep it verbatim, product name included, until the legal copy arrives; the update replaces
-// it here and in the legacy view together (T/ENT7AccountTests.swift checks the two match). Shared Swift data, so both
-// platforms render one source; legal text is not translated (shared presenter strings stay in Swift, owner Q14).
-
 enum PrivacyPolicyBlockKind: String, CaseIterable, Equatable {
     case heading, paragraph, bullet
 }

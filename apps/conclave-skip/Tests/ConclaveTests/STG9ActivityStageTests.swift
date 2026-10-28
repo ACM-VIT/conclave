@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// STG-9 (OUT/PLAN-screens.md section 5): the activity takeover container. The pure `ActivityStagePolicy` (priority
-/// without silently hiding a lower activity, the local Show and Show Video overrides, announcements), the stage
-/// presenter hooks of HD request B4-T8 R1 (resolution, chip, `showActivity(kind:)`, resets), the fixture layer, and
-/// source scans of the iOS and Compose containers (S20 11 c, d, i, l; AGENTS.md game stage layout rules). The Kotlin
-/// half is in T/Skip/ActivityBridgeTests.kt.
 @MainActor
 struct STG9ActivityStageTests {
     private let names = ActivityStageNames(appId: "whiteboard", gameName: "Trivia")
@@ -23,13 +18,11 @@ struct STG9ActivityStageTests {
         ActivityFixtureScript.stageInputs(named: name, base: StageFixtureScript.base(count: count))
     }
 
-    // MARK: Policy (S20 11 a, j)
-
     @Test func liveKindsFollowTheD17Priority() {
         #expect(ActivityStagePolicy.liveKinds(activeAppId: "whiteboard", isBrowserActive: true, isGameActive: true) == ["app", "browser", "game"])
         #expect(ActivityStagePolicy.liveKinds(activeAppId: "", isBrowserActive: false, isGameActive: true) == ["game"])
         #expect(ActivityStagePolicy.liveKinds(activeAppId: "", isBrowserActive: false, isGameActive: false).isEmpty)
-        // Attendees never see activities (S20 11 f, web parity).
+
         let attendee = StageInputs.make(activeAppId: "whiteboard", isGameActive: true, isWebinarAttendee: true)
         #expect(ActivityStagePolicy.liveKinds(attendee).isEmpty)
     }
@@ -57,7 +50,7 @@ struct STG9ActivityStageTests {
         let swapped = ActivityStagePolicy.resolve(live: ["app", "game"], preferredKind: preference, showsVideoOverActivity: false, names: names)
         #expect(swapped.onStageKind == "game")
         #expect(swapped.chip == NowPlayingChip(kind: "app", name: "whiteboard"))
-        // The preference survives only while its activity is live.
+
         #expect(ActivityStagePolicy.normalizedPreference("game", live: ["app"]).isEmpty)
         let ended = ActivityStagePolicy.resolve(live: ["app"], preferredKind: "game", showsVideoOverActivity: false, names: names)
         #expect(ended.onStageKind == "app")
@@ -70,7 +63,7 @@ struct STG9ActivityStageTests {
         #expect(video.hiddenActivityKind == "game")
         #expect(video.chip == NowPlayingChip(kind: "game", name: "Trivia"))
         #expect(video.stageKind == nil)
-        // Show on the chip while video shows only brings the card back (the preference is unchanged).
+
         #expect(ActivityStagePolicy.preferenceAfterShowingHidden(video, currentPreference: "") == "")
         #expect(!ActivityStagePolicy.normalizedShowsVideo(true, live: []))
         #expect(ActivityStagePolicy.isOnStage(kind: "game", resolution: ActivityStagePolicy.resolve(
@@ -87,15 +80,13 @@ struct STG9ActivityStageTests {
         #expect(ActivityStagePolicy.endedAnnouncement == "activityEnded")
     }
 
-    // MARK: Presenter hooks (HD request B4-T8 R1)
-
     @Test func appAndGameFixtureShowsTheAppWithTheGameChip() {
         let presenter = stage(layered(ActivityFixtureState.appAndGame.rawValue))
         #expect(presenter.kind == StageKind.app)
         #expect(presenter.layout.activityKind == "app")
         #expect(presenter.layout.hiddenActivityKind == "game")
         #expect(presenter.chrome.nowPlaying == NowPlayingChip(kind: "game", name: "Trivia"))
-        // Show on the chip swaps the card for this person only.
+
         presenter.showHiddenActivity()
         #expect(presenter.kind == StageKind.game)
         #expect(presenter.chrome.nowPlaying == NowPlayingChip(kind: "app", name: "whiteboard"))
@@ -124,7 +115,7 @@ struct STG9ActivityStageTests {
         #expect(!presenter.layout.showsVideoOverActivity)
         #expect(presenter.chrome.nowPlaying == nil)
         presenter.apply(layered(ActivityFixtureState.gameTrivia6.rawValue))
-        // A new game takes the stage again: the earlier Show Video does not carry over.
+
         #expect(presenter.kind == StageKind.game)
     }
 
@@ -168,8 +159,6 @@ struct STG9ActivityStageTests {
         #expect(snapshot.nowPlayingItem(kind: .game)?.isOnStage == false)
     }
 
-    // MARK: Source scans (S20 11 c, d, i; AGENTS.md game stage layout rules)
-
     @Test func iosContainerIsAFlatCardWithShowVideoAndKeyboardAvoidance() throws {
         let ios = try stageSource("Sources/Conclave/Features/Meeting/Stage/ActivityStage+iOS.swift")
         let flat = stageNormalized(ios)
@@ -183,7 +172,7 @@ struct STG9ActivityStageTests {
         #expect(flat.contains("stage.setShowsVideoOverActivity(true)"))
         #expect(flat.contains(".accessibilityAddTraits(.isHeader)"))
         #expect(flat.contains("ActivitiesCopy.opening(parts.name)") && flat.contains("ActivitiesCopy.couldNotOpen(parts.name)"))
-        // The header (and its controls) precede the body.
+
         let header = try #require(flat.range(of: "ActivityStageHeader(kind: kind, stage: stage, session: session)"))
         let body = try #require(flat.range(of: "ActivityStageBody(kind: kind, stage: stage, session: session)"))
         #expect(header.lowerBound < body.lowerBound)

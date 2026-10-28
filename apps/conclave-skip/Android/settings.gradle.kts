@@ -1,17 +1,11 @@
-// This gradle project is part of a conventional Skip app project.
-pluginManagement {
-    // Initialize the Skip plugin folder and perform a pre-build for non-Xcode builds
-    val pluginPath = File.createTempFile("skip-plugin-path", ".tmp")
 
-    // overriding outputs for an Android IDE can be done by un-commenting and setting the Xcode path:
-    //System.setProperty("BUILT_PRODUCTS_DIR", "${System.getProperty("user.home")}/Library/Developer/Xcode/DerivedData/MySkipProject-HASH/Build/Products/Debug-iphonesimulator")
+pluginManagement {
+
+    val pluginPath = File.createTempFile("skip-plugin-path", ".tmp")
 
     val packagePath = settings.rootDir.parentFile.absolutePath
     val indexBuildPath = settings.rootDir.parentFile.resolve(".build/index-build").absolutePath
-    // Run the skip CLI that SwiftPM resolved from Package.resolved so the Gradle
-    // plugin always matches the skipstone transpiler version. Xcode's "Run skip
-    // gradle" phase already puts its own resolved copy first on PATH; a skip on
-    // PATH is only the fallback before the first `swift package resolve`.
+
     val pinnedSkipBinDir = settings.rootDir.parentFile
         .resolve(".build/artifacts/skip/skip/skip.artifactbundle/macos")
         .absolutePath
@@ -55,8 +49,6 @@ pluginManagement {
             objRoot
         ).firstOrNull { it.isDirectory } ?: return emptyList()
 
-        // Skip 1.9 isolates Xcode output per variant in skipstone/xcode-<CONFIGURATION><EFFECTIVE_PLATFORM_NAME>/;
-        // older plugins wrote straight into skipstone/. Patch whichever exist.
         val skipstoneDir = intermediatesDir
             .resolve("BuildToolPluginIntermediates/conclave-skip.output/Conclave/skipstone")
         val variantDirs = skipstoneDir.listFiles()

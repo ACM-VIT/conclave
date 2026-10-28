@@ -14,12 +14,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * PNL-1, panel contract v2, through the transpiled Kotlin and the Android host's pure helpers (the Swift half is
- * T/PNL1PanelContractTests.swift). Pure tests only: under Robolectric only the first composition in a JVM keeps
- * recomposing, so the one composition check (a lazyList page, its reservation and Back popping the inner page first)
- * lives in PanelStageBridgeTests.hostCompositionRetainsStageAcrossPanelOpenClose.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class PNL1PanelContractBridgeTests {
@@ -59,7 +53,7 @@ class PNL1PanelContractBridgeTests {
         val chat = panels.snapshot.current!!
         assertEquals(PanelDestination.chatReply, chat.destination)
         assertEquals("m1", chat.targetId)
-        // A same-panel destination publishes a request, never a new presentation or a snapshot change.
+
         val observer = SnapshotStateObserver { it() }
         var snapshotReads = 0
         var requestReads = 0
@@ -82,16 +76,16 @@ class PNL1PanelContractBridgeTests {
             targetId = "robin"), panels.destinationRequest)
         assertEquals(1, panels.latestDestination(for_ = chat.presentationID)!!.sequence)
         assertNull(panels.latestDestination(for_ = chat.presentationID + 1))
-        // A plain request for the current panel is quiet.
+
         panels.present(MeetingPanel.chat, from = PanelInvoker.call)
         assertEquals(1, panels.destinationRequest!!.sequence)
         assertEquals(1, changes)
-        // SC19: the replacement keeps its own destination.
+
         panels.present(MeetingPanel.participants, from = PanelInvoker.call, destination = PanelDestination.peopleWaiting)
         assertEquals(2, changes)
         val people = panels.snapshot.pending!!
         assertEquals(PanelDestination.peopleWaiting, people.destination)
-        // The queued panel takes a newer destination in place.
+
         panels.present(MeetingPanel.participants, from = PanelInvoker.more, destination = PanelDestination.peopleRaisedHands)
         assertEquals(3, changes)
         val queued = panels.snapshot.pending!!
@@ -100,7 +94,7 @@ class PNL1PanelContractBridgeTests {
         panels.didDismiss(session = 3, presentationID = chat.presentationID)
         assertEquals(4, changes)
         assertEquals(queued, panels.snapshot.current)
-        // A reset clears the request; sequences continue.
+
         panels.reset(session = 4)
         assertEquals(5, changes)
         assertNull(panels.destinationRequest)
@@ -109,7 +103,7 @@ class PNL1PanelContractBridgeTests {
         panels.present(MeetingPanel.settings, from = PanelInvoker.call, destination = PanelDestination.settingsAudio)
         assertEquals(2, panels.destinationRequest!!.sequence)
         assertEquals(4, panels.latestDestination(for_ = settings.presentationID)!!.session)
-        // Every panel publishes same-panel requests (R11).
+
         for (panel in MeetingPanel.values()) {
             val fresh = PanelCoordinator(session = 1)
             fresh.present(panel, from = PanelInvoker.call)
@@ -161,14 +155,14 @@ class PNL1PanelContractBridgeTests {
         assertFalse(PanelPresentationPolicy.androidIsAccessibilitySize(fontScale = 1.49))
         assertTrue(PanelPresentationPolicy.androidIsAccessibilitySize(fontScale = 1.5))
         assertEquals(222.0, PanelPresentationPolicy.defaultShortDetentHeight, 0.0)
-        // Short is partial coverage, keeps the stage interactive, and every sheet keeps the compact-height rule.
+
         val effects = PanelPresentationPolicy.resolve(request(MeetingPanel.effects), window = phone, platform = PanelPlatform.iOS)
         assertEquals(PanelStageCoverage.partial, PanelPresentationPolicy.coverage(effects, detent = short))
         assertEquals(PanelStageCoverage.partial, PanelPresentationPolicy.coverage(effects, detent = null))
         assertEquals(PanelStageCoverage.full, PanelPresentationPolicy.coverage(effects, detent = large))
         assertEquals(short, PanelPresentationPolicy.stageInteractiveDetent(effects))
         assertTrue(PanelPresentationPolicy.keepsSheetInCompactHeight(effects))
-        // The host decision takes the accessibility input and stays the same DTO (no detents on Android).
+
         val tablet = PanelPresentationPolicy.androidWindow(width = 1280.0, height = 800.0)
         assertEquals(panelHostDecision(request(MeetingPanel.layout), tablet),
             panelHostDecision(request(MeetingPanel.layout), tablet, isAccessibilitySize = true))
@@ -189,7 +183,7 @@ class PNL1PanelContractBridgeTests {
         assertEquals(2, pages.depth)
         assertEquals("reactions", pages.top)
         assertEquals(PanelBackAction.PopPage, panelBackAction(pages))
-        // A committed pop leaves a fresh progress for the next page.
+
         val firstProgress = pages.backProgress
         firstProgress.update(0.5f, fromLeftEdge = true)
         assertTrue(firstProgress.commit())
@@ -201,7 +195,7 @@ class PNL1PanelContractBridgeTests {
         performPanelBack(panelBackAction(pages), pages, panels)
         assertFalse(pages.isNested)
         assertEquals(shown, panels.snapshot)
-        // At the root Back closes the panel and cancels a pending replacement.
+
         panels.present(MeetingPanel.settings, from = PanelInvoker.more)
         assertTrue(panels.snapshot.pending != null)
         performPanelBack(panelBackAction(pages), pages, panels)
@@ -228,41 +222,41 @@ class PNL1PanelContractBridgeTests {
         back.update(1f, fromLeftEdge = false)
         assertEquals(-24f, back.pageTranslationDp, 1e-5f)
         assertEquals(24f, back.paneTranslationDp(rightToLeft = false), 1e-5f)
-        // The overlay transform is unchanged.
+
         assertEquals(-8f, back.translationDp, 1e-5f)
         assertEquals(0.9f, back.scale, 1e-6f)
     }
 
     @Test fun inCallPageNavigationTileAndReservation() {
-        // S60 R6-2: Back on an inner page in every variant; Back to call at the overlay root; Close elsewhere.
+
         assertEquals(InCallPageNavigation.BackToCall, inCallPageNavigation(InCallPageVariant.Overlay, isNested = false))
         assertEquals(InCallPageNavigation.Close, inCallPageNavigation(InCallPageVariant.SidePane, isNested = false))
         assertEquals(InCallPageNavigation.Close, inCallPageNavigation(InCallPageVariant.Sheet, isNested = false))
         for (variant in InCallPageVariant.values()) {
             assertEquals("$variant", InCallPageNavigation.Back, inCallPageNavigation(variant, isNested = true))
         }
-        // The tile: overlay only; hidden while the IME shows for a composer or a page that asks (R50-1).
+
         assertTrue(inCallPageTileVisible(hasTile = true, variant = InCallPageVariant.Overlay, hasComposer = false, hideMiniTileWithIme = false, imeVisible = true))
         assertFalse(inCallPageTileVisible(hasTile = true, variant = InCallPageVariant.Overlay, hasComposer = false, hideMiniTileWithIme = true, imeVisible = true))
         assertTrue(inCallPageTileVisible(hasTile = true, variant = InCallPageVariant.Overlay, hasComposer = false, hideMiniTileWithIme = true, imeVisible = false))
         assertFalse(inCallPageTileVisible(hasTile = true, variant = InCallPageVariant.Overlay, hasComposer = true, hideMiniTileWithIme = false, imeVisible = true))
         assertFalse(inCallPageTileVisible(hasTile = true, variant = InCallPageVariant.SidePane, hasComposer = false, hideMiniTileWithIme = false, imeVisible = false))
         assertFalse(inCallPageTileVisible(hasTile = false, variant = InCallPageVariant.Overlay, hasComposer = false, hideMiniTileWithIme = false, imeVisible = false))
-        // Scroll mode keeps the accepted WP1-3b1 padding: the tile term at the tile's edge, 16 dp elsewhere.
+
         assertEquals(InCallPageReservation(top = 16.dp, bottom = 160.dp),
             inCallPageReservation(InCallPageContent.scroll, landscape = false, tileVisible = true, hasComposer = false, bottomInset = 0.dp))
         assertEquals(InCallPageReservation(top = 160.dp, bottom = 16.dp),
             inCallPageReservation(InCallPageContent.scroll, landscape = false, tileVisible = true, hasComposer = true, bottomInset = 0.dp))
         assertEquals(InCallPageReservation(top = 16.dp, bottom = 16.dp),
             inCallPageReservation(InCallPageContent.scroll, landscape = true, tileVisible = false, hasComposer = false, bottomInset = 0.dp))
-        // lazyList: tile height + 32 dp + navigation-bar inset at the bottom without a composer (R50-1).
+
         assertEquals(InCallPageReservation(top = 0.dp, bottom = 184.dp),
             inCallPageReservation(InCallPageContent.lazyList, landscape = false, tileVisible = true, hasComposer = false, bottomInset = 24.dp))
         assertEquals(InCallPageReservation(top = 0.dp, bottom = 152.dp),
             inCallPageReservation(InCallPageContent.lazyList, landscape = true, tileVisible = true, hasComposer = false, bottomInset = 24.dp))
         assertEquals(InCallPageReservation(top = 0.dp, bottom = 40.dp),
             inCallPageReservation(InCallPageContent.lazyList, landscape = false, tileVisible = false, hasComposer = false, bottomInset = 24.dp))
-        // With a composer: the tile term on top while it shows, nothing at the bottom (the composer sits below).
+
         assertEquals(InCallPageReservation(top = 160.dp, bottom = 0.dp),
             inCallPageReservation(InCallPageContent.lazyList, landscape = false, tileVisible = true, hasComposer = true, bottomInset = 0.dp))
         assertEquals(InCallPageReservation(top = 0.dp, bottom = 0.dp),

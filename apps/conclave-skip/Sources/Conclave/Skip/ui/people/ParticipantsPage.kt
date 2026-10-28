@@ -29,24 +29,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 
-/*
- * S50 1 d (PPL-1): the Android Participants page. One InCallPage in lazyList mode (R50-1: the list takes the page's
- * reservation, so its last row clears the mini tile and the navigation bar; the mini tile hides while the search IME
- * shows), the host's PanelPageStack for the pushed pages (R50-2: PeopleRoute raw values; Back pops a page first, then
- * closes, with predictive progress, PNL-1), the pinned C20 search field (never the M3 SearchBar family, AND 7.7) and a
- * LazyColumn keyed by stable item keys with a content type per kind. The list rebuilds only on a new snapshot revision
- * or query (the PeopleCache rule, S50 1 k); every person item reads its own PersonRowEntry. Mounted by the native call
- * root (HD request B4-T7 R3); the side pane shows the same page (PS 8.3).
- */
-
-/** What one LazyColumn item draws. */
 internal enum class PeopleItemKind {
     Notice, Invite, HostControls, Qa, Header, Person, Waiting, Loading, Footer, Empty,
-    /** PPL-5 (S50 10): attendee hand-queue and invited rows, the watching count row and the Attendees footer. */
+
     Attendee, Watching, AttendeesFooter,
 }
 
-/** One LazyColumn item: a stable key, its kind, and the section and row it belongs to. */
 internal data class PeopleListItem(
     val key: String,
     val kind: PeopleItemKind,
@@ -55,11 +43,6 @@ internal data class PeopleListItem(
     val count: Int = 0,
 )
 
-/**
- * The page's items in S50 1 b order: the lost-host notice, then (not while searching) Share invite, Host controls and
- * Questions and answers, then each section's header and rows, the loading row and the In this meeting footer, and the
- * C14 no-match state. Pure, so the Robolectric test checks the order and the header index a destination scrolls to.
- */
 internal fun peopleListItems(snapshot: PeopleSnapshot, sections: List<PeopleSection>, searching: Boolean): List<PeopleListItem> {
     val items = mutableListOf<PeopleListItem>()
     if (snapshot.showsLostHostNotice) items.add(PeopleListItem("notice", PeopleItemKind.Notice))
@@ -103,10 +86,6 @@ internal fun peopleListItems(snapshot: PeopleSnapshot, sections: List<PeopleSect
 
 internal fun peopleHeaderKey(sectionId: String): String = "h:$sectionId"
 
-/**
- * The page title for the page on top of the stack: Participants at the root, Host controls for the pushed Host
- * Controls page, and the access or notice page title above it (PPL-4, S50 7 g, 8 g).
- */
 internal fun peoplePageTitleName(top: String?): String = when (top) {
     null, PeopleRoute.root.rawValue -> "native_panel_participants"
     PeopleRoute.hostControls.rawValue -> "ppl_host_controls"
@@ -127,7 +106,7 @@ internal fun ParticipantsPage(
 ) {
     val pages = LocalPanelPageStack.current
     val top = pages?.top
-    // PL14 `panelSnackbar`: one snackbar slot per page (R40-3); the root and each host page report there.
+
     val snackbar = remember { SnackbarHostState() }
     InCallPage(
         title = conclaveString(peoplePageTitleName(top)),
@@ -138,14 +117,13 @@ internal fun ParticipantsPage(
         onClose = onClose,
         onMounted = {
             onMounted()
-            // The presentation lifecycle (S50 1 d): the page mounts once per presentation; an overlay to side pane move
-            // keeps it composed, so the destination scrolls once.
+
             people.panelDidOpen(destination = request.destination, presentationID = request.presentationID)
-            // PL14: panel-origin failures use the page snackbar on Android.
+
             people.platform = NoticePlatform.android
         },
         onDisposed = {
-            // The coordinator callback closes it first in production; this keeps a host without that hook correct.
+
             people.panelDidClose(presentationID = request.presentationID)
             onDisposed()
         },
@@ -159,23 +137,17 @@ internal fun ParticipantsPage(
         PeoplePageEffects(people, pages, variant, onHostPage = top != null)
         if (top == null) {
             PeopleRoot(people, reservation, onOpenHostControls = { pages?.push(PeopleRoute.hostControls.rawValue) })
-            // S50 3 j: the People root leaf for row, accessibility and section-header confirmations; the PL10 rename
-            // dialog; and the page snackbar for panel failures (PL14).
+
             PeopleConfirmationHost(people)
             PeopleRenameDialog(people)
             PeopleFailureSnackbar(people, snackbar)
         } else {
-            // PPL-4 (S50 6 to 8): Host controls and its pages on the same stack (R50-2); the host pages compose their
-            // own confirmation leaf and snackbar reporter.
+
             HostPageContent(people, top, reservation, snackbar, onPush = { pages?.push(it) }, onPop = { pages?.pop() })
         }
     }
 }
 
-/**
- * Effects with their own reads, so the page never recomposes for them: coverage for PL14 (overlay full, side pane
- * none), the lost-host pop (S50 12) and same-panel destinations (S20 SR7).
- */
 @Composable
 private fun PeoplePageEffects(people: PeoplePresenter, pages: PanelPageStack?, variant: InCallPageVariant, onHostPage: Boolean) {
     val isHost = people.snapshot.isHostViewer
@@ -197,7 +169,7 @@ private fun PeopleRoot(people: PeoplePresenter, reservation: PaddingValues, onOp
     val snapshot = people.snapshot
     var query by rememberSaveable { mutableStateOf(people.initialSearchQuery) }
     val searching = PeopleSearchPolicy.isSearching(query)
-    // searchKeys only (PL8): rebuilt on a new revision or query, never per frame.
+
     val filtered = remember(snapshot.revision, query) { PeopleSearchPolicy.filter(snapshot.sections, query = query) }
     val entries = remember(snapshot.revision, query) { peopleListItems(snapshot, filtered.toList(), searching) }
     val queueCount = snapshot.section(PeopleSectionID.raisedHands)?.count ?: 0
@@ -205,7 +177,7 @@ private fun PeopleRoot(people: PeoplePresenter, reservation: PaddingValues, onOp
     val keyboard = LocalSoftwareKeyboardController.current
     val reduceMotion = rememberSystemAccessibility().removeAnimations
     LaunchedEffect(listState) {
-        // The keyboard closes when the list scrolls (S50 1 d); read in a flow, so scrolling never recomposes the page.
+
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling -> if (scrolling) keyboard?.hide() }
     }
     val focus = people.focusRequest
@@ -215,7 +187,7 @@ private fun PeopleRoot(people: PeoplePresenter, reservation: PaddingValues, onOp
         if (index >= 0) {
             if (reduceMotion) listState.scrollToItem(index) else listState.animateScrollToItem(index)
         }
-        // Cleared after the scroll, so the root re-entering composition after a pop finds null (S50 1 d).
+
         people.focusRequestHandled(id = request.id)
     }
     Column(Modifier.fillMaxSize()) {
@@ -236,16 +208,16 @@ private fun PeopleRoot(people: PeoplePresenter, reservation: PaddingValues, onOp
                     PeopleItemKind.HostControls -> PeopleHostControlsRow(snapshot.accessSummary, onOpenHostControls)
                     PeopleItemKind.Qa -> PeopleQaRow(people)
                     PeopleItemKind.Header -> if (item.sectionId == PeopleSectionID.attendees.rawValue) {
-                        // PPL-5: the Attendees header counts watchers in its own leaf (S50 10 k).
+
                         WebinarAttendeesHeader(people)
                     } else {
-                        // PPL-3 (S50 1 d, 4 d, 5 d): the merged heading plus the host actions, hidden while searching.
+
                         PeopleSectionHeaderRow(people, item.sectionId, item.count, showsActions = !searching)
                     }
-                    // Only Raised Hands rows read the queue size, so a hand change never recomposes the others.
+
                     PeopleItemKind.Person -> PeopleActionRow(people, item.rowKey, item.sectionId,
                         if (item.sectionId == PeopleSectionID.raisedHands.rawValue) queueCount else 0)
-                    // PPL-3 (S50 PL2, 4 d): Deny and Admit on each waiting row.
+
                     PeopleItemKind.Waiting -> WaitingRow(people, item.rowKey)
                     PeopleItemKind.Loading -> ConclaveLoadingStatus(identifier = "people.loading", label = conclaveString("ppl_loading"))
                     PeopleItemKind.Footer -> ConclaveSectionFooter(text = conclaveString(peopleFooterName(item.rowKey)),
@@ -282,7 +254,6 @@ internal fun peopleAccessSummaryName(raw: String): String = when (raw) {
     else -> "ppl_access_open"
 }
 
-/** Share invite (RECONCILE R14): the one share payload the stage uses, through the system share sheet. */
 @Composable
 private fun PeopleInviteRow(link: String, roomLabel: String) {
     val context = LocalContext.current
@@ -294,7 +265,6 @@ private fun PeopleInviteRow(link: String, roomLabel: String) {
     )
 }
 
-/** Host controls with the meeting access value as its supporting text (S50 1 f); pushes the host page. */
 @Composable
 private fun PeopleHostControlsRow(accessSummary: String, onOpen: () -> Unit) {
     ListItem(
@@ -306,7 +276,6 @@ private fun PeopleHostControlsRow(accessSummary: String, onOpen: () -> Unit) {
     )
 }
 
-/** Questions and answers (S50 1 c): replaces the panel; the count is its own leaf on `qaUnseen`. */
 @Composable
 private fun PeopleQaRow(people: PeoplePresenter) {
     ListItem(
@@ -327,11 +296,6 @@ private fun PeopleQaNewCount(people: PeoplePresenter) {
     }
 }
 
-/**
- * One person with the PPL-2 actions (S50 3 d): tap or long press opens the row DropdownMenu (built when it opens,
- * F00 C16 k), the same items are TalkBack custom actions on the merged node (AX4), and a row without actions stays a
- * plain node. Reads only its own entry.
- */
 @Composable
 private fun PeopleActionRow(people: PeoplePresenter, rowKey: String, sectionId: String, queueCount: Int) {
     val entry = people.rows.entry(rowKey)

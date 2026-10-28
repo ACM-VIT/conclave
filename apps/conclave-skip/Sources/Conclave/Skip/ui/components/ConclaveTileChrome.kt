@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -39,21 +40,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
-/*
- * Video tile chrome (F00 C08 with S20 SR4). The renderer slot is the bottom layer, keyed by user id by the stage in
- * a non-lazy layout and never recreated by chrome, theme, panel or speaker changes (PS P2); the chrome draws in a
- * Box above it and reads only its TileChromeModel. The speaking stroke is a leaf that alone reads TileSpeakingState,
- * so a speaker change redraws one border. Density comes from the slot size (dense below 139 x 167 dp; spotlight from
- * the caller). One node per tile: description = name ("You" locally), state description = joined states, custom
- * actions from the stage. Long press opens the caller's menu and plays `longPress` through the injected haptics,
- * with the built-in long-press haptic off. Compose inside HostingTheme(inCall = true).
- */
-
-/** A named custom accessibility action on a tile (Pin, Unpin, host actions). */
 internal data class ConclaveTileAction(val id: String, val label: String, val onAction: () -> Unit)
 
-/** Which composition to draw: a grid tile with the name pill, or the floating self view (no pill, muted badge top
- *  start, 1 dp border, the flip button from the caller bottom end). */
 internal enum class ConclaveTileVariant { Grid, SelfView }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -64,10 +52,11 @@ internal fun ConclaveTileChrome(
     cornerRadius: Dp = DesignTokens.radiusTile.dp, actions: List<ConclaveTileAction> = emptyList(),
     onClick: (() -> Unit)? = null, onLongPress: (() -> Unit)? = null, haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
     selfViewAccessory: @Composable () -> Unit = {},
-    /** S20 3 d: the TalkBack long-click action (label "Show actions") that opens the caller's menu. */
+
     accessibilityLongPressLabel: String? = null, onAccessibilityLongPress: (() -> Unit)? = null,
-    /** Replaces the spoken name when set (S20 12 i: the attendee program feed reads "Live video from %1$s"). */
+
     accessibilityName: String? = null,
+    overlayInsets: PaddingValues = PaddingValues(0.dp),
     renderer: @Composable () -> Unit,
 ) {
     val shape = RoundedCornerShape(cornerRadius)
@@ -83,7 +72,7 @@ internal fun ConclaveTileChrome(
         val density = TileChromePolicy.density(width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble(), isSpotlight = spotlight)
         Box(Modifier.fillMaxSize()) { renderer() }
         val ext = LocalConclaveExtendedColors.current
-        // Taps pass through to the stage (chrome toggle) unless the caller handles them.
+
         val interaction = if (onLongPress != null || onClick != null) {
             Modifier.combinedClickable(hapticFeedbackEnabled = false, onClick = onClick ?: {},
                 onLongClick = if (onLongPress != null) { { haptics.gesture(FeedbackKind.longPress); onLongPress() } } else null)
@@ -112,7 +101,9 @@ internal fun ConclaveTileChrome(
                     }
                 }
             }
-            TileOverlays(model, variant, density, selfViewAccessory)
+            Box(Modifier.fillMaxSize().padding(overlayInsets)) {
+                TileOverlays(model, variant, density, selfViewAccessory)
+            }
             SpeakingStroke(speaking, cornerRadius)
             if (variant == ConclaveTileVariant.SelfView) {
                 Box(Modifier.fillMaxSize().border(1.dp, ext.border, shape))
@@ -121,7 +112,6 @@ internal fun ConclaveTileChrome(
     }
 }
 
-/** The tile state description in the S20 order; Speaking is left to the speaking leaf (F00 P2). */
 @Composable
 private fun conclaveTileStates(model: TileChromeModel): String {
     val words = mutableListOf<String>()
@@ -135,7 +125,6 @@ private fun conclaveTileStates(model: TileChromeModel): String {
     return words.joinToString(", ")
 }
 
-/** The 2 dp speaking stroke (5.973 against the tile): appears and disappears without animation. */
 @Composable
 private fun SpeakingStroke(speaking: TileSpeakingState, cornerRadius: Dp) {
     if (speaking.isSpeaking) {
@@ -183,8 +172,6 @@ private fun MutedBadge(size: Dp) {
     }
 }
 
-/** The name pill: onSurface text on the label scrim (6.407 over white video), the 16 dp slashed microphone while
- *  muted, labelMedium (labelSmall dense), one line with ellipsis; the full name is in the tile description. */
 @Composable
 private fun TileNamePill(model: TileChromeModel, density: TileChromeDensity, modifier: Modifier) {
     val ext = LocalConclaveExtendedColors.current
@@ -204,10 +191,6 @@ private fun TileNamePill(model: TileChromeModel, density: TileChromeDensity, mod
     }
 }
 
-/**
- * The "+N" overflow tile: up to three overlapping 30 dp avatars over "+N" (tabular), one Button node described as
- * "N more participants" that opens People.
- */
 @Composable
 internal fun ConclaveOverflowTile(
     count: Int, identities: List<ConclaveAvatarIdentity>, identifier: String, onClick: () -> Unit, modifier: Modifier = Modifier,

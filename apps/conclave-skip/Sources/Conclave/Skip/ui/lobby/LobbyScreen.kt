@@ -26,6 +26,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -48,18 +51,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/*
- * ENT-3 (S10 6 d, f, g, i, k) and ENT-5 (S10 8, 9: EntryStatusBlock's connecting, waiting and failed states, the
- * busy Back and the card anchor of the entry expansion): the Android pre-join lobby, handwritten Compose Material 3
- * in the system appearance with the dark preview card. A non-lazy scrolling Column (few children, the preview surface
- * is never disposed). Each child reads one of the six lobby snapshots: the card `lobbyMedia` (through LobbyUiCache),
- * the bottom bar `lobbyStatus`, the title `lobbyLink` and `lobbyPresence`, the identity items `lobbyIdentity`, the
- * Audio row `lobbyAudio`. Intent reaches the core only through the presenter (S10 0.8 C1, C2; D14). Back is the
- * premeeting host's NavDisplay handler in editing (a pop); while connecting or waiting LobbyBusyBackHandler takes it
- * (Cancel, or the Stop asking confirmation) so the gesture never previews Home. ENT-4 (S10 7 d): the permission
- * priming rows under the card and the ON_RESUME re-read live in PermissionPrimingRow.kt.
- */
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.LobbyKey, onBack: () -> Unit) {
@@ -71,7 +62,6 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
     val cache = remember(routeId) { LobbyUiCache() }
     val snackbarHostState = remember { SnackbarHostState() }
     LobbyBusyBackHandler(premeeting, routeId, onBack)
-    // ENT-4 (S10 7 d): back from Settings, the permissions are read again.
     PermissionPrimingResumeEffect(premeeting, routeId)
     val scheme = MaterialTheme.colorScheme
     Scaffold(
@@ -83,7 +73,6 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
         modifier = Modifier.testTag("lobby"),
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
-            // Height alone can be compact in a narrow multi-window: reserve room for both columns.
             val wide = maxWidth >= 640.dp
             if (wide) {
                 Row(
@@ -118,9 +107,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
 private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache, wide: Boolean, modifier: Modifier) {
     val media = premeeting.lobbyMedia?.takeIf { it.routeId == routeId } ?: return
     val card = cache.card(media)
-    // ENT-5 (S10 8 d, L10): the entry expansion starts from this card's bounds (a plain holder write).
     val anchors = LocalEntryTransitionAnchors.current
-    // RECONCILE R31 (SET-6, HD request B7-T2 R7): the Effects sheet over the lobby while an engine publishes it.
     var showsEffectsSheet by remember { mutableStateOf(false) }
     val lobbyEffects = remember { EffectsPresenter(scope = EffectsScope.lobby) }
     HostingTheme(inCall = true) {
@@ -138,7 +125,6 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
             modifier = modifier.entryTransitionAnchor(anchors, routeId),
         )
         if (showsEffectsSheet) {
-            // R31: the in-call Effects sheet over the lobby (the panels' LayoutSheetHost); the preview is the lobby's own.
             EffectsLobbySheet(lobbyEffects, onClosed = { showsEffectsSheet = false },
                 preview = { LocalPreviewSurface(card.previewSessionId) })
         }
@@ -147,10 +133,8 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
 
 @Composable
 private fun LobbyControls(premeeting: PremeetingPresenter, routeId: Int, snackbarHostState: SnackbarHostState) {
-    // S50 PH20 (RECONCILE R30): the promotion lobby keeps your identity and has no link or Share.
     val isPromotion = premeeting.lobbyStatus?.takeIf { it.routeId == routeId }?.intent == LobbyIntent.promotion
     LobbyIssueBanner(premeeting, routeId)
-    // ENT-4 (S10 7 d): the permission priming rows (rationale with Allow and Not now, or Open settings).
     PermissionPrimingRows(premeeting, routeId)
     LobbyAudioItem(premeeting)
     if (!isPromotion) {
@@ -159,8 +143,6 @@ private fun LobbyControls(premeeting: PremeetingPresenter, routeId: Int, snackba
     }
     Spacer(Modifier.heightIn(min = 8.dp))
 }
-
-// MARK: Top bar (title, presence, Share; Cancel while busy)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -199,27 +181,25 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
     val status = premeeting.lobbyStatus?.takeIf { it.routeId == key.routeId }
     val isNewMeeting = status?.intent == LobbyIntent.newMeeting
     val roomLabel = link?.roomLabel ?: key.roomId
-    // ENT-5 (S10 8 g, 9 g): "Joining" or "Reconnecting" while connecting, nothing while waiting or failed.
     val subtitle = when (status?.mode) {
         LobbyMode.connecting ->
             if (status?.waitingKind == WaitingKind.reconnecting) conclaveString("pm_subtitle_reconnecting")
             else conclaveString("pm_subtitle_joining")
         LobbyMode.waiting, LobbyMode.failed -> ""
-        else -> if (isNewMeeting) roomLabel else when (presence?.kind) {
+        else -> if (isNewMeeting) "" else when (presence?.kind) {
             PresenceKind.checking -> conclaveString("pm_presence_checking")
             PresenceKind.empty -> conclaveString("pm_presence_none")
             PresenceKind.count -> conclavePlural("pm_presence_count", presence?.count ?: 0, presence?.count ?: 0)
             else -> ""
         }
     }
-    // S10 6 g (RECONCILE R30): the promotion lobby's title is "Join as a speaker".
     val title = when {
         status?.intent == LobbyIntent.promotion -> conclaveString("pm_join_as_speaker")
         isNewMeeting -> conclaveString("pm_new_meeting")
         else -> roomLabel
     }
     Column {
-        Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1,
+        Text(title, style = MaterialTheme.typography.titleLarge, color = scheme.onSurface, maxLines = 1,
             overflow = TextOverflow.Ellipsis)
         if (subtitle.isNotEmpty()) {
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
@@ -229,11 +209,8 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
     }
 }
 
-// MARK: Issues (S10 6 f)
-
 @Composable
 private fun LobbyIssueBanner(premeeting: PremeetingPresenter, routeId: Int) {
-    // ENT-5 (S10 8 f): while connecting only the offline row shows ("Waiting for a connection"); the primary stays.
     val status = premeeting.lobbyStatus?.takeIf {
         it.routeId == routeId && (it.mode == LobbyMode.editing || (it.mode == LobbyMode.connecting && it.issue == LobbyIssue.offline))
     } ?: return
@@ -261,8 +238,6 @@ private fun LobbyIssueBanner(premeeting: PremeetingPresenter, routeId: Int) {
         actions = actions,
     )
 }
-
-// MARK: Audio (S10 6 d: one Audio row for the communication device; the route dialog)
 
 @Composable
 private fun LobbyAudioItem(premeeting: PremeetingPresenter) {
@@ -293,8 +268,6 @@ private fun LobbyAudioItem(premeeting: PremeetingPresenter) {
         )
     }
 }
-
-// MARK: Identity (S10 6 d; R38) and the invite code
 
 @Composable
 private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
@@ -331,14 +304,19 @@ private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
                 identifier = "lobby.name",
             )
             Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(conclaveString("pm_name_footer"), style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                Spacer(Modifier.weight(1f))
                 ConclaveCharacterCounter(count = name.length, limit = identity.nameLimit,
                     visibleFrom = DisplayNamePolicy.counterThreshold, identifier = "lobby.name.counter")
             }
         }
-        TextButton(onClick = { premeeting.openAccount() }, modifier = Modifier.padding(horizontal = 8.dp).testTag("lobby.signIn")) {
-            Text(conclaveString("pm_sign_in"))
+        OutlinedButton(
+            onClick = { premeeting.openAccount() },
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth()
+                .heightIn(min = 50.dp).testTag("lobby.signIn"),
+            shape = CircleShape,
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = scheme.onSurface),
+        ) {
+            Text(conclaveString("pm_sign_in"), style = MaterialTheme.typography.titleSmall)
         }
     }
     if (identity.needsInviteCode) {
@@ -363,8 +341,6 @@ private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
         }
     }
 }
-
-// MARK: Bottom bar (S10 6 d, 8 d, 9 d: ENT-5's EntryStatusBlock in all four modes)
 
 @Composable
 private fun LobbyBottomBar(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache) {

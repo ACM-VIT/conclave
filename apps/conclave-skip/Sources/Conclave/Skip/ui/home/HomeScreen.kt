@@ -6,6 +6,12 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -51,14 +57,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/*
- * ENT-1 (S10 2 d): Home on Android, handwritten Compose Material 3 in the system appearance. Scaffold with the plain
- * titleLarge app-name title (no wordmark asset yet, S10 R2 and R7), the account action, the flat coral Extended FAB
- * (the only coral, placed by `contentWindowInsets = WindowInsets.safeDrawing` alone, S10 R8) and a LazyColumn with
- * the update banner, the notice, Join with a code, the Rejoin card and the recents. Observes `premeeting.home` only.
- */
-
-/** Canonical premeeting icon concepts (S10 0.6 R1). */
 internal object PremeetingIcons {
     val NewMeeting: ImageVector get() = ConclaveIcons.VideoCallFill0
     val Account: ImageVector get() = ConclaveIcons.AccountCircleFill0
@@ -84,12 +82,15 @@ internal fun HomeScreen(premeeting: PremeetingPresenter, modifier: Modifier = Mo
                 title = {
                     Text(
                         text = conclaveString("pm_app_title"),
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Bold,
                         modifier = Modifier.semantics { heading() },
                     )
                 },
                 actions = {
-                    HomeAccountAction(home.isSignedIn, home.accountName, home.accountSeed) { premeeting.openAccount() }
+                    if (home.isSignedIn) {
+                        HomeAccountAction(true, home.accountName, home.accountSeed) { premeeting.openAccount() }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface),
             )
@@ -108,7 +109,6 @@ internal fun HomeScreen(premeeting: PremeetingPresenter, modifier: Modifier = Mo
         containerColor = scheme.surface,
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
-        // 88 dp clears the FAB; the Scaffold padding already holds the navigation bar (no second inset).
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().widthIn(max = 640.dp).testTag("home.list"),
@@ -126,6 +126,19 @@ internal fun HomeScreen(premeeting: PremeetingPresenter, modifier: Modifier = Mo
                     item("notice") {
                         HomeNoticeBanner(home.noticeKind, onDismiss = { premeeting.dismissHomeNotice() },
                             onSignIn = { premeeting.openAccount() })
+                    }
+                }
+                if (!home.isSignedIn) {
+                    item("signIn") {
+                        OutlinedButton(
+                            onClick = { premeeting.openAccount() },
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth()
+                                .heightIn(min = 50.dp).testTag("home.signIn"),
+                            shape = CircleShape,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = scheme.onSurface),
+                        ) {
+                            Text(conclaveString("pm_sign_in"), style = MaterialTheme.typography.titleSmall)
+                        }
                     }
                 }
                 item("join") {
@@ -155,8 +168,15 @@ internal fun HomeScreen(premeeting: PremeetingPresenter, modifier: Modifier = Mo
                 }
                 if (rows.isEmpty() && card == null) {
                     item("empty") {
-                        ConclaveEmptyStatus(conclaveString("pm_empty_title"), conclaveString("pm_empty_body"),
-                            PremeetingIcons.Recent, "home.empty")
+                        Column(
+                            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp).testTag("home.empty"),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(conclaveString("pm_empty_title"), style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.SemiBold)
+                            Text(conclaveString("pm_empty_body"), style = MaterialTheme.typography.bodyMedium,
+                                color = scheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
@@ -177,7 +197,6 @@ private fun HomeAccountAction(isSignedIn: Boolean, name: String, seed: String, o
     }
 }
 
-/** R51: the C12 app banner with Update opening the store listing. */
 @Composable
 private fun HomeUpdateBanner(storeURL: String, onOpen: () -> Unit) {
     val uriHandler = LocalUriHandler.current
@@ -196,7 +215,6 @@ private fun HomeUpdateBanner(storeURL: String, onOpen: () -> Unit) {
     )
 }
 
-/** S10 2 d: the notice as the C12 app banner (polite live region, Dismiss separate); session expiry adds Sign in. */
 @Composable
 private fun HomeNoticeBanner(kind: HomeNoticeKind, onDismiss: () -> Unit, onSignIn: () -> Unit) {
     val actions = if (kind == HomeNoticeKind.sessionExpired) {
@@ -225,7 +243,6 @@ internal fun homeNoticeText(kind: HomeNoticeKind): String = when (kind) {
     HomeNoticeKind.none -> ""
 }
 
-/** S10 2 d Rejoin card: an OutlinedCard ListItem with the tonal Rejoin (New meeting stays the one coral action). */
 @Composable
 private fun RejoinCardItem(card: RejoinCard, onRejoin: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -256,18 +273,11 @@ private fun RejoinCardItem(card: RejoinCard, onRejoin: () -> Unit) {
     }
 }
 
-/**
- * S10 2 d recent row: ListItem, tap opens the lobby, long press opens the C16 menu and plays exactly one
- * `longPress` (the node's own long-press haptic is off: it bypasses the tested gesture route, F00 8). The menu
- * and the named custom actions offer Join, Copy link, Share invite and Remove from recents. Chevron-less, no swipe.
- */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RecentRowItem(row: HomeRecentUi, onOpen: () -> Unit, onRemove: () -> Unit, modifier: Modifier = Modifier) {
     val haptics = rememberConclaveHaptics()
     var menuOpen by remember { mutableStateOf(false) }
-    // ENT-8 (RECONCILE R50): meeting rows use the shared MeetingLinkBuilder (recents keep no client id, Q4); webinar
-    // rows keep the landing link.
     val link = if (row.isWebinar) EntryPolicies.recentLink(roomId = row.roomId, isWebinar = true)
     else MeetingLinkBuilder.url(roomCode = row.roomId, clientId = null)
     val shareSubject = conclaveString("ds_share_subject")
@@ -287,7 +297,6 @@ private fun RecentRowItem(row: HomeRecentUi, onOpen: () -> Unit, onRemove: () ->
         haptics.gesture(FeedbackKind.linkCopied)
         Unit
     }
-    // S10 11 d (SC21, RECONCILE R14): the F00 payload, EXTRA_TITLE = the room label, no chooser title.
     val share = { NativeMeetingShare.shareMeetingLink(link = link, subject = shareSubject, text = shareText, title = row.title); Unit }
     val sections = remember(joinTitle, copyTitle, shareTitle, removeTitle) {
         listOf(

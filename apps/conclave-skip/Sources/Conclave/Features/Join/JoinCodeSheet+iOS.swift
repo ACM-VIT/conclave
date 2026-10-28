@@ -1,11 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-/// ENT-2: join by code or link, with Cancel in the navigation bar and one full-width confirmation below the form.
-/// Medium detent with
-/// the drag indicator, promoted to large when the field takes focus; no autofocus (the system PasteButton is the
-/// fast path for a copied link and never shows the paste prompt). Keystrokes stay in view state (F00 C19 k): the
-/// presenter only sees the submit, and pushes the lobby from `joinSheetDidDismiss()` after the sheet is gone.
 struct JoinCodeSheet: View {
     let premeeting: PremeetingPresenter
     @State private var input = ""
@@ -97,7 +92,7 @@ struct JoinCodeSheet: View {
 
     private func submit() {
         guard isValid else {
-            // The IME Join key can submit invalid text: the presenter publishes `validationFailed` (S10 3 e).
+
             showsInvalid = !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             premeeting.submitJoinInput(input)
             return
@@ -106,7 +101,6 @@ struct JoinCodeSheet: View {
     }
 }
 
-/// The help line, or the C19 error style for text the parser rejects.
 private struct JoinCodeFooter: View {
     let showsInvalid: Bool
 
@@ -122,7 +116,6 @@ private struct JoinCodeFooter: View {
     }
 }
 
-/// The only primary action stays above the keyboard, with the same filled treatment on every supported iOS version.
 private struct JoinConfirmButton: View {
     let isValid: Bool
     let action: () -> Void

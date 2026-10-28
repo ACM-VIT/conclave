@@ -1,12 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 8 (PPL-4): the notice composer on iOS. The text and the level are view state seeded once from `host.drafts` and
-// written back on change, so the counter, the error and the Send state update on every keystroke and the draft
-// survives Back (8 c). The preview is the F00 C12 in-call banner drawn statically in a dark scoped region, so the host
-// sees the real look. Send is this page's coral action; success clears the field and shows "Notice sent" inline for
-// 2 s (no toasts on iOS system-appearance surfaces, F00 C13); a failure shows the PL14 line under Send with Retry.
-
 struct NoticeComposerPage: View {
     let people: PeoplePresenter
     @State private var draft = ""
@@ -39,7 +33,7 @@ struct NoticeComposerPage: View {
             }
             Section {
                 if dynamicTypeSize.isAccessibilitySize {
-                    // F00 C21 c: at accessibility sizes the segments fall back to selectable rows.
+
                     Picker(ConclaveStrings.text("Level"), selection: $level) {
                         levelOptions
                     }
@@ -102,7 +96,7 @@ struct NoticeComposerPage: View {
             host.drafts.noticeLevel = value
         }
         .onChange(of: snapshot.noticeSentSerial) { _, _ in
-            // The presenter cleared the draft on the acknowledgement (8 c).
+
             draft = host.drafts.noticeText
             showsSent = true
             sentToken += 1
@@ -123,7 +117,6 @@ struct NoticeComposerPage: View {
     }
 }
 
-/// The preview banner's kind and text (S50 8 b, F00 C12; the S20 host notice wording "From %@:").
 enum NoticeComposerPreview {
     static func bannerKind(_ level: String) -> ConclaveBannerKind {
         switch level {
@@ -148,7 +141,6 @@ enum NoticeComposerPreview {
         }
     }
 
-    /// One element, "Preview: Info notice, From Ishaan: ..." (S50 8 i); not a live region.
     static func accessibilityLabel(level: String, sender: String, message: String) -> String {
         ConclaveStrings.format("Preview: %@ notice, %@", levelName(level), text(sender: sender, message: message))
     }

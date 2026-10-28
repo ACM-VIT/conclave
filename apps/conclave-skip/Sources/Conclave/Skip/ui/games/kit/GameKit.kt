@@ -36,13 +36,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 L6-5 (ACT-2) on Android: K1 Prompt, K6 PlayerChips, K7 HostBar, K8 Scoreboard, K9 RoundResults, K12 SeatControl,
- * K13 GameNotice and the shared neutral tag, handwritten Compose Material 3 inside the always-dark activity card
- * (HostingTheme(inCall = true) from the call root). Correctness carries a text or glyph twin, never color alone.
- */
-
-/** K1: kicker, title and subtitle; the title is the scene's heading. */
 @Composable
 internal fun GameKitPrompt(kicker: String, title: String, subtitle: String = "", modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
@@ -60,7 +53,6 @@ internal fun GameKitPrompt(kicker: String, title: String, subtitle: String = "",
     }
 }
 
-/** A neutral status tag (C06 shape): surfaceContainerHighest with onSurface text, never coral, never emoji. */
 @Composable
 internal fun GameKitTag(title: String, modifier: Modifier = Modifier) {
     val ext = LocalConclaveExtendedColors.current
@@ -75,7 +67,6 @@ internal fun GameKitTag(title: String, modifier: Modifier = Modifier) {
     }
 }
 
-/** K12: Join (primaryContainer), or a tag for a queued or watching person; nothing for a seated player. */
 @Composable
 internal fun GameKitSeatControl(seat: SeatState, onJoin: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -96,10 +87,6 @@ internal fun GameKitSeatControl(seat: SeatState, onJoin: () -> Unit) {
     }
 }
 
-/**
- * K13: one notice (failure, spectator, private view, unsupported, reconnecting): glyph, optional title, body and an
- * optional button, in a polite live region so it is announced once.
- */
 @Composable
 internal fun GameKitNotice(kind: GameKitNoticeKind, message: String, buttonTitle: String = "", onButton: (() -> Unit)? = null) {
     val scheme = MaterialTheme.colorScheme
@@ -136,7 +123,6 @@ internal fun GameKitNotice(kind: GameKitNoticeKind, message: String, buttonTitle
     }
 }
 
-/** K6: non-clickable chips (24 dp avatar plus name) in a FlowRow with merged semantics; "next round" for queued. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun GameKitPlayerChips(players: Iterable<GamePlayerModel>, pending: Iterable<GamePlayerModel>, count: Int) {
@@ -171,10 +157,6 @@ private fun GameKitPlayerChip(player: GamePlayerModel) {
     }
 }
 
-/**
- * K7: a secondary (outlined, neutral or error) and a primary (primaryContainer) side by side, stacked vertically when
- * the two do not fit (measured with BoxWithConstraints; font scale 2.0 stacks).
- */
 @Composable
 internal fun GameKitHostBar(
     primaryTitle: String,
@@ -226,7 +208,6 @@ internal fun GameKitHostBar(
     }
 }
 
-/** K8: ranked rows; the leader row on surfaceContainerHighest with a text twin (never coral text on a raised fill). */
 @Composable
 internal fun GameKitScoreboard(rows: Iterable<GameScoreboardRow>) {
     val scheme = MaterialTheme.colorScheme
@@ -256,7 +237,6 @@ internal fun GameKitScoreboard(rows: Iterable<GameScoreboardRow>) {
     }
 }
 
-/** K9: one ranked round ("312 ms", "too soon", "no tap"); muted rows read onSurfaceVariant. */
 @Composable
 internal fun GameKitRoundResults(rows: Iterable<GameKitRoundRow>) {
     val scheme = MaterialTheme.colorScheme

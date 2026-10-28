@@ -81,7 +81,7 @@ def outputs():
             + "".join(f'    <path android:fillColor="#FFFFFFFF" android:fillType="nonZero" android:pathData={quoteattr(d)} />\n' for d in paths)
             + "</vector>\n"
         )
-        # Conversion changes only the container and template color, never the path commands/order/fill rule.
+
         if [p.attrib["d"] for p in ET.fromstring(svg)] != paths:
             raise ValueError("SVG path conversion drift")
         if [p.attrib[f"{{{ANDROID}}}pathData"] for p in ET.fromstring(vector)] != paths:

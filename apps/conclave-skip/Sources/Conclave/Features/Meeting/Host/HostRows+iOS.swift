@@ -1,12 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 6 (PPL-4): the iOS Host Controls rows. `HostPolicyToggleRow` is PL4 (the system green switch, never tinted,
-// R06, showing the pending intent with a spinner and the value "Updating"); `HostInlineFailureLine` is the PL14 inline
-// slot (exclamation glyph in system red, the mapped copy, a borderless Retry); `HostBulkRowView` is one Everyone row
-// with its confirmation anchored to it (S50 3 j); copy follows S50 6 g, 7 g, 8 g (RECONCILE R16, R17).
-
-/// Host Controls copy (Apple title case for rows, titles and buttons; sentence case for footers and values).
 enum HostText {
     static func policyTitle(_ id: HostPolicyID?) -> String {
         guard let id else { return ConclaveStrings.text("Host Controls") }
@@ -44,7 +38,6 @@ enum HostText {
         }
     }
 
-    /// The disabled reason under a row (S50 6 f): reconnecting, offline; pending reads "Updating" as the value instead.
     static func reason(_ raw: String) -> String? {
         switch raw {
         case PeopleActionReason.reconnecting, PeopleActionReason.notJoined:
@@ -66,9 +59,6 @@ enum HostText {
     }
 }
 
-/// PL4: the switch binds to `isPending ? requestedOn : isOn`; the tap sets `requestedOn` synchronously through
-/// `setPolicy`, so the knob moves once and stays; MeetingState changes only on the acknowledgement (D18). A failure
-/// returns the switch to `isOn` (one transition back) and the line below shows the mapped copy with Retry.
 struct HostPolicyToggleRow: View {
     let people: PeoplePresenter
     let policy: HostPolicyID
@@ -103,7 +93,6 @@ struct HostPolicyToggleRow: View {
     }
 }
 
-/// PL14 `panelInline`: renders only when `people.lastFailure` names this slot.
 struct HostInlineFailureLine: View {
     let people: PeoplePresenter
     let sourceKey: String
@@ -131,7 +120,6 @@ struct HostInlineFailureLine: View {
     }
 }
 
-/// One Everyone row (S50 6 c): the bulk action, its pending label and spinner, and its confirmation anchored to it.
 struct HostBulkRowView: View {
     let people: PeoplePresenter
     let row: HostBulkRow
@@ -165,7 +153,6 @@ struct HostBulkRowView: View {
     }
 }
 
-/// S50 3 j `hostControls` host: the invoking row presents the confirmation of its own kinds (a popover on iPad).
 struct HostRowConfirmation: ViewModifier {
     let people: PeoplePresenter
     let kinds: [PeopleConfirmationKind]

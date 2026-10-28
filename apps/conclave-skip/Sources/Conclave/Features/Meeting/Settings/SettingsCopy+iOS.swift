@@ -1,11 +1,6 @@
 #if os(iOS) && !SKIP
 import Foundation
 
-// S60 0.6 L6-14 (SET-1, SET-2, SET-4) on iOS: the one exhaustive copy mapping for Settings. Every typed reason, phase
-// and raw-value field the presenter publishes resolves here to a String Catalog key (Apple title case for controls,
-// titles and section headers; sentence case for footers, values and status lines, S60 0.1). A contract test
-// enumerates every case (T/SettingsTranscriptPoliciesTests.swift). The Android twin is K/ui/copy/SettingsCopy.kt.
-
 enum SettingsCopy {
     static func panelTitle() -> String { ConclaveStrings.text("Settings") }
 
@@ -22,7 +17,6 @@ enum SettingsCopy {
         }
     }
 
-    /// Row titles (the root keeps the longer labels; pushed pages use `pageTitle`).
     static func rowTitle(_ row: SettingsRowID) -> String {
         switch row {
         case .output: return ConclaveStrings.text("Output")
@@ -58,7 +52,6 @@ enum SettingsCopy {
         }
     }
 
-    /// Pushed page titles, all under 15 characters (S60 2 a).
     static func pageTitle(_ route: SettingsRoute) -> String {
         switch route {
         case .root: return ConclaveStrings.text("Settings")
@@ -78,7 +71,6 @@ enum SettingsCopy {
         }
     }
 
-    /// The visible reason under a disabled row, or nil (D10).
     static func reason(_ reason: SettingsReason) -> String? {
         switch reason {
         case .none: return nil
@@ -98,7 +90,6 @@ enum SettingsCopy {
         }
     }
 
-    /// The Account name field's reason (1 f): the reconnecting copy is the name-specific sentence.
     static func nameReason(_ reason: SettingsReason) -> String? {
         reason == SettingsReason.reconnecting ? ConclaveStrings.text("Reconnect before updating your name.") : nil
     }
@@ -147,7 +138,6 @@ enum SettingsCopy {
         }
     }
 
-    /// Identity line from raw values (1 g): "Guest", or the provider line under the account name.
     static func accountKind(_ kind: AccountKind) -> String? {
         switch kind {
         case .none: return nil
@@ -190,13 +180,10 @@ enum SettingsCopy {
         return ConclaveStrings.format("Voice Name and Language %@ %@", voice.name, language)
     }
 
-    /// The one fixed Preview sentence (C6-22).
     static func previewSentence() -> String {
         ConclaveStrings.text("This is how voice messages sound with this voice.")
     }
 
-    /// The Audio footer; the row reason (`reason(audio.noiseSuppressionReason)`) is its own footer line, never
-    /// concatenated (S60 0.1).
     static func audioFooter() -> String {
         ConclaveStrings.text("Noise suppression applies to your microphone in the meeting. The test follows it.")
     }
@@ -205,9 +192,6 @@ enum SettingsCopy {
         ConclaveStrings.text("Captions show on the stage while live notes are on. To change how captions look, open Settings, then Accessibility, then Subtitles & Captioning.")
     }
 
-    // MARK: SET-3 video, screen share and connection (S60 1 g, 2 g)
-
-    /// Camera Quality options and the root value (the data-saver preset reads "Data Saver" while a ceiling applies).
     static func cameraPreset(_ rawValue: String) -> String {
         switch NativeCameraQualityPreset(rawValue: rawValue) ?? NativeCameraQualityPreset.auto {
         case .auto: return ConclaveStrings.text("Auto")
@@ -246,7 +230,6 @@ enum SettingsCopy {
         }
     }
 
-    /// Advanced "Resolution" and Share "Maximum Size" values (MQS labels, localized here).
     static func resolution(_ rawValue: String) -> String {
         switch NativeMediaResolution(rawValue: rawValue) ?? NativeMediaResolution.p720 {
         case .p360: return ConclaveStrings.text("360p")
@@ -280,7 +263,6 @@ enum SettingsCopy {
         }
     }
 
-    /// "Under Pressure": the camera keeps motion or the image; a share keeps its text or its motion.
     static func underPressure(_ rawValue: String, isScreenShare: Bool) -> String {
         switch NativeMediaDegradationPreference(rawValue: rawValue) ?? NativeMediaDegradationPreference.balanced {
         case .balanced: return ConclaveStrings.text("Balance Both")
@@ -294,7 +276,6 @@ enum SettingsCopy {
         ConclaveStrings.text("Mirroring changes only your view. Data Saver lowers the video you send and receive.")
     }
 
-    /// The Camera Quality page footer (2 f): Data Saver, the host's limit, or the ceiling explanation.
     static func cameraQualityFooter(_ video: SettingsVideo) -> String {
         if video.dataSaverOn { return ConclaveStrings.text("Data Saver is on, so video is sent at up to 360p.") }
         if video.qualityCappedByHost { return ConclaveStrings.text("The host limited video quality for this meeting.") }
@@ -309,7 +290,6 @@ enum SettingsCopy {
         ConclaveStrings.text("Shares sound from apps that allow it. Your call audio is never included.")
     }
 
-    /// The preview card's status line (sentence case, 1 g).
     static func previewStatus(_ state: PreviewState) -> String? {
         switch state {
         case .published: return ConclaveStrings.text("Visible to everyone")
@@ -318,8 +298,6 @@ enum SettingsCopy {
         }
     }
 
-    /// The preview card's accessibility value: why the camera paused (another app, multitasking, background), the
-    /// permission, or Audio Only (1 f).
     static func previewReason(_ reason: SettingsReason) -> String? {
         switch reason {
         case .cameraInUse: return ConclaveStrings.text("Another app is using the camera.")
@@ -331,7 +309,6 @@ enum SettingsCopy {
         }
     }
 
-    /// The Connection page summary under the quality (2 g).
     static func connectionSummary(_ label: ConnectionQualityLabel) -> String {
         switch label {
         case .measuring: return ConclaveStrings.text("Measuring your connection")
@@ -346,7 +323,6 @@ enum SettingsCopy {
         ConclaveStrings.format("%lld ms", value)
     }
 
-    /// Packet loss in percent, locale formatted (no catalog key: the system formats percent).
     static func packetLoss(_ percent: Double) -> String {
         (percent / 100.0).formatted(.percent.precision(.fractionLength(0...1)))
     }

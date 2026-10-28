@@ -84,23 +84,8 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-/*
- * S60 10 B2 (ACT-4) on Android: Wordle inside the game shell's scrolling column (GameShell.kt routes GameSceneKind.wordle
- * to WordleSceneBody and pins WordleHostBar in its bottom bar, HD request B7-T7 R3). The board is a Column of Rows of
- * 38 dp cells with 4 dp gaps; each row is one semantics node that reads its letters and marks as text, and every mark has
- * a glyph twin (a check for the right spot, a dot for in the word), so correctness is never color alone. Input is the
- * letter keys (default), the system keyboard ("Type your guess", the default while TalkBack runs) or a hardware keyboard
- * (onPreviewKeyEvent); all three feed the one presenter draft (GameStagePresenter.wordleDraft). The board and the keys
- * stay left to right in RTL locales (D18). Only the newly marked row changes, in one frame. The timer is its own leaf over
- * `countdown`, the board's draft row reads `wordleDraft`, the keys read `keyStates` (S60 10 k). The activity card pads its
- * body by the IME (S20 11 d), so the text field stays visible.
- */
-
 private val WordleKeyHeight = 48.dp
 
-// MARK: Scene
-
-/** The Wordle body for every phase: setting the word, playing, a round's results and the final results. */
 @Composable
 internal fun WordleSceneBody(games: GameStagePresenter) {
     val scene = games.scene.wordle ?: return
@@ -120,7 +105,6 @@ private fun WordleSceneView(scene: WordleScene, games: GameStagePresenter, isFin
     }
 }
 
-/** "Round 1 of 3 · Guess the word", "5 letters · 6 tries" and the timer chip (S60 10 b, g). */
 @Composable
 private fun WordleHeader(scene: WordleScene, games: GameStagePresenter, isFinished: Boolean) {
     val scheme = MaterialTheme.colorScheme
@@ -137,20 +121,12 @@ private fun WordleHeader(scene: WordleScene, games: GameStagePresenter, isFinish
     }
 }
 
-// MARK: Timer (K2 variant)
-
-/** Reads only `countdown`, so the per-second leaf never recomposes the scene. */
 @Composable
 private fun WordleTimerSlot(games: GameStagePresenter) {
     val countdown = games.countdown ?: return
     WordleTimerChip(countdown)
 }
 
-/**
- * "2:41" with tabular digits, recomputed once per second only while the lifecycle is at least STARTED, from the server
- * deadline plus the push's clock offset. At 10 s or less it turns ext.warning and reads "0:09 left" (the text twin);
- * TalkBack reads one node ("2 minutes, 41 seconds left") and hears a polite update at 60 s and 10 s only.
- */
 @Composable
 private fun WordleTimerChip(model: CountdownModel) {
     var nowMillis by remember(model) { mutableDoubleStateOf(System.currentTimeMillis().toDouble()) }
@@ -190,7 +166,7 @@ private fun WordleTimerChip(model: CountdownModel) {
                 Text(shown, style = rememberTabular(MaterialTheme.typography.labelLarge), color = if (warning) ext.warning else scheme.onSurface)
             }
         }
-        // One persistent polite live region whose text changes only at 60 s and 10 s.
+
         Box(Modifier.size(1.dp).semantics {
             liveRegion = LiveRegionMode.Polite
             contentDescription = announcement
@@ -198,16 +174,10 @@ private fun WordleTimerChip(model: CountdownModel) {
     }
 }
 
-// MARK: Phases
-
-/**
- * Set the word (S60 10 d, f): the setter types the secret into a password field ("Set word" at five letters); everyone
- * else reads who is choosing. A rejected word keeps the draft (the shell shows the server's reason).
- */
 @Composable
 private fun WordleSetWordView(scene: WordleScene, games: GameStagePresenter) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // The setter keeps the field (disabled while reconnecting or while the word is in flight).
+
         if (scene.isSetter) {
             PromptLine(conclaveString("gm_wordle_you_pick", scene.wordLength))
             WordleSecretEntry(scene, games)
@@ -218,15 +188,10 @@ private fun WordleSetWordView(scene: WordleScene, games: GameStagePresenter) {
     }
 }
 
-/**
- * Playing (S60 10 d, f): your board, its outcome and the input for a guesser; the setter watches the standings and the
- * status-only boards; a spectator reads the standings. The input mode follows TalkBack (text entry while it runs) until
- * "Type your guess" or "Use letter keys" chooses; the choice survives rotation.
- */
 @Composable
 private fun WordlePlayingView(scene: WordleScene, games: GameStagePresenter) {
     val access = rememberSystemAccessibility()
-    // 0 follows TalkBack, 1 text entry, 2 letter keys.
+
     var entryMode by rememberSaveable(scene.round) { mutableIntStateOf(0) }
     val textEntry = if (entryMode == 0) access.touchExploration else entryMode == 1
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -265,10 +230,6 @@ private fun WordlePlayingView(scene: WordleScene, games: GameStagePresenter) {
     }
 }
 
-/**
- * Results (S60 10 d, f): the solution as correct cells, the winner line, your outcome and board, the standings (and the
- * scoreboard at the final results); participants wait for the host. Next round and Play again are the pinned bars.
- */
 @Composable
 private fun WordleResultsView(scene: WordleScene, games: GameStagePresenter, isFinished: Boolean) {
     val isHost = games.chrome.isHost
@@ -293,7 +254,6 @@ private fun WordleResultsView(scene: WordleScene, games: GameStagePresenter, isF
     }
 }
 
-/** "You solved it", "Out of tries", "Time ran out", announced once (S60 10 f, i). */
 @Composable
 private fun WordleOutcomeLine(scene: WordleScene, games: GameStagePresenter) {
     val name = wordleOutcomeResource(scene.myOutcome) ?: return
@@ -302,7 +262,6 @@ private fun WordleOutcomeLine(scene: WordleScene, games: GameStagePresenter) {
     PromptAnnouncement(games, scene.outcomeKey, text)
 }
 
-/** The pinned host bar (S60 10 f): Next round for a seated host at a round's results, pending until that emit's ack. */
 @Composable
 internal fun WordleHostBar(games: GameStagePresenter) {
     val scene = games.scene.wordle ?: return
@@ -319,13 +278,6 @@ internal fun WordleHostBar(games: GameStagePresenter) {
     }
 }
 
-// MARK: Board (B2)
-
-/**
- * Your rows: the marked guesses, the draft row while your board is open and empty rows up to six; read-only at the
- * results (no draft read). When a guess is marked, TalkBack hears that row's summary through a polite live region
- * (S60 10 i; Compose has no API to move TalkBack focus).
- */
 @Composable
 private fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly: Boolean) {
     val draft = if (readOnly) "" else games.wordleDraft
@@ -355,7 +307,6 @@ private fun WordleBoard(scene: WordleScene, games: GameStagePresenter, readOnly:
     })
 }
 
-/** One row as one semantics node ("Row 2: S, not in the word, L, in the word, ..."), tooltip free. */
 @Composable
 private fun WordleRow(row: WordleRowModel, label: String) {
     Row(
@@ -366,11 +317,6 @@ private fun WordleRow(row: WordleRowModel, label: String) {
     }
 }
 
-/**
- * A 38 dp cell; titleLarge bold with no font-scale override (at 2.0 the letter grows inside the fixed cell and the board
- * keeps its size). Fills: correct ext.success, in the word ext.warning (both with dark ink), not in the word
- * surfaceContainerHighest with onSurface; empty and typed cells are outlined. The accent never marks correctness (S60 10 e).
- */
 @Composable
 private fun WordleCell(cell: WordleCellModel) {
     val colors = wordleCellColors(cell.state)
@@ -387,7 +333,6 @@ private fun WordleCell(cell: WordleCellModel) {
     }
 }
 
-/** The glyph twin of a mark: a check for the right spot, a dot for in the word, nothing otherwise. */
 @Composable
 private fun WordleMarkGlyph(mark: WordleCellState, ink: Color, modifier: Modifier = Modifier) {
     when (mark) {
@@ -397,7 +342,6 @@ private fun WordleMarkGlyph(mark: WordleCellState, ink: Color, modifier: Modifie
     }
 }
 
-/** The setter's status-only boards (marks without letters), each one node with the name and status as text. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun WordleLiveBoards(scene: WordleScene) {
@@ -429,7 +373,6 @@ private fun WordleLiveBoards(scene: WordleScene) {
     }
 }
 
-/** Who solved and in how many tries, who is still playing (S60 10 g). */
 @Composable
 private fun WordleStandingsList(scene: WordleScene) {
     if (scene.standings.count == 0) return
@@ -457,14 +400,6 @@ private fun WordleStandingsList(scene: WordleScene) {
     }
 }
 
-// MARK: Input
-
-/**
- * The letter keys (S60 10 d): keys 48 dp tall and min(32 dp, (width - 36 dp) / 10) wide (the deliberate game-grid
- * exception; text entry is the full-size alternative), Enter and Delete one and a half keys wide, each key reflecting
- * the best known state of its letter with the same glyph twins and "E, in the word" for TalkBack. Hardware letters,
- * Backspace and Enter feed the same draft through onPreviewKeyEvent while the keys hold focus. No per-key haptic.
- */
 @Composable
 private fun WordleLetterKeyboard(scene: WordleScene, games: GameStagePresenter) {
     val interaction = games.interaction
@@ -535,7 +470,6 @@ private fun WordleLetterKeyboard(scene: WordleScene, games: GameStagePresenter) 
     }
 }
 
-/** One letter key; its child text is hidden from semantics so TalkBack reads "E, in the word" once. */
 @Composable
 private fun WordleLetterKey(letterKey: WordleKeyModel, width: Dp, enabled: Boolean, onTap: () -> Unit) {
     val colors = wordleKeyColors(letterKey.state)
@@ -559,7 +493,6 @@ private fun WordleLetterKey(letterKey: WordleKeyModel, width: Dp, enabled: Boole
     }
 }
 
-/** Enter (text) and Delete (canonical R6-1 backspace artwork). */
 @Composable
 private fun WordleWideKey(text: String, icon: ImageVector?, label: String, width: Dp, enabled: Boolean, pending: Boolean, tag: String,
                           onTap: () -> Unit) {
@@ -592,10 +525,6 @@ private fun WordleWideKey(text: String, icon: ImageVector?, label: String, width
     }
 }
 
-/**
- * Text entry (S60 10 d): an OutlinedTextField over the presenter draft, letters A to Z only, at most five, characters
- * capitalization, no autocorrect, ASCII keyboard, Go submits; a 48 dp "Enter guess" button.
- */
 @Composable
 private fun WordleTextEntry(scene: WordleScene, games: GameStagePresenter, autoFocus: Boolean) {
     val interaction = games.interaction
@@ -636,7 +565,6 @@ private fun WordleTextEntry(scene: WordleScene, games: GameStagePresenter, autoF
     }
 }
 
-/** The setter's password field ("Secret word") and "Set word" (S60 10 d, f); the same letter filter as a guess. */
 @Composable
 private fun WordleSecretEntry(scene: WordleScene, games: GameStagePresenter) {
     val interaction = games.interaction
@@ -674,16 +602,12 @@ private fun WordleSecretEntry(scene: WordleScene, games: GameStagePresenter) {
     }
 }
 
-// MARK: Style and copy
-
-/** Canonical R6-1 Wordle concepts. */
 internal object WordleIcons {
     val backspace: ImageVector get() = ConclaveIcons.BackspaceFill0
 }
 
 private data class WordleColors(val fill: Color, val ink: Color, val border: Color, val borderWidth: Dp)
 
-/** S60 10 e tokens: functional colors with text and glyph twins, never the accent; dark ink (ext.onWarning) on bright fills. */
 @Composable
 private fun wordleCellColors(state: WordleCellState): WordleColors {
     val scheme = MaterialTheme.colorScheme
@@ -716,17 +640,14 @@ internal fun wordleKeyMark(state: WordleKeyState): WordleCellState = when (state
     WordleKeyState.absent -> WordleCellState.absent
 }
 
-/** A hardware key's letter (A to Z, uppercased) or "" (S60 10 d onPreviewKeyEvent). */
 internal fun wordleHardwareLetter(codePoint: Int): String =
     if (codePoint in 1..0xFFFF) WordleBoardPolicy.normalized(Char(codePoint).toString(), 1) else ""
 
-/** "2:41" in the current locale. */
 internal fun wordleClock(seconds: Int, locale: Locale = Locale.getDefault()): String {
     val value = maxOf(0, seconds)
     return String.format(locale, "%d:%02d", value / 60, value % 60)
 }
 
-/** "2 minutes, 41 seconds" for TalkBack. */
 internal fun wordleSpokenDuration(seconds: Int, locale: Locale = Locale.getDefault()): String {
     val value = maxOf(0, seconds)
     val minutes = value / 60
@@ -738,8 +659,6 @@ internal fun wordleSpokenDuration(seconds: Int, locale: Locale = Locale.getDefau
         else -> format.formatMeasures(Measure(rest, MeasureUnit.SECOND))
     }
 }
-
-// Resource names per case (S60 10 g, L6-14), plain functions so tests run without composition.
 
 internal fun wordleCellStateResource(state: WordleCellState): String? = when (state) {
     WordleCellState.empty, WordleCellState.typed -> null
@@ -769,7 +688,6 @@ internal fun wordleStatusResource(status: WordleStandingStatus, tries: Int): Str
     WordleStandingStatus.playing -> if (tries > 0) "gm_wordle_tries" else "gm_wordle_playing"
 }
 
-/** The heading resource per phase; "" in the lobby (the shell draws the lobby). */
 internal fun wordleTitleResource(phase: WordlePhase, hasRounds: Boolean, isFinal: Boolean): String = when (phase) {
     WordlePhase.lobby -> ""
     WordlePhase.setWord -> if (hasRounds) "gm_wordle_set_round" else "gm_wordle_set"
@@ -777,7 +695,6 @@ internal fun wordleTitleResource(phase: WordlePhase, hasRounds: Boolean, isFinal
     WordlePhase.results -> if (isFinal) "gm_wordle_final" else "gm_wordle_round_results"
 }
 
-/** Which notice a role adds to the playing body (pure, for the copy test). */
 internal fun wordleRoleNoteResource(role: WordleRole): String? = when (role) {
     WordleRole.guesser -> null
     WordleRole.setter -> "gm_wordle_setter_watching"
@@ -804,7 +721,6 @@ private fun wordleChoosing(setterName: String): String =
 private fun wordleWinner(scene: WordleScene): String =
     if (scene.winnerName.isEmpty()) conclaveString("gm_wordle_nobody") else conclaveString("gm_wordle_winner", scene.winnerName)
 
-/** "Solved in 1 try", "3 tries", "Out of tries", "Timed out", "Playing"; tries through the `gm_wordle_tries` plural. */
 @Composable
 private fun wordleStatus(status: WordleStandingStatus, tries: Int): String {
     val name = wordleStatusResource(status, tries)
@@ -828,7 +744,6 @@ private fun wordleCellLabel(cell: WordleCellModel): String {
     return conclaveString(name, cell.letter)
 }
 
-/** "Row 2: S, not in the word, L, in the word, ..." or "Row 4, empty". */
 @Composable
 private fun wordleRowSummary(row: WordleRowModel): String {
     val parts = mutableListOf<String>()

@@ -15,13 +15,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * FND-3, the Android half (FND3ContentComponentsTests is the Swift half): the composer material and counter policies,
- * search filtering, the segmented fallback rule, the bubble grouping corners, the reaction chip feedback rule, the
- * one-time tip store, the text-entry caps and the semantics exporter additions (S40 R40-11), through the transpiled
- * shared types. Composables are covered by their pure helpers; the Conclave test classpath has no Compose UI test
- * artifacts.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class FND3ContentComponentsBridgeTests {
@@ -36,7 +29,7 @@ class FND3ContentComponentsBridgeTests {
         assertEquals(450, ConclaveComposerCounterPolicy.visibleFrom(limit = 500))
         assertTrue(ConclaveComposerCounterPolicy.isVisible(count = 0, limit = 500, alwaysVisible = true))
         assertEquals(200, ConclaveComposerCounterPolicy.overflow(count = 1200, limit = 1000))
-        // The Android composer container: radius 20 (radiusBubbleAndroid), six lines.
+
         assertEquals(20.0, ConclaveComposerMetrics.androidCornerRadius, 0.0)
         assertEquals(6, ConclaveComposerMetrics.maximumLines)
         assertTrue(ConclaveAttachmentPhase.uploading.showsProgress && ConclaveAttachmentPhase.uploading.blocksSend)
@@ -75,10 +68,10 @@ class FND3ContentComponentsBridgeTests {
     @Test fun bubbleShapeTightensTheSenderSide() {
         assertEquals(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp),
             conclaveBubbleShape(isOwn = true, isFollowUp = false, hasFollower = false))
-        // Own messages tighten the end side: the top for a follow-up, the bottom when another follows.
+
         assertEquals(RoundedCornerShape(topStart = 20.dp, topEnd = 4.dp, bottomEnd = 4.dp, bottomStart = 20.dp),
             conclaveBubbleShape(isOwn = true, isFollowUp = true, hasFollower = true))
-        // Everyone else tightens the start side.
+
         assertEquals(RoundedCornerShape(topStart = 4.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp),
             conclaveBubbleShape(isOwn = false, isFollowUp = true, hasFollower = false))
         assertEquals(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 4.dp),
@@ -96,7 +89,7 @@ class FND3ContentComponentsBridgeTests {
         assertEquals(FeedbackKind.none, ConclaveReactionChipPolicy.feedback(chip(mine = false, canToggle = false)))
         assertEquals(32.0, ConclaveReactionChipPolicy.androidVisualHeight, 0.0)
         assertEquals(48.0, ConclaveReactionChipPolicy.androidTarget, 0.0)
-        // The tap and long press decisions go through the record-only route in tests.
+
         val haptics = ConclaveGestureHaptics(view = null, debuggable = false)
         assertEquals(GestureHapticDecision.Recorded, haptics.decide(FeedbackKind.reactionSent, api = 34))
     }
@@ -108,7 +101,7 @@ class FND3ContentComponentsBridgeTests {
         assertFalse(ConclaveTipStore.isDismissed(app, id))
         ConclaveTipStore.dismiss(app, id)
         assertTrue(ConclaveTipStore.isDismissed(app, id))
-        // F00 C25 l: the preference conclave.tip.gifPicker is true after dismissal.
+
         val preferences = app.getSharedPreferences("conclave.tips", Context.MODE_PRIVATE)
         assertTrue(preferences.getBoolean("conclave.tip.gifPicker", false))
         assertEquals("conclave.tip.gifPicker", OneTimeTipPolicy.storeKey(id))
@@ -167,7 +160,7 @@ class FND3ContentComponentsBridgeTests {
             assertEquals(listOf("dialog.end", "menu.more"), NativeSemanticsPopupRoots.names())
             NativeSemanticsPopupRoots.unregister(dialog)
             assertEquals(listOf("menu.more"), NativeSemanticsPopupRoots.names())
-            // A plain view has no Compose semantics owner, so it exports no trees.
+
             assertTrue(NativeSemanticsPopupRoots.trees().isEmpty())
             NativeSemanticsPopupRoots.unregister(menu)
             NativeSemanticsPopupRoots.unregister(menu)

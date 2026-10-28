@@ -7,20 +7,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 
-/*
- * S30 5 d and 6 d (CTL-5, CTL-6): the Android More sheet the bar's More control opens. The FND-2 in-call action sheet
- * (ConclaveActionSheet, F00 C17): dark over the stage in every system appearance, the recovery notice while recovering
- * or offline, the six reaction targets (the sheet stays open across sends; the flat art row stays hidden until the
- * assets ship, CC14), the wide Raise hand tile (pending spinner, "Raising hand…", Engaged when raised; the sheet stays
- * open so the acknowledgment is visible), the tiles in the shared 5 d order (MoreMenuPolicy.tiles), and the host
- * section (Host controls, Lock meeting, then End call for everyone… after a divider). Panels, End and a share start
- * act only after the sheet finished hiding (D17: no panel or dialog from a dismissing sheet; CC15: the MediaProjection
- * consent never stacks on the sheet); the Leave control composes the End dialog for invoker "more" (CTL-2). Reads only
- * `controls.more` and `controls.reactions` through their caches (CL14), composed only while shown. Feedback plays
- * only for dispatched actions (S30 5 h): `reactionSent`, `handRaised` or `handLowered`, `linkCopied` (silent on API
- * 33+). Resolved strings sit in vals before any semantics block (CL14).
- */
-
 @Composable
 internal fun MoreSheet(controls: CallControlsPresenter, onDismissed: () -> Unit) {
     val more = remember(controls) { MoreCache(controls) }.current()
@@ -28,7 +14,7 @@ internal fun MoreSheet(controls: CallControlsPresenter, onDismissed: () -> Unit)
     val stage = controls.stage
     val context = LocalContext.current
     val haptics = rememberConclaveHaptics()
-    // S30 CC16: the open sheet keeps chrome visible.
+
     DisposableEffect(stage) {
         stage.setTransientChrome(id = ChromeAutoHidePolicy.moreSheet, open = true)
         onDispose { stage.setTransientChrome(id = ChromeAutoHidePolicy.moreSheet, open = false) }
@@ -50,7 +36,7 @@ internal fun MoreSheet(controls: CallControlsPresenter, onDismissed: () -> Unit)
     ConclaveActionSheet(
         identifier = "sheet.more",
         onDismiss = {
-            // S30 5 l5: counted before a panel the sheet chose presents.
+
             controls.noteMoreSheetDismissed()
             onDismissed()
         },
@@ -59,14 +45,14 @@ internal fun MoreSheet(controls: CallControlsPresenter, onDismissed: () -> Unit)
             val id = MoreItemID.init(rawValue = tile.id) ?: MoreItemID.reactions
             when (id) {
                 MoreItemID.invite -> {
-                    // After the sheet is gone: the F00 payload, EXTRA_TITLE the room label, no chooser title (CL19, R14).
+
                     if (controls.select(MoreItemID.invite) == ControlTapResult.dispatched) {
                         NativeMeetingShare.shareMeetingLink(link = more.meetingLink, subject = shareSubject, text = shareText,
                             title = more.roomLabel)
                     }
                 }
                 MoreItemID.copyLink -> {
-                    // In place; the sheet stays. The snackbar "Link copied" only where the system shows no confirmation.
+
                     meetingDetailsCopy(context, more.meetingLink, clipLabel)
                     val postsToast = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
                     if (controls.copyLink(postsToast = postsToast) == ControlTapResult.dispatched) {
@@ -74,7 +60,7 @@ internal fun MoreSheet(controls: CallControlsPresenter, onDismissed: () -> Unit)
                     }
                 }
                 MoreItemID.captions -> controls.setCaptions(!tile.engaged)
-                // An unknown id maps to the palette row, which `select` ignores.
+
                 else -> controls.select(id)
             }
         },
@@ -99,7 +85,6 @@ internal fun MoreSheet(controls: CallControlsPresenter, onDismissed: () -> Unit)
     )
 }
 
-/** One tile in the 5 d set: label, icon, Engaged state, the status or reason line, badge and the after-dismiss rule. */
 @Composable
 private fun moreTile(item: MoreItem): ConclaveActionTile {
     val line = moreTileLine(item)
@@ -136,7 +121,6 @@ private fun moreTileLabel(item: MoreItem): String = when (item.kind) {
     else -> ""
 }
 
-/** The full spoken label where the tile shows a short one (S30 5 g, RECONCILE R14). */
 @Composable
 private fun moreTileDescription(item: MoreItem): String? = when (item.kind) {
     MoreItemID.invite -> conclaveString("ds_share_invite")
@@ -144,7 +128,6 @@ private fun moreTileDescription(item: MoreItem): String? = when (item.kind) {
     else -> null
 }
 
-/** S30 5 e concepts (the manifest's Layout and Effects concepts are CL11 requests; both rows are hidden this push). */
 private fun moreTileIcon(item: MoreItem): ImageVector = when (item.kind) {
     MoreItemID.chat -> ConclaveIcons.ChatBubbleFill0
     MoreItemID.screenShare -> if (item.isOn) ConclaveIcons.CancelPresentationFill1 else ConclaveIcons.PresentToAllFill0
@@ -162,8 +145,6 @@ private fun moreTileIcon(item: MoreItem): ImageVector = when (item.kind) {
     else -> ConclaveIcons.MoreVertFill0
 }
 
-/** The tile line: the short reason while blocked (S30 7 Android tile line), else the status (5 f); captions read On or
- *  Off. Null for none. */
 @Composable
 private fun moreTileLine(item: MoreItem): String? {
     if (!item.isEnabled && !item.isPending) {
@@ -185,7 +166,6 @@ private fun moreTileLine(item: MoreItem): String? {
     }
 }
 
-/** S30 7 "Android tile line": short reasons. */
 @Composable
 private fun moreShortReason(reason: ControlBlockedReason, name: String): String? = when (reason) {
     ControlBlockedReason.reconnecting -> conclaveString("ctl_reason_reconnecting_short")
@@ -203,7 +183,6 @@ private fun moreLayoutTitle(raw: String): String = when (raw) {
     else -> conclaveString("ctl_layout_auto")
 }
 
-/** Host controls, Lock meeting (a Switch row, "Locking…" while pending) and End call for everyone… (error, last). */
 @Composable
 private fun moreHostRow(item: MoreItem): ConclaveActionHostRow {
     val reason = if (!item.isEnabled && !item.isPending) callControlReasonText(CallControlKind.more, item.reason, item.reasonName) else null
@@ -228,7 +207,6 @@ private fun moreHostRow(item: MoreItem): ConclaveActionHostRow {
     }
 }
 
-/** S30 5 g and 6 g: "Raise hand", "Lower hand", "Raising hand…", "Lowering hand…". */
 @Composable
 private fun moreHandLabel(item: MoreItem): String = when (MoreMenuPolicy.handState(item)) {
     LocalHandState.raising -> conclaveString("ctl_raising_hand")
@@ -237,7 +215,6 @@ private fun moreHandLabel(item: MoreItem): String = when (MoreMenuPolicy.handSta
     LocalHandState.lowered -> conclaveString("ds_raise_hand")
 }
 
-/** The Switch state description (S30 6 i): "Raised", "Not raised", "Raising", "Lowering". */
 @Composable
 private fun moreHandState(item: MoreItem): String = when (MoreMenuPolicy.handState(item)) {
     LocalHandState.raising -> conclaveString("ctl_state_raising")
@@ -246,7 +223,6 @@ private fun moreHandState(item: MoreItem): String = when (MoreMenuPolicy.handSta
     LocalHandState.lowered -> conclaveString("ds_state_not_raised")
 }
 
-/** "React with thumbs up" (S30 6 g): a word label, never the glyph. */
 @Composable
 internal fun moreReactionLabel(nameKey: String): String {
     val name = when (nameKey) {

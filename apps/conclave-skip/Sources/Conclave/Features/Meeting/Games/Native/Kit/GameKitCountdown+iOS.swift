@@ -2,10 +2,6 @@
 import Accessibility
 import SwiftUI
 
-/// K2 (S60 8 c): the one countdown leaf. It derives everything from the server deadline plus the push's clock offset
-/// (`CountdownModel`), ticks once per second through `TimelineView` only while the scene is active (stopped in the
-/// background, recomputed on resume, 8 k), moves the bar once per second without animation (R13), turns the warning
-/// color at 5 s with the remaining time in text, and announces politely at 10 s and 5 s only.
 struct GameKitCountdown: View {
     let model: CountdownModel
     @Environment(\.scenePhase) private var scenePhase

@@ -15,14 +15,6 @@ import org.robolectric.annotation.Config
 import android.os.Looper
 import java.util.concurrent.TimeUnit
 
-/**
- * SYS-10 (S70 10 d, l2, l3, l6; SY20, SY23) against the transpiled ScreenShareStartPolicy and the handwritten
- * ScreenCaptureManager, ScreenCaptureService and PipManager: the Android failure reasons (cancel silent, a refused
- * foreground service toasts once), the fallback notification's resource names, category and visibility, the PiP
- * suppression held across the consent dialog, and the device audio capability. App-module names resolve to 0 in this
- * library-module run, so a recording resolver stands in; resolved resources are a silent AVD cell. Not run in the
- * heads-down push.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class SYS10ScreenShareBridgeTests {
@@ -58,8 +50,6 @@ class SYS10ScreenShareBridgeTests {
         PipManager.restoreAutoEnterAfterExternalActivity()
     }
 
-    // MARK: S70 10 l2: failures
-
     @Test
     fun consentCancelIsSilentAndARefusedServiceToastsOnce() {
         val cancelled = ScreenShareFailurePolicy.androidFailure(
@@ -79,8 +69,6 @@ class SYS10ScreenShareBridgeTests {
         assertEquals("sys_err_screen_denied", ScreenShareFailurePolicy.androidResourceName(detail = "deniedBySystem"))
     }
 
-    // MARK: S70 10 d, e, g: the fallback notification
-
     @Test
     fun fallbackNotificationAsksForTheSentenceCaseResourcesAndIsAPublicServiceNotification() {
         val context = RuntimeEnvironment.getApplication()
@@ -98,8 +86,6 @@ class SYS10ScreenShareBridgeTests {
         assertEquals(ScreenShareNotificationPolicy.channelId, NotificationCompat.getChannelId(notification))
     }
 
-    // MARK: S70 10 l3, S30 CC15: the consent suppression
-
     @Test
     fun consentRecordsOneSuppressionAndHoldsItPastTheHandOffWindowUntilTheResult() {
         val before = PipController.suppressionCount
@@ -107,17 +93,17 @@ class SYS10ScreenShareBridgeTests {
         assertEquals(before + 1, PipController.suppressionCount)
         assertEquals("media_projection", PipController.lastSuppressionReason)
         assertTrue(PipManager.isHoldingConsentSuppression)
-        // The 2 s hand-off window passes with the dialog still up: the hold stays and the leave hint is consumed.
+
         shadowOf(Looper.getMainLooper()).idleFor(3, TimeUnit.SECONDS)
         assertTrue(PipManager.isHoldingConsentSuppression)
         assertTrue(PipManager.consumeAutoEnterSuppression())
         assertTrue(PipManager.isHoldingConsentSuppression)
-        // The consent result returns: restored, no second suppression recorded.
+
         PipManager.restoreAutoEnterAfterExternalActivity()
         assertFalse(PipManager.isHoldingConsentSuppression)
         assertFalse(PipManager.consumeAutoEnterSuppression())
         assertEquals(before + 1, PipController.suppressionCount)
-        // Other hand-offs keep the 2 s window (no hold).
+
         PipManager.suppressForExternalHandoff(ExternalHandoffKind.meetingShare)
         assertFalse(PipManager.isHoldingConsentSuppression)
     }
@@ -129,8 +115,6 @@ class SYS10ScreenShareBridgeTests {
         shadowOf(Looper.getMainLooper()).idleFor(ScreenSharePipPolicy.consentHoldCapMs.toLong() + 1_000L, TimeUnit.MILLISECONDS)
         assertFalse(PipManager.isHoldingConsentSuppression)
     }
-
-    // MARK: S70 10 l6, SY23: device audio
 
     @Test
     fun deviceAudioCapabilityStaysOffUntilThePublishPathShips() {

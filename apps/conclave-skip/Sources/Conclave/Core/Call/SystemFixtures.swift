@@ -1,8 +1,6 @@
 import Foundation
 import Observation
 
-/// S70 SX1 system fixture states: `CONCLAVE_SYSTEM_FIXTURE=<state>` (iOS launch environment) and the intent extra
-/// `conclave.systemFixture` (Android, Debug only, `FLAG_DEBUGGABLE` checked like `conclave.hostingPreview`).
 enum SystemFixtureState: String, CaseIterable, Equatable {
     case presenceWaiting = "presence-waiting"
     case presenceConnecting = "presence-connecting"
@@ -13,30 +11,25 @@ enum SystemFixtureState: String, CaseIterable, Equatable {
     case presenceOnHold = "presence-on-hold"
     case presenceAttendee = "presence-attendee"
     case presenceEnded = "presence-ended"
-    /// SYS-4 (S70 SX1, 3 l2, 3 l3, 8 l2): a live call with a portrait remote speaker as the PiP target.
+
     case pipSpeaker = "pip-speaker"
-    /// SYS-5 (S70 4 l2): a live call on the receiver with the camera off, so the proximity rule arms.
+
     case receiverCameraOff = "receiver-camera-off"
 }
 
-/// SX1 provider mode on iOS: `fake` drives the scripted cells, `real` uses the real `CXProvider` and
-/// `CXCallController` with no media (the 1 l7 physical cell, the only way the lock-screen pill appears).
 enum SystemFixtureProviderMode: String, CaseIterable, Equatable {
     case fake, real
 }
 
-/// Scripted inputs per fixture state. Pure, so host tests and the transpiled Robolectric suite read the same script.
 enum SystemFixtureScript {
     static let roomLabel = "lily-zoro-iris"
-    /// A fixed start time so the chronometer reads the same in every run (2026-10-27 12:00 UTC).
+
     static let joinedAtMillis: Double = 1793102400000.0
 
     static func state(named raw: String) -> SystemFixtureState? {
         SystemFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    /// The inputs a fixture applies, in order. A state that needs a prior phase (live after connecting) lists both,
-    /// so adapters see the same transitions a real call produces.
     static func inputs(for state: SystemFixtureState) -> [CallPresenceInputs] {
         let connecting = CallPresenceInputs.make(callSession: 1, sessionPhase: .entering, roomLabel: roomLabel)
         switch state {
@@ -78,17 +71,13 @@ enum SystemFixtureScript {
         }
     }
 
-    /// `pip-speaker`: a portrait remote speaker as the PiP target (720 x 1280 decoded, bounds in window px).
     static let pipTarget = PipTargetFrame(slotId: "p:fixture-speaker", left: 0, top: 0, right: 1080, bottom: 1920,
                                           videoWidth: 720, videoHeight: 1280)
 
-    /// States that end with a system hold (the hold command, not an input).
     static func holdsAfterInputs(_ state: SystemFixtureState) -> Bool {
         state == .presenceOnHold
     }
 
-    /// SYS-5: the audio route a fixture reports before its inputs (S70 4 l2). Only `receiver-camera-off` is on the
-    /// receiver; every other state stays on the speaker, so proximity never arms there.
     static func audioRoute(for state: SystemFixtureState) -> AudioRouteKind {
         state == .receiverCameraOff ? .receiver : .speaker
     }
@@ -105,26 +94,19 @@ enum SystemFixtureScript {
     }
 }
 
-/// SX1 Debug readouts. Each key is one element of the fixture overlay with that `accessibilityIdentifier` or
-/// `testTag` and an ASCII machine-readable value.
 enum SystemFixtureReadout {
     static let presenceKey = "sys.presence"
     static let commandsKey = "sys.commands"
 
-    /// `phase/surface/status/presenceSession`.
     static func presence(_ snapshot: CallPresenceSnapshot) -> String {
         "\(snapshot.phase.rawValue)/\(snapshot.surface.rawValue)/\(snapshot.surfaceStatus.rawValue)/\(snapshot.presenceSession)"
     }
 
-    /// The last five `kind:source:result`, newest last, comma separated ("none" when empty).
     static func commands(_ log: [String]) -> String {
         log.isEmpty ? "none" : log.joined(separator: ",")
     }
 }
 
-/// A standalone `CallPresence` with scripted phases and commands for the system fixture. It drives the real
-/// adapters and never WebRTC, audio, capture or the network: commands are recorded, never dispatched to a call.
-/// The root hook that starts it is the Debug seam in `ConclaveApp.swift` and `Main.kt` (HD request B1-T2).
 @MainActor
 @Observable
 final class SystemFixtureSession {
@@ -140,7 +122,6 @@ final class SystemFixtureSession {
         self.providerMode = providerMode
     }
 
-    /// Applies the script. Call after the platform adapters are installed on `presence`.
     func start() {
         presence.onCommand = { [weak self] command in
             self?.dispatchedCommands.append(command)
@@ -158,7 +139,6 @@ final class SystemFixtureSession {
         refreshReadouts()
     }
 
-    /// A scripted system command (fixture buttons), keyed on the current presence session.
     @discardableResult
     func send(_ kind: SystemCallCommandKind, source: SystemCallSource) -> SystemCommandResult {
         let result = presence.handle(kind, source: source, presenceSession: presence.snapshot.presenceSession)
@@ -166,7 +146,6 @@ final class SystemFixtureSession {
         return result
     }
 
-    /// SYS-5 (S70 4 l2): the fixture's route buttons; switching to the speaker releases proximity.
     func setAudioRoute(_ kind: AudioRouteKind) {
         presence.reportAudioRoute(kind)
         refreshReadouts()

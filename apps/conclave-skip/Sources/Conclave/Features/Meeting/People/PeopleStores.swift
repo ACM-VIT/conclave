@@ -1,13 +1,6 @@
 import Foundation
 import Observation
 
-// S50 0.5 per-row stores (the S20 SL4 pattern): SkipModel backs each stored property of an @Observable class with one
-// MutableState, so rows live in one small observable entry per store key. The container observes only the snapshot
-// structure, each row its own entry: a mute re-evaluates one row on iOS and recomposes one item on Android (S50 1 k).
-// The stores are plain reference types held `@ObservationIgnored` by the presenter; entries are created on demand
-// (a view may ask before the first apply lands) and pruned with the roster.
-
-/// `PersonRowEntry` per store key (bare canonical id, or "attendee:<id>" from PPL-5).
 @MainActor
 final class PersonRowStore {
     private var entries: [String: PersonRowEntry] = [:]
@@ -19,7 +12,6 @@ final class PersonRowStore {
         return created
     }
 
-    /// Equality-guarded write; returns true when the row's model changed.
     @discardableResult
     func write(_ model: PersonRowModel) -> Bool {
         if let existing = entries[model.id] {
@@ -31,7 +23,6 @@ final class PersonRowStore {
         return true
     }
 
-    /// Drops entries whose key is no longer shown.
     func prune(keeping keys: [String]) {
         var stale: [String] = []
         for key in entries.keys {
@@ -51,7 +42,6 @@ final class PersonRowStore {
     var count: Int { entries.count }
 }
 
-/// `WaitingRowEntry` per store key ("waiting:<pending id>").
 @MainActor
 final class WaitingRowStore {
     private var entries: [String: WaitingRowEntry] = [:]
@@ -93,8 +83,6 @@ final class WaitingRowStore {
     var count: Int { entries.count }
 }
 
-/// `people.recompose.<rowId>` (S50 PL12): row body evaluations (iOS) or compositions (Android SideEffect) per store
-/// key. Diagnostics only: production passes none, the Debug fixture installs one. Never observed.
 @MainActor
 final class PeopleRecomposeLedger {
     private var counts: [String: Int] = [:]
@@ -107,7 +95,6 @@ final class PeopleRecomposeLedger {
         counts[key] ?? 0
     }
 
-    /// Keys sorted, for example `recompose u-avery=2 u-sam=1`, or `recompose none`.
     func summary() -> String {
         var keys: [String] = []
         for key in counts.keys {

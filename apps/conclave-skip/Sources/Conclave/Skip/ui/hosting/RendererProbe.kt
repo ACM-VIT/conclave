@@ -15,23 +15,8 @@ import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.viewinterop.AndroidView
 
-/**
- * The renderer ledger reaches probes through a static local provided at the native root (PS 8.3), never as a
- * tile parameter: the transpiled ledger is not a stable type, so passing it would recompose tiles whenever
- * their parent recomposes. Without a provider a probe draws nothing and counts nothing.
- */
 internal val LocalRendererLedger = staticCompositionLocalOf<RendererIdentityLedger?> { null }
 
-/**
- * Tier A renderer-host probe (PS 8.9, 10.1): an opaque hardware-layer TextureView like the production renderer
- * (`VideoRenderer.kt`), with no track, capture or audio. The AndroidView factory and release report creation and
- * release; surface destruction and re-creation count as loss and restore, which never change identity.
- *
- * STG-1 (S20 SL14): an optional test pattern drawn on the probe's own surface. `staticPattern` draws flat token-colored
- * bars once when the surface becomes available and then no frames (the idle gfxinfo cell); `livePattern` redraws a
- * moving marker at 15 frames per second while the surface exists (renderer-driven frames, like decoded video). The
- * pattern is fixed when the view is created.
- */
 @Composable
 internal fun RendererProbe(key: String, slot: RendererSlot, modifier: Modifier = Modifier, pattern: RendererProbePattern = RendererProbePattern.none) {
     val ledger = LocalRendererLedger.current ?: return
@@ -107,7 +92,7 @@ internal class ProbeTextureView(
     }
 
     override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-        // A static pattern redraws once for the new size (a resize, never a periodic frame).
+
         if (pattern == RendererProbePattern.staticPattern) drawPattern()
     }
 
@@ -124,7 +109,6 @@ internal class ProbeTextureView(
         mainHandler.removeCallbacks(liveStep)
     }
 
-    /** Flat bars from the avatar palette (solid token colors) plus the live marker in the in-call paper. */
     private fun drawPattern() {
         if (!isAvailable || width <= 0 || height <= 0) return
         val canvas = lockCanvas() ?: return

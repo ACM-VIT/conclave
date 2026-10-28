@@ -34,13 +34,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 L6-5 (ACT-2) on Android: K3 ChoiceList, K4 BinaryChoice and K5 SplitResult. Rows are selectable Surfaces with the
- * radio role inside a selectableGroup (one click handler each); selection, correctness and your own pick carry a glyph
- * and a word, never color alone: selection is a 2 dp primaryContainer border, correct ext.success, a wrong pick error.
- */
-
-/** K3: full-width options (min 56 dp). The acted row shows a spinner while its move is pending; siblings disable. */
 @Composable
 internal fun GameKitChoiceList(choices: Iterable<GameKitChoice>, pendingId: String, enabled: Boolean, onSelect: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -106,7 +99,6 @@ internal fun GameKitChoiceRow(choice: GameKitChoice, isPending: Boolean, enabled
     }
 }
 
-/** K4: two large options separated by "or". */
 @Composable
 internal fun GameKitBinaryChoice(first: GameKitChoice, second: GameKitChoice, pendingId: String, enabled: Boolean, onSelect: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -118,7 +110,6 @@ internal fun GameKitBinaryChoice(first: GameKitChoice, second: GameKitChoice, pe
     }
 }
 
-/** K5: a flat split bar (onSurface at 100% and 32% on outlineVariant, no blend) with counts and names per side. */
 @Composable
 internal fun GameKitSplitResult(split: GameKitSplit) {
     val scheme = MaterialTheme.colorScheme

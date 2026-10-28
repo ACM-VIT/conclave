@@ -1,13 +1,5 @@
 package conclave.module
 
-/*
- * S60 0.6 L6-14 (TRN-2) on Android: the one exhaustive copy mapping for the Transcript panel. Every typed phase, reason
- * and kind the transpiled TranscriptPresenter publishes resolves here to an app-module string resource name (Material
- * sentence case, prefix trn_; the End dialog recap variant keeps the S30 ctl_ names), which composition resolves
- * through conclaveString. T/Skip/TRN2TranscriptBridgeTests.kt enumerates every case. Provider and model names
- * (OpenAI, Sarvam, GPT-5.6 Terra) are product names and stay verbatim. The iOS twin is
- * S/Features/Meeting/Transcript/TranscriptCopy+iOS.swift.
- */
 internal object TranscriptCopy {
     fun tab(tab: TranscriptTab): String = when (tab) {
         TranscriptTab.transcript -> "trn_tab_transcript"
@@ -39,7 +31,6 @@ internal object TranscriptCopy {
         KeyCoverage.needsKeys -> "trn_coverage_keys"
     }
 
-    /** The status bar's state text; null when the bar shows no state. */
     fun status(status: TranscriptStatusKind): String? = when (status) {
         TranscriptStatusKind.none -> null
         TranscriptStatusKind.starting -> "trn_starting"
@@ -50,7 +41,6 @@ internal object TranscriptCopy {
         TranscriptStatusKind.ended -> "trn_status_ended"
     }
 
-    /** "Hosted by %1$s" takes the controller's name; null when there is no host line. */
     fun host(host: TranscriptHostKind): String? = when (host) {
         TranscriptHostKind.none -> null
         TranscriptHostKind.you -> "trn_hosted_you"
@@ -58,7 +48,6 @@ internal object TranscriptCopy {
         TranscriptHostKind.following -> "trn_following"
     }
 
-    /** The issue banner; null for none and for the server case (shown verbatim). */
     fun issue(issue: TranscriptIssue): String? = when (issue) {
         TranscriptIssue.none -> null
         TranscriptIssue.noPermission -> "trn_issue_permission"
@@ -67,7 +56,6 @@ internal object TranscriptCopy {
         TranscriptIssue.server -> null
     }
 
-    /** A settled Ask row's line (the worker text wins for an error when it has some); null for live states. */
     fun askState(state: AskRowState): String? = when (state) {
         AskRowState.thinking -> "trn_thinking"
         AskRowState.streaming -> null
@@ -98,14 +86,12 @@ internal object TranscriptCopy {
         MinutesEmptyKind.cooking -> "trn_minutes_cooking_body"
     }
 
-    /** "Updated %1$s" takes the relative time. */
     fun minutesStatus(kind: MinutesStatusKind): String = when (kind) {
         MinutesStatusKind.automatic -> "trn_minutes_auto"
         MinutesStatusKind.updating -> "trn_minutes_updating"
         MinutesStatusKind.updated -> "trn_minutes_updated"
     }
 
-    /** The Minutes recap item value; failure is the snackbar (D23); null when idle. */
     fun recapValue(phase: RecapPhase): String? = when (phase) {
         RecapPhase.idle -> null
         RecapPhase.posting -> "trn_recap_posting"
@@ -113,7 +99,6 @@ internal object TranscriptCopy {
         RecapPhase.failed -> "trn_recap_failed"
     }
 
-    /** Polite announcements; copy and the recap results show as snackbars instead (null), D23. */
     fun announcement(kind: TranscriptAnnouncementKind): String? = when (kind) {
         TranscriptAnnouncementKind.started -> "trn_announce_started"
         TranscriptAnnouncementKind.paused -> "trn_announce_paused"
@@ -125,7 +110,6 @@ internal object TranscriptCopy {
         TranscriptAnnouncementKind.answerReady -> "trn_answer_ready"
     }
 
-    /** Every resource name this file can return (the contract test resolves each one). */
     val allNames: List<String> = listOf(
         "trn_title", "trn_tab_transcript", "trn_tab_ask", "trn_tab_minutes", "trn_more_actions", "trn_export", "trn_copy",
         "trn_post_recap", "trn_stop_menu", "trn_kicker", "trn_beta", "trn_turn_on", "trn_pick_up", "trn_blurb_turn_on",

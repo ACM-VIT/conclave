@@ -1,14 +1,8 @@
 package conclave.module
 
-/*
- * ENT-3 (S10 0.6 L12, 6 k): plain Kotlin values for the lobby composables, built once per snapshot change and reused
- * while the snapshot is equal (S1C 3.5), so the card and the bottom bar take Kotlin data classes, never the transpiled
- * Swift structs. No Compose stability annotations (R14): equality and instance reuse do the work.
- */
-
 internal data class LobbyCardUi(
     val routeId: Int,
-    /** ENT-4 (S10 7 f): the drawn toggle state (PermissionPrimingPolicy.displaysOn), Off while a tap cannot grant it. */
+
     val micOn: Boolean,
     val cameraOn: Boolean,
     val micPermission: MediaPermissionState,
@@ -21,7 +15,7 @@ internal data class LobbyCardUi(
     val effectsActive: Boolean,
     val avatarName: String,
     val avatarSeed: String,
-    // ENT-4 (S10 7 d, i): each device's ask-again, the camera overlay's priming and the toggles' state reasons.
+
     val canAskAgainMicrophone: Boolean,
     val canAskAgainCamera: Boolean,
     val cameraPriming: PermissionPrimingKind,
@@ -32,7 +26,7 @@ internal data class LobbyCardUi(
         get() = preview == PreviewState.live || preview == PreviewState.interrupted || preview == PreviewState.published
     val isCameraBlocked: Boolean
         get() = cameraPermission == MediaPermissionState.denied || cameraPermission == MediaPermissionState.restricted
-    /** The card overlay: the shared snapshot policy publishes `blocked` exactly while the camera priming is in the card. */
+
     val showsCameraOverlay: Boolean
         get() = preview == PreviewState.blocked
 }
@@ -47,7 +41,7 @@ internal data class LobbyStatusUi(
     val isPrimaryPending: Boolean,
     val reason: LobbyPrimaryReason,
     val isReconnecting: Boolean,
-    // ENT-5 (S10 8 c, 9 f): the slow footnote, the waiting body's kind and its clean server sentence.
+
     val showsSlowNotice: Boolean,
     val waitingKind: WaitingKind,
     val waitingText: String,
@@ -62,7 +56,6 @@ internal class LobbyUiCache {
     private var lastStatus: LobbyStatusSnapshot? = null
     private var lastStatusUi: LobbyStatusUi? = null
 
-    /** Builds count (Robolectric: an equal snapshot reuses the instance). */
     var builds: Int = 0
         private set
 
@@ -97,7 +90,7 @@ internal class LobbyUiCache {
         )
         builds += 1
         lastMedia = media
-        // Keep the old instance when only fields outside the card changed.
+
         val result = if (cached != null && cached == next) cached else next
         lastCard = result
         return result

@@ -34,17 +34,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
-/*
- * S60 2 d (SET-2) on Android. Audio output: the S30 CL8 AudioRouteList over the route owner's snapshot (read
- * directly, R23), RadioButton rows in one selectable group; a choice requests the route once, plays selectionChanged
- * once on dispatch and posts one polite announcement (R11), because the S20 route toast is suppressed while this
- * overlay covers the stage (D23). Microphone: the level meter (12 flat segments at 10 Hz, read only by its leaf),
- * "Unmute to test your microphone" while muted (C6-6: Android mutes the audio device module), and Record and replay
- * with Test gain only while canRecordMicTest (false until the SamplesReadyCallback capture lands, Q8). No input picker
- * and no Mic mode (the communication device carries the microphone). The test lives exactly as long as the page's
- * composition (DisposableEffect), never longer.
- */
-
 @Composable
 internal fun SettingsOutputPage(settings: SettingsPresenter, reservation: PaddingValues) {
     val owner = settings.routeOwner
@@ -113,7 +102,6 @@ internal fun SettingsMicrophonePage(settings: SettingsPresenter, reservation: Pa
     }
 }
 
-/** The only reader of MicLevelMeter.segments: "Speak to test" with the meter; stateDescription, no live region (2 i). */
 @Composable
 private fun SettingsMicLevelItem(meter: MicLevelMeter) {
     val segments = meter.segments
@@ -130,7 +118,6 @@ private fun SettingsMicLevelItem(meter: MicLevelMeter) {
     )
 }
 
-/** L6-2: 12 flat segments, onSurface filled and outlineVariant empty (never coral or green: level is not a status). */
 @Composable
 internal fun SettingsLevelMeter(segments: Int, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
@@ -144,7 +131,6 @@ internal fun SettingsLevelMeter(segments: Int, modifier: Modifier = Modifier) {
     }
 }
 
-/** Record and replay (C6-6): "Recording" during the 5 s capture, "Stop playback" while it replays. */
 @Composable
 private fun SettingsRecordReplayItem(settings: SettingsPresenter, audio: SettingsAudio) {
     val busy = audio.micPhase == MicTestPhase.recording || audio.micPhase == MicTestPhase.replaying
@@ -162,7 +148,6 @@ private fun SettingsRecordReplayItem(settings: SettingsPresenter, audio: Setting
     )
 }
 
-/** Test gain 0 to 2 for this test only, stateDescription "%1$s times". */
 @Composable
 private fun SettingsTestGainItem(settings: SettingsPresenter, audio: SettingsAudio) {
     val state = conclaveString("set_test_gain_state", String.format(Locale.getDefault(), "%.1f", audio.testGain))

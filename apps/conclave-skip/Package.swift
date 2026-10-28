@@ -1,5 +1,5 @@
 // swift-tools-version: 5.9
-// This is a Skip (https://skip.tools) package.
+
 import PackageDescription
 
 let package = Package(

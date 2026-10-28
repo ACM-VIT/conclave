@@ -1,29 +1,13 @@
 import Foundation
 
-// S60 0.8 C6-18 and 13 (ACT-7): the non-observable owner of the active SDK app's Yjs and awareness relay. It replaces
-// the observable `MeetingState.latestAppYjsUpdate` and siblings, so a cursor flood never touches observable state (zero
-// stage publishes), and it takes over the view model's `syncActiveApp(stateVector:)`, `sendActiveAppYjsUpdate(_:)` and
-// `sendActiveAppAwareness(_:clientId:)`. Shared code cannot hold UIKit or android.webkit types, so this session exposes
-// only its `appSessionId` and lifecycle; the platform `ActivityWebViewRegistry` (L6-15) holds the one web view per app
-// session, attaches the bridge here when it creates it and reports load failures and renderer crashes.
-//
-// Flow: the embed sends `ready` with its document's state vector; the session answers with an authoritative `snapshot`
-// (a sync round trip, or the snapshot primed when the app opened if nothing was missed since), then forwards remote
-// updates and awareness as they arrive. Until the snapshot is delivered, remote bytes are buffered (bounded). After a
-// reconnect the session asks the embed to `resync`: the embed sends its state vector, receives the server's snapshot and
-// then sends only what the server lacks, so no update reaches the room twice (S60 13 f). Outbound updates are dropped
-// while the connection is down or the person is read-only; the post-snapshot diff carries anything drawn meanwhile.
-
 enum ActiveAppLifecycle: String, CaseIterable, Equatable {
     case idle, opening, ready, reconnecting, failed, ended
 }
 
-/// `loadStarted`: the platform registry created or recreated the web view (the presenter starts the ready timeout).
 enum ActiveAppEventKind: String, CaseIterable, Equatable {
     case lifecycle, loadStarted, ready, failed, status, ack
 }
 
-/// One session event for the app host presenter. Fields the kind does not use keep their empty values.
 struct ActiveAppEvent: Equatable {
     let kind: ActiveAppEventKind
     let appSessionId: String
@@ -44,7 +28,6 @@ struct ActiveAppEvent: Equatable {
     }
 }
 
-/// A remote Yjs update or awareness update waiting for the embed's snapshot.
 struct ActiveAppRelayItem: Equatable {
     let isAwareness: Bool
     let data: Data
@@ -61,13 +44,12 @@ struct ActiveAppSessionError: LocalizedError, Equatable {
 
 @MainActor
 final class ActiveAppSession {
-    /// The active SDK app id ("" when none), its app session (a fresh id per opened app, so a replaced app's bridge is
-    /// invalid at once) and the call session the core scopes it to.
+
     private(set) var appId = ""
     private(set) var appSessionId = ""
     private(set) var callSessionId = ""
     private(set) var lifecycle = ActiveAppLifecycle.idle
-    /// Coarse read-only state (locked for a participant): the embed is told, and outbound document updates are dropped.
+
     private(set) var isReadOnly = false
     private(set) var isConnectionLive = true
 
@@ -75,28 +57,22 @@ final class ActiveAppSession {
         return lifecycle == ActiveAppLifecycle.ready
     }
 
-    /// The origin of the bundle the platform host serves (`AppBridgeProtocol.iosOrigin` or `androidOrigin`), set once by
-    /// the platform registry. Every inbound message must come from it.
     var bundleOrigin = ""
 
-    /// Core only: the socket calls (SocketIOManager `syncApp`, `sendAppYjsUpdate`, `sendAppAwareness`) and the call gate
-    /// (joined and not an attendee). Injected so the session never sees the view model or the socket type.
     var syncTransport: ((String, Data) async throws -> AppsSyncResponse)? = nil
     var updateTransport: ((String, Data) -> Void)? = nil
     var awarenessTransport: ((String, Data, Int?) -> Void)? = nil
     var isRelayAllowed: () -> Bool = { return true }
-    /// The app host presenter's hook (`AppHostPresenter.bind(session:)` installs it).
+
     var onEvent: ((ActiveAppEvent) -> Void)? = nil
-    /// Core only: once per app session, when room data first arrives (the legacy placeholder's "Synced with room").
+
     var onRoomData: (() -> Void)? = nil
-    /// Platform only: the registry releases the web view of an ended app session (L6-15: released when the shared
-    /// session publishes ended, even while the card is off the stage).
+
     var onBridgeEnded: ((String) -> Void)? = nil
     var sleep: (Double) async -> Void = { millis in
         try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
     }
 
-    /// Diagnostics for tests and the Debug readouts; never observed. Rejections keep the reason only, never content.
     private(set) var pendingRemote: [ActiveAppRelayItem] = []
     private(set) var pendingRemoteOverflowed = false
     private(set) var snapshotDelivered = false
@@ -110,6 +86,8 @@ final class ActiveAppSession {
 
     private var deliver: ((String) -> Void)? = nil
     private var bridgeSessionId = ""
+    private(set) var bridgeGeneration = 0
+    private var embedBundleVersion = ""
     private var pendingRemoteBytes = 0
     private var heldSnapshot: AppsSyncResponse? = nil
     private var hasRoomData = false
@@ -130,10 +108,6 @@ final class ActiveAppSession {
 
     init() {}
 
-    // MARK: Core identity
-
-    /// Core only: the room's active app (S60 13 a). The same app in the same call keeps its session; another app or call
-    /// ends the old session (its bridge gets `close` and stops answering) and starts a new one.
     func begin(appId rawAppId: String, callSessionId: String, isReadOnly: Bool) {
         let trimmed = rawAppId.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -153,7 +127,6 @@ final class ActiveAppSession {
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.lifecycle, appSessionId: appSessionId, lifecycle: lifecycle))
     }
 
-    /// Core only: the app closed or was replaced, or the call ended.
     func end() {
         if appSessionId.isEmpty { return }
         send(AppBridgeOutboundType.close, requestId: nextRequestId(), payload: [:])
@@ -175,7 +148,6 @@ final class ActiveAppSession {
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.lifecycle, appSessionId: ended, lifecycle: lifecycle))
     }
 
-    /// With the S1 reset: nothing survives into the next call.
     func reset() {
         end()
         callSessionId = ""
@@ -203,22 +175,18 @@ final class ActiveAppSession {
         sendHostStatus()
     }
 
-    /// Reduce Motion goes to the renderer (S60 13 c: the wheel jumps to the result) through the host status.
     func setReduceMotion(_ value: Bool) {
         if reduceMotion == value { return }
         reduceMotion = value
         sendHostStatus()
     }
 
-    /// iOS `UIPencilInteraction.prefersPencilOnlyDrawing`: fingers pan while Pencil draws (S60 13 c).
     func setPencilOnly(_ value: Bool) {
         if pencilOnly == value { return }
         pencilOnly = value
         sendHostStatus()
     }
 
-    /// Core only: the socket is joined (true) or recovering (false). Going down cancels any sync in flight and buffers
-    /// remote bytes; coming back asks the embed to resync (snapshot first, then later updates).
     func setConnection(live: Bool) {
         if isConnectionLive == live { return }
         isConnectionLive = live
@@ -243,10 +211,6 @@ final class ActiveAppSession {
         }
     }
 
-    // MARK: Moved from the view model (C6-18)
-
-    /// One sync round trip for the active app (formerly `MeetingViewModel.syncActiveApp(stateVector:)`). Throws when no
-    /// app is active, the call gate is closed, or the app session or connection changed during the await.
     func syncActiveApp(stateVector: Data) async throws -> AppsSyncResponse {
         let currentAppId = appId
         let expectedSession = appSessionId
@@ -263,8 +227,6 @@ final class ActiveAppSession {
         return response
     }
 
-    /// A local document update for the room (formerly `MeetingViewModel.sendActiveAppYjsUpdate(_:)`): dropped while
-    /// read-only (locked for a participant), offline, outside a joined call, empty or over the SFU's 256 KiB bound.
     func sendActiveAppYjsUpdate(_ update: Data) {
         guard !appId.isEmpty, !update.isEmpty, update.count <= AppBridgeProtocol.updateByteLimit, !isReadOnly,
               isConnectionLive, isRelayAllowed(), let transport = updateTransport else {
@@ -275,8 +237,6 @@ final class ActiveAppSession {
         transport(appId, update)
     }
 
-    /// A local awareness update (formerly `MeetingViewModel.sendActiveAppAwareness(_:clientId:)`). Presence is allowed
-    /// while editing is locked, as on web.
     func sendActiveAppAwareness(_ awarenessUpdate: Data, clientId: Int? = nil) {
         guard !appId.isEmpty, !awarenessUpdate.isEmpty, awarenessUpdate.count <= AppBridgeProtocol.awarenessByteLimit,
               isConnectionLive, isRelayAllowed(), let transport = awarenessTransport else {
@@ -286,9 +246,6 @@ final class ActiveAppSession {
         transport(appId, awarenessUpdate, clientId)
     }
 
-    /// Core only: the view model's former `syncActiveAppSnapshot(appId:)`, run when the app opens. The result is held as
-    /// the embed's first snapshot (nothing missed since: remote bytes are buffered) and marks room data for the legacy
-    /// placeholder.
     func primeSnapshot() {
         if appId.isEmpty || !isRelayAllowed() || syncTransport == nil { return }
         primeTask?.cancel()
@@ -305,8 +262,6 @@ final class ActiveAppSession {
         }
     }
 
-    /// The primed sync's answer (a test seam): marks room data and holds the snapshot for the embed's first `ready`
-    /// unless the embed already synced or remote bytes overflowed meanwhile.
     func acceptPrimedSnapshot(_ response: AppsSyncResponse, appSessionId expectedSession: String) {
         if appSessionId != expectedSession || expectedSession.isEmpty { return }
         primeTask = nil
@@ -318,12 +273,9 @@ final class ActiveAppSession {
         }
     }
 
-    /// Whether a primed snapshot is waiting for the embed (tests).
     var hasHeldSnapshot: Bool {
         return heldSnapshot != nil
     }
-
-    // MARK: Remote (socket) to embed
 
     func receiveRemoteUpdate(appId remoteAppId: String, data: Data) {
         guard matchesActive(remoteAppId), !data.isEmpty else { return }
@@ -337,15 +289,14 @@ final class ActiveAppSession {
         relay(ActiveAppRelayItem(isAwareness: true, data: data, clientId: clientId ?? -1))
     }
 
-    // MARK: Platform bridge
-
-    /// Platform only: the registry created (or recreated) the web view for `appSessionId` and installs its delivery
-    /// (iOS `callAsyncJavaScript`, Android `JavaScriptReplyProxy.postMessage`). Returns false for a stale id.
     @discardableResult
     func attachBridge(appSessionId id: String, deliver: @escaping (String) -> Void) -> Bool {
         if id.isEmpty || id != appSessionId { return false }
         self.deliver = deliver
         bridgeSessionId = id
+        bridgeGeneration += 1
+        seenRequestIds = []
+        embedBundleVersion = ""
         embedReady = false
         snapshotDelivered = false
         syncTask?.cancel()
@@ -355,9 +306,10 @@ final class ActiveAppSession {
         return true
     }
 
-    /// Platform only: the registry released the web view (session ended or a reload replaces it).
-    func detachBridge(appSessionId id: String) {
+    func detachBridge(appSessionId id: String, mount: Int = 0) {
         if id.isEmpty || id != bridgeSessionId { return }
+        if mount != 0 && mount != bridgeGeneration { return }
+        bridgeGeneration += 1
         deliver = nil
         bridgeSessionId = ""
         embedReady = false
@@ -366,9 +318,9 @@ final class ActiveAppSession {
         syncTask = nil
     }
 
-    /// Platform only: the page failed to load, the renderer process died, or the web engine lacks the message listener.
-    func embedFailed(appSessionId id: String, issue: AppHostIssue) {
+    func embedFailed(appSessionId id: String, issue: AppHostIssue, mount: Int = 0) {
         if id.isEmpty || id != appSessionId { return }
+        if mount != 0 && mount != bridgeGeneration { return }
         embedReady = false
         snapshotDelivered = false
         syncTask?.cancel()
@@ -377,10 +329,9 @@ final class ActiveAppSession {
         emit(ActiveAppEvent.make(kind: ActiveAppEventKind.failed, appSessionId: id, lifecycle: lifecycle, issue: issue))
     }
 
-    /// Platform only: one raw message from the embed with the sender's origin and frame. Validated before dispatch;
-    /// a hostile message (wrong origin, oversized, unknown type, stale app session, replayed id) is dropped and counted.
     @discardableResult
-    func receiveFromEmbed(raw: String, origin: String, isMainFrame: Bool) -> AppBridgeRejection {
+    func receiveFromEmbed(raw: String, origin: String, isMainFrame: Bool, mount: Int = 0) -> AppBridgeRejection {
+        if mount != 0 && mount != bridgeGeneration { return reject(AppBridgeRejection.notAttached) }
         if appSessionId.isEmpty || deliver == nil { return reject(AppBridgeRejection.notAttached) }
         let expectation = AppBridgeExpectation(origin: bundleOrigin, callSessionId: callSessionId, appSessionId: appSessionId)
         let result = AppBridgeCodec.decode(raw: raw, origin: origin, isMainFrame: isMainFrame, expectation: expectation)
@@ -394,14 +345,11 @@ final class ActiveAppSession {
         return route(message)
     }
 
-    /// Presenter only: one host command (S60 13 j). False when the embed is not ready.
     @discardableResult
     func sendCommand(_ type: AppBridgeOutboundType, requestId: String, payload: [String: Any]) -> Bool {
         if !embedReady { return false }
         return send(type, requestId: requestId, payload: payload)
     }
-
-    // MARK: Routing
 
     private func route(_ message: AppBridgeInbound) -> AppBridgeRejection {
         let type = AppBridgeInboundType(rawValue: message.type) ?? AppBridgeInboundType.resize
@@ -441,9 +389,8 @@ final class ActiveAppSession {
         }
         embedReady = true
         snapshotDelivered = false
-        lifecycle = isConnectionLive ? ActiveAppLifecycle.ready : ActiveAppLifecycle.reconnecting
-        emit(ActiveAppEvent.make(kind: ActiveAppEventKind.ready, appSessionId: appSessionId, lifecycle: lifecycle,
-                                 bundleVersion: message.bundleVersion))
+        embedBundleVersion = message.bundleVersion
+        lifecycle = isConnectionLive ? ActiveAppLifecycle.opening : ActiveAppLifecycle.reconnecting
         sendHostStatus()
         if !isConnectionLive || !isRelayAllowed() { return AppBridgeRejection.none }
         if let held = heldSnapshot, !pendingRemoteOverflowed {
@@ -461,24 +408,32 @@ final class ActiveAppSession {
         snapshotDelivered = false
         let expectedSession = appSessionId
         let expectedEpoch = connectionEpoch
+        let expectedMount = bridgeGeneration
         syncTask = Task { @MainActor [weak self] in
             guard let self else { return }
             var attempt = 0
             while attempt < 2 {
+                if Task.isCancelled || self.appSessionId != expectedSession || self.connectionEpoch != expectedEpoch
+                    || self.bridgeGeneration != expectedMount { return }
                 attempt += 1
                 do {
                     let response = try await self.syncActiveApp(stateVector: stateVector)
-                    if Task.isCancelled || self.appSessionId != expectedSession || self.connectionEpoch != expectedEpoch { return }
+                    if Task.isCancelled || self.appSessionId != expectedSession || self.connectionEpoch != expectedEpoch
+                        || self.bridgeGeneration != expectedMount { return }
                     self.syncTask = nil
                     self.deliverSnapshot(response, requestId: requestId)
                     return
                 } catch {
-                    if Task.isCancelled || self.appSessionId != expectedSession || self.connectionEpoch != expectedEpoch { return }
+                    if Task.isCancelled || self.appSessionId != expectedSession || self.connectionEpoch != expectedEpoch
+                        || self.bridgeGeneration != expectedMount { return }
                     if attempt < 2 { await self.sleep(ActiveAppSession.syncRetryMillis) }
                 }
             }
-            // The embed keeps its document; the next reconnect resyncs it.
-            if self.appSessionId == expectedSession { self.syncTask = nil }
+
+            if self.appSessionId == expectedSession && self.bridgeGeneration == expectedMount {
+                self.syncTask = nil
+                self.embedFailed(appSessionId: expectedSession, issue: AppHostIssue.loadFailed, mount: expectedMount)
+            }
         }
     }
 
@@ -494,14 +449,15 @@ final class ActiveAppSession {
         snapshotDelivered = true
         if !response.syncMessage.isEmpty { markRoomData() }
         let buffered = pendingRemote
-        // Only the buffer goes: the delivered-snapshot latch stays set so later room bytes flow straight through.
+
         clearBuffer()
         for item in buffered {
             deliverItem(item)
         }
-        if lifecycle == ActiveAppLifecycle.reconnecting && isConnectionLive {
+        if isConnectionLive {
             lifecycle = ActiveAppLifecycle.ready
-            emit(ActiveAppEvent.make(kind: ActiveAppEventKind.lifecycle, appSessionId: appSessionId, lifecycle: lifecycle))
+            emit(ActiveAppEvent.make(kind: ActiveAppEventKind.ready, appSessionId: appSessionId, lifecycle: lifecycle,
+                                    bundleVersion: embedBundleVersion))
         }
     }
 
@@ -513,8 +469,7 @@ final class ActiveAppSession {
         if pendingRemoteOverflowed { return }
         if pendingRemote.count >= ActiveAppSession.pendingItemLimit
             || pendingRemoteBytes + item.data.count > ActiveAppSession.pendingByteLimit {
-            // Too much to replay: drop the buffer and any held snapshot; the embed's own sync at ready covers the
-            // document (awareness is transient and the next cursor move refreshes it).
+
             pendingRemote = []
             pendingRemoteBytes = 0
             pendingRemoteOverflowed = true
@@ -560,8 +515,6 @@ final class ActiveAppSession {
         return true
     }
 
-    // MARK: Helpers
-
     private func matchesActive(_ remoteAppId: String) -> Bool {
         let trimmed = remoteAppId.trimmingCharacters(in: .whitespacesAndNewlines)
         return !trimmed.isEmpty && trimmed == appId
@@ -578,7 +531,6 @@ final class ActiveAppSession {
         snapshotDelivered = false
     }
 
-    /// Drops the buffered remote bytes, the overflow mark and any held snapshot; leaves `snapshotDelivered` alone.
     private func clearBuffer() {
         pendingRemote = []
         pendingRemoteBytes = 0
@@ -602,7 +554,6 @@ final class ActiveAppSession {
         if let onEvent = onEvent { onEvent(event) }
     }
 
-    /// The major version of a bundle version string ("1.2.3" -> 1); -1 when it does not start with digits.
     static func bundleMajor(_ version: String) -> Int {
         var digits = ""
         for character in version {

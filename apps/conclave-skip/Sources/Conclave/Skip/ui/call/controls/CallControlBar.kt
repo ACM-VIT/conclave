@@ -47,26 +47,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
-/*
- * S30 1 d (CTL-1): the Android control toolbar the stage chrome mounts in its toolbar slot (StageChrome.kt). One
- * toolbar container (WP1-2b ConclaveCallControlBar: #18181B, 1 dp border, 8 dp padding and gaps, the divider, then
- * Leave), compact five below 600 dp wide or 480 dp tall, the wide eight from medium width (Q13, RECONCILE R7; max
- * 560 dp), the attendee three. Toggle widths and the overflow move come from the shared fit (ControlBarPolicy over
- * CompactBarFit): 321 dp at 360 dp, 353 dp at 412 dp, 545 dp wide. The bar reads only controls.bar through the cache;
- * each cell reads only its CallControlUi. Every click computes the gesture kind first and plays it only when the
- * presenter returns dispatched (S30 1 h); Chat, Participants, Q&A, More and Leave play nothing. CTL-5: More opens the
- * in-call More sheet (MoreSheet.kt) and draws Engaged while it shows.
- */
-
-/** The controls presenter of the native call root, provided by whoever mounts CallRoot; no bar without it. */
 internal val LocalCallControls = staticCompositionLocalOf<CallControlsPresenter?> { null }
 
-/** S30 1 d: the spinner replaces an optimistic glyph only once an acknowledgment is slow. */
 internal const val CALL_CONTROL_SPINNER_DELAY_MS = 600L
 
 @Composable
 internal fun CallControlBar(controls: CallControlsPresenter, windowWidth: Dp, windowHeight: Dp, modifier: Modifier = Modifier) {
-    // Wide from 600 dp wide and 480 dp tall (Q13); the vertical composition is iPhone only (D27).
+
     val regularWidth = windowWidth.value >= StageCanvasMetrics.MEDIUM_WIDTH_DP
     val regularHeight = windowHeight.value >= StageCanvasMetrics.MEDIUM_HEIGHT_DP
     LaunchedEffect(regularWidth, regularHeight) {
@@ -85,7 +72,7 @@ internal fun CallControlBar(controls: CallControlsPresenter, windowWidth: Dp, wi
         val shown = bar.controls.filter { it.kind != CallControlKind.leave && !plan.moved.contains(it.id) }
         val leave = bar.control(CallControlKind.leave)
         LaunchedEffect(plan, available) {
-            // Never published: More reads the overflow when it opens; the fixture reads the readout on demand.
+
             controls.setOverflow(ids = plan.moved)
             controls.reportFit(ControlBarPolicy.fitReadout(plan = plan, available = available, composition = bar.composition))
         }
@@ -112,8 +99,6 @@ private fun CallControlCell(controls: CallControlsPresenter, control: CallContro
     }
 }
 
-/** S30 5 d (CTL-5): More, Engaged while its sheet shows; the tap plays nothing (Q11) and composes the sheet, which a
- *  role change to attendee disposes with this cell (5 f). */
 @Composable
 private fun MoreControlCell(controls: CallControlsPresenter, control: CallControlUi, width: Dp) {
     var sheetOpen by remember { mutableStateOf(false) }
@@ -124,11 +109,6 @@ private fun MoreControlCell(controls: CallControlsPresenter, control: CallContro
     if (sheetOpen) MoreSheet(controls, onDismissed = { sheetOpen = false })
 }
 
-/** Mic and Camera (optimistic: spinner after 600 ms) and Raise Hand and Share Screen (spinner at once, tooltips).
- *  CTL-4 (S30 2 d): the Mic long press opens the route sheet (AudioRouteSheet.kt, the same sheet as the top-row route
- *  button); the Camera long press opens its dropdown (MediaShortcutMenu.kt) only when an item can act, otherwise the
- *  Camera keeps the plain tooltip. Each plays `longPress` as it opens; TalkBack gets the same shortcuts as custom actions
- *  (AX4) and the long-click label. */
 @Composable
 private fun CallToggleCell(controls: CallControlsPresenter, control: CallControlUi, width: Dp) {
     val haptics = rememberConclaveHaptics()
@@ -167,8 +147,7 @@ private fun CallToggleCell(controls: CallControlsPresenter, control: CallControl
             onLongClickLabel = shortcut.longClickLabel, customActions = shortcut.actions)
     }
     Box {
-        // A Mic or Camera with a shortcut has no tooltip: its long press is the CTL-4 shortcut (S30 1 d, 2 d). A Camera
-        // with no enabled item keeps the plain "Camera" tooltip instead of a dead-end menu.
+
         if (longPress != null) toggle() else CallControlTooltip(label) { toggle() }
         if (control.reason == ControlBlockedReason.permissionDenied) {
             Icon(ConclaveIcons.WarningFill1, contentDescription = null, tint = LocalConclaveExtendedColors.current.warning,
@@ -184,7 +163,6 @@ private fun CallToggleCell(controls: CallControlsPresenter, control: CallControl
     }
 }
 
-/** What a toggle's long press opens (null: no long press), its long-click label and its TalkBack custom actions. */
 internal class CallToggleShortcut(
     val opens: (() -> Unit)?,
     val longClickLabel: String?,
@@ -192,9 +170,6 @@ internal class CallToggleShortcut(
     val cameraItems: MediaShortcutsUi?,
 )
 
-/** S30 2 d: the Mic's route sheet (always, while the Mic has its shortcut) and the Camera's dropdown (only with an
- *  enabled item); Raise Hand and Share Screen have none. Only the Camera reads `controls.shortcuts` (CL14 cache); the
- *  route snapshot is read only by the sheet (S30 2 k). */
 @Composable
 private fun rememberCallToggleShortcut(
     controls: CallControlsPresenter, control: CallControlUi, onRouteSheet: () -> Unit, onCameraMenu: () -> Unit,
@@ -234,8 +209,6 @@ private fun rememberCallToggleShortcut(
     }
 }
 
-/** Chat, Participants, Q&A and More: R01 On, Engaged with `selected` while their panel (More: its sheet) is current
- *  (CC18). */
 @Composable
 private fun CallInvokerCell(
     controls: CallControlsPresenter, control: CallControlUi, width: Dp,
@@ -265,8 +238,6 @@ private fun CallInvokerCell(
     }
 }
 
-/** The M3 plain tooltip above the control (S30 1 d; material3 1.4.0 rememberTooltipPositionProvider); also the guest
- *  Leave control's (LeaveControl.kt). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CallControlTooltip(label: String, content: @Composable () -> Unit) {
@@ -277,7 +248,6 @@ internal fun CallControlTooltip(label: String, content: @Composable () -> Unit) 
     ) { content() }
 }
 
-/** The S10 7 permission dialog a permission-denied tap opens (S30 1 f): Open settings or Not now. */
 @Composable
 private fun CallControlsPermissionDialog(controls: CallControlsPresenter) {
     val prompt = controls.permissionPrompt ?: return
@@ -301,7 +271,6 @@ private fun CallControlsPermissionDialog(controls: CallControlsPresenter) {
     )
 }
 
-/** Permanently denied permissions are changed in the app's system settings page. */
 internal fun openAppPermissionSettings(context: Context) {
     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -310,8 +279,6 @@ internal fun openAppPermissionSettings(context: Context) {
     } catch (_: ActivityNotFoundException) {
     }
 }
-
-// Copy (S30 1 g and 7, Material sentence case). Names resolve at run time from the app module (ConclaveStrings.kt).
 
 @Composable
 internal fun callControlLabel(kind: CallControlKind): String = when (kind) {
@@ -326,7 +293,6 @@ internal fun callControlLabel(kind: CallControlKind): String = when (kind) {
     else -> conclaveString("ds_leave_call")
 }
 
-/** S30 1 e concepts: the slashed glyphs for muted and off, CancelPresentation while sharing, FILL 1 while engaged. */
 internal fun callControlIcon(control: CallControlUi): ImageVector = when (control.kind) {
     CallControlKind.microphone -> if (control.isOn) ConclaveIcons.MicFill1 else ConclaveIcons.MicOffFill1
     CallControlKind.camera -> if (control.isOn) ConclaveIcons.VideocamFill1 else ConclaveIcons.VideocamOffFill1
@@ -339,8 +305,6 @@ internal fun callControlIcon(control: CallControlUi): ImageVector = when (contro
     else -> ConclaveIcons.CallEndFill1
 }
 
-/** The state description: the state (or the paused and on-hold microphone, R29), the blocked reason, then "Applies
- *  when reconnected" while media intent waits for recovery. */
 @Composable
 internal fun callControlStateText(control: CallControlUi): String {
     val parts = mutableListOf<String>()
@@ -370,7 +334,6 @@ private fun callControlState(control: CallControlUi): String = when (control.kin
     else -> ""
 }
 
-/** S30 7 Android state description column; null where the reason has no bar copy. */
 @Composable
 internal fun callControlReasonText(kind: CallControlKind, reason: ControlBlockedReason, name: String): String? = when (reason) {
     ControlBlockedReason.reconnecting -> conclaveString("ctl_reason_reconnecting")
@@ -383,7 +346,6 @@ internal fun callControlReasonText(kind: CallControlKind, reason: ControlBlocked
     else -> null
 }
 
-/** Chat unread, the host waiting count (Participants or More), new questions (Q&A), or More's dot. */
 @Composable
 internal fun callControlInvokerValue(control: CallControlUi): String? {
     if (control.badgeCount > 0) {
@@ -397,7 +359,6 @@ internal fun callControlInvokerValue(control: CallControlUi): String? {
     return if (control.showsDot) conclaveString("ctl_new_activity") else null
 }
 
-/** The toast for a blocked bar tap (S30 7 last column); STG-5's toast lane shows it for the blockedExplanation notice. */
 @Composable
 internal fun callControlToast(explanation: ControlExplanation): String? = when (explanation.reason) {
     ControlBlockedReason.reconnecting -> conclaveString("ctl_toast_reconnecting")

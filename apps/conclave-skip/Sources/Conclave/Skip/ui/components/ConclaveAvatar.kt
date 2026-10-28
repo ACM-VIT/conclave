@@ -24,18 +24,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/*
- * The deterministic identity avatar (F00 C07): the same face as web and iOS for the same (name, id). The indices
- * come from the transpiled ConclaveAvatarIdentity (FacehashPresentation's web-parity hash); the fill is
- * DesignTokens.avatarPalette, so "Guest" is magenta on every platform (the legacy Android avatar drew teal). The
- * eye and mouth geometry below mirrors the shared SwiftUI shapes in S/Shared/FacehashAvatar.swift path for path,
- * because handwritten Compose cannot call SwiftUI shapes (F00 C07 d). Flat fill, a 1 dp white 18% inner ring,
- * static drawing that never animates (F00 0.4 O5). Decorative when a name sits beside it.
- */
-
-/** Pure geometry in avatar pixels, so host tests can check it without drawing. */
 internal object ConclaveAvatarGeometry {
-    /** viewBox width over height per eye variant. */
+
     fun faceAspect(variant: Int): Float = when (variant) {
         0 -> 63f / 15f
         1 -> 71f / 23f
@@ -43,7 +33,6 @@ internal object ConclaveAvatarGeometry {
         else -> 63f / 9f
     }
 
-    /** Mouth viewBox and width as a fraction of the avatar diameter (the web MOUTH_SHAPES table). */
     data class Mouth(val viewBoxWidth: Float, val viewBoxHeight: Float, val widthFraction: Float)
 
     fun mouth(variant: Int): Mouth = when (variant) {
@@ -59,7 +48,6 @@ internal object ConclaveAvatarGeometry {
         else -> Mouth(8f, 8f, 0.10f)
     }
 
-    /** Stroked mouths; 8 strokes its smile and fills a tongue; the rest are filled. */
     fun strokesMouth(variant: Int): Boolean = variant == 0 || variant == 3 || variant == 5 || variant == 6 || variant == 7 || variant == 8
 
     data class Layout(
@@ -67,7 +55,6 @@ internal object ConclaveAvatarGeometry {
         val mouthLeft: Float, val mouthTop: Float, val mouthWidth: Float, val mouthHeight: Float, val strokeWidth: Float,
     )
 
-    /** The face block (eyes, 8% gap, mouth) centered in the circle, sizes as the SwiftUI view computes them. */
     fun layout(diameter: Float, faceIndex: Int, mouthIndex: Int, density: Float): Layout {
         val eyesWidth = diameter * 0.6f
         val eyesHeight = eyesWidth / faceAspect(faceIndex)
@@ -170,7 +157,6 @@ internal object ConclaveAvatarGeometry {
     }
 }
 
-/** An avatar from a name and the SFU user id at a F00 6 size. */
 @Composable
 internal fun ConclaveAvatar(
     name: String, id: String?, size: ConclaveAvatarSize, modifier: Modifier = Modifier, standaloneLabel: String? = null,
@@ -180,10 +166,6 @@ internal fun ConclaveAvatar(
     ConclaveAvatar(identity, size.diameter.dp, modifier, standaloneLabel, identifier)
 }
 
-/**
- * An avatar from an identity the presenter cached (F00 C07 k) at any diameter (tiles size it from the slot
- * density). Hidden from accessibility when a name is adjacent; otherwise an image node labelled with the name.
- */
 @Composable
 internal fun ConclaveAvatar(
     identity: ConclaveAvatarIdentity, diameter: Dp, modifier: Modifier = Modifier, standaloneLabel: String? = null,
@@ -200,7 +182,7 @@ internal fun ConclaveAvatar(
     val ring = Color(DesignTokens.avatarRing)
     val feature = Color(DesignTokens.neutralWhite)
     val tongue = Color(DesignTokens.avatarTongue)
-    // Paths are built once per size and identity in the draw cache; drawing is static.
+
     Spacer(tagged.size(diameter).then(semantics).drawWithCache {
         val side = size.minDimension
         val layout = ConclaveAvatarGeometry.layout(side, identity.faceIndex, identity.mouthIndex, density)

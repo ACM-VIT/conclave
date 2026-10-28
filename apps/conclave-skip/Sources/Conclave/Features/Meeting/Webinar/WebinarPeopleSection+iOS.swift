@@ -1,19 +1,11 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 10 (PPL-5): the webinar host branch of the iOS Participants list. `PeopleSnapshot.sections` carries Raised Hands
-// (the attendee queue, `attendee:` keys), Panelists (the roster rows) and Attendees (invited rows); this file draws the
-// attendee rows with their inline Bring on Stage (C01 tonal, `.bordered` `.tint(.primary)`, never a coral fill, D4) or
-// Cancel Invite (`.borderless`), the leading swipe Bring on Stage (`.tint(.gray)`, no full swipe), the watching count
-// row and the section header and footer that read `people.attendeeCount` in their own leaves, so 50 attendee count
-// changes publish no People revision (10 k, l).
-
-/// One attendee row (hand queue or invited). Reads only its `PersonRowEntry`.
 struct WebinarAttendeeRowView: View {
     let people: PeoplePresenter
     let key: String
     let sectionId: String
-    /// The Raised Hands count, for "1 of 2 in queue".
+
     let queueCount: Int
 
     var body: some View {
@@ -61,7 +53,6 @@ struct WebinarAttendeeRowView: View {
     }
 }
 
-/// Bring on Stage (tonal) or Cancel Invite (borderless) with the "Inviting..." pending state within one frame (10 l).
 private struct WebinarAttendeeButton: View {
     let people: PeoplePresenter
     let key: String
@@ -104,7 +95,6 @@ private struct WebinarAttendeeButton: View {
     }
 }
 
-/// "%lld watching" (10 c): reads `people.attendeeCount` only.
 struct WebinarWatchingRow: View {
     let people: PeoplePresenter
 
@@ -119,7 +109,6 @@ struct WebinarWatchingRow: View {
     }
 }
 
-/// The Attendees header with the watching count in its own leaf (10 b), one header element (F00 C11).
 struct WebinarAttendeesHeader: View {
     let people: PeoplePresenter
 
@@ -130,9 +119,6 @@ struct WebinarAttendeesHeader: View {
     }
 }
 
-/// The Attendees footer (10 f): nobody watching shows the empty copy with a Share Webinar Link row; otherwise the quiet
-/// footer; a host promoted mid-webinar sees "Earlier raised hands appear when the queue next updates." Reads
-/// `people.attendeeCount` in this leaf only.
 struct WebinarAttendeesFooter: View {
     let people: PeoplePresenter
     let snapshot: PeopleSnapshot
@@ -153,8 +139,6 @@ struct WebinarAttendeesFooter: View {
     }
 }
 
-/// Share Webinar Link from the empty Attendees state: the system share sheet once a link exists, else it generates
-/// one through the one owner (R34).
 private struct WebinarShareLinkButton: View {
     let people: PeoplePresenter
     let link: String
@@ -176,14 +160,12 @@ private struct WebinarShareLinkButton: View {
     }
 }
 
-/// S50 10 g, i copy for the attendee rows (iOS title case; sentence case for footers and values).
 enum WebinarPeopleText {
-    /// "Priya N., Attendee" (10 i).
+
     static func label(_ model: PersonRowModel) -> String {
         PeopleText.displayName(model) + ", " + ConclaveStrings.text("Attendee")
     }
 
-    /// "Hand Raised, 1 of 2 in queue" or "Invited on stage".
     static func value(_ model: PersonRowModel, queueCount: Int) -> String {
         if model.detail == PersonDetail.stageInvited { return ConclaveStrings.text("Invited on stage") }
         var parts: [String] = []

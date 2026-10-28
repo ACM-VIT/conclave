@@ -1,26 +1,17 @@
 import Foundation
 
-// S70 15 (SYS-15): the pure diagnostics policies, transpiled and unit tested on both platforms (T/SYS15DiagnosticsTests,
-// T/Skip/SYS15DiagnosticsBridgeTests). No platform import, no I/O.
-
-/// S70 15 j: structural redaction. A code is `domain.detail[.detail]` with a domain from a fixed list and identifier
-/// segments (letters, digits, underscore), so a room code (it has dashes), a link, a sentence or a message cannot pass;
-/// phases and details come from fixed vocabularies; payload texts are short version-like tokens. A value that fails is
-/// replaced by a fixed code or dropped, never stored. Redaction markers (room code, names, ids) are read only at export
-/// time to withhold any platform detail blob that happens to contain one.
 enum DiagnosticsRedactionPolicy {
-    /// Code domains: the S70 7 classifier's (`android`, `capture`, `http`, `media`, `message`, `socket`, `task`, `url`)
-    /// plus the diagnostics vocabulary.
+
     static let codeDomains: [String] = [
         "android", "app", "audio", "call", "capture", "crash", "diag", "exit", "frame", "hang", "http", "join",
         "lifecycle", "links", "media", "message", "metric", "phase", "pip", "recovery", "rejoin", "route", "share",
         "socket", "span", "task", "test", "url",
     ]
-    /// Phases beyond `CallPresencePhase`.
+
     static let extraPhases: [String] = ["launch", "background", "other"]
     static let identifierCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
     static let fieldTextCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ._()/:+,-"
-    /// What a rejected code is stored as.
+
     static let rejectedCode = "diag.rejectedCode"
     static let otherPhase = "other"
 
@@ -58,14 +49,12 @@ enum DiagnosticsRedactionPolicy {
         isAllowedPhase(phase) ? phase : otherPhase
     }
 
-    /// A breadcrumb detail: "", a `MeetingErrorContext` raw value, or a code (a span outcome).
     static func isAllowedDetail(_ detail: String) -> Bool {
         if detail.isEmpty { return true }
         if MeetingErrorContext(rawValue: detail) != nil { return true }
         return isAllowedCode(detail)
     }
 
-    /// A field or counter key: dot-separated identifiers, at most 64 characters.
     static func isAllowedKey(_ key: String) -> Bool {
         if key.isEmpty || key.count > DiagnosticsLimits.maxCodeLength { return false }
         for segment in key.components(separatedBy: ".") {
@@ -74,7 +63,6 @@ enum DiagnosticsRedactionPolicy {
         return true
     }
 
-    /// A payload text: a short version-like token ("iPhone OS 17.5 (21F79)", "arm64e", "anr").
     static func isAllowedFieldText(_ text: String) -> Bool {
         if text.count > DiagnosticsLimits.maxFieldTextLength { return false }
         for character in text {
@@ -85,12 +73,10 @@ enum DiagnosticsRedactionPolicy {
         return true
     }
 
-    /// The text when it is an allowed field text, else "".
     static func sanitizedFieldText(_ text: String) -> String {
         isAllowedFieldText(text) ? text : ""
     }
 
-    /// The `Logger` category for a code (S70 15 c).
     static func category(forCode code: String) -> DiagnosticsLogCategory {
         let domain = code.components(separatedBy: ".").first ?? ""
         switch domain {
@@ -109,7 +95,6 @@ enum DiagnosticsRedactionPolicy {
         }
     }
 
-    /// Normalized redaction markers: trimmed, lowercased, unique, at least `minimumMarkerLength` characters.
     static func markers(_ values: [String]) -> [String] {
         var result: [String] = []
         for value in values {
@@ -122,7 +107,6 @@ enum DiagnosticsRedactionPolicy {
         return result
     }
 
-    /// Whether `text` contains a normalized marker (case-insensitive).
     static func containsMarker(_ text: String, markers: [String]) -> Bool {
         if markers.isEmpty || text.isEmpty { return false }
         let lowered = text.lowercased()
@@ -132,13 +116,11 @@ enum DiagnosticsRedactionPolicy {
         return false
     }
 
-    /// A ring entry passes the structural check.
     static func isClean(_ event: DiagnosticsBreadcrumb) -> Bool {
         isAllowedCode(event.code) && isAllowedPhase(event.phase) && DiagnosticsEventKind(rawValue: event.kind) != nil
             && isAllowedDetail(event.detail)
     }
 
-    /// A stored payload passes the structural check (kind, keys, texts). Markers never fail a payload; they withhold.
     static func isClean(_ payload: DiagnosticsStoredPayload) -> Bool {
         if DiagnosticsPayloadKind(rawValue: payload.kind) == nil { return false }
         for field in payload.fields {
@@ -149,13 +131,12 @@ enum DiagnosticsRedactionPolicy {
     }
 }
 
-/// The 200-event breadcrumb ring (S70 15 c). Owned by the main-actor facade; never observed.
 final class DiagnosticsBreadcrumbRing {
     let capacity: Int
     private var items: [DiagnosticsBreadcrumb] = []
-    /// The oldest entry's index once the ring is full.
+
     private var head = 0
-    /// Entries overwritten since the process started (storage cap reached, oldest dropped).
+
     private(set) var droppedCount = 0
 
     init(capacity: Int) {
@@ -174,7 +155,6 @@ final class DiagnosticsBreadcrumbRing {
         droppedCount += 1
     }
 
-    /// Oldest first.
     func snapshot() -> [DiagnosticsBreadcrumb] {
         if items.count < capacity || head == 0 { return items }
         var result: [DiagnosticsBreadcrumb] = []
@@ -187,10 +167,8 @@ final class DiagnosticsBreadcrumbRing {
     }
 }
 
-/// The local store's bounds (S70 15 c): 7 days or 2 MB, oldest dropped first.
 enum DiagnosticsRetentionPolicy {
-    /// The names to delete: every record older than the retention window, then the oldest of the rest until they fit
-    /// the cap together with `reservedBytes` (the breadcrumb files). Ties break by name so the order is stable.
+
     static func namesToDelete(_ records: [DiagnosticsStoredRecord], nowMillis: Double, reservedBytes: Int = 0,
                               retentionMillis: Double = DiagnosticsLimits.retentionMillis,
                               maxBytes: Int = DiagnosticsLimits.maxStoreBytes) -> [String] {
@@ -221,29 +199,26 @@ enum DiagnosticsRetentionPolicy {
     }
 }
 
-/// UTC time stamps from epoch milliseconds without a formatter (identical output on both platforms).
 enum DiagnosticsTimePolicy {
-    /// `2026-10-28T14:22:33Z`.
+
     static func iso8601(epochMillis: Double) -> String {
         let parts = civilParts(epochMillis: epochMillis)
         return padded(parts[0], width: 4) + "-" + padded(parts[1], width: 2) + "-" + padded(parts[2], width: 2) + "T"
             + padded(parts[3], width: 2) + ":" + padded(parts[4], width: 2) + ":" + padded(parts[5], width: 2) + "Z"
     }
 
-    /// `20261028-142233`, for the export file name.
     static func fileStamp(epochMillis: Double) -> String {
         let parts = civilParts(epochMillis: epochMillis)
         return padded(parts[0], width: 4) + padded(parts[1], width: 2) + padded(parts[2], width: 2) + "-"
             + padded(parts[3], width: 2) + padded(parts[4], width: 2) + padded(parts[5], width: 2)
     }
 
-    /// Year, month, day, hour, minute, second (UTC). Negative or non-finite input reads as the epoch.
     static func civilParts(epochMillis: Double) -> [Int] {
         let clamped = epochMillis.isFinite && epochMillis > 0.0 ? epochMillis : 0.0
         let seconds = Int64(clamped / 1000.0)
         let days = Int(seconds / Int64(86_400))
         let secondOfDay = Int(seconds % Int64(86_400))
-        // Days to the proleptic Gregorian civil date (era-based, valid for every non-negative day count).
+
         let shifted = days + 719_468
         let era = shifted / 146_097
         let dayOfEra = shifted - era * 146_097
@@ -265,8 +240,6 @@ enum DiagnosticsTimePolicy {
     }
 }
 
-/// Minimal JSON emission for the export. Every string it writes is already a code, an enum raw value or an allowed
-/// field text; escaping is defensive.
 enum DiagnosticsJSON {
     static func string(_ value: String) -> String {
         let escaped = value
@@ -278,7 +251,6 @@ enum DiagnosticsJSON {
         return "\"" + escaped + "\""
     }
 
-    /// Whole numbers without a fraction; non-finite values as 0.
     static func number(_ value: Double) -> String {
         if !value.isFinite { return "0" }
         let rounded = value.rounded()
@@ -288,7 +260,6 @@ enum DiagnosticsJSON {
         return "\(value)"
     }
 
-    /// Platform JSON (an object or an array) that can be embedded as is.
     static func isRawJSON(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("{") && trimmed.hasSuffix("}") { return true }
@@ -296,20 +267,17 @@ enum DiagnosticsJSON {
     }
 }
 
-/// Builds payload records with only allowed keys and texts (iOS MetricKit conversion, Android exit records).
 enum DiagnosticsPayloadFactory {
     static func number(_ key: String, _ value: Double) -> DiagnosticsField {
         DiagnosticsField(key: key, isNumber: true, number: value.isFinite ? value : 0.0, text: "")
     }
 
-    /// nil when the key or the text is not allowed (the field is then not stored).
     static func text(_ key: String, _ value: String) -> DiagnosticsField? {
         if !DiagnosticsRedactionPolicy.isAllowedKey(key) || value.isEmpty { return nil }
         if !DiagnosticsRedactionPolicy.isAllowedFieldText(value) { return nil }
         return DiagnosticsField(key: key, isNumber: false, number: 0.0, text: value)
     }
 
-    /// Keeps only allowed fields; a detail that is not an object or an array is dropped.
     static func payload(kind: DiagnosticsPayloadKind, createdAtMillis: Double, fields: [DiagnosticsField],
                         detailJSON: String) -> DiagnosticsStoredPayload {
         var clean: [DiagnosticsField] = []
@@ -323,9 +291,6 @@ enum DiagnosticsPayloadFactory {
                                         detailJSON: detail)
     }
 
-    /// Android API 30 `ApplicationExitInfo` (S70 15 d), called from K/NativePerformanceDiagnostics.kt off the main
-    /// thread: reason name, timestamp, importance, status, memory, the stamped call session and phase from
-    /// `setProcessStateSummary`, and for an ANR the sanitized trace frames (`traceJSON`, or "").
     static func exitRecord(reason: String, timestampMillis: Double, importance: Int, status: Int, pssKb: Double,
                            rssKb: Double, summarySession: Int, summaryPhase: String,
                            traceJSON: String) -> DiagnosticsStoredPayload {
@@ -347,8 +312,6 @@ enum DiagnosticsPayloadFactory {
     }
 }
 
-/// The join milestones that the view model already times through `PerformanceDiagnostics.timing` (S70 15 c): only the
-/// timing name is read, never its details (they can hold the room code).
 enum DiagnosticsTimingBridge {
     static func milestone(forTiming name: String) -> DiagnosticsMilestone? {
         switch name {
@@ -368,16 +331,12 @@ enum DiagnosticsTimingBridge {
     }
 }
 
-/// The export document (S70 15 f): one JSON file with metadata (always written), counters, open spans, the ring, the
-/// previous process's ring and the stored payloads. No upload, no account link (S70 O8).
 enum DiagnosticsExportBuilder {
     static let format = "conclave-diagnostics"
     static let version = 1
-    /// What a withheld detail reads as.
+
     static let withheld = "withheld"
 
-    /// S70 15 f: the structural redaction check. Fails (export refused, no file) when any event, span, counter or
-    /// payload is outside the vocabularies, or when the Debug fixture forces it (15 l5).
     static func passesRedactionCheck(_ input: DiagnosticsExportInput, payloads: [DiagnosticsStoredPayload]) -> Bool {
         if input.forcesRedactionFailure { return false }
         for event in input.events where !DiagnosticsRedactionPolicy.isClean(event) {
@@ -402,7 +361,6 @@ enum DiagnosticsExportBuilder {
         return true
     }
 
-    /// The payload with any field text or detail that contains a marker withheld.
     static func redacted(_ payload: DiagnosticsStoredPayload, markers: [String]) -> DiagnosticsStoredPayload {
         var fields: [DiagnosticsField] = []
         for field in payload.fields {
@@ -418,7 +376,6 @@ enum DiagnosticsExportBuilder {
                                         detailJSON: withholdsDetail ? "" : payload.detailJSON)
     }
 
-    /// How many payloads lose a field or their detail to a marker.
     static func withheldCount(_ payloads: [DiagnosticsStoredPayload], markers: [String]) -> Int {
         var count = 0
         for payload in payloads where redacted(payload, markers: markers) != payload {

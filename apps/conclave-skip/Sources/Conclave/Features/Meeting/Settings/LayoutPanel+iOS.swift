@@ -1,15 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 3 c (SET-5) on iOS: `MeetingPanel.layout`, always dark (owner default Q8 6, D19): `PanelShell` scopes the dark
-// scheme from `resolved.appearance == .inCall` (the presentation's preferred scheme in the sheet, the environment in the
-// iPad inspector), so no view here sets a color scheme. Detents `[.medium, .large]` opening medium, large at accessibility
-// sizes, with background interaction up through medium (RECONCILE R9, the PNL-1 sheet host), so the stage reflows live
-// above the sheet while the person changes it. One grouped `Form` of system controls: the mode and self view inline
-// pickers (selected trait), one adjustable Stepper for Maximum Tiles, switches for Hide Tiles Without Video and Audio
-// Only, and Position only while the self view floats (3 f). Every change applies at once through `LayoutPanelPresenter`
-// (no Done); iOS plays no haptic (system controls, 3 h). Mounted by the native call root (`CallPanelContent`).
-
 struct LayoutPanel: View {
     let layout: LayoutPanelPresenter
     let shell: MeetingShellPresenter
@@ -28,7 +19,6 @@ struct LayoutPanel: View {
     }
 }
 
-/// The form reads only `layout.snapshot` (3 k), so a stage revision that changes nothing here never redraws it.
 private struct LayoutForm: View {
     let layout: LayoutPanelPresenter
 
@@ -102,7 +92,6 @@ private struct LayoutForm: View {
     }
 }
 
-/// A mode row: the title, the Auto detail while someone is pinned (S20 4) and a disabled mode's reason line (3 f).
 private struct LayoutModeLabel: View {
     let mode: LayoutModeModel
     let showsPinnedDetail: Bool
@@ -124,9 +113,6 @@ private struct LayoutModeLabel: View {
     }
 }
 
-/// L6-14 for the Layout panel on iOS (Apple title case, Q13): every mode, self view mode, corner and reason to a catalog
-/// key. The S60 copy table names `SettingsCopy+iOS.swift` for Layout too; that file belongs to SET-3 this batch, so the
-/// Layout half lives here (HD record B7-T2).
 enum LayoutCopy {
     static func title() -> String {
         ConclaveStrings.text("Layout")
@@ -159,7 +145,6 @@ enum LayoutCopy {
         }
     }
 
-    /// nil while the mode is enabled.
     static func reason(_ raw: String) -> String? {
         switch LayoutModeReason(rawValue: raw) ?? LayoutModeReason.none {
         case .none: return nil
@@ -167,7 +152,6 @@ enum LayoutCopy {
         }
     }
 
-    /// Phones state their cap (S20 2 g); tablets omit it (3 f).
     static func tilesFooter(phoneCap: Int) -> String {
         if phoneCap > 0 {
             return ConclaveStrings.format("Phones show up to %lld tiles. People who are speaking or pinned always show.", phoneCap)

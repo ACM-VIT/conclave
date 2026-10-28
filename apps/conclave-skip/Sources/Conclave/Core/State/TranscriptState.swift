@@ -1,8 +1,6 @@
 import Foundation
 import Observation
 
-/// Lifecycle of the transcript worker WebSocket (distinct from the transcription
-/// session status, which is server-driven).
 enum TranscriptConnectionStatus: String {
     case idle
     case connecting
@@ -151,8 +149,6 @@ struct TranscriptQAMessageModel: Identifiable, Equatable {
     let error: String?
 }
 
-/// A single transcript line. `itemId` is the stable identity used to merge
-/// streaming deltas and finalized segments, matching the web client.
 struct TranscriptSegmentModel: Identifiable, Equatable {
     let itemId: String
     let sequence: Int
@@ -165,13 +161,11 @@ struct TranscriptSegmentModel: Identifiable, Equatable {
     var id: String { itemId }
 }
 
-/// A run of consecutive captions from the same speaker, rendered as one block.
 struct TranscriptGroup: Identifiable, Equatable {
     let id: String
     let speakerUserId: String
     let speakerDisplayName: String
-    /// Wall-clock of the group's first caption - the header timestamp,
-    /// matching the web panel's per-group time.
+
     let firstStartMs: Double
     private(set) var text: String
     private(set) var isFinal: Bool
@@ -231,8 +225,6 @@ enum TranscriptPresentationPolicy {
         return "\(segments.count)-\(last.itemId)-\(last.text.count)"
     }
 
-    /// A lull long enough that a quiet time marker helps you scan back later
-    /// (mirrors the web's TRANSCRIPT_PAUSE_MARKER_MS).
     static let pauseMarkerMs: Double = 180_000
 
     static func showsPauseMarker(previous: TranscriptGroup?, next: TranscriptGroup) -> Bool {
@@ -240,8 +232,6 @@ enum TranscriptPresentationPolicy {
         return next.firstStartMs - previous.lastStartMs >= pauseMarkerMs
     }
 
-    /// Ids of groups that follow a long lull - cached alongside the groups so
-    /// the panel's ForEach stays a plain pass over presentation state.
     static func pauseMarkerGroupIds(for groups: [TranscriptGroup]) -> Set<String> {
         var ids = Set<String>()
         var previous: TranscriptGroup?
@@ -254,22 +244,16 @@ enum TranscriptPresentationPolicy {
         return ids
     }
 
-    /// Shared formatter: allocating one per timestamp measurably hurts the
-    /// live-update render path.
     private static let clockFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter
     }()
 
-    /// Clock-style timestamp for group headers and exports, matching the web's
-    /// `formatTranscriptTimestamp` (hour:minute:second).
     static func clockTimestamp(fromMs ms: Double) -> String {
         clockFormatter.string(from: Date(timeIntervalSince1970: ms / 1000.0))
     }
 
-    /// Markdown export of everything currently on screen, matching the web's
-    /// `exportTranscriptMarkdown` line shape.
     static func exportMarkdown(
         roomId: String,
         segments: [TranscriptSegmentModel],
@@ -318,27 +302,10 @@ enum TranscriptPresentationPolicy {
     }
 }
 
-/// TRN-2 (S60 0.5, C6-11): what changed in `TranscriptState`, for the Transcript panel presenter's one hook. The
-/// presenter rebuilds its cold snapshot on `session`, drains the feed engine on `rows`, and replaces its minutes and
-/// Ask leaves on `minutes` and `ask`.
 enum TranscriptPanelChange: String, CaseIterable, Equatable {
     case session, rows, minutes, ask
 }
 
-/// Observable transcript view state. Holds finalized segments plus the in-flight
-/// partials map so the panel can render live captions as they stream in.
-///
-/// TRN-1 (S60 C6-11, C6-27): beside the legacy strings (kept for the legacy panel) it carries the typed live notes
-/// state: `phase`, `link` and `issue` (with `issueServerText`), the relay availability, the session start for the
-/// catch-up offer, and the newest caption line for the stage strip. The stage refresh path listens through
-/// `onStageInputChanged`; the caption hot path through `onCaptionChanged` (both installed by the view model).
-///
-/// TRN-2 (S60 C6-11, 6 j): the segments live in one incremental `TranscriptFeedEngine` (binary insertion, regrouping
-/// limited to the touched group and its neighbours), which the Transcript panel's feed drains through
-/// `onPanelChanged`; `hasContent` is stored and edge-triggered (it flips at most twice per session). The legacy
-/// presentation (`groupedSegments`, `pauseMarkerIds`, `scrollTrigger`) is regrouped from the engine's ordered
-/// segments without a sort, and only while `legacyPresentationEnabled` (the legacy panel's route); `orderedSegments`
-/// always reads the engine.
 @MainActor
 @Observable
 final class TranscriptState {
@@ -350,7 +317,7 @@ final class TranscriptState {
             }
         }
     }
-    var sessionStatus: String = "idle" {         // idle/starting/live/paused/stopping/error/takeover_needed
+    var sessionStatus: String = "idle" {
         didSet {
             guard oldValue != sessionStatus else { return }
             if TranscriptPhasePolicy.isRunning(sessionStatus) { sawSessionThisCall = true }
@@ -364,8 +331,7 @@ final class TranscriptState {
             if oldValue != controllerName { onPanelChanged?(TranscriptPanelChange.session) }
         }
     }
-    /// TRN-2 (web `session.controller.userId`): who holds the live notes, so "Hosted by you" and Stop follow the
-    /// controller (S60 6 f); "" when nobody does.
+
     var controllerUserId: String = "" {
         didSet {
             if oldValue != controllerUserId { onPanelChanged?(TranscriptPanelChange.session) }
@@ -393,27 +359,21 @@ final class TranscriptState {
 
     private(set) var finals: [TranscriptSegmentModel] = []
     private(set) var partials: [String: TranscriptSegmentModel] = [:]
-    /// TRN-2 (C6-11): the one incremental engine behind both presentations; never observed itself.
+
     let feedEngine = TranscriptFeedEngine()
-    /// Grows with every segment change; reading it registers observation for `orderedSegments` readers.
+
     private(set) var segmentsRevision = 0
-    /// TRN-2 (C6-11): any final segment or minutes content (export and copy have something). Stored and edge-triggered,
-    /// so its readers invalidate at most twice per session, never per delta (replaces the computed `hasExportContent`
-    /// for the native panel; the legacy panel keeps reading `hasExportContent`).
+
     private(set) var hasContent = false
-    /// TRN-2 (S60 6 f): questions whose `qa.ask` never left the device ("Question couldn't be sent.").
+
     private(set) var unsentQuestionIds: Set<String> = []
-    /// TRN-2: the legacy panel's presentation (`groupedSegments`, `pauseMarkerIds`, `scrollTrigger`) is regrouped only
-    /// while this is true (the default, so the legacy route is unchanged). The native call route turns it off, so a
-    /// delta costs one local regroup instead of a regroup of the whole session.
+
     @ObservationIgnored private(set) var legacyPresentationEnabled = true
-    /// `transcript.rebuilds` for the legacy path: whole-session regroups of the legacy presentation.
+
     @ObservationIgnored private(set) var legacyRebuildCount = 0
-    /// The Transcript panel presenter's one hook (TRN-2); installed by `TranscriptPresenter.bind(state:)`.
+
     @ObservationIgnored var onPanelChanged: ((TranscriptPanelChange) -> Void)? = nil
 
-    /// Every segment (finals and partials) in order, straight from the engine (no sort, no copy into an observed
-    /// array per delta).
     var orderedSegments: [TranscriptSegmentModel] {
         segmentsRevision >= 0 ? feedEngine.segments : []
     }
@@ -425,24 +385,21 @@ final class TranscriptState {
     private(set) var minutesStatus: TranscriptMinutesStatus = .idle
     private(set) var qaMessages: [TranscriptQAMessageModel] = []
 
-    // MARK: TRN-1 typed state (C6-11, C6-27, S20 SC13)
-
-    /// The typed issue behind `errorMessage` (S60 D20); `issueServerText` is shown verbatim only for `.server`.
     private(set) var issue: TranscriptIssue = .none
     private(set) var issueServerText: String = ""
-    /// R52: `getTranscriptSfuRelayStatus()` on join for non-attendees and after a recovery rejoin.
+
     private(set) var relay: RelayAvailability = .unknown
-    /// Failed connection attempts in a row; 8 or more read as `unavailable` (C6-11).
+
     private(set) var failedAttempts: Int = 0
-    /// The worker's first snapshot arrived (until then the phase is `loading`).
+
     private(set) var hasSessionSnapshot = false
-    /// The live session's start (server clock, epoch milliseconds); 0 when unknown (web TRN-14 catch-up).
+
     private(set) var sessionStartedAtMillis: Double = 0.0
-    /// A session ran in this call, so a later idle reads as `ended` (the last session stays readable).
+
     private(set) var sawSessionThisCall = false
-    /// The stage refresh path (S20 SC13): phase, link, issue, relay and session start changes.
+
     @ObservationIgnored var onStageInputChanged: (() -> Void)? = nil
-    /// The caption hot path (S60 5 j): the newest segment's line after each live delta that changes it.
+
     @ObservationIgnored var onCaptionChanged: ((CaptionLine) -> Void)? = nil
     @ObservationIgnored private var lastCaption = CaptionLine.empty
     @ObservationIgnored private var newestFinal: TranscriptSegmentModel? = nil
@@ -456,7 +413,6 @@ final class TranscriptState {
         TranscriptPhasePolicy.link(connectionStatus: connectionStatus, failedAttempts: failedAttempts)
     }
 
-    /// The S20 capsule state, produced only by `LiveNotesPolicy` (RECONCILE R12).
     var liveNotes: LiveNotesState {
         LiveNotesPolicy.stageState(phase: phase, link: link, issue: issue)
     }
@@ -498,14 +454,12 @@ final class TranscriptState {
         onPanelChanged?(TranscriptPanelChange.session)
     }
 
-    /// TRN-2: the native call route turns the legacy presentation off; turning it back on regroups once.
     func setLegacyPresentation(_ enabled: Bool) {
         if legacyPresentationEnabled == enabled { return }
         legacyPresentationEnabled = enabled
         if enabled { rebuildPresentation() }
     }
 
-    /// TRN-2: the service could not send a question (the socket was not open).
     func markQuestionNotSent(id: String) {
         if unsentQuestionIds.contains(id) { return }
         unsentQuestionIds.insert(id)
@@ -623,7 +577,7 @@ final class TranscriptState {
     func applyFinal(_ segment: TranscriptSegmentModel) {
         let removedPartial = partials.removeValue(forKey: segment.itemId) != nil
         var changedFinal = false
-        // The engine already knows whether this item was a final (a dictionary read, not a scan of `finals`).
+
         let previous = feedEngine.segment(itemId: segment.itemId)
         if let known = previous, known.isFinal {
             if known != segment {
@@ -664,7 +618,7 @@ final class TranscriptState {
             map[segment.itemId] = segment
         }
         self.partials = map
-        // History is not a caption: the snapshot only seeds the newest final, the strip waits for the next live delta.
+
         var newest: TranscriptSegmentModel? = nil
         for segment in finals {
             if let current = newest {
@@ -674,7 +628,7 @@ final class TranscriptState {
             }
         }
         newestFinal = newest
-        // Partials first, so a final with the same item id wins in the engine's one-entry-per-item map.
+
         var all: [TranscriptSegmentModel] = partials
         for segment in finals {
             all.append(segment)
@@ -733,8 +687,6 @@ final class TranscriptState {
         onPanelChanged?(TranscriptPanelChange.ask)
     }
 
-    /// The newest segment of the newest speaker (the newest partial if one exists, else the last final), cut to about
-    /// 160 characters keeping the tail; sent only when the drawn text changes (S60 5 j, C6-11).
     private func publishCaption() {
         guard let listener = onCaptionChanged else { return }
         var open: [TranscriptSegmentModel] = []
@@ -748,8 +700,6 @@ final class TranscriptState {
         listener(line)
     }
 
-    /// The legacy panel's presentation from the engine's ordered segments (no sort); skipped while the native route
-    /// owns the transcript (`legacyPresentationEnabled` false).
     private func rebuildPresentation() {
         segmentsRevision += 1
         guard legacyPresentationEnabled else { return }
@@ -760,7 +710,6 @@ final class TranscriptState {
         scrollTrigger = TranscriptPresentationPolicy.scrollTrigger(for: nextOrderedSegments)
     }
 
-    /// Edge-triggered `hasContent` (C6-11): written only when it flips.
     private func updateHasContent() {
         let next = feedEngine.finalCount > 0 || minutes.hasContent
         if next == hasContent { return }
@@ -768,3 +717,9 @@ final class TranscriptState {
         onPanelChanged?(TranscriptPanelChange.session)
     }
 }
+
+#if !SKIP
+extension TranscriptMinutesEntryModel: Sendable {}
+extension TranscriptMinutesSnapshotModel: Sendable {}
+extension TranscriptSegmentModel: Sendable {}
+#endif

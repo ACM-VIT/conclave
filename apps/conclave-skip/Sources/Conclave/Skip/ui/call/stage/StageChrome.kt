@@ -38,18 +38,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
-/*
- * S20 7 and 8 (STG-4): the top row (Minimize, meeting capsule, audio route, flip camera), the flat status chips (they
- * stay while chrome hides), the toolbar slot (the S30 control bar, CTL-1) and chrome visibility. Android has no glass: the
- * chrome components draw the flat label scrim. The one timer is a LaunchedEffect keyed on the arm serial and the
- * eligibility, armed only while chrome is visible and nothing blocks; nothing ticks while hidden or blocked (RR8). No
- * immersive mode: the status and navigation bars stay (AND 9.2 item 2). CTL-3 (S30 3 d, S20 7 d): with the call's
- * controls presenter (LocalCallControls) the top-row route button opens the in-call audio route sheet
- * (AudioRouteSheet.kt), composed here outside the fading row so a chrome fade never disposes it; the stage fixtures
- * without one keep the caller's onRoute.
- */
-
-/** View-local chrome visibility (SL8) over the shared ChromeAutoHidePolicy state machine. */
 internal class StageChromeVisibilityState {
     var state by mutableStateOf(ChromeVisibilityState.initial)
         private set
@@ -77,11 +65,11 @@ internal fun StageChrome(
     val accessState = access.state()
     val screenReader = forceScreenReader || accessState.isScreenReaderRunning
     val blocker = ChromeAutoHidePolicy.effectiveBlocker(presenter = stage.autoHideBlocker, screenReader = screenReader, focusInChrome = false)
-    val canAutoHide = ChromeAutoHidePolicy.canAutoHide(blocker = blocker, voiceOver = screenReader, switchControl = false, focusInChrome = false)
+    val canAutoHide = ChromeAutoHidePolicy.canAutoHideHeader(blocker = blocker, voiceOver = screenReader, switchControl = false, focusInChrome = false)
     SideEffect { chrome.setCanAutoHide(canAutoHide) }
     val state = chrome.state
     val armed = ChromeAutoHidePolicy.shouldArm(state, canAutoHide = canAutoHide)
-    // API 29+ stretches the 5 s base through getRecommendedTimeoutMillis (read by the system accessibility reader).
+
     val timeout = accessState.recommendedTimeoutMillis
     LaunchedEffect(state.armSerial, armed) {
         if (!armed) return@LaunchedEffect
@@ -104,6 +92,8 @@ internal fun StageChrome(
         }
     }
     val visible = !state.isHidden
+    val controlsVisible = !ChromeAutoHidePolicy.controlsHidden(state, canAutoHide =
+        ChromeAutoHidePolicy.canAutoHide(blocker = blocker, voiceOver = screenReader, switchControl = false, focusInChrome = false))
     val enter = if (access.removeAnimations) EnterTransition.None else fadeIn(animationSpec = ConclaveMotion.chromeFade())
     val exit = if (access.removeAnimations) ExitTransition.None else fadeOut(animationSpec = ConclaveMotion.chromeFade())
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -113,20 +103,20 @@ internal fun StageChrome(
                 .padding(12.dp).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // The row keeps its height while hidden, so the chips below never move.
+
             Box(Modifier.heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp)) {
                 androidx.compose.animation.AnimatedVisibility(visible = visible, enter = enter, exit = exit) {
                     StageTopRow(stage, capsuleMax, onMinimize, routeAction)
                 }
             }
             StageStatusChips(stage)
+            StageSoloLayer(stage, chrome, Modifier.fillMaxWidth())
         }
         val stageWidth = maxWidth
         val stageHeight = maxHeight
         AnimatedVisibility(
-            visible = visible, enter = enter, exit = exit,
-            // S30 1 d: the system bars and the cutout at the bottom and sides (edge to edge at targetSdk 36), then
-            // 12 dp. Never the IME (S20 1 d), which safeDrawing would include.
+            visible = controlsVisible, enter = enter, exit = exit,
+
             modifier = Modifier.align(Alignment.BottomCenter)
                 .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)
                     .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
@@ -140,7 +130,6 @@ internal fun StageChrome(
     }
 }
 
-/** Reveal triggers from the S1 snapshots (S20 8 f): your mute state changing for any reason and a panel closing. */
 @Composable
 private fun StageChromeRevealObserver(shell: MeetingShellPresenter, chrome: StageChromeVisibilityState) {
     var microphoneOn = false
@@ -160,7 +149,6 @@ private fun StageChromeRevealObserver(shell: MeetingShellPresenter, chrome: Stag
     }
 }
 
-/** Minimize top leading (7 of 8 Android apps, AAPPS 1.1 item 9), the capsule, then route and flip. */
 @Composable
 private fun StageTopRow(stage: StagePresenter, capsuleMax: Dp, onMinimize: () -> Unit, onRoute: () -> Unit) {
     val snapshot = stage.chrome
@@ -174,14 +162,13 @@ private fun StageTopRow(stage: StagePresenter, capsuleMax: Dp, onMinimize: () ->
         if (snapshot.canFlipCamera) {
             Spacer(Modifier.width(8.dp))
             ConclaveFlipCameraButton(isFront = snapshot.isFrontCamera, onClick = {
-                // RECONCILE R13: every user camera flip plays selectionChanged once after a dispatched flip (STG-3).
+
                 if (StageCameraFlip.perform(stage)) haptics.gesture(FeedbackKind.selectionChanged)
             }, identifier = "stage.flip")
         }
     }
 }
 
-/** Observes only stage.capsule (S20 7 k). */
 @Composable
 private fun StageCapsule(stage: StagePresenter, maxWidth: Dp, modifier: Modifier) {
     val model = stage.capsule
@@ -195,13 +182,12 @@ private fun StageCapsule(stage: StagePresenter, maxWidth: Dp, modifier: Modifier
 internal fun stageCapsuleSubtitle(model: StageCapsuleModel): String = when (model.subtitleKind) {
     StageCapsuleModel.youPresentingKind -> conclaveString("stg_you_presenting")
     StageCapsuleModel.presentingKind -> conclaveString("ds_is_presenting", model.subtitleName)
-    // S20 12 d (STG-8): attendees see the webinar title and "Live", never a count.
+
     AttendeeViewerPolicy.capsuleLiveKind -> attendeeCapsuleSubtitle()
     StageCapsuleModel.aloneKind -> conclaveString("stg_just_you")
     else -> conclavePlural("stg_participants_count", model.count, model.count)
 }
 
-/** Status chips: flat label-scrim capsules with a 1 dp border, visible while chrome hides (S20 SR3). */
 @Composable
 private fun StageStatusChips(stage: StagePresenter) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -211,7 +197,6 @@ private fun StageStatusChips(stage: StagePresenter) {
     }
 }
 
-/** Your raised hand (SC12): "Raising hand…" while pending, then "Hand raised" with Lower. */
 @Composable
 private fun StageHandChip(stage: StagePresenter) {
     val haptics = rememberConclaveHaptics()
@@ -233,7 +218,6 @@ private fun StageHandChip(stage: StagePresenter) {
     }
 }
 
-/** A hidden activity keeps running behind Show video (S20 7, 11). */
 @Composable
 private fun StageNowPlayingChip(stage: StagePresenter) {
     val chip = stage.chrome.nowPlaying ?: return
@@ -248,7 +232,6 @@ private fun StageNowPlayingChip(stage: StagePresenter) {
         actionDescription = conclaveString("stg_show_activity", name))
 }
 
-/** Solo with your camera on: Share invite as a chip under the capsule so your face stays visible (S20 2 c). */
 @Composable
 private fun StageShareInviteChip(stage: StagePresenter) {
     val layout = stage.layout
@@ -262,12 +245,6 @@ private fun StageShareInviteChip(stage: StagePresenter) {
         onClick = { stageShareMeetingLink(context, link, roomLabel) })
 }
 
-/**
- * The toolbar slot (S30 1, CTL-1). The controls presenter arrives through LocalCallControls from whoever mounts the call
- * root (the native call route and the controls fixture), so CallRoot's signature stays the stage owner's; without one
- * the slot draws nothing. The window classes come from the whole stage, not the slot. The toolbar is an overlay
- * sibling of the canvas: showing, hiding or recomposing it never relayouts tiles (S30 1 k).
- */
 @Composable
 private fun StageBarSlot(shell: MeetingShellPresenter, stage: StagePresenter, stageWidth: Dp, stageHeight: Dp) {
     val controls = LocalCallControls.current

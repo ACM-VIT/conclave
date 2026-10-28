@@ -13,12 +13,6 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * SYS-2 (S70 5 d, 5 l1, 5 l3, 5 l7; SY17, SY18; S30 3 g; RECONCILE R24) against the transpiled AudioRouteOwner, its
- * policies and CallPresence, plus the handwritten AudioRouteOwnerBridge. App-module resource names resolve to 0 in
- * this library-module run, so a recording resolver stands in; the real WebRTCClient needs a PeerConnectionFactory
- * and stays a silent AVD cell (5 l4).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class SYS2AudioRouteBridgeTests {
@@ -86,8 +80,6 @@ class SYS2AudioRouteBridgeTests {
         return out
     }
 
-    // MARK: Kinds and names (S30 3 g, R23)
-
     @Test
     fun routeKindsAndNamesComeFromTheVocabularyAndResources() {
         assertEquals(AudioRouteKind.speaker, AudioRouteOwnerBridge.routeKind(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER))
@@ -101,14 +93,12 @@ class SYS2AudioRouteBridgeTests {
         assertEquals("Phone", AudioRouteOwnerBridge.option(phone, resolver).name)
         assertEquals("Speaker", AudioRouteOwnerBridge.option(speaker, resolver).name)
         assertEquals("Pixel Buds Pro", AudioRouteOwnerBridge.option(buds, resolver).name)
-        // A wired headset always reads "Wired headset", never its product string.
+
         assertEquals("Wired headset", AudioRouteOwnerBridge.option(wired, resolver).name)
         val unnamed = AndroidRouteDevice(id = "out:40", type = AudioDeviceInfo.TYPE_BLUETOOTH_SCO, productName = " ")
         assertEquals("Bluetooth headset", AudioRouteOwnerBridge.option(unnamed, resolver).name)
         assertTrue(resolver.strings.all { it.startsWith("ctl_route_") })
     }
-
-    // MARK: R70-2 and R24 (SY17)
 
     @Test
     fun bluetoothAccessRowIsTheOnlyRequestPoint() {
@@ -122,19 +112,17 @@ class SYS2AudioRouteBridgeTests {
         val harness = Harness()
         val withRow = state(listOf(speaker, phone), "out:2", "out:2", BluetoothRouteAccess.needsGrant)
         assertTrue(ids(withRow).contains(AudioRouteOwner.bluetoothAccessOptionId))
-        // Call start (audio setup) never asks.
+
         harness.owner.callAudioDidStart()
         harness.owner.publish(withRow)
         assertEquals(0, harness.bluetoothRequests)
         assertEquals(BluetoothRouteAccess.needsGrant, harness.owner.route.bluetoothAccess)
-        // Only the row's tap asks, once, and records no intent.
+
         harness.owner.requestRoute(id = AudioRouteOwner.bluetoothAccessOptionId)
         assertEquals(1, harness.bluetoothRequests)
         assertEquals("", harness.owner.preferredRouteIntent)
         assertTrue(harness.applied.isEmpty())
     }
-
-    // MARK: 5 l3 focus, system switcher, removal
 
     @Test
     fun focusLossAndGainToggleOtherAudioWithoutTouchingMute() {
@@ -191,7 +179,6 @@ class SYS2AudioRouteBridgeTests {
         assertEquals(RouteSwitchPhase.idle, harness.owner.route.phase)
         assertEquals(listOf("out:12"), harness.applied)
 
-        // The buds leave: the platform's default order already picked the wired headset; one toast, intent kept.
         harness.now += 10_000.0
         val lost = harness.owner.handleRouteChange(
             AudioRouteChangeReason.oldDeviceUnavailable,
@@ -205,7 +192,6 @@ class SYS2AudioRouteBridgeTests {
         assertEquals("Wired headset", harness.events[0].name)
         assertEquals(AudioRouteEvent.routeChangedKind, harness.events[0].kind)
 
-        // They come back with a new id: restored by kind and name, one more toast.
         harness.now += 10_000.0
         val budsAgain = AndroidRouteDevice(id = "out:19", type = AudioDeviceInfo.TYPE_BLUETOOTH_SCO, productName = "Pixel Buds Pro")
         val back = harness.owner.handleRouteChange(
@@ -219,8 +205,6 @@ class SYS2AudioRouteBridgeTests {
         assertEquals(2, harness.events.size)
         assertEquals("Pixel Buds Pro", harness.events[1].name)
     }
-
-    // MARK: 5 l1 and 5 l7 in Kotlin
 
     @Test
     fun routeChangeTableRowsAgreeInKotlin() {
@@ -262,8 +246,6 @@ class SYS2AudioRouteBridgeTests {
         assertTrue(AudioActivationPolicy.mayActivate(surface = CallSystemSurfaceKind.androidNotification, status = CallSurfaceStatus.active))
         assertFalse(AudioActivationPolicy.mayActivate(surface = CallSystemSurfaceKind.callKit, status = CallSurfaceStatus.starting))
     }
-
-    // MARK: SY18
 
     @Test
     fun volumeKeysChangeCallVolumeWhileACallIsLive() {

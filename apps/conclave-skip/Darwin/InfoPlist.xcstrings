@@ -2,7 +2,6 @@
   "sourceLanguage" : "en",
   "strings" : {
     "CFBundleDisplayName" : {
-      "comment" : "App name shown under the Home Screen icon, in Settings and in system prompts. The product name: keep it as Conclave.",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -14,7 +13,6 @@
       }
     },
     "NSCameraUsageDescription" : {
-      "comment" : "Camera permission prompt body, shown the first time someone turns on video. One sentence in sentence case.",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -26,7 +24,6 @@
       }
     },
     "NSLocalNetworkUsageDescription" : {
-      "comment" : "Local network permission prompt body, shown when a call first connects its audio and video over the local network. One sentence in sentence case.",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -38,7 +35,6 @@
       }
     },
     "NSMicrophoneUsageDescription" : {
-      "comment" : "Microphone permission prompt body, shown the first time someone unmutes or joins with the microphone on. One sentence in sentence case.",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -50,7 +46,6 @@
       }
     },
     "NSPhotoLibraryAddUsageDescription" : {
-      "comment" : "Photo library add permission prompt body, shown only when someone chooses Save Image in the share sheet. One sentence in sentence case.",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {

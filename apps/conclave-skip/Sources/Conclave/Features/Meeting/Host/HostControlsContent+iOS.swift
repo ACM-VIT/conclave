@@ -1,18 +1,9 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S50 6 (PPL-4): Host Controls on iOS. `HostControlsContent` is the one Form (S50 6 c) with no stack, bar or
-// destination of its own, so Participants (a push), the root Host Controls panel (MeetingPanel.hostControls), Meeting
-// Details (S20 15) and Settings (S60 R6-3) all render the same content; each container maps the page routes into its
-// own path type through `link`, so the pushes stay native `NavigationLink(value:)` rows with the system chevron, and
-// declares `HostPageView` as its destination for `PeopleRoute` values (R50-2, R40-9: one homogeneous path per stack).
-// System appearance (Default Q8 (6)); green system switches (R06); the End dialog belongs to Host Controls (PH17, R09).
-
-/// The Host Controls Form (S50 6 b, c). Reads `people.host.snapshot` while on screen; the Watching value is its own leaf
-/// on `host.attendeeCount` (S50 6 k).
 struct HostControlsContent<Route: Hashable>: View {
     let people: PeoplePresenter
-    /// Maps a page to the container's route type (`{ $0 }` inside Participants and the root panel).
+
     let link: (PeopleRoute) -> Route
 
     var body: some View {
@@ -21,7 +12,7 @@ struct HostControlsContent<Route: Hashable>: View {
             if snapshot.isAvailable {
                 HostControlsForm(people: people, snapshot: snapshot, link: link)
             } else {
-                // S50 6 c: losing host while Host Controls is the root panel shows this with Close only (12).
+
                 ContentUnavailableView {
                     Label(ConclaveStrings.text("Host Controls Unavailable"), systemImage: ConclaveSymbols.crownFill)
                 } description: {
@@ -133,7 +124,6 @@ enum HostControlsAnchor {
     static let access = "host.section.access"
 }
 
-/// Reads `host.attendeeCount` only (S50 6 k).
 private struct HostWatchingValue: View {
     let host: HostControlsPresenter
 
@@ -143,9 +133,6 @@ private struct HostWatchingValue: View {
     }
 }
 
-/// End Call for Everyone (S50 6 c): the S1 confirmation with invoker `hostControls` (PH17) attached to this row, so the
-/// dialog belongs to Host Controls and the iPad popover anchors here (R09); Leave stays on the bar while ending. A
-/// failure shows inline under the row with Retry, which asks again (S30 4).
 private struct HostEndRow: View {
     let people: PeoplePresenter
     let snapshot: HostControlsSnapshot
@@ -208,7 +195,6 @@ private struct HostEndRow: View {
         }
     }
 
-    /// The S1 End row's last failure in this call session.
     static func endFailed(_ shell: MeetingShellPresenter) -> Bool {
         for row in shell.controls.rows {
             if row.id == MeetingControlID.endForEveryone.rawValue {
@@ -219,8 +205,6 @@ private struct HostEndRow: View {
     }
 }
 
-/// The pages of a host stack (R50-2): Host Controls, the meeting access and notice pages, and the webinar pages (PPL-5,
-/// S50 9). Every container declares this as its destination for `PeopleRoute` values.
 struct HostPageView<Route: Hashable>: View {
     let people: PeoplePresenter
     let page: PeopleRoute
@@ -246,8 +230,6 @@ struct HostPageView<Route: Hashable>: View {
     }
 }
 
-/// `MeetingPanel.hostControls` as a root panel (S50 6 a: More's Host submenu; opens large, PS 6.2), with its own path
-/// over `PeopleRoute` starting at Host Controls (R50-2). Registered by the native call root (HD request B5-T1 R3).
 struct HostControlsPanel: View {
     let people: PeoplePresenter
     let shell: MeetingShellPresenter
@@ -270,19 +252,19 @@ struct HostControlsPanel: View {
                     .task(id: presentation.request.presentationID) {
                         people.platform = NoticePlatform.ios
                         people.hostPanelDidOpen(presentationID: presentation.request.presentationID)
-                        // R50-3: the Meeting Details access row opens Host Controls at Meeting Access.
+
                         if presentation.request.destination == PanelDestination.hostControlsAccess {
                             proxy.scrollTo(HostControlsAnchor.access, anchor: .top)
                         }
                     }
             }
         }
-        // RECONCILE R34: a push from a medium detent promotes to large.
+
         .onChange(of: route.count) { _, count in
             if count > 0 { adapter.promoteToLarge() }
         }
         .onChange(of: people.host.snapshot.isAvailable) { _, available in
-            // S50 12: losing host pops any pushed page; the root shows the unavailable state.
+
             if !available && !route.isEmpty { route = [] }
         }
         .accessibilityIdentifier("host.panel")

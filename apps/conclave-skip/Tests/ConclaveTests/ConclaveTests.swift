@@ -147,7 +147,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testConnectionRecoveryWatchdogPolicyActions() {
-        // Progressing recovery: recent join activity keeps the watchdog quiet.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 10,
@@ -157,8 +157,7 @@ final class ConclaveTests: XCTestCase {
             ),
             ConnectionRecoveryWatchdogPolicy.Action.wait
         )
-        // Stranded recovery: no join activity past the stall threshold forces
-        // a fresh rejoin even while the state still claims to be joining.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 40,
@@ -168,7 +167,7 @@ final class ConclaveTests: XCTestCase {
             ),
             ConnectionRecoveryWatchdogPolicy.Action.forceRejoin
         )
-        // Hard cap wins over another force cycle.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 121,
@@ -178,7 +177,7 @@ final class ConclaveTests: XCTestCase {
             ),
             ConnectionRecoveryWatchdogPolicy.Action.fail
         )
-        // Reaching a settled or terminal state stands the watchdog down.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 40,
@@ -197,7 +196,7 @@ final class ConclaveTests: XCTestCase {
             ),
             ConnectionRecoveryWatchdogPolicy.Action.standDown
         )
-        // An intentional leave always stands down, whatever the timers say.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 500,
@@ -457,9 +456,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testNativeGamePublicStateDecodesLateJoinAndConfigFields() throws {
-        // The stage reads config (rematch), pendingJoiners (seated next round),
-        // and canJoinLate (Join affordance). Older payloads omit them, so they
-        // must stay optional.
+
         let full = try JSONDecoder().decode(GamePublicState.self, from: Data("""
         {
           "gameId": "trivia",
@@ -500,9 +497,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testNativeGameFinishedStateSurvivesBroadcastForResultsAndRematch() throws {
-        // Regression: a finished round must NOT be nulled by the game:state
-        // broadcast handler (only game:ended clears it), or the stage flashes
-        // its results away and the rematch action never appears. Matches web.
+
         let source = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
         let marker = "private func applyGamePublicState(_ notification: GamePublicState)"
         let range = try XCTUnwrap(source.range(of: marker))
@@ -654,7 +649,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(stabilizer.update(with: ConnectionQuality.poor), ConnectionQuality.good)
         XCTAssertEqual(stabilizer.update(with: ConnectionQuality.poor), ConnectionQuality.poor)
 
-        // Missing stats do not relax a constrained profile.
         XCTAssertEqual(stabilizer.update(with: ConnectionQuality.unknown), ConnectionQuality.poor)
 
         for _ in 0..<4 {
@@ -724,7 +718,9 @@ final class ConclaveTests: XCTestCase {
 
         let meetingSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingView.swift")
         let bannerSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingBannerOverlay.swift")
-        XCTAssertTrue(meetingSource.contains("removes the old 58pt empty slot"))
+        XCTAssertTrue(meetingSource.contains("MeetingBannerOverlay("))
+        XCTAssertTrue(meetingSource.contains(".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)"))
+        XCTAssertFalse(meetingSource.contains("MeetingBannerSlotLayout.reservedHeight"))
         XCTAssertTrue(meetingSource.contains(".padding(.top, MeetingHeaderLayout.barHeight)"))
         XCTAssertFalse(bannerSource.contains("MeetingBannerSlotLayout.reservedHeight"))
     }
@@ -1022,15 +1018,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     #if !SKIP
-    /// Source guards for the foundation correctness blockers: first-frame sinks
-    /// must never detach inside the frame callback (remote-video ANR), iOS
-    /// producers must be created off MainActor (onProduce deadlock) on one
-    /// serial send-transport queue, microphone replacements must survive the
-    /// SFU's predecessor close, a failed mute fails closed, a recovery rejoin
-    /// cannot strand the mic, camera or hand toggle guards, the Android root
-    /// must drop SkipUI saved state (PresentationRoot NPE on PiP exit), calls
-    /// keep the screen awake and ask for notifications, and every Gradle entry
-    /// point uses the checked-in wrapper.
+
     func testNativeCallCorrectnessBlockersStayFixed() throws {
         let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
         let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
@@ -1070,10 +1058,6 @@ final class ConclaveTests: XCTestCase {
         let iosRemove = try XCTUnwrap(iosRenderFrame.range(of: "remove(self)"))
         XCTAssertLessThan(iosDispatch.lowerBound, iosRemove.lowerBound)
 
-        // Every mediasoup createProducer call runs on the serial send-transport
-        // queue (never a detached task racing another Send), and every other
-        // blocking send-side call (producer/transport close, send ICE restart)
-        // goes through the same queue.
         XCTAssertEqual(iosSource.components(separatedBy: ".createProducer(").count - 1, 2)
         XCTAssertEqual(iosSource.components(separatedBy: "request.transport.createProducer(").count - 1, 2)
         XCTAssertFalse(iosSource.contains("Task.detached(priority: .userInitiated) {\n            MediaProducerCreationResult"))
@@ -1095,12 +1079,8 @@ final class ConclaveTests: XCTestCase {
             XCTAssertFalse(iosSource.contains(directClose), "send-side \(directClose) must use the send-transport queue")
         }
 
-        // A mute that lands during the off-main microphone create wins: the
-        // start drops its producer, and a no-producer mute reaches the client.
         XCTAssertTrue(iosSource.contains("localAudioMuteIntentGeneration != muteIntentGeneration"))
 
-        // Microphone tracks start disabled and only a live commit enables them,
-        // so a mute during the create never leaves an audible microphone.
         let trackFactory = try body(
             iosSource,
             from: "private func createMicrophoneAudioTrack()",
@@ -1110,8 +1090,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(trackFactory.contains("track.isEnabled = true"))
         XCTAssertTrue(iosSource.contains("producer.resume()\n        microphone.track.isEnabled = true"))
 
-        // startProducingAudio is single-flight: concurrent starts join the
-        // in-flight one instead of racing a second produce.
         let iosStartWrapper = try body(
             iosSource,
             from: "func startProducingAudio() async throws {",
@@ -1122,11 +1100,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(iosStartWrapper.contains("guard localAudioMuteIntentGeneration == muteIntentGeneration else {"))
         XCTAssertTrue(iosSource.contains("audioStartTask = nil\n        audioCaptureReassertionTask?.cancel()"))
 
-        // The SFU closes a displaced microphone producer and tells the owner
-        // before acking its replacement: both iOS replacement paths mark the
-        // predecessor before the create, the view model consumes the marker,
-        // and a returned replacement is always committed (never fall back to
-        // the SFU-closed predecessor), paused if a mute landed meanwhile.
         for (start, end) in [
             ("func refreshLocalAudioProducerForBandwidthProfile(", "private func commitMicrophoneReplacement("),
             ("private func recreateLocalAudioProducerAfterRouteChange(", "private func restoreRouteRecoveryTrackIfCurrent(")
@@ -1167,8 +1140,6 @@ final class ConclaveTests: XCTestCase {
         let closeAudio = try XCTUnwrap(localClose.range(of: "webRTCClient.closeLocalMedia(\n            kind: \"audio\""))
         XCTAssertLessThan(consumeAudio.lowerBound, closeAudio.lowerBound)
 
-        // A same-session camera start that a newer start superseded returns
-        // without "session was replaced" (which forces a rejoin).
         let videoStart = try body(
             iosSource,
             from: "func startProducingVideo() async throws {",
@@ -1177,22 +1148,23 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(videoStart.contains("if isStale || videoCapturer == nil {"))
         XCTAssertTrue(videoStart.contains("Dropped superseded camera producer"))
 
-        // A failed mute fails closed on both platforms and in the view model.
         let iosSetAudio = try body(
             iosSource,
             from: "func setAudioEnabled(_ enabled: Bool) async throws {",
             to: "func suspendLocalAudioForRecovery() {"
         )
-        let iosFailClosed = try XCTUnwrap(iosSetAudio.range(of: "if !enabled {\n                // A failed mute fails closed"))
-        let iosRollback = try XCTUnwrap(iosSetAudio.range(of: "if previous {\n                producer.resume()"))
+        let iosSetAudioCode = iosSetAudio.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let iosFailClosed = try XCTUnwrap(iosSetAudioCode.range(of: "if !enabled { rtcLocalAudioTrack?.isEnabled = false localAudioEnabled = false"))
+        let iosRollback = try XCTUnwrap(iosSetAudioCode.range(of: "if previous { producer.resume()"))
         XCTAssertLessThan(iosFailClosed.lowerBound, iosRollback.lowerBound)
         let androidSetAudio = try body(
             androidSource,
             from: "internal suspend fun setAudioEnabled(enabled: Boolean) {",
             to: "internal fun suspendLocalAudioForRecovery() {"
         )
-        let androidFailClosed = try XCTUnwrap(androidSetAudio.range(of: "if (!enabled) {\n                // A failed mute fails closed"))
-        let androidRollback = try XCTUnwrap(androidSetAudio.range(of: "if (previous) {\n                localAudioTargetEnabled = true"))
+        let androidSetAudioCode = androidSetAudio.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let androidFailClosed = try XCTUnwrap(androidSetAudioCode.range(of: "if (!enabled) { localAudioTargetEnabled = false audioDeviceModule?.setMicrophoneMute(true)"))
+        let androidRollback = try XCTUnwrap(androidSetAudioCode.range(of: "if (previous) { localAudioTargetEnabled = true"))
         XCTAssertLessThan(androidFailClosed.lowerBound, androidRollback.lowerBound)
         XCTAssertFalse(viewModelSource.contains("state.isMuted = !newState"))
         XCTAssertTrue(viewModelSource.contains("state.isMuted = muted ? true : previousMuted"))
@@ -1203,8 +1175,7 @@ final class ConclaveTests: XCTestCase {
         ))
         XCTAssertTrue(viewModelSource[disableStart.upperBound..<disableEnd.lowerBound]
             .contains("webRTCClient.suspendLocalAudioForRecovery()"))
-        // The mute intent is captured before the first await on both
-        // platforms, and a restart only clears isMuted for a live, unpaused mic.
+
         let iosStart = try XCTUnwrap(iosSource.range(of: "func startProducingAudio() async throws {"))
         let iosFirstAwait = try XCTUnwrap(iosSource.range(
             of: "_ = try? await inFlight.value",
@@ -1225,13 +1196,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(viewModelSource.contains("guard webRTCClient.hasLocalAudioProducer else { return }\n            state.isMuted = false"))
         XCTAssertEqual(viewModelSource.components(separatedBy: "guard webRTCClient.isLocalAudioPublishingHealthy else { return }\n            state.isMuted = false").count - 1, 2)
 
-        // Mic, camera and hand toggle guards are token-owned: a completion
-        // releases its guard only while it still owns the token, and every
-        // join attempt releases them all (recovery rejoins skip cleanup()), so
-        // a rejoin mid-await cannot strand a guard and silently drop later
-        // toggles, CallKit and notification mutes. A genuinely in-flight
-        // toggle still suppresses the producer-closed restart. (These checks
-        // ignore commented-out copies.)
         let viewModelCode = withoutBlockComments(viewModelSource)
         for (token, guardName) in [
             ("muteToggleToken", "isMuteToggleInFlight"),
@@ -1245,10 +1209,9 @@ final class ConclaveTests: XCTestCase {
         }
         XCTAssertEqual(codeCount(of: "if muteToggleToken == toggleToken {", in: viewModelCode), 2)
         XCTAssertEqual(codeCount(of: "if cameraToggleToken == toggleToken {", in: viewModelCode), 2)
-        // The iOS, Android and host screen-share branches.
+
         XCTAssertEqual(codeCount(of: "if screenShareToggleToken == toggleToken {", in: viewModelCode), 3)
-        // The meeting hand (`setHandRaisedState`) and the attendee hand (`toggleAttendeeHand` through
-        // `webinar:setHandRaised`, HD B6-T1 S20 Q10 PH8): each releases the guard only while it owns the token.
+
         XCTAssertEqual(codeCount(of: "if handRaiseToggleToken == toggleToken {", in: viewModelCode), 2)
         XCTAssertEqual(codeCount(of: "if cameraSwitchToken == switchToken {", in: viewModelCode), 1)
         let releaseGuards = try body(
@@ -1271,10 +1234,7 @@ final class ConclaveTests: XCTestCase {
             to: "let wasCameraOff = state.isCameraOff"
         )
         XCTAssertNotNil(codeRange(of: "!isMuteToggleInFlight {", in: localCloseCode))
-        // An orphaned toggle re-checks its call before touching the attempt
-        // that replaced it: the unmute confirmation (which may bypass the
-        // guard), the chat camera start that would turn the camera back on,
-        // and the camera enable's recreate fallback.
+
         let orphanGuard = "guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }"
         for (start, end, awaited, next) in [
             ("    func toggleMute() {", "    func toggleCamera() {",
@@ -1293,9 +1253,7 @@ final class ConclaveTests: XCTestCase {
             let between = String(toggle[awaitedRange.upperBound..<nextRange.lowerBound])
             XCTAssertNotNil(codeRange(of: orphanGuard, in: between), start)
         }
-        // The camera enable acts for the call its caller captured: it checks
-        // that context on entry and before its fallback closes or restarts a
-        // producer, and never re-derives it.
+
         let videoEnable = try body(
             viewModelCode,
             from: "private func enableOrStartLocalVideo(context: CallActionContext) async throws {",
@@ -1303,7 +1261,7 @@ final class ConclaveTests: XCTestCase {
         )
         XCTAssertFalse(videoEnable.contains("currentCallActionContext()"))
         XCTAssertFalse(viewModelCode.contains("enableOrStartLocalVideo()"))
-        let videoEntryGuard = try XCTUnwrap(codeRange(of: "guard isCurrentJoinedCall(context) else { return }", in: videoEnable))
+        let videoEntryGuard = try XCTUnwrap(codeRange(of: "guard isCurrentJoinedCall(context), !isCameraHoldBlockingVideo else { return }", in: videoEnable))
         let videoEnableCall = try XCTUnwrap(codeRange(of: "try await webRTCClient.setVideoEnabled(true)", in: videoEnable))
         XCTAssertLessThan(videoEntryGuard.lowerBound, videoEnableCall.lowerBound)
         let videoRecreateGuard = try XCTUnwrap(codeRange(
@@ -1324,13 +1282,6 @@ final class ConclaveTests: XCTestCase {
         ))
         XCTAssertLessThan(videoRestartGuard.lowerBound, videoRestart.lowerBound)
 
-        // WP2-S1c: the newest local media intent wins (P1, P2, P3). A mute is
-        // never dropped or deferred behind a pending toggle: it is applied at
-        // once, locally first and synchronously (so the client's mute intent
-        // fences a pending unmute's acknowledgement), then signalled. Server
-        // mutes and camera-offs reach the media whoever owns the guard. A
-        // superseded unmute confirms nothing, and every camera-on re-checks
-        // the camera-off intent and the video policy before committing.
         func assertCodeOrder(_ text: String, _ markers: [String], _ label: String) throws {
             var from = text.startIndex
             for marker in markers {
@@ -1367,9 +1318,7 @@ final class ConclaveTests: XCTestCase {
             to: "private func resetReconnectRetryState() {"
         )
         XCTAssertFalse(serverCameraOff.contains("isCameraToggleInFlight"))
-        // Its later hop closes nothing once a newer camera intent landed (a
-        // camera-on tapped before the hop ran), and writes off only while it
-        // is still the newest intent.
+
         try assertCodeOrder(serverCameraOff, [
             "localCameraIntentRevision += 1",
             "setLocalCameraOffState(true)",
@@ -1418,8 +1367,7 @@ final class ConclaveTests: XCTestCase {
             to: "    func toggleMute() {"
         )
         XCTAssertFalse(recoveryCamera.contains("isRecoveringConnection,"), "the camera-off hop must survive the attempt joining first")
-        // Gated on the intent revision, never on isCameraOff, which a stale
-        // camera-on report can flip back before the hop runs.
+
         XCTAssertFalse(recoveryCamera.contains("self.state.isCameraOff"))
         try assertCodeOrder(recoveryCamera, [
             "localCameraIntentRevision += 1",
@@ -1438,17 +1386,14 @@ final class ConclaveTests: XCTestCase {
             "let toggleToken = UUID()"
         ], "toggleCamera never drops a camera-off")
         let restart = try body(viewModelCode, from: "let wasCameraOff = state.isCameraOff", to: "private func handleRemoteProducerClosed(")
-        // A producer close records no camera intent, admin or not: the owner
-        // gets an admin close first as a plain producerClosed, so the admin
-        // one cannot be classified (admin:mediaEnforced records the off).
+
         let localCloseFull = try body(
             viewModelCode,
             from: "private func handleLocalProducerClosed(_ notification: ProducerClosedNotification) async -> Bool {",
             to: "private func handleRemoteProducerClosed("
         )
         XCTAssertNil(codeRange(of: "localCameraIntentRevision += 1", in: localCloseFull))
-        // The restart starts the camera only while camera-on is still the
-        // newest intent after the awaited close, and re-checks after it.
+
         try assertCodeOrder(restart, [
             "let cameraIntentRevision = localCameraIntentRevision",
             "if await webRTCClient.closeLocalMedia(",
@@ -1457,8 +1402,7 @@ final class ConclaveTests: XCTestCase {
             "try await webRTCClient.startProducingVideo()",
             "guard isLocalCameraOnStillWanted("
         ], "producer-closed restart pre-start check")
-        // An admin room snapshot reports producer state: it never overrides a
-        // toggle in flight.
+
         let snapshot = try body(
             viewModelCode,
             from: "private func applyAdminParticipantSnapshot(",
@@ -1497,21 +1441,17 @@ final class ConclaveTests: XCTestCase {
             from: "    func startProducing(joinAttemptId: UUID? = nil) async -> Bool {",
             to: "private func disableLocalMediaPublishingState() {"
         )
-        // The recovered start converges on the newest camera intent from the
-        // reconnecting screen: close for a newer off, start for a newer on.
+
         try assertCodeOrder(startProducingBody, [
             "var cameraIntentRevision = localCameraIntentRevision",
             "try await webRTCClient.startProducingVideo()",
-            "while localCameraIntentRevision != cameraIntentRevision {",
+            "while localCameraIntentRevision != cameraIntentRevision && !isCameraHoldBlockingVideo {",
             "cameraIntentRevision = localCameraIntentRevision",
             "if state.isCameraOff {",
             "await webRTCClient.closeLocalVideoProducer()",
             "try await webRTCClient.startProducingVideo()"
         ], "recovered camera start")
-        // After its awaited close a producer close reports off only while it
-        // is still the newest camera intent and no camera is live (admin or
-        // not): never over a newer camera-on, nor over a camera started
-        // during the close.
+
         try assertCodeOrder(restart, [
             "let cameraIntentRevision = localCameraIntentRevision",
             "if await webRTCClient.closeLocalMedia(",
@@ -1526,22 +1466,18 @@ final class ConclaveTests: XCTestCase {
         try assertCodeOrder(videoEnable, [
             "let cameraIntentRevision = localCameraIntentRevision",
             "try await webRTCClient.setVideoEnabled(true)",
-            // A producer the SFU closed during the acknowledgement is
-            // recreated for the camera-on that is still the newest intent.
+
             "localCameraIntentRevision == cameraIntentRevision,",
             "!webRTCClient.hasLocalVideoProducer else { return }",
             "try await webRTCClient.startProducingVideo()",
-            "guard localCameraIntentRevision == cameraIntentRevision else { return }",
+            "guard localCameraIntentRevision == cameraIntentRevision, !isCameraHoldBlockingVideo else { return }",
             "await webRTCClient.closeLocalVideoProducer()",
-            "guard localCameraIntentRevision == cameraIntentRevision else { return }",
+            "guard localCameraIntentRevision == cameraIntentRevision, !isCameraHoldBlockingVideo else { return }",
             "try await webRTCClient.startProducingVideo()"
         ], "camera enable fallback")
-        // Every camera intent bumps the revision: server camera-off, disabled
-        // publishing, camera-off over a pending toggle, reconnecting screen,
-        // in-call toggle, audio-only mode, chat, admin bulk camera-off and
-        // admin-enforced camera close.
+
         XCTAssertEqual(codeCount(of: "localCameraIntentRevision += 1", in: viewModelCode), 9)
-        // Chat /camera off is never dropped behind a pending camera-on.
+
         let cameraCommand = try body(
             viewModelCode,
             from: "private func setCameraCommandState(cameraOff: Bool, command: ChatCommand) async {",
@@ -1552,8 +1488,7 @@ final class ConclaveTests: XCTestCase {
             "applyLocalCameraOffNow(context: currentCallActionContext())",
             "if isCameraToggleInFlight {"
         ], "chat /camera off never drops a camera-off")
-        // Admin mutes and camera-offs record the newer intent and cancel a
-        // start that matches no producer id before awaiting the close.
+
         let adminBulk = try body(
             viewModelCode,
             from: "private func applyLocalAdminBulkMediaState(_ action: AdminBulkMediaAction) async {",
@@ -1586,21 +1521,22 @@ final class ConclaveTests: XCTestCase {
             "await webRTCClient.closeLocalVideoProducer()"
         ], "admin-enforced camera close")
         XCTAssertNotNil(codeRange(of: "if localCameraIntentRevision == adminCameraIntentRevision {", in: viewModelCode))
-        // An orphaned screen-share toggle never stops a capture, or clears an
-        // end callback, that the attempt replacing it uses.
+
         XCTAssertEqual(codeCount(of: "if canOrphanedScreenShareToggleStopCapture() {", in: viewModelCode), 2)
         XCTAssertEqual(codeCount(
             of: "guard isCurrentCallAfterStart || canOrphanedScreenShareToggleStopCapture() else { return }",
             in: viewModelCode
         ), 2)
-        XCTAssertNotNil(codeRange(
-            of: "await ScreenCaptureManager.shared.stopCapture()\n"
-                + "                    // Orphaned by a rejoin: a share in the attempt that\n"
-                + "                    // replaced this one is not this toggle's to close.\n"
-                + "                    guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }\n"
-                + "                    await webRTCClient.closeLocalScreenProducer()",
-            in: viewModelCode
-        ))
+        let stoppingShare = try body(
+            viewModelCode,
+            from: "if state.isScreenSharing {\n                    publishScreenShare(ScreenSharePhasePolicy.stopping(screenShare))",
+            to: "state.isScreenSharing = false"
+        )
+        try assertCodeOrder(stoppingShare, [
+            "await ScreenCaptureManager.shared.stopCapture()",
+            "guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }",
+            "await webRTCClient.closeLocalScreenProducer()"
+        ], "screen-share stop keeps its call identity fence")
 
         XCTAssertTrue(activitySource.contains("SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }"))
 
@@ -1610,9 +1546,7 @@ final class ConclaveTests: XCTestCase {
 
         XCTAssertTrue(viewModelSource.contains("PermissionHelper.requestNotificationsPermissionIfNeeded { granted in"))
         XCTAssertTrue(permissionSource.contains("NOTIFICATIONS_REQUEST_CODE -> notificationsPermissionWaiters"))
-        // Recovery rejoins (WebRTCClient.cleanup) keep a queued notification
-        // prompt; only terminal call end drops it, and a request that never
-        // reached the user re-arms the once-per-process ask.
+
         let clearQueued = try body(
             permissionSource,
             from: "private fun clearQueuedCallPermissionRequests() {",
@@ -1632,8 +1566,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(viewModelSource.contains("if !granted, !PermissionHelper.wasLastNotificationsPermissionRequestAnswered() {"))
         XCTAssertTrue(viewModelSource.contains("self.hasRequestedCallNotificationPermission = false"))
 
-        // fastlane and the Xcode "Run skip gradle" phase build through the
-        // checked-in wrapper, not an unpinned Homebrew Gradle.
         XCTAssertTrue(fastfileSource.contains("gradle_bin = File.expand_path(\"../gradlew\", __dir__)"))
         XCTAssertFalse(fastfileSource.contains("/bin/gradle\""))
         XCTAssertTrue(xcodeProjectSource.contains("GRADLE_WRAPPER_SHIM_DIR=\\\"${DERIVED_FILE_DIR}/skip-gradle-wrapper\\\""))
@@ -1641,17 +1573,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(xcodeProjectSource.contains("PATH=\\\"${GRADLE_WRAPPER_SHIM_DIR}:${PATH}\\\""))
     }
 
-    /// F7 (codex review items 3 and 4): an acknowledgement that returns after a
-    /// teardown, a newer mute or camera-off, or a producer replacement must not
-    /// touch the state that replaced it. Both clients fence the late success,
-    /// and the camera rollback, by configuration generation, producer identity
-    /// and intent generation (`localAudioMuteIntentGeneration`, and
-    /// `localVideoOffIntentGeneration`, which every camera-off that keeps the
-    /// producer bumps), as setAudioEnabled already did. A replacement camera
-    /// producer keeps the camera. Host tests cannot run either client, so this
-    /// pins each fence right after its awaited acknowledgement, ahead of every
-    /// capture, track, state or callback effect. Commented-out code does not
-    /// count (codeRange, withoutBlockComments).
     func testLateMediaAcknowledgementsAreFencedInBothClients() throws {
         let iosSource = withoutBlockComments(try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift"))
         let androidSource = withoutBlockComments(try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt"))
@@ -1665,8 +1586,6 @@ final class ConclaveTests: XCTestCase {
             return String(source[startRange.lowerBound..<endRange.lowerBound])
         }
 
-        // `fence` follows `awaited` with only comments between them, and the
-        // first `effect` after `awaited` comes after the fence.
         func assertFence(
             in function: String,
             after awaited: String,
@@ -1698,7 +1617,6 @@ final class ConclaveTests: XCTestCase {
             }
         }
 
-        // Microphone confirmation (item 4).
         let iosReassert = try body(
             iosSource,
             from: "func reassertLocalAudioProducerUnmuted() async throws {",
@@ -1738,7 +1656,6 @@ final class ConclaveTests: XCTestCase {
             "Android microphone confirmation"
         )
 
-        // Camera enable (item 3).
         let iosVideo = try body(
             iosSource,
             from: "func setVideoEnabled(_ enabled: Bool) async throws {",
@@ -1770,8 +1687,7 @@ final class ConclaveTests: XCTestCase {
             before: "producer.resume()",
             "iOS camera rollback"
         )
-        // With no producer left, the enable stops the capture it started (and
-        // only while it is still the current capturer) before rethrowing.
+
         try assertOrder(iosVideo, [
             "let enableCapturer = videoCapturer",
             "} catch {",
@@ -1780,8 +1696,7 @@ final class ConclaveTests: XCTestCase {
             "await enableCapturer.stopCapture()",
             "throw error"
         ], "iOS camera enable with no producer left")
-        // Both stopCapture awaits use the capturer read right after the fence
-        // and come after every state write, so nothing is written after them.
+
         XCTAssertFalse(iosVideo.contains("await videoCapturer?.stopCapture()"))
         let iosRollback = try body(iosVideo, from: "} catch {", to: "debugLog(\"[WebRTC] Failed to toggle video:")
         try assertOrder(iosRollback, [
@@ -1812,8 +1727,7 @@ final class ConclaveTests: XCTestCase {
                 + "        val previous = localVideoEnabled",
             "socket.toggleCamera(producer.id, paused = !enabled)"
         ], "Android camera enable")
-        // The permission prompt and the preview release both suspend before
-        // any capture restart or resume; the checks follow the last of them.
+
         try assertOrder(androidVideo, [
             "if (!ensureCameraPermission()) {",
             "releasePreJoinCameraPreview()",
@@ -1872,9 +1786,6 @@ final class ConclaveTests: XCTestCase {
             "Android camera rollback callback"
         )
 
-        // The Android camera start re-checks its session after the preview
-        // release, before creating capture state, and its failure path clears
-        // only camera state its session still owns.
         let androidStart = try body(
             androidSource,
             from: "internal suspend fun startProducingVideo() {",
@@ -1895,11 +1806,6 @@ final class ConclaveTests: XCTestCase {
         ))
         XCTAssertEqual(codeCount(of: "clearLocalWebcamCaptureState(notifyLocalState = false)", in: androidStart), 2)
 
-        // WP2-S1c (P2): a camera start compares the off intent across every
-        // await and never publishes, or reports the camera on, after a
-        // camera-off. iOS checks before resuming, after the permission prompt
-        // and after the off-main create; Android before resuming and after
-        // its preview release (its produce is synchronous).
         let iosStart = try body(
             iosSource,
             from: "func startProducingVideo() async throws {",
@@ -1924,8 +1830,7 @@ final class ConclaveTests: XCTestCase {
         let iosCancelledStart = try body(iosStart, from: "if !isStale, isCancelled {", to: "if isStale || videoCapturer == nil {")
         XCTAssertNotNil(codeRange(of: "return", in: iosCancelledStart))
         XCTAssertFalse(iosCancelledStart.contains("localVideoEnabled = "))
-        // A cancelled start stops its media before awaiting the SFU close, so
-        // no frame flows during that round trip.
+
         try assertOrder(iosCancelledStart, [
             "track.isEnabled = false",
             "closeSendProducer(producer)",
@@ -1950,8 +1855,7 @@ final class ConclaveTests: XCTestCase {
             let close = try body(source, from: start, to: end)
             XCTAssertNotNil(codeRange(of: "localVideoOffIntentGeneration += 1", in: close), "\(label) camera close")
         }
-        // A close without an id (a server camera-off) is a camera-off; a
-        // close by id (the SFU closed that producer) is not an intent.
+
         XCTAssertNotNil(codeRange(
             of: "if kind == \"video\", isWebcam, producerId == nil {\n"
                 + "            localVideoOffIntentGeneration += 1",
@@ -1962,8 +1866,7 @@ final class ConclaveTests: XCTestCase {
                 + "            localVideoOffIntentGeneration += 1",
             in: androidSource
         ))
-        // An older iOS camera close never clears the capture state of a newer
-        // camera-on installed while it awaited stopCapture().
+
         XCTAssertGreaterThanOrEqual(codeCount(of: "if videoCapturer === capturer {", in: iosSource), 4)
         for (start, end) in [
             ("func closeLocalMedia(kind: String, type: String, producerId: String?) async -> Bool {",
@@ -1981,7 +1884,6 @@ final class ConclaveTests: XCTestCase {
             ], "iOS camera close ownership in \(start)")
         }
 
-        // A camera-off that keeps the producer bumps the off intent first.
         XCTAssertNotNil(codeRange(
             of: "func suspendLocalVideoForRecovery() async {\n        localVideoOffIntentGeneration += 1",
             in: iosSource
@@ -2333,8 +2235,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(retryState.permitsConsumerResetRetry)
         XCTAssertEqual(retryState.nextBackoffMilliseconds, 75)
 
-        // Simulate a lost first abort ACK: the second attempt must reuse the
-        // exact identity, and only its confirmation may release reset retry.
         let secondAttempt = try XCTUnwrap(retryState.nextRequest())
         XCTAssertEqual(secondAttempt.requestId, firstAttempt.requestId)
         XCTAssertEqual(secondAttempt.producerId, firstAttempt.producerId)
@@ -2475,7 +2375,7 @@ final class ConclaveTests: XCTestCase {
             "guard info.type == ProducerType.webcam.rawValue else { return nil }"
         ))
         let iosAdaptiveEnd = try XCTUnwrap(iosSource.range(
-            of: "// MARK: - RTP Capabilities (from server)",
+            of: "var serverRtpCapabilities: RtpCapabilities?",
             range: iosAdaptiveStart.upperBound..<iosSource.endIndex
         ))
         let iosAdaptive = String(
@@ -3082,7 +2982,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(snapshot[0].displayName, "Nikhil Rao")
     }
 
-    /// WP2-S2a: the chat copy now comes from the one classifier (S70 SY11); transport errors stay readable.
     func testMeetingChatErrorPresentationKeepsTransportErrorsReadable() throws {
         func message(_ text: String) -> String? {
             MeetingErrorLegacyCopy.message(MeetingErrorClassifier.classify(
@@ -3863,9 +3762,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(state.visibleGridSnapshot().shouldShowDetachedSelfView)
     }
 
-    /// Verify G2 r3 (characterization): `participant(for:)` reads the merged roster through a cache and a user-key index
-    /// built once per roster write; the merge rules, the first-match order and the local-identity filter are unchanged,
-    /// and both a roster write and a local identity change are seen by the next lookup.
     @MainActor
     func testRemoteParticipantLookupKeepsMergeRulesAcrossRosterWrites() throws {
         let state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
@@ -3878,7 +3774,6 @@ final class ConclaveTests: XCTestCase {
             "cat@example.com": Participant(id: "cat@example.com")
         ]
 
-        // The bare id merges into the first session (muted only if both are); the second session stays its own entry.
         XCTAssertEqual(state.participant(for: "ann@example.com")?.id, "ann@example.com#s1")
         XCTAssertEqual(state.participant(for: "ann@example.com")?.isMuted, false)
         XCTAssertEqual(state.participant(for: "ann@example.com#s2")?.id, "ann@example.com#s2")
@@ -3894,7 +3789,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertNil(state.canonicalStageUserId("bob@example.com#s1"))
         XCTAssertEqual(state.participantCount, 3)
 
-        // Cat becomes the local identity and leaves the remote roster without a roster write.
         state.sfuUserId = "cat@example.com"
         XCTAssertNil(state.participant(for: "cat@example.com"))
         XCTAssertEqual(state.participantCount, 2)
@@ -4674,8 +4568,6 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        // S50 PH12 (INM D14, HD B4-T7 R2f): webinar attendees from the admin snapshot never enter `participants`, so
-        // the panelist count stays at you and Maya; the host grant below is still refused for both attendees.
         XCTAssertNil(viewModel.state.participant(for: "tara@example.com#web-session"))
         XCTAssertNil(viewModel.state.participant(for: "lee@example.com#web-session"))
         XCTAssertEqual(viewModel.state.participant(for: "maya@example.com#web-session")?.isWebinarAttendee, false)
@@ -4741,7 +4633,6 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        // C6-18 (ACT-7): the bytes wait in the non-observable relay for the embed's snapshot, never in MeetingState.
         XCTAssertEqual(viewModel.activeAppSession.appId, "whiteboard")
         XCTAssertEqual(viewModel.activeAppSession.pendingRemote.map { $0.data }, [Data([0x01, 0x02])])
         XCTAssertTrue(viewModel.state.activeAppHasRoomData)
@@ -4753,7 +4644,6 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        // C6-18 (ACT-7): the bytes wait in the non-observable relay for the embed's snapshot, never in MeetingState.
         XCTAssertEqual(viewModel.activeAppSession.appId, "whiteboard")
         XCTAssertEqual(viewModel.activeAppSession.pendingRemote.map { $0.data }, [Data([0x01, 0x02])])
         XCTAssertTrue(viewModel.state.activeAppHasRoomData)
@@ -7102,7 +6992,7 @@ final class ConclaveTests: XCTestCase {
         viewModel.togglePin("remote@example.com#remote-session")
 
         XCTAssertNil(viewModel.state.pinnedUserId)
-        // S20 SC2: unpinning never rewrites the user's chosen layout (it was explicitly Spotlight here).
+
         XCTAssertEqual(viewModel.state.viewMode, .spotlight)
     }
 
@@ -7912,7 +7802,6 @@ final class ConclaveTests: XCTestCase {
             padding: 16
         )
 
-        // Meet-style stacked pair: two full-width tiles that split the stage.
         XCTAssertEqual(layout.columns, 1)
         XCTAssertEqual(layout.rows, 2)
         XCTAssertGreaterThan(layout.tileWidth, 300)
@@ -7931,7 +7820,7 @@ final class ConclaveTests: XCTestCase {
 
         XCTAssertEqual(layout.columns, 1)
         XCTAssertEqual(layout.rows, 1)
-        // Fills the available height instead of floating a square card.
+
         XCTAssertEqual(layout.tileHeight, 608, accuracy: 1.0)
         XCTAssertLessThanOrEqual(layout.tileHeight, layout.tileWidth * 2.1)
     }
@@ -8011,7 +7900,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testGridTileFramePolicyCentersShortLastRowAndStaysInCanvas() throws {
-        // 3 tiles in 2 columns: rows are [2, 1]; the lone last tile centers.
+
         let tileWidth: CGFloat = 180
         let tileHeight: CGFloat = 240
         let spacing: CGFloat = 12
@@ -8037,11 +7926,10 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(first.y, 0, accuracy: 0.001)
         XCTAssertEqual(second.x, tileWidth + spacing, accuracy: 0.001)
         XCTAssertEqual(second.y, 0, accuracy: 0.001)
-        // Last row: single tile centered in the canvas.
+
         XCTAssertEqual(third.x, (contentWidth - tileWidth) / 2.0, accuracy: 0.001)
         XCTAssertEqual(third.y, tileHeight + spacing, accuracy: 0.001)
 
-        // Every origin stays inside the canvas for a range of counts.
         for count in 1...8 {
             let columns = count == 2 ? 1 : min(count, 2)
             let width = columns == 1 ? contentWidth : tileWidth
@@ -8250,8 +8138,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testSettingsDisplayNameAutoSaveClearsDebounceBeforeSubmitting() throws {
-        // PPL-2 (S60 C6-10): the Settings field's autosave moved into the shared DisplayNameEditor; the ordering pin
-        // follows it (the debounce clears before the submit).
+
         let source = try sourceFileContents("Sources/Conclave/Core/Session/DisplayNameEditor.swift")
         let guardNeedle = "SettingsTimingPolicy.shouldApply(generation: generation, currentGeneration: self.autoSaveGeneration) else { return }"
         let clearNeedle = "self.autoSaveTask = nil"
@@ -8385,14 +8272,12 @@ final class ConclaveTests: XCTestCase {
         )
 
         XCTAssertEqual(focusedBottomPadding, 12)
-        // Full-height docked panel fills the available height.
+
         XCTAssertEqual(focusedHeight, 680)
     }
 
     func testAndroidUnfocusedChatDockedPanelUsesSmallBottomInset() throws {
-        // The chat is a full-height docked panel that covers the controls, so the
-        // composer only needs a small bottom inset (home indicator), not 84pt of
-        // clearance for the controls bar.
+
         XCTAssertEqual(
             MeetingChatOverlayLayout.bottomPadding(
                 inputFocused: false,
@@ -8405,9 +8290,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testAndroidChatComposerSitsBesideMaterialTextField() throws {
-        // The Android field is a Material3 OutlinedTextField with an enforced
-        // 56dp minimum height; action buttons must stay at least 44dp to hold
-        // their own visually, and no layout constant may clamp below 56.
+
         XCTAssertEqual(ChatComposerLayout.inputHeight(isAndroid: true), 44)
         XCTAssertEqual(ChatComposerLayout.inputVerticalPadding(isAndroid: true), 0)
         XCTAssertEqual(ChatComposerLayout.composerVerticalPadding(isAndroid: true), 6)
@@ -8478,7 +8361,8 @@ final class ConclaveTests: XCTestCase {
         )
 
         let source = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
-        XCTAssertTrue(source.contains("Suggestions are a popover anchored above the composer"))
+        XCTAssertTrue(source.contains(".overlay(alignment: .topLeading) {"))
+        XCTAssertEqual(source.components(separatedBy: ".frame(height: suggestionPopoverHeight)").count - 1, 2)
         XCTAssertTrue(source.contains(".offset(y: -(suggestionPopoverHeight + 10.0))"))
     }
 
@@ -8629,7 +8513,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testChatOverlayLayoutFillsAvailableHeight() throws {
-        // Docked panel fills the full available height on every platform/state.
+
         XCTAssertEqual(
             MeetingChatOverlayLayout.maxHeight(for: 180, inputFocused: true, isAndroid: true),
             180
@@ -8645,8 +8529,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testChatDockedPanelHeightIsIndependentOfFocus() throws {
-        // Height no longer shrinks when the composer is focused — the panel is
-        // full-height and the keyboard is handled via imePadding / keyboardInset.
+
         XCTAssertEqual(
             MeetingChatOverlayLayout.maxHeight(for: 680, inputFocused: true, isAndroid: true),
             680
@@ -9014,9 +8897,6 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
-    /// WP2-S2a: media failures are typed by the one classifier (PLAN-next 7 item 4, S70 7); the legacy banner gets
-    /// owned copy and the retired strings ("Camera/microphone permission denied", "Failed to toggle screen sharing:")
-    /// never come back.
     func testMeetingMediaErrorPresentationMatchesWebMeetErrors() throws {
         func classified(_ text: String, _ context: MeetingErrorContext = .media) -> ClassifiedError {
             MeetingErrorClassifier.classify(
@@ -10206,8 +10086,7 @@ final class ConclaveTests: XCTestCase {
         let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
 
         XCTAssertTrue(viewModelSource.contains("preserveCallAudioRouting: isRecoveryJoin"))
-        // SYS-10 (HD B7-T6, `stopScreenCaptureManager(source:)`): the pre-join cleanup stops capture with the recovery
-        // stop source; the audio routing it preserves is unchanged.
+
         XCTAssertTrue(viewModelSource.contains("if shouldCleanupExistingMediaBeforeJoin {\n                    await stopScreenCaptureManager(source: ScreenShareStopSource.recovery)\n                    await webRTCClient.cleanup(\n                        notifyLocalState: false,\n                        preserveCallAudioRouting: isRecoveryJoin"))
         XCTAssertTrue(viewModelSource.contains("resetLiveRoomSnapshotStateForJoin(preservingVisibleState: isRecoveryJoin)"))
         XCTAssertTrue(viewModelSource.contains("state.participants[userId]?.isCameraOff = true"))
@@ -10278,15 +10157,14 @@ final class ConclaveTests: XCTestCase {
     func testDarwinPermissionPurposeStringsArePresentInAppAndExtensionPlists() throws {
         let appPlist = try sourcePlistDictionary("Darwin/Info.plist")
         let extensionPlist = try sourcePlistDictionary("Darwin/ScreenShareExtension/Info.plist")
-        // SYS-14 (S70 16 c, SY12, S10 0.8 C12): the app declares only the purpose strings it uses, and
-        // Darwin/InfoPlist.xcstrings localizes them (SYS14LocalizationInfraTests pins the copy and the catalog).
+
         let appPurposeStringKeys = [
             "NSCameraUsageDescription",
             "NSMicrophoneUsageDescription",
             "NSLocalNetworkUsageDescription",
             "NSPhotoLibraryAddUsageDescription",
         ]
-        // The broadcast extension keeps its checked-in plist until SYS-10 gives it its own catalog (S70 10 c, CE P12).
+
         let extensionPurposeStringKeys = [
             "NSCameraUsageDescription",
             "NSMicrophoneUsageDescription",
@@ -10387,7 +10265,7 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(appPlist["UIApplicationSupportsIndirectInputEvents"] as? Bool, true)
         XCTAssertNotNil(appPlist["UILaunchScreen"])
         XCTAssertEqual(appPlist["UIStatusBarStyle"] as? String, "UIStatusBarStyleDefault")
-        // S20 SC14 (Q9): no upside-down portrait on iPhone; iPad keeps all four for multitasking.
+
         let orientations = try XCTUnwrap(appPlist["UISupportedInterfaceOrientations"] as? [String])
         XCTAssertEqual(
             orientations,
@@ -10463,13 +10341,19 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(script.contains("framework_path=\"${FRAMEWORKS_DIR}/${framework_name}\""))
         XCTAssertTrue(script.contains("cp \"${manifest_path}\" \"${framework_path}/PrivacyInfo.xcprivacy\""))
         XCTAssertTrue(script.contains("resign_code_bundle_if_needed \"${framework_path}\""))
-        // SYS-14 (S70 14 c, SY12): purpose strings come from Darwin/Info.plist and Darwin/InfoPlist.xcstrings only,
-        // so the phase never rewrites the built app, framework, bundle or extension plists.
+
         XCTAssertFalse(script.contains("UsageDescription"))
         XCTAssertFalse(script.contains("PlistBuddy"))
         XCTAssertFalse(script.contains("set_all_purpose_strings"))
         XCTAssertFalse(script.contains("${PLUGINS_DIR}"))
-        XCTAssertTrue(project.contains("DED5F813849FF18CBE9AFB5A /* Embed App Extensions */,\n\t\t\t\t8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */,"))
+        let plist = try XCTUnwrap(try PropertyListSerialization.propertyList(from: Data(project.utf8), format: nil) as? [String: Any])
+        let objects = try XCTUnwrap(plist["objects"] as? [String: [String: Any]])
+        let phases = try XCTUnwrap(objects["499CD4382AC5B799001AE8D8"]?["buildPhases"] as? [String])
+        let embedIndex = try XCTUnwrap(phases.firstIndex(of: "DED5F813849FF18CBE9AFB5A"))
+        let privacyIndex = try XCTUnwrap(phases.firstIndex(of: "8D0E0D6B2E5A4A71B57E90C1"))
+        XCTAssertEqual(privacyIndex, embedIndex + 1)
+        XCTAssertEqual(objects["DED5F813849FF18CBE9AFB5A"]?["isa"] as? String, "PBXCopyFilesBuildPhase")
+        XCTAssertEqual(objects["8D0E0D6B2E5A4A71B57E90C1"]?["isa"] as? String, "PBXShellScriptBuildPhase")
         XCTAssertTrue(project.contains("\"$(SRCROOT)/PrivacyManifests/MediasoupFramework.xcprivacy\""))
     }
 #endif
@@ -11392,8 +11276,6 @@ final class ConclaveTests: XCTestCase {
         )
         XCTAssertEqual(single.state.phase, WebcamTopologyTransitionPhase.single)
 
-        // No revoke event arrives. The runtime wake is scheduled at the active
-        // proof's monotonic expiry and supplies currentSingleProofActive=false.
         let expired = WebcamTopologyTransitionMachine.advance(
             state: single.state,
             input: makeWebcamTopologyInput(
@@ -11687,9 +11569,6 @@ private func registeredServerEventRawValues(
     return Set(registeredConstants.compactMap { socketEventConstants[$0] })
 }
 
-/// `source` without its `/* ... */` comments (nested ones included); each
-/// comment's newlines stay, so line structure is kept. The guarded sources
-/// have no `/*` or `*/` inside string literals.
 private func withoutBlockComments(_ source: String) -> String {
     let bytes = Array(source.utf8)
     var result: [UInt8] = []
@@ -11714,8 +11593,6 @@ private func withoutBlockComments(_ source: String) -> String {
     return String(decoding: result, as: UTF8.self)
 }
 
-/// The first occurrence of `code` at or after `start` that begins its line
-/// (only spaces or tabs before it), so a commented-out copy never counts.
 private func codeRange(
     of code: String,
     in text: String,
@@ -11733,7 +11610,6 @@ private func codeRange(
     return nil
 }
 
-/// How many occurrences of `code` begin their line (see `codeRange`).
 private func codeCount(of code: String, in text: String) -> Int {
     var count = 0
     var searchStart = text.startIndex

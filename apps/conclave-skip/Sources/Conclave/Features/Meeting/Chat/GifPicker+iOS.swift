@@ -1,22 +1,12 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S40 7 (CHT-5) on iOS: the GIF, sticker and clip page, pushed inside the chat's navigation stack (no second sheet,
-// D12). The system search field in the navigation bar drawer (focused on appear while there is no query), the media
-// type segments with the menu fallback, a grid of fixed 104 pt square tiles (the grid never reflows while images
-// load), the next page once one of the last six tiles appears (tracked in a reference box: appearance callbacks never
-// write observed state), "Powered by Klipy", and the one v1 tip (F00 C25, RECONCILE R39). The page owns the 250 ms
-// debounce and the generation guard through the shared `ChatGifPickerState`; every request goes through
-// `chat.searchGifs` (the core's Klipy closure or the fixture's canned pages) and is cancelled by a newer query, a kind
-// switch or closing the page. Choosing a tile sends it at once with the current reply and pops the page.
-
-/// The appearance callbacks' reference box (AGENTS appearance-callback rule): a load-more in flight.
 private final class ChatGifLoadMoreBox {
     var inFlightGeneration = -1
 }
 
 enum ChatGifPickerLayout {
-    /// Fixed square cells (S40 7 c: adaptive minimum 104 pt; fixed here so a tile never resizes while it loads).
+
     static let cell: CGFloat = 104
     static let spacing: CGFloat = 8
 }
@@ -136,7 +126,6 @@ struct ChatGifPickerPage: View {
             .accessibilityIdentifier("chat.gifs.attribution")
     }
 
-    /// A new generation; the request it starts is dropped if a newer one starts first.
     private func start(kind: ChatGifKind, query: String) {
         loadTask?.cancel()
         let next = state.starting(kind: kind, query: query)
@@ -149,7 +138,6 @@ struct ChatGifPickerPage: View {
         }
     }
 
-    /// Appearance callback: only the reference box changes here; the state write happens when the page answers.
     private func tileAppeared(_ index: Int) {
         guard state.shouldLoadMore(afterShowing: index), box.inFlightGeneration != state.generation else { return }
         loadMore()
@@ -164,19 +152,17 @@ struct ChatGifPickerPage: View {
         let query = current.query
         let page = current.nextPage
         Task { @MainActor in
-            // The footer spinner: written from the task, never from the appearance callback itself.
+
             if state.generation == generation { state = state.startingMore() }
             let result = await chat.searchGifs(kind: kind, query: query, page: page)
             if box.inFlightGeneration == generation { box.inFlightGeneration = -1 }
-            // A newer search owns the state now: this page changes nothing (and never marks the new one as loading).
+
             guard state.generation == generation else { return }
             state = state.startingMore().acceptingMore(result, generation: generation)
         }
     }
 }
 
-/// One square tile: the animated GIF or sticker (first frame under Reduce Motion) or the clip poster with the play
-/// glyph; a Button labelled with the title (or the kind) and the hint "Sends to everyone".
 private struct ChatGifTile: View {
     let gif: ChatGifAttachment
     let kind: ChatGifKind
@@ -210,7 +196,6 @@ private struct ChatGifTile: View {
     }
 }
 
-/// The GIF page's iOS copy (7 g): one full sentence per kind.
 enum ChatGifCopy {
     static func kindOptions() -> [ConclaveSegmentModel] {
         [

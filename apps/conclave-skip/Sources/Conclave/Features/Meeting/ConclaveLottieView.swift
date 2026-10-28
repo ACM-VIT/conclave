@@ -4,11 +4,6 @@ import AVFoundation
 import UIKit
 #endif
 
-/// The branded Conclave lockup animation used by the meeting-entry takeover.
-/// Android uses LottieFiles' dotLottie player. iOS plays the same frames as a
-/// hardware-decoded video because the source dotLottie contains 301 full-size
-/// raster images; Lottie eagerly decodes them and exceeds the device's memory
-/// limit during meeting startup.
 struct ConclaveLottieView: View {
     var body: some View {
         #if SKIP
@@ -54,10 +49,7 @@ private struct ConclaveEntryVideoView: UIViewRepresentable {
     func makeUIView(context: Context) -> PlayerView {
         let view = PlayerView()
         view.backgroundColor = .black
-        // The source is landscape. Aspect-fill scales it to the full portrait
-        // height, which crops the sides and makes the centered mark appear huge
-        // and offset. The surrounding view is already black, so aspect-fit keeps
-        // the complete animation centered without visible letterboxing.
+
         view.playerLayer.videoGravity = .resizeAspect
 
         guard let url = Bundle.module.url(

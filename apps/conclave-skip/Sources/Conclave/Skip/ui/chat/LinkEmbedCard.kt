@@ -39,14 +39,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
-/*
- * S40 3 d (CL6) and 6 d (link preview), CHT-5 on Android. A card reads one ready ChatEmbedEntry (the presenter adds a
- * URL to a row only once its card is ready, CH16), so it appears once with fixed geometry (240 dp, a 16:9 image box or
- * a 64 dp thumbnail, fixed line counts) and never resizes. Each card is one clickable node that opens the link through
- * the chat's link policy (Custom Tabs in the call task, D23, Q16), so YouTube and X stay in front; the installed app is
- * not launched directly. Views never start a fetch: the composer preview asks the presenter after its 450 ms debounce.
- */
-
 internal object ChatEmbedLayoutAndroid {
     val cardWidth = 240.dp
     val largeImageHeight = 135.dp
@@ -54,7 +46,6 @@ internal object ChatEmbedLayoutAndroid {
     val previewThumb = 40.dp
 }
 
-/** One link card: large page or image, thumbnail page, YouTube, or an X post with up to four media cells. */
 @Composable
 internal fun LinkEmbedCard(entry: ChatEmbedEntry, rowId: String, index: Int, onOpen: (String) -> Unit) {
     if (entry.phase != ChatEmbedPhase.ready) return
@@ -67,7 +58,7 @@ internal fun LinkEmbedCard(entry: ChatEmbedEntry, rowId: String, index: Int, onO
             .clearAndSetSemantics {
                 contentDescription = label
                 role = Role.Button
-                // The cleared node keeps one explicit activation, so TalkBack opens the card like a tap.
+
                 onClick {
                     onOpen(model.url)
                     true
@@ -102,7 +93,6 @@ internal fun LinkEmbedCard(entry: ChatEmbedEntry, rowId: String, index: Int, onO
     }
 }
 
-/** The card's spoken label (3 g): "Play video: <title>" or "Watch on YouTube", "Linked image", the post, the page. */
 @Composable
 internal fun chatEmbedLabel(model: ChatEmbedModel): String = when (model.kind) {
     ChatEmbedKind.youtube -> if (model.title.isEmpty()) conclaveString("chat_embed_youtube") else conclaveString("chat_embed_play", model.title)
@@ -146,7 +136,6 @@ private fun ChatEmbedText(site: String, title: String, summary: String) {
     }
 }
 
-/** An X post: author and handle, the text (4 lines) and a grid of 1 to 4 fixed cells. */
 @Composable
 private fun ChatEmbedPost(model: ChatEmbedModel) {
     val scheme = MaterialTheme.colorScheme
@@ -188,10 +177,6 @@ private fun ChatEmbedPost(model: ChatEmbedModel) {
     }
 }
 
-/**
- * S40 6 d link preview above the field: the draft's first embeddable URL after a 450 ms pause, shown once its card is
- * ready, with Remove (the send then carries suppressEmbeds). The entry comes from the presenter, never a fetch here.
- */
 @Composable
 internal fun ChatComposerLinkPreview(presenter: ChatPresenter, draft: String, dismissedUrl: String, onDismiss: (String) -> Unit) {
     val url = ChatComposerPolicy.linkPreviewURL(draft)

@@ -1,11 +1,6 @@
 #if os(iOS) && !SKIP
 import Foundation
 
-// S40 3 g, 5 g, 6 g (CHT-1 to CHT-3): the chat's iOS copy, resolved from the String Catalog (Apple title case for
-// controls and titles, sentence case for body, status lines and announcements). The presenter supplies kinds and
-// data only; names, message text and server text are data, never keys.
-
-/// Canonical chat concepts. Artwork remains decorative inside localized controls.
 enum ChatSymbols {
     static let reply = ConclaveSymbols.arrowshapeTurnUpLeft
     static let privateMessage = ConclaveSymbols.lockFill
@@ -20,7 +15,7 @@ enum ChatSymbols {
 }
 
 enum ChatCopy {
-    /// The reason line under a failed bubble (3 g); "" for retryable failures that show none.
+
     static func failureReason(_ failure: ChatFailure) -> String {
         switch failure {
         case .tooLong: return ConclaveStrings.text("Messages can be up to 1,000 characters.")
@@ -44,7 +39,6 @@ enum ChatCopy {
         }
     }
 
-    /// The text of a system row (3 g, 5 g): catalog copy for notices, the row's own text otherwise.
     static func systemText(_ row: ChatRowModel) -> String {
         switch row.notice {
         case .cleared: return ConclaveStrings.text("Chat cleared")
@@ -61,19 +55,17 @@ enum ChatCopy {
         }
     }
 
-    /// 2 i: the posted announcement text (the view posts it at low priority).
     static func announcement(_ announcement: ChatAnnouncement) -> String {
         switch announcement.kind {
         case "newMessage": return ConclaveStrings.format("Chat New Message %@ %@", announcement.name, announcement.text)
         case "newMessages": return ConclaveStrings.format("%lld new messages", announcement.count)
         case "copied": return ConclaveStrings.text("Copied")
-        // CHT-7 (S40 4 i): one announcement when an answer completes, with its first sentence.
+
         case "assistantAnswered": return ConclaveStrings.format("Conclave answered: %@", announcement.text)
         default: return ""
         }
     }
 
-    /// The spoken emoji name (5 g); the emoji itself for an emoji outside the canonical eight.
     static func emojiName(_ emoji: String) -> String {
         switch ChatReactionRules.nameKey(emoji) {
         case "thumbsUp": return ConclaveStrings.text("Thumbs Up")
@@ -88,7 +80,6 @@ enum ChatCopy {
         }
     }
 
-    /// "You and Avery reacted with Thumbs Up" (web label rule, 5 g): up to 3 names, then "and N others".
     static func chipLabel(_ chip: ChatReactionChip) -> String {
         let name = emojiName(chip.emoji)
         var names: [String] = []
@@ -106,13 +97,11 @@ enum ChatCopy {
         return ConclaveStrings.format("%@ reacted with %@", subject, name)
     }
 
-    /// The chip model for the C24 component.
     static func chipModel(_ chip: ChatReactionChip, canToggle: Bool) -> ConclaveReactionChipModel {
         ConclaveReactionChipModel(id: chip.emoji, emoji: chip.emoji, count: chip.count, isMine: chip.isMine,
                                   canToggle: canToggle, accessibilityLabel: chipLabel(chip))
     }
 
-    /// Command descriptions (6 g, web parity with meeting-core chat-commands.ts).
     static func commandDescription(_ commandId: String) -> String {
         switch commandId {
         case "help": return ConclaveStrings.text("Show available commands")
@@ -131,14 +120,12 @@ enum ChatCopy {
         }
     }
 
-    /// A mention suggestion's title (6 g): "Conclave AI", "%@ (You)" or the name.
     static func mentionTitle(_ option: ChatMentionOption) -> String {
         if option.isYou { return ConclaveStrings.format("%@ (You)", option.name) }
         if option.isAssistant { return ConclaveStrings.text("Conclave AI") }
         return option.name
     }
 
-    /// A mention suggestion's second line: the assistant hint (its private-mode reason while dimmed, D24) or "@token".
     static func mentionDetail(_ option: ChatMentionOption, isPrivateMode: Bool) -> String {
         if option.isAssistant {
             return isPrivateMode ? ConclaveStrings.text("Conclave AI replies are public. Switch to Everyone to ask.")
@@ -147,17 +134,14 @@ enum ChatCopy {
         return "@" + option.token
     }
 
-    /// A command suggestion's second line: the description, or the reason while dimmed.
     static func commandDetail(_ row: ChatCommandRow) -> String {
         row.isAvailable ? commandDescription(row.id) : commandReason(row.reason)
     }
 
-    /// T3 borrow P1: what a hardware arrow move posts politely, the highlighted row's title and second line.
     static func suggestionAnnouncement(title: String, detail: String) -> String {
         detail.isEmpty ? title : title + ", " + detail
     }
 
-    /// Why a command row is dimmed (6 g).
     static func commandReason(_ reason: String) -> String {
         switch reason {
         case "privateDisabled": return ConclaveStrings.text("Private messages are turned off by the host.")
@@ -167,7 +151,6 @@ enum ChatCopy {
         }
     }
 
-    /// The gate status line above the field (6 g); "" when the gate is open, locked (placeholder) or attendee.
     static func gateLine(_ gate: ChatSendGate) -> String {
         switch gate {
         case .reconnecting: return ConclaveStrings.text("Reconnecting. You can send when the call reconnects.")
@@ -177,9 +160,6 @@ enum ChatCopy {
         }
     }
 
-    /// T3 borrow P6 (S40 6 i, AX2): the reason Send is disabled, read as the Send button's value (the label stays the
-    /// control's name) and posted once for a blocked hardware Return. `overBy` is the count past the limit; a failed
-    /// photo reuses the chip's status line. "" for `none` and `attendee` (the composer is absent).
     static func sendBlockReason(_ block: ChatSendBlock, overBy: Int, attachment: ChatAttachmentState) -> String {
         switch block {
         case .none, .attendee: return ""
@@ -212,7 +192,6 @@ enum ChatCopy {
         return ""
     }
 
-    /// The header and quote name for a row (3 g).
     static func senderName(_ row: ChatRowModel) -> String {
         row.isOwn ? ConclaveStrings.text("You") : row.senderName
     }
@@ -221,8 +200,6 @@ enum ChatCopy {
         Date(timeIntervalSince1970: millis / 1000.0).formatted(date: .omitted, time: .shortened)
     }
 
-    /// 2 c day separators: "Today" and "Yesterday" from the catalog (standalone capitalization), other days weekday,
-    /// month and day in the locale's order.
     static func day(_ millis: Double) -> String {
         let date = Date(timeIntervalSince1970: millis / 1000.0)
         let calendar = Calendar.current
@@ -231,12 +208,10 @@ enum ChatCopy {
         return date.formatted(Date.FormatStyle().weekday(.wide).month(.wide).day())
     }
 
-    /// 3 i: the one summary element per message: "Avery Lee, Can you share the deck?".
     static func rowLabel(_ row: ChatRowModel) -> String {
         ConclaveStrings.format("Chat Row Summary %@ %@", senderName(row), row.plainText)
     }
 
-    /// 3 i value parts in fixed order: private, reply, media kind, reactions count, time, delivery.
     static func rowValue(_ row: ChatRowModel) -> String {
         var parts: [String] = []
         if row.privacy == ChatPrivacy.privateSent {

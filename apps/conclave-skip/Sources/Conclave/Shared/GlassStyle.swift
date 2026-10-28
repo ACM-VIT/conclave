@@ -1,16 +1,7 @@
-//
-//  GlassStyle.swift
-//  Conclave
-//
-//  Cross-platform Liquid Glass surface layer. iOS/macOS 26+ uses native
-//  `glassEffect`; older Apple OS and Android keep compatible material/scrim
-//  fallbacks. Keep iOS 26 symbols behind `#if compiler(>=6.2)` because
-//  `#available` alone cannot hide missing SDK symbols from older Xcode builds.
-//
+
 
 import SwiftUI
 
-// Android/Compose fallback fill for glass-like controls over video.
 private let acmGlassFill = acmColor(red: 24.0, green: 24.0, blue: 27.0, opacity: 0.72)
 
 #if !SKIP
@@ -30,7 +21,7 @@ private func acmGlassStyle(tint: Color?, interactive: Bool) -> Glass {
 #endif
 
 extension View {
-    /// Capsule-shaped liquid-glass surface (floating bars, pills, chips).
+
     @ViewBuilder
     public func acmGlassCapsule(tint: Color? = nil, interactive: Bool = false) -> some View {
         #if SKIP
@@ -53,7 +44,6 @@ extension View {
         #endif
     }
 
-    /// Rounded-rect liquid-glass surface (cards, sheets, overlays).
     @ViewBuilder
     public func acmGlassRoundedRect(cornerRadius: CGFloat, tint: Color? = nil, interactive: Bool = false) -> some View {
         #if SKIP
@@ -104,8 +94,6 @@ extension View {
     #endif
 }
 
-/// Groups sibling glass elements so iOS 26 can blend/morph them with correct
-/// spacing. On older Apple OS and on Android it is a transparent pass-through.
 struct ACMGlassGroup<Content: View>: View {
     var spacing: CGFloat = 12
     @ViewBuilder let content: Content

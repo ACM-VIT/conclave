@@ -3,15 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SET-2 (OUT/PLAN-screens.md section 5; S60 2 audio rows, 0.6 L6-1, L6-2, 0.8 C6-1, C6-6, C6-7; S60 Q8): the audio
-/// rows and pages on the fake WP3 owner (`SettingsRecordingCore`): one test tone per tap (`speakerTest.count`), noise
-/// suppression by one track replacement in a call and none in the app scope, the 10 Hz mic meter subscribed once per
-/// page lifetime and stopped on leave, the muted state, Record and Replay hidden without `canRecordMicTest`, the shared
-/// level and tone policies, and source pins on both WebRTC clients (replaceTrack on the send queue, the newest mute
-/// intent wins, one synthesized tone through the voice route). No test plays a sound.
 @MainActor
 struct SET2AudioPagesTests {
-    // MARK: Test tone (C6-7, 2 l4)
 
     @Test func playTestSoundCountsOncePerTapAndReturnsToIdle() async {
         let (presenter, core) = Self.make(.guest)
@@ -46,8 +39,6 @@ struct SET2AudioPagesTests {
         #expect(TestTonePolicy.playingMillis > TestTonePolicy.durationMillis)
     }
 
-    // MARK: Noise suppression (C6-1, 1 l5)
-
     @Test func noiseSuppressionReplacesOnceInACallAndNeverInTheAppScope() {
         let defaults = Self.freshDefaults()
         let (presenter, core) = Self.make(.mic, defaults: defaults)
@@ -74,8 +65,6 @@ struct SET2AudioPagesTests {
         #expect(presenter.audio.noiseSuppressionReason == .appliesNextJoin)
     }
 
-    // MARK: Mic test (C6-6, 2 l1, 2 l9, 2 l10)
-
     @Test func micTestSubscribesOncePerPageAndStopsOnLeave() async {
         let (presenter, core) = Self.make(.mic)
         presenter.sleep = { _ in await Task.yield() }
@@ -89,7 +78,7 @@ struct SET2AudioPagesTests {
         let audioRevision = presenter.audio.revision
         core.scriptedLevel = 0.81
         for _ in 0..<10 { await Task.yield() }
-        // The level moves only the leaf; the snapshots stay put (settings.mic.body unchanged).
+
         #expect(presenter.micLevel.segments == MicLevelPolicy.filledSegments(level: 0.81))
         #expect(presenter.audio.revision == audioRevision && presenter.chat.revision == rootRevision)
         presenter.stopMicTest()
@@ -137,8 +126,6 @@ struct SET2AudioPagesTests {
         #expect(MicLevelPolicy.filledSegments(level: 0.01) == 1)
     }
 
-    // MARK: Routes (L6-1, S30 CC4)
-
     @Test func routeRequestsGoToTheOwnerOnlyForAChange() {
         let owner = AudioRouteOwner()
         let presenter = SettingsPresenter(scope: .call, platform: .android, defaults: Self.freshDefaults())
@@ -152,8 +139,6 @@ struct SET2AudioPagesTests {
         #expect(app.requestRoute(id: "receiver") == .ignored)
     }
 
-    // MARK: Sources (C6-1, C6-6, C6-7)
-
     @Test func iosClientReplacesTheMicTrackOnTheSendQueueAndPlaysOneTone() throws {
         let client = try Self.source("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
         #expect(client.contains("func applyNoiseSuppression(_ enabled: Bool) async -> Bool"))
@@ -166,7 +151,7 @@ struct SET2AudioPagesTests {
         #expect(client.contains("func sampleLocalMicrophoneLevel() -> Double"))
         #expect(client.contains("AVAudioPlayer(data: Self.testToneWAVData())"))
         #expect(!client.contains("AudioServicesPlaySystemSound(SystemSoundID(1057))"))
-        // The microphone track is still created disabled (AGENTS.md media invariants).
+
         #expect(client.contains("track.isEnabled = false\n        return (source, track)"))
     }
 
@@ -200,13 +185,11 @@ struct SET2AudioPagesTests {
         #expect(android.contains("if (audio.canRecordMicTest)"))
         #expect(android.contains("AudioRouteList(rows = rows"))
         #expect(android.contains("haptics.gesture(FeedbackKind.selectionChanged)"))
-        // Only the leaf reads the 10 Hz value.
+
         #expect(android.components(separatedBy: "meter.segments").count - 1 == 1)
         let rows = try Self.source("Sources/Conclave/Features/Meeting/Settings/SettingsRows+iOS.swift")
         #expect(rows.components(separatedBy: "meter.segments").count - 1 == 1)
     }
-
-    // MARK: Helpers
 
     static func make(_ state: SettingsFixtureState, defaults: UserDefaults = SET2AudioPagesTests.freshDefaults())
         -> (SettingsPresenter, SettingsRecordingCore) {
@@ -218,7 +201,6 @@ struct SET2AudioPagesTests {
         return (presenter, core)
     }
 
-    /// Nonisolated: `make`'s default argument calls it, and default arguments are evaluated outside the main actor.
     nonisolated static func freshDefaults() -> UserDefaults {
         let suite = "set2-audio-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard

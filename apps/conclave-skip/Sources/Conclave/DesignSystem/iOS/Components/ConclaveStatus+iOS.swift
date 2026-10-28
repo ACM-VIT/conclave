@@ -1,11 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// Status views (F00 C14): loading, empty, error with retry, and offline. Progress is the system spinner with a
-// static label (R13): no pulse, shimmer or timer, and the spinner exists only while something loads. In-call
-// variants inherit the dark environment of their region.
-
-/// A loading state: the system spinner with a static label ("Loading" when the screen names nothing better).
 struct ConclaveLoadingStatus: View {
     let label: String?
     let identifier: String
@@ -22,7 +17,6 @@ struct ConclaveLoadingStatus: View {
     }
 }
 
-/// An empty state.
 struct ConclaveEmptyStatus: View {
     let title: String
     let message: String
@@ -39,7 +33,6 @@ struct ConclaveEmptyStatus: View {
     }
 }
 
-/// An error with a retry. The retry is tonal; coral stays for the screen's primary action.
 struct ConclaveErrorStatus: View {
     let title: String
     let message: String
@@ -70,7 +63,6 @@ struct ConclaveErrorStatus: View {
     }
 }
 
-/// Offline with canonical artwork and component copy (F00 C14 g, S70 7 g).
 struct ConclaveOfflineStatus: View {
     let identifier: String
     let onRetry: (() -> Void)?
@@ -94,7 +86,6 @@ struct ConclaveOfflineStatus: View {
     }
 }
 
-/// The title is the state's heading.
 private struct StatusTitle: View {
     let title: String
     let systemImage: String

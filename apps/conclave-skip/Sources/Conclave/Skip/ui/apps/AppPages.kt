@@ -56,19 +56,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/*
- * S60 13 d (ACT-8) on Android: Activities > Spin the wheel and Activities > Watch together, pushed on the Activities
- * page stack (HD request B8-T2 R5 mounts them in ActivitiesPage.kt for ActivitiesRoute.wheel and .watch). Content panels
- * follow the system appearance. LazyColumn of ListItems; names in an OutlinedTextField with Words capitalization (Done
- * adds, a pasted list adds each line); the F00 C20 search field (ConclaveSearchField: leading search glyph, clear button
- * ds_clear_search, CircleShape, ImeAction.Search; never the experimental SearchBar) pinned under the app bar on the
- * Watch page; SwipeToDismissBox (end to start) removes a name or an Up next item, with the same action as a custom
- * accessibility action; Move up and Move down are menu items and custom actions (the drag handle waits for a
- * drag_indicator icon concept). Each page reads only host.wheel or host.watch.
- */
-
-// MARK: Spin the wheel
-
 @Composable
 internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
     val wheel = host.wheel
@@ -92,7 +79,7 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
                         value = draft,
                         onValueChange = { value ->
                             draft = value
-                            // A pasted list (or Enter on a hardware keyboard): every line becomes a name.
+
                             if (value.contains('\n')) addDraft()
                         },
                         label = { Text(conclaveString("app_wheel_add_name")) },
@@ -192,8 +179,6 @@ internal fun AppWheelPage(host: AppHostPresenter, reservation: PaddingValues) {
         )
     }
 }
-
-// MARK: Watch together
 
 @Composable
 internal fun AppWatchPage(host: AppHostPresenter, reservation: PaddingValues) {
@@ -297,7 +282,6 @@ internal fun AppWatchPage(host: AppHostPresenter, reservation: PaddingValues) {
     }
 }
 
-/** A search, trending or classic row: the action for you now as the trailing button; Play now in the menu while queuing. */
 @Composable
 private fun AppWatchVideoItem(host: AppHostPresenter, watch: WatchPageModel, video: WatchVideoModel) {
     val action = watch.pickAction
@@ -337,7 +321,6 @@ private fun AppWatchVideoItem(host: AppHostPresenter, watch: WatchPageModel, vid
     )
 }
 
-/** An Up next row: Play now and a menu (Move up, Move down, Remove) for those who control; swipe to remove. */
 @Composable
 private fun AppWatchQueueItem(host: AppHostPresenter, watch: WatchPageModel, item: WatchItemModel) {
     val pending = watch.isPending(AppPageCommandKind.playNow, target = item.id) || watch.isPending(AppPageCommandKind.move, target = item.id) ||
@@ -392,7 +375,6 @@ private fun AppWatchQueueItem(host: AppHostPresenter, watch: WatchPageModel, ite
     }
 }
 
-/** A participant's pick, for hosts: Add to queue or Decline. */
 @Composable
 private fun AppWatchRequestItem(host: AppHostPresenter, watch: WatchPageModel, request: WatchRequestModel) {
     val pending = watch.isPending(AppPageCommandKind.approve, target = request.id) || watch.isPending(AppPageCommandKind.decline, target = request.id)
@@ -421,8 +403,6 @@ private fun AppWatchRequestItem(host: AppHostPresenter, watch: WatchPageModel, r
     }
 }
 
-// MARK: Shared rows
-
 @Composable
 private fun AppPageClosed(appId: String) {
     AppPlainRow(conclaveString("app_page_closed", appHostName(appId)), "app.page.closed")
@@ -433,7 +413,6 @@ private fun AppPlainRow(text: String, identifier: String) {
     ListItem(headlineContent = { Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant) }, modifier = Modifier.testTag(identifier))
 }
 
-/** A row that acts (Shuffle, Sort, Clear): the whole row is the button; pending shows a spinner and "In progress". */
 @Composable
 private fun AppActionRow(
     title: String, identifier: String, enabled: Boolean, pending: Boolean, destructive: Boolean = false, onClick: () -> Unit,
@@ -454,7 +433,6 @@ private fun AppActionRow(
     )
 }
 
-/** A switch row with optional supporting text; one Switch node for the whole row (the C09 toggle row). */
 @Composable
 private fun AppSwitchRow(
     title: String, detail: String, checked: Boolean, enabled: Boolean, identifier: String, onCheckedChange: (Boolean) -> Unit,
@@ -467,11 +445,6 @@ private fun AppSwitchRow(
     )
 }
 
-/**
- * End-to-start swipe removes the row (a "Remove" custom action does the same, with any [extraActions] such as Move up
- * and Move down on the same node); the row snaps back until the embed's status drops it, so a refused removal shows
- * the row again.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppSwipeToRemove(

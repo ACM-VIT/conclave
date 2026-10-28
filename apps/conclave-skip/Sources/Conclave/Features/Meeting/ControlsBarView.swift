@@ -96,8 +96,6 @@ enum MeetingControlsBarCopy {
     }
 }
 
-// MARK: - Controls Bar
-
 struct ControlsBarView: View {
     @Bindable var viewModel: MeetingViewModel
     let availableWidth: CGFloat
@@ -277,8 +275,7 @@ struct ControlsBarView: View {
                 }
 
                 if isCompact {
-                    // Chat is a first-class action on the phone bar; burying it
-                    // in More made the most-used surface two taps away.
+
                     ControlButton(
                         icon: chatIcon,
                         isActive: viewModel.state.isChatOpen,
@@ -405,8 +402,6 @@ struct ControlsBarView: View {
     }
 }
 
-// MARK: - Control Button
-
 struct ControlButton: View {
     let icon: String
     var isActive: Bool = false
@@ -417,7 +412,7 @@ struct ControlButton: View {
     var accessibilityLabel: String? = nil
     var accessibilityHint: String? = nil
     let action: () -> Void
-    
+
     var body: some View {
         let label = accessibilityLabel ?? icon
 

@@ -4,8 +4,6 @@ import Observation
 import UIKit
 #endif
 
-// MARK: - Presentation Layout
-
 enum PresentationCompactLayout {
     static let stripHeight: CGFloat = 84.0
     static let spacing: CGFloat = 8.0
@@ -37,12 +35,9 @@ struct PresentationLayoutView: View {
         }
     }
 
-    // MARK: Phone portrait: screenshare top, horizontal filmstrip below
-
     var compactLayout: some View {
         GeometryReader { geo in
-            // Reserve clearance for the floating controls bar so the filmstrip
-            // never hides behind it.
+
             let avail = MeetingStageLayout.visibleHeight(
                 containerHeight: geo.size.height,
                 controlsOverlap: controlsOverlap
@@ -77,8 +72,6 @@ struct PresentationLayoutView: View {
         }
     }
 
-    // MARK: Tablet / landscape: side-by-side
-
     var regularLayout: some View {
         let strip = viewModel.state.tileStripSnapshot()
         return HStack(spacing: 8) {
@@ -108,8 +101,6 @@ struct PresentationLayoutView: View {
         .padding(8)
     }
 
-    // MARK: Shared components
-
     @ViewBuilder
     var screenshareView: some View {
         ZStack {
@@ -118,16 +109,14 @@ struct PresentationLayoutView: View {
 
             if let screenShareUserId = viewModel.state.presentationScreenShareUserId {
                 if let trackWrapper = viewModel.webRTCClient.remoteVideoTrack(forUserId: "\(screenShareUserId)-screen") {
-                    // .fit = letterbox the shared screen on the black fill so a
-                    // landscape-desktop or portrait-phone capture is never cropped.
+
                     RemoteVideoView(
                         trackWrapper: trackWrapper,
                         contentMode: .fit,
                         fallbackDisplayName: viewModel.displayNameForUser(screenShareUserId)
                     )
                         .overlay {
-                            // Persistent presenter attribution (always know who's
-                            // sharing) - same flat name-plate tokens as the tiles.
+
                             VStack {
                                 Spacer()
                                 HStack {

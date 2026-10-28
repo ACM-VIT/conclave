@@ -3,26 +3,15 @@ import Accessibility
 import SwiftUI
 import UIKit
 
-// Text fields, the composer parts, search and segmented controls (F00 C19, C20, C21; S40 6, CL3, R40-6; S60 R6-8).
-// Single-line fields live in a `Form` or `List` row and keep the system field look; the error sits in the section
-// footer. The composer field row and its two materials live in ConclaveComposerGlass+iOS.swift (the second
-// sanctioned material file, owner OQ2); this file holds the parts around it: the text input, Send, the composer
-// column with its accessory slots (never glass), the bottom and top bar hosts, search on the system field and the
-// segmented picker with its fallbacks. Keystrokes stay in the caller's local state; nothing here reaches a
-// presenter until submit (F00 C19 k).
-
-/// What a single-line field holds, which picks its keyboard, content type and capitalization.
 enum ConclaveTextFieldKind: String, CaseIterable {
-    /// A person's display name: words capitalized, name content type, Done.
+
     case name
-    /// A meeting code or link: URL keyboard, no capitalization or autocorrection, Join.
+
     case code
-    /// Free text such as a rename: sentences capitalized, Done.
+
     case text
 }
 
-/// A single-line field for a Form or List row. The prompt names the field (AX); the caller shows the error as
-/// `ConclaveFieldError` in the section footer right after it.
 struct ConclaveTextField: View {
     let prompt: String
     @Binding var text: String
@@ -70,8 +59,6 @@ struct ConclaveTextField: View {
     }
 }
 
-/// A field error for the section footer: the octagon glyph in system red with label-colored footnote text, so the
-/// meaning never rests on color alone. It follows the field in reading order.
 struct ConclaveFieldError: View {
     let text: String
     let identifier: String
@@ -92,12 +79,6 @@ struct ConclaveFieldError: View {
     }
 }
 
-/// The near-limit counter ("38/40"), visible from `visibleFrom` characters, with tabular digits and the spoken
-/// value "38 of 40 Characters" (F00 C19 f; S10 `DisplayNamePolicy`: cap 40, visible from 30). Composers pass
-/// `ConclaveComposerCounterPolicy.visibleFrom(limit:)` (90%), or 0 in voice mode where it always shows.
-/// `announcesBands` (opt-in, S40 6 i; T3 borrow P9; only the chat composer and the Q&A question pass true): one polite
-/// announcement when the counter appears and at every crossing between near and over, never per character. Every
-/// other caller keeps the silent counter.
 struct ConclaveCharacterCounter: View {
     let count: Int
     let limit: Int
@@ -127,11 +108,6 @@ struct ConclaveCharacterCounter: View {
     }
 }
 
-/// The band-change handler of an opted-in counter (T3 borrow P9). `task(id: band)` starts when the counter appears in
-/// a band (hidden to near or over) and restarts only when the band changes while it shows (near to over and back), so
-/// typing inside a band posts nothing and leaving for hidden posts nothing. The text is fixed at the crossing ("900 of
-/// 1000 Characters", "200 characters over the limit"). The handler sits on the visible counter: a host that stayed
-/// in the composer column while the counter is hidden would add the column's 8 pt spacing under the field at rest.
 private struct ConclaveCounterBandAnnouncement: ViewModifier {
     let isEnabled: Bool
     let band: ConclaveCounterBand
@@ -152,7 +128,6 @@ private struct ConclaveCounterBandAnnouncement: ViewModifier {
     }
 }
 
-/// The counter's spoken copy (S40 6 g): near reuses the counter label, over the Send reason's plural.
 enum ConclaveCounterText {
     static func announcement(band: ConclaveCounterBand, count: Int, limit: Int) -> String {
         if band == .over {
@@ -163,11 +138,6 @@ enum ConclaveCounterText {
     }
 }
 
-// MARK: Composer parts (F00 C19; S40 6 c, CL3, R40-6)
-
-/// The composer text input: a vertical field growing to six lines, then scrolling. Return inserts a newline and
-/// Send sends (the Messages convention, S40 Q13). Screens that need focus or hardware keys pass their own field to
-/// `ConclaveComposerField` instead.
 struct ConclaveComposerInput: View {
     let prompt: String
     @Binding var text: String
@@ -187,8 +157,6 @@ struct ConclaveComposerInput: View {
     }
 }
 
-/// The Send glyph: solid coralText, never on a material and never a coral tint (F00 C19 c); "Send" for
-/// accessibility. No send haptic (Q11).
 struct ConclaveSendButton: View {
     let isEnabled: Bool
     let identifier: String
@@ -205,8 +173,6 @@ struct ConclaveSendButton: View {
     }
 }
 
-/// Send with a screen's own label ("Ask" for Q&A and Transcript Ask, "Send Voice Message" in voice mode) and the
-/// reason Send is disabled as its value ("Type a message", "Uploading photo", S40 6 i).
 struct ConclaveComposerSendButton: View {
     let title: String
     let isEnabled: Bool
@@ -234,7 +200,6 @@ struct ConclaveComposerSendButton: View {
     }
 }
 
-/// The arrow glyph in a 44 pt target: coralText while enabled, secondary while disabled.
 private struct ConclaveSendGlyph: View {
     let isEnabled: Bool
 
@@ -248,9 +213,6 @@ private struct ConclaveSendGlyph: View {
     }
 }
 
-/// The composer column (S40 6 c): the accessory rows above the field row (suggestions, reply bar, attachment chip,
-/// link preview, mode row, notice line; never on a material), the field row, then the footer (the counter, trailing).
-/// 16 by 8 padding, 8 between rows. Rows appear and leave without animation (S40 6 h).
 struct ConclaveComposerStack<Accessories: View, FieldRow: View, Footer: View>: View {
     let identifier: String
     let accessories: Accessories
@@ -288,8 +250,6 @@ extension ConclaveComposerStack where Footer == EmptyView {
     }
 }
 
-/// The reply bar (S40 6 c, CL3): a 3 pt coralText rule, the title ("Replying to Avery Lee") and a two-line preview,
-/// then a Cancel button. The text reads as one element; Cancel is its own button.
 struct ConclaveComposerReplyBar: View {
     let title: String
     let preview: String
@@ -326,9 +286,6 @@ struct ConclaveComposerReplyBar: View {
     }
 }
 
-/// The attachment chip (S40 6 c, CL3): a thumbnail the caller draws, the title ("Photo"), a status line
-/// ("Uploading 42%", "Ready to send" or the failure reason with the error glyph), the system linear indicator while
-/// preparing or uploading, Try Again after a failure, and Remove. Flat raised fill, no border.
 struct ConclaveComposerAttachmentChip<Thumbnail: View>: View {
     let title: String
     let status: String
@@ -403,8 +360,6 @@ struct ConclaveComposerAttachmentChip<Thumbnail: View>: View {
     }
 }
 
-/// One status or notice line above the field (a blocked-send reason, a gate, "Will be sent privately to Avery"):
-/// sentence case footnote in secondary text. The screen announces it once when it appears (S40 6 i).
 struct ConclaveComposerStatusLine: View {
     let text: String
     let identifier: String
@@ -419,7 +374,6 @@ struct ConclaveComposerStatusLine: View {
     }
 }
 
-/// The xmark in a 44 pt target with the caller's label (Cancel Reply, Remove Photo, Exit Voice Message).
 struct ConclaveComposerDismissButton: View {
     let title: String
     let identifier: String
@@ -441,15 +395,11 @@ struct ConclaveComposerDismissButton: View {
 }
 
 extension View {
-    /// Pins a composer to the bottom of the panel content (S40 6 c, 0.6): iOS 26 `safeAreaBar(edge: .bottom)` so the
-    /// timeline gets the scroll edge effect under it; iOS 17 to 25 `safeAreaInset(edge: .bottom)` on the system
-    /// background with a top divider.
+
     func conclaveComposerBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
         modifier(ConclaveBottomBarHost(bar: bar()))
     }
 
-    /// A bar under the inline title for a view switch (F00 C21 c, S60 R6-8, S50 Q&A sort): iOS 26
-    /// `safeAreaBar(edge: .top)`, iOS 17 to 25 `safeAreaInset(edge: .top)` on the system background.
     func conclaveTopBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
         modifier(ConclaveTopBarHost(bar: bar()))
     }
@@ -489,24 +439,18 @@ private struct ConclaveTopBarHost<Bar: View>: ViewModifier {
     }
 }
 
-// MARK: Search (F00 C20)
-
 extension View {
-    /// The system search field in the panel's navigation bar drawer (inside the panel's NavigationStack). Filter
-    /// the cached snapshot with `ConclaveSearchPolicy` as people type; show `ConclaveSearchEmptyState` for no results.
+
     func conclaveSearchable(text: Binding<String>, prompt: String? = nil) -> some View {
         searchable(text: text, placement: .navigationBarDrawer(displayMode: .automatic),
                    prompt: Text(prompt ?? ConclaveStrings.text("Search")))
     }
 
-    /// The same with the presentation bound, for screens that open search programmatically.
     func conclaveSearchable(text: Binding<String>, isPresented: Binding<Bool>, prompt: String? = nil) -> some View {
         searchable(text: text, isPresented: isPresented, placement: .navigationBarDrawer(displayMode: .automatic),
                    prompt: Text(prompt ?? ConclaveStrings.text("Search")))
     }
 
-    /// Announces the result count politely once typing pauses (F00 C20 i): one cancellable task per query and count,
-    /// nothing while the query is empty.
     func conclaveSearchAnnouncement(query: String, resultCount: Int) -> some View {
         modifier(ConclaveSearchAnnouncement(query: query, resultCount: resultCount))
     }
@@ -533,7 +477,6 @@ private struct ConclaveSearchAnnouncement: ViewModifier {
     }
 }
 
-/// The intrinsic search copy (F00 C20 g).
 enum ConclaveSearchText {
     static func resultCount(_ count: Int) -> String {
         if count == 0 { return ConclaveStrings.text("No Results") }
@@ -541,7 +484,6 @@ enum ConclaveSearchText {
     }
 }
 
-/// No results: the system search empty view (C14 empty, F00 C20 c).
 struct ConclaveSearchEmptyState: View {
     let query: String
     let identifier: String
@@ -552,11 +494,6 @@ struct ConclaveSearchEmptyState: View {
     }
 }
 
-// MARK: Segmented control (F00 C21; S60 R6-8)
-
-/// Two to four mutually exclusive options that change a view in place, with system styling (no coral thumb). The
-/// system plays its own selection feedback. Fallbacks: `.rows` switches to C09 selectable rows at accessibility
-/// sizes; `.menu` keeps setup and settings rows on one line with `ViewThatFits` and a menu picker.
 struct ConclaveSegmentedPicker: View {
     let title: String
     let options: [ConclaveSegmentModel]
@@ -631,8 +568,6 @@ struct ConclaveSegmentedPicker: View {
     }
 }
 
-/// A view switch at the top of a panel (the Transcript view switch, the Q&A sort; S60 R6-8): a full-width segmented
-/// picker with the menu fallback, padded for `conclaveTopBar`.
 struct ConclaveViewSwitch: View {
     let title: String
     let options: [ConclaveSegmentModel]

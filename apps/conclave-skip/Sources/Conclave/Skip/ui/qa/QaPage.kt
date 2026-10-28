@@ -28,16 +28,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
-/*
- * S50 11 d (PPL-6): the Webinar Q&A page on Android (`MeetingPanel.webinarQA`). One InCallPage in lazyList mode
- * (R50-1) in the system appearance, the attendee composer in the page's composer slot (F00 C19; the IME padding is the
- * slot's), the sort as one SingleChoiceSegmentedButtonRow over `availableSorts` (attendee Top, Recent, Mine; host Top,
- * Recent; radio rows at font scale 1.5 and up), the host filter chips that scroll horizontally, and a LazyColumn keyed
- * by question id where each row reads its own QaQuestionEntry. "Answer in writing..." is the PL10 multi-line dialog
- * (4 to 8 lines, counter from 900, over 1,000 refused), open while pending. Failures use the page snackbar (PL14).
- * Registered by the native call root (HD request B6-T1 R1).
- */
-
 @Composable
 internal fun QaPage(
     people: PeoplePresenter,
@@ -88,7 +78,7 @@ private fun QaContent(people: PeoplePresenter, snapshot: QaPanelSnapshot, reques
     val listState = rememberLazyListState()
     val ids = remember(snapshot.revision) { snapshot.questionIds.toList() }
     LaunchedEffect(request.presentationID) {
-        // R50-3: destination `qaQuestion` scrolls to the question named by `targetId` once.
+
         if (request.destination == PanelDestination.qaQuestion && request.targetId.isNotEmpty()) {
             val index = ids.indexOf(request.targetId)
             if (index >= 0) listState.scrollToItem(index)
@@ -164,7 +154,6 @@ internal fun qaFilterName(filter: QaHostFilter): String = when (filter) {
     else -> "qa_filter_open"
 }
 
-/** The empty message name for the role, sort and filter (S50 11 f). */
 internal fun qaEmptyName(snapshot: QaPanelSnapshot): String? = when {
     snapshot.isHost && snapshot.filter == QaHostFilter.answered -> "qa_answered_empty"
     snapshot.isHost && snapshot.filter == QaHostFilter.dismissed -> "qa_dismissed_empty"
@@ -174,12 +163,6 @@ internal fun qaEmptyName(snapshot: QaPanelSnapshot): String? = when {
     else -> null
 }
 
-/**
- * The attendee composer (S50 11 d): page state seeded from `qa.drafts.question` and written back on every change, Ask
- * enabled for 2 to 500 characters while Q&A is on and connected, the counter from 450, the field disabled while sending,
- * cleared on the acknowledgement (`submitSerial`). With Q&A off the off line replaces it; reconnecting and offline show
- * their reason; "Ask a longer question." for 1 character.
- */
 @Composable
 private fun QaComposer(people: PeoplePresenter, snapshot: QaPanelSnapshot) {
     val qa = people.qa
@@ -231,10 +214,6 @@ private fun QaComposer(people: PeoplePresenter, snapshot: QaPanelSnapshot) {
     }
 }
 
-/**
- * PL10 multi-line "Answer in writing" (S50 11 d): 4 to 8 lines, the counter from 900, input capped at 1,000; open while
- * pending; a refusal shows in the supporting text and keeps the draft; the acknowledgement closes it.
- */
 @Composable
 private fun QaAnswerDialog(people: PeoplePresenter, questionId: String, onClose: () -> Unit) {
     val qa = people.qa

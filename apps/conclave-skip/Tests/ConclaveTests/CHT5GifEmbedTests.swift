@@ -3,15 +3,8 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// CHT-5 (OUT/PLAN-screens.md section 5; S40 7, 3 GIF, sticker, clip and embed rows, 6 link preview, 0.7 CL6, 0.8 CH5,
-/// CH16, CH19, Q6, Q16): the web embed rules ported to `LinkEmbedPolicy` (at most 2, `<url>` suppressed, explicit links
-/// only), the unfurl mapping, the session cache (fetched when the row is built, no-card results cached, a row changes
-/// height at most once), suppressEmbeds on the send, the GIF send and the injected search, the picker's stale-response
-/// guard, the Klipy URL, and the sources (no fetch from a view, no legacy GIF sheet host on the native path, Custom
-/// Tabs). The Kotlin half is T/Skip/CHT4CHT5BridgeTests.kt.
 @MainActor
 struct CHT5GifEmbedTests {
-    // MARK: CH16 embed rules (web extractEmbedUrls parity)
 
     @Test func embedURLsMatchTheWebRules() {
         let urls = LinkEmbedPolicy.embedURLs
@@ -26,7 +19,7 @@ struct CHT5GifEmbedTests {
         #expect(urls("(see https://x.io/y)", 2) == ["https://x.io/y"])
         #expect(urls("https:// nothing after the scheme", 2) == [])
         #expect(urls("https://a.example", 0) == [])
-        // The query and fragment stay as typed and in order (no URLComponents re-serialization on either platform).
+
         #expect(urls("https://A.example/x?y=1&z=2#top", 2) == ["https://a.example/x?y=1&z=2#top"])
         #expect(urls("https://a.example?q=1", 2) == ["https://a.example/?q=1"])
         #expect(LinkEmbedPolicy.maxEmbedsPerMessage == 2)
@@ -71,7 +64,7 @@ struct CHT5GifEmbedTests {
         """
         let post = try #require(LinkEmbedService.decodeModel(Data(tweet.utf8), requestURL: "https://x.com/c/status/1", baseURL: base))
         #expect(post.kind == .tweet && post.authorHandle == "conclave" && post.postText == "Hello")
-        // A require, not an expect: the indexes below would trap and abort the whole test process.
+
         try #require(post.media.count == 2)
         #expect(post.media[0].aspect > 1.7 && post.media[1].videoURL == base + "/api/unfurl/asset?url=m")
         #expect(LinkEmbedService.decodeModel(Data("{\"preview\":null}".utf8), requestURL: "https://a.example/", baseURL: base) == nil)
@@ -81,8 +74,6 @@ struct CHT5GifEmbedTests {
         #expect(LinkEmbedPolicy.resolvedAssetURL("javascript:alert(1)", baseURL: base) == "")
         #expect(LinkEmbedPolicy.resolvedAssetURL("//evil.example/x", baseURL: base) == "")
     }
-
-    // MARK: CH16 the session cache and the rows
 
     private func settle() async {
         for _ in 0..<20 {
@@ -112,13 +103,13 @@ struct CHT5GifEmbedTests {
         #expect(fetched.sorted() == ["https://a.example/x", "https://b.example/y"])
         #expect(ChatPoliciesTests.row(chat, "s-1").embedURLs == ["https://a.example/x"], "only ready cards; a no-card URL never shows")
         #expect(chat.embeds.entry(for: "https://b.example/y").phase == .none)
-        // The same URLs in another message, a remount and a rebuild never refetch (no-card results are cached too).
+
         let second = text("s-2", "again https://b.example/y and https://a.example/x", at: 60_000)
         chat.apply(ChatPoliciesTests.inputs([first, second]), change: .messages)
         await settle()
         #expect(chat.embeds.fetchCount == 2)
         #expect(ChatPoliciesTests.row(chat, "s-2").embedURLs == ["https://a.example/x"], "a cached card shows from the first frame")
-        // Suppressed, photo and GIF rows never fetch or show cards.
+
         let suppressed = text("s-3", "https://d.example/q", at: 120_000, suppress: true)
         let photo = ChatMessageInput.make(id: "s-4", senderId: ChatPoliciesTests.avery, senderName: "Avery Lee",
                                           content: "https://e.example/p", timestampMillis: ChatPoliciesTests.base + 130_000,
@@ -131,7 +122,7 @@ struct CHT5GifEmbedTests {
         await settle()
         #expect(chat.embeds.fetchCount == 2)
         #expect(ChatPoliciesTests.row(chat, "s-3").embedURLs.isEmpty && ChatPoliciesTests.row(chat, "s-4").embedURLs.isEmpty)
-        // reset() drops the session cache.
+
         chat.reset()
         #expect(chat.embeds.count == 0)
     }
@@ -165,8 +156,6 @@ struct CHT5GifEmbedTests {
         #expect(chat.requestLinkPreview(url: "https://a.example/x").phase == .none, "the placeholder until the core wires a fetcher")
     }
 
-    // MARK: CH5 suppressEmbeds on the send (web ChatPanel.tsx)
-
     @Test func suppressEmbedsTravelsWithTheSendWhenThePreviewWasRemoved() {
         var log: [ChatCommandRequest] = []
         let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([]))
@@ -180,8 +169,6 @@ struct CHT5GifEmbedTests {
         #expect(ChatComposerPolicy.suppressesEmbeds(draft: "x https://a.example/x", dismissedURL: "https://a.example/x"))
         #expect(!ChatComposerPolicy.suppressesEmbeds(draft: "x https://a.example/x", dismissedURL: ""))
     }
-
-    // MARK: CH19 GIFs
 
     private func gif(_ id: String) -> ChatGifAttachment {
         ChatGifAttachment(id: id, title: "Party " + id, url: "https://media.klipy.example/" + id + ".gif",
@@ -259,14 +246,12 @@ struct CHT5GifEmbedTests {
         #expect(KlipyMediaKind.from(.gif) == .gifs && KlipyMediaKind.from(.clip) == .clips && KlipyService.defaultLimit == 16)
         let unfurl = try #require(LinkEmbedService.unfurlURL(for: "https://a.example/x?y=1", baseURL: base))
         #expect(unfurl.path == "/api/unfurl" && unfurl.absoluteString.contains("url="))
-        // The target URL stays one parameter: its "&", "=", "?" and "#" are encoded (the Kotlin twin pins the same string).
+
         let video = try #require(LinkEmbedService.unfurlURL(for: "https://youtube.com/watch?v=dQw4w9WgXcQ&t=4#c", baseURL: base))
         #expect(video.absoluteString == "https://conclave.acmvit.in/api/unfurl?url=https%3A%2F%2Fyoutube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ%26t%3D4%23c")
         let unfurlItems = URLComponents(url: video, resolvingAgainstBaseURL: false)?.queryItems ?? []
         #expect(unfurlItems.count == 1 && unfurlItems.first?.value == "https://youtube.com/watch?v=dQw4w9WgXcQ&t=4#c")
     }
-
-    // MARK: Sources (3 l 10, 7 l, Q16)
 
     @Test func chatViewsNeverFetchAndTheNativePathDropsTheLegacySheetHost() throws {
         var files = try chatFiles(under: "Sources/Conclave/Features/Meeting/Chat", extensions: ["swift"]).filter { $0.hasSuffix("+iOS.swift") }
@@ -312,7 +297,7 @@ struct CHT5GifEmbedTests {
         await ChatFixtureTestGate.acquire()
         defer { ChatFixtureTestGate.release() }
         let shell = MeetingShellPresenter()
-        // Kept in a local: `gifSearch` holds the driver weakly.
+
         let driver = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
         await settle()
         #expect(shell.chat.rows.entry(for: "s-11d").row.embedURLs.count == 2)
@@ -325,10 +310,6 @@ struct CHT5GifEmbedTests {
         #expect(driver.chat === shell.chat, "the local keeps the driver alive through the search")
     }
 
-    // MARK: The core half (HD/requests/B5-T6.md R1, R2; red until the integrator applies them)
-
-    /// CH5 through the models, both decoders and every reconstruction site (AGENTS.md list); CH6, CH16 and CH19 wired
-    /// in the core: the photo prepare and send split, the Klipy and unfurl closures and the GIF send.
     @Test func theCoreCarriesSuppressEmbedsAndWiresTheChatClosures() throws {
         let models = try chatSource("Sources/Conclave/Core/Models/Models.swift")
         #expect(models.contains("let suppressEmbeds: Bool\n") && models.contains("self.suppressEmbeds = suppressEmbeds"))
@@ -341,7 +322,7 @@ struct CHT5GifEmbedTests {
         #expect(kotlin.contains("suppressEmbeds = boolField(obj, \"suppressEmbeds\")"))
         #expect(kotlin.contains("suppressEmbeds = suppressEmbeds ?: false") && kotlin.contains("suppressEmbeds = if (suppressEmbeds) true else null"))
         let vm = try chatSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        // normalizedChatMessage (2), refreshChatDisplayName, rebuiltChatMessage, makeChatMessageInput.
+
         #expect(vm.components(separatedBy: "suppressEmbeds: message.suppressEmbeds").count - 1 >= 5)
         #expect(vm.contains("suppressEmbeds: incoming.suppressEmbeds || existing.suppressEmbeds"))
         #expect(vm.contains("await KlipyService.searchPage(kind: kind, query: query, page: page)"))

@@ -1,13 +1,6 @@
 import Foundation
 import Observation
 
-// S20 SL4 per-id observable stores. SkipModel backs each stored property of an @Observable class with one
-// MutableState, so a value read by many views would re-evaluate all of them. Per-tile state therefore lives in one
-// small observable object per canonical id (or slot id): a mute re-evaluates one tile chrome, a speaker change one
-// speaking ring, a consumer swap one renderer, on both platforms (F00 P2). The stores themselves are plain reference
-// types held `@ObservationIgnored` by the presenter; entries are created on demand and pruned with the roster.
-
-/// One tile's chrome inputs (S20 0.5); writes are equality guarded.
 @MainActor
 @Observable
 final class TileChromeEntry {
@@ -22,8 +15,6 @@ final class TileChromeEntry {
     }
 }
 
-/// One renderer slot's bound video key (SL4). Only the renderer slot reads it, so a consumer swap publishes no layout
-/// and no tile change (SC10).
 @MainActor
 @Observable
 final class RendererBinding {
@@ -38,13 +29,10 @@ final class RendererBinding {
     }
 }
 
-/// `TileChromeEntry` per canonical user id.
 @MainActor
 final class TileChromeStore {
     private var entries: [String: TileChromeEntry] = [:]
 
-    /// The entry for `userId`, created with an empty model when the stage has not seen the id yet (a view may ask
-    /// before the first apply lands; the next apply fills it).
     func entry(for userId: String) -> TileChromeEntry {
         if let existing = entries[userId] { return existing }
         let created = TileChromeEntry(model: TileChromeStore.placeholder(userId))
@@ -60,7 +48,6 @@ final class TileChromeStore {
         }
     }
 
-    /// Drops entries for ids no longer on the roster.
     func prune(keeping ids: [String]) {
         var stale: [String] = []
         for key in entries.keys {
@@ -86,8 +73,6 @@ final class TileChromeStore {
     }
 }
 
-/// `TileSpeakingState` (FND-2, `ConclaveComponentModels.swift`) per canonical user id; only the speaking ring and the
-/// pill waveform leaves read it.
 @MainActor
 final class TileSpeakingStore {
     private var states: [String: TileSpeakingState] = [:]
@@ -99,7 +84,6 @@ final class TileSpeakingStore {
         return created
     }
 
-    /// Exactly one id speaks at a time; every write is equality guarded.
     func setSpeaker(_ userId: String) {
         for key in states.keys {
             if key != userId { states[key]?.update(isSpeaking: false) }
@@ -128,7 +112,6 @@ final class TileSpeakingStore {
     }
 }
 
-/// `RendererBinding` per slot id.
 @MainActor
 final class RendererBindingStore {
     private var bindings: [String: RendererBinding] = [:]

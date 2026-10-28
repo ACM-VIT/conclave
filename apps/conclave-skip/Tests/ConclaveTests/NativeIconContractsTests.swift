@@ -3,8 +3,6 @@ import CryptoKit
 import Foundation
 import Testing
 
-/// Contract checks for the native icon slice. The iOS-only symbol and gallery code is excluded from this
-/// macOS host build, so these tests read the generated iOS sources and the build-time manifest directly.
 struct NativeIconContractsTests {
     @Test func symbolConstantsAreTheExactManifestLiterals() throws {
         let literals = try #require(try iconManifest()["sf_literals"] as? [String])
@@ -41,14 +39,14 @@ struct NativeIconContractsTests {
     @Test func galleryKeepsArtworkDecorativeAndGuardsNewerSystemAPIs() throws {
         let gallery = try iconSource("Sources/Conclave/DesignSystem/iOS/NativeIconGallery.swift")
         #expect(gallery.hasPrefix("#if DEBUG && os(iOS) && !SKIP\n"))
-        // SwiftUI images only; the UIImage availability lookup draws nothing.
+
         let images = iconMatches(#"(?<![A-Za-z])Image\(systemName:"#, in: gallery).count
         #expect(images == 4)
-        // Every image is hidden, plus the raw literal detail line (owner disposition, 2026-10-24).
+
         #expect(gallery.components(separatedBy: ".accessibilityHidden(true)").count - 1 == images + 1)
         #expect(gallery.contains("Text(specimen.detail)\n                    .font(.caption)\n                    .foregroundStyle(.secondary)\n                    .accessibilityHidden(true)"))
         #expect(gallery.components(separatedBy: "if #available(iOS 26.0, *)").count - 1 == 2)
-        // The only system close role sits directly inside its iOS 26 availability branch.
+
         #expect(gallery.contains("if #available(iOS 26.0, *) {\n                Button(role: .close)"))
         #expect(gallery.components(separatedBy: "role: .close").count - 1 == 1)
         #expect(gallery.contains(".accessibilityAddTraits(.isToggle)"))
@@ -107,7 +105,7 @@ private func iconManifest() throws -> [String: Any] {
     let originalSymbols = try #require(base["sf_literals"] as? [String])
     let originalArtwork = try #require(base["artwork"] as? [[String: Any]])
     let originalConcepts = try #require(base["concepts"] as? [[String: Any]])
-    // The original sealed inventory remains separate; additions cannot replace it.
+
     #expect(originalSymbols.count == 50 && originalArtwork.count == 54 && originalConcepts.count == 36)
     #expect(originalConcepts.compactMap { ($0["bindings"] as? [[String: Any]])?.count }.reduce(0, +) == 58)
     let ref = try #require(base["additions"] as? [String: String])

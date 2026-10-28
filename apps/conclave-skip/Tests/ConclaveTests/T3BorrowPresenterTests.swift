@@ -3,13 +3,10 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// The test clock: the presenter reads `ChatPoliciesTests.base + value` milliseconds.
 final class T3BClock {
     var value = 0.0
 }
 
-/// A controlled sleep: each call records its duration and waits until the test wakes that duration, so a test decides
-/// which pending task runs and when (the presenter's gate line task and the fixture driver's script pauses).
 @MainActor
 final class T3BSleeper {
     private(set) var requested: [Double] = []
@@ -24,7 +21,6 @@ final class T3BSleeper {
         }
     }
 
-    /// Resumes every sleep that asked for `millis`.
     func wake(_ millis: Double) {
         var keptMillis: [Double] = []
         var kept: [CheckedContinuation<Void, Never>] = []
@@ -56,10 +52,6 @@ final class T3BSleeper {
     }
 }
 
-/// T3B-3 (R/t3-borrow/PLAN.md section 4; P7, the presenter half of P4, P8): the Skip-safe `DelayedStatusPolicy`, the
-/// presenter's delayed gate line (`composer.gateLine`) with its one cancellable task on the injected clock and sleep,
-/// the one-attachment guard and `canAcceptPhoto`, the fixture's new states and scripts, and the timeline's composer
-/// focus follow (source scans; the Kotlin half and the Robolectric list test are T/Skip/T3BorrowTimelineTests.kt).
 @MainActor
 struct T3BorrowPresenterTests {
     static let base = ChatPoliciesTests.base
@@ -71,7 +63,6 @@ struct T3BorrowPresenterTests {
                         assistant: .available, attachment: attachment)
     }
 
-    /// A presenter on the test clock whose gate line task sleeps on the controlled sleeper.
     static func presenter(clock: T3BClock, sleeper: T3BSleeper, gate: ChatSendGate = .allowed) -> ChatPresenter {
         let chat = ChatPresenter()
         chat.now = { base + clock.value }
@@ -80,7 +71,6 @@ struct T3BorrowPresenterTests {
         return chat
     }
 
-    /// Lets tasks the test started or resumed run on the main actor.
     static func settle() async {
         for _ in 0..<5 {
             await Task.yield()
@@ -88,18 +78,16 @@ struct T3BorrowPresenterTests {
         try? await Task.sleep(nanoseconds: 20_000_000)
     }
 
-    // MARK: P7 DelayedStatusPolicy (pure)
-
     @Test func theDelayedStatusPolicyWaitsHoldsAndRestamps() {
         let policy = DelayedStatusPolicy.self
         #expect(policy.showDelayMillis == 400 && policy.minimumVisibleMillis == 400)
-        // A 250 ms blip never shows.
+
         var status = policy.step(.idle, value: "reconnecting", isImmediate: false, now: 0)
         #expect(status == DelayedStatus(phase: .pending, value: "reconnecting", deadline: 400))
         #expect(policy.visible(status) == "")
         status = policy.step(status, value: "", isImmediate: false, now: 250)
         #expect(status == .idle)
-        // A 1,500 ms outage shows from 400 ms (the minimum hold ends at 800 ms) and hides when it ends.
+
         status = policy.step(.idle, value: "reconnecting", isImmediate: false, now: 0)
         status = policy.step(status, value: "reconnecting", isImmediate: false, now: 399)
         #expect(status.phase == .pending && status.deadline == 400)
@@ -108,27 +96,27 @@ struct T3BorrowPresenterTests {
         #expect(policy.visible(status) == "reconnecting")
         #expect(policy.step(status, value: "reconnecting", isImmediate: false, now: 1000) == status)
         #expect(policy.step(status, value: "", isImmediate: false, now: 1500) == .idle)
-        // Reopened during the hold: the line stays until the hold ends.
+
         var held = policy.step(status, value: "", isImmediate: false, now: 600)
         #expect(held == status && policy.wakeDeadline(held, value: "", now: 600) == 800)
         held = policy.step(held, value: "", isImmediate: false, now: 800)
         #expect(held == .idle)
-        // Reconnecting to offline while shown replaces the value at once and re-stamps the hold.
+
         var restamped = policy.step(status, value: "offline", isImmediate: false, now: 600)
         #expect(restamped == DelayedStatus(phase: .shown, value: "offline", deadline: 1000))
         restamped = policy.step(restamped, value: "", isImmediate: false, now: 700)
         #expect(restamped.value == "offline" && policy.wakeDeadline(restamped, value: "", now: 700) == 1000)
-        // A different value while pending keeps the original show time.
+
         let pending = DelayedStatus(phase: .pending, value: "reconnecting", deadline: 400)
         #expect(policy.step(pending, value: "offline", isImmediate: false, now: 200)
                 == DelayedStatus(phase: .pending, value: "offline", deadline: 400))
-        // Immediate values show and clear at once, with no hold.
+
         let locked = policy.step(.idle, value: "locked", isImmediate: true, now: 50)
         #expect(locked == DelayedStatus(phase: .shown, value: "locked", deadline: 50))
         #expect(policy.step(locked, value: "", isImmediate: false, now: 50) == .idle)
         #expect(policy.step(status, value: "", isImmediate: true, now: 500) == .idle)
         #expect(policy.step(locked, value: "locked", isImmediate: true, now: 90) == locked)
-        // Wakes: pending wakes at its show time; a value that is still wanted needs none.
+
         #expect(policy.wakeDeadline(pending, value: "reconnecting", now: 0) == 400)
         #expect(policy.wakeDeadline(restamped, value: "offline", now: 700) == -1)
         #expect(policy.wakeDeadline(.idle, value: "", now: 0) == -1)
@@ -142,15 +130,12 @@ struct T3BorrowPresenterTests {
         #expect(ChatGateLinePolicy.isImmediate(.locked) && ChatGateLinePolicy.isImmediate(.attendee))
         #expect(!ChatGateLinePolicy.isImmediate(.reconnecting) && !ChatGateLinePolicy.isImmediate(.offline))
         #expect(ChatGateLinePolicy.statusValue(.allowed) == "" && ChatGateLinePolicy.statusValue(.offline) == "offline")
-        // The Android copy agrees: exactly the drawn gates have a line (ChatCopyAndroid.gateLine; iOS ChatCopy.gateLine
-        // is the same table).
+
         let android = try chatSource("Sources/Conclave/Skip/ui/chat/ChatSnapshots.kt")
         #expect(android.contains("ChatSendGate.reconnecting -> conclaveString(\"chat_gate_reconnecting\")"))
         #expect(android.contains("ChatSendGate.offline -> conclaveString(\"chat_gate_offline\")"))
         #expect(android.contains("ChatSendGate.notJoined -> conclaveString(\"chat_gate_not_joined\")"))
     }
-
-    // MARK: P7 presenter gate line (injected clock and sleep)
 
     @Test func theFirstApplyIsImmediateAndTheLineStartsEqualToTheGate() {
         #expect(ChatComposerSnapshot.initial.gateLine == ChatComposerSnapshot.initial.gate)
@@ -160,13 +145,13 @@ struct T3BorrowPresenterTests {
         let reconnecting = Self.presenter(clock: clock, sleeper: sleeper, gate: .reconnecting)
         #expect(reconnecting.composer.gate == .reconnecting && reconnecting.composer.gateLine == .reconnecting)
         #expect(!reconnecting.hasGateLineTask && reconnecting.gateLineTasksStarted == 0)
-        // R8 first apply: a line drawn at once by the first apply counts as one show in the readout.
+
         #expect(reconnecting.gateLineShowCount == 1)
         let open = Self.presenter(clock: clock, sleeper: sleeper, gate: .allowed)
         #expect(open.composer.gateLine == .allowed && !open.hasGateLineTask && open.gateLineShowCount == 0)
         let locked = Self.presenter(clock: clock, sleeper: sleeper, gate: .locked)
         #expect(locked.composer.gateLine == .locked)
-        // reset(): back to the initial snapshot, and the next apply is immediate again.
+
         reconnecting.reset()
         #expect(reconnecting.composer == ChatComposerSnapshot.initial)
         #expect(reconnecting.gateLineShowCount == 0 && reconnecting.gateLineTasksStarted == 0, "reset clears the readout counters")
@@ -272,8 +257,7 @@ struct T3BorrowPresenterTests {
         #expect(chat.composer.gateLine == .attendee && !chat.hasGateLineTask)
         #expect(chat.gateLineShowCount == 0, "locked and attendee draw no line")
         #expect(chat.gateLineTasksStarted == 0)
-        // An outage the lock masked (locked outranks offline and reconnecting) shows at once when the lock lifts: it
-        // is not a new blip. It still holds 400 ms like any drawn line.
+
         chat.apply(Self.inputs(gate: .locked), change: .gate)
         chat.apply(Self.inputs(gate: .offline), change: .gate)
         #expect(chat.composer.gateLine == .offline && chat.gateLineShowCount == 1)
@@ -300,8 +284,6 @@ struct T3BorrowPresenterTests {
         #expect(chat.composer.gateLine == .reconnecting, "the first apply after reset is immediate")
     }
 
-    // MARK: P4 one attachment at a time (presenter half)
-
     @Test func aSecondPhotoIsRefusedWithTheOneAttachmentNotice() {
         var log: [ChatCommandRequest] = []
         let chat = ChatPoliciesTests.presenter(Self.inputs(gate: .allowed))
@@ -313,7 +295,7 @@ struct T3BorrowPresenterTests {
         #expect(log.filter { $0.kind == .attachPhoto }.count == 1)
         #expect(chat.composer.inlineNotice == .oneAttachment)
         #expect(chat.composer.attachment.phase == .preparing && chat.composer.attachment.thumbnailKey == Self.firstPhoto)
-        // Every phase but none refuses; Remove frees the composer again.
+
         for phase in [ChatAttachmentPhase.uploading, .ready, .failed] {
             let state = ChatAttachmentState(phase: phase, progress: 0.5, thumbnailKey: Self.firstPhoto,
                                             failure: phase == .failed ? .photoUnavailable : .none)
@@ -347,8 +329,6 @@ struct T3BorrowPresenterTests {
         }
     }
 
-    // MARK: Fixtures (R1, R2, R7, R8)
-
     @Test func theFixtureAddsTheDraftStatesAndThePhotoScript() async {
         await ChatFixtureTestGate.acquire()
         defer { ChatFixtureTestGate.release() }
@@ -363,13 +343,13 @@ struct T3BorrowPresenterTests {
         #expect(query.chat.drafts.text(for: query.chat.composer.draftKey) == "@av")
         let mentions = ChatComposerPolicy.mentionSuggestions(draft: "@av", options: query.chat.composer.mentionOptions)
         #expect(mentions.first?.name == "Avery Lee", "Avery leads the filtered list")
-        // photoTwice: one chip, the notice and one attachPhoto in the log.
+
         let shell = MeetingShellPresenter()
         let driver = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
         driver.run(.photoTwice)
         #expect(shell.chat.composer.attachment.phase == .preparing && shell.chat.composer.inlineNotice == .oneAttachment)
         #expect(driver.actionsReadout.components(separatedBy: "\n").filter { $0.hasPrefix("attachPhoto") }.count == 1)
-        // The attach script still replaces the uploading photo of chat-attachment-uploading (Remove, then pick).
+
         let uploadingShell = MeetingShellPresenter()
         let uploading = ChatFixtureDriver.installOnStage(state: .attachmentUploading, shell: uploadingShell)
         uploading.run(.attachPhoto)
@@ -426,8 +406,6 @@ struct T3BorrowPresenterTests {
         #expect(kotlin.contains("testTag(\"chat.composer.gateLine\")") && kotlin.contains("driver.gateLineReadout"))
     }
 
-    // MARK: P8 composer focus follow (sources; the Robolectric list test is Kotlin)
-
     @Test func theTimelineFollowsComposerFocusOnlyWhenTheNewestRowIsVisible() throws {
         let timeline = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatTimeline+iOS.swift")
         #expect(timeline.components(separatedBy: ".onChange(of: actions.composerFocusRevision)").count - 1 == 1)
@@ -437,12 +415,12 @@ struct T3BorrowPresenterTests {
         #expect(timeline.contains(".modifier(ChatRowVisibilityProbe(rowId: rowId, box: visibility))"))
         #expect(timeline.contains("withAnimation(.snappy) { proxy.scrollTo(newest, anchor: .bottom) }"))
         #expect(timeline.contains("if reduceMotion {\n            proxy.scrollTo(newest, anchor: .bottom)"))
-        // iOS 17 only: the keyboard-settle re-pin, cleared when the keyboard hides.
+
         #expect(timeline.contains("visibility.repinsAfterKeyboard = follows && !ChatTimelinePlatform.usesScrollGeometry"))
         #expect(timeline.contains("UIResponder.keyboardDidShowNotification") && timeline.contains("UIResponder.keyboardWillHideNotification"))
-        // The visibility box is plain state: no observed write from a visibility or appearance callback.
+
         #expect(timeline.contains("private final class ChatRowVisibilityBox {") && !timeline.contains("@Observable"))
-        // Existing anchors stay (ChatPoliciesTests, CHT7AssistantRowTests).
+
         #expect(timeline.contains("ChatStreamingFollow17(chat: chat, proxy: proxy, isAtBottom: isAtBottom)"))
         #expect(timeline.contains(".defaultScrollAnchor(.bottom)") && timeline.contains(".scrollDismissesKeyboard(.interactively)"))
         let panel = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatPanel+iOS.swift")
@@ -457,8 +435,6 @@ struct T3BorrowPresenterTests {
         #expect(snapshots.contains("var composerFocusRevision by mutableIntStateOf(0)\n        private set"))
         #expect(snapshots.contains("fun composerDidFocus() {\n        composerFocusRevision += 1"))
     }
-
-    // MARK: Rules (Skip limits, design laws)
 
     @Test func theT3BorrowSourcesStayInsideTheRules() throws {
         let files = [
@@ -481,17 +457,18 @@ struct T3BorrowPresenterTests {
                 #expect(!text.contains(forbidden), "\(file) uses \(forbidden)")
             }
         }
-        // The shared policy is Skip safe: String raw-value enums, scalar structs, no tuples, no timers.
+
         let policy = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatDelayedGate.swift")
         #expect(policy.contains("enum DelayedStatusPhase: String, CaseIterable {"))
         #expect(policy.contains("struct DelayedStatus: Equatable {") && policy.contains("enum DelayedStatusPolicy {"))
         #expect(!policy.contains("-> (") && !policy.contains("Task") && !policy.contains("Timer") && !policy.contains("import SwiftUI"))
-        // One stored, cancellable gate line task on the injected sleep, cancelled by reset.
+
         let presenter = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatPresenter.swift")
         #expect(presenter.components(separatedBy: "gateLineTask = Task {").count - 1 == 1)
         #expect(presenter.contains("let wait = sleep\n        let delay = max(0.0, wake - time)"))
         #expect(presenter.contains("gateLine: currentGateLine,") && presenter.contains("current.gateLine == next.gateLine"))
-        #expect(presenter.contains("// P7: the gate line task is cancelled, and the next apply is immediate again.\n        gateLineTask?.cancel()"))
+        let flat = presenter.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        #expect(flat.contains("gateLineTask?.cancel() gateLineTask = nil gateLineTaskDeadline = -1.0 gateLineStatus = ChatPresenter.initialGateLineStatus gateLineIsFirstApply = true"))
     }
 }
 #endif

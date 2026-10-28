@@ -3,14 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ACT-9 (OUT/PLAN-screens.md section 5, S60 14, 0.5 BrowserStagePresenter, L6-9, L6-15, C6-20, Q3): the shared browser
-/// stage. `BrowserInputURLPolicy` (the four noVNC parameters exactly once, with and without a query, keys already
-/// present), the capability probe's callback-only ack shape and its 22 s timeout plus the 45 s command timeout on both
-/// clients (AGENTS.md "Socket Ack Shapes", against the SFU handler and the web hook), the capability and heartbeat rules,
-/// the presenter's controller and viewer modes over one load-state contract (starting, loading, live, failed,
-/// reconnecting; TLS, renderer and first-frame failures; Try Again; Kitesurf without audio; viewers without a web view),
-/// navigate and close pending until the core answers with the `hostActionFailed` outcome on failure, the fixtures, and
-/// source scans of both platforms' surfaces and registries. The Kotlin half is T/Skip/ACT9BrowserBridgeTests.kt.
 @MainActor
 struct ACT9BrowserStageTests {
     private final class Recorder {
@@ -27,7 +19,7 @@ struct ACT9BrowserStageTests {
 
     private func make() -> (BrowserStagePresenter, Recorder) {
         let presenter = BrowserStagePresenter()
-        // Timers stay armed for the whole test; the seams fire them on purpose.
+
         presenter.sleep = { _ in try? await Task.sleep(nanoseconds: 3_600_000_000_000) }
         let recorder = Recorder()
         presenter.onCommand = { [recorder] command in recorder.commands.append(command) }
@@ -46,8 +38,6 @@ struct ACT9BrowserStageTests {
             videoUserId: video ? Self.video : "", videoTrackKey: video ? "track-1" : "", isReconnecting: reconnecting)
     }
 
-    // MARK: BrowserInputURLPolicy (C6-20)
-
     @Test func inputURLAppendsTheFourParametersExactlyOnce() {
         let suffix = "autoconnect=true&resize=scale&quality=0&compression=9"
         #expect(BrowserInputURLPolicy.inputURL("https://b.example/vnc.html") == "https://b.example/vnc.html?" + suffix)
@@ -57,7 +47,7 @@ struct ACT9BrowserStageTests {
         #expect(BrowserInputURLPolicy.inputURL("https://b.example/vnc.html?a=1&") == "https://b.example/vnc.html?a=1&" + suffix)
         #expect(BrowserInputURLPolicy.inputURL("https://b.example/vnc.html#view") == "https://b.example/vnc.html?" + suffix + "#view")
         #expect(BrowserInputURLPolicy.inputURL("  ") == "")
-        // Keys already present keep their values and are not repeated.
+
         #expect(BrowserInputURLPolicy.inputURL("https://b.example/vnc.html?autoconnect=1&Quality=6")
                 == "https://b.example/vnc.html?autoconnect=1&Quality=6&resize=scale&compression=9")
         let full = "https://b.example/vnc.html?" + suffix
@@ -79,8 +69,6 @@ struct ACT9BrowserStageTests {
         #expect(BrowserProviderPolicy.isChromium("") && BrowserProviderPolicy.isChromium("local") && BrowserProviderPolicy.isChromium("Chromium"))
         #expect(!BrowserProviderPolicy.isChromium("kitesurf"))
     }
-
-    // MARK: Probe, timeouts and heartbeat (C6-20)
 
     @Test func timeoutsMatchTheWebClient() throws {
         #expect(SharedBrowserTimeouts.capabilitiesAckMillis == 22000)
@@ -129,7 +117,7 @@ struct ACT9BrowserStageTests {
         #expect(!kotlin.contains("emit(SocketEvent.browserGetCapabilities"))
         #expect(kotlin.contains("private suspend fun emitAckOnly(event: String, timeoutMs: Long = ACK_TIMEOUT_MS): Data"))
         #expect(kotlin.contains("withAckTimeout(event, timeoutMs)"))
-        // Launch, navigate and close wait 45 s on both clients (close is ack-only too).
+
         for event in ["browserLaunch", "browserNavigate"] {
             #expect(ios.contains("emit(event: SocketEvent.\(event), payload: request, timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.commandAckMillis))"))
             #expect(kotlin.contains("emit(SocketEvent.\(event), request, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())"))
@@ -138,12 +126,12 @@ struct ACT9BrowserStageTests {
         #expect(kotlin.contains("emitAckOnly(SocketEvent.browserClose, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())"))
         #expect(android.contains("func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse"))
         #expect(mac.contains("func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse"))
-        // The SFU handler takes only the callback, and the web emits only a callback.
+
         let sfu = act9Normalized(try act9Repo("packages/sfu/server/socket/handlers/sharedBrowserHandlers.ts"))
         #expect(sfu.contains("\"browser:getCapabilities\", async ( callback: ("))
         let web = act9Normalized(try act9Repo("apps/web/src/app/hooks/useSharedBrowser.ts"))
         #expect(web.contains("browser:getCapabilities"))
-        // HD request B8-T1 R2: the generated event (packages/meeting-core/src/sfu-events.ts, then gen-swift-events).
+
         #expect(SfuClientEvent.browserGetCapabilities.rawValue == "browser:getCapabilities")
     }
 
@@ -166,8 +154,6 @@ struct ACT9BrowserStageTests {
         #expect(state.contains("var isBrowserAvailable: Bool = false {"))
         #expect(state.contains("var browserNoVncURL: String? { didSet { onActivityInputChanged?() } }"))
     }
-
-    // MARK: Presenter: controller and viewer over one load-state contract
 
     @Test func theControllerGetsTheInputLayerOverTheVideo() {
         let (presenter, _) = make()
@@ -213,13 +199,11 @@ struct ACT9BrowserStageTests {
         #expect(presenter.focusKeyboard() == ActivityTapResult.explained)
         #expect(presenter.confirmClose() == ActivityTapResult.explained)
 
-        // Another host can navigate and close per the server's admin rule, but input stays with one person.
         let host = make().0
         host.apply(inputs(controller: false, host: true))
         #expect(host.model.canNavigate && host.model.canClose && !host.model.canControl && !host.model.showsAddressRow)
         #expect(host.model.webViewRole == BrowserWebViewRole.none)
 
-        // Control moving away from you drops the input layer.
         let (moving, _) = make()
         moving.apply(inputs())
         #expect(moving.model.wantsWebView)
@@ -280,7 +264,7 @@ struct ACT9BrowserStageTests {
             presenter.retryLoad()
             #expect(presenter.model.wantsWebView && presenter.model.reloadSerial == 1)
         }
-        // A late callback from the replaced web view changes nothing; the fresh one's does.
+
         let (page, _) = make()
         page.apply(inputs(video: false, provider: "kitesurf"))
         let id = page.model.browserSessionId
@@ -340,7 +324,7 @@ struct ACT9BrowserStageTests {
         presenter.navigate("example.org")
         presenter.commandRejected(BrowserStageCommandKind.navigate)
         #expect(!presenter.model.navigatePending && presenter.feedbackState.token.sequence == token + 1, "a refused command is silent")
-        // A navigate from the Activities launcher shows "Navigating" on the card too.
+
         presenter.apply(inputs(navigating: true))
         #expect(presenter.model.navigatePending)
     }
@@ -396,7 +380,7 @@ struct ACT9BrowserStageTests {
         presenter.apply(inputs())
         let second = presenter.model.browserSessionId
         #expect(!second.isEmpty && second != first, "a new activation gets a fresh web view")
-        // A new call session ends the old browser session and drops anything pending.
+
         presenter.navigate("example.org")
         presenter.apply(inputs(session: 2))
         #expect(recorder.ended == [first, second] && !presenter.model.navigatePending)
@@ -404,8 +388,6 @@ struct ACT9BrowserStageTests {
         presenter.reset()
         #expect(recorder.ended == [first, second, third] && !presenter.model.isActive && presenter.model.load == BrowserLoadState.starting)
     }
-
-    // MARK: Load-state and navigation rules
 
     @Test func loadIssuesMapFromEachPlatformsErrors() {
         #expect(BrowserLoadIssuePolicy.urlErrorDomain == NSURLErrorDomain)
@@ -432,8 +414,6 @@ struct ACT9BrowserStageTests {
         #expect(BrowserStagePresenter.webViewRole(surface: BrowserSurfaceKind.video, canControl: false) == BrowserWebViewRole.none)
         #expect(BrowserStagePresenter.surface(isActive: true, videoUserId: "", inputBaseURL: "", usesFixturePage: true) == BrowserSurfaceKind.liveView)
     }
-
-    // MARK: Fixtures (L6-12)
 
     @Test func fixturesScriptEachStateWithoutTheNetwork() {
         for state in BrowserStageFixtureState.allCases {
@@ -468,8 +448,6 @@ struct ACT9BrowserStageTests {
         #expect(BrowserStageFixtures.isFixture("browser-kitesurf") && !BrowserStageFixtures.isFixture("app-opening"))
         #expect(!BrowserFixturePage.html.contains("http") && !BrowserFixturePage.html.contains("<script"))
     }
-
-    // MARK: Source scans
 
     @Test func iosSurfaceKeepsTheInputLayerContract() throws {
         let ios = try act9Source("Sources/Conclave/Features/Meeting/Activities/BrowserSurface+iOS.swift")
@@ -541,7 +519,6 @@ struct ACT9BrowserStageTests {
         #expect(sharedBrowserWebViewUsers == ["NativeWebView.swift"])
     }
 
-    /// True after the batch 8 strings merge (HD/strings/B8-T1.json).
     @Test func browserStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: act9PackageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
         let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
@@ -581,7 +558,6 @@ private func act9Repo(_ repoRelativePath: String) throws -> String {
     return try String(contentsOf: repo.appendingPathComponent(repoRelativePath), encoding: .utf8)
 }
 
-/// Collapses every whitespace run to one space, so scans survive line wrapping.
 private func act9Normalized(_ text: String) -> String {
     return text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" }).joined(separator: " ")
 }

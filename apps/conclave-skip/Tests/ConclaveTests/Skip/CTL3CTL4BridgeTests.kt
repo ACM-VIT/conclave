@@ -12,15 +12,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * CTL-3 and CTL-4 through the transpiled route picker policy, shortcut policy, controls presenter, SYS-2 route owner and
- * CL13 route and shortcut fixtures (the Swift halves are T/CTL3RoutePickerTests.swift and T/CTL4MediaShortcutTests.swift):
- * the route sheet rows from the owner snapshot (S30 3 d, f), dismissal after the owner confirms, the refused route with
- * its Retry toast (3 l2, CC7), the nearby-devices row asked only on its tap and only once (3 l2b, RECONCILE R24, SY17),
- * the Camera items and the bar's long-press flags (2 d, l4), a flip from the shortcut (2 l5, R13), the Android Camera
- * menu section (FND-2 menu model), the route kind label names (S30 3 g) and the route and shortcut caches (CL14). Pure:
- * no composition (PanelStageBridgeTests owns the one composition per JVM). Not run in the heads-down push.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class CTL3CTL4BridgeTests {
@@ -46,7 +37,7 @@ class CTL3CTL4BridgeTests {
         assertTrue(RoutePickerPolicy.dismissesAfter(requestedId = ControlsFixtureScript.speakerRouteId, route = session.controls.route))
         assertEquals(AudioRouteKind.speaker.rawValue, session.stage.chrome.routeKind)
         assertEquals(ControlTapResult.ignored, session.controls.requestRoute(id = "nope"))
-        // Routing stays available while recovering (S30 3 f) and stops while leaving.
+
         assertEquals(ControlTapResult.dispatched,
             ControlsFixtureSession(state = ControlsFixtureState.recovering).controls.requestRoute(id = ControlsFixtureScript.receiverRouteId))
         assertEquals(ControlTapResult.ignored,
@@ -59,7 +50,7 @@ class CTL3CTL4BridgeTests {
         val route = session.controls.route
         assertEquals(RouteSwitchPhase.failed, route.phase)
         assertEquals(ControlsFixtureScript.receiverRouteId, route.currentId)
-        // The row reverts: no spinner, Phone keeps its radio; the sheet stays.
+
         assertEquals(listOf("receiver*", "speaker", "bt-pixel"), rowIds(route))
         assertTrue(RoutePickerPolicy.requestFailed(requestedId = ControlsFixtureScript.speakerRouteId, route = route))
         assertFalse(RoutePickerPolicy.dismissesAfter(requestedId = ControlsFixtureScript.speakerRouteId, route = route))
@@ -81,11 +72,11 @@ class CTL3CTL4BridgeTests {
         assertEquals(AudioRouteOwner.bluetoothAccessOptionId, access.id)
         assertEquals(AudioRouteRowLine.allowAccess, access.line)
         assertEquals("", access.name)
-        // No request at call start or for another row.
+
         assertEquals(0, session.counters.bluetoothRequest)
         session.controls.requestRoute(id = ControlsFixtureScript.speakerRouteId)
         assertEquals(0, session.counters.bluetoothRequest)
-        // The row's tap is the one request; with the grant stubbed the device is named and selected.
+
         assertEquals(ControlTapResult.dispatched, session.controls.requestRoute(id = AudioRouteOwner.bluetoothAccessOptionId))
         assertEquals(1, session.counters.bluetoothRequest)
         val route = session.controls.route
@@ -112,21 +103,21 @@ class CTL3CTL4BridgeTests {
         assertEquals(listOf(MediaShortcutItemID.flipCamera), list(guest.shortcuts.camera).map { it.kind })
         assertEquals(true, guest.bar.control(CallControlKind.microphone)?.hasShortcut)
         assertEquals(true, guest.bar.control(CallControlKind.camera)?.hasShortcut)
-        // 2 l4: camera off with no Effects panel: no long press; with the panel only Effects.
+
         val denied = ControlsFixtureSession(state = ControlsFixtureState.cameraDenied).controls
         assertTrue(list(denied.shortcuts.camera).isEmpty())
         assertEquals(false, denied.bar.control(CallControlKind.camera)?.hasShortcut)
         val effects = ControlsFixtureSession(state = ControlsFixtureState.cameraEffects).controls
         assertEquals(listOf(MediaShortcutItemID.effects), list(effects.shortcuts.camera).map { it.kind })
         assertEquals(true, effects.bar.control(CallControlKind.camera)?.hasShortcut)
-        // Recovering: Flip stays, disabled with its reason; the camera gets no dead-end menu.
+
         val recovering = ControlsFixtureSession(state = ControlsFixtureState.recovering).controls
         val flip = recovering.shortcuts.cameraItem(MediaShortcutItemID.flipCamera)
         assertEquals(false, flip?.isEnabled)
         assertEquals(ControlBlockedReason.reconnecting, flip?.reason)
         assertEquals(false, recovering.bar.control(CallControlKind.camera)?.hasShortcut)
         assertEquals(true, recovering.bar.control(CallControlKind.microphone)?.hasShortcut)
-        // TalkBack custom actions: only items that can act.
+
         assertTrue(list(MediaShortcutPolicy.accessibilityItems(recovering.shortcuts.camera)).isEmpty())
         assertEquals(listOf(MediaShortcutItemID.flipCamera), list(MediaShortcutPolicy.accessibilityItems(guest.shortcuts.camera)).map { it.kind })
     }
@@ -142,7 +133,7 @@ class CTL3CTL4BridgeTests {
         val recovering = ControlsFixtureSession(state = ControlsFixtureState.recovering)
         assertEquals(ControlTapResult.ignored, recovering.controls.selectShortcut(MediaShortcutItemID.flipCamera))
         assertEquals(0, recovering.counters.flipCamera)
-        // Effects opens its panel from the call.
+
         val effects = ControlsFixtureSession(state = ControlsFixtureState.cameraEffects)
         assertEquals(ControlTapResult.dispatched, effects.controls.selectShortcut(MediaShortcutItemID.effects))
         assertEquals("panel=effects invoker=call", effects.panelReadout())
@@ -161,7 +152,7 @@ class CTL3CTL4BridgeTests {
         assertEquals(ConclaveIcons.CameraswitchFill0, mediaShortcutIcon("flipCamera"))
         assertEquals(ConclaveIcons.AutoAwesomeFill0, mediaShortcutIcon("effects"))
         assertNull(mediaShortcutIcon("systemVideoEffects"))
-        // The iOS system module never becomes an Android row.
+
         val system = ControlsFixtureSession(state = ControlsFixtureState.systemEffects).controls
         assertEquals(listOf("flipCamera"),
             list(list(MediaShortcutPolicy.cameraMenuSections(system.shortcuts.camera, titles = titles))[0].items).map { it.id })

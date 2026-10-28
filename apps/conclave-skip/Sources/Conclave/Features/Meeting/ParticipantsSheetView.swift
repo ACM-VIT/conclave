@@ -4,8 +4,6 @@ import Observation
 import UIKit
 #endif
 
-// MARK: - Participants Sheet
-
 @ViewBuilder
 func acmListSectionHeader(_ title: String) -> some View {
     Text(title)

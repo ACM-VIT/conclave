@@ -2,14 +2,6 @@
 import SwiftUI
 import UIKit
 
-// S40 5 (CHT-3): message actions on iOS. The system context menu on the bubble with the lifted bubble as preview
-// (5 c): when reactions are allowed, a palette of the quick five as Toggles (your own visibly selected) and More
-// Reactions with the other three; then Reply, Send Private Message, Copy, Copy Link, View Reactions; then Hide
-// Messages from %@ (the report item stays out until the row can be reported, Owner OQ5 (2026-10-26)); failed rows end with Try
-// Again and Delete (destructive, last). Unavailable items are hidden, not dimmed. The Add Reaction page is the
-// accessibility path (an action cannot open a Menu). Haptic `reactionSent` plays from the bubble's trigger, never a
-// menu item (a menu item unmounts before feedback fires, F00 C22 c): chips play it themselves (C24).
-
 struct MessageMenu: View {
     let row: ChatRowModel
     let actions: ChatRowActions
@@ -87,7 +79,6 @@ struct MessageMenu: View {
         return false
     }
 
-    /// At the 12-emoji cap only emoji already on the message remain (5 f).
     private var paletteEmojis: [String] {
         var result: [String] = []
         for emoji in ChatReactionRules.quickEmojis where !row.isAtReactionCap || isPresent(emoji) {
@@ -105,8 +96,6 @@ struct MessageMenu: View {
     }
 }
 
-/// 5 c: the Add Reaction page pushed for assistive technologies: the eight emoji with names, a checkmark on yours; a
-/// tap toggles and pops.
 struct AddReactionPage: View {
     let chat: ChatPresenter
     let rowId: String

@@ -3,10 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// ENT-5 (S10 8, 9, 0.6 L6, L10, R3, 0.8 C6, C18; RECONCILE R5, R46, R48): the lobby's connecting, waiting and failed
-/// states, the slow notice, the Android Stop asking confirmation, the one automatic join retry, the entry transition
-/// policy and its plumbing on both platforms, and the C6 entry presentation gate. The transpiled presenter and
-/// policies also run in `T/Skip/ENT5ENT6BridgeTests.kt`; iOS views and Android Kotlin are pinned by source scans.
 @MainActor
 struct ENT5EntryTransitionTests {
     private static let room = "rose-sora-luffy"
@@ -35,8 +31,6 @@ struct ENT5EntryTransitionTests {
                               currentRoomId: Self.room, isNetworkOffline: offline, serverRestartText: restart)
     }
 
-    // MARK: Waiting room (S10 9 f; RECONCILE R46)
-
     @Test func waitingKindsFollowTheS10Table() {
         #expect(WaitingKindPolicy.classify(waitingMessage: "", isNetworkOffline: false, serverRestartText: "", isReconnecting: false) == .standard)
         #expect(WaitingKindPolicy.classify(waitingMessage: "This meeting is locked. Waiting for the host to let you in.",
@@ -47,7 +41,7 @@ struct ENT5EntryTransitionTests {
                                            serverRestartText: "", isReconnecting: false) == .hostAvailable)
         #expect(WaitingKindPolicy.classify(waitingMessage: "", isNetworkOffline: false, serverRestartText: "",
                                            isReconnecting: true) == .reconnecting)
-        // Offline wins over everything, then a restart notice, then a reconnect.
+
         #expect(WaitingKindPolicy.classify(waitingMessage: "This meeting is locked.", isNetworkOffline: true,
                                            serverRestartText: "Restarting", isReconnecting: true) == .offline)
         #expect(WaitingKindPolicy.classify(waitingMessage: "This meeting is locked.", isNetworkOffline: false,
@@ -63,19 +57,17 @@ struct ENT5EntryTransitionTests {
         #expect(presenter.lobbyStatus?.waitingKind == .locked)
         presenter.apply(waiting(message: "This meeting is locked. Waiting for the host to let you in.", offline: true))
         #expect(presenter.lobbyStatus?.waitingKind == .offline)
-        // 9 l6: returning online restores the previous body.
+
         presenter.apply(waiting(message: "This meeting is locked. Waiting for the host to let you in."))
         #expect(presenter.lobbyStatus?.waitingKind == .locked)
         presenter.apply(waiting(restart: "Conclave is updating. Hang on for a moment."))
         #expect(presenter.lobbyStatus?.waitingKind == .serverRestarting)
         #expect(presenter.lobbyStatus?.waitingText == "Conclave is updating. Hang on for a moment.")
-        // Protocol noise is never shown: the S20 copy instead.
+
         presenter.apply(waiting(restart: "sfu draining, websocket closing"))
         #expect(presenter.lobbyStatus?.waitingKind == .serverRestarting)
         #expect(presenter.lobbyStatus?.waitingText == "")
     }
-
-    // MARK: Failed block (S10 8 f)
 
     @Test func initialFailuresMapToTheirClasses() {
         #expect(EntryFailurePolicy.issue(category: "offline", diagnosticCode: "url.offline", serverText: "") == .failedNetwork)
@@ -116,8 +108,6 @@ struct ENT5EntryTransitionTests {
         #expect(presenter.lobbyStatus?.issue == LobbyIssue.none)
     }
 
-    // MARK: Slow notice (S10 8 c, 0.5 task table)
-
     @Test func theSlowNoticeAppearsOnceForAVisibleConnectingLobby() async {
         let presenter = presenter()
         presenter.apply(entering())
@@ -132,7 +122,7 @@ struct ENT5EntryTransitionTests {
         #expect(presenter.liveTaskCount == 0)
         try? await Task.sleep(nanoseconds: 30_000_000)
         #expect(presenter.feedbackState.token.sequence == tokens + 1)
-        // Any phase change cancels it; the next Connecting starts over.
+
         presenter.apply(waiting())
         #expect(presenter.lobbyStatus?.showsSlowNotice == false)
         presenter.apply(entering())
@@ -161,8 +151,6 @@ struct ENT5EntryTransitionTests {
         #expect(other.lobbyStatus?.mode == .editing)
     }
 
-    // MARK: Android Back while waiting (S10 9 d, l4)
-
     @Test func stopAskingIsAConfirmationOnlyWhileWaiting() {
         let recorder = Recorder()
         let presenter = presenter(recorder: recorder)
@@ -179,14 +167,12 @@ struct ENT5EntryTransitionTests {
         presenter.stopAsking()
         #expect(recorder.commands == [.leave])
         #expect(!presenter.isStopAskingPresented)
-        // Admission closes a confirmation that was still up.
+
         presenter.requestStopAsking()
         presenter.apply(entering())
         #expect(!presenter.isStopAskingPresented)
         #expect(recorder.commands == [.leave])
     }
-
-    // MARK: C18 (RECONCILE R48)
 
     @Test func a503WithRetryAfterRetriesOnceInsideTheAttempt() async throws {
         let transport = ENT5JoinTransport(answers: [.status(503, retryAfter: 2), .success])
@@ -237,8 +223,6 @@ struct ENT5EntryTransitionTests {
         #expect(EntryJoinRetry.nanoseconds(forSeconds: -1) == 0)
     }
 
-    // MARK: Entry transition (S10 8 c, d; 0.6 L10, R3)
-
     @Test func theExpansionRunsOnlyIntoAStageWithACardFrameAndMotion() {
         #expect(EntryTransitionPolicy.style(entersCall: true, expandsIntoCall: true, hasCardFrame: true, prefersCrossFade: false) == .expand)
         #expect(EntryTransitionPolicy.style(entersCall: true, expandsIntoCall: false, hasCardFrame: true, prefersCrossFade: false) == .crossFade,
@@ -257,8 +241,6 @@ struct ENT5EntryTransitionTests {
         #expect(EntryTransitionPolicy.androidRevealDelayMillis == 220 && EntryTransitionPolicy.androidPremeetingFadeMillis == 120)
         #expect(EntryPresentation.legacyOverlay.armsLegacyOverlay && !EntryPresentation.native.armsLegacyOverlay)
     }
-
-    // MARK: L9 fixtures (S10 8 l, 9 l)
 
     @Test func theEntryFixturesReachTheirStates() {
         let expectations: [PremeetingFixtureState: (PremeetingPresenter) -> Bool] = [
@@ -284,8 +266,6 @@ struct ENT5EntryTransitionTests {
         }
     }
 
-    // MARK: Source scans
-
     @Test func theIOSEntryFilesFollowTheSpec() throws {
         let block = try ent5Source("Sources/Conclave/Features/Lobby/EntryStatusBlock+iOS.swift")
         let flatBlock = ent5Flat(block)
@@ -310,7 +290,7 @@ struct ENT5EntryTransitionTests {
         let card = try ent5Source("Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift")
         #expect(card.contains(".entryTransitionAnchor(routeId: media.routeId)"))
         let lobby = try ent5Source("Sources/Conclave/Features/Lobby/LobbyView+iOS.swift")
-        // Owner polish shares one opaque safe-area footer across supported iOS versions.
+
         #expect(lobby.components(separatedBy: "EntryStatusBlock(premeeting: premeeting, routeId: routeId)").count - 1 == 1)
         #expect(!lobby.contains("LobbyEntryStatusBlock"))
     }
@@ -377,7 +357,6 @@ struct ENT5EntryTransitionTests {
         }
     }
 
-    /// Passes after the integrator applies HD requests B5-T5 R1 and R2.
     @Test func theViewModelHooksAreInPlace() throws {
         let viewModel = ent5Flat(try ent5Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"))
         #expect(viewModel.contains("var entryPresentation: EntryPresentation = EntryPresentation.legacyOverlay"))
@@ -389,7 +368,6 @@ struct ENT5EntryTransitionTests {
         #expect(wiring.contains("viewModel.entryPresentation = EntryPresentation.native"))
     }
 
-    /// Passes after the integrator merges `HD/strings/B5-T5.json`.
     @Test func entryStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent5Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
@@ -410,7 +388,6 @@ struct ENT5EntryTransitionTests {
     }
 }
 
-/// The slow notice runs only for a visible lobby in Connecting, once.
 private enum SlowNoticeExpectations {
     static func policyRows() -> Bool {
         EntrySlowNoticePolicy.runs(mode: .connecting, isLobbyVisible: true, alreadyShown: false)
@@ -421,7 +398,6 @@ private enum SlowNoticeExpectations {
     }
 }
 
-/// A stubbed `POST /api/sfu/join`: scripted answers, a recorded wait (no clock) and a currency switch.
 @MainActor
 private final class ENT5JoinTransport {
     enum Answer {
@@ -462,8 +438,6 @@ private final class ENT5JoinTransport {
     }
 }
 
-/// Waits for a condition the presenter's tasks make true. Main actor: the condition reads presenter state, so it is
-/// polled on the actor that writes it (a nonisolated async helper would run it on the global executor).
 @MainActor
 private func ent5Settle(_ condition: () -> Bool) async -> Bool {
     for _ in 0..<1000 {
@@ -478,7 +452,6 @@ private func ent5Source(_ packageRelativePath: String) throws -> String {
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 
-/// Whitespace collapsed to single spaces, so a pin fails only when the code changes.
 private func ent5Flat(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
@@ -492,7 +465,7 @@ private func ent5Matches(_ pattern: String, in text: String) -> [String] {
 }
 
 #if os(macOS)
-/// S10 0.8 C6 on the view model (macOS stubs; no network). Needs HD request B5-T5 R1.
+
 @MainActor
 @Suite(.serialized)
 struct ENT5EntryCoreDeltaTests {

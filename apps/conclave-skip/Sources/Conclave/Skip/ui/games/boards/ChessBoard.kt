@@ -17,10 +17,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
@@ -29,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -88,36 +93,20 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-/*
- * S60 11 B3 (ACT-5) on Android: chess inside the game shell's scrolling column (GameShell.kt routes GameSceneKind.chess
- * to ChessSceneBody, HD request B8-T3 R4). The board is one Canvas of 64 flat squares in ext.gameBoardLight and
- * ext.gameBoardDark with labelSmall coordinates, a 2 dp paper outline on the last move, a paper and ink double ring on
- * the selected square, paper dots and rings on legal targets, a paper and error double ring on a king in check and a
- * dashed paper outline on a move waiting for its ack. Taps go through pointerInput(orientation, boardSizePx) with
- * detectTapGestures (onTap through rememberUpdatedState); a custom Layout of 64 zero-draw children carries the
- * semantics (clearAndSetSemantics with the square label, selected and onClick), placed at each square's frame and
- * read from one immutable scene per push. The move chooser is the complete non-visual path. The board never mirrors in
- * RTL (D18). The move in flight is GameStagePresenter.chessPendingMove, read only by the board and the status lines.
- * Pieces: bundled MIT-licensed Tabler vectors in every build (S60 Q9), tinted paper or ink with a contrasting 1 dp
- * outline. The original geometry and full license are preserved in artwork/chess-tabler.
- */
-
 private val ChessChooserRowHeight = 48.dp
 
-// MARK: Scene
-
-/** The chess body for playing and results (the shell draws the lobby). */
 @Composable
-internal fun ChessSceneBody(games: GameStagePresenter) {
+internal fun ChessSceneBody(games: GameStagePresenter, cardHeader: (@Composable (Boolean) -> Unit)? = null) {
     val scene = games.scene.chess ?: return
-    ChessSceneView(scene, games, games.chrome.phase == GameChromePhase.results)
+    ChessSceneView(scene, games, games.chrome.phase == GameChromePhase.results, cardHeader)
 }
 
 @Composable
-private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinished: Boolean) {
+private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinished: Boolean,
+                           cardHeader: (@Composable (Boolean) -> Unit)? = null) {
     val access = rememberSystemAccessibility()
     val haptics = rememberConclaveHaptics()
-    // View-local (S60 11 j): the selected square, a watcher's flip, the chooser and the promotion in progress.
+
     var selected by remember(scene.fen) { mutableStateOf("") }
     var flipped by rememberSaveable { mutableStateOf(false) }
     var chooserOpen by rememberSaveable(scene.fen) { mutableStateOf(false) }
@@ -138,7 +127,7 @@ private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinis
         promotionFrom = ""
         promotionTo = ""
         if (games.sendChessMove(from, to, piece) == ActivityTapResult.dispatched) {
-            // pieceMoved only for a dispatched move (S60 11 e, h).
+
             haptics.gesture(FeedbackKind.pieceMoved)
             chooserOpen = false
         }
@@ -157,24 +146,75 @@ private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinis
             }
         }
     }
-    Column(Modifier.fillMaxWidth().testTag("game.scene.chess"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        ChessHeader(scene, onFlip = { flipped = !flipped })
-        ChessClocksRow(scene, orientation)
-        // TalkBack on shows the chooser button prominently, above the board (S60 11 d).
-        if (canMove && access.touchExploration && !chooserOpen) ChessChooserButton(onOpen = { selected = ""; chooserOpen = true })
-        if (chooserOpen && canMove) {
-            ChessMoveChooser(scene, onSend = send, onClose = { chooserOpen = false })
-        } else {
-            ChessBoardSurface(scene, games, orientation, selected, tap)
+    val stackedScene: @Composable () -> Unit = {
+        Column(Modifier.fillMaxWidth().testTag("game.scene.chess"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            ChessHeader(scene, onFlip = { flipped = !flipped })
+            ChessClocksRow(scene, orientation)
+
+            if (canMove && access.touchExploration && !chooserOpen) ChessChooserButton(onOpen = { selected = ""; chooserOpen = true })
+            if (chooserOpen && canMove) {
+                ChessMoveChooser(scene, onSend = send, onClose = { chooserOpen = false })
+            } else {
+                ChessBoardSurface(scene, games, orientation, selected, tap)
+            }
+            ChessStatusLines(scene, games)
+            if (canMove && !access.touchExploration && !chooserOpen) ChessChooserButton(onOpen = { selected = ""; chooserOpen = true })
+            ChessActionsBar(scene, games)
+            ChessTeamsList(scene)
+            ChessMovesList(scene)
+            if (isFinished && !games.chrome.isHost) PromptLine(conclaveString("gm_waiting_host"))
+
+            if (games.chrome.seat == SeatState.canJoin) PromptSpectatorNotice(games)
         }
-        ChessStatusLines(scene, games)
-        if (canMove && !access.touchExploration && !chooserOpen) ChessChooserButton(onOpen = { selected = ""; chooserOpen = true })
-        ChessActionsBar(scene, games)
-        ChessTeamsList(scene)
-        ChessMovesList(scene)
-        if (isFinished && !games.chrome.isHost) PromptLine(conclaveString("gm_waiting_host"))
-        // The kit's spectator notice only when a seat can be asked for (the role line already says "Watching").
-        if (games.chrome.seat == SeatState.canJoin) PromptSpectatorNotice(games)
+    }
+    Box(Modifier.fillMaxWidth()) {
+        if (cardHeader == null) {
+            stackedScene()
+        } else {
+            val fontScale = LocalDensity.current.fontScale.toDouble()
+            BoxWithConstraints(Modifier.fillMaxSize().testTag("game.body")) {
+                val plan = ChessCardLayoutPolicy.resolve(width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble(),
+                    detailsWidth = ChessCardLayoutPolicy.minimumDetailsWidth * fontScale)
+                if (plan.usesColumns && !chooserOpen) {
+                    Row(Modifier.fillMaxSize().padding(ChessCardLayoutPolicy.compactPadding.dp).testTag("game.scene.chess"),
+                        horizontalArrangement = Arrangement.spacedBy(ChessCardLayoutPolicy.columnGap.dp)) {
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            Box(Modifier.size(plan.boardSide.dp).testTag("game.chess.board")) {
+                                ChessBoardLayer(scene, games, orientation, selected, tap, plan.boardSide.toFloat())
+                            }
+                        }
+                        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (canMove) ChessChooserButton(onOpen = { selected = ""; chooserOpen = true })
+                            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).testTag("game.chess.details"),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                cardHeader(true)
+                                GameShellNotices(games)
+                                ChessHeader(scene, onFlip = { flipped = !flipped })
+                                ChessClocksRow(scene, orientation)
+                                ChessStatusLines(scene, games)
+                                ChessActionsBar(scene, games)
+                                ChessTeamsList(scene)
+                                ChessMovesList(scene)
+                                if (isFinished && !games.chrome.isHost) PromptLine(conclaveString("gm_waiting_host"))
+                                if (games.chrome.seat == SeatState.canJoin) PromptSpectatorNotice(games)
+                                GameShellBottomBar(games)
+                            }
+                        }
+                    }
+                } else {
+                    Column(Modifier.fillMaxSize()) {
+                        cardHeader(false)
+                        HorizontalDivider(color = LocalConclaveExtendedColors.current.border)
+                        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            GameShellNotices(games)
+                            stackedScene()
+                        }
+                        GameShellBottomBar(games)
+                    }
+                }
+            }
+        }
         PromptAnnouncement(games, scene.turnKey, conclaveString("gm_chess_your_move"))
         PromptAnnouncement(games, scene.checkKey, conclaveString("gm_chess_check"))
         PromptAnnouncement(games, scene.resultKey, chessResultText(scene.result))
@@ -182,13 +222,12 @@ private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinis
     if (promotionFrom.isNotEmpty() && promotionTo.isNotEmpty()) {
         ChessPromotionDialog(
             onChoose = { piece -> send(promotionFrom, promotionTo, piece.rawValue) },
-            // Cancel keeps the position (never an automatic queen, S60 11 c).
+
             onDismiss = { promotionFrom = ""; promotionTo = "" },
         )
     }
 }
 
-/** "Your move" (or "White to move", "Check", the result) with the mode and role line, and Flip board for watchers. */
 @Composable
 private fun ChessHeader(scene: ChessScene, onFlip: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
@@ -198,13 +237,13 @@ private fun ChessHeader(scene: ChessScene, onFlip: () -> Unit) {
                 Text(chessStatusText(scene), style = MaterialTheme.typography.titleMedium, color = scheme.onSurface,
                     modifier = Modifier.semantics { heading() }.testTag("game.chess.status"))
                 if (scene.isCheck) {
-                    // The ring on the board carries the contrast; this text carries the meaning (S60 11 e).
+
                     Text(conclaveString("gm_chess_check"), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
                         color = scheme.error, modifier = Modifier.testTag("game.chess.check"))
                 }
             }
             if (scene.canFlip) {
-                // The R6-1 `flip_board` glyph joins this button when the icon lands (HD request B8-T3 R9).
+
                 OutlinedButton(onClick = onFlip, modifier = Modifier.heightIn(min = 48.dp).testTag("game.chess.flip")) {
                     Text(conclaveString("gm_chess_flip"))
                 }
@@ -215,12 +254,6 @@ private fun ChessHeader(scene: ChessScene, onFlip: () -> Unit) {
     }
 }
 
-// MARK: Clocks (one timer leaf)
-
-/**
- * Both clocks and the rapid-fire move chip with tabular digits. Only this leaf ticks, once per second while the
- * lifecycle is at least STARTED and a clock runs; the time is the server's at the push minus the time since it arrived.
- */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChessClocksRow(scene: ChessScene, orientation: ChessSide) {
@@ -252,7 +285,6 @@ private fun ChessClocksRow(scene: ChessScene, orientation: ChessSide) {
     }
 }
 
-/** "White 3:58"; the running side outlined in paper 2 dp; under 10 s ext.warning with "Low time" (no shake). */
 @Composable
 private fun ChessClockChip(clocks: ChessClockModel, side: ChessSide, nowMillis: Double) {
     val scheme = MaterialTheme.colorScheme
@@ -285,7 +317,6 @@ private fun ChessClockChip(clocks: ChessClockModel, side: ChessSide, nowMillis: 
     }
 }
 
-/** Rapid fire: "10 s per move" and, while a turn runs, the seconds left for this move. */
 @Composable
 private fun ChessMoveTimerChip(clocks: ChessClockModel, nowMillis: Double) {
     val scheme = MaterialTheme.colorScheme
@@ -315,19 +346,12 @@ private fun ChessMoveTimerChip(clocks: ChessClockModel, nowMillis: Double) {
     }
 }
 
-// MARK: Board (B3)
-
-/** Coordinates measured once per board size and bundled piece painters resolved outside the canvas draw loop. */
 private class ChessBoardText(
     val pieces: Map<String, Painter>,
     val ranks: Map<Int, TextLayoutResult>,
     val files: Map<Int, TextLayoutResult>,
 )
 
-/**
- * A square board as wide as the card allows, capped at 480 dp (300 dp in compact height); cells are side / 8. The
- * orientation follows your side (or a watcher's flip); the board stays left to right in RTL.
- */
 @Composable
 private fun ChessBoardSurface(scene: ChessScene, games: GameStagePresenter, orientation: ChessSide, selected: String,
                               onTap: (String) -> Unit) {
@@ -341,10 +365,6 @@ private fun ChessBoardSurface(scene: ChessScene, games: GameStagePresenter, orie
     }
 }
 
-/**
- * The canvas, its tap handler and the semantics overlay. Reads `chessPendingMove` (the move in flight) and nothing
- * else from the presenter.
- */
 @Composable
 private fun ChessBoardLayer(scene: ChessScene, games: GameStagePresenter, orientation: ChessSide, selected: String,
                             onTap: (String) -> Unit, sideDp: Float) {
@@ -384,7 +404,6 @@ private fun ChessBoardLayer(scene: ChessScene, games: GameStagePresenter, orient
 
 private data class ChessBoardColors(val light: Color, val dark: Color, val paper: Color, val ink: Color, val red: Color)
 
-/** Coordinate layouts sized to the cell (px, so font scale never changes the geometry-bound board, F00 5). */
 @Composable
 private fun rememberChessBoardText(sidePx: Float): ChessBoardText {
     val measurer = rememberTextMeasurer()
@@ -405,7 +424,6 @@ private fun rememberChessBoardText(sidePx: Float): ChessBoardText {
     }
 }
 
-/** Six cached template painters serve both colors; resource lookup and vector parsing never run in Canvas.draw. */
 @Composable
 private fun rememberChessPiecePainters(): Map<String, Painter> {
     val context = LocalContext.current
@@ -421,12 +439,6 @@ private fun rememberChessPiecePainters(): Map<String, Painter> {
     return painters
 }
 
-/**
- * One canvas (S60 11 d, e): squares, paper labelSmall coordinates (ranks top-left on the left file, files bottom-right
- * on the bottom rank), the last move a 2 dp paper outline, a king in check a paper outline with an error inner ring, the
- * pieces, the selection a paper and ink double ring, legal targets as solid paper dots (a ring for a capture) and the
- * pending move dashed. Instant placement, no animation (S60 11 h).
- */
 private fun DrawScope.drawChessBoard(scene: ChessScene, squares: List<ChessSquareModel>, pending: ChessPendingMoveModel, selected: String,
                                      targets: List<ChessLegalMoveModel>, text: ChessBoardText, colors: ChessBoardColors) {
     val cell = size.width / 8f
@@ -474,20 +486,17 @@ private fun DrawScope.drawChessBoard(scene: ChessScene, squares: List<ChessSquar
     }
 }
 
-/** A 2 dp outline `insetDp` inside the square. */
 private fun DrawScope.drawSquareOutline(left: Float, top: Float, cell: Float, insetDp: Float, color: Color, width: Float) {
     val inset = insetDp.dp.toPx()
     drawRect(color, topLeft = Offset(left + inset, top + inset), size = Size(cell - inset * 2f, cell - inset * 2f), style = Stroke(width = width))
 }
 
-/** Eight radial offsets form the 1 dp contrasting silhouette without changing the licensed path geometry. */
 private val ChessPieceOutlineOffsets = listOf(
     Offset(-1f, 0f), Offset(1f, 0f), Offset(0f, -1f), Offset(0f, 1f),
     Offset(-0.70710678f, -0.70710678f), Offset(0.70710678f, -0.70710678f),
     Offset(-0.70710678f, 0.70710678f), Offset(0.70710678f, 0.70710678f),
 )
 
-/** MIT-licensed Tabler vector artwork in Debug and Release, with paper/ink sides and no automatic RTL mirroring. */
 private fun DrawScope.drawChessPiece(code: String, center: Offset, cell: Float, text: ChessBoardText, colors: ChessBoardColors,
                                      outline: Float) {
     val name = chessPieceAssetName(code) ?: return
@@ -509,10 +518,6 @@ private fun DrawScope.drawChessPiece(code: String, center: Offset, cell: Float, 
     }
 }
 
-/**
- * 64 zero-draw children placed at their squares' frames (S60 11 d): "e4, white knight", "e4, empty, legal move", with
- * `selected` on the selection and an onClick ("Select" or "Move here") on a square a tap would act on.
- */
 @Composable
 private fun ChessSemanticsOverlay(scene: ChessScene, squares: List<ChessSquareModel>, pending: ChessPendingMoveModel, selected: String,
                                   targets: List<ChessLegalMoveModel>, interactive: Boolean, sideDp: Float, onTap: (String) -> Unit) {
@@ -559,9 +564,6 @@ private fun ChessSemanticsOverlay(scene: ChessScene, squares: List<ChessSquareMo
     }
 }
 
-// MARK: Promotion and the move chooser
-
-/** "Promote to" (S60 11 d): four radio rows that commit on selection (a simple dialog) and Cancel. */
 @Composable
 private fun ChessPromotionDialog(onChoose: (ChessPromotion) -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
@@ -597,11 +599,6 @@ private fun ChessChooserButton(onOpen: () -> Unit) {
     }
 }
 
-/**
- * "Choose a move" (S60 11 d, i): your pieces with a move ("Knight on g1"), then the destinations ("f3", "takes on e5"),
- * then the promotion piece; 48 dp rows in the card (instant swap, no AnimatedContent); Back steps back. Without
- * projected legal moves it offers every empty or enemy square and the server decides (S60R 23).
- */
 @Composable
 private fun ChessMoveChooser(scene: ChessScene, onSend: (String, String, String) -> Unit, onClose: () -> Unit) {
     var pieceId by rememberSaveable(scene.fen) { mutableStateOf("") }
@@ -672,9 +669,6 @@ private fun ChessChooserRow(title: String, tag: String, onClick: () -> Unit) {
     }
 }
 
-// MARK: Status, actions, teams and moves
-
-/** "Move rejected" after a rejection (position restored) and the draw and takeback lines (S60 11 f). */
 @Composable
 private fun ChessStatusLines(scene: ChessScene, games: GameStagePresenter) {
     val rejected = games.chessPendingMove.isRejected
@@ -692,11 +686,6 @@ private fun ChessStatusLines(scene: ChessScene, games: GameStagePresenter) {
     }
 }
 
-/**
- * The eligibility-gated actions (S60 11 d, C6-17) as OutlinedButtons in a FlowRow: Offer draw (never against the
- * computer), Accept draw and Decline, Request takeback (disabled with its reason), Accept takeback and Decline, and
- * Resign in `error` behind its confirmation. 48 dp; the pending one shows progress until its ack.
- */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChessActionsBar(scene: ChessScene, games: GameStagePresenter) {
@@ -714,7 +703,7 @@ private fun ChessActionsBar(scene: ChessScene, games: GameStagePresenter) {
             ChessActionButton(ChessAction.declineDraw, games, enabled = true)
         }
         if (scene.showsTakeback) {
-            // The R6-1 `undo` glyph joins this button when the icon lands (HD request B8-T3 R9).
+
             ChessActionButton(ChessAction.requestTakeback, games, enabled = scene.canRequestTakeback,
                 reason = chessTakebackReasonResource(scene.takebackReason))
         }
@@ -759,7 +748,6 @@ private fun ChessActionsBar(scene: ChessScene, games: GameStagePresenter) {
     }
 }
 
-/** One payload-free action; a disabled Request takeback reads its reason as its state. */
 @Composable
 private fun ChessActionButton(action: ChessAction, games: GameStagePresenter, enabled: Boolean, reason: String? = null) {
     val interaction = games.interaction
@@ -786,7 +774,6 @@ private fun ChessActionButton(action: ChessAction, games: GameStagePresenter, en
     }
 }
 
-/** "White: Avery (captain), You" and "Black: Ben": who plays each side (the computer by its server name). */
 @Composable
 private fun ChessTeamsList(scene: ChessScene) {
     if (scene.teamWhite.count == 0 && scene.teamBlack.count == 0) return
@@ -798,7 +785,6 @@ private fun ChessTeamsList(scene: ChessScene) {
     }
 }
 
-/** The move list (S60 11 d): a "Moves" TextButton toggling a bounded LazyColumn region of "1. e4 e5" rows. */
 @Composable
 private fun ChessMovesList(scene: ChessScene) {
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -830,12 +816,8 @@ private fun ChessMoveRow(row: ChessMoveRowModel) {
     }
 }
 
-// MARK: Pieces and formatting
-
-/** Every piece code the board can show (color, then K Q R B N P). */
 internal val ChessPieceCodes = listOf("wK", "wQ", "wR", "wB", "wN", "wP", "bK", "bQ", "bR", "bB", "bN", "bP")
 
-/** All six licensed templates are shared by white/black pieces; side color is applied only while drawing. */
 internal fun chessPieceAssetName(code: String): String? = when (ChessBoardPolicy.kind(code)) {
     ChessPieceKind.king -> "chess_piece_king"
     ChessPieceKind.queen -> "chess_piece_queen"
@@ -846,16 +828,13 @@ internal fun chessPieceAssetName(code: String): String? = when (ChessBoardPolicy
     null -> null
 }
 
-/** Board coordinate letters stay a to h in every locale (algebraic notation). */
 internal fun chessFileLetter(file: Int): String = ChessBoardPolicy.squareId(file, 1).take(1)
 
-/** "3:58" in the current locale. */
 internal fun chessClock(seconds: Int, locale: Locale = Locale.getDefault()): String {
     val value = maxOf(0, seconds)
     return String.format(locale, "%d:%02d", value / 60, value % 60)
 }
 
-/** "3 minutes, 58 seconds" for TalkBack. */
 internal fun chessSpokenDuration(seconds: Int, locale: Locale = Locale.getDefault()): String {
     val value = maxOf(0, seconds)
     val minutes = value / 60
@@ -867,8 +846,6 @@ internal fun chessSpokenDuration(seconds: Int, locale: Locale = Locale.getDefaul
         else -> format.formatMeasures(Measure(rest, MeasureUnit.SECOND))
     }
 }
-
-// Resource names per case (S60 11 g, L6-14), plain functions so tests run without composition.
 
 internal fun chessRoleResource(role: ChessRole): String = when (role) {
     ChessRole.white -> "gm_chess_you_white"
@@ -892,7 +869,6 @@ internal fun chessSideResource(side: ChessSide): String = when (side) {
     ChessSide.none -> "gm_chess_white"
 }
 
-/** The result line resource for a reason and winner; "" while the game runs. */
 internal fun chessResultResource(reason: ChessResultReason, winner: ChessSide, isDraw: Boolean): String = when (reason) {
     ChessResultReason.none -> ""
     ChessResultReason.checkmate -> if (winner == ChessSide.white) "gm_chess_white_mate" else "gm_chess_black_mate"
@@ -925,7 +901,6 @@ internal fun chessKindResource(kind: ChessPieceKind): String = when (kind) {
     ChessPieceKind.pawn -> "gm_chess_pawn"
 }
 
-/** "white knight" for square labels; null for an empty square. */
 internal fun chessPieceNameResource(code: String): String? {
     val kind = ChessBoardPolicy.kind(code) ?: return null
     val white = ChessBoardPolicy.side(code) == ChessSide.white
@@ -939,7 +914,6 @@ internal fun chessPieceNameResource(code: String): String? {
     }
 }
 
-/** null for a quiet move (the square alone). */
 internal fun chessDestinationResource(kind: ChessDestinationKind): String? = when (kind) {
     ChessDestinationKind.quiet -> null
     ChessDestinationKind.capture -> "gm_chess_takes_on"
@@ -963,7 +937,6 @@ internal fun chessActionResource(action: ChessAction): String = when (action) {
     ChessAction.resign -> "gm_chess_resign"
 }
 
-/** The status line resource: "Your move", "%1$s to move" (with the side), or the result. */
 internal fun chessStatusResource(status: ChessStatus): String = when (status) {
     ChessStatus.waiting -> ""
     ChessStatus.yourMove -> "gm_chess_your_move"
@@ -989,7 +962,6 @@ private fun chessResultText(result: ChessResultModel): String {
     return if (name.isEmpty()) "" else conclaveString(name)
 }
 
-/** "Avery offered a draw." for everyone but the offering side, which reads "Draw offered"; the same for takebacks. */
 @Composable
 private fun chessOfferText(offer: ChessOfferModel, isDraw: Boolean): String = when {
     !offer.isActive -> ""
@@ -997,14 +969,12 @@ private fun chessOfferText(offer: ChessOfferModel, isDraw: Boolean): String = wh
     else -> conclaveString(if (isDraw) "gm_chess_draw_offered_by" else "gm_chess_takeback_by", offer.byName)
 }
 
-/** "Knight on g1". */
 @Composable
 private fun chessPieceOn(square: ChessSquareModel): String {
     val kind = ChessBoardPolicy.kind(square.piece) ?: return square.id
     return conclaveString("gm_chess_piece_on", conclaveString(chessKindResource(kind)), square.id)
 }
 
-/** "f3", "takes on e5", "takes on d6 en passant", "castles to g1"; a promotion adds ", promotes". */
 @Composable
 private fun chessDestinationText(move: ChessLegalMoveModel): String {
     val name = chessDestinationResource(ChessBoardPolicy.destinationKind(move))
@@ -1012,7 +982,6 @@ private fun chessDestinationText(move: ChessLegalMoveModel): String {
     return if (move.needsPromotion) conclaveString("gm_chess_promotes", text) else text
 }
 
-/** "1. e4 e5", or "1. e4" while Black has not answered (SAN verbatim). */
 @Composable
 private fun chessMoveRowText(row: ChessMoveRowModel): String = when {
     row.black.isEmpty() -> conclaveString("gm_chess_move_row_white", row.number, row.white)
@@ -1033,10 +1002,6 @@ private fun chessTeamText(members: List<ChessTeamMemberModel>, side: ChessSide, 
     return conclaveString(if (side == ChessSide.black) "gm_chess_team_black" else "gm_chess_team_white", list)
 }
 
-/**
- * "e4, white knight", "e4, empty, legal move", "e8, black king, in check, last move" for the 64 squares in display
- * order (one list per recomposition of the overlay, no per-square observation).
- */
 @Composable
 private fun chessSquareLabels(scene: ChessScene, squares: List<ChessSquareModel>, pending: ChessPendingMoveModel,
                               targets: List<ChessLegalMoveModel>): List<String> {

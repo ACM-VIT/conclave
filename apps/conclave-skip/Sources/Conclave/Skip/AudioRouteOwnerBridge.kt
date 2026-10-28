@@ -10,35 +10,20 @@ import android.provider.Settings
 import androidx.core.app.ActivityCompat
 import skip.ui.UIApplication
 
-/** One Android route device reduced to scalars, so the mapping and its tests need no AudioDeviceInfo. */
 internal data class AndroidRouteDevice(
     val id: String,
     val type: Int,
     val productName: String?,
 )
 
-/**
- * SYS-2: the Android half of the single route owner (S70 5 d, S30 CC4 and 3 g). `WebRTCClient` keeps the backing
- * (API 31+ `setCommunicationDevice`, API 28 to 30 speakerphone and SCO) and reports through this bridge to the
- * transpiled `AudioRouteOwner`:
- *  - route kinds and names (labels from the `ctl_route_*` resources, never hard-coded English, CE G21);
- *  - the R70-2 nearby-devices row: with a Bluetooth device present and no `BLUETOOTH_CONNECT` grant the owner lists
- *    one unnamed "Bluetooth headset" row, and the route sheet's tap on it is the only request (SY17, RECONCILE R24);
- *  - focus loss and gain as `otherAudio` interruptions (`LOSS_TRANSIENT_CAN_DUCK` ignored);
- *  - the call activity's `volumeControlStream` while call audio is live (SY18).
- * No haptics for any automatic or system event (R11). Public only so the app module's `MainActivity` can re-apply the
- * volume stream after a recreation; everything that touches transpiled (internal) types stays internal.
- */
 object AudioRouteOwnerBridge {
-    /** Option id prefix the Android client uses for outputs ("out:<AudioDeviceInfo.id>"). */
+
     const val OUTPUT_PREFIX = "out:"
 
-    /** Whether call audio is live (the call audio mode is configured). Drives `volumeControlStream`. */
     @Volatile
     var isCallAudioLive: Boolean = false
         private set
 
-    /** `sys.setCommunicationDevice` (S70 SX1 readout). */
     @Volatile
     var setCommunicationDeviceCount: Int = 0
         private set
@@ -49,7 +34,7 @@ object AudioRouteOwnerBridge {
         AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
         AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
         AudioDeviceInfo.TYPE_BLE_SPEAKER -> AudioRouteKind.bluetooth
-        // S70 5 f: hearing devices are the S30 hearingAid kind.
+
         AudioDeviceInfo.TYPE_HEARING_AID,
         AudioDeviceInfo.TYPE_BLE_HEADSET -> AudioRouteKind.hearingAid
         AudioDeviceInfo.TYPE_WIRED_HEADSET,
@@ -59,7 +44,6 @@ object AudioRouteOwnerBridge {
         else -> AudioRouteKind.unknown
     }
 
-    /** S30 3 g names: the device's own name for Bluetooth and hearing devices when the system gives one. */
     internal fun routeName(kind: AudioRouteKind, productName: String?, resolver: ConclaveResourceResolver): String {
         val product = productName?.trim().orEmpty()
         return when (kind) {
@@ -83,7 +67,6 @@ object AudioRouteOwnerBridge {
         )
     }
 
-    /** R70-2 and R24: the nearby-devices state the route sheet shows. */
     internal fun bluetoothAccess(
         sdk: Int,
         granted: Boolean,
@@ -95,11 +78,6 @@ object AudioRouteOwnerBridge {
         return if (deniedOnce && !canAskAgain) BluetoothRouteAccess.needsSettings else BluetoothRouteAccess.needsGrant
     }
 
-    /**
-     * The routes present now for `AudioRouteOwner.publish(_:)`. `devices` are the routable outputs in the default
-     * order; while nearby-devices access is missing the unnamed Bluetooth row is appended (it cannot be routed to
-     * until the grant).
-     */
     internal fun platformState(
         devices: List<AndroidRouteDevice>,
         currentId: String,
@@ -126,7 +104,6 @@ object AudioRouteOwnerBridge {
         )
     }
 
-    /** S70 5 d: focus loss is `otherAudio`, gain clears it; `LOSS_TRANSIENT_CAN_DUCK` is ignored. */
     internal fun interruptionEvent(focusChange: Int): AudioInterruptionEvent? = when (focusChange) {
         AudioManager.AUDIOFOCUS_GAIN -> AudioInterruptionEvent.focusGained
         AudioManager.AUDIOFOCUS_LOSS,
@@ -134,18 +111,15 @@ object AudioRouteOwnerBridge {
         else -> null
     }
 
-    /** SY18: the volume keys change call volume while a call is live, even during silence. */
     fun volumeStream(callLive: Boolean): Int =
         if (callLive) AudioManager.STREAM_VOICE_CALL else AudioManager.USE_DEFAULT_STREAM_TYPE
 
-    /** Called by `WebRTCClient` as call audio starts and stops; applies to the current activity at once. */
     internal fun setCallAudioLive(live: Boolean) {
         isCallAudioLive = live
         val activity = UIApplication.shared.androidActivity ?: return
         applyVolumeControlStream(activity)
     }
 
-    /** The call activity re-applies this after a recreation (request R6: `MainActivity.onResume`). */
     fun applyVolumeControlStream(activity: Activity, live: Boolean = isCallAudioLive) {
         try {
             activity.volumeControlStream = volumeStream(live)
@@ -158,13 +132,11 @@ object AudioRouteOwnerBridge {
         setCommunicationDeviceCount += 1
     }
 
-    /** False once the person denied nearby-devices access for good (no dialog would show). */
     fun canAskBluetoothAgain(activity: Activity): Boolean {
         if (Build.VERSION.SDK_INT < 31) return true
         return ActivityCompat.shouldShowRequestPermissionRationale(activity, android.Manifest.permission.BLUETOOTH_CONNECT)
     }
 
-    /** R24: after a permanent denial the row's tap opens the app's system settings. */
     fun openAppSettings(activity: Activity) {
         try {
             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", activity.packageName, null))

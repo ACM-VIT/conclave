@@ -3,35 +3,77 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// F7: a recovery rejoin that lands while a microphone, camera or hand toggle
-/// is suspended in its await (an SFU acknowledgement can take up to 30 s) must
-/// not strand the toggle's in-flight guard, and the orphaned toggle must make
-/// no media call into the call that replaced it.
-///
-/// What these host tests drive and observe:
-/// - The rejoin is the real `rejoinIfPossible()` -> `joinRoom` path (attempt
-///   id, guard release). Its join task makes the real teardown call into the
-///   macOS media stub, which bumps the stub's configuration generation (one
-///   per media session) and drops its producers, and is then held there until
-///   `finish()` has retired the attempt, so it never reaches the network join
-///   fetch.
-/// - `land()` stands in for the join response: it publishes media from the
-///   current intent through the real `startProducing()`, then marks the call
-///   joined itself.
-/// - Every stub call is logged with the media session it landed in, so a test
-///   can tell the recovered call's media calls from the orphan's.
-/// - Each toggle that took its guard reports when its task has finished
-///   (`MeetingViewModel.testLocalToggleEnded`, macOS only). A test waits for
-///   that before it asserts what an orphaned toggle did not do.
-/// The real iOS and Android clients do not run here. Their own fences against
-/// late acknowledgements are pinned by
-/// `ConclaveTests.testLateMediaAcknowledgementsAreFencedInBothClients`.
-///
-/// Every wait is bounded by wall-clock time and names the state it waits for;
-/// no fixed number of yields is trusted.
 @MainActor
 @Suite(.serialized)
 struct LocalToggleGuardRecoveryTests {
+    @Test func holdPreservesCameraIntentAndResumeWaitsForSuspension() async {
+        let call = RejoinHarness()
+        #expect(await call.join(cameraOff: false))
+        call.media.testReportsLocalVideoState = true
+        call.calls.hold("suspendLocalVideoForRecovery")
+        call.viewModel.setCameraSuspendedForHold(true)
+        #expect(await settle { call.calls.isHolding("suspendLocalVideoForRecovery") })
+        #expect(await call.reportsHandled())
+        #expect(!call.viewModel.state.isCameraOff)
+        let enables = call.calls.count("setVideoEnabled(true)")
+        let starts = call.calls.count("startProducingVideo")
+        _ = await call.viewModel.startProducing()
+        #expect(call.calls.count("startProducingVideo") == starts)
+        call.viewModel.setCameraSuspendedForHold(false)
+        _ = await call.viewModel.startProducing()
+        await Task.yield()
+        #expect(call.calls.count("startProducingVideo") == starts)
+        #expect(call.calls.count("setVideoEnabled(true)") == enables)
+        call.calls.release("suspendLocalVideoForRecovery")
+        #expect(await settle { call.calls.count("setVideoEnabled(true)") == enables + 1 })
+        #expect(!call.viewModel.state.isCameraOff)
+        await call.finish()
+    }
+
+    @Test func cameraOffDuringHoldWinsOverResume() async {
+        let call = RejoinHarness()
+        #expect(await call.join(cameraOff: false))
+        call.media.testReportsLocalVideoState = true
+        call.calls.hold("suspendLocalVideoForRecovery")
+        call.viewModel.setCameraSuspendedForHold(true)
+        #expect(await settle { call.calls.isHolding("suspendLocalVideoForRecovery") })
+        #expect(await call.reportsHandled())
+        call.viewModel.toggleCamera()
+        #expect(call.viewModel.state.isCameraOff)
+        #expect(await settle { call.calls.count("closeLocalVideoProducer") > 0 })
+        let enables = call.calls.count("setVideoEnabled(true)")
+        let starts = call.calls.count("startProducingVideo")
+        call.viewModel.setCameraSuspendedForHold(false)
+        call.calls.release("suspendLocalVideoForRecovery")
+        #expect(await call.releasedCallsReturned())
+        #expect(await call.reportsHandled())
+        #expect(call.viewModel.state.isCameraOff)
+        #expect(call.calls.count("setVideoEnabled(true)") == enables)
+        #expect(call.calls.count("startProducingVideo") == starts)
+        await call.finish()
+    }
+
+    @Test func speakerPromotionRetainsTheAttendeeCredentialInTheNextJoin() async throws {
+        let call = RejoinHarness()
+        #expect(await call.join())
+        call.viewModel.state.webinarRole = "attendee"
+        let context = try #require(call.viewModel.lastJoinContext)
+        call.viewModel.lastJoinContext = MeetingViewModel.JoinContext(
+            roomId: context.roomId, displayName: context.displayName, socketDisplayName: context.socketDisplayName,
+            isHost: false, joinMode: .webinarAttendee, meetingInviteCode: "meeting-code",
+            webinarInviteCode: "retained-attendee-code", clientId: context.clientId, allowRoomCreation: false,
+            user: context.user)
+        call.viewModel.people.onAcceptStageInvitation?(StageInvitationModel(id: 1, promotedByName: "Host",
+            rejoinRoomId: "room-a", session: 1))
+        #expect(call.viewModel.isPromotionLobbyOpen)
+        call.viewModel.premeeting.onCommand?(.joinAsSpeaker)
+        #expect(await settle { call.calls.heldCount("cleanup(notifyLocalState: false)") >= 2 })
+        #expect(await settle { call.viewModel.lastJoinContext?.joinMode == .meeting })
+        #expect(call.viewModel.lastJoinContext?.webinarInviteCode == "retained-attendee-code")
+        #expect(call.viewModel.lastJoinContext?.meetingInviteCode == "meeting-code")
+        await call.finish()
+    }
+
     @Test
     func rejoinFreesTheMicrophoneGuardWhileTheOrphanedUnmuteIsSuspended() async {
         let call = RejoinHarness()
@@ -44,12 +86,10 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await call.rejoin())
         let recovered = call.generation
         await call.land()
-        // The recovered call published the microphone from the unmuted intent.
+
         #expect(call.calls.count("startProducingAudio", inGeneration: recovered) == 1)
         #expect(call.media.hasLocalAudioProducer)
 
-        // The orphaned start is still suspended, yet a mute and an unmute
-        // reach the recovered call's media: the rejoin freed the guard.
         call.viewModel.toggleMute()
         #expect(call.viewModel.state.isMuted)
         #expect(await settle { call.calls.count("setAudioEnabled(false)", inGeneration: recovered) == 1 })
@@ -61,16 +101,12 @@ struct LocalToggleGuardRecoveryTests {
         })
         #expect(await settle { call.endedToggleCount("toggleMute") == 2 })
 
-        // The orphaned start returns late while the recovered call is
-        // unmuted. Its toggle finishes without any media call, in particular
-        // no second unmute confirmation (which would bypass the guard).
         let callsBefore = call.calls.totalCount
         call.calls.release("startProducingAudio")
         #expect(await settle { call.endedToggleCount("toggleMute") == 3 })
         #expect(call.calls.totalCount == callsBefore)
         #expect(!call.viewModel.state.isMuted)
 
-        // The guard stays usable after the orphan finished.
         call.viewModel.toggleMute()
         #expect(call.viewModel.state.isMuted)
         #expect(await settle { call.calls.count("setAudioEnabled(false)", inGeneration: recovered) == 2 })
@@ -92,9 +128,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.land()
         #expect(call.calls.count("startProducingVideo", inGeneration: recovered) == 1)
 
-        // The orphaned start is still suspended, yet turning the camera off
-        // and on reaches the recovered call's media: the rejoin freed the
-        // guard.
         call.viewModel.toggleCamera()
         #expect(call.viewModel.state.isCameraOff)
         #expect(await settle { call.calls.count("closeLocalVideoProducer", inGeneration: recovered) == 1 })
@@ -104,8 +137,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await settle { call.calls.count("startProducingVideo", inGeneration: recovered) == 2 })
         #expect(await settle { call.endedToggleCount("toggleCamera") == 2 })
 
-        // The orphaned start returns late; its toggle finishes without any
-        // media call.
         let callsBefore = call.calls.totalCount
         call.calls.release("startProducingVideo")
         #expect(await settle { call.endedToggleCount("toggleCamera") == 3 })
@@ -113,7 +144,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(!call.viewModel.state.isCameraOff)
         #expect(call.media.hasLocalVideoProducer)
 
-        // The guard stays usable after the orphan finished.
         call.viewModel.toggleCamera()
         #expect(call.viewModel.state.isCameraOff)
         #expect(await settle { call.calls.count("closeLocalVideoProducer", inGeneration: recovered) == 2 })
@@ -131,8 +161,7 @@ struct LocalToggleGuardRecoveryTests {
 
         #expect(await call.rejoin())
         await call.land()
-        // The orphaned raise is still suspended, yet a raise and a lower
-        // reach the recovered call: the rejoin freed the guard.
+
         call.viewModel.toggleHandRaise()
         #expect(await settle { call.viewModel.state.isHandRaised })
         #expect(call.calls.count("setHandRaised(true)") == 2)
@@ -142,15 +171,12 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.calls.count("setHandRaised(false)") == 1)
         #expect(await settle { call.endedToggleCount("setHandRaisedState") == 2 })
 
-        // The orphaned raise's acknowledgement returns late: it belongs to
-        // the previous attempt, so the hand stays lowered and nothing is sent.
         let callsBefore = call.calls.totalCount
         call.calls.release("setHandRaised(true)")
         #expect(await settle { call.endedToggleCount("setHandRaisedState") == 3 })
         #expect(!call.viewModel.state.isHandRaised)
         #expect(call.calls.totalCount == callsBefore)
 
-        // The guard stays usable after the orphan finished.
         call.viewModel.toggleHandRaise()
         #expect(await settle { call.viewModel.state.isHandRaised })
         #expect(call.calls.count("setHandRaised(true)") == 3)
@@ -169,20 +195,16 @@ struct LocalToggleGuardRecoveryTests {
         await call.land()
         #expect(call.media.hasLocalAudioProducer)
 
-        // A mute in the recovered call owns the guard while its ack is pending.
         call.calls.hold("setAudioEnabled(false)")
         call.viewModel.toggleMute()
         #expect(call.viewModel.state.isMuted)
         #expect(await settle { call.calls.isHolding("setAudioEnabled(false)") })
 
-        // The orphaned unmute finishes; the newer mute still owns the guard,
-        // so another tap is a duplicate and flips nothing.
         call.calls.release("startProducingAudio")
         #expect(await settle { call.endedToggleCount("toggleMute") == 1 })
         call.viewModel.toggleMute()
         #expect(call.viewModel.state.isMuted)
 
-        // Only the owner's completion frees the guard.
         call.calls.release("setAudioEnabled(false)")
         #expect(await settle { call.endedToggleCount("toggleMute") == 2 })
         #expect(call.calls.count("setAudioEnabled(true)") == 0)
@@ -206,12 +228,10 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await call.rejoin())
         let recovered = call.generation
         await call.land()
-        // The teardown dropped the producer and the muted intent published none.
+
         #expect(!call.media.hasLocalAudioProducer)
         #expect(call.calls.count("startProducingAudio", inGeneration: recovered) == 0)
 
-        // The guard is free: unmute starts and confirms a microphone in the
-        // recovered call, and mute pauses it again.
         call.viewModel.toggleMute()
         #expect(!call.viewModel.state.isMuted)
         #expect(await settle {
@@ -224,8 +244,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await settle { call.calls.count("setAudioEnabled(false)", inGeneration: recovered) == 1 })
         #expect(await settle { call.endedToggleCount("toggleMute") == 2 })
 
-        // The orphaned mute's acknowledgement finally times out: no rollback,
-        // no error and no media call in the recovered call, and the mute stays.
         let callsBefore = call.calls.totalCount
         call.calls.fail("setAudioEnabled(false)", with: StubAckTimeout())
         #expect(await settle { call.endedToggleCount("toggleMute") == 3 })
@@ -238,10 +256,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// `CallSessionCoordinator.setMuted` is what CallKit's
-    /// CXSetMutedCallAction handler calls, and its `toggleMute()` is what the
-    /// Android notification and PiP actions call; this drives those two entry
-    /// points, not the system surfaces themselves.
     @Test
     func coordinatorMuteEntryPointsReachTheRecoveredCallsMediaWhileTheOrphanIsSuspended() async {
         let call = RejoinHarness()
@@ -254,33 +268,29 @@ struct LocalToggleGuardRecoveryTests {
         await call.land()
 
         CallSessionCoordinator.shared.register(call.viewModel)
-        // The CallKit entry point is absolute and routes to toggleMute.
+
         CallSessionCoordinator.shared.setMuted(true)
         #expect(call.viewModel.state.isMuted)
         #expect(await settle { call.calls.count("setAudioEnabled(false)", inGeneration: recovered) == 1 })
         #expect(await settle { call.endedToggleCount("toggleMute") == 1 })
-        // The notification and PiP entry point is a plain toggle routed to
-        // the same toggleMute.
+
         #expect(!CallSessionCoordinator.shared.toggleMute())
         #expect(!call.viewModel.state.isMuted)
         #expect(await settle { call.calls.count("setAudioEnabled(true)", inGeneration: recovered) == 1 })
         #expect(await settle { call.endedToggleCount("toggleMute") == 2 })
 
-        // The orphaned start returns late; its toggle finishes without any
-        // media call.
         let callsBefore = call.calls.totalCount
         call.calls.release("startProducingAudio")
         #expect(await settle { call.endedToggleCount("toggleMute") == 3 })
         #expect(call.calls.totalCount == callsBefore)
         #expect(!call.viewModel.state.isMuted)
-        // cleanup() also unregisters the call presence.
+
         await call.finish()
     }
 
     @Test
     func orphanedChatCommandTogglesMakeNoMediaCallInTheRecoveredCall() async throws {
-        // Parsed before the harness exists, so a parse failure leaves no held
-        // join attempt behind.
+
         let cameraOn = try #require(ChatCommandParser.parse("/camera on"))
         let unmute = try #require(ChatCommandParser.parse("/unmute"))
         let call = RejoinHarness()
@@ -300,9 +310,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.calls.count("startProducingAudio", inGeneration: recovered) == 1)
         #expect(call.calls.count("startProducingVideo", inGeneration: recovered) == 1)
 
-        // The orphaned /unmute returns while the recovered call is unmuted:
-        // it finishes without any media call (in particular no confirmation),
-        // and its guard is free.
         var callsBefore = call.calls.totalCount
         call.calls.release("startProducingAudio")
         #expect(await settle { call.endedToggleCount("setMuted") == 1 })
@@ -312,8 +319,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await settle { call.calls.count("setAudioEnabled(false)", inGeneration: recovered) == 1 })
         #expect(await settle { call.endedToggleCount("toggleMute") == 1 })
 
-        // The user turns the camera off; the orphaned /camera on must not
-        // turn it back on when its start returns late.
         call.viewModel.toggleCamera()
         #expect(call.viewModel.state.isCameraOff)
         #expect(await settle { call.calls.count("closeLocalVideoProducer", inGeneration: recovered) == 1 })
@@ -328,8 +333,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex F7 #3, view model side: the camera enable's recreate fallback
-    /// acts only for its own call.
     @Test
     func orphanedCameraEnableFailureMakesNoCloseOrStartCallInTheRecoveredCall() async {
         let call = RejoinHarness()
@@ -342,13 +345,10 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await call.rejoin())
         let recovered = call.generation
         await call.land()
-        // The recovered call published the camera from the on intent.
+
         #expect(call.calls.count("startProducingVideo", inGeneration: recovered) == 1)
         #expect(call.media.hasLocalVideoProducer)
 
-        // The orphaned enable fails late with a stale-producer error. Its
-        // recreate fallback must not close or restart the recovered call's
-        // camera producer, and its error must not reach the recovered call.
         let callsBefore = call.calls.totalCount
         call.calls.fail("setVideoEnabled(true)", with: StubMediaError("Producer closed"))
         #expect(await settle { call.endedToggleCount("toggleCamera") == 1 })
@@ -360,8 +360,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Baseline for the test above: in the same call, the fallback still
-    /// replaces a stale camera producer.
     @Test
     func sameCallCameraEnableFailureStillClosesAndRestartsTheProducer() async {
         let call = RejoinHarness()
@@ -373,7 +371,7 @@ struct LocalToggleGuardRecoveryTests {
 
         call.calls.fail("setVideoEnabled(true)", with: StubMediaError("Producer closed"))
         #expect(await settle { call.endedToggleCount("toggleCamera") == 1 })
-        // One start when the call joined, one from the fallback.
+
         #expect(call.calls.count("startProducingVideo", inGeneration: session) == 2)
         #expect(call.calls.count("closeLocalVideoProducer", inGeneration: session) == 1)
         #expect(call.media.hasLocalVideoProducer)
@@ -381,14 +379,11 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex F7 #4, view model side, with a late successful acknowledgement.
     @Test
     func orphanedUnmuteConfirmationThatSucceedsLateMakesNoMediaCallInTheRecoveredCall() async {
         await assertOrphanedUnmuteConfirmationMakesNoMediaCall(lateFailure: nil)
     }
 
-    /// Codex F7 #4, view model side, with a late failed acknowledgement (the
-    /// Android text for a replaced socket).
     @Test
     func orphanedUnmuteConfirmationThatFailsLateMakesNoMediaCallInTheRecoveredCall() async {
         await assertOrphanedUnmuteConfirmationMakesNoMediaCall(
@@ -411,12 +406,10 @@ struct LocalToggleGuardRecoveryTests {
         call.viewModel.toggleCamera()
         call.viewModel.toggleHandRaise()
         call.viewModel.toggleHandRaise()
-        // The second mic and camera taps return before flipping anything.
+
         #expect(call.viewModel.state.isMuted)
         #expect(call.viewModel.state.isCameraOff)
-        // Both hand tasks were queued, in order, before this wait on the
-        // serial main actor, so the second one (which finds the guard held)
-        // has run by the time the first one holds and the wait returns.
+
         #expect(await settle {
             call.calls.isHolding("setAudioEnabled(false)")
                 && call.calls.isHolding("closeLocalVideoProducer")
@@ -428,7 +421,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.calls.count("startProducingVideo") == videoStartsBefore)
         #expect(call.calls.count("setHandRaised(true)") == 1)
 
-        // Each completion frees its own guard, so the next taps work.
         call.calls.release("setAudioEnabled(false)")
         call.calls.release("closeLocalVideoProducer")
         call.calls.release("setHandRaised(true)")
@@ -481,8 +473,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await settle { call.calls.isHolding("startProducingAudio") })
         #expect(!call.viewModel.state.isMuted)
 
-        // The toggle owns the microphone: the SFU closing the local producer
-        // does not restart it, and the intent falls back to muted.
         call.media.testClosesLocalMedia = { kind in kind == "audio" }
         call.closeLocalMicrophone()
         #expect(await settle { call.viewModel.state.isMuted })
@@ -502,23 +492,12 @@ struct LocalToggleGuardRecoveryTests {
         await call.land()
         #expect(call.calls.count("startProducingAudio", inGeneration: recovered) == 1)
 
-        // The orphaned toggle is still suspended but owns nothing in the
-        // recovered call, so that call's producer-closed restart runs.
         call.media.testClosesLocalMedia = { kind in kind == "audio" }
         call.closeLocalMicrophone()
         #expect(await settle { call.calls.count("startProducingAudio", inGeneration: recovered) == 2 })
         await call.finish()
     }
 
-    // MARK: - WP2-S1c: the newest local media intent wins
-
-    /// P2: a camera-off on the reconnecting screen while the recovered
-    /// call's camera start awaits wins. The view model closes whatever that
-    /// start committed, and the camera stays off through every state report.
-    /// (The real clients also drop such a start themselves once the camera-off
-    /// reached them, pinned by
-    /// `ConclaveTests.testLateMediaAcknowledgementsAreFencedInBothClients`;
-    /// this stub does not, so the view model's own fence is what passes here.)
     @Test
     func cameraOffOnTheReconnectingScreenWinsOverTheRecoveredCallsCameraStart() async {
         let call = RejoinHarness()
@@ -543,9 +522,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// The recovered call's camera start already committed and its attempt
-    /// joins before the camera-off's hop to the media layer runs. The
-    /// camera-off still applies: it closes the published camera.
     @Test
     func cameraOffOnTheReconnectingScreenStillAppliesWhenTheRecoveredCallJoinsFirst() async {
         let call = RejoinHarness()
@@ -557,7 +533,7 @@ struct LocalToggleGuardRecoveryTests {
 
         call.viewModel.toggleCamera()
         #expect(call.viewModel.state.isCameraOff)
-        // The join continuation was queued before that hop.
+
         call.markJoined()
         #expect(await settle { call.calls.count("closeLocalVideoProducer", inGeneration: recovered) == 1 })
         #expect(!call.media.hasLocalVideoProducer)
@@ -565,9 +541,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// The microphone twin: a mute on the reconnecting screen reaches the
-    /// media layer at once, so a recovered attempt that joins first cannot
-    /// leave its freshly started microphone live under a muted UI.
     @Test
     func muteOnTheReconnectingScreenStillAppliesWhenTheRecoveredCallJoinsFirst() async {
         let call = RejoinHarness()
@@ -589,11 +562,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 1 (C2): the recovered attempt's start committed and its
-    /// camera-on report is still queued when the camera-off is tapped on the
-    /// reconnecting screen. That stale report flips the UI back on first; the
-    /// camera-off is still the newest intent, so it must still apply to the
-    /// media and end with the UI off.
     @Test
     func cameraOffOnTheReconnectingScreenWinsOverAStaleCameraOnReport() async {
         let call = RejoinHarness()
@@ -612,9 +580,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 1 (C3): an admin-enforced camera close whose producer id
-    /// matches nothing yet (the start's create has not installed it) still
-    /// cancels that start, and the pending camera-on commits nothing.
     @Test
     func adminEnforcedCameraCloseWhileACameraStartAwaitsWins() async {
         let call = RejoinHarness()
@@ -637,8 +602,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 1 (C1): chat `/camera off` is never dropped behind a
-    /// pending `/camera on`.
     @Test
     func chatCameraOffWhileAChatCameraOnStartsWins() async throws {
         let cameraOn = try #require(ChatCommandParser.parse("/camera on"))
@@ -662,10 +625,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 1 (C6): the SFU closed the camera producer while a
-    /// camera-on awaited its acknowledgement (the toggle suppressed the
-    /// producer-closed restart). The camera-on is still the newest intent, so
-    /// it recreates the camera instead of showing it on with none.
     @Test
     func cameraOnWhoseProducerTheSFUClosedDuringItsAcknowledgementRecreatesIt() async {
         let call = RejoinHarness()
@@ -687,10 +646,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 2 (R2-1): the recovered start closes its camera for a
-    /// camera-off from the reconnecting screen, and the user turns the camera
-    /// back on while that close awaits. The start converges on the newest
-    /// intent and starts the camera again.
     @Test
     func cameraOnTappedWhileTheRecoveredStartClosesForACameraOffStartsTheCameraAgain() async {
         let call = RejoinHarness()
@@ -716,13 +671,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 2 (R2-2), in the SFU's real order: the host turns the
-    /// camera off while a camera-on awaits its acknowledgement. The owner's
-    /// plain producerClosed closes the camera first (held in its awaited
-    /// close), then admin:producerClosed, participantCameraOff and
-    /// admin:mediaEnforced record the camera-off. The camera-on's
-    /// acknowledgement then lands with its producer gone: it neither commits
-    /// nor recreates the camera, and the close restarts nothing.
     @Test
     func aHostCameraOffDuringACameraOnNeverRecreatesTheCamera() async {
         let call = RejoinHarness()
@@ -749,12 +697,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Review round 4 (issue 1): the host turns a live camera off. The
-    /// owner's plain producerClosed closes the camera first and awaits the
-    /// capture stop, as the iOS close does; admin:producerClosed,
-    /// participantCameraOff and admin:mediaEnforced land during that await.
-    /// The close's restart then starts nothing: camera-on is no longer the
-    /// newest intent, so the camera is never captured or published again.
     @Test
     func aHostCameraOffNeverRestartsTheCameraItClosed() async {
         let call = RejoinHarness()
@@ -775,10 +717,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Review round 4 (issue 2): the host mutes the user while a camera-on
-    /// awaits its start. admin:producerClosed arrives after the plain close
-    /// removed the microphone, so it cannot tell a microphone from a camera:
-    /// it records no camera-off, and the camera-on still commits.
     @Test
     func aHostMuteNeverCancelsAPendingCameraOn() async {
         let call = RejoinHarness()
@@ -804,10 +742,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Review round 4 (issue 4): an admin room snapshot reports producer
-    /// state, not intent. One taken before the user's unmute reached the SFU
-    /// says muted; it lands while that unmute awaits its acknowledgement and
-    /// must not discard it.
     @Test
     func anAdminRoomSnapshotNeverOverridesAnUnmuteInFlight() async throws {
         let call = RejoinHarness()
@@ -829,9 +763,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 2 (R2-2): a camera-on the user taps while an admin camera
-    /// close awaits is newer than that close, which then reports nothing
-    /// over the live camera.
     @Test
     func aCameraOnTappedDuringAnAdminCameraCloseStaysOn() async {
         let call = RejoinHarness()
@@ -855,13 +786,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 3 (R2-2): an admin-flagged producer close that finds the
-    /// camera installed (an intentional-close marker, as an iOS topology
-    /// replacement sets, consumed the owner's plain close of it) awaits
-    /// closing camera A. The enforcement's
-    /// camera-off event turns the camera off, then the user turns it back on
-    /// and publishes camera B. When the close resumes it reports nothing over
-    /// B: the user's camera-on is newer.
     @Test
     func anAdminProducerCloseResumingAfterTheUserPublishedANewerCameraReportsNothing() async {
         let call = RejoinHarness()
@@ -887,9 +811,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 3 (R2-2): the same, but the user's camera-on is still
-    /// starting when the close resumes, so no camera is live yet. The close
-    /// still reports nothing over the newer camera-on.
     @Test
     func anAdminProducerCloseResumingDuringANewerCameraOnReportsNothing() async {
         let call = RejoinHarness()
@@ -914,11 +835,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 3 (R2-2, producer ownership): while an admin-flagged
-    /// producer close awaits (its restart is suppressed), a publishing
-    /// reassert (the camera-off has not reached the UI yet) publishes camera
-    /// B, and no newer camera intent lands. The close never reports off over
-    /// live B; the enforcement's camera-off event that follows closes B.
     @Test
     func anAdminProducerCloseNeverReportsOffOverACameraAReassertPublishedDuringIt() async {
         let call = RejoinHarness()
@@ -947,9 +863,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// A server camera-off closes the camera on a later hop. A camera-on the
-    /// user tapped before that hop ran is newer: the hop closes nothing, so it
-    /// can neither close the camera nor cancel that camera-on.
     @Test
     func aServerCameraOffHopNeverClosesTheCameraOfACameraOnTappedBeforeItRan() async {
         let call = RejoinHarness()
@@ -957,8 +870,7 @@ struct LocalToggleGuardRecoveryTests {
         let session = call.generation
         call.media.testClosesLocalMedia = { kind in kind == "video" }
         call.calls.hold("setVideoEnabled(true)")
-        // The camera-off reaches the UI, and the user taps camera-on before
-        // its close hop has run.
+
         call.viewModel.testApplyServerCameraOff()
         #expect(call.viewModel.state.isCameraOff)
         call.viewModel.toggleCamera()
@@ -975,9 +887,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Review round 5 (W1): the camera half of issue 4. A snapshot that says
-    /// camera off, taken before the user's camera-on reached the SFU, lands
-    /// while that camera-on awaits its start and must not cancel it.
     @Test
     func anAdminRoomSnapshotNeverOverridesACameraOnInFlight() async throws {
         let call = RejoinHarness()
@@ -999,11 +908,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 3 (b) and review round 4 (issue 2), in the SFU's real
-    /// order: the host stops the user's screen share while a camera-on awaits
-    /// its start. The plain close removes the screen producer first, so
-    /// admin:producerClosed finds nothing to classify; it records no
-    /// camera-off, and the camera-on still commits.
     @Test
     func anAdminScreenShareCloseNeverCancelsAPendingCameraOn() async {
         let call = RejoinHarness()
@@ -1026,10 +930,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 3 (R2-3): an admin camera enforcement whose producer id
-    /// matches no installed camera (the acknowledgement of a newer camera
-    /// overtook the enforcement event) closes the installed camera and tells
-    /// the SFU, rather than leaving a paused producer registered.
     @Test
     func anAdminCameraEnforcementClosesAnUnlistedInstalledCameraAndTellsTheSFU() async {
         let call = RejoinHarness()
@@ -1047,15 +947,13 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Residual 4: a camera-off that lands while the periodic publishing
-    /// reassert is starting the camera wins over that reassert.
     @Test
     func cameraOffDuringAPublishingReassertWins() async {
         let call = RejoinHarness()
         #expect(await call.join(cameraOff: false))
         let session = call.generation
         call.media.testReportsLocalVideoState = true
-        // The camera producer was lost; the reassert restarts it.
+
         call.media.hasLocalVideoProducer = false
         call.calls.hold("startProducingVideo")
         call.media.onLocalVideoProducerLost?()
@@ -1072,8 +970,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Residual 4: chat `/camera on` honors audio-only mode, including a
-    /// switch to it that lands while the command's camera start awaits.
     @Test
     func chatCameraOnYieldsToAudioOnlyModeThatLandsDuringItsStart() async throws {
         let cameraOn = try #require(ChatCommandParser.parse("/camera on"))
@@ -1091,7 +987,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(!call.media.hasLocalVideoProducer)
         #expect(call.viewModel.state.isCameraOff)
 
-        // In audio-only mode the command starts no camera at all.
         let startsBefore = call.calls.count("startProducingVideo")
         let messagesBefore = call.viewModel.state.systemMessages.count
         call.viewModel.executeChatCommand(cameraOn)
@@ -1101,10 +996,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Residual 4: the SFU closed the camera producer and the view model
-    /// restarts it. A switch to audio-only mode that lands during that
-    /// restart wins over it. (While a restart runs, the close already reported
-    /// the camera off, so audio-only mode has no producer to close itself.)
     @Test
     func audioOnlyModeDuringTheProducerClosedRestartWins() async {
         let call = RejoinHarness()
@@ -1126,9 +1017,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// The user's camera-off is never dropped behind a camera-on that awaits
-    /// its acknowledgement: it applies at once, and the camera-on closes what
-    /// it started instead of turning the camera back on.
     @Test
     func cameraOffWhileACameraOnAwaitsItsAcknowledgementWins() async {
         let call = RejoinHarness()
@@ -1151,10 +1039,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// P1: a CallKit mute that lands while an in-app unmute awaits its
-    /// acknowledgement is applied at once. The unmute's acknowledgement is
-    /// then discarded: no confirmation, the microphone ends muted, and the
-    /// state the system surfaces read stays muted.
     @Test
     func callKitMuteWhileAnUnmuteAwaitsItsAcknowledgementWins() async {
         let call = RejoinHarness()
@@ -1170,7 +1054,7 @@ struct LocalToggleGuardRecoveryTests {
         CallSessionCoordinator.shared.setMuted(true)
         #expect(call.viewModel.state.isMuted)
         #expect(CallSessionCoordinator.shared.isMuted)
-        // The local mute reached the media session before the acknowledgement.
+
         #expect(call.calls.count("suspendLocalAudioForRecovery", inGeneration: session) == 1)
         #expect(await settle { call.calls.count("setAudioEnabled(false)", inGeneration: session) == 2 })
 
@@ -1183,7 +1067,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(!call.media.isLocalAudioPublishingHealthy)
         #expect(call.viewModel.state.errorMessage == nil)
 
-        // The guard is free again once the applied mute's signal finished.
         #expect(await settle { call.endedToggleCount("applyLocalMuteNow") == 1 })
         call.viewModel.toggleMute()
         #expect(!call.viewModel.state.isMuted)
@@ -1192,10 +1075,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// P1 at its tightest: the unmute's acknowledgement has already arrived
-    /// (its continuation is queued) when the CallKit mute lands. The local
-    /// mute is synchronous, so that continuation finds the newer mute and the
-    /// microphone never goes live, not even briefly.
     @Test
     func callKitMuteRightAfterTheUnmuteAcknowledgementArrivedNeverGoesLive() async {
         let call = RejoinHarness()
@@ -1218,10 +1097,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Codex round 1 (C5): a mute applied over a pending unmute owns the
-    /// microphone guard until its own signal completes, so a newer unmute can
-    /// never overlap it (both clients would let the older mute's late
-    /// completion silence that unmute).
     @Test
     func anUnmuteWhileAnAppliedMuteAwaitsItsSignalIsIgnored() async {
         let call = RejoinHarness()
@@ -1237,7 +1112,7 @@ struct LocalToggleGuardRecoveryTests {
 
         call.calls.release("setAudioEnabled(true)")
         #expect(await settle { call.endedToggleCount("toggleMute") == 2 })
-        // The applied mute still awaits its acknowledgement: unmute is ignored.
+
         call.viewModel.toggleMute()
         #expect(call.viewModel.state.isMuted)
         #expect(call.calls.count("setAudioEnabled(true)") == 1)
@@ -1252,8 +1127,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// A discarded unmute whose microphone start then fails reports no error:
-    /// the newer mute stands.
     @Test
     func aDiscardedUnmuteWhoseMicrophoneStartFailsReportsNoError() async {
         let call = RejoinHarness()
@@ -1273,8 +1146,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// A superseded camera-on whose start then fails reports no error: the
-    /// newer camera-off stands.
     @Test
     func aSupersededCameraOnWhoseStartFailsReportsNoError() async {
         let call = RejoinHarness()
@@ -1292,8 +1163,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// P1, the Android notification and PiP entry point (a plain toggle),
-    /// while the unmute is still starting the microphone.
     @Test
     func notificationMuteWhileAnUnmuteStartsTheMicrophoneWins() async {
         let call = RejoinHarness()
@@ -1319,9 +1188,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// P3: an admin mute that lands while an unmute awaits its acknowledgement
-    /// is applied to the microphone, not only the UI, and the unmute's
-    /// acknowledgement does not undo it.
     @Test
     func adminMuteWhileAnUnmuteAwaitsItsAcknowledgementIsAppliedToTheMicrophone() async {
         let call = RejoinHarness()
@@ -1347,9 +1213,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// The camera twin of P3: an admin camera-off that lands while a
-    /// camera-on awaits its acknowledgement closes the camera, and the
-    /// camera-on does not turn it back on.
     @Test
     func adminCameraOffWhileACameraOnAwaitsItsAcknowledgementIsAppliedToTheCamera() async {
         let call = RejoinHarness()
@@ -1374,8 +1237,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Item 5 (F7 class): a rejoin that lands while a camera switch awaits
-    /// must not strand the switch guard.
     @Test
     func rejoinFreesTheCameraSwitchGuardWhileTheOrphanedSwitchIsSuspended() async {
         let call = RejoinHarness()
@@ -1396,8 +1257,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await settle { call.endedToggleCount("switchLocalCamera") == 1 })
         #expect(call.viewModel.canSwitchLocalCamera())
 
-        // The orphaned switch returns late without any media call, and its
-        // completion frees no newer switch's guard.
         call.calls.hold("switchCamera")
         call.viewModel.switchLocalCamera()
         #expect(await settle { call.calls.heldCount("switchCamera") == 2 })
@@ -1412,11 +1271,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// Item 5 (F7 class): a rejoin that lands while a screen-share toggle
-    /// awaits must not strand the screen-share guard. Host builds have no
-    /// screen capture, so their toggle holds its guard across one stub call;
-    /// the iOS and Android branches are pinned by
-    /// `ConclaveTests.testNativeCallCorrectnessBlockersStayFixed`.
     @Test
     func rejoinFreesTheScreenShareGuardWhileTheOrphanedToggleIsSuspended() async {
         let call = RejoinHarness()
@@ -1424,8 +1278,7 @@ struct LocalToggleGuardRecoveryTests {
         call.calls.hold("screenShare")
         call.viewModel.toggleScreenShare()
         #expect(await settle { call.calls.isHolding("screenShare") })
-        // A second tap while it is in flight is ignored: it returns before
-        // creating a task (the barrier would let such a task run first).
+
         call.viewModel.toggleScreenShare()
         await mainActorBarrier()
         #expect(call.calls.count("screenShare") == 1)
@@ -1437,7 +1290,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await settle { call.calls.count("screenShare", inGeneration: recovered) == 1 })
         #expect(await settle { call.endedToggleCount("toggleScreenShare") == 1 })
 
-        // The orphan's completion frees no newer toggle's guard.
         call.calls.hold("screenShare")
         call.viewModel.toggleScreenShare()
         #expect(await settle { call.calls.heldCount("screenShare") == 2 })
@@ -1454,18 +1306,11 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// An unmute whose confirmation is still awaiting its acknowledgement when
-    /// a rejoin lands, then a mute in the recovered call. When the old
-    /// confirmation returns, its toggle finishes without any media call and
-    /// the newer mute stays. Whether a client re-enables capture after such an
-    /// acknowledgement is that client's own fence, pinned by
-    /// `ConclaveTests.testLateMediaAcknowledgementsAreFencedInBothClients`.
     private func assertOrphanedUnmuteConfirmationMakesNoMediaCall(lateFailure: Error?) async {
         let call = RejoinHarness()
         #expect(await call.join(muted: false))
         let first = call.generation
-        // Mute, then unmute: the unmute enables the paused producer and then
-        // holds in its confirmation's acknowledgement.
+
         call.viewModel.toggleMute()
         #expect(await settle { call.calls.count("setAudioEnabled(false)", inGeneration: first) == 1 })
         #expect(await settle { call.endedToggleCount("toggleMute") == 1 })
@@ -1479,7 +1324,7 @@ struct LocalToggleGuardRecoveryTests {
         let recovered = call.generation
         await call.land()
         #expect(call.calls.count("startProducingAudio", inGeneration: recovered) == 1)
-        // A newer mute in the recovered call.
+
         call.viewModel.toggleMute()
         #expect(call.viewModel.state.isMuted)
         #expect(await settle { call.calls.count("setAudioEnabled(false)", inGeneration: recovered) == 1 })
@@ -1499,12 +1344,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    // MARK: SYS-1 and WP2-S1 (system commands through CallPresence, the shell ledger across attempts)
-
-    /// SYS-1 (S70 1 l2): a system mute command while an unmute is pending reaches the in-flight mute path
-    /// (`applyLocalMuteNow`, WP2-S1c) through `CallPresence` and the shell's CC21 rule, and ends muted. While that
-    /// applied mute owns the guard a system unmute is a duplicate (the adapter fails it back), and CallKit's echo of
-    /// the mute is already in effect.
     @Test
     func systemMuteCommandWhileAnUnmuteIsPendingEndsMutedAndASystemUnmuteFailsClosed() async {
         let call = RejoinHarness()
@@ -1523,7 +1362,7 @@ struct LocalToggleGuardRecoveryTests {
         #expect(presence.handle(.mute, source: .callKit, presenceSession: presenceSession) == .dispatched)
         #expect(call.viewModel.state.isMuted)
         #expect(presence.snapshot.isMuted)
-        // The local mute reached the media session before the acknowledgement.
+
         #expect(call.calls.count("suspendLocalAudioForRecovery", inGeneration: session) == 1)
         #expect(await settle { call.calls.isHolding("setAudioEnabled(false)") })
         #expect(presence.handle(.unmute, source: .callKit, presenceSession: presenceSession) == .duplicate)
@@ -1545,9 +1384,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// WP2-S1 E9 (intake amendment 3): the shell's hand ticket is bound to the F7 token release. A recovery start
-    /// interrupts the pending ticket at once (S1C ACK), the rejoin releases the guard, the orphaned raise's late
-    /// acknowledgement resolves nothing, and a new raise works in the recovered call.
     @Test
     func handTicketIsInterruptedByARejoinAndItsLateAcknowledgementIsDropped() async {
         let call = RejoinHarness()
@@ -1580,10 +1416,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// WP2-S1 A19 (`roomSwitchPublishesOneCoherentIdentity`): a `joinRoom` that starts a new call session while a
-    /// hand ticket is pending and an end-for-everyone confirmation is open changes the published identity exactly
-    /// once, with the new call session, attempt and token together; the ticket resolves cancelled, not interrupted;
-    /// no publish mixes the old confirmation, pending rows or outcome with the new identity.
     @Test
     func roomSwitchPublishesOneCoherentIdentity() async {
         let call = RejoinHarness()
@@ -1634,9 +1466,6 @@ struct LocalToggleGuardRecoveryTests {
         await call.finish()
     }
 
-    /// S40 CH11 (CHT-2): the native chat composer routes `/mute` to the guarded directional branch of
-    /// `executeChatCommand`, never to the S1 toggle intents, so a mute sent while an unmute owns the guard mutes at once
-    /// through `applyLocalMuteNow` (WP2-S1c) and the pending unmute's late completion leaves it muted.
     @Test
     func nativeChatMuteDuringAPendingUnmuteMutesAtOnce() async {
         let call = RejoinHarness()
@@ -1652,26 +1481,22 @@ struct LocalToggleGuardRecoveryTests {
         call.calls.release("startProducingAudio")
         #expect(await settle { call.endedToggleCount("toggleMute") == 1 })
         #expect(call.viewModel.state.isMuted)
-        // A command adds no chat message of its own (web parity).
+
         #expect(call.viewModel.state.chatMessages.isEmpty)
         await call.finish()
     }
-
-    // MARK: SYS-6 (S70 6 l1, l2, l5; S20 SC16): lifecycle refresh, recovery and system pressure
 
     @Test
     func inactiveReturnRunsTheLightRefreshAndABackgroundReturnRunsFullRecoveryWithKeyframes() async {
         let call = RejoinHarness()
         call.clearResumeSnapshot()
-        // The first activation of the process is full; with no call yet it starts nothing.
+
         call.viewModel.handleAppBecameActive()
         #expect(call.viewModel.lifecycleRefreshCounters.fullRecovery == 1)
         #expect(await call.join())
         call.viewModel.testSeedRemoteVideoProducer(userId: "remote@example.com#remote-session", producerId: "remote-camera")
         let attempts = call.joinAttemptCount
 
-        // Control Center (inactive, then active): the light refresh only. No presence, audio activation or
-        // recovery, so the disconnected stub socket starts no rejoin.
         call.viewModel.handleAppResignedActive()
         call.viewModel.handleAppBecameActive()
         #expect(call.viewModel.lifecycleRefreshCounters.lightRefresh == 1)
@@ -1682,8 +1507,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.joinAttemptCount == attempts)
         #expect(call.viewModel.state.connectionState == .joined)
 
-        // Home and back (inactive, background, inactive, active): full recovery once, with a keyframe request for
-        // the one visible remote camera.
         call.viewModel.handleAppResignedActive()
         call.viewModel.handleAppEnteredBackground()
         call.viewModel.handleAppResignedActive()
@@ -1691,7 +1514,7 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.viewModel.lifecycleRefreshCounters.lightRefresh == 1)
         #expect(call.viewModel.lifecycleRefreshCounters.fullRecovery == 2)
         #expect(call.viewModel.lifecycleRefreshCounters.keyframeRequests == 1)
-        // The full path runs foreground recovery: the stub socket is not connected, so it rejoins once.
+
         #expect(await settle { call.joinAttemptCount == attempts + 1 })
         await call.finish()
     }
@@ -1702,11 +1525,10 @@ struct LocalToggleGuardRecoveryTests {
         #expect(await call.join())
         call.scriptJoinFailures(StubAckTimeout())
 
-        // Two failed rejoins: attempt 2 of 5 with Retry Now enabled between attempts (S20 10 f row 3).
         #expect(await call.rejoin())
         call.releaseJoinAttempts()
         #expect(await settle { call.viewModel.makeStageNoticeInputs().reconnectAttempt == 1 })
-        // The backoff rejoin (1 s) reaches its held teardown.
+
         #expect(await settle { call.calls.isHolding("cleanup(notifyLocalState: false)") })
         call.releaseJoinAttempts()
         #expect(await settle {
@@ -1718,8 +1540,6 @@ struct LocalToggleGuardRecoveryTests {
         #expect(banner?.total == 5)
         #expect(banner?.actions == [NoticeAction.make(NoticeAction.retryRecovery, isEnabled: true)])
 
-        // A double Retry Now skips the 2 s backoff and starts one rejoin; Retry Now disables at once; the count
-        // stays 2.
         let beforeRetry = call.joinAttemptCount
         call.viewModel.retryRecoveryNow()
         call.viewModel.retryRecoveryNow()
@@ -1730,20 +1550,16 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.joinAttemptCount == beforeRetry + 1)
         #expect(call.viewModel.makeStageNoticeInputs().reconnectAttempt == 2)
 
-        // Retry Now while that attempt is in flight starts nothing.
         call.viewModel.retryRecoveryNow()
         await mainActorBarrier()
         try? await Task.sleep(for: .milliseconds(100))
         #expect(call.joinAttemptCount == beforeRetry + 1)
         #expect(call.reconnectingBanner()?.actions == [NoticeAction.make(NoticeAction.retryRecovery, isEnabled: false)])
 
-        // A watchdog rejoin after a 25 s stall leaves the count unchanged.
         call.viewModel.testRunRecoveryWatchdogTick(recoveryAgeSeconds: 30, joinActivityAgeSeconds: 26)
         #expect(await settle { call.joinAttemptCount == beforeRetry + 2 })
         #expect(call.viewModel.makeStageNoticeInputs().reconnectAttempt == 2)
 
-        // The 120 s hard cap ends recovery with connectionLost, whatever the count. The failure's own media teardown
-        // has the join teardown's name, so stop holding it first.
         call.calls.stopHoldingEvery("cleanup(notifyLocalState: false)")
         call.viewModel.testRunRecoveryWatchdogTick(recoveryAgeSeconds: 121, joinActivityAgeSeconds: 1)
         #expect(await settle { call.viewModel.state.terminalOutcome?.kind == .connectionLost })
@@ -1783,15 +1599,12 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.viewModel.state.videoQuality == savedQuality)
         #expect(UserDefaults.standard.string(forKey: NativeMediaQualityPreferences.storageKey) == savedSettings)
 
-        // Nominal clears the ceiling: the saved setting's limits return. No Data Saver input is on (the harness
-        // keeps the host network out, S60 C6-5), so nothing else holds a ceiling.
         call.viewModel.handleSystemThermalLevel(.nominal)
         #expect(!call.viewModel.systemDataSaverOn && !call.viewModel.hostQualityCapped)
         #expect(call.viewModel.systemPressure.ceiling == .unconstrained)
         #expect(call.viewModel.appliedCameraPublishSettings
             == NativeMediaQualityPolicy.resolvedCamera(NativeMediaQualityPreferences.load().camera))
 
-        // Low Power Mode applies the Data Saver ceiling and posts nothing.
         call.viewModel.handleLowPowerModeChanged(true)
         #expect(qualityToasts() == 1)
         #expect(call.viewModel.appliedCameraPublishSettings?.height == 360)
@@ -1801,11 +1614,10 @@ struct LocalToggleGuardRecoveryTests {
     }
 }
 
-/// A call whose join attempts come from the real `joinRoom`.
 @MainActor
 private final class RejoinHarness {
     private static let resumeKey = "conclave.activeMeetingResume.v1"
-    /// The media teardown a join task makes (`cleanup()` passes true).
+
     private static let joinTeardown = "cleanup(notifyLocalState: false)"
 
     let viewModel = MeetingViewModel()
@@ -1815,14 +1627,12 @@ private final class RejoinHarness {
     private var handledReports = 0
 
     var media: WebRTCClient { viewModel.webRTCClient }
-    /// The media session the call is in: each teardown starts a new one.
+
     var generation: Int { media.configurationGeneration }
 
     init() {
         savedResumeSnapshot = UserDefaults.standard.object(forKey: Self.resumeKey)
-        // The call never reads the build machine's network: a constrained host path (a Personal Hotspot) would
-        // hold the system Data Saver ceiling and break the saved-limits checks. Same main-actor turn as the
-        // view model's init, so no path update has landed yet.
+
         viewModel.testDetachHostNetworkMonitor()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         let calls = self.calls
@@ -1842,34 +1652,23 @@ private final class RejoinHarness {
         viewModel.testLocalMediaReportHandled = { [weak self] in
             self?.handledReports += 1
         }
-        // Media from an earlier attempt reports configured, so every join
-        // task (planned or not) first tears it down, and that teardown is held
-        // until finish() has retired the attempt: no join task can reach the
-        // network join fetch. The view model's own cleanup() is not held.
+
         media.isConfigured = true
         calls.holdEvery(Self.joinTeardown)
     }
 
-    /// Waits until the view model has handled every local microphone and
-    /// camera state report the stub made (each is handled on a later hop).
     func reportsHandled() async -> Bool {
         await settle { self.handledReports == self.media.testLocalMediaReportCount }
     }
 
-    /// Toggles of this kind (the view model function that took the guard, or
-    /// that deferred a server camera-off to a later hop) whose task has
-    /// finished.
     func endedToggleCount(_ kind: String) -> Int {
         endedToggles.filter { $0 == kind }.count
     }
 
-    /// Waits until every held call a test released has returned to its
-    /// caller (each caller then runs on to its next await or its end).
     func releasedCallsReturned() async -> Bool {
         await settle { self.calls.outstandingCount == self.calls.heldTotal }
     }
 
-    /// Starts the call's first join attempt with this media intent and lands it.
     func join(muted: Bool = true, cameraOff: Bool = true) async -> Bool {
         viewModel.state.isMuted = muted
         viewModel.state.isCameraOff = cameraOff
@@ -1880,11 +1679,6 @@ private final class RejoinHarness {
         return true
     }
 
-    /// A joined call whose camera producer exists but is paused: the camera
-    /// was on, and a camera-off on the reconnecting screen paused (did not
-    /// close) the producer the recovered attempt had already published before
-    /// that attempt reached `.joined`. The harness flips the connection state
-    /// by hand to reach that state.
     func joinWithPausedCameraProducer() async -> Bool {
         guard await join(cameraOff: false), media.hasLocalVideoProducer else { return false }
         viewModel.state.connectionState = .reconnecting
@@ -1897,8 +1691,6 @@ private final class RejoinHarness {
         return media.hasLocalVideoProducer
     }
 
-    /// A joined call whose microphone producer exists but is paused: it
-    /// joined unmuted, then muted.
     func joinWithPausedMicrophone() async -> Bool {
         guard await join(muted: false), media.hasLocalAudioProducer else { return false }
         viewModel.toggleMute()
@@ -1909,8 +1701,6 @@ private final class RejoinHarness {
         return media.hasLocalAudioProducer
     }
 
-    /// The socket dropped and reconnected: the real recovery entry point
-    /// starts a new join attempt, whose teardown starts a new media session.
     func rejoin() async -> Bool {
         viewModel.state.connectionState = .reconnecting
         viewModel.state.isRecoveringConnection = true
@@ -1920,50 +1710,35 @@ private final class RejoinHarness {
         return await settle { self.calls.heldCount(Self.joinTeardown) == heldBefore + 1 }
     }
 
-    /// The join response landed: like `handleJoinedRoomResponse`, publish
-    /// media from the current intent through the real `startProducing()`,
-    /// then mark the call joined.
     func land() async {
         _ = await viewModel.startProducing()
         markJoined()
-        // A start's state report is handled on a later hop: let it land
-        // before the test taps anything.
+
         #expect(await reportsHandled(), "a local state report was never handled")
     }
 
-    /// What `handleJoinedRoomResponse` does after its remote consumes: the
-    /// attempt is joined and recovery ends.
     func markJoined() {
         viewModel.state.connectionState = .joined
         viewModel.state.isRecoveringConnection = false
         viewModel.isRejoinInFlight = false
     }
 
-    /// SYS-6: join attempts that reached their media teardown (held or not). The view model's own
-    /// `cleanup(notifyLocalState: false)` logs the same name, so read it only before a terminal failure.
     var joinAttemptCount: Int { calls.count(Self.joinTeardown) }
 
-    /// SYS-6: removes a resume snapshot an earlier run left, so the first activation of the process restores
-    /// nothing (finish() puts the saved value back).
     func clearResumeSnapshot() {
         UserDefaults.standard.removeObject(forKey: Self.resumeKey)
     }
 
-    /// SYS-6: every released join attempt fails with this error (`MeetingViewModel.testJoinFetch`), never reaching
-    /// the network.
     func scriptJoinFailures(_ error: Error) {
         viewModel.testJoinFetch = { throw error }
     }
 
-    /// SYS-6: releases every held join teardown. Retired attempts stop at their attempt guard; the current one goes
-    /// on to the scripted answer.
     func releaseJoinAttempts() {
         while calls.isHolding(Self.joinTeardown) {
             calls.release(Self.joinTeardown)
         }
     }
 
-    /// SYS-6: the reconnecting banner the stage lane would show for the current inputs (iOS rows).
     func reconnectingBanner() -> MeetingNotice? {
         let banners = MeetingNoticePolicy.bannerCandidates(viewModel.makeStageNoticeInputs(), hostNotice: nil,
                                                            liveNotesEpisode: 0, currentPanel: "",
@@ -1971,8 +1746,6 @@ private final class RejoinHarness {
         return banners.first { $0.kind == NoticeKind.reconnecting }
     }
 
-    /// The admin control plane's mute of the local participant (it reaches
-    /// the target too; a user's own toggles are never echoed to them).
     func deliverAdminMute() {
         viewModel.socketManager.onParticipantMuted?(ParticipantMutedNotification(
             userId: viewModel.state.userId,
@@ -2002,9 +1775,6 @@ private final class RejoinHarness {
         closeLocalProducer("local-microphone")
     }
 
-    /// A producerClosed for one of the local producers: plain (the SFU closed
-    /// it, which for an admin close reaches the owner first), or admin-flagged
-    /// (admin:producerClosed).
     func closeLocalProducer(_ producerId: String, adminEnforced: Bool? = nil) {
         viewModel.socketManager.onProducerClosed?(ProducerClosedNotification(
             producerId: producerId,
@@ -2014,9 +1784,6 @@ private final class RejoinHarness {
         ))
     }
 
-    /// A stub close seam that finds a local producer of this kind ("audio",
-    /// "video" or "screen") once, as both clients do: the first close removes
-    /// it, so a later close of the same id finds nothing.
     func closesLocalProducerOnce(_ kind: String) -> (@MainActor (String) -> Bool) {
         var installed = true
         return { name in
@@ -2026,14 +1793,8 @@ private final class RejoinHarness {
         }
     }
 
-    /// What the owner receives after the producer's own close (the plain
-    /// producerClosed) when an admin closes it (closeClientProducers in
-    /// packages/sfu/server/admin/controlPlane.ts): admin:producerClosed for
-    /// the same id, participantMuted or participantCameraOff for a microphone
-    /// or camera, then admin:mediaEnforced. Each is delivered once the one
-    /// before it was handled; returns whether all were.
     func deliverAdminCloseEvents(producerId: String, kind: String, type: String) async -> Bool {
-        // Its last check, after the microphone and the camera, is the screen.
+
         let screenChecks = calls.count("closeLocalMedia(screen)")
         closeLocalProducer(producerId, adminEnforced: true)
         guard await settle({ self.calls.count("closeLocalMedia(screen)") == screenChecks + 1 }) else { return false }
@@ -2061,8 +1822,6 @@ private final class RejoinHarness {
         return await settle { self.viewModel.state.errorMessage != nil }
     }
 
-    /// A host's admin room snapshot that reports the local participant's
-    /// microphone or camera state (the SFU derives both from producer state).
     func deliverAdminRoomSnapshot(localMuted: Bool? = nil, localCameraOff: Bool? = nil) throws {
         viewModel.state.hasInitialPresenceSnapshot = false
         var fields = ["\"userId\":\"\(viewModel.state.userId)\""]
@@ -2078,11 +1837,6 @@ private final class RejoinHarness {
         viewModel.socketManager.onAdminRoomStateChanged?(notification)
     }
 
-    /// Retires every held join attempt and toggle without reaching the
-    /// network: cleanup() clears the attempt id while every join teardown is
-    /// still held, then each held call returns and its caller stops at its
-    /// attempt or call guard. Waits until every held call has returned to its
-    /// caller.
     func finish() async {
         calls.clearPendingHolds()
         await viewModel.cleanup()
@@ -2101,8 +1855,6 @@ private final class RejoinHarness {
     }
 }
 
-/// Holds chosen stub calls mid-await and records every call through the gate
-/// with the media session it landed in.
 @MainActor
 private final class HeldStubCalls {
     private struct LoggedCall {
@@ -2122,12 +1874,10 @@ private final class HeldStubCalls {
     private var alwaysHeld: Set<String> = []
     private var held: [HeldCall] = []
 
-    /// Holds the next call with this name.
     func hold(_ name: String) {
         pendingHolds.append(name)
     }
 
-    /// Holds every call with this name until `stopHoldingEvery`.
     func holdEvery(_ name: String) {
         alwaysHeld.insert(name)
     }
@@ -2150,7 +1900,6 @@ private final class HeldStubCalls {
         }
     }
 
-    /// Records a synchronous stub call, which cannot be held.
     func record(_ name: String, generation: Int) {
         log.append(LoggedCall(name: name, generation: generation))
     }
@@ -2171,17 +1920,14 @@ private final class HeldStubCalls {
         log.filter { $0.name == name && $0.generation == generation }.count
     }
 
-    /// Every call that reached a stub, held or not.
     var totalCount: Int {
         log.count
     }
 
-    /// Calls that entered a hold and have not yet returned to their caller.
     var outstandingCount: Int {
         enteredHolds - returnedCount
     }
 
-    /// Calls held now (entered a hold and not yet released).
     var heldTotal: Int {
         held.count
     }
@@ -2236,17 +1982,11 @@ private struct StubMediaError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-/// Returns after every main-actor job queued before this call has run: on
-/// Apple platforms the main actor runs on the main dispatch queue, a serial
-/// queue that runs its jobs in the order they were queued. Used only to show
-/// that a tap queued no task; state assertions wait for named conditions.
 @MainActor
 private func mainActorBarrier() async {
     await Task { @MainActor in }.value
 }
 
-/// Lets main-actor work run until `condition` holds. Bounded by wall-clock
-/// time, so a regression fails the expectation instead of hanging the suite.
 @MainActor
 private func settle(timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now.advanced(by: timeout)

@@ -28,20 +28,10 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
-/*
- * S50 PL12 (PPL-1): the Android Debug People fixture root, layered on the S20 SL14 stage fixture. MainActivity mounts
- * it for the intent extra `conclave.peopleFixture=<state>` (BuildConfig.DEBUG plus FLAG_DEBUGGABLE, HD request B4-T7
- * R5); the stage fixture's `conclave.stageFixturePattern` and `conclave.stageForceScreenReader` apply. The native call
- * root draws the probe stage with the native Participants page; scripts and readouts sit beside the stage, never
- * inside the page or the stage (PS 7.6). Standalone presenters (PeopleFixtureSession, shared with iOS); never
- * MeetingViewModel, WebRTC, audio, capture or network.
- */
-
-/** Called only by MainActivity's explicit debug launch route. */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun PeopleFixtureRoot(stateName: String, patternName: String? = null, forceScreenReader: Boolean = false) {
-    // Keep the scripted owner alive: its weak completion callback must survive while the real Q&A page is open.
+
     val qaState = PeopleWebinarFixtureScript.state(named = stateName)?.takeIf { it == PeopleWebinarFixtureState.qaAttendee5 }
     val qaSession = remember(qaState) { qaState?.let { PeopleWebinarFixtureSession(state = it) } }
     val state = PeopleFixtureScript.state(named = stateName) ?: qaState?.let { PeopleWebinarFixtureScript.baseState(it) } ?: PeopleFixtureState.host6
@@ -53,7 +43,7 @@ fun PeopleFixtureRoot(stateName: String, patternName: String? = null, forceScree
             qaSession.people.openQuestionsAndAnswers()
             return@LaunchedEffect
         }
-        // Open the way the state's cell does (the knock View for Waiting, the hand toast View for Raised Hands).
+
         session.open(destination = PeopleFixtureScript.openDestination(state))
         if (state == PeopleFixtureState.lostHost) {
             delay(PeopleFixtureScript.lostHostDelayMillis.toLong())
@@ -98,7 +88,7 @@ private fun PeopleFixtureControls(session: PeopleFixtureSession, modifier: Modif
             FixtureReadout(session.recomposeReadout(), "people.recompose", tick)
             FixtureReadout(session.focusReadout(), "people.focus", tick)
             FixtureReadout(session.countersReadout(), "people.counters", tick)
-            // PPL-3: the action log with the last outcome token, and the knock banner state.
+
             FixtureReadout(session.actionsReadout(), "people.actions", tick)
             FixtureReadout(session.noticesReadout(), "stage.notices", tick)
             FixtureReadout(session.panelReadout(), "panel.current", tick)
@@ -110,7 +100,7 @@ private fun PeopleFixtureControls(session: PeopleFixtureSession, modifier: Modif
 @Composable
 private fun FixtureButton(title: String, tag: String, onClick: () -> Unit) {
     TextButton(onClick = onClick, modifier = Modifier.heightIn(min = 48.dp).testTag(tag)) {
-        // Debug fixture labels are not user-facing copy (the stage fixture does the same).
+
         Text(title, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
     }
 }

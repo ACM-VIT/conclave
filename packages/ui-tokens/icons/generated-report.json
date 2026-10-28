@@ -1626,7 +1626,7 @@
     "material_names": 108,
     "sf_literals": 116
   },
-  "generator_sha256": "20dafb1115349de702682a2d2e02d62bc6ee50f1f5805dc7e9e402fced8c0116",
+  "generator_sha256": "96903de45424c01871fa8d5925348dc96e5e5c1d78d9d7f00e394be50b2bdabf",
   "manifest_sha256": "dda8109e83d0fbfe4d3494aaf823bb34669769b3dbfcdb90a5b81d2e7ed243b5",
   "profile": "material-rounded-24-absolute-v1"
 }

@@ -1,86 +1,63 @@
 import Foundation
 import Observation
 
-/// S50 0.5: the session-owned People presenter, created with the S1 `MeetingShellPresenter` and the S20
-/// `StagePresenter` and reset with them (S1C 3.2, 3.3 TEAR). The core pushes `PeopleInputs` through `apply(_:)` on its
-/// own refresh path (PH1); the presenter never observes the core (SkipModel has no `withObservationTracking`). Views
-/// read only this presenter: the container observes `snapshot` (structure), each row its own `PersonRowEntry` or
-/// `WaitingRowEntry`, the speaking glyph the S20 `TileSpeakingStore` leaf, and the count leaves `attendeeCount` and
-/// `qaUnseen`. A speaker change publishes nothing here (the presenter has no speaker hook).
-///
-/// PPL-1 scope: rows, sections, search inputs, the Host Controls row value, the panel lifecycle and the destination
-/// scroll. PPL-2 adds the action half: `PersonRowModel.actions` from `PeopleActionPolicy` (PL7), `perform`, the one
-/// `HostActionLedger` (PH2), `onCommand` and `finish`, confirmations (row-anchored for the row sources, S50 3 j),
-/// `lastFailure` placed by origin (PL14, RECONCILE R2), the host outcome tokens in `feedbackState` and the rename flow
-/// (Q14, RECONCILE R38). PPL-4 adds `host` (`HostControlsPresenter`), which dispatches through `dispatch(...)`.
-/// PPL-5 adds the webinar host sections (attendee hand queue rows, panelists, invited rows) and `webinarQueueKnown`;
-/// PPL-6 adds `qa` (`WebinarQAPresenter`, the same ledger) and feeds `qaUnseen`; PPL-7 applies `PeopleRolePolicy`
-/// (PL13: what closes, pops, clears or announces on each role, target or session change) and publishes the attendee
-/// side's `stageInvitation`. PPL-3 adds admissions and the hand queue (S50 4, 5): Admit and Deny on `waiting:` rows
-/// through `perform`, Admit All and Deny All from the Waiting header and from the S20 knock banner (stage origin, so a
-/// failure uses the toast lane, PL14), one Lower All, the header actions (`headerActions`), the "%lld admitted" and
-/// new-knock announcements, and the knock banner's pending state on the stage.
 @MainActor
 @Observable
 final class PeoplePresenter {
     private(set) var snapshot: PeopleSnapshot = PeopleSnapshot.empty
-    /// Own stored property: only the Attendees count row reads it (S50 1 k).
+
     private(set) var attendeeCount: Int = 0
-    /// Own stored property: only the Q&A row value reads it (PH7 feeds it with PPL-6).
+
     private(set) var qaUnseen: Int = 0
-    /// The destination scroll target (S20 SR7); cleared by `focusRequestHandled(id:)`.
+
     private(set) var focusRequest: PeopleFocusRequest? = nil
-    /// Read only by the confirmation hosts of S50 3 j (each filters by source or kind); row sources also set the target
-    /// row's `PersonRowEntry.confirmation`.
+
     private(set) var confirmation: PeopleConfirmation? = nil
-    /// The panel failure (PL14 `panelInline` or `panelSnackbar`); stage placement goes to `stage.postLocal` instead.
+
     private(set) var lastFailure: HostActionFailureModel? = nil
-    /// Host outcome tokens (S50 0.5 token table; delivery is record-only until the S50 publisher joins the root).
+
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
-    /// The Change Name dialog (S50 3 c, 3 d).
+
     private(set) var rename: PeopleRenameState = PeopleRenameState.idle
-    /// PPL-7 (S50 12, PH9): the attendee side of `webinar:promoted`; drives the invitation alert over the viewer.
+
     private(set) var stageInvitation: StageInvitationModel? = nil
-    /// PPL-3 (S50 1 c, 4, 5): the section header buttons (Admit All and Deny All, Lower All, Mute All...). Own stored
-    /// property: only the headers read it, so a pending Admit All never re-evaluates the list (S50 4 k).
+
     private(set) var headerActions: PeopleHeaderActions = PeopleHeaderActions.none
 
     @ObservationIgnored let rows = PersonRowStore()
     @ObservationIgnored let waiting = WaitingRowStore()
     @ObservationIgnored let shell: MeetingShellPresenter
-    /// The speaking leaf reads `stage.speaking` (S20 SL4); PPL-2 forwards Pin to `stage.togglePin(userId:)`.
+
     @ObservationIgnored let stage: StagePresenter
-    /// Debug readout `people.recompose.<rowId>` (PL12); nil in production.
+
     @ObservationIgnored var recompose: PeopleRecomposeLedger? = nil
-    /// The search text a panel opens with: always empty in production; the people-search-none fixture seeds "zz"
-    /// (PL12). Read once when the panel mounts; the query itself stays view state (PL8).
+
     @ObservationIgnored var initialSearchQuery = ""
-    /// S50 PPL-4: Host Controls, a child that dispatches through this presenter (one ledger, one failure path).
+
     @ObservationIgnored let host = HostControlsPresenter()
-    /// S50 PPL-6: Webinar Q&A, a child on the same ledger and failure path.
+
     @ObservationIgnored let qa = WebinarQAPresenter()
-    /// PH20: Accept on the stage invitation; the core opens the S10 promotion lobby over the viewer (R30).
+
     @ObservationIgnored var onAcceptStageInvitation: ((StageInvitationModel) -> Void)? = nil
-    /// PH2: set once by the view model (`performPeopleCommand`); PL12 fixtures install a scripted one.
+
     @ObservationIgnored var onCommand: ((PeopleCommand, HostActionTicket) -> Void)? = nil
-    /// The platform the panel runs on (`NoticePlatform` value) for PL14; the panel reports it, else the stage's.
+
     @ObservationIgnored var platform = ""
 
     @ObservationIgnored private(set) var inputs = PeopleInputs.make()
-    /// Diagnostics for readouts and tests (never observed).
+
     @ObservationIgnored private(set) var applyCount = 0
     @ObservationIgnored private(set) var rowWriteCount = 0
     @ObservationIgnored private(set) var coverage = PanelStageCoverage.none
     @ObservationIgnored private(set) var isOnHostPage = false
     @ObservationIgnored private(set) var openPresentationID = 0
     @ObservationIgnored private(set) var openDestination = PanelDestination.none
-    /// The root Host Controls presentation, 0 when closed.
+
     @ObservationIgnored private(set) var hostPresentationID = 0
-    /// `people.focus` (PL12): destinations requested this presentation and the scrolls the views performed.
+
     @ObservationIgnored private(set) var focusDestinations: [String] = []
     @ObservationIgnored private(set) var focusScrollCount = 0
 
-    /// `people.counters` (PL12): perform by action id, confirm, cancel, retry and command kinds, newest last.
     @ObservationIgnored private(set) var counterLog: [String] = []
 
     @ObservationIgnored private var nextFocusId = 0
@@ -91,15 +68,14 @@ final class PeoplePresenter {
     @ObservationIgnored private var nextFailureId = 0
     @ObservationIgnored private var nextRenameId = 0
     @ObservationIgnored private var nextInvitationId = 0
-    /// PL13 diagnostics: the change kinds of the last apply (tests and the fixture readout).
+
     @ObservationIgnored private(set) var lastRoleChange: [String] = []
-    /// Failures Retry can re-dispatch (panel and stage), bounded.
+
     @ObservationIgnored private var retryable: [Int: HostLedgerEntry] = [:]
     @ObservationIgnored private var retryOrder: [Int] = []
-    /// Q14 fallback when no core flag arrives (fixtures): a renameDisabled refusal seen by this presenter.
+
     @ObservationIgnored private var renameDisabledLocally = false
-    /// PPL-3 (S50 4 i): the waiting ids of the last rebuild, so a new knock while Participants is open is announced
-    /// once; the baseline is set by the first host rebuild, so the initial pending list never announces.
+
     @ObservationIgnored private var knownWaitingIds: [String] = []
     @ObservationIgnored private var waitingBaselineReady = false
 
@@ -108,29 +84,25 @@ final class PeoplePresenter {
         self.stage = stage
         host.parent = self
         qa.parent = self
-        // RECONCILE R19: the tile menu reads this presenter's action table for the person under the finger.
+
         stage.people = self
     }
 
-    /// The S20 speaking store the row leaves read.
     var speaking: TileSpeakingStore { stage.speaking }
 
-    // MARK: Core hooks
-
-    /// Core only (PH1): the whole input set, equality guarded per published property and per row.
     func apply(_ next: PeopleInputs) {
         applyCount += 1
-        // PL13: one table decides what this change closes, pops, clears or announces (S50 12 f).
+
         let effects = PeopleRolePolicy.effects(previous: PeopleRoleState.from(inputs), next: PeopleRoleState.from(next))
         lastRoleChange = effects.kinds
-        // A new call session starts clean (S1C SES): rows, focus and the lost-host notice never carry over.
+
         if effects.has(PeopleRoleChangeKind.sessionChanged) {
             reset()
         } else if effects.interruptsAllTickets {
-            // PH2: an attempt change interrupts pending host actions with no feedback; late completions then drop.
+
             interruptPending()
         } else if effects.interruptsHostTickets {
-            // Lost host: pending host tickets finish silently (PH2 interrupted); your rename and Q&A stay.
+
             ledger.interruptHostActions()
             host.rebuild()
             qa.rebuild()
@@ -141,13 +113,12 @@ final class PeoplePresenter {
         rebuild(previousViewer: previousViewer)
     }
 
-    /// The presenter's half of a PL13 change; the views follow the snapshot for pops (S50 12 c, d).
     private func applyRoleEffects(_ effects: PeopleRoleEffects) {
         if effects.kinds.isEmpty || effects.has(PeopleRoleChangeKind.sessionChanged) { return }
         if effects.clearsHostConfirmations {
-            // Every People confirmation is a host dialog (person, bulk, access, webinar), the tile menu's included.
+
             clearConfirmation()
-            // PH17: the Host Controls End confirmation belongs to S1 and closes with the role.
+
             if let open = shell.session.confirmation, open.invoker == MeetingConfirmationInvoker.hostControls {
                 shell.cancelConfirmation(id: open.id)
             }
@@ -155,7 +126,7 @@ final class PeoplePresenter {
             clearConfirmation()
         }
         if effects.dismissesPanels {
-            // S1 ROLE: moved to the audience closes Participants, Host Controls and Q&A.
+
             if let current = shell.panels.snapshot.current,
                current.panel == MeetingPanel.participants || current.panel == MeetingPanel.hostControls {
                 shell.panels.dismiss(cancelPending: true)
@@ -166,11 +137,8 @@ final class PeoplePresenter {
         }
     }
 
-    /// Core only: the S1 panel snapshot changed. When the presentation this presenter opened is no longer current the
-    /// panel has closed (S50 1 c: `panelDidClose` comes from the coordinator's dismissal, never a root view's
-    /// disappearance, so an iPad sheet-to-inspector move never closes it).
     func panelSnapshotChanged() {
-        // PPL-6: the Q&A presentation closes from the same coordinator dismissal (PH7 stores the marker in the core).
+
         qa.panelSnapshotChanged(current: shell.panels.snapshot.current)
         if hostPresentationID != 0 {
             let shown = shell.panels.snapshot.current
@@ -189,11 +157,6 @@ final class PeoplePresenter {
         }
     }
 
-    // MARK: Presentation lifecycle (the panel host)
-
-    /// From the presentation lifecycle only (S50 1 c `.task(id: presentationID)`, 1 d `onMounted`): publishes the
-    /// destination's scroll target once. A repeat for the same presentation (a host migration) does nothing, so the
-    /// list never scrolls twice.
     func panelDidOpen(destination: PanelDestination, presentationID: Int) {
         if presentationID == 0 || presentationID == openPresentationID { return }
         openPresentationID = presentationID
@@ -207,8 +170,6 @@ final class PeoplePresenter {
         publishFocus(destination)
     }
 
-    /// Clears the lost-host notice, coverage, any unhandled focus, the panel's inline failure and its confirmations
-    /// (PL14: inline failures clear on panel close and are never re-posted to the stage).
     func panelDidClose(presentationID: Int) {
         if presentationID == 0 || presentationID != openPresentationID { return }
         openPresentationID = 0
@@ -225,8 +186,6 @@ final class PeoplePresenter {
         }
     }
 
-    /// A same-panel destination while Participants is open (S20 SR7, PNL-1 `destinationRequest`), for example the
-    /// knock banner's View: the shown list scrolls to the section without a new presentation.
     func destinationRequested(_ request: PanelDestinationRequest) {
         guard openPresentationID != 0, request.panel == MeetingPanel.participants,
               request.presentationID == openPresentationID, request.session == shell.panels.snapshot.session,
@@ -236,28 +195,21 @@ final class PeoplePresenter {
         publishFocus(request.destination)
     }
 
-    /// The view scrolled (or found nothing to scroll to); a pop back from a pushed page finds `nil` and stays put.
     func focusRequestHandled(id: Int) {
         guard let request = focusRequest, request.id == id else { return }
         focusRequest = nil
         focusScrollCount += 1
     }
 
-    /// The panel host reports the same coverage PS 6.2 reports to the stage (sheet medium partial, large full,
-    /// inspector none, Android overlay full, side pane none) and whether a host page is on top; PPL-2's failure
-    /// placement reads it (PL14 by origin, RECONCILE R2).
     func presentationDidChange(coverage: PanelStageCoverage, onHostPage: Bool) {
         self.coverage = coverage
         isOnHostPage = onHostPage
     }
 
-    /// Questions and Answers replaces the panel (S50 1 a, 11); the row shows only while `snapshot.qaVisible`.
     func openQuestionsAndAnswers() {
         shell.panels.present(MeetingPanel.webinarQA, from: PanelInvoker.call)
     }
 
-    /// With the S1 reset (S1C 3.3 TEAR): stores, focus and the open presentation clear; revisions keep growing so a
-    /// view never mistakes a reset for "unchanged".
     func reset() {
         ledger.interruptAll()
         clearConfirmation()
@@ -294,30 +246,20 @@ final class PeoplePresenter {
         stage.setKnockActionsPending(false)
     }
 
-    // MARK: Actions (S50 3, PPL-2)
-
-    /// True while Participants or the root Host Controls panel is open (Host Controls announcements, S50 6 f).
     var isPanelOpen: Bool { openPresentationID != 0 || hostPresentationID != 0 }
 
-    /// The root Host Controls panel (`MeetingPanel.hostControls`) opened; its inline failures and confirmations clear
-    /// when the coordinator dismisses it (PL14), like Participants'.
     func hostPanelDidOpen(presentationID: Int) {
         if presentationID == 0 { return }
         hostPresentationID = presentationID
     }
 
-    /// The ledger's pending keys, for the host child's pending rows (PH2).
     func pendingKeys() -> [String] {
         ledger.pendingKeys()
     }
 
-    /// One row action from any surface (row menu, swipe, accessibility, the S20 tile menu). `rowId` is a store key.
-    /// Pin, Send Private Message, Hide or Show Messages and Lower Hand are local (no ticket): they go to the stage, the
-    /// chat presenter and S1. Confirming actions open their confirmation; the rest take a ticket and emit one command.
-    /// Returns `.ignored` synchronously for a missing row, an unavailable item or a duplicate.
     @discardableResult
     func perform(_ action: PersonActionID, rowId: String, source: String) -> ControlTapResult {
-        // PPL-3 (S50 4): Admit and Deny act on `waiting:` rows, which live in the waiting store.
+
         if PeopleOrderPolicy.isWaitingKey(rowId) { return performWaiting(action, rowId: rowId, source: source) }
         guard rows.contains(rowId) else { return ControlTapResult.ignored }
         let model = rows.entry(for: rowId).model
@@ -370,21 +312,16 @@ final class PeoplePresenter {
                         source: source, sourceKey: rowId, targetName: displayName(model))
     }
 
-    /// PPL-3 header action (S50 4): Admit All never confirms. The command's `number` carries how many were waiting, so
-    /// the acknowledgement announces "%lld admitted" (S50 4 g).
     @discardableResult
     func admitAll() -> ControlTapResult {
         dispatchAdmitAll(source: PeopleActionSource.sectionHeader)
     }
 
-    /// The S20 knock banner's Admit All (two or more waiting, S20 10 f row 8): the same command from the stage, so a
-    /// failure posts to the toast lane (PL14 stage origin) and the outcome token stays this presenter's (S50 0.5).
     @discardableResult
     func admitAllFromStage() -> ControlTapResult {
         dispatchAdmitAll(source: PeopleActionSource.stage)
     }
 
-    /// The S20 knock banner's Admit (one person waiting): `pendingId` is the server's pending id exactly as sent.
     @discardableResult
     func admitFromStage(pendingId: String) -> ControlTapResult {
         if pendingId.isEmpty { return ControlTapResult.ignored }
@@ -392,14 +329,12 @@ final class PeoplePresenter {
         if waiting.contains(key) {
             return performWaiting(PersonActionID.admit, rowId: key, source: PeopleActionSource.stage)
         }
-        // The banner and People read the same pending list; this covers a banner that is one update ahead.
+
         guard snapshot.canUseHostActions else { return ControlTapResult.ignored }
         return dispatch(PeopleCommand.make(PeopleCommandKind.admit, targetId: pendingId), key: PeopleAdmissionsPolicy.admitKey(key),
                         source: PeopleActionSource.stage, sourceKey: key, targetName: "")
     }
 
-    /// PPL-3 header action (S50 4): Deny All confirms from the Waiting header, which offers it only while two or more
-    /// people wait (one waiting shows the row buttons only, S50 4 c).
     func requestDenyAll() {
         guard snapshot.canUseHostActions, headerActions.showsAdmitAll, headerActions.isDenyAllEnabled,
               let section = snapshot.section(PeopleSectionID.waiting) else { return }
@@ -410,8 +345,6 @@ final class PeoplePresenter {
                                    isConfirmEnabled: true, reason: PeopleActionReason.none))
     }
 
-    /// PPL-3 (S50 5 c, Q4, Q9): the one Lower All on the Raised Hands header, for hosts and co-hosts, acting at once.
-    /// It shares the Host Controls bulk key, so Lower All Hands there shows the same pending state.
     @discardableResult
     func lowerAllHands() -> ControlTapResult {
         guard snapshot.canUseHostActions, headerActions.showsLowerAll, headerActions.isLowerAllEnabled else {
@@ -422,7 +355,6 @@ final class PeoplePresenter {
                         sourceKey: PeopleSectionID.raisedHands.rawValue, targetName: "")
     }
 
-    /// The In This Meeting header's Mute All (S50 1 c): the same confirmation as Host Controls, from the header.
     func requestMuteAll() {
         guard snapshot.canUseHostActions, headerActions.showsMuteAll, headerActions.isMuteAllEnabled else { return }
         nextConfirmationId += 1
@@ -432,9 +364,6 @@ final class PeoplePresenter {
                                    isConfirmEnabled: true, reason: PeopleActionReason.none))
     }
 
-    /// Admit or Deny on one waiting row (S50 4 c, 4 d; PL2). Deny never confirms (one person, they can ask again).
-    /// Returns `.ignored` for an unknown row, a disabled row (recovering, offline, a bulk admission in flight) or a
-    /// duplicate (the row already shows its spinner).
     private func performWaiting(_ action: PersonActionID, rowId: String, source: String) -> ControlTapResult {
         guard action == PersonActionID.admit || action == PersonActionID.deny, waiting.contains(rowId),
               snapshot.canUseHostActions else { return ControlTapResult.ignored }
@@ -453,12 +382,10 @@ final class PeoplePresenter {
                         source: source, sourceKey: PeopleSectionID.waiting.rawValue, targetName: "")
     }
 
-    /// The roster section a header Mute All started from (Panelists in the webinar host branch).
     private func rosterSectionId() -> String {
         snapshot.section(PeopleSectionID.panelists) != nil ? PeopleSectionID.panelists.rawValue : PeopleSectionID.inMeeting.rawValue
     }
 
-    /// Host Controls confirmations (bulk, Remove Code, Block, Rotate Link, Remove Attendee Code; source `hostControls`).
     func presentHostConfirmation(kind: PeopleConfirmationKind, targetId: String, targetName: String) {
         nextConfirmationId += 1
         present(PeopleConfirmation(id: nextConfirmationId, kind: kind, targetId: targetId, targetName: targetName, count: 0,
@@ -466,8 +393,6 @@ final class PeoplePresenter {
                                    isConfirmEnabled: true, reason: PeopleActionReason.none))
     }
 
-    /// Accepts only the current confirmation id, once. `block` is the iOS "Remove and Block" button or the Android
-    /// "Also block" checkbox; the block alone removes present sessions (the server kicks them, S50 3 l5).
     func confirm(id: Int, block: Bool) {
         guard let current = confirmation, current.id == id, current.isConfirmEnabled else { return }
         clearConfirmation()
@@ -497,8 +422,7 @@ final class PeoplePresenter {
         case .muteAll, .camerasOff, .stopAllShares:
             if let bulk = HostControlsPolicy.bulk(for: current.kind) {
                 if current.source == PeopleActionSource.sectionHeader {
-                    // PPL-3 (S50 1 c): the header Mute All reports at its section (PL14 inline at the source), on the
-                    // shared bulk key so Host Controls shows it pending too.
+
                     dispatch(PeopleCommand.make(PeopleCommandKind.bulk, text: bulk.rawValue), key: HostControlsPolicy.bulkKey(bulk),
                              source: current.source, sourceKey: rosterSectionId(), targetName: "")
                 } else {
@@ -522,7 +446,6 @@ final class PeoplePresenter {
         clearConfirmation()
     }
 
-    /// Re-dispatches the failed command (same key, source and slot) with a new ticket.
     func retry(failureId: Int) {
         guard let entry = retryable[failureId] else { return }
         record("retry:" + entry.command.kind.rawValue)
@@ -537,16 +460,11 @@ final class PeoplePresenter {
         if let failure = lastFailure, failure.id == id { lastFailure = nil }
     }
 
-    // MARK: Rename (S50 3 c, 3 d; RECONCILE R38)
-
-    /// "Change Name..." opens the dialog with your current name.
     func beginRename() {
         nextRenameId += 1
         rename = PeopleRenameState(id: nextRenameId, phase: PeopleRenamePhase.editing, draft: localDisplayName(), refusal: "")
     }
 
-    /// Save: one rename intent through the core's single flight (S60 C6-10); the dialog keeps the draft until the
-    /// acknowledgement (Android shows the spinner; iOS re-presents on a refusal).
     @discardableResult
     func submitRename(_ name: String) -> ControlTapResult {
         let normalized = DisplayNamePolicy.normalized(DisplayNamePolicy.capped(name))
@@ -570,9 +488,6 @@ final class PeoplePresenter {
         if rename != PeopleRenameState.idle { rename = PeopleRenameState.idle }
     }
 
-    // MARK: Command seam (PH2)
-
-    /// Core only: the result of one ticket. False for a late, stale or unknown ticket (interrupted, reset, finished).
     @discardableResult
     func finish(_ ticket: HostActionTicket, _ result: HostActionResult) -> Bool {
         guard ticket.session == inputs.callSession, let entry = ledger.finish(ticket) else { return false }
@@ -601,8 +516,6 @@ final class PeoplePresenter {
         return true
     }
 
-    /// Takes a ticket for `key` and emits one command. Pending shows in the same frame (rows and host switches read
-    /// the ledger); a duplicate key returns `.ignored` with no command. Used by `perform`, the host child and Retry.
     @discardableResult
     func dispatch(_ command: PeopleCommand, key: String, source: String, sourceKey: String, targetName: String) -> ControlTapResult {
         guard let ticket = ledger.begin(key: key, command: command, source: source, sourceKey: sourceKey, targetName: targetName,
@@ -625,7 +538,7 @@ final class PeoplePresenter {
             publishFeedback(FeedbackKind.hostAdmitted)
         case .admitAll:
             publishFeedback(FeedbackKind.hostAdmittedAll)
-            // S50 4 g: "%lld admitted" after Admit All (the count dispatched with the command).
+
             if entry.command.number > 0 {
                 stage.announce(kind: PeopleAnnouncementKind.admittedAll, name: String(entry.command.number))
             }
@@ -651,7 +564,7 @@ final class PeoplePresenter {
             publishFeedback(FeedbackKind.hostMovedToAudience)
             stage.announce(kind: PeopleAnnouncementKind.movedToAudience, name: name)
         case .qaSubmit:
-            // S50 0.5 token table: WebinarQAPresenter's outcomes publish through this presenter's feedbackState.
+
             publishFeedback(FeedbackKind.questionSent)
             stage.announce(kind: PeopleAnnouncementKind.questionSent, name: "")
         case .sendNotice:
@@ -662,10 +575,9 @@ final class PeoplePresenter {
     }
 
     private func failed(_ entry: HostLedgerEntry, failure: String) {
-        // Lost host while it was in flight: a host action finishes silently (S50 6 f, 12; PH2). Your own rename, Q&A
-        // questions and votes and a stage decline still report.
+
         if !snapshot.isHostViewer && PeopleRolePolicy.isHostCommand(entry.command.kind) { return }
-        // PPL-3 (S50 4 f): a stale waiting entry leaves silently.
+
         if PeopleAdmissionsPolicy.isSilentFailure(kind: entry.command.kind, failure: failure) { return }
         publishFeedback(entry.command.kind == PeopleCommandKind.qaSubmit ? FeedbackKind.questionFailed : FeedbackKind.hostActionFailed)
         nextFailureId += 1
@@ -715,8 +627,6 @@ final class PeoplePresenter {
         confirmation = nil
     }
 
-    /// S50 3 f: a person dialog closes when its target leaves or its action no longer applies (the target became a
-    /// host while Make Co-Host was open); host role loss closes every host dialog (PPL-7 completes the PL13 table).
     private func validateConfirmation(rowKeys: [String], blockedReason: String) {
         guard let current = confirmation else { return }
         let shown = rowKeys.contains(current.targetId)
@@ -733,7 +643,7 @@ final class PeoplePresenter {
             clearConfirmation()
             return
         }
-        // S50 12 f "Recovery starts": an open confirmation stays, its confirm disabled with the reason.
+
         let enabled = blockedReason == MeetingBlockedReason.none.rawValue
         let reason = enabled ? PeopleActionReason.none : blockedReason
         if current.isConfirmEnabled != enabled || current.reason != reason {
@@ -744,8 +654,6 @@ final class PeoplePresenter {
         }
     }
 
-    /// PPL-3 (S50 4 f): a header dialog follows its header. Deny All closes once fewer than two people wait (the
-    /// header no longer offers it) and keeps its title count current otherwise; Mute All closes when you are alone.
     private func validateHeaderConfirmation(_ header: PeopleHeaderActions, waitingCount: Int) {
         guard let current = confirmation, current.source == PeopleActionSource.sectionHeader else { return }
         if current.kind == PeopleConfirmationKind.denyAll {
@@ -794,25 +702,19 @@ final class PeoplePresenter {
         inputs.participant(inputs.localUserId)?.displayName ?? ""
     }
 
-    /// Your display name as People shows it (the notice preview names the sender, S50 8 b).
     func localName() -> String {
         localDisplayName()
     }
 
-    // MARK: Children (PPL-5, PPL-6)
-
-    /// The ledger's pending entries, for the Q&A child's per-question pending state (PH2).
     func pendingLedgerEntries() -> [HostLedgerEntry] {
         ledger.pending
     }
 
-    /// PPL-6: the host-side PH7 counter for the Participants "%lld new" row (S50 1 k: its own stored property).
     func qaUnseenChanged(_ value: Int) {
         let next = max(0, value)
         if qaUnseen != next { qaUnseen = next }
     }
 
-    /// Clears a panel failure in one slot (the Q&A panel's close, PL14).
     func clearFailures(sourceKey: String) {
         if let failure = lastFailure, failure.sourceKey == sourceKey { lastFailure = nil }
     }
@@ -821,10 +723,6 @@ final class PeoplePresenter {
         if let failure = lastFailure, failure.sourceKey.hasPrefix(sourcePrefix) { lastFailure = nil }
     }
 
-    // MARK: Stage invitation (S50 12, PH9, PH20; attendee side)
-
-    /// Core only (PH9 `webinar:promoted`): one invitation at a time; a second replaces the first (same id rules as S1
-    /// confirmations). The attendee side plays nothing (remote event, R05).
     func presentStageInvitation(promotedByName: String, rejoinRoomId: String) {
         guard PeopleOrderPolicy.viewerRole(inputs) == PersonRole.attendee else { return }
         nextInvitationId += 1
@@ -833,8 +731,6 @@ final class PeoplePresenter {
                                                rejoinRoomId: rejoinRoomId, session: inputs.callSession)
     }
 
-    /// Join as a Speaker: the alert closes and the core opens the S10 promotion lobby over the still-playing viewer
-    /// (PH20, RECONCILE R30). A stale id or an invitation from an earlier session does nothing.
     func acceptStageInvitation(id: Int) {
         guard let invitation = stageInvitation, invitation.id == id else { return }
         stageInvitation = nil
@@ -844,15 +740,12 @@ final class PeoplePresenter {
         onAcceptStageInvitation?(invitation)
     }
 
-    /// Not Now, Android Back or the lobby's Cancel: `webinar:declineStage` while still an attendee (PH8), so the
-    /// server releases the invite. Stage origin, so a failure uses the S20 toast lane (PL14).
     func declineStageInvitation(id: Int) {
         guard let invitation = stageInvitation, invitation.id == id else { return }
         stageInvitation = nil
         declineStage()
     }
 
-    /// The decline itself (also the promotion lobby's Cancel, PH20).
     @discardableResult
     func declineStage() -> ControlTapResult {
         guard PeopleOrderPolicy.viewerRole(inputs) == PersonRole.attendee else { return ControlTapResult.ignored }
@@ -862,20 +755,15 @@ final class PeoplePresenter {
                         source: PeopleActionSource.stage, sourceKey: PeopleActionPolicy.selfTarget, targetName: "")
     }
 
-    // MARK: Readouts (Debug fixture and tests)
-
-    /// `people.revision`.
     func revisionReadout() -> String {
         "rev=" + String(snapshot.revision) + " sections=" + sectionSummary()
     }
 
-    /// `people.focus`: the destinations requested this presentation and the scrolls performed.
     func focusReadout() -> String {
         let destinations = focusDestinations.isEmpty ? "none" : focusDestinations.joined(separator: ",")
         return "destination=" + destinations + " scrolls=" + String(focusScrollCount)
     }
 
-    /// `people.counters` (PL12): the last actions, confirmations, retries and commands, newest last.
     func countersReadout() -> String {
         if counterLog.isEmpty { return "none" }
         var recent: [String] = []
@@ -888,7 +776,6 @@ final class PeoplePresenter {
         return recent.joined(separator: " ")
     }
 
-    /// Section ids with counts in display order, for example `raisedHands:1,inMeeting:6`.
     func sectionSummary() -> String {
         var parts: [String] = []
         for section in snapshot.sections {
@@ -896,8 +783,6 @@ final class PeoplePresenter {
         }
         return parts.isEmpty ? "none" : parts.joined(separator: ",")
     }
-
-    // MARK: Rebuild
 
     private func publishFocus(_ destination: PanelDestination) {
         var sectionId = ""
@@ -912,9 +797,6 @@ final class PeoplePresenter {
         focusRequest = PeopleFocusRequest(id: nextFocusId, sectionId: sectionId)
     }
 
-    /// S50 4 i: a new knock while Participants is open is announced once politely ("%@ wants to join"); the stage
-    /// banner's assertive announcement is suppressed while Participants is current (`MeetingNoticePolicy`), so it is
-    /// read once. The first host rebuild only records the baseline (the initial pending list never announces).
     private func announceNewKnocks(_ requests: [PeopleWaitingInput], viewerIsHost: Bool) {
         if !viewerIsHost {
             knownWaitingIds = []
@@ -941,8 +823,7 @@ final class PeoplePresenter {
     private func rebuild(previousViewer: PersonRole) {
         let ordered = PeopleOrderPolicy.order(inputs)
         let viewer = ordered.viewerRole
-        // Lost host while the panel is open (S50 1 f, 12): host rows and sections leave in place and the notice stays
-        // until the panel closes; regaining the role clears it. Becoming an attendee dismisses the panel (S1 ROLE).
+
         if openPresentationID != 0 && previousViewer.isHostRole && viewer == PersonRole.participant {
             showsLostHost = true
         }
@@ -958,7 +839,6 @@ final class PeoplePresenter {
             handPosition[person.userId] = position
         }
 
-        // PL7: the action table reads the viewer, the S1 blocked reason, DMs, webinar, the pin and the rename flag.
         let context = PeopleActionContext.make(
             viewerRole: viewer,
             isPrimaryHostViewer: viewer == PersonRole.host,
@@ -978,7 +858,7 @@ final class PeoplePresenter {
         var namesById: [String: String] = [:]
         var hasActiveShare = false
         for raw in ordered.inMeeting {
-            // S40 CH21: the chat presenter is the source of truth for hidden senders.
+
             let person = raw.withMessagesHidden(raw.messagesHidden || shell.chat.isSenderHidden(raw.userId))
             if person.isScreenSharing { hasActiveShare = true }
             let role = PeopleOrderPolicy.role(person, inputs: inputs)
@@ -998,8 +878,6 @@ final class PeoplePresenter {
             namesById[person.userId] = model.name
         }
 
-        // PPL-5 (S50 10): webinar hosts see the attendee hand queue and the invited attendees as `attendee:` rows; the
-        // meeting Raised Hands section is not shown in webinar mode (panelists keep their hand glyph on their row).
         let webinarHost = WebinarPeoplePolicy.showsWebinarSections(isWebinarEnabled: inputs.isWebinarEnabled, viewerRole: viewer)
         var attendeeHandKeys: [String] = []
         var attendeeHandSearch: [String] = []
@@ -1052,7 +930,6 @@ final class PeoplePresenter {
             handNames.append(name)
         }
 
-        // PPL-3 (S50 4): waiting rows carry their own Admit or Deny in flight; a bulk admission disables every row.
         let pendingKeys = ledger.pendingKeys()
         let bulkAdmission = pendingKeys.contains(PeopleAdmissionsPolicy.admitAllKey)
             || pendingKeys.contains(PeopleAdmissionsPolicy.denyAllKey)
@@ -1085,7 +962,7 @@ final class PeoplePresenter {
                                           searchKeys: waitingSearch, names: waitingNames))
         }
         if webinarHost {
-            // S50 10 b: Raised Hands (attendee queue), Panelists, Attendees (the count row is the views' own leaf).
+
             if !attendeeHandKeys.isEmpty {
                 sections.append(PeopleSection(id: PeopleSectionID.raisedHands.rawValue, count: attendeeHandKeys.count,
                                               rowIds: attendeeHandKeys, searchKeys: attendeeHandSearch, names: attendeeHandNames))

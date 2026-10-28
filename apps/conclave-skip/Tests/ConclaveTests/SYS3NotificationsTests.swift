@@ -3,16 +3,10 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// SYS-3 (S70 2, 0.6 SX11, 0.7 SY19; S10 9 R5; S60 1 R26; S70 O3, O5): the notification permission states, the Android
-/// priming banner, the local notification post rules and the presenter over a recording center (the "fake center" of
-/// S70 2 l3 is a `LocalNotificationCenter` of closures, the repo's protocol-free adapter shape). The transpiled half
-/// runs in `T/Skip/SYS3NotificationsBridgeTests.kt`; the iOS adapter, the rows and the Android bridge are pinned by
-/// source scans. Nothing here touches UserNotifications or the network.
 @MainActor
 struct SYS3NotificationsTests {
     private static let room = "lily-zoro-iris"
 
-    /// Records every call the presenter makes into the platform.
     @MainActor
     final class RecordingCenter {
         var requests: [String] = []
@@ -65,14 +59,12 @@ struct SYS3NotificationsTests {
                                       nativeRoutesActive: true)
     }
 
-    // MARK: Permission states (S70 2 l2)
-
     @Test func permissionStateTableFollowsS70Section2d() {
         #expect(NotificationPermissionStatePolicy.state(granted: false, asked: false, rationale: false) == .notDetermined)
         #expect(NotificationPermissionStatePolicy.state(granted: false, asked: true, rationale: true) == .denied)
         #expect(NotificationPermissionStatePolicy.state(granted: false, asked: true, rationale: false) == .permanentlyDenied)
         #expect(NotificationPermissionStatePolicy.state(granted: true, asked: false, rationale: false) == .granted)
-        // API 32: the implicit grant, or off (only Settings fixes it).
+
         #expect(NotificationPermissionStatePolicy.androidState(apiLevel: 32, permissionGranted: false, appNotificationsEnabled: true,
                                                                asked: false, rationale: false) == .granted)
         #expect(NotificationPermissionStatePolicy.androidState(apiLevel: 32, permissionGranted: true, appNotificationsEnabled: false,
@@ -83,7 +75,7 @@ struct SYS3NotificationsTests {
         #expect(NotificationPermissionStatePolicy.iosState(authorization: "authorized") == .granted)
         #expect(NotificationPermissionStatePolicy.iosState(authorization: "provisional") == .granted)
         #expect(NotificationPermissionStatePolicy.iosState(authorization: "denied") == .denied)
-        // iOS asks once; Android asks again while the rationale flag is set.
+
         #expect(NotificationPermissionStatePolicy.canRequest(.denied, isAndroid: true))
         #expect(!NotificationPermissionStatePolicy.canRequest(.denied, isAndroid: false))
         #expect(!NotificationPermissionStatePolicy.canRequest(.permanentlyDenied, isAndroid: true))
@@ -101,12 +93,12 @@ struct SYS3NotificationsTests {
         #expect(presenter.snapshot.permission == .notDetermined)
         presenter.requestPermission(reason: .call)
         #expect(recorder.requests == ["call"])
-        // Dropped before the person saw it (terminal call end, or Android cancelled it behind another dialog).
+
         presenter.permissionAnswered(granted: false, answered: false)
         #expect(!NotificationPreferences.permissionAsked(defaults: defaults))
         presenter.statusRead(androidReading())
         #expect(presenter.snapshot.permission == .notDetermined)
-        // Answered with a refusal: rationale true reads denied, rationale false permanently denied.
+
         presenter.requestPermission(reason: .messages)
         presenter.permissionAnswered(granted: false, answered: true)
         #expect(NotificationPreferences.permissionAsked(defaults: defaults))
@@ -117,8 +109,6 @@ struct SYS3NotificationsTests {
         #expect(presenter.snapshot.offersOpenSettings)
         #expect(presenter.snapshot.settingsPermission == .denied)
     }
-
-    // MARK: Priming (S70 2 l1, l2)
 
     @Test func primingBannerShowsOnlyAfterStageEntryOncePerProcess() {
         let (presenter, recorder) = make(android: true)
@@ -135,7 +125,7 @@ struct SYS3NotificationsTests {
         #expect(presenter.snapshot.showsPrimingBanner)
         presenter.dismissPriming()
         #expect(!presenter.snapshot.showsPrimingBanner, "Not now keeps it away for the session")
-        // A later call in the same process: not again.
+
         presenter.apply(SystemNotificationInputs.none)
         presenter.apply(liveInputs(session: 2))
         presenter.stageEntryFinished()
@@ -194,8 +184,6 @@ struct SYS3NotificationsTests {
         #expect(!NotificationPrimingPolicy.usesLegacyPrompt(isAndroid: false, usesNativeStage: false))
     }
 
-    // MARK: Requests and posts (S70 2 l3)
-
     @Test func iosRowAndToggleRequestOnceAndReadOnOnlyWhenGranted() {
         #expect(LocalNotificationPostPolicy.authorizationOptions == ["alert", "sound"], "no badge")
         let (presenter, recorder) = make(android: false)
@@ -247,7 +235,7 @@ struct SYS3NotificationsTests {
         #expect(request?.channelId == "conclave_admission")
         #expect(request?.presenceSession == 7)
         #expect(request?.roomLabel == Self.room)
-        // The connect that follows the admission keeps it (still this call); returning to the foreground removes it.
+
         presenter.apply(SystemNotificationInputs.make(callSession: 4, presenceSession: 7, roomId: Self.room, roomLabel: Self.room,
                                                       isConnecting: true, isAppActive: false, nativeRoutesActive: true))
         #expect(recorder.removed.isEmpty)
@@ -259,14 +247,14 @@ struct SYS3NotificationsTests {
     @Test func theLegacyRootsPostNothingAndRecoveryKeepsTheRoom() {
         let (presenter, recorder) = make(android: true)
         presenter.statusRead(androidReading(granted: true))
-        // No native route: the legacy production roots stay unchanged (HD RULES 3).
+
         presenter.apply(SystemNotificationInputs.make(callSession: 1, presenceSession: 2, roomId: Self.room, roomLabel: Self.room,
                                                       isLive: true, isAppActive: false))
         presenter.chatMessageForYou(LocalChatMessageInput.make(messageId: "m1", senderId: "a", text: "x", isPrivate: true))
         presenter.admittedWhileBackgrounded(roomLabel: Self.room)
         #expect(recorder.posted.isEmpty)
         #expect(!LocalNotificationPostPolicy.postsForRoutes(nativeRoutesActive: false))
-        // A recovery is still the call: nothing is removed until the call ends.
+
         presenter.apply(liveInputs(active: false))
         presenter.chatMessageForYou(LocalChatMessageInput.make(messageId: "m2", senderId: "a", text: "y", isPrivate: true))
         #expect(recorder.posted.count == 1)
@@ -288,8 +276,6 @@ struct SYS3NotificationsTests {
                                                             admissionNotifyOn: true, channelEnabled: true))
     }
 
-    // MARK: Messages (S70 2 l4, O5)
-
     @Test func privateMessagesAndMentionsPostAndRoomMessagesDoNot() {
         let (presenter, recorder) = make(android: true)
         presenter.statusRead(androidReading(granted: true))
@@ -302,7 +288,7 @@ struct SYS3NotificationsTests {
         #expect(recorder.posted.map { $0.identifier } == ["chat.m1", "chat.m2"])
         #expect(recorder.posted.map { $0.kind } == [.privateMessage, .mention])
         #expect(recorder.posted.allSatisfy { $0.channelId == "conclave_messages" })
-        // Chat visible (not in PiP), active, attendee or the preference off: nothing.
+
         presenter.apply(liveInputs(active: false, chatVisible: true))
         presenter.chatMessageForYou(LocalChatMessageInput.make(messageId: "m5", senderId: "a", text: "x", isPrivate: true))
         presenter.apply(liveInputs(active: true))
@@ -313,7 +299,7 @@ struct SYS3NotificationsTests {
         presenter.setMessageNotifications(false)
         presenter.chatMessageForYou(LocalChatMessageInput.make(messageId: "m8", senderId: "a", text: "x", isPrivate: true))
         #expect(recorder.posted.count == 2)
-        // Chat in PiP counts as not visible.
+
         presenter.setMessageNotifications(true)
         presenter.apply(liveInputs(active: false, pip: true, chatVisible: true))
         presenter.chatMessageForYou(LocalChatMessageInput.make(messageId: "m9", senderId: "a", text: "x", isPrivate: true))
@@ -330,10 +316,10 @@ struct SYS3NotificationsTests {
                                                                    text: "line \(index)", isPrivate: true))
         }
         #expect(recorder.posted.count == 10)
-        // One thread (iOS grouping) and one Android tag and id per room.
+
         #expect(Set(recorder.posted.map { $0.threadIdentifier }) == ["meeting." + Self.room])
         #expect(LocalNotificationPostPolicy.messagesNotificationId != LocalNotificationPostPolicy.admissionNotificationId)
-        // A new sender alerts; a burst from the same one does not.
+
         #expect(recorder.posted.map { $0.alertsOnce } == [false, true, true, false, true, false, true, false, true, true])
     }
 
@@ -370,8 +356,6 @@ struct SYS3NotificationsTests {
         let assistant = ChatMessage(id: "a1", userId: ConclaveAssistantChatIdentity.userId, displayName: "Conclave AI", content: "@blake done")
         #expect(LocalChatMessageInput.from(message: assistant, localName: "Blake", isFromSelf: false).isAssistant)
     }
-
-    // MARK: Taps and the core hooks
 
     @Test func aTapIsHeldUntilTheCoreInstallsItsHandler() {
         let (presenter, _) = make(android: false)
@@ -412,8 +396,6 @@ struct SYS3NotificationsTests {
         #expect(!AdmissionNotifyCapability.offersRow(isAndroid: false, cellPassed: true, isWaiting: true, isPromotion: true))
     }
 
-    // MARK: Source scans (S70 2 l3, l5)
-
     @Test func theIOSAdapterFollowsTheSpec() throws {
         let ios = try sys3Source("Sources/Conclave/Core/Call/LocalNotifications+iOS.swift")
         #expect(ios.hasPrefix("#if os(iOS) && !SKIP"))
@@ -437,7 +419,7 @@ struct SYS3NotificationsTests {
     }
 
     @Test func theDelegateIsInstalledFromOnInit() throws {
-        // Passes once HD request B8-T5 R1 lands in S/ConclaveApp.swift.
+
         let app = try sys3Source("Sources/Conclave/ConclaveApp.swift")
         let start = try #require(app.range(of: "public func onInit() {"))
         let end = try #require(app.range(of: "public func onLaunch() {", range: start.upperBound..<app.endIndex))
@@ -460,7 +442,7 @@ struct SYS3NotificationsTests {
         #expect(helper.contains("if (permissions.isNotEmpty()) NotificationPreferences.setPermissionAsked()"))
         #expect(helper.contains("ActivityCompat.shouldShowRequestPermissionRationale(activity, android.Manifest.permission.POST_NOTIFICATIONS)"))
         #expect(helper.contains("Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)"))
-        // The pins other slices rely on stay.
+
         #expect(helper.contains("answered = permissions.isNotEmpty()"))
         #expect(helper.contains("NOTIFICATIONS_REQUEST_CODE -> notificationsPermissionWaiters"))
         let transition = sys3Flat(try sys3Source("Sources/Conclave/Skip/ui/lobby/EntryTransition.kt"))
@@ -468,14 +450,14 @@ struct SYS3NotificationsTests {
     }
 
     @Test func theCoreWiringLandsWithTheRequests() throws {
-        // Passes once HD request B8-T5 R2 lands in the view model.
+
         let vm = try sys3Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
         #expect(vm.contains("NotificationPrimingPolicy.usesLegacyPrompt("))
         #expect(vm.contains("SystemNotifications.shared.requestPermission(reason: NotificationRequestReason.call)"))
         #expect(vm.contains("SystemNotifications.shared.admittedWhileBackgrounded(roomLabel:"))
         #expect(vm.contains("SystemNotifications.shared.chatMessageForYou("))
         #expect(vm.contains("showsNotificationsPrime: SystemNotifications.shared.snapshot.showsPrimingBanner"))
-        // testNativeCallCorrectnessBlockersStayFixed keeps its pins.
+
         #expect(vm.contains("PermissionHelper.requestNotificationsPermissionIfNeeded { granted in"))
         #expect(vm.contains("self.hasRequestedCallNotificationPermission = false"))
     }
@@ -503,7 +485,7 @@ struct SYS3NotificationsTests {
     }
 
     @Test func sys3StringsResolveOnBothPlatforms() throws {
-        // Passes once the integrator merges HD/strings/B8-T5.json.
+
         let catalog = try sys3Source("Sources/Conclave/Resources/Localizable.xcstrings")
         for key in ["Notify Me When I’m Let In", "We’ll notify you when you’re let in.", "You’re in. Tap to return to the call.",
                     "Mentioned you", "Private message", "Message Notifications", "Notifications are off for Conclave.",
@@ -518,7 +500,7 @@ struct SYS3NotificationsTests {
                      "chat_preview_photo", "chat_reply_gif", "chat_sticker", "chat_clip", "chat_voice", "chat_private_received"] {
             #expect(strings.contains("name=\"" + name + "\""), "missing Android resource \(name)")
         }
-        // iOS subtitles are sentence case (S70 2 c).
+
         #expect(catalog.contains("\"Private message\"") && catalog.contains("\"Mentioned you\""))
     }
 }
@@ -528,7 +510,6 @@ private func sys3Source(_ packageRelativePath: String) throws -> String {
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 
-/// Whitespace collapsed to single spaces, so a pin fails only when the code changes.
 private func sys3Flat(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }

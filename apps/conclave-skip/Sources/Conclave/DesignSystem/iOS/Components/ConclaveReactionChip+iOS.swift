@@ -2,13 +2,6 @@
 import SwiftUI
 import UIKit
 
-// The message reaction chip (F00 C24 = S40 CL2): "emoji count" in footnote tabular digits on a tertiary system fill
-// capsule, 28 pt tall with a 44 pt hit area. Your own reaction adds a 1 pt coralText outline; the selected trait,
-// not color, carries it for VoiceOver. A chip that cannot toggle (private, local or unacknowledged rows) is plain
-// text. Tapping toggles; `reactionSent` plays only when the tap adds a reaction (S40 3 h), through the view-local
-// route at this chip. Chips wrap with a flow layout. Never coral-filled and never on a material.
-
-/// One chip. `onToggle` hands back the chip so the screen calls its toggle intent.
 struct ConclaveReactionChip: View {
     let chip: ConclaveReactionChipModel
     let gestureRoute: ConclaveGestureRoute
@@ -55,7 +48,6 @@ struct ConclaveReactionChip: View {
     }
 }
 
-/// The visual chip inside its 44 pt target.
 private struct ConclaveReactionChipLabel: View {
     let chip: ConclaveReactionChipModel
 
@@ -76,7 +68,6 @@ private struct ConclaveReactionChipLabel: View {
     }
 }
 
-/// Plays `reactionSent` at this chip in production; the record-only route adds nothing.
 private struct ConclaveReactionChipFeedback: ViewModifier {
     let route: ConclaveGestureRoute
     let trigger: Int
@@ -92,7 +83,6 @@ private struct ConclaveReactionChipFeedback: ViewModifier {
     }
 }
 
-/// The chips of one message, wrapping onto more lines as needed, each its own element in reading order.
 struct ConclaveReactionChipRow: View {
     let chips: [ConclaveReactionChipModel]
     let gestureRoute: ConclaveGestureRoute
@@ -119,8 +109,6 @@ struct ConclaveReactionChipRow: View {
     }
 }
 
-/// A leading-aligned flow: subviews keep their ideal size and wrap to a new line when the next one would overflow.
-/// SwiftUI mirrors the placement in right-to-left layouts.
 struct ConclaveFlowLayout: Layout {
     let spacing: CGFloat
 

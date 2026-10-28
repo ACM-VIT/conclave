@@ -879,15 +879,13 @@ def generate(root):
                                  'coordinate_profile': 'implicit24-scale40' if a.get('_vendor_root') == ADDITIONS and a['id'] in ADDITIVE_24PX else 'font960-translate-y',
                                  'maximum_float32_error': str(error),
                                  'maximum_float32_error_decimal': format(float(error), '.12g')})
-    vectors.append('    // Metadata probe; reading isInitialized never evaluates a lazy initializer.\n'
-                   '    internal fun initializedCount(): Int = listOf(\n'
+    vectors.append('    internal fun initializedCount(): Int = listOf(\n'
                    + ',\n'.join('        ' + a['kotlin_property'] + 'Cache.isInitialized()' for a in m['artwork'])
                    + '\n    ).count { it }\n}\n')
     vector_bytes = ''.join(vectors).encode()
 
     by_id = {a['id']: a for a in m['artwork']}
     catalog = [header, 'package conclave.module\n\n',
-               '// Fixture-only metadata. Closures do not instantiate vectors; there is no runtime name resolver.\n',
                'internal object NativeIconCatalog {\n',
                f'    const val vectorSourceSHA256 = "{digest(vector_bytes)}"\n',
                f'    const val manifestSHA256 = "{manifest_sha}"\n',
@@ -909,8 +907,7 @@ def generate(root):
                 f'{{ ConclaveIcons.{by_id[b["artwork"]]["kotlin_property"]} }},\n')
     catalog.append('    )\n}\n')
 
-    swift = [header, '// SF Symbols are system-provided Apple artwork; no Google art is bundled here.\n',
-             '#if os(iOS) && !SKIP\n', '/// Exact selected literals. No runtime cases, resolver or automatic `.fill` suffix.\n',
+    swift = [header, '#if os(iOS) && !SKIP\n',
              'enum ConclaveSymbols {\n']
     names = [sf_property(s) for s in m['sf_literals']]
     require(len(set(names)) == len(names) and all(re.fullmatch('[a-z][A-Za-z0-9]*', n) for n in names),
@@ -919,7 +916,6 @@ def generate(root):
     swift.append('}\n#endif\n')
 
     symbols = [header, '#if DEBUG && os(iOS) && !SKIP\n',
-               '// Metadata only. SwiftUI Image construction stays in visible lazy rows.\n',
                'enum NativeSymbolCatalog {\n', '    static let rows: [NativeSymbolSpecimen] = [\n']
     for c in m['concepts']:
         for s in c['sf_symbols']:
@@ -935,8 +931,7 @@ def generate(root):
     fixture_data = strict_json(safe(root, ICON / 'semantic-fixtures.json').read_bytes())
     keys(fixture_data, 'fixtures', '/fixtures')
     require(type(fixture_data['fixtures']) is list and len(fixture_data['fixtures']) == 4, 'four semantic fixtures required')
-    fixtures = [header, IMPORTS, '\n// Converter outputs for the four hand-derived geometry fixtures; compared with\n',
-                '// NativeIconGeometryFixtures, which is authored independently of this generator.\n',
+    fixtures = [header, IMPORTS, '\n',
                 'internal object NativeConvertedIconFixtures {\n']
     for i, f in enumerate(fixture_data['fixtures']):
         keys(f, 'id property path', f'/fixtures/{i}')

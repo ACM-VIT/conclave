@@ -2,6 +2,9 @@ package conclave.module
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -67,16 +70,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
-/*
- * ENT-7 (S10 5 d): Account on Android, a pushed page (`AccountKey`) in the premeeting NavDisplay, handwritten Compose
- * Material 3 in the system appearance (predictive back pops it; a modal bottom sheet would open its own window). Signed
- * in: the profile, Sign out, Privacy policy and the error-colored Delete account with its AlertDialog. Signed out: the
- * value line, Continue with Google (Credential Manager's system sheet) with the Apple-account footnote (Q10), the
- * guest name and Privacy policy. Observes `account.snapshot` only. No coral fill: the Google row is neutral; text rows
- * carry no icons (H-06). SET-1 (RECONCILE R26, S10 5 d) adds the "Settings" row, which opens the app-scope Settings
- * screen (`SettingsKey` in the premeeting back stack, AppSettingsScreen); it shows once the host passes onOpenSettings.
- * Back is disabled while the account is being deleted (S10 5 f).
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AccountScreen(
@@ -95,8 +88,6 @@ internal fun AccountScreen(
     val retryText = conclaveString("pm_retry")
     val outcomeId = snapshot.outcomeId
     val outcome = snapshot.outcome
-    // Each deletion outcome shows once: acknowledged before it shows, so a recomposition or a return to the page
-    // never repeats it.
     LaunchedEffect(outcomeId) {
         if (outcomeId == 0 || !account.needsOutcomeNotice(id = outcomeId)) return@LaunchedEffect
         account.acknowledgeOutcome(id = outcomeId)
@@ -113,7 +104,6 @@ internal fun AccountScreen(
         }
     }
     BackHandler(enabled = !snapshot.canDismiss) {
-        // Swallowed while the deletion runs.
     }
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -121,7 +111,7 @@ internal fun AccountScreen(
             TopAppBar(
                 title = {
                     Text(
-                        conclaveString("pm_account"),
+                        conclaveString(if (snapshot.isSignedIn) "pm_account" else "pm_sign_in"),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.semantics { heading() },
@@ -136,7 +126,6 @@ internal fun AccountScreen(
         },
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = scheme.surface,
-        // safeDrawing includes the IME, so the focused guest field stays above the keyboard without imePadding.
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { padding ->
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
@@ -191,13 +180,6 @@ internal fun AccountScreen(
                         )
                     }
                 } else {
-                    item("valueLine") {
-                        Text(
-                            conclaveString("pm_account_value_line"),
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(16.dp).testTag("account.valueLine"),
-                        )
-                    }
                     when (snapshot.providersState) {
                         ProvidersState.loading -> item("providersLoading") { AccountProvidersLoading() }
                         ProvidersState.failed -> item("providersFailed") { AccountProvidersFailed { account.retryProviders() } }
@@ -282,7 +264,6 @@ internal fun AccountScreen(
     }
 }
 
-/** The info banner for a meeting that needs an account or an expired session (S10 5 f); a deletion is a snackbar. */
 @Composable
 private fun AccountContextBanner(context: AccountContext) {
     val text = if (context == AccountContext.signInRequired) {
@@ -299,7 +280,6 @@ private fun AccountContextBanner(context: AccountContext) {
     )
 }
 
-/** Profile row, one merged node; the overline names the provider (S10 5 d). */
 @Composable
 private fun AccountProfileItem(snapshot: AccountSnapshot) {
     val providerLine = when (snapshot.provider) {
@@ -323,7 +303,6 @@ private fun AccountProfileItem(snapshot: AccountSnapshot) {
     )
 }
 
-/** A text row that is the button (Sign out, Privacy policy, Delete account) with a trailing spinner while pending. */
 @Composable
 private fun AccountActionItem(
     title: String,
@@ -377,7 +356,6 @@ private fun AccountProvidersFailed(onRetry: () -> Unit) {
     }
 }
 
-/** Secondary copy under the providers: the footnote, the no-providers line, the sign-in failure (a polite region). */
 @Composable
 private fun AccountNote(text: String, identifier: String, color: Color, announces: Boolean = false) {
     Text(
@@ -389,10 +367,6 @@ private fun AccountNote(text: String, identifier: String, color: Color, announce
     )
 }
 
-/**
- * Continue with Google: a neutral OutlinedButton with Google's mark (an app-module drawable resolved by name, drawn
- * with Image so it is never tinted) and the text as the label (the mark is decorative).
- */
 @Composable
 private fun AccountGoogleButton(pending: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val context = LocalContext.current
@@ -400,8 +374,12 @@ private fun AccountGoogleButton(pending: Boolean, enabled: Boolean, onClick: () 
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth().heightIn(min = 48.dp)
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth().heightIn(min = 56.dp)
             .testTag("account.google"),
+        shape = CircleShape,
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
     ) {
         if (pending) {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -410,14 +388,10 @@ private fun AccountGoogleButton(pending: Boolean, enabled: Boolean, onClick: () 
             Image(painterResource(markId), contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(conclaveString("pm_continue_google"))
+        Text(conclaveString("pm_continue_google"), style = MaterialTheme.typography.titleMedium)
     }
 }
 
-/**
- * The guest name (S10 5 d, f): a local draft committed on Done, focus loss and when the field leaves composition,
- * never per keystroke; capped at 40 with the shared counter from 30 characters.
- */
 @Composable
 private fun AccountGuestNameField(initialName: String, enabled: Boolean, onCommit: (String) -> Unit) {
     var draft by rememberSaveable { mutableStateOf(initialName) }

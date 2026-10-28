@@ -38,43 +38,23 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
-/*
- * In-call controls (F00 C04, C05; R01): call toggles (plain and labelled), panel invokers, Leave and the compact
- * toolbar. The R01 colors stay pure functions over the generated tokens so callToggleColorsMatchR01 checks them
- * without Compose; they equal the in-call ConclaveExtendedColors roles. No high-contrast token is adopted (owner
- * Q10). Every target is at least 48 dp.
- */
-
-/** The R01 visual states. Off is a muted microphone or a camera that is off; Engaged is a raised hand, a running
- *  share or an open panel; On is the rest. */
 internal enum class ConclaveCallControlVisual { Off, On, Engaged }
 
-/** Container and content colors as generated ARGB tokens, so the R01 mapping is testable without Compose. */
 internal data class ConclaveCallToggleColors(val container: Long, val content: Long)
 
-/** R01: Off #F2B8B5 with #601410, On #2E2E33 with #FAFAFA, Engaged #F4F4F5 with #18181B (owner OQ1 kept it). */
 internal fun conclaveCallToggleColors(visual: ConclaveCallControlVisual): ConclaveCallToggleColors = when (visual) {
     ConclaveCallControlVisual.Off -> ConclaveCallToggleColors(DesignTokens.androidExtendedToggleOffContainer, DesignTokens.androidExtendedOnToggleOff)
     ConclaveCallControlVisual.On -> ConclaveCallToggleColors(DesignTokens.androidExtendedToggleOnContainer, DesignTokens.androidExtendedOnToggleOn)
     ConclaveCallControlVisual.Engaged -> ConclaveCallToggleColors(DesignTokens.androidExtendedToggleEngagedContainer, DesignTokens.androidExtendedOnToggleEngaged)
 }
 
-/** Leave's colors: callEnd with a white glyph (3.923, glyph only). */
 internal val conclaveLeaveColors = ConclaveCallToggleColors(DesignTokens.androidExtendedCallEnd, DesignTokens.androidExtendedOnCallEnd)
 
-/** M3 disabled content alpha (F00 2.6 A6). */
 internal const val CONCLAVE_CALL_DISABLED_ALPHA = 0.38f
 
-/** 56 dp from 385 dp available width, else 48 dp (F00 C05 d), through the shared fit helper. */
 internal fun conclaveCallToggleWidth(availableWidthDp: Float): Dp =
     CompactBarFit.androidToggleWidth(available = availableWidthDp.toDouble()).dp
 
-/**
- * A call toggle: one Switch node with a constant description and the state in its state description (TG 4.2).
- * [checked] means the device or feature is live. [feedback] is the gesture kind the tap plays through [haptics]
- * (null plays nothing, for example a share whose result arrives as an outcome); [onGesture] sees each decision,
- * which the Debug gallery records with a record-only route.
- */
 @Composable
 internal fun ConclaveCallToggle(
     label: String, stateText: String, icon: ImageVector, visual: ConclaveCallControlVisual, checked: Boolean,
@@ -99,12 +79,6 @@ internal fun ConclaveCallToggle(
     }
 }
 
-/**
- * A panel invoker (Chat, More): a button in the R01 On colors, Engaged with `selected` while its panel is open.
- * It plays nothing (F00 C04 e) and takes no gesture route. The count badge (OQ-2b-7) is primaryContainer with
- * onPrimaryContainer numerals, never read on its own: the unread count is the state description instead, and the
- * badge hides while the panel is open and at zero.
- */
 @Composable
 internal fun ConclaveCallInvoker(
     label: String, icon: ImageVector, identifier: String, onClick: () -> Unit, modifier: Modifier = Modifier,
@@ -139,11 +113,9 @@ internal fun ConclaveCallInvoker(
     }
 }
 
-/** "99+" above 99 (F00 C06 l); visible numbers follow the device locale. */
 internal fun conclaveBadgeLabel(count: Int): String =
     if (count > 99) String.format(Locale.getDefault(), "%d+", 99) else String.format(Locale.getDefault(), "%d", count)
 
-/** Leave: a 72 x 48 dp callEnd pill with a white glyph and the description "Leave call". It plays nothing (Q11). */
 @Composable
 internal fun ConclaveLeaveButton(identifier: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val description = conclaveString("ds_leave_call")
@@ -159,11 +131,6 @@ internal fun ConclaveLeaveButton(identifier: String, onClick: () -> Unit, modifi
     }
 }
 
-/**
- * The compact toolbar (F00 C05 d): toolbar container with a 1 dp border, 8 dp padding and spacing, the controls,
- * a 1 dp divider without padding of its own (OQ-2b-6), then Leave. One traversal group in reading order with
- * Leave last; the Row mirrors in right-to-left layouts. No tooltip (OQ-2b-9).
- */
 @Composable
 internal fun ConclaveCallControlBar(
     identifier: String, modifier: Modifier = Modifier, leave: @Composable () -> Unit, controls: @Composable RowScope.() -> Unit,
@@ -188,12 +155,6 @@ internal fun ConclaveCallControlBar(
     }
 }
 
-/**
- * The lobby preview card toggle (F00 C04 f labelled variant; S10 L2): the call toggle with its state caption below.
- * Android draws R01 everywhere, so [context] only styles the caption: over the lobby video it sits on the label
- * scrim, on the card strip it is onSurfaceVariant. The caption repeats the state description, so it is cleared from
- * semantics. The toggle plays its own gesture kind (C04 e), like the plain toggle.
- */
 @Composable
 internal fun ConclaveLabelledCallToggle(
     label: String, stateText: String, icon: ImageVector, visual: ConclaveCallControlVisual, checked: Boolean,
@@ -206,8 +167,7 @@ internal fun ConclaveLabelledCallToggle(
     val ext = LocalConclaveExtendedColors.current
     val overVideo = context == ConclaveSurfaceContext.overVideo
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        // ENT-4 (S10 7 i, HD request B7-T8 R2): the state description adds why a toggle reads Off; the caption below
-        // keeps the plain state.
+
         ConclaveCallToggle(label = label, stateText = if (stateReason.isEmpty()) stateText else "$stateText, $stateReason",
             icon = icon, visual = visual, checked = checked,
             identifier = identifier, onToggle = onToggle, width = width, enabled = enabled, feedback = feedback,

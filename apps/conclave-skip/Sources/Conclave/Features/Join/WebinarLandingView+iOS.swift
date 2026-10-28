@@ -1,14 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// ENT-9 (S10 12 c, e, f, g, h, i, k; RECONCILE R41; S10 Q7): the iOS webinar attendee landing, the `.webinarLanding`
-// destination of the premeeting NavigationStack. System appearance, an inset grouped List, the one coral primary
-// (Start Watching) in the lobby's bottom bar (iOS 26 `safeAreaBar`, 17 to 25 `safeAreaInset` on the grouped
-// background), Cancel in the toolbar while joining. Every leaf reads the one `PremeetingPresenter.webinar` snapshot,
-// which never changes once a second: the countdown is the system timer text (`CountdownText`). No preview, no
-// capture, no permission prompt and no sound on any path (invariant 6). No haptic on Start Watching: the `joined` and
-// `joinFailed` tokens come from the session.
-
 struct WebinarLandingView: View {
     let route: PremeetingRoute
     let premeeting: PremeetingPresenter
@@ -27,14 +19,12 @@ struct WebinarLandingView: View {
                 premeeting.webinarDidDisappear(routeId: route.id)
             }
             .onChange(of: scenePhase) { _, phase in
-                // S10 12 c, l6: back to active re-runs the status policy at once (equality-guarded in the presenter).
+
                 premeeting.webinarSceneDidChange(isActive: phase == .active)
             }
             .accessibilityIdentifier("webinar")
     }
 }
-
-// MARK: - List
 
 private struct WebinarLandingList: View {
     let route: PremeetingRoute
@@ -44,7 +34,7 @@ private struct WebinarLandingList: View {
     var body: some View {
         let snapshot = premeeting.webinar?.routeId == route.id ? premeeting.webinar : nil
         #if DEBUG
-        // S10 12 l4: counts this body's evaluations; the early fixture's value stays flat while the countdown ticks.
+
         let bodyCount = WebinarLandingDiagnostics.noteListBody()
         #endif
         List {
@@ -69,7 +59,7 @@ private struct WebinarLandingList: View {
             .ignoresSafeArea()
         }
         .onChange(of: snapshot?.status) { previous, current in
-            // S10 12 i: opening, the wait for the host and the end announce once, on a change only.
+
             guard let previous, let current, previous != current, WebinarLandingPolicy.announces(current) else { return }
             AccessibilityNotification.Announcement(WebinarLandingCopy.announcement(current)).post()
         }
@@ -85,7 +75,6 @@ private struct WebinarLandingList: View {
     }
 }
 
-/// The tag, the title (a header) and "Hosted by" (S10 12 c).
 private struct WebinarHeaderSection: View {
     let tag: WebinarLandingTag
     let title: String
@@ -112,8 +101,6 @@ private struct WebinarHeaderSection: View {
     }
 }
 
-/// The C06 status tag: Live is the functional live color plus the word, never the color alone; Starts Soon and Ended
-/// are neutral (S10 12 c, i; R5).
 private struct WebinarStatusTag: View {
     let tag: WebinarLandingTag
 
@@ -135,8 +122,6 @@ private struct WebinarStatusTag: View {
         .accessibilityIdentifier("webinar.tag")
     }
 }
-
-// MARK: - Status sections (S10 12 f)
 
 private struct WebinarStatusSections: View {
     let snapshot: WebinarLandingSnapshot
@@ -161,7 +146,6 @@ private struct WebinarStatusSections: View {
     }
 }
 
-/// Early: "You're a Little Early", the countdown leaf and the opens note, then Add to Calendar and Share Link.
 private struct WebinarEarlySections: View {
     let snapshot: WebinarLandingSnapshot
     let onAddToCalendar: () -> Void
@@ -200,8 +184,6 @@ private struct WebinarEarlySections: View {
     }
 }
 
-/// Open: the name field when needed (40 at most, counter from 30, R41), the invite field when needed, then the
-/// attendee note. The fields keep their own text; the presenter gets every change.
 private struct WebinarOpenSections: View {
     let snapshot: WebinarLandingSnapshot
     let premeeting: PremeetingPresenter
@@ -241,14 +223,14 @@ private struct WebinarNameSection: View {
                 .accessibilityIdentifier("webinar.name.footer")
         }
         .task(id: routeId) {
-            // The field comes back after Cancel with the name already typed (never on a body re-run).
+
             let draft = premeeting.webinarNameText
             if name != draft {
                 name = draft
             }
         }
         .onChange(of: name) {
-            // R41: typing stops at 40 (the 41st character is rejected).
+
             let capped = DisplayNamePolicy.capped(name)
             if capped != name {
                 name = capped
@@ -291,7 +273,6 @@ private struct WebinarInviteSection: View {
     }
 }
 
-/// Joining, Almost There and the wait for the host: the system spinner with a static title (R13), and the wait's body.
 private struct WebinarProgressSection: View {
     let status: WebinarLandingStatus
 
@@ -316,8 +297,6 @@ private struct WebinarProgressSection: View {
     }
 }
 
-/// The C14 status message inside the list: locked, full, not available, ended, cancelled (Back to Home) and the failed
-/// lookup or join (Try Again). The action is tonal; coral stays for Start Watching.
 private struct WebinarStatusMessage: View {
     let snapshot: WebinarLandingSnapshot
     let premeeting: PremeetingPresenter
@@ -348,10 +327,6 @@ private struct WebinarStatusMessage: View {
     }
 }
 
-// MARK: - Bottom bar and chrome
-
-/// The lobby's bottom bar container (S10 12 c): Start Watching only while open, disabled (40%, C01) until a needed name
-/// or invite code exists.
 private struct WebinarLandingBottomBar: ViewModifier {
     let premeeting: PremeetingPresenter
     let routeId: Int
@@ -387,7 +362,6 @@ private struct WebinarPrimaryBar: View {
     }
 }
 
-/// While joining: Cancel replaces Back (and the swipe back), S10 12 f.
 private struct WebinarLandingChrome: ViewModifier {
     let premeeting: PremeetingPresenter
     let routeId: Int
@@ -407,8 +381,6 @@ private struct WebinarLandingChrome: ViewModifier {
             }
     }
 }
-
-// MARK: - Copy (S10 12 g; Apple title case for titles and buttons, sentence case for bodies)
 
 enum WebinarLandingCopy {
     static func tag(_ tag: WebinarLandingTag) -> String {
@@ -452,8 +424,6 @@ enum WebinarLandingCopy {
         }
     }
 
-    /// The body under the title: the organizer guidance, the lookup failure, or for a failed join the classifier's
-    /// clean sentence class (the S10 8 g bodies the lobby uses), so a failure never says only "We Hit a Snag".
     static func message(_ snapshot: WebinarLandingSnapshot) -> String {
         switch snapshot.status {
         case .ended:
@@ -493,7 +463,6 @@ enum WebinarLandingCopy {
         }
     }
 
-    /// The prefilled event: the title (or the fallback), the start and the end (else one hour), the link.
     static func calendarDraft(_ snapshot: WebinarLandingSnapshot) -> WebinarCalendarDraft {
         let endMillis = WebinarLandingPolicy.eventEndMillis(startsAtMillis: snapshot.startsAtMillis,
                                                             endsAtMillis: snapshot.endsAtMillis)
@@ -508,7 +477,7 @@ enum WebinarLandingCopy {
 }
 
 #if DEBUG
-/// S10 12 l4 (Debug): the landing list's body evaluations, read through the hidden `webinar.list.bodyCount` element.
+
 enum WebinarLandingDiagnostics {
     private static var listBodyCount = 0
 

@@ -43,9 +43,6 @@ private final class TranscriptPanelNavigationState {
     }
 }
 
-/// Native sibling of the web transcript panel. The root observes only session
-/// lifecycle; transcript deltas, Q&A streaming, and minutes updates are read by
-/// separate leaf views so SkipUI does not rebuild the controls on every token.
 struct TranscriptPanelView: View {
     @Bindable var viewModel: MeetingViewModel
     @Environment(\.dismiss) private var dismiss
@@ -110,8 +107,7 @@ struct TranscriptPanelView: View {
         .preferredColorScheme(.dark)
         .tint(ACMColors.primaryOrange)
         #if !SKIP
-        // Keep setup at the regular meeting-sheet height. Once live, start tall
-        // and let the user resize between standard, tall, and full-height stops.
+
         .presentationDetents(presentationDetents, selection: $selectedPresentationDetent)
         .presentationDragIndicator(.visible)
         #endif
@@ -173,8 +169,6 @@ struct TranscriptPanelView: View {
         )
     }
 }
-
-// MARK: - Header
 
 private struct TranscriptPanelHeader: View {
     @Bindable var state: TranscriptState
@@ -306,8 +300,6 @@ private struct TranscriptErrorBanner: View {
         }
     }
 }
-
-// MARK: - Running session
 
 private struct TranscriptRunningPanel: View {
     @Bindable var state: TranscriptState
@@ -442,8 +434,6 @@ private struct TranscriptStatusBar: View {
     }
 }
 
-// MARK: - Transcript tab
-
 private struct TranscriptCaptionsTab: View {
     @Bindable var state: TranscriptState
 
@@ -573,8 +563,6 @@ private struct TranscriptGroupCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
-
-// MARK: - Ask tab
 
 private struct TranscriptAskTab: View {
     @Bindable var state: TranscriptState
@@ -786,8 +774,6 @@ private struct TranscriptQAMessageRow: View {
     }
 }
 
-// MARK: - Minutes tab
-
 private struct TranscriptMinutesTab: View {
     @Bindable var state: TranscriptState
     let onRefresh: () -> Void
@@ -951,8 +937,6 @@ private struct TranscriptMinutesEmptyState: View {
     }
 }
 
-// MARK: - Export bar
-
 private struct TranscriptExportBar: View {
     @Bindable var state: TranscriptState
     let copyState: Int
@@ -1008,8 +992,6 @@ private struct TranscriptExportBar: View {
         .disabled(!state.hasExportContent)
     }
 }
-
-// MARK: - Start stage
 
 private struct TranscriptStartStage: View {
     @Bindable var state: TranscriptState

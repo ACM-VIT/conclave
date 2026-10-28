@@ -83,28 +83,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
-/*
- * S40 6 d (CHT-2): the composer on Android, in the InCallPage composer slot (the page applies imePadding and the
- * horizontal margin). The FND-3 composer column and field (always opaque on Android: surfaceContainerHighest, no
- * indicator, radius 20, IME action Send, hardware Enter sends and Shift+Enter inserts a newline, Q13). Keystrokes stay
- * in Compose state; the draft is written to ChatDraftStore after 500 ms idle and on dispose (R40-7). Every send goes
- * through `presenter.send` (ChatComposerPolicy.route, D24); no send, command, attach or recipient haptic (Q11). CHT-4
- * and CHT-5: the attach control (an IconButton opening a DropdownMenu of Photo and GIFs and stickers; an item
- * unavailable in the mode stays, disabled, with its reason), the system Photo Picker (no storage permission; the
- * backport module entry in AndroidManifest.xml covers API 28 and 29) whose URI is copied into a cache file on
- * Dispatchers.IO before the presenter gets it (CH6), the attachment chip and the link preview above the field.
- *
- * T3 borrow (R/t3-borrow/PLAN.md, patterns only, written fresh): P1 hardware keys for the suggestion list (Up and Down
- * move a flat highlight with wrap-around, skipping dimmed rows; Enter and Tab insert; a row whose insert text equals
- * the draft sends; Escape hides the list for this trigger and, with the list hidden, falls through to Back), only
- * while a hardware keyboard is attached, so touch and the IME Send key never change (Q13); P2 a held Enter sends once;
- * P3 composer menus decide at open time whether to take popup focus, so the IME stays up, and the field gets focus
- * back after the picker or the GIF sheet only when it had it and TalkBack is off (AX12); P4 the draft is a
- * TextFieldState, so the one content receiver on the composer column takes keyboard images (Gboard stickers and
- * GIFs), clipboard images and drops on the whole composer (its built-in drop node requests the drag permissions); a
- * text paste and its undo stay native; P6 the Send reason comes from ChatComposerPolicy.sendBlock; P7 the gate line
- * reads the delayed `composer.gateLine`; P8 a focus gain tells the timeline; P9 the counter announces its bands.
- */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
@@ -113,7 +91,7 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
     val draftState = rememberTextFieldState()
     var loadedKey by remember { mutableStateOf("") }
     var hasLoaded by remember { mutableStateOf(false) }
-    // CHT-5: the composer preview the person removed; the next send carries suppressEmbeds (6 d).
+
     var dismissedPreviewUrl by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     val context = LocalContext.current
@@ -121,21 +99,21 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
     val keyboard = LocalSoftwareKeyboardController.current
     val keys = remember { ChatComposerKeys() }
     val focusMemory = remember { ChatComposerFocusMemory() }
-    // P4: a keyboard, clipboard or drop image still being copied; every other intake is refused meanwhile.
+
     var photoIntakeInFlight by remember { mutableStateOf(false) }
-    // P6: a blocked hardware Enter or IME Send (gate or photo); each press is spoken once (ChatBlockedSendAnnouncer).
+
     var blockedPress by remember { mutableIntStateOf(0) }
     var blockedBlock by remember { mutableStateOf(ChatSendBlock.none) }
-    // P1: hardware keyboard only. The activity handles keyboard configuration changes, so this updates live.
+
     val hardware = LocalConfiguration.current.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
-    // P3: focus comes back only when the field had it and TalkBack is off (AX12); the IME only when it was up.
+
     val restoreFocus: (ChatFocusCapture) -> Unit = { capture ->
         if (ChatComposerPolicy.restoresComposerFocus(capture.wasFocused, chatTouchExplorationOn(context))) {
             runCatching { focus.requestFocus() }
             if (capture.imeWasVisible) keyboard?.show()
         }
     }
-    // CH6: the Photo Picker's URI becomes a cache file off the main thread; cancelling changes nothing.
+
     val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) {
             scope.launch {
@@ -143,18 +121,16 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
                 if (file != null) presenter.attachPhoto(file.fileUrl, file.mimeType, file.fileName)
             }
         }
-        // P3: back from the picker (pick or cancel).
+
         focusMemory.takePicker()?.let { restoreFocus(it) }
     }
-    // R40-7: a recipient switch saves the text under the old key and loads the new key's draft; when the new key has
-    // none, the text you were writing moves with you.
+
     LaunchedEffect(composer.draftKey) {
         chatSwitchDraft(draftState, presenter.drafts, loadedKey, hasLoaded, composer.draftKey)
         loadedKey = composer.draftKey
         hasLoaded = true
     }
-    // Every edit (typed, pasted, inserted or loaded) clears the blocked-send notice and keeps the suggestion state in
-    // step; the draft store write waits for 500 ms idle (the collector restarts on each edit), never per keystroke.
+
     LaunchedEffect(draftState) {
         snapshotFlow { draftState.text.toString() }
             .drop(1)
@@ -172,17 +148,14 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
         chatAppendInsert(draftState, insert)
         runCatching { focus.requestFocus() }
     }
-    // P3: the GIF picker closed (pick or dismissal). The capture is kept on the actions, not here: the side pane's
-    // in-pane GIF page removes this composer, so the composer composed after it (this effect's first run) takes it.
+
     LaunchedEffect(actions.showsGifs) {
         if (!actions.showsGifs) actions.takeGifsFocusCapture()?.let { restoreFocus(it) }
     }
     DisposableEffect(presenter) {
         onDispose { presenter.drafts.setText(draftState.text.toString(), loadedKey) }
     }
-    // P4: keyboard images (IME commit content), clipboard images and drops on the whole composer. Image items with a
-    // URI are copied at once (the grant lasts only so long) and handed over as a file; text and every other item go
-    // back untouched, so a text paste and its undo stay native. Refused while a photo exists or a copy is running.
+
     val receiver = remember(presenter) {
         object : ReceiveContentListener {
             override fun onReceive(transferableContent: TransferableContent): TransferableContent? {
@@ -210,7 +183,7 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
                     }
                     if (file != null) {
                         presenter.attachPhoto(file.fileUrl, file.mimeType, file.fileName)
-                        // One photo per message: the rest of a multi-image clip is dropped and the notice says why.
+
                         if (surplus) presenter.rejectPhoto(ChatFailure.oneAttachment)
                     } else if (!tooLarge) {
                         presenter.rejectPhoto(ChatFailure.photoUnavailable)
@@ -228,7 +201,7 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
     val block = ChatComposerPolicy.sendBlock(draft, composer.gate, composer.isVoiceMode, composer.attachment)
     val canSend = block == ChatSendBlock.none
     val sendReason = chatSendBlockReason(block, count - limit, composer.attachment)
-    // The send reads the state at the moment of the press, never a value from the last composition.
+
     val dispatch: () -> ChatSendResult = {
         val text = draftState.text.toString()
         val dismissed = dismissedPreviewUrl
@@ -241,9 +214,7 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
         result
     }
     val send: () -> Unit = { dispatch() }
-    // P6: a hardware Enter, or an IME Send while Send is disabled (the field's onSendBlocked). A gate or photo block
-    // (refused silently by the presenter) posts its reason once per press; route and limit blocks announce their own
-    // notice; an empty draft posts nothing.
+
     val sendFromKeyboard: () -> Unit = {
         val current = presenter.composer
         val pressed = ChatComposerPolicy.sendBlock(draftState.text.toString(), current.gate, current.isVoiceMode, current.attachment)
@@ -256,7 +227,7 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
         }
     }
     val insertSuggestion: (String) -> Unit = { insert -> draftState.setTextAndPlaceCursorAtEnd(insert) }
-    // The InCallPage composer slot already pads 16 by 8, so the column adds no padding of its own.
+
     Column(Modifier.fillMaxWidth().testTag("chat.composer").contentReceiver(receiver), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ChatSuggestionList(suggestions, keys, composer.privateTo != null, insertSuggestion)
         val reply = composer.reply
@@ -271,8 +242,7 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
         if (composer.inlineNotice != ChatFailure.none) {
             ConclaveComposerStatusLine(ChatMediaCopyAndroid.failureReason(composer.inlineNotice), "chat.composer.notice")
         }
-        // P7: the line follows the delayed gate (shown after 400 ms closed, held at least 400 ms); Send and its reason
-        // follow the real gate at once.
+
         val gateLine = ChatCopyAndroid.gateLine(composer.gateLine)
         if (gateLine.isNotEmpty()) ConclaveComposerStatusLine(gateLine, "chat.composer.gate")
         Box(Modifier.fillMaxWidth()) {
@@ -289,11 +259,10 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
                     keys.onKey(event, hardware, draftState.text.toString(), suggestions, insertSuggestion, sendFromKeyboard)
                 },
                 onSendBlocked = sendFromKeyboard,
-                // On the TextField itself, not the row: with a hardware keyboard a focus request on the row lands on the
-                // attach button first, and the row's hasFocus would also count the attach button (P3, P8).
+
                 fieldModifier = Modifier.focusRequester(focus).onFocusChanged { state ->
                     val now = state.hasFocus
-                    // P8 (S40 2 d): the timeline follows a focus gain only when the newest row is visible.
+
                     if (now && !focusMemory.fieldFocused) actions.composerDidFocus()
                     focusMemory.fieldFocused = now
                 },
@@ -305,8 +274,7 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
                         restoreFocus = restoreFocus,
                         onPhoto = { capture ->
                             focusMemory.picker = capture
-                            // S70 8 d (SYS-8, HD/requests/B5-T4.md R17 e): the picker activity must not tear the call
-                            // into PiP; auto-enter comes back if the launch fails.
+
                             PipManager.suppressForExternalHandoff(ExternalHandoffKind.photoPicker)
                             try {
                                 pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -330,13 +298,6 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
     }
 }
 
-/**
- * P6: a blocked press (hardware Enter or IME Send, gate or photo) speaks its reason once, with the text composed right
- * after the press; never on a keystroke, and a recreated composer (press 0) speaks nothing. Posted through
- * View.announceForAccessibility, as AppPageAnnouncer does: a fresh polite node per press would be new to Compose's
- * accessibility delegate, which reports live region changes only for nodes already in its previous semantics
- * snapshot, and one kept node could not repeat the same reason on the next press. Emits no layout node.
- */
 @Composable
 private fun ChatBlockedSendAnnouncer(press: Int, reason: String) {
     val view = LocalView.current
@@ -348,11 +309,6 @@ private fun ChatBlockedSendAnnouncer(press: Int, reason: String) {
     }
 }
 
-/**
- * R40-7 on the TextFieldState: a recipient switch saves the current text under the old key and loads the new key's
- * draft; when the new key has none, the text being written moves along (the old key is cleared). The first load just
- * places the stored draft.
- */
 internal fun chatSwitchDraft(state: TextFieldState, drafts: ChatDraftStore, loadedKey: String, hasLoaded: Boolean, key: String) {
     val stored = drafts.text(key)
     if (hasLoaded) {
@@ -367,17 +323,12 @@ internal fun chatSwitchDraft(state: TextFieldState, drafts: ChatDraftStore, load
     }
 }
 
-/** A focus request's text ("@Conclave " from the empty state): appended after a space, the caret at the end. */
 internal fun chatAppendInsert(state: TextFieldState, insert: String) {
     if (insert.isEmpty()) return
     val current = state.text.toString()
     state.setTextAndPlaceCursorAtEnd(if (current.isEmpty()) insert else "$current $insert")
 }
 
-/**
- * P4: the image URIs of a received clip (a keyboard image, a clipboard paste or a drop): every item with a URI when
- * the clip says it holds images; text items never count. Pure, for the host tests.
- */
 internal fun chatImageUris(clipData: ClipData): List<Uri> {
     if (!clipData.description.hasMimeType("image/*")) return emptyList()
     val result = mutableListOf<Uri>()
@@ -388,10 +339,6 @@ internal fun chatImageUris(clipData: ClipData): List<Uri> {
     return result
 }
 
-/**
- * P6: the string resource behind each Send reason. "" for none and attendee (the composer is absent) and for
- * photoFailed, which reuses the chip's status line; overLimit names the F00 counter plurals.
- */
 internal fun chatSendBlockReasonName(block: ChatSendBlock): String = when (block) {
     ChatSendBlock.none, ChatSendBlock.attendee, ChatSendBlock.photoFailed -> ""
     ChatSendBlock.empty -> "chat_send_reason_empty"
@@ -403,7 +350,6 @@ internal fun chatSendBlockReasonName(block: ChatSendBlock): String = when (block
     ChatSendBlock.photoPending -> "chat_send_reason_uploading"
 }
 
-/** P6 (S40 6 i, AX2): the disabled Send's state description and the blocked-Enter announcement. */
 @Composable
 private fun chatSendBlockReason(block: ChatSendBlock, overBy: Int, attachment: ChatAttachmentState): String {
     if (block == ChatSendBlock.photoFailed) return ChatMediaCopyAndroid.attachmentStatus(attachment)
@@ -415,14 +361,9 @@ private fun chatSendBlockReason(block: ChatSendBlock, overBy: Int, attachment: C
     return if (name.isEmpty()) "" else conclaveString(name)
 }
 
-/** TalkBack touch exploration, read at the moment a menu or picker opens or closes (never observed). */
 private fun chatTouchExplorationOn(context: Context): Boolean =
     context.getSystemService(AccessibilityManager::class.java)?.isTouchExplorationEnabled == true
 
-/**
- * P3: the field's focus and the IME at the moment a menu or picker opened, and whether the menu takes popup focus
- * (decided then, ChatComposerPolicy.composerMenuIsFocusable, and held until it closes).
- */
 internal data class ChatFocusCapture(val wasFocused: Boolean, val imeWasVisible: Boolean, val menuFocusable: Boolean) {
     companion object {
         val none = ChatFocusCapture(wasFocused = false, imeWasVisible = false, menuFocusable = true)
@@ -432,11 +373,6 @@ internal data class ChatFocusCapture(val wasFocused: Boolean, val imeWasVisible:
     }
 }
 
-/**
- * P3, P8: plain fields (never Compose state): the field's focus and the capture waiting for the Photo Picker to return.
- * The GIF picker's capture lives on ChatRowActions (gifsFocusCapture), because the side pane's GIF page removes the
- * composer from the composition.
- */
 internal class ChatComposerFocusMemory {
     var fieldFocused = false
     var picker: ChatFocusCapture? = null
@@ -448,11 +384,6 @@ internal class ChatComposerFocusMemory {
     }
 }
 
-/**
- * P1: the suggestion list as the person sees it, derived once per composition from the draft (pure): the trigger,
- * the matching rows, whether the list shows (not empty, not dismissed by Escape) and the effective highlight ("" on
- * touch, while hidden or with no available row).
- */
 internal class ChatSuggestionsModel(
     val trigger: ChatSuggestionTrigger,
     val queryKey: String,
@@ -467,7 +398,6 @@ internal class ChatSuggestionsModel(
     val highlightedInsert: String
         get() = ChatComposerPolicy.insertText(highlight, items)
 
-    /** A tap on a row inserts the same text as Enter and Tab. */
     fun insertText(itemId: String): String {
         for (item in items) {
             if (item.id == itemId) return item.insertText
@@ -490,11 +420,6 @@ internal class ChatSuggestionsModel(
     }
 }
 
-/**
- * P1 and P2 (hardware keyboard only): the suggestion highlight (a row id plus the query it belongs to), the
- * per-trigger Escape dismissal and the key decisions. One per composer; its fields are Compose state read by the list.
- * The composer field calls [onKey] first for every key event (ConclaveComposerField's onHardwareKey).
- */
 internal class ChatComposerKeys {
     var highlightedId by mutableStateOf("")
         private set
@@ -502,7 +427,7 @@ internal class ChatComposerKeys {
         private set
     var dismissedKey by mutableStateOf("")
         private set
-    /** The row the last arrow move landed on; only arrow moves change it, so the polite node speaks only then. */
+
     var announcedId by mutableStateOf("")
         private set
     private val consumedDowns = mutableSetOf<Key>()
@@ -512,10 +437,6 @@ internal class ChatComposerKeys {
     fun effectiveHighlight(items: skip.lib.Array<ChatSuggestionItem>, queryKey: String, hardware: Boolean, visible: Boolean): String =
         if (hardware && visible) ChatComposerPolicy.resolvedHighlight(highlightedId, items, highlightQuery, queryKey) else ""
 
-    /**
-     * After every draft change: the Escape dismissal stays only for the same trigger (deleting "@" and typing it
-     * again shows the list), and a highlight from another query is dropped.
-     */
     fun syncDraft(draft: String) {
         val trigger = ChatComposerPolicy.suggestionTrigger(draft)
         val kept = ChatComposerPolicy.dismissedKey(trigger, dismissedKey)
@@ -528,12 +449,6 @@ internal class ChatComposerKeys {
         }
     }
 
-    /**
-     * True when the event is consumed. Nothing is consumed without a hardware keyboard, so touch input and the IME
-     * Send key behave exactly as before. A consumed press also consumes its release, so the system's Escape-to-Back
-     * fallback (or a Tab focus move) never acts on a key the list used; with the list hidden Escape is not consumed
-     * and falls back to Back, which closes the panel (S40 6 d).
-     */
     fun onKey(
         event: KeyEvent, hardware: Boolean, draft: String, model: ChatSuggestionsModel, onInsert: (String) -> Unit,
         onSend: () -> Unit,
@@ -549,7 +464,7 @@ internal class ChatComposerKeys {
         val handled = when (key) {
             Key.DirectionUp -> move(-1, model)
             Key.DirectionDown -> move(1, model)
-            // A held Tab or Escape only swallows its repeats (it never inserts again or moves focus).
+
             Key.Tab -> if (isRepeat) consumedDowns.contains(key) else !event.isShiftPressed && insert(model, onInsert)
             Key.Escape -> if (isRepeat) consumedDowns.contains(key) else dismiss(model)
             Key.Enter, Key.NumPadEnter -> enter(event.isShiftPressed, isRepeat, draft, model, onInsert, onSend)
@@ -559,8 +474,6 @@ internal class ChatComposerKeys {
         return handled
     }
 
-    /** Enter in the order ChatComposerPolicy.returnKeyAction gives; an auto-repeat (repeatCount > 0) returns true
-     *  without sending, so a held Enter never fills the cleared field with newlines. */
     private fun enter(
         isShift: Boolean, isRepeat: Boolean, draft: String, model: ChatSuggestionsModel, onInsert: (String) -> Unit,
         onSend: () -> Unit,
@@ -602,27 +515,20 @@ internal class ChatComposerKeys {
     }
 }
 
-/**
- * 6 d recipient chip and the implicit private line: an AssistChip "To: everyone" opens a DropdownMenu of everyone and
- * the people you can message privately; "Will be sent privately to %1$s" reads the shared implicit-target rule. P3:
- * while the IME was up and TalkBack is off when the chip is pressed, the menu does not take popup focus, so the IME
- * stays up and the draft keeps its caret; Back then reaches the BackHandler below (after the system's first Back hid
- * the IME). With a hardware keyboard and no IME, or under TalkBack, the menu stays focusable.
- */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChatComposerModeRow(
     presenter: ChatPresenter, composer: ChatComposerSnapshot, draft: String, isFieldFocused: () -> Boolean,
     restoreFocus: (ChatFocusCapture) -> Unit,
 ) {
-    // Read in this small leaf (the IME toggling recomposes only it) and captured when the chip is pressed.
+
     val imeVisible = WindowInsets.isImeVisible
     var expanded by remember { mutableStateOf(false) }
     var capture by remember { mutableStateOf(ChatFocusCapture.none) }
     val context = LocalContext.current
     if (composer.privateEnabled && composer.recipients.count > 0) {
         val recipient = composer.privateTo
-        // A focusable menu took focus from the field: give it back after a pick or a dismissal.
+
         val close: () -> Unit = {
             expanded = false
             if (capture.menuFocusable) restoreFocus(capture)
@@ -685,12 +591,6 @@ private fun ChatComposerModeRow(
     }
 }
 
-/**
- * 6 d suggestions: commands for a bare `/word`, mentions for a trailing `@word` (a mention wins), in a flat surface
- * above the field, 4.5 rows then scrolling; unavailable rows dimmed with their reason; a polite count announcement.
- * P1: with a hardware keyboard one row carries the flat surfaceContainerHighest highlight (never the primary color)
- * and the selected state; each arrow move is spoken once from a hidden polite node. Rows appear without animation.
- */
 @Composable
 private fun ChatSuggestionList(model: ChatSuggestionsModel, keys: ChatComposerKeys, isPrivateMode: Boolean, onPick: (String) -> Unit) {
     if (!model.visible) return
@@ -699,7 +599,7 @@ private fun ChatSuggestionList(model: ChatSuggestionsModel, keys: ChatComposerKe
     val rowHeight = 48.dp
     val listState = rememberLazyListState()
     val scheme = MaterialTheme.colorScheme
-    // Keeps the highlighted row on screen past the 4.5 visible rows (an instant scroll, 6 h).
+
     LaunchedEffect(model.highlight) {
         val index = model.itemIds.indexOf(model.highlight)
         val visible = listState.layoutInfo.visibleItemsInfo
@@ -770,15 +670,12 @@ private fun ChatSuggestionList(model: ChatSuggestionsModel, keys: ChatComposerKe
                     }
                 }
             }
-            // 6 i: the count is spoken from a hidden polite node, never from the rows (inside the surface, so the
-            // column spacing never moves the field).
+
             Box(Modifier.size(1.dp).semantics {
                 liveRegion = LiveRegionMode.Polite
                 contentDescription = countText
             })
-            // P1: the arrow-move text; it changes only when an arrow move lands on another row. The node is composed with
-            // the list and has no text until the first move, so every move changes the text of a node TalkBack already
-            // knows (a polite node that appears with its text is not reported).
+
             Box(Modifier.size(1.dp).testTag("chat.suggestions.move").semantics {
                 liveRegion = LiveRegionMode.Polite
                 if (moveText.isNotEmpty()) contentDescription = moveText
@@ -805,7 +702,6 @@ private fun chatMentionDetail(option: ChatMentionOption, dimmed: Boolean): Strin
 private fun chatCommandDetail(row: ChatCommandRow): String =
     if (row.isAvailable) ChatCopyAndroid.commandDescription(row.id) else ChatCopyAndroid.commandReason(row.reason)
 
-/** P1: the highlighted row's title and second line after an arrow move ("" before any move). */
 @Composable
 private fun chatSuggestionAnnouncement(model: ChatSuggestionsModel, itemId: String, isPrivateMode: Boolean): String {
     if (itemId.isEmpty()) return ""
@@ -820,19 +716,13 @@ private fun chatSuggestionAnnouncement(model: ChatSuggestionsModel, itemId: Stri
     return ""
 }
 
-/**
- * 6 d attach control: an IconButton opening a DropdownMenu. Items unavailable in the current mode stay in the menu,
- * disabled, with the reason as a second line (private mode is text only; photos follow the host switch). P3: the
- * menu's popup focus is decided when it opens (as for the recipient chip); the picker and the GIF sheet take the
- * capture along, so focus comes back when they close.
- */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChatAttachMenuButton(
     presenter: ChatPresenter, composer: ChatComposerSnapshot, isFieldFocused: () -> Boolean,
     restoreFocus: (ChatFocusCapture) -> Unit, onPhoto: (ChatFocusCapture) -> Unit, onGifs: (ChatFocusCapture) -> Unit,
 ) {
-    // Read in this small leaf (the IME toggling recomposes only it) and captured when the button is pressed.
+
     val imeVisible = WindowInsets.isImeVisible
     var expanded by remember { mutableStateOf(false) }
     var capture by remember { mutableStateOf(ChatFocusCapture.none) }
@@ -903,10 +793,6 @@ private fun ChatAttachMenuButton(
     }
 }
 
-/**
- * 6 d attachment chip (FND-3 component): the thumbnail from the cache file, "Photo", the status line, the linear
- * indicator while preparing or uploading, Try again after a failure, and Remove. Absent while there is no photo.
- */
 @Composable
 private fun ChatAttachmentChipRow(presenter: ChatPresenter, attachment: ChatAttachmentState) {
     val phase = when (attachment.phase) {

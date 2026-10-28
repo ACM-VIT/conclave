@@ -12,9 +12,6 @@ private struct MeetingActionResponseError: LocalizedError {
     }
 }
 
-// WP2-S2a (S70 SY11): `MeetingErrorClassifier` (S/Core/Session) replaced the media and chat error presentation
-// enums; legacy banner copy comes from `MeetingErrorLegacyCopy`.
-
 private enum MeetingViewPreferences {
     private static let keyPrefix = "conclave.meetView."
     private static let viewModeKey = "\(keyPrefix)viewMode"
@@ -434,25 +431,21 @@ enum BrowserActivityLoopPolicy {
 @MainActor
 @Observable
 final class MeetingViewModel {
-    // Process-wide so Activity/SwiftUI recreation can reattach to an active call.
+
     static let shared = MeetingViewModel.makeShared()
 
-    /// Only the process-wide view model drives the system call surfaces; previews and host tests never install them.
     private static func makeShared() -> MeetingViewModel {
         let viewModel = MeetingViewModel()
         viewModel.installPlatformCallPresenceAdapters()
-        // SYS-15 (S70 15 l4): the diagnostics export withholds any platform detail that contains the room code, a name
-        // or an id; the values are read at export time only and never stored.
+
         CallDiagnostics.shared.sensitiveValues = { [weak viewModel] in
             viewModel?.diagnosticsSensitiveValues() ?? []
         }
-        // SYS-2 R4 (S20 SC18): automatic route changes reach the stage as events (STG-5 turns them into toasts); a
-        // person's own choice posts nothing. Only the process-wide view model owns the route owner's callback.
+
         AudioRouteOwner.shared.onRouteEvent = { [weak viewModel] event in
             viewModel?.stage.post(StageEvent.make(kind: event.kind, name: event.name, detail: event.routeKind.rawValue))
         }
-        // CTL-3 (S30 3 d, CC7): a person's route request that did not apply within 3 s or was refused posts "Couldn't
-        // switch audio. Try again." with Retry and the `routeSwitchFailed` token through the controls presenter.
+
         AudioRouteOwner.shared.onRouteFailed = { [weak viewModel] routeId in
             viewModel?.controls.routeFailed(id: routeId)
         }
@@ -461,7 +454,7 @@ final class MeetingViewModel {
 
     var state = MeetingState() {
         didSet {
-            // Tests replace the state wholesale (S1C F11): rebind the one shell hook, never accumulate.
+
             oldValue.onShellInputChanged = nil
             bindShellInputs()
             oldValue.onStageInputChanged = nil
@@ -475,7 +468,7 @@ final class MeetingViewModel {
             bindPeopleInputs()
             oldValue.onHostInputChanged = nil
             bindHostControlsInputs()
-            // S50 PH7 (PPL-6): the Q&A path's own hook.
+
             oldValue.onQaInputChanged = nil
             bindQaInputs()
             oldValue.onActivityInputChanged = nil
@@ -486,55 +479,39 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: - Session shell (WP2-S1) and call presence (SYS-1)
-
-    /// The meeting shell presenter every native screen reads (session, controls and entry snapshots, typed outcomes,
-    /// the action ledger and the per-session panel coordinator). Fed only through `requestShellRefresh()`.
     let shell: MeetingShellPresenter
-    /// S20 0.5: the session-owned stage presenter, created with the shell and reset with each call session. Fed only
-    /// through `requestStageRefresh()` and the hot hooks (SC1).
+
     let stage: StagePresenter
-    /// S30 0.5 (CTL-1): the session-owned controls presenter, created with the shell and the stage and fed only through
-    /// `requestControlsRefresh()` (CC1). The native call root's bar reads it through the environment / LocalCallControls.
+
     let controls: CallControlsPresenter
-    /// S50 0.5: the session-owned People presenter, created with the shell and the stage and reset with each call
-    /// session (it resets itself when `PeopleInputs.callSession` changes). Fed only through `requestPeopleRefresh()`
-    /// (PH1); its speaking leaves read `stage.speaking`.
+
     let people: PeoplePresenter
-    /// S60 C6-10, RECONCILE R38: the one rename intent (Settings Name field and People "Change Name..."), with the S50 Q14
-    /// session flag. Installed in `init` (`bindDisplayNameEditor()`).
+
     let displayNameEditor = DisplayNameEditor()
-    /// S60 0.5 (ACT-1, ACT-2): the session-owned Activities launcher and game shell, created with the shell and the
-    /// stage. Fed only through `requestActivityRefresh()` and `refreshActivityGame()`; the native call root reads it.
+
     let activitySession: ActivitySession
-    /// S60 0.8 C6-18 (ACT-7): the non-observable relay for the active SDK app's Yjs and awareness (formerly
-    /// `latestAppYjsUpdate` and siblings on `MeetingState`, and this type's `syncActiveApp`, `sendActiveAppYjsUpdate`
-    /// and `sendActiveAppAwareness`). The app host presenter (`activitySession.appHost`) drives it; the platform
-    /// `ActivityWebViewRegistry` attaches the one web view per app session to it.
+
     let activeAppSession = ActiveAppSession()
-    /// Scopes the bridge's call-session id to this process, so an embed never matches another run's ids.
+
     private let appBridgeProcessToken = UUID().uuidString.lowercased()
-    /// S40 0.5: the session-owned chat presenter, held by the shell (created and reset with it). Fed only through
-    /// `requestChatRefresh(_:)`; its commands land in `performChatCommand(_:)`.
+
     var chat: ChatPresenter { shell.chat }
-    /// S70 0.5 system call presence: the one snapshot CallKit, the Android call notification and the Debug readout
-    /// read, and the one entry for system commands.
+
     let callPresence = CallPresence()
-    /// ENT-1 (S10 0.5): the app-scoped premeeting presenter, owned here so it survives calls. Fed by the same refresh
-    /// as the shell (`requestShellRefresh()`, S10 0.8 C8); the native roots take it as a parameter.
+
     let premeeting = PremeetingPresenter()
-    /// S10 0.8 C8: identity and app activity, pushed by the native root wiring (AppState, ConclaveAppDelegate).
+
     private var premeetingIsSignedIn = false
     private var premeetingAccountName = ""
     private var premeetingAccountSeed = ""
     private var premeetingIsAppActive = true
-    /// ENT-7 (HD request B4-T3 R8): a provider sign-in is running in the Account screen (S10 invariant 9).
+
     private var premeetingIsSigningIn = false
-    /// S1C ID: bumps for a new meeting intent only (`MeetingCallSessionPolicy`), never for a recovery or admission.
+
     private(set) var callSessionSerial = 0 {
         didSet {
             state.resetParticipantJoinSerials()
-            // S50 PH13 and Q14: user keys and the rename session flag are per call session.
+
             state.participantUserKeys = [:]
             state.webinarAttendeeSnapshotUserIds = []
             state.raisedAtByUserId = [:]
@@ -543,104 +520,96 @@ final class MeetingViewModel {
         }
     }
     private var terminalOutcomeSerial = 0
-    /// S10 0.8 C3 (HD request B5-T5 R3): the last call's join target and media intent for Rejoin and Try Again, captured
-    /// before `cleanup()` clears `lastJoinContext` (`RejoinContextPolicy`); kept through a failed rejoin.
+
     private(set) var rejoinContext: JoinContext? = nil {
         didSet { requestShellRefresh() }
     }
     private var rejoinMicOn = false
     private var rejoinCameraOn = false
-    /// S10 10 l6 (Debug): `rejoinLastMeeting()` calls that reached a join.
+
     private(set) var rejoinJoinCount = 0
-    /// Host tests only: when set, `rejoinLastMeeting()` hands the context here instead of joining (no network).
+
     var rejoinJoinOverride: ((JoinContext) -> Void)? = nil
-    /// S10 8 f (HD request B5-T5 R3): the classifier's answer for the last join failure, for the lobby's failed block
-    /// and a failed rejoin's body. The code is written first, so the category's refresh carries both.
+
     private var lastJoinFailureCode = ""
     private var lastJoinFailureCategory = "" {
         didSet { requestShellRefresh() }
     }
-    /// S10 8 l7b (Debug, HD request B5-T5 R2): automatic Retry-After retries (C18).
+
     private(set) var joinAutomaticRetryCount = 0
-    /// S70 5 c (O2): the camera is paused by a CallKit hold; never written to `isCameraOff` or the camera intent.
+
     private var isCameraSuspendedForHold = false
-    /// While above zero, hooked writes do not refresh; the batch end refreshes once (S1C ID, A19).
+    private var cameraHoldTransitionTask: Task<Void, Never>?
+    private var cameraHoldRevision = 0
+    private var cameraHoldSuspendDepth = 0
+    private var cameraHoldGeneration = 0
+    private var isCameraHoldBlockingVideo: Bool { isCameraSuspendedForHold || cameraHoldSuspendDepth > 0 }
+
     private var shellRefreshBatchDepth = 0
-    /// S20 SC1 E3: while above zero, stage hooks do not refresh; the batch end refreshes once.
+
     private var stageRefreshBatchDepth = 0
-    /// Test seam and diagnostic: how many times stage inputs were built and applied.
+
     private(set) var stageRefreshCount = 0
     private var lastStageShellPhase: MeetingPhaseKind = .home
-    /// STG-5 (S20 SC5): the last host role the stage saw, for the becameHost and lostHost events (SC18).
+
     private var stageLastIsAdmin = false
-    /// TRN-1 (SC13, C6-11): the transcript stream is open for this call (non-attendees only).
+
     private var transcriptStreamOpen = false
     private var transcriptLastPhase: MeetingPhaseKind = .home
-    /// S30 CC1: while above zero, controls hooks do not refresh; the batch end refreshes once.
+
     private var controlsRefreshBatchDepth = 0
-    /// CTL-2: true while `requestShellRefresh()` applies fresh inputs to the shell, so `shell.onPublish` skips the
-    /// publishes the refresh itself refreshes the controls for (CC1 stays one refresh per field).
+
     private var isApplyingShellInputs = false
-    /// Test seam and diagnostic: how many times controls inputs were built and applied.
+
     private(set) var controlsRefreshCount = 0
-    /// S50 PH1: while above zero, People hooks do not refresh; the batch end refreshes once.
+
     private var peopleRefreshBatchDepth = 0
-    /// Test seam and diagnostic: how many times People inputs were built and applied.
+
     private(set) var peopleRefreshCount = 0
-    /// PH1: the S1 phase and offline flag People last saw; connection fields reach People through the S1 publish.
+
     private var lastPeopleConnectionKey = ""
-    /// S50 PPL-4: how many times Host Controls inputs were built and applied (test seam and diagnostic).
+
     private(set) var hostControlsRefreshCount = 0
-    /// S50 PH14: true from becoming host until both config refreshes return (`HostControlsSnapshot.isConfigLoading`).
+
     private var isHostConfigLoading = false
     private var hostConfigRefreshToken = 0
-    /// S50 PH7 (PPL-6): how many times Q&A inputs were built and applied (test seam and diagnostic).
+
     private(set) var qaRefreshCount = 0
-    /// S50 PH18 h (PPL-6, PPL-7): you joined this call session as a host; a later grant is "became host mid-webinar"
-    /// (no Q&A snapshot, no hand queue until the next change).
+
     private var webinarJoinedAsAdmin = false
-    /// RECONCILE R18: the Q&A ids counted toward the unseen counter since the last close, and whether `.webinarQA` is
-    /// the current panel (arrivals while open never count).
+
     private var webinarQaCountedIds: [String] = []
     private var isWebinarQaPanelOpen = false
-    /// S50 PH9 (PPL-7): the demotion handoff in flight (`webinar:demoted` before the server-side disconnect) and its
-    /// slug; survives the cleanup it runs. The attendee viewer announces the move once after the in-place rejoin.
+
     private var pendingDemotionSlug: String? = nil
     private var announcesDemotionOnJoin = false
-    /// S50 PH20 (PPL-7): the room the accepted stage invitation rejoins, while the promotion lobby is open.
+
     private var promotionRejoinRoomId: String? = nil
-    /// PH20: the promotion lobby's own mic and camera intent (the attendee publishes nothing until the speaker join).
+
     private var promotionMicIntent = false
     private var promotionCameraIntent = false
-    /// SC1 E4: the last game presence the stage saw.
+
     private var stageGamePresence = false
-    /// SC1 E4 (STG-9): the last game name the stage saw (the chip and the announcements name the game).
+
     private var stageGameName = ""
-    /// S60 7 (ACT-1): the room size the launcher last saw, for the player range check.
+
     private var activityPlayersHere = 0
-    /// S60 7 (ACT-1): the catalog has loaded at least once this call.
+
     private var gameCatalogLoaded = false
-    /// R70-11: set by the redirect path before the new call session starts, so the system call keeps its presence
-    /// session (and CallKit UUID); cleared once the redirected join is admitted, ends or fails.
+
     private var redirectContinuationPending = false {
         didSet { requestShellRefresh() }
     }
-    /// S20 SC15 interim: when this call was first live, stable across recovery rejoins and redirects of one call.
+
     private var presenceJoinedAtMillis: Double = 0 {
         didSet { requestShellRefresh(); requestStageRefresh() }
     }
     private var cachedScreenShareSupport: Bool? = nil
-    /// S20 SC15 (STG-6, RECONCILE R21): the inputs of the one `ConnectionQualityLabelPolicy`: a usable quality sample
-    /// arrived in this call session, and how many unknown samples followed the last usable one. Reset per call session
-    /// only, so a recovery rejoin keeps them (the label stays stable across rejoins).
+
     private var connectionLabelHasSample = false
     private var connectionUnknownSampleStreak = 0
 
-    // MARK: - Reactions
-
     var reactionLaneCounter = 0
-
-    // MARK: - Managers
 
     let socketManager = SocketIOManager()
     let webRTCClient = WebRTCClient()
@@ -693,48 +662,42 @@ final class MeetingViewModel {
     private var remoteProducerCloseGraceTasks: [String: Task<Void, Never>] = [:]
     private var remoteProducerCloseGraceProducers: [String: ProducerInfo] = [:]
     private var pendingDisplayNameSnapshot: DisplayNameSnapshotNotification?
-    // In-flight optimistic chat sends awaiting their server echo (broadcast or
-    // ack). Lets receiveChatMessage swap the optimistic row in place instead
-    // of appending a transient duplicate.
+
     private var pendingOptimisticChatSends: [(id: String, signature: String)] = []
-    /// S40 CH11: optimistic ids `/clear` dropped; an acknowledgement that lands after the clear adds no row.
+
     private var clearedOptimisticChatIds: Set<String> = []
-    /// S40 CH12: message ids from the join history replay (no unread, no announcement).
+
     private var chatHistoryMessageIds: Set<String> = []
-    /// S40 CH12: assistant answers already counted as unread when their content first arrived.
+
     private var countedAssistantAnswerIds: Set<String> = []
-    /// S40 CH7, CH8 (CHT-7): the Conclave AI answers' typed state (the asker's streams and the relayed packets).
+
     let conclaveAssistant = ConclaveAssistantStore()
-    /// TRN-2 (S30 CC8, S60 C6-12): the recap owner: Post Recap and End with the web 30 s cap, End Now, and the Minutes
-    /// "Post Recap to Chat" (`S/Features/Meeting/Transcript/TranscriptRecap.swift`).
+
     let recapCoordinator = RecapCoordinator()
-    /// S40 CH7: the asker's running answer requests, cancelled with the call (no stream outlives its call).
+
     private var conclaveAssistantTasks: [String: Task<Void, Never>] = [:]
-    /// S40 CH13: while above zero, chat hooks do not refresh; the batch end refreshes once with the merged hint.
+
     private var chatRefreshBatchDepth = 0
     private var pendingChatRefreshChange: ChatInputChange? = nil
-    /// The derived chat roster last applied, so a mute, camera or hand update (participants didSet) refreshes no chat.
+
     private var lastChatRoster: [ChatRosterEntry] = []
-    /// Test seam and diagnostic: how many times chat inputs were built and applied.
+
     private(set) var chatRefreshCount = 0
-    /// S30 CC5: whether the native Chat panel is current; `isChatOpen` follows it on the native route.
+
     private var nativeChatPanelIsCurrent = false
-    /// CH2: the wire text of each retained own send (with its private or voice prefix), for Try Again.
+
     private var retainedChatWireTexts: [String: String] = [:]
-    /// S40 CH6 (CHT-4): the composer photo's prepare and upload. One photo at a time; a newer pick, Remove, a send or
-    /// leaving bumps the generation, so a late answer changes nothing.
+
     private var chatPhotoTask: Task<Void, Never>? = nil
     private var chatPhotoGeneration = 0
-    /// The picked file and the picker's hints, for Try Again.
+
     private var chatPhotoSourceURL = ""
     private var chatPhotoSourceMimeType = ""
     private var chatPhotoSourceName = ""
-    /// The uploaded attachment the next send carries, with the picked file URL the presenter names it by.
+
     private var chatUploadedImage: ChatImageAttachment? = nil
     private var chatUploadedImageFileURL = ""
-    // Connection-recovery watchdog (see ConnectionRecoveryWatchdogPolicy):
-    // observable timestamps + a periodic tick that un-strands a recovery whose
-    // fire-and-forget tasks died holding the in-flight guards.
+
     private var recoveryWatchdogTask: Task<Void, Never>?
     private var recoveryStartedAt: Date?
     private var lastJoinActivityAt = Date()
@@ -766,15 +729,12 @@ final class MeetingViewModel {
     private var pendingGameVoteClear = false
     private var webRTCJoinAttemptId: UUID?
     private var pendingProducerRetryTask: Task<Void, Never>?
-    // A mic, camera, screen-share, hand or camera-switch toggle is in flight
-    // while the token it set is current; see releaseLocalToggleGuards().
+
     private var muteToggleToken: UUID? = nil {
         didSet { requestShellRefresh(); requestStageRefresh() }
     }
     private var isMuteToggleInFlight: Bool { muteToggleToken != nil }
-    /// Bumped by every mute applyLocalMuteNow() applies (a server mute, or one
-    /// that lands over a pending toggle). A pending unmute that sees it change
-    /// was superseded: it confirms nothing and reports no error.
+
     private var localMuteIntentRevision = 0
     private var isReplacingLocalAudioProducer = false
     private var localAudioProducerReplacementToken: UUID?
@@ -786,32 +746,21 @@ final class MeetingViewModel {
         didSet { requestShellRefresh() }
     }
     private var isScreenShareToggleInFlight: Bool { screenShareToggleToken != nil }
-    /// SYS-10 (S70 10 j, SY20, SY23): the published screen share phase, failure, stop source and device audio
-    /// capability. Written on transitions only, through `publishScreenShare(_:)` (10 k).
+
     private(set) var screenShare = ScreenShareSnapshot.idle
     private var videoPublishingPolicyRevision = 0
-    /// Bumped by every camera intent, on or off: the user (in call, on the
-    /// reconnecting screen or by chat command), a server or admin camera-off,
-    /// audio-only mode and disabled publishing. Client state reports never
-    /// bump it. A camera-on path captures it before its awaited enable or
-    /// start and never commits camera-on once it changed, and a camera-off
-    /// that is still the newest intent wins over a stale camera-on report:
-    /// the newest intent wins.
+
     private var localCameraIntentRevision = 0
     private var handRaiseToggleToken: UUID? = nil {
         didSet { requestShellRefresh(); requestStageRefresh() }
     }
     private var isHandRaiseToggleInFlight: Bool { handRaiseToggleToken != nil }
     #if os(macOS) && !SKIP
-    /// Host-test seam (macOS host tests only; iOS and Android never compile
-    /// it): a toggle that took its guard, or the later hop of a server
-    /// camera-off, reports here when it finishes, so a test can wait for it.
+
     var testLocalToggleEnded: ((String) -> Void)?
-    /// Host-test seam (macOS only): the view model finished handling one
-    /// local microphone or camera state report from the media client.
+
     var testLocalMediaReportHandled: (() -> Void)?
-    /// Host-test seam (macOS only, SYS-6): when set, a join attempt that passed its media teardown awaits this
-    /// instead of the network; a throw takes the real failure path (rejoin retry, ended room), a return ends it.
+
     var testJoinFetch: (@MainActor () async throws -> Void)?
     #endif
     private var isDisplayNameUpdateInFlight = false
@@ -819,25 +768,23 @@ final class MeetingViewModel {
         didSet { requestStageRefresh(); requestControlsRefresh() }
     }
     private var isCameraSwitchInFlight: Bool { cameraSwitchToken != nil }
-    /// SYS-6 (S70 6 c, 6 d, SX11, SY9): the deepest lifecycle phase since the app was last active.
+
     private var lifecycleRefreshTracker = LifecycleRefreshTracker()
-    /// SYS-6 (S70 0.6 readouts `sys.lightRefresh`, `sys.fullRecovery`, `sys.keyframeRequests`; 6 l1 host tests).
+
     private(set) var lifecycleRefreshCounters = LifecycleRefreshCounters()
-    /// SYS-6 (S20 SC16): a Retry Now whose rejoin has not started yet; the banner reads it as in flight.
+
     private var isRecoveryRetryPending = false {
         didSet { if oldValue != isRecoveryRetryPending { requestStageRefresh() } }
     }
-    /// SYS-6 (S70 6 c, 6 d, 6 j, O10, SY22): thermal level, Low Power Mode and the per-call toast latch. Transient:
-    /// never persisted.
+
     private(set) var systemPressure = SystemPressureState()
-    /// SYS-6: the camera limits last pushed to the media client (readout and host tests).
+
     private(set) var appliedCameraPublishSettings: NativeResolvedCameraPublishSettings? = nil
-    /// SET-3 (S60 C6-4): the server's `setVideoQuality` low, the host's quality limit for this meeting (the Data Saver
-    /// publish ceiling with `qualityCappedByHost`). Reset with the room.
+
     private(set) var hostQualityCapped = false
-    /// SET-3 (S60 C6-5): iOS Low Data Mode or Android Data Saver (the monitor's `onSystemDataSaverChanged`).
+
     private(set) var systemDataSaverOn = false
-    /// SET-3 (D11): the current camera's capture limits, read once per facing (Settings > Advanced lists only these).
+
     private var settingsCameraCapability = CameraCaptureCapability.unknown
     private var settingsCameraCapabilityFacing = ""
     private var networkMonitorReportsOffline = false
@@ -857,11 +804,11 @@ final class MeetingViewModel {
     private var gameEndArmTask: Task<Void, Never>?
     private var browserActivityTask: Task<Void, Never>?
     private var browserActivityContext: CallActionContext?
-    /// S60 C6-20 (ACT-9): the `browser:getCapabilities` probe loop (hosts, every 30 s while joined) and its single flight.
+
     private var browserCapabilityTask: Task<Void, Never>?
     private var browserCapabilityContext: CallActionContext?
     private var isBrowserCapabilityProbeInFlight = false
-    /// S60 14 k: `resolvedBrowserNoVncURL()` runs once per URL (and SFU host) change, never per render.
+
     private var browserInputURLSource = ""
     private var browserInputURLResolved = ""
     private var adminNoticeDismissTask: Task<Void, Never>?
@@ -879,10 +826,6 @@ final class MeetingViewModel {
     private let adminNoticeDurationNanoseconds = UInt64(60_000_000_000)
     private let maxPendingPreAckRosterEvents = 128
 
-    // MARK: - Active Speaker
-
-    // Client-side active-speaker detection uses the same timing constants as
-    // the web client's WebAudio analyser path, but reads remote WebRTC stats.
     private var activeSpeakerTask: Task<Void, Never>?
     private var lastActiveSpeakerId: String?
     private var lastActiveSpeakerAt: Date?
@@ -897,20 +840,15 @@ final class MeetingViewModel {
     private let activeSpeakerHoldSeconds: Double = 1.5
     private let freezeWatchdogTickInterval = 8
     private let producerSyncTickInterval = 40
-    // When a sheet or the chat panel covers the video stage, the per-tick
-    // active-speaker audio sampling (main-thread work) is relaxed so it doesn't
-    // compete with sheet rendering/scrolling. Plain property (never read in a view
-    // body) so toggling it never triggers recomposition.
+
     private var isStageObscuredByOverlay = false
     private let activeSpeakerObscuredTickInterval = 3
-    // Meeting-entry takeover timing (see beginMeetingEntry).
+
     private var meetingEntryRevealTask: Task<Void, Never>?
     private var meetingEntrySafetyTask: Task<Void, Never>?
-    /// S10 0.8 C6 (HD request B5-T5 R1): `.native` behind the native premeeting root (`PremeetingAppWiring`); the legacy
-    /// overlay, its 12 s safety task and the reveal timers then never arm (the lobby and the entry transition present
-    /// the entry). The legacy route keeps `.legacyOverlay`.
+
     var entryPresentation: EntryPresentation = EntryPresentation.legacyOverlay
-    /// S10 8 l7 (Debug, tests): whether the legacy entry safety task is armed.
+
     var isMeetingEntrySafetyTaskArmed: Bool { meetingEntrySafetyTask != nil }
     private let meetingEntryMinDisplaySeconds: Double = 1.3
     private let meetingEntrySettleNanoseconds = UInt64(700_000_000)
@@ -935,8 +873,7 @@ final class MeetingViewModel {
         )
         let sampledReceiveQuality = combinedConnectionQuality(sample.receiveQuality)
         let sampledOverallQuality = combinedConnectionQuality(sample.overallQuality)
-        // STG-6 (SC15): the shared label reads "Measuring…" before the first usable sample and "Unavailable" once stats
-        // stop reporting (ConnectionQualityLabelPolicy.statsFailed); refresh the stage only when either input flips.
+
         let hadSampleBefore = connectionLabelHasSample
         let failedBefore = ConnectionQualityLabelPolicy.statsFailed(hasSample: connectionLabelHasSample,
                                                                     consecutiveUnknownSamples: connectionUnknownSampleStreak)
@@ -1011,8 +948,6 @@ final class MeetingViewModel {
         state.displayName(for: id)
     }
 
-    /// S20 SC9: one confirmed "alone" input for the stage, so join-time producer churn never flickers the solo card;
-    /// the legacy solo tile and invite pill derive from it unchanged.
     var isAloneConfirmed: Bool {
         guard state.connectionState == .joined,
               state.hasInitialPresenceSnapshot,
@@ -1278,8 +1213,6 @@ final class MeetingViewModel {
         return allowed.contains(character)
     }
 
-    // MARK: - Init
-
     init() {
         let shellPresenter = MeetingShellPresenter()
         let stagePresenter = StagePresenter(shell: shellPresenter)
@@ -1289,31 +1222,31 @@ final class MeetingViewModel {
         people = PeoplePresenter(shell: shellPresenter, stage: stagePresenter)
         activitySession = ActivitySession(shell: shellPresenter, stage: stagePresenter)
         MeetingViewPreferences.apply(to: state)
-        // SY23: the device audio capability (false on both platforms until the audio publish paths ship).
+
         screenShare = ScreenSharePhasePolicy.withCapability(screenShare, canShareDeviceAudio: screenShareDeviceAudioCapability())
         #if SKIP
         webRTCClient.prewarmMediaStack()
         #endif
         transcriptService = TranscriptService(state: transcriptState, socketManager: socketManager)
-        // TRN-1: the stage reads live notes and captions through its own refresh path and hot hook (S20 SC13).
+
         transcriptState.onStageInputChanged = { [weak self] in
             self?.requestStageRefresh()
-            // CTL-5: More's Transcript status and Captions subtitle read live notes too.
+
             self?.requestControlsRefresh()
-            // TRN-2: the recap capability and the catch-up minutes follow the phase and `hasContent`.
+
             self?.requestTranscriptRefresh()
         }
         transcriptState.onCaptionChanged = { [weak self] line in
             self?.stage.captionChanged(line)
         }
-        // TRN-2 (S60 0.5): the Transcript panel presenter reads the state through its one hook and sends every intent here.
+
         shell.transcript.bind(state: transcriptState)
         shell.transcript.onCommand = { [weak self] command in
             self?.performTranscriptCommand(command) ?? false
         }
-        // S30 CC8: the recap owner sends the prompt, ends through the S1 End path and refreshes the readers.
-        recapCoordinator.sendRecap = { [weak self] in
-            self?.sendRecapPrompt() ?? false
+
+        recapCoordinator.sendRecap = { [weak self] answerId in
+            self?.sendRecapPrompt(answerId: answerId) ?? false
         }
         recapCoordinator.endCall = { [weak self] in
             _ = self?.controls.finishRecapAndEnd()
@@ -1329,17 +1262,15 @@ final class MeetingViewModel {
         setupNetworkBindings()
         setupSocketBindings()
         setupWebRTCBindings()
-        // WP2-S1 E3, E8 and SYS-1 SY1: one shell hook, one command closure per surface.
+
         shell.onCommand = { [weak self] command, ticket in
             self?.performShellCommand(command, ticket: ticket)
         }
-        // S30 4 c and CC7 (CTL-2): S1 publishes an intent or a ticket result causes (the End confirmation, its cancel, the
-        // End, hand and Leave results, the stage's Retry) change no MeetingState field, so they refresh the controls here;
-        // the core's own shell refresh already refreshes them once at its end (CC1).
+
         shell.onPublish = { [weak self] _, _, _ in
             guard let self, !self.isApplyingShellInputs else { return }
             self.requestControlsRefresh()
-            // S20 SC12 (CTL-6): the hand ticket starting or finishing refreshes the stage chip in the same frame.
+
             let handPending = self.shellHandRowPending()
             if handPending != self.lastStageHandPending {
                 self.lastStageHandPending = handPending
@@ -1352,9 +1283,7 @@ final class MeetingViewModel {
         premeeting.onCommand = { [weak self] command in
             self?.performPremeetingCommand(command)
         }
-        // SYS-3 (S70 2 j): the process-lifetime notification presenter. Its platform answers (status read, permission
-        // answered, stage entry, priming dismissed) refresh the stage notices and Settings; it never calls back from
-        // `apply`. A tap on a delivered notification returns to the call (Chat at the message for chat notifications).
+
         SystemNotifications.shared.onChange = { [weak self] in
             self?.systemNotificationsChanged()
         }
@@ -1365,18 +1294,18 @@ final class MeetingViewModel {
             handleLocalNotificationTap(tap)
         }
         bindShellInputs()
-        // S20 SC1, SC6, SC7: the stage's own hooks and commands.
+
         stage.onCommand = { [weak self] command in
             self?.performStageCommand(command)
         }
         stage.onNoticeCommand = { [weak self] command in
             self?.performNoticeCommand(command)
         }
-        // SET-5 (S60 3 j): the native Layout panel's intents reach the existing setters (HD request B7-T2 R2).
+
         stage.layoutPanel.onCommand = { [weak self] command in
             self?.performLayoutPanelCommand(command)
         }
-        // SET-6 (S60 4 j): the session's Effects picker (hidden until an engine publishes it, OQ6 default A).
+
         stage.effects.onCommand = { [weak self] command in
             self?.performEffectsCommand(command)
         }
@@ -1384,59 +1313,57 @@ final class MeetingViewModel {
             guard let self else { return }
             self.setStageObscuredByOverlay(report.coverage == StageVisibilityPolicy.coverageFull)
             self.scheduleRemoteConsumerBandwidthPolicyUpdate()
-            // SYS-4 (S70 0.5, R70-10): the PiP target frame reaches CallPresence (Android params, iOS content size).
+
             self.callPresence.reportPipTarget(report.pipTarget)
         }
-        // S30 CC18: the stage folds a panel into its blocker; the controls derive Engaged on Chat, Participants and Q&A.
+
         shell.panels.onSnapshotChanged = { [weak self] in
             guard let self else { return }
             self.stage.panelSnapshotChanged()
-            // S50 1 c: People closes its presentation from the coordinator's dismissal, never a view's disappearance.
+
             self.people.panelSnapshotChanged()
             self.requestStageRefresh()
             self.requestControlsRefresh()
-            // S30 CC5: `isChatOpen` follows the native Chat panel (unread to zero and previews cleared on open).
+
             self.syncChatPanelOpenState()
-            // S50 PH7, R18 (PPL-6): the Q&A counter is zero while `.webinarQA` is open and resumes after close.
+
             self.syncWebinarQaPanelOpenState()
         }
         bindStageInputs()
         bindPeopleInputs()
-        // S50 PH2 (PPL-2, PPL-4): People and Host Controls commands land in one switch; every exit ends in
-        // `people.finish(ticket, result)`.
+
         people.onCommand = { [weak self] command, ticket in
             self?.performPeopleCommand(command, ticket)
         }
-        // RECONCILE R34: the one webinar link owner calls the core's generator; the presenter keeps it single flight.
+
         people.host.linkProvider = { [weak self] in
             await self?.generateWebinarLink()
         }
         bindDisplayNameEditor()
-        // S60 (SET-1, SET-2, SET-4): the Settings presenter's core hooks and commands (HD request B6-T2 R1).
+
         bindSettingsPresenter()
         bindHostControlsInputs()
-        // S50 9 j (PPL-5): Webinar Settings refreshes the config once on appear.
+
         people.host.configRefresher = { [weak self] in
             guard let self else { return }
             Task { _ = await self.refreshWebinarConfigNow() }
         }
-        // S50 PH7 (PPL-6): Q&A's own refresh path.
+
         bindQaInputs()
-        // S50 PH20 (PPL-7): Accept on the stage invitation opens the promotion lobby over the viewer.
+
         people.onAcceptStageInvitation = { [weak self] invitation in
             self?.openPromotionLobby(invitation)
         }
-        // S30 CC1 (CTL-1): the controls' own hook and commands. Blocked-tap toasts need no wiring: the presenter posts
-        // them to the stage itself (CC7, `StagePresenter.postLocal`).
+
         controls.onCommand = { [weak self] command in
             self?.performControlsCommand(command)
         }
-        // S30 0.5 (CTL-5, CTL-6): a reaction, captions, the layout, Flip Camera, Lock Meeting and the iOS system effects.
+
         controls.onRequest = { [weak self] request in
             self?.performControlsRequest(request) ?? false
         }
         bindControlsInputs()
-        // S60 7, 8 (ACT-1, ACT-2): the activity presenters' commands and their own refresh path.
+
         activitySession.bindStage()
         activitySession.activities.onCommand = { [weak self] command in
             self?.performActivitiesCommand(command)
@@ -1444,19 +1371,16 @@ final class MeetingViewModel {
         activitySession.games.onCommand = { [weak self] command in
             self?.performGameStageCommand(command)
         }
-        // S60 13 (ACT-7): the SDK app host and its relay. The relay reaches the socket only through these closures and
-        // only inside a joined call for a non-attendee; the presenter's Close and Lock Editing use the existing paths.
+
         bindActiveAppSession()
-        // S60 14 (ACT-9): the shared browser card's commands (navigate, audio, close, refresh) over the existing paths.
+
         bindBrowserStage()
         bindActivityInputs()
-        // S40 0.5, CH13: the chat presenter's commands and its own refresh hook.
+
         chat.onCommand = { [weak self] request in
             self?.performChatCommand(request)
         }
-        // S40 CH19, CH16 (CHT-5): the picker's cancellable paged Klipy search and the link cards, both through the app
-        // backend (the Klipy key and the participants' addresses never reach a third party from the client). The chat
-        // fixture installs canned closures instead.
+
         chat.gifSearch = { kind, query, page in
             await KlipyService.searchPage(kind: kind, query: query, page: page)
         }
@@ -1465,8 +1389,6 @@ final class MeetingViewModel {
         }
         bindChatInputs()
     }
-
-    // MARK: - Transcription
 
     func toggleTranscript() {
         state.isTranscriptOpen = !state.isTranscriptOpen
@@ -1505,12 +1427,10 @@ final class MeetingViewModel {
         transcriptService?.refreshMinutes()
     }
 
-    /// TRN-2 (S60 0.5 action mapping): the Transcript panel's intents reach the existing service paths. True when the
-    /// core accepted the intent (the presenter clears the keys or the Ask draft then).
     private func performTranscriptCommand(_ command: TranscriptCommand) -> Bool {
         switch command.kind {
         case .start, .takeover:
-            // The service sends `session.takeover` itself while the status is takeover_needed.
+
             startTranscription(options: command.options)
             return true
         case .stop:
@@ -1535,8 +1455,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// TRN-2: fresh Transcript inputs (equality guarded in the presenter). The local id is the SFU id the worker stamps
-    /// on segments and on the controller (as `chatLocalUserId`), else the session user id.
     func makeTranscriptInputs() -> TranscriptInputs {
         let sfu = state.sfuUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return TranscriptInputs.make(
@@ -1554,13 +1472,12 @@ final class MeetingViewModel {
 
     private func requestTranscriptRefresh() {
         shell.transcript.apply(makeTranscriptInputs())
-        // S60 6 f Attendee (C6-11): a demotion while the panel is open closes it (the stream closes in syncTranscriptStream).
+
         if state.isWebinarAttendee && shell.panels.snapshot.current?.panel == MeetingPanel.transcript {
             shell.panels.dismiss(cancelPending: true)
         }
     }
 
-    /// S30 CC8: the End dialog's recap variant shows only while live notes run with content and the host may post.
     func makeRecapControlsState() -> RecapControlsState {
         let canPost = RecapPolicy.canPostToChat(isChatLocked: state.isChatLocked, isHost: state.isAdmin,
                                                 isAttendee: state.isWebinarAttendee, isJoined: state.connectionState == .joined)
@@ -1571,13 +1488,13 @@ final class MeetingViewModel {
         )
     }
 
-    /// The web wrap-up prompt through the normal chat send (the assistant relay posts the recap for the room).
-    private func sendRecapPrompt() -> Bool {
+    private func sendRecapPrompt(answerId: String) -> Bool {
         guard RecapPolicy.canPostToChat(isChatLocked: state.isChatLocked, isHost: state.isAdmin,
                                         isAttendee: state.isWebinarAttendee, isJoined: state.connectionState == .joined) else {
             return false
         }
-        sendChatMessage(RecapPolicy.prompt)
+        guard let question = ChatCommandParser.parseConclaveMention(RecapPolicy.prompt) else { return false }
+        sendConclaveQuestion(RecapPolicy.prompt, question: question, replyTo: nil, recapRequestId: answerId)
         return true
     }
 
@@ -1639,24 +1556,20 @@ final class MeetingViewModel {
                 self?.handleLowPowerModeChanged(isOn)
             }
         }
-        // SET-3 (S60 C6-5): iOS Low Data Mode or Android Data Saver.
+
         networkMonitor.onSystemDataSaverChanged = { [weak self] isOn in
             Task { @MainActor in
                 self?.handleSystemDataSaverChanged(isOn)
             }
         }
         networkMonitor.start()
-        // SET-3 (C6-4): the saved camera and share limits reach the client before the first camera start.
+
         applyMediaPublishConfiguration()
     }
 
-    /// SYS-6 (S70 SY22; S60 C6-4, C6-5, D21): the one place the camera and screen publish limits reach the media
-    /// client: the person's saved settings (read only), the Data Saver ceiling and the transient system send ceiling
-    /// through the shared resolver. It never writes the saved settings or the legacy quality flag.
     private func applyMediaPublishConfiguration() {
         let settings = NativeMediaQualityPreferences.load()
-        // SET-3 (S60 C6-4, C6-5, D21): Data Saver (the switch OR the system signal) and the host's limit apply the
-        // 360p at 20 fps ceiling; the transient system ceiling composes after it (S70 SY22).
+
         let dataSaverOn = DataSaverPolicy.isOn(preference: NativeVideoPreferences.dataSaver(), systemDataSaver: systemDataSaverOn)
         let ceilingOn = DataSaverPolicy.appliesPublishCeiling(dataSaverOn: dataSaverOn, qualityCappedByHost: hostQualityCapped)
         let camera = NativeMediaQualityPolicy.resolvedPublishCamera(settings.camera, dataSaverOn: ceilingOn,
@@ -1679,9 +1592,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// SYS-6 (S70 6 c, 6 d, O10): a thermal level from the monitor. Serious lowers the camera one tier and posts
-    /// `qualityLowered` once per call; critical lowers one more tier silently; fair or nominal clears the ceiling.
-    /// Nothing mutes or stops media.
     func handleSystemThermalLevel(_ level: SystemThermalLevel) {
         let isInCall = state.connectionState == .joined || state.connectionState == .reconnecting
         let change = systemPressure.applyThermalLevel(level, callSession: callSessionSerial, isInCall: isInCall)
@@ -1693,7 +1603,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// SYS-6 (S70 6 c, 6 d, O10): Low Power Mode or battery saver applies the Data Saver ceiling, silently.
     func handleLowPowerModeChanged(_ isOn: Bool) {
         let change = systemPressure.applyLowPowerMode(isOn)
         if change.ceilingChanged {
@@ -1701,8 +1610,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// SET-3 (S60 C6-5): the system data saver holds Data Saver on: the publish ceiling, the receive policy and the
-    /// Settings switch (on and disabled, "On because Low Data Mode is on.") follow it.
     func handleSystemDataSaverChanged(_ isOn: Bool) {
         guard systemDataSaverOn != isOn else { return }
         systemDataSaverOn = isOn
@@ -1716,12 +1623,7 @@ final class MeetingViewModel {
     }
 
     #if os(macOS) && !SKIP
-    /// Host-test seam (macOS only; SET-3 S60 C6-5, SYS-6 S70 SY22): stops the real path monitor `init` started and
-    /// drops its path callbacks (offline, quality hint, system Data Saver), so a host test's call never reads the build
-    /// machine's network (a Personal Hotspot path is constrained, which holds the 360p Data Saver ceiling). Call it in
-    /// the main-actor turn that created the view model: each path update hops to the main actor before it reaches a
-    /// callback, so none has landed yet, and one the monitor queued before the stop finds no callback. The view model's
-    /// path inputs keep their defaults (online, no hint, system Data Saver off); tests drive the handlers directly.
+
     func testDetachHostNetworkMonitor() {
         networkMonitor.stop()
         networkMonitor.onStatusChanged = nil
@@ -1730,8 +1632,6 @@ final class MeetingViewModel {
     }
     #endif
 
-    // MARK: - Socket Bindings
-
     func setupSocketBindings() {
         socketManager.onConnected = { [weak self] in
             guard let self = self else { return }
@@ -1739,20 +1639,10 @@ final class MeetingViewModel {
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext) else { return }
                 self.state.isNetworkOffline = false
-                // socket.io fires 'connect' on every RECONNECT too, not just the
-                // first connect. Routing to .connected mid-call would flash the
-                // join screen for one frame (ContentView maps .connected →
-                // JoinView) before onReconnected → rejoinIfPossible moves us to
-                // .joining. While a reconnect is pending, stay on the reconnecting
-                // overlay (.reconnecting → MeetingView); a genuine first connect
-                // (no call in progress) still surfaces .connected.
+
                 if self.shouldRejoinAfterReconnect && !self.isIntentionalLeave {
                     self.beginConnectionRecovery()
-                    // Drive the rejoin from here too: socket.io can emit 'connect'
-                    // without a following 'reconnect' (onReconnected), which would
-                    // otherwise leave us parked in .reconnecting forever. The
-                    // isRejoinInFlight / shouldRejoinAfterReconnect guards in
-                    // rejoinIfPossible keep this idempotent with onReconnected.
+
                     Task { await self.rejoinIfPossible() }
                     return
                 }
@@ -1796,8 +1686,7 @@ final class MeetingViewModel {
                     return
                 }
                 if reason == "io server disconnect" {
-                    // SFU drain emits serverRestarting before this server-side disconnect.
-                    // That path is reconnectable; kicks and ended rooms remain terminal.
+
                     if self.state.serverRestartNotice != nil,
                        self.lastJoinContext != nil {
                         self.beginConnectionRecovery()
@@ -1805,8 +1694,7 @@ final class MeetingViewModel {
                         await self.forceRejoinWithFreshToken()
                         return
                     }
-                    // S10 0.8 C4 (INM H3.13): no restart notice, no kick and no room end, so the server ended the
-                    // connection: record the typed outcome and tear down (the legacy route still goes home).
+
                     await self.finishServerDisconnect()
                     return
                 }
@@ -1820,8 +1708,7 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext) else { return }
-                // S70 7 f: a raw socket error goes to diagnostics only; the recovery banner carries the state and no
-                // haptic plays (WP2-H2, TG 3.6 row 14).
+
                 let classified = MeetingErrorClassifier.classify(error, context: .join, isNetworkOffline: self.state.isNetworkOffline)
                 CallDiagnostics.shared.recordFailure(classified)
                 debugLog("[Meeting] Socket error \(classified.diagnosticCode): \(error.localizedDescription)")
@@ -1882,7 +1769,7 @@ final class MeetingViewModel {
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
                 guard let context = self.lastJoinContext else { return }
-                // SYS-3 (S70 2 c, d): "You're in" while Conclave is not in front, before the entry starts.
+
                 SystemNotifications.shared.admittedWhileBackgrounded(roomLabel: self.shell.session.roomLabel)
                 self.state.connectionState = ConnectionState.joining
                 self.state.waitingMessage = nil
@@ -1958,7 +1845,7 @@ final class MeetingViewModel {
                     hostUserIds: notification.hostUserIds ?? [],
                     updateAdminFromSnapshot: true
                 )
-                // S50 PH14: becoming host refreshes the configs once.
+
                 if !wasAdmin && self.state.isAdmin { self.beginHostConfigRefresh() }
             }
         }
@@ -1983,8 +1870,6 @@ final class MeetingViewModel {
             }
         }
 
-        // Host ended the meeting (admin:endRoom). Treat this as terminal even
-        // if the SFU socket disconnect arrives before or after the event.
         socketManager.onRoomEnded = { [weak self] notification in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -2021,7 +1906,7 @@ final class MeetingViewModel {
                     message: message,
                     level: AdminNoticeLevel.from(notification.level)
                 )
-                // STG-5 (S20 SC18): the host notice lane keeps its own copy, so masking pauses its 60 s clock.
+
                 let sender = self.state.canonicalStageUserId(notification.senderUserId) ?? ""
                 self.stage.post(StageEvent.make(kind: StageEventKind.hostNotice, userId: sender,
                                                 name: sender.isEmpty ? "" : self.displayNameForUser(sender),
@@ -2037,7 +1922,7 @@ final class MeetingViewModel {
                 let wasLocalHandRaised = self.state.isHandRaised
                 self.clearRaisedHands()
                 if wasLocalHandRaised {
-                    // STG-5 (S20 SC18): a host lowering your hand posts once.
+
                     self.stage.post(StageEvent.make(kind: StageEventKind.hostLoweredHand))
                 }
             }
@@ -2193,8 +2078,7 @@ final class MeetingViewModel {
                 let completesAssistantAnswer = self.isAssistantAnswerCompletion(message)
                 let appendedMessage = self.receiveChatMessage(message, shouldSpeakTts: true)
                 let isAttendee = self.state.isWebinarAttendee
-                // S40 CH12 (CHT-8): an assistant answer counts once, when its content first arrives (an empty start
-                // counts nothing and posts nothing); a hidden sender (CH21) counts nothing and posts no preview.
+
                 guard let appendedMessage else {
                     if completesAssistantAnswer {
                         self.countedAssistantAnswerIds.insert(message.id)
@@ -2202,7 +2086,7 @@ final class MeetingViewModel {
                                                           isChatCurrent: self.state.isChatOpen, isAttendee: isAttendee) {
                             self.state.unreadChatCount += 1
                         }
-                        // The merged answer now has content: "Conclave AI" and its first sentence (S40 8 f).
+
                         if let answer = self.state.chatMessages.first(where: { $0.id == message.id }),
                            ChatPreviewPolicy.postsPreview(isOwn: false, isHiddenSender: false, isEmptyAssistantStart: false,
                                                           isAttendee: isAttendee) {
@@ -2224,12 +2108,10 @@ final class MeetingViewModel {
                     self.state.unreadChatCount += 1
                 }
                 if !isFromCurrentUser && !isHiddenSender && !isEmptyAssistantStart {
-                    // Legacy chat overlay, unchanged (the legacy view hides it for attendees).
+
                     self.showChatOverlayMessage(appendedMessage)
                 }
-                // SYS-3 (S70 2 c, d, O5): private messages and mentions of you while Conclave is not in front; the
-                // presenter applies every rule (active, Chat visible, attendee, own, assistant, preference, permission,
-                // channel).
+
                 if !isHiddenSender && !isEmptyAssistantStart {
                     SystemNotifications.shared.chatMessageForYou(
                         LocalChatMessageInput.from(message: appendedMessage, localName: self.chatLocalName,
@@ -2237,17 +2119,13 @@ final class MeetingViewModel {
                 }
                 if ChatPreviewPolicy.postsPreview(isOwn: isFromCurrentUser, isHiddenSender: isHiddenSender,
                                                   isEmptyAssistantStart: isEmptyAssistantStart, isAttendee: isAttendee) {
-                    // CHT-8 (S40 R40-4): the native stage's chat preview, body kind and payload from the policy (never a
-                    // file name). The notice center coalesces in place and drops previews while Chat is current, while
-                    // the toast lane is suspended and while "Show Chat Previews" is off.
+
                     let senderId = self.state.canonicalStageUserId(appendedMessage.userId) ?? ""
                     self.stage.post(ChatPreviewPolicy.event(message: appendedMessage, canonicalSenderId: senderId))
                 }
             }
         }
 
-        // S40 CH7 (CHT-7): a room member's answer process state (reasoning, steps, done, errored) from the relayed
-        // packet; its text still arrives through onChatMessage.
         socketManager.onConclaveAssistantPacket = { [weak self] packet in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -2264,7 +2142,7 @@ final class MeetingViewModel {
             let eventContext = self.currentSocketEventContext()
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
-                // S40 CH3: the server set replaces the message's reactions (never merged).
+
                 self.applyChatReactions(messageId: notification.messageId, reactions: notification.reactions)
             }
         }
@@ -2517,7 +2395,6 @@ final class MeetingViewModel {
             }
         }
 
-        // S50 PH7 (PPL-6): the Q&A snapshot (hosts and attendees at join) and per-entry changes.
         socketManager.onWebinarQaSnapshot = { [weak self] snapshot in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -2536,7 +2413,6 @@ final class MeetingViewModel {
             }
         }
 
-        // S50 PH8 (PPL-5): the whole attendee hand queue on every change, to admins only.
         socketManager.onWebinarHandQueueChanged = { [weak self] notification in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -2546,7 +2422,6 @@ final class MeetingViewModel {
             }
         }
 
-        // S50 PH9 (PPL-7): the attendee side of a stage invitation.
         socketManager.onWebinarPromoted = { [weak self] notification in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -2556,8 +2431,6 @@ final class MeetingViewModel {
             }
         }
 
-        // S50 PH9 (PPL-7): moved to the audience. The handoff flag is set synchronously in the socket callback, before
-        // the SFU's `socket.disconnect(true)` can reach `onDisconnected` (webinarInteractionHandlers.ts:440-452).
         socketManager.onWebinarDemoted = { [weak self] notification in
             guard let self = self else { return }
             let eventContext = self.currentSocketEventContext()
@@ -2778,21 +2651,23 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: - WebRTC Bindings
-
     func setupWebRTCBindings() {
         webRTCClient.onLocalVideoEnabledChanged = { [weak self] enabled in
+            let reportContext = self?.currentCallActionContext()
+            let heldReport = self?.isCameraHoldBlockingVideo == true
             Task { @MainActor in
                 guard let self = self else { return }
                 #if os(macOS) && !SKIP
                 defer { self.testLocalMediaReportHandled?() }
                 #endif
+                guard let reportContext, self.isSameCallContext(reportContext) else { return }
+                if heldReport || self.isCameraHoldBlockingVideo { return }
                 self.setLocalCameraOffState(!enabled)
                 if enabled {
-                    // S20 SC8 (STG-3): the started camera may have resolved another facing (Android fallback).
+
                     self.publishLocalCameraFacing()
                 } else {
-                    // S20 6 f: no pause carries past your camera turning off.
+
                     LocalPreviewController.shared.resetCallCamera()
                 }
             }
@@ -2810,8 +2685,7 @@ final class MeetingViewModel {
                    !self.state.mediaPublishingDisabled {
                     return
                 }
-                // This hop can run after a later mute. Never show unmuted for
-                // a microphone that is no longer live and unpaused.
+
                 if enabled, !self.webRTCClient.isLocalAudioPublishingHealthy {
                     return
                 }
@@ -2857,34 +2731,16 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: - Helper Methods
-
     private func applyLocalMutedStateFromServer(_ muted: Bool, context: SocketEventContext? = nil) {
-        // Local mic state is client-authoritative (prejoin choice + explicit
-        // toggles). The server may force us to MUTE (e.g. an admin mute), but must
-        // NEVER force us to unmute: the participant-muted broadcast echoes our own
-        // producer state on join and would otherwise flip the mic live against the
-        // user's intent ("joining turns my mic on"). Matches the web, where local
-        // mute is driven by mediaIntent, not server notifications.
+
         guard muted else { return }
-        // Applied to the microphone even while a toggle owns the guard: an
-        // unmute awaiting its acknowledgement must not outlive a server mute.
+
         applyLocalMuteNow(context: context ?? currentSocketEventContext())
     }
 
-    /// Mutes now, whoever owns the microphone guard: a server mute, or a
-    /// CallKit, notification, PiP, chat or in-app mute that lands while an
-    /// unmute awaits its acknowledgement, is never dropped or deferred. The
-    /// local mute is synchronous, so it bumps the client's mute intent before
-    /// any pending unmute's acknowledgement can land: that unmute then neither
-    /// resumes the producer nor reports the microphone live, and its toggle
-    /// confirms nothing. Then the SFU is told.
     private func applyLocalMuteNow(context: SocketEventContext) {
         localMuteIntentRevision += 1
-        // This mute owns the microphone guard until its signal completes (a
-        // pending toggle's completion then frees nothing), so no newer unmute
-        // can overlap it: both clients would let this mute's late completion
-        // silence that unmute.
+
         let toggleToken = UUID()
         muteToggleToken = toggleToken
         state.isMuted = true
@@ -2911,19 +2767,17 @@ final class MeetingViewModel {
                 self.syncCallPresenceState()
             } catch {
                 guard self.isCurrentSocketEvent(context) else { return }
-                // A failed mute fails closed: the client kept the local mute.
+
                 debugLog("[Meeting] Failed to signal the local mute: \(error)")
             }
         }
     }
 
     private func applyLocalCameraOffStateFromServer(_ cameraOff: Bool, context: SocketEventContext? = nil) {
-        // Server may force the local camera OFF (admin), never ON - see
-        // applyLocalMutedStateFromServer for why turning it on would fight intent.
+
         guard cameraOff else { return }
         let eventContext = context ?? currentSocketEventContext()
-        // Applied to the camera even while a toggle owns the guard; a pending
-        // camera-on sees the newer camera-off and turns nothing back on.
+
         localCameraIntentRevision += 1
         let intentRevision = localCameraIntentRevision
         setLocalCameraOffState(true)
@@ -2932,8 +2786,7 @@ final class MeetingViewModel {
             #if os(macOS) && !SKIP
             defer { self.testLocalToggleEnded?("applyLocalCameraOffStateFromServer") }
             #endif
-            // A camera-on the user tapped before this hop ran is newer: this
-            // close must not close its camera or cancel its start.
+
             guard self.isCurrentSocketEvent(eventContext),
                   self.localCameraIntentRevision == intentRevision else { return }
             _ = await self.webRTCClient.closeLocalMedia(
@@ -2948,17 +2801,14 @@ final class MeetingViewModel {
     }
 
     #if os(macOS) && !SKIP
-    /// Host-test seam (macOS only): the local participant's server camera-off
-    /// as its event handlers apply it, synchronously, so a test can act before
-    /// its later close hop runs.
+
     func testApplyServerCameraOff() {
         applyLocalCameraOffStateFromServer(true)
     }
     #endif
 
     #if os(macOS) && !SKIP
-    /// Host-test seam (macOS only, SYS-6; S70 6 l2, S20 SC16): ages the recovery clocks, then runs one watchdog tick
-    /// as the 8 s timer would (a stall at 25 s forces a rejoin, the 120 s cap ends with connectionLost).
+
     @discardableResult
     func testRunRecoveryWatchdogTick(recoveryAgeSeconds: Double, joinActivityAgeSeconds: Double) -> Bool {
         let now = Date()
@@ -2967,8 +2817,6 @@ final class MeetingViewModel {
         return runRecoveryWatchdogTick()
     }
 
-    /// Host-test seam (macOS only, SYS-6; S70 6 l1): a present remote participant with a live camera producer,
-    /// without a consume (the stub client has no consumers).
     func testSeedRemoteVideoProducer(userId: String, producerId: String) {
         state.participants[userId] = Participant(id: userId, displayName: "Remote", isMuted: true, isCameraOff: false)
         producerInfosById[producerId] = ProducerInfo(producerId: producerId, producerUserId: userId, kind: "video",
@@ -3013,8 +2861,6 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: - Recovery watchdog
-
     private func startRecoveryWatchdogIfNeeded() {
         guard recoveryWatchdogTask == nil else { return }
         let tickNanoseconds = UInt64(ConnectionRecoveryWatchdogPolicy.tickSeconds * 1_000_000_000.0)
@@ -3033,7 +2879,6 @@ final class MeetingViewModel {
         recoveryWatchdogTask = nil
     }
 
-    /// One watchdog evaluation. Returns false when the watchdog should stop.
     private func runRecoveryWatchdogTick() -> Bool {
         guard let startedAt = recoveryStartedAt else { return false }
         let action = ConnectionRecoveryWatchdogPolicy.action(
@@ -3067,10 +2912,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S20 SC16: the reconnecting banner's Retry Now. It skips the backoff and rejoins at once, and never starts a
-    /// second rejoin: refused while an attempt is in flight or while a tap's rejoin has not started yet
-    /// (`RecoveryRetryPolicy`, SYS-6), so a double tap starts one. The attempt count is unchanged (it counts rejoin
-    /// retries only).
     func retryRecoveryNow() {
         guard RecoveryRetryPolicy.acceptsRetryNow(isRecovering: state.isRecoveringConnection,
                                                   isRejoinInFlight: isRejoinInFlight,
@@ -3086,9 +2927,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// A stranded join attempt leaves `isRejoinInFlight`/retry guards set,
-    /// blocking every recovery entry point. Break the guards, then run the
-    /// normal fresh-token rejoin.
     private func breakStalledRecoveryAndRejoin() {
         reconnectRetryTask?.cancel()
         reconnectRetryTask = nil
@@ -3223,14 +3061,8 @@ final class MeetingViewModel {
         }
     }
 
-    /// Starts the branded meeting-entry takeover on a New/Join tap. The overlay
-    /// (gated on `isEnteringMeeting` + an entering connection state) then covers
-    /// connect → join → media-settle so the user never sees the raw spinner or the
-    /// post-join device-init hiccups. A safety timeout guarantees the overlay is
-    /// never a dead end if the join stalls.
     func beginMeetingEntry(action: MeetingEntryAction) {
-        // S10 0.8 C6 (HD request B5-T5 R1): the native root presents the entry itself; admission (`onJoinApproved`) and
-        // resume (`restorePersistedMeetingIfNeeded`) call this, so one guard covers both sites.
+
         guard entryPresentation.armsLegacyOverlay else { return }
         PerformanceDiagnostics.event("meeting_entry_begin", details: "action=\(action)")
         meetingEntryRevealTask?.cancel()
@@ -3254,9 +3086,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// Reveals the meeting once it's fully ready: a settle window after `.joined`
-    /// for media/transports, plus a minimum overlay display so the Lottie reads as
-    /// intentional rather than a flash.
     private func scheduleMeetingEntryReveal() {
         guard entryPresentation.armsLegacyOverlay, state.isEnteringMeeting else { return }
         meetingEntryRevealTask?.cancel()
@@ -3272,8 +3101,7 @@ final class MeetingViewModel {
             guard !Task.isCancelled,
                   self.state.connectionState == .joined,
                   self.state.meetingEntryGeneration == generation else { return }
-            // Enforce a minimum total takeover so the Lottie reads as intentional
-            // rather than a flash. Work in Double seconds; cast once for the sleep.
+
             let remainingSeconds = self.meetingEntryMinDisplaySeconds - Date().timeIntervalSince(started)
             if remainingSeconds > 0.0 {
                 try? await Task.sleep(nanoseconds: UInt64(remainingSeconds * 1_000_000_000.0))
@@ -3312,11 +3140,7 @@ final class MeetingViewModel {
         state.isEnteringMeeting = false
         state.meetingEntryAction = nil
         #if SKIP
-        // The one place the notification prompt is scheduled after the
-        // overlay: every clear path (reveal, safety timeout, ContentView's
-        // hard deadline, connection-state clears) goes through here. The
-        // request defers and re-checks joined, in call, foreground, no PiP
-        // and no entry itself, so a teardown clear never prompts.
+
         if wasEntering {
             scheduleCallNotificationPermissionRequest()
         }
@@ -3329,10 +3153,6 @@ final class MeetingViewModel {
         let isRecoveryJoin = isRejoinInFlight
         state.waitingMessage = nil
 
-        // On a RECONNECT-driven rejoin the prior session's mediasoup Device,
-        // transports, producers, consumers, and any local screen capture are
-        // still live. Explicit leave, kick, and end paths call cleanup(), but
-        // socket reconnect does not.
         if webRTCClient.isConfigured {
             await stopScreenCaptureManager(source: ScreenShareStopSource.recovery)
             await webRTCClient.cleanup(
@@ -3428,9 +3248,7 @@ final class MeetingViewModel {
             persistMeetingResumeSnapshot()
             reconcilePendingEntryMediaIntent()
             if isRecoveryJoin, let displayNameSnapshot = response.displayNameSnapshot {
-                // The first application happens while `.joining`, where roster
-                // pruning is intentionally disabled. Re-apply the authoritative
-                // snapshot now so preserved recovery placeholders cannot linger.
+
                 applyDisplayNameSnapshot(DisplayNameSnapshotNotification(
                     users: displayNameSnapshot,
                     roomId: response.roomId ?? state.roomId
@@ -3438,9 +3256,7 @@ final class MeetingViewModel {
             }
             clearConnectionRecovery()
             PerformanceDiagnostics.timing("join_handle_joined_response", startedAt: startedAt)
-            // Reveal scheduling must happen as soon as the meeting is usable. The
-            // post-join sync/refresh work below can take long enough to hit the
-            // hard deadline, which makes the entry overlay feel stuck.
+
             scheduleMeetingEntryReveal()
             await replayPendingPreAckRoomEvents(includeDeferredRoomState: true)
             await syncProducers(context: currentSocketEventContext())
@@ -3501,10 +3317,7 @@ final class MeetingViewModel {
         preservingVisibleState: Bool = false
     ) {
         if preservingVisibleState {
-            // Keep stable tile identities and names while replacement transports
-            // are built. Their old tracks are gone, so render calm avatar tiles
-            // until each producer is consumed again instead of collapsing the
-            // whole stage to an empty grid for a frame.
+
             for userId in Array(state.participants.keys)
                 where state.isRemoteParticipantUserId(userId) {
                 state.participants[userId]?.isMuted = true
@@ -3561,7 +3374,7 @@ final class MeetingViewModel {
             state.webinarLinkURL = nil
             state.webinarFeedMode = "active-speaker"
             state.webinarSpeakerUserId = nil
-            // S50 PH7 to PH10 (PPL-5, PPL-6): Q&A, the hand queue and the interim invites are per call session.
+
             state.isWebinarQaEnabled = false
             state.resetWebinarInteractionState()
             resetWebinarRoleTracking()
@@ -3755,7 +3568,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S50 PH5: the room's participant media permissions (the bar reads them for non-hosts, S30 CC10).
     private func applyParticipantMediaPermissions(_ notification: ParticipantMediaPermissionsChangedNotification) {
         state.isParticipantUnmuteAllowed = notification.unmuteAllowed
         state.isParticipantVideoAllowed = notification.videoAllowed
@@ -3763,8 +3575,7 @@ final class MeetingViewModel {
 
     private func applyHandRaisedSnapshot(_ snapshot: HandRaisedSnapshotNotification) {
         guard isCurrentRoomEvent(snapshot.roomId) else { return }
-        // S50 PH3: snapshot entries carry no time; a hand still raised keeps the time this client already knew (the
-        // queue keeps its order after a reconnect), a hand first seen here stays untimed (sorts after timed hands).
+
         let knownTimes = state.raisedAtByUserId
         clearRaisedHands()
         var keptTimes: [String: Double] = [:]
@@ -3788,7 +3599,7 @@ final class MeetingViewModel {
     private func applyHandRaisedNotification(_ notification: HandRaisedNotification) {
         guard let userId = normalizedParticipantUserId(notification.userId) else { return }
         if state.isLocalIdentityUserId(userId) {
-            // S50 PH3: the SFU echoes your own raise to the whole room with its time (`io.to(channel)`).
+
             recordHandRaiseTime(state.userId, raised: notification.raised, timestamp: notification.timestamp)
             state.isHandRaised = notification.raised
             return
@@ -3796,11 +3607,11 @@ final class MeetingViewModel {
         guard !shouldIgnoreDepartedParticipant(userId) else { return }
         guard ensureParticipantPresent(userId) else { return }
         let handStateId = participantStateId(for: userId)
-        // S50 PH3: keyed like `makePeopleInputs()` keys the row (`canonicalStageUserId(participant.id)`).
+
         recordHandRaiseTime(state.canonicalStageUserId(handStateId) ?? handStateId, raised: notification.raised,
                             timestamp: notification.timestamp)
         state.participants[handStateId]?.isHandRaised = notification.raised
-        // STG-5 (S20 SC18): remote hands only (the local branch returned above).
+
         if notification.raised, let id = state.canonicalStageUserId(userId) {
             stage.post(StageEvent.make(kind: StageEventKind.handRaised, userId: id, name: displayNameForUser(id)))
         }
@@ -3935,10 +3746,7 @@ final class MeetingViewModel {
             applyChatHistorySnapshot(chatHistorySnapshot)
         }
         let replayContext = currentSocketEventContext()
-        // Verify G2 r3 (perf): one shell, stage, controls, People and chat refresh per synchronous run of replayed
-        // roster events instead of one per `participants` write (a buffer of 128 joins rebuilt every presenter
-        // hundreds of times). Like every other batch it never spans an await: it closes before each suspension and
-        // reopens after it, and the loop has no return, so begin and end stay balanced.
+
         beginShellRefreshBatch()
         for event in rosterEvents {
             guard isCurrentSocketEvent(replayContext, roomId: event.roomId) else { continue }
@@ -4182,8 +3990,6 @@ final class MeetingViewModel {
         isCurrentJoinedCall(roomId: context.roomId, joinAttemptId: context.joinAttemptId)
     }
 
-    /// S70 7 f: `applyActionError` feeds the classifier; the legacy banner gets owned copy or a clean server sentence,
-    /// never raw transport text.
     private func applyActionError(_ error: Error, context: CallActionContext) {
         guard isSameCallContext(context) else { return }
         let classified = MeetingErrorClassifier.classify(error, context: .hostAction, isNetworkOffline: state.isNetworkOffline)
@@ -4219,7 +4025,7 @@ final class MeetingViewModel {
         guard state.isRemoteParticipantUserId(userId) else { return false }
         let stateId = participantStateId(for: userId)
         if state.participants[stateId] == nil {
-            // S50 PH19: the serial exists before either presenter sees the participant.
+
             state.assignParticipantJoinSerial(stateId)
             state.participants[stateId] = Participant(id: stateId)
         }
@@ -4238,7 +4044,7 @@ final class MeetingViewModel {
             departedParticipantUserIds.remove(aliasId)
         }
         let added = ensureParticipantPresent(userId)
-        // S50 PH9 interim (Q15): an invited attendee who joins as a panelist (same user key) accepted the invitation.
+
         if !state.webinarStageInvites.isEmpty {
             let next = WebinarStageInvitePolicy.afterPanelistJoin(state.webinarStageInvites, joinedUserId: userId)
             if next.count != state.webinarStageInvites.count {
@@ -4278,10 +4084,9 @@ final class MeetingViewModel {
         markRemoteParticipantPresent(userId)
         clearParticipantConnectionStatus(userId)
         applyDisplayName(notification.displayName, for: userId)
-        // STG-5 (S20 SC18): suppression (initial snapshot, recovery grace, Q4, attendees) lives in the notice policy.
+
         if let id = state.canonicalStageUserId(userId) {
-            // Inside a refresh batch (the pre-ack replay) the notice inputs are refreshed first, so the Q4 thresholds
-            // count the roster this join produced, exactly as the per-write stage refresh does outside a batch.
+
             if stageRefreshBatchDepth > 0 {
                 stage.applyNotices(makeStageNoticeInputs())
             }
@@ -4298,7 +4103,7 @@ final class MeetingViewModel {
               state.isRemoteParticipantUserId(userId) else { return }
         let leavingAliasIds = participantLeaveAliasIds(for: userId)
         clearParticipantConnectionStatus(userId)
-        // STG-5 (S20 SC18): posted while the name is still known.
+
         if let id = state.canonicalStageUserId(userId) {
             stage.post(StageEvent.make(kind: StageEventKind.userLeft, userId: id, name: displayNameForUser(id)))
         }
@@ -5115,7 +4920,7 @@ final class MeetingViewModel {
         state.webinarRequiresInviteCode = response.webinarRequiresInviteCode ?? false
         state.webinarAttendeeCount = response.webinarAttendeeCount ?? 0
         state.webinarMaxAttendees = response.webinarMaxAttendees ?? 500
-        // S50 PH10: Attendee Q&A from the join ack (MC/types.ts:424); off when an older server sends none.
+
         state.isWebinarQaEnabled = response.webinarQaEnabled ?? false
         webinarJoinedAsAdmin = state.isAdmin
 
@@ -5161,7 +4966,7 @@ final class MeetingViewModel {
             if let requiresInviteCode = policies.requiresMeetingInviteCode {
                 state.meetingRequiresInviteCode = requiresInviteCode
             }
-            // S50 PH5, PH6.
+
             if let imageAttachmentsEnabled = policies.imageAttachmentsEnabled {
                 state.isImageAttachmentsEnabled = imageAttachmentsEnabled
             }
@@ -5207,7 +5012,7 @@ final class MeetingViewModel {
         var remoteUserKeys = Set<String>()
         var snapshotProducerIds = Set<String>()
         var nextActiveScreenShareUserId: String?
-        // S50 PH12: the attendees this snapshot reports; `canPromoteHost(userId:)` refuses them (INM D14).
+
         var attendeeUserIds: [String] = []
 
         for snapshot in participants {
@@ -5223,7 +5028,7 @@ final class MeetingViewModel {
             for key in stableKeys {
                 snapshotUserKeys.insert(key)
             }
-            // S50 PH13: the key "Remove and Block" blocks for this participant.
+
             if let explicitUserKey, state.participantUserKeys[userId] != explicitUserKey {
                 state.participantUserKeys[userId] = explicitUserKey
             }
@@ -5238,10 +5043,7 @@ final class MeetingViewModel {
                 if !displayName.isEmpty {
                     applyLocalDisplayName(displayName)
                 }
-                // The snapshot reports producer state, not intent: while a
-                // toggle is in flight it can predate that toggle, so it never
-                // overrides it (an admin mute or camera-off still arrives, and
-                // applies, as its own events).
+
                 if let muted = snapshot.muted, !isMuteToggleInFlight {
                     applyLocalMutedStateFromServer(muted)
                 }
@@ -5253,8 +5055,7 @@ final class MeetingViewModel {
                     nextActiveScreenShareUserId = state.userId
                 }
             } else if isRemoteParticipant {
-                // S50 PH12 (INM D14): webinar attendees never enter `participants` (People rows, counts and tiles); one
-                // already there is removed by the sweep below because it is not represented in this snapshot.
+
                 if isWebinarAttendee {
                     if !attendeeUserIds.contains(userId) { attendeeUserIds.append(userId) }
                     continue
@@ -5432,11 +5233,11 @@ final class MeetingViewModel {
         if let feedMode = snapshot.feedMode {
             state.webinarFeedMode = feedMode
         }
-        // S50 PH10.
+
         if let qaEnabled = snapshot.qaEnabled {
             state.isWebinarQaEnabled = qaEnabled
         }
-        // PH9 interim (Q15): webinar mode off clears the invites sent from this device.
+
         let invites = WebinarStageInvitePolicy.afterWebinarMode(state.webinarStageInvites, isWebinarEnabled: state.isWebinarEnabled)
         if invites != state.webinarStageInvites { state.webinarStageInvites = invites }
     }
@@ -5633,7 +5434,7 @@ final class MeetingViewModel {
                     self.stopBrowserActivityLoop()
                     return
                 }
-                // C6-20 (INM H1 8): only hosts keep the remote session alive; the SFU ignores everyone else's heartbeat.
+
                 if BrowserHeartbeatPolicy.shouldSend(isActive: self.state.isBrowserActive,
                                                      isJoined: self.state.connectionState == .joined,
                                                      isHost: self.state.isAdmin, isAttendee: self.state.isWebinarAttendee) {
@@ -5657,8 +5458,7 @@ final class MeetingViewModel {
         state.isAppsLocked = notification.locked
         state.isAppsActionInFlight = false
         if previousAppId != state.activeAppId {
-            // The activeAppId write above already refreshed the app host (its didSet), which moved the relay to the new
-            // app; this call is idempotent and covers a refresh that ran before the lock and role landed.
+
             if state.activeAppHasRoomData { state.activeAppHasRoomData = false }
             syncActiveAppSessionIdentity()
             if state.activeAppId != nil,
@@ -5680,7 +5480,6 @@ final class MeetingViewModel {
         return normalizedActiveAppId() == trimmed
     }
 
-    /// C6-18: Yjs bytes go to the non-observable relay, never to observable state (a cursor flood publishes nothing).
     private func applyAppsYjsUpdate(_ notification: AppsYjsUpdateNotification) {
         guard isCurrentRoomEvent(notification.roomId),
               appEventMatchesActiveApp(notification.appId) else { return }
@@ -5724,18 +5523,13 @@ final class MeetingViewModel {
 
     private func applyGamePublicState(_ notification: GamePublicState) {
         guard isCurrentRoomEvent(notification.roomId) else { return }
-        // A finished round is a real, persistent state: it carries the final
-        // scoreboard and drives the rematch affordance. Keep it (like the web
-        // client) until an explicit `game:ended` clears it or a new game
-        // replaces it. Nulling here would flash the results away and bounce the
-        // stage back to the grid the instant a game ends.
+
         state.gamePublicState = notification
         if state.gamePlayerView?.gameId != notification.gameId {
             state.gamePlayerView = nil
         }
         state.isGameActionInFlight = false
-        // Server pushes arrive constantly during a game; they must not wipe a
-        // just-surfaced action error before the player can read it.
+
     }
 
     private func applyGamePlayerView(_ notification: GamePlayerViewNotification) {
@@ -5775,19 +5569,15 @@ final class MeetingViewModel {
         state.isGameEndArmed = false
     }
 
-    /// The relay ends its app session (the embed gets `close`; buffers and any held snapshot are dropped).
     private func clearAppSyncState() {
         activeAppSession.end()
         if state.activeAppHasRoomData { state.activeAppHasRoomData = false }
     }
 
-    /// C6-18 (ACT-7): the bridge's call-session id. Opaque to the embed; changes with every new meeting intent.
     var appBridgeCallSessionId: String {
         "call-" + String(callSessionSerial) + "-" + appBridgeProcessToken
     }
 
-    /// Keeps the relay on the room's active app: begins a session for a new app (or a new call), ends it when the app
-    /// closes or the person is an attendee (attendees never see apps, S60 13 f). Cheap and idempotent.
     private func syncActiveAppSessionIdentity() {
         let appId = state.isWebinarAttendee ? "" : (normalizedActiveAppId() ?? "")
         let readOnly = !AppHostPresenter.canEdit(isAttendee: state.isWebinarAttendee, isHost: state.isAdmin,
@@ -5799,7 +5589,6 @@ final class MeetingViewModel {
         activeAppSession.begin(appId: appId, callSessionId: appBridgeCallSessionId, isReadOnly: readOnly)
     }
 
-    /// S60 13 (ACT-7): the relay's socket closures, the call gate and the app host presenter's core actions.
     private func bindActiveAppSession() {
         activeAppSession.syncTransport = { [weak self] appId, stateVector in
             guard let self else { throw ActiveAppSessionError(reason: "Shared app sync was cancelled.") }
@@ -5823,8 +5612,7 @@ final class MeetingViewModel {
         activitySession.appHost.onCommand = { [weak self] command in
             self?.performAppHostCommand(command)
         }
-        // ACT-8 (S60 13 c, f): Watch search and trending through the app backend (the embed has no network), and the
-        // roster for the Wheel's "Add Everyone Here".
+
         activitySession.appHost.watchSearch = { query in
             return await WatchSearchService.search(query: query)
         }
@@ -5836,8 +5624,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S60 13 j: Close and Lock Editing over the existing host paths; failures come back as `closeFailed()` and
-    /// `lockFailed()`.
     private func performAppHostCommand(_ command: AppHostCoreCommand) {
         switch command.kind {
         case .close:
@@ -5847,8 +5633,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// ACT-8: everyone in the call (you first), full display names deduped, for the Wheel's "Add Everyone Here" and
-    /// "%lld not on the wheel". Read by the presenter only when the Wheel's page data changes or its page appears.
     private func appHostRosterNames() -> [String] {
         var ids: [String] = [state.userId]
         for id in state.participants.keys.sorted() where id != state.userId {
@@ -5862,7 +5646,6 @@ final class MeetingViewModel {
         return names
     }
 
-    /// The app host's inputs and the relay's coarse state, on the activity refresh path (app, lock, role, connection).
     private func refreshAppHost() {
         let live = state.connectionState == .joined && !state.isRecoveringConnection
         syncActiveAppSessionIdentity()
@@ -5885,12 +5668,10 @@ final class MeetingViewModel {
         for userId in Array(state.participants.keys) {
             state.participants[userId]?.isHandRaised = false
         }
-        // S50 PH3: every hand is down, so no raise time survives (admin:handsCleared, Lower All acknowledged).
+
         if !state.raisedAtByUserId.isEmpty { state.raisedAtByUserId = [:] }
     }
 
-    /// S50 PH3: the server's raise time for `id` (the People id); a lowered hand forgets it. Repeated raises keep the
-    /// newest server time, as the SFU stamps each `setHandRaised`.
     private func recordHandRaiseTime(_ id: String, raised: Bool, timestamp: Double) {
         if raised && timestamp > 0 {
             if state.raisedAtByUserId[id] != timestamp { state.raisedAtByUserId[id] = timestamp }
@@ -6130,8 +5911,7 @@ final class MeetingViewModel {
     private func applyLocalAdminBulkMediaState(_ action: AdminBulkMediaAction) async {
         switch action {
         case .mute:
-            // As closeAdminEnforcedProducer: cancel a microphone start (or
-            // pending unmute) before awaiting the close.
+
             localMuteIntentRevision += 1
             webRTCClient.suspendLocalAudioForRecovery()
             state.isMuted = true
@@ -6152,7 +5932,7 @@ final class MeetingViewModel {
                 type: ProducerType.webcam.rawValue,
                 producerId: nil
             )
-            // A newer camera-on by the user since stands.
+
             if localCameraIntentRevision == intentRevision {
                 setLocalCameraOffState(true)
             }
@@ -6192,8 +5972,7 @@ final class MeetingViewModel {
         ) {
             return true
         }
-        // A microphone replacement (iOS bandwidth refresh or route recovery)
-        // displaced this producer on purpose; its successor commits separately.
+
         if webRTCClient.consumeIntentionalLocalAudioProducerClose(
             producerId: notification.producerId
         ) {
@@ -6216,8 +5995,7 @@ final class MeetingViewModel {
                     guard isCurrentJoinedCall(actionContext) else { return false }
                     try await webRTCClient.startProducingAudio()
                     guard isCurrentJoinedCall(actionContext) else { return false }
-                    // A mute that landed mid-start leaves no producer or a
-                    // paused one: fall through and stay muted.
+
                     if webRTCClient.isLocalAudioPublishingHealthy {
                         state.isMuted = false
                         syncCallPresenceState()
@@ -6233,12 +6011,7 @@ final class MeetingViewModel {
         }
 
         let wasCameraOff = state.isCameraOff
-        // A producer close records no camera intent, admin or not. The SFU
-        // closes the producer itself first, which reaches its owner as a plain
-        // producerClosed and removes it locally, so admin:producerClosed for
-        // the same id cannot tell a camera from a microphone or screen here.
-        // admin:mediaEnforced, which follows every admin close, records the
-        // camera-off (closeAdminEnforcedProducer).
+
         let cameraIntentRevision = localCameraIntentRevision
         let videoPolicyRevision = videoPublishingPolicyRevision
         if await webRTCClient.closeLocalMedia(
@@ -6246,9 +6019,7 @@ final class MeetingViewModel {
             type: ProducerType.webcam.rawValue,
             producerId: notification.producerId
         ) {
-            // Restart only while camera-on is still the newest intent after
-            // the awaited close: an admin close's camera-off events land
-            // during it, and the restart must not publish the camera over them.
+
             if !wasCameraOff,
                notification.adminEnforced != true,
                state.connectionState == ConnectionState.joined,
@@ -6263,8 +6034,7 @@ final class MeetingViewModel {
                     guard isCurrentJoinedCall(actionContext) else { return false }
                     try await webRTCClient.startProducingVideo()
                     guard isCurrentJoinedCall(actionContext) else { return false }
-                    // A camera-off or audio-only mode that landed during the
-                    // close or the restart wins over the restart.
+
                     guard isLocalCameraOnStillWanted(
                         cameraIntentRevision: cameraIntentRevision,
                         videoPolicyRevision: videoPolicyRevision
@@ -6280,12 +6050,7 @@ final class MeetingViewModel {
                     applyActionError(error, context: actionContext)
                 }
             }
-            // Report off only while this close is still the newest camera
-            // intent and no camera is live. A newer camera-on by the user
-            // stands, and so does a camera started during the close (by a
-            // camera-on that owns the camera, a publishing reassert or a
-            // rejoin), after an admin close too: admin:mediaEnforced closes
-            // that camera. Never report off over a live one.
+
             if localCameraIntentRevision == cameraIntentRevision,
                !webRTCClient.hasLocalVideoProducer {
                 setLocalCameraOffState(true)
@@ -6467,8 +6232,7 @@ final class MeetingViewModel {
 
         if didCloseMedia || !notification.closedProducers.isEmpty {
             state.errorMessage = adminMediaReason(notification.reason)
-            // STG-5 (S20 SC18): one stage event per kind of closed media (the legacy banner keeps `errorMessage`). The
-            // bulk event needs no post of its own: the SFU sends this per-person event to everyone it closed.
+
             var postedKinds: [String] = []
             for producer in notification.closedProducers {
                 var kind = ""
@@ -6496,19 +6260,13 @@ final class MeetingViewModel {
     func closeAdminEnforcedProducer(_ producer: AdminMediaProducer) async -> Bool {
         var adminCameraIntentRevision = localCameraIntentRevision
         if producer.kind == "audio", producer.type == ProducerType.webcam.rawValue {
-            // The server can close a producer before its off-main create has
-            // installed it locally. Cancel that start (and any pending unmute)
-            // before awaiting the close, even when no producer matches yet.
+
             localMuteIntentRevision += 1
             webRTCClient.suspendLocalAudioForRecovery()
             state.isMuted = true
             syncCallPresenceState()
         } else if producer.kind == "video", producer.type == ProducerType.webcam.rawValue {
-            // The same for the camera, which is the newest intent once this
-            // runs: close whatever camera is installed (its id may not be the
-            // enforced one if its acknowledgement overtook this event) and
-            // tell the SFU, and cancel a start whose off-main create has not
-            // installed its producer yet.
+
             localCameraIntentRevision += 1
             adminCameraIntentRevision = localCameraIntentRevision
             setLocalCameraOffState(true)
@@ -6525,7 +6283,7 @@ final class MeetingViewModel {
             syncCallPresenceState()
             return true
         } else if producer.kind == "video", producer.type == ProducerType.webcam.rawValue {
-            // A newer camera-on by the user since stands.
+
             if localCameraIntentRevision == adminCameraIntentRevision {
                 setLocalCameraOffState(true)
             }
@@ -6582,15 +6340,7 @@ final class MeetingViewModel {
         }
         guard !MeetingState.isSystemUserId(producerUserId) else { return }
         if state.isLocalIdentityUserId(producerUserId) {
-            // The local mic/camera state is authoritative from the user's own
-            // intent (prejoin choice + explicit toggles + admin-enforced actions),
-            // NOT from the SFU echoing back our own producer. Syncing
-            // isMuted/isCameraOff from a possibly-stale server producer here would
-            // flip the user unmuted / camera-on against their intent shortly after
-            // join (once syncProducers reconciles). The web client ignores the
-            // local user's own producer entirely (consumeProducer returns early for
-            // producerUserId === userId); mirror that. Screen-share is still synced
-            // because it has no local "off intent" the echo could fight.
+
             if producer.kind == "video", producer.type == "screen" {
                 state.isScreenSharing = !(producer.paused ?? false)
                 state.activeScreenShareUserId = state.isScreenSharing ? state.userId : nil
@@ -6752,8 +6502,6 @@ final class MeetingViewModel {
         state.activeReactions.removeAll()
     }
 
-    // MARK: - Room Actions
-
     func joinRoom(
         roomId: String,
         displayName: String,
@@ -6775,8 +6523,7 @@ final class MeetingViewModel {
         PerformanceDiagnostics.memory("join_room_start")
         let isRecoveryJoin = isRejoinInFlight
         let previousConnectionState = state.connectionState
-        // S1C ID (A19): the call session, the generation and the attempt id change inside one refresh batch, so the
-        // shell sees exactly one identity change carrying all three. No return sits in this block.
+
         beginShellRefreshBatch()
         if MeetingCallSessionPolicy.startsNewCallSession(
             isRecoveryJoin: isRecoveryJoin,
@@ -6824,15 +6571,11 @@ final class MeetingViewModel {
         self.state.serverRestartNotice = nil
         self.state.joinFormErrorMessage = nil
         self.state.isNetworkOffline = effectiveNetworkOffline
-        // Clear any error left over from a prior session on THIS reused singleton
-        // VM (e.g. a kick / room-ended notice, or a transient in-call error).
-        // cleanup() deliberately preserves errorMessage so the .error screens
-        // (ErrorView) still show it after teardown - so the fresh-join path is
-        // where we wipe it, or it would leak into the next meeting's banner.
+
         self.state.errorMessage = nil
         self.state.meetingEndedNoticeMessage = nil
         self.state.terminalOutcome = nil
-        // S10 8 f (HD request B5-T5 R3): a new attempt starts without the last failure's class.
+
         self.lastJoinFailureCode = ""
         self.lastJoinFailureCategory = ""
         self.isIntentionalLeave = false
@@ -6876,7 +6619,7 @@ final class MeetingViewModel {
                 }
 
                 #if os(macOS) && !SKIP
-                // SYS-6 host-test seam: a scripted join answer instead of the network (the macOS stubs never connect).
+
                 if let testJoinFetch = self.testJoinFetch {
                     try await testJoinFetch()
                     return
@@ -6890,8 +6633,7 @@ final class MeetingViewModel {
                 if !canReuseConnectedSocket {
                     let clientId = clientId ?? SfuJoinService.resolveClientId()
                     let fetchStartedAt = Date()
-                    // S10 0.8 C18 (RECONCILE R48, HD request B5-T5 R2): an initial join retries once after Retry-After
-                    // (at most 10 s) while the lobby stays in Connecting; recovery joins keep their own schedule.
+
                     let fetchedJoinInfo = try await EntryJoinRetry.fetchJoinInfo(
                         allowsRetry: !isRecoveryJoin,
                         isNetworkOffline: { self.state.isNetworkOffline },
@@ -6984,7 +6726,7 @@ final class MeetingViewModel {
                     let classified = MeetingErrorClassifier.classify(error, context: .rejoin, isNetworkOffline: state.isNetworkOffline)
                     CallDiagnostics.shared.recordFailure(classified)
                     if classified.category == .roomEnded {
-                        // S10 0.8 C5 (10 f): a rejoin answer that says the room ended is a host end, a Home notice.
+
                         await finishMeetingEnded(
                             showNotice: true,
                             message: classified.serverText.isEmpty ? nil : classified.serverText,
@@ -7031,8 +6773,7 @@ final class MeetingViewModel {
               !isRejoinInFlight,
               lastJoinContext != nil else { return }
         state.isRecoveringConnection = true
-        // SYS-6 (S70 6 c, INM H3.5): the watchdog covers a forced rejoin too, so a hung first attempt still stalls
-        // out at 25 s and caps at 120 s. Neither stamp touches the SC16 attempt count.
+
         if recoveryStartedAt == nil {
             recoveryStartedAt = Date()
         }
@@ -7104,7 +6845,6 @@ final class MeetingViewModel {
             user: nil
         )
 
-        // R70-11: the system call continues through the redirect (same presence session and CallKit UUID).
         redirectContinuationPending = true
         isIntentionalLeave = true
         isIntentionalTeardownInProgress = true
@@ -7129,12 +6869,6 @@ final class MeetingViewModel {
         )
     }
 
-    // MARK: - Active Speaker Poll
-
-    /// Starts the active-speaker poll that reads remote audio levels and updates
-    /// `state.activeSpeakerId`. Idempotent - a running poll is cancelled first.
-    /// Called by the view when a sheet or the chat panel covers the video stage,
-    /// so the active-speaker poll can relax its main-thread sampling.
     func setStageObscuredByOverlay(_ obscured: Bool) {
         guard isStageObscuredByOverlay != obscured else { return }
         PerformanceDiagnostics.event("stage_obscured", details: "next=\(obscured)")
@@ -7146,10 +6880,7 @@ final class MeetingViewModel {
         let freezeInterval = freezeWatchdogTickInterval
         let syncInterval = producerSyncTickInterval
         let pollContext = currentSocketEventContext()
-        // @MainActor so the poll (which iterates the WebRTC client's consumers +
-        // mutates the freeze-watchdog state) is serialized with consume/close on
-        // both platforms - on Android a plain Task would run off-main and could
-        // race the consumer maps.
+
         activeSpeakerTask = Task { @MainActor [weak self] in
             var freezeTick = 0
             var qualityTick = freezeInterval
@@ -7168,13 +6899,9 @@ final class MeetingViewModel {
                 #else
                 let isInPip = false
                 #endif
-                // Active-speaker sampling is main-thread work. When a sheet/chat
-                // covers the stage (and we're not in PiP, where it's still shown),
-                // relax it to ~every 3rd tick so it doesn't compete with sheet
-                // rendering. The freeze/quality/sync safety-nets below keep their
-                // normal wall-clock cadence.
+
                 activeSpeakerTick += 1
-                // SYS-6 (S70 6 c, CE E25): no speaker sampling while backgrounded without PiP; PiP keeps sampling.
+
                 let samplesSpeaker = LifecycleRefreshPolicy.samplesActiveSpeaker(
                     isInBackground: self.lifecycleRefreshTracker.isInBackground,
                     isInPip: isInPip
@@ -7191,8 +6918,7 @@ final class MeetingViewModel {
                 }
                 self.lastObservedPipMode = isInPip
                 #endif
-                // Run the video freeze watchdog ~every 2s:
-                // un-freezes a stuck remote decoder via a keyframe request.
+
                 freezeTick += 1
                 if freezeTick >= freezeInterval {
                     freezeTick = 0
@@ -7206,9 +6932,7 @@ final class MeetingViewModel {
                     self.applyAdaptiveVideoQuality(self.publishConnectionQuality)
                     await self.applyRemoteConsumerBandwidthPolicy()
                 }
-                // Producer-sync safety net ~every 10s: recover
-                // a consumer the SFU left paused after a dropped resumeConsumer
-                // ack (the "can't hear one specific person" case).
+
                 syncTick += 1
                 if syncTick >= syncInterval {
                     syncTick = 0
@@ -7243,8 +6967,7 @@ final class MeetingViewModel {
         do {
             try await enableOrStartLocalAudio()
             guard isCurrentJoinedCall(actionContext) else { return }
-            // A mute that landed mid-start leaves no producer or a paused
-            // one; keep it.
+
             guard webRTCClient.isLocalAudioPublishingHealthy else { return }
             state.isMuted = false
             syncCallPresenceState()
@@ -7324,8 +7047,7 @@ final class MeetingViewModel {
         do {
             try await enableOrStartLocalAudio()
             guard isCurrentJoinedCall(actionContext) else { return }
-            // A mute that landed mid-start leaves no producer or a paused
-            // one; keep it.
+
             guard webRTCClient.isLocalAudioPublishingHealthy else { return }
             state.isMuted = false
             syncCallPresenceState()
@@ -7353,6 +7075,7 @@ final class MeetingViewModel {
     private func reassertLocalVideoPublishingIfNeeded(context: SocketEventContext? = nil) async {
         guard state.connectionState == ConnectionState.joined,
               !state.mediaPublishingDisabled,
+              !isCameraHoldBlockingVideo,
               !state.isCameraOff,
               !isCameraToggleInFlight else { return }
         if let context {
@@ -7365,8 +7088,7 @@ final class MeetingViewModel {
         do {
             try await enableOrStartLocalVideo(context: actionContext)
             guard isCurrentJoinedCall(actionContext) else { return }
-            // A camera-off or audio-only mode that landed during the enable
-            // wins: never commit camera-on over it.
+
             guard isLocalCameraOnStillWanted(
                 cameraIntentRevision: cameraIntentRevision,
                 videoPolicyRevision: videoPolicyRevision
@@ -7400,9 +7122,6 @@ final class MeetingViewModel {
             message.contains("video track unavailable")
     }
 
-    /// Periodic safety net mirroring the web client's producer sync: reconcile
-    /// against the SFU's current producer list, clear stale consumers, create
-    /// any missing consumers, and re-assert resume on consumers we already hold.
     private func syncProducers(context: SocketEventContext? = nil) async {
         guard state.connectionState == ConnectionState.joined else { return }
         if let context {
@@ -7476,9 +7195,7 @@ final class MeetingViewModel {
                !(state.isAudioOnlyMode && producer.kind == "video") {
                 try? await socketManager.resumeConsumer(consumerId: consumerId, requestKeyFrame: false)
             } else if webRTCClient.hasConsumerGeneration(forProducer: producer.producerId) {
-                // A planned make-before-break reset owns this producer. Its
-                // staged/displaced generations must not receive sync controls
-                // or be duplicated by a third consume.
+
                 continue
             } else {
                 await consumeRemoteProducer(producer, context: context)
@@ -7564,7 +7281,7 @@ final class MeetingViewModel {
                 applyBrowserAudioMuteState()
             }
             if MeetingState.isBrowserVideoUserId(producer.producerUserId) {
-                // S60 14 c (ACT-9): the browser card binds the consumer's track once it exists.
+
                 refreshBrowserStage()
             }
             pendingProducers.removeValue(forKey: producer.producerId)
@@ -7695,9 +7412,6 @@ final class MeetingViewModel {
         #endif
     }
 
-    /// Picks the loudest participant above `activeSpeakerThreshold`. When
-    /// nobody is above the threshold the previous speaker lingers for
-    /// `activeSpeakerHoldSeconds` to debounce the ring, then clears to nil.
     private func updateActiveSpeaker() {
         let levels = webRTCClient.sampleAudioLevels(localUserId: state.userId)
 
@@ -7810,17 +7524,14 @@ final class MeetingViewModel {
         }
 
         guard isCurrentJoinAttempt(joinAttemptId) else { return false }
-        if !state.isCameraOff {
+        if !state.isCameraOff && !isCameraHoldBlockingVideo {
             var cameraIntentRevision = localCameraIntentRevision
             do {
                 try await webRTCClient.startProducingVideo()
                 guard isCurrentJoinAttempt(joinAttemptId) else { return false }
-                // Camera intents from the reconnecting screen that landed
-                // during the start win: close what the start committed for a
-                // newer camera-off (the clients cancel such a start themselves
-                // once the camera-off reached them), start again for a newer
-                // camera-on, until the camera matches the newest intent.
-                while localCameraIntentRevision != cameraIntentRevision {
+                guard !isCameraHoldBlockingVideo else { return true }
+
+                while localCameraIntentRevision != cameraIntentRevision && !isCameraHoldBlockingVideo {
                     cameraIntentRevision = localCameraIntentRevision
                     if state.isCameraOff {
                         await webRTCClient.closeLocalVideoProducer()
@@ -7831,6 +7542,7 @@ final class MeetingViewModel {
                 }
             } catch {
                 guard isCurrentJoinAttempt(joinAttemptId) else { return false }
+                guard !isCameraHoldBlockingVideo else { return true }
                 debugLog("[Meeting] Failed to start video: \(error)")
                 setLocalCameraOffState(true)
                 reportMediaFailure(error, kind: .camera)
@@ -7874,7 +7586,7 @@ final class MeetingViewModel {
         Task {
             await cleanup(lifecycleGeneration: leavingGeneration)
             guard meetingLifecycleGeneration == leavingGeneration else { return }
-            // One refresh for both writes: the shell never sees a torn-down call as in call between them.
+
             beginShellRefreshBatch()
             isIntentionalTeardownInProgress = false
             state.connectionState = ConnectionState.disconnected
@@ -7901,9 +7613,6 @@ final class MeetingViewModel {
         await cleanup()
     }
 
-    /// S10 0.8 C4 (INM H3.13): the server ended the connection without a restart notice. The typed outcome
-    /// (`serverDisconnected`, the outcome phase and the `connectionLost` token) is recorded before the phase write; the
-    /// legacy route goes home as before, now with the call torn down.
     private func finishServerDisconnect() async {
         guard !isIntentionalTeardownInProgress else { return }
         let disconnectGeneration = meetingLifecycleGeneration
@@ -7989,8 +7698,7 @@ final class MeetingViewModel {
     ) async {
         let failureGeneration = meetingLifecycleGeneration
         let resolvedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        // S70 7: the legacy error screen shows owned copy or a clean server sentence, never transport text; the
-        // outcome keeps only clean server text (S10 10 j `serverDetail`).
+
         let classification = classified ?? MeetingErrorClassifier.classify(
             serverMessage: resolvedMessage,
             context: outcome == .joinFailed ? .join : .rejoin
@@ -8000,7 +7708,7 @@ final class MeetingViewModel {
         let preservedDisplayName = state.displayName
         let preservedIsMuted = state.isMuted
         let preservedIsCameraOff = state.isCameraOff
-        // S10 0.8 C3 (HD request B5-T5 R3): cleanup() clears lastJoinContext; the rejoin context needs it.
+
         let preservedJoinContext = lastJoinContext
 
         isIntentionalLeave = true
@@ -8018,7 +7726,7 @@ final class MeetingViewModel {
         state.displayName = preservedDisplayName
         state.isMuted = preservedIsMuted
         state.isCameraOff = preservedIsCameraOff
-        // S10 8 f (HD request B5-T5 R3): the failed block's class, then the outcome with the pre-cleanup rejoin context.
+
         lastJoinFailureCode = classification.diagnosticCode
         lastJoinFailureCategory = classification.category.rawValue
         recordTerminalOutcome(outcome, serverText: classification.serverText, joinContext: preservedJoinContext)
@@ -8042,13 +7750,10 @@ final class MeetingViewModel {
         state.connectionState = ConnectionState.disconnected
         state.errorMessage = nil
         state.joinFormErrorMessage = message
-        // TG 3.6 row 18: the legacy outcome route (the premeeting presenter publishes validationFailed with ENT-1).
+
         ConclaveHapticFeedback.legacyOutcome(.validationFailed)
     }
 
-    // MARK: - Session Shell (WP2-S1) and Call Presence Inputs (SYS-1)
-
-    /// S1C E5: the public identity the shell and every native screen key their work to.
     var sessionIdentity: MeetingSessionIdentity {
         MeetingSessionIdentity(
             callSession: callSessionSerial,
@@ -8057,7 +7762,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// S1C E3: installs the one shell hook on the current state and publishes it.
     private func bindShellInputs() {
         state.onShellInputChanged = { [weak self] in
             self?.requestShellRefresh()
@@ -8065,48 +7769,41 @@ final class MeetingViewModel {
         requestShellRefresh()
     }
 
-    /// S1C E6: pushes fresh inputs to the shell presenter, then to the call presence (SY1: the presence reads the
-    /// session snapshot the shell just published). Suppressed inside a refresh batch; the batch end refreshes once.
     private func requestShellRefresh() {
         guard shellRefreshBatchDepth == 0 else { return }
         isApplyingShellInputs = true
         shell.apply(makeShellInputs())
         isApplyingShellInputs = false
         callPresence.apply(makeCallPresenceInputs())
-        // S10 0.8 C8: the premeeting presenter reads the snapshot the shell just published (equality-guarded).
+
         premeeting.apply(makePremeetingInputs())
-        // The stage's `isInCall` follows the shell phase (connectionState is S1-only): refresh the stage only when the
-        // published phase changes.
+
         if shell.session.phase != lastStageShellPhase {
             lastStageShellPhase = shell.session.phase
             requestStageRefresh()
         }
-        // STG-5 (S20 SC5): the on hold and audio paused rows read the presence the shell just published (after the
-        // stage block, so the batch 3 shell, presence, premeeting order pin holds).
+
         if stageRefreshBatchDepth == 0 {
             stage.applyNotices(makeStageNoticeInputs())
         }
-        // S50 PH1: People's blocked reason follows the S1 phase and the offline flag; refresh only when either changes.
+
         let peopleKey = shell.session.phase.rawValue + (state.isNetworkOffline ? ":offline" : "")
         if peopleKey != lastPeopleConnectionKey {
             lastPeopleConnectionKey = peopleKey
             requestPeopleRefresh()
-            // S50 11 f (PPL-6): Q&A disables the composer, votes and moderation with the same reason.
+
             requestQaRefresh()
         }
-        // S50 PPL-4: End for Everyone's availability and pending state come from the S1 publish.
+
         requestHostControlsRefresh()
-        // S30 CC1: every S1-hooked field reaches the controls once, after S1 published (equality guarded there).
+
         requestControlsRefresh()
-        // TRN-1 (SC13, C6-11): the transcript stream follows the published phase and the attendee role.
+
         syncTranscriptStream()
-        // SYS-3 (S70 2 j): the notification presenter follows the published phase, foreground, Chat and PiP.
+
         syncSystemNotifications()
     }
 
-    /// SYS-3 (S70 2 j): the call facts the notification presenter reads (equality guarded there). Conclave counts as
-    /// active only in the foreground and outside PiP (a PiP window shows the call, so Chat is not visible there); the
-    /// phase flags mirror the S1 phase so an admission posted while waiting survives the connect that follows it.
     private func syncSystemNotifications() {
         let session = shell.session
         let presence = callPresence.snapshot
@@ -8137,7 +7834,6 @@ final class MeetingViewModel {
         ))
     }
 
-    /// SYS-3: a platform answer changed the notifications snapshot (the priming banner, the Settings rows).
     private func systemNotificationsChanged() {
         if stageRefreshBatchDepth == 0 {
             stage.applyNotices(makeStageNoticeInputs())
@@ -8145,9 +7841,6 @@ final class MeetingViewModel {
         requestSettingsRefresh()
     }
 
-    /// SYS-3 (S70 2 a, c): a tap on a delivered notification returns to the call; a chat notification then opens Chat
-    /// at the message (the native call root; the legacy root opens its chat). A tap for another room or after the call
-    /// ended only brings the app forward. Android's MainActivity already recorded returnToCall for the tap intent.
     private func handleLocalNotificationTap(_ tap: LocalNotificationTap) {
         guard !tap.roomId.isEmpty, tap.roomId == state.roomId, CallSessionCoordinator.shared.isInCall else { return }
         #if !SKIP
@@ -8185,7 +7878,6 @@ final class MeetingViewModel {
         flushChatRefresh()
     }
 
-    /// S1C 3.2 inputs table. Never errorMessage, the active speaker, connection quality, audio levels or chat arrays.
     func makeShellInputs() -> MeetingShellInputs {
         MeetingShellInputs(
             identity: sessionIdentity,
@@ -8212,7 +7904,7 @@ final class MeetingViewModel {
             isScreenShareSupported: screenShareSupported(),
             unreadChatCount: state.unreadChatCount,
             isChatOpen: state.isChatOpen,
-            // S50 PH11: the waiting badges are host-only (INM D5 stale badge).
+
             pendingUsersCount: state.isAdmin ? state.pendingUsersCount : 0,
             isReactionsDisabled: state.isReactionsDisabled,
             terminalOutcome: state.terminalOutcome,
@@ -8221,20 +7913,17 @@ final class MeetingViewModel {
             screenShareToggleInFlight: isScreenShareToggleInFlight,
             handToggleInFlight: isHandRaiseToggleInFlight,
             isTearingDown: isIntentionalTeardownInProgress,
-            // R70-11: a redirect of a call that was already live keeps the stage and its admission.
+
             isRedirectContinuation: redirectContinuationPending && presenceJoinedAtMillis > 0,
-            // No permission provider yet (WP3): rows stay as the legacy bar until it reports.
+
             microphonePermission: MeetingMediaPermissionStatus.granted,
             cameraPermission: MeetingMediaPermissionStatus.granted,
             audioInterruption: callPresence.snapshot.interruption,
-            // S20 Q10 (PPL-5): the attendee hand row follows the call with the `webinar:setHandRaised` path.
+
             attendeeCanRaiseHand: attendeeCanRaiseHand
         )
     }
 
-    // MARK: - Stage (S20 SC1, STG-1)
-
-    /// S20 SC1 E3, E5: the stage's own hooks on the current state (never S1's), then one publish.
     private func bindStageInputs() {
         state.onStageInputChanged = { [weak self] in
             self?.requestStageRefresh()
@@ -8252,7 +7941,7 @@ final class MeetingViewModel {
             self?.refreshStageGamePresence()
             self?.refreshActivityGame()
         }
-        // S20 SC8, S60 C6-2, S20 6 f (STG-3): the one camera owner reports facing and pause changes.
+
         LocalPreviewController.shared.onCallCameraChange = { [weak self] in
             self?.syncLocalCameraState()
         }
@@ -8260,21 +7949,20 @@ final class MeetingViewModel {
         requestStageRefresh()
     }
 
-    /// S20 SC1 E3: fresh stage inputs, suppressed inside a refresh batch (the batch end flushes once).
     private func requestStageRefresh() {
         guard stageRefreshBatchDepth == 0 else { return }
         stageRefreshCount += 1
         stage.apply(makeStageInputs())
         stage.applyNotices(makeStageNoticeInputs())
-        // STG-6, STG-8 (S20 15 j, 12 j): Meeting Details and the attendee viewer inputs (B5-T2 R1).
+
         stage.applyDetails(makeStageDetailsInputs())
-        // SET-6 (S60 4 j): the Effects picker's camera facts (equality guarded in the presenter).
+
         stage.effects.apply(makeEffectsInputs())
-        // SET-1 (S60 1 j): Settings reads the same core facts (equality guarded in the presenter).
+
         requestSettingsRefresh()
-        // S20 12 f (PPL-7): the in-place attendee rejoin after a demotion announces the move once.
+
         announceDemotionIfNeeded()
-        // SC18: a role change after the presence snapshot posts becameHost or lostHost once.
+
         if stageLastIsAdmin != state.isAdmin {
             if state.hasInitialPresenceSnapshot && presenceJoinedAtMillis > 0 {
                 stage.post(StageEvent.make(kind: state.isAdmin ? StageEventKind.becameHost : StageEventKind.lostHost))
@@ -8284,7 +7972,6 @@ final class MeetingViewModel {
         refreshActivityPlayersHere()
     }
 
-    /// SC1 E4: game pushes refresh the stage only when presence or the game name changes.
     private func refreshStageGamePresence() {
         let present = state.gamePublicState != nil
         let name = state.gamePublicState?.name ?? ""
@@ -8295,8 +7982,6 @@ final class MeetingViewModel {
         requestControlsRefresh()
     }
 
-    /// S20 0.5 `StageInputs`: every id through `canonicalStageUserId` (E6), join order from `participantJoinSerials`
-    /// (PH19), renderer keys from the media client (SC10).
     func makeStageInputs() -> StageInputs {
         let localId = state.userId
         var rows: [StageParticipantInput] = []
@@ -8322,8 +8007,7 @@ final class MeetingViewModel {
                 isHandRaised: participant.isHandRaised,
                 isScreenSharing: participant.isScreenSharing,
                 isReconnecting: participant.connectionStatus?.state == .reconnecting,
-                // The SFU's raw reason ("ping timeout", "transport close", ...); the tile maps it to copy
-                // (TileFeaturePolicy.reconnectReasonKind). Empty when not reconnecting.
+
                 reconnectReason: participant.connectionStatus?.state == .reconnecting ? (participant.connectionStatus?.reason ?? "") : "",
                 isHost: state.hostUserIds.contains(id),
                 joinSerial: state.participantJoinSerials[id] ?? 0,
@@ -8355,7 +8039,7 @@ final class MeetingViewModel {
             selfViewCorner: state.selfViewCorner.rawValue,
             pinnedUserId: state.canonicalStageUserId(state.pinnedUserId) ?? "",
             activeAppId: state.activeAppId ?? "",
-            // The app id: the chip and the announcements resolve the app's localized name from it (S60 C6-18).
+
             activeAppName: state.activeAppId ?? "",
             isBrowserActive: state.isBrowserActive,
             isGameActive: stageGamePresence,
@@ -8384,9 +8068,6 @@ final class MeetingViewModel {
         )
     }
 
-    // MARK: - Notices (S20 SC5, SC16, STG-5) and transcript (TRN-1)
-
-    /// S20 0.5 notice rows (SC5): state only, every id canonical. `errorMessage` never reaches the stage.
     func makeStageNoticeInputs() -> StageNoticeInputs {
         var pendingIds: [String] = []
         for row in state.pendingUserRows {
@@ -8410,7 +8091,7 @@ final class MeetingViewModel {
                                                                              isRetryPending: isRecoveryRetryPending),
             hasServerRestartNotice: state.serverRestartNotice != nil,
             serverRestartText: state.serverRestartNotice ?? "",
-            // S30 CC8: the recap posting banner with End Now.
+
             isRecapPosting: recapCoordinator.isPostingBeforeEnd,
             isOnHold: presence.phase == .onHold || presence.interruption == .held,
             isAudioPaused: presence.interruption == .otherAudio,
@@ -8424,17 +8105,13 @@ final class MeetingViewModel {
                                                   isAttendee: state.isWebinarAttendee),
             isAudioOnly: state.isAudioOnlyMode,
             connectionQuality: state.connectionQuality,
-            // SYS-3 (S70 2 d, R70-1): Android 13+, native stage, after stage entry, once per process.
+
             showsNotificationsPrime: SystemNotifications.shared.snapshot.showsPrimingBanner,
             knockSoundOn: SettingsPreferences.knockSound(),
             handSoundOn: SettingsPreferences.handSound()
         )
     }
 
-    /// S20 15 j and 12 j (STG-6, STG-8): what Meeting Details and the attendee viewer read beyond `StageInputs`. Never
-    /// calls the async `copyableWebinarLink()` (it can generate server state; only the link actions generate, through
-    /// the S50 `HostControlsPresenter.ensureWebinarLink()`, RECONCILE R34). Q&A and the attendee hand capability keep
-    /// their defaults until S50 PH7 (PPL-6) and PPL-5 (batch 6) publish them.
     func makeStageDetailsInputs() -> StageDetailsInputs {
         StageDetailsInputs.make(
             callSession: callSessionSerial,
@@ -8445,7 +8122,7 @@ final class MeetingViewModel {
             webinarLinkURL: state.webinarLinkURL ?? "",
             webinarTitle: state.webinarTitle,
             webinarAttendeeCount: state.webinarAttendeeCount,
-            // S50 PH7, PH10 and S20 Q10 (PPL-5, PPL-6; RECONCILE R18): the attendee bar's Q&A badge and hand capability.
+
             isWebinarQaEnabled: state.isWebinarEnabled && state.isWebinarQaEnabled,
             webinarQaUnseen: webinarQaUnseen(),
             attendeeCanRaiseHand: attendeeCanRaiseHand,
@@ -8456,7 +8133,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// STG-5: the notice actions the core performs (S20 10 j).
     private func performNoticeCommand(_ command: NoticeCommand) {
         switch command.actionId {
         case NoticeAction.admit:
@@ -8474,30 +8150,27 @@ final class MeetingViewModel {
         case NoticeAction.shareAgain:
             shell.toggleScreenShare()
         case NoticeAction.allow:
-            // SYS-3 (S70 2 d): one serialized POST_NOTIFICATIONS request; the banner leaves at once either way.
+
             SystemNotifications.shared.requestPermission(reason: NotificationRequestReason.call)
         case NoticeCommand.dismissHostNotice:
             dismissAdminNotice()
         case NoticeAction.retry:
-            // S50 PL14: a stage-origin People failure (tile menu) retries its own command.
+
             if command.noticeKind == PeopleFailurePlacementPolicy.stageNoticeKind {
                 people.retry(failureId: PeopleFailurePlacementPolicy.stageFailureId(command.detail))
             } else if command.noticeKind == NoticeKind.routeFailed {
-                // CTL-3 (S30 3 d): the route failure toast's Retry asks the route owner for the same route again (the
-                // notice's `detail` is the route id, `RoutePickerPolicy.failureNotice(routeId:)`).
+
                 _ = controls.retryRoute(id: command.detail)
             }
         case NoticeAction.endNow:
-            // S30 CC8: the recap banner's End Now ends at once.
+
             recapCoordinator.endNow()
         default:
-            // Retry for the lock failure lands with its owner (PPL).
+
             break
         }
     }
 
-    /// TRN-1: opens the transcript stream on join for non-attendees, closes it on leave or demotion to attendee, and
-    /// probes the relay once on join and again after a recovery rejoin (R52; web useMeetingTranscript).
     private func syncTranscriptStream() {
         let phase = shell.session.phase
         let inCall = phase == .inCall || (phase == .recovering && shell.session.hasBeenAdmittedThisSession)
@@ -8506,8 +8179,7 @@ final class MeetingViewModel {
         transcriptLastPhase = phase
         if wanted && !transcriptStreamOpen {
             transcriptStreamOpen = true
-            // TRN-2 (C6-11): the native call route reads the incremental feed; the legacy panel's whole-session regroup
-            // per delta runs only on the legacy route.
+
             transcriptState.setLegacyPresentation(!NativeRouteFlags.shared.isEnabled(NativeRouteKey.call))
             openTranscriptStream()
             Task { [weak self] in await self?.transcriptService?.probeRelayAvailability() }
@@ -8519,14 +8191,10 @@ final class MeetingViewModel {
         }
     }
 
-    /// TRN-2 hook: the Live Notes panel's Retry (S60 C6-11).
     func retryTranscriptConnection() {
         transcriptService?.retryConnection()
     }
 
-    // MARK: - Controls (S30 CC1, CTL-1)
-
-    /// S30 CC1: the controls' own hook on the fields S1 does not hook, then one publish.
     private func bindControlsInputs() {
         state.onControlsInputChanged = { [weak self] in
             self?.requestControlsRefresh()
@@ -8534,29 +8202,26 @@ final class MeetingViewModel {
         requestControlsRefresh()
     }
 
-    /// S30 CC1: fresh controls inputs, suppressed inside a refresh batch (the batch end flushes once).
     private func requestControlsRefresh() {
         guard controlsRefreshBatchDepth == 0 else { return }
         controlsRefreshCount += 1
         controls.apply(makeCallControlsInputs())
-        // TRN-2 (S30 CC8): the recap capability and the posting phase over the Leave state.
+
         controls.applyRecap(makeRecapControlsState())
     }
 
-    /// S30 0.5 `CallControlsInputs`: the S1 snapshots the shell just published plus the controls-only fields. Never the
-    /// active speaker, audio levels, reactions or chat arrays (S30 1 k).
     func makeCallControlsInputs() -> CallControlsInputs {
         let presenterId = state.activeScreenShareUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let presenterName = presenterId.isEmpty || state.isLocalIdentityUserId(presenterId) ? "" : state.displayName(for: presenterId)
-        // CTL-5 (S30 5 f row 18): the S50 host-actions owner's pending Lock Meeting switch.
+
         let lockRow = people.host.snapshot.policy(HostPolicyID.lockMeeting)
         return CallControlsInputs.fromShell(
             shell,
             presenterName: presenterName,
-            // S50 PH5 feeds S30 CC10: hosts are never blocked by participant permissions.
+
             isMicDisabledByHost: !state.isAdmin && !state.isParticipantUnmuteAllowed,
             isCameraDisabledByHost: !state.isAdmin && !state.isParticipantVideoAllowed,
-            // S30 CC9 (PPL-5, PPL-6; RECONCILE R18): the attendee Q&A control, its badge and the attendee hand.
+
             isWebinarQaEnabled: state.isWebinarEnabled && state.isWebinarQaEnabled,
             webinarQaUnseen: webinarQaUnseen(),
             attendeeCanRaiseHand: attendeeCanRaiseHand,
@@ -8566,9 +8231,7 @@ final class MeetingViewModel {
             activeAppId: state.activeAppId ?? "",
             hasOpenVote: state.gameVote != nil,
             layoutMode: state.viewMode.rawValue,
-            // CTL-5 (S30 5 j): More's link (RECONCILE R50), captions and live notes (S20 SC13), the game behind
-            // Activities (SC1 E4), the camera flip capability independent of the connection (rows stay in place while
-            // recovering, R10), and the pending lock. Effects follow `EffectsAvailabilityPolicy` (OQ6 default A; CC11 not built).
+
             meetingLink: state.roomId.isEmpty ? "" : MeetingState.meetingLink(for: state.roomId, clientId: state.meetingClientId),
             captionsOn: CaptionsPreference.isOn(),
             liveNotes: transcriptState.liveNotes,
@@ -8576,17 +8239,15 @@ final class MeetingViewModel {
             gameName: stageGameName,
             canFlipCamera: !state.isAudioOnlyMode && !state.mediaPublishingDisabled && webRTCClient.canSwitchCamera(),
             isFlipInFlight: isCameraSwitchInFlight,
-            // SET-6 (OQ6 default A): the Effects panel entries follow the one availability value (false in production).
+
             effectsPanelAvailable: EffectsAvailabilityPolicy.showsPanelEntry(stage.effects.snapshot.availability),
-            // S30 CC11 (CTL-4): iOS "Video Effects…" (More and the Camera shortcut) only while the camera captures.
+
             canShowSystemVideoEffects: canShowSystemVideoEffectsNow(),
             isRoomLockPending: lockRow?.isPending ?? false,
             roomLockRequestedOn: lockRow?.requestedOn ?? false
         )
     }
 
-    /// S30 CC11 (CTL-4): the system video effects module is offered only while the call camera captures (iOS 15 API;
-    /// always false on Android, which has no such module).
     func canShowSystemVideoEffectsNow() -> Bool {
         #if os(iOS) && !SKIP
         let running = MediaShortcutPolicy.isCameraCaptureRunning(isCameraOff: state.isCameraOff, isAudioOnly: state.isAudioOnlyMode,
@@ -8598,9 +8259,6 @@ final class MeetingViewModel {
         #endif
     }
 
-    /// The in-context permission request (S10 7). The shell rows read `.granted` until WP3's permission provider reports
-    /// a status (see `makeShellInputs()`), so no `permissionUndetermined` row exists yet and nothing reaches here; the
-    /// provider wires the system prompt when it lands.
     private func performControlsCommand(_ command: CallControlsCommand) {
         switch command {
         case .requestMicrophonePermission, .requestCameraPermission:
@@ -8608,8 +8266,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S30 0.5 mapping (CTL-5, CTL-6): true when the request was accepted, so the presenter returns `dispatched` and the
-    /// view plays its gesture. Lock goes through the S50 host-actions owner (its pending state and failure toast).
     private func performControlsRequest(_ request: CallControlsRequest) -> Bool {
         switch request.kind {
         case .sendReaction:
@@ -8634,15 +8290,14 @@ final class MeetingViewModel {
             requestControlsRefresh()
             return result == ControlTapResult.dispatched
         case .showSystemVideoEffects:
-            // S30 CC11 (CTL-4): Control Center's video effects module through the WP3 capture owner. iOS only: Android
-            // never offers the row (its input stays false).
+
             #if os(iOS) && !SKIP
             return SystemCameraEffectsOwner.shared.showSystemVideoEffects()
             #else
             return false
             #endif
         case .showSystemMicrophoneModes:
-            // S30 CC11 (CTL-4): Control Center's Mic Mode module ("Mic Mode…" in the iOS Mic shortcut, S30 Q7).
+
             #if os(iOS) && !SKIP
             return SystemCameraEffectsOwner.shared.showSystemMicrophoneModes()
             #else
@@ -8651,16 +8306,12 @@ final class MeetingViewModel {
         }
     }
 
-    /// S20 SC12 (CTL-6): the S1 hand row is pending from the tap (ticket begun) to the acknowledgment.
     private func shellHandRowPending() -> Bool {
         shell.controls.rows.first(where: { $0.id == MeetingControlID.hand.rawValue })?.isPending ?? false
     }
-    /// The last S1 hand pending value the stage saw (refresh only on a change).
+
     private var lastStageHandPending = false
 
-    // MARK: - People (S50 PH1, PPL-1)
-
-    /// S50 PH1: People's own hook on the current state (never S1's or the stage's), then one publish.
     private func bindPeopleInputs() {
         state.onPeopleInputChanged = { [weak self] in
             self?.requestPeopleRefresh()
@@ -8668,16 +8319,12 @@ final class MeetingViewModel {
         requestPeopleRefresh()
     }
 
-    /// PH1: fresh People inputs, suppressed inside a refresh batch (the batch end flushes once).
     private func requestPeopleRefresh() {
         guard peopleRefreshBatchDepth == 0 else { return }
         peopleRefreshCount += 1
         people.apply(makePeopleInputs())
     }
 
-    /// S50 0.5 `PeopleInputs`: roster ids through `canonicalStageUserId` (S20 E6), waiting ids exactly as the server
-    /// sent them, join order from `participantJoinSerials` (PH19), screen audio collapsed per user in one pass over the
-    /// producers (INM D1). Never the active speaker, audio levels, connection quality or chat arrays.
     func makePeopleInputs() -> PeopleInputs {
         let localId = state.userId
         var screenAudioUsers: [String: Bool] = [:]
@@ -8702,7 +8349,7 @@ final class MeetingViewModel {
             guard !participant.isLeaving, let id = state.canonicalStageUserId(participant.id), id != localId else { continue }
             rows.append(PeopleParticipantInput.make(
                 userId: id,
-                // S50 2 j: the full name (B4-T1's `chatDisplayName(for:)` is the same rule, HD request B4-T7 R1e).
+
                 displayName: state.chatDisplayName(for: id),
                 isMuted: participant.isMuted,
                 isCameraOff: participant.isCameraOff,
@@ -8712,9 +8359,9 @@ final class MeetingViewModel {
                 isReconnecting: participant.connectionStatus?.state == .reconnecting,
                 isWebinarAttendee: participant.isWebinarAttendee,
                 joinSerial: state.participantJoinSerials[id] ?? 0,
-                // S50 PH3: the server's raise time (0 when unknown: sorts after timed hands by join order).
+
                 raisedAtMillis: participant.isHandRaised ? (state.raisedAtByUserId[id] ?? 0.0) : 0.0,
-                // S40 CH21 and S50 PH13: the hide state and the key "Remove and Block" blocks.
+
                 messagesHidden: chat.isSenderHidden(id),
                 userKey: state.userKey(for: participant.id)
             ))
@@ -8745,7 +8392,7 @@ final class MeetingViewModel {
             hostUserIds: hostIds,
             isWebinarAttendee: state.isWebinarAttendee,
             waiting: waiting,
-            // ENT-8 (HD request B4-T2 R3): the same builder call `makeStageInputs()` uses.
+
             meetingLink: state.roomId.isEmpty ? "" : MeetingState.meetingLink(for: state.roomId, clientId: state.meetingClientId),
             roomLabel: shell.session.roomLabel,
             isRoomLocked: state.isRoomLocked,
@@ -8758,7 +8405,7 @@ final class MeetingViewModel {
             isDmEnabled: state.isDmEnabled,
             pinnedUserId: pinnedId,
             isRenameDisabled: displayNameEditor.isDisabledForSession,
-            // PH8 (PPL-5): the demote emitter exists on every platform.
+
             supportsMoveToAudience: true,
             webinarHandQueue: makeWebinarHandInputs(),
             webinarQueueKnown: state.webinarHandQueueReceived,
@@ -8766,9 +8413,6 @@ final class MeetingViewModel {
         )
     }
 
-    // MARK: - Host Controls (S50 6 to 8, PPL-4) and the People command seam (PH2)
-
-    /// PH1 (host presenter path): Host Controls' own hook (policies, access lists, webinar config), then one publish.
     private func bindHostControlsInputs() {
         state.onHostInputChanged = { [weak self] in
             self?.requestHostControlsRefresh()
@@ -8776,7 +8420,6 @@ final class MeetingViewModel {
         requestHostControlsRefresh()
     }
 
-    /// Equality guarded: only changed inputs reach the presenter.
     private func requestHostControlsRefresh() {
         guard peopleRefreshBatchDepth == 0 else { return }
         let next = makeHostControlsInputs()
@@ -8811,7 +8454,7 @@ final class MeetingViewModel {
             webinarLinkSlug: state.webinarLinkSlug ?? "",
             webinarLinkURL: state.webinarLinkURL ?? "",
             webinarAttendeeCount: state.webinarAttendeeCount,
-            // S50 PH10 (PPL-5): the Attendee Q&A switch.
+
             isWebinarQaEnabled: state.isWebinarQaEnabled,
             isConfigLoading: isHostConfigLoading,
             canEndForEveryone: shell.session.canEndForEveryone,
@@ -8819,8 +8462,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// S50 PH14: on becoming host, refresh the meeting and the webinar config once (web PPL-16); Host Controls shows
-    /// "Loading Settings" until both return.
     private func beginHostConfigRefresh() {
         hostConfigRefreshToken += 1
         let token = hostConfigRefreshToken
@@ -8836,8 +8477,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// C6-10: the rename editor reads the core through `context` and saves through the typed rename; a session flag
-    /// change refreshes People (the Change Name item, Q14).
     private func bindDisplayNameEditor() {
         displayNameEditor.context = { [weak self] in
             guard let self else { return DisplayNameEditorContext.empty }
@@ -8850,17 +8489,15 @@ final class MeetingViewModel {
         }
         displayNameEditor.onSessionFlagChanged = { [weak self] in
             self?.requestPeopleRefresh()
-            // SET-1 (C6-10): Settings' Name field follows the same session flag (HD request B6-T2 R1 g).
+
             self?.requestSettingsRefresh()
         }
     }
 
-    /// S50 PH2: the one switch from `PeopleCommand` to the core calls in the S50 0.5 mapping table. Every exit reports
-    /// through `people.finish(ticket, result)`; the presenter owns the ledger, pending state and failure placement.
     func performPeopleCommand(_ command: PeopleCommand, _ ticket: HostActionTicket) {
         let finish: (HostActionResult) -> Void = { [weak self] result in
             _ = self?.people.finish(ticket, result)
-            // CTL-5: More's Lock Meeting row leaves "Locking…" when the host action resolves (equality guarded).
+
             self?.requestControlsRefresh()
         }
         let target = command.targetId
@@ -8880,7 +8517,7 @@ final class MeetingViewModel {
         case .stopScreenShare:
             stopParticipantScreenShare(userId: target, onResult: finish)
         case .stopScreenAudio:
-            // Resolved inside the core: the presenter never sees producer ids (ticket key stopScreenAudio:<userId>).
+
             guard let producerId = remoteScreenShareAudioProducerId(for: target) else {
                 finish(HostActionResult.failed(HostActionFailure.notFound))
                 return
@@ -8889,7 +8526,7 @@ final class MeetingViewModel {
         case .remove:
             Task { await self.removeUser(userId: target, onResult: finish) }
         case .block:
-            // The server kicks present sessions and rejects pending ones (adminHandlers.ts:975-1031), so no kick here.
+
             let key = command.text.isEmpty ? state.userKey(for: target) : command.text
             blockAccessUserKey(key, onResult: finish)
         case .makeCoHost:
@@ -8923,7 +8560,7 @@ final class MeetingViewModel {
         case .clearMeetingInviteCode:
             clearMeetingInviteCode(onResult: finish)
         case .refreshAccessLists:
-            // Fire and forget (S50 7 c): progress is `isAdminAccessListRefreshing`.
+
             refreshAdminAccessLists()
             finish(HostActionResult.completed)
         case .allowKey:
@@ -8954,7 +8591,7 @@ final class MeetingViewModel {
         case .rotateLink:
             Task { _ = await self.rotateWebinarLink(onResult: finish) }
         case .moveToAudience:
-            // PH8: the SFU refuses any admin target, so the table offers it only for role participant.
+
             demoteWebinarParticipant(userId: target, isInviteCancel: false, onResult: finish)
         case .bringOnStage:
             let name = state.webinarHandQueue.first(where: { $0.userId == target })?.displayName ?? ""
@@ -8962,7 +8599,7 @@ final class MeetingViewModel {
         case .cancelStageInvite:
             demoteWebinarParticipant(userId: target, isInviteCancel: true, onResult: finish)
         case .declineStage:
-            // PH8: ack-only `(callback)` handler; the server releases the invite.
+
             runWebinarQaCommand(onResult: finish) {
                 try await self.socketManager.declineWebinarStage()
             }
@@ -8975,7 +8612,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// `setPolicy`: the presenter dispatched only on a change, so each toggle flips to the requested value.
     private func performHostPolicyCommand(_ command: PeopleCommand, finish: @escaping (HostActionResult) -> Void) {
         guard let policy = HostPolicyID(rawValue: command.text) else {
             finish(HostActionResult.failed(HostActionFailure.invalidInput))
@@ -9012,14 +8648,11 @@ final class MeetingViewModel {
         case .webinarLocked:
             toggleWebinarLocked(onResult: finish)
         case .webinarQa:
-            // PH10.
+
             setWebinarQaEnabled(on, onResult: finish)
         }
     }
 
-    // MARK: - Webinar roles, the hand queue and Q&A (S50 PH7 to PH10, PH20; PPL-5 to PPL-7)
-
-    /// Per call session: cleared on a fresh join and on cleanup (the demotion handoff keeps its own flags).
     private func resetWebinarRoleTracking() {
         webinarJoinedAsAdmin = false
         webinarQaCountedIds = []
@@ -9029,7 +8662,6 @@ final class MeetingViewModel {
         promotionCameraIntent = false
     }
 
-    /// S50 PH7: the Q&A presenter's own hook (entries, Q&A state, role, the counters), then one publish.
     private func bindQaInputs() {
         state.onQaInputChanged = { [weak self] in
             self?.requestQaRefresh()
@@ -9037,7 +8669,6 @@ final class MeetingViewModel {
         requestQaRefresh()
     }
 
-    /// Equality guarded: only changed inputs reach the presenter; suppressed inside a refresh batch.
     private func requestQaRefresh() {
         guard peopleRefreshBatchDepth == 0 else { return }
         let next = makeQaInputs()
@@ -9046,8 +8677,6 @@ final class MeetingViewModel {
         people.qa.apply(next)
     }
 
-    /// S50 0.5 Q&A inputs: PH7 entries with the viewer's own votes folded in, PH10 state, the role (R18) and the
-    /// role-appropriate counter. Entries are sorted by id so equal content compares equal.
     func makeQaInputs() -> QaInputs {
         let role = QaUnseenPolicy.role(isWebinarAttendee: state.isWebinarAttendee, isAdmin: state.isAdmin)
         var entries: [QaEntryInput] = []
@@ -9082,18 +8711,14 @@ final class MeetingViewModel {
         )
     }
 
-    /// RECONCILE R18: the one derived `webinarQaUnseen` the stage (S20 12) and the controls (S30 CC9) read.
     func webinarQaUnseen() -> Int {
         QaUnseenPolicy.derived(role: QaUnseenPolicy.role(isWebinarAttendee: state.isWebinarAttendee, isAdmin: state.isAdmin),
                                isQaEnabled: state.isWebinarEnabled && state.isWebinarQaEnabled,
                                attendeeCount: state.webinarQaUnseenAttendee, hostCount: state.webinarQaUnseenHost)
     }
 
-    /// S20 Q10 (PPL-5): the attendee hand capability. The `webinar:setHandRaised` path exists on every platform now,
-    /// so every attendee has it; the bar shows Raise Hand only with it.
     var attendeeCanRaiseHand: Bool { state.isWebinarAttendee }
 
-    /// PH7: the first snapshot of this call session; it never counts toward unseen (R18).
     private func applyWebinarQaSnapshot(_ snapshot: WebinarQaSnapshot) {
         guard isCurrentRoomEvent(snapshot.roomId) else { return }
         var entries: [String: WebinarQaEntry] = [:]
@@ -9111,8 +8736,6 @@ final class MeetingViewModel {
         requestQaRefresh()
     }
 
-    /// PH7: one entry changed, or `removedId` pruned it (it left the published state, webinarNotifications.ts). Change
-    /// events carry no per-viewer vote, so the viewer's own vote map keeps `hasUpvoted`. Unseen counts per R18.
     private func applyWebinarQaChanged(_ notification: WebinarQaChangedNotification) {
         guard isCurrentRoomEvent(notification.roomId) else { return }
         if let removedId = notification.removedId, !removedId.isEmpty {
@@ -9141,7 +8764,6 @@ final class MeetingViewModel {
         requestQaRefresh()
     }
 
-    /// PH7 and R18: `.webinarQA` opening zeroes the viewer's counter; closing stores the marker (counting resumes).
     private func syncWebinarQaPanelOpenState() {
         let open = shell.panels.snapshot.current?.panel == MeetingPanel.webinarQA && !shell.panels.snapshot.isDismissing
         guard open != isWebinarQaPanelOpen else { return }
@@ -9156,8 +8778,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// PH8: the whole queue on each change (admins only). The first one marks the queue known (S50 10 f); a new hand
-    /// from an invited attendee removes the interim invite (Q15).
     private func applyWebinarHandQueue(_ notification: WebinarHandQueueChangedNotification) {
         guard isCurrentRoomEvent(notification.roomId), state.isAdmin, !state.isWebinarAttendee else { return }
         var previousIds: [String] = []
@@ -9177,7 +8797,6 @@ final class MeetingViewModel {
         requestPeopleRefresh()
     }
 
-    /// The People inputs' webinar half (PH8, PH9).
     private func makeWebinarHandInputs() -> [PeopleWebinarHandInput] {
         var rows: [PeopleWebinarHandInput] = []
         for entry in state.webinarHandQueue {
@@ -9187,10 +8806,6 @@ final class MeetingViewModel {
         return rows
     }
 
-    // MARK: PH8 commands (PeopleCommand switch helpers)
-
-    /// `webinar:promoteAttendee`; the ack records the interim invite (PH9, Q15). No optimistic write: the hand leaves
-    /// the queue when the server's next queue change arrives (the SFU lowers it on promote).
     private func promoteWebinarAttendee(userId: String, name: String, onResult: @escaping (HostActionResult) -> Void) {
         runWebinarHostCommand(key: "promoteAttendee:" + userId, onResult: onResult, operation: {
             try await self.socketManager.promoteWebinarAttendee(userId: userId)
@@ -9200,7 +8815,6 @@ final class MeetingViewModel {
         })
     }
 
-    /// `webinar:demoteParticipant` on an attendee revokes the invite; on a panelist it moves them to the audience.
     private func demoteWebinarParticipant(userId: String, isInviteCancel: Bool, onResult: @escaping (HostActionResult) -> Void) {
         runWebinarHostCommand(key: "demoteParticipant:" + userId, onResult: onResult, operation: {
             try await self.socketManager.demoteWebinarParticipant(userId: userId)
@@ -9211,7 +8825,6 @@ final class MeetingViewModel {
         })
     }
 
-    /// One host-only webinar command with the shared guard (PH2 inner guard, typed results at every exit).
     private func runWebinarHostCommand(key: String, onResult: @escaping (HostActionResult) -> Void,
                                        operation: @escaping () async throws -> Void, onSuccess: @escaping () -> Void) {
         guard let actionToken = beginAdminAction(key) else {
@@ -9239,7 +8852,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// PH10: Attendee Q&A through `webinar:updateConfig`.
     @discardableResult
     func setWebinarQaEnabled(_ enabled: Bool, onResult: ((HostActionResult) -> Void)? = nil) -> Bool {
         guard state.isAdmin else { onResult?(HostActionResult.cancelled); return false }
@@ -9248,9 +8860,6 @@ final class MeetingViewModel {
         })
     }
 
-    // MARK: PH7 commands (attendee ask and vote, host moderation)
-
-    /// One Q&A command with typed results at every exit. Attendee commands skip the admin guard; moderation uses it.
     private func runWebinarQaCommand(onResult: @escaping (HostActionResult) -> Void, operation: @escaping () async throws -> Void) {
         guard state.connectionState == .joined, state.isWebinarEnabled else {
             onResult(HostActionResult.failed(state.connectionState == .joined ? HostActionFailure.notAllowed : HostActionFailure.notJoined))
@@ -9282,8 +8891,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// The ack carries your own projection; it updates the vote map and the count at once (change events to the room
-    /// carry no per-viewer vote).
     private func upvoteWebinarQuestion(id: String, onResult: @escaping (HostActionResult) -> Void) {
         guard state.isWebinarAttendee else { onResult(HostActionResult.failed(HostActionFailure.notAllowed)); return }
         runWebinarQaCommand(onResult: onResult) {
@@ -9309,10 +8916,6 @@ final class MeetingViewModel {
         }, onSuccess: {})
     }
 
-    // MARK: S20 Q10 attendee hand (PH8)
-
-    /// The attendee's Raise Hand through `webinar:setHandRaised` (attendees cannot use `setHandRaised`, S20 Q10). The S1
-    /// hand ticket binds to the same F7 token release as the meeting hand (E9).
     private func toggleAttendeeHand(onResult: ((MeetingActionResult) -> Void)?) {
         let direction: MeetingActionDirection = state.isHandRaised ? .lower : .raise
         guard !isHandRaiseToggleInFlight else {
@@ -9354,10 +8957,6 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: PH9 promotion and demotion (attendee and panelist sides)
-
-    /// `webinar:promoted`: the attendee's invitation alert over the viewer (S50 12 c); the server already lowered the
-    /// hand (webinarInteractionHandlers.ts:376).
     private func applyWebinarPromoted(_ notification: WebinarPromotedNotification) {
         guard isCurrentRoomEvent(notification.roomId), state.isWebinarAttendee else { return }
         if state.isHandRaised { state.isHandRaised = false }
@@ -9366,9 +8965,6 @@ final class MeetingViewModel {
                                       rejoinRoomId: rejoin.isEmpty ? notification.roomId : rejoin)
     }
 
-    /// PH9: called synchronously in the socket callback, before the server-side disconnect reaches `onDisconnected`
-    /// (which then takes the intentional path instead of the terminal "io server disconnect" path). No observable state
-    /// is written here: Android runs socket callbacks off the main thread.
     private func beginDemotionHandoff(_ notification: WebinarDemotedNotification) {
         guard !state.isWebinarAttendee, lastJoinContext != nil else { return }
         pendingDemotionSlug = (notification.webinarLinkSlug ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -9384,9 +8980,6 @@ final class MeetingViewModel {
         isIntentionalLeave = false
     }
 
-    /// PH9, Q12 (RECONCILE R47): tear down with no outcome screen and no leave sound, then rejoin in place as an
-    /// attendee through the webinar link slug, or go Home quietly with "A host moved you to the audience." The root
-    /// never sees `.disconnected` on the rejoin path (the phase stays joining).
     private func finishDemotionHandoff() async {
         guard let slug = pendingDemotionSlug else { return }
         pendingDemotionSlug = nil
@@ -9400,7 +8993,7 @@ final class MeetingViewModel {
         shell.panels.dismiss(cancelPending: true)
         let outcome = PeopleRolePolicy.demotionOutcome(slug: slug)
         if outcome == PeopleDemotionOutcome.rejoinAsAttendee {
-            // R70-11 (the redirect pattern): the system call and the stage continue through the in-place rejoin.
+
             redirectContinuationPending = true
             state.connectionState = ConnectionState.joining
         }
@@ -9433,18 +9026,12 @@ final class MeetingViewModel {
         )
     }
 
-    /// S20 12 f: "You're now watching as an attendee." once, after the in-place attendee rejoin reaches the call
-    /// (a fresh call session, so the stage's same-session demotion rule cannot see it).
     private func announceDemotionIfNeeded() {
         guard announcesDemotionOnJoin, state.connectionState == .joined, state.isWebinarAttendee else { return }
         announcesDemotionOnJoin = false
         stage.announce(kind: AttendeeViewerPolicy.demotedAnnouncement, name: "")
     }
 
-    // MARK: PH20 stage promotion handoff (S10 6 promotion lobby, RECONCILE R30)
-
-    /// Accept on the invitation: the S10 lobby opens with `LobbyIntent.promotion` over the still-playing viewer. The
-    /// lobby's mic and camera start off; nothing is published while the viewer plays (one preview owner, R22).
     private func openPromotionLobby(_ invitation: StageInvitationModel) {
         guard state.isWebinarAttendee, state.connectionState == .joined else { return }
         promotionRejoinRoomId = invitation.rejoinRoomId
@@ -9454,7 +9041,6 @@ final class MeetingViewModel {
         premeeting.apply(makePremeetingInputs())
     }
 
-    /// Cancel in the promotion lobby: `webinar:declineStage` while still an attendee, and the lobby closes.
     private func cancelPromotionLobby() {
         guard promotionRejoinRoomId != nil else { return }
         promotionRejoinRoomId = nil
@@ -9463,9 +9049,6 @@ final class MeetingViewModel {
         premeeting.apply(makePremeetingInputs())
     }
 
-    /// "Join as a Speaker": S1 ends the attendee session silently (no outcome screen, no leave sound) and joins the
-    /// rejoin room with the same identity and the lobby's intents. The SFU keys the promotion by user key
-    /// (webinarInteractionHandlers.ts:375); the audio session moves from playback to play-and-record at that join.
     private func joinAsSpeaker() {
         guard let roomId = promotionRejoinRoomId, state.isWebinarAttendee, let context = lastJoinContext else { return }
         promotionRejoinRoomId = nil
@@ -9482,7 +9065,7 @@ final class MeetingViewModel {
         resetReconnectRetryState()
         clearMeetingResumeSnapshot()
         shell.panels.dismiss(cancelPending: true)
-        // R70-11 (the redirect pattern): the system call and the stage continue into the speaker join.
+
         redirectContinuationPending = true
         state.connectionState = ConnectionState.joining
         socketManager.disconnect()
@@ -9493,7 +9076,7 @@ final class MeetingViewModel {
                 return
             }
             isIntentionalTeardownInProgress = false
-            // The lobby's intents, applied as the next join's flags (S10 0.8 C1 at home).
+
             state.isMuted = !mic
             state.isCameraOff = !camera
             joinRoom(
@@ -9504,15 +9087,13 @@ final class MeetingViewModel {
                 isHost: false,
                 joinMode: JoinMode.meeting,
                 meetingInviteCode: context.meetingInviteCode,
-                webinarInviteCode: nil,
+                webinarInviteCode: context.webinarInviteCode,
                 clientId: context.clientId,
                 allowRoomCreation: false
             )
         }
     }
 
-    /// PH20: the promotion lobby's toggles are intent for the speaker join, never an in-call toggle (the attendee
-    /// publishes nothing).
     private func setPromotionMediaIntent(mic: Bool, camera: Bool) {
         promotionMicIntent = mic
         promotionCameraIntent = camera
@@ -9521,9 +9102,6 @@ final class MeetingViewModel {
 
     var isPromotionLobbyOpen: Bool { promotionRejoinRoomId != nil }
 
-    // MARK: - Activities and games (S60 7, 8; ACT-1, ACT-2)
-
-    /// The launcher's own hooks and the game shell's push hook, then one publish each.
     private func bindActivityInputs() {
         state.onActivityInputChanged = { [weak self] in
             self?.requestActivityRefresh()
@@ -9541,12 +9119,10 @@ final class MeetingViewModel {
         refreshBrowserStage()
     }
 
-    /// One game push, parsed once by the shell (C6-15).
     private func refreshActivityGame() {
         activitySession.applyGame(makeGameStageInputs())
     }
 
-    /// The player-range check reads the room size; refresh only when it changes.
     private func refreshActivityPlayersHere() {
         let count = state.participantCount
         guard count != activityPlayersHere else { return }
@@ -9572,7 +9148,6 @@ final class MeetingViewModel {
                                  maxPlayers: entry.maxPlayers, options: options)
     }
 
-    /// S60 7 j: the launcher's cold inputs (never the raw game state; the summary comes from the shell).
     func makeActivitiesInputs() -> ActivitiesInputs {
         var catalog: [ActivityGameInput] = []
         for entry in state.gameCatalog {
@@ -9609,7 +9184,7 @@ final class MeetingViewModel {
             isAppsLocked: state.isAppsLocked,
             isAppsActionInFlight: state.isAppsActionInFlight,
             appIds: ActivitiesCatalogPolicy.defaultAppIds,
-            // C6-20 (ACT-9): the `browser:getCapabilities` probe's settled answer (false until it says available).
+
             isBrowserAvailable: state.isBrowserAvailable,
             isBrowserActive: state.isBrowserActive,
             isBrowserLaunching: state.isBrowserLaunching,
@@ -9622,7 +9197,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// S60 8 j: one game push for the shell. `selfId` wins over the local identity rule.
     func makeGameStageInputs() -> GameStageInputs {
         let recovering = state.connectionState != .joined || state.isRecoveringConnection
         guard let publicState = state.gamePublicState else {
@@ -9672,7 +9246,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// The launcher's actions over the existing paths; failures come back through `commandFailed`.
     private func performActivitiesCommand(_ command: ActivitiesCommand) {
         switch command.kind {
         case .refresh:
@@ -9716,7 +9289,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// The game shell's actions: a move travels with its client-local request id (C6-15).
     private func performGameStageCommand(_ command: GameStageCommand) {
         switch command.kind {
         case .move:
@@ -9730,9 +9302,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// C6-15: one move bound to its own ack. The shell clears that request id on this ack or after its 10 s timeout,
-    /// never on a push (the SFU broadcasts the new state before it acks). No shared in-flight flag: each move answers
-    /// for itself, so a push can never strand or release another move.
     func sendGameMove(type: String, payloadJSON: String, requestId: String) {
         let games = activitySession.games
         guard let gameId = state.gamePublicState?.gameId, state.connectionState == .joined, !state.isWebinarAttendee else {
@@ -9753,7 +9322,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// Hot hook: the active reactions as stage inputs (the presenter maps source ids to stable bubble ids).
     private func makeStageReactionInputs() -> [StageReactionInput] {
         var result: [StageReactionInput] = []
         for reaction in state.activeReactions {
@@ -9770,7 +9338,6 @@ final class MeetingViewModel {
         return result
     }
 
-    /// The stage's actions (the S1 `onCommand` pattern); SC2 (STG-2) later makes the pin transient.
     private func performStageCommand(_ command: StageCommand) {
         switch command.kind {
         case .togglePin:
@@ -9786,8 +9353,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// SET-5 (S60 3 j): the Layout panel's intents through the existing setters; the change returns through the stage
-    /// inputs (`onStageInputChanged`), so the panel keeps no second copy. Persistence stays `MeetingViewPreferences`.
     private func performLayoutPanelCommand(_ command: LayoutPanelCommand) {
         switch command.kind {
         case .setViewMode:
@@ -9801,13 +9366,11 @@ final class MeetingViewModel {
         case .setSelfViewCorner:
             if let corner = MeetingSelfViewCorner(rawValue: command.value) { setSelfViewCorner(corner) }
         case .setAudioOnly:
-            // The same setter the S20 "Use Audio Only" banner action calls (R6-11); turning it off leaves the camera off.
+
             setAudioOnlyMode(command.flag)
         }
     }
 
-    /// SET-6 (S60 4 j): what the Effects picker reads from the core. `canShowSystemVideoEffects` follows the CTL-4
-    /// capture gate (S30 CC11); the iOS system effects come from the WP3 capture owner (C6-21).
     func makeEffectsInputs() -> EffectsInputs {
         var system = SystemCameraEffects.none
         #if os(iOS) && !SKIP
@@ -9826,16 +9389,13 @@ final class MeetingViewModel {
         )
     }
 
-    /// SET-6 (S60 4 j): the Effects intents. No WP10 engine ships (W10-3, OQ6 default A), so the engine intents are
-    /// no-ops until one does; the panel cannot open in production because nothing publishes `.panel`.
     private func performEffectsCommand(_ command: EffectsCommand) {
         switch command.kind {
         case .turnCameraOnForEveryone:
-            // One S1 camera intent (4 l4), only while the camera is off.
+
             if state.isCameraOff { _ = shell.toggleCamera() }
         case .startPreview:
-            // C6-8: the one local-only preview owner (nothing is published). The publish latch keeps it a no-op once the
-            // call took the camera, until WP3 opens an in-call preview (SET-3 follow-up).
+
             LocalPreviewController.shared.start(facing: state.localCameraFacing)
             requestStageRefresh()
         case .stopPreview:
@@ -9859,18 +9419,17 @@ final class MeetingViewModel {
             }
             #endif
         case .showSystemVideoEffects:
-            // S30 CC11 (CTL-4): Control Center's video effects module through the WP3 capture owner.
+
             #if os(iOS) && !SKIP
             SystemCameraEffectsOwner.shared.showSystemVideoEffects()
             #endif
             break
         case .select, .clearAll, .setAppearance, .recenter, .removePersonalImage:
-            // The WP10 engine's intents (W10-3, not in this push).
+
             break
         }
     }
 
-    /// SY1: the presence inputs from the S1 session snapshot plus the media fields (S70 0.5 inputs table).
     func makeCallPresenceInputs() -> CallPresenceInputs {
         let session = shell.session
         #if os(iOS) && !SKIP
@@ -9895,7 +9454,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// Static per process (S1C 3.2); read once so a refresh never calls into ReplayKit.
     private func screenShareSupported() -> Bool {
         if let cached = cachedScreenShareSupport {
             return cached
@@ -9905,11 +9463,9 @@ final class MeetingViewModel {
         return supported
     }
 
-    /// S1C E7: the typed outcome, recorded before the terminal phase write. Legacy text is unchanged.
     private func recordTerminalOutcome(_ kind: MeetingTerminalOutcomeKind, serverText: String,
                                        joinContext: JoinContext? = nil) {
-        // S10 0.8 C3 (HD request B5-T5 R3): the rejoin target, before the outcome publishes and before cleanup(). The
-        // other callers record before cleanup(), so `lastJoinContext` is still set for them.
+
         captureRejoinContext(kind, joinContext: joinContext ?? lastJoinContext)
         terminalOutcomeSerial += 1
         redirectContinuationPending = false
@@ -9919,14 +9475,10 @@ final class MeetingViewModel {
             kind: kind,
             serverText: serverText
         )
-        // WP2-H2 (PLAN-next A6): one legacy haptic derived from the typed outcome, no per-caller parameter. The facade
-        // refuses every kind the root consumer delivers as a token (WP2-S2b: denied, removed, joinFailed and
-        // connectionLost), so each outcome plays through exactly one route.
+
         ConclaveHapticFeedback.legacyOutcome(MeetingLegacyHapticPolicy.feedbackKind(for: kind))
     }
 
-    /// S10 0.8 C3 (HD request B5-T5 R3): captured for left (after an admission), connection lost, server disconnect and
-    /// a failed rejoin; cleared for removed, denied, ended and closed; an initial failure keeps an earlier context.
     private func captureRejoinContext(_ kind: MeetingTerminalOutcomeKind, joinContext: JoinContext?) {
         let decision = RejoinContextPolicy.decision(kind: kind, entryOrigin: shell.session.entryOrigin,
                                                     hasBeenAdmittedThisSession: shell.session.hasBeenAdmittedThisSession)
@@ -9943,10 +9495,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S10 0.8 C3, RECONCILE R4 (HD request B5-T5 R3): Rejoin on Home and the outcome screen, Try Again after a failed
-    /// rejoin and Join in a `rejoin` lobby: exactly one `joinRoom` with the last call's room, invite codes, client id
-    /// and room creation rule, restoring its media intent (the flags the join reads; a Rejoin is a deliberate tap). The
-    /// entry overlay is never armed here. The context is kept, so a failed rejoin can try again.
     func rejoinLastMeeting() {
         guard let context = rejoinContext else { return }
         guard state.connectionState == ConnectionState.disconnected
@@ -9973,7 +9521,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// S1C E8: each shell intent reaches the existing implementation; the presenter never owns media state.
     private func performShellCommand(_ command: MeetingShellCommand, ticket: MeetingActionTicket?) {
         switch command {
         case .toggleMicrophone:
@@ -9988,7 +9535,7 @@ final class MeetingViewModel {
                 self.shell.finish(ticket, result)
             }
         case .leave:
-            // Leave always works and cannot fail: its ticket completes before the teardown changes the identity.
+
             if let ticket {
                 shell.finish(ticket, MeetingActionResult.completed)
             }
@@ -10014,9 +9561,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// SY1 command table (S70 0.5): `CallPresence` already answered `.dispatched`. Microphone commands enter the S1
-    /// path (`shell.toggleMicrophone()`, whose CC21 rule lets a mute over a pending unmute reach `applyLocalMuteNow`);
-    /// no system command plays a haptic (S70 D7).
     private func performSystemCallCommand(_ command: SystemCallCommand) {
         switch command.kind {
         case .mute:
@@ -10025,7 +9569,7 @@ final class MeetingViewModel {
                 applyEntryMuteFromSystem()
             default:
                 if shell.toggleMicrophone() != .dispatched, !state.isMuted {
-                    // Never dropped: a mute the row cannot take (blocked mid-teardown) still applies.
+
                     toggleMute()
                 }
             }
@@ -10036,16 +9580,16 @@ final class MeetingViewModel {
                 leaveRoom()
             }
         case .hold:
-            // O2: the call resumes muted (fail closed), so mute as the hold starts.
+
             if !state.isMuted {
                 shell.toggleMicrophone()
             }
-            // S70 5 c (O2): the camera pauses for the hold over the recovery suspend path.
+
             setCameraSuspendedForHold(true)
-            // R70-6: the microphone row and the notice read the hold from CallPresence.
+
             requestShellRefresh()
         case .resume:
-            // O2: the microphone stays muted; the camera restarts only while camera-on is still the intent.
+
             setCameraSuspendedForHold(false)
             stage.post(StageEvent.make(kind: "resumedMuted"))
             requestShellRefresh()
@@ -10054,41 +9598,42 @@ final class MeetingViewModel {
         }
     }
 
-    /// S70 5 c (O2): a CallKit hold pauses the camera over the recovery suspend path (`suspendLocalVideoForRecovery`,
-    /// which never writes `isCameraOff` or the camera intent); resume restarts it only while camera-on is still the
-    /// intent (`reassertLocalVideoPublishingIfNeeded` checks `isCameraOff` and the intent revisions).
     func setCameraSuspendedForHold(_ suspended: Bool) {
         guard suspended != isCameraSuspendedForHold else { return }
         isCameraSuspendedForHold = suspended
-        if suspended {
-            Task { @MainActor [weak self] in
-                await self?.webRTCClient.suspendLocalVideoForRecovery()
-            }
-        } else {
-            let context = currentSocketEventContext()
-            Task { @MainActor [weak self] in
-                await self?.reassertLocalVideoPublishingIfNeeded(context: context)
+        cameraHoldRevision += 1
+        let revision = cameraHoldRevision
+        let generation = cameraHoldGeneration
+        let previous = cameraHoldTransitionTask
+        let context = currentCallActionContext()
+        let socketContext = currentSocketEventContext()
+        cameraHoldTransitionTask = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled, self.isSameCallContext(context),
+                  self.cameraHoldRevision == revision else { return }
+            if suspended {
+                self.cameraHoldSuspendDepth += 1
+                await self.webRTCClient.suspendLocalVideoForRecovery()
+                if self.cameraHoldGeneration == generation {
+                    self.cameraHoldSuspendDepth = max(0, self.cameraHoldSuspendDepth - 1)
+                }
+            } else {
+                await self.reassertLocalVideoPublishingIfNeeded(context: socketContext)
             }
         }
     }
 
-    /// S70 5 j: the on-hold banner's Resume. CallKit's echo dispatches `.resume`; Android Phase A has no hold.
     func resumeFromHold() {
         #if os(iOS) && !SKIP
         CallKitPresenceAdapter.shared.requestResumeFromHold()
         #endif
     }
 
-    /// S70 5 (R70-6, RECONCILE R29): the audio route owner reports interruptions here, so CallPresence and the
-    /// microphone row (`audioInterrupted`, `onHold`) change in one refresh.
     func reportAudioInterruption(_ kind: AudioInterruptionKind) {
         callPresence.reportInterruption(kind)
         requestShellRefresh()
     }
 
-    /// WP2-S2a (PLAN-next 7 item 4, S70 SY11): one classifier for every media failure. The S1 row gets the typed
-    /// failure (`kind` nil for a failure that belongs to no row, such as a camera flip); the legacy banner gets owned
-    /// copy, never raw transport text; a cancel shows nothing.
     private func reportMediaFailure(_ error: Error, kind: MeetingActionKind?) {
         let context: MeetingErrorContext = kind == .screenShare ? .screenShare : .media
         let classified = MeetingErrorClassifier.classify(error, context: context, isNetworkOffline: state.isNetworkOffline)
@@ -10097,7 +9642,7 @@ final class MeetingViewModel {
         if let kind {
             let result = MeetingErrorClassifier.actionResult(classified)
             shell.reportFailure(kind, result)
-            // STG-5 (HD request B4-T4 R2.7): the typed toast for a failure started on the stage or the bar.
+
             if result.kind == .failed && !classified.isSilent {
                 stage.post(StageEvent.make(kind: StageEventKind.actionFailed, serverText: result.serverText ?? "",
                                            detail: kind.rawValue))
@@ -10110,9 +9655,6 @@ final class MeetingViewModel {
         state.errorMessage = message
     }
 
-    // MARK: - Room switch (WP2-S2b)
-
-    /// S10 4: the join mode of the current call, for the same-room rule (`lastJoinContext.joinMode`).
     var currentJoinMode: JoinMode {
         if let context = lastJoinContext {
             return context.joinMode
@@ -10120,8 +9662,6 @@ final class MeetingViewModel {
         return state.isWebinarAttendee ? JoinMode.webinarAttendee : JoinMode.meeting
     }
 
-    /// S10 4 (WP2-S2b): the inputs of `MeetingRoomSwitchPolicy` for a parsed link target. The premeeting presenter
-    /// (ENT-2) adds its lobby mode and sign-in state; the same-room check keeps today's rule (ids and aliases).
     func makeRoomSwitchInputs(
         targetRoomId: String,
         targetJoinMode: JoinMode,
@@ -10140,10 +9680,6 @@ final class MeetingViewModel {
         )
     }
 
-    // MARK: - Premeeting (ENT-1, S10 0.8 C8)
-
-    /// S10 0.5 inputs table: the S1 session subset plus the same-room rule, identity, network and app activity. The
-    /// resume (C7) and version gate (C20) fields stay at their defaults until their core slices land.
     func makePremeetingInputs() -> PremeetingInputs {
         PremeetingInputs.from(session: shell.session, base: PremeetingInputs.make(
             currentRoomId: state.roomId,
@@ -10157,20 +9693,17 @@ final class MeetingViewModel {
             isAppActive: premeetingIsAppActive,
             micIntentOn: isPromotionLobbyOpen ? promotionMicIntent : (state.pendingEntryMediaIntent?.mic ?? !state.isMuted),
             cameraIntentOn: isPromotionLobbyOpen ? promotionCameraIntent : (state.pendingEntryMediaIntent?.camera ?? !state.isCameraOff),
-            // ENT-5 and ENT-6 (HD request B5-T5 R3): the rejoin target's room, the waiting room's restart notice and the
-            // last join failure's class.
+
             rejoinRoomId: rejoinContext?.roomId ?? "",
             serverRestartText: state.serverRestartNotice ?? "",
             joinFailureCategory: lastJoinFailureCategory,
             joinFailureCode: lastJoinFailureCode,
-            // ENT-9 (S10 12 f, HD request B8-T7 R1): the socket is up for this attempt, so the webinar landing says
-            // "Almost There" after "Getting You In".
+
             entrySocketConnected: state.connectionState == ConnectionState.connected
                 || state.connectionState == ConnectionState.joining
         ))
     }
 
-    /// S10 0.8 C8: AppState's identity `didSet` pushes the user (the native root installs the hook).
     func setPremeetingIdentity(isSignedIn: Bool, accountName: String, accountSeed: String) {
         guard isSignedIn != premeetingIsSignedIn || accountName != premeetingAccountName
                 || accountSeed != premeetingAccountSeed else { return }
@@ -10180,26 +9713,20 @@ final class MeetingViewModel {
         premeeting.apply(makePremeetingInputs())
     }
 
-    /// S10 0.8 C8: `ConclaveAppDelegate.onResume` and `onStop` push app activity.
     func setPremeetingAppActive(_ isActive: Bool) {
         guard isActive != premeetingIsAppActive else { return }
         premeetingIsAppActive = isActive
         premeeting.apply(makePremeetingInputs())
     }
 
-    /// ENT-7 (S10 invariant 9): the account presenter reports a provider sign-in starting or ending.
     func setPremeetingSigningIn(_ isSigningIn: Bool) {
         guard isSigningIn != premeetingIsSigningIn else { return }
         premeetingIsSigningIn = isSigningIn
         premeeting.apply(makePremeetingInputs())
     }
 
-    /// S10 0.8 C1 (ENT-3, HD request B4-T2 R1): the lobby's only media intent path. At home, while waiting and while
-    /// reconnecting before the first admission it writes the flags the next join reads; while entering it stores a
-    /// pending intent for this attempt (the transport decision may already be made), which `.joined` reconciles once
-    /// through the toggles; in call the S1 toggles apply where the intent differs.
     func setEntryMediaIntent(mic: Bool, camera: Bool) {
-        // S50 PH20 (PPL-7): the promotion lobby's toggles are intent for the speaker join, never an attendee toggle.
+
         if isPromotionLobbyOpen {
             setPromotionMediaIntent(mic: mic, camera: camera)
             return
@@ -10221,8 +9748,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S10 0.8 C1: once on `.joined`, the pending lobby intent goes through the toggles where it differs (so send
-    /// transport creation and the producer generation guards apply); a stale attempt's intent is dropped.
     private func reconcilePendingEntryMediaIntent() {
         let pending = EntryMediaIntentPolicy.reconcilable(state.pendingEntryMediaIntent,
                                                            currentGeneration: meetingLifecycleGeneration)
@@ -10232,16 +9757,12 @@ final class MeetingViewModel {
         if pending.camera == state.isCameraOff { toggleCamera() }
     }
 
-    /// S10 0.8 C2 (ENT-3, HD request B4-T2 R2): intent only. The single routing owner (SYS-2) applies it exactly once
-    /// when call audio starts; `setAudioInput` and `setAudioOutput` are never called from the lobby, so an empty
-    /// pre-join device list neither applies it early nor drops it.
     func setPrejoinAudioRouteIntent(outputKind: String, inputId: String) {
         state.prejoinAudioOutputKind = outputKind
         state.prejoinAudioInputId = inputId
         AudioRouteOwner.shared.setPrejoinIntent(outputKind: outputKind, inputId: inputId)
     }
 
-    /// The premeeting presenter's core-only commands, forwarded to the S1 shell (no haptic, Q11).
     private func performPremeetingCommand(_ command: PremeetingCommand) {
         switch command {
         case .leave:
@@ -10249,20 +9770,17 @@ final class MeetingViewModel {
         case .dismissOutcome:
             shell.dismissOutcome()
         case .rejoinLastMeeting:
-            // ENT-6 (S10 0.8 C3, HD request B5-T5 R3).
+
             rejoinLastMeeting()
         case .joinAsSpeaker:
-            // S50 PH20 (PPL-7): the promotion lobby's primary.
+
             joinAsSpeaker()
         case .cancelPromotion:
-            // S50 PH20: Cancel or Back in the promotion lobby declines while still an attendee.
+
             cancelPromotionLobby()
         }
     }
 
-    /// Interim S10 0.8 C1 for a system mute before admission (ENT-1 adds `setEntryMediaIntent`): the join publishes
-    /// from `state.isMuted`, and a microphone start already in flight is cancelled at once, as on the reconnecting
-    /// screen.
     private func applyEntryMuteFromSystem() {
         guard !state.isMuted else { return }
         state.isMuted = true
@@ -10270,55 +9788,39 @@ final class MeetingViewModel {
         webRTCClient.suspendLocalAudioForRecovery()
     }
 
-    /// Only `MeetingViewModel.shared` drives the system surfaces (S70 0.5: the platform installs its set once).
     private func installPlatformCallPresenceAdapters() {
         #if os(iOS) && !SKIP
-        // CallKit first (it reports the surface), then the audio session owner, which follows the surface for
-        // AudioActivationPolicy and hands a refused call to the fallback activation (S70 5 c).
+
         callPresence.adapters = CallPresenceAdapters([
             CallKitPresenceAdapter.shared.makeAdapter(for: callPresence),
             CallAudioSession.shared.makePresenceAdapter(),
-            // SYS-4 (S70 3 c, SX4): video-call PiP over the native stage root's anchor.
+
             VideoCallPictureInPicture.shared.makeAdapter(for: callPresence, stage: stage)
         ])
         #elseif SKIP
         callPresence.adapters = CallNotificationBridge.presenceAdapters(presence: callPresence)
         #endif
-        // SYS-8 (S70 8, RECONCILE R25, S70 R70-5): the S40 D23 camera line follows cameraContinuesInBackground; the chat
-        // presenter gets it as its own input (S70 0.5 Observation), from one more adapter on both platforms.
+
         let platformAdapters = callPresence.adapters.adapters
         callPresence.adapters = CallPresenceAdapters(platformAdapters + [
             CallPresenceAdapter(name: "chatCameraLine", presenceDidChange: { [weak self] _, new in
                 self?.shell.chat.setCameraLine(CameraContinuityPolicy.showsCameraLine(
                     isCameraOn: new.isCameraOn, cameraContinuesInBackground: new.cameraContinuesInBackground))
             }),
-            // SYS-5 (S70 4, SX5): keep awake (iOS idle timer; Android CallKeepScreenOnEffect in the native roots) and
-            // proximity (iOS UIDevice monitoring; Android ProximityController) follow keepsScreenAwake and
-            // proximityArmed, written once per edge. The legacy setActive gate below stays.
+
             CallScreenAwake.makePresenceAdapter(),
-            // SYS-15 (S70 15 c, j): breadcrumbs, spans and the Android process state summary follow the phase; the
-            // adapter diffs, never observes, and adds no listener (one listener set per process, S70 15 k).
+
             CallDiagnostics.shared.makePresenceAdapter()
         ])
-        // SYS-2: the route owner is the only interruption reporter (S70 0.5); it reads holds from the presence and
-        // reports through the VM so the S1 microphone row refreshes with it (R29).
+
         AudioRouteOwner.shared.presence = callPresence
-        // SYS-5: the owner pushes every later route change itself (publishSnapshot); seed the current one.
+
         callPresence.reportAudioRoute(AudioRouteOwner.shared.route.routeKind)
         AudioRouteOwner.shared.onInterruption = { [weak self] kind in
             self?.reportAudioInterruption(kind)
         }
     }
 
-    // MARK: - System Call Presence
-
-    /// Brings up the in-call system pieces once joined: keep awake, the iOS
-    /// audio-session interruption recovery, the Android PiP wiring and the
-    /// notification permission prompt. The system call itself (CallKit on
-    /// iOS, the CallStyle call notification service on Android) follows the
-    /// `CallPresence` snapshot through its adapters (S70 SY1), so this no
-    /// longer starts or updates it. Idempotent and gated on being in a joined
-    /// call via CallSessionCoordinator.
     func activateCallPresence() {
         CallSessionCoordinator.shared.register(self)
         guard CallSessionCoordinator.shared.isInCall else { return }
@@ -10348,39 +9850,26 @@ final class MeetingViewModel {
             pipEntered: { self.handlePictureInPictureEntered() },
             pipRefresh: { self.handlePictureInPictureRefresh() }
         )
-        // Posts the call notification from the current snapshot if the service is not running yet (a start the
-        // system refused in the background retries here, in the foreground).
+
         CallNotificationBridge.repostCurrent()
         PipController.setInCall(active: true)
         PipController.setMuted(value: state.isMuted)
         PipManager.configureForActiveCall(active: true, muted: state.isMuted)
         refreshPipVideo()
-        // No-op while the entry overlay is up; clearMeetingEntry() asks instead.
+
         scheduleCallNotificationPermissionRequest()
         #endif
     }
 
     #if SKIP
-    /// Android 13+ hides the ongoing-call notification (and its Mute/Leave
-    /// actions) until POST_NOTIFICATIONS is granted; the foreground service
-    /// keeps the call alive either way, so this never blocks or fails a join.
-    /// Ask at most once per process, in the foreground, and only once the
-    /// meeting-entry overlay has cleared: launching the permission Activity
-    /// during the entry transition churns the activity lifecycle while SkipUI
-    /// is still settling the meeting. A grant mid-call re-posts the
-    /// notification so it appears immediately; a denial leaves the service
-    /// running with its notification listed only in the system Task Manager.
+
     private func scheduleCallNotificationPermissionRequest() {
-        // SYS-3 (S70 2 d): the native call root primes through the S20 banner after stage entry instead; the legacy
-        // root (no banner lane) keeps this prompt 500 ms after the overlay until CALL-FLIP.
+
         guard NotificationPrimingPolicy.usesLegacyPrompt(isAndroid: true,
                                                         usesNativeStage: NativeRouteFlags.shared.isEnabled(NativeRouteKey.call)),
               !hasRequestedCallNotificationPermission,
               !PermissionHelper.hasPostNotificationsPermission() else { return }
-        // Never launch the permission Activity in the same main-thread turn
-        // that clears the entry overlay: Compose has not rendered the overlay
-        // away yet, so the prompt would pause the activity over it. The guards
-        // are re-checked after the delay.
+
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 500_000_000)
             self?.requestCallNotificationPermissionIfNeeded()
@@ -10398,10 +9887,7 @@ final class MeetingViewModel {
         hasRequestedCallNotificationPermission = true
         PermissionHelper.requestNotificationsPermissionIfNeeded { granted in
             if !granted, !PermissionHelper.wasLastNotificationsPermissionRequestAnswered() {
-                // Dropped or interrupted before the user saw and answered the
-                // dialog (call ended, or another prompt was still up): the
-                // once-per-process ask is not used up, so a later
-                // activateCallPresence can ask again.
+
                 self.hasRequestedCallNotificationPermission = false
                 return
             }
@@ -10411,16 +9897,12 @@ final class MeetingViewModel {
     }
     #endif
 
-    /// SYS-6 (S70 6 c, 6 d): `ConclaveAppDelegate.onPause` (iOS `.inactive`, Android `onPause`). Records the hop only;
-    /// the next `handleAppBecameActive()` decides between the light refresh and full recovery.
     func handleAppResignedActive() {
         lifecycleRefreshTracker.record(.inactive)
     }
 
     func handleAppBecameActive() {
-        // SYS-6 (S70 6 c, 6 d, SX11, SY9): only a return from the background (or the first activation of the process)
-        // runs full recovery; a return from `.inactive` alone (Control Center, Notification Center, a permission
-        // alert, the CallKit UI, the broadcast picker; Android: a dialog, the shade, leaving PiP) runs the light refresh.
+
         let refresh = lifecycleRefreshTracker.record(.active)
         lifecycleRefreshCounters.record(refresh)
         #if canImport(UIKit) && !SKIP
@@ -10469,7 +9951,7 @@ final class MeetingViewModel {
         activateCallPresence()
         normalizeSelectedAudioDeviceState()
         webRTCClient.activateCallAudioSession()
-        // SYS-6 (S70 6 c, WEB SYS-05, 6 k): a keyframe for every visible remote video, once the consumers resumed.
+
         let keyframeProducerIds = state.connectionState == .joined ? visibleRemoteVideoKeyframeProducerIds() : []
         lifecycleRefreshCounters.recordKeyframeRequests(keyframeProducerIds.count)
 
@@ -10515,9 +9997,6 @@ final class MeetingViewModel {
         scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 
-    /// SYS-6 (S70 6 c, 6 k): the light refresh after an `.inactive` hop re-reads the route snapshot and re-derives the
-    /// shell and stage inputs (where the permission-derived rows land when their owner wires them); it never re-runs
-    /// presence, audio activation, foreground recovery or the microphone reassertion.
     private func runLightForegroundRefresh() {
         switch state.connectionState {
         case .joined, .reconnecting, .waiting:
@@ -10529,7 +10008,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// SYS-6 (S70 6 c): the visible remote video producers a full return asks keyframes for (visible tiles only, 6 k).
     private func visibleRemoteVideoKeyframeProducerIds() -> [String] {
         var candidates: [LifecycleKeyframeCandidate] = []
         for producer in producerInfosById.values {
@@ -10548,8 +10026,6 @@ final class MeetingViewModel {
                                                           receivesVideo: shouldReceiveRemoteVideoConsumers)
     }
 
-    /// SYS-6 (S70 6 c): a keyframe only (`setConsumerPreferences` without `paused`), so a consumer the bandwidth
-    /// policy paused stays paused; stops once the call that asked is gone.
     private func requestRemoteVideoKeyFrames(producerIds: [String], context: SocketEventContext) async {
         for producerId in producerIds {
             guard isCurrentSocketEvent(context), state.connectionState == .joined else { return }
@@ -10558,21 +10034,22 @@ final class MeetingViewModel {
         }
     }
 
-    /// Tears the OS-level call presence down (left, kicked, host ended, error).
     func deactivateCallPresence() {
         CallSessionCoordinator.shared.unregister(self)
         CallScreenAwake.setActive(false)
         isCameraSuspendedForHold = false
+        cameraHoldRevision += 1
+        cameraHoldGeneration += 1
+        cameraHoldSuspendDepth = 0
+        cameraHoldTransitionTask?.cancel()
+        cameraHoldTransitionTask = nil
         #if os(iOS) && !SKIP
         CallAudioSession.shared.setCategoryOptionsProvider(nil)
         CallAudioSession.shared.setRouteReassertionHandler(nil)
         CallAudioSession.shared.end()
         #endif
         #if SKIP
-        // Terminal call end only: a recovery rejoin (WebRTCClient.cleanup)
-        // keeps a queued POST_NOTIFICATIONS prompt, but it must never surface
-        // after the call. The drop reports an unanswered request, which
-        // re-arms the once-per-process ask for the next call.
+
         PermissionHelper.dropQueuedNotificationsPermissionRequest()
         CallActionDispatcher.clear()
         PipManager.configureForActiveCall(active: false, muted: state.isMuted)
@@ -10582,7 +10059,6 @@ final class MeetingViewModel {
         #endif
     }
 
-    /// Reflect local call media state onto the system call surfaces.
     private func setLocalCameraOffState(_ cameraOff: Bool, syncCallPresence: Bool = true) {
         state.isCameraOff = cameraOff
         if syncCallPresence {
@@ -10594,14 +10070,13 @@ final class MeetingViewModel {
     }
 
     private func syncCallPresenceState() {
-        // SY1: CallPresence diffs the new inputs and fans out to the system adapters (CallKit, the Android call
-        // notification); this sync point keeps the resume snapshot and the PiP action label.
+
         requestShellRefresh()
         guard CallSessionCoordinator.shared.isInCall else { return }
         persistMeetingResumeSnapshot()
         #if SKIP
         PipController.setMuted(value: state.isMuted)
-        // If we're already in PiP, refresh the Mute/Unmute RemoteAction label.
+
         if PipController.inPipMode {
             PipManager.refreshActions(muted: state.isMuted)
         }
@@ -10791,14 +10266,12 @@ final class MeetingViewModel {
         LocalPreviewController.shared.resetCallCamera()
         stopActiveSpeakerPoll()
         stopTtsPlayback()
-        // S40 CH4 (CHT-6): the queue forgets the call's message ids; Android releases the TextToSpeech binding.
+
         ttsSpeaker.reset()
         publishScreenShare(ScreenSharePhasePolicy.ended(screenShare, failure: ScreenShareFailure.none,
                                                         stopSource: ScreenShareStopSource.callEnded))
         #if canImport(UIKit) && !SKIP
-        // Clear the external-stop callback before stopping capture so a late
-        // broadcast-stopped signal from a dying extension cannot tear down a
-        // future call in this process-wide VM.
+
         ScreenCaptureManager.shared.onBroadcastStopped = nil
         ScreenCaptureManager.shared.onCapturePhaseChanged = nil
         await ScreenCaptureManager.shared.stopCapture()
@@ -10820,7 +10293,7 @@ final class MeetingViewModel {
         activitySession.reset()
         activeAppSession.reset()
         gameCatalogLoaded = false
-        // S10 0.8 C1: a cancelled join or a finished call never carries a lobby intent into the next one.
+
         state.pendingEntryMediaIntent = nil
         participantLeaveTokens.removeAll()
         departedParticipantUserIds.removeAll()
@@ -10847,7 +10320,7 @@ final class MeetingViewModel {
         clearedOptimisticChatIds.removeAll()
         retainedChatWireTexts.removeAll()
         resetChatPhoto()
-        // S40 1 f: leaving drops the presenter's rows, drafts, hidden senders and reply and private targets.
+
         chat.reset()
         clearChatOverlayMessages()
         clearReactions()
@@ -10871,8 +10344,7 @@ final class MeetingViewModel {
         state.sfuUserId = nil
         state.hostUserId = nil
         state.hostUserIds.removeAll()
-        // This VM is reused across calls; reset session-local state. Preserve
-        // errorMessage because terminal room flows set it before cleanup().
+
         state.systemMessages.removeAll()
         state.isRoomLocked = false
         state.isChatLocked = false
@@ -10905,12 +10377,12 @@ final class MeetingViewModel {
         state.webinarFeedMode = "active-speaker"
         state.webinarSpeakerUserId = nil
         state.webinarTitle = ""
-        // S50 PH7 to PH10 (PPL-5, PPL-6).
+
         state.isWebinarQaEnabled = false
         state.resetWebinarInteractionState()
         resetWebinarRoleTracking()
         clearBrowserState()
-        // S60 C6-20 (ACT-9): no probe outlives the call; the next call probes again.
+
         stopBrowserCapabilityLoop()
         isBrowserCapabilityProbeInFlight = false
         state.isBrowserAvailable = false
@@ -10927,8 +10399,7 @@ final class MeetingViewModel {
         recapCoordinator.reset()
         shell.transcript.reset()
         state.roomId = ""
-        // Each room starts from the standard user preference; live bandwidth
-        // adaptation is applied as a separate transient transport profile.
+
         resetAdaptiveVideoQualityState()
         state.videoQuality = .standard
         webRTCClient.updateVideoQuality(.standard)
@@ -10961,10 +10432,6 @@ final class MeetingViewModel {
         clearMeetingEntry()
     }
 
-    /// Clears a transient, recoverable error shown in the in-call banner WITHOUT
-    /// tearing down the connection (unlike `resetError`, which returns to join).
-    /// Used by the in-meeting banner overlay so a failed mute/camera/chat action
-    /// surfaces visibly instead of being silently dropped while still joined.
     func dismissError() {
         state.errorMessage = nil
     }
@@ -11006,12 +10473,6 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: - Media Controls
-
-    /// A new join attempt (including a recovery rejoin, which skips cleanup())
-    /// orphans every toggle still awaiting a result, so release their guards.
-    /// A completion clears its guard only while it still owns the token, so an
-    /// orphaned one can neither strand a guard nor release a newer toggle's.
     private func releaseLocalToggleGuards() {
         muteToggleToken = nil
         cameraToggleToken = nil
@@ -11020,19 +10481,13 @@ final class MeetingViewModel {
         cameraSwitchToken = nil
     }
 
-    /// Whether a camera-on that captured these revisions before its awaited
-    /// enable or start may still commit: no newer camera intent and no change
-    /// of video policy (audio-only mode) landed meanwhile.
     private func isLocalCameraOnStillWanted(cameraIntentRevision: Int, videoPolicyRevision: Int) -> Bool {
         localCameraIntentRevision == cameraIntentRevision
             && videoPublishingPolicyRevision == videoPolicyRevision
             && !state.isAudioOnlyMode
+            && !isCameraHoldBlockingVideo
     }
 
-    /// Turns the camera off now, whoever owns the camera guard: a camera-off
-    /// that lands while a camera-on awaits its acknowledgement is never
-    /// dropped. The pending camera-on then sees the newer camera-off and
-    /// closes what it started instead of committing camera-on.
     private func applyLocalCameraOffNow(context: CallActionContext) {
         localCameraIntentRevision += 1
         setLocalCameraOffState(true)
@@ -11064,43 +10519,35 @@ final class MeetingViewModel {
 
     private func disableLocalAudioIfNeeded() async throws {
         guard webRTCClient.hasLocalAudioProducer else {
-            // No producer to pause, but a microphone start may be mid-create
-            // (iOS creates producers off MainActor). Apply the mute locally so
-            // that start drops its producer instead of committing it live.
+
             webRTCClient.suspendLocalAudioForRecovery()
             return
         }
         try await webRTCClient.setAudioEnabled(false)
     }
 
-    /// Enables or starts the camera for the caller's call, whose context the
-    /// caller captured. Every close or restart below acts for that call only.
     private func enableOrStartLocalVideo(context: CallActionContext) async throws {
-        guard isCurrentJoinedCall(context) else { return }
+        guard isCurrentJoinedCall(context), !isCameraHoldBlockingVideo else { return }
         let cameraIntentRevision = localCameraIntentRevision
         if webRTCClient.hasLocalVideoProducer {
             do {
                 try await webRTCClient.setVideoEnabled(true)
-                // The SFU can close the producer during the acknowledgement
-                // while this caller suppresses the producer-closed restart;
-                // the client then returns without a camera. Recreate it for
-                // the camera-on that is still the newest intent.
+
                 guard isCurrentJoinedCall(context),
+                      !isCameraHoldBlockingVideo,
                       localCameraIntentRevision == cameraIntentRevision,
                       !webRTCClient.hasLocalVideoProducer else { return }
                 try await webRTCClient.startProducingVideo()
             } catch {
-                // An enable orphaned by a rejoin must not close or restart the
-                // producer of the attempt that replaced it. (The clients never
-                // report a failure while a replacement producer owns the camera.)
+
                 guard isCurrentJoinedCall(context),
                       shouldRecreateLocalProducerAfterEnableFailure(error) else { throw error }
-                // A newer camera-off owns the camera: restart nothing.
-                guard localCameraIntentRevision == cameraIntentRevision else { return }
+
+                guard localCameraIntentRevision == cameraIntentRevision, !isCameraHoldBlockingVideo else { return }
                 debugLog("[Meeting] Recreating stale local video producer after enable failure: \(error)")
                 await webRTCClient.closeLocalVideoProducer()
                 guard isCurrentJoinedCall(context) else { throw error }
-                guard localCameraIntentRevision == cameraIntentRevision else { return }
+                guard localCameraIntentRevision == cameraIntentRevision, !isCameraHoldBlockingVideo else { return }
                 try await webRTCClient.startProducingVideo()
             }
         } else {
@@ -11156,10 +10603,7 @@ final class MeetingViewModel {
         syncCallPresenceState()
 
         guard newState else { return }
-        // Mute now, not on a later hop: the recovered attempt can join (and
-        // end recovery) before such a hop runs, which skipped the mute and
-        // left that attempt's microphone live under a muted UI. The mute also
-        // cancels a microphone start still in flight.
+
         webRTCClient.suspendLocalAudioForRecovery()
     }
 
@@ -11173,17 +10617,12 @@ final class MeetingViewModel {
         guard newState else { return }
         let lifecycleGeneration = meetingLifecycleGeneration
         Task { @MainActor [weak self] in
-            // Gated on the intent, not on isCameraOff: a stale camera-on
-            // report from the recovered attempt's start can flip the UI back
-            // on before this hop runs, and this camera-off must still win.
+
             guard let self,
                   self.meetingLifecycleGeneration == lifecycleGeneration,
                   self.localCameraIntentRevision == intentRevision else { return }
             self.setLocalCameraOffState(true)
-            // The recovered attempt may have joined, with its camera
-            // published, before this hop ran: the camera-off still applies,
-            // as an in-call one. Otherwise suspend; a camera start in flight
-            // cancels itself on it.
+
             if self.state.connectionState == .joined {
                 await self.webRTCClient.closeLocalVideoProducer()
             } else {
@@ -11204,11 +10643,7 @@ final class MeetingViewModel {
         }
         guard !state.mediaPublishingDisabled else { return }
         if isMuteToggleInFlight {
-            // A mute is never dropped: a CallKit, notification, PiP or second
-            // in-app mute that lands while an unmute awaits its
-            // acknowledgement applies now, and that unmute is discarded. An
-            // unmute while a toggle is in flight stays ignored (fail closed);
-            // the system surfaces are re-synced to the real state.
+
             if state.isMuted {
                 syncCallPresenceState()
                 return
@@ -11224,7 +10659,7 @@ final class MeetingViewModel {
         let newState = !state.isMuted
         state.isMuted = newState
         syncCallPresenceState()
-        // SYS-15 (S70 15 c): mute intent to commit; ended on every exit of the toggle task, never awaited.
+
         let muteSpan = CallDiagnostics.shared.span(DiagnosticsSpanKind.mute.rawValue, callSession: callSessionSerial)
         Task { @MainActor in
             defer {
@@ -11242,12 +10677,9 @@ final class MeetingViewModel {
                     try await disableLocalAudioIfNeeded()
                 } else {
                     try await enableOrStartLocalAudio()
-                    // A rejoin during the start orphaned this toggle: the new
-                    // attempt publishes from state.isMuted, and this confirm
-                    // would bypass the guard a newer toggle may hold.
+
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-                    // A mute that landed meanwhile won (applyLocalMuteNow):
-                    // this unmute is discarded and confirms nothing.
+
                     guard localMuteIntentRevision == actionMuteRevision else { return }
                     await confirmLocalAudioProducerUnmutedOrRecover(
                         context: currentSocketEventContext(),
@@ -11256,10 +10688,9 @@ final class MeetingViewModel {
                 }
             } catch {
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-                // A discarded unmute reports no error: the newer mute stands.
+
                 guard newState || localMuteIntentRevision == actionMuteRevision else { return }
-                // A failed unmute reverts to muted; a failed mute fails closed
-                // (the client kept the local mute), so it stays muted too.
+
                 state.isMuted = true
                 syncCallPresenceState()
                 reportMediaFailure(error, kind: .microphone)
@@ -11280,9 +10711,7 @@ final class MeetingViewModel {
         }
         guard !state.mediaPublishingDisabled else { return }
         if isCameraToggleInFlight {
-            // A camera-off is never dropped: one that lands while a
-            // camera-on awaits its acknowledgement applies now. A camera-on
-            // while a toggle is in flight stays ignored.
+
             guard !state.isCameraOff else { return }
             applyLocalCameraOffNow(context: currentCallActionContext())
             return
@@ -11314,8 +10743,7 @@ final class MeetingViewModel {
                         context: CallActionContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId)
                     )
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-                    // A camera-off (user, server) or audio-only mode that
-                    // landed during the enable wins over this camera-on.
+
                     guard isLocalCameraOnStillWanted(
                         cameraIntentRevision: actionCameraIntentRevision,
                         videoPolicyRevision: actionVideoPolicyRevision
@@ -11328,7 +10756,7 @@ final class MeetingViewModel {
                 }
             } catch {
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-                // A superseded camera-on reports no error: the camera-off stands.
+
                 guard newState || localCameraIntentRevision == actionCameraIntentRevision else { return }
                 setLocalCameraOffState(!newState)
                 reportMediaFailure(error, kind: .camera)
@@ -11362,8 +10790,6 @@ final class MeetingViewModel {
         publishLocalCameraFacing()
     }
 
-    /// S20 6 f (STG-3): the stage keeps the flip control while a flip is in flight (disabled, `isFlipInFlight`), so the
-    /// control never disappears for the length of a flip; `switchLocalCamera()` keeps its own guard.
     private func canOfferLocalCameraFlip() -> Bool {
         state.connectionState == .joined
             && !state.isAudioOnlyMode
@@ -11371,14 +10797,11 @@ final class MeetingViewModel {
             && webRTCClient.canSwitchCamera()
     }
 
-    /// S20 SC8, S60 C6-2 (STG-3): the call camera's facing goes to the one camera owner first (RECONCILE R22); its
-    /// `onCallCameraChange` mirrors it into `MeetingState` (see `syncLocalCameraState()`).
     private func publishLocalCameraFacing() {
         LocalPreviewController.shared.adoptCallFacing(webRTCClient.currentCameraFacing)
         syncLocalCameraState()
     }
 
-    /// Mirrors the camera owner's facing and the call camera's pause into `MeetingState` (equality guarded).
     private func syncLocalCameraState() {
         let camera = LocalPreviewController.shared
         if state.localCameraFacing != camera.facing {
@@ -11403,7 +10826,7 @@ final class MeetingViewModel {
         let actionContext = currentCallActionContext()
         let switchToken = UUID()
         cameraSwitchToken = switchToken
-        // S20 6 f (STG-3): the stage shows the flip control disabled while this flip is in flight.
+
         requestStageRefresh()
         Task { @MainActor in
             defer {
@@ -11418,19 +10841,18 @@ final class MeetingViewModel {
             guard isCurrentJoinedCall(actionContext) else { return }
             do {
                 try await webRTCClient.switchCamera()
-                // An orphaned switch refreshes nothing for the attempt that
-                // replaced it.
+
                 guard isCurrentJoinedCall(actionContext) else { return }
-                // S20 SC8 (STG-3): the mirror and the flip value change in one publish.
+
                 publishLocalCameraFacing()
                 #if SKIP
                 refreshPipVideo(requestKeyFrame: true)
                 #endif
             } catch {
                 guard isCurrentJoinedCall(actionContext) else { return }
-                // A camera flip failure is copy only: the camera row keeps its state and failure.
+
                 reportMediaFailure(error, kind: nil)
-                // S20 6 f (STG-3): the native stage's toast, with Retry ("Couldn't switch cameras. Try again.").
+
                 publishLocalCameraFacing()
                 stage.post(StageEvent.make(kind: StageEventKind.actionFailed, detail: "flipCamera"))
             }
@@ -11467,8 +10889,7 @@ final class MeetingViewModel {
                     publishScreenShare(ScreenSharePhasePolicy.stopping(screenShare))
                     ScreenCaptureManager.shared.onBroadcastStopped = nil
                     await ScreenCaptureManager.shared.stopCapture()
-                    // Orphaned by a rejoin: a share in the attempt that
-                    // replaced this one is not this toggle's to close.
+
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
                     await webRTCClient.closeLocalScreenProducer()
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
@@ -11478,11 +10899,9 @@ final class MeetingViewModel {
                                                                     stopSource: ScreenShareStopSource.person))
                     debugLog("[Meeting] Screen sharing stopped")
                 } else {
-                    // Reset the broadcast producer if the user ends the share
-                    // from Control Center / the status bar instead of the
-                    // in-app toggle.
+
                     publishScreenShare(ScreenSharePhasePolicy.began(screenShare))
-                    // S70 10 c: the extension's starting event moves choosing to starting before the socket connects.
+
                     ScreenCaptureManager.shared.onCapturePhaseChanged = { [weak self] phase in
                         guard let self, phase == ScreenSharePhase.starting,
                               self.isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
@@ -11536,8 +10955,7 @@ final class MeetingViewModel {
                     debugLog("[Meeting] Screen sharing started")
                 }
             } catch {
-                // S70 10 f: the typed reason (cancel silent; deniedBySystem, notConfigured, extensionTimeout and a
-                // producer failure show one toast) instead of the raw error text.
+
                 let failure = ScreenCaptureManager.failure(for: error)
                 let isCaptureCancelled = failure == ScreenShareFailure.cancelled
                 if isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) {
@@ -11552,9 +10970,7 @@ final class MeetingViewModel {
             }
         }
         #elseif SKIP
-        // Android: MediaProjection via the system consent dialog -> a
-        // foreground service -> ScreenCapturerAndroid (ScreenCaptureManager is
-        // the Kotlin bridge object in this same module).
+
         Task { @MainActor in
             defer {
                 if screenShareToggleToken == toggleToken {
@@ -11576,7 +10992,7 @@ final class MeetingViewModel {
                 debugLog("[Meeting] Screen sharing stopped")
             } else {
                 publishScreenShare(ScreenSharePhasePolicy.began(screenShare))
-                // Reset state if the user stops from the system UI / notification.
+
                 ScreenCaptureManager.onProjectionRevoked = { [weak self] in
                     self?.handleScreenShareEndedExternally(
                         roomId: actionRoomId,
@@ -11584,7 +11000,7 @@ final class MeetingViewModel {
                     )
                 }
                 let granted = await ScreenCaptureManager.requestCapture()
-                // S70 10 d: why consent did not lead to a live service (cancel and Back stay silent).
+
                 let consentFailure = granted ? ScreenShareFailure.none : ScreenCaptureManager.lastStartFailure()
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else {
                     if canOrphanedScreenShareToggleStopCapture() {
@@ -11643,19 +11059,16 @@ final class MeetingViewModel {
                         debugLog("[Meeting] Screen sharing error: \(error)")
                     }
                 }
-                // granted == false (user cancelled the consent dialog): no-op,
-                // isScreenSharing stays false, no orphan producer.
+
                 if !granted {
                     ScreenCaptureManager.onProjectionRevoked = nil
-                    // serviceRefused, deniedBySystem and notConfigured toast once; a cancel ends silently.
+
                     reportScreenShareFailure(consentFailure)
                 }
             }
         }
         #else
-        // Host builds (the macOS test target) have no screen capture. The
-        // toggle still owns its guard across one awaited media-layer call, so
-        // host tests can hold it as a slow capture start would.
+
         Task { @MainActor in
             defer {
                 if screenShareToggleToken == toggleToken {
@@ -11672,23 +11085,16 @@ final class MeetingViewModel {
         #endif
     }
 
-    /// A screen-share toggle orphaned by a rejoin stops the shared capture
-    /// (and clears its end callback) only while nothing in the attempt that
-    /// replaced it uses that capture: no newer toggle owns the guard and no
-    /// share is live.
     private func canOrphanedScreenShareToggleStopCapture() -> Bool {
         screenShareToggleToken == nil && !state.isScreenSharing
     }
 
-    /// SYS-10: publishes the screen share snapshot only when it changes (S70 10 k).
     private func publishScreenShare(_ next: ScreenShareSnapshot) {
         guard next != screenShare else { return }
         screenShare = next
         debugLog("[Meeting] Screen share \(next.phase.rawValue) failure \(next.failure.rawValue) stop \(next.stopSource.rawValue)")
     }
 
-    /// SYS-10 (S70 10 f): ends the start with its failure; every failure but a cancel shows exactly one toast
-    /// through the stage's `shareFailed` copy (10 g). The S1 ledger and the legacy message keep the classifier path.
     private func reportScreenShareFailure(_ failure: ScreenShareFailure) {
         publishScreenShare(ScreenSharePhasePolicy.ended(screenShare, failure: failure, stopSource: ScreenShareStopSource.none))
         guard ScreenShareFailurePolicy.showsToast(failure) else { return }
@@ -11705,8 +11111,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// SYS-10: a toggle that ends while its own start or stop is still in flight (orphaned by a rejoin, a policy
-    /// change, a cancel) leaves no phase behind. Runs from the toggle's `defer` while it still owns the guard.
     private func settleScreenSharePhase() {
         switch screenShare.phase {
         case .choosing, .starting:
@@ -11728,7 +11132,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// SY23 (RECONCILE R43): whether a share can carry device audio on this device.
     private func screenShareDeviceAudioCapability() -> Bool {
         #if SKIP
         return ScreenCaptureManager.canShareDeviceAudio()
@@ -11737,10 +11140,6 @@ final class MeetingViewModel {
         #endif
     }
 
-    // The screen share was ended from OUTSIDE the in-app toggle (iOS: Control
-    // Center; Android: the system "Stop sharing" / notification action). Close
-    // the WebRTC producer and reset state. Duplicated under the two proven Skip
-    // gates (iOS + Android) because Skip mis-evaluates os()-based directives.
     #if canImport(UIKit) && !SKIP
     private func handleScreenShareEndedExternally(roomId: String, joinAttemptId: UUID?) {
         guard isCurrentJoinedCall(roomId: roomId, joinAttemptId: joinAttemptId) else { return }
@@ -11774,11 +11173,8 @@ final class MeetingViewModel {
     }
     #endif
 
-    /// E9 (S1C 3.4, intake amendment 3): reports a typed result at every exit, with the existing guard order. The
-    /// S1 hand ticket binds to the F7 token release: `setHandRaisedState` frees its guard only while it owns
-    /// `handRaiseToggleToken`, and the result is reported after that release, so a ticket never outlives its guard.
     func toggleHandRaise(onResult: ((MeetingActionResult) -> Void)? = nil) {
-        // S30 CC3: every failure says which way the hand was going.
+
         let direction: MeetingActionDirection = state.isHandRaised ? .lower : .raise
         guard state.connectionState == .joined else {
             let failure: MeetingActionFailure = state.connectionState == .disconnected || state.connectionState == .error
@@ -11788,7 +11184,7 @@ final class MeetingViewModel {
             return
         }
         guard !state.isWebinarAttendee else {
-            // S20 Q10 (PPL-5): attendees raise their hand through `webinar:setHandRaised`.
+
             if attendeeCanRaiseHand {
                 toggleAttendeeHand(onResult: onResult)
             } else {
@@ -11816,8 +11212,7 @@ final class MeetingViewModel {
             } catch {
                 applyActionError(error, context: actionContext)
                 let result = MeetingActionFailurePolicy.result(for: error, direction: newState ? .raise : .lower)
-                // STG-5 (HD request B4-T4 R2.6, R2.7): a server rate limit posts its own notice, any other failure the
-                // typed hand toast; never both.
+
                 let classified = MeetingErrorClassifier.classify(error, context: .media, isNetworkOffline: state.isNetworkOffline)
                 CallDiagnostics.shared.recordFailure(classified)
                 if classified.category == .rateLimited {
@@ -11867,9 +11262,6 @@ final class MeetingViewModel {
         scheduleRemoteConsumerBandwidthPolicyUpdate()
     }
 
-    /// SET-3 (S60 C6-4): the server's `setVideoQuality` low is the host's quality limit: the Data Saver publish ceiling
-    /// with `qualityCappedByHost` in Settings. The legacy flag keeps feeding the legacy client path until the legacy
-    /// Settings sheet retires (WP11).
     private func applyHostQualityCap(_ capped: Bool) {
         guard hostQualityCapped != capped else { return }
         hostQualityCapped = capped
@@ -12004,8 +11396,7 @@ final class MeetingViewModel {
     }
 
     private func remoteVisibleConsumerUserIds() -> Set<String> {
-        // S20 SC6: while the native stage reports, its visible set (laid-out frames, coverage, PiP) is the truth.
-        // Only webcam video follows it; audio consumers are never paused by visibility (RR4, the #177 class).
+
         if stage.hasVisibilityReport {
             var visible = Set<String>()
             for userId in StageConsumerVisibilityPolicy.visibleVideoUserIds(stage.visibility) {
@@ -12064,7 +11455,7 @@ final class MeetingViewModel {
             connectionQuality: receiveConnectionQuality,
             videoQuality: state.videoQuality,
             receiveVideo: shouldReceiveRemoteVideoConsumers,
-            // SET-3 (S60 C6-5): Data Saver lowers what this client receives.
+
             dataSaver: DataSaverPolicy.isOn(preference: NativeVideoPreferences.dataSaver(), systemDataSaver: systemDataSaverOn)
         )
     }
@@ -12077,8 +11468,6 @@ final class MeetingViewModel {
         return appForegroundAllowsRemoteVideoReceive
     }
 
-    // MARK: - Audio Device Routing
-
     func availableAudioInputs() -> [AudioDevice] {
         webRTCClient.availableAudioInputs()
     }
@@ -12087,7 +11476,6 @@ final class MeetingViewModel {
         webRTCClient.availableAudioOutputs()
     }
 
-    /// Empty string means "System default", matching the web device picker.
     func currentAudioInputId() -> String? {
         let inputs = availableAudioInputs()
         guard !inputs.isEmpty else { return nil }
@@ -12174,8 +11562,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// SYS-2 (S30 CC4): the route owner keeps the explicit choice through device loss and adopts choices made in
-    /// system UI; the legacy selection mirrors it and is never cleared because a device left (CE G8).
     private func normalizeSelectedAudioDeviceState() {
         let output = AudioRouteOwner.shared.preferredRouteIntent
         let input = AudioRouteOwner.shared.preferredInputIntent
@@ -12189,8 +11575,6 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: - Chat Commands
-
     func executeChatCommand(_ parsedCommand: ParsedCommand) {
         let commandContext = currentCallActionContext()
         Task {
@@ -12203,7 +11587,7 @@ final class MeetingViewModel {
 
                 case .clear:
                     state.chatMessages.removeAll()
-                    // CH11: acknowledgements that land after the clear add no row.
+
                     for pending in pendingOptimisticChatSends {
                         clearedOptimisticChatIds.insert(pending.id)
                     }
@@ -12211,7 +11595,7 @@ final class MeetingViewModel {
                     state.systemMessages.removeAll()
                     state.unreadChatCount = 0
                     clearChatOverlayMessages()
-                    // CHT-8: no stage chat preview survives the clear.
+
                     stage.clearChatPreviews()
                     addSystemMessage(.info("Chat cleared"), notice: ChatNotice.cleared)
 
@@ -12265,7 +11649,7 @@ final class MeetingViewModel {
 
                 case .mute:
                     if isMuteToggleInFlight, !state.isMuted {
-                        // A mute is never dropped behind a pending unmute.
+
                         applyLocalMuteNow(context: currentSocketEventContext())
                         addSystemMessage(.commandExecuted(command: .mute, userName: localDisplayNameForFeedback))
                         return
@@ -12338,14 +11722,13 @@ final class MeetingViewModel {
         state.systemMessages.append(message)
     }
 
-    /// A command notice the native chat localizes (S40 3 g); the legacy chat keeps reading `displayText`.
     private func addSystemMessage(_ type: SystemMessageType, notice: ChatNotice) {
         state.systemMessages.append(SystemMessage(type: type, notice: notice.rawValue))
     }
 
     func applyChatHistorySnapshot(_ snapshot: ChatHistorySnapshotNotification) {
         guard isCurrentRoomEvent(snapshot.roomId) else { return }
-        // CH13: one chat refresh for the whole replay, not one per message.
+
         beginChatRefreshBatch()
         defer { endChatRefreshBatch() }
         var existingIds = Set(state.chatMessages.map { $0.id })
@@ -12353,7 +11736,7 @@ final class MeetingViewModel {
             let normalized = normalizedChatMessage(message)
             guard isVisibleChatMessage(normalized) else { continue }
             existingIds.insert(normalized.id)
-            // S40 CH12: replayed history never counts unread or announces.
+
             chatHistoryMessageIds.insert(normalized.id)
             state.chatMessages.append(normalized)
         }
@@ -12380,7 +11763,7 @@ final class MeetingViewModel {
             return
         }
         if isCameraToggleInFlight, cameraOff, state.connectionState == .joined {
-            // A camera-off is never dropped behind a pending camera-on.
+
             applyLocalCameraOffNow(context: currentCallActionContext())
             addSystemMessage(.commandExecuted(command: command, userName: localDisplayNameForFeedback))
             return
@@ -12428,9 +11811,9 @@ final class MeetingViewModel {
                 try await disableLocalAudioIfNeeded()
             } else {
                 try await enableOrStartLocalAudio()
-                // Orphaned by a rejoin: see toggleMute().
+
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-                // Superseded by a newer mute: see toggleMute().
+
                 guard localMuteIntentRevision == actionMuteRevision else { return }
                 await confirmLocalAudioProducerUnmutedOrRecover(
                     context: currentSocketEventContext(),
@@ -12440,7 +11823,7 @@ final class MeetingViewModel {
         } catch {
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
             guard muted || localMuteIntentRevision == actionMuteRevision else { return }
-            // A failed mute fails closed (the client kept the local mute).
+
             state.isMuted = muted ? true : previousMuted
             syncCallPresenceState()
             reportMediaFailure(error, kind: .microphone)
@@ -12476,9 +11859,9 @@ final class MeetingViewModel {
                 try await enableOrStartLocalVideo(
                     context: CallActionContext(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId)
                 )
-                // An orphaned start must not turn the recovered call's camera back on.
+
                 guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-                // Nor may a camera-off or audio-only mode that landed meanwhile.
+
                 guard isLocalCameraOnStillWanted(
                     cameraIntentRevision: actionCameraIntentRevision,
                     videoPolicyRevision: actionVideoPolicyRevision
@@ -12491,7 +11874,7 @@ final class MeetingViewModel {
             }
         } catch {
             guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }
-            // A superseded camera-on reports no error: the camera-off stands.
+
             guard cameraOff || localCameraIntentRevision == actionCameraIntentRevision else { return }
             setLocalCameraOffState(previousCameraOff)
             reportMediaFailure(error, kind: .camera)
@@ -12597,10 +11980,7 @@ final class MeetingViewModel {
             )
             return nil
         }
-        // Our own message echoed back by the room broadcast. Without this, the
-        // echo appended a second copy alongside the optimistic row until the
-        // send ack cleaned it up - a visible one-second double/flip that made
-        // sending feel broken. Swap the optimistic row in place instead.
+
         if state.isLocalIdentityUserId(normalized.userId),
            let pendingIndex = pendingOptimisticChatSends.firstIndex(where: {
                $0.signature == Self.chatEchoSignature(
@@ -12613,7 +11993,7 @@ final class MeetingViewModel {
             let optimisticId = pendingOptimisticChatSends[pendingIndex].id
             pendingOptimisticChatSends.remove(at: pendingIndex)
             if let messageIndex = state.chatMessages.firstIndex(where: { $0.id == optimisticId }) {
-                // S40 CH1: the echo keeps the optimistic client id, so the chat row id never changes.
+
                 let acknowledged = rebuiltChatMessage(normalized, clientId: optimisticId, sendStatus: nil,
                                                       reactions: normalized.reactions)
                 state.chatMessages[messageIndex] = acknowledged
@@ -12677,8 +12057,7 @@ final class MeetingViewModel {
         let normalizedSfuUserId = state.sfuUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let userId = normalizedSfuUserId.isEmpty ? state.userId : normalizedSfuUserId
         let optimisticId = "optimistic-\(UUID().uuidString)"
-        // S40 CH1, CH2: the optimistic id is the client id for life and the row reads "sending"; a known private
-        // target styles the row private from the first frame (INM C10).
+
         let message = ChatMessage(
             id: optimisticId,
             userId: userId,
@@ -12697,9 +12076,7 @@ final class MeetingViewModel {
         )
         let appended = appendChatMessage(message)
         if let appended {
-            // Signature from the NORMALIZED stored message, not the raw input:
-            // the echo is matched post-normalization, so both sides of the
-            // comparison must go through the same transform (TTS prefixes etc).
+
             pendingOptimisticChatSends.append((
                 id: appended.id,
                 signature: Self.chatEchoSignature(
@@ -12728,7 +12105,7 @@ final class MeetingViewModel {
         pendingOptimisticChatSends.removeAll { $0.id == optimisticMessageId }
         guard isSameCallContext(context) else { return nil }
         if clearedOptimisticChatIds.contains(optimisticMessageId) {
-            // CH11: `/clear` ran while this send was in flight; its acknowledgement adds no row.
+
             clearedOptimisticChatIds.remove(optimisticMessageId)
             return nil
         }
@@ -12745,7 +12122,7 @@ final class MeetingViewModel {
         }
 
         if let index = state.chatMessages.firstIndex(where: { $0.id == optimisticMessageId }) {
-            // S40 CH1: the acknowledged message keeps the optimistic client id.
+
             state.chatMessages[index] = rebuiltChatMessage(normalized, clientId: optimisticMessageId, sendStatus: nil,
                                                            reactions: normalized.reactions)
         } else {
@@ -12755,9 +12132,6 @@ final class MeetingViewModel {
         return normalized
     }
 
-    /// S40 CH4: received and acknowledged voice messages join the speaker's queue (6 waiting, 250 ms gaps) with the
-    /// full text and the sender's voice token; own messages play even while Play Voice Messages is off (C6-22). The
-    /// queue speaks a message id once, so the echo and the acknowledgement never double it.
     private func playTtsIfNeeded(for message: ChatMessage, sourceContent: String, shouldSpeakTts: Bool) {
         guard shouldSpeakTts,
               !message.isDirect,
@@ -12922,8 +12296,6 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: - Chat
-
     func sendChatMessage(_ content: String, replyTo: ChatReplyPreview? = nil) {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -12935,12 +12307,6 @@ final class MeetingViewModel {
         sendChatMessageContent(title.isEmpty ? "GIF" : title, gif: gif, replyTo: replyTo)
     }
 
-    /// Uploads a picked image through the SFU's moderated asset store and
-    /// sends it as a chat attachment with the caption (mirrors the web's
-    /// sendChatImage: authorize -> bearer POST -> send). Size/type limits and
-    /// error copy match the web client.
-    /// Uploads and sends a chat image. Returns true when the message went out;
-    /// false lets the composer restore the caption/reply it staged.
     @discardableResult
     func sendChatImage(fileURL: URL, caption: String, replyTo: ChatReplyPreview? = nil) async -> Bool {
         guard state.connectionState == .joined else {
@@ -12964,9 +12330,7 @@ final class MeetingViewModel {
         defer { state.isChatImageUploading = false }
 
         do {
-            // Reject oversized files from metadata BEFORE reading the bytes: a
-            // picker result can be tens of megabytes, and reading it first
-            // would buffer it all just to throw it away.
+
             if let attributeSize = try? FileManager.default.attributesOfItem(atPath: fileURL.path)[FileAttributeKey.size],
                let declaredByteCount = attributeSize as? Int,
                declaredByteCount > 0,
@@ -13117,7 +12481,8 @@ final class MeetingViewModel {
     private func sendConclaveQuestion(
         _ originalMessage: String,
         question: String,
-        replyTo: ChatReplyPreview?
+        replyTo: ChatReplyPreview?,
+        recapRequestId: String = ""
     ) {
         let actionContext = currentCallActionContext()
         startConclaveAssistantTask {
@@ -13131,28 +12496,31 @@ final class MeetingViewModel {
                 await self.requestConclaveAssistantAnswer(
                     question: question,
                     questionMessageId: questionMessage.id,
-                    context: actionContext
+                    context: actionContext,
+                    recapRequestId: recapRequestId
                 )
             } catch {
+                if !recapRequestId.isEmpty {
+                    self.recapCoordinator.noteAssistantAnswerSettled(answerId: recapRequestId,
+                        atMillis: Date().timeIntervalSince1970 * 1000.0, failed: true)
+                }
                 self.applyChatSendError(error, context: actionContext)
             }
         }
     }
 
-    /// S40 CH7, CH8 (CHT-7): the asker's answer streams through `NativeConclaveAssistantService.ask(...onEvent:)`. The
-    /// store keeps the typed row state and the live text (the chat inputs read them), forwards the signed packets to
-    /// the room with the web throttle and coalesces refreshes; the history leaves out private messages (Q4) and failed
-    /// answers; the transcript goes along while live notes run. A failure is a row state for the native chat; the
-    /// legacy chat still reads the failure copy as the answer text. `retryAnswerId` is set by Try Again.
     private func requestConclaveAssistantAnswer(
         question: String,
         questionMessageId: String,
         context: CallActionContext,
-        answerId retryAnswerId: String? = nil
+        answerId retryAnswerId: String? = nil,
+        recapRequestId: String = ""
     ) async {
         let normalizedQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = normalizedQuestion.isEmpty ? NativeConclaveAssistantService.defaultQuestion : normalizedQuestion
-        let answerId = retryAnswerId ?? "conclave-\(Int(Date().timeIntervalSince1970 * 1000))-\(String(UUID().uuidString.prefix(6)).lowercased())"
+        let answerId = retryAnswerId ?? (recapRequestId.isEmpty
+            ? "conclave-\(Int(Date().timeIntervalSince1970 * 1000))-\(String(UUID().uuidString.prefix(6)).lowercased())"
+            : recapRequestId)
         let history = nativeConclaveAssistantHistory(excluding: answerId)
         let transcriptContext = ConclaveAssistantTranscriptPolicy.context(
             segments: transcriptState.orderedSegments,
@@ -13199,10 +12567,10 @@ final class MeetingViewModel {
                 return
             }
             conclaveAssistant.finish(answerId: answerId, content: result.content)
-            recapCoordinator.noteAssistantAnswerSettled(atMillis: Date().timeIntervalSince1970 * 1000.0,
+            recapCoordinator.noteAssistantAnswerSettled(answerId: answerId, atMillis: Date().timeIntervalSince1970 * 1000.0,
                                                          failed: result.content.isEmpty)
             if result.content.isEmpty {
-                // Native rows read the `empty` kind; the legacy chat keeps the failure copy it showed before.
+
                 appendConclaveAssistantAnswer(id: answerId, content: NativeConclaveAssistantService.genericFailureMessage,
                                               timestamp: Date(), roomId: state.roomId)
             } else if let relay = result.relay {
@@ -13211,10 +12579,10 @@ final class MeetingViewModel {
                 appendConclaveAssistantAnswer(id: answerId, content: result.content, timestamp: Date(), roomId: state.roomId)
             }
         } catch {
-            // A cancelled request (the call ended or the room's chat was cleared) leaves nothing behind.
+
             guard isSameCallContext(context), conclaveAssistant.hasAnswer(answerId) else { return }
             conclaveAssistant.fail(answerId: answerId, kind: ConclaveAssistantFailurePolicy.kind(for: error))
-            recapCoordinator.noteAssistantAnswerSettled(atMillis: Date().timeIntervalSince1970 * 1000.0, failed: true)
+            recapCoordinator.noteAssistantAnswerSettled(answerId: answerId, atMillis: Date().timeIntervalSince1970 * 1000.0, failed: true)
             appendConclaveAssistantAnswer(
                 id: answerId,
                 content: NativeConclaveAssistantService.presentationMessage(for: error),
@@ -13225,23 +12593,19 @@ final class MeetingViewModel {
         }
     }
 
-    /// S40 Q4: private messages never reach the assistant; failed answers and the answer being asked are skipped too.
     private func nativeConclaveAssistantHistory(excluding answerId: String) -> [ConclaveAssistantHistoryItem] {
         var excluded = conclaveAssistant.failedAnswerIds()
         excluded.append(answerId)
         return ConclaveAssistantHistoryPolicy.items(messages: state.chatMessages, excludedIds: excluded)
     }
 
-    /// S40 4 f (CHT-7): Try Again asks the same question again under the same answer id (the row keeps its place); the
-    /// failure copy the legacy chat showed is replaced by a fresh placeholder at the original time.
     private func retryConclaveAssistantAnswer(answerId: String) {
-        guard chatSendGate() == ChatSendGate.allowed,
-              let record = conclaveAssistant.retryRecord(answerId: answerId) else { return }
-        let timestamp = state.chatMessages.first(where: { $0.id == record.answerId })?.timestamp ?? Date()
-        // Thinking at once, so a second tap finds no Try Again.
-        conclaveAssistant.begin(answerId: record.answerId, question: record.question, questionMessageId: record.questionMessageId)
+        guard chatSendGate() == ChatSendGate.allowed else { return }
+        let timestamp = state.chatMessages.first(where: { $0.id == answerId })?.timestamp ?? Date()
+        guard let record = conclaveAssistant.beginRetry(answerId: answerId) else { return }
+
         beginChatRefreshBatch()
-        removeOptimisticChatMessage(id: record.answerId)
+        removeOptimisticChatMessage(id: answerId)
         appendConclaveAssistantPlaceholder(id: record.answerId, timestamp: timestamp, roomId: state.roomId)
         endChatRefreshBatch()
         let context = currentCallActionContext()
@@ -13251,7 +12615,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S40 CH7: one asker request as a tracked task, so `cancelConclaveAssistantRequests()` ends it with the call.
     private func startConclaveAssistantTask(_ body: @escaping @MainActor () async -> Void) {
         let token = UUID().uuidString
         conclaveAssistantTasks[token] = Task { @MainActor [weak self] in
@@ -13261,8 +12624,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S40 CH7: the call ended or its chat was cleared: every asker stream stops (the service cancels the HTTP
-    /// request on both platforms) and the store forgets every answer.
     private func cancelConclaveAssistantRequests() {
         for task in conclaveAssistantTasks.values {
             task.cancel()
@@ -13381,18 +12742,15 @@ final class MeetingViewModel {
         state.chatOverlayMessages.removeAll()
     }
 
-    // MARK: - Settings presenter (S60 SET-1, SET-2, SET-4)
-
-    /// SET-1: installs the Settings presenter's hooks, then publishes once.
     private func bindSettingsPresenter() {
         let settings = shell.settings
-        // C6-10: the one rename intent (People and Settings share it, RECONCILE R38).
+
         settings.nameEditor = displayNameEditor
-        // C6-6: the sender's media-source audio level, polled at 10 Hz only while the Microphone page is visible.
+
         settings.micLevelSource = { [weak self] in
             self?.webRTCClient.sampleLocalMicrophoneLevel() ?? 0.0
         }
-        // SET-3 (C6-9): the Connection details read one raw stats reading per poll (1 Hz while the page is visible).
+
         settings.stats.source = { [weak self] in
             self?.webRTCClient.sampleConnectionStatsCounters()
         }
@@ -13402,14 +12760,10 @@ final class MeetingViewModel {
         requestSettingsRefresh()
     }
 
-    /// SET-1: fresh Settings inputs (equality guarded in the presenter).
     private func requestSettingsRefresh() {
         shell.settings.apply(makeSettingsInputs())
     }
 
-    /// S60 1 j: what Settings reads from the core. Capabilities of later slices stay false (D11, R70-4): the
-    /// Open Conclave links status row (S70 9), Record and Replay (C6-6, Q8) and the personal voice
-    /// (W10-4). Data Saver and the camera pages (SET-3) and Export Diagnostics (SYS-15) landed in batch 7.
     func makeSettingsInputs() -> SettingsInputs {
         let user = AppState.shared.currentUser
         var account = AccountKind.none
@@ -13458,25 +12812,25 @@ final class MeetingViewModel {
             accountName: user?.name ?? "",
             accountEmail: user?.email ?? "",
             accountProvider: provider,
-            // C6-6 (Q8): no capture path on either platform yet.
+
             canRecordMicTest: false,
             noiseSuppressionLive: webRTCClient.supportsLiveNoiseSuppressionChange,
-            // C6-24: the notice sound player (S20 SC24) reads the two switches through R1 f.
+
             hostAlertSoundsAvailable: true,
-            // R44: the attendee viewer keeps its chrome on screen (S20 12), so no Always Show Controls row for attendees.
+
             attendeeChromeAutoHides: false,
             hasCore: true,
-            // W10-4 is out of this push (S40 Q12).
+
             canUsePersonalVoice: false,
             hasPersonalVoice: false,
             isStandardPreviewPlaying: VoicePreviewPolicy.isPreviewPlaying(activeMessageId: ttsSpeaker.activeMessageId),
-            // SYS-3 (S70 2 c, g; R70-4): Message Notifications on both platforms, the call notification status on Android.
+
             messageNotificationsAvailable: true,
             messageNotificationsOn: SystemNotifications.shared.snapshot.messageNotificationsPreference,
             notificationPermission: SystemNotifications.shared.snapshot.settingsPermission,
             callNotificationStatusAvailable: SystemNotifications.platformIsAndroid,
             callNotificationEnabled: SystemNotifications.shared.snapshot.callNotificationOn,
-            // SET-3 (S60 C6-4, C6-5, C6-29, D11).
+
             isScreenShareSupported: state.isScreenShareSupported,
             isScreenSharing: state.isScreenSharing,
             qualityCappedByHost: hostQualityCapped,
@@ -13484,12 +12838,11 @@ final class MeetingViewModel {
             canShareDeviceAudio: screenShare.canShareDeviceAudio,
             cameraMaxHeight: settingsCameraCapabilityNow().maxHeight,
             cameraMaxFrameRate: settingsCameraCapabilityNow().maxFrameRate,
-            // SYS-15 (S70 15 a, R70-4): About > Export Diagnostics.
+
             canExportDiagnostics: DiagnosticsExportPolicy.isOffered
         )
     }
 
-    /// SET-3 (D11): the camera capability for the current facing, read from the client once per facing.
     private func settingsCameraCapabilityNow() -> CameraCaptureCapability {
         let facing = state.localCameraFacing.rawValue
         if settingsCameraCapabilityFacing != facing {
@@ -13499,8 +12852,6 @@ final class MeetingViewModel {
         return settingsCameraCapability
     }
 
-    /// SYS-15 (S70 15 j, l4): what must never appear in a diagnostics export (room code, your name, other people's names
-    /// and ids, the signed-in account). Read at export time only.
     func diagnosticsSensitiveValues() -> [String] {
         var values: [String] = [state.roomId, state.displayName]
         for entry in state.displayNames {
@@ -13518,43 +12869,39 @@ final class MeetingViewModel {
         return values
     }
 
-    /// S60 0.5 action mapping: each Settings intent reaches the existing implementation; the presenter never owns media.
     private func performSettingsCommand(_ command: SettingsCommand) {
         switch command.kind {
         case .preferenceChanged:
-            // Batch 6 integrator (F1): a non-optional subject for the transpiled `when`; an unknown id lands in `default`
-            // like `haptics` does.
+
             switch SettingsPreferenceID(rawValue: command.text) ?? SettingsPreferenceID.haptics {
             case .captions, .alwaysShowControls, .knockSound, .handSound:
-                // C6-13 (the strip and More read captions), C6-14 (AutoHideBlocker), C6-24 (notice sounds).
+
                 requestStageRefresh()
                 requestControlsRefresh()
             case .chatPreviews, .playVoiceMessages, .voiceKind, .standardVoice:
-                // C6-22: TtsSpeaker's queue and the chat composer read VoicePreferences directly.
+
                 requestChatRefresh(ChatInputChange.messages)
             case .cameraQuality, .screenShareQuality, .dataSaver:
-                // SET-3 (C6-4, C6-5, S70 SY22): the publish resolver re-runs with the saved limits and Data Saver (the
-                // transient system ceiling keeps composing); Data Saver also lowers what this client receives. Android
-                // replaces a producer only when its own signature check asks for it (iOS updates live parameters).
+
                 applyMediaPublishConfiguration()
                 scheduleRemoteConsumerBandwidthPolicyUpdate()
                 Task { [weak self] in
                     await self?.webRTCClient.refreshLocalMediaForQualitySettings()
                 }
             case .mirror, .shareDeviceAudio:
-                // C6-3: the stage self view reads `LocalVideoMirrorPreference` (R3); C6-29: read by the next share start.
+
                 break
             default:
                 break
             }
         case .setNoiseSuppression:
-            // C6-1: one track replacement; without a live microphone the next start reads the stored preference.
+
             let on = command.flag
             Task { [weak self] in
                 _ = await self?.webRTCClient.applyNoiseSuppression(on)
             }
         case .playTestSound:
-            // C6-7: one tone through the voice route.
+
             webRTCClient.playTestTone()
         case .setCameraFacing:
             let wantsFront = command.flag
@@ -13575,37 +12922,31 @@ final class MeetingViewModel {
                 self.requestStageRefresh()
             }
         case .startMicTest, .stopMicTest, .showSystemMicModes:
-            // iOS polls the sender stats through `micLevelSource`; Mic Mode is opened by the iOS page itself; Android
-            // has neither a samples callback nor Mic Mode yet (C6-6).
+
             break
         case .recordMicSample, .replayMicSample, .setTestGain:
-            // C6-6: unreachable while `canRecordMicTest` is false.
+
             break
         case .startVoiceSample, .stopVoiceSample, .playVoiceSample, .createPersonalVoice, .hearPersonalVoice, .deletePersonalVoice:
-            // C6-23: unreachable while `canUsePersonalVoice` is false (W10-4). When it lands, startVoiceSample pauses the
-            // meeting microphone through `applyLocalMuteNow` after saving the mute intent, stopVoiceSample restores that
-            // intent (an unmute goes through the normal guarded toggle), and both re-check `localMuteIntentRevision`.
+
             break
         }
     }
 
-    // MARK: - Chat presenter (S40 CHT-1 to CHT-3)
-
-    /// S40 CH13: installs the one chat hook on the current state, then publishes once.
     private func bindChatInputs() {
         state.onChatInputChanged = { [weak self] change in
             self?.requestChatRefresh(change)
         }
-        // S40 CH4: the speaker reports what plays; the stage speaking highlight and the voice rows follow it.
+
         ttsSpeaker.onPlaybackChanged = { [weak self] messageId, userId in
             guard let self = self else { return }
             if self.state.activeTtsMessageId != messageId { self.state.activeTtsMessageId = messageId }
             let speaker: String? = userId.isEmpty ? nil : userId
             if self.state.ttsSpeakerId != speaker { self.state.ttsSpeakerId = speaker }
-            // SET-4 (C6-22): Settings' Preview row reads whether the reserved Preview id plays.
+
             self.requestSettingsRefresh()
         }
-        // S40 CH7 (CHT-7): the assistant store's coalesced changes refresh the chat with the assistant hint.
+
         conclaveAssistant.onChange = { [weak self] in
             self?.requestChatRefresh(ChatInputChange.assistant)
         }
@@ -13613,9 +12954,6 @@ final class MeetingViewModel {
         requestChatRefresh(ChatInputChange.messages)
     }
 
-    /// CH13: builds the chat inputs on their own path (never S1's or the stage's) and applies them. A roster hint
-    /// (participants, names, identity) applies only when the derived roster changed, so a mute, camera or hand update
-    /// refreshes no chat. Inside a batch the hints merge and the batch end refreshes once.
     private func requestChatRefresh(_ change: ChatInputChange) {
         if chatRefreshBatchDepth > 0 {
             if let pending = pendingChatRefreshChange, pending != change {
@@ -13631,7 +12969,7 @@ final class MeetingViewModel {
         chatRefreshCount += 1
         chat.apply(makeChatInputs(roster: roster), change: change)
         requestTranscriptRefresh()
-        // D22: a demotion to webinar attendee closes the native Chat panel; the draft stays in the presenter.
+
         if change == ChatInputChange.gate && state.isWebinarAttendee && nativeChatPanelIsCurrent {
             shell.panels.dismiss(cancelPending: true)
         }
@@ -13652,7 +12990,6 @@ final class MeetingViewModel {
         requestChatRefresh(change)
     }
 
-    /// Your canonical chat id: the SFU id the server stamps on your messages, else the session user id.
     private var chatLocalUserId: String {
         let sfu = state.sfuUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return sfu.isEmpty ? state.userId : sfu
@@ -13662,7 +12999,6 @@ final class MeetingViewModel {
         state.chatDisplayName(for: chatLocalUserId)
     }
 
-    /// S40 0.5 `ChatInputs`: the derived roster, never the participants dictionary.
     func makeChatInputs() -> ChatInputs {
         makeChatInputs(roster: makeChatRoster())
     }
@@ -13701,8 +13037,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// One `ChatMessage` as the presenter reads it: full names (S40 3 f), your identity through the local aliases,
-    /// the reply ref, the delivery state (CH2) and the reactions with "mine" decided here (CH3).
     func makeChatMessageInput(_ message: ChatMessage) -> ChatMessageInput {
         let isOwn = state.isLocalIdentityUserId(message.userId)
         let isAssistant = message.userId == ConclaveAssistantChatIdentity.userId
@@ -13747,7 +13081,7 @@ final class MeetingViewModel {
             let full = state.chatDisplayName(for: dmTarget)
             dmTargetName = full.isEmpty ? (message.dmTargetDisplayName ?? "") : full
         }
-        // S40 CH7 (CHT-7): the asker's live answer text comes from the store; everyone else's from the message.
+
         let chatContent = isAssistant
             ? conclaveAssistant.content(forMessageId: message.id, messageContent: message.content) : message.content
         return ChatMessageInput.make(
@@ -13784,8 +13118,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// CH13: the derived roster (you, then present people by name, then people who left but are still named in
-    /// chat). Recomputed on roster hints and compared, so only id or name changes reach the presenter.
     func makeChatRoster() -> [ChatRosterEntry] {
         var entries: [ChatRosterEntry] = []
         var seen: Set<String> = []
@@ -13820,7 +13152,6 @@ final class MeetingViewModel {
         return entries
     }
 
-    /// The composer gate (S40 6 f): watch-only, locked for guests, offline, recovering, not joined, open.
     func chatSendGate() -> ChatSendGate {
         if state.isWebinarAttendee { return ChatSendGate.attendee }
         if state.isChatLocked && !state.isAdmin { return ChatSendGate.locked }
@@ -13830,7 +13161,6 @@ final class MeetingViewModel {
         return ChatSendGate.allowed
     }
 
-    /// The chat presenter's `onCommand` (S40 0.5 action mapping). Hide and show sender are presenter-local.
     func performChatCommand(_ request: ChatCommandRequest) {
         switch request.kind {
         case .send:
@@ -13838,12 +13168,12 @@ final class MeetingViewModel {
             sendNativeChat(request.text, route: route, replyTo: chatReplyPreview(forMessageId: request.messageId),
                            privateTargetId: request.userId, photoFileURL: request.fileURL, suppressEmbeds: request.flag)
         case .sendGif:
-            // S40 CH19: `text` is the GIF id; the attachment itself stays in the presenter (scalar requests).
+
             if let gif = chat.takeSentGif(id: request.text) {
                 sendNativeChatGif(gif, replyTo: chatReplyPreview(forMessageId: request.messageId))
             }
         case .attachPhoto:
-            // S40 CH6: `fileURL` is the copy in the caches directory, `text` the picker's name, `emoji` its MIME type.
+
             prepareChatPhoto(fileURL: request.fileURL, mimeType: request.emoji, fileName: request.text)
         case .retryAttachment:
             if !chatPhotoSourceURL.isEmpty {
@@ -13858,8 +13188,7 @@ final class MeetingViewModel {
         case .react:
             toggleChatReaction(messageId: request.messageId, emoji: request.emoji)
         case .hideSender:
-            // S40 CH21 and S50 3 f: People's Hide or Show Messages item and "Messages hidden" follow the chat. CHT-8: the
-            // hidden sender's stage previews (shown or waiting) go too.
+
             stage.dropChatPreviews(fromUserId: state.canonicalStageUserId(request.userId) ?? request.userId)
             requestPeopleRefresh()
         case .showSender:
@@ -13869,15 +13198,13 @@ final class MeetingViewModel {
         case .stopVoice:
             stopTtsPlayback()
         case .retryAssistant:
-            // S40 4 f (CHT-7): the asker's Try Again on a failed answer (`rowId` is the answer id).
+
             retryConclaveAssistantAnswer(answerId: request.rowId)
         default:
             break
         }
     }
 
-    /// S40 CH4: local replay from a voice bubble ("only you will hear it"); the current message stops, the queue
-    /// continues after it. Nothing plays while the host turned voice messages off.
     private func replayVoiceMessage(messageId: String, rowId: String) {
         guard !state.isTtsDisabled,
               let message = state.chatMessages.first(where: {
@@ -13889,17 +13216,14 @@ final class MeetingViewModel {
                           voiceToken: message.ttsVoiceToken ?? "")
     }
 
-    /// D24 routes already decided by `ChatComposerPolicy.route`. Chat failures stay in the panel (D20): a failed row
-    /// or a system row, never `state.errorMessage`.
     private func sendNativeChat(_ text: String, route: ChatRouteKind, replyTo: ChatReplyPreview?, privateTargetId: String,
                                 photoFileURL: String = "", suppressEmbeds: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A ready photo sends alone or with a caption (S40 6 f); the presenter names it by its picked file URL.
+
         guard !trimmed.isEmpty || !photoFileURL.isEmpty, chatSendGate() == ChatSendGate.allowed else { return }
         switch route {
         case .command:
-            // CH11: the guarded directional branches of `executeChatCommand` (`setMuted`, `setCameraCommandState`,
-            // `setHandRaisedState`, `applyLocalMuteNow`, `applyLocalCameraOffNow`); never the S1 toggle intents.
+
             if let parsed = ChatCommandParser.parse(trimmed) {
                 executeChatCommand(parsed)
             }
@@ -13912,14 +13236,12 @@ final class MeetingViewModel {
             sendRetainedChat(wireText: trimmed, displayText: body, suppressEmbeds: suppressEmbeds, replyTo: replyTo,
                              directTargetUserId: privateTargetId)
         case .publicText:
-            // An implicit private draft ("@avery hi") that resolved shows private from the first frame; the SFU strips
-            // the prefix, so the row shows the body like the echo will.
+
             var display = trimmed
             if !privateTargetId.isEmpty, let parsed = ChatCommandParser.parseDirectMessage(trimmed) {
                 display = parsed.body
             }
-            // S40 CH6: the uploaded photo goes with this send; the SFU uses its file name as the content when there is
-            // no caption, so the optimistic row (and its echo signature) does the same.
+
             var image: ChatImageAttachment? = nil
             if !photoFileURL.isEmpty {
                 guard let uploaded = chatUploadedImage, chatUploadedImageFileURL == photoFileURL else { return }
@@ -13940,8 +13262,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// CH1, CH2: the optimistic row appears at once with its client id and stays through the acknowledgement; a
-    /// failure keeps it with its text, Try Again and Delete.
     private func sendRetainedChat(wireText: String, displayText: String, gif: ChatGifAttachment? = nil,
                                   image: ChatImageAttachment? = nil, suppressEmbeds: Bool = false,
                                   replyTo: ChatReplyPreview?, directTargetUserId: String) {
@@ -13961,7 +13281,7 @@ final class MeetingViewModel {
                                      image: ChatImageAttachment? = nil, suppressEmbeds: Bool = false,
                                      replyTo: ChatReplyPreview?, context: CallActionContext) async {
         guard isCurrentJoinedCall(context) else {
-            // A context change before the emit marks the row failed instead of letting it vanish (CH2).
+
             if isCurrentRoomContext(context.roomId) {
                 markChatSendFailed(clientId: clientId, failure: ChatFailure.notConnected, serverText: "")
             } else {
@@ -13982,7 +13302,7 @@ final class MeetingViewModel {
                 removeOptimisticChatMessage(id: clientId)
                 return
             }
-            // CH10: no raw transport text reaches the UI; the server text is kept for logging only.
+
             let classified = MeetingErrorClassifier.classify(error, context: .chat, isNetworkOffline: state.isNetworkOffline)
             CallDiagnostics.shared.recordFailure(classified)
             let failure = ChatFailurePolicy.failure(category: classified.category, serverText: error.localizedDescription)
@@ -13991,8 +13311,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// The acknowledgement replaces the optimistic row in place and keeps its client id; an echo that landed first
-    /// as its own row is folded into it, so the row id never changes (CH1). A send `/clear` dropped adds nothing.
     private func acknowledgeRetainedChat(clientId: String, with message: ChatMessage) {
         pendingOptimisticChatSends.removeAll { $0.id == clientId }
         retainedChatWireTexts.removeValue(forKey: clientId)
@@ -14024,7 +13342,6 @@ final class MeetingViewModel {
         state.chatMessages[index] = rebuiltChatMessage(message, clientId: clientId, sendStatus: status, reactions: message.reactions)
     }
 
-    /// CH2: Try Again sends the same wire text again from the same row.
     func retryChatSend(clientId: String) {
         guard chatSendGate() == ChatSendGate.allowed,
               let index = state.chatMessages.firstIndex(where: { $0.clientId == clientId }),
@@ -14046,15 +13363,12 @@ final class MeetingViewModel {
         }
     }
 
-    /// CH2: Delete removes a failed row (never a delivered one).
     func discardChatSend(clientId: String) {
         pendingOptimisticChatSends.removeAll { $0.id == clientId }
         retainedChatWireTexts.removeValue(forKey: clientId)
         state.chatMessages.removeAll { $0.clientId == clientId && $0.delivery == ChatMessageDelivery.failed }
     }
 
-    /// S40 CH19 (CHT-5): a picked GIF, sticker or clip sends at once as a retained own row with the current reply (web
-    /// parity, S40 7 a); Try Again resends the same attachment.
     private func sendNativeChatGif(_ gif: ChatGifAttachment, replyTo: ChatReplyPreview?) {
         guard chatSendGate() == ChatSendGate.allowed else { return }
         let title = gif.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -14062,9 +13376,6 @@ final class MeetingViewModel {
         sendRetainedChat(wireText: content, displayText: content, gif: gif, replyTo: replyTo, directTargetUserId: "")
     }
 
-    /// S40 CH6 (CHT-4): prepare off the main actor (`ChatPhotoPreparer`: sniff, HEIC to JPEG, downscale above 6 MB),
-    /// authorize, upload; the composer chip follows `state.chatAttachment`, and the next send carries the upload.
-    /// Failures are chip states (`ChatPhotoFailurePolicy`), never `state.errorMessage` (D20).
     private func prepareChatPhoto(fileURL: String, mimeType: String, fileName: String) {
         guard !fileURL.isEmpty else { return }
         chatPhotoTask?.cancel()
@@ -14121,7 +13432,7 @@ final class MeetingViewModel {
                 self.failChatPhoto(ChatPhotoFailurePolicy.failure(serverMessage: error.message, code: ""), fileURL: fileURL)
             } catch {
                 guard self.chatPhotoGeneration == generation else { return }
-                // CH10: the authorize ack's server text (rate limit, lock, attendee) or a transport failure.
+
                 self.failChatPhoto(ChatPhotoFailurePolicy.failure(serverMessage: error.localizedDescription, code: ""),
                                    fileURL: fileURL)
             }
@@ -14135,7 +13446,6 @@ final class MeetingViewModel {
                                                    failure: failure)
     }
 
-    /// Remove, leave and a fresh join: cancels the prepare or upload and clears the chip.
     private func resetChatPhoto() {
         chatPhotoTask?.cancel()
         chatPhotoTask = nil
@@ -14148,14 +13458,12 @@ final class MeetingViewModel {
         if state.chatAttachment != ChatAttachmentState.none { state.chatAttachment = ChatAttachmentState.none }
     }
 
-    /// CH3: optimistic toggle (web `applyLocalReactionToggle`, cap 12), then `chat:react`; the acknowledgement's set
-    /// is authoritative; a failure rolls back (while the optimistic set is still shown) and adds the system row.
     func toggleChatReaction(messageId: String, emoji: String) {
         guard !messageId.isEmpty, chatSendGate() == ChatSendGate.allowed,
               !state.isReactionsDisabled || state.isAdmin,
               let index = state.chatMessages.firstIndex(where: { $0.id == messageId }) else { return }
         let previous = state.chatMessages[index].reactions
-        // Toggle the alias the server already holds for you, if any (local identity aliases decide "mine").
+
         var reactorId = chatLocalUserId
         for reaction in previous where reaction.emoji == emoji {
             for userId in reaction.userIds where state.isLocalIdentityUserId(userId) {
@@ -14181,7 +13489,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// CH3: replaces one message's reactions with the server's complete set.
     private func applyChatReactions(messageId: String, reactions: [ChatMessageReaction]) {
         guard let index = state.chatMessages.firstIndex(where: { $0.id == messageId }) else { return }
         let message = state.chatMessages[index]
@@ -14190,8 +13497,6 @@ final class MeetingViewModel {
                                                        reactions: reactions)
     }
 
-    /// The one helper that rebuilds a message with new identity, delivery or reaction fields. A reconstruction site
-    /// (apps/conclave-skip/AGENTS.md): every `ChatMessage` field is passed through.
     private func rebuiltChatMessage(
         _ message: ChatMessage,
         clientId: String?,
@@ -14220,7 +13525,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// The SFU reply preview for a message (legacy `beginReply` rules; content cut to 280 like the SFU).
     private func chatReplyPreview(forMessageId messageId: String) -> ChatReplyPreview? {
         guard !messageId.isEmpty, let message = state.chatMessages.first(where: { $0.id == messageId }) else { return nil }
         var content = message.content
@@ -14244,7 +13548,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// CH12: an assistant chunk that brings the first content to an answer whose start was empty.
     private func isAssistantAnswerCompletion(_ message: ChatMessage) -> Bool {
         guard message.userId == ConclaveAssistantChatIdentity.userId,
               !countedAssistantAnswerIds.contains(message.id),
@@ -14253,8 +13556,6 @@ final class MeetingViewModel {
         return existing.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// S30 CC5: `isChatOpen` follows the native Chat panel, so the `toggleChat()` side effects (unread to zero,
-    /// previews cleared) run on native open; the legacy route never presents `.chat`, so this never fires there.
     private func syncChatPanelOpenState() {
         let snapshot = shell.panels.snapshot
         let isCurrent = snapshot.current?.panel == MeetingPanel.chat && !snapshot.isDismissing
@@ -14266,8 +13567,6 @@ final class MeetingViewModel {
             clearChatOverlayMessages()
         }
     }
-
-    // MARK: - Reactions
 
     func sendReaction(emoji: String) {
         sendReaction(MeetingReactionOption.emoji(emoji))
@@ -14305,15 +13604,13 @@ final class MeetingViewModel {
             } catch {
                 guard isSameCallContext(actionContext) else { return }
                 debugLog("[Meeting] Reaction error: \(error.localizedDescription)")
-                // STG-5 (HD request B4-T4 R2.6): a server rate limit on a reaction posts one stage notice.
+
                 if MeetingErrorClassifier.classify(error, context: .media, isNetworkOffline: state.isNetworkOffline).category == .rateLimited {
                     stage.post(StageEvent.make(kind: StageEventKind.rateLimited, detail: "reaction"))
                 }
             }
         }
     }
-
-    // MARK: - Admin Actions
 
     private func beginAdminAction(_ key: String) -> UUID? {
         guard state.isAdmin else { return nil }
@@ -14332,8 +13629,6 @@ final class MeetingViewModel {
         adminActionsInFlight.removeValue(forKey: key)
     }
 
-    /// S50 PH2, PH16: a native caller (`onResult` set) gets a typed failure and no legacy banner text; legacy callers
-    /// keep `applyActionError`. A context change after the dispatch is `interrupted`, never a failure.
     private func reportHostError(_ error: Error, context: CallActionContext, onResult: ((HostActionResult) -> Void)?) {
         guard let onResult else {
             applyActionError(error, context: context)
@@ -14348,16 +13643,12 @@ final class MeetingViewModel {
         onResult(result)
     }
 
-    /// The legacy Bool contract (Settings, the join flows), unchanged: true when the name is applied or unchanged.
     @discardableResult
     func updateDisplayName(_ name: String) async -> Bool {
         let result = await updateDisplayNameResult(name, reportsLegacyErrors: true)
         return result.kind == HostActionResultKind.completed
     }
 
-    /// S50 PH16 and S60 C6-10: the typed rename. Refusals map to `renameRateLimited`, `renameDisabled` and
-    /// `renameTooLong`; a success updates `lastJoinContext`, so a reconnect keeps the new name. One single flight
-    /// (`isDisplayNameUpdateInFlight`) serves Settings and People; an overlapping save is `cancelled`.
     func updateDisplayNameResult(_ name: String, reportsLegacyErrors: Bool = false) async -> HostActionResult {
         let trimmed = NativeDisplayNameNormalizer.normalize(name)
         guard !trimmed.isEmpty else { return HostActionResult.failed(HostActionFailure.invalidInput) }
@@ -14391,7 +13682,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// C6-10: the next join or recovery rejoin sends the renamed name.
     private func updateLastJoinContextDisplayName(_ displayName: String) {
         guard let context = lastJoinContext, context.displayName != displayName else { return }
         lastJoinContext = JoinContext(
@@ -14408,8 +13698,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// S50 PH4: transfer the host role over `admin:transferHost`. Nothing is written optimistically: roles change only
-    /// on `hostChanged` and `adminUsersChanged` (D10); the previous host stays a co-host (adminHandlers.ts:750-812).
     func transferHost(userId: String, onResult: ((HostActionResult) -> Void)? = nil) async {
         guard state.isAdmin, !state.isWebinarAttendee, !state.isLocalIdentityUserId(userId) else {
             onResult?(HostActionResult.cancelled)
@@ -14444,8 +13732,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S50 PH5: participant media permissions (`setParticipantMediaPermissions`). Server state arrives through the ack
-    /// and `participantMediaPermissionsChanged`; nothing is written before the ack.
     func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?, onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "mediaPermissions"
         guard let actionToken = beginAdminAction(actionKey) else {
@@ -14475,7 +13761,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// S50 PH6: Photos in Chat (`setImageAttachmentsEnabled`); the ack applies `isImageAttachmentsEnabled`.
     func toggleImageAttachmentsEnabled(onResult: ((HostActionResult) -> Void)? = nil) {
         let actionKey = "imageAttachments"
         guard let actionToken = beginAdminAction(actionKey) else {
@@ -14921,10 +14206,6 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: - Shared browser stage (S60 14, C6-20; ACT-9)
-
-    /// The browser card's commands over the existing paths; failures come back as `navigateFailed()` and
-    /// `closeFailed()`, a command that never left as `commandRejected(_:)`.
     private func bindBrowserStage() {
         activitySession.browser.onCommand = { [weak self] command in
             self?.performBrowserStageCommand(command)
@@ -14948,14 +14229,10 @@ final class MeetingViewModel {
         }
     }
 
-    /// The card's inputs on the activity refresh path (browser fields, role, connection) and on browser video producer
-    /// changes. Equality guarded in the presenter.
     private func refreshBrowserStage() {
         activitySession.browser.apply(makeBrowserStageInputs())
     }
 
-    /// S60 14 j: the browser card's inputs. The video track key is the consumer behind the `shared-browser-video:`
-    /// producer (a screen-type consumer, keyed "<user>-screen" by the media client), "" until it is consumed.
     func makeBrowserStageInputs() -> BrowserStageInputs {
         let active = state.isBrowserActive
         let controller = state.browserControllerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -14984,7 +14261,6 @@ final class MeetingViewModel {
         )
     }
 
-    /// The tracked browser video producer (one per room; the lowest id wins if a replacement briefly overlaps).
     private func activeBrowserVideoProducer() -> ProducerInfo? {
         var match: ProducerInfo? = nil
         for producer in producerInfosById.values {
@@ -14995,7 +14271,6 @@ final class MeetingViewModel {
         return match
     }
 
-    /// `resolvedBrowserNoVncURL()` once per raw URL and SFU host (S60 14 k), not on every refresh.
     private func cachedBrowserInputURL() -> String {
         let key = (state.browserNoVncURL ?? "") + "|" + (currentJoinInfo?.sfuUrl ?? "")
         if key != browserInputURLSource {
@@ -15005,8 +14280,6 @@ final class MeetingViewModel {
         return browserInputURLResolved
     }
 
-    /// C6-20: `browser:getCapabilities`, ack-only with no payload and a 22 s timeout (SocketIOManager), hosts only. A
-    /// timeout, an error or `available: false` leave the launcher's shared browser unavailable (web parity).
     private func refreshBrowserCapabilities() {
         guard BrowserCapabilityPolicy.shouldProbe(isJoined: state.connectionState == .joined, isHost: state.isAdmin,
                                                   isAttendee: state.isWebinarAttendee) else {
@@ -15033,8 +14306,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// Probes now and every 30 s while this call lasts (a person who becomes host mid-call gets the launcher row within
-    /// one interval). One loop per call context, like the heartbeat loop.
     private func startBrowserCapabilityLoop() {
         guard state.connectionState == .joined else { return }
         refreshBrowserCapabilities()
@@ -15124,7 +14395,6 @@ final class MeetingViewModel {
         }
     }
 
-    /// Two-step end: first call arms for a few seconds, second call confirms.
     func armOrConfirmEndGame() {
         debugLog("[Game] armOrConfirmEndGame entry armed=\(state.isGameEndArmed)")
         if state.isGameEndArmed {
@@ -15147,16 +14417,12 @@ final class MeetingViewModel {
         }
     }
 
-    /// Ask for a seat in the running game; the server grants it at the next
-    /// round boundary.
     func joinActiveGame() {
         performGameAction(requiresAdmin: false) {
             try await self.socketManager.joinGame()
         }
     }
 
-    /// Start the same game again with the config the server reported for the
-    /// finished session (falls back to defaults when absent).
     func rematchActiveGame() {
         guard let publicState = state.gamePublicState, publicState.finished else { return }
         let gameId = publicState.gameId
@@ -15226,7 +14492,7 @@ final class MeetingViewModel {
                 guard isSameCallContext(actionContext) else { return }
                 debugLog("[Game] action failed: \(error)")
                 state.gameErrorMessage = gameActionErrorMessage(error)
-                // S60 7, 8 (HD request B4-T8 R2g): typed failures back to the launcher and the shell (never the toast lane).
+
                 if let failureKind {
                     let text = gameActionErrorMessage(error)
                     activitySession.activities.commandFailed(failureKind, serverText: text)
@@ -15302,9 +14568,6 @@ final class MeetingViewModel {
         return rawMessage.isEmpty ? "Game action failed." : rawMessage
     }
 
-    // syncActiveApp(stateVector:), sendActiveAppYjsUpdate(_:) and sendActiveAppAwareness(_:clientId:) moved into
-    // ActiveAppSession (S60 0.8 C6-18, ACT-7); `activeAppSession` owns them now.
-
     @discardableResult
     func launchSharedBrowser(url input: String) -> Bool {
         guard state.isAdmin, !state.isWebinarAttendee else { return false }
@@ -15354,8 +14617,6 @@ final class MeetingViewModel {
         _ = beginCloseSharedBrowser()
     }
 
-    /// False when the close never left (not a host, or an admin action already in flight); the browser card then drops
-    /// its pending state silently (ACT-9).
     private func beginCloseSharedBrowser() -> Bool {
         guard state.isAdmin, !state.isWebinarAttendee else { return false }
         let actionKey = "browserClose"
@@ -16031,24 +15292,18 @@ final class MeetingViewModel {
         }
     }
 
-    /// The legacy Bool contract (`MoreSheetView`), unchanged: true only when the meeting ended.
     func endMeetingForEveryone(message: String? = nil) async -> Bool {
         let result = await endMeetingForEveryoneResult(message: message)
         return result.kind == .completed
     }
 
-    /// E10 (S1C 3.4): the typed result. `onAcknowledged` runs after the success check and before the local teardown,
-    /// so the ticket completes while its identity is still current; a context change after the ack is `interrupted`
-    /// (R09 needs to tell it from a failure).
     func endMeetingForEveryoneResult(
         message: String? = nil,
         onAcknowledged: (() -> Void)? = nil
     ) async -> MeetingActionResult {
         let actionKey = "endRoom"
         guard let actionToken = beginAdminAction(actionKey) else {
-            // E10: a call that is not joined is the typed `notJoined` failure (as the joined check below and the other
-            // typed core paths, joined first), never a quiet cancel; a non-host or an End already in flight is
-            // `cancelled`. `beginAdminAction` still posts the legacy banner, so the Bool wrapper is unchanged.
+
             return state.connectionState == .joined ? MeetingActionResult.cancelled : MeetingActionResult.failed(.notJoined)
         }
         let actionContext = currentCallActionContext()
@@ -16135,13 +15390,11 @@ final class MeetingViewModel {
         }
     }
 
-    // MARK: - Spotlight / Pin (local-only)
-
     func setViewMode(_ mode: MeetingViewMode) {
         guard state.viewMode != mode else { return }
         state.viewMode = mode
         if mode == .tiled {
-            // S20 SC2: a layout change ends the pin; the persisted self view preference stays the user's own.
+
             state.pinnedUserId = nil
         }
         MeetingViewPreferences.save(from: state)
@@ -16178,9 +15431,6 @@ final class MeetingViewModel {
         MeetingViewPreferences.save(from: state)
     }
 
-    /// S20 SC2: the pin is transient and local. It never writes the persisted `viewMode` (the pin-persists-spotlight
-    /// defect: a later `MeetingViewPreferences.save` stored `.spotlight`); the resolved stage kind reads the pin directly
-    /// (`StageLayoutPolicy.kind`, and `MeetingState.resolvedViewMode` for the legacy root).
     func togglePin(_ userId: String) {
         if state.isPinnedParticipant(userId) {
             state.pinnedUserId = nil

@@ -1,10 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S40 5 c (CHT-3): the reactions viewer, pushed in the chat's stack (no second sheet, D12). One section per emoji
-// with every reactor (the chip's names hold only three), you first, read only (web viewer parity, CHT-21). The
-// reactor lists are built once when the page opens (`reactors(rowId:emoji:)`, presenter memory, no network).
-
 struct ReactionsPage: View {
     let chat: ChatPresenter
     let rowId: String

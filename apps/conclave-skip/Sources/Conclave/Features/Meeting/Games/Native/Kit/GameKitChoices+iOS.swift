@@ -1,12 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S60 L6-5 (ACT-2) on iOS: K3 ChoiceList, K4 BinaryChoice and K5 SplitResult. Selection, correctness and the
-// person's own pick always carry a glyph and a word ("Your answer", "Correct"), never color alone (D4, R03): the
-// selection border is 2 pt coral fill, correct is the in-call success border, a wrong pick the system red border.
-
-/// K3: full-width option buttons (min 56 pt, `.body`). The acted control shows a spinner while its move is pending;
-/// siblings are disabled until the ack (C6-15).
 struct GameKitChoiceList: View {
     let choices: [GameKitChoice]
     let pendingId: String
@@ -103,7 +97,6 @@ struct GameKitChoiceRow: View {
         }
     }
 
-    /// "Your answer", "Correct, 3 votes" or "Incorrect" (S60 9 i).
     static func accessibilityValue(_ choice: GameKitChoice) -> String {
         var parts: [String] = []
         if let mark = markText(choice.mark) { parts.append(mark) }
@@ -112,7 +105,6 @@ struct GameKitChoiceRow: View {
     }
 }
 
-/// K4: two large option buttons separated by "or" (Would You Rather).
 struct GameKitBinaryChoice: View {
     let first: GameKitChoice
     let second: GameKitChoice
@@ -136,7 +128,6 @@ struct GameKitBinaryChoice: View {
     }
 }
 
-/// K5: a flat split bar with counts and names per side (paper at 100% and 32%, no blend between the two).
 struct GameKitSplitResult: View {
     let split: GameKitSplit
 

@@ -14,13 +14,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/**
- * SYS-4 and SYS-8 (S70 3 d, l1, l3; 8 d, l2; SY7) against the transpiled PiP policies and the handwritten PipManager,
- * PipController and hand-off bridge: params from PipTargetFrame (aspect, source rect, absolute actions with the
- * presence session, the API 33 title and subtitle), the API 35 transition state, stale intents, and the suppression
- * count. App-module resource names resolve to 0 in this library-module run, so a recording resolver stands in; the
- * resolved drawables are a silent AVD cell (S70 3 l1, l2). Not run in the heads-down push.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class SYS4PipBridgeTests {
@@ -67,8 +60,6 @@ class SYS4PipBridgeTests {
         endReason = CallEndReason.none,
     )
 
-    // MARK: S70 3 l1: params (API 33 title and subtitle)
-
     @Test
     @Config(sdk = [33])
     fun paramsCarryTheTargetAspectRectAbsoluteActionsAndTheApi33TitleAndSubtitle() {
@@ -84,7 +75,7 @@ class SYS4PipBridgeTests {
         assertEquals("Muted", params.subtitle?.toString())
         assertTrue(params.isAutoEnterEnabled)
         assertTrue(params.isSeamlessResizeEnabled)
-        // Each action carries the presence session it was built in.
+
         for (action in params.actions) {
             val intent = shadowOf(action.actionIntent).savedIntent
             assertEquals(3, intent.getIntExtra(CallActionDispatcher.EXTRA_PRESENCE_SESSION, -1))
@@ -107,7 +98,6 @@ class SYS4PipBridgeTests {
             PipParamsPolicy.params(snapshot = snapshot(pipTarget = wide), availability = PipAvailability.eligible), RecordingResolver())
         assertEquals(Rational(239, 100), wideParams.aspectRatio)
 
-        // No target yet: 16:9 and the activity bounds as the source rect.
         val fallback = Rect(0, 0, 1080, 2340)
         val bare = PipManager.buildParams(context,
             PipParamsPolicy.params(snapshot = snapshot(phase = CallPresencePhase.recovering), availability = PipAvailability.suppressed),
@@ -115,14 +105,10 @@ class SYS4PipBridgeTests {
         assertEquals(Rational(16, 9), bare.aspectRatio)
         assertEquals(fallback, bare.sourceRectHint)
         assertEquals("Reconnecting…", bare.subtitle?.toString())
-        // A suppressed call never arms auto-enter.
+
         assertFalse(bare.isAutoEnterEnabled)
     }
 
-    // MARK: API 35 transition (S70 3 d, D-13)
-
-    // MainActivity.onPictureInPictureUiStateChanged reads isTransitioningToPip on API 35+ and hands the booleans to
-    // PipManager; the state below is platform independent, so it runs on the cached API 28 runtime.
     @Test
     fun theTransitionHidesChromeSuspendsFeedbackAndKeepsTheNativeRootComposed() {
         PipController.setInCall(true)
@@ -132,18 +118,16 @@ class SYS4PipBridgeTests {
         assertTrue(PipController.chromeHiddenForPip)
         assertTrue(PipController.feedbackSuspended)
         PipController.inPipMode = true
-        // The native root stays composed: Main.kt never swaps to the legacy PipContent.
+
         assertFalse(PipController.showsLegacyPipContent)
         PipController.setNativeRootComposed(false)
         assertTrue(PipController.showsLegacyPipContent)
-        // The call ends: PiP state and the transition reset.
+
         PipController.setInCall(false)
         assertFalse(PipController.inPipMode)
         assertFalse(PipController.isTransitioningToPip)
         assertFalse(PipController.feedbackSuspended)
     }
-
-    // MARK: Absolute intents and stale sessions (S70 0.5, 3 l3)
 
     @Test
     fun actionIntentsAreAbsoluteWithDistinctRequestCodes() {
@@ -177,7 +161,6 @@ class SYS4PipBridgeTests {
         assertEquals(SystemCallSource.pictureInPicture, commands.last().source)
         assertEquals(SystemCallCommandKind.mute, commands.last().kind)
 
-        // The next call has a new presence session: the old window's intent changes nothing.
         presence.apply(CallPresenceInputs.make(callSession = 1, sessionPhase = MeetingPhaseKind.home, roomLabel = "lily-zoro-iris"))
         presence.apply(CallPresenceInputs.make(callSession = 2, sessionPhase = MeetingPhaseKind.entering, roomLabel = "lily-zoro-iris", isMuted = false))
         presence.apply(CallPresenceInputs.make(callSession = 2, sessionPhase = MeetingPhaseKind.inCall, roomLabel = "lily-zoro-iris", isMuted = false))
@@ -186,11 +169,8 @@ class SYS4PipBridgeTests {
         assertEquals(SystemCommandResult.stale, CallActionDispatcher.lastResult)
         assertEquals(before, commands.size)
 
-        // Any other intent is not a PiP action.
         assertFalse(PipManager.handleActionIntent(Intent(CallNotificationBuilder.ACTION_MUTE)))
     }
-
-    // MARK: S70 8 l2: suppression
 
     @Test
     fun everyExternalActivityButSettingsIsCountedAsASuppression() {
@@ -202,14 +182,13 @@ class SYS4PipBridgeTests {
             assertEquals(before + 1, PipController.suppressionCount)
             assertEquals("chat_link", PipController.lastSuppressionReason)
             assertFalse(PipManager.isHoldingConsentSuppression)
-            // onUserLeaveHint consumes a hand-off suppression once (API 28 to 30).
+
             assertTrue(PipManager.consumeAutoEnterSuppression())
             assertFalse(PipManager.consumeAutoEnterSuppression())
             PipManager.suppressForExternalHandoff(ExternalHandoffKind.mediaProjectionConsent)
             assertEquals(before + 2, PipController.suppressionCount)
             assertEquals("${before + 2} media_projection", PipController.suppressionReadout)
-            // SYS-10 (S30 CC15, S70 10 d): the consent's suppression is held until its result returns, so the dialog's
-            // leave hint never consumes it; the result (or a failed launch) restores auto-enter.
+
             assertTrue(PipManager.isHoldingConsentSuppression)
             assertTrue(PipManager.consumeAutoEnterSuppression())
             assertTrue(PipManager.consumeAutoEnterSuppression())
@@ -218,12 +197,10 @@ class SYS4PipBridgeTests {
             assertFalse(PipManager.consumeAutoEnterSuppression())
             assertEquals(before + 2, PipController.suppressionCount)
         } finally {
-            // PipManager is process-wide: never leave the consent hold set for the classes that share this sandbox.
+
             PipManager.restoreAutoEnterAfterExternalActivity()
         }
     }
-
-    // MARK: Transpiled policy parity with the Swift host tests
 
     @Test
     fun policiesMatchSwift() {

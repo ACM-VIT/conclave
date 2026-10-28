@@ -14,13 +14,6 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.json.JSONObject
 
-/**
- * ACT-7 through the transpiled bridge codec, relay and presenter plus the handwritten host helpers (the Swift half is
- * T/ACT7AppHostTests.swift, and both mirror packages/apps-sdk/src/native-embed/contract-fixtures.json): hostile messages
- * rejected by reason through the Android JSON path, the presenter's phases, tags and pending-until-ack, the Android
- * origin, the C6-25 run-time WEB_MESSAGE_LISTENER fallback to the failure state, and every copy name the host asks for.
- * No composition and no WebView (Robolectric has no WebView provider).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ACT7AppHostBridgeTests {
@@ -127,6 +120,7 @@ class ACT7AppHostBridgeTests {
         assertEquals(ActivityTapResult.explained, presenter.perform(AppHostCommandKind.setTool, value = "eraser"))
         val ready = JSONObject().put("v", 1).put("type", "ready").put("callSessionId", call).put("appSessionId", relay.appSessionId)
             .put("requestId", "e-1").put("payload", JSONObject().put("bundleVersion", "1.0.0").put("appId", "whiteboard")).toString()
+        relay.acceptPrimedSnapshot(AppsSyncResponse(syncMessage = skip.foundation.Data(), stateVector = null, awarenessUpdate = null), appSessionId = relay.appSessionId)
         relay.receiveFromEmbed(raw = ready, origin = AppBridgeProtocol.androidOrigin, isMainFrame = true)
         assertEquals(AppHostPhase.ready, presenter.model.phase)
         assertEquals(ActivityTapResult.dispatched, presenter.perform(AppHostCommandKind.setTool, value = "eraser"))

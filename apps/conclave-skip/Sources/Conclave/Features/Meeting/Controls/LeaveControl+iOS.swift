@@ -1,25 +1,14 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S30 4 c (CTL-2): the Leave control on the iOS bar. One tap leaves for everyone (Q9 glyph-only red circle, "Leave Call"
-// on every composition, Owner OQ3); a host also gets the long-press menu (`Menu(primaryAction:)` with
-// `.menuOrder(.priority)`: Leave Call nearest the control, End Call for Everyone… farthest, after a separator, no icons;
-// CL5, CL15, RECONCILE R8) and the "End Call for Everyone" accessibility action, so End never depends on a long press.
-// The End confirmation is the FND-1 dialog (F00 C18, `conclaveDialog`) attached to this control, so it originates from
-// it (a popover on iPad) and belongs to it (R09). The view reads only `controls.leaveState` (4 k). No haptic on Leave,
-// on the menu, on Cancel or on success (Q11); `endForEveryonePrompted` plays once per new confirmation (4 h). Never
-// glass: the opaque `HostingTheme.inCallLeave` fill (Owner OQ4 high-contrast red under Increase Contrast).
-
 struct LeaveControl: View {
     let controls: CallControlsPresenter
     let diameter: CGFloat
-    /// The uncapped accessibility text size from `CallControlBar` (the bar caps its own text at `.xxxLarge`), so this
-    /// view reads no environment for it (4 c).
+
     let isAccessibilityText: Bool
     @State private var promptCounter = 0
     @State private var lastPromptedId = 0
-    /// The confirmation this control already closed (a dialog button or a tap outside), so the binding never shows it
-    /// again while S1 catches up.
+
     @State private var closedConfirmationId = 0
 
     var body: some View {
@@ -75,9 +64,7 @@ struct LeaveControl: View {
                 set: { shown in
                     if shown || confirmationId == 0 { return }
                     closedConfirmationId = confirmationId
-                    // A dialog button's action and this dismissal may arrive in either order: cancel on the next turn,
-                    // when a confirm has already consumed the id (S1 then ignores the cancel), so a tap outside the iPad
-                    // popover still clears the confirmation and Confirm is never lost.
+
                     Task { @MainActor in
                         if controls.leaveState.confirmationId == confirmationId {
                             controls.cancelEnd(id: confirmationId)
@@ -89,7 +76,7 @@ struct LeaveControl: View {
             onConfirm: { _ = controls.confirmEndForEveryone(id: confirmationId, postRecap: false) },
             onCancel: { controls.cancelEnd(id: confirmationId) }
         )
-        // TRN-2 (S30 4 g recap variant, CC8): the same confirmation shows the recap dialog while the recap is on offer.
+
         .recapEndDialog(
             controls: controls,
             confirmationId: confirmationId,
@@ -113,7 +100,7 @@ struct LeaveControl: View {
             onCancel: { controls.cancelEnd(id: confirmationId) }
         )
         .onChange(of: confirmationId) { _, _ in
-            // 4 h: once per new confirmation this control presents (menu item, accessibility action or Retry).
+
             let current = controls.leaveState
             if LeaveControlPolicy.playsPrompt(previousId: lastPromptedId, leave: current, includesMoreInvoker: false) {
                 promptCounter += 1
@@ -124,8 +111,6 @@ struct LeaveControl: View {
     }
 }
 
-/// The glyph-only red circle at the toggles' diameter (F00 C04 c, Q9). While leaving, a white system spinner replaces
-/// the glyph (R13: system spinner only).
 private struct LeaveGlyph: View {
     let diameter: CGFloat
     let isLeaving: Bool
@@ -151,8 +136,6 @@ private struct LeaveGlyph: View {
     }
 }
 
-/// The press response of an opaque control (the same 60% dimming as the WP1-2b Leave button); the menu adopts it
-/// through `.menuStyle(.button)`.
 private struct LeaveControlButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -173,10 +156,9 @@ private struct LeaveControlValue: ViewModifier {
     }
 }
 
-/// iOS copy for Leave and End (S30 4 g, RECONCILE R6; Apple title case). String Catalog keys through `ConclaveStrings`.
 enum LeaveControlCopy {
     static var leaveTitle: String { ConclaveStrings.text("Leave Call") }
-    /// The accessibility action's name (no ellipsis: it opens the confirmation directly, 4 g).
+
     static var endActionTitle: String { ConclaveStrings.text("End Call for Everyone") }
 
     static func menuTitles() -> LeaveMenuTitles {
@@ -189,7 +171,6 @@ enum LeaveControlCopy {
         )
     }
 
-    /// The End confirmation (F00 C18 b, c): the destructive confirm and Cancel only (no extra Leave button; R6).
     static func endDialog() -> ConclaveDialogModel {
         ConclaveDialogModel(
             kind: ConclaveDialogKind.confirmation,

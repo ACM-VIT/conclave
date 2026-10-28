@@ -16,11 +16,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/**
- * ENT-9 (S10 12, 0.6 L7; RECONCILE R41; S10 Q7): the transpiled webinar landing policy and presenter route as Kotlin
- * sees them, the Android countdown clock text, the calendar insert intent and the copy mapping. Mirrors
- * `T/ENT9WebinarLandingTests.swift`.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ENT9WebinarLandingBridgeTests {
@@ -159,7 +154,7 @@ class ENT9WebinarLandingBridgeTests {
         assertEquals(3601000L, intent.getLongExtra(CalendarContract.EXTRA_EVENT_END_TIME, 0L))
         assertEquals("Design Systems Week", intent.getStringExtra(CalendarContract.Events.TITLE))
         assertEquals("https://conclave.acmvit.in/w/design-systems-week", intent.getStringExtra(CalendarContract.Events.DESCRIPTION))
-        // S10 12 l7: the fixture's disabled resolver reports no calendar app instead of starting anything.
+
         val snapshot = WebinarLandingSnapshot(revision = 1, routeId = 1, slug = "design-systems-week",
             status = WebinarLandingStatus.early, tag = WebinarLandingTag.startsSoon, title = "", hostName = "",
             startsAtMillis = t0, endsAtMillis = 0.0, earlyEntryMinutes = 10, needsName = false, nameLimit = 40,

@@ -18,9 +18,7 @@ import java.util.concurrent.Executors
 @Config(manifest = Config.NONE, sdk = [28])
 class NativeIconContractTests {
     @Test fun realCatalogIsLazyThreadSafeAndStructurallyComplete() {
-        // Test classes share one Robolectric sandbox, and bridge tests that run earlier (route and menu icons in
-        // FND1FND2BridgeTests, camera menu icons in CTL3CTL4BridgeTests) may already have loaded a few accessors,
-        // so the contract starts from whatever is loaded now. Metadata never evaluates an accessor.
+
         val baseline = ConclaveIcons.initializedCount()
         assertEquals(115, NativeIconCatalog.artwork.size)
         assertEquals(134, NativeIconCatalog.bindings.size)
@@ -34,7 +32,7 @@ class NativeIconContractTests {
                 val futures = (1..8).map { pool.submit<ImageVector> { a.vector() } }
                 val first = futures.first().get()
                 futures.forEach { assertSame(first, it.get()) }
-                // Each accessor is its own lazy: evaluating one loads at most that one icon.
+
                 assertTrue(a.id, (ConclaveIcons.initializedCount() - before) in 0..1)
                 requireIconStructure(first, a.mirrors)
                 assertEquals(a.id, first.name)
@@ -48,7 +46,7 @@ class NativeIconContractTests {
         assertSame(bindings.getValue("host.host_badge").vector(), bindings.getValue("host.host_controls_action").vector())
         assertSame(ConclaveIcons.CheckFill0, bindings.getValue("admit.action").vector())
         assertFalse(ConclaveIcons.CheckFill0.autoMirror)
-        // Every mapped People action resolves on Android; section completeness cannot mask a missing resolver.
+
         for (action in PersonActionID.allCases) {
             val concept = PeopleActionPolicy.concept(action)
             assertTrue(action.rawValue, concept.isNotEmpty())
@@ -56,7 +54,7 @@ class NativeIconContractTests {
         }
         assertSame(ConclaveIcons.VisibilityOffFill0, conclaveMenuIcon("hide_sender"))
         assertSame(ConclaveIcons.FitScreenFill0, conclaveMenuIcon("fit_video"))
-        // Base identities remain stable; new meanings use canonical artwork rather than stand-ins.
+
         assertSame(ConclaveIcons.ReplyFill0, bindings.getValue("reply.action").vector())
         assertSame(ConclaveIcons.PlayArrowFill1, VoiceIcons.play)
         assertSame(ConclaveIcons.StopFill1, VoiceIcons.stop)
@@ -108,7 +106,7 @@ class NativeIconContractTests {
         assertEquals(PathNode.MoveTo(160f, 480f), smooth[0])
         assertEquals(PathNode.QuadTo(320f, 160f, 480f, 480f), smooth[1])
         assertEquals(PathNode.QuadTo(640f, 800f, 800f, 480f), smooth[2])
-        // Independent literal contour order catches EvenOdd/subpath reversal regressions.
+
         val opposite = (converted[0].vector().root[0] as VectorPath).pathData
         val same = (converted[1].vector().root[0] as VectorPath).pathData
         assertEquals(PathNode.LineTo(320f, 640f), opposite[6])
@@ -143,13 +141,12 @@ class NativeIconContractTests {
         val bitmap = Bitmap.createBitmap(2, 1, Bitmap.Config.ARGB_8888, true, ColorSpace.get(ColorSpace.Named.SRGB))
         try {
             bitmap.setPixels(intArrayOf(0x80102030.toInt(), 0), 0, 2, 0, 0, 2, 1)
-            // Precondition: storage is premultiplied, about (8, 16, 24) at alpha 128 in either byte order,
-            // so reading storage bytes instead of straight pixels would fail below.
+
             val storage = ByteBuffer.allocate(8).also { bitmap.copyPixelsToBuffer(it) }.array()
             assertEquals(128, storage[3].toInt() and 255)
             assertEquals(48.0, (0..2).sumOf { storage[it].toInt() and 255 }.toDouble(), 2.0)
             val rgba = iconPixels(bitmap)
-            // Read through the production normalization: straight (16, 32, 48), unpremultiply may round by one.
+
             assertEquals(128, rgba[3].toInt() and 255)
             listOf(16, 32, 48).forEachIndexed { i, straight ->
                 assertEquals("channel $i", straight.toDouble(), (rgba[i].toInt() and 255).toDouble(), 1.0)
@@ -157,7 +154,7 @@ class NativeIconContractTests {
             assertTrue(rgba.copyOfRange(4, 8).all { it == 0.toByte() })
             assertEquals(64, iconSHA256(rgba).length)
         } finally { bitmap.recycle() }
-        // Unpremultiplied storage, as in the PNG round-trip decode, keeps RGB under alpha zero; the protocol zeroes it.
+
         val unpremultiplied = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888, true, ColorSpace.get(ColorSpace.Named.SRGB))
         try {
             unpremultiplied.setPremultiplied(false)

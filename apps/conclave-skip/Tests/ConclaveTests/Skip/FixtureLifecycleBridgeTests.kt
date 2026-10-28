@@ -8,7 +8,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** Actual transpiled launch policy and lifecycle gate; no view model, media or device operations. */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class FixtureLifecycleBridgeTests {

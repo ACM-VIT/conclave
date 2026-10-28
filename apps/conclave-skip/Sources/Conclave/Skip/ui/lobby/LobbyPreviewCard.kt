@@ -35,17 +35,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.max
 import androidx.compose.ui.viewinterop.AndroidView
 
-/*
- * ENT-3 (S10 6 d L1, L2; 7 d; Q16): the dark preview card on Android, composed inside HostingTheme(inCall = true) by
- * LobbyScreen. It takes the cached LobbyCardUi (LobbyUiCache) and plain callbacks, so presence, name, route or issue
- * changes never recompose it (6 k). The video area holds the LocalPreviewSurface (keyed by the preview session), the
- * camera-off avatar, the starting spinner, the unavailable caption or the denied overlay; the "You" chip; the flip
- * button while live (a solid scrim circle, never glass). The strip holds the R01 labelled toggles (Off #F2B8B5) and
- * the Effects slot only while an engine publishes it (R31). ENT-4 (S10 7 d, f, i): the toggles draw the displayed state
- * (Off while a tap cannot grant it), their state descriptions add the permission reason (`stateReason`, HD request
- * B7-T8 R2), and the camera overlay is PermissionPrimingCardOverlay.
- */
-
 @Composable
 internal fun LobbyPreviewCard(
     card: LobbyCardUi,
@@ -111,7 +100,7 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, onFlip: () -> Unit, onOpenSetti
             }
         }
         if (card.showsCameraOverlay) {
-            // ENT-4 (S10 7 d): Open settings or restricted inside the card; the rationale asks from a row instead.
+
             PermissionPrimingCardOverlay(card.cameraPriming, onOpenSettings, Modifier.align(Alignment.Center))
         }
         Text(
@@ -154,7 +143,6 @@ private fun LobbyCameraOffContent(card: LobbyCardUi) {
     }
 }
 
-/** L2: Mic then Camera (then Effects), each a Role.Switch with its state description; the caption is visual only. */
 @Composable
 private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: (Boolean) -> Unit, onEffects: () -> Unit) {
     ConclaveLabelledCallToggle(
@@ -200,13 +188,6 @@ private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: 
     }
 }
 
-// MARK: The preview surface (WP3 LocalPreviewSurface)
-
-/**
- * The Android preview surface: a PreviewView owned by the one LocalPreviewController (frames reach it only, never a
- * producer), keyed by the preview session so nothing but a new session recreates it. The non-lazy lobby Column never
- * disposes it on scroll (F00 P5).
- */
 @Composable
 internal fun LocalPreviewSurface(sessionId: Int, modifier: Modifier = Modifier) {
     val controller = LocalPreviewController.shared

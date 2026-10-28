@@ -3,10 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// STG-5 (OUT/PLAN-screens.md section 5; S20 10 l, SC5, SC18, SC24; RECONCILE R1, R3, R27, R45): the 17-row banner
-/// table, toast queue, coalescing, masking, quality dismissal, event suppression, the Q4 thresholds, compact sheet
-/// suspension, the notice sounds through a recording output, the presenter routing and the lane sources. The Kotlin
-/// twin with the same fixtures is T/Skip/STG5NoticeBridgeTests.kt.
 @MainActor
 struct STG5NoticePolicyTests {
     final class Clock {
@@ -48,8 +44,6 @@ struct STG5NoticePolicyTests {
         return stage
     }
 
-    // MARK: Banner table (S20 10 f)
-
     @Test func theBannerTableHasSeventeenRowsInPriorityOrder() {
         let notice = MeetingNoticePolicy.hostNoticeBanner(serial: 1, text: "Hi", level: "info", senderId: "r1", senderName: "Avery",
                                                           expiresAtMillis: 0)
@@ -83,7 +77,7 @@ struct STG5NoticePolicyTests {
         for list in [android, ios] {
             #expect(list.map(\.priority) == list.map(\.priority).sorted())
         }
-        // iOS never shows the Android-only rows.
+
         let iosAll = MeetingNoticePolicy.bannerCandidates(first, hostNotice: notice, liveNotesEpisode: 1, currentPanel: "",
                                                           platform: NoticePlatform.ios)
         #expect(iosAll.first?.kind == NoticeKind.offline)
@@ -110,7 +104,7 @@ struct STG5NoticePolicyTests {
         let android = MeetingNoticeCenter(platform: NoticePlatform.android)
         _ = android.applyState(host(isOffline: true, isCaptivePortal: true), nowMillis: 0)
         #expect(android.banner?.kind == NoticeKind.captivePortal && android.banner?.actions.map(\.id) == [NoticeAction.openSettings])
-        // The call root names its platform once.
+
         ios.setPlatform(NoticePlatform.android, nowMillis: 1)
         #expect(ios.banner?.kind == NoticeKind.captivePortal)
     }
@@ -121,7 +115,7 @@ struct STG5NoticePolicyTests {
         #expect(center.banner?.kind == NoticeKind.veryPoorConnection && center.banner?.actions.map(\.id) == [NoticeAction.useAudioOnly])
         _ = center.applyState(host(isAudioOnly: true, quality: .emergency), nowMillis: 1)
         #expect(center.banner?.kind == NoticeKind.audioOnly && center.banner?.actions.map(\.id) == [NoticeAction.turnOffAudioOnly])
-        // Poor is not a banner (Q5, SR5).
+
         _ = center.applyState(host(quality: .poor), nowMillis: 2)
         #expect(center.banner == nil)
     }
@@ -152,7 +146,7 @@ struct STG5NoticePolicyTests {
                                         detail: "warning"), nowMillis: start)
         #expect(center.banner?.kind == NoticeKind.hostNotice && center.banner?.severity == .warning)
         #expect(center.banner?.expiresAtMillis == start + 60_000)
-        // Shown for 20 s, then offline masks it for 70 s.
+
         _ = center.applyState(host(isOffline: true), nowMillis: start + 20_000)
         #expect(center.banner?.kind == NoticeKind.offline)
         #expect(center.hostNoticeRemaining == 40_000)
@@ -162,7 +156,7 @@ struct STG5NoticePolicyTests {
         #expect(!center.expireIfDue(nowMillis: start + 129_000))
         #expect(center.expireIfDue(nowMillis: start + 130_000))
         #expect(center.banner == nil)
-        // Dismiss works too, and a long notice expands in place.
+
         let long = String(repeating: "Please read this. ", count: 20)
         _ = center.post(StageEvent.make(kind: StageEventKind.hostNotice, serverText: long, detail: "info"), nowMillis: start + 131_000)
         #expect(center.banner?.actions.map(\.id) == [NoticeAction.expand] && center.banner?.isDismissible == true)
@@ -180,11 +174,11 @@ struct STG5NoticePolicyTests {
         #expect(attempt?.actions == [NoticeAction.make(NoticeAction.retryRecovery, isEnabled: true)])
         let inFlight = StageFixtureSession(state: .reconnectingInFlight).stage.banner
         #expect(inFlight?.actions == [NoticeAction.make(NoticeAction.retryRecovery, isEnabled: false)])
-        // Before the first rejoin fails there is no attempt line and no Retry Now.
+
         let center = MeetingNoticeCenter()
         _ = center.applyState(host(isRecovering: true, attempt: 1), nowMillis: 0)
         #expect(center.banner?.count == 0 && center.banner?.actions.isEmpty == true)
-        // Within the foreground grace the recovery shows nothing.
+
         let quiet = StageNoticeInputs.make(callSession: 1, isRecovering: true, isResumingFromBackground: true)
         #expect(MeetingNoticePolicy.bannerCandidates(quiet, hostNotice: nil, liveNotesEpisode: 0, currentPanel: "",
                                                      platform: NoticePlatform.ios).isEmpty)
@@ -211,13 +205,11 @@ struct STG5NoticePolicyTests {
             #expect(session.stage.toast?.expiresAtMillis == 0, "toasts carry no presenter expiry")
             #expect(session.counters.chimes.isEmpty, "the fixture never chimes with the switches off")
         }
-        // The fixture joins coalesce: Avery first, then "Ben and 1 other".
+
         let joins = StageFixtureSession(state: .toastJoins)
         #expect(joins.stage.toast?.name == "Avery Lee" && joins.stage.queuedToasts == 1)
         #expect(joins.stage.notices.queue.first?.count == 2)
     }
-
-    // MARK: Toast lane (S20 10 f toast paragraph, F00 C13)
 
     @Test func toastsQueueThreeCoalesceWithinFourSecondsAndNeverExpire() throws {
         let center = MeetingNoticeCenter()
@@ -232,12 +224,12 @@ struct STG5NoticePolicyTests {
         #expect(center.queue.count == 2)
         _ = center.post(StageEvent.make(kind: StageEventKind.routeChanged, name: "Speaker"), nowMillis: t + 6_600)
         _ = center.post(StageEvent.make(kind: StageEventKind.actionFailed, detail: "hand"), nowMillis: t + 6_700)
-        // Queue max 3: the oldest event left; the failure waits first.
+
         #expect(center.queue.count == 3)
         try #require(!center.queue.isEmpty)
         #expect(center.queue[0].kind == NoticeKind.actionFailed)
         #expect(!center.queue.map(\.name).contains("Ben"))
-        // The presenter never expires a toast: only the host's dismissal moves the lane.
+
         #expect(center.toast?.name == "Avery")
         center.dismiss(id: center.toast?.id ?? "", nowMillis: t + 600_000)
         #expect(center.toast?.kind == NoticeKind.actionFailed && center.toast?.actions.map(\.id) == [NoticeAction.retry])
@@ -289,12 +281,12 @@ struct STG5NoticePolicyTests {
         #expect(center.banner?.kind == NoticeKind.knock)
         center.setToastLaneSuspended(false)
         #expect(center.toast?.name == "Avery")
-        // A toast that was showing when a sheet opened comes back first.
+
         center.setToastLaneSuspended(true)
         #expect(center.toast == nil && center.queue.first?.name == "Avery")
         center.setToastLaneSuspended(false)
         #expect(center.toast?.name == "Avery")
-        // R3: sheets and Android overlays suspend; the inspector and the side pane keep the lane.
+
         #expect(MeetingNoticePolicy.suspendsToastLane(style: .sheet) && MeetingNoticePolicy.suspendsToastLane(style: .overlay))
         #expect(!MeetingNoticePolicy.suspendsToastLane(style: .inspector) && !MeetingNoticePolicy.suspendsToastLane(style: .sidePane))
     }
@@ -345,19 +337,17 @@ struct STG5NoticePolicyTests {
         #expect(center.queue.first?.id.hasPrefix("local:") == true)
         center.clear(id: "endFailed")
         #expect(center.toast?.kind == NoticeKind.linkCopied)
-        // A local notice can never become a banner.
+
         center.postLocal(MeetingNotice.make(kind: NoticeKind.offline, lane: .banner), nowMillis: 8_000)
         #expect(center.banner == nil)
     }
-
-    // MARK: Notice sounds (SC24, RECONCILE R45) through a recording output only
 
     @Test func noticeSoundsPlayOncePerKindAndNeverForTheHostsOwnHandOnHoldOrSwitchOff() {
         let clock = Clock()
         let stage = presenter(clock)
         let recorder = Recorder()
         stage.sounds.output = { kind in recorder.values.append(kind) }
-        // The first host snapshot is a baseline: two people already waiting play nothing.
+
         stage.applyNotices(host(pending: ["w1", "w2"], knockSound: true, handSound: true))
         #expect(recorder.values.isEmpty)
         clock.millis += 10_000
@@ -377,7 +367,7 @@ struct STG5NoticePolicyTests {
         stage.applyNotices(host(pending: ["w1", "w2", "w3", "w4", "w5", "w6"], knockSound: false, handSound: false))
         stage.post(StageEvent.make(kind: StageEventKind.handRaised, userId: "r2", name: "Ben"))
         #expect(recorder.values.count == 2, "switches off play nothing")
-        // The policy itself.
+
         let gate = NoticeSoundGate(isHost: true, knockSoundOn: true, handSoundOn: true, isOnHold: false, isAudioPaused: false)
         #expect(NoticeSoundPolicy.shouldPlay(kind: NoticeSoundKind.knock, gate: gate, lastPlayedMillis: nil, nowMillis: 0))
         #expect(!NoticeSoundPolicy.shouldPlay(kind: NoticeSoundKind.knock, gate: gate, lastPlayedMillis: 0, nowMillis: 2_999))
@@ -403,8 +393,6 @@ struct STG5NoticePolicyTests {
         #expect(recorder.values.isEmpty)
     }
 
-    // MARK: Presenter routing, tokens, announcements and geometry
-
     @Test func noticeActionsRouteToPanelsTheShellAndTheCore() {
         let clock = Clock()
         let stage = presenter(clock)
@@ -417,11 +405,11 @@ struct STG5NoticePolicyTests {
         stage.performNoticeAction(noticeId: knock, actionId: NoticeAction.view)
         #expect(stage.shell.panels.snapshot.current?.panel == .participants)
         #expect(stage.shell.panels.snapshot.current?.destination == .peopleWaiting)
-        // An action the notice does not carry does nothing.
+
         let before = commands.count
         stage.performNoticeAction(noticeId: knock, actionId: NoticeAction.endNow)
         #expect(commands.count == before)
-        // A host notice Dismiss also clears the core's copy.
+
         stage.post(StageEvent.make(kind: StageEventKind.hostNotice, serverText: "Hello", detail: "info"))
         stage.applyNotices(host())
         #expect(stage.banner?.kind == NoticeKind.hostNotice)
@@ -482,7 +470,7 @@ struct STG5NoticePolicyTests {
             #expect(stage.noticeGeometry.toastTrailing > NoticeLaneGeometryPolicy.edgeMargin
                     || stage.noticeGeometry.toastLeading > NoticeLaneGeometryPolicy.edgeMargin)
         }
-        // Chrome hiding never reaches the geometry: it comes from the viewport only.
+
         let before = stage.noticeGeometry
         stage.setTransientChrome(id: ChromeAutoHidePolicy.moreSheet, open: true)
         #expect(stage.noticeGeometry == before)
@@ -501,8 +489,6 @@ struct STG5NoticePolicyTests {
         stage.applyNotices(next)
         #expect(stage.banner == nil)
     }
-
-    // MARK: Sources and assets
 
     @Test func laneSourcesUseTheFoundationComponentsAndStaySilentInFixtures() throws {
         let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/NoticeLanes+iOS.swift"))

@@ -1,11 +1,6 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-/// The compact stage status capsule (S20 SR3; F00 C03 f variant) for Hand Raised, Now Playing, Share Invite and the
-/// minimized self view: an optional glyph, the text and an optional trailing text action. Flat on every OS
-/// version: the in-call label scrim (80% under Increase Contrast) with a 1 pt border, never glass and never inside
-/// the chrome cluster's glass container, because chips stay on screen while chrome hides. The chip text is one element; the
-/// action is its own element after it. Capped at xxxLarge with the Large Content Viewer.
 struct ConclaveStageChip: View {
     let title: String
     let systemImage: String?
@@ -13,7 +8,7 @@ struct ConclaveStageChip: View {
     let identifier: String
     let onTap: (() -> Void)?
     let onAction: (() -> Void)?
-    /// The action's full label and first Voice Control name (S20 7 i); nil reads the visible title.
+
     let actionAccessibilityLabel: String?
 
     init(title: String, systemImage: String? = nil, actionTitle: String? = nil, identifier: String,
@@ -77,7 +72,7 @@ struct ConclaveStageChip: View {
 }
 
 enum ConclaveStageChipMetrics {
-    /// The visual chip height; a tappable chip or action keeps a 44 pt target.
+
     static let height: CGFloat = 36
     static let targetHeight: CGFloat = 44
 }

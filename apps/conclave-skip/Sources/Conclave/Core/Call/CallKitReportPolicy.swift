@@ -1,27 +1,26 @@
 import Foundation
 
 enum CallKitReportKind: String, CaseIterable, Equatable {
-    /// `CXStartCallAction(call:handle:)` with `isVideo`.
+
     case startCall
-    /// `reportOutgoingCall(with:startedConnectingAt:)`.
+
     case reportConnecting
-    /// `CXCallUpdate` (name, video flag, holding on, grouping and DTMF off) through `reportCall(with:updated:)`.
+
     case updateCall
-    /// `reportOutgoingCall(with:connectedAt:)`, once per call.
+
     case reportConnected
-    /// The existing `CXSetMutedCallAction` transaction with rollback.
+
     case setMuted
-    /// The end of the call: a local `CXEndCallAction` request or `reportCall(with:endedAt:reason:)`.
+
     case endCall
 }
 
-/// One CallKit call the iOS adapter makes. Scalars only, so the policy is host-tested and transpiled (SX11).
 struct CallKitReport: Equatable {
     let kind: CallKitReportKind
     let presenceSession: Int
-    /// The `CXHandle(type: .generic)` value: the room code.
+
     let handle: String
-    /// `localizedCallerName`; empty means the adapter uses its localized fallback ("Conclave Meeting").
+
     let title: String
     let hasVideo: Bool
     let muted: Bool
@@ -46,8 +45,6 @@ struct CallKitReport: Equatable {
     }
 }
 
-/// S70 1 c CallKit rules as a pure function of snapshot diffs (SY2). The adapter keeps the per-call bookkeeping
-/// (`hasReportedConnected`, the UUID, `reportedMuted`, `pendingLocalEndUUID`) and translates each report.
 enum CallKitReportPolicy {
     static func reports(
         old: CallPresenceSnapshot,
@@ -57,11 +54,11 @@ enum CallKitReportPolicy {
         var reports: [CallKitReport] = []
         let wasInProgress = CallPresencePhasePolicy.isCallInProgress(old.phase)
         let isInProgress = CallPresencePhasePolicy.isCallInProgress(new.phase)
-        // Leaving idle or ending, or a new presence session, starts a new system call.
+
         let startsNewCall = isInProgress && (!wasInProgress || old.presenceSession != new.presenceSession)
 
         if startsNewCall {
-            // idle to waiting or connecting (O3): start, connecting, then the first update.
+
             reports.append(CallKitReport.make(.startCall, snapshot: new))
             reports.append(CallKitReport.make(.reportConnecting, snapshot: new))
             reports.append(CallKitReport.make(.updateCall, snapshot: new))
@@ -69,7 +66,7 @@ enum CallKitReportPolicy {
                 reports.append(CallKitReport.make(.reportConnected, snapshot: new))
             }
             if new.isMuted {
-                // A system call starts unmuted: mirror a muted start once.
+
                 reports.append(CallKitReport.make(.setMuted, snapshot: new))
             }
             return reports
@@ -89,7 +86,7 @@ enum CallKitReportPolicy {
         }
 
         if wasInProgress && !isInProgress {
-            // Into ending or idle: the first such transition ends the call. Ending to idle reports nothing more.
+
             reports.append(CallKitReport.make(.endCall, snapshot: new, endKind: CallEndReasonPolicy.callKitEnd(new.endReason)))
         }
         return reports

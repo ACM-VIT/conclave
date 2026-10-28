@@ -47,16 +47,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
-/*
- * S60 0.6 L6-7 (SET-6) on Android: EffectTile, a 64 dp flat thumbnail inside a 72 dp column with its labelSmall caption,
- * a 2 dp primaryContainer ring and a check badge (primaryContainer fill, onPrimaryContainer CheckFill0) when selected,
- * and a system spinner while the engine applies it (4 d, e, h: no animation on the ring or badge). One node with the
- * radio role inside its tab's selectable group, the effect name and "Selected" or "Applying" as its state (4 i).
- * Personal tiles add a long-press menu (Change image, Remove image) mirrored as custom actions. Thumbnails are flat
- * (R12): catalog art ships with the WP10 engine, so a catalog tile shows the raised surface with a concept glyph; a
- * personal tile shows its stored JPEG decoded at tile size.
- */
-
 internal object EffectTileMetrics {
     const val TILE_DP = 72
     const val THUMBNAIL_DP = 64
@@ -148,7 +138,6 @@ internal fun EffectTile(
     }
 }
 
-/** The Add photo tile (4 d): the same geometry, a button that launches the system photo picker. */
 @Composable
 internal fun EffectAddPhotoTile(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
@@ -172,7 +161,6 @@ internal fun EffectAddPhotoTile(enabled: Boolean, onClick: () -> Unit, modifier:
     }
 }
 
-/** A personal tile's stored JPEG at tile size, else the concept glyph. */
 @Composable
 private fun EffectThumbnail(item: EffectItem) {
     val context = LocalContext.current

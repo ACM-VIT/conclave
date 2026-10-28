@@ -3,12 +3,6 @@ package conclave.module
 import androidx.compose.runtime.Composable
 import java.text.NumberFormat
 
-/*
- * S60 L6-14 (ACT-2): the one exhaustive copy mapping for the game shell on Android (RC R15 "GameCopy uses keys and
- * typed args"): a `when` to gm_ resources resolved by name, plurals through conclavePlural. Server game strings stay
- * verbatim; module error text shows verbatim only for GameFailure.server.
- */
-
 internal fun gameSeatTagResource(seat: SeatState): String? = when (seat) {
     SeatState.player, SeatState.canJoin -> null
     SeatState.joiningNextRound -> "gm_joining_next"
@@ -27,7 +21,6 @@ internal fun gamePhaseLabel(chrome: GameChromeModel): String = when (chrome.phas
     GameChromePhase.unsupported -> ""
 }
 
-/** "6 players · Lobby", plus "+1 joining" while seats are queued. */
 @Composable
 internal fun gameHeaderStatus(chrome: GameChromeModel): String {
     val phase = gamePhaseLabel(chrome)
@@ -69,7 +62,6 @@ internal fun gameFailure(failure: GameFailure, serverText: String): String? {
     return conclaveString(name)
 }
 
-/** K13 titles; single-sentence kinds have none. */
 internal fun gameNoticeTitleResource(kind: GameKitNoticeKind): String? = when (kind) {
     GameKitNoticeKind.failure, GameKitNoticeKind.spectator, GameKitNoticeKind.info -> null
     GameKitNoticeKind.privateView -> "gm_private_loading_title"
@@ -100,7 +92,6 @@ internal fun gameScoreRowLabel(row: GameScoreboardRow): String {
 @Composable
 internal fun gameProgress(done: Int, total: Int): String = conclaveString("gm_progress", done, total)
 
-/** "Questions: 7 · Pace: Normal" (two facts on one line through one resource, never concatenation). */
 @Composable
 internal fun gameOptionSummary(options: Iterable<GameOptionSummaryModel>): String {
     var line = ""

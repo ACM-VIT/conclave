@@ -6,14 +6,6 @@ import UIKit
 import WebRTC
 #endif
 
-/// Tier A renderer-host probe (PS 7.5, 10.1): the production surface type in a counting container, with no
-/// track, capture or audio session. Creation and dismantling report to the preview's ledger, and window
-/// detach and reattach count as surface loss and restore, which never change identity. Smart Invert never
-/// inverts it, as production video views should not be inverted either (A18).
-///
-/// STG-1 (S20 SL14): an optional test pattern. `staticPattern` draws flat token-colored bars once and then no frames
-/// (the idle cells); `livePattern` moves a marker at 15 frames per second through a display link while the probe is
-/// in a window (the renderer-driven frame cells). Both report to the same ledger; the pattern is fixed at creation.
 struct RendererProbe: View {
     let key: String
     let slot: RendererSlot
@@ -115,8 +107,6 @@ final class RendererProbeView: UIView {
     }
 }
 
-/// The flat test pattern (solid token colors only): four bars from the avatar palette, plus a paper marker
-/// that a display link moves in the live pattern.
 private final class RendererProbePatternView: UIView {
     private let pattern: RendererProbePattern
     private var bars: [CALayer] = []
@@ -192,7 +182,6 @@ private final class RendererProbePatternView: UIView {
     }
 }
 
-/// Breaks the display link's strong reference to its target.
 private final class RendererProbeLinkTarget: NSObject {
     weak var view: RendererProbePatternView?
 

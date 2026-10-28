@@ -1,15 +1,8 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-// S30 6 c, CL7 (CTL-6): the iOS reactions tray "More Reactions…" opens: the emoji row and the flat art row, staying
-// open across sends. A popover in regular width (iPad); in compact width (every iPhone) a dark sheet at the tray's own
-// height with background interaction, so the stage and the S20 reaction overlay stay visible and usable above it (HIG
-// "Avoid displaying popovers in compact views"). In-call dark (D3, F00 2.1). `reactionSent` plays from the tray per
-// dispatched send (S30 6 h). Reachable only once the flat art ships (CC14, S30 Q10: `ReactionPalettePolicy.artShipped`),
-// because the menu palette already carries the six emoji; until then More shows no "More Reactions…" row.
-
 extension View {
-    /// Presents the tray from the More control. `onSent` runs after each dispatched send (the More control's counter).
+
     func reactionsTray(isPresented: Binding<Bool>, controls: CallControlsPresenter, onSent: @escaping () -> Void) -> some View {
         modifier(ReactionsTrayPresenter(isPresented: isPresented, controls: controls, onSent: onSent))
     }
@@ -20,7 +13,7 @@ private struct ReactionsTrayPresenter: ViewModifier {
     let controls: CallControlsPresenter
     let onSent: () -> Void
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    /// The measured tray height plus the drag indicator (compact width only).
+
     @State private var trayHeight: CGFloat = 132
 
     func body(content: Content) -> some View {
@@ -45,14 +38,12 @@ private struct ReactionsTrayPresenter: ViewModifier {
             }
         }
         .onChange(of: isPresented) { _, open in
-            // S30 CC16: the open tray keeps chrome visible.
+
             controls.stage.setTransientChrome(id: ChromeAutoHidePolicy.reactionsTray, open: open)
         }
     }
 }
 
-/// The tray body: reads only `controls.reactions` (S30 6 k). While reactions cannot send the buttons disable and a
-/// footnote names the reason (6 f).
 struct ReactionsTray: View {
     let controls: CallControlsPresenter
     let onSent: () -> Void
@@ -111,8 +102,6 @@ private struct ReactionsTrayRow: View {
     }
 }
 
-/// An emoji as text at `.title2`, or the bundled flat art (32 pt) looked up by the wire id once it ships (CC14). Emoji
-/// and art are content (never coral, never a blend, R12).
 struct ReactionGlyph: View {
     let option: ReactionOptionModel
 
@@ -131,7 +120,6 @@ struct ReactionGlyph: View {
     }
 }
 
-/// The flat art asset names (CC14): "reaction-" plus the name key, bundled with the app when they ship.
 enum ReactionArtAssets {
     static func assetName(_ id: String) -> String {
         "reaction-" + ReactionPalettePolicy.nameKey(id)

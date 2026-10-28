@@ -1,12 +1,7 @@
 #if os(iOS) && !SKIP
 import Foundation
 
-/// S60 L6-14 (ACT-1, STG-9): the one exhaustive copy mapping for the Activities surface and the activity card on iOS.
-/// Every reason, phase and raw value maps through a `switch` to a String Catalog key (Apple title case for controls,
-/// titles and headers; sentence case for footers, values and status lines, F00 11). Server catalog strings stay
-/// verbatim. The contract test enumerates every enum case and checks the keys exist (RC R15).
 enum ActivitiesCopy {
-    // MARK: App copy keyed by SDK id (C6-18)
 
     static func appName(_ appId: String) -> String {
         switch appId {
@@ -25,8 +20,6 @@ enum ActivitiesCopy {
         default: return ""
         }
     }
-
-    // MARK: Activity identity (card header, chip, Now Playing)
 
     static func kindName(_ kind: ActivityKind, gameName: String, appId: String) -> String {
         switch kind {
@@ -59,8 +52,6 @@ enum ActivitiesCopy {
         }
     }
 
-    // MARK: End and Close (R09; the confirmation belongs to the invoking surface)
-
     static func endTitle(_ item: NowPlayingModel) -> String {
         switch item.kind {
         case .game: return ConclaveStrings.text("End Game…")
@@ -90,9 +81,6 @@ enum ActivitiesCopy {
         item.kind == .game ? ConclaveStrings.text("End Game") : ConclaveStrings.text("Close")
     }
 
-    // MARK: Reasons (exhaustive)
-
-    /// The sentence for a reason; `nil` for `none`. `setup` fills the player-range sentence.
     static func reason(_ reason: ActivitiesReason, setup: GameSetupModel? = nil, serverText: String = "") -> String? {
         switch reason {
         case .none: return nil
@@ -114,15 +102,11 @@ enum ActivitiesCopy {
         }
     }
 
-    // MARK: Catalog, vote, setup
-
-    /// "1 to 24 players", or "3 players" when both ends match.
     static func playerRange(_ minPlayers: Int, _ maxPlayers: Int) -> String {
         if minPlayers == maxPlayers { return players(minPlayers) }
         return ConclaveStrings.format("%lld to %lld players", minPlayers, maxPlayers)
     }
 
-    /// "3 to 12" inside the below-range sentence.
     static func playerRangeShort(_ minPlayers: Int, _ maxPlayers: Int) -> String {
         if minPlayers == maxPlayers { return String(minPlayers) }
         return ConclaveStrings.format("%lld to %lld", minPlayers, maxPlayers)
@@ -147,7 +131,6 @@ enum ActivitiesCopy {
         }
     }
 
-    /// The line under the pinned Start (S60 7 f): slow, failure (server text verbatim), or the blocking reason.
     static func setupFooter(_ setup: GameSetupModel) -> String? {
         switch setup.phase {
         case .slow: return ConclaveStrings.text("Still starting. AI content can take a moment.")
@@ -162,8 +145,6 @@ enum ActivitiesCopy {
     static func characterCount(_ count: Int, limit: Int) -> String {
         ConclaveStrings.format("%lld of %lld characters", count, limit)
     }
-
-    // MARK: Browser
 
     static func validation(_ value: BrowserValidation) -> String? {
         switch value {
@@ -194,15 +175,12 @@ enum ActivitiesCopy {
         }
     }
 
-    /// Host-only provider detail (S60 Q3): known ids get a product-neutral name.
     static func providerTitle(_ provider: String) -> String {
         switch provider.lowercased() {
         case "chromium", "local", "": return ConclaveStrings.text("Chromium")
         default: return ConclaveStrings.text("Cloud browser")
         }
     }
-
-    // MARK: Card (S20 11 g)
 
     static func opening(_ name: String) -> String { ConclaveStrings.format("Opening %@", name) }
     static func couldNotOpen(_ name: String) -> String { ConclaveStrings.format("Couldn’t Open %@", name) }

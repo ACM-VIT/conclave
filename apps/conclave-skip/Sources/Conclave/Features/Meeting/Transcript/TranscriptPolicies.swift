@@ -1,87 +1,66 @@
 import Foundation
 
-// TRN-2 (S60 0.5, 6, L6-14): the Transcript panel's typed vocabulary and pure policies. Shared (transpiled) Swift under
-// the S1C 3.6 rules: String raw-value enums, scalar structs, arrays of structs, no associated values, no tuples. Each
-// platform maps every case to copy through its exhaustive copy file (`TranscriptCopy+iOS.swift`, `K/ui/copy/
-// TranscriptCopy.kt`); a contract test enumerates every case on both platforms.
-
-/// Whether the selected provider (and the assistant) run on Conclave's shared keys (S60 6 c Options, web start card).
 enum KeyCoverage: String, CaseIterable, Equatable {
     case unknown, covered, sarvamNeedsOpenAI, needsKeys
 }
 
-/// The three views of one transcript (S60 R6-8: iOS segmented picker, Android `PrimaryTabRow`).
 enum TranscriptTab: String, CaseIterable, Equatable {
     case transcript, ask, minutes
 }
 
-/// "Stop Live Notes for Everyone?" confirms first (S60 6 c); a failure shows the stop-failed banner with Try Again.
 enum StopPhase: String, CaseIterable, Equatable {
     case idle, confirming, stopping, failed
 }
 
-/// The Minutes "Post Recap to Chat" row (S30 CC8, S60 C6-12, D23).
 enum RecapPhase: String, CaseIterable, Equatable {
     case idle, posting, posted, failed
 }
 
-/// What the panel body shows (S60 6 f).
 enum TranscriptBody: String, CaseIterable, Equatable {
-    /// "Loading Live Notes" (capabilities unknown).
+
     case loading
-    /// Turn On Live Notes or Pick Up the Live Notes.
+
     case startCard
-    /// R52: "Live Notes Aren't Available" with no Start, Take Over or Try Again.
+
     case relayUnavailable
-    /// 8 failed attempts: "Live Notes Are Unavailable" with Try Again.
+
     case unavailable
-    /// The tabs over the session (starting, live, paused, stopping, ended).
+
     case content
 }
 
-/// The status bar's state text (S60 6 f).
 enum TranscriptStatusKind: String, CaseIterable, Equatable {
     case none, starting, live, paused, stopping, reconnecting, ended
 }
 
-/// "Hosted by you", "Hosted by %@" or "Following live" (S60 6 g).
 enum TranscriptHostKind: String, CaseIterable, Equatable {
     case none, you, named, following
 }
 
-/// The start card's title and primary button: "Turn On Live Notes" / "Start Notes" or "Pick Up the Live Notes" /
-/// "Resume Notes" (S60 6 f).
 enum TranscriptStartKind: String, CaseIterable, Equatable {
     case start, takeover
 }
 
-/// The start card blurb (S60 6 g).
 enum TranscriptBlurb: String, CaseIterable, Equatable {
     case turnOn, takeoverCovered, takeoverBringKey, viewOnly
 }
 
-/// One Ask row's state (S60 6 j `AskRow.state`, 6 f).
 enum AskRowState: String, CaseIterable, Equatable {
     case thinking, streaming, done, error, notSent, timedOut
 }
 
-/// Minutes section titles (S60 6 j `MinutesSection`), mapped by the copy files.
 enum MinutesSection: String, CaseIterable, Equatable {
     case summary, topics, decisions, actionItems, openQuestions, followUps
 }
 
-/// The Minutes empty states (S60 6 g): "Minutes Build as You Talk" while notes are off, "Cooking Up Minutes" while
-/// they run with nothing summarized yet.
 enum MinutesEmptyKind: String, CaseIterable, Equatable {
     case none, buildAsYouTalk, cooking
 }
 
-/// The Minutes status row: "Minutes build automatically", "Updating Minutes" or "Updated %@" (S60 6 c).
 enum MinutesStatusKind: String, CaseIterable, Equatable {
     case automatic, updating, updated
 }
 
-/// One-shot polite announcements (S60 6 g Announcements, 6 i). The views speak them once per id.
 enum TranscriptAnnouncementKind: String, CaseIterable, Equatable {
     case started, paused, stopped, copied, recapPosting, recapPosted, recapFailed, answerReady
 }
@@ -91,10 +70,6 @@ struct TranscriptAnnouncement: Equatable {
     let kind: TranscriptAnnouncementKind
 }
 
-// MARK: Policies
-
-/// The web start card's key rules (`TranscriptPanel.tsx` start form): the provider needs its own key unless Conclave
-/// covers it; Sarvam also needs an OpenAI key for Ask and Minutes unless Conclave covers OpenAI.
 enum TranscriptKeyPolicy {
     static func needsProviderKey(provider: TranscriptProvider, openAICovered: Bool, sarvamCovered: Bool) -> Bool {
         provider == TranscriptProvider.sarvam ? !sarvamCovered : !openAICovered
@@ -113,7 +88,6 @@ enum TranscriptKeyPolicy {
         return KeyCoverage.needsKeys
     }
 
-    /// Start (or Resume) is enabled once coverage is known and every needed key has text (web `hasRequiredKeys`).
     static func hasRequiredKeys(provider: TranscriptProvider, keysKnown: Bool, openAICovered: Bool, sarvamCovered: Bool,
                                 providerKey: String, assistantKey: String) -> Bool {
         if !keysKnown { return false }
@@ -124,12 +98,10 @@ enum TranscriptKeyPolicy {
         return providerOK && assistantOK
     }
 
-    /// Options start expanded only when a key is needed (S60 6 c).
     static func optionsStartExpanded(_ coverage: KeyCoverage) -> Bool {
         coverage == KeyCoverage.needsKeys || coverage == KeyCoverage.sarvamNeedsOpenAI
     }
 
-    /// The start options sent with Start or Take Over: only the keys the coverage needs (web `startOptions`).
     static func options(provider: TranscriptProvider, assistantModel: String, openAICovered: Bool, sarvamCovered: Bool,
                         providerKey: String, assistantKey: String) -> TranscriptStartOptions {
         let needsProvider = needsProviderKey(provider: provider, openAICovered: openAICovered, sarvamCovered: sarvamCovered)
@@ -139,7 +111,6 @@ enum TranscriptKeyPolicy {
     }
 }
 
-/// What the panel shows for a phase (S60 6 f), shared by both platforms.
 enum TranscriptViewPolicy {
     static func body(phase: LiveNotesPhase, relay: RelayAvailability) -> TranscriptBody {
         switch phase {
@@ -154,14 +125,12 @@ enum TranscriptViewPolicy {
         }
     }
 
-    /// The view switch: Ask only for people who can ask (view only shows no Ask, 6 l 1).
     static func tabs(body: TranscriptBody, canAsk: Bool) -> [TranscriptTab] {
         if body != TranscriptBody.content { return [] }
         if canAsk { return [TranscriptTab.transcript, TranscriptTab.ask, TranscriptTab.minutes] }
         return [TranscriptTab.transcript, TranscriptTab.minutes]
     }
 
-    /// A selected tab that the person can no longer see falls back to Transcript.
     static func visibleTab(_ tab: TranscriptTab, tabs: [TranscriptTab]) -> TranscriptTab {
         if tabs.contains(tab) { return tab }
         return TranscriptTab.transcript
@@ -190,7 +159,6 @@ enum TranscriptViewPolicy {
         return TranscriptHostKind.following
     }
 
-    /// The web rule: the controller can always stop; anyone else needs the stop capability (`useMeetingTranscript`).
     static func canStop(capability: Bool, isController: Bool, phase: LiveNotesPhase) -> Bool {
         let running = phase == LiveNotesPhase.starting || phase == LiveNotesPhase.live || phase == LiveNotesPhase.paused
         return running && (capability || isController)
@@ -200,7 +168,6 @@ enum TranscriptViewPolicy {
         canStop && (phase == LiveNotesPhase.live || phase == LiveNotesPhase.paused)
     }
 
-    /// No controls at all: the start card shows the "View Only" tag and its blurb (6 f).
     static func isViewOnly(capabilitiesKnown: Bool, canStart: Bool, canTakeover: Bool, canStop: Bool) -> Bool {
         capabilitiesKnown && !canStart && !canTakeover && !canStop
     }
@@ -215,7 +182,6 @@ enum TranscriptViewPolicy {
         return coverage == KeyCoverage.covered ? TranscriptBlurb.takeoverCovered : TranscriptBlurb.takeoverBringKey
     }
 
-    /// Start Notes (idle, ended) or Resume Notes (take over); never while the relay is unavailable (R52).
     static func offersStart(phase: LiveNotesPhase, canStart: Bool, canTakeover: Bool, relay: RelayAvailability) -> Bool {
         if phase == LiveNotesPhase.takeoverNeeded {
             return canTakeover && relay != RelayAvailability.unavailable
@@ -223,28 +189,23 @@ enum TranscriptViewPolicy {
         return LiveNotesStartPolicy.offersStart(canStart: canStart, relay: relay, phase: phase)
     }
 
-    /// Controls disable while the link reconnects and while a stop runs (6 f).
     static func controlsDisabled(status: TranscriptStatusKind, stop: StopPhase) -> Bool {
         status == TranscriptStatusKind.reconnecting || status == TranscriptStatusKind.stopping || stop == StopPhase.stopping
     }
 
-    /// The Ask composer shows on the Ask tab while the person can ask and the session can still answer (not ended).
     static func showsAskComposer(tab: TranscriptTab, canAsk: Bool, phase: LiveNotesPhase) -> Bool {
         tab == TranscriptTab.ask && canAsk && phase != LiveNotesPhase.ended
     }
 
-    /// The pinned Start Notes / Resume Notes bar under the start card (6 c).
     static func showsStartBar(body: TranscriptBody, offersStart: Bool) -> Bool {
         body == TranscriptBody.startCard && offersStart
     }
 
-    /// The trailing More Transcript Actions menu has something to do (6 c `.disabled(!hasContent && !canStop)`).
     static func menuEnabled(hasContent: Bool, canStop: Bool, offersRecap: Bool) -> Bool {
         hasContent || canStop || offersRecap
     }
 }
 
-/// Announcements for server-confirmed phase changes (S60 6 g), once per transition.
 enum TranscriptAnnouncementPolicy {
     static func transition(from previous: LiveNotesPhase, to next: LiveNotesPhase) -> TranscriptAnnouncementKind? {
         if previous == next { return nil }
@@ -261,9 +222,6 @@ enum TranscriptAnnouncementPolicy {
     }
 }
 
-/// The stop flow (S60 6 c, f, l 2): confirming, then stopping while the server reports `stopping`, idle once the
-/// session left (the panel stays open in `ended`). A stop the core refused (no connection: the issue reads
-/// "controls reconnecting"; no permission) leaves the session running, which reads as failed with Try Again.
 enum TranscriptStopPolicy {
     static func next(pending: Bool, current: StopPhase, phase: LiveNotesPhase, issue: TranscriptIssue) -> StopPhase {
         if !pending { return current == StopPhase.stopping ? StopPhase.idle : current }
@@ -272,13 +230,11 @@ enum TranscriptStopPolicy {
         return StopPhase.failed
     }
 
-    /// The banner's reason: reconnecting when the core said so, else "Couldn't stop live notes."
     static func failedForReconnecting(issue: TranscriptIssue) -> Bool {
         issue == TranscriptIssue.controlsReconnecting
     }
 }
 
-/// Ask rows (S60 6 f, C6-11): a question's answer settles on a worker error, a reconnect or 30 s without a delta.
 enum AskRowPolicy {
     static let timeoutMillis = 30_000.0
 
@@ -304,14 +260,12 @@ enum AskRowPolicy {
         state == AskRowState.error || state == AskRowState.notSent || state == AskRowState.timedOut
     }
 
-    /// The draft is sendable: some text, connected, not ended (the composer's Ask button).
     static func canSend(_ draft: String, canAsk: Bool, phase: LiveNotesPhase, link: TranscriptLink) -> Bool {
         if !canAsk || phase == LiveNotesPhase.ended || link != TranscriptLink.connected { return false }
         return !draft.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty
     }
 }
 
-/// Minutes (S60 6 c, f, j).
 enum MinutesPolicy {
     static func emptyKind(phase: LiveNotesPhase, hasContent: Bool) -> MinutesEmptyKind {
         if hasContent { return MinutesEmptyKind.none }
@@ -324,7 +278,6 @@ enum MinutesPolicy {
         return updatedAtMillis > 0 ? MinutesStatusKind.updated : MinutesStatusKind.automatic
     }
 
-    /// Refresh needs Ask (web `canRefreshMinutes = canAsk`) and a session that can still summarize (6 l 7).
     static func canRefresh(canAsk: Bool, phase: LiveNotesPhase) -> Bool {
         canAsk && (phase == LiveNotesPhase.live || phase == LiveNotesPhase.paused)
     }
@@ -333,7 +286,6 @@ enum MinutesPolicy {
         status == TranscriptMinutesStatus.generating || status == TranscriptMinutesStatus.pending
     }
 
-    /// The section order of the web panel; empty sections are left out.
     static func sections(_ minutes: TranscriptMinutesSnapshotModel) -> [MinutesSectionModel] {
         var result: [MinutesSectionModel] = []
         append(MinutesSection.topics, minutes.topics, to: &result)
@@ -360,9 +312,8 @@ enum MinutesPolicy {
     }
 }
 
-/// Localized headings for the export, resolved by the platform copy file (S60 6 j "localized headings").
 struct TranscriptExportLabels: Equatable {
-    /// The document title with the room already filled in ("Meeting Transcript - %@").
+
     let title: String
     let summary: String
     let topics: String
@@ -371,7 +322,7 @@ struct TranscriptExportLabels: Equatable {
     let openQuestions: String
     let followUps: String
     let transcript: String
-    /// The speaker fallback ("Speaker").
+
     let speaker: String
 
     func heading(_ section: MinutesSection) -> String {
@@ -386,15 +337,12 @@ struct TranscriptExportLabels: Equatable {
     }
 }
 
-/// One built export (the file is written by the platform share path).
 struct TranscriptExportFile: Equatable {
     let fileName: String
     let content: String
     let byteCount: Int
 }
 
-/// Export and copy (S60 6 j, C6-11, l 3): finals only, localized headings, a real Markdown file named
-/// `conclave-<room>-transcript.md`; built only on tap.
 enum TranscriptExportPolicy {
     static let safeCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
 
@@ -408,8 +356,6 @@ enum TranscriptExportPolicy {
         return "conclave-" + room + "-transcript.md"
     }
 
-    /// The Markdown document: title, summary, minutes sections, then one line per final segment
-    /// (`- <time> <speaker>: <text>`, the web `exportTranscriptMarkdown` shape). Partial text never appears.
     static func markdown(finals: [TranscriptSegmentModel], minutes: TranscriptMinutesSnapshotModel, labels: TranscriptExportLabels,
                          timeLabel: (Double) -> String) -> String {
         var lines: [String] = ["# " + labels.title, ""]
@@ -448,3 +394,21 @@ enum TranscriptExportPolicy {
         content.data(using: String.Encoding.utf8)?.count ?? content.count
     }
 }
+
+struct TranscriptExportSnapshot {
+    let fileName: String
+    let finals: [TranscriptSegmentModel]
+    let minutes: TranscriptMinutesSnapshotModel
+    let labels: TranscriptExportLabels
+
+    func file(timeLabel: (Double) -> String) -> TranscriptExportFile {
+        let content = TranscriptExportPolicy.markdown(finals: finals, minutes: minutes, labels: labels, timeLabel: timeLabel)
+        return TranscriptExportFile(fileName: fileName, content: content, byteCount: TranscriptExportPolicy.byteCount(content))
+    }
+}
+
+#if !SKIP
+extension TranscriptExportLabels: Sendable {}
+extension TranscriptExportFile: Sendable {}
+extension TranscriptExportSnapshot: Sendable {}
+#endif

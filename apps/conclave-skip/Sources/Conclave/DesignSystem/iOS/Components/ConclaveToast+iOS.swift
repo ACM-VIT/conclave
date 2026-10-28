@@ -2,14 +2,6 @@
 import Accessibility
 import SwiftUI
 
-// Toasts and the toast host (F00 C13): transient, low-stakes feedback on the dark stage, one at a time. Which
-// toast shows, the queue (max 3, coalesced) and suspension while a compact sheet covers the stage belong to the
-// S20 lane owner (STG-5); this host draws the current `ConclaveToastItem`, times it (4 s, 8 s with an action,
-// persisting under VoiceOver or Switch Control when it has an action, F00 AX11) and announces it once. It runs no
-// timer while no toast shows. System-appearance iOS screens never use toasts (inline confirmation instead).
-
-/// The host: place it at the bottom of the stage above the control bar (or above the bottom safe area while chrome
-/// hides), outside the self-view snap zone. `onTimeout` and `onDismiss` both hand back the toast id.
 struct ConclaveToastHost: View {
     let item: ConclaveToastItem?
     let isScreenReaderRunning: Bool
@@ -50,8 +42,6 @@ struct ConclaveToastHost: View {
         .accessibilityIdentifier(identifier)
     }
 
-    /// One announcement per toast id (a reference latch, never observed view state): low priority for events, high
-    /// for failures.
     private func announce(_ item: ConclaveToastItem) {
         guard announced.id != item.id else { return }
         announced.id = item.id
@@ -65,8 +55,6 @@ private final class ToastAnnouncementLatch {
     var id: String?
 }
 
-/// One toast: optional 24 pt avatar, up to two lines of text and an optional borderless action in the in-call
-/// coral text color (6.246 on the raised surface), on the flat raised surface with a 1 pt border, radius 12.
 struct ConclaveToast: View {
     let item: ConclaveToastItem
     let identifier: String

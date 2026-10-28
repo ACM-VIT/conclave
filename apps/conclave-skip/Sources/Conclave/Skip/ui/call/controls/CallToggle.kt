@@ -26,19 +26,6 @@ import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-/*
- * S30 CL3 and CL6 (CTL-1): the Android call toggle for Mic, Camera, Raise Hand and Share Screen. A circle Box with
- * combinedClickable (Role.Switch) instead of the M3 filled icon toggle button, for two reasons: that button has no
- * long-click slot (CTL-4 adds the Mic and Camera shortcut through onLongClick), and a blocked control must stay
- * clickable while it draws the disabled treatment (Q11: the tap explains; a disabled M3 button would swallow it). R01
- * colors through the shared conclaveCallToggleColors (owner OQ1), 38% alpha while blocked, a 48 dp target, a constant
- * description and the state in the state description. hapticFeedbackEnabled = false: the cell plays the gesture kind
- * itself, only on a dispatched tap (S30 1 h). CTL-4 (S30 2 d): Mic and Camera pass their long press (it plays
- * `longPress` itself, so the built-in haptic stays off and it plays once), its label, and the TalkBack custom actions
- * that duplicate every shortcut item (AX4).
- */
-
-/** CallControlVisual to the WP1-2b R01 roles. */
 internal fun callControlVisual(visual: CallControlVisual): ConclaveCallControlVisual = when (visual) {
     CallControlVisual.off -> ConclaveCallControlVisual.Off
     CallControlVisual.engaged -> ConclaveCallControlVisual.Engaged

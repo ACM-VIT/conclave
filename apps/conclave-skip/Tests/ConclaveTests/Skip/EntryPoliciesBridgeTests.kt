@@ -12,11 +12,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * ENT-1 and ENT-2 (S10 3, 4, 0.4, 0.8 C9, C16; L11): the transpiled entry policies, parser classes, the S10 0.4 table,
- * the S10 4 c switch rules through the transpiled PremeetingPresenter, the Android back stack keys and the Home row
- * cache. Mirrors `T/EntryPoliciesTests.swift` and `T/PremeetingPresenterTests.swift`.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class EntryPoliciesBridgeTests {
@@ -88,13 +83,13 @@ class EntryPoliciesBridgeTests {
     }
 
     @Test fun switchRulesMatchTheS10Table() {
-        // Idle: the lobby, no prompt.
+
         val idle = presenter()
         idle.handleIncomingURL("conclave://rose-sora-luffy")
         assertEquals(1, idle.path.count)
         assertEquals(PremeetingRouteKind.lobby, idle.path[0].kind)
         assertNull(idle.switchPrompt)
-        // Busy with another room: the prompt; the same room and mode: ignored.
+
         val commands = mutableListOf<PremeetingCommand>()
         val busy = presenter(commands)
         inCall(busy)
@@ -105,25 +100,25 @@ class EntryPoliciesBridgeTests {
         assertNotNull(prompt)
         assertEquals("lily-zoro-iris", prompt!!.currentLabel)
         assertEquals("rose-sora-luffy", prompt.targetLabel)
-        // Leave and Join: the shell leaves, then Home opens the target lobby in editing.
+
         busy.confirmSwitch(id = prompt.id)
         assertEquals(listOf(PremeetingCommand.leave), commands)
         busy.apply(PremeetingInputs.make(callSession = 1, phase = MeetingPhaseKind.home, hasBeenAdmittedThisSession = true))
         assertEquals("rose-sora-luffy", busy.path[0].roomId)
         assertEquals(LobbyMode.editing, busy.lobbyStatus?.mode)
-        // The other join mode prompts (invariants 13 and 15).
+
         val attendee = presenter()
         inCall(attendee, room = "yuki-haz", joinMode = JoinMode.webinarAttendee)
         attendee.handleIncomingURL("https://conclave.acmvit.in/yuki-haz")
         assertNotNull(attendee.switchPrompt)
-        // Sign-in in progress: queued, then applied.
+
         val signingIn = presenter()
         signingIn.apply(PremeetingInputs.make(isSigningIn = true))
         signingIn.handleIncomingURL("conclave://rose-sora-luffy")
         assertEquals(0, signingIn.path.count)
         signingIn.apply(PremeetingInputs.make(isSigningIn = false))
         assertEquals("rose-sora-luffy", signingIn.path[0].roomId)
-        // An invalid Conclave link: the Home notice.
+
         val invalid = presenter()
         invalid.handleIncomingURL("conclave://")
         assertEquals(HomeNoticeKind.invalidLink, invalid.home.noticeKind)
@@ -149,7 +144,7 @@ class EntryPoliciesBridgeTests {
         val presenter = presenter()
         presenter.newMeeting()
         presenter.openAccount()
-        // Android pushes the Account page instead of the iOS sheet (S10 5).
+
         assertFalse(presenter.isAccountSheetPresented)
         val keys = PremeetingBackStack.from(presenter.path.toList(), presenter.outcome)
         assertEquals(3, keys.size)
@@ -159,7 +154,7 @@ class EntryPoliciesBridgeTests {
         val popped = PremeetingBackStack.popped(presenter.path.toList())
         presenter.setPath(skip.lib.Array(popped))
         assertEquals(1, presenter.path.count)
-        // An outcome is `[HomeKey, OutcomeKey]`.
+
         val outcome = OutcomeModel(id = 4, variant = OutcomeVariant.removed, primary = OutcomeAction.backHome,
             secondary = OutcomeAction.none, serverDetail = "")
         assertEquals(listOf(PremeetingKey.HomeKey, PremeetingKey.OutcomeKey(4)), PremeetingBackStack.from(emptyList(), outcome))

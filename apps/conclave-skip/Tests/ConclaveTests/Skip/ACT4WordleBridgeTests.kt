@@ -11,12 +11,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * ACT-4 through the transpiled Wordle scene, the board policy and the game presenter (the Swift half is
- * T/ACT4WordleTests.swift): the same WordleFixtures pushes parsed through the Android JSON path, the presenter draft (kept
- * on a rejected guess, cleared once by the recording push), the outcome tokens, setter mode and results, the hardware key
- * filter, the clock and the resource name for every enum case (L6-14). Pure: no composition.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ACT4WordleBridgeTests {

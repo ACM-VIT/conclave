@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// PPL-4 (OUT/PLAN-screens.md section 5): Host Controls, the meeting access pages and the notice composer. The shared
-/// HostControlsPresenter (PL4 pending intent, bulk rules, HostDrafts kept until the acknowledgement PH15, the R34
-/// single-flight webinar link), HostControlsPolicy validation, the PH5 and PH6 socket surface on every platform file,
-/// the PH1 host path in MeetingState and the view model, and source pins for the iOS-only and Kotlin views (S60 R6-3:
-/// one HostControlsContent for every container). The Kotlin half is T/Skip/PPL2PPL4BridgeTests.kt.
 @MainActor
 struct PPL4HostControlsTests {
     private let me = "u-ishaan"
@@ -39,8 +34,6 @@ struct PPL4HostControlsTests {
         return (people, log)
     }
 
-    // MARK: PL4: one knob transition per tap, server state only on the acknowledgement
-
     @Test func aPendingPolicyShowsItsIntentAndReturnsOnceOnFailure() throws {
         let (people, log) = makeHost()
         let host = people.host
@@ -55,7 +48,7 @@ struct PPL4HostControlsTests {
         #expect(log.commands.first?.kind == .setPolicy)
         #expect(log.commands.first?.text == HostPolicyID.lockMeeting.rawValue)
         #expect(log.commands.first?.flag == true)
-        // A second tap while pending emits nothing; the same value never dispatches.
+
         #expect(host.setPolicy(.lockMeeting, on: false) == .ignored)
         #expect(host.setPolicy(.allowGuests, on: true) == .ignored)
         people.finish(try #require(log.tickets.first), HostActionResult.failed(.rejectedByServer))
@@ -64,7 +57,7 @@ struct PPL4HostControlsTests {
         #expect(failed?.shownOn == false)
         #expect(people.lastFailure?.sourceKey == HostPolicyID.lockMeeting.rawValue)
         #expect(people.lastFailure?.placement == HostFailurePlacement.panelInline.rawValue)
-        // RECONCILE R17: the lock failure uses the S30 lock sentence.
+
         #expect(PeopleFailureCopy.kind(action: people.lastFailure?.action ?? "", failure: people.lastFailure?.failure ?? "",
                                        sourceKey: people.lastFailure?.sourceKey ?? "") == PeopleFailureCopy.lockMeeting)
     }
@@ -74,7 +67,7 @@ struct PPL4HostControlsTests {
         let host = people.host
         host.setPolicy(.photos, on: false)
         people.finish(try #require(log.tickets.first), HostActionResult.completed)
-        // Still on until the core's inputs say otherwise (no optimistic write).
+
         #expect(host.snapshot.policy(.photos)?.shownOn == true)
         host.apply(HostControlsInputs.make(callSession: 1, isImageAttachmentsEnabled: false))
         #expect(host.snapshot.policy(.photos)?.shownOn == false)
@@ -90,7 +83,7 @@ struct PPL4HostControlsTests {
     }
 
     @Test func policyIdsAndPositivePhrasingStayStable() {
-        // RECONCILE R16 renamed the titles, never the ids.
+
         #expect(HostPolicyID.directMessages.rawValue == "directMessages")
         #expect(HostPolicyID.readAloud.rawValue == "readAloud")
         let inputs = HostControlsInputs.make(isChatLocked: true, isTtsDisabled: true, isReactionsDisabled: false)
@@ -99,8 +92,6 @@ struct PPL4HostControlsTests {
         #expect(HostControlsPolicy.isOn(.reactions, inputs: inputs))
         #expect(HostPolicyID.chatRows == [.allowChat, .directMessages, .photos, .readAloud, .reactions])
     }
-
-    // MARK: Bulk (S50 6 f, Q9)
 
     @Test func bulkRowsFollowSharesAndHandsAndMediaBulkConfirms() {
         let (quiet, _) = makeHost()
@@ -116,13 +107,11 @@ struct PPL4HostControlsTests {
         #expect(log.commands.last?.kind == .bulk)
         #expect(log.commands.last?.text == HostBulkID.muteAll.rawValue)
         #expect(host.snapshot.bulkRow(.muteAll)?.isPending == true)
-        // Lower All Hands acts at once.
+
         host.requestBulk(.lowerAllHands)
         #expect(log.commands.last?.text == HostBulkID.lowerAllHands.rawValue)
         #expect(people.confirmation == nil)
     }
-
-    // MARK: PH15 drafts kept until the acknowledgement
 
     @Test func theInviteCodeDraftClearsOnlyAfterTheAcknowledgement() throws {
         let (people, log) = makeHost()
@@ -193,13 +182,10 @@ struct PPL4HostControlsTests {
         #expect(log.commands.last?.targetId == "new@x.org")
     }
 
-    // MARK: R34: ensureWebinarLink is single flight
-
     @MainActor
     private final class LinkGate {
         var calls = 0
-        /// Every parked provider call. A broken single flight parks two; `release()` resumes them all, so a regression
-        /// fails the expectations below instead of leaving a task waiting forever.
+
         var continuations: [CheckedContinuation<Void, Never>] = []
         var isReleased = false
 
@@ -231,7 +217,7 @@ struct PPL4HostControlsTests {
             await Task.yield()
             spins += 1
         }
-        // A provider that never parked would leave `first` waiting for a resume that never comes: stop here instead.
+
         try #require(!gate.continuations.isEmpty)
         #expect(host.snapshot.webinar.linkPhase == WebinarLinkPhase.generating)
         let second = Task { await host.ensureWebinarLink() }
@@ -242,13 +228,11 @@ struct PPL4HostControlsTests {
         #expect(gate.calls == 1)
         #expect(a == "https://conclave.example/w/abc")
         #expect(b == "https://conclave.example/w/abc")
-        // A link that exists returns at once, with no generation.
+
         host.apply(HostControlsInputs.make(callSession: 1, isWebinarEnabled: true, webinarLinkURL: "https://conclave.example/w/abc"))
         #expect(await host.ensureWebinarLink() == "https://conclave.example/w/abc")
         #expect(gate.calls == 1)
     }
-
-    // MARK: Lost host and reset
 
     @Test func losingHostMakesHostControlsUnavailableAndResetClearsDrafts() {
         let (people, _) = makeHost()
@@ -259,14 +243,12 @@ struct PPL4HostControlsTests {
                                        isRosterLoaded: true, isAdmin: false, hostUserId: "u-lee", hostUserIds: ["u-lee"]))
         #expect(!host.snapshot.isAvailable)
         #expect(host.setPolicy(.lockMeeting, on: true) == .ignored)
-        // Drafts survive a role change (R40-7) and clear with the session reset.
+
         #expect(host.drafts.noticeText == "draft")
         people.reset()
         #expect(host.drafts.noticeText.isEmpty)
         #expect(host.snapshot == HostControlsSnapshot.empty.withRevision(host.snapshot.revision))
     }
-
-    // MARK: Source pins: PH5, PH6 on every socket file; the PH1 host path; one content for every container
 
     @Test func participantMediaPermissionsAndPhotosReachEverySocketFile() throws {
         let events = try ppl4Source("Sources/Conclave/Core/Networking/SfuEvents.swift")
@@ -295,11 +277,11 @@ struct PPL4HostControlsTests {
         #expect(vm.contains("private func bindHostControlsInputs()"))
         #expect(vm.contains("func makeHostControlsInputs() -> HostControlsInputs"))
         #expect(vm.contains("func toggleImageAttachmentsEnabled(onResult:"))
-        // PH14: becoming host refreshes both configs once.
+
         #expect(vm.contains("private func beginHostConfigRefresh()"))
         #expect(vm.contains("await self.refreshMeetingConfigNow()"))
         #expect(vm.contains("await self.refreshWebinarConfigNow()"))
-        // R34: the presenter's link provider is the core's generator.
+
         #expect(vm.contains("people.host.linkProvider = { [weak self] in"))
     }
 
@@ -310,7 +292,7 @@ struct PPL4HostControlsTests {
         #expect(ios.contains(".confirmationDialog(ConclaveStrings.text(\"End Call for Everyone?\")"))
         #expect(!ios.contains(".tint("))
         let rows = try ppl4Source("Sources/Conclave/Features/Meeting/Host/HostRows+iOS.swift")
-        // PL4: the Toggle binds to `shownOn`; B5-T1's getter re-reads the live snapshot row instead of a captured `row`.
+
         #expect(rows.contains("row.isPending ? row.requestedOn : row.isOn") || rows.contains("row.shownOn")
             || rows.contains("Binding(get: { people.host.snapshot.policy(policy)?.shownOn ?? false }"))
         let participants = try ppl4Source("Sources/Conclave/Features/Meeting/People/ParticipantsPanel+iOS.swift")

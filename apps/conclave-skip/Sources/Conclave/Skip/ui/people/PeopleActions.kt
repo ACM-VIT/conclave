@@ -34,17 +34,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 
-/*
- * S50 3 d (PPL-2): the Android row actions. One shared action table (PeopleActionPolicy, PL7) feeds the row
- * DropdownMenu (F00 C16 d: the whole row opens it, long press too; unavailable items stay disabled with their reason,
- * R10), the TalkBack custom actions, and the S20 tile menu (RECONCILE R19). Confirmations are M3 AlertDialogs from one
- * root leaf per surface (People root, each host page, the stage for the tile menu in the in-call theme), with the
- * "Also block" checkbox row (role Checkbox) for Remove; Change Name is the PL10 dialog that stays open while pending
- * and shows a refusal in its supporting text; panel failures use the page snackbar with Retry (PL14). Copy: S50 3 g
- * `ppl_` names, the single source for every people item on every surface.
- */
-
-/** The row action titles and reasons for one person, resolved by name (S50 3 g). */
 internal fun peopleActionTitlesOf(context: Context, name: String): PeopleActionTitles = PeopleActionTitles(
     pin = conclaveStringOf(context, "ppl_pin"),
     unpin = conclaveStringOf(context, "ppl_unpin"),
@@ -68,15 +57,12 @@ internal fun peopleActionTitlesOf(context: Context, name: String): PeopleActionT
     reasonRenameDisabled = conclaveStringOf(context, "ppl_rename_disabled"),
 )
 
-/** The name a menu and its dialogs use for a row ("You" for an unnamed you). */
 internal fun peopleRowName(context: Context, model: PersonRowModel): String =
     if (model.name.isEmpty() && model.isSelf) conclaveStringOf(context, "ds_you") else model.name
 
-/** The row's menu sections, built when the menu opens (F00 C16 k). */
 internal fun peopleMenuSections(context: Context, model: PersonRowModel): List<MenuSectionModel> =
     PeopleActionPolicy.menuSections(model.actions, titles = peopleActionTitlesOf(context, peopleRowName(context, model))).toList()
 
-/** TalkBack custom actions on the row's merged node (S50 3 i, AX4): every available item, in menu order. */
 internal fun peopleRowAccessibilityActions(context: Context, model: PersonRowModel, perform: (PersonActionID) -> Unit): List<CustomAccessibilityAction> {
     if (model.actions.isEmpty) return emptyList()
     val titles = peopleActionTitlesOf(context, peopleRowName(context, model))
@@ -88,7 +74,6 @@ internal fun peopleRowAccessibilityActions(context: Context, model: PersonRowMod
     return result
 }
 
-/** The row DropdownMenu (S50 3 d): groups in the PL7 order with dividers, destructive in error, no shadow, 1 dp border. */
 @Composable
 internal fun PeopleRowMenu(people: PeoplePresenter, model: PersonRowModel, sectionId: String, expanded: Boolean, onDismiss: () -> Unit) {
     val context = LocalContext.current
@@ -106,9 +91,6 @@ internal fun PeopleRowMenu(people: PeoplePresenter, model: PersonRowModel, secti
     )
 }
 
-// MARK: Confirmations (S50 3 d, 3 j)
-
-/** One dialog's copy (S50 3 g, 6 g, 7 g). */
 internal data class PeopleDialogCopy(
     val title: String,
     val message: String,
@@ -143,7 +125,7 @@ internal fun peopleDialogCopy(context: Context, confirmation: PeopleConfirmation
         PeopleConfirmationKind.clearInviteCode -> PeopleDialogCopy(
             conclaveStringOf(context, "hst_remove_code_title"), conclaveStringOf(context, "hst_remove_code_message"),
             conclaveStringOf(context, "hst_remove_code_confirm"), true, null)
-        // S50 9 g: the attendee code page mirrors 7 g with its own strings.
+
         PeopleConfirmationKind.clearAttendeeCode -> PeopleDialogCopy(
             conclaveStringOf(context, "hst_remove_attendee_code_title"), conclaveStringOf(context, "hst_remove_attendee_code_message"),
             conclaveStringOf(context, "hst_remove_code_confirm"), true, null)
@@ -154,10 +136,6 @@ internal fun peopleDialogCopy(context: Context, confirmation: PeopleConfirmation
     }
 }
 
-/**
- * The People root leaf (S50 3 j): row, swipe, accessibility and section-header confirmations; only this leaf reads
- * `people.confirmation` on the People page, so a dialog recomposes no row.
- */
 @Composable
 internal fun PeopleConfirmationHost(people: PeoplePresenter) {
     val confirmation = people.confirmation ?: return
@@ -165,7 +143,6 @@ internal fun PeopleConfirmationHost(people: PeoplePresenter) {
     PeopleConfirmationDialog(people, confirmation)
 }
 
-/** The tile-menu host (R50-9): composed by the stage, in the in-call theme (HD request B5-T1 R3). */
 @Composable
 internal fun StagePeopleConfirmationHost(people: PeoplePresenter?) {
     val presenter = people ?: return
@@ -176,7 +153,6 @@ internal fun StagePeopleConfirmationHost(people: PeoplePresenter?) {
     }
 }
 
-/** One M3 dialog: one confirm (error for destructive kinds, never coral), Cancel, and the "Also block" checkbox row. */
 @Composable
 internal fun PeopleConfirmationDialog(people: PeoplePresenter, confirmation: PeopleConfirmation) {
     val context = LocalContext.current
@@ -224,8 +200,6 @@ internal fun PeopleConfirmationDialog(people: PeoplePresenter, confirmation: Peo
     )
 }
 
-// MARK: Rename (S50 3 d; RECONCILE R38)
-
 internal fun peopleRenameRefusalOf(context: Context, raw: String): String = when (raw) {
     HostActionFailure.renameRateLimited.rawValue -> conclaveStringOf(context, "ppl_rename_rate_limited")
     HostActionFailure.renameDisabled.rawValue -> conclaveStringOf(context, "ppl_rename_disabled")
@@ -233,7 +207,6 @@ internal fun peopleRenameRefusalOf(context: Context, raw: String): String = when
     else -> conclaveStringOf(context, "ppl_fail_rename")
 }
 
-/** The PL10 Change Name dialog: open while pending (spinner on Save), closes on success, a refusal keeps the draft. */
 @Composable
 internal fun PeopleRenameDialog(people: PeoplePresenter) {
     val rename = people.rename
@@ -260,8 +233,6 @@ internal fun PeopleRenameDialog(people: PeoplePresenter) {
         pending = rename.phase == PeopleRenamePhase.pending,
     )
 }
-
-// MARK: Failures (PL14 copy; S50 3 g, 6 g, 7 g, 8 g; RECONCILE R17)
 
 internal fun peopleFailureMessageOf(context: Context, kind: String, name: String, sourceKey: String): String = when (kind) {
     PeopleFailureCopy.cantRemove -> conclaveStringOf(context, "ppl_fail_cant_remove")
@@ -294,7 +265,7 @@ internal fun peopleFailureMessageOf(context: Context, kind: String, name: String
     PeopleFailureCopy.qaRateLimited -> conclaveStringOf(context, "qa_rate_limited")
     PeopleFailureCopy.qaTooShort -> conclaveStringOf(context, "qa_too_short")
     PeopleFailureCopy.qaModerate -> conclaveStringOf(context, "qa_fail_moderate")
-    // PPL-3 (S50 4 g, 5 g).
+
     PeopleFailureCopy.admit -> conclaveStringOf(context, "hst_fail_admit", name)
     PeopleFailureCopy.admitAll -> conclaveStringOf(context, "hst_fail_admit_all")
     PeopleFailureCopy.deny -> conclaveStringOf(context, "hst_fail_deny", name)
@@ -306,10 +277,6 @@ internal fun peopleFailureMessageOf(context: Context, failure: HostActionFailure
     peopleFailureMessageOf(context, PeopleFailureCopy.kind(action = failure.action, failure = failure.failure, sourceKey = failure.sourceKey),
         failure.targetName, failure.sourceKey)
 
-/**
- * PL14 `panelSnackbar`: every action started in the page (overlay or side pane) reports on that page's snackbar with
- * Retry, once per failure; Dismiss or a timeout clears it.
- */
 @Composable
 internal fun PeopleFailureSnackbar(people: PeoplePresenter, snackbar: SnackbarHostState) {
     val failure = people.lastFailure
@@ -324,7 +291,6 @@ internal fun PeopleFailureSnackbar(people: PeoplePresenter, snackbar: SnackbarHo
     }
 }
 
-/** The S20 toast for a tile-menu failure (stage placement): `NoticeLanes` resolves `peopleFailed` here (HD request R4). */
 @Composable
 internal fun peopleStageToastMessage(notice: MeetingNotice): String {
     val context = LocalContext.current
@@ -333,7 +299,6 @@ internal fun peopleStageToastMessage(notice: MeetingNotice): String {
     return peopleFailureMessageOf(context, kind, notice.name, notice.userId)
 }
 
-/** The S50 result announcements on the stage's one live region (kind `peopleResult`, S50 3 i, 6 f, 8 i). */
 @Composable
 internal fun peopleAnnouncementText(announcement: StageAnnouncement): String? {
     val context = LocalContext.current
@@ -351,7 +316,7 @@ internal fun peopleAnnouncementText(announcement: StageAnnouncement): String? {
         PeopleAnnouncementKind.questionSent -> conclaveStringOf(context, "qa_announce_sent")
         PeopleAnnouncementKind.qaOff -> conclaveStringOf(context, "qa_announce_off")
         PeopleAnnouncementKind.newHost -> conclaveStringOf(context, "ppl_announce_new_host", announcement.name)
-        // PPL-3 (S50 4 g, 4 i): `name` carries the count as digits for the counted kinds.
+
         PeopleAnnouncementKind.admittedAll -> {
             val count = announcement.name.toIntOrNull() ?: 0
             conclavePluralOf(context, "ppl_announce_admitted_all", count, count)

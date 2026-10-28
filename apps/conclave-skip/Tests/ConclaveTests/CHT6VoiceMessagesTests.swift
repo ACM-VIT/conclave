@@ -3,21 +3,12 @@ import Foundation
 import Testing
 @testable import Conclave
 
-/// CHT-6 (OUT/PLAN-screens.md section 5; S40 3 voice bubbles, 6 voice mode, 0.8 CH4, Q12; S60 0.8 C6-22): the voice
-/// preference keys and defaults, the voice message text and rules, the shared playback queue on a recording speaker
-/// (6 waiting, 250 ms gaps, replay, stop, one start per message id, the standard voice applied once per change, the
-/// call audio owner's gate, the failsafe), the speakers' shared API and audio routing (source), the voice bubble and
-/// voice mode sources, and the strings. The presenter, composer and core round trip tests at the end need HD requests
-/// B5-T7 R1 to R3 (core fields, presenter API). The Kotlin half is T/Skip/CHT6VoiceBridgeTests.kt. Nothing here makes
-/// a sound: the queue runs on `TtsRecordingSpeaker` and the macOS host speaker is silent.
 @MainActor
 struct CHT6VoiceMessagesTests {
     static let local = "jordan@example.com#s1"
     static let avery = "avery@example.com#w1"
-    /// Noon UTC, as in ChatPoliciesTests.
-    static let base = 1_800_014_400_000.0
 
-    // MARK: C6-22 keys and defaults
+    static let base = 1_800_014_400_000.0
 
     @Test func voicePreferencesUseTheC622KeysAndDefaults() {
         #expect(VoicePreferences.showsChatPreviewsKey == "conclave.pref.chatPreviews")
@@ -53,11 +44,9 @@ struct CHT6VoiceMessagesTests {
         #expect(VoicePreferences.effectiveVoiceKind(preferred: .system, canUsePersonalVoice: true) == .system)
         let defaults = Self.freshDefaults()
         VoicePreferences.setVoiceKind(.personal, defaults: defaults)
-        // S40 Q12: no native token path yet, so the composer line names the system voice.
+
         #expect(VoicePreferences.composerVoiceKind(defaults: defaults) == .system)
     }
-
-    // MARK: Voice message text (CH4)
 
     @Test func voiceTextKeepsEveryLine() {
         #expect(VoiceMessageText.fullText(from: "/tts Welcome everyone\nto the call") == "Welcome everyone\nto the call")
@@ -70,11 +59,9 @@ struct CHT6VoiceMessagesTests {
         #expect(VoiceMessageText.spokenText(normalizedContent: "TTS: line one\nline two") == "line one\nline two")
         #expect(VoiceMessageText.spokenText(normalizedContent: "/tts raw text") == "raw text")
         #expect(VoiceMessageText.normalizedContent(text: "hi") == "TTS: hi")
-        // The legacy first-line parser is unchanged (testChatMessageContentPolicyMatchesWebWhitespace).
+
         #expect(ChatMessageContentPolicy.ttsText(from: "/tts speak\nignored") == "speak")
     }
-
-    // MARK: Rules (S40 3 f, 6 c, CH4, C6-22)
 
     @Test func autoplayFollowsThePreferenceForOthersOnly() {
         let rule = VoiceMessagePolicy.shouldAutoplay
@@ -140,8 +127,6 @@ struct CHT6VoiceMessagesTests {
         #expect(VoiceMessagePolicy.personalVoiceTimeoutMillis == 15000)
     }
 
-    // MARK: The queue on a recording speaker (CH4)
-
     @Test func theQueueHoldsSixAndDropsTheOldest() {
         let harness = VoiceHarness()
         for index in 1...8 {
@@ -160,7 +145,7 @@ struct CHT6VoiceMessagesTests {
         harness.speaker.finishActive()
         #expect(harness.queue.activeMessageId == "")
         #expect(harness.queue.isAdvancePending)
-        // A message arriving inside the gap waits behind m2 (order kept).
+
         harness.queue.enqueue(harness.item("m3"), isOwn: false)
         #expect(harness.queue.activeMessageId == "")
         harness.queue.advanceNow()
@@ -204,7 +189,7 @@ struct CHT6VoiceMessagesTests {
         harness.speaker.finishActive()
         harness.queue.advanceNow()
         #expect(harness.queue.activeMessageId == "m2")
-        // Replay plays a message that already played (the one-start rule is for arrivals only).
+
         harness.speaker.finishActive()
         harness.queue.replay(harness.item("m1"))
         #expect(harness.queue.activeMessageId == "m1")
@@ -233,7 +218,7 @@ struct CHT6VoiceMessagesTests {
         #expect(harness.queue.activeMessageId == "m2")
         harness.queue.finished(token: 0)
         #expect(harness.queue.activeMessageId == "m2")
-        // An empty text never starts.
+
         harness.queue.stop()
         harness.queue.enqueue(harness.item("m3", text: "   "), isOwn: false)
         #expect(harness.queue.isIdle)
@@ -247,7 +232,7 @@ struct CHT6VoiceMessagesTests {
         #expect(harness.queue.isIdle && harness.queue.skippedByPreferenceCount == 1)
         harness.queue.enqueue(harness.item("m2", user: "jordan"), isOwn: true)
         #expect(harness.queue.activeMessageId == "m2")
-        // Replay is an explicit tap and always plays.
+
         harness.queue.replay(harness.item("m1"))
         #expect(harness.queue.activeMessageId == "m1")
     }
@@ -278,7 +263,7 @@ struct CHT6VoiceMessagesTests {
         harness.blocked = false
         harness.queue.enqueue(harness.item("m2"), isOwn: false)
         #expect(harness.queue.activeMessageId == "m2")
-        // A replay that the owner blocks still leaves the stopped message idle.
+
         harness.blocked = true
         harness.queue.replay(harness.item("m3"))
         #expect(harness.queue.activeMessageId == "" && harness.playback.last == "|")
@@ -315,7 +300,7 @@ struct CHT6VoiceMessagesTests {
     }
 
     #if os(macOS)
-    /// The macOS host speaker keeps the shared API and is silent: a message starts and ends at once.
+
     @Test func theHostSpeakerIsSilentAndKeepsTheSharedMembers() {
         let speaker = TtsSpeaker()
         speaker.queue.schedulesTimers = false
@@ -335,8 +320,6 @@ struct CHT6VoiceMessagesTests {
     }
     #endif
 
-    // MARK: Sources
-
     @Test func bothSpeakersExposeTheSameMembersAndRouteThroughTheCallAudioOwner() throws {
         let ios = try chatSource("Sources/Conclave/Core/Audio/TtsSpeaker.swift")
         let kotlin = try chatSource("Sources/Conclave/Skip/TtsSpeaker.kt")
@@ -352,7 +335,7 @@ struct CHT6VoiceMessagesTests {
                        "var onPlaybackChanged: ((String, String) -> Unit)?", "val activeMessageId: String"] {
             #expect(kotlin.contains(member), "Kotlin speaker declares \(member)")
         }
-        // The call audio owner: the call's session and route, no category, activation, focus or mode changes.
+
         #expect(ios.contains("usesApplicationAudioSession = true") && ios.contains("mixToTelephonyUplink = false"))
         #expect(!ios.contains("setCategory") && !ios.contains("setActive(") && !ios.contains("overrideOutputAudioPort"))
         #expect(kotlin.contains("USAGE_VOICE_COMMUNICATION") && kotlin.contains("CONTENT_TYPE_SPEECH"))
@@ -362,7 +345,7 @@ struct CHT6VoiceMessagesTests {
             #expect(text.contains("VoiceMessagePolicy.defaultSpeechEndpoint()"))
             #expect(!chatHasDash(text))
         }
-        // Nothing shared lives in the overridden file (K/TtsSpeaker.kt replaces its transpiled output).
+
         for shared in ["class TtsPlaybackQueue", "struct TtsQueueItem", "enum VoicePreferences", "enum VoiceMessagePolicy"] {
             #expect(!ios.contains(shared))
         }
@@ -385,13 +368,13 @@ struct CHT6VoiceMessagesTests {
         #expect(!ios.contains("Image(systemName: \""), "raw symbol literal")
         #expect(!ios.contains("sensoryFeedback") && !ios.contains("conclaveGestureFeedback"), "no voice haptic (D6)")
         #expect(!ios.contains("repeatForever") && !ios.contains("symbolEffect"), "static glyph, no equalizer (R13)")
-        // Only the voice control and its accessibility action read the playback snapshot.
+
         #expect(ios.components(separatedBy: "chat.playback.activeVoiceRowId").count - 1 == 2)
         #expect(ios.contains(".accessibilityHint(isPlaying ? \"\" : VoiceCopy.playHint)"))
         let kotlin = try chatSource("Sources/Conclave/Skip/ui/chat/VoiceBubble.kt")
         #expect(!kotlin.contains("haptics") && !kotlin.contains("infiniteRepeatable") && !kotlin.contains("Color(0x"))
         #expect(kotlin.components(separatedBy: "presenter.playback.activeVoiceRowId").count - 1 == 2)
-        // Every icon has an explicit tint (Skip Compose gotcha).
+
         let icons = kotlin.components(separatedBy: "Icon(").dropFirst()
         for call in icons where !call.hasPrefix("Button") {
             let head = call.prefix(while: { $0 != "\n" })
@@ -423,8 +406,6 @@ struct CHT6VoiceMessagesTests {
         }
     }
 
-    // MARK: Presenter, composer and core (need HD requests B5-T7 R1 to R3)
-
     @Test func voiceRowsShowTheFullTextAndFollowThePlaybackSnapshot() {
         let chat = ChatPresenter()
         chat.now = { Self.base + 600_000 }
@@ -447,7 +428,7 @@ struct CHT6VoiceMessagesTests {
         #expect(log.last == "stopVoice")
         chat.apply(Self.inputs([voice]), change: .playback)
         #expect(chat.playback.activeVoiceRowId == "")
-        // The host turns voice messages off: the play control hides, the voice label stays (3 f).
+
         chat.apply(Self.inputs([voice], voiceEnabled: false), change: .policy)
         let off = chat.rows.entry(for: "s-v1").row
         #expect(off.kind == .voice && !off.canPlayVoice)
@@ -467,7 +448,7 @@ struct CHT6VoiceMessagesTests {
         #expect(chat.composer.inlineNotice == .voiceTooLong)
         #expect(chat.send(text: "Read this aloud") == .dispatched)
         #expect(log.last == "send emoji=voice text=/tts Read this aloud")
-        // One voice message per entry into voice mode.
+
         #expect(!chat.composer.isVoiceMode)
         chat.setVoiceMode(true)
         chat.setPrivateTo(userId: Self.avery)
@@ -511,8 +492,6 @@ struct CHT6VoiceMessagesTests {
     }
     #endif
 
-    // MARK: Helpers
-
     static func freshDefaults() -> UserDefaults {
         let suite = "cht6-voice-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
@@ -529,11 +508,6 @@ struct CHT6VoiceMessagesTests {
     }
 }
 
-/// The real queue on the recording speaker with scripted preferences and output gate; timers off, so tests drive the
-/// 250 ms gap (`advanceNow()`) and the failsafe (`failsafeFired(token:)`) themselves.
-/// The queue's closures hold the harness weakly (the harness owns the queue, so a strong capture is a cycle). Never
-/// `unowned`: a queue task that outlives a test's local harness would read a freed object and abort the whole test
-/// process (G2 round 3, the SYS15 recorder). A freed harness answers with its initial values.
 @MainActor
 private final class VoiceHarness {
     let queue = TtsPlaybackQueue()

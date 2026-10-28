@@ -12,13 +12,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/**
- * ENT-7 (S10 5 d, f, j; Q10): the transpiled AccountPresenter on Android (Google alone plus the Apple footnote, silent
- * cancellation, the generation guard, deletion outcomes shown once), the identity and guest name policies, the typed
- * Google bridge codes, the L9 account fixtures as pushed pages, and the privacy document. Mirrors
- * `T/ENT7AccountTests.swift`. The `hook` tests need HD requests B4-T3 R1, R3 and R4 (`premeeting.account`, the
- * back-stack dismissal and `openPrivacyPolicy()`).
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ENT7AccountBridgeTests {
@@ -205,8 +198,6 @@ class ENT7AccountBridgeTests {
         assertTrue(blocks[0].text.contains("the c0nclav3 app"))
     }
 
-    // MARK: hook (HD requests B4-T3 R1, R3, R4)
-
     @Test fun hookTheAccountPageAndPrivacyPageLiveOnThePremeetingBackStack() {
         val premeeting = PremeetingPresenter()
         val recorder = Recorder()
@@ -218,7 +209,7 @@ class ENT7AccountBridgeTests {
         val keys = PremeetingBackStack.from(premeeting.path.toList(), premeeting.outcome)
         assertTrue(keys[1] is PremeetingKey.AccountKey)
         assertTrue(keys[2] is PremeetingKey.PrivacyKey)
-        // Back from Privacy keeps Account presented; Back from Account dismisses it.
+
         premeeting.setPath(skip.lib.Array(PremeetingBackStack.popped(premeeting.path.toList())))
         assertTrue(premeeting.account.isPresented)
         premeeting.setPath(skip.lib.Array(PremeetingBackStack.popped(premeeting.path.toList())))

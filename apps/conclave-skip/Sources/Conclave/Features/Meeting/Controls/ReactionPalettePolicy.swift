@@ -1,29 +1,18 @@
 import Foundation
 
-// S30 6 j (CTL-6): the reaction palette contract and its pure policy, shared by the iOS More menu palette, the iOS
-// fallback sheet and tray, and the Android More sheet rows (F00 C22, RECONCILE R35). Transpiled: String raw-value enums,
-// scalar structs and arrays of structs. Ids are `MeetingReactionOption.value` exactly ("👍", "/reactions/aura.gif"),
-// the wire value and the flat-art lookup key; kinds are the `ReactionKind` raw values. The art row stays empty until the
-// six flat reaction assets ship per platform (CC14, S30 Q10, RECONCILE R12): the animated legacy GIFs never ship natively.
-
-/// One palette entry (S30 0.5).
 struct ReactionOptionModel: Equatable, Identifiable {
-    /// `MeetingReactionOption.value`: the wire value and the flat-art key.
+
     let id: String
-    /// `ReactionKind` raw value: "emoji" or "asset".
+
     let kind: String
-    /// The spoken name key: thumbsUp, clap, laugh, heart, party, wow, aura, crying, goblin, phone, sixSeven, yawn.
+
     let nameKey: String
 }
 
-/// Why the palette cannot send (S30 6 f). `unavailable` covers leaving and not yet joined (no copy: the bar is
-/// disabled then anyway).
 enum ReactionAvailability: String, CaseIterable, Equatable {
     case available, disabledByHost, reconnecting, offline, attendee, unavailable
 }
 
-/// `controls.reactions`: read only by the palette, the tray and the Android reaction rows (S30 6 k), so a reaction
-/// never touches `bar` or `more`.
 struct ReactionPaletteSnapshot: Equatable {
     let revision: Int
     let emoji: [ReactionOptionModel]
@@ -40,11 +29,9 @@ struct ReactionPaletteSnapshot: Equatable {
 }
 
 enum ReactionPalettePolicy {
-    /// CC14 and S30 Q10: false until six flat art assets per platform ship with the existing wire ids. While false the
-    /// art row, the iOS "More Reactions…" row and the tray's art row stay hidden, and the bundle carries no reaction art.
+
     static let artShipped = false
 
-    /// The spoken name key for a wire value (S30 6 g); "" for a value outside the palette.
     static func nameKey(_ value: String) -> String {
         switch value {
         case "👍": return "thumbsUp"
@@ -63,7 +50,6 @@ enum ReactionPalettePolicy {
         }
     }
 
-    /// The six emoji in the web order (MD `emojiOptions`, F00 C22 l).
     static func emojiOptions() -> [ReactionOptionModel] {
         var result: [ReactionOptionModel] = []
         for value in MeetingReactionConstants.emojiOptions {
@@ -72,7 +58,6 @@ enum ReactionPalettePolicy {
         return result
     }
 
-    /// The six art reactions with their wire ids; empty while the flat art has not shipped.
     static func artOptions(artShipped: Bool) -> [ReactionOptionModel] {
         if !artShipped { return [] }
         var result: [ReactionOptionModel] = []
@@ -82,8 +67,6 @@ enum ReactionPalettePolicy {
         return result
     }
 
-    /// From the S1 `reactions` row (S30 7 Reactions row): attendees have none; a host keeps the palette when reactions
-    /// are off (web parity, 6 f); recovery and offline block it with their reason.
     static func availability(_ inputs: CallControlsInputs) -> ReactionAvailability {
         if inputs.isWebinarAttendee { return ReactionAvailability.attendee }
         guard let row = inputs.row(MeetingControlID.reactions) else { return ReactionAvailability.unavailable }
@@ -102,7 +85,6 @@ enum ReactionPalettePolicy {
                                 availability: availability(inputs))
     }
 
-    /// The reason line the palette shows in place of its rows (S30 6 f, 7) in the controls vocabulary.
     static func reason(_ availability: ReactionAvailability) -> ControlBlockedReason {
         switch availability {
         case .available: return ControlBlockedReason.none
@@ -114,8 +96,6 @@ enum ReactionPalettePolicy {
         }
     }
 
-    /// The option a palette id names, or nil (S30 0.5: an id that resolves to nothing is ignored instead of being
-    /// dropped silently by the core's allow list).
     static func option(id: String) -> MeetingReactionOption? {
         for option in MeetingReactionConstants.allOptions {
             if option.value == id { return option }
@@ -123,7 +103,6 @@ enum ReactionPalettePolicy {
         return nil
     }
 
-    /// True when `id` is one of the options this snapshot offers (emoji, or art once shipped).
     static func offers(_ palette: ReactionPaletteSnapshot, id: String) -> Bool {
         for option in palette.emoji {
             if option.id == id { return true }

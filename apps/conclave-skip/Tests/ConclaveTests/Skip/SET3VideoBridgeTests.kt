@@ -13,13 +13,6 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import skip.foundation.UserDefaults
 
-/**
- * SET-3 through the transpiled SettingsPresenter (video rows, presets as encoder ceilings, Data Saver, the preview on
- * the fake WP3 owner), NativeQualityOptions, DataSaverPolicy, LocalVideoMirrorPolicy, SettingsPreviewPolicy and
- * ConnectionStatsPolicy, plus the handwritten SettingsCopy SET-3 mappings and settingsListItems (the preview card item
- * before the Camera row). The Swift half is T/SET3VideoConnectionTests.swift; the same vectors give the same results
- * on both platforms. Pure: no composition, no camera, no transport.
- */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class SET3VideoBridgeTests {

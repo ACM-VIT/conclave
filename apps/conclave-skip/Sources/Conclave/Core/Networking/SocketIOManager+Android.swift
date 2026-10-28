@@ -32,12 +32,12 @@ final class SocketIOManager {
     var onWebinarAttendeeCountChanged: ((WebinarAttendeeCountChangedNotification) -> Void)?
     var onWebinarFeedChanged: ((WebinarFeedChangedNotification) -> Void)?
     var onWebinarParticipantJoined: ((WebinarParticipantJoinedNotification) -> Void)?
-    /// S50 PH7 (PPL-6): Q&A snapshot and changes.
+
     var onWebinarQaChanged: ((WebinarQaChangedNotification) -> Void)?
     var onWebinarQaSnapshot: ((WebinarQaSnapshot) -> Void)?
-    /// S50 PH8 (PPL-5): the attendee hand queue (hosts and co-hosts).
+
     var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Void)?
-    /// S50 PH9 (PPL-7): stage invitation and demotion.
+
     var onWebinarPromoted: ((WebinarPromotedNotification) -> Void)?
     var onWebinarDemoted: ((WebinarDemotedNotification) -> Void)?
     var onBrowserState: ((BrowserStateNotification) -> Void)?
@@ -78,7 +78,7 @@ final class SocketIOManager {
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
     var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
-    /// S50 PH5.
+
     var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
@@ -170,9 +170,9 @@ final class SocketIOManager {
     func setDmEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
     func setTtsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
     func setReactionsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
-    /// S50 PH6.
+
     func setImageAttachmentsEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
-    /// S50 PH5.
+
     func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?) async throws -> ParticipantMediaPermissionsResponse { fatalError() }
     func setRoomPolicies(
         locked: Bool? = nil,
@@ -198,19 +198,19 @@ final class SocketIOManager {
     func updateWebinarLinkSlug(_ linkSlug: String?) async throws -> WebinarConfigSnapshot { fatalError() }
     func generateWebinarLink() async throws -> WebinarLinkResponse { fatalError() }
     func rotateWebinarLink() async throws -> WebinarLinkResponse { fatalError() }
-    /// S50 PH10.
+
     func updateWebinarQaEnabled(_ enabled: Bool) async throws -> WebinarConfigSnapshot { fatalError() }
-    /// S50 PH8.
+
     func promoteWebinarAttendee(userId: String) async throws { fatalError() }
     func demoteWebinarParticipant(userId: String) async throws { fatalError() }
     func setWebinarHandRaised(_ raised: Bool) async throws -> Bool { fatalError() }
     func declineWebinarStage() async throws { fatalError() }
-    /// S50 PH7.
+
     func submitWebinarQuestion(_ question: String) async throws -> String { fatalError() }
     func upvoteWebinarQuestion(id: String) async throws -> WebinarQaUpvoteResponse { fatalError() }
     func moderateWebinarQuestion(id: String, action: String, answerText: String?) async throws { fatalError() }
     func getBrowserState() async throws -> BrowserStateNotification { fatalError() }
-    /// C6-20 (ACT-9): ack-only, no payload, 22 s (K/SocketIOManager+Android.kt).
+
     func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse { fatalError() }
     func launchBrowser(url: String) async throws -> LaunchBrowserResponse { fatalError() }
     func navigateBrowser(url: String) async throws -> LaunchBrowserResponse { fatalError() }

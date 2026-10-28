@@ -3,13 +3,6 @@ import LinkPresentation
 import SwiftUI
 import UIKit
 
-// S70 15 b, e, g, i (R70-4) on iOS: Settings > About "Export Diagnostics" in the call scope and the app scope (RECONCILE
-// R26). A plain Button in the default tint with no disclosure glyph (it opens a share sheet, not a page; F00 C09 c),
-// its footer sentence under the title and as the accessibility hint. A finished export hands one JSON file to the
-// system share sheet ("Conclave diagnostics"; a popover anchored to the row on iPad). A failed export shows the D20
-// line under the row with Try Again, announced once, politely; never the stage toast lane. No haptics, no glass,
-// system colors only. Mounted by SettingsPanel+iOS.swift's About section (HD request B7-T4 R2).
-
 enum DiagnosticsCopy {
     static var rowTitle: String { ConclaveStrings.text("Export Diagnostics") }
     static var footer: String {
@@ -20,8 +13,6 @@ enum DiagnosticsCopy {
     static var tryAgain: String { ConclaveStrings.text("Try Again") }
 }
 
-/// The About row. Its body is two list rows (the button, then the failure line while shown), so it sits directly in
-/// the Settings `Section`.
 struct DiagnosticsExportRow: View {
     let presenter: DiagnosticsExportPresenter
     @State private var showsFailure = false
@@ -82,9 +73,7 @@ struct DiagnosticsExportRow: View {
 }
 
 #if DEBUG
-/// S70 SX1 Debug system fixture section (AC-SI18-1, AC-SI18-2): the `sys.diagListeners` and `sys.diagBuffer` readouts
-/// (accessibility identifiers, ASCII values), a classified test error and a deliberate 2 s main-thread hang (MetricKit
-/// reports hangs over 250 ms). Mounted by SystemFixtureView+iOS.swift (HD request B7-T4 R6).
+
 struct DiagnosticsFixtureSection: View {
     @State private var tick = 0
 
@@ -108,14 +97,12 @@ struct DiagnosticsFixtureSection: View {
         }
     }
 
-    /// `marker` ties the value to the tick, so a command refreshes the readouts (the facade is not observed).
     private func readout(_ key: String, _ marker: Int) -> String {
         marker >= 0 ? CallDiagnostics.shared.readoutValue(key) : ""
     }
 }
 #endif
 
-/// Holds the row's UIKit view for the iPad popover anchor. A plain reference: setting it never invalidates the view.
 @MainActor
 final class DiagnosticsShareAnchorBox {
     weak var view: UIView?
@@ -137,7 +124,6 @@ private struct DiagnosticsShareAnchor: UIViewRepresentable {
     }
 }
 
-/// The system share sheet for one file (S70 15 h: system motion, no haptics).
 @MainActor
 enum DiagnosticsShareSheet {
     static func present(fileURL: URL, title: String, anchor: UIView?, onFinish: @escaping @MainActor () -> Void,
@@ -181,7 +167,6 @@ enum DiagnosticsShareSheet {
     }
 }
 
-/// The shared file with its title ("Conclave diagnostics") as the subject and the share sheet header.
 final class DiagnosticsShareItem: NSObject, UIActivityItemSource {
     let fileURL: URL
     let title: String
