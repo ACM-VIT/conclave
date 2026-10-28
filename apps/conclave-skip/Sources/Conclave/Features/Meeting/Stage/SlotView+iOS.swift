@@ -438,7 +438,9 @@ struct RendererSlotView: View {
     var body: some View {
         let videoKey = binding.videoKey
         // Only your own camera mirrors (front facing); only your tile reads the chrome snapshot.
-        let mirror = isLocal && !isShare ? stage.chrome.isFrontCamera : false
+        let mirror = isLocal && !isShare
+            ? LocalVideoMirrorPolicy.mirrors(isFront: stage.chrome.isFrontCamera, preference: LocalVideoMirrorPreference.shared.isOn)
+            : false
         Group {
             if renderers.usesProbes {
                 probe

@@ -139,6 +139,7 @@ struct GameLobbyModel: Equatable {
 /// ACT-3 to ACT-6 add their per-game scene models here (built from `projection`), so the bodies never parse JSON.
 /// ACT-3: the six prompt game scenes (S60 9 j, Games/Native/Scenes/PromptGameScenes.swift); at most one is set, and
 /// private fields come only from the local person's own player view while that person holds a seat.
+/// ACT-4: the Wordle scene (S60 10 j, declared with its builder at the end of GameStagePresenter.swift).
 struct GameScene: Equatable {
     let revision: Int
     let kind: String
@@ -153,15 +154,16 @@ struct GameScene: Equatable {
     let mostLikelyTo: PersonVoteScene?
     let reaction: ReactionScene?
     let imposter: ImposterScene?
+    let wordle: WordleScene?
 
     static let empty = GameScene(revision: 0, kind: GameSceneKind.lobby, players: [], pendingJoiners: [], options: [],
                                  lobby: GameLobbyModel.empty, projection: GameProjection.empty, trivia: nil, bluff: nil,
-                                 wouldYouRather: nil, mostLikelyTo: nil, reaction: nil, imposter: nil)
+                                 wouldYouRather: nil, mostLikelyTo: nil, reaction: nil, imposter: nil, wordle: nil)
 
     func withRevision(_ next: Int) -> GameScene {
         GameScene(revision: next, kind: kind, players: players, pendingJoiners: pendingJoiners, options: options, lobby: lobby,
                   projection: projection, trivia: trivia, bluff: bluff, wouldYouRather: wouldYouRather, mostLikelyTo: mostLikelyTo,
-                  reaction: reaction, imposter: imposter)
+                  reaction: reaction, imposter: imposter, wordle: wordle)
     }
 }
 

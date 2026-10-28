@@ -30,6 +30,11 @@ import skip.ui.UIApplication
  *
  * S70 8 (SYS-8): [suppressForExternalHandoff] wraps every external activity Conclave starts, except Settings, so a
  * chooser, browser, picker or system dialog is never mistaken for Home; resuming restores auto-enter.
+ *
+ * S30 CC15 and S70 10 d (SYS-10): the MediaProjection consent's suppression is recorded on every API level and held
+ * until the consent result returns ([restoreAutoEnterAfterExternalActivity] from ScreenCaptureManager), instead of
+ * lapsing after the 2 s hand-off window while the dialog may still be up; a capped safety release covers a result
+ * that never arrives.
  */
 object PipManager {
     private const val ENTER_AFTER_MINIMAL_LAYOUT_FALLBACK_MS = 180L
@@ -51,6 +56,9 @@ object PipManager {
     private var suppressionResetRunnable: Runnable? = null
     private var enterAttemptGeneration = 0
     @Volatile private var suppressNextAutoEnter = false
+    /** SYS-10: the consent dialog is up; auto-enter stays suppressed until its result (ScreenSharePipPolicy). */
+    @Volatile private var consentHold = false
+    private var consentHoldCapRunnable: Runnable? = null
     @Volatile private var presence: CallPresence? = null
     private var paramsUpdatePending = false
     private var lastAppliedModel: PipParamsModel? = null
@@ -87,7 +95,7 @@ object PipManager {
         return PipAvailabilityPolicy.availability(
             isSupported = isSupported(context),
             isAllowedByUser = isAllowedByUser(context),
-            isSuppressed = suppressNextAutoEnter,
+            isSuppressed = suppressNextAutoEnter || consentHold,
             isActive = PipController.inPipMode,
             phase = phase,
         )
@@ -282,7 +290,39 @@ object PipManager {
     fun suppressForExternalHandoff(kind: ExternalHandoffKind) {
         if (!ExternalHandoffPolicy.suppressesAutoEnter(kind)) return
         suppressNextAutoEnter(ExternalHandoffPolicy.reason(kind))
+        if (ScreenSharePipPolicy.holdsSuppressionUntilResult(kind)) {
+            holdSuppressionUntilResult()
+        }
     }
+
+    /**
+     * SYS-10 (S30 CC15): keeps the suppression past the 2 s window until the consent result returns. Records no second
+     * suppression (`sys.pipSuppressions` counts one per consent).
+     */
+    private fun holdSuppressionUntilResult() {
+        consentHold = true
+        suppressionResetRunnable?.let { mainHandler.removeCallbacks(it) }
+        suppressionResetRunnable = null
+        consentHoldCapRunnable?.let { mainHandler.removeCallbacks(it) }
+        val cap = Runnable {
+            consentHoldCapRunnable = null
+            debugLog("[PiP] Consent suppression reached its cap; restoring auto-enter")
+            restoreAutoEnterAfterExternalActivity()
+        }
+        consentHoldCapRunnable = cap
+        mainHandler.postDelayed(cap, ScreenSharePipPolicy.consentHoldCapMs.toLong())
+        reportAvailability()
+    }
+
+    private fun releaseConsentHold() {
+        consentHold = false
+        consentHoldCapRunnable?.let { mainHandler.removeCallbacks(it) }
+        consentHoldCapRunnable = null
+    }
+
+    /** True while the MediaProjection consent keeps auto-enter suppressed (Robolectric, fixtures). */
+    internal val isHoldingConsentSuppression: Boolean
+        get() = consentHold
 
     /** Prevent an app-launched chooser/browser from being mistaken for Home. */
     fun suppressNextAutoEnter(reason: String) {
@@ -307,13 +347,16 @@ object PipManager {
     }
 
     fun consumeAutoEnterSuppression(): Boolean {
+        // The consent dialog's leave hint is not Home, and the hold outlives it until the result returns.
+        if (consentHold) return true
         if (!suppressNextAutoEnter) return false
         clearAutoEnterSuppression()
         return true
     }
 
-    /** Restore normal Home-gesture PiP if an external launch fails. */
+    /** Restore normal Home-gesture PiP if an external launch fails, or once the consent result returned (SYS-10). */
     fun restoreAutoEnterAfterExternalActivity() {
+        releaseConsentHold()
         clearAutoEnterSuppression()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             configureForActiveCall(PipController.isInCall, PipController.muted)
@@ -487,6 +530,10 @@ object PipManager {
     @RequiresApi(Build.VERSION_CODES.O)
     fun handleActivityResumed(activity: Activity) {
         if (activity.isInPictureInPictureMode) return
+        // A resume while the consent is still up (multi-window) keeps the hold; any other resume ends it.
+        if (consentHold && !ScreenCaptureManager.isAwaitingConsent()) {
+            releaseConsentHold()
+        }
         clearAutoEnterSuppression()
         val wasInPip = PipController.inPipMode
         cancelPendingEnterPip()

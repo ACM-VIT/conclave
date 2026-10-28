@@ -286,6 +286,7 @@ internal fun noticeToastMessage(notice: MeetingNotice): String = when (notice.ki
     // S30 CC7 (CTL-1, HD request B4-T6 R4): the controls' explanation table names the blocked control's reason.
     NoticeKind.blockedExplanation ->
         ControlBarPolicy.explanation(fromNotice = notice)?.let { callControlToast(it) } ?: conclaveString("stg_toast_failed_generic")
-    // shareFailed (S70 10) resolves through its owner's copy (SYS-8 request).
+    // S70 10 g (SYS-10): sys_share_failed, or sys_err_screen_denied for deniedBySystem.
+    NoticeKind.shareFailed -> conclaveString(ScreenShareFailurePolicy.androidResourceName(detail = notice.detail))
     else -> conclaveString("stg_toast_failed_generic")
 }

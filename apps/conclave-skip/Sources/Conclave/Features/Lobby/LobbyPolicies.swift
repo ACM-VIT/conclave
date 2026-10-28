@@ -169,13 +169,19 @@ enum LobbyAudioPolicy {
 // MARK: - Snapshots (S10 0.5)
 
 enum LobbySnapshotPolicy {
-    /// The card snapshot. The preview shows `blocked` whenever the camera permission is denied or restricted (the
-    /// card overlay, S10 7 f) and `unavailable` when there is no camera, whatever the controller reports.
+    /// The card snapshot. The preview shows `blocked` exactly while the card overlay explains the camera permission
+    /// (denied with no prompt left, or restricted; ENT-4 `PermissionPrimingPolicy.showsCameraOverlay`), `off` while
+    /// Android can still ask again (the rationale row under the card explains it), and `unavailable` when there is no
+    /// camera, whatever the controller reports.
     static func media(routeId: Int, micIntentOn: Bool, cameraIntentOn: Bool, device: LobbyDeviceInputs,
                       avatarName: String, avatarSeed: String) -> LobbyMediaSnapshot {
         var preview = device.previewState
-        if device.cameraPermission == .denied || device.cameraPermission == .restricted {
+        if PermissionPrimingPolicy.showsCameraOverlay(permission: device.cameraPermission,
+                                                      canAskAgain: device.canAskAgainCamera,
+                                                      supportsRationale: PermissionPrimingPolicy.platformSupportsRationale) {
             preview = .blocked
+        } else if device.cameraPermission == .denied {
+            preview = .off
         } else if device.cameraPermission == .unavailable {
             preview = .unavailable
         } else if !cameraIntentOn && preview != .published {
@@ -195,7 +201,9 @@ enum LobbySnapshotPolicy {
             effectsActive: device.effectsActive,
             avatarName: avatarName,
             avatarSeed: avatarSeed,
-            interruption: preview == .interrupted ? device.interruption : PreviewInterruption.none
+            interruption: preview == .interrupted ? device.interruption : PreviewInterruption.none,
+            canAskAgainMicrophone: device.canAskAgainMicrophone,
+            canAskAgainCamera: device.canAskAgainCamera
         )
     }
 

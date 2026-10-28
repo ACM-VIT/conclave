@@ -11,6 +11,14 @@ import Observation
 // values live in their own leaves (`MicLevelMeter` at 10 Hz while the Microphone page is visible, `VoiceRecorderModel`
 // while a take runs), so a ticking value never republishes a snapshot (S60 2 k). Reasons and phases are typed enums;
 // every platform resolves them through its one copy file (L6-14: `SettingsCopy+iOS.swift`, `K/ui/copy/SettingsCopy.kt`).
+//
+// SET-3 (S60 2 video, screen share and connection rows, 0.6 L6-3, 0.8 C6-3, C6-4, C6-5, C6-8, C6-9, C6-29; RECONCILE
+// R22, R40, R43; S70 SY22): the Video section grows the preview card, Mirror My Video, Camera Quality (presets as encoder
+// ceilings over `NativeMediaQualityPreferences`), Screen Share Quality with Share Device Audio, and Data Saver (the
+// switch OR the system signal); General > Connection pushes the Connection page whose details are the
+// `ConnectionStatsModel` leaf. Preference writes reach the core through `preferenceChanged` (the core re-runs its publish
+// resolver and receive policy); the preview goes through the one WP3 `LocalPreviewController` (`previewHooks`), never a
+// screen.
 
 // MARK: - Vocabulary (S60 0.5)
 
@@ -99,10 +107,13 @@ struct SettingsRowSection: Equatable, Identifiable {
     let rows: [SettingsRowID]
 }
 
-/// A preference the presenter wrote; the core refreshes whatever reads it (`preferenceChanged`).
+/// A preference the presenter wrote; the core refreshes whatever reads it (`preferenceChanged`). SET-3: `mirror` (the
+/// stage self view), `cameraQuality`, `screenShareQuality` and `dataSaver` (the publish resolver, and the receive policy
+/// for Data Saver), `shareDeviceAudio` (read by the next screen-share start).
 enum SettingsPreferenceID: String, CaseIterable, Equatable {
     case noiseSuppression, captions, chatPreviews, playVoiceMessages, voiceKind, standardVoice, alwaysShowControls
     case haptics, knockSound, handSound
+    case mirror, cameraQuality, screenShareQuality, dataSaver, shareDeviceAudio
 }
 
 // MARK: - Preference stores (C6-1, C6-14, C6-24; F00 8)
@@ -179,6 +190,11 @@ struct SettingsPreferenceValues: Equatable {
     let hapticsOn: Bool
     let knockSoundOn: Bool
     let handSoundOn: Bool
+    /// SET-3 (C6-3, C6-5 switch only, C6-29, C6-4).
+    let mirrorsSelfView: Bool
+    let dataSaverOn: Bool
+    let shareDeviceAudioOn: Bool
+    let quality: NativeMediaQualitySettings
 
     @MainActor
     static func read(defaults: UserDefaults) -> SettingsPreferenceValues {
@@ -193,7 +209,11 @@ struct SettingsPreferenceValues: Equatable {
             alwaysShowControls: SettingsPreferences.alwaysShowControls(defaults: defaults),
             hapticsOn: SettingsPreferences.haptics(defaults: defaults),
             knockSoundOn: SettingsPreferences.knockSound(defaults: defaults),
-            handSoundOn: SettingsPreferences.handSound(defaults: defaults)
+            handSoundOn: SettingsPreferences.handSound(defaults: defaults),
+            mirrorsSelfView: NativeVideoPreferences.mirrorsSelfView(defaults: defaults),
+            dataSaverOn: NativeVideoPreferences.dataSaver(defaults: defaults),
+            shareDeviceAudioOn: NativeVideoPreferences.shareDeviceAudio(defaults: defaults),
+            quality: NativeMediaQualityPreferences.load(defaults: defaults)
         )
     }
 }
@@ -222,7 +242,29 @@ struct SettingsAudio: Equatable {
                                      canRecordMicTest: false, micPhase: MicTestPhase.idle, isMuted: true, testGain: 1.0)
 }
 
-/// The SET-1 video rows (camera facing). SET-3 adds preview, mirror, quality, Data Saver and share fields; SET-6 the
+/// The Advanced page values (S60 0.5 `CameraLimitsModel`), for the camera and, with the same shape, the screen share:
+/// raw values of `NativeMediaResolution`, `NativeCameraContentHint` / `NativeScreenShareContentHint` and
+/// `NativeMediaDegradationPreference`, plus the options the device supports (D11) and the bitrate slider's range.
+struct CameraLimitsModel: Equatable {
+    let resolution: String
+    let frameRate: Int
+    let optimizeFor: String
+    let underPressure: String
+    let bitrateKbps: Int
+    let resolutions: [String]
+    let frameRates: [Int]
+    let optimizeOptions: [String]
+    let pressureOptions: [String]
+    let minBitrateKbps: Int
+    let maxBitrateKbps: Int
+    let bitrateStepKbps: Int
+
+    static let empty = CameraLimitsModel(resolution: "720p", frameRate: 30, optimizeFor: "motion", underPressure: "maintain-framerate",
+                                         bitrateKbps: 1_650, resolutions: [], frameRates: [], optimizeOptions: [],
+                                         pressureOptions: [], minBitrateKbps: 150, maxBitrateKbps: 6_000, bitrateStepKbps: 50)
+}
+
+/// The Video rows (SET-1 camera facing; SET-3 preview, mirror, quality, Data Saver, share quality). SET-6 adds the
 /// effects availability.
 struct SettingsVideo: Equatable {
     let revision: Int
@@ -235,9 +277,47 @@ struct SettingsVideo: Equatable {
     let flipFailed: Bool
     let isCameraOn: Bool
     let isAudioOnly: Bool
+    /// C6-3 Mirror My Video (the preference; it applies to the front camera only).
+    let mirrorsSelfView: Bool
+    /// The picker's selection, a `NativeCameraQualityPreset` raw value (Auto, HD, Studio, Custom; D21).
+    let cameraPreset: String
+    /// What is sent: "data-saver" while Data Saver or the host's limit applies the ceiling, else `cameraPreset`
+    /// (1 f: "Camera Quality value shows the effective preset").
+    let effectiveCameraPreset: String
+    let presets: [String]
+    let qualityCappedByHost: Bool
+    let custom: CameraLimitsModel
+    /// C6-5: the switch value, the person's preference OR the system signal.
+    let dataSaverOn: Bool
+    /// The system signal holds Data Saver on: the switch is disabled with the reason.
+    let systemDataSaverOn: Bool
+    let screenSharePreset: String
+    let screenSharePresets: [String]
+    let screenShareCustom: CameraLimitsModel
+    let showsScreenShareQuality: Bool
+    /// "Changes apply to an active share right away."
+    let isScreenSharing: Bool
+    /// C6-29 (RECONCILE R43): the switch shows only while the S70 10 capability holds.
+    let canShareDeviceAudio: Bool
+    let shareDeviceAudioOn: Bool
+    /// L6-3 / C6-8: the one `PreviewState` (RECONCILE R22); `published` while the meeting camera is on (the card shows
+    /// the sent track).
+    let preview: PreviewState
+    let previewReason: SettingsReason
+    /// Keys the card's renderer (a new local preview session or the published track).
+    let previewSessionId: Int
+    /// Start Preview is offered (off or unavailable, camera off, not Audio Only).
+    let canStartPreview: Bool
 
     static let empty = SettingsVideo(revision: 0, cameraFacing: "front", canFlipCamera: false, flipReason: SettingsReason.none,
-                                     isFlipInFlight: false, flipFailed: false, isCameraOn: false, isAudioOnly: false)
+                                     isFlipInFlight: false, flipFailed: false, isCameraOn: false, isAudioOnly: false,
+                                     mirrorsSelfView: true, cameraPreset: "auto", effectiveCameraPreset: "auto", presets: [],
+                                     qualityCappedByHost: false, custom: CameraLimitsModel.empty, dataSaverOn: false,
+                                     systemDataSaverOn: false, screenSharePreset: "auto", screenSharePresets: [],
+                                     screenShareCustom: CameraLimitsModel.empty, showsScreenShareQuality: false,
+                                     isScreenSharing: false, canShareDeviceAudio: false, shareDeviceAudioOn: false,
+                                     preview: PreviewState.off, previewReason: SettingsReason.none, previewSessionId: 0,
+                                     canStartPreview: false)
 }
 
 struct SettingsChat: Equatable {
@@ -371,6 +451,18 @@ struct SettingsInputs: Equatable {
     let linkVerificationAvailable: Bool
     let linkVerification: LinkVerification
     let canExportDiagnostics: Bool
+    /// SET-3: Screen Share Quality shows where screen sharing exists (`MeetingState.isScreenShareSupported`).
+    let isScreenShareSupported: Bool
+    let isScreenSharing: Bool
+    /// C6-4: the server's `setVideoQuality` low (the host limited video quality for this meeting).
+    let qualityCappedByHost: Bool
+    /// C6-5: iOS Low Data Mode or Android Data Saver (the core's monitor signal).
+    let systemDataSaverOn: Bool
+    /// C6-29 / S70 10 (RECONCILE R43): false until the screen-share owner publishes the capability.
+    let canShareDeviceAudio: Bool
+    /// D11: the device camera's largest capture height and frame rate (0 = unknown, every option listed).
+    let cameraMaxHeight: Int
+    let cameraMaxFrameRate: Int
 
     static func make(callSession: Int = 0, roomId: String = "", isJoined: Bool = false, isAttendee: Bool = false,
                      isHost: Bool = false, isRecovering: Bool = false, isOffline: Bool = false, isMuted: Bool = true,
@@ -387,7 +479,9 @@ struct SettingsInputs: Equatable {
                      notificationPermission: NotificationPermission = NotificationPermission.notDetermined,
                      callNotificationStatusAvailable: Bool = false, callNotificationEnabled: Bool = true,
                      linkVerificationAvailable: Bool = false, linkVerification: LinkVerification = LinkVerification.unknown,
-                     canExportDiagnostics: Bool = false) -> SettingsInputs {
+                     isScreenShareSupported: Bool = false, isScreenSharing: Bool = false, qualityCappedByHost: Bool = false,
+                     systemDataSaverOn: Bool = false, canShareDeviceAudio: Bool = false, cameraMaxHeight: Int = 0,
+                     cameraMaxFrameRate: Int = 0, canExportDiagnostics: Bool = false) -> SettingsInputs {
         SettingsInputs(callSession: callSession, roomId: roomId, isJoined: isJoined, isAttendee: isAttendee, isHost: isHost,
                        isRecovering: isRecovering, isOffline: isOffline, isMuted: isMuted, isCameraOff: isCameraOff,
                        isAudioOnly: isAudioOnly, isFrontCamera: isFrontCamera, canFlipCamera: canFlipCamera,
@@ -403,7 +497,11 @@ struct SettingsInputs: Equatable {
                        messageNotificationsOn: messageNotificationsOn, notificationPermission: notificationPermission,
                        callNotificationStatusAvailable: callNotificationStatusAvailable,
                        callNotificationEnabled: callNotificationEnabled, linkVerificationAvailable: linkVerificationAvailable,
-                       linkVerification: linkVerification, canExportDiagnostics: canExportDiagnostics)
+                       linkVerification: linkVerification, canExportDiagnostics: canExportDiagnostics,
+                       isScreenShareSupported: isScreenShareSupported, isScreenSharing: isScreenSharing,
+                       qualityCappedByHost: qualityCappedByHost, systemDataSaverOn: systemDataSaverOn,
+                       canShareDeviceAudio: canShareDeviceAudio, cameraMaxHeight: cameraMaxHeight,
+                       cameraMaxFrameRate: cameraMaxFrameRate)
     }
 }
 
@@ -645,6 +743,176 @@ enum TestTonePolicy {
     }
 }
 
+// MARK: - Video policies (SET-3: C6-3, C6-4, C6-5, C6-8, D11, D21)
+
+enum SettingsVideoPolicy {
+    /// The camera limits the encoder gets for these settings (the core's publish resolver without the transient
+    /// system ceiling): the Debug readout and the fake owner's `setPublishCeiling` value (2 l4).
+    static func publishCeiling(camera: NativeCameraQualitySettings, dataSaverOn: Bool,
+                               qualityCappedByHost: Bool) -> NativeResolvedCameraPublishSettings {
+        let capped = DataSaverPolicy.appliesPublishCeiling(dataSaverOn: dataSaverOn, qualityCappedByHost: qualityCappedByHost)
+        return NativeMediaQualityPolicy.resolvedPublishCamera(camera, dataSaverOn: capped,
+                                                              systemSendCeiling: NativeSystemSendCeiling.unconstrained)
+    }
+
+    /// The Camera Quality value: the data-saver tier while a ceiling applies, else the picker's selection.
+    static func effectivePreset(selection: NativeCameraQualityPreset, dataSaverOn: Bool, qualityCappedByHost: Bool) -> String {
+        if DataSaverPolicy.appliesPublishCeiling(dataSaverOn: dataSaverOn, qualityCappedByHost: qualityCappedByHost) {
+            return NativeCameraQualityPreset.dataSaver.rawValue
+        }
+        return selection.rawValue
+    }
+
+    static func cameraLimits(_ camera: NativeCameraQualitySettings, capability: CameraCaptureCapability) -> CameraLimitsModel {
+        var resolutions: [String] = []
+        for option in NativeQualityOptions.cameraResolutions(capability: capability) { resolutions.append(option.rawValue) }
+        var optimize: [String] = []
+        for option in NativeQualityOptions.cameraOptimizeOptions { optimize.append(option.rawValue) }
+        var pressure: [String] = []
+        for option in NativeQualityOptions.cameraPressureOptions { pressure.append(option.rawValue) }
+        let normalized = NativeMediaQualityPolicy.normalizedCamera(camera)
+        return CameraLimitsModel(resolution: normalized.resolution.rawValue, frameRate: normalized.frameRate,
+                                 optimizeFor: normalized.contentHint.rawValue,
+                                 underPressure: normalized.degradationPreference.rawValue,
+                                 bitrateKbps: normalized.maxBitrateKbps, resolutions: resolutions,
+                                 frameRates: NativeQualityOptions.cameraFrameRates(capability: capability),
+                                 optimizeOptions: optimize, pressureOptions: pressure,
+                                 minBitrateKbps: NativeQualityOptions.cameraBitrateMinKbps,
+                                 maxBitrateKbps: NativeQualityOptions.cameraBitrateMaxKbps,
+                                 bitrateStepKbps: NativeQualityOptions.cameraBitrateStepKbps)
+    }
+
+    static func screenShareLimits(_ share: NativeScreenShareQualitySettings) -> CameraLimitsModel {
+        var resolutions: [String] = []
+        for option in NativeQualityOptions.screenShareResolutions { resolutions.append(option.rawValue) }
+        var optimize: [String] = []
+        for option in NativeQualityOptions.screenShareOptimizeOptions { optimize.append(option.rawValue) }
+        var pressure: [String] = []
+        for option in NativeQualityOptions.screenSharePressureOptions { pressure.append(option.rawValue) }
+        let normalized = NativeMediaQualityPolicy.normalizedScreenShare(share)
+        return CameraLimitsModel(resolution: normalized.resolution.rawValue, frameRate: normalized.frameRate,
+                                 optimizeFor: normalized.contentHint.rawValue,
+                                 underPressure: normalized.degradationPreference.rawValue,
+                                 bitrateKbps: normalized.maxBitrateKbps, resolutions: resolutions,
+                                 frameRates: NativeMediaQualityPolicy.screenShareFrameRateOptions,
+                                 optimizeOptions: optimize, pressureOptions: pressure,
+                                 minBitrateKbps: NativeQualityOptions.screenBitrateMinKbps,
+                                 maxBitrateKbps: NativeQualityOptions.screenBitrateMaxKbps,
+                                 bitrateStepKbps: NativeQualityOptions.screenBitrateStepKbps)
+    }
+}
+
+/// What the WP3 preview owner reports to Settings (S60 C6-8): its one `PreviewState`, the session that keys the card's
+/// renderer, the interruption reason, and whether the running capture is the Settings preview.
+struct SettingsPreviewReading: Equatable {
+    let state: PreviewState
+    let sessionId: Int
+    let interruption: PreviewInterruption
+    let isScoped: Bool
+
+    static let off = SettingsPreviewReading(state: PreviewState.off, sessionId: 0, interruption: PreviewInterruption.none,
+                                            isScoped: false)
+}
+
+/// L6-3 / C6-8 card rules (pure, unit tested on both platforms).
+enum SettingsPreviewPolicy {
+    /// The capture stops after the card stays off screen this long (C6-8).
+    static let offScreenStopMillis = 30_000.0
+
+    /// The card's state: off outside a participant call and in Audio Only; `published` while the meeting camera is on
+    /// (the card shows the sent track); the Settings preview's own state while it runs; `blocked` after a denied
+    /// camera permission; else off.
+    static func state(isParticipantInCall: Bool, isAudioOnly: Bool, isCameraOn: Bool, reading: SettingsPreviewReading,
+                      permissionBlocked: Bool) -> PreviewState {
+        if !isParticipantInCall || isAudioOnly { return PreviewState.off }
+        if isCameraOn { return PreviewState.published }
+        if reading.isScoped {
+            if reading.state == PreviewState.published { return PreviewState.off }
+            return reading.state
+        }
+        if permissionBlocked { return PreviewState.blocked }
+        return PreviewState.off
+    }
+
+    /// The card's reason: Audio Only, the camera permission, or why the system paused the camera (read as the card's
+    /// accessibility value, 1 f).
+    static func reason(state: PreviewState, interruption: PreviewInterruption, isAudioOnly: Bool) -> SettingsReason {
+        if isAudioOnly { return SettingsReason.audioOnly }
+        if state == PreviewState.blocked { return SettingsReason.permissionDenied }
+        if state != PreviewState.interrupted { return SettingsReason.none }
+        switch interruption {
+        case .multipleForegroundApps: return SettingsReason.cameraMultitasking
+        case .background: return SettingsReason.cameraInBackground
+        case .none, .inUseByAnotherClient, .cameraError: return SettingsReason.cameraInUse
+        }
+    }
+
+    /// Start Preview is offered while the card is off or the camera was unavailable; never while interrupted (1 l11),
+    /// starting, live, published or blocked (blocked offers Open Settings instead).
+    static func canStart(state: PreviewState, isParticipantInCall: Bool, isAudioOnly: Bool) -> Bool {
+        isParticipantInCall && !isAudioOnly && (state == PreviewState.off || state == PreviewState.unavailable)
+    }
+
+    /// Stop Preview is offered while the Settings preview runs (starting, live or interrupted).
+    static func canStop(state: PreviewState) -> Bool {
+        state == PreviewState.starting || state == PreviewState.live || state == PreviewState.interrupted
+    }
+}
+
+/// The presenter's door to the one WP3 preview owner (RECONCILE R22). `live()` drives `LocalPreviewController.shared`
+/// and the camera permission provider; the fake WP3 owner (`SettingsRecordingCore`) replaces every closure, so tests
+/// and fixtures never touch a camera.
+@MainActor
+final class SettingsPreviewHooks {
+    var start: (LocalCameraFacing) -> Void = { _ in }
+    var stop: () -> Void = {}
+    var read: () -> SettingsPreviewReading = { SettingsPreviewReading.off }
+    /// Installs (or, with nil, removes) the owner's change callback for the presenter.
+    var observe: ((() -> Void)?) -> Void = { _ in }
+    var setMirror: (Bool) -> Void = { _ in }
+    var cameraPermission: () -> MediaPermissionState = { MediaPermissionState.granted }
+    /// Android may ask again after a denial while the system allows it (S10 7 d); iOS asks once.
+    var canAskCameraAgain: () -> Bool = { false }
+    var requestCameraPermission: (@escaping (Bool) -> Void) -> Void = { completion in completion(true) }
+    var openSystemSettings: () -> Void = {}
+
+    init() {}
+
+    static func live() -> SettingsPreviewHooks {
+        let hooks = SettingsPreviewHooks()
+        hooks.start = { facing in
+            LocalPreviewController.shared.startScopedPreview(facing: facing)
+        }
+        hooks.stop = {
+            LocalPreviewController.shared.stopScopedPreview()
+        }
+        hooks.read = {
+            let controller = LocalPreviewController.shared
+            return SettingsPreviewReading(state: controller.state, sessionId: controller.sessionId,
+                                          interruption: controller.interruption, isScoped: controller.isScopedPreviewActive)
+        }
+        hooks.observe = { callback in
+            LocalPreviewController.shared.onScopedPreviewChange = callback
+        }
+        hooks.setMirror = { on in
+            LocalPreviewController.shared.setMirrorPreference(on)
+        }
+        hooks.cameraPermission = {
+            MediaPermissionStatusProvider.status(LobbyMediaKind.camera)
+        }
+        hooks.canAskCameraAgain = {
+            MediaPermissionStatusProvider.canAskAgain(LobbyMediaKind.camera)
+        }
+        hooks.requestCameraPermission = { completion in
+            MediaPermissionStatusProvider.request(LobbyMediaKind.camera, completion: completion)
+        }
+        hooks.openSystemSettings = {
+            MediaPermissionStatusProvider.openSystemSettings()
+        }
+        return hooks
+    }
+}
+
 // MARK: - Account policies (C6-10, RECONCILE R38)
 
 enum SettingsNamePolicy {
@@ -778,6 +1046,8 @@ final class SettingsPresenter {
 
     let micLevel = MicLevelMeter()
     let recorder = VoiceRecorderModel()
+    /// C6-9: the Connection page's details (1 Hz while the page is visible); the core installs `stats.source`.
+    let stats = ConnectionStatsModel()
     let scope: SettingsScope
     let platform: SettingsPlatform
 
@@ -790,6 +1060,11 @@ final class SettingsPresenter {
     @ObservationIgnored var micLevelSource: (() -> Double)? = nil
     /// The single routing authority (S30 CC4); tests substitute their own.
     @ObservationIgnored var routeOwner: AudioRouteOwner = AudioRouteOwner.shared
+    /// C6-8 (RECONCILE R22): the one WP3 preview owner; the fake WP3 owner replaces it.
+    @ObservationIgnored var previewHooks: SettingsPreviewHooks = SettingsPreviewHooks.live()
+    /// The preview card may bind the live media client's sent track (production). The fake WP3 owner turns it off, so
+    /// a fixture or a test never reaches the media client (the card draws its dark surface instead).
+    @ObservationIgnored var usesLiveRenderers = true
     @ObservationIgnored var defaults: UserDefaults
     /// Test seam (milliseconds).
     @ObservationIgnored var sleep: (Double) async -> Void = { millis in
@@ -809,6 +1084,10 @@ final class SettingsPresenter {
     @ObservationIgnored private var signOutGeneration = 0
     @ObservationIgnored private var signOutRoomId = ""
     @ObservationIgnored private var personalVoice: PersonalVoicePhase = PersonalVoicePhase.unavailable
+    @ObservationIgnored private var previewReading: SettingsPreviewReading = SettingsPreviewReading.off
+    @ObservationIgnored private var previewPermissionBlocked = false
+    @ObservationIgnored private var isPreviewCardOnScreen = false
+    @ObservationIgnored private var previewOffScreenToken = 0
 
     // Debug readouts and tests (L6-12: speakerTest.count, micTest.phase, voicePreview.count, wp3.calls).
     @ObservationIgnored private(set) var speakerTestCount = 0
@@ -819,6 +1098,10 @@ final class SettingsPresenter {
     @ObservationIgnored private(set) var voiceSampleCount = 0
     @ObservationIgnored private(set) var dispatchedKinds: [String] = []
     @ObservationIgnored private(set) var applyCount = 0
+    /// SET-3 readouts (L6-12 `wp3.calls` `previewStart`, `previewStop`; 2 l4 `setPublishCeiling`).
+    @ObservationIgnored private(set) var previewStartCount = 0
+    @ObservationIgnored private(set) var previewStopCount = 0
+    @ObservationIgnored private(set) var publishCeilingChangeCount = 0
     /// The Name field changed during this presentation, so "Saved" may show once the save lands (read by the status
     /// leaf when the editor's saving state changes).
     @ObservationIgnored private(set) var hasEditedName = false
@@ -843,6 +1126,12 @@ final class SettingsPresenter {
         if previous.callSession != next.callSession {
             resetSession()
         }
+        // C6-8: the meeting camera took over (the clients already released the preview), Audio Only blocks the camera,
+        // or the person became an attendee: a running Settings preview stops.
+        if previewReading.isScoped && (!next.isCameraOff || next.isAudioOnly || next.isAttendee) {
+            stopPreview()
+        }
+        stats.setFrozen(next.isRecovering || next.isOffline)
         if !next.canUsePersonalVoice {
             personalVoice = PersonalVoicePhase.unavailable
         } else if personalVoice == PersonalVoicePhase.unavailable {
@@ -869,12 +1158,24 @@ final class SettingsPresenter {
         hasEditedName = false
         refreshPreferences()
         nameEditor?.syncFromServerIfIdle()
+        if scope == SettingsScope.call {
+            previewHooks.observe({ [weak self] in self?.previewChanged() })
+            previewHooks.setMirror(prefs.mirrorsSelfView)
+            previewChanged()
+        }
     }
 
-    /// The panel closed: the pending name saves now (C6-10) and a mic test still running stops.
+    /// The panel closed: the pending name saves now (C6-10), a mic test still running stops and so does the Settings
+    /// preview (C6-8: one `previewStop` on close, 1 l12).
     func panelDidClose() {
         nameEditor?.flush()
         stopMicTest()
+        if scope == SettingsScope.call {
+            stopPreview()
+            isPreviewCardOnScreen = false
+            previewOffScreenToken += 1
+            previewHooks.observe(nil)
+        }
     }
 
     // MARK: Audio (SET-2)
@@ -1019,6 +1320,248 @@ final class SettingsPresenter {
         guard isFront != front else { return ControlTapResult.ignored }
         dispatch(SettingsCommand.make(SettingsCommandKind.setCameraFacing, flag: front))
         return ControlTapResult.dispatched
+    }
+
+    // MARK: Video (SET-3: C6-3, C6-4, C6-5, C6-8, C6-29)
+
+    /// C6-3: the store, the renderers' observed value and the preview owner; the core refreshes the stage self view.
+    func setMirrorsSelfView(_ on: Bool) {
+        guard prefs.mirrorsSelfView != on else { return }
+        NativeVideoPreferences.setMirrorsSelfView(on, defaults: defaults)
+        LocalVideoMirrorPreference.shared.update(on)
+        previewHooks.setMirror(on)
+        preferenceWritten(SettingsPreferenceID.mirror)
+    }
+
+    /// C6-5: disabled (and on) while the system signal holds it; the core re-runs the publish resolver and the
+    /// receive policy.
+    func setDataSaver(_ on: Bool) {
+        guard !inputs.systemDataSaverOn, prefs.dataSaverOn != on else { return }
+        NativeVideoPreferences.setDataSaver(on, defaults: defaults)
+        publishCeilingChangeCount += 1
+        preferenceWritten(SettingsPreferenceID.dataSaver)
+    }
+
+    /// C6-4: a preset is an encoder ceiling (`NativeMediaQualityPolicy.cameraPreset`); disabled while Data Saver is on.
+    /// Returns `.dispatched` for a change (Android plays `selectionChanged` then, 2 h).
+    @discardableResult
+    func setCameraPreset(_ rawValue: String) -> ControlTapResult {
+        guard !video.dataSaverOn, video.presets.contains(rawValue),
+              let preset = NativeCameraQualityPreset(rawValue: rawValue) else { return ControlTapResult.ignored }
+        let current = prefs.quality.camera
+        if preset == NativeQualityOptions.cameraSelection(current.preset) && preset != NativeCameraQualityPreset.custom {
+            return ControlTapResult.ignored
+        }
+        if preset == NativeCameraQualityPreset.custom && current.preset == NativeCameraQualityPreset.custom {
+            return ControlTapResult.ignored
+        }
+        saveCamera(NativeMediaQualityPolicy.cameraPreset(preset, current: current))
+        return ControlTapResult.dispatched
+    }
+
+    /// Advanced (2 c): any change makes the preset Custom; options are limited to what the device supports (D11).
+    func setCameraResolution(_ rawValue: String) {
+        guard video.custom.resolutions.contains(rawValue), let resolution = NativeMediaResolution(rawValue: rawValue) else { return }
+        var camera = prefs.quality.camera
+        guard camera.resolution != resolution else { return }
+        camera.resolution = resolution
+        camera.preset = NativeCameraQualityPreset.custom
+        saveCamera(camera)
+    }
+
+    func setCameraFrameRate(_ frameRate: Int) {
+        guard video.custom.frameRates.contains(frameRate) else { return }
+        var camera = prefs.quality.camera
+        guard camera.frameRate != frameRate else { return }
+        camera.frameRate = frameRate
+        camera.preset = NativeCameraQualityPreset.custom
+        saveCamera(camera)
+    }
+
+    func setCameraOptimizeFor(_ rawValue: String) {
+        guard let hint = NativeCameraContentHint(rawValue: rawValue) else { return }
+        var camera = prefs.quality.camera
+        guard camera.contentHint != hint else { return }
+        camera.contentHint = hint
+        camera.preset = NativeCameraQualityPreset.custom
+        saveCamera(camera)
+    }
+
+    func setCameraUnderPressure(_ rawValue: String) {
+        guard let preference = NativeMediaDegradationPreference(rawValue: rawValue) else { return }
+        var camera = prefs.quality.camera
+        guard camera.degradationPreference != preference else { return }
+        camera.degradationPreference = preference
+        camera.preset = NativeCameraQualityPreset.custom
+        saveCamera(camera)
+    }
+
+    func setCameraBitrate(_ kbps: Int) {
+        let snapped = NativeQualityOptions.snappedBitrate(kbps, minimum: NativeQualityOptions.cameraBitrateMinKbps,
+                                                          maximum: NativeQualityOptions.cameraBitrateMaxKbps,
+                                                          step: NativeQualityOptions.cameraBitrateStepKbps)
+        var camera = prefs.quality.camera
+        guard camera.maxBitrateKbps != snapped else { return }
+        camera.maxBitrateKbps = snapped
+        camera.preset = NativeCameraQualityPreset.custom
+        saveCamera(camera)
+    }
+
+    /// "Restore Recommended Settings": Auto.
+    func restoreRecommendedQuality() {
+        let auto = NativeMediaQualityPolicy.defaultSettings.camera
+        guard prefs.quality.camera != auto else { return }
+        saveCamera(auto)
+    }
+
+    @discardableResult
+    func setScreenSharePreset(_ rawValue: String) -> ControlTapResult {
+        guard video.showsScreenShareQuality, let preset = NativeScreenShareQualityPreset(rawValue: rawValue) else {
+            return ControlTapResult.ignored
+        }
+        let current = prefs.quality.screenShare
+        guard current.preset != preset else { return ControlTapResult.ignored }
+        saveScreenShare(NativeMediaQualityPolicy.screenSharePreset(preset, current: current))
+        return ControlTapResult.dispatched
+    }
+
+    func setScreenShareResolution(_ rawValue: String) {
+        guard let resolution = NativeMediaResolution(rawValue: rawValue) else { return }
+        var share = prefs.quality.screenShare
+        guard share.resolution != resolution else { return }
+        share.resolution = resolution
+        share.preset = NativeScreenShareQualityPreset.custom
+        saveScreenShare(share)
+    }
+
+    func setScreenShareFrameRate(_ frameRate: Int) {
+        guard NativeMediaQualityPolicy.screenShareFrameRateOptions.contains(frameRate) else { return }
+        var share = prefs.quality.screenShare
+        guard share.frameRate != frameRate else { return }
+        share.frameRate = frameRate
+        share.preset = NativeScreenShareQualityPreset.custom
+        saveScreenShare(share)
+    }
+
+    func setScreenShareOptimizeFor(_ rawValue: String) {
+        guard let hint = NativeScreenShareContentHint(rawValue: rawValue) else { return }
+        var share = prefs.quality.screenShare
+        guard share.contentHint != hint else { return }
+        share.contentHint = hint
+        share.preset = NativeScreenShareQualityPreset.custom
+        saveScreenShare(share)
+    }
+
+    func setScreenShareUnderPressure(_ rawValue: String) {
+        guard let preference = NativeMediaDegradationPreference(rawValue: rawValue) else { return }
+        var share = prefs.quality.screenShare
+        guard share.degradationPreference != preference else { return }
+        share.degradationPreference = preference
+        share.preset = NativeScreenShareQualityPreset.custom
+        saveScreenShare(share)
+    }
+
+    func setScreenShareBitrate(_ kbps: Int) {
+        let snapped = NativeQualityOptions.snappedBitrate(kbps, minimum: NativeQualityOptions.screenBitrateMinKbps,
+                                                          maximum: NativeQualityOptions.screenBitrateMaxKbps,
+                                                          step: NativeQualityOptions.screenBitrateStepKbps)
+        var share = prefs.quality.screenShare
+        guard share.maxBitrateKbps != snapped else { return }
+        share.maxBitrateKbps = snapped
+        share.preset = NativeScreenShareQualityPreset.custom
+        saveScreenShare(share)
+    }
+
+    func restoreRecommendedScreenShare() {
+        let auto = NativeMediaQualityPolicy.defaultSettings.screenShare
+        guard prefs.quality.screenShare != auto else { return }
+        saveScreenShare(auto)
+    }
+
+    /// C6-29: only while the capability holds (the switch is hidden otherwise).
+    func setShareDeviceAudio(_ on: Bool) {
+        guard video.canShareDeviceAudio, prefs.shareDeviceAudioOn != on else { return }
+        NativeVideoPreferences.setShareDeviceAudio(on, defaults: defaults)
+        preferenceWritten(SettingsPreferenceID.shareDeviceAudio)
+    }
+
+    /// The camera limits the encoder gets now (Debug readout; the fake owner's `setPublishCeiling` value).
+    func publishCeiling() -> NativeResolvedCameraPublishSettings {
+        SettingsVideoPolicy.publishCeiling(camera: prefs.quality.camera, dataSaverOn: video.dataSaverOn,
+                                           qualityCappedByHost: inputs.qualityCappedByHost)
+    }
+
+    // MARK: Preview (C6-8, L6-3)
+
+    /// Start Preview: local only, never handed to a producer. Asks for the camera once when the system has not yet;
+    /// a denied permission shows "Camera access is off" with Open Settings.
+    func startPreview() {
+        guard scope == SettingsScope.call, video.canStartPreview else { return }
+        let permission = previewHooks.cameraPermission()
+        let asksAgain = permission == MediaPermissionState.denied && previewHooks.canAskCameraAgain()
+        if (permission == MediaPermissionState.denied && !asksAgain) || permission == MediaPermissionState.restricted {
+            previewPermissionBlocked = true
+            rebuildVideo()
+            return
+        }
+        if permission == MediaPermissionState.notDetermined || asksAgain {
+            previewHooks.requestCameraPermission({ [weak self] granted in
+                guard let strong = self else { return }
+                if granted {
+                    strong.beginPreview()
+                } else {
+                    strong.previewPermissionBlocked = true
+                    strong.rebuildVideo()
+                }
+            })
+            return
+        }
+        beginPreview()
+    }
+
+    /// Stop Preview (and every other stop: panel close, background, 30 s off screen, the meeting camera taking over).
+    func stopPreview() {
+        guard previewReading.isScoped else { return }
+        previewStopCount += 1
+        previewOffScreenToken += 1
+        previewHooks.stop()
+        previewChanged()
+    }
+
+    /// Open Settings from the blocked card (F00 C18 intrinsic).
+    func openCameraSettings() {
+        previewHooks.openSystemSettings()
+    }
+
+    /// The card entered (true) or left (false) the screen (task scoped on iOS, composition on Android). Off screen for
+    /// 30 s stops the preview (C6-8); the renderer itself is kept per presentation by the card.
+    func previewCardVisible(_ visible: Bool) {
+        isPreviewCardOnScreen = visible
+        previewOffScreenToken += 1
+        guard !visible, previewReading.isScoped else { return }
+        let token = previewOffScreenToken
+        let pause = sleep
+        Task { @MainActor [weak self] in
+            await pause(SettingsPreviewPolicy.offScreenStopMillis)
+            guard let strong = self, strong.previewOffScreenToken == token, !strong.isPreviewCardOnScreen else { return }
+            strong.stopPreview()
+        }
+    }
+
+    /// The scene went to the background: the preview stops (C6-8).
+    func previewSceneBackgrounded() {
+        stopPreview()
+    }
+
+    /// The preview owner published (state, session, interruption or ownership).
+    func previewChanged() {
+        let next = previewHooks.read()
+        guard next != previewReading else { return }
+        previewReading = next
+        if next.state == PreviewState.live || next.state == PreviewState.starting {
+            previewPermissionBlocked = false
+        }
+        rebuildVideo()
     }
 
     // MARK: Captions, chat and voice (C6-13, C6-22)
@@ -1230,6 +1773,30 @@ final class SettingsPresenter {
         testGain = 1.0
         recorder.reset()
         personalVoice = PersonalVoicePhase.unavailable
+        stopPreview()
+        previewPermissionBlocked = false
+        stats.reset()
+    }
+
+    private func beginPreview() {
+        guard video.canStartPreview else { return }
+        previewStartCount += 1
+        previewPermissionBlocked = false
+        previewHooks.start(LocalCameraFacing.from(isFront: inputs.isFrontCamera))
+        previewChanged()
+    }
+
+    private func saveCamera(_ camera: NativeCameraQualitySettings) {
+        let next = NativeMediaQualitySettings(camera: camera, screenShare: prefs.quality.screenShare)
+        NativeMediaQualityPreferences.save(next, defaults: defaults)
+        publishCeilingChangeCount += 1
+        preferenceWritten(SettingsPreferenceID.cameraQuality)
+    }
+
+    private func saveScreenShare(_ share: NativeScreenShareQualitySettings) {
+        let next = NativeMediaQualitySettings(camera: prefs.quality.camera, screenShare: share)
+        NativeMediaQualityPreferences.save(next, defaults: defaults)
+        preferenceWritten(SettingsPreferenceID.screenShareQuality)
     }
 
     private func micTick() {
@@ -1279,8 +1846,16 @@ final class SettingsPresenter {
     }
 
     private func rebuildSections() {
+        // SET-3: Mirror, Camera Quality and Data Saver exist on every device (D11 limits the options, not the rows);
+        // Screen Share Quality only where screen sharing exists.
         let capabilities = SettingsRowCapabilities.make(
             noiseSuppression: audio.noiseSuppression != SettingsCapability.hidden,
+            mirror: true,
+            cameraQuality: true,
+            screenShareQuality: inputs.isScreenShareSupported,
+            dataSaver: true,
+            // SET-6 (OQ6 default A, HD request B7-T2 R9): the Effects row follows the one gate (false in production).
+            effects: EffectsAvailabilityPolicy.showsPanelEntry(EffectsAvailabilityPolicy.production(canShowSystemVideoEffects: false)),
             hostAlertSounds: inputs.hostAlertSoundsAvailable,
             messageNotifications: inputs.messageNotificationsAvailable,
             callNotificationStatus: inputs.callNotificationStatusAvailable,
@@ -1319,6 +1894,16 @@ final class SettingsPresenter {
     private func makeVideo(revision: Int) -> SettingsVideo {
         let inCall = isParticipantInCall
         let reason = SettingsAudioPolicy.flipReason(isAudioOnly: inputs.isAudioOnly, isRecovering: false)
+        let capability = CameraCaptureCapability(maxHeight: inputs.cameraMaxHeight, maxFrameRate: inputs.cameraMaxFrameRate)
+        var presets: [String] = []
+        for preset in NativeQualityOptions.cameraPresets(capability: capability) { presets.append(preset.rawValue) }
+        var sharePresets: [String] = []
+        for preset in NativeQualityOptions.screenSharePresets { sharePresets.append(preset.rawValue) }
+        let selection = NativeQualityOptions.cameraSelection(prefs.quality.camera.preset)
+        let dataSaverOn = DataSaverPolicy.isOn(preference: prefs.dataSaverOn, systemDataSaver: inputs.systemDataSaverOn)
+        let cameraOn = !inputs.isCameraOff
+        let preview = SettingsPreviewPolicy.state(isParticipantInCall: inCall, isAudioOnly: inputs.isAudioOnly, isCameraOn: cameraOn,
+                                                  reading: previewReading, permissionBlocked: previewPermissionBlocked)
         return SettingsVideo(
             revision: revision,
             cameraFacing: inputs.isFrontCamera ? "front" : "back",
@@ -1326,8 +1911,30 @@ final class SettingsPresenter {
             flipReason: reason,
             isFlipInFlight: inputs.isFlipInFlight,
             flipFailed: inputs.flipFailed,
-            isCameraOn: !inputs.isCameraOff,
-            isAudioOnly: inputs.isAudioOnly
+            isCameraOn: cameraOn,
+            isAudioOnly: inputs.isAudioOnly,
+            mirrorsSelfView: prefs.mirrorsSelfView,
+            cameraPreset: selection.rawValue,
+            effectiveCameraPreset: SettingsVideoPolicy.effectivePreset(selection: selection, dataSaverOn: dataSaverOn,
+                                                                       qualityCappedByHost: inputs.qualityCappedByHost),
+            presets: presets,
+            qualityCappedByHost: inputs.qualityCappedByHost,
+            custom: SettingsVideoPolicy.cameraLimits(prefs.quality.camera, capability: capability),
+            dataSaverOn: dataSaverOn,
+            systemDataSaverOn: inputs.systemDataSaverOn,
+            screenSharePreset: prefs.quality.screenShare.preset.rawValue,
+            screenSharePresets: sharePresets,
+            screenShareCustom: SettingsVideoPolicy.screenShareLimits(prefs.quality.screenShare),
+            showsScreenShareQuality: inCall && inputs.isScreenShareSupported,
+            isScreenSharing: inputs.isScreenSharing,
+            canShareDeviceAudio: inCall && inputs.canShareDeviceAudio,
+            shareDeviceAudioOn: prefs.shareDeviceAudioOn,
+            preview: preview,
+            previewReason: SettingsPreviewPolicy.reason(state: preview, interruption: previewReading.interruption,
+                                                        isAudioOnly: inputs.isAudioOnly),
+            previewSessionId: previewReading.sessionId,
+            canStartPreview: SettingsPreviewPolicy.canStart(state: preview, isParticipantInCall: inCall,
+                                                            isAudioOnly: inputs.isAudioOnly) && !cameraOn
         )
     }
 
@@ -1431,6 +2038,10 @@ final class SettingsPresenter {
 /// recorded by `SettingsRecordingCore` (the fake WP3 owner of L6-12), never performed.
 enum SettingsFixtureState: String, CaseIterable, Equatable {
     case guest, host, attendee, mic, muted, audioOnly, recovering, voiceUnavailable, voiceReady
+    /// SET-3 (L6-12 `settings-video`, `settings-camera-on`, `settings-system-data-saver`, `settings-host-cap`): camera
+    /// off with screen sharing (the preview card offers Start Preview), camera on (the card is published), the system
+    /// data saver signal, and the host's quality limit.
+    case video, cameraOn, systemDataSaver, hostQualityCap
 
     func inputs(callSession: Int = 1) -> SettingsInputs {
         switch self {
@@ -1475,17 +2086,49 @@ enum SettingsFixtureState: String, CaseIterable, Equatable {
                                        savedDisplayName: "Avery Lee", account: AccountKind.signedIn, accountName: "Avery Lee",
                                        accountEmail: "avery@example.com", accountProvider: "google", hasCore: true,
                                        canUsePersonalVoice: true, hasPersonalVoice: true)
+        case .video:
+            return SettingsInputs.make(callSession: callSession, roomId: "fixture-room", isJoined: true, isMuted: false,
+                                       canFlipCamera: true, connection: ConnectionQualityLabel.good, savedDisplayName: "Avery Lee",
+                                       account: AccountKind.guest, noiseSuppressionLive: true, hasCore: true,
+                                       isScreenShareSupported: true)
+        case .cameraOn:
+            return SettingsInputs.make(callSession: callSession, roomId: "fixture-room", isJoined: true, isMuted: false,
+                                       isCameraOff: false, canFlipCamera: true, connection: ConnectionQualityLabel.good,
+                                       savedDisplayName: "Avery Lee", account: AccountKind.guest, noiseSuppressionLive: true,
+                                       hasCore: true, isScreenShareSupported: true)
+        case .systemDataSaver:
+            return SettingsInputs.make(callSession: callSession, roomId: "fixture-room", isJoined: true, isMuted: false,
+                                       canFlipCamera: true, connection: ConnectionQualityLabel.fair, savedDisplayName: "Avery Lee",
+                                       account: AccountKind.guest, noiseSuppressionLive: true, hasCore: true,
+                                       isScreenShareSupported: true, systemDataSaverOn: true)
+        case .hostQualityCap:
+            return SettingsInputs.make(callSession: callSession, roomId: "fixture-room", isJoined: true, isMuted: false,
+                                       isCameraOff: false, canFlipCamera: true, connection: ConnectionQualityLabel.good,
+                                       savedDisplayName: "Avery Lee", account: AccountKind.guest, noiseSuppressionLive: true,
+                                       hasCore: true, isScreenShareSupported: true, qualityCappedByHost: true)
         }
     }
 }
 
 /// The fake WP3 owner (L6-12 `wp3.calls`): records every command instead of touching media, the network or the
-/// server, scripts the mic level and answers the speaker preview, the sign-out and the personal voice calls.
+/// server, scripts the mic level and answers the speaker preview, the sign-out and the personal voice calls. SET-3: it
+/// replaces the preview owner (`previewStart`, `previewStop`, scripted states and interruptions), records
+/// `setPublishCeiling` with the resolved ceiling for every quality or Data Saver change (2 l4), scripts the connection
+/// stats reading and keeps the card off the live media client.
 @MainActor
 final class SettingsRecordingCore {
     private(set) var calls: [String] = []
     var scriptedLevel: Double = 0.0
+    /// C6-9: the reading the stats leaf gets (nil = no data).
+    var scriptedStats: ConnectionStatsCounters? = nil
+    /// The camera permission the fake preview owner reports.
+    var scriptedCameraPermission: MediaPermissionState = MediaPermissionState.granted
+    /// 2 l4 readout: the last ceiling the fake owner received.
+    private(set) var lastPublishCeiling: NativeResolvedCameraPublishSettings? = nil
+    private(set) var previewReading: SettingsPreviewReading = SettingsPreviewReading.off
     private weak var presenter: SettingsPresenter?
+    private var previewObserver: (() -> Void)? = nil
+    private var previewSession = 0
 
     init() {}
 
@@ -1493,6 +2136,21 @@ final class SettingsRecordingCore {
         self.presenter = presenter
         presenter.micLevelSource = { [weak self] in self?.scriptedLevel ?? 0.0 }
         presenter.onCommand = { [weak self] command in self?.handle(command) }
+        presenter.usesLiveRenderers = false
+        presenter.stats.source = { [weak self] in self?.scriptedStats }
+        let hooks = SettingsPreviewHooks()
+        hooks.start = { [weak self] facing in self?.previewStart(facing) }
+        hooks.stop = { [weak self] in self?.previewStop() }
+        hooks.read = { [weak self] in self?.previewReading ?? SettingsPreviewReading.off }
+        hooks.observe = { [weak self] callback in self?.previewObserver = callback }
+        hooks.setMirror = { [weak self] on in self?.calls.append(on ? "mirrorOn" : "mirrorOff") }
+        hooks.cameraPermission = { [weak self] in self?.scriptedCameraPermission ?? MediaPermissionState.granted }
+        hooks.requestCameraPermission = { [weak self] completion in
+            self?.calls.append("cameraPermissionRequest")
+            completion(self?.scriptedCameraPermission == MediaPermissionState.granted)
+        }
+        hooks.openSystemSettings = { [weak self] in self?.calls.append("openSystemSettings") }
+        presenter.previewHooks = hooks
     }
 
     func count(_ name: String) -> Int {
@@ -1501,6 +2159,35 @@ final class SettingsRecordingCore {
             if call == name { total += 1 }
         }
         return total
+    }
+
+    /// Scripts what the preview owner reports (an interruption, its end, a failure).
+    func scriptPreview(state: PreviewState, interruption: PreviewInterruption = PreviewInterruption.none) {
+        previewReading = SettingsPreviewReading(state: state, sessionId: previewSession, interruption: interruption,
+                                                isScoped: previewReading.isScoped)
+        previewObserver?()
+    }
+
+    /// The meeting camera took the camera (the clients' hand-off): the preview stops being the Settings preview.
+    func scriptCallCameraTookOver() {
+        previewReading = SettingsPreviewReading(state: PreviewState.published, sessionId: previewSession,
+                                                interruption: PreviewInterruption.none, isScoped: false)
+        previewObserver?()
+    }
+
+    private func previewStart(_ facing: LocalCameraFacing) {
+        calls.append("previewStart")
+        previewSession += 1
+        previewReading = SettingsPreviewReading(state: PreviewState.live, sessionId: previewSession,
+                                                interruption: PreviewInterruption.none, isScoped: true)
+        previewObserver?()
+    }
+
+    private func previewStop() {
+        calls.append("previewStop")
+        previewReading = SettingsPreviewReading(state: PreviewState.off, sessionId: previewSession,
+                                                interruption: PreviewInterruption.none, isScoped: false)
+        previewObserver?()
     }
 
     private func handle(_ command: SettingsCommand) {
@@ -1515,6 +2202,13 @@ final class SettingsRecordingCore {
         case .signOut:
             calls.append("signOut")
             presenter?.signOutFinished(generation: command.generation)
+        case .preferenceChanged:
+            calls.append(command.kind.rawValue)
+            let id = SettingsPreferenceID(rawValue: command.text) ?? SettingsPreferenceID.haptics
+            if id == SettingsPreferenceID.cameraQuality || id == SettingsPreferenceID.dataSaver {
+                calls.append("setPublishCeiling")
+                lastPublishCeiling = presenter?.publishCeiling()
+            }
         default: calls.append(command.kind.rawValue)
         }
     }

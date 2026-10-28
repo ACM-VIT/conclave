@@ -32,6 +32,11 @@ final class MeetingShellPresenter {
     /// resets its pending work itself when the call session changes. The native call root reaches it as
     /// `shell.settings`; the stage fixture shell's instance serves the panel fixture.
     let settings = SettingsPresenter(scope: SettingsScope.call)
+    /// S60 0.5 (TRN-2): the session's Transcript presenter (`MeetingPanel.transcript`). Created with the shell and bound
+    /// once to the core's `TranscriptState` (`bind(state:)`); the core pushes `TranscriptInputs` and resets it on leave.
+    /// The native call root reaches it as `shell.transcript`; the Transcript fixture binds the stage fixture shell's
+    /// instance to its own state (HD request B7-T5 R5).
+    let transcript = TranscriptPresenter()
     /// Core only: the view model forwards each intent to its existing implementation (S1C E8). Never called from
     /// `apply(_:)`.
     @ObservationIgnored var onCommand: ((MeetingShellCommand, MeetingActionTicket?) -> Void)? = nil

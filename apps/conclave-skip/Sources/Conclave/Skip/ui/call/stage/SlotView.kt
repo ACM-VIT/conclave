@@ -522,7 +522,9 @@ private fun StageRendererSlot(
             RendererProbe(key = slotId, slot = RendererSlot.stage, modifier = Modifier.fillMaxSize(), pattern = renderers.pattern)
         } else {
             // Only your own front camera mirrors; only your tile reads the chrome snapshot.
-            val mirror = if (isLocal && !isShare) stage.chrome.isFrontCamera else false
+            val mirror = if (isLocal && !isShare) {
+                LocalVideoMirrorPolicy.mirrors(isFront = stage.chrome.isFrontCamera, preference = LocalVideoMirrorPreference.shared.isOn)
+            } else false
             StageLiveVideo(slotId, userId, isLocal, isShare, videoKey, fit, mirror)
         }
     }

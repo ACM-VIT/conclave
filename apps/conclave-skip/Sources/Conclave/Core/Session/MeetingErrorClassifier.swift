@@ -61,6 +61,11 @@ enum MeetingErrorClassifier {
     /// classes), then today's substring tables (kept inside the classifier only). `isNetworkOffline` lets an
     /// unresolvable host read as `offline` while the reachability monitor reports no validated network (S70 7 d).
     static func classify(_ error: Error, context: MeetingErrorContext, isNetworkOffline: Bool = false) -> ClassifiedError {
+        // SYS-10 (S70 10 f): screen share start failures carry their typed reason.
+        if let shareError = error as? ScreenShareStartError {
+            return typed(ScreenShareFailurePolicy.category(shareError.failure), context: context,
+                         code: ScreenShareFailurePolicy.diagnosticCode(shareError.failure))
+        }
         if let http = error as? MeetingHTTPStatusError {
             return classify(
                 httpStatus: http.statusCode,
@@ -127,7 +132,8 @@ enum MeetingErrorClassifier {
             case .cancelled:
                 return typed(.cancelled, context: context, code: "capture.cancelled")
             case .appGroupUnavailable:
-                return typed(.deviceUnavailable, context: context, code: "capture.appGroup")
+                // S70 10 f notConfigured: "Couldn't start screen sharing. Try again.", not the camera sentence.
+                return typed(.platformRefused, context: context, code: "capture.appGroup")
             case .socketUnavailable:
                 return typed(.platformRefused, context: context, code: "capture.socket")
             }

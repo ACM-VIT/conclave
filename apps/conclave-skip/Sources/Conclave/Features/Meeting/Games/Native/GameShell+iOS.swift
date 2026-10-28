@@ -121,6 +121,9 @@ struct GameShellScene: View {
              GameSceneKind.reaction, GameSceneKind.imposter:
             // ACT-3 (S60 9): the prompt game scenes, playing and results (Games/Native/Scenes).
             PromptGameSceneBody(games: games)
+        // ACT-4 (S60 10): Wordle, every phase (Games/Native/Boards/WordleBoard+iOS.swift).
+        case GameSceneKind.wordle:
+            WordleSceneBody(games: games)
         case GameSceneKind.unsupported:
             VStack(alignment: .leading, spacing: 10) {
                 GameKitNotice(kind: .unsupported, message: "", buttonTitle: storeURL.isEmpty ? "" : ConclaveStrings.text("Update App"),
@@ -253,6 +256,8 @@ struct GameShellBottomBar: View {
             } else if chrome.phase == .playing {
                 // ACT-3 (S60 9 c): Skip Question, Next, Skip Writing, Reveal Now, Call the Vote, End Vote (seated host only).
                 PromptGameHostBar(games: games)
+                // ACT-4 (S60 10 f): Next Round at a Wordle round's results (seated host only).
+                WordleHostBar(games: games)
             }
         }
         .padding(.horizontal, 16)

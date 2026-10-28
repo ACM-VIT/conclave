@@ -12,7 +12,9 @@ import Observation
 /// Leave menu and the End dialog over `leaveState`, with the End progress and failure toasts (CC7); CTL-3 `route`;
 /// CTL-5 (here) `more`, `moreMetrics`, `commands`, `select(_:)`, `setCaptions(_:)`, `setLayoutMode(_:)`,
 /// `copyLink(postsToast:)` and `perform(_:)`; CTL-6 (here) `reactions` and `sendReaction(id:)`. Local actions the core
-/// performs (a reaction, captions, the layout, Flip, Lock, the iOS system effects) go out through `onRequest`.
+/// performs (a reaction, captions, the layout, Flip, Lock, the iOS system effects) go out through `onRequest`. TRN-2
+/// (here, S30 CC8): the recap capability (`applyRecap(_:)`, `LeaveSnapshot.offersRecap`, `EndPhase.postingRecap`), Post
+/// Recap and End through `onRecap`, `endNowDuringRecap()` and the core's `finishRecapAndEnd()`.
 @MainActor
 @Observable
 final class CallControlsPresenter {
@@ -32,6 +34,8 @@ final class CallControlsPresenter {
     private(set) var reactions: ReactionPaletteSnapshot = ReactionPaletteSnapshot.empty
     /// CTL-5: the iOS scene commands and the Android key handler only (S30 1 g, CL21).
     private(set) var commands: CallCommandsSnapshot = CallCommandsSnapshot.empty
+    /// TRN-2 (S30 0.5 outcome tokens): `recapPostingStarted` (silent) when `leaveState.endPhase` becomes `postingRecap`.
+    private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
 
     @ObservationIgnored let shell: MeetingShellPresenter
     /// S20; the local explanation toasts (CC7) and the bar hold (CC16).
@@ -44,6 +48,13 @@ final class CallControlsPresenter {
     /// Core only (CTL-5, CTL-6): local actions with a value (S30 0.5 mapping). The core answers true when it accepted
     /// the request (the presenter then returns `dispatched`, and the view plays its gesture); nil answers nothing.
     @ObservationIgnored var onRequest: ((CallControlsRequest) -> Bool)? = nil
+    /// Core only (TRN-2, S30 CC8): the `RecapCoordinator`'s Post Recap and End and End Now; true when it accepted.
+    @ObservationIgnored var onRecap: ((RecapCommandKind) -> Bool)? = nil
+    /// TRN-2: the core's recap capability and posting state (`applyRecap(_:)`); overlaid on the S1 Leave state.
+    @ObservationIgnored private(set) var recap = RecapControlsState.none
+    /// TRN-2 diagnostics (never observed): recap requests sent to the core and End Now taps.
+    @ObservationIgnored private(set) var recapRequestCount = 0
+    @ObservationIgnored private(set) var endNowCount = 0
 
     @ObservationIgnored private(set) var inputs = CallControlsInputs.make()
     @ObservationIgnored private(set) var windowWidth = ControlsWindowClass.compact
@@ -227,10 +238,21 @@ final class CallControlsPresenter {
 
     /// One confirm per confirmation id (S1C DUP: a second confirm is a duplicate and returns `ignored`). A dispatched End
     /// owes a result: the presenter posts the `endingForEveryone` progress toast while the ticket is in flight and the
-    /// `endFailed` toast with Retry if it fails, and Leave stays available throughout (R09). `postRecap` waits for the
-    /// WP8 recap owner (CC8, TRN-2); until then End goes straight to the S1 ticket.
+    /// `endFailed` toast with Retry if it fails, and Leave stays available throughout (R09). TRN-2 (CC8): `postRecap`
+    /// with the recap on offer closes the confirmation and asks the core to post the recap first (the call ends when
+    /// the answer lands or after 30 s, `finishRecapAndEnd()`); a recap the core cannot send ends at once (web
+    /// `handlePostRecapAndEnd`). Without the recap on offer `postRecap` is ignored and End goes to the S1 ticket.
     @discardableResult
     func confirmEndForEveryone(id: Int, postRecap: Bool) -> ControlTapResult {
+        if postRecap && leaveState.offersRecap && id != 0 && leaveState.confirmationId == id, let handler = onRecap {
+            stage.noteControlAction()
+            shell.cancelConfirmation(id: id)
+            recapRequestCount += 1
+            let accepted = handler(RecapCommandKind.postAndEnd)
+            refreshFromShell()
+            if !accepted { return finishRecapAndEnd() }
+            return ControlTapResult.dispatched
+        }
         stage.noteControlAction()
         isConfirmingEnd = true
         let dispatch = shell.confirmEndForEveryone(id: id)
@@ -244,6 +266,45 @@ final class CallControlsPresenter {
         case .dispatched: return ControlTapResult.dispatched
         default: return ControlTapResult.ignored
         }
+    }
+
+    /// TRN-2 (S30 CC8): the core ends the call once the recap answer settled or the 30 s cap passed (or after End Now):
+    /// the same S1 confirmation and ticket as the dialog, asked and confirmed in one turn, so no dialog shows and the
+    /// End progress and failure toasts follow as for a confirmed End.
+    @discardableResult
+    func finishRecapAndEnd() -> ControlTapResult {
+        shell.requestEndForEveryone(from: MeetingConfirmationInvoker.call)
+        let id = shell.session.confirmation?.id ?? 0
+        if id == 0 {
+            refreshFromShell()
+            return ControlTapResult.ignored
+        }
+        endRequestCount += 1
+        isConfirmingEnd = true
+        let dispatch = shell.confirmEndForEveryone(id: id)
+        isConfirmingEnd = false
+        if dispatch == MeetingDispatch.dispatched {
+            endDispatchCount += 1
+            endResultOwed = true
+        }
+        refreshFromShell()
+        return dispatch == MeetingDispatch.dispatched ? ControlTapResult.dispatched : ControlTapResult.ignored
+    }
+
+    /// The recap banner's End Now (S30 4 posting row, CC8): the core ends at once.
+    @discardableResult
+    func endNowDuringRecap() -> ControlTapResult {
+        stage.noteControlAction()
+        guard leaveState.endPhase == EndPhase.postingRecap, let handler = onRecap else { return ControlTapResult.ignored }
+        endNowCount += 1
+        return handler(RecapCommandKind.endNow) ? ControlTapResult.dispatched : ControlTapResult.ignored
+    }
+
+    /// Core only (TRN-2, S30 CC8): the recap capability and the posting state, equality guarded.
+    func applyRecap(_ next: RecapControlsState) {
+        if next == recap { return }
+        recap = next
+        recompute()
     }
 
     /// Cancel, Back, a scrim tap or a tap outside the iPad popover: the confirmation closes and nothing else changes.
@@ -427,6 +488,7 @@ final class CallControlsPresenter {
         fitReadout = "none"
         menuHeightReadout = "none"
         handIntent = MeetingActionDirection.none
+        recap = RecapControlsState.none
         recompute()
     }
 
@@ -461,9 +523,18 @@ final class CallControlsPresenter {
             bar = candidate.withRevision(bar.revision + 1)
             barPublishCount += 1
         }
-        let leaveCandidate = ControlBarPolicy.leaveSnapshot(inputs: inputs, revision: leaveState.revision)
+        // TRN-2 (S30 CC8): the recap capability and the posting phase over the S1 Leave state.
+        let leaveCandidate = RecapPolicy.leaveSnapshot(ControlBarPolicy.leaveSnapshot(inputs: inputs, revision: leaveState.revision),
+                                                       recap: recap)
         if leaveCandidate != leaveState {
+            let wasPosting = leaveState.endPhase == EndPhase.postingRecap
             leaveState = leaveCandidate.withRevision(leaveState.revision + 1)
+            if leaveState.endPhase == EndPhase.postingRecap && !wasPosting {
+                // RECONCILE R12: the silent `recapPostingStarted` token, published here only.
+                feedbackState = MeetingShellFeedbackState(session: inputs.callSession,
+                                                          token: FeedbackToken(sequence: feedbackState.token.sequence + 1,
+                                                                               kind: FeedbackKind.recapPostingStarted))
+            }
             // S30 CC16: an open End confirmation keeps chrome up on both platforms (the iOS dialog reports nothing of its
             // own); equality guarded in the stage.
             stage.setTransientChrome(id: ChromeAutoHidePolicy.endDialog, open: leaveState.confirmationId != 0)

@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,7 +40,9 @@ import androidx.compose.ui.viewinterop.AndroidView
  * changes never recompose it (6 k). The video area holds the LocalPreviewSurface (keyed by the preview session), the
  * camera-off avatar, the starting spinner, the unavailable caption or the denied overlay; the "You" chip; the flip
  * button while live (a solid scrim circle, never glass). The strip holds the R01 labelled toggles (Off #F2B8B5) and
- * the Effects slot only while an engine publishes it (R31).
+ * the Effects slot only while an engine publishes it (R31). ENT-4 (S10 7 d, f, i): the toggles draw the displayed state
+ * (Off while a tap cannot grant it), their state descriptions add the permission reason (`stateReason`, HD request
+ * B7-T8 R2), and the camera overlay is PermissionPrimingCardOverlay.
  */
 
 @Composable
@@ -96,7 +96,7 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, onFlip: () -> Unit, onOpenSetti
         ) {
             when {
                 card.showsSurface -> LocalPreviewSurface(card.previewSessionId)
-                card.isCameraBlocked -> Unit
+                card.showsCameraOverlay -> Unit
                 else -> LobbyCameraOffContent(card)
             }
             if (card.preview == PreviewState.interrupted) {
@@ -108,8 +108,9 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, onFlip: () -> Unit, onOpenSetti
                 )
             }
         }
-        if (card.isCameraBlocked) {
-            LobbyCameraPermissionOverlay(card.cameraPermission, onOpenSettings, Modifier.align(Alignment.Center))
+        if (card.showsCameraOverlay) {
+            // ENT-4 (S10 7 d): Open settings or restricted inside the card; the rationale asks from a row instead.
+            PermissionPrimingCardOverlay(card.cameraPriming, onOpenSettings, Modifier.align(Alignment.Center))
         }
         Text(
             conclaveString("ds_you"),
@@ -151,32 +152,6 @@ private fun LobbyCameraOffContent(card: LobbyCardUi) {
     }
 }
 
-/** S10 7 d: camera denied inside the card (title, body, a tonal Open settings in the in-call theme); restricted has
- *  no button. One container. */
-@Composable
-private fun LobbyCameraPermissionOverlay(permission: MediaPermissionState, onOpenSettings: () -> Unit, modifier: Modifier) {
-    val scheme = MaterialTheme.colorScheme
-    Column(
-        modifier = modifier.padding(20.dp).semantics(mergeDescendants = false) { }.testTag("lobby.camera.denied"),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Icon(ConclaveIcons.VideocamOffFill1, contentDescription = null, tint = scheme.onSurface)
-        Text(conclaveString("pm_camera_denied_title"), style = MaterialTheme.typography.titleMedium, color = scheme.onSurface)
-        Text(
-            if (permission == MediaPermissionState.restricted) conclaveString("pm_camera_restricted") else conclaveString("pm_camera_denied_body"),
-            style = MaterialTheme.typography.bodyMedium,
-            color = scheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-        if (permission == MediaPermissionState.denied) {
-            FilledTonalButton(onClick = onOpenSettings, modifier = Modifier.testTag("lobby.camera.openSettings")) {
-                Text(conclaveString("pm_open_settings"))
-            }
-        }
-    }
-}
-
 /** L2: Mic then Camera (then Effects), each a Role.Switch with its state description; the caption is visual only. */
 @Composable
 private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: (Boolean) -> Unit, onEffects: () -> Unit) {
@@ -190,7 +165,8 @@ private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: 
         onToggle = { onMic(it) },
         width = 56.dp,
         feedback = LobbyToggleFeedbackPolicy.kind(isOn = card.micOn, permission = card.micPermission,
-            onKind = FeedbackKind.micOn, offKind = FeedbackKind.micOff, canAskAgain = card.canAskAgain),
+            onKind = FeedbackKind.micOn, offKind = FeedbackKind.micOff, canAskAgain = card.canAskAgainMicrophone),
+        stateReason = permissionReasonText(LobbyMediaKind.microphone, card.micReason),
     )
     ConclaveLabelledCallToggle(
         label = conclaveString("ds_camera"),
@@ -203,7 +179,8 @@ private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: 
         width = 56.dp,
         enabled = card.cameraPermission != MediaPermissionState.unavailable,
         feedback = LobbyToggleFeedbackPolicy.kind(isOn = card.cameraOn, permission = card.cameraPermission,
-            onKind = FeedbackKind.cameraOn, offKind = FeedbackKind.cameraOff, canAskAgain = card.canAskAgain),
+            onKind = FeedbackKind.cameraOn, offKind = FeedbackKind.cameraOff, canAskAgain = card.canAskAgainCamera),
+        stateReason = permissionReasonText(LobbyMediaKind.camera, card.cameraReason),
     )
     if (card.showsEffects) {
         ConclaveLabelledCallToggle(

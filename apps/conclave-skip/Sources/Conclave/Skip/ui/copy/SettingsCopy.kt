@@ -4,8 +4,8 @@ package conclave.module
  * S60 0.6 L6-14 (SET-1, SET-2, SET-4) on Android: the one exhaustive copy mapping for Settings. Every typed reason,
  * phase and raw-value field the transpiled SettingsPresenter publishes resolves here to an app-module string resource
  * name (Material sentence case, prefix set_; the S70 status rows keep their sys_ names), which composition resolves
- * through conclaveString. T/Skip/SettingsTranscriptBridgeTests.kt enumerates every case. The iOS twin is
- * S/Features/Meeting/Settings/SettingsCopy+iOS.swift.
+ * through conclaveString. T/Skip/SettingsTranscriptBridgeTests.kt enumerates every case (SET-3's mappings:
+ * T/Skip/SET3VideoBridgeTests.kt). The iOS twin is S/Features/Meeting/Settings/SettingsCopy+iOS.swift.
  */
 internal object SettingsCopy {
     fun sectionName(section: SettingsSection): String = when (section) {
@@ -155,4 +155,93 @@ internal object SettingsCopy {
     fun callNotificationName(enabled: Boolean): String = if (enabled) "sys_call_notif_on" else "sys_call_notif_off"
 
     fun signOutMessageName(isHost: Boolean): String = if (isHost) "set_sign_out_host" else "set_sign_out_guest"
+
+    // SET-3 video, screen share and connection (S60 1 g, 2 g)
+
+    /** Camera quality options and the root value (the data-saver preset reads "Data saver" while a ceiling applies). */
+    fun cameraPresetName(rawValue: String): String = when (NativeCameraQualityPreset.init(rawValue = rawValue)) {
+        NativeCameraQualityPreset.highDefinition -> "set_preset_hd"
+        NativeCameraQualityPreset.studio -> "set_preset_studio"
+        NativeCameraQualityPreset.custom -> "set_preset_custom"
+        NativeCameraQualityPreset.dataSaver -> "set_data_saver"
+        else -> "set_preset_auto"
+    }
+
+    fun cameraPresetDetailName(rawValue: String): String = when (NativeCameraQualityPreset.init(rawValue = rawValue)) {
+        NativeCameraQualityPreset.highDefinition -> "set_preset_hd_detail"
+        NativeCameraQualityPreset.studio -> "set_preset_studio_detail"
+        NativeCameraQualityPreset.custom -> "set_preset_custom_detail"
+        NativeCameraQualityPreset.dataSaver -> "set_preset_data_saver_detail"
+        else -> "set_preset_auto_detail"
+    }
+
+    fun screenSharePresetName(rawValue: String): String = when (NativeScreenShareQualityPreset.init(rawValue = rawValue)) {
+        NativeScreenShareQualityPreset.presentation -> "set_share_preset_presentation"
+        NativeScreenShareQualityPreset.motion -> "set_share_preset_motion"
+        NativeScreenShareQualityPreset.custom -> "set_preset_custom"
+        else -> "set_preset_auto"
+    }
+
+    fun screenSharePresetDetailName(rawValue: String): String = when (NativeScreenShareQualityPreset.init(rawValue = rawValue)) {
+        NativeScreenShareQualityPreset.presentation -> "set_share_presentation_detail"
+        NativeScreenShareQualityPreset.motion -> "set_share_motion_detail"
+        NativeScreenShareQualityPreset.custom -> "set_preset_custom_detail"
+        else -> "set_share_auto_detail"
+    }
+
+    fun resolutionName(rawValue: String): String = when (NativeMediaResolution.init(rawValue = rawValue)) {
+        NativeMediaResolution.p360 -> "set_res_360"
+        NativeMediaResolution.p1080 -> "set_res_1080"
+        NativeMediaResolution.p1440 -> "set_res_1440"
+        NativeMediaResolution.p2160 -> "set_res_2160"
+        else -> "set_res_720"
+    }
+
+    fun cameraOptimizeName(rawValue: String): String =
+        if (rawValue == NativeCameraContentHint.detail.rawValue) "set_fine_detail" else "set_natural_motion"
+
+    fun screenShareOptimizeName(rawValue: String): String = when (NativeScreenShareContentHint.init(rawValue = rawValue)) {
+        NativeScreenShareContentHint.text -> "set_text_slides"
+        NativeScreenShareContentHint.motion -> "set_video_motion"
+        else -> "set_fine_detail"
+    }
+
+    fun underPressureName(rawValue: String, isScreenShare: Boolean): String = when (NativeMediaDegradationPreference.init(rawValue = rawValue)) {
+        NativeMediaDegradationPreference.maintainFramerate -> "set_keep_motion"
+        NativeMediaDegradationPreference.maintainResolution -> if (isScreenShare) "set_keep_text" else "set_keep_sharp"
+        else -> "set_balance_both"
+    }
+
+    /** The Camera quality footer (2 f). */
+    fun cameraQualityFooterName(dataSaverOn: Boolean, qualityCappedByHost: Boolean): String = when {
+        dataSaverOn -> "set_quality_data_saver"
+        qualityCappedByHost -> "set_host_quality_cap"
+        else -> "set_quality_footer"
+    }
+
+    /** The preview card status line (1 g), or null. */
+    fun previewStatusName(state: PreviewState): String? = when (state) {
+        PreviewState.published -> "set_visible_everyone"
+        PreviewState.starting, PreviewState.live, PreviewState.interrupted -> "set_only_you"
+        else -> null
+    }
+
+    /** The preview card's state description: why the camera paused, the permission, or audio only (1 f). */
+    fun previewReasonName(reason: SettingsReason): String? = when (reason) {
+        SettingsReason.cameraInUse -> "set_camera_in_use"
+        SettingsReason.cameraMultitasking -> "set_camera_multitasking"
+        SettingsReason.cameraInBackground -> "set_camera_background"
+        SettingsReason.permissionDenied -> "set_camera_access_off"
+        SettingsReason.audioOnly -> "set_audio_only_reason"
+        else -> null
+    }
+
+    /** The Connection page summary (2 g). */
+    fun connectionSummaryName(label: ConnectionQualityLabel): String = when (label) {
+        ConnectionQualityLabel.measuring -> "set_connection_measuring"
+        ConnectionQualityLabel.good -> "set_connection_good"
+        ConnectionQualityLabel.fair -> "set_connection_fair"
+        ConnectionQualityLabel.poor, ConnectionQualityLabel.veryPoor -> "set_connection_poor"
+        ConnectionQualityLabel.unavailable -> "set_connection_unavailable"
+    }
 }

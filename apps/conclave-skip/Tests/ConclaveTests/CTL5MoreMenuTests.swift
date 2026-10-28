@@ -28,7 +28,9 @@ struct CTL5MoreMenuTests {
         ControlsFixtureSession(state: state).controls.more.itemIds
     }
 
-    static let guestIds = ["reactions", "hand", "screenShare", "captions", "flipCamera", "participants", "activities", "settings",
+    // Batch 7 (TRN-2, SET-5): Transcript and Layout landed, so both rows show between Activities and Settings.
+    static let guestIds = ["reactions", "hand", "screenShare", "captions", "flipCamera", "participants", "activities", "transcript",
+                           "layout", "settings",
                            "invite", "copyLink", "meetingDetails"]
     static let hostIds = guestIds + ["hostControls", "lockMeeting", "endForEveryone"]
 
@@ -49,21 +51,30 @@ struct CTL5MoreMenuTests {
     }
 
     @Test func rowsWhosePanelHasNotLandedStayHiddenAndThereIsNoVoiceAgent() {
-        // PLAN-screens 2: under the call flag a row whose native panel has not landed stays hidden.
-        #expect(!MoreMenuPolicy.isLanded(.transcript) && !MoreMenuPolicy.isLanded(.layout) && !MoreMenuPolicy.isLanded(.effects))
-        for panel in [MeetingPanel.chat, .participants, .activities, .settings, .webinarQA, .meetingInfo, .hostControls] {
+        // PLAN-screens 2: under the call flag a row whose native panel has not landed stays hidden. Batch 7 landed
+        // Transcript (TRN-2), Layout (SET-5) and Effects (SET-6); the Effects row still waits for `effectsPanelAvailable`.
+        #expect(MoreMenuPolicy.isLanded(.transcript) && MoreMenuPolicy.isLanded(.layout) && MoreMenuPolicy.isLanded(.effects))
+        for panel in [MeetingPanel.chat, .participants, .activities, .settings, .webinarQA, .meetingInfo, .hostControls,
+                      .transcript, .layout, .effects] {
             #expect(MoreMenuPolicy.isLanded(panel), "\(panel.rawValue)")
         }
         let host = ControlsFixtureSession(state: .webinarHost)
-        for hidden in ["transcript", "layout", "effects", "systemVideoEffects"] {
+        #expect(host.controls.more.itemIds.contains("transcript") && host.controls.more.itemIds.contains("layout"))
+        for hidden in ["effects", "systemVideoEffects"] {
             #expect(!host.controls.more.itemIds.contains(hidden), "\(hidden) shows")
         }
-        // OQ6 default A: even with live notes on, effects published and a running camera, the rows wait for their panels;
-        // the system module waits for CC11.
+        // OQ6 default A: the Effects row follows the one availability value (false in production); the system module waits
+        // for CC11.
+        let hidden = CallControlsInputs.make(rows: host.shell.controls.rows, phase: .inCall, isLocalHost: true,
+                                             meetingLink: "https://conclave.acmvit.in/abc", liveNotes: .live, effectsPanelAvailable: false)
+        let hiddenSections = MoreMenuPolicy.sections(inputs: hidden, composition: .compact, overflowIds: [], reactions: ReactionPaletteSnapshot.empty)
+        #expect(!hiddenSections.flatMap { $0.items }.contains { $0.kind == .effects })
+        #expect(hiddenSections.flatMap { $0.items }.contains { $0.kind == .transcript })
         let inputs = CallControlsInputs.make(rows: host.shell.controls.rows, phase: .inCall, isLocalHost: true,
                                              meetingLink: "https://conclave.acmvit.in/abc", liveNotes: .live, effectsPanelAvailable: true)
         let sections = MoreMenuPolicy.sections(inputs: inputs, composition: .compact, overflowIds: [], reactions: ReactionPaletteSnapshot.empty)
-        #expect(!sections.flatMap { $0.items }.contains { $0.kind == .effects || $0.kind == .transcript })
+        #expect(sections.flatMap { $0.items }.contains { $0.kind == .effects })
+        #expect(sections.flatMap { $0.items }.contains { $0.kind == .transcript })
         // Owner OQ7: the AI voice agent is web only.
         #expect(!MoreItemID.allCases.map { $0.rawValue }.contains { $0.lowercased().contains("voice") })
     }
@@ -261,8 +272,8 @@ struct CTL5MoreMenuTests {
 
     @Test func androidTilesFollowTheFiveDOrder() {
         let host = ControlsFixtureSession(state: .host).controls.more
-        #expect(MoreMenuPolicy.tiles(host).map { $0.id } == ["screenShare", "captions", "participants", "activities", "invite", "copyLink",
-                                                              "meetingDetails", "settings"])
+        #expect(MoreMenuPolicy.tiles(host).map { $0.id } == ["screenShare", "captions", "participants", "activities", "transcript",
+                                                              "layout", "invite", "copyLink", "meetingDetails", "settings"])
         let webinar = ControlsFixtureSession(state: .webinarHost).controls.more
         #expect(MoreMenuPolicy.tiles(webinar).map { $0.id }.suffix(3) == ["meetingDetails", "qa", "settings"])
         // Flip and the iOS system module are never Android tiles (S30 5 f rows 6 and 12).
@@ -273,11 +284,12 @@ struct CTL5MoreMenuTests {
 
     @Test func theMenuBudgetChoosesTheMenuOrTheSheet() {
         let guest = ControlsFixtureSession(state: .guest).controls
-        #expect(guest.moreMetrics == MoreMenuMetrics(rows: 6, twoLineRows: 1, hasPalette: true, mediumRows: 1, separators: 3))
-        #expect(MoreMenuPolicy.estimatedHeight(guest.moreMetrics, textScale: 1) == 486)
+        // Batch 7: Transcript adds a one-line row (live notes off) and Layout a two-line row (its mode subtitle).
+        #expect(guest.moreMetrics == MoreMenuMetrics(rows: 7, twoLineRows: 2, hasPalette: true, mediumRows: 1, separators: 3))
+        #expect(MoreMenuPolicy.estimatedHeight(guest.moreMetrics, textScale: 1) == 588)
         let host = ControlsFixtureSession(state: .host).controls
-        #expect(host.moreMetrics == MoreMenuMetrics(rows: 7, twoLineRows: 1, hasPalette: true, mediumRows: 1, separators: 4))
-        #expect(MoreMenuPolicy.estimatedHeight(host.moreMetrics, textScale: 1) == 538)
+        #expect(host.moreMetrics == MoreMenuMetrics(rows: 8, twoLineRows: 2, hasPalette: true, mediumRows: 1, separators: 4))
+        #expect(MoreMenuPolicy.estimatedHeight(host.moreMetrics, textScale: 1) == 640)
         #expect(MoreMenuPolicy.estimatedHeight(host.moreMetrics, textScale: 23.0 / 17.0) > 700)
         // 375 x 667 leaves about 575 pt above the control; 390 x 844 about 690 pt.
         #expect(!MoreMenuPolicy.usesSheet(estimate: 538, menuSpace: 575, isAccessibilitySize: false, isVerticalBar: false))

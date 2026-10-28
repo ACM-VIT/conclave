@@ -47,6 +47,11 @@ struct StageFixtureView: View {
             if let chatState = ChatFixtureLaunch.state() {
                 _ = ChatFixtureDriver.installOnStage(state: chatState, shell: session.shell)
             }
+            // TRN-2 (S60 L6-12, HD request B7-T5 R5): `CONCLAVE_TRANSCRIPT_FIXTURE=<state>` layers the Transcript fixture
+            // (FakeTranscriptOwner) on this stage fixture and opens the panel.
+            if let transcriptState = TranscriptFixtureDriver.fixtureState(named: ProcessInfo.processInfo.environment["CONCLAVE_TRANSCRIPT_FIXTURE"]) {
+                TranscriptFixtureDriver.installOnStage(state: transcriptState, shell: session.shell)
+            }
         }
     }
 }
@@ -111,6 +116,12 @@ private struct StageFixtureReadouts: View {
             readout(session.settingsCallsReadout(), identifier: "wp3.calls")
             readout(session.speakerTestReadout(), identifier: "speakerTest.count")
             readout(session.voicePreviewReadout(), identifier: "voicePreview.count")
+            // SET-5, SET-6 (L6-12): the Layout panel's intents and the fake WP10 engine's calls.
+            readout(session.layoutCallsReadout(), identifier: "layout.calls")
+            readout(session.effectsCallsReadout(), identifier: "wp10.calls")
+            // SET-3 (S60 2 l3, l4): Connection polls and the last publish ceiling.
+            readout(session.statsPollsReadout(), identifier: "stats.polls")
+            readout(session.publishCeilingReadout(), identifier: "wp3.ceiling")
             readout(session.captionsReadout(), identifier: "stage.captions.readout")
             readout(session.activityReadout(), identifier: "game.emits")
             readout(session.panelReadout(), identifier: "panel.current")

@@ -10,6 +10,12 @@ import UIKit
 // Details (R44, `SettingsAttendeeList`), each mapping the root's pushes onto its own stack through `link`. Lifetimes are
 // task scoped (AGENTS.md: appearance callbacks re-fire on body re-runs). No glass, no haptics (system controls play
 // their own, D8). Mounted by the native call root (HD request B6-T2 R3).
+//
+// SET-3 (S60 1 c Video and General rows, 2 c pages; L6-3): the Video section draws the dark LivePreviewCard before the
+// Camera row (the card belongs to the in-call participant rows, so it rides on the camera facing row instead of a row
+// id of its own), Mirror My Video, Camera Quality, Screen Share Quality and Data Saver with the Video footer; General >
+// Connection pushes the Connection page; `SettingsPage` routes the quality, Advanced and Connection pages
+// (VideoPages+iOS.swift).
 
 enum SettingsAnchor {
     static let audio = "settings.section.audio"
@@ -49,6 +55,8 @@ struct SettingsPanel: View {
                     .navigationDestination(for: SettingsRoute.self) { route in
                         SettingsPage(route: route, settings: settings, people: people)
                     }
+                    // L6-3: the preview card keeps one renderer per presentation.
+                    .environment(\.settingsPresentationID, presentation.request.presentationID)
                     .task(id: presentation.request.presentationID) {
                         // Once per presentation (1 l10): the Mic shortcut's destination scrolls to Audio; the voice
                         // hint's destination pushes the Voice page (R6-5).
@@ -93,6 +101,8 @@ private struct SettingsPanelLeaves: View {
                 settings.panelDidOpen()
                 await SettingsTaskLifetime.waitForCancellation()
                 settings.panelDidClose()
+                // L6-3: the presentation's preview renderer goes with it.
+                SettingsPreviewRendererCache.shared.release(presentationID: presentationID)
             }
             .onChange(of: destinationSequence) { _, _ in
                 guard let request = panels.latestDestination(for: presentationID) else { return }
@@ -139,11 +149,11 @@ private struct SettingsSectionView<Route: Hashable>: View {
     var body: some View {
         switch section.section {
         case .audio: SettingsAudioSection(rows: section.rows, settings: settings, link: link)
-        case .video: SettingsVideoSection(rows: section.rows, settings: settings)
+        case .video: SettingsVideoSection(rows: section.rows, settings: settings, link: link)
         case .captions: SettingsCaptionsSection(rows: section.rows, settings: settings, onOpenTranscript: onOpenTranscript)
         case .chat: SettingsChatSection(rows: section.rows, settings: settings, link: link)
         case .host: SettingsHostSection(rows: section.rows, settings: settings, link: link)
-        case .general: SettingsGeneralSection(rows: section.rows, settings: settings)
+        case .general: SettingsGeneralSection(rows: section.rows, settings: settings, link: link)
         case .account: SettingsAccountSection(rows: section.rows, settings: settings)
         case .about: SettingsAboutSection(rows: section.rows, settings: settings, link: link)
         }
@@ -193,30 +203,74 @@ private struct SettingsAudioSection<Route: Hashable>: View {
     }
 }
 
-private struct SettingsVideoSection: View {
+private struct SettingsVideoSection<Route: Hashable>: View {
     let rows: [SettingsRowID]
     let settings: SettingsPresenter
+    let link: (SettingsRoute) -> Route?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         let video = settings.video
         Section {
             ForEach(rows, id: \.self) { row in
-                if row == SettingsRowID.cameraFacing {
+                switch row {
+                case .cameraFacing:
+                    // L6-3: the preview card sits above the Camera row (both are in-call participant rows).
+                    SettingsLivePreviewCard(settings: settings)
+                        .listRowInsets(EdgeInsets())
                     LabeledContent(SettingsCopy.rowTitle(.cameraFacing)) {
                         facingPicker(video)
                     }
                     .disabled(!video.canFlipCamera || video.isFlipInFlight)
                     .accessibilityIdentifier("settings.row.cameraFacing")
+                case .mirror:
+                    Toggle(SettingsCopy.rowTitle(.mirror),
+                           isOn: Binding(get: { video.mirrorsSelfView }, set: { settings.setMirrorsSelfView($0) }))
+                        .disabled(video.isAudioOnly)
+                        .accessibilityIdentifier("settings.row.mirror")
+                case .cameraQuality:
+                    if let value = link(SettingsRoute.cameraQuality) {
+                        NavigationLink(value: value) {
+                            LabeledContent(SettingsCopy.rowTitle(.cameraQuality),
+                                           value: SettingsCopy.cameraPreset(video.effectiveCameraPreset))
+                        }
+                        .accessibilityIdentifier("settings.row.cameraQuality")
+                    }
+                case .screenShareQuality:
+                    if let value = link(SettingsRoute.screenShareQuality) {
+                        NavigationLink(value: value) {
+                            LabeledContent(SettingsCopy.rowTitle(.screenShareQuality),
+                                           value: SettingsCopy.screenSharePreset(video.screenSharePreset))
+                        }
+                        .accessibilityIdentifier("settings.row.screenShareQuality")
+                    }
+                case .dataSaver:
+                    Toggle(SettingsCopy.rowTitle(.dataSaver),
+                           isOn: Binding(get: { video.dataSaverOn }, set: { settings.setDataSaver($0) }))
+                        .disabled(video.systemDataSaverOn)
+                        .accessibilityIdentifier("settings.row.dataSaver")
+                default:
+                    // Effects lands with SET-6 (EffectsAvailability); hidden until then (D11).
+                    EmptyView()
                 }
-                // Mirror, Camera Quality, Screen Share Quality, Data Saver and Effects land with SET-3 and SET-6.
             }
         } header: {
             Text(SettingsCopy.sectionTitle(.video))
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                if let reason = SettingsCopy.reason(video.flipReason) {
+                if rows.contains(SettingsRowID.mirror) {
+                    Text(SettingsCopy.videoFooter())
+                }
+                if rows.contains(SettingsRowID.cameraFacing), let reason = SettingsCopy.reason(video.flipReason) {
                     Text(reason)
+                }
+                if rows.contains(SettingsRowID.dataSaver), video.systemDataSaverOn,
+                   let reason = SettingsCopy.reason(SettingsReason.systemDataSaver) {
+                    Text(reason).accessibilityIdentifier("settings.video.systemDataSaver")
+                }
+                if rows.contains(SettingsRowID.cameraQuality), video.qualityCappedByHost,
+                   let reason = SettingsCopy.reason(SettingsReason.hostQualityCap) {
+                    Text(reason).accessibilityIdentifier("settings.video.hostQualityCap")
                 }
                 if video.flipFailed {
                     Text(ConclaveStrings.text("Couldn\u{2019}t switch cameras. Try again."))
@@ -361,9 +415,10 @@ private struct SettingsHostSection<Route: Hashable>: View {
     }
 }
 
-private struct SettingsGeneralSection: View {
+private struct SettingsGeneralSection<Route: Hashable>: View {
     let rows: [SettingsRowID]
     let settings: SettingsPresenter
+    let link: (SettingsRoute) -> Route?
 
     var body: some View {
         let general = settings.general
@@ -371,9 +426,16 @@ private struct SettingsGeneralSection: View {
             ForEach(rows, id: \.self) { row in
                 switch row {
                 case .connection:
-                    // The value row until SET-3 lands the Connection page (C6-9).
-                    LabeledContent(SettingsCopy.rowTitle(.connection), value: SettingsCopy.connectionValue(general.connection))
+                    // SET-3 (C6-9): pushes the Connection page; the value is the one shared label (R21).
+                    if let value = link(SettingsRoute.connection) {
+                        NavigationLink(value: value) {
+                            LabeledContent(SettingsCopy.rowTitle(.connection), value: SettingsCopy.connectionValue(general.connection))
+                        }
                         .accessibilityIdentifier("settings.row.connection")
+                    } else {
+                        LabeledContent(SettingsCopy.rowTitle(.connection), value: SettingsCopy.connectionValue(general.connection))
+                            .accessibilityIdentifier("settings.row.connection")
+                    }
                 case .messageNotifications:
                     LabeledContent(SettingsCopy.rowTitle(.messageNotifications),
                                    value: general.messageNotificationsOn ? ConclaveStrings.text("On") : ConclaveStrings.text("Off"))
@@ -475,8 +537,10 @@ private struct SettingsAboutSection<Route: Hashable>: View {
                     LabeledContent(SettingsCopy.rowTitle(.version), value: MeetingDetailsCopy.versionText())
                         .textSelection(.enabled)
                         .accessibilityIdentifier("settings.row.version")
+                case .exportDiagnostics:
+                    // S70 15 b, e (R70-4): a Button with no chevron, its footer under the title; failure inline (D20).
+                    DiagnosticsExportRow(presenter: DiagnosticsExportPresenter.shared)
                 default:
-                    // Export Diagnostics: SYS-15 (batch 7) adds the action with `canExportDiagnostics`.
                     EmptyView()
                 }
             }
@@ -503,6 +567,9 @@ struct SettingsPage: View {
             SettingsVoiceRecordPage(settings: settings)
         case .privacy:
             PrivacyPolicyScreen()
+        case .cameraQuality, .cameraAdvanced, .screenShareQuality, .screenShareAdvanced, .connection:
+            // SET-3 (S60 2 c): VideoPages+iOS.swift.
+            SettingsVideoPage(route: route, settings: settings, link: { route in route })
         default:
             if let page = SettingsRoutePolicy.peopleRoute(route) {
                 if let people {

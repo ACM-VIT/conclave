@@ -46,23 +46,33 @@ import androidx.compose.ui.unit.dp
  * host's PanelPageStack in a call, the local stack in the app scope). No Android in-app haptics switch (the system
  * setting governs, F00 8); selectionChanged plays only on the Camera segmented row, after the flip is dispatched (R13).
  * Failures raised here use the page snackbar (D23), never the stage toast lane.
+ *
+ * SET-3 (S60 1 d Video and General rows; L6-3): the dark LivePreviewCard is its own list item right before the Camera
+ * row (the card rides on the in-call camera facing row, so the shared row ids stay as they are), followed by Mirror my
+ * video, Camera quality, Screen share quality and Data saver, then the Video footer; Connection pushes its page.
  */
 
-internal enum class SettingsItemKind { Header, Row, Footer }
+internal enum class SettingsItemKind { Header, Row, Footer, Card }
 
 internal data class SettingsListItem(val key: String, val kind: SettingsItemKind, val section: SettingsSection, val row: SettingsRowID? = null)
 
-/** Headers, rows and the one section footer (host sounds), in S60 1 b order. Pure. */
+/**
+ * Headers, rows, the preview card (SET-3, before the Camera row) and the section footers (host sounds; the Video
+ * footer, which shows the host's quality limit while it applies), in S60 1 b order. Pure.
+ */
 internal fun settingsListItems(sections: List<SettingsRowSection>): List<SettingsListItem> {
     val items = mutableListOf<SettingsListItem>()
     for (section in sections) {
         items.add(SettingsListItem("h:${section.id}", SettingsItemKind.Header, section.section))
-        var hasSounds = false
+        var hasFooter = false
         for (row in section.rows) {
+            if (row == SettingsRowID.cameraFacing) {
+                items.add(SettingsListItem("c:preview", SettingsItemKind.Card, section.section))
+            }
             items.add(SettingsListItem("r:${row.rawValue}", SettingsItemKind.Row, section.section, row))
-            if (row == SettingsRowID.knockSound) hasSounds = true
+            if (row == SettingsRowID.knockSound || row == SettingsRowID.cameraQuality) hasFooter = true
         }
-        if (hasSounds) items.add(SettingsListItem("f:${section.id}", SettingsItemKind.Footer, section.section))
+        if (hasFooter) items.add(SettingsListItem("f:${section.id}", SettingsItemKind.Footer, section.section))
     }
     return items
 }
@@ -84,8 +94,8 @@ internal fun SettingsRootList(
             when (item.kind) {
                 SettingsItemKind.Header -> ConclaveSectionHeader(title = conclaveString(SettingsCopy.sectionName(item.section)),
                     identifier = "settings.header.${item.section.rawValue}")
-                SettingsItemKind.Footer -> ConclaveSectionFooter(text = conclaveString("set_host_sounds_detail"),
-                    identifier = "settings.footer.${item.section.rawValue}")
+                SettingsItemKind.Footer -> SettingsSectionFooterItem(settings, item.section)
+                SettingsItemKind.Card -> LivePreviewCard(settings, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 SettingsItemKind.Row -> {
                     val row = item.row
                     if (row != null) SettingsRootRow(settings, row, onPush, onOpenTranscript, onSignOut = { confirmSignOut = true })
@@ -94,6 +104,8 @@ internal fun SettingsRootList(
         }
     }
     SettingsFlipFailureSnackbar(settings, snackbar)
+    // S70 15 f, l5 (SYS-15): the export opens the chooser once and shows its failure in this page's snackbar.
+    DiagnosticsExportEffects(DiagnosticsExportPresenter.shared, snackbar)
     if (confirmSignOut) SettingsSignOutDialog(settings, onDismiss = { confirmSignOut = false })
 }
 
@@ -162,10 +174,35 @@ private fun SettingsRootRow(
             SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), general.handSoundOn, tag) { settings.setHandSound(it) }
         }
         SettingsRowID.connection -> {
-            // The value row until SET-3 lands the Connection page (C6-9).
+            // SET-3 (C6-9): pushes the Connection page; the value is the one shared label (R21).
             val general = settings.general
-            ConclaveValueRow(title = conclaveString(SettingsCopy.rowName(row)), value = conclaveString(SettingsCopy.connectionName(general.connection)),
-                identifier = tag)
+            SettingsNavItem(conclaveString(SettingsCopy.rowName(row)), conclaveString(SettingsCopy.connectionName(general.connection)), tag) {
+                onPush(SettingsRoute.connection.rawValue)
+            }
+        }
+        SettingsRowID.mirror -> {
+            val video = settings.video
+            // 1 f: Audio Only disables Camera, Mirror and the preview (Data saver stays editable).
+            SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), video.mirrorsSelfView, tag, enabled = !video.isAudioOnly,
+                supporting = conclaveString("set_mirror_detail")) { settings.setMirrorsSelfView(it) }
+        }
+        SettingsRowID.cameraQuality -> {
+            val video = settings.video
+            SettingsNavItem(conclaveString(SettingsCopy.rowName(row)), conclaveString(SettingsCopy.cameraPresetName(video.effectiveCameraPreset)), tag) {
+                onPush(SettingsRoute.cameraQuality.rawValue)
+            }
+        }
+        SettingsRowID.screenShareQuality -> {
+            val video = settings.video
+            SettingsNavItem(conclaveString(SettingsCopy.rowName(row)), conclaveString(SettingsCopy.screenSharePresetName(video.screenSharePreset)), tag) {
+                onPush(SettingsRoute.screenShareQuality.rawValue)
+            }
+        }
+        SettingsRowID.dataSaver -> {
+            val video = settings.video
+            SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), video.dataSaverOn, tag, enabled = !video.systemDataSaverOn,
+                supporting = conclaveString("set_data_saver_detail"),
+                secondary = if (video.systemDataSaverOn) conclaveString("set_system_data_saver") else null) { settings.setDataSaver(it) }
         }
         SettingsRowID.messageNotifications -> {
             val general = settings.general
@@ -197,10 +234,23 @@ private fun SettingsRootRow(
             val version = remember { meetingDetailsVersionName(context) }
             ConclaveValueRow(title = conclaveString("set_version"), value = version, identifier = tag)
         }
-        // Haptics is iOS only (F00 8); Export Diagnostics is SYS-15's; the camera quality, share quality, mirror, Data
-        // Saver and Effects rows land with SET-3 and SET-6.
-        SettingsRowID.haptics, SettingsRowID.exportDiagnostics, SettingsRowID.mirror, SettingsRowID.cameraQuality,
-        SettingsRowID.screenShareQuality, SettingsRowID.dataSaver, SettingsRowID.effects -> Unit
+        SettingsRowID.exportDiagnostics -> DiagnosticsExportItem(DiagnosticsExportPresenter.shared, tag)
+        // Haptics is iOS only (F00 8); Effects lands with SET-6 (EffectsAvailability).
+        SettingsRowID.haptics, SettingsRowID.effects -> Unit
+    }
+}
+
+/** The section footers: host sounds (C6-24) and the Video footer with its reasons (1 f, 1 g). */
+@Composable
+private fun SettingsSectionFooterItem(settings: SettingsPresenter, section: SettingsSection) {
+    val identifier = "settings.footer.${section.rawValue}"
+    if (section != SettingsSection.video) {
+        ConclaveSectionFooter(text = conclaveString("set_host_sounds_detail"), identifier = identifier)
+        return
+    }
+    val video = settings.video
+    if (video.qualityCappedByHost) {
+        ConclaveSectionFooter(text = conclaveString("set_host_quality_cap"), identifier = "$identifier.hostQualityCap")
     }
 }
 

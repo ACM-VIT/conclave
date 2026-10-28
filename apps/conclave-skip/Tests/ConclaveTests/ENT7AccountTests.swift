@@ -469,7 +469,7 @@ struct ENT7AccountTests {
         #expect(flat.contains("Button(ConclaveStrings.text(\"Delete Account\"), role: .destructive) { account.deleteAccount() }"))
         #expect(flat.contains(".listStyle(.insetGrouped)"))
         // R26 (SET-1): the Settings row pushes the app-scope Settings on the sheet's own stack.
-        #expect(source.contains("ConclaveStrings.text(\"Settings\")") && source.contains("case privacy, settings, settingsVoice"))
+        #expect(source.contains("ConclaveStrings.text(\"Settings\")") && source.contains("case privacy, settings, settingsVoice, settingsCameraQuality, settingsCameraAdvanced"))
         #expect(flat.contains("case .settings: SettingsAppScopeList(settings: appSettings, link: { AccountRoute.settingsLink($0) })"))
         #expect(!source.contains(".preferredColorScheme"))
         let privacy = ent7Flat(try ent7Source("Sources/Conclave/Features/Account/PrivacyPolicyScreen+iOS.swift"))

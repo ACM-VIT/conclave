@@ -103,8 +103,11 @@ final class WebRTCClient {
         visibleUserIds: Set<String>,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
-        receiveVideo: Bool
-    ) async { }
+        receiveVideo: Bool,
+        dataSaver: Bool = false
+    ) async {
+        testLastReceiveDataSaver = dataSaver
+    }
     func updateVideoQuality(_ quality: VideoQuality) { }
     func updateMediaPublishConfiguration(
         cameraWidth: Int,
@@ -299,5 +302,16 @@ final class WebRTCClient {
     func applyNoiseSuppression(_ enabled: Bool) async -> Bool { false }
     func sampleLocalMicrophoneLevel() -> Double { 0 }
     func playTestTone() { }
+
+    // S60 C6-3, C6-5, C6-9, D11 (SET-3): the silent host has no camera and no transports.
+    /// Host-test seam: the Data Saver value of the last receive policy pass (C6-5).
+    private(set) var testLastReceiveDataSaver = false
+    /// Host-test seam: the reading `sampleConnectionStatsCounters()` returns (nil = no stats).
+    var testConnectionStats: ConnectionStatsCounters?
+    var mirrorsLocalVideo: Bool {
+        LocalVideoMirrorPolicy.mirrors(isFront: currentCameraFacing == .front, preference: LocalVideoMirrorPreference.shared.isOn)
+    }
+    func cameraCaptureCapability() -> CameraCaptureCapability { CameraCaptureCapability.unknown }
+    func sampleConnectionStatsCounters() -> ConnectionStatsCounters? { testConnectionStats }
 }
 #endif

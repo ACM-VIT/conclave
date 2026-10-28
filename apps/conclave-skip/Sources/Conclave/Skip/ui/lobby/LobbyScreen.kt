@@ -57,7 +57,8 @@ import androidx.compose.ui.unit.dp
  * the bottom bar `lobbyStatus`, the title `lobbyLink` and `lobbyPresence`, the identity items `lobbyIdentity`, the
  * Audio row `lobbyAudio`. Intent reaches the core only through the presenter (S10 0.8 C1, C2; D14). Back is the
  * premeeting host's NavDisplay handler in editing (a pop); while connecting or waiting LobbyBusyBackHandler takes it
- * (Cancel, or the Stop asking confirmation) so the gesture never previews Home.
+ * (Cancel, or the Stop asking confirmation) so the gesture never previews Home. ENT-4 (S10 7 d): the permission
+ * priming rows under the card and the ON_RESUME re-read live in PermissionPrimingRow.kt.
  */
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,6 +72,8 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
     val cache = remember(routeId) { LobbyUiCache() }
     val snackbarHostState = remember { SnackbarHostState() }
     LobbyBusyBackHandler(premeeting, routeId, onBack)
+    // ENT-4 (S10 7 d): back from Settings, the permissions are read again.
+    PermissionPrimingResumeEffect(premeeting, routeId)
     val scheme = MaterialTheme.colorScheme
     Scaffold(
         topBar = { LobbyTopBar(premeeting, key, onBack) },
@@ -118,6 +121,9 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
     val card = cache.card(media)
     // ENT-5 (S10 8 d, L10): the entry expansion starts from this card's bounds (a plain holder write).
     val anchors = LocalEntryTransitionAnchors.current
+    // RECONCILE R31 (SET-6, HD request B7-T2 R7): the Effects sheet over the lobby while an engine publishes it.
+    var showsEffectsSheet by remember { mutableStateOf(false) }
+    val lobbyEffects = remember { EffectsPresenter(scope = EffectsScope.lobby) }
     HostingTheme(inCall = true) {
         LobbyPreviewCard(
             card = card,
@@ -125,10 +131,18 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
             onMic = { premeeting.setMicIntent(it) },
             onCamera = { premeeting.setCameraIntent(it) },
             onFlip = { premeeting.flipCamera() },
-            onEffects = { premeeting.openEffects() },
+            onEffects = {
+                premeeting.openEffects()
+                if (media.showsEffects) showsEffectsSheet = true
+            },
             onOpenSettings = { premeeting.openSystemSettings() },
             modifier = modifier.entryTransitionAnchor(anchors, routeId),
         )
+        if (showsEffectsSheet) {
+            // R31: the in-call Effects sheet over the lobby (the panels' LayoutSheetHost); the preview is the lobby's own.
+            EffectsLobbySheet(lobbyEffects, onClosed = { showsEffectsSheet = false },
+                preview = { LocalPreviewSurface(card.previewSessionId) })
+        }
     }
 }
 
@@ -137,7 +151,8 @@ private fun LobbyControls(premeeting: PremeetingPresenter, routeId: Int, snackba
     // S50 PH20 (RECONCILE R30): the promotion lobby keeps your identity and has no link or Share.
     val isPromotion = premeeting.lobbyStatus?.takeIf { it.routeId == routeId }?.intent == LobbyIntent.promotion
     LobbyIssueBanner(premeeting, routeId)
-    LobbyMicrophonePermissionBanner(premeeting)
+    // ENT-4 (S10 7 d): the permission priming rows (rationale with Allow and Not now, or Open settings).
+    PermissionPrimingRows(premeeting, routeId)
     LobbyAudioItem(premeeting)
     if (!isPromotion) {
         LobbyIdentityItems(premeeting, routeId)
@@ -208,7 +223,7 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
     }
 }
 
-// MARK: Issues (S10 6 f; 7 d)
+// MARK: Issues (S10 6 f)
 
 @Composable
 private fun LobbyIssueBanner(premeeting: PremeetingPresenter, routeId: Int) {
@@ -235,28 +250,6 @@ private fun LobbyIssueBanner(premeeting: PremeetingPresenter, routeId: Int) {
         kind = ConclaveBannerKind.Warning,
         text = text,
         identifier = "lobby.issue",
-        inCall = false,
-        modifier = Modifier.padding(horizontal = 16.dp),
-        actions = actions,
-    )
-}
-
-@Composable
-private fun LobbyMicrophonePermissionBanner(premeeting: PremeetingPresenter) {
-    val media = premeeting.lobbyMedia ?: return
-    val permission = media.micPermission
-    if (permission != MediaPermissionState.denied && permission != MediaPermissionState.restricted) return
-    val body = if (permission == MediaPermissionState.restricted) conclaveString("pm_mic_restricted") else conclaveString("pm_mic_denied_body")
-    val actions = if (permission == MediaPermissionState.denied) {
-        listOf(ConclaveBannerAction(conclaveString("pm_open_settings"), "lobby.microphone.openSettings",
-            onClick = { premeeting.openSystemSettings() }))
-    } else {
-        emptyList()
-    }
-    ConclaveBanner(
-        kind = ConclaveBannerKind.Warning,
-        text = conclaveString("pm_mic_denied_title") + "\n" + body,
-        identifier = "lobby.microphone.denied",
         inCall = false,
         modifier = Modifier.padding(horizontal = 16.dp),
         actions = actions,

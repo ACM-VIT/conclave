@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
  * pops a page first with predictive progress, and the stack survives a move between the overlay and the side pane);
  * in the app scope they live on AppSettingsScreen's own saved stack. Host mirror keys render the S50 Host Controls
  * pages (R6-3), whose PeopleRoute pushes map back to Settings keys, so one homogeneous stack holds every page.
+ * SET-3 adds Camera quality, Share quality, their Advanced pages and Connection (VideoPages.kt).
  */
 
 /** The route a stack key names; the root for no key or an unknown one. */
@@ -49,6 +50,12 @@ internal fun SettingsPageContent(
         route == SettingsRoute.voice -> SettingsVoicePage(settings, reservation, snackbar, onPush)
         route == SettingsRoute.voiceRecord -> SettingsVoiceRecordPage(settings, reservation)
         route == SettingsRoute.privacy -> SettingsPrivacyPage(reservation)
+        // SET-3 (S60 2 d): VideoPages.kt.
+        route == SettingsRoute.cameraQuality -> SettingsCameraQualityPage(settings, reservation, onPush)
+        route == SettingsRoute.cameraAdvanced -> SettingsAdvancedPage(settings, reservation, isScreenShare = false)
+        route == SettingsRoute.screenShareQuality -> SettingsShareQualityPage(settings, reservation, onPush)
+        route == SettingsRoute.screenShareAdvanced -> SettingsAdvancedPage(settings, reservation, isScreenShare = true)
+        route == SettingsRoute.connection -> SettingsConnectionPage(settings, reservation)
         peopleRoute != null && people != null -> HostPageContent(people, peopleRoute.rawValue, reservation, snackbar,
             onPush = { raw ->
                 val next = SettingsRoutePolicy.hostRouteForPeopleRoute(rawValue = raw)

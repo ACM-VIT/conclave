@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 enum NativeMediaResolution: String, Codable, CaseIterable, Identifiable {
     case p360 = "360p"
@@ -543,13 +544,15 @@ enum NativeMediaQualityPolicy {
 enum NativeMediaQualityPreferences {
     static let storageKey = "conclave:media-quality-settings:v1"
 
-    static func load() -> NativeMediaQualitySettings {
-        decode(UserDefaults.standard.string(forKey: storageKey))
+    /// SET-3 (S60 C6-4): the persisted camera and screen share limits. The Settings presenter writes them (Camera
+    /// Quality, Share Quality and their Advanced pages); the core reads them in its publish resolver.
+    static func load(defaults: UserDefaults = UserDefaults.standard) -> NativeMediaQualitySettings {
+        decode(defaults.string(forKey: storageKey))
     }
 
-    static func save(_ settings: NativeMediaQualitySettings) {
+    static func save(_ settings: NativeMediaQualitySettings, defaults: UserDefaults = UserDefaults.standard) {
         guard let value = encode(settings) else { return }
-        UserDefaults.standard.set(value, forKey: storageKey)
+        defaults.set(value, forKey: storageKey)
     }
 
     static func decode(_ value: String?) -> NativeMediaQualitySettings {
@@ -565,6 +568,206 @@ enum NativeMediaQualityPreferences {
         let normalized = NativeMediaQualityPolicy.normalized(settings)
         guard let data = try? JSONEncoder().encode(normalized) else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+}
+
+// MARK: - Video preferences and options (SET-3: S60 2, 0.8 C6-3, C6-4, C6-5, C6-29, D11, D21; S70 SY22)
+//
+// The persisted video preferences beside the quality limits: Mirror My Video (C6-3: your own local renderers with the
+// front camera only, never the sent stream), Data Saver (C6-5, D21: the 360p at 20 fps publish ceiling, which also
+// lowers what you receive; on while the system asks too) and Share Device Audio (C6-29, default off, read by the
+// screen-share start). The Settings presenter writes them; the core's publish resolver and receive policy and the
+// WebRTC clients read them. The picker and Advanced options live here so both platforms list the same values.
+
+enum NativeVideoPreferences {
+    static let mirrorSelfViewKey = "conclave.pref.mirrorSelfView"
+    static let dataSaverKey = "conclave.pref.dataSaver"
+    static let shareDeviceAudioKey = "conclave.pref.shareDeviceAudio"
+
+    /// C6-3, default on.
+    static func mirrorsSelfView(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+        boolValue(mirrorSelfViewKey, fallback: true, defaults: defaults)
+    }
+
+    static func setMirrorsSelfView(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+        defaults.set(on, forKey: mirrorSelfViewKey)
+    }
+
+    /// C6-5, default off: the person's switch only; the effective value also honors the system signal
+    /// (`DataSaverPolicy.isOn`).
+    static func dataSaver(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+        boolValue(dataSaverKey, fallback: false, defaults: defaults)
+    }
+
+    static func setDataSaver(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+        defaults.set(on, forKey: dataSaverKey)
+    }
+
+    /// C6-29, default off; honored only while the S70 10 `canShareDeviceAudio` capability holds.
+    static func shareDeviceAudio(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+        boolValue(shareDeviceAudioKey, fallback: false, defaults: defaults)
+    }
+
+    static func setShareDeviceAudio(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+        defaults.set(on, forKey: shareDeviceAudioKey)
+    }
+
+    private static func boolValue(_ key: String, fallback: Bool, defaults: UserDefaults) -> Bool {
+        if defaults.object(forKey: key) == nil { return fallback }
+        return defaults.bool(forKey: key)
+    }
+}
+
+/// C6-3: who mirrors. Pure, so both platforms and the host tests apply one rule.
+enum LocalVideoMirrorPolicy {
+    /// Your own local renderers (the stage self view, the Settings preview, the lobby card) mirror only with the
+    /// front camera and only while Mirror My Video is on; the rear camera never mirrors.
+    static func mirrors(isFront: Bool, preference: Bool) -> Bool {
+        isFront && preference
+    }
+
+    /// The sent stream is never mirrored, whatever the preference says (the capturers deliver unmirrored frames).
+    static let mirrorsSentStream = false
+}
+
+/// C6-3: the Mirror My Video value the local renderers read (one observed property, changed only by Settings), so a
+/// renderer leaf follows the preference without reading the store in a body. Loaded once from the store.
+@MainActor
+@Observable
+final class LocalVideoMirrorPreference {
+    static let shared = LocalVideoMirrorPreference()
+
+    private(set) var isOn: Bool = true
+
+    init(defaults: UserDefaults = UserDefaults.standard) {
+        isOn = NativeVideoPreferences.mirrorsSelfView(defaults: defaults)
+    }
+
+    func update(_ on: Bool) {
+        if isOn != on { isOn = on }
+    }
+}
+
+/// C6-5, C6-4, D21: one Data Saver.
+enum DataSaverPolicy {
+    /// The switch reads on when the person turned it on or the system asks (iOS Low Data Mode `NWPath.isConstrained`;
+    /// Android Data Saver, `getRestrictBackgroundStatus() == RESTRICT_BACKGROUND_STATUS_ENABLED`).
+    static func isOn(preference: Bool, systemDataSaver: Bool) -> Bool {
+        preference || systemDataSaver
+    }
+
+    /// The 360p at 20 fps publish ceiling applies for Data Saver and for the host's quality limit (server
+    /// `setVideoQuality` low maps here, with `qualityCappedByHost`). It composes with the transient system send
+    /// ceiling in `NativeMediaQualityPolicy.effectiveCamera` (S70 SY22).
+    static func appliesPublishCeiling(dataSaverOn: Bool, qualityCappedByHost: Bool) -> Bool {
+        dataSaverOn || qualityCappedByHost
+    }
+
+    /// The receive half (C6-5): Data Saver lowers what you receive the way the legacy low quality flag did (smaller
+    /// layers for visible video, off-screen video paused while the connection is poor).
+    static func reducesReceive(isLowQuality: Bool, dataSaverOn: Bool) -> Bool {
+        isLowQuality || dataSaverOn
+    }
+}
+
+/// What the device camera can capture (D11: Advanced lists only what it supports). 0 means unknown (every option
+/// stays listed).
+struct CameraCaptureCapability: Equatable {
+    let maxHeight: Int
+    let maxFrameRate: Int
+
+    init(maxHeight: Int, maxFrameRate: Int) {
+        self.maxHeight = maxHeight
+        self.maxFrameRate = maxFrameRate
+    }
+
+    static let unknown = CameraCaptureCapability(maxHeight: 0, maxFrameRate: 0)
+}
+
+/// The Camera Quality and Share Quality options (S60 2 c, g; D21: the picker lists Auto, HD, Studio and Custom, and
+/// the data-saver preset is the Data Saver switch). Pure and shared.
+enum NativeQualityOptions {
+    static let cameraBitrateMinKbps = 150
+    static let cameraBitrateMaxKbps = 6_000
+    static let cameraBitrateStepKbps = 50
+    static let screenBitrateMinKbps = 300
+    static let screenBitrateMaxKbps = 10_000
+    static let screenBitrateStepKbps = 100
+
+    /// Camera presets the device supports (unsupported presets are absent, 2 f): HD needs 1080p capture, Studio
+    /// 1080p at 60 fps.
+    static func cameraPresets(capability: CameraCaptureCapability) -> [NativeCameraQualityPreset] {
+        let supports1080 = capability.maxHeight <= 0 || capability.maxHeight >= NativeMediaResolution.p1080.height
+        let supports60 = capability.maxFrameRate <= 0 || capability.maxFrameRate >= 60
+        var result: [NativeCameraQualityPreset] = [NativeCameraQualityPreset.auto]
+        if supports1080 { result.append(NativeCameraQualityPreset.highDefinition) }
+        if supports1080 && supports60 { result.append(NativeCameraQualityPreset.studio) }
+        result.append(NativeCameraQualityPreset.custom)
+        return result
+    }
+
+    /// The picker's selection for a saved preset: the legacy data-saver preset reads as Auto (its ceiling is the
+    /// Data Saver switch now, D21).
+    static func cameraSelection(_ preset: NativeCameraQualityPreset) -> NativeCameraQualityPreset {
+        preset == NativeCameraQualityPreset.dataSaver ? NativeCameraQualityPreset.auto : preset
+    }
+
+    static func cameraResolutions(capability: CameraCaptureCapability) -> [NativeMediaResolution] {
+        var result: [NativeMediaResolution] = []
+        for resolution in NativeMediaResolution.allCases {
+            if resolution == NativeMediaResolution.p360 || capability.maxHeight <= 0 || resolution.height <= capability.maxHeight {
+                result.append(resolution)
+            }
+        }
+        return result
+    }
+
+    static func cameraFrameRates(capability: CameraCaptureCapability) -> [Int] {
+        var result: [Int] = []
+        for rate in NativeMediaQualityPolicy.cameraFrameRateOptions {
+            if rate <= 15 || capability.maxFrameRate <= 0 || rate <= capability.maxFrameRate {
+                result.append(rate)
+            }
+        }
+        return result
+    }
+
+    static let cameraOptimizeOptions: [NativeCameraContentHint] = [NativeCameraContentHint.motion, NativeCameraContentHint.detail]
+    static let cameraPressureOptions: [NativeMediaDegradationPreference] = [
+        NativeMediaDegradationPreference.maintainFramerate,
+        NativeMediaDegradationPreference.balanced,
+        NativeMediaDegradationPreference.maintainResolution
+    ]
+
+    static let screenSharePresets: [NativeScreenShareQualityPreset] = [
+        NativeScreenShareQualityPreset.auto,
+        NativeScreenShareQualityPreset.presentation,
+        NativeScreenShareQualityPreset.motion,
+        NativeScreenShareQualityPreset.custom
+    ]
+    static let screenShareResolutions: [NativeMediaResolution] = [
+        NativeMediaResolution.p720,
+        NativeMediaResolution.p1080,
+        NativeMediaResolution.p1440,
+        NativeMediaResolution.p2160
+    ]
+    static let screenShareOptimizeOptions: [NativeScreenShareContentHint] = [
+        NativeScreenShareContentHint.text,
+        NativeScreenShareContentHint.detail,
+        NativeScreenShareContentHint.motion
+    ]
+    static let screenSharePressureOptions: [NativeMediaDegradationPreference] = [
+        NativeMediaDegradationPreference.maintainResolution,
+        NativeMediaDegradationPreference.balanced,
+        NativeMediaDegradationPreference.maintainFramerate
+    ]
+
+    /// A bitrate snapped to the slider's step inside its range.
+    static func snappedBitrate(_ kbps: Int, minimum: Int, maximum: Int, step: Int) -> Int {
+        let clamped = min(maximum, max(minimum, kbps))
+        if step <= 1 { return clamped }
+        let steps = (clamped - minimum + step / 2) / step
+        return min(maximum, minimum + steps * step)
     }
 }
 

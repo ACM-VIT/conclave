@@ -23,6 +23,9 @@ final class NetworkReachabilityMonitor {
     var onThermalLevelChanged: ((SystemThermalLevel) -> Void)?
     /// S70 6 c (O10): Low Power Mode, published once on start and then on every change.
     var onLowPowerModeChanged: ((Bool) -> Void)?
+    /// SET-3 (S60 C6-5): iOS Low Data Mode (`NWPath.isConstrained` on a satisfied path), published on change.
+    var onSystemDataSaverChanged: ((Bool) -> Void)?
+    private var lastSystemDataSaver: Bool?
 
     #if canImport(Network) && !SKIP
     private var monitor: NWPathMonitor?
@@ -45,9 +48,11 @@ final class NetworkReachabilityMonitor {
         monitor.pathUpdateHandler = { [weak self] path in
             let isOffline = path.status != .satisfied
             let qualityHint = Self.qualityHint(for: path)
+            let isConstrained = path.status == .satisfied && path.isConstrained
             Task { @MainActor in
                 self?.onStatusChanged?(isOffline)
                 self?.onQualityHintChanged?(qualityHint)
+                self?.publishSystemDataSaver(isConstrained)
             }
         }
         monitor.start(queue: queue)
@@ -61,6 +66,7 @@ final class NetworkReachabilityMonitor {
         #if canImport(Network) && !SKIP
         monitor?.cancel()
         monitor = nil
+        lastSystemDataSaver = nil
         #endif
         stopSystemPressureObservers()
     }
@@ -92,6 +98,12 @@ final class NetworkReachabilityMonitor {
         }
     }
     #endif
+
+    private func publishSystemDataSaver(_ isOn: Bool) {
+        guard isOn != lastSystemDataSaver else { return }
+        lastSystemDataSaver = isOn
+        onSystemDataSaverChanged?(isOn)
+    }
 
     // MARK: - System pressure (iOS only; the macOS host registers nothing, so host tests drive the core directly)
 

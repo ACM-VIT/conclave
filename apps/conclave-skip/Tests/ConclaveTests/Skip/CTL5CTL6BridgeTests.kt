@@ -25,8 +25,9 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class CTL5CTL6BridgeTests {
-    private val guestIds = listOf("reactions", "hand", "screenShare", "captions", "flipCamera", "participants", "activities", "settings",
-        "invite", "copyLink", "meetingDetails")
+    // Batch 7 (TRN-2, SET-5): Transcript and Layout landed, so both rows show between Activities and Settings.
+    private val guestIds = listOf("reactions", "hand", "screenShare", "captions", "flipCamera", "participants", "activities", "transcript",
+        "layout", "settings", "invite", "copyLink", "meetingDetails")
     private val hostIds = guestIds + listOf("hostControls", "lockMeeting", "endForEveryone")
 
     private fun <T> list(array: skip.lib.Array<T>): List<T> {
@@ -51,8 +52,9 @@ class CTL5CTL6BridgeTests {
         val webinar = ControlsFixtureSession(state = ControlsFixtureState.webinarHost).controls
         assertEquals(2, webinar.more.item(MoreItemID.qa)?.count)
         assertEquals(true, webinar.bar.control(CallControlKind.more)?.showsDot)
-        // Rows whose panel has not landed stay hidden; no voice agent (Owner OQ7).
-        assertFalse(ids(ControlsFixtureState.webinarHost).any { it == "transcript" || it == "layout" || it == "effects" })
+        // Transcript and Layout landed (batch 7); Effects waits for its availability (OQ6 default A); no voice agent (Owner OQ7).
+        assertTrue(ids(ControlsFixtureState.webinarHost).contains("transcript") && ids(ControlsFixtureState.webinarHost).contains("layout"))
+        assertFalse(ids(ControlsFixtureState.webinarHost).any { it == "effects" })
         assertFalse(MoreItemID.values().any { it.rawValue.lowercase().contains("voice") })
     }
 
@@ -76,13 +78,14 @@ class CTL5CTL6BridgeTests {
 
     @Test fun menuBudgetAndAndroidTiles() {
         val guest = ControlsFixtureSession(state = ControlsFixtureState.guest).controls
-        assertEquals(MoreMenuMetrics(rows = 6, twoLineRows = 1, hasPalette = true, mediumRows = 1, separators = 3), guest.moreMetrics)
-        assertEquals(486.0, MoreMenuPolicy.estimatedHeight(guest.moreMetrics, textScale = 1.0), 0.0)
+        assertEquals(MoreMenuMetrics(rows = 7, twoLineRows = 2, hasPalette = true, mediumRows = 1, separators = 3), guest.moreMetrics)
+        assertEquals(588.0, MoreMenuPolicy.estimatedHeight(guest.moreMetrics, textScale = 1.0), 0.0)
         val host = ControlsFixtureSession(state = ControlsFixtureState.host).controls
-        assertEquals(538.0, MoreMenuPolicy.estimatedHeight(host.moreMetrics, textScale = 1.0), 0.0)
+        assertEquals(640.0, MoreMenuPolicy.estimatedHeight(host.moreMetrics, textScale = 1.0), 0.0)
         assertFalse(MoreMenuPolicy.usesSheet(estimate = 538.0, menuSpace = 575.0, isAccessibilitySize = false, isVerticalBar = false))
         assertTrue(MoreMenuPolicy.usesSheet(estimate = 538.0, menuSpace = 500.0, isAccessibilitySize = false, isVerticalBar = false))
-        assertEquals(listOf("screenShare", "captions", "participants", "activities", "invite", "copyLink", "meetingDetails", "settings"),
+        assertEquals(listOf("screenShare", "captions", "participants", "activities", "transcript", "layout", "invite", "copyLink",
+            "meetingDetails", "settings"),
             list(MoreMenuPolicy.tiles(host.more)).map { it.id })
         assertEquals(listOf("hostControls", "lockMeeting", "endForEveryone"), list(MoreMenuPolicy.hostItems(host.more)).map { it.id })
     }

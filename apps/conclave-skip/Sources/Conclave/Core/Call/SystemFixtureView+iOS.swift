@@ -17,7 +17,9 @@ struct SystemFixtureView: View {
         session.presence.adapters = CallPresenceAdapters([
             adapter.makeAdapter(for: session.presence),
             // SYS-5 (S70 4, SX1): keep awake and proximity follow the fixture's snapshot.
-            CallScreenAwake.makePresenceAdapter()
+            CallScreenAwake.makePresenceAdapter(),
+            // SYS-15 (AC-SI18-2): fixture join and leave cycles drive the diagnostics ring and spans.
+            CallDiagnostics.shared.makePresenceAdapter()
         ])
         _session = State(initialValue: session)
         _adapter = State(initialValue: adapter)
@@ -44,6 +46,10 @@ struct SystemFixtureView: View {
                 Button(ConclaveStrings.text("iPhone")) { session.setAudioRoute(.receiver) }
                 Button(ConclaveStrings.text("Speaker")) { session.setAudioRoute(.speaker) }
             }
+            #if DEBUG
+            // SYS-15 (AC-SI18-1, AC-SI18-2): sys.diagListeners, sys.diagBuffer, a test error and a test hang.
+            DiagnosticsFixtureSection()
+            #endif
         }
         .task {
             // Once per mount, never from an appearance callback that could write observed state again.

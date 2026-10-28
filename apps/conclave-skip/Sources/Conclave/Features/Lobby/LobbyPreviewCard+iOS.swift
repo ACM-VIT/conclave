@@ -6,6 +6,8 @@ import SwiftUI
 // `premeeting.lobbyMedia` only, so presence, name, route or issue changes never re-evaluate it or its preview surface
 // (F00 P2, P3, P5). Never glass: the flip button is the C03 `.lobbyCard` variant (opaque scrim circle) on every iOS
 // version and the toggles sit on the flat strip (`.onSurface`). The card is a dark region (F00 2.1) inside the lobby.
+// ENT-4 (S10 7 c, i): the camera permission overlay is `PermissionPrimingCardOverlay`; the toggles draw the displayed
+// state `PermissionPrimingPolicy.displaysOn` and carry the permission hint.
 
 struct LobbyPreviewCard: View {
     let premeeting: PremeetingPresenter
@@ -84,8 +86,13 @@ private struct LobbyPreviewVideo: View {
                     .background(Capsule().fill(HostingTheme.inCallLabelScrim))
             }
             if media.preview == .blocked {
-                LobbyCameraPermissionOverlay(permission: media.cameraPermission,
-                                             onOpenSettings: { premeeting.openSystemSettings() })
+                // ENT-4 (S10 7 c): `blocked` is published exactly while the camera priming belongs in the card.
+                PermissionPrimingCardOverlay(
+                    priming: PermissionPrimingPolicy.priming(permission: media.cameraPermission,
+                                                             canAskAgain: media.canAskAgainCamera,
+                                                             supportsRationale: PermissionPrimingPolicy.platformSupportsRationale,
+                                                             rationaleDismissed: false),
+                    onOpenSettings: { premeeting.openSystemSettings() })
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -153,85 +160,84 @@ private struct LobbyCameraOffContent: View {
     }
 }
 
-/// S10 7 c: camera denied inside the card (title, body, a neutral bordered Open Settings, never coral); restricted
-/// has no button. One container, announced once by the system when it appears.
-private struct LobbyCameraPermissionOverlay: View {
-    let permission: MediaPermissionState
-    let onOpenSettings: () -> Void
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: ConclaveSymbols.videoSlash)
-                .font(.title2)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .accessibilityHidden(true)
-            Text(ConclaveStrings.text("Camera Access Is Off"))
-                .font(.headline)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-            Text(permission == .restricted
-                 ? ConclaveStrings.text("Camera access is restricted on this device.")
-                 : ConclaveStrings.text("Allow camera access in Settings to use video in meetings."))
-                .font(.subheadline)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(HostingTheme.inCallTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if permission == .denied {
-                Button(ConclaveStrings.text("Open Settings"), action: onOpenSettings)
-                    .buttonStyle(.bordered)
-                    .tint(HostingTheme.token(DesignTokens.iosInCallText))
-                    .accessibilityIdentifier("lobby.camera.openSettings")
-            }
-        }
-        .padding(20)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("lobby.camera.denied")
-    }
-}
-
 /// The toggle strip (L2): Mic then Camera (then Effects while an engine publishes it, R31), horizontal when it fits,
 /// vertical at large text sizes. Each toggle plays its gesture kind once per tap that changes the intent (C04 e); a
 /// tap a permission blocks plays nothing.
 private struct LobbyToggleStrip: View {
     let media: LobbyMediaSnapshot
     let premeeting: PremeetingPresenter
+    // RECONCILE R31 (SET-6, HD request B7-T2 R7): the Effects content over the lobby while an engine publishes it.
+    @State private var showsEffectsSheet = false
+    @State private var lobbyEffects = EffectsPresenter(scope: EffectsScope.lobby)
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 32) { toggles }
             VStack(spacing: 12) { toggles }
         }
+        .sheet(isPresented: $showsEffectsSheet) {
+            // R31: the same Effects content as a dark sheet over the lobby, short then large, background interaction on.
+            EffectsLobbySheet(effects: lobbyEffects, onClose: { showsEffectsSheet = false })
+        }
+        .onChange(of: media.preview, initial: true) { _, preview in
+            lobbyEffects.apply(EffectsInputs.make(isCameraOff: !media.cameraIntentOn,
+                                                  isCameraBlocked: media.cameraPermission == .denied,
+                                                  preview: preview))
+        }
+    }
+
+    // ENT-4 (S10 7 c, f, i): each toggle draws its intent only while the system can still grant it (Off while denied,
+    // restricted or without hardware), and its hint says why it reads Off.
+    private var micOn: Bool {
+        PermissionPrimingPolicy.displaysOn(intentOn: media.micIntentOn, permission: media.micPermission,
+                                           canAskAgain: media.canAskAgainMicrophone)
+    }
+
+    private var cameraOn: Bool {
+        PermissionPrimingPolicy.displaysOn(intentOn: media.cameraIntentOn, permission: media.cameraPermission,
+                                           canAskAgain: media.canAskAgainCamera)
+    }
+
+    private func hint(_ kind: LobbyMediaKind) -> String {
+        let permission = kind == .camera ? media.cameraPermission : media.micPermission
+        let canAskAgain = kind == .camera ? media.canAskAgainCamera : media.canAskAgainMicrophone
+        return PermissionPrimingCopy.hint(kind, reason: PermissionPrimingPolicy.toggleReason(
+            permission: permission, canAskAgain: canAskAgain,
+            supportsRationale: PermissionPrimingPolicy.platformSupportsRationale))
     }
 
     @ViewBuilder
     private var toggles: some View {
         ConclaveLabelledCallToggle(
             title: ConclaveStrings.text("Microphone"),
-            value: media.micIntentOn ? ConclaveStrings.text("On") : ConclaveStrings.text("Muted"),
-            systemImage: media.micIntentOn ? ConclaveSymbols.micFill : ConclaveSymbols.micSlashFill,
-            state: media.micIntentOn ? .on : .off,
+            value: micOn ? ConclaveStrings.text("On") : ConclaveStrings.text("Muted"),
+            systemImage: micOn ? ConclaveSymbols.micFill : ConclaveSymbols.micSlashFill,
+            state: micOn ? .on : .off,
             inputLabels: [ConclaveStrings.text("Microphone"), ConclaveStrings.text("Mic"), ConclaveStrings.text("Mute"),
                           ConclaveStrings.text("Unmute")],
-            feedback: LobbyToggleFeedbackPolicy.kind(isOn: media.micIntentOn, permission: media.micPermission,
+            feedback: LobbyToggleFeedbackPolicy.kind(isOn: micOn, permission: media.micPermission,
                                                onKind: .micOn, offKind: .micOff),
             context: .onSurface,
             identifier: "lobby.mic"
         ) {
-            premeeting.setMicIntent(!media.micIntentOn)
+            premeeting.setMicIntent(!micOn)
         }
+        .accessibilityHint(hint(.microphone))
         ConclaveLabelledCallToggle(
             title: ConclaveStrings.text("Camera"),
-            value: media.cameraIntentOn ? ConclaveStrings.text("On") : ConclaveStrings.text("Off"),
-            systemImage: media.cameraIntentOn ? ConclaveSymbols.videoFill : ConclaveSymbols.videoSlashFill,
-            state: media.cameraIntentOn ? .on : .off,
+            value: cameraOn ? ConclaveStrings.text("On") : ConclaveStrings.text("Off"),
+            systemImage: cameraOn ? ConclaveSymbols.videoFill : ConclaveSymbols.videoSlashFill,
+            state: cameraOn ? .on : .off,
             isEnabled: media.cameraPermission != .unavailable,
             inputLabels: [ConclaveStrings.text("Camera"), ConclaveStrings.text("Video")],
-            feedback: LobbyToggleFeedbackPolicy.kind(isOn: media.cameraIntentOn, permission: media.cameraPermission,
+            feedback: LobbyToggleFeedbackPolicy.kind(isOn: cameraOn, permission: media.cameraPermission,
                                                onKind: .cameraOn, offKind: .cameraOff),
             context: .onSurface,
             identifier: "lobby.camera"
         ) {
-            premeeting.setCameraIntent(!media.cameraIntentOn)
+            premeeting.setCameraIntent(!cameraOn)
         }
+        .accessibilityHint(hint(.camera))
         if media.showsEffects {
             ConclaveLabelledCallToggle(
                 title: ConclaveStrings.text("Effects"),
@@ -245,6 +251,7 @@ private struct LobbyToggleStrip: View {
                 identifier: "lobby.effects"
             ) {
                 premeeting.openEffects()
+                showsEffectsSheet = media.showsEffects
             }
         }
     }
@@ -271,6 +278,13 @@ struct LocalPreviewSurface: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: LocalPreviewLayerView, context: Context) {
+        // C6-3 (SET-3, HD request B7-T3 R8): the front camera mirrors only while Mirror My Video is on; the rear never.
+        let mirrored = LocalVideoMirrorPolicy.mirrors(isFront: LocalPreviewController.shared.facing == .front,
+                                                      preference: LocalVideoMirrorPreference.shared.isOn)
+        if let connection = uiView.previewLayer.connection, connection.isVideoMirroringSupported {
+            if connection.automaticallyAdjustsVideoMirroring { connection.automaticallyAdjustsVideoMirroring = false }
+            if connection.isVideoMirrored != mirrored { connection.isVideoMirrored = mirrored }
+        }
     }
 }
 

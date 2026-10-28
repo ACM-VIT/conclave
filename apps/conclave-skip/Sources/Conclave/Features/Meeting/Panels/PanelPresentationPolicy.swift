@@ -63,6 +63,9 @@ enum PanelPresentationPolicy {
     /// The short detent's height until the content reports its own (S60 4 c: Effects measures 222 pt at the
     /// default text size).
     static let defaultShortDetentHeight = 222.0
+    /// WP1-3c (SET-5, S60 3 b, 4 b): the Android Layout and Effects bottom sheet never grows wider than 640 dp, so a
+    /// 600 to 839 dp window (tablet portrait, unfolded foldable) keeps the stage visible at both sides of it.
+    static let bottomSheetMaxWidth = 640.0
 
     /// An Android window measured by the host's own constraints, in dp.
     static func androidWindow(width: Double, height: Double) -> PanelWindow {
@@ -76,15 +79,34 @@ enum PanelPresentationPolicy {
         fontScale >= PanelPresentationPolicy.androidAccessibilityFontScale
     }
 
-    /// Side styles only on regular x regular windows; otherwise the iOS sheet or the Android full overlay. The
-    /// Android bottom sheet for Layout and Effects waits for WP1-3c (deferred to WP6), so `panel` does not
-    /// change the result yet.
+    /// Side styles only on regular x regular windows (owner default Q8 2); otherwise the iOS sheet, and on Android the
+    /// WP1-3c bottom sheet for Layout and Effects (SET-5 absorbs WP1-3c: PLAN-next 3.7, PS 8.6, S60 3 d, 4 d) or the
+    /// full overlay for every content panel. Compact and medium Android windows therefore show Layout and Effects
+    /// as a partial `ModalBottomSheet` over the live stage; the expanded side pane keeps them beside it.
     static func style(window: PanelWindow, platform: PanelPlatform, panel: MeetingPanel,
                       sideStylesEnabled: Bool = PanelPresentationPolicy.sideStylesEnabled) -> PanelHostStyle {
         if sideStylesEnabled && window.horizontalRegular && window.verticalRegular {
             return platform == PanelPlatform.iOS ? PanelHostStyle.inspector : PanelHostStyle.sidePane
         }
-        return platform == PanelPlatform.iOS ? PanelHostStyle.sheet : PanelHostStyle.overlay
+        if platform == PanelPlatform.iOS {
+            return PanelHostStyle.sheet
+        }
+        return PanelPresentationPolicy.usesAndroidBottomSheet(panel) ? PanelHostStyle.bottomSheet : PanelHostStyle.overlay
+    }
+
+    /// The panels the Android bottom sheet hosts outside the side pane (PS 8.6): Layout and Effects, the two in-call
+    /// panels whose effect is watched on the stage. Content panels keep the full overlay (owner default Q8 3).
+    static func usesAndroidBottomSheet(_ panel: MeetingPanel) -> Bool {
+        panel == MeetingPanel.layout || panel == MeetingPanel.effects
+    }
+
+    /// Whether the Android bottom sheet skips its partially expanded state (S60 3 d, 4 d; RECONCILE R9): Effects
+    /// opens expanded at its content height (`skipPartiallyExpanded = true`, it carries its own preview), Layout opens
+    /// partially expanded with the live controls first, and both open expanded at accessibility text sizes
+    /// (`isAccessibilitySize`, font scale 1.5 and up), where the partial state would hold almost nothing.
+    static func bottomSheetSkipsPartialState(_ panel: MeetingPanel, isAccessibilitySize: Bool = false) -> Bool {
+        if panel == MeetingPanel.effects { return true }
+        return isAccessibilitySize
     }
 
     /// `isAccessibilitySize` is a policy input because the shared policy cannot see view-level scaled metrics: at
@@ -161,7 +183,8 @@ enum PanelPresentationPolicy {
     }
 
     /// How much of the stage a shown panel covers. A sheet at short or medium is partial and at large full; a nil
-    /// detent reads as the presentation's initial detent.
+    /// detent reads as the presentation's initial detent. The Android bottom sheet is partial (PS 6.2): it never
+    /// hides the stage from accessibility, and the call root suspends the toast lane under it (RECONCILE R3).
     static func coverage(_ presentation: PanelPresentation, detent: PanelDetent?) -> PanelStageCoverage {
         switch presentation.style {
         case .sheet:

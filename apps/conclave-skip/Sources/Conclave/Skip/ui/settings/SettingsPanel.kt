@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
@@ -35,6 +36,9 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 /*
  * S60 1 d (SET-1) on Android. In a call, MeetingPanel.settings is an InCallPage in lazyList mode (R40-3, R50-1) in the
@@ -42,7 +46,8 @@ import androidx.compose.ui.unit.dp
  * page before it closes the panel, predictive back moves the page, PS 8.5). Outside a call, Account > Settings is the
  * app-scope screen (RECONCILE R26, S10 5 d `SettingsKey`): a Scaffold with its own saved page stack over the same
  * SettingsPresenter content and stores. The attendee variant (R44) renders the same root list inside Webinar details.
- * Registered by the native call root (HD request B6-T2 R3).
+ * Registered by the native call root (HD request B6-T2 R3). SET-3: the call-scope page stops the Settings preview
+ * when the activity stops (scene background, C6-8).
  */
 
 @Composable
@@ -65,7 +70,11 @@ internal fun SettingsPage(
     val route = settingsRouteForKey(top)
     DisposableEffect(request.presentationID) {
         settings.panelDidOpen()
-        onDispose { settings.panelDidClose() }
+        onDispose {
+            settings.panelDidClose()
+            // L6-3: the presentation's preview view goes with it.
+            SettingsPreviewRenderers.release(request.presentationID)
+        }
     }
     LaunchedEffect(request.presentationID) {
         // R6-5: the voice message hint lands on the Voice page, once per presentation.
@@ -75,6 +84,7 @@ internal fun SettingsPage(
     }
     SettingsDestinationLeaf(panels, request.presentationID, pages)
     SettingsRoleLeaf(settings, pages, onClose)
+    SettingsBackgroundLeaf(settings)
     InCallPage(
         title = conclaveString(SettingsCopy.pageTitleName(route)),
         variant = variant,
@@ -91,8 +101,11 @@ internal fun SettingsPage(
         isNested = pages?.isNested == true,
         onBack = { pages?.pop() },
     ) { reservation ->
-        SettingsPageContent(settings, people, top, reservation, snackbar, onPush = { pages?.push(it) },
-            onOpenTranscript = { panels.present(MeetingPanel.transcript, from = PanelInvoker.settings) })
+        // L6-3: the preview card keeps one PreviewView per presentation.
+        CompositionLocalProvider(LocalSettingsPresentationId provides request.presentationID) {
+            SettingsPageContent(settings, people, top, reservation, snackbar, onPush = { pages?.push(it) },
+                onOpenTranscript = { panels.present(MeetingPanel.transcript, from = PanelInvoker.settings) })
+        }
     }
 }
 
@@ -107,6 +120,19 @@ private fun SettingsDestinationLeaf(panels: PanelCoordinator, presentationID: In
         if (path.isEmpty || pages == null) return@LaunchedEffect
         pages.popToRoot()
         for (page in path) pages.push(page.rawValue)
+    }
+}
+
+/** C6-8: the activity stopping (the scene went to the background) stops the Settings preview. */
+@Composable
+private fun SettingsBackgroundLeaf(settings: SettingsPresenter) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, settings) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) settings.previewSceneBackgrounded()
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
 }
 
@@ -145,7 +171,12 @@ private val settingsStackSaver = listSaver<SnapshotStateList<String>, String>(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AppSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
-    val settings = remember { SettingsPresenter(scope = SettingsScope.app) }
+    // S70 15 a (R70-4, RECONCILE R26): outside a call, About still offers Export Diagnostics (after a failed join).
+    val settings = remember {
+        SettingsPresenter(scope = SettingsScope.app).also {
+            it.apply(SettingsInputs.make(canExportDiagnostics = DiagnosticsExportPolicy.isOffered))
+        }
+    }
     val stack = rememberSaveable(saver = settingsStackSaver) { mutableStateListOf<String>() }
     val snackbar = remember { SnackbarHostState() }
     val scheme = MaterialTheme.colorScheme

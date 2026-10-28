@@ -3763,34 +3763,6 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
-    func testScreenCaptureStartPolicyTimesOutOnlyPendingCurrentStart() throws {
-        XCTAssertEqual(ScreenCaptureStartPolicy.startTimeoutNanoseconds, 12_000_000_000)
-        XCTAssertTrue(ScreenCaptureStartPolicy.shouldApplyTimeout(
-            generation: 2,
-            currentGeneration: 2,
-            hasServer: true,
-            isConnected: false
-        ))
-        XCTAssertFalse(ScreenCaptureStartPolicy.shouldApplyTimeout(
-            generation: 2,
-            currentGeneration: 3,
-            hasServer: true,
-            isConnected: false
-        ))
-        XCTAssertFalse(ScreenCaptureStartPolicy.shouldApplyTimeout(
-            generation: 2,
-            currentGeneration: 2,
-            hasServer: false,
-            isConnected: false
-        ))
-        XCTAssertFalse(ScreenCaptureStartPolicy.shouldApplyTimeout(
-            generation: 2,
-            currentGeneration: 2,
-            hasServer: true,
-            isConnected: true
-        ))
-    }
-
     func testScreenCaptureReconnectPolicyKeepsCurrentServerAliveDuringTransientDisconnect() throws {
         XCTAssertEqual(ScreenCaptureReconnectPolicy.graceNanoseconds, 8_000_000_000)
         XCTAssertTrue(ScreenCaptureReconnectPolicy.shouldFinalizeDisconnect(
@@ -4727,9 +4699,10 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.appId, "whiteboard")
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.data, Data([0x01, 0x02]))
-        XCTAssertEqual(viewModel.state.appYjsUpdateSequence, 1)
+        // C6-18 (ACT-7): the bytes wait in the non-observable relay for the embed's snapshot, never in MeetingState.
+        XCTAssertEqual(viewModel.activeAppSession.appId, "whiteboard")
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.map { $0.data }, [Data([0x01, 0x02])])
+        XCTAssertTrue(viewModel.state.activeAppHasRoomData)
 
         viewModel.socketManager.onAppsYjsUpdate?(AppsYjsUpdateNotification(
             appId: "dev-playground",
@@ -4738,9 +4711,10 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.appId, "whiteboard")
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.data, Data([0x01, 0x02]))
-        XCTAssertEqual(viewModel.state.appYjsUpdateSequence, 1)
+        // C6-18 (ACT-7): the bytes wait in the non-observable relay for the embed's snapshot, never in MeetingState.
+        XCTAssertEqual(viewModel.activeAppSession.appId, "whiteboard")
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.map { $0.data }, [Data([0x01, 0x02])])
+        XCTAssertTrue(viewModel.state.activeAppHasRoomData)
     }
 
     @MainActor
@@ -4760,8 +4734,8 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertNil(viewModel.state.latestAppAwarenessUpdate)
-        XCTAssertEqual(viewModel.state.appAwarenessUpdateSequence, 0)
+        XCTAssertTrue(viewModel.activeAppSession.pendingRemote.isEmpty)
+        XCTAssertFalse(viewModel.state.activeAppHasRoomData)
     }
 
     func testMeetingConfigSnapshotAcceptsRoomlessBroadcast() throws {
@@ -7654,9 +7628,9 @@ final class ConclaveTests: XCTestCase {
 
         await replayPendingPreAckRoomEvents(on: viewModel, includeDeferredRoomState: true)
 
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.appId, "whiteboard")
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.data, currentUpdate)
-        XCTAssertEqual(viewModel.state.appYjsUpdateSequence, 1)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.count, 1)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.data, currentUpdate)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.isAwareness, false)
     }
 
     @MainActor
@@ -7687,10 +7661,10 @@ final class ConclaveTests: XCTestCase {
 
         await replayPendingPreAckRoomEvents(on: viewModel, includeDeferredRoomState: true)
 
-        XCTAssertEqual(viewModel.state.latestAppAwarenessUpdate?.appId, "whiteboard")
-        XCTAssertEqual(viewModel.state.latestAppAwarenessUpdate?.data, currentUpdate)
-        XCTAssertEqual(viewModel.state.latestAppAwarenessUpdate?.clientId, 12)
-        XCTAssertEqual(viewModel.state.appAwarenessUpdateSequence, 1)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.count, 1)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.data, currentUpdate)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.isAwareness, true)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.clientId, 12)
     }
 
     @MainActor

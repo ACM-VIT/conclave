@@ -229,6 +229,8 @@ final class AudioRouteOwner {
     @ObservationIgnored private var revertIntentName: String = ""
     @ObservationIgnored private var ownRequestMillis: Double = -1
     @ObservationIgnored private var ownRequestTargetId: String = ""
+    /// SYS-15 (S70 15 c): route request to commit.
+    @ObservationIgnored private var routeSpan = DiagnosticsSpanToken.inert
     @ObservationIgnored private var pickerDismissedMillis: Double = -1
     @ObservationIgnored private var prejoinOutputKind: String = ""
     @ObservationIgnored private var prejoinInputId: String = ""
@@ -309,6 +311,7 @@ final class AudioRouteOwner {
         pendingId = trimmed
         pendingStartedMillis = nowMillis()
         markOwnRequest(targetId: trimmed)
+        routeSpan = CallDiagnostics.shared.span(DiagnosticsSpanKind.route.rawValue)
         publishSnapshot()
         let accepted = backend.applyOutput(trimmed)
         guard accepted else {
@@ -637,6 +640,7 @@ final class AudioRouteOwner {
     private func confirmPendingIfLanded() {
         guard phase == .switching, routeMatches(platform.currentId, pendingId) else { return }
         record("confirmed:\(pendingId)")
+        CallDiagnostics.shared.end(routeSpan)
         clearPending()
     }
 
@@ -655,6 +659,7 @@ final class AudioRouteOwner {
         intentKind = revertIntentKind
         intentName = revertIntentName
         record("failed:\(failedId)")
+        CallDiagnostics.shared.end(routeSpan, code: "route.failed")
         publishSnapshot()
         onRouteFailed?(failedId)
     }

@@ -34,6 +34,16 @@ build:
         # guava listenablefuture 1.0, kotlin-stdlib 2.1.20 all resolve to the newer versions already on the classpath
         # (activity 1.13.0, core 1.18.0); no R8 change. One line only (HD/requests/B5-T4.md R15 lands here).
         - 'implementation("androidx.browser:browser:1.10.0")'
+        # S60 C6-25 (ACT-7): androidx.webkit for the SDK app host (K/ui/apps): WebViewCompat.addWebMessageListener
+        # (origin-checked messaging, no addJavascriptInterface), WebViewAssetLoader (the bundled embed at
+        # https://appassets.androidplatform.net/assets/native-embed/) and WebViewFeature (run-time WEB_MESSAGE_LISTENER
+        # check; absent shows the failure state). Compatibility record: 1.14.0 is the newest version in the Gradle cache
+        # (1.12.1 also cached); minSdk 21 (app floor 28), minCompileSdk 34 (app 37), minAndroidGradlePluginVersion 8.1.1
+        # (AGP 9.2); runtime deps androidx.annotation 1.8.1, annotation-experimental 1.4.1, androidx.core 1.1.0 and
+        # org.jspecify 1.0.0 are all satisfied by cached artifacts (annotation up to 1.9.1, annotation-experimental up to
+        # 1.5.1, core 1.18.0 already on the classpath, jspecify 1.0.0); no consumer R8 rules matter (R8 stays off). One
+        # line only.
+        - 'implementation("androidx.webkit:webkit:1.14.0")'
 
 # this is a transpiled Skip Lite module
 skip:

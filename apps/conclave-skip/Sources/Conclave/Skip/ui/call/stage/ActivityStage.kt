@@ -131,7 +131,9 @@ private fun activityStageIdentity(kind: String, session: ActivitySession?): Acti
     }
     val item = session.activities.snapshot.nowPlayingItem(kind = activityKind)
         ?: return ActivityStageIdentityParts(activityStageDisplayName(kind, ""), "", "")
-    return ActivityStageIdentityParts(activitiesNowPlayingTitle(item), activitiesNowPlayingStatus(item), item.appId)
+    // ACT-7 (HD request B7-T1 R2): an app's status comes from its host ("%1$d editing", "Editing locked").
+    val hostStatus = if (activityKind == ActivityKind.app) nativeAppHostStatus(session.appHost) else ""
+    return ActivityStageIdentityParts(activitiesNowPlayingTitle(item), hostStatus.ifEmpty { activitiesNowPlayingStatus(item) }, item.appId)
 }
 
 /** Identity, Show video, then the trailing actions; the header's controls precede the body in reading order. */
@@ -167,6 +169,9 @@ private fun ActivityStageHeader(kind: String, stage: StagePresenter, session: Ac
         if (session != null) {
             if (activityStageKind(kind) == ActivityKind.game) {
                 GameShellHeaderActions(session.games)
+            } else if (activityStageKind(kind) == ActivityKind.app) {
+                // ACT-7 (HD request B7-T1 R2): Lock editing and Close in the host menu (S60 13 d).
+                NativeAppHostMenu(session.appHost)
             } else {
                 ActivityCloseButton(activityStageKind(kind), session.activities)
             }
@@ -212,6 +217,9 @@ private fun ActivityStageBody(kind: String, stage: StagePresenter, session: Acti
     if (session == null) return
     if (activityStageKind(kind) == ActivityKind.game) {
         GameShellBody(session.games, session.storeURL, onShowVideo = { stage.setShowsVideoOverActivity(true) })
+    } else if (activityStageKind(kind) == ActivityKind.app) {
+        // ACT-7 (HD request B7-T1 R2): the one retained WebView per app session, its states and the tools.
+        NativeAppHostBody(session.appHost, onShowVideo = { stage.setShowsVideoOverActivity(true) })
     } else {
         ActivityWebBody(kind, stage, session)
     }

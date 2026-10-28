@@ -8,6 +8,7 @@ package conclave.module
 
 internal data class LobbyCardUi(
     val routeId: Int,
+    /** ENT-4 (S10 7 f): the drawn toggle state (PermissionPrimingPolicy.displaysOn), Off while a tap cannot grant it. */
     val micOn: Boolean,
     val cameraOn: Boolean,
     val micPermission: MediaPermissionState,
@@ -20,11 +21,20 @@ internal data class LobbyCardUi(
     val effectsActive: Boolean,
     val avatarName: String,
     val avatarSeed: String,
+    // ENT-4 (S10 7 d, i): each device's ask-again, the camera overlay's priming and the toggles' state reasons.
+    val canAskAgainMicrophone: Boolean,
+    val canAskAgainCamera: Boolean,
+    val cameraPriming: PermissionPrimingKind,
+    val micReason: PermissionPrimingKind,
+    val cameraReason: PermissionPrimingKind,
 ) {
     val showsSurface: Boolean
         get() = preview == PreviewState.live || preview == PreviewState.interrupted || preview == PreviewState.published
     val isCameraBlocked: Boolean
         get() = cameraPermission == MediaPermissionState.denied || cameraPermission == MediaPermissionState.restricted
+    /** The card overlay: the shared snapshot policy publishes `blocked` exactly while the camera priming is in the card. */
+    val showsCameraOverlay: Boolean
+        get() = preview == PreviewState.blocked
 }
 
 internal data class LobbyStatusUi(
@@ -59,10 +69,13 @@ internal class LobbyUiCache {
     fun card(media: LobbyMediaSnapshot): LobbyCardUi {
         val cached = lastCard
         if (cached != null && media == lastMedia) return cached
+        val rationale = PermissionPrimingPolicy.platformSupportsRationale
         val next = LobbyCardUi(
             routeId = media.routeId,
-            micOn = media.micIntentOn,
-            cameraOn = media.cameraIntentOn,
+            micOn = PermissionPrimingPolicy.displaysOn(intentOn = media.micIntentOn, permission = media.micPermission,
+                canAskAgain = media.canAskAgainMicrophone),
+            cameraOn = PermissionPrimingPolicy.displaysOn(intentOn = media.cameraIntentOn, permission = media.cameraPermission,
+                canAskAgain = media.canAskAgainCamera),
             micPermission = media.micPermission,
             cameraPermission = media.cameraPermission,
             canAskAgain = media.canAskAgainAndroid,
@@ -73,6 +86,14 @@ internal class LobbyUiCache {
             effectsActive = media.effectsActive,
             avatarName = media.avatarName,
             avatarSeed = media.avatarSeed,
+            canAskAgainMicrophone = media.canAskAgainMicrophone,
+            canAskAgainCamera = media.canAskAgainCamera,
+            cameraPriming = PermissionPrimingPolicy.priming(permission = media.cameraPermission,
+                canAskAgain = media.canAskAgainCamera, supportsRationale = rationale, rationaleDismissed = false),
+            micReason = PermissionPrimingPolicy.toggleReason(permission = media.micPermission,
+                canAskAgain = media.canAskAgainMicrophone, supportsRationale = rationale),
+            cameraReason = PermissionPrimingPolicy.toggleReason(permission = media.cameraPermission,
+                canAskAgain = media.canAskAgainCamera, supportsRationale = rationale),
         )
         builds += 1
         lastMedia = media

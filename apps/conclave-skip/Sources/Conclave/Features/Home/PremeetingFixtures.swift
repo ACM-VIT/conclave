@@ -39,8 +39,14 @@ enum PremeetingFixtureState: String, CaseIterable, Equatable {
     case lobby
     /// S10 6 l10: the same lobby with no name, so the primary is disabled with its reason.
     case lobbyNameMissing = "lobby-name-missing"
-    /// S10 6 f `newMeeting`: the generated code as the title, Start Meeting, no link and no Share (Q1), no camera.
-    case lobbyNewMeeting = "lobby-new-meeting"
+    /// ENT-4 (S10 7 l; HD request B7-T8 R3): the permission priming states, each a joined-by-link lobby like `lobby` with
+    /// the permissions `PermissionPrimingFixture` names (S/Features/Lobby/PermissionPrimingPolicy.swift). The fixture's
+    /// hooks never request, so no system prompt can appear.
+    case lobbyPermissionsUndetermined = "lobby-permissions-undetermined"
+    case lobbyMicRationale = "lobby-mic-rationale"
+    case lobbyCameraRationale = "lobby-camera-rationale"
+    case lobbyPermissionsDenied = "lobby-permissions-denied"
+    case lobbyPermissionsRestricted = "lobby-permissions-restricted"
     /// ENT-7 (S10 5 l): Account states. `AccountFixtureScript` (S/Features/Account/AccountFixtures.swift) scripts the
     /// identity and the answers; Home stays the root content.
     case accountSignedOut = "account-signed-out"
@@ -216,7 +222,8 @@ enum PremeetingFixtureScript {
                 PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
                 PremeetingFixtureStep(delayMillis: 0, shell: ended(.joinFailed, connectionState: .error), base: plain)
             ]
-        case .lobby, .lobbyNewMeeting:
+        case .lobby, .lobbyNewMeeting, .lobbyPermissionsUndetermined, .lobbyMicRationale, .lobbyCameraRationale,
+             .lobbyPermissionsDenied, .lobbyPermissionsRestricted:
             return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: base(guestName: lobbyGuestName))]
         case .lobbyNameMissing:
             return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: plain)]
@@ -317,7 +324,8 @@ enum PremeetingFixtureScript {
 
     /// The link a lobby fixture opens through the production intake ("" for none).
     static func lobbyLink(for state: PremeetingFixtureState) -> String {
-        state == .lobby || state == .lobbyNameMissing ? "https://conclave.acmvit.in/" + roomLabel : ""
+        state == .lobby || state == .lobbyNameMissing || PermissionPrimingFixture.permissions(forState: state.rawValue) != nil
+            ? "https://conclave.acmvit.in/" + roomLabel : ""
     }
 
     static func opensNewMeeting(for state: PremeetingFixtureState) -> Bool {
@@ -326,6 +334,7 @@ enum PremeetingFixtureScript {
 
     static func isLobbyFixture(_ state: PremeetingFixtureState) -> Bool {
         state == .lobby || state == .lobbyNameMissing || state == .lobbyNewMeeting
+            || PermissionPrimingFixture.permissions(forState: state.rawValue) != nil
     }
 
     /// Camera blocked by a revoked permission in the join lobbies (6 l1); no camera hardware in the new meeting lobby
@@ -471,9 +480,16 @@ final class PremeetingFixtureSession {
     /// The lobby fixtures: the injected device snapshot (6 l1), then the lobby through the production intake.
     private func openLobby() {
         premeeting.generateRoomCode = { PremeetingFixtureScript.newMeetingCode }
-        premeeting.applyPermissions(microphone: PremeetingFixtureScript.micPermission(for: state),
-                                    camera: PremeetingFixtureScript.cameraPermission(for: state),
-                                    canAskAgainMicrophone: false, canAskAgainCamera: false)
+        if let priming = PermissionPrimingFixture.permissions(forState: state.rawValue) {
+            // ENT-4 (S10 7 l): undetermined, refused once, refused for good and restricted come from the fixture only.
+            premeeting.applyPermissions(microphone: priming.microphone, camera: priming.camera,
+                                        canAskAgainMicrophone: priming.canAskAgainMicrophone,
+                                        canAskAgainCamera: priming.canAskAgainCamera)
+        } else {
+            premeeting.applyPermissions(microphone: PremeetingFixtureScript.micPermission(for: state),
+                                        camera: PremeetingFixtureScript.cameraPermission(for: state),
+                                        canAskAgainMicrophone: false, canAskAgainCamera: false)
+        }
         premeeting.applyAudioRoutes(outputs: PremeetingFixtureScript.lobbyRoutes, currentOutputId: "fixture-speaker",
                                     inputOptions: [], currentInputId: "")
         let link = PremeetingFixtureScript.lobbyLink(for: state)

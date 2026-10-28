@@ -318,6 +318,13 @@ enum TranscriptPresentationPolicy {
     }
 }
 
+/// TRN-2 (S60 0.5, C6-11): what changed in `TranscriptState`, for the Transcript panel presenter's one hook. The
+/// presenter rebuilds its cold snapshot on `session`, drains the feed engine on `rows`, and replaces its minutes and
+/// Ask leaves on `minutes` and `ask`.
+enum TranscriptPanelChange: String, CaseIterable, Equatable {
+    case session, rows, minutes, ask
+}
+
 /// Observable transcript view state. Holds finalized segments plus the in-flight
 /// partials map so the panel can render live captions as they stream in.
 ///
@@ -325,12 +332,22 @@ enum TranscriptPresentationPolicy {
 /// state: `phase`, `link` and `issue` (with `issueServerText`), the relay availability, the session start for the
 /// catch-up offer, and the newest caption line for the stage strip. The stage refresh path listens through
 /// `onStageInputChanged`; the caption hot path through `onCaptionChanged` (both installed by the view model).
+///
+/// TRN-2 (S60 C6-11, 6 j): the segments live in one incremental `TranscriptFeedEngine` (binary insertion, regrouping
+/// limited to the touched group and its neighbours), which the Transcript panel's feed drains through
+/// `onPanelChanged`; `hasContent` is stored and edge-triggered (it flips at most twice per session). The legacy
+/// presentation (`groupedSegments`, `pauseMarkerIds`, `scrollTrigger`) is regrouped from the engine's ordered
+/// segments without a sort, and only while `legacyPresentationEnabled` (the legacy panel's route); `orderedSegments`
+/// always reads the engine.
 @MainActor
 @Observable
 final class TranscriptState {
     var connectionStatus: TranscriptConnectionStatus = .idle {
         didSet {
-            if oldValue != connectionStatus { onStageInputChanged?() }
+            if oldValue != connectionStatus {
+                onStageInputChanged?()
+                onPanelChanged?(TranscriptPanelChange.session)
+            }
         }
     }
     var sessionStatus: String = "idle" {         // idle/starting/live/paused/stopping/error/takeover_needed
@@ -338,12 +355,32 @@ final class TranscriptState {
             guard oldValue != sessionStatus else { return }
             if TranscriptPhasePolicy.isRunning(sessionStatus) { sawSessionThisCall = true }
             onStageInputChanged?()
+            onPanelChanged?(TranscriptPanelChange.session)
         }
     }
     var errorMessage: String?
-    var controllerName: String?
-    var sessionTranscriptModel = TranscriptConfiguration.defaultTranscriptModel
-    var sessionQaModel = TranscriptConfiguration.defaultAssistantModel
+    var controllerName: String? {
+        didSet {
+            if oldValue != controllerName { onPanelChanged?(TranscriptPanelChange.session) }
+        }
+    }
+    /// TRN-2 (web `session.controller.userId`): who holds the live notes, so "Hosted by you" and Stop follow the
+    /// controller (S60 6 f); "" when nobody does.
+    var controllerUserId: String = "" {
+        didSet {
+            if oldValue != controllerUserId { onPanelChanged?(TranscriptPanelChange.session) }
+        }
+    }
+    var sessionTranscriptModel = TranscriptConfiguration.defaultTranscriptModel {
+        didSet {
+            if oldValue != sessionTranscriptModel { onPanelChanged?(TranscriptPanelChange.session) }
+        }
+    }
+    var sessionQaModel = TranscriptConfiguration.defaultAssistantModel {
+        didSet {
+            if oldValue != sessionQaModel { onPanelChanged?(TranscriptPanelChange.session) }
+        }
+    }
     var sessionTransportMode = "sfu"
     private(set) var capabilitiesKnown = false
     private(set) var canStart: Bool = false
@@ -356,7 +393,31 @@ final class TranscriptState {
 
     private(set) var finals: [TranscriptSegmentModel] = []
     private(set) var partials: [String: TranscriptSegmentModel] = [:]
-    private(set) var orderedSegments: [TranscriptSegmentModel] = []
+    /// TRN-2 (C6-11): the one incremental engine behind both presentations; never observed itself.
+    let feedEngine = TranscriptFeedEngine()
+    /// Grows with every segment change; reading it registers observation for `orderedSegments` readers.
+    private(set) var segmentsRevision = 0
+    /// TRN-2 (C6-11): any final segment or minutes content (export and copy have something). Stored and edge-triggered,
+    /// so its readers invalidate at most twice per session, never per delta (replaces the computed `hasExportContent`
+    /// for the native panel; the legacy panel keeps reading `hasExportContent`).
+    private(set) var hasContent = false
+    /// TRN-2 (S60 6 f): questions whose `qa.ask` never left the device ("Question couldn't be sent.").
+    private(set) var unsentQuestionIds: Set<String> = []
+    /// TRN-2: the legacy panel's presentation (`groupedSegments`, `pauseMarkerIds`, `scrollTrigger`) is regrouped only
+    /// while this is true (the default, so the legacy route is unchanged). The native call route turns it off, so a
+    /// delta costs one local regroup instead of a regroup of the whole session.
+    @ObservationIgnored private(set) var legacyPresentationEnabled = true
+    /// `transcript.rebuilds` for the legacy path: whole-session regroups of the legacy presentation.
+    @ObservationIgnored private(set) var legacyRebuildCount = 0
+    /// The Transcript panel presenter's one hook (TRN-2); installed by `TranscriptPresenter.bind(state:)`.
+    @ObservationIgnored var onPanelChanged: ((TranscriptPanelChange) -> Void)? = nil
+
+    /// Every segment (finals and partials) in order, straight from the engine (no sort, no copy into an observed
+    /// array per delta).
+    var orderedSegments: [TranscriptSegmentModel] {
+        segmentsRevision >= 0 ? feedEngine.segments : []
+    }
+
     private(set) var groupedSegments: [TranscriptGroup] = []
     private(set) var pauseMarkerIds: Set<String> = []
     private(set) var scrollTrigger: String = "0"
@@ -406,30 +467,49 @@ final class TranscriptState {
         issue = next
         issueServerText = text
         onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func setRelay(_ next: RelayAvailability) {
         guard relay != next else { return }
         relay = next
         onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func recordFailedAttempts(_ count: Int) {
         guard failedAttempts != count else { return }
         failedAttempts = count
         onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func markSessionSnapshot() {
         guard !hasSessionSnapshot else { return }
         hasSessionSnapshot = true
         onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func applySessionStartedAt(_ millis: Double) {
         guard sessionStartedAtMillis != millis else { return }
         sessionStartedAtMillis = millis
         onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
+    }
+
+    /// TRN-2: the native call route turns the legacy presentation off; turning it back on regroups once.
+    func setLegacyPresentation(_ enabled: Bool) {
+        if legacyPresentationEnabled == enabled { return }
+        legacyPresentationEnabled = enabled
+        if enabled { rebuildPresentation() }
+    }
+
+    /// TRN-2: the service could not send a question (the socket was not open).
+    func markQuestionNotSent(id: String) {
+        if unsentQuestionIds.contains(id) { return }
+        unsentQuestionIds.insert(id)
+        onPanelChanged?(TranscriptPanelChange.ask)
     }
 
     var isLive: Bool { sessionStatus == "live" }
@@ -457,22 +537,27 @@ final class TranscriptState {
         if canTakeover != takeover { canTakeover = takeover }
         if canStop != stop { canStop = stop }
         if canAsk != ask { canAsk = ask }
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func applyProviderKeyAvailability(openAI: Bool, sarvam: Bool) {
         if !providerKeyAvailabilityKnown { providerKeyAvailabilityKnown = true }
         if globalOpenAIKeyAvailable != openAI { globalOpenAIKeyAvailable = openAI }
         if globalSarvamKeyAvailable != sarvam { globalSarvamKeyAvailable = sarvam }
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func applyMinutes(_ snapshot: TranscriptMinutesSnapshotModel) {
         guard minutes != snapshot else { return }
         minutes = snapshot
+        updateHasContent()
+        onPanelChanged?(TranscriptPanelChange.minutes)
     }
 
     func applyMinutesStatus(_ status: TranscriptMinutesStatus) {
         guard minutesStatus != status else { return }
         minutesStatus = status
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func beginQuestion(id: String, question: String, timestamp: Double) {
@@ -495,6 +580,7 @@ final class TranscriptState {
             updatedAt: timestamp,
             error: nil
         ))
+        onPanelChanged?(TranscriptPanelChange.ask)
     }
 
     func applyQuestionUpdate(
@@ -522,21 +608,28 @@ final class TranscriptState {
         )
         guard current != next else { return }
         qaMessages[index] = next
+        onPanelChanged?(TranscriptPanelChange.ask)
     }
 
     func applyPartial(_ segment: TranscriptSegmentModel) {
         if partials[segment.itemId] == segment { return }
         partials[segment.itemId] = segment
+        feedEngine.upsert(segment)
         rebuildPresentation()
         publishCaption()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func applyFinal(_ segment: TranscriptSegmentModel) {
         let removedPartial = partials.removeValue(forKey: segment.itemId) != nil
         var changedFinal = false
-        if let index = finals.firstIndex(where: { $0.itemId == segment.itemId }) {
-            if finals[index] != segment {
-                finals[index] = segment
+        // The engine already knows whether this item was a final (a dictionary read, not a scan of `finals`).
+        let previous = feedEngine.segment(itemId: segment.itemId)
+        if let known = previous, known.isFinal {
+            if known != segment {
+                if let index = finals.firstIndex(where: { $0.itemId == segment.itemId }) {
+                    finals[index] = segment
+                }
                 changedFinal = true
             }
         } else {
@@ -549,14 +642,19 @@ final class TranscriptState {
         } else {
             newestFinal = segment
         }
+        feedEngine.upsert(segment)
         rebuildPresentation()
         publishCaption()
+        updateHasContent()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func resetPartials() {
         guard !partials.isEmpty else { return }
         partials = [:]
+        feedEngine.removePartials()
         rebuildPresentation()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func replaceSnapshot(finals: [TranscriptSegmentModel], partials: [TranscriptSegmentModel]) {
@@ -576,16 +674,27 @@ final class TranscriptState {
             }
         }
         newestFinal = newest
+        // Partials first, so a final with the same item id wins in the engine's one-entry-per-item map.
+        var all: [TranscriptSegmentModel] = partials
+        for segment in finals {
+            all.append(segment)
+        }
+        feedEngine.replaceAll(all)
         rebuildPresentation()
+        updateHasContent()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func clearSegments() {
         newestFinal = nil
         lastCaption = CaptionLine.empty
-        guard !finals.isEmpty || !partials.isEmpty || !orderedSegments.isEmpty || !groupedSegments.isEmpty else { return }
+        guard !finals.isEmpty || !partials.isEmpty || !feedEngine.isEmpty || !groupedSegments.isEmpty else { return }
         finals = []
         partials = [:]
+        feedEngine.removeAll()
         rebuildPresentation()
+        updateHasContent()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func resetAll() {
@@ -615,7 +724,13 @@ final class TranscriptState {
         hasSessionSnapshot = false
         sessionStartedAtMillis = 0.0
         sawSessionThisCall = false
+        controllerUserId = ""
+        unsentQuestionIds = []
+        updateHasContent()
         onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
+        onPanelChanged?(TranscriptPanelChange.minutes)
+        onPanelChanged?(TranscriptPanelChange.ask)
     }
 
     /// The newest segment of the newest speaker (the newest partial if one exists, else the last final), cut to about
@@ -633,14 +748,23 @@ final class TranscriptState {
         listener(line)
     }
 
+    /// The legacy panel's presentation from the engine's ordered segments (no sort); skipped while the native route
+    /// owns the transcript (`legacyPresentationEnabled` false).
     private func rebuildPresentation() {
-        let nextOrderedSegments = TranscriptPresentationPolicy.orderedSegments(
-            finals: finals,
-            partials: partials
-        )
-        orderedSegments = nextOrderedSegments
+        segmentsRevision += 1
+        guard legacyPresentationEnabled else { return }
+        legacyRebuildCount += 1
+        let nextOrderedSegments = feedEngine.segments
         groupedSegments = TranscriptPresentationPolicy.groupedSegments(from: nextOrderedSegments)
         pauseMarkerIds = TranscriptPresentationPolicy.pauseMarkerGroupIds(for: groupedSegments)
         scrollTrigger = TranscriptPresentationPolicy.scrollTrigger(for: nextOrderedSegments)
+    }
+
+    /// Edge-triggered `hasContent` (C6-11): written only when it flips.
+    private func updateHasContent() {
+        let next = feedEngine.finalCount > 0 || minutes.hasContent
+        if next == hasContent { return }
+        hasContent = next
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 }

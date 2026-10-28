@@ -109,10 +109,13 @@ class PanelStageBridgeTests {
             val interactive = if (row.composer) null else if (row.panel == MeetingPanel.effects) short else medium
             assertEquals("${row.panel}", interactive, PanelPresentationPolicy.stageInteractiveDetent(sheet))
             assertTrue("${row.panel}", PanelPresentationPolicy.keepsSheetInCompactHeight(sheet))
+            // SET-5 (WP1-3c, PS 8.6): Layout and Effects are the partial bottom sheet on Android phones.
+            val bottomSheet = row.panel == MeetingPanel.layout || row.panel == MeetingPanel.effects
             val overlay = PanelPresentationPolicy.resolve(request(row.panel), window = androidPortrait, platform = PanelPlatform.android)
-            assertEquals("${row.panel}", PanelHostStyle.overlay, overlay.style)
-            assertTrue("${row.panel}", overlay.showsMiniTile && overlay.detents.isEmpty && overlay.initialDetent == null)
-            assertEquals("${row.panel}", PanelStageCoverage.full, PanelPresentationPolicy.coverage(overlay, detent = null))
+            assertEquals("${row.panel}", if (bottomSheet) PanelHostStyle.bottomSheet else PanelHostStyle.overlay, overlay.style)
+            assertTrue("${row.panel}", overlay.showsMiniTile == !bottomSheet && overlay.detents.isEmpty && overlay.initialDetent == null)
+            assertEquals("${row.panel}", if (bottomSheet) PanelStageCoverage.partial else PanelStageCoverage.full,
+                PanelPresentationPolicy.coverage(overlay, detent = null))
             assertFalse("${row.panel}", PanelPresentationPolicy.keepsSheetInCompactHeight(overlay))
             // S60 R6-10: Layout and Effects are dark for every invoker; content panels follow the system.
             for (invoker in listOf(PanelInvoker.call, PanelInvoker.more, PanelInvoker.settings)) {
@@ -132,10 +135,14 @@ class PanelStageBridgeTests {
         )
         for (case in windows) {
             for (panel in MeetingPanel.values()) {
-                assertEquals(case.off, PanelPresentationPolicy.style(window = case.window, platform = case.platform, panel = panel, sideStylesEnabled = false))
-                assertEquals(case.on, PanelPresentationPolicy.style(window = case.window, platform = case.platform, panel = panel, sideStylesEnabled = true))
-                assertEquals(case.off, PanelPresentationPolicy.resolve(request(panel), window = case.window, platform = case.platform, sideStylesEnabled = false).style)
-                assertEquals(case.on, PanelPresentationPolicy.resolve(request(panel), window = case.window, platform = case.platform, sideStylesEnabled = true).style)
+                // SET-5 (WP1-3c): Android shows Layout and Effects as the bottom sheet wherever the overlay would show.
+                val sheet = case.platform == PanelPlatform.android && PanelPresentationPolicy.usesAndroidBottomSheet(panel)
+                val off = if (sheet && case.off == PanelHostStyle.overlay) PanelHostStyle.bottomSheet else case.off
+                val on = if (sheet && case.on == PanelHostStyle.overlay) PanelHostStyle.bottomSheet else case.on
+                assertEquals(off, PanelPresentationPolicy.style(window = case.window, platform = case.platform, panel = panel, sideStylesEnabled = false))
+                assertEquals(on, PanelPresentationPolicy.style(window = case.window, platform = case.platform, panel = panel, sideStylesEnabled = true))
+                assertEquals(off, PanelPresentationPolicy.resolve(request(panel), window = case.window, platform = case.platform, sideStylesEnabled = false).style)
+                assertEquals(on, PanelPresentationPolicy.resolve(request(panel), window = case.window, platform = case.platform, sideStylesEnabled = true).style)
                 // The host follows the shared default, whatever its value.
                 assertEquals(PanelPresentationPolicy.style(window = case.window, platform = case.platform, panel = panel,
                     sideStylesEnabled = PanelPresentationPolicy.sideStylesEnabled),
@@ -158,8 +165,11 @@ class PanelStageBridgeTests {
         assertEquals(PanelStageCoverage.full, PanelPresentationPolicy.coverage(participants, detent = PanelDetent.large))
         // The host decision DTO mirrors the shared presentation.
         val decision = panelHostDecision(request(MeetingPanel.layout), androidPortrait, sideStylesEnabled = false)
+        assertEquals(PanelHostDecision(style = PanelHostStyle.bottomSheet, coverage = PanelStageCoverage.partial, paneWidthDp = 0,
+            showsMiniTile = false, inCallAppearance = true, hasBottomComposer = false, skipsPartialSheet = false), decision)
         assertEquals(PanelHostDecision(style = PanelHostStyle.overlay, coverage = PanelStageCoverage.full, paneWidthDp = 0,
-            showsMiniTile = true, inCallAppearance = true, hasBottomComposer = false), decision)
+            showsMiniTile = true, inCallAppearance = false, hasBottomComposer = false),
+            panelHostDecision(request(MeetingPanel.participants), androidPortrait, sideStylesEnabled = false))
         assertEquals(PanelHostStyle.sidePane, panelHostDecision(request(MeetingPanel.chat), tablet, sideStylesEnabled = true).style)
         assertEquals(360, panelHostDecision(request(MeetingPanel.chat), tablet, sideStylesEnabled = true).paneWidthDp)
         assertEquals(panelHostDecision(request(MeetingPanel.chat), tablet, sideStylesEnabled = PanelPresentationPolicy.sideStylesEnabled),
@@ -316,6 +326,137 @@ class PanelStageBridgeTests {
         assertNull(panels.snapshot.current)
     }
 
+    /**
+     * SET-5 (WP1-3c, PLAN-next 3.7, PS 8.6): the coordinator's dismissal starts one hide; the acknowledgment arrives only
+     * after the hide completed and the sheet's content disposed. Scrim, swipe and Back reach the coordinator as
+     * `dismiss(cancelPending = false)`, which keeps a queued replacement.
+     */
+    @Test fun layoutSheetAcknowledgesOnlyAfterHideAndDisposal() {
+        val panels = PanelCoordinator(session = 1)
+        val lifetime = NativePanelOverlayLifetime(panels)
+        val phase = LayoutSheetPhase()
+        panels.present(MeetingPanel.layout, from = PanelInvoker.more)
+        val shown = panels.snapshot.current!!
+        val decision = panelHostDecision(shown, PanelPresentationPolicy.androidWindow(width = 360.0, height = 800.0))
+        assertEquals(PanelHostStyle.bottomSheet, decision.style)
+        assertFalse("Layout opens partially expanded", decision.skipsPartialSheet)
+        lifetime.mounted(1, shown.presentationID)
+        assertTrue(phase.composed)
+        // The scrim tap: the host asks the coordinator, which only marks the dismissal.
+        panels.dismiss(cancelPending = false)
+        assertTrue(panels.snapshot.isDismissing)
+        assertTrue("the host starts the hide", phase.dismissRequested())
+        assertFalse("a second request never starts a second hide", phase.dismissRequested())
+        lifetime.acknowledgeAbsent()
+        assertEquals("still composed while hiding: nothing acknowledged", shown, panels.snapshot.current)
+        phase.hideCompleted()
+        assertFalse(phase.composed)
+        assertEquals("the content has not disposed yet", shown, panels.snapshot.current)
+        lifetime.disposed(1, shown.presentationID)
+        assertNull("acknowledged after the hide and the disposal", panels.snapshot.current)
+        assertEquals(1, phase.hideCount)
+    }
+
+    /** The animator-scale-0 path: the hide completes at once, and the order (hide, dispose, acknowledge) still holds. */
+    @Test fun layoutSheetAnimatorScaleZeroHidesAtOnce() {
+        val panels = PanelCoordinator(session = 1)
+        val lifetime = NativePanelOverlayLifetime(panels)
+        val phase = LayoutSheetPhase()
+        panels.present(MeetingPanel.effects, from = PanelInvoker.more)
+        val shown = panels.snapshot.current!!
+        assertTrue("Effects opens expanded", panelHostDecision(shown, PanelPresentationPolicy.androidWindow(width = 360.0, height = 800.0)).skipsPartialSheet)
+        lifetime.mounted(1, shown.presentationID)
+        // A replacement queued behind the sheet: the hide, then the disposal, then the replacement opens.
+        panels.present(MeetingPanel.participants, from = PanelInvoker.more)
+        assertTrue(panels.snapshot.isDismissing)
+        if (phase.dismissRequested()) phase.hideCompleted()
+        assertFalse(phase.composed)
+        lifetime.disposed(1, shown.presentationID)
+        assertEquals(MeetingPanel.participants, panels.snapshot.current!!.panel)
+        // Accessibility text sizes open Layout expanded too (R9 on Android).
+        val layout = PanelRequest(presentationID = 9, panel = MeetingPanel.layout, invoker = PanelInvoker.call)
+        assertTrue(panelHostDecision(layout, PanelPresentationPolicy.androidWindow(width = 360.0, height = 800.0), isAccessibilitySize = true).skipsPartialSheet)
+        // The expanded side pane keeps both panels beside the stage; no sheet decision applies there.
+        val side = panelHostDecision(layout, PanelPresentationPolicy.androidWindow(width = 1280.0, height = 800.0), sideStylesEnabled = true)
+        assertEquals(PanelHostStyle.sidePane, side.style)
+        assertFalse(side.skipsPartialSheet)
+        assertEquals(640.0, PanelPresentationPolicy.bottomSheetMaxWidth, 0.0)
+    }
+
+    /**
+     * SET-5: the transpiled Layout presenter through Kotlin: one intent per real change (the slider writes each distinct
+     * value once), and the snapshot follows the inputs only.
+     */
+    @Test fun layoutPresenterWritesEachDistinctValueOnce() {
+        val presenter = LayoutPanelPresenter()
+        val kinds = mutableListOf<LayoutPanelCommandKind>()
+        presenter.onCommand = { command -> kinds.add(command.kind) }
+        presenter.apply(LayoutPanelInputs.make(callSession = 1, viewMaxTiles = 16))
+        assertEquals(ControlTapResult.ignored, presenter.setMaxTiles(16))
+        assertEquals(ControlTapResult.dispatched, presenter.setMaxTiles(17))
+        assertEquals(ControlTapResult.ignored, presenter.setMaxTiles(50))
+        assertEquals(ControlTapResult.dispatched, presenter.setViewMode("spotlight"))
+        assertEquals(ControlTapResult.ignored, presenter.setViewMode("auto"))
+        assertEquals(listOf(LayoutPanelCommandKind.setViewMaxTiles, LayoutPanelCommandKind.setViewMode), kinds)
+        assertEquals(8, presenter.snapshot.phoneCap)
+        assertEquals(46, LayoutPanelPolicy.sliderSteps)
+        assertTrue(EffectsSelfViewPolicy.liftsSelfView(platform = EffectsPlatform.ios, isEffectsOpen = true))
+        assertFalse(EffectsSelfViewPolicy.liftsSelfView(platform = EffectsPlatform.android, isEffectsOpen = true))
+        assertEquals(EffectsAvailability.hidden, EffectsAvailabilityPolicy.production(canShowSystemVideoEffects = true, platform = EffectsPlatform.android))
+    }
+
+    /**
+     * SET-5 (WP1-3c): the bottom sheet composed by the real host on a Robolectric activity (360 x 800 dp constraint):
+     * the page mounts in the Sheet variant, the stage reads partial coverage, and Close acknowledges only after the
+     * sheet's hide completed and the page disposed. Runtime-sensitive: the hide runs on the Robolectric frame clock.
+     */
+    @Test fun hostComposesLayoutSheetAndAcknowledgesAfterHide() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
+        val panels = PanelCoordinator(session = 1)
+        val lifetime = NativePanelOverlayLifetime(panels)
+        val readout = PanelHostReadout()
+        var mounts = 0
+        var disposals = 0
+        var variantSeen: InCallPageVariant? = null
+        var coverageSeen = PanelStageCoverage.none
+        activity.setContent {
+            Box(Modifier.requiredSize(360.dp, 800.dp)) {
+                NativePanelHost(
+                    panels = panels,
+                    lifetime = lifetime,
+                    focus = PanelInvokerFocus(),
+                    readout = readout,
+                    systemBars = { },
+                    stage = { coverage -> coverageSeen = coverage; Box(Modifier.fillMaxSize()) },
+                    panel = { session, request, _, variant ->
+                        variantSeen = variant
+                        DisposableEffect(Unit) {
+                            mounts++
+                            lifetime.mounted(session, request.presentationID)
+                            onDispose {
+                                disposals++
+                                lifetime.disposed(session, request.presentationID)
+                            }
+                        }
+                        Text("Layout fixture")
+                    },
+                )
+            }
+        }
+        settleHost()
+        panels.present(MeetingPanel.layout, from = PanelInvoker.more)
+        settleHost()
+        assertEquals(1, mounts)
+        assertEquals(InCallPageVariant.Sheet, variantSeen)
+        assertEquals(PanelStageCoverage.partial, coverageSeen)
+        assertEquals("style=bottomSheet coverage=partial", readout.style)
+        panels.dismiss(cancelPending = true)
+        repeat(4) { settleHost() }
+        assertEquals("disposed after the hide", 1, disposals)
+        assertNull("acknowledged once the page disposed", panels.snapshot.current)
+        assertEquals("style=none coverage=none", readout.style)
+    }
+
     @Test fun backProgressCommitCancelClamp() {
         val back = PanelBackProgress()
         assertEquals(0f, back.progress, 0f)
@@ -419,6 +560,10 @@ class PanelStageBridgeTests {
         val replacing = PanelSnapshot(session = 1, current = participants, pending = layout, isDismissing = true)
         fun decision(state: PanelSnapshot, window: PanelWindow = phone, side: Boolean = false) =
             state.current?.let { panelHostDecision(it, window, sideStylesEnabled = side) }
+        // SET-5 (WP1-3c): Layout is a bottom sheet now, whose dialog window owns its own bars, so the in-call overlay
+        // rows keep their coverage through an explicit in-call overlay decision.
+        val inCallOverlay = PanelHostDecision(style = PanelHostStyle.overlay, coverage = PanelStageCoverage.full, paneWidthDp = 0,
+            showsMiniTile = true, inCallAppearance = true, hasBottomComposer = false)
         data class Case(val name: String, val state: PanelSnapshot, val decision: PanelHostDecision?, val systemDark: Boolean,
                         val stripInCall: Boolean, val statusDark: Boolean, val navigationDark: Boolean)
         val cases = listOf(
@@ -427,16 +572,17 @@ class PanelStageBridgeTests {
             Case("no panel, dark", none, null, true, false, true, true),
             Case("participants overlay, light", participantsShown, decision(participantsShown), false, false, false, false),
             Case("participants overlay, dark", participantsShown, decision(participantsShown), true, false, true, true),
-            Case("layout from call, light", layoutShown, decision(layoutShown), false, false, true, true),
-            Case("layout from call, dark", layoutShown, decision(layoutShown), true, false, true, true),
-            Case("layout closing, light", layoutClosing, decision(layoutClosing), false, false, false, false),
+            Case("in-call overlay, light", layoutShown, inCallOverlay, false, false, true, true),
+            Case("in-call overlay, dark", layoutShown, inCallOverlay, true, false, true, true),
+            Case("in-call overlay closing, light", layoutClosing, inCallOverlay, false, false, false, false),
+            Case("layout bottom sheet leaves the root bars, light", layoutShown, decision(layoutShown), false, false, false, false),
             Case("replacement keeps overlay, light", replacing, decision(replacing), false, false, false, false),
             Case("side pane is no overlay, light", participantsShown, decision(participantsShown, tablet, side = true), false, false, false, false),
             // A strip that reaches the bottom edge (the production call root, WP6): the navigation bar shows it.
             Case("no panel, strip, light", none, null, false, true, false, true),
             Case("participants overlay, strip, light", participantsShown, decision(participantsShown), false, true, false, false),
-            Case("layout from call, strip, light", layoutShown, decision(layoutShown), false, true, true, true),
-            Case("layout closing, strip, light", layoutClosing, decision(layoutClosing), false, true, false, true),
+            Case("in-call overlay, strip, light", layoutShown, inCallOverlay, false, true, true, true),
+            Case("in-call overlay closing, strip, light", layoutClosing, inCallOverlay, false, true, false, true),
             Case("no panel, strip, dark", none, null, true, true, true, true),
         )
         for (case in cases) {
@@ -447,7 +593,8 @@ class PanelStageBridgeTests {
             assertEquals("${case.name}: navigation bar", case.navigationDark, bars.navigationDark)
         }
         assertEquals(PanelBarInputs(overlayVisible = false, overlayInCall = false), panelBarInputs(none, null))
-        assertEquals(PanelBarInputs(overlayVisible = true, overlayInCall = true), panelBarInputs(layoutShown, decision(layoutShown)))
+        assertEquals(PanelBarInputs(overlayVisible = true, overlayInCall = true), panelBarInputs(layoutShown, inCallOverlay))
+        assertEquals(PanelBarInputs(overlayVisible = false, overlayInCall = false), panelBarInputs(layoutShown, decision(layoutShown)))
     }
 
     @Test fun focusRestoreTargetsLastInvoker() {

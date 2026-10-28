@@ -9,6 +9,13 @@
 //  This target stays pure Swift + ReplayKit so it can run inside the broadcast
 //  extension without importing the Skip-transpiled Conclave module.
 //
+//  SYS-10 (S70 10 c, g): the system alert iOS shows when the broadcast
+//  finishes reads a localized, friendly sentence from this extension's own
+//  String Catalog (its process cannot read the app's Bundle.module): an in-app
+//  stop says "Screen sharing stopped.", a lost connection says why, and a start
+//  that never connected (or that the app gave up on) says "Couldn't start
+//  screen sharing. Try again." Device audio stays off (S70 O6, SY23).
+//
 
 import CoreGraphics
 import CoreImage
@@ -61,6 +68,8 @@ final class SampleHandler: RPBroadcastSampleHandler {
   private let lifecycleStateKey = "conclave.screenShare.lifecycle.state"
   private let lifecycleUpdatedAtKey = "conclave.screenShare.lifecycle.updatedAt"
   private let stopRequestedAtKey = "conclave.screenShare.lifecycle.stopRequestedAt"
+  /// `ScreenShareBroadcastStopReason` raw value the app writes with the stop request ("person" or "startTimeout").
+  private let stopReasonKey = "conclave.screenShare.lifecycle.stopReason"
   private var broadcastStartedAt: TimeInterval = 0
 
   private func log(_ message: String, _ metadata: [String: Any] = [:]) {
@@ -118,9 +127,12 @@ final class SampleHandler: RPBroadcastSampleHandler {
     with sampleBufferType: RPSampleBufferType
   ) {
     guard !didFinishBroadcast else { return }
+    // S70 10 a, O6 and SY23 (RECONCILE R43): `.audioApp` buffers would be forwarded only once iOS device audio
+    // ships (`ScreenShareCapabilityPolicy.iosDeviceAudioShips` is false in v1, pending a physical-device cell for
+    // the extension's 50 MB budget); `.audioMic` is never used (the picker hides the microphone button).
     guard sampleBufferType == .video else { return }
     if wasStopRequestedByMainApp() {
-      finishDueToConnectionLoss(message: "Screen sharing stopped.", intentional: true)
+      finishBroadcast(stopReasonRequestedByMainApp())
       return
     }
     videoSampleCount += 1
@@ -171,11 +183,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
             "hasConnectedAtLeastOnce": hasConnectedAtLeastOnce,
             "videoSampleCount": videoSampleCount,
           ])
-          finishDueToConnectionLoss(
-            message: hasConnectedAtLeastOnce
-              ? "Screen sharing stopped."
-              : "Unable to start screen sharing. Please try again."
-          )
+          finishBroadcast(hasConnectedAtLeastOnce ? .connectionLost : .neverConnected)
           return
         }
       }
@@ -251,7 +259,19 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
   }
 
-  private func finishDueToConnectionLoss(message: String, intentional: Bool = false) {
+  /// Why the extension finishes the broadcast; each reads its own system alert sentence (S70 10 g).
+  private enum FinishReason {
+    /// The person stopped from the app.
+    case stoppedByApp
+    /// The app gave up on a start whose socket never connected (its 8 s grace).
+    case startTimeout
+    /// The socket dropped after the share was live and did not come back in time.
+    case connectionLost
+    /// The socket never connected within this extension's own initial timeout.
+    case neverConnected
+  }
+
+  private func finishBroadcast(_ reason: FinishReason) {
     if didFinishBroadcast { return }
     didFinishBroadcast = true
     socketConnection?.close()
@@ -259,19 +279,46 @@ final class SampleHandler: RPBroadcastSampleHandler {
     isConnected = false
     publishLifecycleState("stopped")
 
+    let intentional = reason == .stoppedByApp
     if intentional {
       log("Intentional stop - finishing broadcast gracefully")
     } else {
-      log("Connection loss - finishing broadcast with error")
+      log("Finishing broadcast with error", ["reason": String(describing: reason)])
     }
     let error = NSError(
       domain: "com.acmvit.conclave.screenshare",
       code: intentional ? 0 : -1,
-      userInfo: [NSLocalizedDescriptionKey: intentional ? "user stopped the screen share" : message]
+      userInfo: [NSLocalizedDescriptionKey: SampleHandler.alertMessage(for: reason)]
     )
     DispatchQueue.main.async { [weak self] in
       self?.finishBroadcastWithError(error)
     }
+  }
+
+  /// The localized sentence iOS shows in its system alert when the broadcast finishes (S70 10 c, g).
+  private static func alertMessage(for reason: FinishReason) -> String {
+    switch reason {
+    case .stoppedByApp:
+      return NSLocalizedString(
+        "Screen sharing stopped.",
+        comment: "System alert after the person stopped screen sharing from Conclave (S70 10 g)"
+      )
+    case .connectionLost:
+      return NSLocalizedString(
+        "Screen sharing stopped because Conclave lost the connection.",
+        comment: "System alert when the broadcast lost its connection to Conclave while sharing (S70 10 g)"
+      )
+    case .startTimeout, .neverConnected:
+      return NSLocalizedString(
+        "Couldn’t start screen sharing. Try again.",
+        comment: "System alert when a screen share broadcast never connected to Conclave (S70 10 g)"
+      )
+    }
+  }
+
+  private func stopReasonRequestedByMainApp() -> FinishReason {
+    let raw = UserDefaults(suiteName: appGroupIdentifier)?.string(forKey: stopReasonKey)
+    return raw == "startTimeout" ? .startTimeout : .stoppedByApp
   }
 
   private func reloadPublishConfiguration() {

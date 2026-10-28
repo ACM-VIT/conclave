@@ -12,12 +12,17 @@ import androidx.compose.runtime.remember
  * dispatches End once per id (S1C DUP), after which the presenter shows the progress toast and Leave stays live (R09).
  * `endForEveryonePrompted` plays once per new confirmation (silent on Android per the contract table, kept for the
  * route's parity with iOS, S30 4 h). The open dialog keeps chrome up through the presenter's `end.dialog` (CC16).
- * The recap variant (two confirm buttons) arrives with TRN-2 (CC8) when `offersRecap` can be true.
+ * The recap variant (two confirm buttons) is RecapEndDialog (TRN-2, CC8).
  */
 
 @Composable
 internal fun EndForEveryoneDialog(leave: LeaveUi, controls: CallControlsPresenter, haptics: ConclaveGestureHaptics) {
     val id = leave.confirmationId
+    if (leave.offersRecap) {
+        // TRN-2 (S30 4 d recap variant, CC8): the two-confirm dialog while the recap is on offer.
+        RecapEndDialog(confirmationId = id, controls = controls, haptics = haptics)
+        return
+    }
     val model = rememberEndForEveryoneDialogModel()
     LaunchedEffect(id) {
         haptics.gesture(FeedbackKind.endForEveryonePrompted)

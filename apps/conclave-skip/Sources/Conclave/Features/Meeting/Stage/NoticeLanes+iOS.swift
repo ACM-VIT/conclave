@@ -320,9 +320,11 @@ enum NoticeCopy {
                 return text
             }
             return ConclaveStrings.text("That didn’t go through. Try again.")
+        case NoticeKind.shareFailed:
+            // S70 10 g (SYS-10): "Couldn’t start screen sharing. Try again." or, for deniedBySystem,
+            // "Screen sharing isn’t allowed on this device."
+            return ConclaveStrings.text(ScreenShareFailurePolicy.iosCopyKey(detail: notice.detail))
         default:
-            // shareFailed (S70 10 reasons) resolves through its owner's copy table (SYS-8 request); until then the
-            // generic failure sentence stands in.
             return ConclaveStrings.text("That didn’t go through. Try again.")
         }
     }

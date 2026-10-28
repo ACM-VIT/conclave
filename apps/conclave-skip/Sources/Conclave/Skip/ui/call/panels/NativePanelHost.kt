@@ -74,7 +74,10 @@ internal class NativePanelOverlayLifetime(private val coordinator: PanelCoordina
 internal fun panelContainerVisible(state: PanelSnapshot): Boolean =
     state.current != null && !(state.isDismissing && state.pending == null)
 
-/** The host's cached decision for one presentation and window class (PS 8.2). */
+/**
+ * The host's cached decision for one presentation and window class (PS 8.2). `skipsPartialSheet` matters only for the
+ * WP1-3c bottom sheet (SET-5): Effects and accessibility text sizes open it expanded.
+ */
 internal data class PanelHostDecision(
     val style: PanelHostStyle,
     val coverage: PanelStageCoverage,
@@ -82,6 +85,7 @@ internal data class PanelHostDecision(
     val showsMiniTile: Boolean,
     val inCallAppearance: Boolean,
     val hasBottomComposer: Boolean,
+    val skipsPartialSheet: Boolean = false,
 )
 
 internal fun panelHostDecision(
@@ -99,6 +103,8 @@ internal fun panelHostDecision(
         showsMiniTile = presentation.showsMiniTile,
         inCallAppearance = presentation.appearance == PanelAppearance.inCall,
         hasBottomComposer = presentation.hasBottomComposer,
+        skipsPartialSheet = presentation.style == PanelHostStyle.bottomSheet &&
+            PanelPresentationPolicy.bottomSheetSkipsPartialState(request.panel, isAccessibilitySize = isAccessibilitySize),
     )
 }
 
@@ -275,6 +281,10 @@ internal class PanelHostReadout {
  * nothing is acknowledged and the coordinator keeps its request. Each presentation also gets its [PanelPageStack]
  * through [LocalPanelPageStack] (PNL-1, S40 R40-12): Back pops an inner page first, and the gesture moves that
  * page; at the root Back closes the panel, scaling the overlay or sliding the side pane toward its outer edge.
+ * SET-5 (WP1-3c, PS 8.6) adds the bottom sheet for Layout and Effects in compact and medium windows: [LayoutSheetHost]
+ * stays composed through the coordinator's dismissal until its hide completes, so the content acknowledges only after
+ * the sheet is gone; the stage reads partial coverage under it (never hidden from accessibility), and the sheet's
+ * dialog window handles Back and predictive back itself.
  */
 @Composable
 internal fun NativePanelHost(
@@ -298,7 +308,9 @@ internal fun NativePanelHost(
         val visible = panelContainerVisible(state)
         val overlay = decision != null && decision.style == PanelHostStyle.overlay && visible
         val sidePane = decision != null && decision.style == PanelHostStyle.sidePane && visible
-        val coverage = if (overlay && decision != null) decision.coverage else PanelStageCoverage.none
+        // The sheet follows the current request, through the dismissal, until its hide completes (PS 8.6).
+        val bottomSheet = decision != null && decision.style == PanelHostStyle.bottomSheet && request != null
+        val coverage = if ((overlay || bottomSheet) && decision != null) decision.coverage else PanelStageCoverage.none
         val covered = coverage == PanelStageCoverage.full
         val back = remember(state.session, request?.presentationID) { PanelBackProgress() }
         val pages = remember(state.session, request?.presentationID) { PanelPageStack() }
@@ -317,7 +329,7 @@ internal fun NativePanelHost(
             }
         }
         systemBars(panelBarInputs(state, decision))
-        SideEffect { readout.update(decision, overlay || sidePane) }
+        SideEffect { readout.update(decision, overlay || sidePane || bottomSheet) }
         Row(Modifier.fillMaxSize()) {
             // The stage container alone reads the coverage, so opening a panel never recomposes stage tiles.
             // Covered: hidden from accessibility, and keyboard focus cannot enter it from the overlay.
@@ -360,6 +372,25 @@ internal fun NativePanelHost(
                 }
             }
         }
+        if (bottomSheet && request != null && decision != null) {
+            // WP1-3c (SET-5): one sheet per presentation, keyed so a replacement gets a fresh sheet state. The page is
+            // invoked directly, not through the movable content: the sheet composes in its own dialog window, and a
+            // window-class change to the side pane remounts the page (a disposal while not dismissing is a coordinator
+            // no-op, PS 8.3 fallback).
+            key(state.session, request.presentationID) {
+                val session = state.session
+                LayoutSheetHost(
+                    dismissing = state.isDismissing,
+                    skipPartiallyExpanded = decision.skipsPartialSheet,
+                    inCallAppearance = decision.inCallAppearance,
+                    onDismissRequest = { panels.dismiss(cancelPending = false) },
+                ) {
+                    CompositionLocalProvider(LocalPanelPageStack provides pages) {
+                        latestPanel(session, request, decision, InCallPageVariant.Sheet)
+                    }
+                }
+            }
+        }
         SideEffect { lifetime.acknowledgeAbsent() }
         // Registered after the root handler, so it wins while a panel is open; the root handler closes the
         // preview only when no panel is current (PS 8.5).
@@ -377,7 +408,7 @@ internal fun NativePanelHost(
         }
         // A move between the overlay and the side pane keeps the panel visible, so it restores nothing; a close
         // from either returns focus to the opener.
-        val panelVisible = overlay || sidePane
+        val panelVisible = overlay || sidePane || bottomSheet
         LaunchedEffect(panelVisible) {
             val target = focus.tracker.update(panelVisible) ?: return@LaunchedEffect
             requestPanelFocus(PANEL_FOCUS_ATTEMPTS, awaitFrame = { withFrameNanos { } }) { focus.restore(target) }

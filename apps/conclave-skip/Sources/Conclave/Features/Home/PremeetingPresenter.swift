@@ -525,6 +525,12 @@ final class PremeetingPresenter {
         visibleLobbyRouteId = 0
         stopPresencePolling()
         cancelSlowNotice()
+        // ENT-4 (S10 7 j, HD request B7-T8 R1): leaving for anything but the hand-off cancels pending permission
+        // requests, so a queued prompt never surfaces on Home (7 l3); connecting, waiting and the call keep them.
+        if LobbyPermissionCleanupPolicy.cancelsRequests(mode: root.lobbyMode ?? LobbyMode.editing,
+                                                        isCallRoot: root.root == .call, handedOff: previewHandedOff) {
+            lobbyHooks?.cancelPermissionRequests?()
+        }
         updatePreviewDemand()
     }
 

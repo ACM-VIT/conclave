@@ -4,7 +4,8 @@ import Foundation
 // presenter, the join sheet on both platforms and the legacy JoinView share. Transpiled; String raw-value enums and
 // scalar structs only (S1C 3.6). The room code generator and the input sanitizer moved here from JoinView, which now
 // calls them (one implementation, unchanged rules). The lobby rules (JoinFormErrorPolicy, the invite code rules, the
-// display name rules) move with the lobby slice (ENT-3).
+// display name rules) move with the lobby slice (ENT-3). ENT-4 (S10 7 j) adds the one MediaPermissionState mapping
+// both platforms' permission providers use.
 
 enum EntryPolicies {
     // MARK: Room codes (moved from JoinView, PRE 3.3)
@@ -159,4 +160,62 @@ enum EntryPolicies {
     static func roomLabel(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    // MARK: Media permissions (ENT-4, S10 7 c, d, f, j, k)
+
+    /// The one mapping from a platform answer to the lobby's `MediaPermissionState` (iOS `AVAuthorizationStatus` or
+    /// `AVAudioApplication.recordPermission`, through `PlatformCaptureAuthorization`). No capture device wins over
+    /// any answer: the card says the camera isn't available instead of asking for it (S10 6 f).
+    static func mediaPermissionState(authorization: PlatformCaptureAuthorization, hasDevice: Bool) -> MediaPermissionState {
+        guard hasDevice else { return .unavailable }
+        switch authorization {
+        case .authorized:
+            return .granted
+        case .notDetermined:
+            return .notDetermined
+        case .denied:
+            return .denied
+        case .restricted:
+            return .restricted
+        }
+    }
+
+    /// iOS asks exactly once: only an undetermined status can still show the system prompt (S10 7 c, g: no rationale
+    /// flow and no second request; a denial routes to Settings).
+    static func iosCanAskAgain(_ state: MediaPermissionState) -> Bool {
+        state == .notDetermined
+    }
+
+    /// Android has no "not determined" answer of its own: `checkSelfPermission` says granted or not, so the first
+    /// request the lobby launched is remembered (`PermissionHelper`), and before it the state is `notDetermined`.
+    static func androidMediaPermissionState(hasDevice: Bool, isGranted: Bool, wasRequested: Bool) -> MediaPermissionState {
+        guard hasDevice else { return .unavailable }
+        if isGranted { return .granted }
+        return wasRequested ? MediaPermissionState.denied : MediaPermissionState.notDetermined
+    }
+
+    /// Whether the Android system would still show its prompt (S10 7 d): before the first request, while the system
+    /// asks for a rationale (`shouldShowRequestPermissionRationale`), and after a dismissed first prompt that never
+    /// became a permanent denial. `isBlocked` is the permanent denial `androidDenialBlocks` recorded.
+    static func androidCanAskAgain(isGranted: Bool, wasRequested: Bool, showsRationale: Bool, isBlocked: Bool) -> Bool {
+        if isGranted || !wasRequested || showsRationale { return true }
+        return !isBlocked
+    }
+
+    /// S10 7 d "permanently denied (request returns denied and rationale false)": read right after a refused
+    /// request. A rationale after the refusal means "denied once, ask again". No rationale after it is permanent when
+    /// the system had wanted a rationale before this request (the second refusal, or "Don't ask again"), or when an
+    /// earlier request was refused too (the prompt no longer shows at all). A first refusal with no rationale before
+    /// or after is a dismissed prompt (tapped outside, API 30 and later), which may be asked once more.
+    static func androidDenialBlocks(rationaleBefore: Bool, rationaleAfter: Bool, previousDenials: Int) -> Bool {
+        if rationaleAfter { return false }
+        return rationaleBefore || previousDenials > 0
+    }
+}
+
+/// One platform's authorization answer for a capture device, before the lobby maps it (S10 7 j): iOS
+/// `AVAuthorizationStatus` (`authorized`, `notDetermined`, `denied`, `restricted`) and `AVAudioApplication`
+/// `recordPermission` (`granted`, `undetermined`, `denied`) both fold into these four.
+enum PlatformCaptureAuthorization: String, CaseIterable, Equatable {
+    case authorized, notDetermined, denied, restricted
 }

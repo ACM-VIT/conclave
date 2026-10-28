@@ -15,14 +15,16 @@ import SwiftUI
 /// Pushed pages of the Account sheet's own stack: the privacy policy, the app-scope Settings (RECONCILE R26) and its
 /// Voice Messages page (the only Settings page the app scope pushes besides the privacy policy).
 enum AccountRoute: String, Hashable, CaseIterable {
-    case privacy, settings, settingsVoice
+    case privacy, settings, settingsVoice, settingsCameraQuality, settingsCameraAdvanced
 
-    /// The app-scope Settings root pushes onto this stack: the privacy policy and the Voice Messages page; nothing else
-    /// is pushed in the app scope (camera, share, connection and host pages are call only).
+    /// The app-scope Settings root pushes onto this stack: the privacy policy, the Voice Messages page and Camera
+    /// Quality with its Advanced page (SET-3); share, connection and host pages are call only.
     static func settingsLink(_ route: SettingsRoute) -> AccountRoute? {
         switch route {
         case .privacy: return AccountRoute.privacy
         case .voice: return AccountRoute.settingsVoice
+        case .cameraQuality: return AccountRoute.settingsCameraQuality
+        case .cameraAdvanced: return AccountRoute.settingsCameraAdvanced
         default: return nil
         }
     }
@@ -46,7 +48,7 @@ struct AccountView: View {
     @State private var path: [AccountRoute] = []
     /// RECONCILE R26: the app-scope Settings content source (no call, no core); it reads and writes the same preference
     /// stores as the in-call panel.
-    @State private var appSettings = SettingsPresenter(scope: SettingsScope.app)
+    @State private var appSettings = AccountView.makeAppSettings()
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -59,6 +61,10 @@ struct AccountView: View {
                         SettingsAppScopeList(settings: appSettings, link: { AccountRoute.settingsLink($0) })
                     case .settingsVoice:
                         SettingsVoicePage(settings: appSettings, link: { AccountRoute.settingsLink($0) })
+                    case .settingsCameraQuality:
+                        SettingsVideoPage(route: SettingsRoute.cameraQuality, settings: appSettings, link: { AccountRoute.settingsLink($0) })
+                    case .settingsCameraAdvanced:
+                        SettingsVideoPage(route: SettingsRoute.cameraAdvanced, settings: appSettings, link: { AccountRoute.settingsLink($0) })
                     }
                 }
                 .toolbar {
@@ -69,6 +75,14 @@ struct AccountView: View {
         }
         .presentationDetents([.large])
         .modifier(AccountDismissGuard(account: account))
+    }
+
+    /// RECONCILE R26 with S70 15 a (R70-4): the app scope offers Export Diagnostics too, which matters most after a
+    /// failed join, when no call exists.
+    private static func makeAppSettings() -> SettingsPresenter {
+        let settings = SettingsPresenter(scope: SettingsScope.app)
+        settings.apply(SettingsInputs.make(canExportDiagnostics: DiagnosticsExportPolicy.isOffered))
+        return settings
     }
 }
 

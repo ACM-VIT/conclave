@@ -641,11 +641,13 @@ struct DesignContractsTests {
             #expect(ios.detents == PanelPresentationPolicy.sheetDetents(panel), "\(panel)")
             #expect(ios.initialDetent == PanelPresentationPolicy.initialSheetDetent(panel), "\(panel)")
             #expect(!ios.showsMiniTile && ios.paneWidth == 0, "\(panel)")
+            // SET-5 (WP1-3c, PS 8.6): Layout and Effects are the partial bottom sheet; every content panel the overlay.
+            let sheet = panel == .layout || panel == .effects
             let android = PanelPresentationPolicy.resolve(request(panel), window: androidPhone, platform: .android)
-            #expect(android.style == .overlay, "\(panel)")
-            #expect(android.showsMiniTile, "\(panel)")
+            #expect(android.style == (sheet ? .bottomSheet : .overlay), "\(panel)")
+            #expect(android.showsMiniTile == !sheet, "\(panel)")
             #expect(android.detents.isEmpty && android.initialDetent == nil && android.paneWidth == 0, "\(panel)")
-            #expect(PanelPresentationPolicy.coverage(android, detent: nil) == .full, "\(panel)")
+            #expect(PanelPresentationPolicy.coverage(android, detent: nil) == (sheet ? .partial : .full), "\(panel)")
             #expect(android.hasBottomComposer == ios.hasBottomComposer, "\(panel)")
         }
     }
@@ -726,10 +728,14 @@ struct DesignContractsTests {
         #expect(PanelPresentationPolicy.coverage(overlay, detent: nil) == .full)
         let side = PanelPresentationPolicy.resolve(request(.participants), window: PanelPresentationPolicy.androidWindow(width: 1280, height: 800), platform: .android, sideStylesEnabled: true)
         #expect(side.style == .sidePane && PanelPresentationPolicy.coverage(side, detent: nil) == PanelStageCoverage.none)
-        // The policy returns no bottom sheet until WP1-3c; the rule still holds for the style.
+        // SET-5 (WP1-3c): the policy returns the bottom sheet for Layout and Effects on Android phones; it is partial.
         let bottom = PanelPresentation(style: .bottomSheet, detents: [], initialDetent: nil, appearance: .inCall,
                                        showsMiniTile: false, paneWidth: 0, hasBottomComposer: false)
         #expect(PanelPresentationPolicy.coverage(bottom, detent: nil) == .partial)
+        let layoutSheet = PanelPresentationPolicy.resolve(request(.layout), window: PanelPresentationPolicy.androidWindow(width: 360, height: 800),
+                                                          platform: .android)
+        #expect(layoutSheet == bottom)
+        #expect(PanelPresentationPolicy.coverage(layoutSheet, detent: .large) == .partial)
     }
 
     @Test func panelPolicySideStylesFlagCoversBothBranches() {
@@ -749,10 +755,14 @@ struct DesignContractsTests {
         ]
         for (window, platform, off, on) in windows {
             for panel in MeetingPanel.allCases {
-                #expect(PanelPresentationPolicy.style(window: window, platform: platform, panel: panel, sideStylesEnabled: false) == off)
-                #expect(PanelPresentationPolicy.style(window: window, platform: platform, panel: panel, sideStylesEnabled: true) == on)
-                #expect(PanelPresentationPolicy.resolve(request(panel), window: window, platform: platform, sideStylesEnabled: false).style == off)
-                #expect(PanelPresentationPolicy.resolve(request(panel), window: window, platform: platform, sideStylesEnabled: true).style == on)
+                // SET-5 (WP1-3c): Android shows Layout and Effects as the bottom sheet wherever the overlay would show.
+                let sheet = platform == .android && (panel == .layout || panel == .effects)
+                let expectedOff: PanelHostStyle = sheet && off == .overlay ? .bottomSheet : off
+                let expectedOn: PanelHostStyle = sheet && on == .overlay ? .bottomSheet : on
+                #expect(PanelPresentationPolicy.style(window: window, platform: platform, panel: panel, sideStylesEnabled: false) == expectedOff)
+                #expect(PanelPresentationPolicy.style(window: window, platform: platform, panel: panel, sideStylesEnabled: true) == expectedOn)
+                #expect(PanelPresentationPolicy.resolve(request(panel), window: window, platform: platform, sideStylesEnabled: false).style == expectedOff)
+                #expect(PanelPresentationPolicy.resolve(request(panel), window: window, platform: platform, sideStylesEnabled: true).style == expectedOn)
             }
         }
         let inspector = PanelPresentationPolicy.resolve(request(.settings), window: Self.padFullScreen, platform: .iOS, sideStylesEnabled: true)
@@ -779,10 +789,13 @@ struct DesignContractsTests {
                                                 platform: .android).style == .overlay)
         #expect(PanelPresentationPolicy.resolve(request(.participants), window: Self.phoneLandscape, platform: .iOS).style == .sheet)
         #expect(PanelPresentationPolicy.resolve(request(.participants), window: Self.phonePortrait, platform: .iOS).style == .sheet)
-        // Owner default Q8 (3): Android medium width (600 to 839 dp) keeps the full overlay, revisited in WP6.
+        // Owner default Q8 (3): Android medium width (600 to 839 dp) keeps the full overlay for content panels, revisited
+        // in WP6; SET-5 (WP1-3c) shows Layout and Effects there as the bottom sheet, at most 640 dp wide.
         for width in [600.0, 720.0, 839.9] {
             let medium = PanelPresentationPolicy.androidWindow(width: width, height: 1000)
             #expect(PanelPresentationPolicy.style(window: medium, platform: .android, panel: .participants) == .overlay, "\(width)")
+            #expect(PanelPresentationPolicy.style(window: medium, platform: .android, panel: .layout) == .bottomSheet, "\(width)")
+            #expect(PanelPresentationPolicy.style(window: medium, platform: .android, panel: .effects) == .bottomSheet, "\(width)")
         }
         // Owner default Q8 (2): side styles only on regular x regular, for every panel, following the window alone.
         for (window, platform) in [(Self.padFullScreen, PanelPlatform.iOS), (tablet, PanelPlatform.android)] {
@@ -819,6 +832,37 @@ struct DesignContractsTests {
         // One implementation of the rule: the policy carries no second copy.
         let policy = try panelSource("Sources/Conclave/Features/Meeting/Panels/PanelPresentationPolicy.swift")
         #expect(!policy.contains("func detentAfterTextFocus"))
+    }
+
+    // MARK: WP1-3c Android LayoutSheet (absorbed by SET-5; PLAN-next 3.7, PS 8.6)
+
+    @Test func wp13cBottomSheetRowsForLayoutAndEffects() {
+        let compact = PanelPresentationPolicy.androidWindow(width: 360, height: 800)
+        let tablet = PanelPresentationPolicy.androidWindow(width: 1280, height: 800)
+        for panel in [MeetingPanel.layout, MeetingPanel.effects] {
+            for invoker in [PanelInvoker.call, PanelInvoker.more, PanelInvoker.settings] {
+                for isAccessibilitySize in [false, true] {
+                    let sheet = PanelPresentationPolicy.resolve(request(panel, invoker), window: compact, platform: .android,
+                                                                isAccessibilitySize: isAccessibilitySize)
+                    // Policy rows: bottom sheet, coverage partial, dark from every invoker, no mini tile, no iOS detents.
+                    #expect(sheet.style == .bottomSheet && sheet.appearance == .inCall && !sheet.showsMiniTile, "\(panel)")
+                    #expect(PanelPresentationPolicy.coverage(sheet, detent: nil) == .partial, "\(panel)")
+                    #expect(sheet.detents.isEmpty && sheet.initialDetent == nil && sheet.paneWidth == 0 && !sheet.hasBottomComposer)
+                    // R9 on Android: Effects opens expanded; Layout partially, expanded at accessibility sizes.
+                    #expect(PanelPresentationPolicy.bottomSheetSkipsPartialState(panel, isAccessibilitySize: isAccessibilitySize)
+                            == (panel == .effects || isAccessibilitySize), "\(panel)")
+                }
+            }
+            #expect(PanelPresentationPolicy.resolve(request(panel), window: tablet, platform: .android).style == .sidePane)
+            // iOS keeps the R9 detents: Effects short then large, Layout medium then large.
+            let ios = PanelPresentationPolicy.resolve(request(panel), window: Self.phonePortrait, platform: .iOS)
+            #expect(ios.style == .sheet && ios.detents == (panel == .effects ? [.short, .large] : [.medium, .large]))
+        }
+        #expect(PanelPresentationPolicy.bottomSheetMaxWidth == 640)
+        for panel in MeetingPanel.allCases where panel != .layout && panel != .effects {
+            #expect(!PanelPresentationPolicy.usesAndroidBottomSheet(panel), "\(panel)")
+            #expect(PanelPresentationPolicy.resolve(request(panel), window: compact, platform: .android).style == .overlay, "\(panel)")
+        }
     }
 
     // MARK: WP1-3b1 renderer identity ledger (PS 6.3, P2)
@@ -1210,8 +1254,17 @@ struct DesignContractsTests {
         // The side pane follows the stage in the same Row, so the stage only narrows; it is never modal.
         #expect(host.contains("stage(coverage) } // Non-modal: the stage stays visible and reachable, and traversal reads the stage, then the pane. if (sidePane && request != null && decision != null && movablePanel != null) { PanelSidePane(decision, back, rightToLeft) {"))
         #expect(host.contains("Modifier.width(decision.paneWidthDp.dp).fillMaxHeight().focusGroup()"))
-        #expect(host.contains("SideEffect { readout.update(decision, overlay || sidePane) }"))
-        #expect(host.contains("val panelVisible = overlay || sidePane LaunchedEffect(panelVisible) { val target = focus.tracker.update(panelVisible) ?: return@LaunchedEffect"))
+        #expect(host.contains("SideEffect { readout.update(decision, overlay || sidePane || bottomSheet) }"))
+        #expect(host.contains("val panelVisible = overlay || sidePane || bottomSheet LaunchedEffect(panelVisible) { val target = focus.tracker.update(panelVisible) ?: return@LaunchedEffect"))
+        // SET-5 (WP1-3c, PS 8.6): the sheet follows the current request through the dismissal until its hide completes,
+        // keyed per presentation; the page renders in the Sheet variant; the stage reads partial coverage under it.
+        #expect(host.contains("val bottomSheet = decision != null && decision.style == PanelHostStyle.bottomSheet && request != null"))
+        #expect(host.contains("val coverage = if ((overlay || bottomSheet) && decision != null) decision.coverage else PanelStageCoverage.none"))
+        #expect(host.contains("key(state.session, request.presentationID) { val session = state.session LayoutSheetHost( dismissing = state.isDismissing, skipPartiallyExpanded = decision.skipsPartialSheet, inCallAppearance = decision.inCallAppearance, onDismissRequest = { panels.dismiss(cancelPending = false) }, ) {"))
+        let sheetHost = panelNormalized(try panelSource("Sources/Conclave/Skip/ui/call/panels/LayoutSheetHost.kt"))
+        #expect(sheetHost.contains("@OptIn(ExperimentalMaterial3Api::class) @Composable internal fun LayoutSheetHost("))
+        #expect(sheetHost.contains("semantics { testTagsAsResourceId = true }"))
+        #expect(sheetHost.contains("properties = ModalBottomSheetProperties(isAppearanceLightStatusBars = lightBars, isAppearanceLightNavigationBars = lightBars),"))
         #expect(host.components(separatedBy: "panel(state.session, request, decision,").count - 1 == 0)
         #expect(host.contains("SideEffect { lifetime.acknowledgeAbsent() }"))
         #expect(host.contains("PredictiveBackHandler(enabled = request != null && !state.isDismissing)"))
@@ -1274,6 +1327,8 @@ struct DesignContractsTests {
             "Sources/Conclave/Skip/ui/call/panels/PanelBackProgress.kt",
             "Sources/Conclave/Skip/ui/call/panels/InCallPage.kt",
             "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt",
+            "Sources/Conclave/Skip/ui/call/panels/LayoutSheetHost.kt",
+            "Sources/Conclave/Features/Meeting/Panels/LayoutPanelPresenter.swift",
             "Sources/Conclave/Skip/ui/hosting/NativeHostingRows.kt",
             "Sources/Conclave/Skip/ui/hosting/RendererProbe.kt",
             "Tests/ConclaveTests/Skip/PanelStageBridgeTests.kt",
@@ -1320,7 +1375,7 @@ struct DesignContractsTests {
         // PNL-1 adds native_panel_back (the nested-page Back icon) through HD/strings/B2-T3.json.
         #expect(used.count == 14 && used == defined, "\(used.symmetricDifference(defined).sorted())")
         for file in ["Sources/Conclave/Skip/ui/call/panels/InCallPage.kt", "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt",
-                     "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt"] {
+                     "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt", "Sources/Conclave/Skip/ui/call/panels/LayoutSheetHost.kt"] {
             #expect(panelMatches(#"Text\(\s*""#, in: try panelSource(file)).isEmpty, "\(file) has a literal Text")
         }
     }

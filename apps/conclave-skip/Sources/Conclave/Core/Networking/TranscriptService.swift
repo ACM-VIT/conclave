@@ -240,6 +240,8 @@ final class TranscriptService {
         state.beginQuestion(id: id, question: trimmed, timestamp: now)
         let didSend = sendJSON(["type": "qa.ask", "id": id, "question": trimmed])
         if !didSend {
+            // TRN-2 (S60 6 f): typed "not sent" for the native Ask row; the legacy string stays for the legacy panel.
+            state.markQuestionNotSent(id: id)
             state.applyQuestionUpdate(
                 id: id,
                 question: trimmed,
@@ -508,14 +510,20 @@ final class TranscriptService {
             state.sessionTransportMode = transportMode
         }
         let nextControllerName: String?
+        var nextControllerUserId = ""
         if let controller = session["controller"] as? [String: Any] {
             let trimmed = (controller["displayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             nextControllerName = trimmed?.isEmpty == false ? trimmed : nil
+            // TRN-2 (web `session.controller.userId`): "Hosted by you" and the controller's Stop (S60 6 f).
+            nextControllerUserId = ((controller["userId"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             nextControllerName = nil
         }
         if state.controllerName != nextControllerName {
             state.controllerName = nextControllerName
+        }
+        if state.controllerUserId != nextControllerUserId {
+            state.controllerUserId = nextControllerUserId
         }
         if session.keys.contains("error") {
             let rawError = (session["error"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
