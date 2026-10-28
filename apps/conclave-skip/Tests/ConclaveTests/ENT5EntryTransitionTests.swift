@@ -310,7 +310,8 @@ struct ENT5EntryTransitionTests {
         let card = try ent5Source("Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift")
         #expect(card.contains(".entryTransitionAnchor(routeId: media.routeId)"))
         let lobby = try ent5Source("Sources/Conclave/Features/Lobby/LobbyView+iOS.swift")
-        #expect(lobby.components(separatedBy: "EntryStatusBlock(premeeting: premeeting, routeId: routeId)").count - 1 == 2)
+        // Owner polish shares one opaque safe-area footer across supported iOS versions.
+        #expect(lobby.components(separatedBy: "EntryStatusBlock(premeeting: premeeting, routeId: routeId)").count - 1 == 1)
         #expect(!lobby.contains("LobbyEntryStatusBlock"))
     }
 
