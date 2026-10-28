@@ -70,7 +70,9 @@ struct CHT5GifEmbedTests {
         {"kind":"video","url":"/api/unfurl/asset?url=v","videoUrl":"/api/unfurl/asset?url=m"}]}}}
         """
         let post = try #require(LinkEmbedService.decodeModel(Data(tweet.utf8), requestURL: "https://x.com/c/status/1", baseURL: base))
-        #expect(post.kind == .tweet && post.authorHandle == "conclave" && post.postText == "Hello" && post.media.count == 2)
+        #expect(post.kind == .tweet && post.authorHandle == "conclave" && post.postText == "Hello")
+        // A require, not an expect: the indexes below would trap and abort the whole test process.
+        try #require(post.media.count == 2)
         #expect(post.media[0].aspect > 1.7 && post.media[1].videoURL == base + "/api/unfurl/asset?url=m")
         #expect(LinkEmbedService.decodeModel(Data("{\"preview\":null}".utf8), requestURL: "https://a.example/", baseURL: base) == nil)
         #expect(LinkEmbedService.decodeModel(nil, requestURL: "https://a.example/", baseURL: base) == nil)

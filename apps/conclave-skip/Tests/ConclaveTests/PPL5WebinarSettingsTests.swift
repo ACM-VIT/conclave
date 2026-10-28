@@ -99,10 +99,10 @@ struct PPL5WebinarSettingsTests {
         #expect(people.attendeeCount == 150)
     }
 
-    @Test func bringOnStageIsOneTicketedCommandWithThePendingRow() {
+    @Test func bringOnStageIsOneTicketedCommandWithThePendingRow() throws {
         let (people, log) = webinarPeople(queue: Self.fourHands)
         #expect(people.perform(.bringOnStage, rowId: "attendee:a-priya", source: PeopleActionSource.rowMenu) == .dispatched)
-        #expect(log.commands.count == 1)
+        try #require(log.commands.count == 1)
         #expect(log.commands[0].kind == .bringOnStage && log.commands[0].targetId == "a-priya")
         #expect(people.rows.entry(for: "attendee:a-priya").model.pendingAction == PersonActionID.bringOnStage.rawValue)
         // A duplicate tap emits nothing.
@@ -113,10 +113,10 @@ struct PPL5WebinarSettingsTests {
         #expect(people.stage.announcement?.kind == PeopleAnnouncementKind.invitedToStage)
     }
 
-    @Test func aGoneAttendeeMapsToTheNoLongerWatchingSentence() {
+    @Test func aGoneAttendeeMapsToTheNoLongerWatchingSentence() throws {
         let (people, log) = webinarPeople(queue: Self.fourHands)
         people.perform(.bringOnStage, rowId: "attendee:a-omar", source: PeopleActionSource.rowMenu)
-        people.finish(log.tickets[0], HostActionResult.failed(.notFound))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(.notFound))
         let failure = people.lastFailure
         #expect(failure?.sourceKey == "attendee:a-omar")
         #expect(PeopleFailureCopy.kind(action: failure?.action ?? "", failure: failure?.failure ?? "",

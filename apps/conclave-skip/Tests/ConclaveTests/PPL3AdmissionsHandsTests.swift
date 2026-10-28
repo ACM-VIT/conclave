@@ -76,7 +76,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(people.perform(.admit, rowId: "waiting:p-lee", source: PeopleActionSource.rowMenu) == .dispatched)
         #expect(people.perform(.admit, rowId: "waiting:p-lee", source: PeopleActionSource.rowMenu) == .ignored)
         #expect(people.perform(.deny, rowId: "waiting:p-lee", source: PeopleActionSource.swipe) == .ignored)
-        #expect(log.commands.count == 1)
+        try #require(log.commands.count == 1)
         // The pending id exactly as the server sent it (S50 0.5), keyed `admit:<waiting key>` (S50 4 j).
         #expect(log.commands[0].kind == .admit && log.commands[0].targetId == "p-lee")
         #expect(log.tickets[0].key == "admit:waiting:p-lee")
@@ -97,6 +97,7 @@ struct PPL3AdmissionsHandsTests {
         // Deny never confirms (one person, they can ask again) and publishes the silent hostDenied outcome.
         #expect(people.perform(.deny, rowId: "waiting:p-sam", source: PeopleActionSource.rowMenu) == .dispatched)
         #expect(people.confirmation == nil)
+        try #require(log.tickets.count > 1)
         #expect(log.commands[1].kind == .deny && log.commands[1].targetId == "p-sam" && log.tickets[1].key == "deny:waiting:p-sam")
         people.finish(log.tickets[1], HostActionResult.completed)
         #expect(people.feedbackState.token.kind == .hostDenied)
@@ -156,6 +157,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(people.confirmation?.id == dialog.id && people.confirmation?.count == 2)
         people.confirm(id: dialog.id, block: false)
         #expect(log.commands.map { $0.kind } == [.denyAll] && log.commands[0].number == 2)
+        try #require(log.tickets.count > 0)
         #expect(log.tickets[0].key == PeopleAdmissionsPolicy.denyAllKey)
         people.apply(inputs([]))
         people.finish(log.tickets[0], HostActionResult.completed)
@@ -188,13 +190,13 @@ struct PPL3AdmissionsHandsTests {
         #expect(people.headerActions.reason == MeetingBlockedReason.offline.rawValue)
     }
 
-    @Test func aStaleWaitingEntryLeavesSilently() {
+    @Test func aStaleWaitingEntryLeavesSilently() throws {
         let people = makePeople()
         let log = record(people)
         people.apply(inputs(three))
         people.perform(.admit, rowId: "waiting:p-lee", source: PeopleActionSource.rowMenu)
         let token = people.feedbackState.token
-        people.finish(log.tickets[0], HostActionResult.failed(HostActionFailure.notFound))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(HostActionFailure.notFound))
         #expect(people.lastFailure == nil && people.feedbackState.token == token)
         #expect(!people.stage.noticesReadout().contains(PeopleFailurePlacementPolicy.stageNoticeKind))
         #expect(PeopleAdmissionsPolicy.isSilentFailure(kind: .deny, failure: HostActionFailure.notFound.rawValue))
@@ -208,7 +210,7 @@ struct PPL3AdmissionsHandsTests {
         people.platform = NoticePlatform.ios
         people.apply(inputs(three))
         people.perform(.admit, rowId: "waiting:p-lee", source: PeopleActionSource.rowMenu)
-        people.finish(log.tickets[0], HostActionResult.failed(HostActionFailure.rejectedByServer))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(HostActionFailure.rejectedByServer))
         let failure = try #require(people.lastFailure)
         #expect(failure.sourceKey == "waiting:p-lee" && failure.action == PeopleCommandKind.admit.rawValue)
         #expect(failure.targetName == "Lee Park" && failure.placement == HostFailurePlacement.panelInline.rawValue)
@@ -307,7 +309,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(log.tickets.last?.key == HostControlsPolicy.bulkKey(.muteAll))
         #expect(people.headerActions.muteAllPending)
         #expect(people.host.dispatchBulk(.muteAll) == .ignored, "Host Controls' Mute Everyone is the same flight")
-        people.finish(log.tickets[0], HostActionResult.failed(HostActionFailure.rejectedByServer))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(HostActionFailure.rejectedByServer))
         let failure = try #require(people.lastFailure)
         #expect(failure.sourceKey == PeopleSectionID.inMeeting.rawValue)
         #expect(PeopleFailureCopy.kind(action: failure.action, failure: failure.failure, sourceKey: failure.sourceKey)
@@ -353,7 +355,7 @@ struct PPL3AdmissionsHandsTests {
         people.platform = NoticePlatform.android
         people.apply(inputs([], hands: true))
         people.lowerAllHands()
-        people.finish(log.tickets[0], HostActionResult.failed(HostActionFailure.rejectedByServer))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(HostActionFailure.rejectedByServer))
         let failure = try #require(people.lastFailure)
         #expect(failure.sourceKey == PeopleSectionID.raisedHands.rawValue)
         #expect(failure.placement == HostFailurePlacement.panelSnackbar.rawValue)
@@ -394,13 +396,14 @@ struct PPL3AdmissionsHandsTests {
         #expect(people.waiting.entry(for: "waiting:x-1").model.serverId == "x-1")
     }
 
-    @Test func theHandQueueKeepsItsOrderThroughSpeakerChanges() {
+    @Test func theHandQueueKeepsItsOrderThroughSpeakerChanges() throws {
         let session = PeopleFixtureSession(state: .hostHands3)
         let order = rowIds(session.people, .raisedHands)
         #expect(order == ["u-avery", "u-sam", "u-lee"])
         // PL12: scripted raise times 30 s apart.
         let raised = session.inputs.participants.filter { $0.isHandRaised }.sorted { $0.raisedAtMillis < $1.raisedAtMillis }
         #expect(raised.map { $0.userId } == ["u-avery", "u-sam", "u-lee"])
+        try #require(raised.count > 2)
         #expect(raised[1].raisedAtMillis - raised[0].raisedAtMillis == 30_000)
         #expect(raised[2].raisedAtMillis - raised[1].raisedAtMillis == 30_000)
         let revision = session.people.snapshot.revision
@@ -449,7 +452,7 @@ struct PPL3AdmissionsHandsTests {
         #expect(log.commands.map { $0.kind } == [.admit] && log.commands[0].targetId == "p-lee")
         #expect(stage.banner?.actions.last?.isEnabled == false, "Admit stays visible but disabled while in flight")
         #expect(stage.banner?.actions.first?.isEnabled == true, "View stays available")
-        people.finish(log.tickets[0], HostActionResult.failed(HostActionFailure.rejectedByServer))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(HostActionFailure.rejectedByServer))
         #expect(people.lastFailure == nil, "stage origin: the toast lane, never the panel (PL14)")
         #expect(stage.noticesReadout().contains("toast=" + PeopleFailurePlacementPolicy.stageNoticeKind))
         #expect(stage.banner?.actions.last?.isEnabled == true)

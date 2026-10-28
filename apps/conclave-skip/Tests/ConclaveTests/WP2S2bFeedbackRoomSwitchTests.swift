@@ -39,7 +39,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
 
     // MARK: F1 rules with shell tokens
 
-    @Test func aTokenIsDeliveredOnceAndNeverReplayedOnRemountOrPictureInPicture() {
+    @Test func aTokenIsDeliveredOnceAndNeverReplayedOnRemountOrPictureInPicture() throws {
         let shell = MeetingShellPresenter()
         let identity = MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "attempt-1")
         shell.apply(MeetingShellInputs.make(identity: identity, connectionState: .connecting))
@@ -51,7 +51,8 @@ struct WP2S2bFeedbackRoomSwitchTests {
         shell.apply(MeetingShellInputs.make(identity: identity, connectionState: .joined))
         let ticket = cursor.observe(session: state().session, token: state().token, epoch: cursor.epoch, eligible: true)
         #expect(ticket?.kind == .joined)
-        #expect(cursor.take(ticket!, session: state().session, eligible: true) == .joined)
+        let observed = try #require(ticket)
+        #expect(cursor.take(observed, session: state().session, eligible: true) == .joined)
         #expect(cursor.observe(session: state().session, token: state().token, epoch: cursor.epoch, eligible: true) == nil)
         // Rotation (a new consumer) baselines on the published token: nothing replays.
         let rotated = FeedbackDeliveryCursor()
@@ -177,7 +178,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
 
     // MARK: Debug session readout values
 
-    @Test func sessionReadoutValuesAreMachineReadable() {
+    @Test func sessionReadoutValuesAreMachineReadable() throws {
         let shell = MeetingShellPresenter()
         let identity = MeetingSessionIdentity(callSession: 3, attempt: 7, attemptToken: "attempt")
         shell.apply(MeetingShellInputs.make(identity: identity, connectionState: .connecting))
@@ -190,7 +191,7 @@ struct WP2S2bFeedbackRoomSwitchTests {
         #expect(shell.toggleHand() == .dispatched)
         #expect(MeetingSessionReadout.ledger(shell.ledger) == "pending=hand resolved=0 last=none")
         #expect(MeetingSessionReadout.controls(shell.controls).contains("hand=on,enabled,pending"))
-        let ticket = shell.ledger.pending[0]
+        let ticket = try #require(shell.ledger.pending.first)
         #expect(shell.finish(ticket, MeetingActionResult.failed(.ackTimedOut)))
         let controls = MeetingSessionReadout.controls(shell.controls)
         #expect(controls.contains("hand=on,enabled,failed:ackTimedOut:lower"))

@@ -116,7 +116,8 @@ struct CTL5MoreMenuTests {
         let guest = CTL5Harness(Self.joined(unreadChatCount: 4))
         #expect(guest.controls.more.item(.chat) == nil)
         guest.controls.setOverflow(ids: ["chat"])
-        #expect(guest.controls.more.item(.chat)?.count == 4 && guest.controls.more.itemIds[1] == "hand")
+        // `dropFirst().first`, not `itemIds[1]`: a one-row list fails the expectation instead of trapping the process.
+        #expect(guest.controls.more.item(.chat)?.count == 4 && guest.controls.more.itemIds.dropFirst().first == "hand")
         #expect(guest.controls.more.section(MoreSectionID.panels)?.items.first?.kind == .chat)
     }
 
@@ -477,9 +478,9 @@ private final class CTL5Harness {
     let shell = MeetingShellPresenter()
     let stage: StagePresenter
     let controls: CallControlsPresenter
-    private let make: (MeetingShellPresenter) -> CallControlsInputs
+    private let make: @MainActor (MeetingShellPresenter) -> CallControlsInputs
 
-    init(_ inputs: MeetingShellInputs, make: @escaping (MeetingShellPresenter) -> CallControlsInputs = { CallControlsInputs.fromShell($0) }) {
+    init(_ inputs: MeetingShellInputs, make: @escaping @MainActor (MeetingShellPresenter) -> CallControlsInputs = { CallControlsInputs.fromShell($0) }) {
         stage = StagePresenter(shell: shell)
         controls = CallControlsPresenter(shell: shell, stage: stage)
         self.make = make

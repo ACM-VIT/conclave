@@ -92,11 +92,13 @@ struct T3BorrowComposerPolicyTests {
         #expect(ChatComposerPolicy.insertText(forHighlight: "", items: items).isEmpty)
     }
 
-    @Test func suggestionItemsKeepTheExistingFunctionsOrder() {
+    @Test func suggestionItemsKeepTheExistingFunctionsOrder() throws {
         let rows = ChatComposerPolicy.commandRows(privateEnabled: true, voiceEnabled: true, isPrivateMode: false)
         let commands = ChatComposerPolicy.suggestionItems(draft: "/", mentionOptions: [], commandRows: rows, isPrivateMode: false)
         #expect(commands.map { $0.id } == ChatComposerPolicy.commandSuggestions(draft: "/", rows: rows).map { "c:" + $0.id })
         #expect(commands.first == ChatSuggestionItem(id: "c:help", insertText: "/help", isAvailable: true))
+        // Requires before every `[1]` here: an index past a short policy list would trap and abort the whole test process.
+        try #require(commands.count > 1)
         #expect(commands[1].insertText == "/dm ")
         let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([]))
         let options = chat.composer.mentionOptions
@@ -106,6 +108,7 @@ struct T3BorrowComposerPolicyTests {
         // Private mode dims the assistant row (D24); it stays in the list, skipped by the arrows.
         let privateItems = ChatComposerPolicy.suggestionItems(draft: "hi @", mentionOptions: options, commandRows: rows, isPrivateMode: true)
         #expect(privateItems.first?.isAvailable == false && privateItems.dropFirst().allSatisfy { $0.isAvailable })
+        try #require(privateItems.count > 1)
         let firstPerson = privateItems[1].id
         #expect(ChatComposerPolicy.resolvedHighlight(currentId: "", items: privateItems, highlightQuery: "", currentQuery: "") == firstPerson)
         // A dimmed command row (private messages off) is skipped too.
@@ -275,8 +278,10 @@ struct T3BorrowComposerPolicyTests {
         #expect(ios.contains(".background(Color(uiColor: .secondarySystemBackground),\n                                in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous))"))
         #expect(ios.contains("RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusSmall), style: .continuous)\n                .fill(Color(uiColor: .systemFill))"))
         #expect(ios.components(separatedBy: ".accessibilityAddTraits(isHighlighted ? [.isSelected] : [])").count - 1 == 2)
+        // Each end marker is searched after its start, so a reordered file records an issue instead of trapping on the
+        // range (here and in the two section reads below).
         guard let start = ios.range(of: "private struct ChatSuggestionHighlight: View {"),
-              let end = ios.range(of: "private struct ChatAttachMenu: View {") else {
+              let end = ios.range(of: "private struct ChatAttachMenu: View {", range: start.upperBound..<ios.endIndex) else {
             Issue.record("highlight view not found")
             return
         }
@@ -294,7 +299,7 @@ struct T3BorrowComposerPolicyTests {
         let ios = try chatSource(Self.iosComposer)
         #expect(ios.contains("@Environment(\\.accessibilityVoiceOverEnabled) private var voiceOverEnabled"))
         guard let start = ios.range(of: "private func restoreFocus(wasFocused: Bool) {"),
-              let end = ios.range(of: "// MARK: Photo intake (P4)") else {
+              let end = ios.range(of: "// MARK: Photo intake (P4)", range: start.upperBound..<ios.endIndex) else {
             Issue.record("restoreFocus not found")
             return
         }
@@ -336,7 +341,8 @@ struct T3BorrowComposerPolicyTests {
     @Test func theIOSSendReasonsHaveOneCopyRowPerCase() throws {
         let copy = try chatSource(Self.iosCopy)
         guard let start = copy.range(of: "static func sendBlockReason(_ block: ChatSendBlock, overBy: Int, attachment: ChatAttachmentState) -> String {"),
-              let end = copy.range(of: "static func placeholder(_ composer: ChatComposerSnapshot) -> String {") else {
+              let end = copy.range(of: "static func placeholder(_ composer: ChatComposerSnapshot) -> String {",
+                                   range: start.upperBound..<copy.endIndex) else {
             Issue.record("sendBlockReason not found")
             return
         }

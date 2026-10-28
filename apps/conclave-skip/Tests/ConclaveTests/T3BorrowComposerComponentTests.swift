@@ -196,9 +196,16 @@ struct T3BorrowComposerComponentTests {
         // The post sits inside the band-keyed task, behind announcesBands; the task restarts only on a band change.
         #expect(handlerFlat.contains("if isEnabled { content.task(id: band) { var text = AttributedString(ConclaveCounterText.announcement(band: band, count: count, limit: limit)) text.accessibilitySpeechAnnouncementPriority = .low AccessibilityNotification.Announcement(text).post() } } else { content }"))
         // Every post in the file is either the counter's band handler or the search result announcement.
-        var outside = code
         let search = try #require(t3cBracedBlocks(after: "private struct ConclaveSearchAnnouncement: ViewModifier {", in: code).first)
-        for range in [handler, search].sorted(by: { $0.lowerBound > $1.lowerBound }) { outside.removeSubrange(range) }
+        // The code outside both blocks, copied slice by slice in source order: a nested or overlapping block (an
+        // unbalanced brace in a future edit) is skipped instead of trapping on a stale index in removeSubrange.
+        var outside = ""
+        var cursor = code.startIndex
+        for range in [handler, search].sorted(by: { $0.lowerBound < $1.lowerBound }) where range.lowerBound >= cursor {
+            outside += code[cursor..<range.lowerBound]
+            cursor = range.upperBound
+        }
+        outside += code[cursor...]
         #expect(!outside.contains(".post()"))
         #expect(!outside.contains("AccessibilityNotification"))
         // The spoken copy reuses the catalog keys (no new iOS string).

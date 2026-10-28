@@ -15,10 +15,11 @@ struct SettingsTranscriptPoliciesTests {
 
     // MARK: Row sets (1 a, 1 c, 1 l1, 1 l7b)
 
-    @Test func callScopeParticipantRowsFollowTheSectionOrder() {
+    @Test func callScopeParticipantRowsFollowTheSectionOrder() throws {
         let sections = SettingsRowPolicy.sections(scope: .call, isAttendee: false, isHost: false, platform: .ios,
                                                   capabilities: SettingsRowCapabilities.make(hasAccountIdentity: true))
         #expect(sections.map { $0.section } == [.audio, .video, .captions, .chat, .general, .account, .about])
+        try #require(sections.count == 7)
         #expect(sections[0].rows == [.output, .microphone, .noiseSuppression, .testSound])
         #expect(sections[1].rows == [.cameraFacing])
         #expect(sections[2].rows == [.captions])
@@ -215,7 +216,7 @@ struct SettingsTranscriptPoliciesTests {
         #expect(!SettingsNamePolicy.canEdit(isJoined: false, isAttendee: false, isRecovering: false, isOffline: false, isRenameDisabled: false))
     }
 
-    @Test func signOutIsSingleFlightWithTheGenerationAndRoomGuard() {
+    @Test func signOutIsSingleFlightWithTheGenerationAndRoomGuard() throws {
         let presenter = SettingsPresenter(scope: .call, platform: .ios, defaults: Self.freshDefaults())
         var commands: [SettingsCommand] = []
         presenter.onCommand = { commands.append($0) }
@@ -223,6 +224,7 @@ struct SettingsTranscriptPoliciesTests {
         presenter.signOut()
         presenter.signOut()
         #expect(commands.count == 1 && commands[0].kind == .signOut)
+        try #require(commands.count == 1)
         #expect(presenter.account.signOutPending)
         // A completion for another generation or after a room switch applies nothing.
         presenter.signOutFinished(generation: commands[0].generation + 1)

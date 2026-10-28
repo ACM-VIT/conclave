@@ -101,7 +101,8 @@ struct ACT6ZipTests {
         #expect(zip.canMove && zip.canHint && zip.canReset && zip.canUndo && !zip.isSolved && zip.myOutcome == ZipOutcome.none)
         #expect(zip.hintsUsed == 1 && zip.hintCostPoints == 15 && zip.hintCooldownSeconds(nowMillis: ZipFixtures.serverNow) == 0)
         // One immutable cell model per square, built once per push.
-        #expect(zip.cells.count == 36 && zip.cells.map { $0.index } == Array(0..<36))
+        try #require(zip.cells.count == 36)
+        #expect(zip.cells.map { $0.index } == Array(0..<36))
         let head = zip.cells[13]
         #expect(head.isHead && head.isVisited && !head.isNext && head.row == 2 && head.column == 1)
         #expect(zip.cells.filter { $0.isNext }.map { $0.index } == [14, 19])
@@ -123,6 +124,7 @@ struct ACT6ZipTests {
         let spectator = try scene(.spectator)
         #expect(ZipPathPolicy.chooserCells(reconnecting).isEmpty && ZipPathPolicy.chooserCells(spectator).isEmpty)
         // Screen reader labels come from the cell models (S60 12 g): row and column are 1-based.
+        try #require(playing.cells.count > 19)
         let nextCell = playing.cells[19]
         #expect(nextCell.row + 1 == 4 && nextCell.column + 1 == 2 && nextCell.isNext && nextCell.checkpoint == 0)
     }
@@ -316,6 +318,7 @@ struct ACT6ZipTests {
         let timeout = try #require(games.scene.zip)
         #expect(timeout.phase == ZipPhase.results && timeout.myOutcome == ZipOutcome.timedOut && !timeout.canMove)
         #expect(timeout.winnerName == "Avery" && timeout.solutionPath == ZipFixtures.solution && timeout.resultKey == "zip-result-1")
+        try #require(timeout.standings.count >= 2)
         #expect(timeout.canAdvanceRound && !timeout.isFinalRound && timeout.standings[1].status == ZipStandingStatus.timedOut)
         #expect(games.send(ZipIntent.nextRound()) == ActivityTapResult.dispatched)
         #expect(recorder.commands.last?.type == "nextRound" && recorder.commands.last?.payloadJSON == "")

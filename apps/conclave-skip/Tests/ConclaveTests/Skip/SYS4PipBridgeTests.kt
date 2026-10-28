@@ -194,18 +194,33 @@ class SYS4PipBridgeTests {
 
     @Test
     fun everyExternalActivityButSettingsIsCountedAsASuppression() {
-        val before = PipController.suppressionCount
-        PipManager.suppressForExternalHandoff(ExternalHandoffKind.systemSettings)
-        assertEquals(before, PipController.suppressionCount)
-        PipManager.suppressForExternalHandoff(ExternalHandoffKind.webLink)
-        assertEquals(before + 1, PipController.suppressionCount)
-        assertEquals("chat_link", PipController.lastSuppressionReason)
-        PipManager.suppressForExternalHandoff(ExternalHandoffKind.mediaProjectionConsent)
-        assertEquals(before + 2, PipController.suppressionCount)
-        assertEquals("${before + 2} media_projection", PipController.suppressionReadout)
-        // onUserLeaveHint consumes it once (API 28 to 30); resuming restores auto-enter.
-        assertTrue(PipManager.consumeAutoEnterSuppression())
-        assertFalse(PipManager.consumeAutoEnterSuppression())
+        try {
+            val before = PipController.suppressionCount
+            PipManager.suppressForExternalHandoff(ExternalHandoffKind.systemSettings)
+            assertEquals(before, PipController.suppressionCount)
+            PipManager.suppressForExternalHandoff(ExternalHandoffKind.webLink)
+            assertEquals(before + 1, PipController.suppressionCount)
+            assertEquals("chat_link", PipController.lastSuppressionReason)
+            assertFalse(PipManager.isHoldingConsentSuppression)
+            // onUserLeaveHint consumes a hand-off suppression once (API 28 to 30).
+            assertTrue(PipManager.consumeAutoEnterSuppression())
+            assertFalse(PipManager.consumeAutoEnterSuppression())
+            PipManager.suppressForExternalHandoff(ExternalHandoffKind.mediaProjectionConsent)
+            assertEquals(before + 2, PipController.suppressionCount)
+            assertEquals("${before + 2} media_projection", PipController.suppressionReadout)
+            // SYS-10 (S30 CC15, S70 10 d): the consent's suppression is held until its result returns, so the dialog's
+            // leave hint never consumes it; the result (or a failed launch) restores auto-enter.
+            assertTrue(PipManager.isHoldingConsentSuppression)
+            assertTrue(PipManager.consumeAutoEnterSuppression())
+            assertTrue(PipManager.consumeAutoEnterSuppression())
+            PipManager.restoreAutoEnterAfterExternalActivity()
+            assertFalse(PipManager.isHoldingConsentSuppression)
+            assertFalse(PipManager.consumeAutoEnterSuppression())
+            assertEquals(before + 2, PipController.suppressionCount)
+        } finally {
+            // PipManager is process-wide: never leave the consent hold set for the classes that share this sandbox.
+            PipManager.restoreAutoEnterAfterExternalActivity()
+        }
     }
 
     // MARK: Transpiled policy parity with the Swift host tests

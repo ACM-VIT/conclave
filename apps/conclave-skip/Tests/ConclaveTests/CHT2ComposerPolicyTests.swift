@@ -129,7 +129,7 @@ struct CHT2ComposerPolicyTests {
 
     // MARK: Suggestions and command rows (6 c, 6 g)
 
-    @Test func suggestionsOfferCommandsForABareSlashAndMentionsForATrailingAt() {
+    @Test func suggestionsOfferCommandsForABareSlashAndMentionsForATrailingAt() throws {
         let rows = ChatComposerPolicy.commandRows(privateEnabled: true, voiceEnabled: true, isPrivateMode: false)
         #expect(rows.count == 12 && rows.map { $0.id } == ChatCommand.primaryCommands.map { $0.rawValue })
         #expect(ChatComposerPolicy.commandSuggestions(draft: "/", rows: rows).count == 12)
@@ -138,7 +138,9 @@ struct CHT2ComposerPolicyTests {
         #expect(ChatComposerPolicy.commandSuggestions(draft: "hello", rows: rows).isEmpty)
         let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([]))
         let options = chat.composer.mentionOptions
-        #expect(options.first?.isAssistant == true && options.count == 4)
+        #expect(options.first?.isAssistant == true)
+        // A require, not an expect: the index below would trap and abort the whole test process.
+        try #require(options.count == 4)
         #expect(options[1].isYou)
         #expect(ChatComposerPolicy.mentionSuggestions(draft: "hi @av", options: options).first?.name == "Avery Lee")
         #expect(ChatComposerPolicy.mentionSuggestions(draft: "hi @", options: options).count == 4)
@@ -199,8 +201,9 @@ struct CHT2ComposerPolicyTests {
 
     @Test func nativeCommandsKeepTheirGuardedDirectionalBranches() throws {
         let vm = try chatSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        // The end is searched after the start, so a reordered file reports an issue instead of trapping on the range.
         guard let start = vm.range(of: "private func sendNativeChat("),
-              let end = vm.range(of: "private func sendRetainedChat(") else {
+              let end = vm.range(of: "private func sendRetainedChat(", range: start.upperBound..<vm.endIndex) else {
             Issue.record("sendNativeChat not found")
             return
         }

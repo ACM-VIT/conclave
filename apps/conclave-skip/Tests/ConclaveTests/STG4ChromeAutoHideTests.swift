@@ -114,13 +114,13 @@ struct STG4ChromeAutoHideTests {
         }
     }
 
-    @Test func panelsAndTransientChromeHoldChrome() {
+    @Test func panelsAndTransientChromeHoldChrome() throws {
         let presenter = stage(StageFixtureScript.base(count: 4))
         #expect(presenter.autoHideBlocker == .none)
         presenter.shell.panels.present(.participants, from: .call)
         presenter.panelSnapshotChanged()
         #expect(presenter.autoHideBlocker == .panelOpen)
-        let current = presenter.shell.panels.snapshot.current!
+        let current = try #require(presenter.shell.panels.snapshot.current)
         presenter.shell.panels.dismiss(cancelPending: true)
         presenter.shell.panels.didDismiss(session: presenter.shell.panels.snapshot.session, presentationID: current.presentationID)
         presenter.panelSnapshotChanged()

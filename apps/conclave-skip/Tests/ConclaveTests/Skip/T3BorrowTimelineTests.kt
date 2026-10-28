@@ -10,9 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -35,8 +33,12 @@ import org.robolectric.annotation.Config
  * delayed gate line (the gate task parks on the injected sleep and the test runs its body at the deadline), the
  * one-attachment guard and canAcceptPhoto, the fixture's new states and scripts, ChatRowActions.composerDidFocus, and
  * the composer focus follow on a real reversed LazyColumn composed on a Robolectric activity: one row up follows, three
- * screens up stays. The Conclave test classpath has no Compose UI test artifacts, so the list runs on the Robolectric
- * frame clock (runtime-sensitive, like PanelStageBridgeTests).
+ * screens up stays, the animated follow settles on the newest row. The focus tests drive the effect body
+ * (ChatFocusFollow.follow, the only call in ChatComposerFocusFollow's LaunchedEffect) directly, because under Robolectric
+ * only the first composition in a JVM keeps recomposing (PanelStageBridgeTests composes first), so a revision bump here
+ * never restarts the effect (G3b round 3). Layout still runs: scrollToItem and the animation's scrollBy remeasure the
+ * list synchronously. The Conclave test classpath has no Compose UI test artifacts, so the animated follow runs on
+ * this file's stepping frame clock.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
@@ -232,20 +234,14 @@ class T3BorrowTimelineTests {
         assertEquals(0, actions.focusRequest)
     }
 
-    /** P8 on a real reversed list: one row up (the newest row still partly visible) follows, three screens up stays. */
+    /**
+     * P8 on a real reversed list: one row up (the newest row still partly visible) follows at once under Remove
+     * animations, three screens up stays (in both motion modes, with no frame awaited).
+     */
     @Test
     fun focusFollowsOnlyWhileTheNewestRowIsVisible() {
-        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
         val listState = LazyListState()
-        var revision by mutableIntStateOf(0)
-        activity.setContent {
-            Box(Modifier.requiredSize(360.dp, 800.dp)) {
-                LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.fillMaxSize()) {
-                    items(count = 120, key = { "row-$it" }) { Box(Modifier.fillMaxWidth().height(100.dp)) }
-                }
-                ChatComposerFocusFollow(listState, reduceMotion = true) { revision }
-            }
-        }
+        composeReversedList(listState, reduceMotion = true)
         settle()
         assertTrue(ChatFocusFollow.newestVisible(listState))
         // One row up: scrolled past the 48 px bottom slop, the newest row still partly visible.
@@ -253,47 +249,79 @@ class T3BorrowTimelineTests {
         settle()
         assertEquals(60, listState.firstVisibleItemScrollOffset)
         assertTrue(ChatFocusFollow.newestVisible(listState))
-        revision += 1
+        // A focus gain: the effect body follows to the newest row instantly (no frame awaited).
+        val instant = SteppingFrameClock()
+        assertTrue(runBlocking(instant) { ChatFocusFollow.follow(listState, reduceMotion = true) })
         settle()
+        assertEquals(0, instant.frames)
         assertEquals(0, listState.firstVisibleItemIndex)
         assertEquals(0, listState.firstVisibleItemScrollOffset)
         // Three screens up: the newest row is out of view, so a focus gain leaves the position alone.
         runBlocking { listState.scrollToItem(24) }
         settle()
         assertFalse(ChatFocusFollow.newestVisible(listState))
-        revision += 1
+        val far = SteppingFrameClock()
+        assertFalse(runBlocking(far) { ChatFocusFollow.follow(listState, reduceMotion = true) })
+        assertFalse(runBlocking(far) { ChatFocusFollow.follow(listState, reduceMotion = false) })
         settle()
+        assertEquals(0, far.frames)
         assertEquals(24, listState.firstVisibleItemIndex)
+        assertEquals(0, listState.firstVisibleItemScrollOffset)
     }
 
-    /** The animated follow (animations on): it settles on the newest row on the Robolectric frame clock. */
+    /** The animated follow (animations on): it runs over frames and settles on the newest row. */
     @Test
     fun focusFollowAnimatesToTheNewestRow() {
-        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
         val listState = LazyListState()
-        var revision by mutableIntStateOf(0)
+        composeReversedList(listState, reduceMotion = false)
+        settle()
+        runBlocking { listState.scrollToItem(0, 80) }
+        settle()
+        assertTrue("the newest row is still partly visible", ChatFocusFollow.newestVisible(listState))
+        val clock = SteppingFrameClock()
+        assertTrue(runBlocking(clock) { ChatFocusFollow.follow(listState, reduceMotion = false) })
+        assertTrue("the follow animates over frames, it does not jump", clock.frames > 1)
+        settle()
+        assertEquals(0, listState.firstVisibleItemIndex)
+        assertEquals(0, listState.firstVisibleItemScrollOffset)
+    }
+
+    /**
+     * The timeline's shape on a Robolectric activity: a 360 x 800 dp reversed LazyColumn of 120 rows, 100 dp each, with
+     * ChatComposerFocusFollow composed beside it as in ChatTimeline. Its revision never moves here, so the composed
+     * effect never follows; the tests call its body.
+     */
+    private fun composeReversedList(listState: LazyListState, reduceMotion: Boolean): ComponentActivity {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
         activity.setContent {
             Box(Modifier.requiredSize(360.dp, 800.dp)) {
                 LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.fillMaxSize()) {
                     items(count = 120, key = { "row-$it" }) { Box(Modifier.fillMaxWidth().height(100.dp)) }
                 }
-                ChatComposerFocusFollow(listState, reduceMotion = false) { revision }
+                ChatComposerFocusFollow(listState, reduceMotion) { 0 }
             }
         }
-        settle()
-        runBlocking { listState.scrollToItem(0, 80) }
-        settle()
-        assertTrue("the newest row is still partly visible", ChatFocusFollow.newestVisible(listState))
-        revision += 1
-        repeat(8) { settle() }
-        assertEquals(0, listState.firstVisibleItemIndex)
-        assertEquals(0, listState.firstVisibleItemScrollOffset)
+        return activity
     }
 
     private fun settle() {
         repeat(5) {
             Snapshot.sendApplyNotifications()
             shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(50))
+        }
+    }
+
+    /**
+     * The animated follow's frame clock: every awaited frame arrives at once, 16 ms after the previous one, so the
+     * animation runs to its end inside runBlocking without the window's Choreographer.
+     */
+    private class SteppingFrameClock : MonotonicFrameClock {
+        var frames = 0
+            private set
+
+        override suspend fun <R> withFrameNanos(onFrame: (frameTimeNanos: Long) -> R): R {
+            frames += 1
+            return onFrame(frames * 16_000_000L)
         }
     }
 }

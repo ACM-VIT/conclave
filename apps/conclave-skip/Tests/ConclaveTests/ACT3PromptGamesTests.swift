@@ -58,6 +58,7 @@ struct ACT3PromptGamesTests {
         #expect(answered.options.map { $0.id } == ["q2-0", "q2-1", "q2-2", "q2-3"])
         #expect(answered.questionNumber == 3 && answered.questionTotal == 7 && answered.category == "Science")
         let question = answered.kitChoices()
+        try #require(question.count >= 2)
         #expect(question.allSatisfy { $0.count == -1 && $0.isDisabled })
         #expect(question[1].mark == GameKitMark.selected && question[0].mark == GameKitMark.none)
         #expect(answered.hostAction == PromptHostAction.skipQuestion)
@@ -65,6 +66,7 @@ struct ACT3PromptGamesTests {
         let reveal = try #require(presenter(.triviaReveal).scene.trivia)
         #expect(reveal.outcome == TriviaOutcome.wrong && reveal.correctText == "Saturn")
         let marks = reveal.kitChoices()
+        try #require(marks.count >= 2)
         // Correctness is never color alone: the kit row turns each mark into a glyph and a word.
         #expect(marks[0].mark == GameKitMark.wrongPick && marks[1].mark == GameKitMark.correct)
         #expect(marks.map { $0.count } == [2, 3, 0, 1])
@@ -159,6 +161,7 @@ struct ACT3PromptGamesTests {
         #expect(choose.options.filter { $0.isOwn }.map { $0.id } == ["o2"])
         #expect(choose.options.allSatisfy { !$0.isTruth && $0.ownerName.isEmpty && $0.votes == -1 })
         let rows = choose.kitChoices(ownLabel: "Your bluff")
+        try #require(rows.count >= 2)
         #expect(rows[1].isDisabled && rows[1].detail == "Your bluff" && !rows[0].isDisabled)
 
         let reveal = try #require(presenter(.bluffReveal).scene.bluff)
@@ -236,6 +239,7 @@ struct ACT3PromptGamesTests {
         let reveal = try #require(presenter(.reactionReveal).scene.reaction)
         #expect(reveal.results.map { $0.id } == ["r1", "you", "r3", "r2", "r4", "r5"])
         #expect(reveal.results.map { $0.outcome } == [ReactionResultOutcome.time, .time, .time, .early, .noTap, .noTap])
+        try #require(reveal.results.count >= 4)
         #expect(reveal.results.map { $0.position } == [1, 2, 3, 4, 5, 6] && reveal.results[0].isFastest && reveal.results[1].isYou)
         #expect(reveal.results[3].ms == -1 && reveal.fastestName == "Avery" && reveal.hostAction == PromptHostAction.next)
 

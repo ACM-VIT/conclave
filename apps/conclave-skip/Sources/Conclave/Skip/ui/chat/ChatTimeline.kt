@@ -138,10 +138,10 @@ internal fun ChatTimeline(
 
 /**
  * T3 borrow P8 (S40 2 d composer focus, the T3 "follow when at the end" rule with one visibility test on every
- * platform): when the composer's field gains focus (`revision` moves past the value seen at first composition) and the
- * newest row is at least partly visible, the reversed list scrolls to index 0 (instantly under Remove animations);
- * farther up, the position and the jump pill stay. The check runs before the IME insets shrink the list, and the
- * reversed list keeps index 0 at the bottom while it shrinks. `revision` is read here, in this effect's own scope.
+ * platform): when the composer's field gains focus (`revision` moves past the value seen at first composition), the
+ * effect runs [ChatFocusFollow.follow]: while the newest row is at least partly visible the reversed list scrolls to
+ * index 0 (instantly under Remove animations); farther up, the position and the jump pill stay. `revision` is read
+ * here, in this effect's own scope.
  */
 @Composable
 internal fun ChatComposerFocusFollow(listState: LazyListState, reduceMotion: Boolean, revision: () -> Int) {
@@ -149,16 +149,27 @@ internal fun ChatComposerFocusFollow(listState: LazyListState, reduceMotion: Boo
     val initial = remember { current }
     LaunchedEffect(current) {
         if (current == initial) return@LaunchedEffect
-        if (!ChatFocusFollow.newestVisible(listState)) return@LaunchedEffect
-        if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
+        ChatFocusFollow.follow(listState, reduceMotion)
     }
 }
 
-/** P8: the one visibility rule. */
+/** P8: the one visibility rule and the focus follow it gates. */
 internal object ChatFocusFollow {
     /** The newest row (index 0 of the reversed list) is at least partly inside the viewport. */
     fun newestVisible(listState: LazyListState): Boolean =
         listState.layoutInfo.visibleItemsInfo.any { it.index == 0 }
+
+    /**
+     * The focus gain's effect body (the Robolectric tests drive it directly): while the newest row is at least partly
+     * visible, scrolls the reversed list to index 0 (instantly under Remove animations, else animated on the caller's
+     * frame clock) and returns true; farther up it leaves the position alone and returns false. The check runs before
+     * the IME insets shrink the list, and the reversed list keeps index 0 at the bottom while it shrinks.
+     */
+    suspend fun follow(listState: LazyListState, reduceMotion: Boolean): Boolean {
+        if (!newestVisible(listState)) return false
+        if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
+        return true
+    }
 }
 
 /** 2 d empty state: F00 C14 column, then Ask Conclave AI (hidden when the assistant is unavailable). */

@@ -41,7 +41,7 @@ struct PPL4HostControlsTests {
 
     // MARK: PL4: one knob transition per tap, server state only on the acknowledgement
 
-    @Test func aPendingPolicyShowsItsIntentAndReturnsOnceOnFailure() {
+    @Test func aPendingPolicyShowsItsIntentAndReturnsOnceOnFailure() throws {
         let (people, log) = makeHost()
         let host = people.host
         #expect(host.snapshot.isAvailable)
@@ -58,7 +58,7 @@ struct PPL4HostControlsTests {
         // A second tap while pending emits nothing; the same value never dispatches.
         #expect(host.setPolicy(.lockMeeting, on: false) == .ignored)
         #expect(host.setPolicy(.allowGuests, on: true) == .ignored)
-        people.finish(log.tickets[0], HostActionResult.failed(.rejectedByServer))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(.rejectedByServer))
         let failed = host.snapshot.policy(.lockMeeting)
         #expect(failed?.isPending == false)
         #expect(failed?.shownOn == false)
@@ -69,11 +69,11 @@ struct PPL4HostControlsTests {
                                        sourceKey: people.lastFailure?.sourceKey ?? "") == PeopleFailureCopy.lockMeeting)
     }
 
-    @Test func theAcknowledgedServerStateIsWhatTheSwitchShowsAfterwards() {
+    @Test func theAcknowledgedServerStateIsWhatTheSwitchShowsAfterwards() throws {
         let (people, log) = makeHost()
         let host = people.host
         host.setPolicy(.photos, on: false)
-        people.finish(log.tickets[0], HostActionResult.completed)
+        people.finish(try #require(log.tickets.first), HostActionResult.completed)
         // Still on until the core's inputs say otherwise (no optimistic write).
         #expect(host.snapshot.policy(.photos)?.shownOn == true)
         host.apply(HostControlsInputs.make(callSession: 1, isImageAttachmentsEnabled: false))
@@ -124,23 +124,24 @@ struct PPL4HostControlsTests {
 
     // MARK: PH15 drafts kept until the acknowledgement
 
-    @Test func theInviteCodeDraftClearsOnlyAfterTheAcknowledgement() {
+    @Test func theInviteCodeDraftClearsOnlyAfterTheAcknowledgement() throws {
         let (people, log) = makeHost()
         let host = people.host
         host.drafts.meetingCode = "4821"
         host.setMeetingInviteCode("4821")
         #expect(host.snapshot.inviteCodePhase == HostFieldPhase.sending)
-        people.finish(log.tickets[0], HostActionResult.failed(.ackTimedOut))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(.ackTimedOut))
         #expect(host.drafts.meetingCode == "4821")
         #expect(host.snapshot.inviteCodePhase == HostFieldPhase.failed)
         #expect(people.lastFailure?.sourceKey == HostFieldID.inviteCode)
         host.setMeetingInviteCode("4821")
+        try #require(log.tickets.count > 1)
         people.finish(log.tickets[1], HostActionResult.completed)
         #expect(host.drafts.meetingCode.isEmpty)
         #expect(host.snapshot.inviteCodeSavedSerial == 1)
     }
 
-    @Test func theNoticeCarriesItsLevelAndClearsItsDraftOnSuccess() {
+    @Test func theNoticeCarriesItsLevelAndClearsItsDraftOnSuccess() throws {
         let (people, log) = makeHost()
         let host = people.host
         host.drafts.noticeText = "We start the Q&A in five minutes."
@@ -150,7 +151,7 @@ struct PPL4HostControlsTests {
         #expect(log.commands.last?.kind == .sendNotice)
         #expect(log.commands.last?.targetId == HostNoticeLevel.warning)
         #expect(host.snapshot.noticePhase == HostFieldPhase.sending)
-        people.finish(log.tickets[0], HostActionResult.completed)
+        people.finish(try #require(log.tickets.first), HostActionResult.completed)
         #expect(host.drafts.noticeText.isEmpty)
         #expect(host.snapshot.noticeSentSerial == 1)
         #expect(host.snapshot.noticePhase == HostFieldPhase.sent)
@@ -197,28 +198,45 @@ struct PPL4HostControlsTests {
     @MainActor
     private final class LinkGate {
         var calls = 0
-        var continuation: CheckedContinuation<Void, Never>? = nil
+        /// Every parked provider call. A broken single flight parks two; `release()` resumes them all, so a regression
+        /// fails the expectations below instead of leaving a task waiting forever.
+        var continuations: [CheckedContinuation<Void, Never>] = []
+        var isReleased = false
+
+        func release() {
+            isReleased = true
+            let parked = continuations
+            continuations = []
+            for continuation in parked {
+                continuation.resume()
+            }
+        }
     }
 
-    @Test func concurrentLinkRequestsShareOneGeneration() async {
+    @Test func concurrentLinkRequestsShareOneGeneration() async throws {
         let (people, _) = makeHost()
         let host = people.host
         let gate = LinkGate()
+        defer { gate.release() }
         host.linkProvider = { @MainActor in
             gate.calls += 1
-            await withCheckedContinuation { continuation in gate.continuation = continuation }
+            if !gate.isReleased {
+                await withCheckedContinuation { continuation in gate.continuations.append(continuation) }
+            }
             return "https://conclave.example/w/abc"
         }
         let first = Task { await host.ensureWebinarLink() }
         var spins = 0
-        while gate.continuation == nil && spins < 1000 {
+        while gate.continuations.isEmpty && spins < 1000 {
             await Task.yield()
             spins += 1
         }
+        // A provider that never parked would leave `first` waiting for a resume that never comes: stop here instead.
+        try #require(!gate.continuations.isEmpty)
         #expect(host.snapshot.webinar.linkPhase == WebinarLinkPhase.generating)
         let second = Task { await host.ensureWebinarLink() }
         for _ in 0..<20 { await Task.yield() }
-        gate.continuation?.resume()
+        gate.release()
         let a = await first.value
         let b = await second.value
         #expect(gate.calls == 1)

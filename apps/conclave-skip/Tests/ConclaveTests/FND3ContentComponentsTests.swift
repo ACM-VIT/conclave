@@ -397,7 +397,8 @@ struct FND3ContentComponentsTests {
             ("contrast.composerSend.androidDark", 5.388), ("contrast.gameBoard.paperOnLight", 4.630), ("contrast.gameBoard.paperOnDark", 10.006),
             ("contrast.gameBoard.squares", 2.161), ("contrast.gameBoard.coralPath", 3.364),
         ]
-        let pairs = Dictionary(uniqueKeysWithValues: ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) })
+        // Keyed lookup only: a duplicate id fails galleryCatalogKeysStableUniqueAndDashFree, it never aborts the run.
+        let pairs = Dictionary(ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (id, value) in expected {
             let pair = pairs[id]
             #expect(pair != nil, "\(id)")
@@ -418,7 +419,7 @@ struct FND3ContentComponentsTests {
     }
 
     @Test func fnd3SourcesAreDashFreeAndFlat() throws {
-        for file in Self.fnd3Files {
+        for file in Self.fnd3CheckedFiles {
             let text = try fnd3Source(file)
             #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) contains an en or em dash")
             for word in ["Gradient", "gradient", "dynamicLightColorScheme", "dynamicDarkColorScheme", ".shadow(", "Icons.Default"] {
@@ -430,7 +431,7 @@ struct FND3ContentComponentsTests {
 
     static let composerGlassFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift"
     static let composerBranchCondition = "if #available(iOS 26.0, *), ConclaveComposerMaterialPolicy.material(glassAvailable: true, reduceTransparency: reduceTransparency, forceOpaque: forceOpaque, prefersReducedResourceUsage: prefersReducedResourceUsage) == .glass {"
-    static let fnd3Files = [
+    static let fnd3CheckedFiles = [
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveContentModels.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift",

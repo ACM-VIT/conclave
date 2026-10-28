@@ -24,20 +24,23 @@ struct SYS15DiagnosticsTests {
         var processStates: [String] = []
         var installs = 0
 
+        /// The closures hold the recorder strongly: several tests pass `RecordingHooks().make()` and never keep the
+        /// recorder, so an unowned capture read a freed object and aborted the test process (G2 round 3). The recorder
+        /// never holds the hooks, so there is no cycle.
         func make() -> DiagnosticsPlatformHooks {
             let hooks = DiagnosticsPlatformHooks()
-            hooks.beginInterval = { [unowned self] name, _, _ in self.begins.append(name) }
-            hooks.endInterval = { [unowned self] name, _, _ in self.ends.append(name) }
-            hooks.emitEvent = { [unowned self] name, _ in self.events.append(name) }
-            hooks.log = { [unowned self] category, code, phase in self.logs.append("\(category) \(code) \(phase)") }
-            hooks.processState = { [unowned self] session, phase in self.processStates.append("\(session):\(phase)") }
-            hooks.installListeners = { [unowned self] _ in self.installs += 1 }
+            hooks.beginInterval = { name, _, _ in self.begins.append(name) }
+            hooks.endInterval = { name, _, _ in self.ends.append(name) }
+            hooks.emitEvent = { name, _ in self.events.append(name) }
+            hooks.log = { category, code, phase in self.logs.append("\(category) \(code) \(phase)") }
+            hooks.processState = { session, phase in self.processStates.append("\(session):\(phase)") }
+            hooks.installListeners = { _ in self.installs += 1 }
             hooks.counters = { [DiagnosticsCounter(key: "frame.slow", value: 2.0)] }
             hooks.info = {
                 DiagnosticsPlatformInfo(platform: "test", appVersion: "2.0.0 (50)", osVersion: "Test 1.0", deviceClass: "phone")
             }
-            hooks.monotonicMillis = { [unowned self] in self.now }
-            hooks.wallMillis = { [unowned self] in self.wall }
+            hooks.monotonicMillis = { self.now }
+            hooks.wallMillis = { self.wall }
             return hooks
         }
     }
@@ -146,7 +149,7 @@ struct SYS15DiagnosticsTests {
         #expect(DiagnosticsRedactionPolicy.isAllowedCode(classified.diagnosticCode))
     }
 
-    @Test func recordStoresCodesOnlyAndRejectsFreeText() {
+    @Test func recordStoresCodesOnlyAndRejectsFreeText() throws {
         let recording = RecordingHooks()
         let diagnostics = CallDiagnostics(store: temporaryStore(), hooks: recording.make())
         diagnostics.record(code: "Zelda Quartermaine joined lily-zoro-iris")
@@ -156,6 +159,7 @@ struct SYS15DiagnosticsTests {
         diagnostics.recordFailure(failure)
         let events = diagnostics.events
         #expect(events.map { $0.code } == [DiagnosticsRedactionPolicy.rejectedCode, "socket.timeout", "message.unrecognized"])
+        try #require(events.count == 3)
         #expect(events[1].phase == "other")
         #expect(events[2].detail == "chat")
         #expect(diagnostics.rejectedCount == 1)

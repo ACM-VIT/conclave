@@ -37,16 +37,21 @@ enum FacehashPresentation {
     /// units (charCodeAt) with 32-bit wrap, then absolute value.
     static func hashValue(for seed: String) -> Int {
         var hash = 0
+        #if SKIP
+        // SkipFoundation's `String.utf16` is little-endian bytes behind a
+        // byte-order mark, not code units. A Kotlin Char is already one UTF-16
+        // code unit (see ChatComposerPolicy.utf16Length), and Kotlin's Int is
+        // 32-bit, so this wraps natively like the JS `hash |= 0`.
+        for unit in seed {
+            hash = (hash << 5) - hash + unit.code
+        }
+        if hash == Int.min { return 0 }
+        #else
         for unit in seed.utf16 {
             hash = (hash << 5) - hash + Int(unit)
-            // Wrap to signed 32-bit like the JS `hash |= 0`. Kotlin's Int is
-            // already 32-bit, so the arithmetic above wraps natively there.
-            #if !SKIP
+            // Wrap to signed 32-bit like the JS `hash |= 0`.
             hash = ((hash & 0xFFFFFFFF) ^ 0x80000000) - 0x80000000
-            #endif
         }
-        #if SKIP
-        if hash == Int.min { return 0 }
         #endif
         return abs(hash)
     }

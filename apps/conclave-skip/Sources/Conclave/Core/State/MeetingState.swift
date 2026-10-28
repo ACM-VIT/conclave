@@ -417,6 +417,8 @@ final class MeetingState {
     // Participants
     var participants: [String: Participant] = [:] {
         didSet {
+            // First, so every hook below reads the new roster through `uniqueRemoteParticipants`.
+            isUniqueRemoteCacheValid = false
             if oldValue.count != participants.count {
                 PerformanceDiagnostics.state("participants.count", old: "\(oldValue.count)", new: "\(participants.count)")
             }
@@ -451,6 +453,11 @@ final class MeetingState {
     var participantUserKeys: [String: String] = [:] {
         didSet { onPeopleInputChanged?() }
     }
+
+    /// S50 PH12 (INM D14): the remote user ids the last admin snapshot reported as webinar attendees. PH12 keeps them
+    /// out of `participants`, so `canPromoteHost(userId:)` reads this list to refuse a host grant to an attendee.
+    /// Replaced by every admin snapshot; reset per call session and on cleanup. Read by no presenter.
+    var webinarAttendeeSnapshotUserIds: [String] = []
 
     /// S50 PH3 (PPL-3): when each raised hand went up, in server milliseconds (`HandRaisedNotification.timestamp`),
     /// keyed by the id People shows (your `userId`; a remote participant's canonical stage id). A lowered hand forgets
@@ -801,17 +808,51 @@ final class MeetingState {
             }
     }
 
+    // Verify G2 r3 (perf): every `participant(for:)` used to re-sort and re-merge the whole roster, so a refresh that
+    // canonicalizes n rows (`makeStageInputs()`, `makePeopleInputs()`) cost O(n^3). The merged list and its user-key
+    // index are now built once per `participants` write (or local identity change) and reused until the next one. The
+    // merge and the first-match order are unchanged. Never observed: the getter still reads `participants`, `userId`
+    // and `sfuUserId`, so a view that reads a roster property keeps its observation dependencies.
+    @ObservationIgnored private var uniqueRemoteCache: [Participant] = []
+    /// Indices into `uniqueRemoteCache` by `userKeyPart(for:)`, ascending (list order).
+    @ObservationIgnored private var uniqueRemoteIndexByKey: [String: [Int]] = [:]
+    @ObservationIgnored private var uniqueRemoteCacheUserId = ""
+    @ObservationIgnored private var uniqueRemoteCacheSfuUserId: String? = nil
+    @ObservationIgnored private var isUniqueRemoteCacheValid = false
+
     private var uniqueRemoteParticipants: [Participant] {
+        refreshUniqueRemoteCacheIfNeeded()
+        return uniqueRemoteCache
+    }
+
+    private func refreshUniqueRemoteCacheIfNeeded() {
+        let source = participants
+        let localUserId = userId
+        let localSfuUserId = sfuUserId
+        if isUniqueRemoteCacheValid && uniqueRemoteCacheUserId == localUserId
+            && uniqueRemoteCacheSfuUserId == localSfuUserId {
+            return
+        }
         var remotes: [Participant] = []
-        for participant in participants.values.sorted(by: { $0.id < $1.id })
+        var indexByKey: [String: [Int]] = [:]
+        for participant in source.values.sorted(by: { $0.id < $1.id })
             where isRemoteParticipantUserId(participant.id) {
-            guard let index = remotes.firstIndex(where: { Self.userIdsMatch($0.id, participant.id) }) else {
+            // `userIdsMatch` never matches two ids with different user keys, so only this key's earlier entries can
+            // match; they are kept in list order, so the first match is the one the full scan found.
+            let key = Self.userKeyPart(for: participant.id)
+            let candidates = indexByKey[key] ?? []
+            guard let index = candidates.first(where: { Self.userIdsMatch(remotes[$0].id, participant.id) }) else {
+                indexByKey[key] = candidates + [remotes.count]
                 remotes.append(participant)
                 continue
             }
             remotes[index] = Self.mergedRemoteParticipant(remotes[index], participant)
         }
-        return remotes
+        uniqueRemoteCache = remotes
+        uniqueRemoteIndexByKey = indexByKey
+        uniqueRemoteCacheUserId = localUserId
+        uniqueRemoteCacheSfuUserId = localSfuUserId
+        isUniqueRemoteCacheValid = true
     }
 
     private nonisolated static func mergedRemoteParticipant(_ left: Participant, _ right: Participant) -> Participant {
@@ -1004,8 +1045,11 @@ final class MeetingState {
             return nil
         }
 
-        if let participant = uniqueRemoteParticipants.first(where: { Self.userIdsMatch($0.id, normalized) }) {
-            return participant
+        // The first merged participant that matches, through the user-key index (only one key can match).
+        let remotes = uniqueRemoteParticipants
+        for index in uniqueRemoteIndexByKey[Self.userKeyPart(for: normalized)] ?? []
+            where Self.userIdsMatch(remotes[index].id, normalized) {
+            return remotes[index]
         }
         return participants[normalized]
     }
@@ -1529,7 +1573,9 @@ final class MeetingState {
             return false
         }
         guard let participant = participant(for: normalized) else {
-            return true
+            // S50 PH12: an attendee from the admin snapshot is not in `participants`, so it is refused here (INM D14);
+            // any other unknown id keeps the old default.
+            return !webinarAttendeeSnapshotUserIds.contains { Self.userIdsMatch($0, normalized) }
         }
         return !participant.isWebinarAttendee
     }

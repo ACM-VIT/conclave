@@ -114,7 +114,7 @@ struct CHT8UnreadPreviewTests {
         #expect(ChatPreviewPolicy.body(message: message("m13", long)).text.count == ChatPreviewPolicy.maxDetailCharacters)
     }
 
-    @Test func theEventCarriesTheR404Fields() {
+    @Test func theEventCarriesTheR404Fields() throws {
         let event = ChatPreviewPolicy.event(message: message("srv-7", "Are you free?", isDirect: true), canonicalSenderId: "r1")
         #expect(event.kind == StageEventKind.chatPreview)
         #expect(event.userId == "r1" && event.name == "Avery Lee" && event.messageId == "srv-7")
@@ -130,7 +130,9 @@ struct CHT8UnreadPreviewTests {
         #expect(notice?.serverText == "text" && notice?.messageId == "srv-7" && notice?.isPrivate == true)
         let bare = MeetingNoticePolicy.toast(fromEvent: StageEvent.make(kind: StageEventKind.chatPreview, userId: "r1", name: "A"))
         #expect(bare.map { ChatPreviewPolicy.bodyKind($0) } == .text)
-        #expect(ChatPreviewPolicy.isAssistant(MeetingNoticePolicy.toast(fromEvent: assistant)!))
+        // A require, not a force unwrap: a nil toast fails the test instead of aborting the whole test process.
+        let assistantNotice = try #require(MeetingNoticePolicy.toast(fromEvent: assistant))
+        #expect(ChatPreviewPolicy.isAssistant(assistantNotice))
     }
 
     // MARK: Coalescing (S40 8 f, S20 10 f)

@@ -219,7 +219,7 @@ struct STG5NoticePolicyTests {
 
     // MARK: Toast lane (S20 10 f toast paragraph, F00 C13)
 
-    @Test func toastsQueueThreeCoalesceWithinFourSecondsAndNeverExpire() {
+    @Test func toastsQueueThreeCoalesceWithinFourSecondsAndNeverExpire() throws {
         let center = MeetingNoticeCenter()
         let t = 10_000.0
         _ = center.applyState(host(), nowMillis: t)
@@ -234,6 +234,7 @@ struct STG5NoticePolicyTests {
         _ = center.post(StageEvent.make(kind: StageEventKind.actionFailed, detail: "hand"), nowMillis: t + 6_700)
         // Queue max 3: the oldest event left; the failure waits first.
         #expect(center.queue.count == 3)
+        try #require(!center.queue.isEmpty)
         #expect(center.queue[0].kind == NoticeKind.actionFailed)
         #expect(!center.queue.map(\.name).contains("Ben"))
         // The presenter never expires a toast: only the host's dismissal moves the lane.

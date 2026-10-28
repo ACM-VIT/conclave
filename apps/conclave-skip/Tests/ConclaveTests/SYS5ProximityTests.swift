@@ -22,12 +22,14 @@ struct SYS5ProximityTests {
         var monitoringAvailable = true
         weak var state: CallScreenAwakeState?
 
+        /// The closures hold the recorder strongly, so the state never reads a freed recorder (an unowned read aborts
+        /// the whole Swift Testing process). The recorder holds the state weakly, so there is no cycle.
         func make() -> ScreenAwakeWriters {
             ScreenAwakeWriters(
-                setIdleTimerDisabled: { [unowned self] active in
+                setIdleTimerDisabled: { active in
                     self.idleTimer.append(active)
                 },
-                setProximityMonitoring: { [unowned self] armed in
+                setProximityMonitoring: { armed in
                     self.proximity.append(armed)
                     self.state?.reportProximityMonitoring(active: armed && self.monitoringAvailable)
                 }

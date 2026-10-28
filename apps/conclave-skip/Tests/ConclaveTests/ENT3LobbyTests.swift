@@ -281,7 +281,8 @@ struct ENT3LobbyTests {
         hooks.presenceAnswers = [2, 0]
         let presenter = presenter(hooks: hooks)
         var codes = ["rose-sora-luffy", "lily-zoro-iris", "maple-goku-tulip"]
-        presenter.generateRoomCode = { codes.removeFirst() }
+        // An extra request past the script fails the expectations below instead of trapping on an empty array.
+        presenter.generateRoomCode = { codes.isEmpty ? "extra-code-requested" : codes.removeFirst() }
         presenter.newMeeting()
         let routeRoom = presenter.path.last?.roomId
         presenter.startOrJoin()
@@ -302,7 +303,7 @@ struct ENT3LobbyTests {
         hooks.presenceAnswers = [3, 1, 4, 9]
         let presenter = presenter(hooks: hooks)
         var codes = ["aloe-aster-bloom", "canna-cedar-clove", "dahl-daisy-erica", "flora-hazel-iris"]
-        presenter.generateRoomCode = { codes.removeFirst() }
+        presenter.generateRoomCode = { codes.isEmpty ? "extra-code-requested" : codes.removeFirst() }
         presenter.newMeeting()
         presenter.startOrJoin()
         #expect(await ent3Settle { hooks.joins.count == 1 })

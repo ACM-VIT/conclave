@@ -433,6 +433,9 @@ struct ENT6RejoinCoreDeltaTests {
     }
 }
 
+/// Waits for a condition the view model's tasks make true. Main actor: the condition reads view model state, so it
+/// is polled on the actor that writes it (a nonisolated async helper would run it on the global executor).
+@MainActor
 private func ent6Settle(_ condition: () -> Bool) async -> Bool {
     for _ in 0..<1000 {
         if condition() { return true }

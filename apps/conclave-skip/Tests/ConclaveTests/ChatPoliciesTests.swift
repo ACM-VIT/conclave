@@ -179,7 +179,9 @@ struct ChatPoliciesTests {
         let ids = chat.timeline.rowIds
         let divider = ids.firstIndex(of: "unread")
         #expect(divider != nil)
-        if let divider { #expect(ids[divider + 1] == "s-3") }
+        // `dropFirst`, not `ids[divider + 1]`: a divider in the last place fails the expectation instead of trapping
+        // and aborting the whole test process.
+        if let divider { #expect(ids.dropFirst(divider + 1).first == "s-3") }
         #expect(chat.timeline.firstUnreadId == "s-3")
         chat.panelDidClose()
         #expect(!chat.timeline.rowIds.contains("unread"))
@@ -199,7 +201,7 @@ struct ChatPoliciesTests {
         #expect(chat.announcement?.kind == "newMessages" && chat.announcement?.count == 2)
     }
 
-    @Test func daySeparatorsMarkOnlyDayChanges() {
+    @Test func daySeparatorsMarkOnlyDayChanges() throws {
         let today = Self.base + 600_000
         let yesterday = today - 86_400_000
         let chat = ChatPresenter()
@@ -209,7 +211,8 @@ struct ChatPoliciesTests {
             ChatMessageInput.make(id: "s-2", senderId: Self.avery, senderName: "Avery Lee", content: "new", timestampMillis: today),
         ]), change: .messages)
         let ids = chat.timeline.rowIds
-        #expect(ids.count == 4)
+        // A require, not an expect: the indexes below would trap and abort the whole test process.
+        try #require(ids.count == 4)
         #expect(ids[0] == "day:" + String(ChatDayPolicy.dayKey(millis: yesterday)))
         #expect(ids[2] == "day:" + String(ChatDayPolicy.dayKey(millis: today)))
         let todayOnly = Self.presenter(Self.inputs([Self.peer("s-1", "now", at: 600_000)]))
@@ -435,7 +438,7 @@ struct ChatViewModelWiringTests {
 
     @Test func aFailedSendStaysWithItsTextAndRetries() async {
         let viewModel = joinedViewModel()
-        viewModel.socketManager.testSendChatError = SocketError.timeout
+        viewModel.socketManager.testSendChatError = ChatWiringHostError("Timed out waiting for the SFU")
         viewModel.performChatCommand(ChatCommandRequest.make(.send, text: "this times out", emoji: ChatRouteKind.publicText.rawValue))
         try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(viewModel.state.chatMessages.count == 1)
@@ -455,7 +458,7 @@ struct ChatViewModelWiringTests {
 
     @Test func deleteRemovesOnlyAFailedRow() async {
         let viewModel = joinedViewModel()
-        viewModel.socketManager.testSendChatError = SocketError.serverError("Message too long (max 1000 characters)")
+        viewModel.socketManager.testSendChatError = ChatWiringHostError("Message too long (max 1000 characters)")
         viewModel.performChatCommand(ChatCommandRequest.make(.send, text: "nope", emoji: ChatRouteKind.publicText.rawValue))
         try? await Task.sleep(nanoseconds: 50_000_000)
         let clientId = viewModel.state.chatMessages.first?.clientId ?? ""
@@ -468,7 +471,7 @@ struct ChatViewModelWiringTests {
         let viewModel = joinedViewModel()
         viewModel.state.chatMessages = [ChatMessage(id: "s-1", userId: "remote@example.com#w", displayName: "Remote",
                                                     content: "hi", roomId: "room-a")]
-        viewModel.socketManager.testChatReactionError = SocketError.serverError("Reactions disabled by host")
+        viewModel.socketManager.testChatReactionError = ChatWiringHostError("Reactions disabled by host")
         viewModel.toggleChatReaction(messageId: "s-1", emoji: "👍")
         #expect(viewModel.state.chatMessages.first?.reactions == [ChatMessageReaction(emoji: "👍", userIds: ["local@example.com"])])
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -525,6 +528,14 @@ struct ChatViewModelWiringTests {
         #expect(viewModel.state.systemMessages.last?.notice == ChatNotice.alreadyMuted.rawValue)
         #expect(viewModel.state.chatMessages.isEmpty)
     }
+}
+
+/// The texts of the iOS `SocketError` cases (`timeout` and `serverError`), which exist only in the iOS build; the macOS
+/// host classifies an error by its text, like `PresenterHostError` in PresenterSessionTests.
+private struct ChatWiringHostError: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
 }
 #endif
 

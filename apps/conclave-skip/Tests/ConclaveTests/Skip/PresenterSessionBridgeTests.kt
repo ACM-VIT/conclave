@@ -43,6 +43,7 @@ class PresenterSessionBridgeTests {
         unreadChatCount: Int = 0,
         micToggleInFlight: Boolean = false,
         cameraToggleInFlight: Boolean = false,
+        terminalOutcome: MeetingTerminalOutcome? = null,
     ): MeetingShellInputs = MeetingShellInputs.make(
         identity = identity(callSession, attempt),
         connectionState = connectionState,
@@ -54,6 +55,7 @@ class PresenterSessionBridgeTests {
         isCameraOff = isCameraOff,
         isHandRaised = isHandRaised,
         unreadChatCount = unreadChatCount,
+        terminalOutcome = terminalOutcome,
         micToggleInFlight = micToggleInFlight,
         cameraToggleInFlight = cameraToggleInFlight,
     )
@@ -69,7 +71,7 @@ class PresenterSessionBridgeTests {
     }
 
     private fun row(shell: MeetingShellPresenter, id: MeetingControlID): MeetingControlRow =
-        shell.controls.rows.first { it.id == id.rawValue }
+        shell.controls.rows.toList().first { it.id == id.rawValue }
 
     private fun observe(read: () -> Unit, action: () -> Unit): Int {
         val observer = SnapshotStateObserver { it() }
@@ -280,7 +282,7 @@ class PresenterSessionBridgeTests {
 
         // S1-ROW-03: recovery keeps ids and order and explains blocked rows.
         shell.apply(joined(isHandRaised = true, isRecoveringConnection = true, connectionState = ConnectionState.reconnecting, unreadChatCount = 3))
-        val ids = shell.controls.rows.map { it.id }
+        val ids = shell.controls.rows.toList().map { it.id }
         assertEquals(MeetingControlID.values().map { it.rawValue }, ids)
         assertEquals(MeetingBlockedReason.reconnecting, row(shell, MeetingControlID.hand).blockedReason)
         assertEquals(MeetingControlHint.appliesAfterReconnect, row(shell, MeetingControlID.microphone).hint)

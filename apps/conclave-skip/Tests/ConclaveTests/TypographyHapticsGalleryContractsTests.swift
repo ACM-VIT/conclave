@@ -926,7 +926,7 @@ struct TypographyHapticsGalleryContractsTests {
         // The state mapping is host-compiled plain Swift, outside the iOS block.
         let host = try #require(text.range(of: "#if !SKIP\n"))
         let ios = try #require(text.range(of: "#if os(iOS) && !SKIP\n"))
-        #expect(host.upperBound < ios.lowerBound)
+        try #require(host.upperBound < ios.lowerBound)
         let mapping = withoutComments(String(text[host.upperBound..<ios.lowerBound]))
         #expect(mapping.contains("enum ConclaveControlState: String, CaseIterable {"))
         #expect(mapping.contains("enum ConclaveControlSurfaceMapping {"))

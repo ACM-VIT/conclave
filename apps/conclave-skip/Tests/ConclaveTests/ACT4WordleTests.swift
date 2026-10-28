@@ -86,6 +86,7 @@ struct ACT4WordleTests {
         #expect(scene.phase == WordlePhase.playing && scene.role == WordleRole.guesser && scene.canGuess && scene.isRandomWord)
         #expect(scene.round == 1 && scene.roundTotal == 3 && scene.wordLength == 5 && scene.maxTries == 6)
         #expect(scene.myRows.map { $0.word } == ["SLOTH", "LLAMA"] && scene.myRows.allSatisfy { $0.isGuess })
+        try #require(scene.myRows.count >= 2)
         #expect(marks(scene.myRows[0]) == [.absent, .present, .present, .absent, .absent])
         // LLAMA against LEMON: the first L is correct and the repeated L is absent (the target has one L).
         #expect(marks(scene.myRows[1]) == [.correct, .absent, .absent, .present, .absent])
@@ -99,6 +100,7 @@ struct ACT4WordleTests {
         #expect(scene.keys(inRow: 2).map { $0.letter }.joined() == "ZXCVBNM")
         #expect(scene.draftKey == "guess-1" && scene.showsDraftRow && scene.myOutcome == WordleOutcome.none)
         #expect(scene.standings.map { $0.id } == ["r1", "r2", "r3", "you"] && scene.standings[3].isYou)
+        try #require(!scene.standings.isEmpty)
         #expect(scene.standings[0].status == WordleStandingStatus.solved && scene.standings[0].tries == 3)
         #expect(scene.solution.isEmpty && scene.winnerName.isEmpty && !scene.canAdvanceRound)
         #expect(presenter(.guess).countdown != nil)
@@ -108,6 +110,7 @@ struct ACT4WordleTests {
         let scene = try #require(presenter(.guess).scene.wordle)
         let rows = WordleBoardPolicy.displayRows(scene, draft: "LEMO")
         #expect(rows.count == 6 && rows.map { $0.index } == [0, 1, 2, 3, 4, 5])
+        try #require(rows.count >= 3)
         #expect(marks(rows[2]) == [.typed, .typed, .typed, .typed, .empty] && !rows[2].isGuess)
         #expect(rows[3...].allSatisfy { row in row.cells.allSatisfy { $0.state == .empty && $0.letter.isEmpty } })
         #expect(rows[2].cells.map { $0.id } == ["r2c0", "r2c1", "r2c2", "r2c3", "r2c4"])
@@ -264,11 +267,13 @@ struct ACT4WordleTests {
         let watching = try #require(presenter(.setterWatching).scene.wordle)
         #expect(watching.role == WordleRole.setter && !watching.canGuess && watching.myRows.isEmpty)
         #expect(watching.liveBoards.map { $0.id } == ["r1", "r2", "r3"] && watching.liveBoards.map { $0.name } == ["Avery", "Ben", "Cai"])
+        try #require(watching.liveBoards.count >= 3)
         #expect(watching.liveBoards[0].status == WordleStandingStatus.solved && watching.liveBoards[0].tries == 3)
         #expect(watching.liveBoards[2].status == WordleStandingStatus.outOfTries && watching.liveBoards[2].rows.count == 6)
         // Status only: marks without letters.
         #expect(watching.liveBoards.allSatisfy { board in board.rows.allSatisfy { row in
             row.word.isEmpty && row.cells.allSatisfy { $0.letter.isEmpty } } })
+        try #require(watching.liveBoards[0].rows.count >= 3)
         #expect(marks(watching.liveBoards[0].rows[2]) == [.correct, .correct, .correct, .correct, .correct])
     }
 

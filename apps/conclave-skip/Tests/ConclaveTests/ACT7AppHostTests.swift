@@ -50,8 +50,13 @@ struct ACT7AppHostTests {
                           version: Int = 1, appSessionId: String? = nil) -> String {
         let object: [String: Any] = ["v": version, "type": type, "callSessionId": session.callSessionId,
                                      "appSessionId": appSessionId ?? session.appSessionId, "requestId": requestId, "payload": payload]
-        let data = try! JSONSerialization.data(withJSONObject: object)
-        return String(data: data, encoding: .utf8)!
+        // A bad payload fails this test instead of aborting the whole run (an invalid object raises, it never throws).
+        guard JSONSerialization.isValidJSONObject(object), let data = try? JSONSerialization.data(withJSONObject: object),
+              let text = String(data: data, encoding: .utf8) else {
+            Issue.record("the \(type) envelope is not a JSON object")
+            return ""
+        }
+        return text
     }
 
     private func ready(_ session: ActiveAppSession, requestId: String = "e-1", version: Int = 1, bundle: String = "1.0.0") -> AppBridgeRejection {
@@ -163,7 +168,7 @@ struct ACT7AppHostTests {
         }
     }
 
-    @Test func readyGetsHostStatusThenTheSnapshotThenBufferedRoomBytes() async {
+    @Test func readyGetsHostStatusThenTheSnapshotThenBufferedRoomBytes() async throws {
         let wire = Wire()
         let relay = session(wire)
         relay.setUser(id: "you", name: "You")
@@ -177,6 +182,7 @@ struct ACT7AppHostTests {
         #expect(wire.types() == ["status", "snapshot", "update", "awareness"])
         #expect(wire.syncs == [Data([0])])
         #expect(relay.pendingRemote.isEmpty && relay.snapshotDelivered && relay.isReady)
+        try #require(wire.delivered.count >= 2)
         let snapshot = AppBridgeCodec.jsonObject(wire.delivered[1])
         #expect(snapshot?["requestId"] as? String == "e-1", "the snapshot answers the ready's request id")
         #expect((snapshot?["payload"] as? [String: Any])?["syncMessage"] as? String == Data([1, 2]).base64EncodedString())

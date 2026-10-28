@@ -1247,7 +1247,9 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(codeCount(of: "if cameraToggleToken == toggleToken {", in: viewModelCode), 2)
         // The iOS, Android and host screen-share branches.
         XCTAssertEqual(codeCount(of: "if screenShareToggleToken == toggleToken {", in: viewModelCode), 3)
-        XCTAssertEqual(codeCount(of: "if handRaiseToggleToken == toggleToken {", in: viewModelCode), 1)
+        // The meeting hand (`setHandRaisedState`) and the attendee hand (`toggleAttendeeHand` through
+        // `webinar:setHandRaised`, HD B6-T1 S20 Q10 PH8): each releases the guard only while it owns the token.
+        XCTAssertEqual(codeCount(of: "if handRaiseToggleToken == toggleToken {", in: viewModelCode), 2)
         XCTAssertEqual(codeCount(of: "if cameraSwitchToken == switchToken {", in: viewModelCode), 1)
         let releaseGuards = try body(
             viewModelCode,
@@ -3861,6 +3863,43 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(state.visibleGridSnapshot().shouldShowDetachedSelfView)
     }
 
+    /// Verify G2 r3 (characterization): `participant(for:)` reads the merged roster through a cache and a user-key index
+    /// built once per roster write; the merge rules, the first-match order and the local-identity filter are unchanged,
+    /// and both a roster write and a local identity change are seen by the next lookup.
+    @MainActor
+    func testRemoteParticipantLookupKeepsMergeRulesAcrossRosterWrites() throws {
+        let state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        state.sfuUserId = "local@example.com"
+        state.participants = [
+            "ann@example.com": Participant(id: "ann@example.com", isMuted: false),
+            "ann@example.com#s1": Participant(id: "ann@example.com#s1"),
+            "ann@example.com#s2": Participant(id: "ann@example.com#s2"),
+            "bob@example.com#s1": Participant(id: "bob@example.com#s1"),
+            "cat@example.com": Participant(id: "cat@example.com")
+        ]
+
+        // The bare id merges into the first session (muted only if both are); the second session stays its own entry.
+        XCTAssertEqual(state.participant(for: "ann@example.com")?.id, "ann@example.com#s1")
+        XCTAssertEqual(state.participant(for: "ann@example.com")?.isMuted, false)
+        XCTAssertEqual(state.participant(for: "ann@example.com#s2")?.id, "ann@example.com#s2")
+        XCTAssertEqual(state.participant(for: " bob@example.com ")?.id, "bob@example.com#s1")
+        XCTAssertEqual(state.canonicalStageUserId("bob@example.com"), "bob@example.com#s1")
+        XCTAssertNil(state.participant(for: "dan@example.com"))
+        XCTAssertEqual(state.participantCount, 5)
+
+        state.participants["ann@example.com#s1"] = nil
+        XCTAssertEqual(state.participant(for: "ann@example.com")?.id, "ann@example.com#s2")
+        XCTAssertEqual(state.participant(for: "ann@example.com")?.isMuted, false)
+        state.participants["bob@example.com#s1"]?.isLeaving = true
+        XCTAssertNil(state.canonicalStageUserId("bob@example.com#s1"))
+        XCTAssertEqual(state.participantCount, 3)
+
+        // Cat becomes the local identity and leaves the remote roster without a roster write.
+        state.sfuUserId = "cat@example.com"
+        XCTAssertNil(state.participant(for: "cat@example.com"))
+        XCTAssertEqual(state.participantCount, 2)
+    }
+
     @MainActor
     func testVoiceAgentIdentityIsHiddenFromNativeRosterAndLayout() throws {
         let state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
@@ -4635,9 +4674,12 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(viewModel.state.participant(for: "tara@example.com#web-session")?.isWebinarAttendee, true)
-        XCTAssertEqual(viewModel.state.participant(for: "lee@example.com#web-session")?.isWebinarAttendee, true)
+        // S50 PH12 (INM D14, HD B4-T7 R2f): webinar attendees from the admin snapshot never enter `participants`, so
+        // the panelist count stays at you and Maya; the host grant below is still refused for both attendees.
+        XCTAssertNil(viewModel.state.participant(for: "tara@example.com#web-session"))
+        XCTAssertNil(viewModel.state.participant(for: "lee@example.com#web-session"))
         XCTAssertEqual(viewModel.state.participant(for: "maya@example.com#web-session")?.isWebinarAttendee, false)
+        XCTAssertEqual(viewModel.state.participantCount, 2)
         XCTAssertFalse(viewModel.state.canPromoteHost(userId: "tara@example.com#web-session"))
         XCTAssertFalse(viewModel.state.canPromoteHost(userId: "lee@example.com#web-session"))
         XCTAssertTrue(viewModel.state.canPromoteHost(userId: "maya@example.com#web-session"))
@@ -10162,7 +10204,9 @@ final class ConclaveTests: XCTestCase {
         let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
 
         XCTAssertTrue(viewModelSource.contains("preserveCallAudioRouting: isRecoveryJoin"))
-        XCTAssertTrue(viewModelSource.contains("if shouldCleanupExistingMediaBeforeJoin {\n                    await stopScreenCaptureManager()\n                    await webRTCClient.cleanup(\n                        notifyLocalState: false,\n                        preserveCallAudioRouting: isRecoveryJoin"))
+        // SYS-10 (HD B7-T6, `stopScreenCaptureManager(source:)`): the pre-join cleanup stops capture with the recovery
+        // stop source; the audio routing it preserves is unchanged.
+        XCTAssertTrue(viewModelSource.contains("if shouldCleanupExistingMediaBeforeJoin {\n                    await stopScreenCaptureManager(source: ScreenShareStopSource.recovery)\n                    await webRTCClient.cleanup(\n                        notifyLocalState: false,\n                        preserveCallAudioRouting: isRecoveryJoin"))
         XCTAssertTrue(viewModelSource.contains("resetLiveRoomSnapshotStateForJoin(preservingVisibleState: isRecoveryJoin)"))
         XCTAssertTrue(viewModelSource.contains("state.participants[userId]?.isCameraOff = true"))
         XCTAssertTrue(iosWebRTCSource.contains("if !preserveCallAudioRouting {\n            try? audioSession.setActive(false)"))

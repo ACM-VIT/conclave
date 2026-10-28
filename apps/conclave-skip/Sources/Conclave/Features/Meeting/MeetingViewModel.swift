@@ -536,6 +536,7 @@ final class MeetingViewModel {
             state.resetParticipantJoinSerials()
             // S50 PH13 and Q14: user keys and the rename session flag are per call session.
             state.participantUserKeys = [:]
+            state.webinarAttendeeSnapshotUserIds = []
             state.raisedAtByUserId = [:]
             displayNameEditor.resetSession()
             requestShellRefresh(); requestStageRefresh(); requestPeopleRefresh(); requestQaRefresh()
@@ -3919,13 +3920,20 @@ final class MeetingViewModel {
             applyChatHistorySnapshot(chatHistorySnapshot)
         }
         let replayContext = currentSocketEventContext()
+        // Verify G2 r3 (perf): one shell, stage, controls, People and chat refresh per synchronous run of replayed
+        // roster events instead of one per `participants` write (a buffer of 128 joins rebuilt every presenter
+        // hundreds of times). Like every other batch it never spans an await: it closes before each suspension and
+        // reopens after it, and the loop has no return, so begin and end stay balanced.
+        beginShellRefreshBatch()
         for event in rosterEvents {
             guard isCurrentSocketEvent(replayContext, roomId: event.roomId) else { continue }
             switch event {
             case .userJoined(let notification):
                 applyUserJoinedNotification(notification)
             case .userLeft(let notification):
+                endShellRefreshBatch()
                 await applyUserLeftNotification(notification, context: replayContext)
+                beginShellRefreshBatch()
             case .webinarParticipantJoined(let notification):
                 applyWebinarParticipantJoined(notification)
             case .displayNameUpdated(let update):
@@ -3935,9 +3943,12 @@ final class MeetingViewModel {
             case .participantMuted(let notification):
                 applyParticipantMutedNotification(notification, context: replayContext)
             case .participantCameraOff(let notification):
+                endShellRefreshBatch()
                 await applyParticipantCameraOffNotification(notification, context: replayContext)
+                beginShellRefreshBatch()
             }
         }
+        endShellRefreshBatch()
         applyPendingWaitingRoomEvents(waitingRoomEvents)
         if let handRaisedSnapshot {
             applyHandRaisedSnapshot(handRaisedSnapshot)
@@ -4254,6 +4265,11 @@ final class MeetingViewModel {
         applyDisplayName(notification.displayName, for: userId)
         // STG-5 (S20 SC18): suppression (initial snapshot, recovery grace, Q4, attendees) lives in the notice policy.
         if let id = state.canonicalStageUserId(userId) {
+            // Inside a refresh batch (the pre-ack replay) the notice inputs are refreshed first, so the Q4 thresholds
+            // count the roster this join produced, exactly as the per-write stage refresh does outside a batch.
+            if stageRefreshBatchDepth > 0 {
+                stage.applyNotices(makeStageNoticeInputs())
+            }
             stage.post(StageEvent.make(kind: StageEventKind.userJoined, userId: id, name: displayNameForUser(id)))
         }
     }
@@ -5176,6 +5192,8 @@ final class MeetingViewModel {
         var remoteUserKeys = Set<String>()
         var snapshotProducerIds = Set<String>()
         var nextActiveScreenShareUserId: String?
+        // S50 PH12: the attendees this snapshot reports; `canPromoteHost(userId:)` refuses them (INM D14).
+        var attendeeUserIds: [String] = []
 
         for snapshot in participants {
             let userId = snapshot.userId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5222,7 +5240,10 @@ final class MeetingViewModel {
             } else if isRemoteParticipant {
                 // S50 PH12 (INM D14): webinar attendees never enter `participants` (People rows, counts and tiles); one
                 // already there is removed by the sweep below because it is not represented in this snapshot.
-                if isWebinarAttendee { continue }
+                if isWebinarAttendee {
+                    if !attendeeUserIds.contains(userId) { attendeeUserIds.append(userId) }
+                    continue
+                }
                 remoteUserIds.insert(userId)
                 for key in stableKeys {
                     remoteUserKeys.insert(key)
@@ -5273,6 +5294,9 @@ final class MeetingViewModel {
             where state.isRemoteParticipantUserId(userId) &&
                 !participantId(userId, isRepresentedIn: remoteUserIds, stableKeys: remoteUserKeys) {
             removeRemoteParticipant(userId)
+        }
+        if state.webinarAttendeeSnapshotUserIds != attendeeUserIds {
+            state.webinarAttendeeSnapshotUserIds = attendeeUserIds
         }
 
         let staleProducerIds = producerInfosById.compactMap { producerId, producer in
@@ -10843,6 +10867,7 @@ final class MeetingViewModel {
         state.isParticipantUnmuteAllowed = true
         state.isParticipantVideoAllowed = true
         state.participantUserKeys = [:]
+        state.webinarAttendeeSnapshotUserIds = []
         state.raisedAtByUserId = [:]
         isHostConfigLoading = false
         hostConfigRefreshToken += 1

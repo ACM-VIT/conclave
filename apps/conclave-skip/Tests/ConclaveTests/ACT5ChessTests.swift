@@ -141,7 +141,7 @@ struct ACT5ChessTests {
 
     @Test func moveRowsPairPliesAndNameAutoPlayedMoves() throws {
         let chess = try scene(.lowTime)
-        #expect(chess.moves.count == 2)
+        try #require(chess.moves.count == 2)
         #expect(chess.moves[0].number == 1 && chess.moves[0].white == "e4" && chess.moves[0].black == "e5")
         #expect(chess.moves[0].whiteAutoName.isEmpty && chess.moves[0].blackAutoName.isEmpty)
         #expect(chess.moves[1].white == "Nf3" && chess.moves[1].black == "Nc6" && chess.moves[1].blackAutoName == "Avery")

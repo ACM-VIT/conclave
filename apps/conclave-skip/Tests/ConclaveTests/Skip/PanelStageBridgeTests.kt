@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import org.junit.Assert.assertEquals
@@ -405,58 +406,6 @@ class PanelStageBridgeTests {
         assertEquals(EffectsAvailability.hidden, EffectsAvailabilityPolicy.production(canShowSystemVideoEffects = true, platform = EffectsPlatform.android))
     }
 
-    /**
-     * SET-5 (WP1-3c): the bottom sheet composed by the real host on a Robolectric activity (360 x 800 dp constraint):
-     * the page mounts in the Sheet variant, the stage reads partial coverage, and Close acknowledges only after the
-     * sheet's hide completed and the page disposed. Runtime-sensitive: the hide runs on the Robolectric frame clock.
-     */
-    @Test fun hostComposesLayoutSheetAndAcknowledgesAfterHide() {
-        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
-        val panels = PanelCoordinator(session = 1)
-        val lifetime = NativePanelOverlayLifetime(panels)
-        val readout = PanelHostReadout()
-        var mounts = 0
-        var disposals = 0
-        var variantSeen: InCallPageVariant? = null
-        var coverageSeen = PanelStageCoverage.none
-        activity.setContent {
-            Box(Modifier.requiredSize(360.dp, 800.dp)) {
-                NativePanelHost(
-                    panels = panels,
-                    lifetime = lifetime,
-                    focus = PanelInvokerFocus(),
-                    readout = readout,
-                    systemBars = { },
-                    stage = { coverage -> coverageSeen = coverage; Box(Modifier.fillMaxSize()) },
-                    panel = { session, request, _, variant ->
-                        variantSeen = variant
-                        DisposableEffect(Unit) {
-                            mounts++
-                            lifetime.mounted(session, request.presentationID)
-                            onDispose {
-                                disposals++
-                                lifetime.disposed(session, request.presentationID)
-                            }
-                        }
-                        Text("Layout fixture")
-                    },
-                )
-            }
-        }
-        settleHost()
-        panels.present(MeetingPanel.layout, from = PanelInvoker.more)
-        settleHost()
-        assertEquals(1, mounts)
-        assertEquals(InCallPageVariant.Sheet, variantSeen)
-        assertEquals(PanelStageCoverage.partial, coverageSeen)
-        assertEquals("style=bottomSheet coverage=partial", readout.style)
-        panels.dismiss(cancelPending = true)
-        repeat(4) { settleHost() }
-        assertEquals("disposed after the hide", 1, disposals)
-        assertNull("acknowledged once the page disposed", panels.snapshot.current)
-        assertEquals("style=none coverage=none", readout.style)
-    }
-
     @Test fun backProgressCommitCancelClamp() {
         val back = PanelBackProgress()
         assertEquals(0f, back.progress, 0f)
@@ -696,8 +645,12 @@ class PanelStageBridgeTests {
      * every composition check lives here. Beyond retention it checks review ISSUE 1 (AND-9: a tap on a blank area of
      * the open overlay never reaches the stage control beneath it, with control taps before and after) and review
      * ISSUE 3 (PS 8.10, AND-2: in touch mode Close returns focus to the invoking control, and `restore` reports
-     * whether focus really moved). PNL-1 adds a last phase (S40 R40-3, R40-12, S50 R50-1): a lazyList InCallPage gets
-     * the mini-tile reservation for its list, and system Back pops an inner page of the side pane before it closes.
+     * whether focus really moved). PNL-1 adds a phase (S40 R40-3, R40-12, S50 R50-1): a lazyList InCallPage gets the
+     * mini-tile reservation for its list, and system Back pops an inner page of the side pane before it closes. SET-5
+     * (WP1-3c, PS 8.6) adds the last phase, folded in from its own composing test (G3b round 2, a second composition
+     * never recomposed): on a 360 x 800 dp phone constraint Layout opens as the bottom sheet, the page mounts in the
+     * Sheet variant, the stage reads partial coverage, and Close acknowledges only after the sheet's hide completed and
+     * the page disposed. Runtime-sensitive: the hide runs on the Robolectric frame clock.
      */
     @Test fun hostCompositionRetainsStageAcrossPanelOpenClose() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
@@ -707,9 +660,14 @@ class PanelStageBridgeTests {
         val readout = PanelHostReadout()
         // WP1-3b2, the side-pane variant: an expanded host constraint (1280 x 800 dp) instead of the window.
         var wide by mutableStateOf(false)
+        // SET-5 phase: a phone host constraint (360 x 800 dp), where Layout opens as the bottom sheet.
+        var phone by mutableStateOf(false)
         var stageFactories = 0
         var stageReleases = 0
+        var stageCoverage = PanelStageCoverage.none
         var panelMounts = 0
+        var panelDisposals = 0
+        var panelVariant: InCallPageVariant? = null
         var stageTaps = 0
         var invokerFocused = false
         var plainFocused = false
@@ -720,14 +678,15 @@ class PanelStageBridgeTests {
         var pageStack: PanelPageStack? = null
         activity.setContent {
             CompositionLocalProvider(LocalRendererLedger provides presenter.renderers) {
-              Box(if (wide) Modifier.requiredSize(1280.dp, 800.dp) else Modifier.fillMaxSize()) {
+              Box(if (wide) Modifier.requiredSize(1280.dp, 800.dp) else if (phone) Modifier.requiredSize(360.dp, 800.dp) else Modifier.fillMaxSize()) {
                 NativePanelHost(
                     panels = presenter.panels,
                     lifetime = lifetime,
                     focus = focus,
                     readout = readout,
                     systemBars = { },
-                    stage = { _ ->
+                    stage = { coverage ->
+                        stageCoverage = coverage
                         Column(Modifier.fillMaxSize()) {
                             TextButton(onClick = { }, modifier = Modifier.panelInvoker(focus, "panel.open.participants")
                                 .onFocusChanged { invokerFocused = it.isFocused }) { Text("Participants panel") }
@@ -747,7 +706,8 @@ class PanelStageBridgeTests {
                             Box(Modifier.fillMaxWidth().weight(1f).clickable { stageTaps++ })
                         }
                     },
-                    // The panel draws nothing, so the whole overlay is blank (until the PNL-1 phase).
+                    // The panel draws nothing, so the whole overlay is blank (until the PNL-1 phase); only the SET-5
+                    // sheet gets a line of text.
                     panel = { session, request, decision, variant ->
                         if (pageMode) {
                             InCallPage(
@@ -769,18 +729,23 @@ class PanelStageBridgeTests {
                                 }
                             }
                         } else {
+                            panelVariant = variant
                             DisposableEffect(Unit) {
                                 panelMounts++
                                 lifetime.mounted(session, request.presentationID)
-                                onDispose { lifetime.disposed(session, request.presentationID) }
+                                onDispose {
+                                    panelDisposals++
+                                    lifetime.disposed(session, request.presentationID)
+                                }
                             }
+                            if (variant == InCallPageVariant.Sheet) Text("Layout fixture")
                         }
                     },
                 )
               }
             }
         }
-        settleHost()
+        settleHost(activity)
         val launch = "stage c=3 r=0 l=3 lost=0 back=0 | mini c=0 r=0 l=0 lost=0 back=0 | avery#1 robin#2 taylor#3"
         assertEquals(3, stageFactories)
         assertEquals(launch, presenter.renderers.summary())
@@ -793,17 +758,17 @@ class PanelStageBridgeTests {
         assertFalse(plainFocused)
         focus.invoked("panel.open.participants")
         presenter.panels.present(MeetingPanel.participants, from = PanelInvoker.call)
-        settleHost()
+        settleHost(activity)
         assertEquals(1, panelMounts)
         tapCentre(activity)
         assertEquals("a blank overlay area never passes the tap to the stage", 1, stageTaps)
         presenter.panels.present(MeetingPanel.settings, from = PanelInvoker.more)
-        settleHost()
+        settleHost(activity)
         assertEquals(MeetingPanel.settings, presenter.panels.snapshot.current!!.panel)
         assertEquals(2, panelMounts)
         assertFalse(invokerFocused)
         presenter.panels.dismiss(cancelPending = true)
-        settleHost()
+        settleHost(activity)
         assertNull(presenter.panels.snapshot.current)
         assertTrue("Close returns focus to the invoker in touch mode, after a replacement too", invokerFocused)
         assertTrue(focus.restore("panel.open.participants"))
@@ -811,9 +776,9 @@ class PanelStageBridgeTests {
         assertEquals("control: after Close the stage takes taps again", 2, stageTaps)
         for (cycle in 1..5) {
             presenter.panels.present(MeetingPanel.participants, from = PanelInvoker.call)
-            settleHost()
+            settleHost(activity)
             presenter.panels.dismiss(cancelPending = true)
-            settleHost()
+            settleHost(activity)
         }
         assertNull(presenter.panels.snapshot.current)
         assertEquals(7, panelMounts)
@@ -824,21 +789,21 @@ class PanelStageBridgeTests {
         // changes move the same page between the side pane and the overlay: no remount, no acknowledgment, no
         // stage renderer recreated.
         wide = true
-        settleHost()
+        settleHost(activity)
         presenter.panels.present(MeetingPanel.settings, from = PanelInvoker.settings)
-        settleHost()
+        settleHost(activity)
         assertEquals(8, panelMounts)
         assertEquals("style=sidePane coverage=none", readout.style)
         val sideShown = presenter.panels.snapshot
         for (expanded in listOf(false, true, false, true)) {
             wide = expanded
-            settleHost()
+            settleHost(activity)
             assertEquals("a move never remounts the page", 8, panelMounts)
             assertEquals(sideShown, presenter.panels.snapshot)
             assertEquals(if (expanded) "style=sidePane coverage=none" else "style=overlay coverage=full", readout.style)
         }
         presenter.panels.dismiss(cancelPending = true)
-        settleHost()
+        settleHost(activity)
         assertNull(presenter.panels.snapshot.current)
         assertEquals("style=none coverage=none", readout.style)
         assertEquals(3, stageFactories)
@@ -848,9 +813,9 @@ class PanelStageBridgeTests {
         // is 0 and the bottom at least 16 dp plus the navigation inset); its page stack comes from the host.
         pageMode = true
         wide = true
-        settleHost()
+        settleHost(activity)
         presenter.panels.present(MeetingPanel.participants, from = PanelInvoker.call)
-        settleHost()
+        settleHost(activity)
         assertEquals(1, pageMounts)
         assertEquals("style=sidePane coverage=none", readout.style)
         val stack = pageStack
@@ -859,16 +824,16 @@ class PanelStageBridgeTests {
         assertTrue(reservation!!.calculateBottomPadding() >= 16.dp)
         // System Back pops the inner page first; the panel stays open.
         stack!!.push("inner")
-        settleHost()
+        settleHost(activity)
         assertTrue(stack.isNested)
         activity.onBackPressedDispatcher.onBackPressed()
-        settleHost()
+        settleHost(activity)
         assertFalse("Back pops the inner page first", stack.isNested)
         assertNotNull(presenter.panels.snapshot.current)
         assertFalse(presenter.panels.snapshot.isDismissing)
         // The overlay: the same page and stack move over (no remount), and the list clears the mini tile.
         wide = false
-        settleHost()
+        settleHost(activity)
         assertEquals("a move never remounts the page", 1, pageMounts)
         assertSame("the page stack survives the move", stack, pageStack)
         assertEquals("style=overlay coverage=full", readout.style)
@@ -876,16 +841,60 @@ class PanelStageBridgeTests {
         assertTrue(reservation!!.calculateBottomPadding() >= miniTileReservationDp(landscape, tileVisible = true).dp)
         // At the root, Back closes the panel.
         activity.onBackPressedDispatcher.onBackPressed()
-        settleHost()
+        settleHost(activity)
         assertNull("at the root Back closes the panel", presenter.panels.snapshot.current)
+        assertEquals(3, stageFactories)
+        assertEquals(0, stageReleases)
+        // SET-5 (WP1-3c, PS 8.6): on a phone constraint Layout opens as the bottom sheet. The page mounts once in the
+        // Sheet variant and stays mounted while the sheet shows; the stage reads partial coverage.
+        pageMode = false
+        phone = true
+        settleHost(activity)
+        val sheetMounts = panelMounts
+        val sheetDisposals = panelDisposals
+        panelVariant = null
+        presenter.panels.present(MeetingPanel.layout, from = PanelInvoker.more)
+        settleHost(activity)
+        assertEquals(sheetMounts + 1, panelMounts)
+        assertEquals("the sheet page stays mounted while the sheet shows", sheetDisposals, panelDisposals)
+        assertEquals(InCallPageVariant.Sheet, panelVariant)
+        assertEquals(PanelStageCoverage.partial, stageCoverage)
+        assertEquals("style=bottomSheet coverage=partial", readout.style)
+        // Close: the host hides the sheet first, and only the page's disposal after the hide acknowledges.
+        presenter.panels.dismiss(cancelPending = true)
+        var hideWaits = 0
+        while (panelDisposals == sheetDisposals && hideWaits < 8) {
+            settleHost(activity)
+            hideWaits++
+        }
+        settleHost(activity)
+        assertEquals("disposed after the hide", sheetDisposals + 1, panelDisposals)
+        assertNull("acknowledged once the page disposed", presenter.panels.snapshot.current)
+        assertEquals("style=none coverage=none", readout.style)
+        assertEquals(PanelStageCoverage.none, stageCoverage)
         assertEquals(3, stageFactories)
         assertEquals(0, stageReleases)
     }
 
-    private fun settleHost() {
+    /**
+     * Five host frames: snapshot changes are sent, the main looper runs the Choreographer frames (recomposition), and
+     * then every Compose root in the activity window that still waits for a measure and layout pass gets it, as a real
+     * frame would. Robolectric never runs the draw pass in which Compose measures after an invalidation; only a change
+     * that can resize the root requests a View layout. Without the last step a node composed in measure, such as the
+     * Scaffold body of an InCallPage first shown in the side pane, never appears (G3b round 2, the PNL-1 phase).
+     */
+    private fun settleHost(activity: ComponentActivity) {
         repeat(5) {
             Snapshot.sendApplyNotifications()
             shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(50))
+            layoutComposeRoots(activity.window.decorView)
+        }
+    }
+
+    private fun layoutComposeRoots(view: View) {
+        if (view is ViewRootForTest && view.hasPendingMeasureOrLayout) view.measureAndLayoutForTest()
+        if (view is ViewGroup) {
+            for (index in 0 until view.childCount) layoutComposeRoots(view.getChildAt(index))
         }
     }
 
@@ -900,7 +909,7 @@ class PanelStageBridgeTests {
             event.source = InputDevice.SOURCE_TOUCHSCREEN
             root.dispatchTouchEvent(event)
             event.recycle()
-            settleHost()
+            settleHost(activity)
         }
     }
 
@@ -909,7 +918,7 @@ class PanelStageBridgeTests {
         val content = activity.findViewById<ViewGroup>(android.R.id.content)
         val compose = (content.getChildAt(0) as ViewGroup).getChildAt(0)
         (compose as ViewTreeObserver.OnTouchModeChangeListener).onTouchModeChanged(true)
-        settleHost()
+        settleHost(activity)
     }
 
     /** Review ISSUE 3: a focus request waits a frame before each try, retries until it lands, and reports failure. */

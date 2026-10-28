@@ -18,18 +18,24 @@ import java.util.concurrent.Executors
 @Config(manifest = Config.NONE, sdk = [28])
 class NativeIconContractTests {
     @Test fun realCatalogIsLazyThreadSafeAndStructurallyComplete() {
-        // This test alone loads the production accessors. Metadata never evaluates them.
-        assertEquals(0, ConclaveIcons.initializedCount())
+        // Test classes share one Robolectric sandbox, and bridge tests that run earlier (route and menu icons in
+        // FND1FND2BridgeTests, camera menu icons in CTL3CTL4BridgeTests) may already have loaded a few accessors,
+        // so the contract starts from whatever is loaded now. Metadata never evaluates an accessor.
+        val baseline = ConclaveIcons.initializedCount()
         assertEquals(54, NativeIconCatalog.artwork.size)
         assertEquals(58, NativeIconCatalog.bindings.size)
-        assertEquals(0, ConclaveIcons.initializedCount())
+        assertEquals(baseline, ConclaveIcons.initializedCount())
         assertEquals(setOf("arrow_back.fill0", "send.fill1"), NativeIconCatalog.artwork.filter { it.mirrors }.map { it.id }.toSet())
+        assertEquals(baseline, ConclaveIcons.initializedCount())
         val pool = Executors.newFixedThreadPool(4)
         try {
             for (a in NativeIconCatalog.artwork) {
+                val before = ConclaveIcons.initializedCount()
                 val futures = (1..8).map { pool.submit<ImageVector> { a.vector() } }
                 val first = futures.first().get()
                 futures.forEach { assertSame(first, it.get()) }
+                // Each accessor is its own lazy: evaluating one loads at most that one icon.
+                assertTrue(a.id, (ConclaveIcons.initializedCount() - before) in 0..1)
                 requireIconStructure(first, a.mirrors)
                 assertEquals(a.id, first.name)
             }

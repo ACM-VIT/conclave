@@ -157,7 +157,8 @@ struct FND2InCallChromeTests {
         #expect(android.contains("Snackbar(data, shape = MaterialTheme.shapes.small)"), "in-page snackbars stay stock")
         #expect(!android.contains("textAllCaps") && !android.contains("uppercase"))
         // The archived pairs: 15.001 and 6.246 on #232327.
-        let pairs = Dictionary(uniqueKeysWithValues: ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) })
+        // Keyed lookup only: a duplicate id fails galleryCatalogKeysStableUniqueAndDashFree, it never aborts the run.
+        let pairs = Dictionary(ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         #expect(abs((pairs["contrast.snackbar.text"]?.ratio ?? 0) - 15.001) < 0.001)
         #expect(abs((pairs["contrast.snackbar.action"]?.ratio ?? 0) - 6.246) < 0.001)
         #expect(DesignTokens.androidInCallSurfaceContainerHigh == 0xFF232327)
@@ -255,7 +256,8 @@ struct FND2InCallChromeTests {
             ("contrast.snackbarInPage.dark.text", 16.118), ("contrast.snackbarInPage.dark.action", 4.882),
             ("contrast.tagLight", 6.556), ("contrast.tagDark", 5.270), ("contrast.routeRadio", 7.398),
         ]
-        let pairs = Dictionary(uniqueKeysWithValues: ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) })
+        // Keyed lookup only: a duplicate id fails galleryCatalogKeysStableUniqueAndDashFree, it never aborts the run.
+        let pairs = Dictionary(ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (id, ratio) in expected {
             let pair = pairs[id]
             #expect(pair != nil, "\(id)")
