@@ -1,3 +1,4 @@
+#if !SKIP
 import Foundation
 import Testing
 @testable import Conclave
@@ -82,17 +83,17 @@ struct ENT9WebinarLandingTests {
         let now = Self.t0
         #expect(WebinarLandingPolicy.lookupStatus(nil, nowMillis: now) == .loading)
         #expect(WebinarLandingPolicy.lookupStatus(WebinarLookupAnswer.lookupFailed, nowMillis: now) == .failed)
-        #expect(WebinarLandingPolicy.lookupStatus(WebinarLookupAnswer.unscheduled, nowMillis: now) == .open)
-        #expect(WebinarLandingPolicy.lookupStatus(Self.live(), nowMillis: now) == .open)
+        #expect(WebinarLandingPolicy.lookupStatus(WebinarLookupAnswer.unscheduled, nowMillis: now) == .openNow)
+        #expect(WebinarLandingPolicy.lookupStatus(Self.live(), nowMillis: now) == .openNow)
         #expect(WebinarLandingPolicy.lookupStatus(Self.status(Self.live(), "ended"), nowMillis: now) == .ended)
         #expect(WebinarLandingPolicy.lookupStatus(Self.status(Self.live(), "CANCELLED"), nowMillis: now) == .cancelled)
         let early = Self.scheduled(startsIn: 761000.0, earlyMinutes: 10)
         #expect(WebinarLandingPolicy.lookupStatus(early, nowMillis: now) == .early)
-        #expect(WebinarLandingPolicy.lookupStatus(early, nowMillis: now + 161000.0) == .open, "open at start minus 10 min")
+        #expect(WebinarLandingPolicy.lookupStatus(early, nowMillis: now + 161000.0) == .openNow, "open at start minus 10 min")
         #expect(WebinarLandingPolicy.lookupStatus(early, nowMillis: now + 160999.0) == .early)
         let noStart = Self.scheduled(startsIn: -Self.t0, earlyMinutes: 0)
         #expect(WebinarLandingPolicy.opensAtMillis(noStart) == 0.0)
-        #expect(WebinarLandingPolicy.lookupStatus(noStart, nowMillis: now) == .open, "no start time is open")
+        #expect(WebinarLandingPolicy.lookupStatus(noStart, nowMillis: now) == .openNow, "no start time is open")
         #expect(WebinarLandingPolicy.openWakeDelayMillis(early, nowMillis: now) == 161000.0)
         #expect(WebinarLandingPolicy.openWakeDelayMillis(Self.live(), nowMillis: now) == nil)
         #expect(WebinarLandingPolicy.openWakeDelayMillis(nil, nowMillis: now) == nil)
@@ -114,10 +115,10 @@ struct ENT9WebinarLandingTests {
 
     @Test func tagsUseTheWordAndLiveNeedsTheStart() {
         let now = Self.t0
-        #expect(WebinarLandingPolicy.tag(status: .open, answer: Self.live(), nowMillis: now) == .live)
-        #expect(WebinarLandingPolicy.tag(status: .open, answer: WebinarLookupAnswer.unscheduled, nowMillis: now) == .live)
+        #expect(WebinarLandingPolicy.tag(status: .openNow, answer: Self.live(), nowMillis: now) == .live)
+        #expect(WebinarLandingPolicy.tag(status: .openNow, answer: WebinarLookupAnswer.unscheduled, nowMillis: now) == .live)
         let window = Self.scheduled(startsIn: 120000.0, earlyMinutes: 10)
-        #expect(WebinarLandingPolicy.tag(status: .open, answer: window, nowMillis: now) == .startsSoon, "the early entry window")
+        #expect(WebinarLandingPolicy.tag(status: .openNow, answer: window, nowMillis: now) == .startsSoon, "the early entry window")
         #expect(WebinarLandingPolicy.tag(status: .early, answer: window, nowMillis: now) == .startsSoon)
         #expect(WebinarLandingPolicy.tag(status: .waitingForHost, answer: Self.live(), nowMillis: now) == .startsSoon)
         #expect(WebinarLandingPolicy.tag(status: .ended, answer: nil, nowMillis: now) == .ended)
@@ -168,15 +169,15 @@ struct ENT9WebinarLandingTests {
         #expect(WebinarLandingPolicy.displayName(isSignedIn: false, accountName: "", nameDraft: long).count <= DisplayNamePolicy.limit)
         #expect(WebinarLandingPolicy.displayName(isSignedIn: false, accountName: "Avery", nameDraft: "Typed") == "Avery")
         #expect(WebinarLandingPolicy.displayName(isSignedIn: false, accountName: "", nameDraft: "  Sam   Lee ") == "Sam Lee")
-        #expect(!WebinarLandingPolicy.isPrimaryEnabled(status: .open, needsName: true, nameDraft: " ", needsInviteCode: false,
+        #expect(!WebinarLandingPolicy.isPrimaryEnabled(status: .openNow, needsName: true, nameDraft: " ", needsInviteCode: false,
                                                        inviteDraft: "", linkHasInviteCode: false))
-        #expect(WebinarLandingPolicy.isPrimaryEnabled(status: .open, needsName: true, nameDraft: "Sam", needsInviteCode: false,
+        #expect(WebinarLandingPolicy.isPrimaryEnabled(status: .openNow, needsName: true, nameDraft: "Sam", needsInviteCode: false,
                                                       inviteDraft: "", linkHasInviteCode: false))
-        #expect(!WebinarLandingPolicy.isPrimaryEnabled(status: .open, needsName: false, nameDraft: "", needsInviteCode: true,
+        #expect(!WebinarLandingPolicy.isPrimaryEnabled(status: .openNow, needsName: false, nameDraft: "", needsInviteCode: true,
                                                        inviteDraft: "", linkHasInviteCode: false))
-        #expect(WebinarLandingPolicy.isPrimaryEnabled(status: .open, needsName: false, nameDraft: "", needsInviteCode: true,
+        #expect(WebinarLandingPolicy.isPrimaryEnabled(status: .openNow, needsName: false, nameDraft: "", needsInviteCode: true,
                                                       inviteDraft: "", linkHasInviteCode: true))
-        for status in WebinarLandingStatus.allCases where status != .open {
+        for status in WebinarLandingStatus.allCases where status != .openNow {
             #expect(!WebinarLandingPolicy.isPrimaryEnabled(status: status, needsName: false, nameDraft: "", needsInviteCode: false,
                                                            inviteDraft: "", linkHasInviteCode: false), "\(status)")
         }
@@ -186,7 +187,7 @@ struct ENT9WebinarLandingTests {
         for status in WebinarLandingStatus.allCases {
             let action = WebinarLandingPolicy.action(status)
             switch status {
-            case .open:
+            case .openNow:
                 #expect(action == .startWatching)
             case .failed:
                 #expect(action == .tryAgain)
@@ -195,9 +196,9 @@ struct ENT9WebinarLandingTests {
             case .loading, .early, .joining, .almostThere, .waitingForHost:
                 #expect(action == WebinarLandingAction.none, "\(status)")
             }
-            #expect(WebinarLandingPolicy.refetches(status) == [.loading, .early, .open, .waitingForHost].contains(status), "\(status)")
+            #expect(WebinarLandingPolicy.refetches(status) == [.loading, .early, .openNow, .waitingForHost].contains(status), "\(status)")
             #expect(WebinarLandingPolicy.isJoining(status) == (status == .joining || status == .almostThere))
-            #expect(WebinarLandingPolicy.announces(status) == [.open, .waitingForHost, .ended, .cancelled].contains(status))
+            #expect(WebinarLandingPolicy.announces(status) == [.openNow, .waitingForHost, .ended, .cancelled].contains(status))
         }
     }
 
@@ -252,7 +253,7 @@ struct ENT9WebinarLandingTests {
         #expect(presenter.lobbyStatus == nil && presenter.lobbyMedia == nil, "no lobby, no preview")
         #expect(presenter.webinarLookupCount == 0 && presenter.liveTaskCount == 0, "nothing runs before the landing is visible")
         presenter.webinarDidAppear(routeId: routeId)
-        #expect(await ent9Settle { presenter.webinar?.status == .open })
+        #expect(await ent9Settle { presenter.webinar?.status == .openNow })
         #expect(presenter.webinar?.title == "Design Systems Week" && presenter.webinar?.hostName == "ACM-VIT")
         #expect(presenter.webinar?.tag == .live && presenter.webinar?.action == .startWatching)
         #expect(presenter.webinar?.needsName == false && presenter.webinar?.isPrimaryEnabled == true)
@@ -279,7 +280,7 @@ struct ENT9WebinarLandingTests {
         // S10 12 l5, RECONCILE R41.
         let hooks = ENT9HookRecorder()
         let presenter = await openAnswered(Self.live(), hooks: hooks, guestName: "")
-        #expect(presenter.webinar?.status == .open && presenter.webinar?.needsName == true)
+        #expect(presenter.webinar?.status == .openNow && presenter.webinar?.needsName == true)
         #expect(presenter.webinar?.isPrimaryEnabled == false)
         presenter.startWatching()
         #expect(hooks.joins.isEmpty)
@@ -350,7 +351,7 @@ struct ENT9WebinarLandingTests {
         presenter.startWatching()
         presenter.apply(Self.inputs(phase: .entering))
         presenter.apply(Self.inputs(phase: .home, notice: .formError, noticeText: "Enter the webinar invite code to join."))
-        #expect(presenter.webinar?.status == .open && presenter.webinar?.needsInviteCode == true)
+        #expect(presenter.webinar?.status == .openNow && presenter.webinar?.needsInviteCode == true)
         #expect(presenter.webinar?.inviteCodeInvalid == false && presenter.webinar?.isPrimaryEnabled == false)
         presenter.setWebinarInviteCode("SECRET")
         #expect(presenter.webinar?.isPrimaryEnabled == true)
@@ -379,7 +380,7 @@ struct ENT9WebinarLandingTests {
         let linked = self.presenter(hooks: withCode)
         let routeId = openLanding(linked, link: Self.link + "?inviteCode=ABC123")
         linked.webinarDidAppear(routeId: routeId)
-        #expect(await ent9Settle { linked.webinar?.status == .open })
+        #expect(await ent9Settle { linked.webinar?.status == .openNow })
         #expect(linked.webinar?.needsInviteCode == false && linked.webinar?.isPrimaryEnabled == true)
     }
 
@@ -391,7 +392,7 @@ struct ENT9WebinarLandingTests {
         #expect(presenter.webinar?.status == .joining)
         presenter.cancelJoin()
         #expect(hooks.commands == [PremeetingCommand.leave.rawValue])
-        #expect(presenter.webinar?.status == .open, "Cancel returns the landing to its lookup state")
+        #expect(presenter.webinar?.status == .openNow, "Cancel returns the landing to its lookup state")
         // Back while a join this landing started is under way never lets it continue unseen.
         presenter.startWatching()
         presenter.setPath([])
@@ -413,7 +414,7 @@ struct ENT9WebinarLandingTests {
         #expect(presenter.webinar?.revision == revision, "the snapshot never changes for the clock alone")
         clock.now = Self.t0 + 61000.0
         presenter.webinarSceneDidChange(isActive: true)
-        #expect(presenter.webinar?.status == .open, "the scene-active refresh flips the status at once")
+        #expect(presenter.webinar?.status == .openNow, "the scene-active refresh flips the status at once")
         #expect(WebinarLandingPolicy.countdownEndMillis(startsAtMillis: Self.t0 + 60000.0, nowMillis: clock.now) == clock.now)
     }
 
@@ -424,7 +425,7 @@ struct ENT9WebinarLandingTests {
         #expect(presenter.webinar?.action == .tryAgain && presenter.webinarTaskCount == 0)
         hooks.answers = [Self.live()]
         presenter.retryWebinar()
-        #expect(await ent9Settle { presenter.webinar?.status == .open })
+        #expect(await ent9Settle { presenter.webinar?.status == .openNow })
         let clock = ENT9Clock()
         let other = ENT9HookRecorder()
         let kept = await openAnswered(Self.live(), hooks: other, clock: clock)
@@ -432,7 +433,7 @@ struct ENT9WebinarLandingTests {
         let lookups = kept.webinarLookupCount
         clock.now += 10.0
         #expect(await ent9Settle { kept.webinarLookupCount > lookups })
-        #expect(kept.webinar?.status == .open, "a failed refetch keeps the last good answer")
+        #expect(kept.webinar?.status == .openNow, "a failed refetch keeps the last good answer")
     }
 
     @Test func endedAndCancelledStopTheRefetchAndGoHome() async {
@@ -498,7 +499,7 @@ struct ENT9WebinarLandingTests {
     @Test func theFixtureAnswersCoverEveryStatus() async {
         let expected: [PremeetingFixtureState: WebinarLandingStatus] = [
             .webinarEarly: .early, .webinarEarlyOneMinute: .early, .webinarEarlyShort: .early, .webinarNoCalendar: .early,
-            .webinarOpen: .open, .webinarNameNeeded: .open, .webinarInviteCode: .open, .webinarEnded: .ended,
+            .webinarOpen: .openNow, .webinarNameNeeded: .openNow, .webinarInviteCode: .openNow, .webinarEnded: .ended,
             .webinarCancelled: .cancelled, .webinarFailed: .failed, .webinarJoining: .joining,
             .webinarAlmostThere: .almostThere, .webinarWaitingHost: .waitingForHost, .webinarLocked: .locked,
             .webinarFull: .full, .webinarUnavailable: .unavailable
@@ -685,3 +686,4 @@ private func ent9Matches(_ pattern: String, in text: String) -> [String] {
     }
     return found
 }
+#endif

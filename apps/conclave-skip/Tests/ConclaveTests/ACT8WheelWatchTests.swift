@@ -171,7 +171,7 @@ struct ACT8WheelWatchTests {
         #expect(AppBridgeProtocol.iosResourceName(appId: "watch") == "native-embed-watch")
         #expect(AppBridgeProtocol.androidAssetPath(appId: "wheel") == "native-embed/wheel.html")
         let protocolTS = try String(contentsOf: act8RepoRoot().appendingPathComponent("packages/apps-sdk/src/native-embed/protocol.ts"), encoding: .utf8)
-        #expect(protocolTS.contains("entries: \(AppWheelLimits.entries),") && protocolTS.contains("label: \(AppWheelLimits.label),"))
+        #expect(protocolTS.contains("entries: \(AppWheelLimits.maxEntries),") && protocolTS.contains("label: \(AppWheelLimits.label),"))
         #expect(protocolTS.contains("queue: \(AppWatchLimits.queue),") && protocolTS.contains("title: \(AppWatchLimits.title),"))
         #expect(protocolTS.contains("WATCH_FRAME_ORIGIN = \"\(AppEmbedFramePolicy.watchFrameOrigin)\""))
     }
@@ -311,7 +311,7 @@ struct ACT8WheelWatchTests {
         let (presenter, relay) = host(wire, inputs: AppHostInputs.make(callSession: 1, appId: "wheel", isHost: true), roster: ["New"])
         #expect(ready(relay) == .none)
         var names: [String] = []
-        for index in 0..<AppWheelLimits.entries { names.append("N" + String(index)) }
+        for index in 0..<AppWheelLimits.maxEntries { names.append("N" + String(index)) }
         send(relay, "status", ["app": Self.wheelApp(names)], id: "e-2")
         #expect(presenter.wheel.isFull && presenter.model.nameCount == 64)
         #expect(presenter.addWheelNames("One more") == .explained && presenter.addEveryoneToWheel() == .explained)

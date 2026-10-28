@@ -8656,7 +8656,7 @@ final class MeetingViewModel {
             isCameraOff: state.isCameraOff,
             isHandRaised: state.isHandRaised,
             isScreenSharing: state.isScreenSharing,
-            raisedAtMillis: state.isHandRaised ? (state.raisedAtByUserId[localId] ?? 0) : 0,
+            raisedAtMillis: state.isHandRaised ? (state.raisedAtByUserId[localId] ?? 0.0) : 0.0,
             userKey: state.userKey(for: localId)
         ))
         for participant in state.mergedRemoteParticipants {
@@ -8674,7 +8674,7 @@ final class MeetingViewModel {
                 isWebinarAttendee: participant.isWebinarAttendee,
                 joinSerial: state.participantJoinSerials[id] ?? 0,
                 // S50 PH3: the server's raise time (0 when unknown: sorts after timed hands by join order).
-                raisedAtMillis: participant.isHandRaised ? (state.raisedAtByUserId[id] ?? 0) : 0,
+                raisedAtMillis: participant.isHandRaised ? (state.raisedAtByUserId[id] ?? 0.0) : 0.0,
                 // S40 CH21 and S50 PH13: the hide state and the key "Remove and Block" blocks.
                 messagesHidden: chat.isSenderHidden(id),
                 userKey: state.userKey(for: participant.id)

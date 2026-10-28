@@ -10,7 +10,10 @@ import Foundation
 
 /// The landing's state (S10 12 f, j). `almostThere` follows the socket connecting while joining.
 enum WebinarLandingStatus: String, CaseIterable, Equatable {
-    case loading, early, open, joining, almostThere, waitingForHost, locked, full, unavailable, ended, cancelled, failed
+    case loading, early
+    /// Raw value "open"; the case name avoids the Kotlin `open` modifier, which breaks the transpiled enum entry.
+    case openNow = "open"
+    case joining, almostThere, waitingForHost, locked, full, unavailable, ended, cancelled, failed
 }
 
 /// The status tag over the title (S10 12 c `StatusTag`): Live (functional color plus the word), Starts Soon and Ended
@@ -166,7 +169,7 @@ enum WebinarLandingPolicy {
         case .failed:
             return .failed
         case .notScheduled:
-            return .open
+            return .openNow
         case .found:
             let status = answer.status.lowercased()
             if status == "ended" {
@@ -175,7 +178,7 @@ enum WebinarLandingPolicy {
             if status == "cancelled" {
                 return .cancelled
             }
-            return isOpen(answer, nowMillis: nowMillis) ? WebinarLandingStatus.open : WebinarLandingStatus.early
+            return isOpen(answer, nowMillis: nowMillis) ? WebinarLandingStatus.openNow : WebinarLandingStatus.early
         }
     }
 
@@ -197,7 +200,7 @@ enum WebinarLandingPolicy {
             return .ended
         case .early, .waitingForHost:
             return .startsSoon
-        case .open, .joining, .almostThere:
+        case .openNow, .joining, .almostThere:
             guard let answer, answer.outcome == .found else { return .live }
             if answer.status.lowercased() == "live" || answer.startsAtMillis <= 0.0 || nowMillis >= answer.startsAtMillis {
                 return .live
@@ -260,7 +263,7 @@ enum WebinarLandingPolicy {
     /// typed (or carried by the link).
     static func isPrimaryEnabled(status: WebinarLandingStatus, needsName: Bool, nameDraft: String, needsInviteCode: Bool,
                                  inviteDraft: String, linkHasInviteCode: Bool) -> Bool {
-        guard status == .open else { return false }
+        guard status == .openNow else { return false }
         if needsName && DisplayNamePolicy.normalized(nameDraft).isEmpty {
             return false
         }
@@ -272,7 +275,7 @@ enum WebinarLandingPolicy {
 
     static func action(_ status: WebinarLandingStatus) -> WebinarLandingAction {
         switch status {
-        case .open:
+        case .openNow:
             return .startWatching
         case .failed:
             return .tryAgain
@@ -287,7 +290,7 @@ enum WebinarLandingPolicy {
     /// open and the wait for the host keep it running, so the landing updates on its own (S10 12 f).
     static func refetches(_ status: WebinarLandingStatus) -> Bool {
         switch status {
-        case .loading, .early, .open, .waitingForHost:
+        case .loading, .early, .openNow, .waitingForHost:
             return true
         case .joining, .almostThere, .locked, .full, .unavailable, .ended, .cancelled, .failed:
             return false
@@ -301,7 +304,7 @@ enum WebinarLandingPolicy {
 
     /// Status changes VoiceOver and TalkBack announce once (S10 12 i): opening, the wait for the host and the end.
     static func announces(_ status: WebinarLandingStatus) -> Bool {
-        status == .open || status == .waitingForHost || status == .ended || status == .cancelled
+        status == .openNow || status == .waitingForHost || status == .ended || status == .cancelled
     }
 
     /// The countdown range's end, clamped (S10 12 c, l6): a `ClosedRange` traps when its lower bound passes its upper

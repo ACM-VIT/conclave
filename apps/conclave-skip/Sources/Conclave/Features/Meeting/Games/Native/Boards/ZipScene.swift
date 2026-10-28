@@ -336,7 +336,7 @@ enum ZipPathPolicy {
     }
 
     static func cellSide(boardSide: Double, size: Int) -> Double {
-        size > 0 ? boardSide / Double(size) : 0
+        size > 0 ? boardSide / Double(size) : 0.0
     }
 
     static func row(_ cell: Int, size: Int) -> Int {

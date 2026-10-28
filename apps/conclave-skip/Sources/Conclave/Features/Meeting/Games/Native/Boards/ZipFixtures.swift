@@ -228,6 +228,7 @@ enum ZipFixtures {
     /// with the module's "Cell already visited" after sending one step, so the rejected notice and the restored path show.
     /// Nil for any other name.
     @discardableResult
+    @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ZipFixtureState? {
         guard let fixture = state(named: raw) else { return nil }
         let rejects = fixture == ZipFixtureState.rejected

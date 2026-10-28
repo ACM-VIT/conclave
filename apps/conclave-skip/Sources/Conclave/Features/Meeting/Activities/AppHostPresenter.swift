@@ -167,7 +167,7 @@ struct AppHostPendingCommand: Equatable {
 
 /// Spin the Wheel bounds (the SDK `wheel/core/doc`). Twin of `WHEEL_LIMITS` in packages/apps-sdk/src/native-embed/protocol.ts.
 enum AppWheelLimits {
-    static let entries = 64
+    static let maxEntries = 64
     static let label = 48
     static let results = 25
     static let name = 64
@@ -256,17 +256,17 @@ struct AppEmbedAppStatus: Equatable {
 enum AppEmbedAppCodec {
     static func parse(_ value: Any?) -> AppEmbedAppStatus? {
         guard let value = value else { return AppEmbedAppStatus.empty }
-        guard let object = value as? [String: Any] else { return nil }
-        let kind = object["kind"] as? String ?? ""
-        if kind == "wheel" { return parseWheel(object) }
-        if kind == "watch" { return parseWatch(object) }
+        guard let envelope = value as? [String: Any] else { return nil }
+        let kind = envelope["kind"] as? String ?? ""
+        if kind == "wheel" { return parseWheel(envelope) }
+        if kind == "watch" { return parseWatch(envelope) }
         return nil
     }
 
     private static func parseWheel(_ object: [String: Any]) -> AppEmbedAppStatus? {
         var entries: [WheelEntryModel] = []
         if let rawEntries = object["entries"] {
-            guard let list = rawEntries as? [Any], list.count <= AppWheelLimits.entries else { return nil }
+            guard let list = rawEntries as? [Any], list.count <= AppWheelLimits.maxEntries else { return nil }
             for item in list {
                 guard let entry = item as? [String: Any] else { return nil }
                 let id = entry["id"] as? String ?? ""
@@ -615,7 +615,7 @@ enum WatchPickAction: String, CaseIterable, Equatable {
 
 /// Pure Spin the Wheel and Watch Together rules (both platforms' tests pin them).
 enum AppPagePolicy {
-    private static let spaceCharacters = " \t\n\r\u{0B}\u{0C}\u{A0}"
+    private static let spaceCharacters = " \t\n\r\u{000B}\u{000C}\u{00A0}"
 
     /// The SDK's label rule (`wheel/core/doc` normalizeLabel): runs of whitespace become one space, trimmed, at most
     /// 48 characters.
@@ -785,8 +785,8 @@ enum WatchSearchService {
     static func decode(statusCode: Int, data: Data) -> WatchSearchOutcome {
         if statusCode == 503 { return WatchSearchOutcome(items: [], unavailable: true, failed: false) }
         if statusCode < 200 || statusCode > 299 { return failure }
-        guard let parsed = try? JSONSerialization.jsonObject(with: data), let object = parsed as? [String: Any],
-              let list = object["items"] as? [Any] else { return failure }
+        guard let parsed = try? JSONSerialization.jsonObject(with: data), let body = parsed as? [String: Any],
+              let list = body["items"] as? [Any] else { return failure }
         var items: [WatchVideoModel] = []
         for raw in list {
             if items.count >= resultLimit { break }
@@ -1153,7 +1153,7 @@ final class AppHostPresenter {
     func addWheelNames(_ raw: String) -> ActivityTapResult {
         if !wheel.canEdit { return ActivityTapResult.explained }
         if wheel.isFull { return ActivityTapResult.explained }
-        let labels = AppPagePolicy.wheelLabels(raw, room: AppWheelLimits.entries - wheel.entries.count)
+        let labels = AppPagePolicy.wheelLabels(raw, room: AppWheelLimits.maxEntries - wheel.entries.count)
         if labels.isEmpty { return ActivityTapResult.ignored }
         return sendPage(AppPageCommandKind.addEntries, target: "", payload: ["labels": labels])
     }
@@ -1163,7 +1163,7 @@ final class AppHostPresenter {
     func addEveryoneToWheel() -> ActivityTapResult {
         if !wheel.canEdit || wheel.isFull { return ActivityTapResult.explained }
         let missing = AppPagePolicy.missingNames(roster: rosterNames(), entries: wheel.entries)
-        let room = AppWheelLimits.entries - wheel.entries.count
+        let room = AppWheelLimits.maxEntries - wheel.entries.count
         var labels: [String] = []
         for name in missing {
             if labels.count >= room { break }
@@ -1819,7 +1819,7 @@ final class AppHostPresenter {
             spinning: spinning,
             canEdit: wheelEdit,
             canSpin: wheelEdit && wheelEntries.count >= 2 && !spinning && !kinds.contains(AppPageCommandKind.spin.rawValue),
-            isFull: wheelEntries.count >= AppWheelLimits.entries,
+            isFull: wheelEntries.count >= AppWheelLimits.maxEntries,
             isReady: isWheel && ready,
             missingNames: missing,
             pendingKinds: isWheel ? kinds : [],
@@ -1978,6 +1978,7 @@ enum AppHostFixtures {
         return relay
     }
 
+    @MainActor
     private static func applyPage(_ state: AppPageFixtureState, presenter: AppHostPresenter, owner: AppHostFixtureOwner) -> ActiveAppSession {
         let relay = ActiveAppSession()
         relay.syncTransport = { [weak owner] _, _ in

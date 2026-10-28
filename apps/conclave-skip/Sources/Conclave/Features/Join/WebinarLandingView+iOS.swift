@@ -149,7 +149,7 @@ private struct WebinarStatusSections: View {
             EmptyView()
         case .early:
             WebinarEarlySections(snapshot: snapshot, onAddToCalendar: onAddToCalendar)
-        case .open:
+        case .openNow:
             WebinarOpenSections(snapshot: snapshot, premeeting: premeeting)
         case .joining, .almostThere, .waitingForHost:
             WebinarProgressSection(status: snapshot.status)
@@ -480,7 +480,7 @@ enum WebinarLandingCopy {
 
     static func announcement(_ status: WebinarLandingStatus) -> String {
         switch status {
-        case .open:
+        case .openNow:
             return ConclaveStrings.text("Start Watching")
         case .waitingForHost:
             return ConclaveStrings.text("Waiting for the Host to Start")

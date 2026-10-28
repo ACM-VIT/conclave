@@ -598,8 +598,8 @@ final class SystemNotifications {
     @ObservationIgnored private(set) var authorizationRequestCount = 0
     @ObservationIgnored private(set) var postedCount = 0
 
-    init(isAndroid: Bool = SystemNotifications.platformIsAndroid, defaults: UserDefaults = UserDefaults.standard) {
-        self.isAndroid = isAndroid
+    init(isAndroid: Bool? = nil, defaults: UserDefaults = UserDefaults.standard) {
+        self.isAndroid = isAndroid ?? SystemNotifications.platformIsAndroid
         self.defaults = defaults
         publish()
     }

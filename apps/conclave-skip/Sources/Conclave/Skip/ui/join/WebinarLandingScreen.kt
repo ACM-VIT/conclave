@@ -227,7 +227,7 @@ private fun WebinarStatusContent(premeeting: PremeetingPresenter, snapshot: Webi
     when (snapshot.status) {
         WebinarLandingStatus.loading -> Unit
         WebinarLandingStatus.early -> WebinarEarlyContent(premeeting, snapshot, snackbarHostState)
-        WebinarLandingStatus.open -> WebinarOpenContent(premeeting, snapshot)
+        WebinarLandingStatus.openNow -> WebinarOpenContent(premeeting, snapshot)
         WebinarLandingStatus.joining, WebinarLandingStatus.almostThere, WebinarLandingStatus.waitingForHost ->
             WebinarProgressRow(snapshot.status)
         else -> WebinarStatusMessage(premeeting, snapshot)
@@ -469,7 +469,7 @@ internal fun webinarMessageBodyName(status: WebinarLandingStatus): String = when
 }
 
 private fun webinarAnnouncementOf(context: Context, status: WebinarLandingStatus): String = when (status) {
-    WebinarLandingStatus.open -> conclaveStringOf(context, "pm_start_watching")
+    WebinarLandingStatus.openNow -> conclaveStringOf(context, "pm_start_watching")
     WebinarLandingStatus.waitingForHost -> conclaveStringOf(context, "pm_waiting_host_start")
     WebinarLandingStatus.ended -> conclaveStringOf(context, "pm_webinar_ended_title")
     WebinarLandingStatus.cancelled -> conclaveStringOf(context, "pm_webinar_cancelled_title")

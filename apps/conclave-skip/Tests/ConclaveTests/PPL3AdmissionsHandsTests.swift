@@ -641,7 +641,6 @@ struct PPL3AdmissionsHandsTests {
         #expect(shared.range(of: #"->\s*\("#, options: .regularExpression) == nil, "no tuples")
     }
 }
-#endif
 
 private func ppl3Source(_ packageRelativePath: String) throws -> String {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -651,3 +650,4 @@ private func ppl3Source(_ packageRelativePath: String) throws -> String {
 private func ppl3Normalized(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
+#endif

@@ -704,7 +704,8 @@
     },
     ", next" : {
       "comment" : "Zip in the activity card (S60 12): appended to the label of a cell your path may take next; keep the leading comma",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     ", not part of the puzzle" : {
       "comment" : "Zip in the activity card (S60 12): appended to the label of a removed cell the path skips; keep the leading comma",
@@ -2022,11 +2023,13 @@
     },
     "Choose Microphone" : {
       "comment" : "In-call Mic control: VoiceOver custom action name (iOS 26 and later) that opens the system microphone picker",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Choose Microphone…" : {
       "comment" : "In-call Mic control long-press menu (iOS 26 and later): opens the system microphone picker",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Choose Next Cell" : {
       "comment" : "Zip in the activity card (S60 12): toggle that shows the step chooser (the cells your path may take next as buttons) and the chooser's heading",
@@ -2066,15 +2069,18 @@
     },
     "Clear Names" : {
       "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): destructive confirmation button that removes every name",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Clear Names?" : {
       "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): confirmation title before removing every name",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Clear Names…" : {
       "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): destructive button that removes every name (asks first)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Clear Results" : {
       "comment" : "Spin the Wheel in the activity card or its Activities page (S60 13): button that clears the list of past winners for everyone",
@@ -2745,11 +2751,13 @@
     },
     "Deny All" : {
       "comment" : "People confirmation dialog (S50 3 g): Deny All confirm button (S50 4)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Deny All…" : {
       "comment" : "Participants (S50 4 g): the item in the Waiting header's overflow menu that asks before denying everyone waiting to join",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Details" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): short visible label of the Meeting Details action in the three-item row of the menu; the spoken label is Meeting Details",
@@ -4171,11 +4179,13 @@
     },
     "Mic Mode" : {
       "comment" : "In-call Mic control: VoiceOver custom action name that opens the system microphone modes (Standard, Voice Isolation, Wide Spectrum)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Mic Mode…" : {
       "comment" : "Settings pages (S60 2) (iOS): opens the system microphone mode menu (Voice Isolation and Wide Spectrum)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Microphone" : {
       "comment" : "Call controls: constant accessibility label of the microphone toggle; its state is the value",
@@ -4438,7 +4448,8 @@
     },
     "Next" : {
       "comment" : "Prompt games in the activity card (S60 9): host bar button that moves from the reveal to the next round",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Next Round" : {
       "comment" : "Wordle in the activity card (S60 10): host bar button that starts the next round after a round's results",
@@ -5655,7 +5666,8 @@
     },
     "Resign" : {
       "comment" : "Chess in the activity card (S60 11): confirms resigning (Android also uses it on the button that opens the confirmation)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Resign This Game?" : {
       "comment" : "Chess in the activity card (S60 11): resign confirmation title",
@@ -5663,7 +5675,8 @@
     },
     "Resign…" : {
       "comment" : "Chess in the activity card (S60 11): button that opens the resign confirmation",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Resolution" : {
       "comment" : "Settings (S60 2, SET-3): Advanced camera setting title",
@@ -7331,11 +7344,13 @@
     },
     "Video Effects" : {
       "comment" : "In-call Camera control: VoiceOver custom action name that opens the system video effects in Control Center",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Video Effects…" : {
       "comment" : "In-call More menu (iOS native menu and its fallback sheet): item that opens the system video effects module while the camera is on (the ellipsis means a chooser follows)",
-      "extractionState" : "manual"
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Video and Motion" : {
       "comment" : "Settings (S60 2, SET-3): Optimize For option for a screen share",

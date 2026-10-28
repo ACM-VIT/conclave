@@ -49,15 +49,15 @@ class ENT9WebinarLandingBridgeTests {
     @Test fun lookupStatusMatchesTheSwiftTable() {
         assertEquals(WebinarLandingStatus.loading, WebinarLandingPolicy.lookupStatus(null, nowMillis = t0))
         assertEquals(WebinarLandingStatus.failed, WebinarLandingPolicy.lookupStatus(WebinarLookupAnswer.lookupFailed, nowMillis = t0))
-        assertEquals(WebinarLandingStatus.open, WebinarLandingPolicy.lookupStatus(WebinarLookupAnswer.unscheduled, nowMillis = t0))
-        assertEquals(WebinarLandingStatus.open, WebinarLandingPolicy.lookupStatus(live(), nowMillis = t0))
+        assertEquals(WebinarLandingStatus.openNow, WebinarLandingPolicy.lookupStatus(WebinarLookupAnswer.unscheduled, nowMillis = t0))
+        assertEquals(WebinarLandingStatus.openNow, WebinarLandingPolicy.lookupStatus(live(), nowMillis = t0))
         val early = scheduled(startsIn = 761000.0, earlyMinutes = 10)
         assertEquals(WebinarLandingStatus.early, WebinarLandingPolicy.lookupStatus(early, nowMillis = t0))
-        assertEquals(WebinarLandingStatus.open, WebinarLandingPolicy.lookupStatus(early, nowMillis = t0 + 161000.0))
+        assertEquals(WebinarLandingStatus.openNow, WebinarLandingPolicy.lookupStatus(early, nowMillis = t0 + 161000.0))
         assertEquals(161000.0, WebinarLandingPolicy.openWakeDelayMillis(early, nowMillis = t0) ?: -1.0, 0.0)
         assertNull(WebinarLandingPolicy.openWakeDelayMillis(live(), nowMillis = t0))
         assertEquals(WebinarLandingTag.startsSoon, WebinarLandingPolicy.tag(status = WebinarLandingStatus.early, answer = early, nowMillis = t0))
-        assertEquals(WebinarLandingTag.live, WebinarLandingPolicy.tag(status = WebinarLandingStatus.open, answer = live(), nowMillis = t0))
+        assertEquals(WebinarLandingTag.live, WebinarLandingPolicy.tag(status = WebinarLandingStatus.openNow, answer = live(), nowMillis = t0))
         assertEquals(WebinarLandingTag.ended, WebinarLandingPolicy.tag(status = WebinarLandingStatus.cancelled, answer = null, nowMillis = t0))
         assertEquals(WebinarLandingTag.none, WebinarLandingPolicy.tag(status = WebinarLandingStatus.failed, answer = live(), nowMillis = t0))
     }
@@ -73,7 +73,7 @@ class ENT9WebinarLandingBridgeTests {
             diagnosticCode = "", serverText = "Webinar is not enabled."))
         assertEquals(WebinarLandingStatus.failed, WebinarLandingPolicy.joinFailureStatus(category = "serverUnreachable",
             diagnosticCode = "url.unreachable", serverText = ""))
-        assertEquals(WebinarLandingAction.startWatching, WebinarLandingPolicy.action(WebinarLandingStatus.open))
+        assertEquals(WebinarLandingAction.startWatching, WebinarLandingPolicy.action(WebinarLandingStatus.openNow))
         assertEquals(WebinarLandingAction.tryAgain, WebinarLandingPolicy.action(WebinarLandingStatus.failed))
         assertEquals(WebinarLandingAction.backHome, WebinarLandingPolicy.action(WebinarLandingStatus.ended))
         assertEquals(WebinarLandingAction.none, WebinarLandingPolicy.action(WebinarLandingStatus.joining))
@@ -86,9 +86,9 @@ class ENT9WebinarLandingBridgeTests {
     @Test fun theNameGateAndTheCapMatchR41() {
         assertTrue(WebinarLandingPolicy.needsName(isSignedIn = false, accountName = ""))
         assertFalse(WebinarLandingPolicy.needsName(isSignedIn = false, accountName = "Avery"))
-        assertFalse(WebinarLandingPolicy.isPrimaryEnabled(status = WebinarLandingStatus.open, needsName = true, nameDraft = "",
+        assertFalse(WebinarLandingPolicy.isPrimaryEnabled(status = WebinarLandingStatus.openNow, needsName = true, nameDraft = "",
             needsInviteCode = false, inviteDraft = "", linkHasInviteCode = false))
-        assertTrue(WebinarLandingPolicy.isPrimaryEnabled(status = WebinarLandingStatus.open, needsName = true, nameDraft = "Sam",
+        assertTrue(WebinarLandingPolicy.isPrimaryEnabled(status = WebinarLandingStatus.openNow, needsName = true, nameDraft = "Sam",
             needsInviteCode = false, inviteDraft = "", linkHasInviteCode = false))
         assertEquals(40, DisplayNamePolicy.capped("n".repeat(41)).length)
         assertEquals(40, DisplayNamePolicy.limit)

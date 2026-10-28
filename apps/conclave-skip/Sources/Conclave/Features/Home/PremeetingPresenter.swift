@@ -863,7 +863,7 @@ final class PremeetingPresenter {
     /// off. Nothing else on the landing ever joins.
     func startWatching() {
         guard let target = topWebinarTarget(), let snapshot = webinar, snapshot.routeId == target.routeId,
-              snapshot.status == .open, snapshot.isPrimaryEnabled else { return }
+              snapshot.status == .openNow, snapshot.isPrimaryEnabled else { return }
         guard !blockedByUpdate() else { return }
         sendWebinarJoin(target, silent: false)
     }
@@ -1943,7 +1943,7 @@ final class PremeetingPresenter {
     private func retryWaitingForHostIfOpen() {
         guard let target = topWebinarTarget(), let snapshot = webinar, snapshot.routeId == target.routeId,
               snapshot.status == .waitingForHost, !isWebinarJoinInFlight() else { return }
-        guard WebinarLandingPolicy.lookupStatus(webinarAnswer, nowMillis: nowMillis()) == .open else { return }
+        guard WebinarLandingPolicy.lookupStatus(webinarAnswer, nowMillis: nowMillis()) == .openNow else { return }
         guard root.root == .premeeting, !inputs.updateRequired else { return }
         sendWebinarJoin(target, silent: true)
     }

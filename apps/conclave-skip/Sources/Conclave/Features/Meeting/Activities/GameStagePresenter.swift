@@ -1799,7 +1799,7 @@ enum ChessSceneBuilder {
         }
 
         let hasClock = projection.timeControlMillis > 0 && projection.whiteClockMillis >= 0 && projection.blackClockMillis >= 0
-        let offset = serverNowMillis > 0 && receivedAtMillis > 0 ? receivedAtMillis - serverNowMillis : 0
+        let offset = serverNowMillis > 0 && receivedAtMillis > 0 ? receivedAtMillis - serverNowMillis : 0.0
         var moveDeadline = 0.0
         if playing && receivedAtMillis > 0 && projection.moveTimeMillis > 0 && projection.turnStartedAtMillis > 0 {
             moveDeadline = projection.turnStartedAtMillis + projection.moveTimeMillis + offset
@@ -2569,6 +2569,7 @@ enum ChessFixtures {
     /// Feeds the activity session for a chess state and wires its commands to the recording owner, the way
     /// `WordleFixtures.apply(named:session:owner:)` does. Nil for any other name.
     @discardableResult
+    @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ChessFixtureState? {
         guard let fixture = state(named: raw) else { return nil }
         session.activities.onCommand = { [weak owner] command in

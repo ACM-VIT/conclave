@@ -296,9 +296,9 @@ final class BrowserStagePresenter {
     /// A main-frame load failure, a TLS failure (surfaced, never cancelled silently) or a dead renderer process.
     func webViewFailed(browserSessionId id: String, reloadSerial serial: Int, issue next: BrowserLoadIssue) {
         if !isCurrent(id, serial) || next == BrowserLoadIssue.none { return }
-        if issue != BrowserLoadIssue.none { return }
+        if self.issue != BrowserLoadIssue.none { return }
         pageLoading = false
-        issue = next
+        self.issue = next
         cancelFirstFrameTimer()
         rebuild()
     }
@@ -804,6 +804,7 @@ enum BrowserStageFixtures {
     /// Binds the presenter to the recording owner and scripts the state. `browser-starting` loads no page: it shows
     /// "Starting browser" and, 20 s later, the first-frame timeout's failure state (the S60 14 timeout cell);
     /// `browser-failed` (a TLS failure) and `browser-renderer-gone` fail at once.
+    @MainActor
     static func apply(named raw: String, presenter: BrowserStagePresenter, owner: BrowserFixtureOwner) {
         guard let state = state(named: raw) else { return }
         presenter.onCommand = { [weak owner] command in owner?.record(command) }
