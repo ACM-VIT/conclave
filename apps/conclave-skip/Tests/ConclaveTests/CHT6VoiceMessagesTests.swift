@@ -531,6 +531,9 @@ struct CHT6VoiceMessagesTests {
 
 /// The real queue on the recording speaker with scripted preferences and output gate; timers off, so tests drive the
 /// 250 ms gap (`advanceNow()`) and the failsafe (`failsafeFired(token:)`) themselves.
+/// The queue's closures hold the harness weakly (the harness owns the queue, so a strong capture is a cycle). Never
+/// `unowned`: a queue task that outlives a test's local harness would read a freed object and abort the whole test
+/// process (G2 round 3, the SYS15 recorder). A freed harness answers with its initial values.
 @MainActor
 private final class VoiceHarness {
     let queue = TtsPlaybackQueue()
@@ -542,10 +545,10 @@ private final class VoiceHarness {
     init() {
         speaker = TtsRecordingSpeaker(queue: queue)
         queue.schedulesTimers = false
-        queue.preferences = { [unowned self] in self.prefs }
-        queue.isOutputBlocked = { [unowned self] in self.blocked }
-        queue.onPlaybackChanged = { [unowned self] messageId, userId in
-            self.playback.append(messageId + "|" + userId)
+        queue.preferences = { [weak self] in self?.prefs ?? VoicePreferenceSnapshot.defaults }
+        queue.isOutputBlocked = { [weak self] in self?.blocked ?? false }
+        queue.onPlaybackChanged = { [weak self] messageId, userId in
+            self?.playback.append(messageId + "|" + userId)
         }
     }
 

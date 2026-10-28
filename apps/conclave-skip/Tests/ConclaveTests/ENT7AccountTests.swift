@@ -48,13 +48,13 @@ struct ENT7AccountTests {
         #expect(android.snapshot.showsAppleFootnote)
     }
 
-    @Test func providersLoadOncePerPresentationAndAFailureRetries() {
+    @Test func providersLoadOncePerPresentationAndAFailureRetries() throws {
         let recorder = ENT7Recorder()
         let presenter = ent7Presenter(recorder: recorder)
         #expect(presenter.snapshot.providersState == .loading)
         presenter.didPresent()
         #expect(recorder.count(.loadProviders) == 1)
-        let first = recorder.requests[0].generation
+        let first = try #require(recorder.requests.first).generation
         presenter.providersFailedToLoad(generation: first)
         #expect(presenter.snapshot.providersState == .failed)
         presenter.retryProviders()
@@ -63,6 +63,7 @@ struct ENT7AccountTests {
         // A late answer for the first fetch is dropped.
         presenter.providersLoaded(generation: first, listsApple: true, listsGoogle: true)
         #expect(presenter.snapshot.providersState == .loading)
+        try #require(recorder.requests.count > 1)
         presenter.providersLoaded(generation: recorder.requests[1].generation, listsApple: true, listsGoogle: true)
         #expect(presenter.snapshot.providersState == .ready)
         #expect(presenter.snapshot.offersApple && presenter.snapshot.offersGoogle)
@@ -74,7 +75,7 @@ struct ENT7AccountTests {
         let failing = ENT7Recorder()
         let other = ent7Presenter(recorder: failing)
         other.didPresent()
-        other.providersFailedToLoad(generation: failing.requests[0].generation)
+        other.providersFailedToLoad(generation: try #require(failing.requests.first).generation)
         other.didDismiss()
         other.didPresent()
         #expect(failing.count(.loadProviders) == 2, "a failed fetch is retried on the next presentation")
@@ -82,7 +83,7 @@ struct ENT7AccountTests {
 
     // MARK: Sign-in (S10 5 c, f, h; l7)
 
-    @Test func googleSignInDisablesEverythingWhilePendingAndSucceedsWithOneToken() {
+    @Test func googleSignInDisablesEverythingWhilePendingAndSucceedsWithOneToken() throws {
         let recorder = ENT7Recorder()
         let presenter = ent7Presenter(recorder: recorder)
         ent7LoadProviders(presenter, recorder, apple: true, google: true)
@@ -93,7 +94,7 @@ struct ENT7AccountTests {
         presenter.signInWithGoogle()
         #expect(recorder.count(.signInWithGoogle) == 1, "both providers disable while one is pending")
         #expect(!presenter.beginAppleSignIn())
-        let generation = recorder.requests.last!.generation
+        let generation = try #require(recorder.requests.last).generation
         // The coordinator stores the user first (the identity push), then reports success.
         presenter.apply(ent7SignedIn(provider: "google"))
         presenter.finishSignIn(generation: generation, outcome: .succeeded)
@@ -107,17 +108,17 @@ struct ENT7AccountTests {
         #expect(recorder.feedback == [.signInSucceeded])
     }
 
-    @Test func aCancelledSignInIsSilentAndAFailureShowsTheFailedCopy() {
+    @Test func aCancelledSignInIsSilentAndAFailureShowsTheFailedCopy() throws {
         let recorder = ENT7Recorder()
         let presenter = ent7Presenter(recorder: recorder)
         ent7LoadProviders(presenter, recorder, apple: true, google: true)
         presenter.signInWithGoogle()
-        presenter.finishSignIn(generation: recorder.requests.last!.generation, outcome: .cancelled)
+        presenter.finishSignIn(generation: try #require(recorder.requests.last).generation, outcome: .cancelled)
         #expect(presenter.snapshot.errorKind == .none)
         #expect(presenter.snapshot.pendingProvider.isEmpty)
         #expect(recorder.feedback.isEmpty)
         presenter.signInWithGoogle()
-        presenter.finishSignIn(generation: recorder.requests.last!.generation, outcome: .failed)
+        presenter.finishSignIn(generation: try #require(recorder.requests.last).generation, outcome: .failed)
         #expect(presenter.snapshot.errorKind == .signInFailed)
         #expect(!presenter.snapshot.isSignedIn)
         // The next attempt clears the failure.
@@ -125,12 +126,12 @@ struct ENT7AccountTests {
         #expect(presenter.snapshot.errorKind == .none)
     }
 
-    @Test func closingCancelsAnInFlightSignInButNeverACompletedOne() {
+    @Test func closingCancelsAnInFlightSignInButNeverACompletedOne() throws {
         let recorder = ENT7Recorder()
         let presenter = ent7Presenter(recorder: recorder)
         ent7LoadProviders(presenter, recorder, apple: true, google: true)
         presenter.signInWithGoogle()
-        let generation = recorder.requests.last!.generation
+        let generation = try #require(recorder.requests.last).generation
         presenter.didDismiss()
         #expect(recorder.requests.last?.kind == .cancelSignIn)
         #expect(!presenter.isCurrent(generation: generation))
@@ -141,7 +142,7 @@ struct ENT7AccountTests {
 
         presenter.didPresent()
         presenter.signInWithGoogle()
-        let second = recorder.requests.last!.generation
+        let second = try #require(recorder.requests.last).generation
         presenter.apply(ent7SignedIn(provider: "google"))
         presenter.finishSignIn(generation: second, outcome: .succeeded)
         presenter.didDismiss()
@@ -149,14 +150,14 @@ struct ENT7AccountTests {
         #expect(recorder.count(.cancelSignIn) == 1)
     }
 
-    @Test func appleSignInSendsTheTokenAndNonceAndACancelIsSilent() {
+    @Test func appleSignInSendsTheTokenAndNonceAndACancelIsSilent() throws {
         let recorder = ENT7Recorder()
         let presenter = ent7Presenter(recorder: recorder)
         ent7LoadProviders(presenter, recorder, apple: true, google: true)
         #expect(presenter.beginAppleSignIn())
         #expect(presenter.snapshot.pendingProvider == "apple")
         presenter.signInWithApple(identityToken: " token ", nonce: "raw-nonce", fullName: "Avery Lee", email: "avery@example.com")
-        let request = recorder.requests.last!
+        let request = try #require(recorder.requests.last)
         #expect(request.kind == .signInWithApple)
         #expect(request.identityToken == "token" && request.nonce == "raw-nonce")
         #expect(request.fullName == "Avery Lee" && request.email == "avery@example.com")
@@ -183,13 +184,13 @@ struct ENT7AccountTests {
 
     // MARK: Sign out and deletion (S10 5 c, d, f, j; invariant 8)
 
-    @Test func signOutShowsAPendingRowUntilTheCoordinatorFinishes() {
+    @Test func signOutShowsAPendingRowUntilTheCoordinatorFinishes() throws {
         let recorder = ENT7Recorder()
         let presenter = ent7Presenter(signedIn: true, recorder: recorder)
         presenter.signOut()
         #expect(presenter.snapshot.isSigningOut && presenter.snapshot.isBusy)
         #expect(recorder.requests.last?.kind == .signOut)
-        let generation = recorder.requests.last!.generation
+        let generation = try #require(recorder.requests.last).generation
         presenter.apply(AccountPresenterInputs.make(platform: .ios))
         presenter.finishSignOut(generation: generation)
         #expect(!presenter.snapshot.isSigningOut && !presenter.snapshot.isSignedIn)
@@ -197,7 +198,7 @@ struct ENT7AccountTests {
         #expect(recorder.count(.signOut) == 1, "signed out: nothing to sign out")
     }
 
-    @Test func deletionWaitsForTheServerAndReportsEachOutcomeOnce() {
+    @Test func deletionWaitsForTheServerAndReportsEachOutcomeOnce() throws {
         let recorder = ENT7Recorder()
         let presenter = ent7Presenter(signedIn: true, recorder: recorder)
         presenter.deleteAccount()
@@ -206,7 +207,7 @@ struct ENT7AccountTests {
         presenter.didDismiss()
         #expect(presenter.snapshot.isDeleting, "Close never cancels a deletion")
         #expect(recorder.count(.cancelSignIn) == 0)
-        presenter.finishDelete(generation: recorder.requests.last!.generation, succeeded: false)
+        presenter.finishDelete(generation: try #require(recorder.requests.last).generation, succeeded: false)
         #expect(presenter.snapshot.errorKind == .deleteFailed && presenter.snapshot.isSignedIn)
         #expect(presenter.snapshot.outcome == .deleteFailed && presenter.snapshot.outcomeId == 1)
         #expect(presenter.needsOutcomeNotice(id: 1))
@@ -215,7 +216,7 @@ struct ENT7AccountTests {
 
         presenter.deleteAccount()
         #expect(presenter.snapshot.errorKind == .none)
-        let generation = recorder.requests.last!.generation
+        let generation = try #require(recorder.requests.last).generation
         // Invariant 8: the coordinator signs out locally only after the server deleted the account.
         presenter.apply(AccountPresenterInputs.make(platform: .ios))
         presenter.finishDelete(generation: generation, succeeded: true)
@@ -412,10 +413,11 @@ struct ENT7AccountTests {
             "Information Collection and Use", "Third Party Access", "Opt-Out Rights", "Data Retention Policy", "Children",
             "Security", "Changes", "Your Consent", "Contact Us",
         ])
-        #expect(blocks[0].text.contains("the c0nclav3 app"), "OQ9: the product name stays until the legal update")
+        let firstBlock = try #require(blocks.first)
+        #expect(firstBlock.text.contains("the c0nclav3 app"), "OQ9: the product name stays until the legal update")
         let legacy = try ent7Source("Sources/Conclave/Shared/PrivacyPolicyView.swift")
         let start = try #require(legacy.range(of: "private struct PrivacyPolicyContentView"))
-        let end = try #require(legacy.range(of: "private func privacyHeading"))
+        let end = try #require(legacy.range(of: "private func privacyHeading", range: start.upperBound..<legacy.endIndex))
         let body = String(legacy[start.lowerBound..<end.lowerBound])
         let pattern = #"privacy(Paragraph|Heading|Bullet)\(\s*(?:"""\n(.*?)\n\s*"""|"((?:[^"\\]|\\.)*)")\s*\)"#
         let regex = try NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
@@ -593,14 +595,14 @@ struct ENT7AccountTests {
 /// The hooks HD requests B4-T3 R1 to R10 add to B4-T2's Home files (apply them first).
 @MainActor
 struct ENT7AccountHookTests {
-    @Test func openingAccountFetchesProvidersOnceAndClosingCancelsASignIn() {
+    @Test func openingAccountFetchesProvidersOnceAndClosingCancelsASignIn() throws {
         let premeeting = PremeetingPresenter()
         let recorder = ENT7Recorder()
         premeeting.account.onRequest = { recorder.requests.append($0) }
         premeeting.openAccount()
         #expect(premeeting.isAccountSheetPresented && premeeting.account.isPresented)
         #expect(recorder.count(.loadProviders) == 1)
-        premeeting.account.providersLoaded(generation: recorder.requests[0].generation, listsApple: true, listsGoogle: true)
+        premeeting.account.providersLoaded(generation: try #require(recorder.requests.first).generation, listsApple: true, listsGoogle: true)
         premeeting.account.signInWithGoogle()
         premeeting.dismissAccountSheet()
         premeeting.accountSheetDidDismiss()
@@ -611,14 +613,14 @@ struct ENT7AccountHookTests {
         #expect(recorder.count(.loadProviders) == 1, "cached for the process")
     }
 
-    @Test func accountTokensJoinThePremeetingStream() {
+    @Test func accountTokensJoinThePremeetingStream() throws {
         let premeeting = PremeetingPresenter()
         let recorder = ENT7Recorder()
         premeeting.account.onRequest = { recorder.requests.append($0) }
         premeeting.openAccount()
-        premeeting.account.providersLoaded(generation: recorder.requests[0].generation, listsApple: true, listsGoogle: true)
+        premeeting.account.providersLoaded(generation: try #require(recorder.requests.first).generation, listsApple: true, listsGoogle: true)
         premeeting.account.signInWithGoogle()
-        let generation = recorder.requests.last!.generation
+        let generation = try #require(recorder.requests.last).generation
         premeeting.account.apply(ent7SignedIn(provider: "google"))
         premeeting.account.finishSignIn(generation: generation, outcome: .succeeded)
         #expect(premeeting.feedbackState.token.kind == .signInSucceeded)

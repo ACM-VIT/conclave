@@ -109,12 +109,13 @@ struct StagePoliciesTests {
         }
     }
 
-    @Test func grid12ShowsFivePlusSevenOnTheSEAndSevenPlusFiveOn390And360() {
+    @Test func grid12ShowsFivePlusSevenOnTheSEAndSevenPlusFiveOn390And360() throws {
         let se = presenter(StageFixtureScript.base(count: 12), viewport: Self.iphoneSE)
         #expect(se.layout.kind == .grid)
         #expect(personSlots(se).count == 5 && se.layout.overflowCount == 7)
         #expect(se.layout.slots.last?.id == StageSlot.overflowId)
         // You sit second to last, just before "+N".
+        try #require(se.layout.slots.count >= 2)
         #expect(se.layout.slots[se.layout.slots.count - 2].userId == StageFixtureScript.localUserId)
         #expect(se.layout.overflowSeeds.count == 3)
         for viewport in [Self.iphone17e, Self.android360] {
@@ -123,12 +124,13 @@ struct StagePoliciesTests {
         }
     }
 
-    @Test func oddCompactGridsWidenTheFirstRemote() {
+    @Test func oddCompactGridsWidenTheFirstRemote() throws {
         let three = presenter(StageFixtureScript.base(count: 3))
         #expect(three.layout.slots.first?.role == .gridWide)
         #expect(three.layout.slots.last?.userId == StageFixtureScript.localUserId)
         let frames = three.currentFrames()
         let content = StageLayoutPolicy.contentFrame(Self.iphoneSE)
+        try #require(!frames.isEmpty)
         #expect(abs(frames[0].width - content.width) < 0.01)
         let four = presenter(StageFixtureScript.base(count: 4))
         #expect(!four.layout.slots.contains { $0.role == .gridWide })
@@ -137,7 +139,7 @@ struct StagePoliciesTests {
         #expect(!landscape.layout.slots.contains { $0.role == .gridWide })
     }
 
-    @Test func soloOneOnOneShareAndActivityFrames() {
+    @Test func soloOneOnOneShareAndActivityFrames() throws {
         let solo = presenter(StageFixtureScript.inputs(for: .soloCameraOff))
         #expect(solo.layout.kind == .solo)
         #expect(solo.currentFrames().first.map { $0.x == 0 && $0.y == 0 && $0.width == 375 && $0.height == 667 } == true)
@@ -147,7 +149,9 @@ struct StagePoliciesTests {
         let oneOnOne = presenter(StageFixtureScript.inputs(for: .oneOnOne))
         #expect(oneOnOne.layout.kind == .oneOnOne)
         #expect(oneOnOne.layout.slots.map(\.role) == [.spotlightMain, .selfFloating])
-        let selfFrame = oneOnOne.currentFrames()[1]
+        let oneOnOneFrames = oneOnOne.currentFrames()
+        try #require(oneOnOneFrames.count >= 2)
+        let selfFrame = oneOnOneFrames[1]
         // Default corner bottom right, inside the reserved insets with a 12 pt margin.
         #expect(abs(selfFrame.maxX - (375 - 12)) < 0.01 && abs(selfFrame.maxY - (667 - 64 - 12)) < 0.01)
         let share = presenter(StageFixtureScript.inputs(for: .presentation))
@@ -155,6 +159,7 @@ struct StagePoliciesTests {
         #expect(share.layout.slots.first?.id == StageSlot.shareId(StageFixtureScript.remoteId(0)))
         #expect(share.layout.slots.first?.fit == .fit)
         // The presenter leads the strip.
+        try #require(share.layout.slots.count >= 2)
         #expect(share.layout.slots[1].userId == StageFixtureScript.remoteId(0))
         let activity = presenter(StageFixtureScript.inputs(for: .nowPlaying))
         #expect(activity.layout.kind == .game)
@@ -367,13 +372,13 @@ struct StagePoliciesTests {
 
     // MARK: SL4 per-id stores (SC10, F00 P2)
 
-    @Test func tileWritesAreScopedAndBindingSwapsPublishNoLayout() {
+    @Test func tileWritesAreScopedAndBindingSwapsPublishNoLayout() throws {
         let stage = presenter(StageFixtureScript.inputs(for: .grid6))
         let r2 = stage.tileChrome.entry(for: "r2")
         let r3Before = stage.tileChrome.entry(for: "r3").model
         let revision = stage.layout.revision
         var rows = StageFixtureScript.inputs(for: .grid6).participants
-        let index = rows.firstIndex { $0.userId == "r2" }!
+        let index = try #require(rows.firstIndex(where: { $0.userId == "r2" }))
         let old = rows[index]
         rows[index] = StageParticipantInput.make(userId: old.userId, displayName: old.displayName, isMuted: !old.isMuted,
                                                  isCameraOff: old.isCameraOff, joinSerial: old.joinSerial, videoKey: old.videoKey)

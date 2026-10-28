@@ -213,7 +213,7 @@ struct CallPresenceTests {
 
     // MARK: Fan-out (S70 0.5)
 
-    @Test func oneInputChangeGivesOneAdapterCallAndAnEqualInputNone() {
+    @Test func oneInputChangeGivesOneAdapterCallAndAnEqualInputNone() throws {
         let recorder = Recorder()
         let second = Recorder()
         let presence = CallPresence()
@@ -228,6 +228,7 @@ struct CallPresenceTests {
         #expect(recorder.changes.count == 1 && second.changes.count == 1)
         presence.apply(inputs(.inCall, isMuted: false))
         #expect(recorder.changes.count == 2 && second.changes.count == 2)
+        try #require(recorder.changes.count == 2)
         #expect(recorder.changes[1].0.phase == .connecting && recorder.changes[1].1.phase == .live)
         #expect(recorder.changes[1].1.revision == recorder.changes[1].0.revision + 1)
         // An input no adapter-visible field depends on (pending microphone) publishes nothing.
@@ -290,7 +291,7 @@ struct CallPresenceTests {
 
     // MARK: CallKit rules (SY2, 1 l1)
 
-    @Test func scriptedSessionYieldsExactlyTheCallKitReports() {
+    @Test func scriptedSessionYieldsExactlyTheCallKitReports() throws {
         let presence = CallPresence()
         var reports: [CallKitReport] = []
         var connected = false
@@ -312,6 +313,7 @@ struct CallPresenceTests {
         presence.apply(inputs(.leaving, outcome: .left, isMuted: false, isCameraOff: false, joinedAtMillis: 5_000))
         presence.apply(inputs(.home, outcome: .left, isMuted: true))
         #expect(reports.map { $0.kind } == [.startCall, .reportConnecting, .updateCall, .reportConnected, .updateCall, .endCall])
+        try #require(reports.count == 6)
         #expect(!reports[0].hasVideo)
         #expect(reports[2].title == "lily-zoro-iris" && !reports[2].hasVideo)
         #expect(reports[3].connectedAtMillis == 5_000)

@@ -126,7 +126,7 @@ struct PPL7RolePolicyTests {
             hostUserIds: isAdmin ? [me, "u-avery"] : [hostId])
     }
 
-    @Test func losingHostFinishesPendingHostTicketsSilentlyAndKeepsTheRename() {
+    @Test func losingHostFinishesPendingHostTicketsSilentlyAndKeepsTheRename() throws {
         let (people, log) = hostPeople()
         people.perform(.mute, rowId: "u-lee", source: PeopleActionSource.rowMenu)
         people.beginRename()
@@ -138,6 +138,7 @@ struct PPL7RolePolicyTests {
         #expect(people.lastRoleChange.contains(PeopleRoleChangeKind.lostHost.rawValue))
         #expect(people.confirmation == nil)
         // The mute ticket finished as interrupted: its late result is refused and posts nothing.
+        try #require(log.tickets.count > 1)
         #expect(!people.finish(log.tickets[0], HostActionResult.failed(.rejectedByServer)))
         #expect(people.lastFailure == nil)
         // The rename is yours, not a host action: it still completes.

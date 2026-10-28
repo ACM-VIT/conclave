@@ -397,7 +397,8 @@ struct FND3ContentComponentsTests {
             ("contrast.composerSend.androidDark", 5.388), ("contrast.gameBoard.paperOnLight", 4.630), ("contrast.gameBoard.paperOnDark", 10.006),
             ("contrast.gameBoard.squares", 2.161), ("contrast.gameBoard.coralPath", 3.364),
         ]
-        let pairs = Dictionary(uniqueKeysWithValues: ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) })
+        // Keyed lookup only: a duplicate id fails galleryCatalogKeysStableUniqueAndDashFree, it never aborts the run.
+        let pairs = Dictionary(ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for (id, value) in expected {
             let pair = pairs[id]
             #expect(pair != nil, "\(id)")

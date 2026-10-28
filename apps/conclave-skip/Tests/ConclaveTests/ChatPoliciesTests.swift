@@ -179,7 +179,9 @@ struct ChatPoliciesTests {
         let ids = chat.timeline.rowIds
         let divider = ids.firstIndex(of: "unread")
         #expect(divider != nil)
-        if let divider { #expect(ids[divider + 1] == "s-3") }
+        // `dropFirst`, not `ids[divider + 1]`: a divider in the last place fails the expectation instead of trapping
+        // and aborting the whole test process.
+        if let divider { #expect(ids.dropFirst(divider + 1).first == "s-3") }
         #expect(chat.timeline.firstUnreadId == "s-3")
         chat.panelDidClose()
         #expect(!chat.timeline.rowIds.contains("unread"))
@@ -199,7 +201,7 @@ struct ChatPoliciesTests {
         #expect(chat.announcement?.kind == "newMessages" && chat.announcement?.count == 2)
     }
 
-    @Test func daySeparatorsMarkOnlyDayChanges() {
+    @Test func daySeparatorsMarkOnlyDayChanges() throws {
         let today = Self.base + 600_000
         let yesterday = today - 86_400_000
         let chat = ChatPresenter()
@@ -209,7 +211,8 @@ struct ChatPoliciesTests {
             ChatMessageInput.make(id: "s-2", senderId: Self.avery, senderName: "Avery Lee", content: "new", timestampMillis: today),
         ]), change: .messages)
         let ids = chat.timeline.rowIds
-        #expect(ids.count == 4)
+        // A require, not an expect: the indexes below would trap and abort the whole test process.
+        try #require(ids.count == 4)
         #expect(ids[0] == "day:" + String(ChatDayPolicy.dayKey(millis: yesterday)))
         #expect(ids[2] == "day:" + String(ChatDayPolicy.dayKey(millis: today)))
         let todayOnly = Self.presenter(Self.inputs([Self.peer("s-1", "now", at: 600_000)]))

@@ -128,7 +128,7 @@ struct CTL2LeaveEndTests {
 
     // MARK: CL15, RECONCILE R8: the host menu rows
 
-    @Test func menuRowsFollowEachPlatformsOrderWithoutIcons() {
+    @Test func menuRowsFollowEachPlatformsOrderWithoutIcons() throws {
         let host = Self.snapshot()
         let ios = LeaveControlPolicy.menuSections(host, titles: Self.titles, endOnTop: false)
         #expect(ios.map { section in section.items.map { $0.id } } == [["leave"], ["endForEveryone"]])
@@ -147,16 +147,23 @@ struct CTL2LeaveEndTests {
                 }
             }
         }
-        #expect(ios[1].items[0].title == "End\u{2026}" && ios[0].items[0].title == "Leave")
+        // Safe accessors and requires instead of `[0]` and `[1]`: a missing section or row fails the test instead of
+        // trapping and aborting the whole test process.
+        #expect(ios.dropFirst().first?.items.first?.title == "End\u{2026}" && ios.first?.items.first?.title == "Leave")
         // A blocked End stays, disabled, with its reason line (R10).
-        func endItem(_ reason: ControlBlockedReason) -> MenuItemModel {
-            LeaveControlPolicy.menuSections(Self.snapshot(canEnd: reason == .offline, reason: reason), titles: Self.titles,
-                                            endOnTop: true)[0].items[0]
+        func endItem(_ reason: ControlBlockedReason) throws -> MenuItemModel {
+            let sections = LeaveControlPolicy.menuSections(Self.snapshot(canEnd: reason == .offline, reason: reason),
+                                                           titles: Self.titles, endOnTop: true)
+            return try #require(sections.first?.items.first)
         }
-        #expect(!endItem(.reconnecting).isEnabled && endItem(.reconnecting).disabledReason == "R")
-        #expect(!endItem(.offline).isEnabled && endItem(.offline).disabledReason == "O")
-        #expect(!endItem(.ending).isEnabled && endItem(.ending).disabledReason == "N")
-        #expect(endItem(.leaving).disabledReason.isEmpty)
+        let reconnecting = try endItem(.reconnecting)
+        #expect(!reconnecting.isEnabled && reconnecting.disabledReason == "R")
+        let offline = try endItem(.offline)
+        #expect(!offline.isEnabled && offline.disabledReason == "O")
+        let ending = try endItem(.ending)
+        #expect(!ending.isEnabled && ending.disabledReason == "N")
+        let leaving = try endItem(.leaving)
+        #expect(leaving.disabledReason.isEmpty)
     }
 
     // MARK: 4 l1: one tap leaves, in the same frame
@@ -200,7 +207,9 @@ struct CTL2LeaveEndTests {
         #expect(h.endCommands == 1 && h.controls.endingNoticeCount == 1)
         // The menu shows End disabled with "Ending…" (4 f Ending row).
         let menu = LeaveControlPolicy.menuSections(h.leave, titles: Self.titles, endOnTop: false)
-        #expect(!menu[1].items[0].isEnabled && menu[1].items[0].disabledReason == "N")
+        // The second section's first row through safe accessors: a missing row fails instead of trapping the process.
+        let endRow = menu.dropFirst().first?.items.first
+        #expect(endRow?.isEnabled == false && endRow?.disabledReason == "N")
         // The acknowledgment ends the call: the progress toast is cleared, nothing else is posted.
         let ticket = h.lastTicket(.endForEveryone)
         #expect(ticket != nil)
@@ -393,8 +402,9 @@ struct CTL2LeaveEndTests {
         let session = ControlsFixtureSession(state: .hostRecovering)
         let leave = session.controls.leaveState
         #expect(leave.showsEndForEveryone && leave.endBlockedReason == .reconnecting)
-        let end = LeaveControlPolicy.menuSections(leave, titles: Self.titles, endOnTop: true)[0].items[0]
-        #expect(end.id == LeaveControlPolicy.endItemId && !end.isEnabled && end.disabledReason == "R")
+        // The first section's first row through safe accessors: a missing row fails instead of trapping the process.
+        let end = LeaveControlPolicy.menuSections(leave, titles: Self.titles, endOnTop: true).first?.items.first
+        #expect(end?.id == LeaveControlPolicy.endItemId && end?.isEnabled == false && end?.disabledReason == "R")
         #expect(session.leaveReadout().contains("endReason=reconnecting"))
     }
 

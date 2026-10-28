@@ -250,12 +250,12 @@ struct PremeetingPresenterTests {
 
     // MARK: Home actions
 
-    @Test func newMeetingOpensAStandInLobbyWithAGeneratedCodeAndNoCommand() {
+    @Test func newMeetingOpensAStandInLobbyWithAGeneratedCodeAndNoCommand() throws {
         let recorder = Recorder()
         let presenter = presenter(recorder: recorder)
         presenter.newMeeting()
         #expect(presenter.path.count == 1)
-        let route = presenter.path[0]
+        let route = try #require(presenter.path.first)
         #expect(route.kind == .lobby)
         let words = route.roomId.split(separator: "-").map { String($0) }
         #expect(words.count == EntryPolicies.roomWordsPerCode)
@@ -273,10 +273,10 @@ struct PremeetingPresenterTests {
         #expect(presenter.liveTaskCount == 0)
     }
 
-    @Test func openingARecentAndARecentRouteFromNavigationPrepareTheSameTarget() {
+    @Test func openingARecentAndARecentRouteFromNavigationPrepareTheSameTarget() throws {
         let presenter = presenter()
         presenter.bootstrap(user: nil, recents: PremeetingFixtureScript.recents(for: .home, nowMillis: Self.now))
-        let row = presenter.home.recents[0]
+        let row = try #require(presenter.home.recents.first)
         presenter.setPath([PremeetingRoute(id: row.routeId, kind: row.routeKind, roomId: row.roomId)])
         #expect(presenter.path.count == 1)
         let target = presenter.target(forRoute: row.routeId)

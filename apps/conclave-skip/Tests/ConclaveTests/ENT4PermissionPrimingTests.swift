@@ -525,8 +525,8 @@ struct ENT4PermissionPrimingTests {
             #expect(PremeetingFixtureScript.state(named: raw) != nil, "fixture state \(raw)")
         }
         // R4: the overlay's text pair is in the gallery catalog.
-        let pairs = Dictionary(uniqueKeysWithValues: ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) })
-        let pair = pairs["contrast.inCallText.tile"]
+        // A lookup, not `Dictionary(uniqueKeysWithValues:)`: a duplicate id elsewhere in the catalog must not trap here.
+        let pair = ComponentGalleryCatalog.contrastPairs.first { $0.id == "contrast.inCallText.tile" }
         #expect(pair != nil && abs((pair?.ratio ?? 0) - 17.767) < 0.001)
     }
 

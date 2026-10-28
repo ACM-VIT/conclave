@@ -656,6 +656,9 @@ private final class ENT9HookRecorder {
     }
 }
 
+/// Waits (bounded) for a condition the landing's tasks make true. Main actor: the condition reads presenter state, so
+/// it is polled on the actor that writes it (a nonisolated async helper would run it on the global executor).
+@MainActor
 private func ent9Settle(seconds: Double = 2.0, _ condition: () -> Bool) async -> Bool {
     let attempts = Int(seconds * 500.0)
     for _ in 0..<attempts {

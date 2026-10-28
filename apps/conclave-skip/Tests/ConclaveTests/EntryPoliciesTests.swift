@@ -110,7 +110,7 @@ struct EntryPoliciesTests {
 
     // MARK: The S10 4 c rules table through the presenter
 
-    @Test func anIdleMeetingLinkOpensTheLobbyAndAWebinarLinkTheLanding() {
+    @Test func anIdleMeetingLinkOpensTheLobbyAndAWebinarLinkTheLanding() throws {
         let presenter = presenter()
         presenter.handleIncomingURL("conclave://rose-sora-luffy")
         #expect(presenter.path.map { $0.kind } == [.lobby])
@@ -119,7 +119,8 @@ struct EntryPoliciesTests {
         let landing = self.presenter()
         landing.handleIncomingURL("https://conclave.acmvit.in/w/yuki-haz?inviteCode=web-code")
         #expect(landing.path.map { $0.kind } == [.webinarLanding])
-        #expect(landing.target(forRoute: landing.path[0].id)?.webinarInviteCode == "web-code")
+        let landingRoute = try #require(landing.path.first)
+        #expect(landing.target(forRoute: landingRoute.id)?.webinarInviteCode == "web-code")
     }
 
     @Test func aLinkOverAnOpenSheetWaitsForTheDismissal() {
@@ -154,13 +155,13 @@ struct EntryPoliciesTests {
         #expect(presenter.path.first?.roomId == "rose-sora-luffy")
     }
 
-    @Test func aLobbyInEditingIsReplacedWithoutAPromptAndTheSameRoomIsIgnored() {
+    @Test func aLobbyInEditingIsReplacedWithoutAPromptAndTheSameRoomIsIgnored() throws {
         let presenter = presenter()
         presenter.newMeeting()
-        let first = presenter.path[0]
+        let first = try #require(presenter.path.first)
         presenter.handleIncomingURL("conclave://rose-sora-luffy")
         #expect(presenter.switchPrompt == nil)
-        #expect(presenter.path.count == 1)
+        try #require(presenter.path.count == 1)
         #expect(presenter.path[0].roomId == "rose-sora-luffy")
         #expect(presenter.path[0].id != first.id)
         let replaced = presenter.path[0]

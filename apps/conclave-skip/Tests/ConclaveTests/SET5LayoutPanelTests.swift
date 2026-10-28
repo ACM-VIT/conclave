@@ -46,7 +46,7 @@ struct SET5LayoutPanelTests {
 
     // MARK: Presenter (3 j, l3)
 
-    @Test func everySetterDispatchesOncePerRealChange() {
+    @Test func everySetterDispatchesOncePerRealChange() throws {
         let presenter = LayoutPanelPresenter()
         var commands: [LayoutPanelCommand] = []
         presenter.onCommand = { commands.append($0) }
@@ -64,6 +64,7 @@ struct SET5LayoutPanelTests {
         #expect(presenter.setAudioOnly(true) == .dispatched && presenter.setAudioOnly(false) == .ignored)
         #expect(commands.map { $0.kind } == [.setViewMode, .setViewMaxTiles, .setHideTilesWithoutVideo, .setSelfViewMode,
                                               .setSelfViewCorner, .setAudioOnly])
+        try #require(commands.count == 6)
         #expect(commands[0].value == "spotlight" && commands[1].number == 17 && commands[2].flag && commands[5].flag)
         #expect(presenter.callsReadout() == "setViewMode,setViewMaxTiles,setHideTilesWithoutVideo,setSelfViewMode,setSelfViewCorner,setAudioOnly")
         // The snapshot never changed: the core owns the preferences and answers through the inputs.

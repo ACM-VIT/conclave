@@ -64,17 +64,17 @@ struct PresenterSessionTests {
     }
 
     private func row(_ presenter: MeetingShellPresenter, _ id: MeetingControlID) -> MeetingControlRow {
-        presenter.controls.rows.first { $0.id == id.rawValue }!
+        presenterSessionRow(presenter.controls.rows, id)
     }
 
     // MARK: Stale callbacks
 
-    @Test func staleCallbacks() {
+    @Test func staleCallbacks() throws {
         // S1-STALE-01: a finish from an earlier attempt is dropped and quiet.
         let log = CommandLog()
         let shell = presenter(log, joined())
         #expect(shell.toggleHand() == .dispatched)
-        let ticket = log.tickets[0]
+        let ticket = try #require(log.tickets.first)
         shell.apply(joined(attempt: 2))
         #expect(shell.ledger.result(of: ticket.id)?.kind == .interrupted)
         let publishes = shell.snapshotPublishCount
@@ -83,6 +83,7 @@ struct PresenterSessionTests {
 
         // S1-STALE-02: a double finish of one ticket is accepted once.
         #expect(shell.toggleHand() == .dispatched)
+        try #require(log.tickets.count > 1)
         let second = log.tickets[1]
         #expect(shell.finish(second, MeetingActionResult.completed))
         #expect(!shell.finish(second, MeetingActionResult.completed))
@@ -91,7 +92,7 @@ struct PresenterSessionTests {
 
     // MARK: Room switch
 
-    @Test func roomSwitch() {
+    @Test func roomSwitch() throws {
         // S1-ROOM-01: a new call session cancels pending, resets panels to the new session and sets the feedback
         // baseline in one coherent publish.
         let log = CommandLog()
@@ -103,13 +104,14 @@ struct PresenterSessionTests {
         var publishes: [(MeetingSessionSnapshot, MeetingControlRowsState, MeetingShellFeedbackState)] = []
         shell.onPublish = { session, controls, feedback in publishes.append((session, controls, feedback)) }
         shell.apply(joined(2, isAdmin: true))
-        #expect(publishes.count == 1)
+        try #require(publishes.count == 1)
         let published = publishes[0]
         #expect(published.0.identity.callSession == 2)
         #expect(published.0.confirmation == nil)
         #expect(published.2 == MeetingShellFeedbackState(session: 2, token: FeedbackToken.baseline))
         #expect(!published.1.rows.contains { $0.isPending })
         #expect(shell.panels.snapshot.session == 2 && shell.panels.snapshot.current == nil)
+        try #require(log.tickets.count > 0)
         #expect(shell.ledger.result(of: log.tickets[0].id)?.kind == .cancelled)
 
         // S1-ROOM-02: late callbacks from room A after B starts are dropped.
@@ -123,12 +125,13 @@ struct PresenterSessionTests {
         #expect(MeetingCallSessionPolicy.startsNewCallSession(isRecoveryJoin: false, reuseExistingSocket: false, previousConnectionState: .disconnected))
         #expect(shell.toggleHand() == .dispatched)
         shell.apply(joined(2, attempt: 2, isAdmin: true, isRecoveringConnection: false))
+        try #require(log.tickets.count > 1)
         #expect(shell.ledger.result(of: log.tickets[1].id)?.kind == .interrupted)
     }
 
     // MARK: Lost acknowledgment
 
-    @Test func lostAcknowledgment() {
+    @Test func lostAcknowledgment() throws {
         // S1-ACK-01: the iOS timeout (the text of the iOS-only SocketError.timeout) classifies as ackTimedOut.
         #expect(MeetingActionFailurePolicy.classify(PresenterHostError("Timed out waiting for the SFU")) == .ackTimedOut)
         // S1-ACK-02: the Kotlin timeout text classifies as ackTimedOut too.
@@ -141,6 +144,7 @@ struct PresenterSessionTests {
         let log = CommandLog()
         let shell = presenter(log, joined())
         #expect(shell.toggleHand() == .dispatched)
+        try #require(log.tickets.count > 0)
         #expect(shell.finish(log.tickets[0], MeetingActionResult.failed(.ackTimedOut)))
         #expect(row(shell, .hand).failure == .ackTimedOut && !row(shell, .hand).isOn)
         shell.apply(joined(isHandRaised: true))
@@ -153,13 +157,14 @@ struct PresenterSessionTests {
         #expect(recovery.toggleHand() == .dispatched)
         recovery.apply(joined(isRecoveringConnection: true, connectionState: .reconnecting))
         #expect(!row(recovery, .hand).isPending)
+        try #require(recoveryLog.tickets.count > 0)
         #expect(recovery.ledger.result(of: recoveryLog.tickets[0].id)?.kind == .interrupted)
         #expect(!recovery.finish(recoveryLog.tickets[0], MeetingActionResult.completed))
     }
 
     // MARK: Duplicate action
 
-    @Test func duplicateAction() {
+    @Test func duplicateAction() throws {
         // S1-DUP-01: a second hand tap while pending dispatches nothing and publishes nothing.
         let log = CommandLog()
         let shell = presenter(log, joined(isAdmin: true))
@@ -171,7 +176,7 @@ struct PresenterSessionTests {
 
         // S1-DUP-02: a double confirm dispatches end once.
         shell.requestEndForEveryone(from: MeetingConfirmationInvoker.more)
-        let confirmation = shell.session.confirmation!
+        let confirmation = try #require(shell.session.confirmation)
         #expect(confirmation.invoker == MeetingConfirmationInvoker.more)
         #expect(shell.confirmEndForEveryone(id: confirmation.id) == .dispatched)
         #expect(shell.confirmEndForEveryone(id: confirmation.id) == .duplicate)
@@ -196,7 +201,7 @@ struct PresenterSessionTests {
 
     // MARK: Role change
 
-    @Test func roleChange() {
+    @Test func roleChange() throws {
         // S1-ROLE-01: host loss clears the end confirmation and hides host rows.
         let log = CommandLog()
         let shell = presenter(log, joined(isAdmin: true))
@@ -220,9 +225,11 @@ struct PresenterSessionTests {
         let ending = CommandLog()
         let host = presenter(ending, joined(isAdmin: true))
         host.requestEndForEveryone(from: MeetingConfirmationInvoker.more)
-        #expect(host.confirmEndForEveryone(id: host.session.confirmation!.id) == .dispatched)
+        let endConfirmation = try #require(host.session.confirmation)
+        #expect(host.confirmEndForEveryone(id: endConfirmation.id) == .dispatched)
         host.apply(joined(isAdmin: false))
         #expect(host.ledger.isPending(.endForEveryone))
+        try #require(ending.tickets.count > 0)
         #expect(host.finish(ending.tickets[0], MeetingActionResult.completed))
     }
 
@@ -267,12 +274,12 @@ struct PresenterSessionTests {
 
     // MARK: Contract tables
 
-    @Test func ledgerIdsNeverReuseAcrossSessions() {
+    @Test func ledgerIdsNeverReuseAcrossSessions() throws {
         let ledger = MeetingActionLedger()
-        let first = ledger.begin(.hand, identity: identity(1))!
+        let first = try #require(ledger.begin(.hand, identity: identity(1)))
         #expect(ledger.begin(.hand, identity: identity(1)) == nil)
         ledger.cancelAll()
-        let second = ledger.begin(.hand, identity: identity(2))!
+        let second = try #require(ledger.begin(.hand, identity: identity(2)))
         #expect(second.id > first.id)
         #expect(!ledger.finish(first, result: MeetingActionResult.completed, currentIdentity: identity(2)))
         #expect(!ledger.finish(second, result: MeetingActionResult.completed, currentIdentity: identity(1)))
@@ -340,7 +347,7 @@ struct PresenterSessionTests {
                                     )
                                     let context = MeetingControlRowContext.make(phase: MeetingPhasePolicy.resolve(inputs).phase)
                                     let rows = MeetingControlAvailabilityPolicy.rows(inputs, context: context)
-                                    func find(_ id: MeetingControlID) -> MeetingControlRow { rows.first { $0.id == id.rawValue }! }
+                                    func find(_ id: MeetingControlID) -> MeetingControlRow { presenterSessionRow(rows, id) }
                                     // The ControlsBarView.swift:199-215 expressions, restated.
                                     let isJoined = state == .joined
                                     let canChange = MeetingMediaControlAvailabilityPolicy.canChangeLocalMediaIntent(
@@ -396,13 +403,15 @@ struct PresenterSessionTests {
         }
     }
 
-    @Test func leaveStaysEnabledWhileEndPendingOrFailed() {
+    @Test func leaveStaysEnabledWhileEndPendingOrFailed() throws {
         let log = CommandLog()
         let shell = presenter(log, joined(isAdmin: true))
         shell.requestEndForEveryone(from: MeetingConfirmationInvoker.more)
-        #expect(shell.confirmEndForEveryone(id: shell.session.confirmation!.id) == .dispatched)
+        let confirmation = try #require(shell.session.confirmation)
+        #expect(shell.confirmEndForEveryone(id: confirmation.id) == .dispatched)
         #expect(row(shell, .endForEveryone).isPending)
         #expect(row(shell, .leave).isEnabled)
+        try #require(log.tickets.count > 0)
         #expect(shell.finish(log.tickets[0], MeetingActionResult.failed(.rejectedByServer, serverText: "No")))
         #expect(row(shell, .endForEveryone).failure == .rejectedByServer)
         #expect(row(shell, .leave).isEnabled)
@@ -425,7 +434,7 @@ struct PresenterSessionTests {
         #expect(shell.session.outcome == removed)
     }
 
-    @Test func feedbackTokensAdvanceOnlyForAcceptedAsyncOutcomes() {
+    @Test func feedbackTokensAdvanceOnlyForAcceptedAsyncOutcomes() throws {
         let log = CommandLog()
         let shell = presenter(log, MeetingShellInputs.make(identity: identity(1), connectionState: .waiting))
         shell.apply(MeetingShellInputs.make(identity: identity(1, 2), connectionState: .joining))
@@ -437,6 +446,7 @@ struct PresenterSessionTests {
         shell.apply(joined(attempt: 3))
         #expect(shell.feedbackState.token == FeedbackToken(sequence: 2, kind: .connectionRestored))
         #expect(shell.toggleHand() == .dispatched)
+        try #require(log.tickets.count > 0)
         #expect(shell.finish(log.tickets[0], MeetingActionResult.failed(.ackTimedOut)))
         #expect(shell.feedbackState.token == FeedbackToken(sequence: 3, kind: .actionRejected))
         #expect(!shell.finish(log.tickets[0], MeetingActionResult.failed(.ackTimedOut)))
@@ -465,7 +475,7 @@ struct PresenterSessionTests {
         #expect(log.commands.isEmpty)
     }
 
-    @Test func presenterOwnersAreIndependent() {
+    @Test func presenterOwnersAreIndependent() throws {
         let firstLog = CommandLog()
         let secondLog = CommandLog()
         let first = presenter(firstLog, joined())
@@ -473,6 +483,7 @@ struct PresenterSessionTests {
         #expect(first.toggleHand() == .dispatched)
         #expect(second.toggleHand() == .dispatched)
         // Each presenter numbers its own tickets and owns its own ledger and panels.
+        try #require(firstLog.tickets.count > 0 && secondLog.tickets.count > 0)
         #expect(firstLog.tickets[0].id == 1 && secondLog.tickets[0].id == 1)
         #expect(first.finish(firstLog.tickets[0], MeetingActionResult.completed))
         #expect(second.ledger.isPending(.hand))
@@ -625,11 +636,12 @@ struct PresenterSessionTests {
         #expect(log.commands == [.toggleMicrophone])
     }
 
-    @Test func handFailuresCarryTheirDirection() {
+    @Test func handFailuresCarryTheirDirection() throws {
         // CC3: a failed lower maps to its own copy.
         let log = CommandLog()
         let shell = presenter(log, joined(isHandRaised: true))
         #expect(shell.toggleHand() == .dispatched)
+        try #require(log.tickets.count > 0)
         #expect(shell.finish(log.tickets[0], MeetingActionResult.failed(.ackTimedOut)))
         #expect(row(shell, .hand).failure == .ackTimedOut)
         #expect(row(shell, .hand).failureDirection == .lower)
@@ -638,6 +650,7 @@ struct PresenterSessionTests {
         #expect(shell.toggleHand() == .dispatched)
         #expect(row(shell, .hand).failure == .none)
         #expect(row(shell, .hand).failureDirection == .none)
+        try #require(log.tickets.count > 1)
         #expect(shell.finish(log.tickets[1], MeetingActionResult.failed(.rejectedByServer, direction: .raise)))
         #expect(row(shell, .hand).failureDirection == .raise)
         #expect(row(shell, .microphone).failureDirection == .none)
@@ -921,6 +934,18 @@ private struct PresenterHostError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
+}
+
+/// The row with `id`. A missing row records an issue and returns an inert stand-in instead of trapping, so one
+/// broken row fails its test without aborting the whole Swift Testing process.
+private func presenterSessionRow(_ rows: [MeetingControlRow], _ id: MeetingControlID) -> MeetingControlRow {
+    if let found = rows.first(where: { $0.id == id.rawValue }) {
+        return found
+    }
+    Issue.record("no \(id.rawValue) control row")
+    return MeetingControlRow(id: "missing:" + id.rawValue, isVisible: false, isOn: false, isEnabled: false, isPending: false,
+                             blockedReason: MeetingBlockedReason.none, hint: MeetingControlHint.none, badgeCount: 0,
+                             failure: MeetingActionFailure.none, failureDirection: MeetingActionDirection.none)
 }
 
 private func presenterSessionSource(_ packageRelativePath: String) throws -> String {

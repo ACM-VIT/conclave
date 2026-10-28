@@ -257,7 +257,9 @@ struct CHT7AssistantRowTests {
         store.applyRelay(answerId: "r", reasoning: "Look", reasoningDone: true,
                          tasks: [ConclaveAssistantRelayTask(id: "w", kind: "web_search", status: "done")], done: true, errored: false)
         input = store.input(forMessageId: "r")
-        #expect(input?.reasoning == "Looking" && input?.reasoningDone == true && input?.isDone == true && input?.tasks[0].isDone == true)
+        // `tasks.first`, not `tasks[0]`: an empty list fails the expectation instead of trapping the test process.
+        #expect(input?.reasoning == "Looking" && input?.reasoningDone == true && input?.isDone == true
+                && input?.tasks.first?.isDone == true)
         store.applyRelay(answerId: "i", reasoning: "", reasoningDone: false, tasks: [], done: true, errored: true)
         #expect(store.input(forMessageId: "i")?.errorKind == .generic, "the SFU's interrupted notice ends the row as an error")
         #expect(store.retryRecord(answerId: "i") == nil, "only the asker retries")

@@ -9,7 +9,7 @@ import Testing
 /// resolve (present after the HD/strings/B3-T1.json merge).
 @MainActor
 struct ENT2JoinCodeTests {
-    @Test func submittingALinkPushesItsLobbyOnlyAfterTheSheetIsGoneWithTheInviteCode() {
+    @Test func submittingALinkPushesItsLobbyOnlyAfterTheSheetIsGoneWithTheInviteCode() throws {
         let presenter = PremeetingPresenter()
         presenter.openJoinSheet()
         #expect(presenter.isJoinSheetPresented)
@@ -18,7 +18,7 @@ struct ENT2JoinCodeTests {
         #expect(presenter.path.isEmpty, "never pushed while the sheet is dismissing")
         presenter.joinSheetDidDismiss()
         #expect(presenter.path.count == 1)
-        let target = presenter.target(forRoute: presenter.path[0].id)
+        let target = presenter.target(forRoute: try #require(presenter.path.first).id)
         #expect(target?.roomId == "rose-sora-luffy")
         #expect(target?.meetingInviteCode == "abc")
         #expect(target?.allowRoomCreation == true)

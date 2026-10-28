@@ -59,8 +59,13 @@ struct ACT8WheelWatchTests {
     private func envelope(_ session: ActiveAppSession, _ type: String, _ payload: [String: Any], requestId: String) -> String {
         let object: [String: Any] = ["v": 1, "type": type, "callSessionId": session.callSessionId,
                                      "appSessionId": session.appSessionId, "requestId": requestId, "payload": payload]
-        let data = try! JSONSerialization.data(withJSONObject: object)
-        return String(data: data, encoding: .utf8)!
+        // A bad payload fails this test instead of aborting the whole run (an invalid object raises, it never throws).
+        guard JSONSerialization.isValidJSONObject(object), let data = try? JSONSerialization.data(withJSONObject: object),
+              let text = String(data: data, encoding: .utf8) else {
+            Issue.record("the \(type) envelope is not a JSON object")
+            return ""
+        }
+        return text
     }
 
     @discardableResult

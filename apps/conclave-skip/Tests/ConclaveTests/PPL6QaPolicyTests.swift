@@ -133,7 +133,7 @@ struct PPL6QaPolicyTests {
         #expect(snapshot.composerEnabled)
     }
 
-    @Test func submitIsOneTicketAndClearsTheDraftOnTheAcknowledgement() {
+    @Test func submitIsOneTicketAndClearsTheDraftOnTheAcknowledgement() throws {
         let (people, log) = qaPeople(role: QaRole.attendee)
         let qa = people.qa
         #expect(qa.submit("?") == .ignored)
@@ -144,15 +144,15 @@ struct PPL6QaPolicyTests {
         #expect(qa.snapshot.submitPhase == QaSubmitPhase.sending)
         #expect(qa.submit("Again?") == .ignored)
         let serial = qa.snapshot.submitSerial
-        people.finish(log.tickets[0], HostActionResult.completed)
+        people.finish(try #require(log.tickets.first), HostActionResult.completed)
         #expect(qa.snapshot.submitSerial == serial + 1 && qa.drafts.question.isEmpty)
         #expect(people.feedbackState.token.kind == .questionSent)
     }
 
-    @Test func anAttendeeSubmitFailureReportsInlineWithTheQaSentence() {
+    @Test func anAttendeeSubmitFailureReportsInlineWithTheQaSentence() throws {
         let (people, log) = qaPeople(role: QaRole.attendee)
         people.qa.submit("A longer question")
-        people.finish(log.tickets[0], HostActionResult.failed(.rateLimited))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(.rateLimited))
         let failure = people.lastFailure
         // Not swallowed for a non-host viewer (Q&A is not a host action).
         #expect(failure?.sourceKey == QaFieldID.composer)

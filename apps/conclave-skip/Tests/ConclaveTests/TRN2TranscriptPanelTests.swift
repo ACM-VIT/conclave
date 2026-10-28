@@ -39,7 +39,7 @@ struct TRN2TranscriptPanelTests {
 
     // MARK: Incremental feed (C6-11)
 
-    @Test func theEngineGroupsLikeTheLegacyPolicyWithoutSorting() {
+    @Test func theEngineGroupsLikeTheLegacyPolicyWithoutSorting() throws {
         let engine = TranscriptFeedEngine()
         var all: [TranscriptSegmentModel] = []
         // Out of order arrivals, a speaker change, a lull that splits one speaker, a late final that merges two groups.
@@ -61,6 +61,7 @@ struct TRN2TranscriptPanelTests {
         #expect(engine.hasMarker(before: 2), "a lull of at least 3 minutes puts a marker before Avery's second group")
         // The partial finalizes in place: the same groups, the text and finality patched.
         engine.upsert(segment("d", 4, "sam", "four done", at: 4_000))
+        try #require(engine.groups.count > 1)
         #expect(engine.groups[1].text == "three four done" && engine.groups[1].isFinal)
         engine.remove(itemId: "c")
         #expect(engine.groups.map { $0.speakerUserId } == ["avery", "sam", "avery"])
@@ -219,17 +220,19 @@ struct TRN2TranscriptPanelTests {
 
     // MARK: Ask (6 l 6)
 
-    @Test func askRowsSettleOnWorkerErrorReconnectAndThirtySeconds() {
+    @Test func askRowsSettleOnWorkerErrorReconnectAndThirtySeconds() throws {
         let driver = fixture(.liveController)
         let presenter = driver.presenter
         let clock = Clock()
         presenter.now = { clock.millis }
         driver.run(.askReject)
         #expect(presenter.askQuestion("What did we decide?"))
+        try #require(presenter.ask.rowIds.count > 0)
         let rejected = presenter.ask.row(presenter.ask.rowIds[0])
         #expect(rejected.state == .error && rejected.errorText == "The assistant is busy. Try again in a moment.")
         driver.run(.askSilence)
         presenter.askQuestion("Summarize the discussion")
+        try #require(presenter.ask.rowIds.count > 1)
         let silentId = presenter.ask.rowIds[1]
         #expect(presenter.ask.row(silentId).state == .thinking && presenter.hasAskTimer)
         clock.millis += 29_000
@@ -241,6 +244,7 @@ struct TRN2TranscriptPanelTests {
         // A reconnect settles a pending row with the app copy.
         driver.run(.askSilence)
         presenter.askQuestion("What are the action items?")
+        try #require(presenter.ask.rowIds.count > 2)
         let pendingId = presenter.ask.rowIds[2]
         driver.state.connectionStatus = .connecting
         #expect(presenter.ask.row(pendingId).state == .error && presenter.ask.row(pendingId).errorText.isEmpty)
@@ -248,6 +252,7 @@ struct TRN2TranscriptPanelTests {
         driver.state.connectionStatus = .connected
         driver.run(.askSilence)
         presenter.askQuestion("Who owns the deck?")
+        try #require(presenter.ask.rowIds.count > 3)
         let workerId = presenter.ask.rowIds[3]
         driver.state.setIssue(.server, serverText: "Worker restarted")
         #expect(presenter.ask.row(workerId).state == .error && presenter.ask.row(workerId).errorText == "Worker restarted")
@@ -273,11 +278,12 @@ struct TRN2TranscriptPanelTests {
 
     // MARK: Minutes (6 l 7, 13)
 
-    @Test func minutesSectionsStatusAndRefresh() {
+    @Test func minutesSectionsStatusAndRefresh() throws {
         let driver = fixture(.minutes)
         let presenter = driver.presenter
         #expect(presenter.minutes.sections.map { $0.section } == [.topics, .decisions, .actionItems, .openQuestions, .followUps])
-        let action = presenter.minutes.sections[2].entries[0]
+        try #require(presenter.minutes.sections.count > 2)
+        let action = try #require(presenter.minutes.sections[2].entries.first)
         #expect(action.owner == "Avery Lee" && action.due == "Friday")
         #expect(presenter.snapshot.canRefreshMinutes && presenter.snapshot.minutesUpdatedAtMillis > 0)
         #expect(MinutesPolicy.statusKind(updating: false, updatedAtMillis: 10) == .updated)

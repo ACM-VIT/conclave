@@ -140,13 +140,13 @@ struct PPL2PeopleActionTests {
 
     // MARK: PH2 ledger and dispatch (S50 3 l6)
 
-    @Test func oneTapEmitsOneCommandAndADuplicateIsIgnored() {
+    @Test func oneTapEmitsOneCommandAndADuplicateIsIgnored() throws {
         let people = makePeople()
         people.apply(hostRoster())
         let log = record(people)
         #expect(people.perform(.mute, rowId: priya, source: PeopleActionSource.rowMenu) == .dispatched)
         #expect(people.perform(.mute, rowId: priya, source: PeopleActionSource.rowMenu) == .ignored)
-        #expect(log.commands.count == 1)
+        try #require(log.commands.count == 1)
         #expect(log.commands.first?.kind == .mute)
         #expect(log.commands.first?.targetId == priya)
         #expect(people.rows.entry(for: priya).model.pendingAction == PersonActionID.mute.rawValue)
@@ -160,13 +160,14 @@ struct PPL2PeopleActionTests {
         #expect(!people.finish(log.tickets[0], HostActionResult.completed))
     }
 
-    @Test func anAttemptChangeInterruptsPendingActionsSilently() {
+    @Test func anAttemptChangeInterruptsPendingActionsSilently() throws {
         let people = makePeople()
         people.apply(hostRoster(attempt: 1))
         let log = record(people)
         people.perform(.mute, rowId: priya, source: PeopleActionSource.rowMenu)
         people.apply(hostRoster(attempt: 2))
         #expect(people.pendingKeys().isEmpty)
+        try #require(log.tickets.count > 0)
         #expect(!people.finish(log.tickets[0], HostActionResult.failed(.rejectedByServer)))
         #expect(people.lastFailure == nil)
     }
@@ -228,13 +229,14 @@ struct PPL2PeopleActionTests {
         #expect(people.confirmation?.canBlock == false)
     }
 
-    @Test func makeHostTransfersWithNoOptimisticRoleWrite() {
+    @Test func makeHostTransfersWithNoOptimisticRoleWrite() throws {
         let people = makePeople()
         people.apply(hostRoster())
         let log = record(people)
         people.perform(.makeHost, rowId: priya, source: PeopleActionSource.rowMenu)
         people.confirm(id: people.confirmation?.id ?? 0, block: false)
         #expect(log.commands.map { $0.kind } == [.makeHost])
+        try #require(log.tickets.count > 0)
         #expect(people.finish(log.tickets[0], HostActionResult.completed))
         // Roles change only when the core's host inputs change (D10).
         #expect(people.rows.entry(for: priya).model.role == .participant)
@@ -256,29 +258,31 @@ struct PPL2PeopleActionTests {
 
     // MARK: PL14 placement by origin (RECONCILE R2) and PH16 copy
 
-    @Test func panelOriginFailuresStayInThePanelAndStageOriginFailuresToast() {
+    @Test func panelOriginFailuresStayInThePanelAndStageOriginFailuresToast() throws {
         let people = makePeople()
         people.apply(hostRoster())
         let log = record(people)
         people.platform = NoticePlatform.ios
         people.perform(.mute, rowId: priya, source: PeopleActionSource.rowMenu)
-        people.finish(log.tickets[0], HostActionResult.failed(.rejectedByServer))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(.rejectedByServer))
         #expect(people.lastFailure?.placement == HostFailurePlacement.panelInline.rawValue)
         #expect(people.lastFailure?.sourceKey == priya)
         // Retry re-dispatches the same command with a new ticket.
         people.retry(failureId: people.lastFailure?.id ?? 0)
-        #expect(log.commands.count == 2)
+        try #require(log.commands.count == 2)
         #expect(people.lastFailure == nil)
         people.finish(log.tickets[1], HostActionResult.completed)
 
         people.platform = NoticePlatform.android
         people.perform(.mute, rowId: avery, source: PeopleActionSource.rowMenu)
+        try #require(log.tickets.count > 2)
         people.finish(log.tickets[2], HostActionResult.failed(.ackTimedOut))
         #expect(people.lastFailure?.placement == HostFailurePlacement.panelSnackbar.rawValue)
         people.dismissFailure(id: people.lastFailure?.id ?? 0)
 
         // Tile menu (stage origin): the S20 toast lane, nothing stored in the panel.
         people.perform(.mute, rowId: priya, source: PeopleActionSource.tileMenu)
+        try #require(log.tickets.count > 3)
         people.finish(log.tickets[3], HostActionResult.failed(.superAdmin))
         #expect(people.lastFailure == nil)
         #expect(people.stage.noticesReadout().contains("toast=" + PeopleFailurePlacementPolicy.stageNoticeKind))
@@ -318,7 +322,7 @@ struct PPL2PeopleActionTests {
 
     // MARK: Rename (S50 3 c, 3 d; Q14; RECONCILE R38; S60 C6-10)
 
-    @Test func aRenameRefusalKeepsTheDraftAndDisabledLastsTheSession() {
+    @Test func aRenameRefusalKeepsTheDraftAndDisabledLastsTheSession() throws {
         let people = makePeople()
         people.apply(hostRoster())
         let log = record(people)
@@ -329,7 +333,7 @@ struct PPL2PeopleActionTests {
         #expect(people.rename.phase == .pending)
         #expect(log.commands.last?.kind == .changeName)
         #expect(log.commands.last?.text == "Ishaan K")
-        people.finish(log.tickets[0], HostActionResult.failed(.renameDisabled))
+        people.finish(try #require(log.tickets.first), HostActionResult.failed(.renameDisabled))
         #expect(people.rename.phase == .refused)
         #expect(people.rename.draft == "Ishaan K")
         #expect(people.rename.refusal == HostActionFailure.renameDisabled.rawValue)

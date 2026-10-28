@@ -284,7 +284,7 @@ struct ACT2GameShellTests {
         #expect(unknown.scene.kind == GameSceneKind.unsupported && unknown.chrome.canEnd)
     }
 
-    @Test func resultsRankTiesAndOfferRematchToTheHost() {
+    @Test func resultsRankTiesAndOfferRematchToTheHost() throws {
         let common = GameCommonProjection(phase: "results", serverNowMillis: 0, deadlineMillis: 0, durationMillis: 0, roundNumber: 0,
                                           roundTotal: 0, actedCount: 0, totalPlayers: 3, actedPlayerIds: [],
                                           scoreboard: [GameScoreEntry(id: "a", name: "A", score: 2400), GameScoreEntry(id: "b", name: "B", score: 1900),
@@ -292,6 +292,7 @@ struct ACT2GameShellTests {
         let results = GameStagePresenter.results(common: common, localId: "b", isFinished: true, canRematch: true, rematchPending: false, revision: 0)
         #expect(results.scoreboard.map { $0.rank } == [1, 2, 2])
         #expect(results.winnerName == "A" && results.winnerScore == 2400 && !results.isTie)
+        try #require(results.scoreboard.count >= 2)
         #expect(results.scoreboard.first?.isLeader == true && results.scoreboard[1].isYou)
         let tied = GameCommonProjection(phase: "results", serverNowMillis: 0, deadlineMillis: 0, durationMillis: 0, roundNumber: 0,
                                         roundTotal: 0, actedCount: 0, totalPlayers: 2, actedPlayerIds: [],

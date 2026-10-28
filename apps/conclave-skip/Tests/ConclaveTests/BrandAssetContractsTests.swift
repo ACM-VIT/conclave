@@ -21,17 +21,18 @@ struct BrandAssetContractsTests {
         let ink = brandSRGB(DesignTokens.iosInCallStage)
         #expect(brandSRGB(DesignTokens.iosAppOnCoral) == ink)
         let fills = try #require(document["fill-specializations"] as? [[String: Any]])
-        #expect(fills.count == 2)
+        try #require(fills.count == 2)
         #expect(fills[0]["appearance"] == nil && brandSolid(fills[0]["value"]) == ink)
         #expect(fills[1]["appearance"] as? String == "dark" && brandSolid(fills[1]["value"]) == ink)
         #expect(document["fill"] == nil)
         let groups = try #require(document["groups"] as? [[String: Any]])
-        #expect(groups.count == 1)
+        try #require(groups.count == 1)
         let group = groups[0]
         #expect((group["shadow"] as? [String: Any])?["kind"] as? String == "none")
         #expect((group["translucency"] as? [String: Any])?["enabled"] as? Bool == false)
         let layers = try #require(group["layers"] as? [[String: Any]])
         #expect(layers.map { $0["name"] as? String ?? "" } == ["Letters", "Mark"])
+        try #require(layers.count >= 2)
         let letters = layers[0], mark = layers[1]
         #expect(brandSolid(letters["fill"]) == ink)
         #expect(brandSolid(mark["fill"]) == brandSRGB(DesignTokens.coral))
@@ -165,7 +166,8 @@ struct BrandAssetContractsTests {
         let contents = try brandJSON("\(folder)/Contents.json")
         #expect((contents["properties"] as? [String: Any])?["template-rendering-intent"] as? String == "template")
         let images = try #require(contents["images"] as? [[String: Any]])
-        #expect(images.count == 1 && images[0]["filename"] as? String == "CallKitIcon.svg")
+        try #require(images.count == 1)
+        #expect(images[0]["filename"] as? String == "CallKitIcon.svg")
         #expect(images[0]["idiom"] as? String == "universal" && images[0]["scale"] == nil)
         let svg = try brandSource("\(folder)/CallKitIcon.svg")
         #expect(svg.components(separatedBy: "<path").count == 2)
@@ -434,7 +436,7 @@ private func brandMark() throws -> [String] {
     let svg = try String(contentsOf: brandRepoRoot().appendingPathComponent("packages/ui-tokens/icons/brand/conclave-mark.svg"), encoding: .utf8)
     let d = try #require(brandAttribute("d", in: svg))
     let parts = d.components(separatedBy: "M").dropFirst().map { "M" + $0 }
-    #expect(parts.count == 5)
+    try #require(parts.count == 5)
     return parts
 }
 

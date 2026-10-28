@@ -99,7 +99,7 @@ struct STG2TileTests {
         #expect(TileMenuPolicy.hasMenu(slotId: "p:r1", role: .rail, kind: .game))
     }
 
-    @Test func sectionsPutTheStageFirstAndThePeopleItemsAfterWithoutTheirPin() {
+    @Test func sectionsPutTheStageFirstAndThePeopleItemsAfterWithoutTheirPin() throws {
         let people = [
             MenuSectionModel(id: "ppl.1", items: [item("mute", "Mute", concept: "mute_person")]),
             MenuSectionModel(id: "ppl.0", items: [item("pin", "Pin", concept: "pin"), item("message", "Send Private Message", concept: "chat")]),
@@ -108,6 +108,7 @@ struct STG2TileTests {
         ]
         let sections = TileMenuPolicy.sections(context(), titles: Self.titles, people: people)
         #expect(sections.map(\.id) == [TileMenuPolicy.stageSectionId, "ppl.1", "ppl.0", "ppl.3"])
+        try #require(sections.count >= 3)
         #expect(sections[0].items.map(\.id) == ["pin", "showFullVideo"])
         #expect(sections[0].items.map(\.title) == ["Pin", "Show Full Video"])
         // S20 keeps Pin (R19): the people group 0 arrives without its own Pin.
@@ -123,7 +124,7 @@ struct STG2TileTests {
         #expect(TileMenuPolicy.sections(context(slotId: "share:r1", role: .share), titles: Self.titles, people: []).isEmpty)
     }
 
-    @Test func iosContextMenuHidesUnavailableItemsAndActionsSkipThem() {
+    @Test func iosContextMenuHidesUnavailableItemsAndActionsSkipThem() throws {
         // S20 3 f, l6: in recovery the iOS context menu hides socket actions; Android keeps them disabled with the reason.
         let reason = "Unavailable while reconnecting"
         let people = [
@@ -132,6 +133,7 @@ struct STG2TileTests {
         ]
         let android = TileMenuPolicy.sections(context(), titles: Self.titles, people: people)
         #expect(android.map(\.id) == [TileMenuPolicy.stageSectionId, "ppl.1", "ppl.0"])
+        try #require(android.count >= 2)
         #expect(android[1].items.first?.disabledReason == reason)
         let ios = TileMenuPolicy.contextMenuSections(android)
         #expect(ios.map(\.id) == [TileMenuPolicy.stageSectionId, "ppl.0"])

@@ -26,24 +26,26 @@ struct SYS2AudioRoutingTests {
         var refreshState: AudioRoutePlatformState? = nil
         weak var owner: AudioRouteOwner?
 
+        /// The closures hold the fake strongly so the owner never reads a freed fake (an unowned read aborts the whole
+        /// Swift Testing process). The fake holds the owner weakly, so there is no cycle.
         func make(for owner: AudioRouteOwner) -> AudioRouteBackend {
             self.owner = owner
             return AudioRouteBackend(
-                applyOutput: { [unowned self] id in
+                applyOutput: { id in
                     self.applied.append(id)
                     return self.accepts
                 },
-                adoptOutput: { [unowned self] id in
+                adoptOutput: { id in
                     self.adopted.append(id)
                 },
-                applyInput: { [unowned self] id in
+                applyInput: { id in
                     self.inputs.append(id)
                     return true
                 },
-                requestBluetoothAccess: { [unowned self] in
+                requestBluetoothAccess: {
                     self.bluetoothRequests += 1
                 },
-                refresh: { [unowned self] in
+                refresh: {
                     self.refreshes += 1
                     if let state = self.refreshState {
                         self.owner?.publish(state)

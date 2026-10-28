@@ -37,14 +37,15 @@ struct CHT3MessageActionsTests {
         #expect(ChatReactionRules.nameKey("🤔") == "thinking" && ChatReactionRules.nameKey("🔥").isEmpty)
     }
 
-    @Test func chipsNameYouFirstAndCountTheRest() {
+    @Test func chipsNameYouFirstAndCountTheRest() throws {
         let names = ["a": "Avery", "b": "Sam", "c": "Priya", "d": "Morgan"]
         let chips = ChatReactionRules.chips([
             ChatReactionInput(emoji: "👍", userIds: ["a", "me", "b", "c", "d"], includesMe: true),
             ChatReactionInput(emoji: "😂", userIds: ["b"], includesMe: false),
             ChatReactionInput(emoji: "🎉", userIds: [], includesMe: false),
         ]) { id in id == "me" ? "" : (names[id] ?? "") }
-        #expect(chips.count == 2)
+        // A require, not an expect: the indexes below would trap and abort the whole test process.
+        try #require(chips.count == 2)
         #expect(chips[0].names == ["", "Avery", "Sam"] && chips[0].remaining == 2 && chips[0].isMine && chips[0].count == 5)
         #expect(chips[1].names == ["Sam"] && chips[1].remaining == 0 && !chips[1].isMine)
     }
@@ -79,7 +80,7 @@ struct CHT3MessageActionsTests {
         #expect(log.last?.messageId == "s-4" && log.last?.rowId == "optimistic-4")
     }
 
-    @Test func theViewerListsEveryReactorYouFirst() {
+    @Test func theViewerListsEveryReactorYouFirst() throws {
         var ids = [ChatPoliciesTests.avery, ChatPoliciesTests.sam]
         for index in 0..<4 {
             ids.append("guest" + String(index) + "@example.com#g")
@@ -89,7 +90,8 @@ struct CHT3MessageActionsTests {
             ChatPoliciesTests.peer("s-1", "hi", at: 0, reactions: [ChatReactionInput(emoji: "👍", userIds: ids, includesMe: true)]),
         ]))
         let reactors = chat.reactors(rowId: "s-1", emoji: "👍")
-        #expect(reactors.count == 7)
+        // A require, not an expect: the indexes below would trap and abort the whole test process.
+        try #require(reactors.count == 7)
         #expect(reactors.first?.userId == ChatPoliciesTests.local)
         #expect(reactors[1].name == "Avery Lee" && reactors[2].name == "Sam Rivera")
         #expect(reactors[3].name == "guest0")
