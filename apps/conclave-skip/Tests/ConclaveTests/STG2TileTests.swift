@@ -141,7 +141,9 @@ struct STG2TileTests {
     }
 
     @Test func dispatcherRoutesPinSelfViewAndFlipThroughCommandsAndWritesTheFit() throws {
-        let stage = presenter(StageFixtureScript.inputs(for: .grid6))
+        // The grid-6 roster with your camera on: the flip item dispatches through `StageCameraFlip`, which only flips
+        // while the stage chrome offers it (camera on, no flip in flight; HD B5-T8 R4, SC8). The refusals are STG-3's.
+        let stage = presenter(StageFixtureScript.base(count: 6, localCameraOn: true))
         var commands: [StageCommand] = []
         stage.onCommand = { command in commands.append(command) }
         let slot = try #require(stage.layout.slot(id: "p:r1"))

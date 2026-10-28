@@ -248,7 +248,7 @@ struct PNL1PanelContractTests {
         let invokers: [PanelInvoker] = [.call, .more, .settings]
         for panel in MeetingPanel.allCases {
             for invoker in invokers {
-                let expected: PanelAppearance = (panel == .layout || panel == .effects) ? .inCall : .system
+                let expected: PanelAppearance = (panel == .chat || panel == .layout || panel == .effects) ? .inCall : .system
                 #expect(PanelPresentationPolicy.appearance(panel, invoker: invoker) == expected, "\(panel) from \(invoker)")
                 let windows: [(PanelWindow, PanelPlatform)] = [
                     (Self.phonePortrait, .iOS), (Self.padFullScreen, .iOS),

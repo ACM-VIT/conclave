@@ -198,6 +198,7 @@ private fun QaComposer(people: PeoplePresenter, snapshot: QaPanelSnapshot) {
     val canSubmit = QaComposerPolicy.canSubmit(text, composerEnabled = snapshot.composerEnabled, isSending = sending)
     ConclaveComposerStack(
         identifier = "qa.composer",
+        contentPadding = PaddingValues(0.dp),
         accessories = {
             if (QaComposerPolicy.isTooShort(text)) {
                 ConclaveComposerStatusLine(text = conclaveString("qa_too_short"), identifier = "qa.composer.short")

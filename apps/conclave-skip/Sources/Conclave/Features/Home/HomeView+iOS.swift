@@ -69,7 +69,7 @@ struct HomeView: View {
             }
         }
         .navigationTitle(ConclaveStrings.text("Meetings"))
-        .navigationBarTitleDisplayMode(.large)
+        .toolbarTitleDisplayMode(.inlineLarge)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 HomeAccountButton(isSignedIn: home.isSignedIn, name: home.accountName, seed: home.accountSeed,

@@ -494,7 +494,8 @@ final class ActiveAppSession {
         snapshotDelivered = true
         if !response.syncMessage.isEmpty { markRoomData() }
         let buffered = pendingRemote
-        clearRelay()
+        // Only the buffer goes: the delivered-snapshot latch stays set so later room bytes flow straight through.
+        clearBuffer()
         for item in buffered {
             deliverItem(item)
         }
@@ -573,11 +574,16 @@ final class ActiveAppSession {
     }
 
     private func clearRelay() {
+        clearBuffer()
+        snapshotDelivered = false
+    }
+
+    /// Drops the buffered remote bytes, the overflow mark and any held snapshot; leaves `snapshotDelivered` alone.
+    private func clearBuffer() {
         pendingRemote = []
         pendingRemoteBytes = 0
         pendingRemoteOverflowed = false
         heldSnapshot = nil
-        snapshotDelivered = false
     }
 
     private func reject(_ rejection: AppBridgeRejection) -> AppBridgeRejection {

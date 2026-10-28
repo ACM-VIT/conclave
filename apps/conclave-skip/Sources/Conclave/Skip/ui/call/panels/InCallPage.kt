@@ -207,21 +207,30 @@ internal fun InCallPage(
                 PaddingValues(start = insets.calculateStartPadding(layoutDirection), top = insets.calculateTopPadding(),
                     end = insets.calculateEndPadding(layoutDirection), bottom = 0.dp)
             } else insets
-            val reservation = inCallPageReservation(contentMode, landscape, tileVisible, hasComposer, bottomInset)
+            // Tile clearance belongs to the whole body, including fixed headers and tabs. List content padding
+            // alone only protects the first/last rows and lets controls or scrolled messages pass under the tile.
+            val tileClearance = if (tileVisible) miniTileReservationDp(landscape, true).dp else 0.dp
+            val reservation = inCallPageReservation(contentMode, landscape, false, hasComposer,
+                if (tileVisible) 0.dp else bottomInset)
             Column(Modifier.fillMaxSize().padding(bodyPadding).consumeWindowInsets(insets)) {
                 Box(Modifier.weight(1f).fillMaxSize()) {
-                    if (lazyList) {
-                        Column(Modifier.fillMaxSize().testTag("panel.body")) {
-                            content(PaddingValues(top = reservation.top, bottom = reservation.bottom))
-                        }
-                    } else {
-                        Column(
-                            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("panel.body")
-                                .padding(horizontal = margin)
-                                .padding(top = reservation.top, bottom = reservation.bottom),
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            content(PaddingValues(0.dp))
+                    Box(Modifier.fillMaxSize().padding(
+                        top = if (hasComposer) tileClearance else 0.dp,
+                        bottom = if (tileVisible && !hasComposer) tileClearance + bottomInset else 0.dp,
+                    )) {
+                        if (lazyList) {
+                            Column(Modifier.fillMaxSize().testTag("panel.body")) {
+                                content(PaddingValues(top = reservation.top, bottom = reservation.bottom))
+                            }
+                        } else {
+                            Column(
+                                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("panel.body")
+                                    .padding(horizontal = margin)
+                                    .padding(top = reservation.top, bottom = reservation.bottom),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                content(PaddingValues(0.dp))
+                            }
                         }
                     }
                     if (tileVisible && miniTile != null) {

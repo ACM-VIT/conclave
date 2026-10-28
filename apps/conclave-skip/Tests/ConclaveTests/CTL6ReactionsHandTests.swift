@@ -69,7 +69,11 @@ struct CTL6ReactionsHandTests {
         #expect(session.counters.reaction == 3)
         #expect(ControlsFixtureSession(state: .reactionsOff).controls.sendReaction(id: "👍") == .ignored)
         #expect(ControlsFixtureSession(state: .recovering).controls.sendReaction(id: "👍") == .ignored)
-        #expect(ControlsFixtureSession(state: .hostReactionsOff).controls.sendReaction(id: "🎉") == .dispatched)
+        // A host keeps the palette when reactions are off (6 f). The session stays in a local: the scripted core holds
+        // it weakly, so a temporary session can be released before its request handler runs.
+        let hostOff = ControlsFixtureSession(state: .hostReactionsOff)
+        #expect(hostOff.controls.sendReaction(id: "🎉") == .dispatched)
+        #expect(hostOff.counters.reaction == 1)
         #expect(session.countersReadout().contains("reaction=3"))
     }
 

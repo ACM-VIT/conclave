@@ -821,12 +821,12 @@ internal val ChessPieceCodes = listOf("wK", "wQ", "wR", "wB", "wN", "wP", "bK", 
 
 /** The filled glyph for both colors (the outline separates them), with the text presentation selector. */
 internal fun chessGlyph(code: String): String = when (ChessBoardPolicy.kind(code)) {
-    ChessPieceKind.king -> "♚︎"
-    ChessPieceKind.queen -> "♛︎"
-    ChessPieceKind.rook -> "♜︎"
-    ChessPieceKind.bishop -> "♝︎"
-    ChessPieceKind.knight -> "♞︎"
-    ChessPieceKind.pawn -> "♟︎"
+    ChessPieceKind.king -> "\u265A\uFE0E"
+    ChessPieceKind.queen -> "\u265B\uFE0E"
+    ChessPieceKind.rook -> "\u265C\uFE0E"
+    ChessPieceKind.bishop -> "\u265D\uFE0E"
+    ChessPieceKind.knight -> "\u265E\uFE0E"
+    ChessPieceKind.pawn -> "\u265F\uFE0E"
     null -> ""
 }
 

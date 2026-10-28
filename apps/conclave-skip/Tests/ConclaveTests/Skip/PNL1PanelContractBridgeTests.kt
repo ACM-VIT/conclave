@@ -152,7 +152,7 @@ class PNL1PanelContractBridgeTests {
                     platform = PanelPlatform.android, isAccessibilitySize = accessibilitySize)
                 assertTrue("${row.panel}", overlay.detents.isEmpty && overlay.initialDetent == null)
             }
-            val dark = row.panel == MeetingPanel.layout || row.panel == MeetingPanel.effects
+            val dark = row.panel == MeetingPanel.chat || row.panel == MeetingPanel.layout || row.panel == MeetingPanel.effects
             for (invoker in listOf(PanelInvoker.call, PanelInvoker.more, PanelInvoker.settings)) {
                 assertEquals("${row.panel}", if (dark) PanelAppearance.inCall else PanelAppearance.system,
                     PanelPresentationPolicy.appearance(row.panel, invoker = invoker))

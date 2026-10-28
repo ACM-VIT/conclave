@@ -39,7 +39,7 @@ import kotlinx.coroutines.isActive
  * K2 (S60 8 d): the one countdown leaf. One LaunchedEffect keyed to the deadline recomputes once per second and only
  * while the lifecycle is at least STARTED (repeatOnLifecycle), so the ticker stops in the background and recomputes on
  * resume (8 k). Everything derives from the server deadline plus the push's clock offset (CountdownModel). The bar
- * moves once per second without animation (R13); at 5 s or less it turns ext.warning with the "5 s left" text twin.
+ * moves once per second without animation (R13); at 5 s or less it turns ext.warning with the remaining time in text.
  * TalkBack reads one element ("12 seconds left") and hears a polite update at 10 s and 5 s only.
  */
 @Composable
@@ -87,7 +87,7 @@ internal fun GameKitCountdown(model: CountdownModel, modifier: Modifier = Modifi
             }
         }
         if (warning && seconds > 0) {
-            Text(conclaveString("gm_warning"), style = MaterialTheme.typography.bodySmall, color = ext.warning)
+            Text(label, style = MaterialTheme.typography.bodySmall, color = ext.warning)
         }
     }
     // One persistent polite live region whose text changes only at 10 s and 5 s, so TalkBack hears those marks and

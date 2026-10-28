@@ -1715,6 +1715,21 @@ final class MeetingViewModel {
         networkMonitorReportsOffline && !socketManager.isConnected
     }
 
+    #if os(macOS) && !SKIP
+    /// Host-test seam (macOS only; SET-3 S60 C6-5, SYS-6 S70 SY22): stops the real path monitor `init` started and
+    /// drops its path callbacks (offline, quality hint, system Data Saver), so a host test's call never reads the build
+    /// machine's network (a Personal Hotspot path is constrained, which holds the 360p Data Saver ceiling). Call it in
+    /// the main-actor turn that created the view model: each path update hops to the main actor before it reaches a
+    /// callback, so none has landed yet, and one the monitor queued before the stop finds no callback. The view model's
+    /// path inputs keep their defaults (online, no hint, system Data Saver off); tests drive the handlers directly.
+    func testDetachHostNetworkMonitor() {
+        networkMonitor.stop()
+        networkMonitor.onStatusChanged = nil
+        networkMonitor.onQualityHintChanged = nil
+        networkMonitor.onSystemDataSaverChanged = nil
+    }
+    #endif
+
     // MARK: - Socket Bindings
 
     func setupSocketBindings() {
@@ -16030,7 +16045,12 @@ final class MeetingViewModel {
         onAcknowledged: (() -> Void)? = nil
     ) async -> MeetingActionResult {
         let actionKey = "endRoom"
-        guard let actionToken = beginAdminAction(actionKey) else { return MeetingActionResult.cancelled }
+        guard let actionToken = beginAdminAction(actionKey) else {
+            // E10: a call that is not joined is the typed `notJoined` failure (as the joined check below and the other
+            // typed core paths, joined first), never a quiet cancel; a non-host or an End already in flight is
+            // `cancelled`. `beginAdminAction` still posts the legacy banner, so the Bool wrapper is unchanged.
+            return state.connectionState == .joined ? MeetingActionResult.cancelled : MeetingActionResult.failed(.notJoined)
+        }
         let actionContext = currentCallActionContext()
         defer { finishAdminAction(actionKey, token: actionToken) }
         guard isCurrentJoinedCall(actionContext) else { return MeetingActionResult.failed(.notJoined) }

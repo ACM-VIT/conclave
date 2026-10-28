@@ -118,7 +118,11 @@ struct PeopleHostPoliciesTests {
         #expect(people.rows.entry(for: "u-lee").model.detail == .presenting)
         #expect(people.rows.entry(for: "u-omar").model.detail == .reconnecting)
         #expect(people.rows.entry(for: "u-omar").model.isReconnecting)
-        #expect(people.rows.entry(for: "u-sam").model.actions.isEmpty, "row actions arrive with PPL-2")
+        // PPL-2 (B5-T1) put the PL7 actions on every row: for a host viewer, muted and camera-off Sam has no host media
+        // item, so the menu starts with group 0 and ends with Remove (S50 3 f). PPL2PeopleActionTests pins the full table.
+        let samActions = people.rows.entry(for: "u-sam").model.actions
+        #expect(!samActions.isEmpty, "row actions arrived with PPL-2")
+        #expect(PeopleActionPolicy.groupOrder(samActions).first == 0 && samActions.last?.action == .remove)
     }
 
     @Test func attendeesAndLeavingPeopleNeverBecomeRows() {
@@ -450,8 +454,13 @@ struct PeopleHostPoliciesTests {
             for pattern in ["glassEffect", "GlassEffectContainer", "ultraThinMaterial", "regularMaterial",
                             "preferredColorScheme", "announceForAccessibility", "HapticManager", "MeetingViewModel.shared",
                             "SearchBar(", "DockedSearchBar", "dynamicLightColorScheme", "dynamicDarkColorScheme", "LazyVGrid",
-                            "@Stable", "@Immutable", "verticalScroll", "contextMenu"] {
+                            "@Stable", "@Immutable", "verticalScroll"] {
                 #expect(!text.contains(pattern), "\(file) uses \(pattern)")
+            }
+            // PPL-2 (S50 3 c, F00 C16) gives iOS rows a `contextMenu` with a row preview in the iOS-only file; the
+            // transpiled and Kotlin sources still never reach for it (contextMenu does not render on Android).
+            if !file.contains("+iOS") {
+                #expect(!text.contains("contextMenu"), "\(file) uses contextMenu outside an iOS-only file")
             }
             #expect(peopleMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x|white:)"#, in: text).isEmpty, "\(file) builds a color from a literal")
         }
@@ -539,7 +548,10 @@ struct PeopleHostPoliciesTests {
             as? [String: Any])
         let keys = Set((catalog["strings"] as? [String: Any] ?? [:]).keys)
         for file in try peopleFiles(under: "Sources/Conclave/Features/Meeting/People", extensions: ["swift"]) where file.contains("+iOS") {
+            // Swift unicode escapes in a key decode to the catalog's real characters (U+2019, and U+2026 for PPL-2's
+            // "Change Name\u{2026}" style menu items).
             let text = try peopleSource(file).replacingOccurrences(of: "\\u{2019}", with: "\u{2019}")
+                .replacingOccurrences(of: "\\u{2026}", with: "\u{2026}")
             for match in peopleCaptures(#"ConclaveStrings\.(?:text|format)\("([^"]+)""#, in: text) {
                 #expect(keys.contains(match), "\(file): missing catalog key \(match)")
             }

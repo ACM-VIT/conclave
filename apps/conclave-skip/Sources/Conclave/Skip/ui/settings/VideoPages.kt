@@ -273,7 +273,7 @@ private fun SettingsBitrateDialog(limits: CameraLimitsModel, onConfirm: (Int) ->
                     label = { ConclaveText(conclaveString("set_bitrate_kbps_label"), line = "settings.advanced.bitrate.field.label") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFeatureSettings = "tnum"),
+                    textStyle = rememberTabular(MaterialTheme.typography.bodyLarge),
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("settings.advanced.bitrate.field"),
                 )
             }
@@ -392,7 +392,7 @@ private fun SettingsStatItem(title: String, value: String, identifier: String) {
         headlineContent = { ConclaveText(title, line = "settings.connection.$identifier.title") },
         trailingContent = {
             ConclaveText(value, line = "settings.connection.$identifier.value",
-                style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"), color = scheme.onSurfaceVariant)
+                style = rememberTabular(MaterialTheme.typography.bodyMedium), color = scheme.onSurfaceVariant)
         },
         colors = ListItemDefaults.colors(containerColor = scheme.surface),
         modifier = Modifier.testTag("settings.connection.$identifier").semantics(mergeDescendants = true) {},

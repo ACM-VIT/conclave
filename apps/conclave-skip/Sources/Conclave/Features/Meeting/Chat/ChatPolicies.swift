@@ -385,14 +385,15 @@ enum ChatFailurePolicy {
         if text.contains("private messages are disabled") || text.contains("private messages are turned off") {
             return ChatFailure.privateDisabled
         }
+        // Reply strings first: "reply target is no longer available." also contains the private-target phrase.
+        if text.contains("private replies must stay") { return ChatFailure.replyPrivateThread }
+        if text.contains("reply target") { return ChatFailure.replyUnavailable }
         if text.contains("multiple users match") { return ChatFailure.privateTargetAmbiguous }
         if text.contains("cannot private message yourself") { return ChatFailure.privateSelf }
         if text.contains("target is no longer available") { return ChatFailure.privateTargetLeft }
         if text.contains("not found for private message") || text.contains("invalid private message target") {
             return ChatFailure.privateTargetMissing
         }
-        if text.contains("private replies must stay") { return ChatFailure.replyPrivateThread }
-        if text.contains("reply target") { return ChatFailure.replyUnavailable }
         if text.contains("reconnect before") || text.contains("not in a room") || text.contains("not connected") {
             return ChatFailure.notConnected
         }

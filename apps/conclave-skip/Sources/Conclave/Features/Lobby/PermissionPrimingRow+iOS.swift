@@ -29,7 +29,7 @@ struct PermissionPrimingSection: View {
     }
 }
 
-/// S10 7 c: `Label("Microphone Access Is Off", systemImage: micSlash)` with the body and a trailing Open Settings
+/// S10 7 c: a `Label` titled "Microphone Access Is Off" with the micSlash symbol, the body and a trailing Open Settings
 /// (borderless, coralText); the button moves under the text at accessibility sizes. One container, announced once when
 /// it appears (7 i).
 struct PermissionPrimingRow: View {

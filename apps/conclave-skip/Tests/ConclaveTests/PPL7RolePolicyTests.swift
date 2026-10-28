@@ -132,7 +132,10 @@ struct PPL7RolePolicyTests {
         people.beginRename()
         people.submitRename("Ishaan K")
         #expect(log.commands.map(\.kind) == [.mute, .changeName])
-        people.perform(.remove, rowId: "u-lee", source: PeopleActionSource.rowMenu)
+        // Lee's row is pending its mute, so its items are disabled and further taps ignored (S50 3 f "action pending",
+        // PPL-2); the open host dialog is Remove on Avery's row, which has nothing in flight.
+        #expect(people.perform(.remove, rowId: "u-lee", source: PeopleActionSource.rowMenu) == .ignored)
+        people.perform(.remove, rowId: "u-avery", source: PeopleActionSource.rowMenu)
         #expect(people.confirmation?.kind == .remove)
         people.apply(hostInputs(isAdmin: false, hostId: "u-avery"))
         #expect(people.lastRoleChange.contains(PeopleRoleChangeKind.lostHost.rawValue))

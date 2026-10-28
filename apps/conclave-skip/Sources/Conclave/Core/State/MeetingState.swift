@@ -221,8 +221,9 @@ final class MeetingState {
     var roomId: String = "" {
         didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
     }
+    /// CTL-5: Host Controls refreshes before the controls, whose More Lock Meeting row reads the host lock row.
     var isRoomLocked: Bool = false {
-        didSet { onStageInputChanged?(); onControlsInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?() }
+        didSet { onStageInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?(); onControlsInputChanged?() }
     }
     var isChatLocked: Bool = false {
         didSet { onChatInputChanged?(ChatInputChange.policy); onHostInputChanged?() }

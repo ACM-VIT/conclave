@@ -114,8 +114,9 @@ struct T3BorrowComposerComponentTests {
         #expect(android.contains("Box(Modifier.heightIn(min = TextFieldDefaults.MinHeight), contentAlignment = Alignment.Center) { attach() }"))
         #expect(android.components(separatedBy: "if (attach != null) ConclaveComposerAttachSlot(attach)").count - 1 == 2)
         #expect(!android.contains("if (attach != null) attach()"))
-        // Send stays the trailing icon of the field (S40 6 d); R1 records where M3 places it at three and six lines.
-        #expect(android.components(separatedBy: "trailingIcon = { ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason) },").count - 1 == 2)
+        // Owner polish keeps native trailing text space, with Send in the last-line band as the field grows.
+        #expect(android.components(separatedBy: "trailingIcon = { Spacer(Modifier.size(48.dp)) },").count - 1 == 2)
+        #expect(android.components(separatedBy: "ConclaveComposerSendSlot(Modifier.align(Alignment.BottomEnd)) { ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason) }").count - 1 == 2)
     }
 
     // MARK: P1, P2, P4 and P6 component halves (Android)
@@ -128,7 +129,7 @@ struct T3BorrowComposerComponentTests {
         // P6, fieldModifier for P3 and P8), both defaulted and before attach, so named callers are unaffected.
         #expect(android.contains("placeholder: String, state: TextFieldState, sendEnabled: Boolean, onSend: () -> Unit, identifier: String, modifier: Modifier = Modifier, sendLabel: String? = null, sendDisabledReason: String = \"\", enabled: Boolean = true, onHardwareKey: ((KeyEvent) -> Boolean)? = null, onSendBlocked: (() -> Unit)? = null, fieldModifier: Modifier = Modifier, attach: (@Composable () -> Unit)? = null,"))
         // fieldModifier lands on the TextField (a FocusRequester there reaches the field, not the attach button).
-        #expect(android.components(separatedBy: "modifier = Modifier.weight(1f).then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->").count - 1 == 2)
+        #expect(android.components(separatedBy: "modifier = Modifier.fillMaxWidth().then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->").count - 1 == 2)
         #expect(android.components(separatedBy: "Row(modifier.fillMaxWidth(),").count - 1 == 2)
         #expect(android.contains("import androidx.compose.ui.input.key.KeyEvent"))
         #expect(android.contains("import androidx.compose.foundation.text.input.TextFieldState"))

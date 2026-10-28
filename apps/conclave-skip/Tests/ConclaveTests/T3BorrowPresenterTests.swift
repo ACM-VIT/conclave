@@ -349,11 +349,9 @@ struct T3BorrowPresenterTests {
 
     // MARK: Fixtures (R1, R2, R7, R8)
 
-    @Test func theFixtureAddsTheDraftStatesAndThePhotoScript() {
-        defer {
-            ChatDiagnostics.driver = nil
-            ChatDiagnostics.counters = nil
-        }
+    @Test func theFixtureAddsTheDraftStatesAndThePhotoScript() async {
+        await ChatFixtureTestGate.acquire()
+        defer { ChatFixtureTestGate.release() }
         #expect(ChatFixtureDriver.state(named: "chat-draft-multiline") == .draftMultiline)
         #expect(ChatFixtureDriver.state(named: "chat-suggestions-mention-query") == .suggestionsMentionQuery)
         #expect(ChatFixtureScriptName(rawValue: "gateBlip") == .gateBlip && ChatFixtureScriptName(rawValue: "gateLong") == .gateLong)
@@ -380,10 +378,8 @@ struct T3BorrowPresenterTests {
     }
 
     @Test func gateBlipDrawsNoLineAndGateLongDrawsAndHoldsIt() async {
-        defer {
-            ChatDiagnostics.driver = nil
-            ChatDiagnostics.counters = nil
-        }
+        await ChatFixtureTestGate.acquire()
+        defer { ChatFixtureTestGate.release() }
         let clock = T3BClock()
         let sleeper = T3BSleeper()
         let blipShell = MeetingShellPresenter()

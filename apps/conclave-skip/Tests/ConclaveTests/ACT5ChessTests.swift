@@ -597,9 +597,13 @@ struct ACT5ChessTests {
         let kotlin = try stageSource(kotlinPath)
         #expect(ios.contains("#if DEBUG") && ios.contains("\\u{265F}\\u{FE0E}") && ios.contains("static func letter(_ code: String)"))
         #expect(kotlin.contains("isDebuggableApp(context)") && kotlin.contains("\\u265F\\uFE0E") && kotlin.contains("fun chessPieceLetter(code: String)"))
-        for forbidden in ["Image(\"", "painterResource", "chess_piece", "ImageVector.vectorResource"] {
+        for forbidden in ["Image(\"", "painterResource", "ImageVector.vectorResource"] {
             #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the board ships piece art via \(forbidden)")
         }
+        // A `chess_piece*` image resource name; B8-T3's own "Knight on g1" label `gm_chess_piece_on` is copy, not art.
+        let pieceArt = #"\bchess_piece"#
+        #expect(stageMatches(pieceArt, in: ios).isEmpty && stageMatches(pieceArt, in: kotlin).isEmpty,
+                "the board ships piece art via a chess_piece resource")
     }
 
     @Test func everyChessEnumCaseHasCopyOnBothPlatforms() throws {

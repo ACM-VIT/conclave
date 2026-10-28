@@ -82,13 +82,14 @@ struct ENT2JoinCodeTests {
         // No autofocus on iOS (S10 3 c).
         #expect(!ios.contains("isFocused = true"))
         #expect(!ios.contains("defaultFocus"))
-        // Commit flow: Cancel leading, one confirm trailing, no Close role.
+        // Owner entry polish: Cancel stays leading; one filled confirmation sits below the form.
         #expect(flat.contains("ToolbarItem(placement: .cancellationAction) { Button(ConclaveStrings.text(\"Cancel\"), role: .cancel)"))
-        #expect(flat.contains("ToolbarItem(placement: .confirmationAction) { JoinConfirmButton(isValid: isValid, action: submit) }"))
+        #expect(!flat.contains("ToolbarItem(placement: .confirmationAction)"))
+        #expect(flat.contains(".safeAreaInset(edge: .bottom, spacing: 0) { VStack(spacing: 0) { Divider() JoinConfirmButton(isValid: isValid, action: submit) .padding(16) } .background(Color(uiColor: .systemGroupedBackground)) }"))
         #expect(!ios.contains("role: .close"))
-        // iOS 26: the prominent coral fill with the onCoral label and 0.4 when disabled; 17 to 25: coralText text.
-        #expect(flat.contains("if #available(iOS 26.0, *) { Button(action: action) { Text(ConclaveStrings.text(\"Join\")) .foregroundStyle(HostingTheme.onCoral) } .buttonStyle(.borderedProminent) .tint(HostingTheme.coralFill) .opacity(isValid ? 1 : HostingTheme.disabledOpacity) .disabled(!isValid)"))
-        #expect(flat.contains("} else { Button(ConclaveStrings.text(\"Join\"), action: action) .tint(HostingTheme.coralText) .disabled(!isValid)"))
+        // The filled button has sufficient ink contrast on every supported iOS version.
+        #expect(flat.contains("Button(action: action) { Text(ConclaveStrings.text(\"Join\")) .foregroundStyle(HostingTheme.onCoral) .frame(maxWidth: .infinity, minHeight: 28) } .buttonStyle(.borderedProminent) .controlSize(.large) .tint(HostingTheme.coralFill) .opacity(isValid ? 1 : HostingTheme.disabledOpacity) .disabled(!isValid)"))
+        #expect(flat.contains(".scrollDismissesKeyboard(.interactively)"))
         #expect(!ios.contains("Color.white") && !ios.contains(".foregroundStyle(.white)"))
         #expect(flat.contains("input = EntryPolicies.sanitizeRoomInput(newValue)"))
         // The root presents it with the dismissal callback that pushes the pending route.
@@ -107,7 +108,11 @@ struct ENT2JoinCodeTests {
         // The clip description is read without the content; the content only on a tap.
         #expect(android.contains("primaryClipDescription?.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)"))
         #expect(flat.contains("keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go,"))
-        #expect(flat.contains("scope.launch { sheetState.hide() }.invokeOnCompletion { premeeting.submitJoinInput(raw) }"))
+        // A cancelled hide must not commit a join; cancellation propagates before this sequential continuation.
+        #expect(!android.contains("invokeOnCompletion"))
+        #expect(flat.contains("sheetState.hide() if (!sheetState.isVisible) premeeting.submitJoinInput(raw)"))
+        #expect(flat.contains("if (isSubmitting) return"))
+        #expect(flat.contains("Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())"))
         #expect(flat.contains("DisposableEffect(premeeting) { onDispose { premeeting.joinSheetDidDismiss() } }"))
         #expect(flat.contains("containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer"))
         #expect(!android.contains("FlexibleBottomSheet"), "a handwritten M3 sheet, not the legacy bridge")

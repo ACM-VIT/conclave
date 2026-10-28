@@ -564,9 +564,13 @@ enum NativeMediaQualityPreferences {
         return NativeMediaQualityPolicy.normalized(decoded)
     }
 
+    /// Sorted keys keep the persisted JSON stable for the same settings (a plain encoder's key order can differ run
+    /// to run), so identical settings always store the identical string.
     static func encode(_ settings: NativeMediaQualitySettings) -> String? {
         let normalized = NativeMediaQualityPolicy.normalized(settings)
-        guard let data = try? JSONEncoder().encode(normalized) else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = JSONEncoder.OutputFormatting.sortedKeys
+        guard let data = try? encoder.encode(normalized) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 }

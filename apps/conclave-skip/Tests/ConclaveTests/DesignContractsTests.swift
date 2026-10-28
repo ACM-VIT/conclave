@@ -674,7 +674,7 @@ struct DesignContractsTests {
         // PS 6.2 panel table as PNL-1 amends it (RECONCILE R9, S60 R6-10): bottom composer, iOS sheet detents, initial
         // detent at default text sizes, appearance (Effects now short then large).
         let table: [(MeetingPanel, Bool, [PanelDetent], PanelDetent, PanelAppearance)] = [
-            (.chat, true, [.large], .large, .system),
+            (.chat, true, [.large], .large, .inCall),
             (.participants, false, [.medium, .large], .medium, .system),
             (.transcript, true, [.large], .large, .system),
             (.activities, false, [.medium, .large], .medium, .system),
@@ -700,11 +700,11 @@ struct DesignContractsTests {
 
     @Test func panelPolicyLayoutAndEffectsAreInCall() {
         // S60 R6-10 renames panelPolicyLayoutAppearanceIsInvokerScoped: Layout and Effects are dark for every invoker
-        // (RECONCILE R9, owner default Q8.6); every content panel follows the system appearance.
+        // (RECONCILE R9, owner default Q8.6); owner polish also keeps Chat dark over the call.
         let invokers: [PanelInvoker] = [.call, .more, .settings]
         for panel in MeetingPanel.allCases {
             for invoker in invokers {
-                let dark = panel == .layout || panel == .effects
+                let dark = panel == .chat || panel == .layout || panel == .effects
                 #expect(PanelPresentationPolicy.appearance(panel, invoker: invoker) == (dark ? .inCall : .system), "\(panel) from \(invoker)")
                 let android = PanelPresentationPolicy.resolve(request(panel, invoker), window: PanelPresentationPolicy.androidWindow(width: 411, height: 891), platform: .android)
                 #expect(android.appearance == (dark ? .inCall : .system), "\(panel) from \(invoker)")

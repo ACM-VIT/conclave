@@ -582,7 +582,9 @@ struct StagePoliciesTests {
     @Test func everyFixtureStateBuildsAndMagicTapCountsOnce() {
         for state in StageFixtureState.allCases {
             let session = StageFixtureSession(state: state)
+            // The recovering states: STG-1, STG-6 Meeting Details, ACT-1/2 activities (HD B4-T8) and ACT-9 browser (HD B8-T1).
             let recovers = state == StageFixtureState.recovering || state == StageFixtureState.meetingInfoRecovering
+                || state == StageFixtureState.activitiesRecovering || state == StageFixtureState.browserReconnecting
             #expect(session.shell.session.phase == (recovers ? MeetingPhaseKind.recovering : MeetingPhaseKind.inCall), "\(state.rawValue)")
             #expect(StageFixtureScript.state(named: state.rawValue) == state)
         }

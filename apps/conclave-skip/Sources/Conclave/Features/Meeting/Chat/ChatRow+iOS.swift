@@ -5,8 +5,8 @@ import UIKit
 // S40 3 (CHT-1, CHT-3 chips): message rows. Each row reads only its `ChatRowEntry`, so a reaction or delivery change
 // redraws one row. One summary element per message (the bubble text, with the assembled label, value and the row's
 // accessibility actions); every control (quote, chips, failed marker) stays its own element. The bubble is the C23
-// component; own public rows are coral with onCoral ink, every private and peer row neutral (Q9). No `.textSelection`
-// (the context menu carries Copy). CHT-4 and CHT-5: photo rows show the bounded image in a fixed 240 by 180 box (the
+// component; own public rows are coral with onCoral ink, every private and peer row neutral (Q9). No text selection
+// modifier (the context menu carries Copy). CHT-4 and CHT-5: photo rows show the bounded image in a fixed 240 by 180 box (the
 // viewer opens on tap, a failed load retries on tap), GIF rows animate only on screen (stickers without a bubble,
 // clips as a poster with the play glyph), and ready link cards follow the reactions. Media-only rows put the summary
 // on the media element. Voice rows are CHT-6's; Conclave AI rows are `AssistantRowView` (CHT-7, AssistantRow+iOS.swift).
@@ -160,6 +160,8 @@ private struct ChatRowHeader: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(HostingTheme.secondaryText)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 }

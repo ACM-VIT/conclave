@@ -2,8 +2,10 @@ package conclave.module
 
 import android.content.res.Configuration
 import android.graphics.SurfaceTexture
+import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Choreographer
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -26,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -36,9 +39,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.AndroidUiFrameClock
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -54,6 +62,11 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.time.Duration
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -88,7 +101,7 @@ class PanelStageBridgeTests {
         val medium = PanelDetent.medium
         val large = PanelDetent.large
         val table = listOf(
-            Row(MeetingPanel.chat, true, listOf(large), large, PanelAppearance.system),
+            Row(MeetingPanel.chat, true, listOf(large), large, PanelAppearance.inCall),
             Row(MeetingPanel.participants, false, listOf(medium, large), medium, PanelAppearance.system),
             Row(MeetingPanel.transcript, true, listOf(large), large, PanelAppearance.system),
             Row(MeetingPanel.activities, false, listOf(medium, large), medium, PanelAppearance.system),
@@ -638,19 +651,19 @@ class PanelStageBridgeTests {
     }
 
     /**
-     * Attempt (PS 14.2): the real NativePanelHost on a Robolectric ComponentActivity, with plain-View stage probes,
-     * the TextureView renderer probes and a stage control, through open, replacement and close. It is the suite's only
-     * composition: under Robolectric only the first composition in a JVM keeps recomposing (a later one never
-     * recomposed in the WP1-3b1 fix round, even with fresh Choreographer and Compose dispatcher thread locals), so
-     * every composition check lives here. Beyond retention it checks review ISSUE 1 (AND-9: a tap on a blank area of
-     * the open overlay never reaches the stage control beneath it, with control taps before and after) and review
-     * ISSUE 3 (PS 8.10, AND-2: in touch mode Close returns focus to the invoking control, and `restore` reports
-     * whether focus really moved). PNL-1 adds a phase (S40 R40-3, R40-12, S50 R50-1): a lazyList InCallPage gets the
-     * mini-tile reservation for its list, and system Back pops an inner page of the side pane before it closes. SET-5
-     * (WP1-3c, PS 8.6) adds the last phase, folded in from its own composing test (G3b round 2, a second composition
-     * never recomposed): on a 360 x 800 dp phone constraint Layout opens as the bottom sheet, the page mounts in the
-     * Sheet variant, the stage reads partial coverage, and Close acknowledges only after the sheet's hide completed and
-     * the page disposed. Runtime-sensitive: the hide runs on the Robolectric frame clock.
+     * Attempt (PS 14.2): the real NativePanelHost on a Robolectric ComponentActivity, with plain-View stage probes, the
+     * TextureView renderer probes and a stage control, through open, replacement and close. It is the suite's only
+     * composition, and it composes on its own Recomposer ([hostRecomposer]): a window Recomposer never recomposes once
+     * an earlier test in the JVM has stalled Compose's shared main dispatcher (G3b round 4, where T3BorrowTimelineTests
+     * ran first), so every composition check lives here. Beyond retention it checks review ISSUE 1 (AND-9: a tap on a
+     * blank area of the open overlay never reaches the stage control beneath it, with control taps before and after)
+     * and review ISSUE 3 (PS 8.10, AND-2: in touch mode Close returns focus to the invoking control, and `restore`
+     * reports whether focus really moved). PNL-1 adds a phase (S40 R40-3, R40-12, S50 R50-1): a lazyList InCallPage
+     * gets the mini-tile reservation for its list, and system Back pops an inner page of the side pane before it
+     * closes. SET-5 (WP1-3c, PS 8.6) adds the last phase, folded in from its own composing test (G3b round 2, a second
+     * composition never recomposed): on a 360 x 800 dp phone constraint Layout opens as the bottom sheet, the page
+     * mounts in the Sheet variant, the stage reads partial coverage, and Close acknowledges only after the sheet's hide
+     * completed and the page disposed. Runtime-sensitive: the hide runs on the Robolectric frame clock.
      */
     @Test fun hostCompositionRetainsStageAcrossPanelOpenClose() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
@@ -673,10 +686,13 @@ class PanelStageBridgeTests {
         var plainFocused = false
         // PNL-1 phase: the panel becomes a real lazyList page.
         var pageMode by mutableStateOf(false)
+        var pageComposer by mutableStateOf(false)
+        var pageBodyBounds: Rect? = null
+        var pageTileBounds: Rect? = null
         var pageMounts = 0
         var reservation: PaddingValues? = null
         var pageStack: PanelPageStack? = null
-        activity.setContent {
+        activity.setContent(hostRecomposer()) {
             CompositionLocalProvider(LocalRendererLedger provides presenter.renderers) {
               Box(if (wide) Modifier.requiredSize(1280.dp, 800.dp) else if (phone) Modifier.requiredSize(360.dp, 800.dp) else Modifier.fillMaxSize()) {
                 NativePanelHost(
@@ -713,7 +729,7 @@ class PanelStageBridgeTests {
                             InCallPage(
                                 title = "Fixture page",
                                 variant = variant,
-                                hasComposer = false,
+                                hasComposer = pageComposer,
                                 miniTile = if (decision.showsMiniTile) {
                                     CallMiniTileModel(displayName = "Avery", cameraOff = true, isLocal = false, speaking = false)
                                 } else null,
@@ -721,10 +737,14 @@ class PanelStageBridgeTests {
                                 onMounted = { pageMounts++; lifetime.mounted(session, request.presentationID) },
                                 onDisposed = { lifetime.disposed(session, request.presentationID) },
                                 contentMode = InCallPageContent.lazyList,
+                                miniTileVideo = {
+                                    Box(Modifier.fillMaxSize().onGloballyPositioned { pageTileBounds = it.boundsInRoot() })
+                                },
+                                composer = { Text("Fixture composer") },
                             ) { padding ->
                                 reservation = padding
                                 pageStack = LocalPanelPageStack.current
-                                LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+                                LazyColumn(Modifier.fillMaxSize().onGloballyPositioned { pageBodyBounds = it.boundsInRoot() }, contentPadding = padding) {
                                     item(key = "row") { Text("Row") }
                                 }
                             }
@@ -837,8 +857,17 @@ class PanelStageBridgeTests {
         assertEquals("a move never remounts the page", 1, pageMounts)
         assertSame("the page stack survives the move", stack, pageStack)
         assertEquals("style=overlay coverage=full", readout.style)
-        val landscape = activity.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        assertTrue(reservation!!.calculateBottomPadding() >= miniTileReservationDp(landscape, tileVisible = true).dp)
+        // The page reserves the mini tile outside its content; list padding only carries the normal inset.
+        assertTrue(reservation!!.calculateBottomPadding() >= 16.dp)
+        assertNotNull(pageBodyBounds)
+        assertNotNull(pageTileBounds)
+        assertTrue("the measured body stays above the lower mini tile", pageBodyBounds!!.bottom <= pageTileBounds!!.top)
+        pageComposer = true
+        settleHost(activity)
+        assertEquals("a composer change never remounts the page", 1, pageMounts)
+        assertEquals(0.dp, reservation!!.calculateTopPadding())
+        assertTrue("fixed headers and scrolled content stay below the upper mini tile", pageBodyBounds!!.top >= pageTileBounds!!.bottom)
+        assertTrue("the body retains visible height", pageBodyBounds!!.height > 0f)
         // At the root, Back closes the panel.
         activity.onBackPressedDispatcher.onBackPressed()
         settleHost(activity)
@@ -874,6 +903,52 @@ class PanelStageBridgeTests {
         assertEquals(PanelStageCoverage.none, stageCoverage)
         assertEquals(3, stageFactories)
         assertEquals(0, stageReleases)
+    }
+
+    /** Stops the composing test's own Compose runtime ([hostRecomposer]); null in every other test. */
+    private var hostRuntimeStop: (() -> Unit)? = null
+
+    @After fun stopHostRuntime() {
+        hostRuntimeStop?.invoke()
+        hostRuntimeStop = null
+    }
+
+    /**
+     * The host's own Compose runtime (G3b round 4), so the composing test passes whichever test class runs first. A
+     * plain `setContent` gets a window Recomposer on Compose's process-wide `AndroidUiDispatcher.Main`, which marks its
+     * main-looper message and its Choreographer frame callback as scheduled and posts neither again until they run.
+     * Robolectric empties the main looper queue and the Choreographer callback queues after every test but keeps that
+     * dispatcher, so work it had scheduled when an earlier test ended is dropped while the marks stay set, and no later
+     * window Recomposer ever runs again. A snapshot write at the end of any later test is enough, because the first
+     * composition in the JVM starts GlobalSnapshotManager, which wakes through that dispatcher. Resetting thread locals
+     * cannot help (WP1-3b1 tried): on the main thread `AndroidUiDispatcher.CurrentThread` is that same shared `Main`.
+     * This Recomposer runs on the main looper (`Dispatchers.Main`) with a frame clock that posts straight to the
+     * Choreographer, and a global write observer sends apply notifications on the main looper as GlobalSnapshotManager
+     * does on a device. The composition, the M3 sheet's dialog window (it composes through `rememberCompositionContext`)
+     * and every effect and pointer coroutine run on it; [stopHostRuntime] cancels it after the test.
+     */
+    private fun hostRecomposer(): Recomposer {
+        val context = Dispatchers.Main + AndroidUiFrameClock(Choreographer.getInstance())
+        val recomposer = Recomposer(context)
+        val runner = CoroutineScope(context)
+        runner.launch(start = CoroutineStart.UNDISPATCHED) { recomposer.runRecomposeAndApplyChanges() }
+        val main = Handler(Looper.getMainLooper())
+        var sendPending = false
+        val writes = Snapshot.registerGlobalWriteObserver {
+            if (!sendPending) {
+                sendPending = true
+                main.post {
+                    sendPending = false
+                    Snapshot.sendApplyNotifications()
+                }
+            }
+        }
+        hostRuntimeStop = {
+            writes.dispose()
+            recomposer.cancel()
+            runner.cancel()
+        }
+        return recomposer
     }
 
     /**

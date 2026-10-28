@@ -42,7 +42,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -84,8 +83,8 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
         modifier = Modifier.testTag("lobby"),
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
-            val compactHeight = LocalConfiguration.current.screenHeightDp < 480
-            val wide = maxWidth >= 600.dp || compactHeight
+            // Height alone can be compact in a narrow multi-window: reserve room for both columns.
+            val wide = maxWidth >= 640.dp
             if (wide) {
                 Row(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
@@ -198,13 +197,15 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
     val link = premeeting.lobbyLink?.takeIf { it.routeId == key.routeId }
     val presence = premeeting.lobbyPresence?.takeIf { it.routeId == key.routeId }
     val status = premeeting.lobbyStatus?.takeIf { it.routeId == key.routeId }
+    val isNewMeeting = status?.intent == LobbyIntent.newMeeting
+    val roomLabel = link?.roomLabel ?: key.roomId
     // ENT-5 (S10 8 g, 9 g): "Joining" or "Reconnecting" while connecting, nothing while waiting or failed.
     val subtitle = when (status?.mode) {
         LobbyMode.connecting ->
             if (status?.waitingKind == WaitingKind.reconnecting) conclaveString("pm_subtitle_reconnecting")
             else conclaveString("pm_subtitle_joining")
         LobbyMode.waiting, LobbyMode.failed -> ""
-        else -> when (presence?.kind) {
+        else -> if (isNewMeeting) roomLabel else when (presence?.kind) {
             PresenceKind.checking -> conclaveString("pm_presence_checking")
             PresenceKind.empty -> conclaveString("pm_presence_none")
             PresenceKind.count -> conclavePlural("pm_presence_count", presence?.count ?: 0, presence?.count ?: 0)
@@ -212,12 +213,17 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
         }
     }
     // S10 6 g (RECONCILE R30): the promotion lobby's title is "Join as a speaker".
-    val title = if (status?.intent == LobbyIntent.promotion) conclaveString("pm_join_as_speaker") else (link?.roomLabel ?: key.roomId)
+    val title = when {
+        status?.intent == LobbyIntent.promotion -> conclaveString("pm_join_as_speaker")
+        isNewMeeting -> conclaveString("pm_new_meeting")
+        else -> roomLabel
+    }
     Column {
         Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1,
             overflow = TextOverflow.Ellipsis)
         if (subtitle.isNotEmpty()) {
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.testTag("lobby.presence"))
         }
     }

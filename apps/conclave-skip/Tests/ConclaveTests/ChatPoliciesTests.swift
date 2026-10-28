@@ -563,4 +563,35 @@ func chatFiles(under directory: String, extensions: Set<String>) throws -> [Stri
 func chatHasDash(_ text: String) -> Bool {
     text.unicodeScalars.contains { $0.value == 0x2013 || $0.value == 0x2014 }
 }
+
+/// `ChatFixtureDriver.install()` writes the shared `ChatDiagnostics` statics, and Swift Testing runs suites in
+/// parallel, so every test that installs a chat fixture driver (CHT4, CHT5, CHT7, T3 borrow) holds this main-actor gate
+/// from before the install until its `defer` releases it. The tests still keep their driver in a local: the chat
+/// closures hold it weakly and only the static holds it strongly.
+@MainActor
+enum ChatFixtureTestGate {
+    private static var isHeld = false
+    private static var waiting: [CheckedContinuation<Void, Never>] = []
+
+    static func acquire() async {
+        if !isHeld {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiting.append(continuation)
+        }
+    }
+
+    /// Clears the statics and hands the gate to the next waiting test (it stays held across the handoff).
+    static func release() {
+        ChatDiagnostics.driver = nil
+        ChatDiagnostics.counters = nil
+        if waiting.isEmpty {
+            isHeld = false
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
+}
 #endif

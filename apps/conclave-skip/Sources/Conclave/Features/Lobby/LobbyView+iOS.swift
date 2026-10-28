@@ -7,7 +7,8 @@ import SwiftUI
 // the card is never a lazy cell (F00 P5). Each leaf reads one of the six lobby snapshots: the card `lobbyMedia`, the
 // bottom block `lobbyStatus`, the subtitle `lobbyPresence`, the identity rows `lobbyIdentity`, the link row
 // `lobbyLink`, the audio rows `lobbyAudio` (S10 0.5, 6 k). No glass besides what the system draws for the navigation
-// bar and the bottom bar container (S10 6 c "Glass", R9). Intent goes to the core through the presenter (D14).
+// bar. The bottom action area is opaque so scrolling form text cannot overlap its labels. Intent goes to the core
+// through the presenter (D14).
 // ENT-4 (S10 7): the permission priming rows under the card come from `PermissionPrimingSection`.
 
 struct LobbyView: View {
@@ -15,11 +16,11 @@ struct LobbyView: View {
     let premeeting: PremeetingPresenter
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    @State private var visibleHeight: CGFloat = 667
+    @State private var viewportSize = CGSize(width: 390, height: 667)
 
-    /// Size classes only (IOS 3.2): the card beside the controls on regular width or compact height.
+    /// A compact height alone does not guarantee room for a preview beside the form in a narrow window.
     private var isWide: Bool {
-        horizontalSizeClass == .regular || verticalSizeClass == .compact
+        viewportSize.width >= 640 && (horizontalSizeClass == .regular || verticalSizeClass == .compact)
     }
 
     var body: some View {
@@ -29,7 +30,7 @@ struct LobbyView: View {
             : AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
         ScrollView {
             layout {
-                LobbyPreviewCard(premeeting: premeeting, isWide: isWide, visibleHeight: visibleHeight)
+                LobbyPreviewCard(premeeting: premeeting, isWide: isWide, visibleHeight: viewportSize.height)
                     .frame(maxWidth: isWide ? 560 : .infinity)
                     .padding(.horizontal, isWide ? 0 : 16)
                 LobbyControlsColumn(premeeting: premeeting)
@@ -40,7 +41,7 @@ struct LobbyView: View {
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .scrollDismissesKeyboard(.interactively)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { visibleHeight = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { viewportSize = $0 }
         .modifier(LobbyBottomBar(premeeting: premeeting, routeId: route.id))
         .modifier(LobbyTitle(premeeting: premeeting, route: route))
         .modifier(LobbyChrome(premeeting: premeeting, routeId: route.id))
@@ -282,15 +283,12 @@ private struct LobbyBottomBar: ViewModifier {
     let routeId: Int
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.safeAreaBar(edge: .bottom) {
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
                 EntryStatusBlock(premeeting: premeeting, routeId: routeId)
             }
-        } else {
-            content.safeAreaInset(edge: .bottom, spacing: 0) {
-                EntryStatusBlock(premeeting: premeeting, routeId: routeId)
-                    .background(Color(uiColor: .systemGroupedBackground))
-            }
+            .background(Color(uiColor: .systemGroupedBackground))
         }
     }
 }
@@ -333,9 +331,12 @@ private struct LobbyTitle: ViewModifier {
     func body(content: Content) -> some View {
         let status = premeeting.lobbyStatus?.routeId == route.id ? premeeting.lobbyStatus : nil
         // S10 6 g (RECONCILE R30): the promotion lobby's title is "Join as a Speaker".
+        let roomLabel = premeeting.lobbyLink?.roomLabel ?? route.roomId
+        let isNewMeeting = status?.intent == LobbyIntent.newMeeting
         let title = status?.intent == LobbyIntent.promotion ? ConclaveStrings.text("Join as a Speaker")
-            : (premeeting.lobbyLink?.roomLabel ?? route.roomId)
-        let subtitle = EntryStatusCopy.subtitle(status: status, presence: premeeting.lobbyPresence)
+            : (isNewMeeting ? ConclaveStrings.text("New Meeting") : roomLabel)
+        let subtitle = isNewMeeting && status?.mode == .editing ? roomLabel
+            : EntryStatusCopy.subtitle(status: status, presence: premeeting.lobbyPresence)
         if #available(iOS 26.0, *) {
             content
                 .navigationTitle(title)

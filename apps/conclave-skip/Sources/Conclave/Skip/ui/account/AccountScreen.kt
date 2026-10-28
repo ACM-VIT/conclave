@@ -69,7 +69,7 @@ import androidx.compose.ui.unit.dp
 
 /*
  * ENT-7 (S10 5 d): Account on Android, a pushed page (`AccountKey`) in the premeeting NavDisplay, handwritten Compose
- * Material 3 in the system appearance (predictive back pops it; a ModalBottomSheet would open its own window). Signed
+ * Material 3 in the system appearance (predictive back pops it; a modal bottom sheet would open its own window). Signed
  * in: the profile, Sign out, Privacy policy and the error-colored Delete account with its AlertDialog. Signed out: the
  * value line, Continue with Google (Credential Manager's system sheet) with the Apple-account footnote (Q10), the
  * guest name and Privacy policy. Observes `account.snapshot` only. No coral fill: the Google row is neutral; text rows

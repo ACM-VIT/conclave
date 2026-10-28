@@ -3,7 +3,7 @@ package conclave.module
 /*
  * ENT-3 (S10 0.6 L12, 6 k): plain Kotlin values for the lobby composables, built once per snapshot change and reused
  * while the snapshot is equal (S1C 3.5), so the card and the bottom bar take Kotlin data classes, never the transpiled
- * Swift structs. No @Immutable or @Stable claims (R14): equality and instance reuse do the work.
+ * Swift structs. No Compose stability annotations (R14): equality and instance reuse do the work.
  */
 
 internal data class LobbyCardUi(

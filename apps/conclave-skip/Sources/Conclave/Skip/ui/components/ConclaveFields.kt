@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -193,7 +195,7 @@ private class ConclaveCounterBandMemory(var band: ConclaveCounterBand)
 
 /**
  * The composer field row: an optional [attach] control (an IconButton opening a DropdownMenu, the screen's) centred on
- * the field's one-line height, then a TextField growing to six lines with the Send glyph as its trailing icon (enabled
+ * the field's one-line height, then a TextField growing to six lines with Send in its bottom trailing band (enabled
  * only when [sendEnabled]; while disabled, [sendDisabledReason] is its state description, S40 6 i). IME Send sends
  * only when [sendEnabled] (Q13). Hardware keys go through conclaveComposerKey: [onHardwareKey] first (the screen's
  * suggestion keys), then Enter and NumPadEnter send once per press and Shift+Enter adds a newline. [sendLabel]
@@ -212,21 +214,26 @@ internal fun ConclaveComposerField(
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ConclaveComposerMetrics.clusterSpacing.dp),
         verticalAlignment = Alignment.Bottom) {
         if (attach != null) ConclaveComposerAttachSlot(attach)
-        TextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.weight(1f).then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
-                conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
-            },
-            enabled = enabled,
-            placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
-            trailingIcon = { ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason) },
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { if (sendEnabled) onSend() }),
-            maxLines = 6,
-            shape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp),
-            colors = conclaveComposerColors(),
-        )
+        Box(Modifier.weight(1f)) {
+            TextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.fillMaxWidth().then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
+                    conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
+                },
+                enabled = enabled,
+                placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
+                trailingIcon = { Spacer(Modifier.size(48.dp)) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { if (sendEnabled) onSend() }),
+                maxLines = 6,
+                shape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp),
+                colors = conclaveComposerColors(),
+            )
+            ConclaveComposerSendSlot(Modifier.align(Alignment.BottomEnd)) {
+                ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason)
+            }
+        }
     }
 }
 
@@ -247,20 +254,25 @@ internal fun ConclaveComposerField(
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ConclaveComposerMetrics.clusterSpacing.dp),
         verticalAlignment = Alignment.Bottom) {
         if (attach != null) ConclaveComposerAttachSlot(attach)
-        TextField(
-            state = state,
-            modifier = Modifier.weight(1f).then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
-                conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
-            },
-            enabled = enabled,
-            placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
-            trailingIcon = { ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason) },
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-            onKeyboardAction = conclaveComposerImeSend(sendEnabled, onSendBlocked, onSend),
-            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
-            shape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp),
-            colors = conclaveComposerColors(),
-        )
+        Box(Modifier.weight(1f)) {
+            TextField(
+                state = state,
+                modifier = Modifier.fillMaxWidth().then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
+                    conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
+                },
+                enabled = enabled,
+                placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
+                trailingIcon = { Spacer(Modifier.size(48.dp)) },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+                onKeyboardAction = conclaveComposerImeSend(sendEnabled, onSendBlocked, onSend),
+                lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+                shape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp),
+                colors = conclaveComposerColors(),
+            )
+            ConclaveComposerSendSlot(Modifier.align(Alignment.BottomEnd)) {
+                ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason)
+            }
+        }
     }
 }
 
@@ -307,6 +319,15 @@ private fun ConclaveComposerAttachSlot(attach: @Composable () -> Unit) {
     }
 }
 
+/** Keep Send level with the attach control as the field grows. The native trailing slot above reserves text
+ *  space without centring the action halfway up a multiline draft. End alignment also follows RTL. */
+@Composable
+private fun ConclaveComposerSendSlot(modifier: Modifier, send: @Composable () -> Unit) {
+    Box(modifier.width(48.dp).heightIn(min = TextFieldDefaults.MinHeight), contentAlignment = Alignment.Center) {
+        send()
+    }
+}
+
 /** Send: the glyph in primary while enabled and onSurface at the disabled opacity otherwise (auto-mirrored in RTL);
  *  the disabled reason is its state description, so TalkBack never hears a bare disabled Send. */
 @Composable
@@ -341,17 +362,19 @@ private fun conclaveComposerColors(): TextFieldColors {
 
 /**
  * The composer column (S40 6 d): [accessories] above the field row (suggestions, reply bar, attachment chip, link
- * preview, mode row, notice line), the [field] row, then the [footer] (the counter). 16 by 8 padding, 8 between
- * rows; rows appear without animation (S40 6 h).
+ * preview, mode row, notice line), the [field] row, then the [footer] (the counter). Default 16 by 8 [contentPadding],
+ * which a page that already owns the gutter can override; 8 between rows, without animation (S40 6 h).
  */
 @Composable
 internal fun ConclaveComposerStack(
     identifier: String, modifier: Modifier = Modifier, accessories: @Composable ColumnScope.() -> Unit = {},
-    footer: @Composable ColumnScope.() -> Unit = {}, field: @Composable () -> Unit,
+    footer: @Composable ColumnScope.() -> Unit = {},
+    contentPadding: PaddingValues = PaddingValues(horizontal = ConclaveComposerMetrics.stackHorizontalPadding.dp,
+        vertical = ConclaveComposerMetrics.stackVerticalPadding.dp),
+    field: @Composable () -> Unit,
 ) {
     Column(
-        modifier.fillMaxWidth().testTag(identifier).padding(
-            horizontal = ConclaveComposerMetrics.stackHorizontalPadding.dp, vertical = ConclaveComposerMetrics.stackVerticalPadding.dp),
+        modifier.fillMaxWidth().testTag(identifier).padding(contentPadding),
         verticalArrangement = Arrangement.spacedBy(ConclaveComposerMetrics.stackSpacing.dp),
         horizontalAlignment = Alignment.End,
     ) {

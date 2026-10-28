@@ -155,9 +155,15 @@ private struct CameraOffFace: View {
         ZStack {
             HostingTheme.token(DesignTokens.iosInCallTile)
             if model.isVoiceAgent {
+                // A glyph, not text: it fills half the avatar circle like the Android 0.5 icon box, so it follows the
+                // slot density (tile avatars do not scale with text) without a point-size font.
                 Image(systemName: ConclaveSymbols.waveform)
-                    .font(.system(size: CGFloat(TileChromePolicy.avatarSize(density)) * 0.5, weight: .semibold))
+                    .resizable()
+                    .scaledToFit()
+                    .fontWeight(.semibold)
                     .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    .frame(width: CGFloat(TileChromePolicy.avatarSize(density)) * 0.5,
+                           height: CGFloat(TileChromePolicy.avatarSize(density)) * 0.5)
                     .frame(width: CGFloat(TileChromePolicy.avatarSize(density)), height: CGFloat(TileChromePolicy.avatarSize(density)))
                     .background(HostingTheme.inCallLabelScrim, in: Circle())
                     .accessibilityHidden(true)

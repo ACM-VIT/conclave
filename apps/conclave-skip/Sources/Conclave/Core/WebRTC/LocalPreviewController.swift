@@ -20,7 +20,7 @@ import AVFoundation
 // STG-3 (S20 SC8, S60 C6-2, S20 6 f): the controller is also the one owner of the camera facing and of the call
 // camera's system pause. The call's camera reports its facing after a flip or a start (`adoptCallFacing(_:)`) and its
 // interruptions (`noteCallCameraInterruption(_:)`, iOS from the capture session notifications here, Android from the
-// WebRTC client's camera events); `onCallCameraChange` tells the core, which mirrors both into `MeetingState` once so
+// WebRTC client's camera events); `onCallCameraChange` tells the core, which mirrors both into the meeting state once so
 // the stage's mirror, its flip value, the "Camera paused" caption and the Settings facing control change in one publish.
 // None of this starts, stops or restarts a capture while the latch is closed.
 //
@@ -42,7 +42,7 @@ final class LocalPreviewController {
     /// premeeting presenter).
     var onChange: (() -> Void)? = nil
     /// STG-3: called on the main actor after the facing or the call camera's pause changes (the core mirrors both into
-    /// `MeetingState`, S20 SC8, S60 C6-2).
+    /// the meeting state, S20 SC8, S60 C6-2).
     var onCallCameraChange: (() -> Void)? = nil
     /// SET-3: called on the main actor after every publish, for the Settings presenter's preview card.
     var onScopedPreviewChange: (() -> Void)? = nil

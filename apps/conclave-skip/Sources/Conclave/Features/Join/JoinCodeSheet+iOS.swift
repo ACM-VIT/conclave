@@ -1,7 +1,8 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-/// ENT-2 (S10 3): join by code or link, a commit-flow sheet (Cancel leading, one confirm trailing). Medium detent with
+/// ENT-2: join by code or link, with Cancel in the navigation bar and one full-width confirmation below the form.
+/// Medium detent with
 /// the drag indicator, promoted to large when the field takes focus; no autofocus (the system PasteButton is the
 /// fast path for a copied link and never shows the paste prompt). Keystrokes stay in view state (F00 C19 k): the
 /// presenter only sees the submit, and pushes the lobby from `joinSheetDidDismiss()` after the sheet is gone.
@@ -48,6 +49,8 @@ struct JoinCodeSheet: View {
                         showsInvalid = EntryPolicies.showsInvalidJoinInput(input)
                     }
                     .accessibilityIdentifier("join.paste")
+                } header: {
+                    Text(ConclaveStrings.text("Meeting Code or Link"))
                 } footer: {
                     JoinCodeFooter(showsInvalid: showsInvalid)
                 }
@@ -59,6 +62,7 @@ struct JoinCodeSheet: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(ConclaveStrings.text("Join Meeting"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -66,9 +70,14 @@ struct JoinCodeSheet: View {
                     Button(ConclaveStrings.text("Cancel"), role: .cancel) { premeeting.dismissJoinSheet() }
                         .accessibilityIdentifier("join.cancel")
                 }
-                ToolbarItem(placement: .confirmationAction) {
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider()
                     JoinConfirmButton(isValid: isValid, action: submit)
+                        .padding(16)
                 }
+                .background(Color(uiColor: .systemGroupedBackground))
             }
         }
         .presentationDetents([.medium, .large], selection: $detent)
@@ -107,30 +116,23 @@ private struct JoinCodeFooter: View {
     }
 }
 
-/// S10 3 c confirm button: on iOS 26 the C01 prominent fill with the onCoral label and the 0.4 disabled opacity; on
-/// iOS 17 to 25 the system confirmation text button tinted coralText (the onCoral ink would sit on the dark sheet
-/// bar and the plain coral tint fails 4.5:1 on white, R03).
+/// The only primary action stays above the keyboard, with the same filled treatment on every supported iOS version.
 private struct JoinConfirmButton: View {
     let isValid: Bool
     let action: () -> Void
 
     var body: some View {
-        if #available(iOS 26.0, *) {
-            Button(action: action) {
-                Text(ConclaveStrings.text("Join"))
-                    .foregroundStyle(HostingTheme.onCoral)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(HostingTheme.coralFill)
-            .opacity(isValid ? 1 : HostingTheme.disabledOpacity)
-            .disabled(!isValid)
-            .accessibilityIdentifier("join.confirm")
-        } else {
-            Button(ConclaveStrings.text("Join"), action: action)
-                .tint(HostingTheme.coralText)
-                .disabled(!isValid)
-                .accessibilityIdentifier("join.confirm")
+        Button(action: action) {
+            Text(ConclaveStrings.text("Join"))
+                .foregroundStyle(HostingTheme.onCoral)
+                .frame(maxWidth: .infinity, minHeight: 28)
         }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .tint(HostingTheme.coralFill)
+        .opacity(isValid ? 1 : HostingTheme.disabledOpacity)
+        .disabled(!isValid)
+        .accessibilityIdentifier("join.confirm")
     }
 }
 #endif

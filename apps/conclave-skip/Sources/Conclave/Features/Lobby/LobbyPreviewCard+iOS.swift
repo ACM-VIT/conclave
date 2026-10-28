@@ -11,17 +11,19 @@ import SwiftUI
 
 struct LobbyPreviewCard: View {
     let premeeting: PremeetingPresenter
-    /// 16:9 beside the controls (regular width or compact height), else 3:4 (S10 6 c).
+    /// A compact preview leaves the identity and audio controls within reach before joining.
     let isWide: Bool
-    /// The visible height of the screen; the 3:4 video clamps to [200, 0.52 x visible height].
+    /// The visible height bounds the preview at ordinary text sizes; accessibility text can expand it.
     let visibleHeight: CGFloat
     @State private var cardWidth: CGFloat = 0
+    @ScaledMetric(relativeTo: .body) private var minimumVideoHeight: CGFloat = 200
 
-    private var videoHeight: CGFloat {
-        let ratio: CGFloat = isWide ? 9.0 / 16.0 : 4.0 / 3.0
+    private func videoHeight(needsPermissionSpace: Bool) -> CGFloat {
+        let minimum = minimumVideoHeight * (needsPermissionSpace ? 1.4 : 1)
+        let ratio: CGFloat = isWide ? 9.0 / 16.0 : 10.0 / 16.0
         let natural = max(cardWidth, 1) * ratio
-        let upper = max(200, visibleHeight * 0.52)
-        return min(max(natural, 200), upper)
+        let upper = max(minimum, visibleHeight * 0.40)
+        return min(max(natural, minimum), upper)
     }
 
     var body: some View {
@@ -29,7 +31,7 @@ struct LobbyPreviewCard: View {
             VStack(spacing: 0) {
                 LobbyPreviewVideo(media: media, premeeting: premeeting)
                     .frame(maxWidth: .infinity)
-                    .frame(height: videoHeight)
+                    .frame(height: videoHeight(needsPermissionSpace: media.preview == .blocked))
                     .background(HostingTheme.token(DesignTokens.iosInCallTile))
                 LobbyToggleStrip(media: media, premeeting: premeeting)
                     .padding(.vertical, 12)

@@ -310,7 +310,9 @@ struct PPL4HostControlsTests {
         #expect(ios.contains(".confirmationDialog(ConclaveStrings.text(\"End Call for Everyone?\")"))
         #expect(!ios.contains(".tint("))
         let rows = try ppl4Source("Sources/Conclave/Features/Meeting/Host/HostRows+iOS.swift")
-        #expect(rows.contains("row.isPending ? row.requestedOn : row.isOn") || rows.contains("row.shownOn"))
+        // PL4: the Toggle binds to `shownOn`; B5-T1's getter re-reads the live snapshot row instead of a captured `row`.
+        #expect(rows.contains("row.isPending ? row.requestedOn : row.isOn") || rows.contains("row.shownOn")
+            || rows.contains("Binding(get: { people.host.snapshot.policy(policy)?.shownOn ?? false }"))
         let participants = try ppl4Source("Sources/Conclave/Features/Meeting/People/ParticipantsPanel+iOS.swift")
         #expect(participants.contains("HostPageView(people: people, page: page, link: { $0 })"))
         let kotlinRows = try ppl4Source("Sources/Conclave/Skip/ui/host/HostRows.kt")

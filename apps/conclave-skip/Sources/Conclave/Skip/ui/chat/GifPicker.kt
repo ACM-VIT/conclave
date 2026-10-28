@@ -63,7 +63,7 @@ import kotlinx.coroutines.launch
  * v1 tip (F00 C25). The content owns the 250 ms debounce and the generation guard through the shared
  * ChatGifPickerState; every request goes through `presenter.searchGifs` and is cancelled by a newer query, a kind
  * switch or closing the picker. A tile sends at once with the current reply and closes the picker. The native path no
- * longer uses FlexibleGifPickerSheetHost.
+ * longer uses the legacy chat view's GIF sheet host.
  */
 
 @OptIn(ExperimentalMaterial3Api::class)

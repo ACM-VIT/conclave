@@ -309,6 +309,7 @@ internal fun TranscriptAskComposer(presenter: TranscriptPresenter, snapshot: Tra
     val canSend = AskRowPolicy.canSend(page.askDraft, canAsk = snapshot.canAsk, phase = snapshot.phase, link = snapshot.link)
     ConclaveComposerStack(
         identifier = "transcript.ask.composer",
+        contentPadding = PaddingValues(0.dp),
         accessories = {
             ConclaveComposerStatusLine(text = conclaveString("trn_ask_private"), identifier = "transcript.ask.private")
         },

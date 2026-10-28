@@ -25,6 +25,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,10 +37,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 /*
  * S40 2 d (CHT-1): the timeline, a reversed LazyColumn (newest at index 0, at the bottom) keyed by row id with the
- * row kind as content type; the cache reverses the presenter's ids once per revision. A new row follows only while
+ * row kind as content type; short conversations align at the top and read oldest to newest. The cache reverses the
+ * presenter's ids once per revision. A new row follows only while
  * at the bottom (captured before the insert) or for your own send; otherwise remote messages count into the jump
  * pill. Rows read only their own entry, so a reaction or delivery write recomposes one item. No timers in the list
  * (the 900 ms highlight is one effect keyed by the focus request).
@@ -64,16 +67,39 @@ internal fun ChatTimeline(
     var unseen by remember { mutableIntStateOf(0) }
     var highlightId by remember { mutableStateOf("") }
     val atBottom by remember {
-        derivedStateOf { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 48 }
+        derivedStateOf { !listState.canScrollBackward ||
+            (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 48) }
     }
     var wasAtBottom by remember { mutableStateOf(true) }
     var jumpRequests by remember { mutableIntStateOf(0) }
+    var initialPositioned by remember { mutableStateOf(false) }
+    val placement = remember { ChatTimelinePlacement() }
     LaunchedEffect(atBottom) {
         wasAtBottom = atBottom
         if (atBottom) unseen = 0
     }
     val snapshot = reversed.snapshot
-    LaunchedEffect(snapshot.newestId) {
+    LaunchedEffect(Unit) {
+        // Opening is one request, so unread history cannot race a focus destination or an animated newest scroll.
+        placement.focusRequest = snapshot.focusRequest
+        placement.newestId = snapshot.newestId
+        val target = ChatTimelinePolicy.initialTarget(focusId = snapshot.focusId,
+            firstUnreadId = snapshot.firstUnreadId, newestId = snapshot.newestId)
+        // In a reversed list offset zero puts this divider at the bottom, hiding the unread row below it.
+        // Use the measured viewport to keep the divider near the upper third and the first unread in view.
+        val offset = if (target == "unread") {
+            val layout = snapshotFlow { listState.layoutInfo }
+                .first { it.viewportEndOffset > it.viewportStartOffset }
+            -(layout.viewportEndOffset - layout.viewportStartOffset) * 2 / 3
+        } else 0
+        // Arrivals before the first layout can move the reversed index without changing the destination.
+        val index = cache.current().ids.indexOf(target)
+        if (index >= 0) listState.scrollToItem(index, offset)
+        initialPositioned = true
+    }
+    LaunchedEffect(snapshot.newestId, initialPositioned) {
+        if (!initialPositioned || snapshot.newestId == placement.newestId) return@LaunchedEffect
+        placement.newestId = snapshot.newestId
         if (snapshot.newestId.isEmpty()) return@LaunchedEffect
         if (wasAtBottom || snapshot.newestIsOwn) {
             if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
@@ -81,46 +107,47 @@ internal fun ChatTimeline(
             unseen += 1
         }
     }
-    LaunchedEffect(snapshot.focusRequest) {
+    LaunchedEffect(snapshot.focusRequest, initialPositioned) {
         val focus = snapshot.focusId
-        if (focus.isEmpty()) return@LaunchedEffect
-        val index = reversed.ids.indexOf(focus)
-        if (index < 0) return@LaunchedEffect
-        if (reduceMotion) listState.scrollToItem(index) else listState.animateScrollToItem(index)
+        if (!initialPositioned || focus.isEmpty() || focus !in reversed.ids) return@LaunchedEffect
+        // New messages do not cancel an in-progress destination scroll or its highlight lifetime.
+        if (snapshot.focusRequest != placement.focusRequest) {
+            placement.focusRequest = snapshot.focusRequest
+            val index = reversed.ids.indexOf(focus)
+            if (reduceMotion) listState.scrollToItem(index) else listState.animateScrollToItem(index)
+        }
         highlightId = focus
         delay(900)
         if (highlightId == focus) highlightId = ""
     }
-    LaunchedEffect(Unit) {
-        // Open position (2 c): the unread divider when there is one; else the reversed list starts at the newest.
-        val unreadIndex = reversed.ids.indexOf("unread")
-        if (unreadIndex > 0) listState.scrollToItem(unreadIndex)
-    }
     // T3 borrow P8 (2 d composer focus): read inside its own scope, so a focus gain recomposes no list or row.
     ChatComposerFocusFollow(listState, reduceMotion) { actions.composerFocusRevision }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val maxBubble = maxWidth * ConclaveBubbleGeometry.maxWidthFraction.toFloat()
-        LazyColumn(
-            state = listState,
-            reverseLayout = true,
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp + reservation.calculateTopPadding(),
-                bottom = 12.dp + reservation.calculateBottomPadding()),
-            modifier = Modifier.fillMaxSize().imeNestedScroll().testTag("chat.timeline")
-                .semantics { collectionInfo = CollectionInfo(reversed.ids.size, 1) },
-        ) {
-            items(count = reversed.ids.size, key = { reversed.ids[it] }, contentType = { reversed.kinds[it] }) { index ->
-                val rowId = reversed.ids[index]
-                ChatRow(presenter.rows.entry(rowId), actions, sidePane, maxBubble, highlightId == rowId)
+    Column(Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val maxBubble = maxWidth * ConclaveBubbleGeometry.maxWidthFraction.toFloat()
+            LazyColumn(
+                state = listState,
+                reverseLayout = true,
+                verticalArrangement = Arrangement.Top,
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp + reservation.calculateTopPadding(),
+                    bottom = 12.dp + reservation.calculateBottomPadding()),
+                modifier = Modifier.fillMaxSize().imeNestedScroll().testTag("chat.timeline")
+                    .semantics { collectionInfo = CollectionInfo(reversed.ids.size, 1) },
+            ) {
+                items(count = reversed.ids.size, key = { reversed.ids[it] }, contentType = { reversed.kinds[it] }) { index ->
+                    val rowId = reversed.ids[index]
+                    ChatRow(presenter.rows.entry(rowId), actions, sidePane, maxBubble, highlightId == rowId)
+                }
             }
         }
-        if (!atBottom) {
+        if (initialPositioned && !atBottom) {
             FilledTonalButton(
                 onClick = {
                     unseen = 0
                     jumpRequests += 1
                 },
                 contentPadding = PaddingValues(horizontal = 16.dp),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp).testTag("chat.jumpPill"),
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp).testTag("chat.jumpPill"),
             ) {
                 // The scroll_to_latest glyph is a pending icon concept (R40-5); text only until it lands.
                 val label = if (unseen > 0) conclavePlural("chat_jump_new", unseen, unseen) else conclaveString("chat_jump_latest")
@@ -134,6 +161,12 @@ internal fun ChatTimeline(
             if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
         }
     }
+}
+
+/** Effect bookkeeping does not invalidate the list or its rows. */
+private class ChatTimelinePlacement {
+    var newestId = ""
+    var focusRequest = 0
 }
 
 /**

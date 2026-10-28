@@ -126,9 +126,16 @@ struct TypographyHapticsGalleryContractsTests {
             scanned += 1
             for pattern in forbidden { #expect(!text.contains(pattern), "\(file) uses \(pattern)") }
         }
+        // B6-T4 R3 (S40 4 d, CHT-7): the theme's one monospaced() helper selects the system monospace face for code
+        // in assistant answers; it is the only family a Kotlin UI file may name, and it is never a bundled font.
+        let monospaceHelper = "internal fun TextStyle.monospaced(): TextStyle = copy(fontFamily = FontFamily.Monospace)"
         for file in try sourceFiles(under: "Sources/Conclave/Skip/ui", extensions: ["kt"])
             where !file.contains("/Skip/ui/icons/") {
-            let text = try source(file)
+            var text = try source(file)
+            if file.hasSuffix("/Skip/ui/theme/ConclaveTypography.kt") {
+                #expect(text.components(separatedBy: monospaceHelper).count - 1 == 1, "the monospace helper is declared once")
+                text = text.replacingOccurrences(of: monospaceHelper, with: "")
+            }
             scanned += 1
             for pattern in forbidden + ["fontFamily ="] { #expect(!text.contains(pattern), "\(file) uses \(pattern)") }
             // Only the raster fixture may override density; production UI never does.
@@ -599,7 +606,8 @@ struct TypographyHapticsGalleryContractsTests {
         }
         for label in iosLabels { #expect(isTitleCase(label), "iOS label is not title case: \(label)") }
         // Android: every string resource, and every literal control label in the hosting root.
-        var androidLabels = try androidStrings().values.map { $0 }
+        // Resource values are XML text: "Q&amp;A" shows as "Q&A".
+        var androidLabels = try androidStrings().values.map { xmlUnescaped($0) }
         let root = try source("Sources/Conclave/Skip/ui/AppRoot.kt")
         // Material uses sentence case for all text, so every literal in the root counts.
         androidLabels += regexMatches(#"Text\(\s*"([^"\\$]+)""#, in: root).map { $0[0] }
@@ -608,6 +616,10 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(isTitleCase("Simulate Background or PiP") && !isTitleCase("Icon gallery"))
         #expect(isSentenceCase("Simulate background or PiP") && !isSentenceCase("Show Details"))
         #expect(isSentenceCase("left to right") && isSentenceCase("Appendix C %1$.3f") && !isSentenceCase("Live, In call"))
+        // A middle dot joins two phrases, each in sentence case; a quoted name passes only as the whole phrase.
+        #expect(isSentenceCase("Round %1$d of %2$d \u{00B7} Guess the word") && !isSentenceCase("Round 1 \u{00B7} Guess The word"))
+        #expect(isSentenceCase("Allow access in Settings") && !isSentenceCase("Open Settings now") && !isSentenceCase("Tap to Mute"))
+        #expect(isSentenceCase("Only http and https URLs are supported.") && isSentenceCase("This Wi-Fi network needs you to sign in."))
     }
 
     // MARK: Q14, system bars and icon dispositions
@@ -1033,7 +1045,15 @@ struct TypographyHapticsGalleryContractsTests {
             holders.append(file)
         }
         // FND-3: the composer cluster reads the same Debug key (F00 C19 c: the Debug force shows the opaque field).
-        #expect(holders == [Self.callControlFile, Self.composerGlassFile, galleryFile].sorted())
+        // B4-T6 (CTL-1): the call control cell's surface body reads it too, so its press dimming follows the fill the
+        // surface draws (opaque renderings dim, glass does not).
+        let cellFile = "Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift"
+        #expect(holders == [Self.callControlFile, Self.composerGlassFile, galleryFile, cellFile].sorted())
+        let cell = try source(cellFile)
+        let cellRelease = withoutDebugBlocks(cell)
+        for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!cellRelease.contains(name), "\(name) in the cell Release") }
+        #expect(normalized(cell).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 1)
+        #expect(!cell.contains(".environment(\\.\(key)"))
         // Outside #if DEBUG the entries never name the key; Release reads a constant false in the surface and the bar.
         let text = try source(Self.callControlFile)
         let release = withoutDebugBlocks(text)
@@ -1139,7 +1159,8 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(prominent.count - 1 == 1)
         if prominent.count == 2 {
             #expect(normalized(String(prominent[0].suffix(300))).contains("spinnerTint: HostingTheme.onCoral) .foregroundStyle(HostingTheme.onCoral) }"))
-            #expect(normalized(String(prominent[1].prefix(200))).hasPrefix(" .tint(HostingTheme.coralFill) .controlSize(.large) .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)"))
+            // normalized() drops leading whitespace, so the style's next modifier opens the normalized text.
+            #expect(normalized(String(prominent[1].prefix(200))).hasPrefix(".tint(HostingTheme.coralFill) .controlSize(.large) .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)"))
         }
         #expect(normalized(buttons).contains("content.accessibilityValue(ConclaveStrings.text(\"In Progress\"))"))
         // R06: the switch row is the untinted native Toggle.
@@ -1266,13 +1287,33 @@ private let properNouns: Set<String> = ["Android", "iOS", "PiP", "TalkBack", "JS
                                         // Batch 7 (TRN-2 key and coverage copy): provider names and the possessive.
                                         "OpenAI", "Sarvam", "Conclave\u{2019}s",
                                         // Batch 8 (ACT-5 chess copy): the side names.
-                                        "White", "Black"]
+                                        "White", "Black",
+                                        // Verify round 4 (S20 captive portal banner, S60 shared browser error): a
+                                        // trademark and an acronym plural.
+                                        "Wi-Fi", "URLs"]
+
+/// Names of a control, tab, page or system setting that the spec copy quotes with the capitals the name shows
+/// (Q13 as the specs apply it: "in Settings" in S10, S20, S30 and S70; "in Layout", "Data Saver" and "Ask and
+/// Minutes" in S60; "Mute and Hang up" in S20, S60 and S70; "Switch to Everyone" in S40; "Sleep mode" in the legacy
+/// JoinView banner). Each passes only as the whole phrase, so its words stay ordinary everywhere else.
+private let quotedNames: [String] = ["in Settings", "Data Saver", "Sleep mode", "Mute and Hang up", "in Layout",
+                                     "Switch to Everyone", "Ask and Minutes"]
 
 /// Material sentence case: each sentence starts with a capital, a digit or a format argument, and later words
 /// are lowercase unless they are proper nouns or acronyms. A fragment that is substituted into a sentence may
-/// be all lowercase.
+/// be all lowercase. A middle dot separates two phrases the way a full stop separates sentences.
 private func isSentenceCase(_ label: String) -> Bool {
-    for sentence in label.components(separatedBy: ". ") {
+    var text = label
+    for name in quotedNames {
+        // The quoted name's capitalized words read as acronyms; its lowercase words and its position stay as written.
+        let masked = name.components(separatedBy: " ").map { word -> String in
+            guard let initial = word.unicodeScalars.first, CharacterSet.uppercaseLetters.contains(initial) else { return word }
+            return word.uppercased()
+        }
+        text = text.replacingOccurrences(of: name, with: masked.joined(separator: " "))
+    }
+    text = text.replacingOccurrences(of: " \u{00B7} ", with: ". ")
+    for sentence in text.components(separatedBy: ". ") {
         let words = sentence.components(separatedBy: CharacterSet(charactersIn: " ,:;()/")).filter { !$0.isEmpty }
         guard let firstWord = words.first, let first = firstWord.unicodeScalars.first else { continue }
         let fragment = words.allSatisfy { word in
@@ -1306,6 +1347,13 @@ private func androidPlurals() throws -> [String: [String: String]] {
         result[match[0]] = forms
     }
     return result
+}
+
+/// The displayed text of an XML resource value (the five predefined entities; `&amp;` last, so "&amp;lt;" stays "&lt;").
+private func xmlUnescaped(_ value: String) -> String {
+    value.replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">")
+        .replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&apos;", with: "'")
+        .replacingOccurrences(of: "&amp;", with: "&")
 }
 
 /// The app module's string resources, name to value.

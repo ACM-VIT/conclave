@@ -234,7 +234,9 @@ struct SelfViewMoveTitles: Equatable {
 
 enum SelfViewSnapPolicy {
     /// S20 6 c: width = clamp(0.28 x short edge, 96, 132) on phones, 160 on regular width; height = width x 4 / 3.
-    static let phoneWidthRatio = 0.28
+    /// Held as a percent: 0.28 has no exact binary value, so `375 * 0.28` lands one ulp above 105 and the 4 / 3 height
+    /// above 140, while `375 * 28 / 100` is exact (whole points stay whole, 360 still gives 100.8).
+    static let phoneWidthPercent = 28.0
     static let phoneMinimumWidth = 96.0
     static let phoneMaximumWidth = 132.0
     static let regularWidth = 160.0
@@ -257,7 +259,7 @@ enum SelfViewSnapPolicy {
     static func floatingWidth(_ viewport: StageViewport) -> Double {
         if StageLayoutPolicy.usesRegularSpacing(viewport) { return regularWidth }
         let shortEdge = min(viewport.width, viewport.height)
-        return min(phoneMaximumWidth, max(phoneMinimumWidth, shortEdge * phoneWidthRatio))
+        return min(phoneMaximumWidth, max(phoneMinimumWidth, shortEdge * phoneWidthPercent / 100.0))
     }
 
     static func floatingHeight(_ viewport: StageViewport) -> Double {

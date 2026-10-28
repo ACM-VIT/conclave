@@ -4,7 +4,8 @@ import UIKit
 /// WP1-H1b imperative player for the legacy route (TG 3.5): cached, prepared generators, gated at delivery on the
 /// `conclave.pref.haptics` preference (`ConclaveFeedback.isEnabled`) and on an active app
 /// (`UIApplication.shared.applicationState == .active`). It maps through `ConclaveHapticFeedback.iosLegacyHaptic`
-/// (contract tokens, never `SensoryFeedback` equality, which does not tell impact weights apart on iOS 27.1).
+/// (contract tokens, never equality on the SwiftUI sensory feedback values, which does not tell impact weights apart
+/// on iOS 27.1).
 /// iOS 17.5 and later attach each generator to the key window's root view (`init(style:view:)`, `init(view:)`);
 /// iOS 17.0 to 17.4 use the view-less initializers.
 @MainActor

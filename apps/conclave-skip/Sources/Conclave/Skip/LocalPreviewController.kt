@@ -31,7 +31,7 @@ import skip.ui.UIApplication
  * STG-3 (S20 SC8, S60 C6-2, S20 6 f): the same members as the Swift file for the one camera facing and the call camera's
  * system pause. The call's camera reports its facing after a flip or a start (adoptCallFacing) and the WebRTC client's
  * camera events report the pause (noteCallCameraInterruption and noteCallCameraResumed, from any thread; they hop to
- * the main thread here). onCallCameraChange tells the core, which mirrors both into MeetingState once. None of this
+ * the main thread here). onCallCameraChange tells the core, which mirrors both into the meeting state once. None of this
  * starts, stops or restarts a capture while the latch is closed.
  *
  * SET-3 (S60 0.8 C6-8, L6-3, 1 f, 1 l11, 1 l12; RECONCILE R22): the same scoped Settings preview members as the Swift

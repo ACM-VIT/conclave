@@ -55,7 +55,8 @@ struct SET4VoicePagesTests {
     @Test func previewCountsPerTapNeverOnOpenAndIsCallOnly() {
         let (presenter, core) = Self.make(.voiceUnavailable)
         presenter.panelDidOpen()
-        #expect(presenter.voicePreviewCount == 0 && core.calls.isEmpty)
+        // Opening sends no voice command; the only call is the SET-3 mirror sync to the preview owner (B7-T3).
+        #expect(presenter.voicePreviewCount == 0 && core.calls == ["mirrorOn"])
         #expect(presenter.toggleStandardVoicePreview(sentence: "Sample") == .dispatched)
         #expect(presenter.voicePreviewCount == 1)
         presenter.apply(SettingsInputs.make(callSession: 1, roomId: "fixture-room", isJoined: true, isMuted: false,
@@ -65,7 +66,7 @@ struct SET4VoicePagesTests {
         #expect(presenter.chat.standardPreview == .playing)
         #expect(presenter.toggleStandardVoicePreview(sentence: "Sample") == .dispatched)
         #expect(presenter.voicePreviewCount == 1)
-        #expect(core.calls == ["voicePreviewStart", "voicePreviewStop"])
+        #expect(core.calls == ["mirrorOn", "voicePreviewStart", "voicePreviewStop"])
         let app = SettingsPresenter(scope: .app, platform: .ios, defaults: Self.freshDefaults())
         #expect(!app.chat.canPreviewStandardVoice)
         #expect(app.toggleStandardVoicePreview(sentence: "Sample") == .ignored)

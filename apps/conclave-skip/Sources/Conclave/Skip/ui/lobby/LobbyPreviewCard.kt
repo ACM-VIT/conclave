@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -60,9 +61,10 @@ internal fun LobbyPreviewCard(
     val scheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(DesignTokens.radiusTile.dp)
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val minimumVideoHeight = (if (card.showsCameraOverlay) 280.dp else 200.dp) * LocalDensity.current.fontScale.coerceAtLeast(1f)
     BoxWithConstraints(modifier.fillMaxWidth().testTag("lobby.card")) {
-        val natural = if (wide) maxWidth * (9f / 16f) else maxWidth * (4f / 3f)
-        val videoHeight = natural.coerceIn(200.dp, max(200.dp, screenHeight * 0.52f))
+        val natural = if (wide) maxWidth * (9f / 16f) else maxWidth * (10f / 16f)
+        val videoHeight = natural.coerceIn(minimumVideoHeight, max(minimumVideoHeight, screenHeight * 0.40f))
         Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, ext.border, shape)) {
             LobbyPreviewVideo(card, onFlip, onOpenSettings, Modifier.fillMaxWidth().height(videoHeight).background(ext.tile))
             Row(

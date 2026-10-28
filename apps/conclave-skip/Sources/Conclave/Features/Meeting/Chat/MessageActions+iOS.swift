@@ -5,7 +5,7 @@ import UIKit
 // S40 5 (CHT-3): message actions on iOS. The system context menu on the bubble with the lifted bubble as preview
 // (5 c): when reactions are allowed, a palette of the quick five as Toggles (your own visibly selected) and More
 // Reactions with the other three; then Reply, Send Private Message, Copy, Copy Link, View Reactions; then Hide
-// Messages from %@ (the report item stays out while `canReport` is false, Owner OQ5 (2026-10-26)); failed rows end with Try
+// Messages from %@ (the report item stays out until the row can be reported, Owner OQ5 (2026-10-26)); failed rows end with Try
 // Again and Delete (destructive, last). Unavailable items are hidden, not dimmed. The Add Reaction page is the
 // accessibility path (an action cannot open a Menu). Haptic `reactionSent` plays from the bubble's trigger, never a
 // menu item (a menu item unmounts before feedback fires, F00 C22 c): chips play it themselves (C24).

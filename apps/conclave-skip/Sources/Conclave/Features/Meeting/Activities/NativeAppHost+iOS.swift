@@ -743,16 +743,15 @@ enum NativeAppExport {
     }
 }
 
-/// User ink is content, not app palette (S60 13 e, S60R 25): the swatch shows the embed's own color value.
+/// User ink is content, not app palette (S60 13 e, S60R 25): the swatch shows the embed's own color value. The
+/// `#rrggbb` value goes opaque through `HostingTheme.token`, the one ARGB-to-color adapter, so no view builds a color
+/// from components.
 enum AppInkSwatch {
     static func color(_ hex: String) -> Color {
         guard hex.count == 7, hex.hasPrefix("#"), let value = UInt32(hex.dropFirst(), radix: 16) else {
             return HostingTheme.token(DesignTokens.iosInCallText)
         }
-        let red = Double((value >> 16) & 0xff) / 255.0
-        let green = Double((value >> 8) & 0xff) / 255.0
-        let blue = Double(value & 0xff) / 255.0
-        return Color(.sRGB, red: red, green: green, blue: blue, opacity: 1)
+        return HostingTheme.token(0xFF00_0000 | Int64(value))
     }
 }
 

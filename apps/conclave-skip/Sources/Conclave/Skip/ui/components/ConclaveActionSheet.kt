@@ -6,15 +6,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -122,7 +126,8 @@ internal fun ConclaveActionSheet(
             // The sheet's own window registers with the Debug semantics exporter (S40 R40-11).
             NativeSemanticsPopupRoot(identifier)
             Column(
-                Modifier.fillMaxWidth().widthIn(max = ConclaveActionSheetMetrics.MAX_WIDTH_DP.dp).align(Alignment.CenterHorizontally)
+                Modifier.widthIn(max = ConclaveActionSheetMetrics.MAX_WIDTH_DP.dp).fillMaxWidth().align(Alignment.CenterHorizontally)
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp).padding(bottom = 16.dp).testTag(identifier).semantics { this.paneTitle = paneTitle },
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -147,9 +152,9 @@ internal fun ConclaveActionSheet(
                     }
                 }
                 for (row in tiles.chunked(ConclaveActionSheetMetrics.COLUMNS)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (tile in row) {
-                            ActionTile(tile, "$identifier.${tile.id}", Modifier.weight(1f)) {
+                            ActionTile(tile, "$identifier.${tile.id}", Modifier.weight(1f).fillMaxHeight(), inline = row.size == 1) {
                                 if (tile.dismissesSheet) {
                                     scope.launch { sheetState.hide() }.invokeOnCompletion {
                                         if (!sheetState.isVisible) {
@@ -162,8 +167,6 @@ internal fun ConclaveActionSheet(
                                 }
                             }
                         }
-                        // Keep the last row's tiles at one third each.
-                        for (filler in row.size until ConclaveActionSheetMetrics.COLUMNS) Spacer(Modifier.weight(1f))
                     }
                 }
                 if (hostTitle != null && hostRows.isNotEmpty()) {
@@ -196,20 +199,23 @@ private fun HostRow(host: ConclaveActionHostRow, identifier: String, onAction: (
     val scheme = MaterialTheme.colorScheme
     val destructive = host.kind == ConclaveActionRowKind.Destructive
     val tint = if (destructive) scheme.error else LocalContentColor.current
-    val base = Modifier.testTag(identifier).alpha(if (host.enabled) 1f else CONCLAVE_CALL_DISABLED_ALPHA)
+    val base = Modifier.clip(MaterialTheme.shapes.medium).testTag(identifier)
+        .alpha(if (host.enabled) 1f else CONCLAVE_CALL_DISABLED_ALPHA)
     val rowModifier = if (host.kind == ConclaveActionRowKind.Switch) {
         base.toggleable(value = host.checked, enabled = host.enabled, role = Role.Switch, onValueChange = { checked -> onAction(checked) })
     } else {
         base.clickable(enabled = host.enabled, role = Role.Button) { onAction(true) }
     }
     ListItem(
-        headlineContent = { ConclaveText(host.label, line = "$identifier.title", color = if (destructive) scheme.error else Color.Unspecified) },
-        supportingContent = if (host.reason != null) { { ConclaveText(host.reason, line = "$identifier.reason") } } else null,
+        headlineContent = { ConclaveText(host.label, line = "$identifier.title", style = MaterialTheme.typography.labelLarge,
+            color = if (destructive) scheme.error else scheme.onSecondaryContainer) },
+        supportingContent = if (host.reason != null) { { ConclaveText(host.reason, line = "$identifier.reason",
+            style = MaterialTheme.typography.labelMedium) } } else null,
         leadingContent = if (host.icon != null) { { Icon(host.icon, contentDescription = null, tint = tint) } } else null,
         trailingContent = if (host.kind == ConclaveActionRowKind.Switch) {
             { Switch(checked = host.checked, onCheckedChange = null, enabled = host.enabled) }
         } else null,
-        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        colors = ListItemDefaults.colors(containerColor = scheme.secondaryContainer),
         modifier = rowModifier,
     )
 }
@@ -251,7 +257,7 @@ private fun RaiseHandTile(
 /** A labelled tile: icon (with its count badge) over a two-line labelMedium label and the optional status line;
  *  Engaged colors while on. The node speaks the full label and reads the line as its state. */
 @Composable
-private fun ActionTile(tile: ConclaveActionTile, identifier: String, modifier: Modifier, onClick: () -> Unit) {
+private fun ActionTile(tile: ConclaveActionTile, identifier: String, modifier: Modifier, inline: Boolean = false, onClick: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val ext = LocalConclaveExtendedColors.current
     val spoken = tile.description ?: tile.label
@@ -262,7 +268,7 @@ private fun ActionTile(tile: ConclaveActionTile, identifier: String, modifier: M
         Modifier.clickable(enabled = tile.enabled, role = Role.Button, onClick = onClick)
     }
     Surface(
-        modifier = modifier.heightIn(min = ConclaveActionSheetMetrics.TILE_MIN_HEIGHT_DP.dp).testTag(identifier)
+        modifier = modifier.heightIn(min = if (inline) 56.dp else ConclaveActionSheetMetrics.TILE_MIN_HEIGHT_DP.dp).testTag(identifier)
             .alpha(if (tile.enabled) 1f else CONCLAVE_CALL_DISABLED_ALPHA)
             .clip(MaterialTheme.shapes.medium)
             .then(interaction)
@@ -274,7 +280,22 @@ private fun ActionTile(tile: ConclaveActionTile, identifier: String, modifier: M
         color = if (tile.engaged) ext.toggleEngagedContainer else scheme.secondaryContainer,
         contentColor = if (tile.engaged) ext.onToggleEngaged else scheme.onSecondaryContainer,
     ) {
-        Column(Modifier.padding(horizontal = 8.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally,
+        if (inline) {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                ConclaveBadgedAnchor(count = tile.badgeCount, identifier = "$identifier.badge") {
+                    Icon(tile.icon, contentDescription = null)
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ConclaveText(tile.label, line = "$identifier.title", style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.clearAndSetSemantics { })
+                    if (tile.statusLine != null) {
+                        ConclaveText(tile.statusLine, line = "$identifier.status", style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.clearAndSetSemantics { })
+                    }
+                }
+            }
+        } else Column(Modifier.padding(horizontal = 8.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp)) {
             ConclaveBadgedAnchor(count = tile.badgeCount, identifier = "$identifier.badge") {
                 Icon(tile.icon, contentDescription = null)

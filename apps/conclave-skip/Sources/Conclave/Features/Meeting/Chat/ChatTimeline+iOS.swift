@@ -3,7 +3,8 @@ import SwiftUI
 import UIKit
 
 // S40 2 (CHT-1): the timeline. A lazy list over the presenter's row ids (the list observes only `timeline`, each row
-// only its entry), bottom anchored, following new rows only while at the bottom or for your own send, with a neutral
+// only its entry), short history aligned at the top, following new rows only while at the bottom or for your own send,
+// with a neutral
 // jump pill counting unseen remote messages. iOS 18 reads bottom proximity from scroll geometry; iOS 17 uses a bottom
 // sentinel whose appearance callbacks write a plain reference box plus a value-guarded flag (AGENTS appearance-
 // callback rule). No merge, sort or format in a body; no timers except the one highlight task a jump starts.
@@ -53,6 +54,7 @@ struct ChatTimeline: View {
     @State private var isAtBottom = true
     @State private var unseen = 0
     @State private var highlightId = ""
+    @State private var initialPositioned = false
     @State private var sentinel = ChatBottomSentinelState()
     @State private var visibility = ChatRowVisibilityBox()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -86,8 +88,7 @@ struct ChatTimeline: View {
                     .padding(.horizontal, CGFloat(DesignTokens.space16))
                     .padding(.vertical, CGFloat(DesignTokens.space12))
                 }
-                .defaultScrollAnchor(.bottom)
-                .modifier(ChatSizeChangeBottomAnchor())
+                .modifier(ChatTimelineAnchors(isAtBottom: isAtBottom))
                 .background {
                     if !ChatTimelinePlatform.usesScrollGeometry {
                         ChatStreamingFollow17(chat: chat, proxy: proxy, isAtBottom: isAtBottom)
@@ -98,8 +99,8 @@ struct ChatTimeline: View {
                 }
                 .modifier(ChatBottomProximity(isAtBottom: $isAtBottom))
                 .scrollDismissesKeyboard(.interactively)
-                .overlay(alignment: .bottom) {
-                    if !isAtBottom {
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if initialPositioned && !isAtBottom {
                         ChatJumpPill(unseen: unseen) { jumpToLatest(proxy, timeline: timeline) }
                             .padding(.bottom, CGFloat(DesignTokens.space8))
                     }
@@ -108,6 +109,7 @@ struct ChatTimeline: View {
                                     entryID: \ChatRotorEntry.id, entryLabel: \ChatRotorEntry.label)
                 .task {
                     place(proxy, timeline: timeline)
+                    initialPositioned = true
                 }
                 .onChange(of: timeline.newestId) { _, _ in
                     follow(proxy, timeline: chat.timeline)
@@ -131,19 +133,23 @@ struct ChatTimeline: View {
 
     /// Open position (2 c): the destination, else the unread divider, else the newest row; no animation.
     private func place(_ proxy: ScrollViewProxy, timeline: ChatTimelineSnapshot) {
+        let target = ChatTimelinePolicy.initialTarget(focusId: timeline.focusId,
+                                                     firstUnreadId: timeline.firstUnreadId, newestId: timeline.newestId)
+        guard !target.isEmpty else { return }
         if !timeline.focusId.isEmpty {
-            proxy.scrollTo(timeline.focusId, anchor: .center)
-            highlight(timeline.focusId)
-        } else if !timeline.firstUnreadId.isEmpty {
-            proxy.scrollTo("unread", anchor: UnitPoint(x: 0.5, y: 0.33))
-        } else if !timeline.newestId.isEmpty {
-            proxy.scrollTo(timeline.newestId, anchor: .bottom)
+            proxy.scrollTo(target, anchor: .center)
+            highlight(target)
+        } else if target == "unread" {
+            proxy.scrollTo(target, anchor: UnitPoint(x: 0.5, y: 0.33))
+        } else {
+            proxy.scrollTo(target, anchor: .bottom)
         }
     }
 
     /// INM C2 follow rule: at the bottom or your own send, scroll to the newest; otherwise count unseen remote
     /// messages only (system rows, reactions and assistant deltas never count).
     private func follow(_ proxy: ScrollViewProxy, timeline: ChatTimelineSnapshot) {
+        guard initialPositioned else { return }
         let atBottom = ChatTimelinePlatform.usesScrollGeometry ? isAtBottom : sentinel.isVisible
         if atBottom || timeline.newestIsOwn {
             if reduceMotion {
@@ -209,13 +215,20 @@ enum ChatTimelinePlatform {
     }
 }
 
-/// iOS 18: keep the bottom anchored when content grows (streaming answers, an embed card).
-private struct ChatSizeChangeBottomAnchor: ViewModifier {
+/// iOS 18 separates opening at the newest row from short-content alignment. Only keep the bottom pinned through
+/// size changes while following; a reader looking at history keeps the current position as remote content grows.
+/// iOS 17 starts at the top and the explicit opening destination positions overflowing history.
+private struct ChatTimelineAnchors: ViewModifier {
+    let isAtBottom: Bool
+
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
-            content.defaultScrollAnchor(.bottom, for: .sizeChanges)
-        } else {
             content
+                .defaultScrollAnchor(.bottom)
+                .defaultScrollAnchor(.top, for: .alignment)
+                .defaultScrollAnchor(isAtBottom ? .bottom : nil, for: .sizeChanges)
+        } else {
+            content.defaultScrollAnchor(.top)
         }
     }
 }
@@ -320,7 +333,10 @@ private struct ChatBottomProximity: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
             content.onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 24
+                ChatTimelinePolicy.isAtBottom(offsetY: Double(geometry.contentOffset.y),
+                                              viewportHeight: Double(geometry.containerSize.height),
+                                              contentHeight: Double(geometry.contentSize.height),
+                                              bottomInset: Double(geometry.contentInsets.bottom))
             } action: { _, atBottom in
                 if isAtBottom != atBottom { isAtBottom = atBottom }
             }

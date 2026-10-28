@@ -114,7 +114,7 @@ private fun ButtonLabel(title: String, identifier: String, pending: Boolean, max
  * An icon-only action in system-appearance chrome or content (app bar actions, a row's trailing More, a field
  * clear): an M3 IconButton (48 dp target) whose description names the action, not the glyph. [tint] defaults to
  * the content color the app bar or row provides (onSurface navigation, onSurfaceVariant actions). No tooltip in
- * this push (OQ-2b-9; TooltipBox needs an experimental opt-in the component files do not take).
+ * this push (OQ-2b-9; the M3 tooltip box needs an experimental opt-in the component files do not take).
  */
 @Composable
 internal fun ConclaveIconButton(

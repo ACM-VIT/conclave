@@ -309,12 +309,11 @@ struct CHT5GifEmbedTests {
         #expect(ChatFixtureScript.embed(for: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")?.kind == .youtube)
         #expect(ChatFixtureScript.embed(for: "https://x.com/conclave/status/1234567890")?.kind == .tweet)
         #expect(ChatFixtureScript.embed(for: "https://other.example/") == nil)
+        await ChatFixtureTestGate.acquire()
+        defer { ChatFixtureTestGate.release() }
         let shell = MeetingShellPresenter()
-        _ = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
-        defer {
-            ChatDiagnostics.driver = nil
-            ChatDiagnostics.counters = nil
-        }
+        // Kept in a local: `gifSearch` holds the driver weakly.
+        let driver = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
         await settle()
         #expect(shell.chat.rows.entry(for: "s-11d").row.embedURLs.count == 2)
         #expect(shell.chat.rows.entry(for: "s-y2").row.embedURLs == ["https://docs.example.com/agenda"])
@@ -323,6 +322,7 @@ struct CHT5GifEmbedTests {
         #expect(shell.chat.rows.entry(for: "s-11b").row.gifKind == .sticker && shell.chat.rows.entry(for: "s-11c").row.gifKind == .clip)
         let page = await shell.chat.searchGifs(kind: .gif, query: "", page: 1)
         #expect(page.items.count == 16)
+        #expect(driver.chat === shell.chat, "the local keeps the driver alive through the search")
     }
 
     // MARK: The core half (HD/requests/B5-T6.md R1, R2; red until the integrator applies them)

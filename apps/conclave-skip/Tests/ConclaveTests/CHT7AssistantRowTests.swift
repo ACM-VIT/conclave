@@ -383,13 +383,11 @@ struct CHT7AssistantRowTests {
         #expect(model?.reasoning == "Checking the roadmap doc, the notes and the shared browser.")
     }
 
-    @Test func theBusyFixtureShowsEveryAssistantStateButApproval() {
+    @Test func theBusyFixtureShowsEveryAssistantStateButApproval() async {
+        await ChatFixtureTestGate.acquire()
+        defer { ChatFixtureTestGate.release() }
         let shell = MeetingShellPresenter()
         let driver = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
-        defer {
-            ChatDiagnostics.driver = nil
-            ChatDiagnostics.counters = nil
-        }
         #expect(shell.chat.rows.entry(for: "s-a1").assistant?.state == .thinking)
         #expect(shell.chat.rows.entry(for: "s-a2").assistant?.state == .streaming)
         #expect(shell.chat.rows.entry(for: "s-a2").assistant?.tasks.count == 2)

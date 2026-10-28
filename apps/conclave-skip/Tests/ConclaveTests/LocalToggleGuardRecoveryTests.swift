@@ -1783,8 +1783,10 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.viewModel.state.videoQuality == savedQuality)
         #expect(UserDefaults.standard.string(forKey: NativeMediaQualityPreferences.storageKey) == savedSettings)
 
-        // Nominal clears the ceiling: the saved setting's limits return.
+        // Nominal clears the ceiling: the saved setting's limits return. No Data Saver input is on (the harness
+        // keeps the host network out, S60 C6-5), so nothing else holds a ceiling.
         call.viewModel.handleSystemThermalLevel(.nominal)
+        #expect(!call.viewModel.systemDataSaverOn && !call.viewModel.hostQualityCapped)
         #expect(call.viewModel.systemPressure.ceiling == .unconstrained)
         #expect(call.viewModel.appliedCameraPublishSettings
             == NativeMediaQualityPolicy.resolvedCamera(NativeMediaQualityPreferences.load().camera))
@@ -1818,6 +1820,10 @@ private final class RejoinHarness {
 
     init() {
         savedResumeSnapshot = UserDefaults.standard.object(forKey: Self.resumeKey)
+        // The call never reads the build machine's network: a constrained host path (a Personal Hotspot) would
+        // hold the system Data Saver ceiling and break the saved-limits checks. Same main-actor turn as the
+        // view model's init, so no path update has landed yet.
+        viewModel.testDetachHostNetworkMonitor()
         viewModel.state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
         let calls = self.calls
         let media = viewModel.webRTCClient

@@ -172,11 +172,11 @@ enum PanelPresentationPolicy {
         }
     }
 
-    /// Layout and Effects take the dark in-call appearance for every invoker (owner default Q8.6, S60 R6-10,
-    /// RECONCILE R9); every content panel follows the system appearance. The invoker stays a parameter so the
+    /// Chat stays with the dark call surface (owner polish feedback, 2026-10-28), as do Layout and Effects.
+    /// Other content panels follow the system appearance. The invoker stays a parameter so the
     /// call sites keep one shape.
     static func appearance(_ panel: MeetingPanel, invoker: PanelInvoker) -> PanelAppearance {
-        if panel == MeetingPanel.layout || panel == MeetingPanel.effects {
+        if panel == MeetingPanel.chat || panel == MeetingPanel.layout || panel == MeetingPanel.effects {
             return PanelAppearance.inCall
         }
         return PanelAppearance.system

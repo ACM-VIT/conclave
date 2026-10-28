@@ -34,11 +34,13 @@ import org.robolectric.annotation.Config
  * one-attachment guard and canAcceptPhoto, the fixture's new states and scripts, ChatRowActions.composerDidFocus, and
  * the composer focus follow on a real reversed LazyColumn composed on a Robolectric activity: one row up follows, three
  * screens up stays, the animated follow settles on the newest row. The focus tests drive the effect body
- * (ChatFocusFollow.follow, the only call in ChatComposerFocusFollow's LaunchedEffect) directly, because under Robolectric
- * only the first composition in a JVM keeps recomposing (PanelStageBridgeTests composes first), so a revision bump here
- * never restarts the effect (G3b round 3). Layout still runs: scrollToItem and the animation's scrollBy remeasure the
- * list synchronously. The Conclave test classpath has no Compose UI test artifacts, so the animated follow runs on
- * this file's stepping frame clock.
+ * (ChatFocusFollow.follow, the only call in ChatComposerFocusFollow's LaunchedEffect) directly, because under
+ * Robolectric a window Recomposer never recomposes once an earlier test in the JVM has stalled Compose's shared main
+ * dispatcher (PanelStageBridgeTests.hostRecomposer explains it), and which class runs first follows Gradle's order (G3b
+ * rounds 3 and 4), so a revision bump here would not reliably restart the effect. Nothing here needs a recomposition,
+ * so the file passes in any class order: the initial composition (when the view attaches) and the View layout pass need
+ * no Recomposer frame, and scrollToItem and the animation's scrollBy remeasure the list synchronously. The Conclave
+ * test classpath has no Compose UI test artifacts, so the animated follow runs on this file's stepping frame clock.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])

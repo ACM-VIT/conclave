@@ -176,7 +176,9 @@ struct PPL6QaPolicyTests {
         let (people, log) = qaPeople(role: QaRole.host)
         let qa = people.qa
         #expect(qa.snapshot.availableSorts == ["top", "recent"])
-        #expect(qa.snapshot.counts == [2, 1, 1])
+        // Open is pending or answering (S50 11 c, QaStatus.isOpen): q1 answering plus q2 and q3 pending; q4 answered;
+        // q5 dismissed.
+        #expect(qa.snapshot.counts == [3, 1, 1])
         #expect(qa.toggleUpvote(id: "q2") == .ignored)
         #expect(qa.perform(hostAction: QaModerationAction.answering, id: "q2") == .dispatched)
         #expect(log.commands.last?.kind == .qaModerate && log.commands.last?.detail == "answering")

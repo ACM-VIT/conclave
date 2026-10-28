@@ -122,9 +122,14 @@ private fun ChatSwipeToReply(row: ChatRowModel, actions: ChatRowActions, content
     SwipeToDismissBox(
         state = state,
         backgroundContent = {
-            Box(Modifier.fillMaxSize().padding(start = 16.dp), contentAlignment = Alignment.CenterStart) {
-                // The reply glyph is a pending icon concept (R40-5); the chat bubble stands in.
-                Icon(ConclaveIcons.ChatBubbleFill0, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Rows are transparent outside their bubbles. A settled swipe must not reveal a reply cue through
+            // the avatar gutter; show the named action only while the row is moving towards Reply.
+            if (state.dismissDirection == SwipeToDismissBoxValue.StartToEnd) {
+                Box(Modifier.fillMaxSize().padding(start = 16.dp).clearAndSetSemantics { },
+                    contentAlignment = Alignment.CenterStart) {
+                    ConclaveText(conclaveString("chat_action_reply"), line = "chat.row.${row.id}.swipeReply",
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         },
         enableDismissFromStartToEnd = true,
@@ -196,9 +201,11 @@ private fun ChatRowHeader(row: ChatRowModel) {
     Row(Modifier.clearAndSetSemantics { }, horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         ConclaveText(ChatCopyAndroid.senderName(row), line = "chat.row.${row.id}.name", style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.weight(1f, fill = false),
             color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
         ConclaveText(ChatCopyAndroid.time(context, row.timestampMillis), line = "chat.row.${row.id}.time",
-            style = rememberTabular(MaterialTheme.typography.labelSmall), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            style = rememberTabular(MaterialTheme.typography.labelSmall), color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1)
     }
 }
 
