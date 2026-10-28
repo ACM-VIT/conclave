@@ -648,10 +648,11 @@ enum ConclaveChromeMetrics {
     static let capsuleMaxWidthFraction: CGFloat = 0.6
 }
 
-/// The top-leading meeting capsule (F00 C03 c): room title (middle truncation) over a subtitle (participant count,
-/// "{name} is presenting"), with the lock glyph when the room is locked and the captions glyph while captions are
-/// on. It is a Button that opens meeting info; label = title, value = subtitle plus "Locked". Capped at xxxLarge
-/// with the Large Content Viewer. The disclosure chevron waits for its manifest concept (F00 7.3).
+/// The top-leading meeting capsule (F00 C03 c): one line, the room title (middle truncation), with the lock glyph
+/// when the room is locked and the captions glyph while captions are on. Owner decision 2026-10-28: no visible
+/// subtitle (the two-line capsule read too heavy); the subtitle (participant count, "{name} is presenting") stays
+/// the accessibility value. It is a Button that opens meeting info; label = title, value = subtitle plus "Locked".
+/// Capped at xxxLarge with the Large Content Viewer. The disclosure chevron waits for its manifest concept (F00 7.3).
 struct ConclaveMeetingCapsule: View {
     let title: String
     let subtitle: String
@@ -686,16 +687,10 @@ struct ConclaveMeetingCapsule: View {
                         .font(.subheadline)
                         .accessibilityHidden(true)
                 }
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(title)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(HostingTheme.inCallTextSecondary)
-                        .lineLimit(1)
-                }
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 if captionsOn {
                     Image(systemName: ConclaveSymbols.captionsBubbleFill)
                         .font(.subheadline)

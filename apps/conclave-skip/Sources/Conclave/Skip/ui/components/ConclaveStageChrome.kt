@@ -3,7 +3,6 @@ package conclave.module
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -46,9 +45,11 @@ internal object ConclaveChromeMetrics {
 }
 
 /**
- * The meeting capsule: title (one line, ellipsis) over a subtitle (participant count or "{name} is presenting"),
- * with the lock glyph when locked and the captions glyph while captions are on. One Button node; description =
- * title, state description = subtitle plus "Locked". [maxWidth] is 60% of the stage width from the caller.
+ * The meeting capsule: one line, the title (ellipsis), with the lock glyph when locked and the captions glyph while
+ * captions are on. Owner decision 2026-10-28: no visible subtitle (the two-line capsule read too heavy); the
+ * subtitle (participant count or "{name} is presenting") stays the state description. One Button node;
+ * description = title, state description = subtitle plus "Locked". [maxWidth] is 60% of the stage width from the
+ * caller.
  */
 @Composable
 internal fun ConclaveMeetingCapsule(
@@ -72,12 +73,8 @@ internal fun ConclaveMeetingCapsule(
         Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             if (locked) Icon(ConclaveIcons.LockFill1, contentDescription = null, modifier = Modifier.size(20.dp), tint = scheme.onSurface)
-            Column(Modifier.weight(1f, fill = false)) {
-                ConclaveText(title, line = "$identifier.title", style = MaterialTheme.typography.titleSmall, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-                ConclaveText(subtitle, line = "$identifier.subtitle", style = MaterialTheme.typography.labelSmall,
-                    color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            ConclaveText(title, line = "$identifier.title", style = MaterialTheme.typography.titleSmall, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (captionsOn) Icon(ConclaveIcons.ClosedCaptionFill1, contentDescription = null, modifier = Modifier.size(20.dp), tint = scheme.onSurface)
         }
     }
