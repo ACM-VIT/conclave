@@ -1,6 +1,6 @@
 import Foundation
 
-// S40 CH4 and S60 0.8 C6-22 (CHT-6), transpiled for both platforms. Everything iOS and Android share about voice
+// S40 CH4 and S60 0.8 C6-22 (CHT-6; SET-4 adds the standard voice list and the Preview rules), transpiled for both platforms. Everything iOS and Android share about voice
 // messages lives here: the four voice preference keys with their defaults (read by TtsSpeaker on both platforms, by
 // the chat presenter, by the stage chat previews in CHT-8 and by the Settings voice pages in SET-4), the pure voice
 // message rules, and the playback queue both speakers drive (6 queued, 250 ms gaps, one active message id). The
@@ -94,6 +94,52 @@ enum VoicePreferences {
     private static func boolValue(forKey key: String, fallback: Bool, defaults: UserDefaults) -> Bool {
         if defaults.object(forKey: key) == nil { return fallback }
         return defaults.bool(forKey: key)
+    }
+}
+
+// MARK: - Standard voices and Preview (S60 2 c, 2 d; C6-22; SET-4)
+
+/// One system voice the person can hear for speakers without a personal voice: the platform identifier (iOS
+/// `AVSpeechSynthesisVoice.identifier`, Android `Voice.getName()`), its display name and its BCP 47 tag, both shown
+/// verbatim (S60 0.5).
+struct VoiceOptionModel: Equatable, Identifiable {
+    let id: String
+    let name: String
+    let languageTag: String
+}
+
+/// The Voice Messages page's shared rules: which system voices are listed and how the Preview is recognized.
+enum VoicePreviewPolicy {
+    /// The reserved message id a Preview plays under (`TtsSpeaker.replay`), so the speaker's `activeMessageId` tells
+    /// whether the Preview is playing and no chat row matches it.
+    static let messageId = "conclave-settings-voice-preview"
+
+    static func isPreviewPlaying(activeMessageId: String) -> Bool {
+        activeMessageId == messageId
+    }
+
+    /// The voices for the current language (the primary subtag of `languageTag`, case-insensitive, `_` read as `-`),
+    /// without duplicates or empty ids, sorted by name and then id so both platforms list them in one order.
+    static func options(_ voices: [VoiceOptionModel], languageTag: String) -> [VoiceOptionModel] {
+        let wanted = primaryLanguage(languageTag)
+        var seen: [String] = []
+        var kept: [VoiceOptionModel] = []
+        for voice in voices {
+            if voice.id.isEmpty || seen.contains(voice.id) { continue }
+            if !wanted.isEmpty && primaryLanguage(voice.languageTag) != wanted { continue }
+            seen.append(voice.id)
+            kept.append(voice)
+        }
+        return kept.sorted { first, second in
+            if first.name != second.name { return first.name < second.name }
+            return first.id < second.id
+        }
+    }
+
+    static func primaryLanguage(_ tag: String) -> String {
+        let normalized = tag.replacingOccurrences(of: "_", with: "-").lowercased()
+        guard let first = normalized.components(separatedBy: "-").first else { return "" }
+        return first.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

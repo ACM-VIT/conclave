@@ -15,8 +15,10 @@ enum PeopleActionSource {
     static let tileMenu = "tileMenu"
     static let sectionHeader = "sectionHeader"
     static let hostControls = "hostControls"
-    /// The S20 knock banner and other stage controls (PPL-3).
+    /// The S20 knock banner and other stage controls (PPL-3), and the attendee stage invitation (PPL-7).
     static let stage = "stage"
+    /// The Webinar Q&A panel (PPL-6): panel origin, inline on iOS and the page snackbar on Android (PL14).
+    static let qa = "qa"
 
     /// Sources whose confirmation the target row hosts on iOS (S50 3 c, 3 j).
     static func isRowSource(_ source: String) -> Bool {
@@ -120,21 +122,24 @@ enum PeopleCommandKind: String, CaseIterable, Equatable {
 }
 
 /// One command (no associated values, S1C 3.6): one kind plus scalar payload fields. For `sendNotice` the level
-/// (info, warning, error) rides in `targetId`; for `setPolicy` and `bulk` the id raw value rides in `text`.
+/// (info, warning, error) rides in `targetId`; for `setPolicy` and `bulk` the id raw value rides in `text`; for
+/// `qaModerate` the `QaModerationAction` rides in `detail` and a written answer in `text` (PPL-6).
 struct PeopleCommand: Equatable {
     let kind: PeopleCommandKind
     /// Server id (participant or pending id, attendee queue id, question id, access key, notice level).
     let targetId: String
-    /// Name, code, notice text, slug, answer text, policy or bulk id raw value.
+    /// Name, code, notice text, slug, answer text, question text, policy or bulk id raw value.
     let text: String
-    /// Policy on or off, block, reopen.
+    /// Policy on or off, block, the upvote wanted.
     let flag: Bool
     /// Capacity.
     let number: Int
+    /// The Q&A moderation action (`answering`, `answered`, `dismissed`, `reopen`); "" for every other kind.
+    let detail: String
 
     static func make(_ kind: PeopleCommandKind, targetId: String = "", text: String = "", flag: Bool = false,
-                     number: Int = 0) -> PeopleCommand {
-        PeopleCommand(kind: kind, targetId: targetId, text: text, flag: flag, number: number)
+                     number: Int = 0, detail: String = "") -> PeopleCommand {
+        PeopleCommand(kind: kind, targetId: targetId, text: text, flag: flag, number: number, detail: detail)
     }
 }
 
@@ -200,6 +205,17 @@ enum PeopleAnnouncementKind {
     static let policyOn = "hostPolicyOn"
     static let policyOff = "hostPolicyOff"
     static let noticeSent = "hostNoticeSent"
+    /// PPL-5 (S50 10 g): "Invited %@ on stage.", "%@ joined the stage.", "%@ moved to the audience."
+    static let invitedToStage = "peopleInvitedToStage"
+    static let joinedStage = "peopleJoinedStage"
+    static let movedToAudience = "peopleMovedToAudience"
+    /// PPL-5 (S50 9 f): "New link copied." after a rotation.
+    static let newLinkCopied = "hostNewLinkCopied"
+    /// PPL-6 (S50 11 g): "Your question was sent." and "Q&A is off."
+    static let questionSent = "qaQuestionSent"
+    static let qaOff = "qaOff"
+    /// PPL-7 (S50 12 g): "%@ is now the host." when the host role moves.
+    static let newHost = "peopleNewHost"
 }
 
 /// What the action table reads besides the row (S50 3 j): the viewer, the S1 blocked reason, the DM policy, webinar

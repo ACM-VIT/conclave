@@ -468,8 +468,9 @@ struct ENT7AccountTests {
         #expect(flat.contains(".confirmationDialog(ConclaveStrings.text(\"Delete Your Account?\"), isPresented: $confirmDelete, titleVisibility: .visible)"))
         #expect(flat.contains("Button(ConclaveStrings.text(\"Delete Account\"), role: .destructive) { account.deleteAccount() }"))
         #expect(flat.contains(".listStyle(.insetGrouped)"))
-        // R26: the Settings row waits for SET-1.
-        #expect(!source.contains("ConclaveStrings.text(\"Settings\")") && !source.contains("case settings"))
+        // R26 (SET-1): the Settings row pushes the app-scope Settings on the sheet's own stack.
+        #expect(source.contains("ConclaveStrings.text(\"Settings\")") && source.contains("case privacy, settings, settingsVoice"))
+        #expect(flat.contains("case .settings: SettingsAppScopeList(settings: appSettings, link: { AccountRoute.settingsLink($0) })"))
         #expect(!source.contains(".preferredColorScheme"))
         let privacy = ent7Flat(try ent7Source("Sources/Conclave/Features/Account/PrivacyPolicyScreen+iOS.swift"))
         #expect(privacy.contains("ForEach(PrivacyPolicyDocument.blocks) { block in"))
@@ -493,7 +494,8 @@ struct ENT7AccountTests {
         #expect(acknowledge.lowerBound < show.lowerBound, "acknowledged before it shows, so it never repeats")
         #expect(flat.contains("contentWindowInsets = WindowInsets.safeDrawing"))
         #expect(!source.contains("ModalBottomSheet") && !source.contains("FlexibleBottomSheet"))
-        #expect(!source.contains("pm_settings"), "R26: the Settings row waits for SET-1")
+        // R26 (SET-1): the Settings row shows once the premeeting host passes onOpenSettings (HD request B6-T2 R2 e).
+        #expect(flat.contains("if (onOpenSettings != null) { item(\"settings\") {"))
         let privacy = ent7Flat(try ent7Source("Sources/Conclave/Skip/ui/account/PrivacyPolicyScreen.kt"))
         #expect(privacy.contains("uriHandler.openUri(PrivacyPolicyDestination.urlString)"))
         #expect(privacy.contains("style = typography.titleMedium"))

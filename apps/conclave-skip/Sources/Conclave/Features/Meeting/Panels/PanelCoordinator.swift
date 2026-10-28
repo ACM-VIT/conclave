@@ -52,6 +52,21 @@ final class PanelCoordinator {
         }
     }
 
+    /// S30 5 a (CTL-5): a panel chosen in More, always with invoker `.more`, so closing it returns to the stage and never
+    /// back to More (INM B13 invoker semantics). The More surfaces call it only once their own menu or sheet is gone (the
+    /// iOS menu closes first; the iOS fallback sheet and the Android sheet wait for their dismissal, D17), and the
+    /// coordinator still serializes a replacement behind a closing panel. True when the request changed something (a
+    /// new presentation, a replacement, a queued destination or a destination request for the current panel); false
+    /// when the panel was already current with nothing new, so More reports nothing and plays nothing.
+    @discardableResult
+    func presentFromMore(_ panel: MeetingPanel, destination: PanelDestination = PanelDestination.none,
+                         targetId: String = "") -> Bool {
+        let before = snapshot
+        let beforeDestination = destinationRequest
+        present(panel, from: PanelInvoker.more, destination: destination, targetId: targetId)
+        return snapshot != before || destinationRequest != beforeDestination
+    }
+
     /// S30 1 a, CC18: a bar invoker (Chat, Participants, Q&A) closes its panel while it is current and shown, and
     /// opens it otherwise (a fresh request, a replacement of another panel, or a re-request while it is closing).
     /// Close cancels a queued replacement, like the explicit Close and Back.

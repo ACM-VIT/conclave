@@ -7,13 +7,25 @@ import SwiftUI
 // ENT-7 (S10 5 c): the iOS Account sheet in the system appearance. A `.large` sheet with its own NavigationStack and
 // an inset grouped List: signed in, the profile, Sign Out, Privacy Policy and Delete Account; signed out, the value
 // line, Sign in with Apple first and Continue with Google at the same height (HIG, App Review 4.8), the guest name and
-// Privacy Policy. It observes `account.snapshot` only; rows are leaf views. The app-scope Settings row stays hidden
-// until SET-1 adds `AccountRoute.settings` (RECONCILE R26). No coral fill here: the providers are brand or neutral and
-// coralText is only the tint.
+// Privacy Policy. It observes `account.snapshot` only; rows are leaf views. SET-1 (RECONCILE R26, S10 5 c) adds the
+// "Settings" row before Privacy Policy, which pushes the app-scope Settings content (`AccountRoute.settings`, the S60
+// root list with the app row set) on this sheet's stack; its Voice Messages page pushes `AccountRoute.settingsVoice`.
+// No coral fill here: the providers are brand or neutral and coralText is only the tint.
 
-/// Pushed pages of the Account sheet's own stack. SET-1 adds `.settings` (RECONCILE R26).
+/// Pushed pages of the Account sheet's own stack: the privacy policy, the app-scope Settings (RECONCILE R26) and its
+/// Voice Messages page (the only Settings page the app scope pushes besides the privacy policy).
 enum AccountRoute: String, Hashable, CaseIterable {
-    case privacy
+    case privacy, settings, settingsVoice
+
+    /// The app-scope Settings root pushes onto this stack: the privacy policy and the Voice Messages page; nothing else
+    /// is pushed in the app scope (camera, share, connection and host pages are call only).
+    static func settingsLink(_ route: SettingsRoute) -> AccountRoute? {
+        switch route {
+        case .privacy: return AccountRoute.privacy
+        case .voice: return AccountRoute.settingsVoice
+        default: return nil
+        }
+    }
 }
 
 enum AccountSymbols {
@@ -32,6 +44,9 @@ struct AccountView: View {
     let premeeting: PremeetingPresenter
     let account: AccountPresenter
     @State private var path: [AccountRoute] = []
+    /// RECONCILE R26: the app-scope Settings content source (no call, no core); it reads and writes the same preference
+    /// stores as the in-call panel.
+    @State private var appSettings = SettingsPresenter(scope: SettingsScope.app)
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -40,6 +55,10 @@ struct AccountView: View {
                     switch route {
                     case .privacy:
                         PrivacyPolicyScreen()
+                    case .settings:
+                        SettingsAppScopeList(settings: appSettings, link: { AccountRoute.settingsLink($0) })
+                    case .settingsVoice:
+                        SettingsVoicePage(settings: appSettings, link: { AccountRoute.settingsLink($0) })
                     }
                 }
                 .toolbar {
@@ -98,7 +117,7 @@ struct AccountList: View {
                         .disabled(snapshot.isBusy)
                 }
                 Section {
-                    // SETTINGS ROW SLOT: SET-1 adds the "Settings" row (AccountRoute.settings) before Privacy Policy.
+                    AccountSettingsRow(usesRouteLink: usesRouteLinks)
                     AccountPrivacyRow(usesRouteLink: usesRouteLinks)
                 }
                 Section {
@@ -127,7 +146,7 @@ struct AccountList: View {
                 AccountGuestNameSection(initialName: snapshot.guestName, isEnabled: !snapshot.isBusy,
                                         onCommit: { name in account.setGuestName(name) })
                 Section {
-                    // SETTINGS ROW SLOT: SET-1 adds the "Settings" row (AccountRoute.settings) before Privacy Policy.
+                    AccountSettingsRow(usesRouteLink: usesRouteLinks)
                     AccountPrivacyRow(usesRouteLink: usesRouteLinks)
                 }
             }
@@ -202,6 +221,21 @@ private struct AccountPendingButton: View {
         }
         .accessibilityValue(isPending ? ConclaveStrings.text("In Progress") : "")
         .accessibilityIdentifier(identifier)
+    }
+}
+
+/// S10 5 c (RECONCILE R26): "Settings" pushes the app-scope Settings on the sheet's stack. Only inside the sheet: the
+/// pushed premeeting Account page (never used on iOS) has no stack that can hold `AccountRoute` values.
+private struct AccountSettingsRow: View {
+    let usesRouteLink: Bool
+
+    var body: some View {
+        if usesRouteLink {
+            NavigationLink(value: AccountRoute.settings) {
+                Text(ConclaveStrings.text("Settings"))
+            }
+            .accessibilityIdentifier("account.settings")
+        }
     }
 }
 

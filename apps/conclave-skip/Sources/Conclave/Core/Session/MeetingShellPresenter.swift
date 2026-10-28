@@ -27,6 +27,11 @@ final class MeetingShellPresenter {
     /// changes and the core resets it on leave. The native call root reaches it as `shell.chat`; the chat fixture
     /// installs into the stage fixture shell's instance.
     let chat = ChatPresenter()
+    /// S60 0.5 (SET-1): the session's Settings presenter (`MeetingPanel.settings` and the attendee-filtered variant in
+    /// Webinar Details, RECONCILE R26, R44). Created with the shell; the core feeds it (`requestSettingsRefresh`) and it
+    /// resets its pending work itself when the call session changes. The native call root reaches it as
+    /// `shell.settings`; the stage fixture shell's instance serves the panel fixture.
+    let settings = SettingsPresenter(scope: SettingsScope.call)
     /// Core only: the view model forwards each intent to its existing implementation (S1C E8). Never called from
     /// `apply(_:)`.
     @ObservationIgnored var onCommand: ((MeetingShellCommand, MeetingActionTicket?) -> Void)? = nil

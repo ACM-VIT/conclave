@@ -131,5 +131,11 @@ final class WebRTCClient {
     func selectAudioInput(_ deviceId: String) { fatalError() }
     func selectAudioOutput(_ deviceId: String) { fatalError() }
     func testSpeaker() { fatalError() }
+
+    // S60 C6-1, C6-6, C6-7 (SET-2): implemented in K/WebRTCClient+Android.kt.
+    var supportsLiveNoiseSuppressionChange: Bool { fatalError() }
+    func applyNoiseSuppression(_ enabled: Bool) async -> Bool { fatalError() }
+    func sampleLocalMicrophoneLevel() -> Double { fatalError() }
+    func playTestTone() { fatalError() }
 }
 #endif

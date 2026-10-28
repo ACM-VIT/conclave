@@ -147,6 +147,11 @@ enum StageAnnouncementText {
         switch announcement.kind {
         case StageAnnouncement.joinedKind:
             return ConclaveStrings.format("Joined %@", announcement.name)
+        // CTL-6 (S30 CC7, 6 i; HD request B6-T3 R3): your own hand change, once the server confirms it.
+        case StageAnnouncement.handRaisedKind:
+            return ConclaveStrings.text("Hand raised")
+        case StageAnnouncement.handLoweredKind:
+            return ConclaveStrings.text("Hand lowered")
         // STG-5 (S70 R70-1): recovery starts and ends on the same one-shot channel (HD request B4-T4 R4).
         case StageNoticeAnnouncementKind.reconnecting:
             return ConclaveStrings.text("Reconnecting")

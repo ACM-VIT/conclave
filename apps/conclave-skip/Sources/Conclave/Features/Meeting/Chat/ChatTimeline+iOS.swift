@@ -58,6 +58,11 @@ struct ChatTimeline: View {
                 }
                 .defaultScrollAnchor(.bottom)
                 .modifier(ChatSizeChangeBottomAnchor())
+                .background {
+                    if !ChatTimelinePlatform.usesScrollGeometry {
+                        ChatStreamingFollow17(chat: chat, proxy: proxy, isAtBottom: isAtBottom)
+                    }
+                }
                 .modifier(ChatBottomProximity(isAtBottom: $isAtBottom))
                 .scrollDismissesKeyboard(.interactively)
                 .overlay(alignment: .bottom) {
@@ -179,6 +184,25 @@ private struct ChatSizeChangeBottomAnchor: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// 2 c, iOS 17 only (CHT-7): a leaf that alone reads `chat.tailGrowth`, so a streaming answer's growth re-runs no list
+/// body; it keeps the newest row pinned only while the reader is at the bottom (iOS 18 uses the size-change anchor).
+private struct ChatStreamingFollow17: View {
+    let chat: ChatPresenter
+    let proxy: ScrollViewProxy
+    let isAtBottom: Bool
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onChange(of: chat.tailGrowth) { _, _ in
+                guard isAtBottom else { return }
+                let newest = chat.timeline.newestId
+                if !newest.isEmpty { proxy.scrollTo(newest, anchor: .bottom) }
+            }
     }
 }
 

@@ -73,18 +73,6 @@ enum SettingsDisplayNameAutoSavePolicy {
     }
 }
 
-enum SettingsSignOutCompletionPolicy {
-    static func shouldApply(
-        generation: Int,
-        currentGeneration: Int,
-        actionRoomId: String,
-        currentRoomId: String
-    ) -> Bool {
-        generation == currentGeneration &&
-            NativeRoomIdNormalizer.matches(actionRoomId, currentRoomId)
-    }
-}
-
 enum SettingsConfigRefreshTarget: Equatable {
     case meeting
     case webinar

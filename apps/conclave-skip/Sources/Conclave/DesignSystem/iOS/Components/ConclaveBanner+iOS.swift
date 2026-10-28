@@ -20,6 +20,8 @@ struct ConclaveBannerAction: Identifiable {
     let action: () -> Void
     /// S20 SR5 `NoticeAction.isEnabled`: Retry Now stays visible but disabled while an attempt is in flight.
     var isEnabled: Bool = true
+    /// S70 6 i: why a disabled action is disabled ("Retrying now" for Retry Now), read as its hint; "" for none.
+    var disabledHint: String = ""
 
     var id: String { identifier }
 }
@@ -77,6 +79,7 @@ struct ConclaveBanner: View {
                                 .buttonStyle(.borderless)
                                 .tint(HostingTheme.coralText)
                                 .disabled(!action.isEnabled)
+                                .accessibilityHint(action.isEnabled ? "" : action.disabledHint)
                                 .accessibilityIdentifier(action.identifier)
                         }
                     }

@@ -8,7 +8,8 @@ import AVFoundation
 // file's transpiled output there, so this file only synthesizes. Both speakers expose the same members, because the
 // transpiled view model calls them: `enqueue(messageId:userId:displayName:text:voiceToken:isOwn:)`,
 // `replay(messageId:userId:displayName:text:voiceToken:)`, `stop()`, `reset()`, `onPlaybackChanged`,
-// `activeMessageId`, plus the legacy `speak(text:userId:displayName:)`.
+// `activeMessageId`, plus the legacy `speak(text:userId:displayName:)` and SET-4's Settings Preview
+// (`togglePreview(sentence:start:)`); the standard voice list is a platform helper each Voice page calls itself.
 //
 // Playback goes through the call audio owner (SYS-2): the synthesizer and the personal voice player use the app's
 // audio session that CallAudioSession configures for the call, so speech follows the call's route (receiver, speaker,
@@ -85,6 +86,30 @@ final class TtsSpeaker {
     /// The legacy entry point (no message id, so no bubble state); kept until the core moves to `enqueue`.
     func speak(text: String, userId: String, displayName: String) {
         enqueue(messageId: "", userId: userId, displayName: displayName, text: text, voiceToken: "", isOwn: false)
+    }
+
+    // MARK: Settings Preview (S60 2 c, C6-22; SET-4)
+
+    /// Settings > Voice Messages > Preview: one fixed sentence (`sentence`, localized by the page) in the chosen
+    /// standard voice through the call output, under the reserved `VoicePreviewPolicy.messageId`, so
+    /// `activeMessageId` tells whether it plays. `start` false (Stop Preview) stops it; a voice message playing at that
+    /// moment is replaced, as a bubble replay replaces it.
+    func togglePreview(sentence: String, start: Bool) {
+        if VoicePreviewPolicy.isPreviewPlaying(activeMessageId: queue.activeMessageId) {
+            queue.stop()
+            if !start { return }
+        }
+        if !start { return }
+        replay(messageId: VoicePreviewPolicy.messageId, userId: "", displayName: "", text: sentence, voiceToken: "")
+    }
+
+    /// The system voices for `languageTag` (the preferred language by default), in the shared order (S60 2 c).
+    static func standardVoiceOptions(languageTag: String = Locale.preferredLanguages.first ?? Locale.current.identifier) -> [VoiceOptionModel] {
+        var voices: [VoiceOptionModel] = []
+        for voice in AVSpeechSynthesisVoice.speechVoices() {
+            voices.append(VoiceOptionModel(id: voice.identifier, name: voice.name, languageTag: voice.language))
+        }
+        return VoicePreviewPolicy.options(voices, languageTag: languageTag)
     }
 
     // MARK: Engine
@@ -310,6 +335,20 @@ final class TtsSpeaker {
 
     func speak(text: String, userId: String, displayName: String) {
         enqueue(messageId: "", userId: userId, displayName: displayName, text: text, voiceToken: "", isOwn: false)
+    }
+
+    func togglePreview(sentence: String, start: Bool) {
+        if VoicePreviewPolicy.isPreviewPlaying(activeMessageId: queue.activeMessageId) {
+            queue.stop()
+            if !start { return }
+        }
+        if !start { return }
+        replay(messageId: VoicePreviewPolicy.messageId, userId: "", displayName: "", text: sentence, voiceToken: "")
+    }
+
+    /// No system voices on the silent host.
+    static func standardVoiceOptions(languageTag: String = "") -> [VoiceOptionModel] {
+        []
     }
 }
 #endif

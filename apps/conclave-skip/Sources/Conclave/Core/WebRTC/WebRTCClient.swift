@@ -504,6 +504,12 @@ private struct SendTransportOperationHandle: @unchecked Sendable {
     var device: Device?
 }
 
+/// S60 C6-1 (SET-2): the live microphone producer and the replacement track crossing to its send queue.
+private struct AudioTrackReplacementHandle: @unchecked Sendable {
+    let producer: Producer
+    let track: RTCAudioTrack
+}
+
 @MainActor
 final class WebRTCClient: NSObject, ObservableObject {
 
@@ -2138,6 +2144,8 @@ final class WebRTCClient: NSObject, ObservableObject {
     /// of racing a second produce: the SFU keeps only the later producer, so
     /// two overlapping creates would commit the one it already closed.
     private var audioStartTask: Task<Void, Error>?
+    /// S60 C6-7: the Settings test tone, kept alive until it finishes (`playTestTone()`).
+    private var testTonePlayer: AVAudioPlayer?
     /// libmediasoupclient's SendTransport/SendHandler state is unsynchronized,
     /// so every blocking send-side call (producer create and close, transport
     /// close, ICE restart) runs on the serial queue of the transport it
@@ -2508,12 +2516,19 @@ final class WebRTCClient: NSObject, ObservableObject {
     /// commits the producer live, so a mute that lands during the off-main
     /// create cannot leave an unpaused, audible microphone behind.
     private func createMicrophoneAudioTrack() -> (source: RTCAudioSource, track: RTCAudioTrack) {
+        // S60 C6-1: every new microphone source follows the Settings preference (`conclave.pref.noiseSuppression`,
+        // default on); `applyNoiseSuppression(_:)` passes the new value explicitly.
+        createMicrophoneAudioTrack(noiseSuppression: SettingsPreferences.noiseSuppression())
+    }
+
+    /// The same, with an explicit `googNoiseSuppression` value; the track is returned disabled.
+    private func createMicrophoneAudioTrack(noiseSuppression: Bool) -> (source: RTCAudioSource, track: RTCAudioTrack) {
         let audioConstraints = RTCMediaConstraints(
             mandatoryConstraints: nil,
             optionalConstraints: [
                 "googEchoCancellation": "true",
                 "googAutoGainControl": "true",
-                "googNoiseSuppression": "true",
+                "googNoiseSuppression": noiseSuppression ? "true" : "false",
                 "googHighpassFilter": "true"
             ]
         )
@@ -6638,11 +6653,100 @@ extension WebRTCClient {
         }
     }
 
-    /// Plays a short system sound through the current output route so the user can
-    /// confirm the selected speaker is audible (mirrors web's "Test speaker").
+    /// The legacy Settings "Test speaker" now plays the one shared test tone (S60 C6-7).
     func testSpeaker() {
-        // 1057 is the short "Tink" UI sound; routes through the active session.
-        AudioServicesPlaySystemSound(SystemSoundID(1057))
+        playTestTone()
+    }
+
+    // MARK: - Settings audio (S60 C6-1, C6-6, C6-7; SET-2)
+
+    /// C6-1: the live microphone track can be replaced with a source built with the new noise suppression value
+    /// (mediasoup `Producer.replaceTrack`, no renegotiation). [Unverified on device: if a device cell shows the
+    /// change does not take effect live, set this to false and the row reads "Applies the next time you join."]
+    var supportsLiveNoiseSuppressionChange: Bool { true }
+
+    /// C6-1: builds a new microphone source with `enabled` as its `googNoiseSuppression` value, creates its track
+    /// disabled, replaces the live producer's track on the producer's send queue (AGENTS.md: every blocking send-side
+    /// call runs there), then enables the new track only if the newest mute intent is unmuted, re-checked after the
+    /// await. The producer is never closed or recreated (zero producerClose). Without a live microphone it returns
+    /// false and the next microphone start reads the stored preference.
+    func applyNoiseSuppression(_ enabled: Bool) async -> Bool {
+        guard let producer = audioProducer, !producer.closed,
+              let queue = sendProducerOperationQueues[ObjectIdentifier(producer)] else { return false }
+        let generation = configurationGeneration
+        let microphone = createMicrophoneAudioTrack(noiseSuppression: enabled)
+        let handle = AudioTrackReplacementHandle(producer: producer, track: microphone.track)
+        do {
+            try await performSendTransportOperation(on: queue) {
+                try handle.producer.replaceTrack(handle.track)
+            }
+        } catch {
+            microphone.track.isEnabled = false
+            debugLog("[WebRTC] Noise suppression track replacement failed: \(error)")
+            return false
+        }
+        guard generation == configurationGeneration, audioProducer === producer, !producer.closed else {
+            // The producer went away during the await; whatever replaced it builds its own source from the preference.
+            microphone.track.isEnabled = false
+            return false
+        }
+        let previousTrack = rtcLocalAudioTrack
+        audioSource = microphone.source
+        rtcLocalAudioTrack = microphone.track
+        previousTrack?.isEnabled = false
+        // The newest intent wins: a mute that landed during the await left `localAudioIntentEnabled` false.
+        microphone.track.isEnabled = localAudioIntentEnabled && localAudioEnabled
+        return true
+    }
+
+    /// C6-6: the sender's media-source audio level (0 to 1) for the Settings meter, polled at 10 Hz only while the
+    /// Microphone page is visible; 0 while muted (the track is disabled then).
+    func sampleLocalMicrophoneLevel() -> Double {
+        guard localAudioEnabled, rtcLocalAudioTrack?.isEnabled == true, let audioProducer else { return 0 }
+        return Self.parseAudioLevel(audioProducer.stats) ?? 0
+    }
+
+    /// C6-7: one test tone (`TestTonePolicy`) through the voice route: an `AVAudioPlayer` on the call's
+    /// `AVAudioSession` (CallAudioSession owns category, mode and activation), so it plays wherever call audio plays.
+    /// Tap only, never automatic.
+    func playTestTone() {
+        testTonePlayer?.stop()
+        guard let player = try? AVAudioPlayer(data: Self.testToneWAVData()) else { return }
+        player.volume = 1.0
+        player.prepareToPlay()
+        if player.play() {
+            testTonePlayer = player
+        }
+    }
+
+    /// 16-bit mono PCM of `TestTonePolicy` wrapped in a WAV header.
+    private static func testToneWAVData() -> Data {
+        let count = TestTonePolicy.sampleCount
+        let rate = UInt32(TestTonePolicy.sampleRate)
+        var pcm = Data(capacity: count * 2)
+        for index in 0..<count {
+            let clamped = max(-1.0, min(1.0, TestTonePolicy.sample(index)))
+            let value = Int16(clamped * Double(Int16.max))
+            withUnsafeBytes(of: value.littleEndian) { pcm.append(contentsOf: $0) }
+        }
+        var data = Data()
+        func append32(_ value: UInt32) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+        func append16(_ value: UInt16) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+        data.append(contentsOf: Array("RIFF".utf8))
+        append32(UInt32(36 + pcm.count))
+        data.append(contentsOf: Array("WAVE".utf8))
+        data.append(contentsOf: Array("fmt ".utf8))
+        append32(16)
+        append16(1)
+        append16(1)
+        append32(rate)
+        append32(rate * 2)
+        append16(2)
+        append16(16)
+        data.append(contentsOf: Array("data".utf8))
+        append32(UInt32(pcm.count))
+        data.append(pcm)
+        return data
     }
 }
 

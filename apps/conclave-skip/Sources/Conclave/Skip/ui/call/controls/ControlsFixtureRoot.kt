@@ -89,6 +89,9 @@ private fun ControlsFixtureControls(session: ControlsFixtureSession, modifier: M
             ControlsFixtureReadout(session.compositionReadout(), "controls.composition", tick)
             ControlsFixtureReadout(session.explanationReadout(), "controls.explanation", tick)
             ControlsFixtureReadout(session.leaveReadout(), "controls.leave", tick)
+            // CTL-5 and CTL-6 (CL13): More's rows and the hand (the menu budget is iOS only).
+            ControlsFixtureReadout(session.moreReadout(), "controls.more", tick)
+            ControlsFixtureReadout(session.handReadout(), "controls.hand", tick)
             ControlsFixtureReadout(session.noticesReadout(), "stage.notices", tick)
             ControlsFixtureReadout(session.panelReadout(), "panel.current", tick)
             ControlsFixtureReadout(session.chromeReadout(), "chrome.transient", tick)

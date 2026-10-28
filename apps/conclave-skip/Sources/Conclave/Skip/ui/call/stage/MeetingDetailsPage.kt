@@ -144,6 +144,7 @@ internal fun MeetingDetailsPage(
     miniTileVideo: (@Composable () -> Unit)? = null,
     webinarLinkProvider: (suspend () -> String?)? = null,
     people: PeoplePresenter? = null,
+    settings: SettingsPresenter? = null,
 ) {
     val pages = LocalPanelPageStack.current
     val top = pages?.top
@@ -173,6 +174,8 @@ internal fun MeetingDetailsPage(
         onBack = { pages?.pop() },
     ) { reservation ->
         when {
+            top == MeetingDetailsPages.SETTINGS && settings != null -> SettingsAttendeeContent(settings, reservation, snackbar,
+                onOpenPrivacy = { pages?.push(MeetingDetailsPages.PRIVACY) })
             top == MeetingDetailsPages.SETTINGS -> MeetingDetailsAttendeeSettings(reservation, onPush = { pages?.push(it) })
             top == MeetingDetailsPages.PRIVACY -> MeetingDetailsPrivacyPage(reservation)
             top != null && meetingDetailsIsHostPage(top) ->

@@ -22,6 +22,9 @@ final class HostControlsPresenter {
     /// R34: the core's webinar link generation (`generateWebinarLink()`); fixtures install a scripted one. Called only
     /// through `ensureWebinarLink()`, which keeps it single flight.
     @ObservationIgnored var linkProvider: (() async -> String?)? = nil
+    /// PPL-5 (S50 9 j): the core's `refreshWebinarConfigNow()`, called once when Webinar Settings appears (not per
+    /// sub-page); fixtures leave it nil.
+    @ObservationIgnored var configRefresher: (() -> Void)? = nil
 
     @ObservationIgnored private(set) var inputs = HostControlsInputs.make()
     @ObservationIgnored private var requested: [String: Bool] = [:]
@@ -35,6 +38,10 @@ final class HostControlsPresenter {
     @ObservationIgnored private var inviteCodeSavedSerial = 0
     @ObservationIgnored private var linkPhase = WebinarLinkPhase.idle
     @ObservationIgnored private var linkTask: Task<String?, Never>? = nil
+    @ObservationIgnored private var rotatedLinkSerial = 0
+    @ObservationIgnored private var savedField = ""
+    @ObservationIgnored private var savedSerial = 0
+    @ObservationIgnored private(set) var configRefreshCount = 0
     @ObservationIgnored private(set) var applyCount = 0
 
     init() {}
@@ -265,6 +272,16 @@ final class HostControlsPresenter {
         return link.isEmpty ? nil : link
     }
 
+    /// S50 9 j: one config refresh when Webinar Settings appears, never per sub-page.
+    func refreshWebinarConfig() {
+        guard snapshot.isAvailable else { return }
+        configRefreshCount += 1
+        configRefresher?()
+    }
+
+    /// S50 9 a, 6 c: the Webinar Settings row shows while webinar mode is on; turning it off pops the page.
+    var isWebinarSettingsReachable: Bool { snapshot.isAvailable && snapshot.webinar.enabled }
+
     func requestRotateLink() {
         guard snapshot.isAvailable, let parent else { return }
         parent.presentHostConfirmation(kind: PeopleConfirmationKind.rotateWebinarLink, targetId: HostFieldID.customLink,
@@ -324,18 +341,34 @@ final class HostControlsPresenter {
             } else {
                 noticePhase = failed ? HostFieldPhase.failed : HostFieldPhase.idle
             }
-        case .setAttendeeCode:
-            if completed { drafts.attendeeCode = "" }
-        case .setLinkSlug:
-            if completed { drafts.slug = "" }
+        case .setAttendeeCode, .clearAttendeeCode:
+            if completed {
+                drafts.attendeeCode = ""
+                noteSaved(HostFieldID.attendeeCode)
+            }
+        case .setLinkSlug, .clearLinkSlug:
+            // The field now shows the server's slug; the draft reseeds from it (S50 9 j).
+            if completed {
+                drafts.slug = entry.command.kind == PeopleCommandKind.setLinkSlug ? entry.command.text : ""
+                noteSaved(HostFieldID.customLink)
+            }
         case .setMaxAttendees:
-            if completed { drafts.capacity = "" }
+            if completed {
+                drafts.capacity = String(entry.command.number)
+                noteSaved(HostFieldID.capacity)
+            }
         case .rotateLink, .generateLink:
             linkPhase = failed ? WebinarLinkPhase.failed : WebinarLinkPhase.idle
+            if completed && entry.command.kind == PeopleCommandKind.rotateLink { rotatedLinkSerial += 1 }
         default:
             break
         }
         rebuild()
+    }
+
+    private func noteSaved(_ field: String) {
+        savedField = field
+        savedSerial += 1
     }
 
     /// With the parent's reset (S1C 3.3 TEAR): drafts, pending intent and phases clear; revisions keep growing.
@@ -365,6 +398,7 @@ final class HostControlsPresenter {
         var pendingPolicies: [String] = []
         var pendingBulk: [String] = []
         var pendingAccess: [String] = []
+        var pendingFields: [String] = []
         for key in pendingKeys {
             let parts = key.components(separatedBy: ":")
             if parts.count < 2 { continue }
@@ -373,6 +407,8 @@ final class HostControlsPresenter {
                 pendingPolicies.append(target)
             } else if parts[0] == "bulk" {
                 pendingBulk.append(target)
+            } else if parts[0] == "field" {
+                pendingFields.append(target)
             } else if parts[0] == PeopleCommandKind.allowKey.rawValue || parts[0] == PeopleCommandKind.blockKey.rawValue
                         || parts[0] == PeopleCommandKind.unblockKey.rawValue || parts[0] == PeopleCommandKind.revokeKey.rawValue {
                 pendingAccess.append(target)
@@ -398,7 +434,11 @@ final class HostControlsPresenter {
             pendingAccessKeys: pendingAccess,
             webinar: webinar,
             canEndForEveryone: inputs.canEndForEveryone && isHostViewer,
-            endPhase: inputs.isEnding ? HostEndPhase.ending : HostEndPhase.idle
+            endPhase: inputs.isEnding ? HostEndPhase.ending : HostEndPhase.idle,
+            rotatedLinkSerial: rotatedLinkSerial,
+            pendingFields: pendingFields,
+            savedField: savedField,
+            savedSerial: savedSerial
         )
         if candidate != snapshot {
             snapshot = candidate.withRevision(snapshot.revision + 1)
@@ -411,7 +451,8 @@ final class HostControlsPresenter {
         guard let parent, isHostViewer, parent.isPanelOpen, previous.callSession == next.callSession, applyCount > 1 else { return }
         for id in [HostPolicyID.lockMeeting, HostPolicyID.allowGuests, HostPolicyID.allowUnmute, HostPolicyID.allowVideo,
                    HostPolicyID.allowChat, HostPolicyID.directMessages, HostPolicyID.photos, HostPolicyID.readAloud,
-                   HostPolicyID.reactions, HostPolicyID.webinarMode] {
+                   HostPolicyID.reactions, HostPolicyID.webinarMode, HostPolicyID.webinarPublic, HostPolicyID.webinarLocked,
+                   HostPolicyID.webinarQa] {
             let before = HostControlsPolicy.isOn(id, inputs: previous)
             let after = HostControlsPolicy.isOn(id, inputs: next)
             if before == after || requested[id.rawValue] != nil { continue }

@@ -93,7 +93,8 @@ private fun NoticeBanner(stage: StagePresenter, notice: MeetingNotice) {
     for (action in notice.actions) {
         if (action.id == NoticeAction.catchUp) continue
         val title = noticeActionTitle(action.id, notice, expanded)
-        actions.add(ConclaveBannerAction(title, "stage.banner.${notice.kind}.${action.id}", action.isEnabled) {
+        actions.add(ConclaveBannerAction(title, "stage.banner.${notice.kind}.${action.id}", action.isEnabled,
+            if (action.id == NoticeAction.retryRecovery) conclaveString("sys_retrying_now") else "") {
             when (action.id) {
                 NoticeAction.expand -> expanded = !expanded
                 NoticeAction.openSettings -> openNoticeSettings(context, notice)
@@ -134,18 +135,24 @@ private fun NoticeBottomLanes(stage: StagePresenter) {
     }
 }
 
-/** Toast lane: reads stage.toast only; the host times the snackbar and reports the result. */
+/**
+ * Toast lane: reads stage.toast only; the hosts time the snackbar and report the result. CHT-8 (S40 8 d): a chat preview
+ * draws the chat variant (ChatPreviewSnackbar.kt, its own swipe and View action); every other kind keeps the F00 C13 slot.
+ * Both hosts stay composed so each runs its own exit motion; the presenter shows one toast at a time.
+ */
 @Composable
 private fun NoticeToastLane(stage: StagePresenter, modifier: Modifier) {
     val notice = stage.toast
-    val item = if (notice == null) null else noticeToastItem(notice)
-    ConclaveToastHost(
-        item = item,
-        identifier = "stage.toast",
-        onAction = { shown -> stage.performNoticeAction(noticeId = shown.id, actionId = shown.actionId) },
-        onDismiss = { id -> stage.dismissNotice(id = id) },
-        modifier = modifier.testTag("stage.toast.lane"),
-    )
+    val item = if (notice == null || ChatPreviewPolicy.isChatPreview(notice)) null else noticeToastItem(notice)
+    Box(modifier.testTag("stage.toast.lane"), contentAlignment = Alignment.BottomCenter) {
+        ConclaveToastHost(
+            item = item,
+            identifier = "stage.toast",
+            onAction = { shown -> stage.performNoticeAction(noticeId = shown.id, actionId = shown.actionId) },
+            onDismiss = { id -> stage.dismissNotice(id = id) },
+        )
+        ChatPreviewSnackbarHost(stage)
+    }
 }
 
 /** Open settings from a banner: the Wi-Fi panel for a captive portal (API 29+, else Wi-Fi settings), else the app page. */

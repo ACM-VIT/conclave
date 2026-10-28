@@ -177,14 +177,16 @@ enum ControlBarPolicy {
                          appliesAfterReconnect: false, badge: engaged ? 0 : max(0, inputs.webinarQaUnseen), dot: false)
         case .more:
             if inputs.isWebinarAttendee { return nil }
-            // Compact: the host waiting count rides on More because Participants is not on the bar (1 f).
+            // Compact: the host waiting count rides on More because Participants is not on the bar (1 f). The dot (CTL-5)
+            // marks an open vote, live notes needing attention or unseen webinar questions behind More.
             var count = 0
             if composition != ControlBarComposition.wide && inputs.isLocalHost {
                 count = max(0, inputs.row(MeetingControlID.participants)?.badgeCount ?? 0)
             }
             return model(kind, isOn: false, blocked: leaving, pending: false,
                          reason: leaving ? ControlBlockedReason.leaving : ControlBlockedReason.none, name: "",
-                         appliesAfterReconnect: false, badge: count, dot: count == 0 && inputs.moreAttention)
+                         appliesAfterReconnect: false, badge: count,
+                         dot: count == 0 && (inputs.moreAttention || MoreMenuPolicy.hasAttention(inputs)))
         case .leave:
             guard let row = inputs.row(MeetingControlID.leave) else { return nil }
             // CTL-2: the host Leave menu exists whenever the host's End row does, also while End is blocked (S30 4 f).
@@ -198,6 +200,30 @@ enum ControlBarPolicy {
 
     /// The bar for a layout: the composition's controls in order, hidden ones dropped (positions of the rest never
     /// move between recovery and normal, S30 7 acceptance).
+    /// CHT-8 (HD request B6-T5 R4; S30 5 m, F00 C05 f): the fit moved Chat into More while it has unread messages.
+    static func chatMovedWithUnread(inputs: CallControlsInputs, overflowIds: [String]) -> Bool {
+        overflowIds.contains(CallControlKind.chat.rawValue) && (inputs.row(MeetingControlID.chat)?.badgeCount ?? 0) > 0
+    }
+
+    /// The bar with More's dot on, unless More already shows a badge (a count hides the dot, S30 1 f). The dot never
+    /// changes the fit, so this cannot loop.
+    static func withMoreDot(_ snapshot: ControlBarSnapshot) -> ControlBarSnapshot {
+        var controls: [CallControlModel] = []
+        for model in snapshot.controls {
+            if model.kind == CallControlKind.more && model.badgeCount == 0 && !model.showsDot {
+                controls.append(CallControlModel(id: model.id, kind: model.kind, isOn: model.isOn, visual: model.visual,
+                                                 isBlocked: model.isBlocked, isPending: model.isPending, reason: model.reason,
+                                                 reasonName: model.reasonName,
+                                                 appliesAfterReconnect: model.appliesAfterReconnect,
+                                                 badgeCount: model.badgeCount, showsDot: true, hasShortcut: model.hasShortcut))
+            } else {
+                controls.append(model)
+            }
+        }
+        return ControlBarSnapshot(revision: snapshot.revision, composition: snapshot.composition, axis: snapshot.axis,
+                                  controls: controls)
+    }
+
     static func bar(inputs: CallControlsInputs, layout: ControlBarLayout, revision: Int) -> ControlBarSnapshot {
         var controls: [CallControlModel] = []
         for kind in order(layout.composition) {

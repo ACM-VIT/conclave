@@ -82,6 +82,10 @@ private struct ControlsFixtureReadouts: View {
             readout(session.compositionReadout(), identifier: "controls.composition")
             readout(session.explanationReadout(), identifier: "controls.explanation")
             readout(session.leaveReadout(), identifier: "controls.leave")
+            // CTL-5 and CTL-6 (CL13): More's rows, the iOS menu budget and the hand.
+            readout(session.moreReadout(), identifier: "controls.more")
+            readout(session.menuHeightReadout(), identifier: "controls.menuHeight")
+            readout(session.handReadout(), identifier: "controls.hand")
             readout(session.noticesReadout(), identifier: "stage.notices")
             readout(session.panelReadout(), identifier: "panel.current")
             readout(session.chromeReadout(), identifier: "chrome.transient")

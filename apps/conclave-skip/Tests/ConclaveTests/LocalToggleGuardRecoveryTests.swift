@@ -1656,6 +1656,147 @@ struct LocalToggleGuardRecoveryTests {
         #expect(call.viewModel.state.chatMessages.isEmpty)
         await call.finish()
     }
+
+    // MARK: SYS-6 (S70 6 l1, l2, l5; S20 SC16): lifecycle refresh, recovery and system pressure
+
+    @Test
+    func inactiveReturnRunsTheLightRefreshAndABackgroundReturnRunsFullRecoveryWithKeyframes() async {
+        let call = RejoinHarness()
+        call.clearResumeSnapshot()
+        // The first activation of the process is full; with no call yet it starts nothing.
+        call.viewModel.handleAppBecameActive()
+        #expect(call.viewModel.lifecycleRefreshCounters.fullRecovery == 1)
+        #expect(await call.join())
+        call.viewModel.testSeedRemoteVideoProducer(userId: "remote@example.com#remote-session", producerId: "remote-camera")
+        let attempts = call.joinAttemptCount
+
+        // Control Center (inactive, then active): the light refresh only. No presence, audio activation or
+        // recovery, so the disconnected stub socket starts no rejoin.
+        call.viewModel.handleAppResignedActive()
+        call.viewModel.handleAppBecameActive()
+        #expect(call.viewModel.lifecycleRefreshCounters.lightRefresh == 1)
+        #expect(call.viewModel.lifecycleRefreshCounters.fullRecovery == 1)
+        #expect(call.viewModel.lifecycleRefreshCounters.keyframeRequests == 0)
+        await mainActorBarrier()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(call.joinAttemptCount == attempts)
+        #expect(call.viewModel.state.connectionState == .joined)
+
+        // Home and back (inactive, background, inactive, active): full recovery once, with a keyframe request for
+        // the one visible remote camera.
+        call.viewModel.handleAppResignedActive()
+        call.viewModel.handleAppEnteredBackground()
+        call.viewModel.handleAppResignedActive()
+        call.viewModel.handleAppBecameActive()
+        #expect(call.viewModel.lifecycleRefreshCounters.lightRefresh == 1)
+        #expect(call.viewModel.lifecycleRefreshCounters.fullRecovery == 2)
+        #expect(call.viewModel.lifecycleRefreshCounters.keyframeRequests == 1)
+        // The full path runs foreground recovery: the stub socket is not connected, so it rejoins once.
+        #expect(await settle { call.joinAttemptCount == attempts + 1 })
+        await call.finish()
+    }
+
+    @Test
+    func scriptedRejoinFailuresPublishAttemptTwoAndRetryNowStartsExactlyOneRejoin() async {
+        let call = RejoinHarness()
+        #expect(await call.join())
+        call.scriptJoinFailures(StubAckTimeout())
+
+        // Two failed rejoins: attempt 2 of 5 with Retry Now enabled between attempts (S20 10 f row 3).
+        #expect(await call.rejoin())
+        call.releaseJoinAttempts()
+        #expect(await settle { call.viewModel.makeStageNoticeInputs().reconnectAttempt == 1 })
+        // The backoff rejoin (1 s) reaches its held teardown.
+        #expect(await settle { call.calls.isHolding("cleanup(notifyLocalState: false)") })
+        call.releaseJoinAttempts()
+        #expect(await settle {
+            let inputs = call.viewModel.makeStageNoticeInputs()
+            return inputs.reconnectAttempt == 2 && !inputs.isRecoveryAttemptInFlight
+        })
+        let banner = call.reconnectingBanner()
+        #expect(banner?.count == 2)
+        #expect(banner?.total == 5)
+        #expect(banner?.actions == [NoticeAction.make(NoticeAction.retryRecovery, isEnabled: true)])
+
+        // A double Retry Now skips the 2 s backoff and starts one rejoin; Retry Now disables at once; the count
+        // stays 2.
+        let beforeRetry = call.joinAttemptCount
+        call.viewModel.retryRecoveryNow()
+        call.viewModel.retryRecoveryNow()
+        #expect(call.reconnectingBanner()?.actions == [NoticeAction.make(NoticeAction.retryRecovery, isEnabled: false)])
+        #expect(await settle { call.joinAttemptCount == beforeRetry + 1 })
+        await mainActorBarrier()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(call.joinAttemptCount == beforeRetry + 1)
+        #expect(call.viewModel.makeStageNoticeInputs().reconnectAttempt == 2)
+
+        // Retry Now while that attempt is in flight starts nothing.
+        call.viewModel.retryRecoveryNow()
+        await mainActorBarrier()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(call.joinAttemptCount == beforeRetry + 1)
+        #expect(call.reconnectingBanner()?.actions == [NoticeAction.make(NoticeAction.retryRecovery, isEnabled: false)])
+
+        // A watchdog rejoin after a 25 s stall leaves the count unchanged.
+        call.viewModel.testRunRecoveryWatchdogTick(recoveryAgeSeconds: 30, joinActivityAgeSeconds: 26)
+        #expect(await settle { call.joinAttemptCount == beforeRetry + 2 })
+        #expect(call.viewModel.makeStageNoticeInputs().reconnectAttempt == 2)
+
+        // The 120 s hard cap ends recovery with connectionLost, whatever the count. The failure's own media teardown
+        // has the join teardown's name, so stop holding it first.
+        call.calls.stopHoldingEvery("cleanup(notifyLocalState: false)")
+        call.viewModel.testRunRecoveryWatchdogTick(recoveryAgeSeconds: 121, joinActivityAgeSeconds: 1)
+        #expect(await settle { call.viewModel.state.terminalOutcome?.kind == .connectionLost })
+        #expect(call.viewModel.state.connectionState == .error)
+        await call.finish()
+    }
+
+    @Test
+    func aRejoinThatFindsTheRoomEndedEndsWithTheHostEndedHomeNotice() async {
+        let call = RejoinHarness()
+        #expect(await call.join())
+        call.scriptJoinFailures(StubMediaError("This meeting has ended"))
+        #expect(await call.rejoin())
+        call.releaseJoinAttempts()
+        #expect(await settle { call.viewModel.state.terminalOutcome?.kind == .endedByHost })
+        #expect(call.viewModel.state.meetingEndedNoticeMessage != nil)
+        #expect(call.viewModel.makeStageNoticeInputs().reconnectAttempt == 0)
+        await call.finish()
+    }
+
+    @Test
+    func thermalEscalationsPostOneToastLowerTheCeilingAndNeverTouchTheSavedQuality() async {
+        let call = RejoinHarness()
+        #expect(await call.join())
+        let savedQuality = call.viewModel.state.videoQuality
+        let savedSettings = UserDefaults.standard.string(forKey: NativeMediaQualityPreferences.storageKey)
+        func qualityToasts() -> Int {
+            call.viewModel.stage.recentEvents.filter { $0.kind == StageEventKind.qualityLowered }.count
+        }
+
+        call.viewModel.handleSystemThermalLevel(.serious)
+        call.viewModel.handleSystemThermalLevel(.critical)
+        #expect(call.viewModel.systemPressure.qualityLoweredToastsPosted == 1)
+        #expect(qualityToasts() == 1)
+        #expect(call.viewModel.systemPressure.ceiling.thermalSteps == 2)
+        #expect(call.viewModel.appliedCameraPublishSettings?.height == 360)
+        #expect(call.viewModel.state.videoQuality == savedQuality)
+        #expect(UserDefaults.standard.string(forKey: NativeMediaQualityPreferences.storageKey) == savedSettings)
+
+        // Nominal clears the ceiling: the saved setting's limits return.
+        call.viewModel.handleSystemThermalLevel(.nominal)
+        #expect(call.viewModel.systemPressure.ceiling == .unconstrained)
+        #expect(call.viewModel.appliedCameraPublishSettings
+            == NativeMediaQualityPolicy.resolvedCamera(NativeMediaQualityPreferences.load().camera))
+
+        // Low Power Mode applies the Data Saver ceiling and posts nothing.
+        call.viewModel.handleLowPowerModeChanged(true)
+        #expect(qualityToasts() == 1)
+        #expect(call.viewModel.appliedCameraPublishSettings?.height == 360)
+        #expect(call.viewModel.state.videoQuality == savedQuality)
+        #expect(UserDefaults.standard.string(forKey: NativeMediaQualityPreferences.storageKey) == savedSettings)
+        await call.finish()
+    }
 }
 
 /// A call whose join attempts come from the real `joinRoom`.
@@ -1792,6 +1933,38 @@ private final class RejoinHarness {
         viewModel.isRejoinInFlight = false
     }
 
+    /// SYS-6: join attempts that reached their media teardown (held or not). The view model's own
+    /// `cleanup(notifyLocalState: false)` logs the same name, so read it only before a terminal failure.
+    var joinAttemptCount: Int { calls.count(Self.joinTeardown) }
+
+    /// SYS-6: removes a resume snapshot an earlier run left, so the first activation of the process restores
+    /// nothing (finish() puts the saved value back).
+    func clearResumeSnapshot() {
+        UserDefaults.standard.removeObject(forKey: Self.resumeKey)
+    }
+
+    /// SYS-6: every released join attempt fails with this error (`MeetingViewModel.testJoinFetch`), never reaching
+    /// the network.
+    func scriptJoinFailures(_ error: Error) {
+        viewModel.testJoinFetch = { throw error }
+    }
+
+    /// SYS-6: releases every held join teardown. Retired attempts stop at their attempt guard; the current one goes
+    /// on to the scripted answer.
+    func releaseJoinAttempts() {
+        while calls.isHolding(Self.joinTeardown) {
+            calls.release(Self.joinTeardown)
+        }
+    }
+
+    /// SYS-6: the reconnecting banner the stage lane would show for the current inputs (iOS rows).
+    func reconnectingBanner() -> MeetingNotice? {
+        let banners = MeetingNoticePolicy.bannerCandidates(viewModel.makeStageNoticeInputs(), hostNotice: nil,
+                                                           liveNotesEpisode: 0, currentPanel: "",
+                                                           platform: NoticePlatform.ios)
+        return banners.first { $0.kind == NoticeKind.reconnecting }
+    }
+
     /// The admin control plane's mute of the local participant (it reaches
     /// the target too; a user's own toggles are never echoed to them).
     func deliverAdminMute() {
@@ -1913,6 +2086,7 @@ private final class RejoinHarness {
         #expect(returned, "a held stub call never returned to its caller")
         viewModel.testLocalToggleEnded = nil
         viewModel.testLocalMediaReportHandled = nil
+        viewModel.testJoinFetch = nil
         if let savedResumeSnapshot {
             UserDefaults.standard.set(savedResumeSnapshot, forKey: Self.resumeKey)
         } else {

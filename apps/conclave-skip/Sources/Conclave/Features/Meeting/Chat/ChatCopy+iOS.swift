@@ -68,6 +68,8 @@ enum ChatCopy {
         case "newMessage": return ConclaveStrings.format("Chat New Message %@ %@", announcement.name, announcement.text)
         case "newMessages": return ConclaveStrings.format("%lld new messages", announcement.count)
         case "copied": return ConclaveStrings.text("Copied")
+        // CHT-7 (S40 4 i): one announcement when an answer completes, with its first sentence.
+        case "assistantAnswered": return ConclaveStrings.format("Conclave answered: %@", announcement.text)
         default: return ""
         }
     }

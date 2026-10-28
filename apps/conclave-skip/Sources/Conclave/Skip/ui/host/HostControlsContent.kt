@@ -36,16 +36,17 @@ import androidx.compose.ui.unit.dp
  * (R50-2). System appearance; M3 switches in primary (R06); the End dialog is composed on this page (PH17, R09).
  */
 
-/** The pages of a host stack (R50-2). Webinar Settings, Attendee code and Custom link are PPL-5's (S50 9). */
+/** The pages of a host stack (R50-2), the webinar pages included (PPL-5, S50 9). */
 @Composable
 internal fun HostPageContent(people: PeoplePresenter, route: String, reservation: PaddingValues, snackbar: SnackbarHostState,
-                             onPush: (String) -> Unit) {
+                             onPush: (String) -> Unit, onPop: () -> Unit = {}) {
     when (route) {
         PeopleRoute.inviteCode.rawValue -> InviteCodePage(people, reservation, snackbar)
         PeopleRoute.accessList.rawValue -> AccessListPage(people, reservation, snackbar)
         PeopleRoute.notice.rawValue -> NoticeComposerPage(people, reservation, snackbar)
-        PeopleRoute.webinar.rawValue, PeopleRoute.attendeeCode.rawValue, PeopleRoute.customLink.rawValue ->
-            LazyColumn(Modifier.fillMaxSize().testTag("host.page.$route"), contentPadding = reservation) {}
+        PeopleRoute.webinar.rawValue -> WebinarSettingsPage(people, reservation, snackbar, onPush, onPop)
+        PeopleRoute.attendeeCode.rawValue -> AttendeeCodePage(people, reservation, snackbar, onPop)
+        PeopleRoute.customLink.rawValue -> CustomLinkPage(people, reservation, snackbar, onPop)
         else -> HostControlsContent(people, reservation, onPush)
     }
     HostConfirmationHost(people)
@@ -58,6 +59,8 @@ internal fun hostPageTitleName(route: String?): String = when (route) {
     PeopleRoute.accessList.rawValue -> "hst_access_title"
     PeopleRoute.notice.rawValue -> "hst_send_notice"
     PeopleRoute.webinar.rawValue -> "hst_webinar_settings"
+    PeopleRoute.attendeeCode.rawValue -> "hst_attendee_code_title"
+    PeopleRoute.customLink.rawValue -> "hst_custom_link"
     else -> "hst_title"
 }
 
@@ -261,6 +264,7 @@ internal fun HostControlsPage(
         isNested = pages?.isNested == true,
         onBack = { pages?.pop() },
     ) { reservation ->
-        HostPageContent(people, top ?: PeopleRoute.hostControls.rawValue, reservation, snackbar, onPush = { pages?.push(it) })
+        HostPageContent(people, top ?: PeopleRoute.hostControls.rawValue, reservation, snackbar, onPush = { pages?.push(it) },
+            onPop = { pages?.pop() })
     }
 }

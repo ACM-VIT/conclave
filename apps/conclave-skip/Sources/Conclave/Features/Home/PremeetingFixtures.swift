@@ -521,6 +521,9 @@ final class PremeetingFixtureSession {
         case .leave, .dismissOutcome:
             // Scripted, never a view model: the session goes Home.
             apply(PremeetingFixtureStep(delayMillis: 0, shell: PremeetingFixtureScript.home(), base: lastBase))
+        case .joinAsSpeaker, .cancelPromotion:
+            // S50 PH20: the promotion lobby lives over the attendee viewer in the call root, never in this fixture.
+            break
         case .rejoinLastMeeting:
             // ENT-6 (R4): the scripted context rejoins with the previous intent and shows Connecting; nothing joins.
             let mic = PremeetingFixtureScript.rejoinMicOn

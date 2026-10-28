@@ -259,22 +259,33 @@ struct ChatRowModel: Equatable, Identifiable {
 }
 
 /// One observable entry per row id (D11): a reaction, delivery or assistant change rewrites one entry, so only that
-/// row redraws. Equality-guarded writes.
+/// row redraws. Equality-guarded writes. `assistant` is the Conclave AI row's model (CHT-7), nil for every other row;
+/// a streamed delta rewrites only it, never the timeline.
 @MainActor
 @Observable
 final class ChatRowEntry {
     private(set) var row: ChatRowModel
+    private(set) var assistant: AssistantRowModel?
 
-    init(row: ChatRowModel) {
+    init(row: ChatRowModel, assistant: AssistantRowModel? = nil) {
         self.row = row
+        self.assistant = assistant
     }
 
-    /// Returns true when the row changed.
+    /// Returns true when the row or its assistant model changed. Each property is written only when it differs, so a
+    /// delta that changes only the answer leaves `row` observers alone.
     @discardableResult
-    func update(_ next: ChatRowModel) -> Bool {
-        guard next != row else { return false }
-        row = next
-        return true
+    func update(_ next: ChatRowModel, assistant nextAssistant: AssistantRowModel? = nil) -> Bool {
+        var changed = false
+        if next != row {
+            row = next
+            changed = true
+        }
+        if nextAssistant != assistant {
+            assistant = nextAssistant
+            changed = true
+        }
+        return changed
     }
 }
 
@@ -415,7 +426,8 @@ struct ChatPlaybackSnapshot: Equatable {
     let activeVoiceRowId: String
 }
 
-/// One-shot; the view resolves the string. `kind`: "newMessage", "newMessages", "sendFailed", "copied".
+/// One-shot; the view resolves the string. `kind`: "newMessage", "newMessages", "sendFailed", "copied", and
+/// "assistantAnswered" (CHT-7, S40 4 i: one polite announcement with the answer's first sentence in `text`).
 struct ChatAnnouncement: Equatable {
     let id: Int
     let kind: String
@@ -539,6 +551,9 @@ struct ChatMessageInput: Equatable {
     let suppressEmbeds: Bool
     /// S40 CH4: a voice message (the core's isTts).
     let isTts: Bool
+    /// S40 CH7 (CHT-7): the Conclave AI answer's process state (the asker's stream or the relayed packets); nil for
+    /// every other message and for history answers, which are complete.
+    let assistant: ChatAssistantInput?
 
     static func make(id: String, clientId: String = "", senderId: String, senderName: String, isOwn: Bool = false,
                      isAssistant: Bool = false, content: String, timestampMillis: Double, isDirect: Bool = false,
@@ -548,14 +563,16 @@ struct ChatMessageInput: Equatable {
                      gifTitle: String = "", delivery: ChatDelivery = ChatDelivery.delivered,
                      failure: ChatFailure = ChatFailure.none, failureServerText: String = "", isRetryable: Bool = false,
                      reactions: [ChatReactionInput] = [], isHistory: Bool = false,
-                     suppressEmbeds: Bool = false, isTts: Bool = false) -> ChatMessageInput {
+                     suppressEmbeds: Bool = false, isTts: Bool = false,
+                     assistant: ChatAssistantInput? = nil) -> ChatMessageInput {
         ChatMessageInput(id: id, clientId: clientId, senderId: senderId, senderName: senderName, isOwn: isOwn,
                          isAssistant: isAssistant, content: content, timestampMillis: timestampMillis, isDirect: isDirect,
                          dmTargetUserId: dmTargetUserId, dmTargetName: dmTargetName, reply: reply, imageURL: imageURL,
                          imageFileName: imageFileName, gifURL: gifURL, gifPreviewURL: gifPreviewURL, gifVideoURL: gifVideoURL,
                          gifKind: gifKind, gifWidth: gifWidth, gifHeight: gifHeight, gifTitle: gifTitle, delivery: delivery,
                          failure: failure, failureServerText: failureServerText, isRetryable: isRetryable,
-                         reactions: reactions, isHistory: isHistory, suppressEmbeds: suppressEmbeds, isTts: isTts)
+                         reactions: reactions, isHistory: isHistory, suppressEmbeds: suppressEmbeds, isTts: isTts,
+                         assistant: assistant)
     }
 
     /// The row id for life (CH1, D25): the client id of an own send, the server id otherwise.

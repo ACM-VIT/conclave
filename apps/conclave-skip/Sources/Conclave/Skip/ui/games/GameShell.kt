@@ -127,6 +127,9 @@ private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVi
     when (scene.kind) {
         GameSceneKind.lobby -> GameLobbyBody(scene, chrome)
         GameSceneKind.privateView -> GameKitNotice(GameKitNoticeKind.privateView, conclaveString("gm_private_loading_body"))
+        // ACT-3 (S60 9): the prompt game scenes, playing and results (K/ui/games/scenes).
+        GameSceneKind.trivia, GameSceneKind.bluff, GameSceneKind.wouldYouRather, GameSceneKind.mostLikelyTo,
+        GameSceneKind.reaction, GameSceneKind.imposter -> PromptGameSceneBody(games)
         GameSceneKind.unsupported -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             GameKitNotice(
                 GameKitNoticeKind.unsupported, "",
@@ -232,6 +235,9 @@ private fun GameShellBottomBar(games: GameStagePresenter) {
                 secondaryDestructive = true,
                 onSecondary = { prompt = true },
             )
+        } else if (chrome.phase == GameChromePhase.playing) {
+            // ACT-3 (S60 9 c): the prompt game host bar (seated host only).
+            PromptGameHostBar(games)
         }
     }
     if (prompt) GameShellEndDialog(games, chrome.name, onDismiss = { prompt = false })

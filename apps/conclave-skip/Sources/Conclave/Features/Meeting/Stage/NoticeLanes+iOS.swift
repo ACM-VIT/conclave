@@ -98,7 +98,8 @@ struct NoticeBannerView: View {
             let identifier = "stage.banner." + notice.kind + "." + action.id
             result.append(ConclaveBannerAction(title: title, identifier: identifier, action: {
                 perform(action.id, notice: notice)
-            }, isEnabled: action.isEnabled))
+            }, isEnabled: action.isEnabled,
+               disabledHint: action.id == NoticeAction.retryRecovery ? ConclaveStrings.text("Retrying now") : ""))
         }
         return result
     }
@@ -139,16 +140,22 @@ struct NoticeBottomLanes: View {
     }
 }
 
-/// Toast lane: reads `stage.toast` only. The host times the toast and reports it back.
+/// Toast lane: reads `stage.toast` only. The hosts time the toast and report it back. CHT-8 (S40 8 c): a chat preview
+/// draws the chat variant (`ChatPreviewToast+iOS.swift`); every other kind keeps the F00 C13 toast. Both hosts stay
+/// mounted, so each animates its own exit; the presenter shows one toast at a time.
 struct NoticeToastLane: View {
     let stage: StagePresenter
     let screenReader: Bool
 
     var body: some View {
-        let item = stage.toast.map { NoticeCopy.toastItem($0) }
-        ConclaveToastHost(item: item, isScreenReaderRunning: screenReader, identifier: "stage.toast",
-                          onAction: { shown in stage.performNoticeAction(noticeId: shown.id, actionId: shown.actionId) },
-                          onDismiss: { id in stage.dismissNotice(id: id) })
+        let current = stage.toast
+        let item = ChatPreviewPolicy.isChatPreview(current) ? nil : current.map { NoticeCopy.toastItem($0) }
+        ZStack(alignment: .bottom) {
+            ConclaveToastHost(item: item, isScreenReaderRunning: screenReader, identifier: "stage.toast",
+                              onAction: { shown in stage.performNoticeAction(noticeId: shown.id, actionId: shown.actionId) },
+                              onDismiss: { id in stage.dismissNotice(id: id) })
+            ChatPreviewToastHost(stage: stage, screenReader: screenReader)
+        }
     }
 }
 

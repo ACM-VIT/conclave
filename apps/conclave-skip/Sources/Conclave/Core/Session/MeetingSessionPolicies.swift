@@ -242,7 +242,9 @@ enum MeetingControlAvailabilityPolicy {
             )
         case .hand:
             var reason = MeetingBlockedReason.none
-            if isAttendee {
+            // S20 Q10 (PPL-5): with the attendee hand capability an attendee's hand follows the call like anyone's.
+            let attendeeHand = isAttendee && inputs.attendeeCanRaiseHand
+            if isAttendee && !attendeeHand {
                 reason = .attendee
             } else if isLeaving {
                 reason = .leaving
@@ -252,7 +254,7 @@ enum MeetingControlAvailabilityPolicy {
                 reason = .offline
             }
             return MeetingControlRow(
-                id: id.rawValue, isVisible: !isAttendee, isOn: inputs.isHandRaised,
+                id: id.rawValue, isVisible: !isAttendee || attendeeHand, isOn: inputs.isHandRaised,
                 isEnabled: reason == .none, isPending: context.handTicketPending || inputs.handToggleInFlight,
                 blockedReason: reason, hint: .none, badgeCount: 0,
                 failure: context.handFailure, failureDirection: context.handFailure == .none ? .none : context.handFailureDirection

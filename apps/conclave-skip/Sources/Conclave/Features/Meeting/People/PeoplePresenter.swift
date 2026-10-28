@@ -13,8 +13,10 @@ import Observation
 /// `HostActionLedger` (PH2), `onCommand` and `finish`, confirmations (row-anchored for the row sources, S50 3 j),
 /// `lastFailure` placed by origin (PL14, RECONCILE R2), the host outcome tokens in `feedbackState` and the rename flow
 /// (Q14, RECONCILE R38). PPL-4 adds `host` (`HostControlsPresenter`), which dispatches through `dispatch(...)`.
-/// Extension points: PPL-3 the waiting and hand actions; PPL-5 the webinar sections and `webinarQueueKnown`; PPL-6
-/// `qa` and `qaUnseen`; PPL-7 the full role-change table and `stageInvitation`.
+/// PPL-5 adds the webinar host sections (attendee hand queue rows, panelists, invited rows) and `webinarQueueKnown`;
+/// PPL-6 adds `qa` (`WebinarQAPresenter`, the same ledger) and feeds `qaUnseen`; PPL-7 applies `PeopleRolePolicy`
+/// (PL13: what closes, pops, clears or announces on each role, target or session change) and publishes the attendee
+/// side's `stageInvitation`. Extension point: PPL-3 the waiting and hand actions.
 @MainActor
 @Observable
 final class PeoplePresenter {
@@ -34,6 +36,8 @@ final class PeoplePresenter {
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
     /// The Change Name dialog (S50 3 c, 3 d).
     private(set) var rename: PeopleRenameState = PeopleRenameState.idle
+    /// PPL-7 (S50 12, PH9): the attendee side of `webinar:promoted`; drives the invitation alert over the viewer.
+    private(set) var stageInvitation: StageInvitationModel? = nil
 
     @ObservationIgnored let rows = PersonRowStore()
     @ObservationIgnored let waiting = WaitingRowStore()
@@ -47,6 +51,10 @@ final class PeoplePresenter {
     @ObservationIgnored var initialSearchQuery = ""
     /// S50 PPL-4: Host Controls, a child that dispatches through this presenter (one ledger, one failure path).
     @ObservationIgnored let host = HostControlsPresenter()
+    /// S50 PPL-6: Webinar Q&A, a child on the same ledger and failure path.
+    @ObservationIgnored let qa = WebinarQAPresenter()
+    /// PH20: Accept on the stage invitation; the core opens the S10 promotion lobby over the viewer (R30).
+    @ObservationIgnored var onAcceptStageInvitation: ((StageInvitationModel) -> Void)? = nil
     /// PH2: set once by the view model (`performPeopleCommand`); PL12 fixtures install a scripted one.
     @ObservationIgnored var onCommand: ((PeopleCommand, HostActionTicket) -> Void)? = nil
     /// The platform the panel runs on (`NoticePlatform` value) for PL14; the panel reports it, else the stage's.
@@ -76,6 +84,9 @@ final class PeoplePresenter {
     @ObservationIgnored private var nextConfirmationId = 0
     @ObservationIgnored private var nextFailureId = 0
     @ObservationIgnored private var nextRenameId = 0
+    @ObservationIgnored private var nextInvitationId = 0
+    /// PL13 diagnostics: the change kinds of the last apply (tests and the fixture readout).
+    @ObservationIgnored private(set) var lastRoleChange: [String] = []
     /// Failures Retry can re-dispatch (panel and stage), bounded.
     @ObservationIgnored private var retryable: [Int: HostLedgerEntry] = [:]
     @ObservationIgnored private var retryOrder: [Int] = []
@@ -86,6 +97,7 @@ final class PeoplePresenter {
         self.shell = shell
         self.stage = stage
         host.parent = self
+        qa.parent = self
         // RECONCILE R19: the tile menu reads this presenter's action table for the person under the finger.
         stage.people = self
     }
@@ -98,22 +110,58 @@ final class PeoplePresenter {
     /// Core only (PH1): the whole input set, equality guarded per published property and per row.
     func apply(_ next: PeopleInputs) {
         applyCount += 1
+        // PL13: one table decides what this change closes, pops, clears or announces (S50 12 f).
+        let effects = PeopleRolePolicy.effects(previous: PeopleRoleState.from(inputs), next: PeopleRoleState.from(next))
+        lastRoleChange = effects.kinds
         // A new call session starts clean (S1C SES): rows, focus and the lost-host notice never carry over.
-        if inputs.callSession != 0 && next.callSession != inputs.callSession {
+        if effects.has(PeopleRoleChangeKind.sessionChanged) {
             reset()
-        } else if inputs.attempt != 0 && next.attempt != inputs.attempt {
+        } else if effects.interruptsAllTickets {
             // PH2: an attempt change interrupts pending host actions with no feedback; late completions then drop.
             interruptPending()
+        } else if effects.interruptsHostTickets {
+            // Lost host: pending host tickets finish silently (PH2 interrupted); your rename and Q&A stay.
+            ledger.interruptHostActions()
+            host.rebuild()
+            qa.rebuild()
         }
         let previousViewer = snapshot.viewerRole
         inputs = next
+        applyRoleEffects(effects)
         rebuild(previousViewer: previousViewer)
+    }
+
+    /// The presenter's half of a PL13 change; the views follow the snapshot for pops (S50 12 c, d).
+    private func applyRoleEffects(_ effects: PeopleRoleEffects) {
+        if effects.kinds.isEmpty || effects.has(PeopleRoleChangeKind.sessionChanged) { return }
+        if effects.clearsHostConfirmations {
+            // Every People confirmation is a host dialog (person, bulk, access, webinar), the tile menu's included.
+            clearConfirmation()
+            // PH17: the Host Controls End confirmation belongs to S1 and closes with the role.
+            if let open = shell.session.confirmation, open.invoker == MeetingConfirmationInvoker.hostControls {
+                shell.cancelConfirmation(id: open.id)
+            }
+        } else if effects.closesMakeHostDialog, let current = confirmation, current.kind == PeopleConfirmationKind.makeHost {
+            clearConfirmation()
+        }
+        if effects.dismissesPanels {
+            // S1 ROLE: moved to the audience closes Participants, Host Controls and Q&A.
+            if let current = shell.panels.snapshot.current,
+               current.panel == MeetingPanel.participants || current.panel == MeetingPanel.hostControls {
+                shell.panels.dismiss(cancelPending: true)
+            }
+        }
+        if !effects.announcement.isEmpty {
+            stage.announce(kind: effects.announcement, name: effects.announcementName)
+        }
     }
 
     /// Core only: the S1 panel snapshot changed. When the presentation this presenter opened is no longer current the
     /// panel has closed (S50 1 c: `panelDidClose` comes from the coordinator's dismissal, never a root view's
     /// disappearance, so an iPad sheet-to-inspector move never closes it).
     func panelSnapshotChanged() {
+        // PPL-6: the Q&A presentation closes from the same coordinator dismissal (PH7 stores the marker in the core).
+        qa.panelSnapshotChanged(current: shell.panels.snapshot.current)
         if hostPresentationID != 0 {
             let shown = shell.panels.snapshot.current
             if shown == nil || shown?.presentationID != hostPresentationID || shown?.panel != MeetingPanel.hostControls {
@@ -212,6 +260,9 @@ final class PeoplePresenter {
         if lastFailure != nil { lastFailure = nil }
         if rename != PeopleRenameState.idle { rename = PeopleRenameState.idle }
         host.reset()
+        qa.reset()
+        if stageInvitation != nil { stageInvitation = nil }
+        lastRoleChange = []
         openPresentationID = 0
         hostPresentationID = 0
         openDestination = PanelDestination.none
@@ -460,6 +511,7 @@ final class PeoplePresenter {
             if isRename && rename.phase == PeopleRenamePhase.pending { rename = PeopleRenameState.idle }
         }
         host.actionFinished(entry, result: result)
+        qa.actionFinished(entry, result: result)
         rebuild(previousViewer: snapshot.viewerRole)
         return true
     }
@@ -476,6 +528,7 @@ final class PeoplePresenter {
         record("command:" + command.kind.rawValue)
         rebuild(previousViewer: snapshot.viewerRole)
         host.rebuild()
+        qa.rebuild()
         onCommand?(command, ticket)
         return ControlTapResult.dispatched
     }
@@ -504,8 +557,14 @@ final class PeoplePresenter {
             publishFeedback(FeedbackKind.hostPolicyChanged)
         case .bringOnStage:
             publishFeedback(FeedbackKind.hostInvitedToStage)
+            stage.announce(kind: PeopleAnnouncementKind.invitedToStage, name: name)
         case .moveToAudience:
             publishFeedback(FeedbackKind.hostMovedToAudience)
+            stage.announce(kind: PeopleAnnouncementKind.movedToAudience, name: name)
+        case .qaSubmit:
+            // S50 0.5 token table: WebinarQAPresenter's outcomes publish through this presenter's feedbackState.
+            publishFeedback(FeedbackKind.questionSent)
+            stage.announce(kind: PeopleAnnouncementKind.questionSent, name: "")
         case .sendNotice:
             stage.announce(kind: PeopleAnnouncementKind.noticeSent, name: "")
         default:
@@ -514,9 +573,10 @@ final class PeoplePresenter {
     }
 
     private func failed(_ entry: HostLedgerEntry, failure: String) {
-        // Lost host while it was in flight: the action finishes silently (S50 6 f, 12; PH2).
-        if !snapshot.isHostViewer && entry.command.kind != PeopleCommandKind.changeName { return }
-        publishFeedback(FeedbackKind.hostActionFailed)
+        // Lost host while it was in flight: a host action finishes silently (S50 6 f, 12; PH2). Your own rename, Q&A
+        // questions and votes and a stage decline still report.
+        if !snapshot.isHostViewer && PeopleRolePolicy.isHostCommand(entry.command.kind) { return }
+        publishFeedback(entry.command.kind == PeopleCommandKind.qaSubmit ? FeedbackKind.questionFailed : FeedbackKind.hostActionFailed)
         nextFailureId += 1
         let placement = PeopleFailurePlacementPolicy.placement(origin: PeopleActionSource.origin(entry.source),
                                                                platform: currentPlatform())
@@ -545,6 +605,7 @@ final class PeoplePresenter {
         ledger.interruptAll()
         if rename.phase == PeopleRenamePhase.pending { rename = PeopleRenameState.idle }
         host.rebuild()
+        qa.rebuild()
     }
 
     private func present(_ next: PeopleConfirmation) {
@@ -565,24 +626,31 @@ final class PeoplePresenter {
 
     /// S50 3 f: a person dialog closes when its target leaves or its action no longer applies (the target became a
     /// host while Make Co-Host was open); host role loss closes every host dialog (PPL-7 completes the PL13 table).
-    private func validateConfirmation(rowKeys: [String]) {
+    private func validateConfirmation(rowKeys: [String], blockedReason: String) {
         guard let current = confirmation else { return }
-        var keep = true
-        switch current.kind {
-        case .remove, .makeCoHost, .makeHost, .moveToAudience:
-            if !rowKeys.contains(current.targetId) {
-                keep = false
-            } else if let action = personAction(for: current.kind) {
-                var present = false
-                for item in rows.entry(for: current.targetId).model.actions {
-                    if item.action == action { present = true }
-                }
-                keep = present
+        let shown = rowKeys.contains(current.targetId)
+        var offered = true
+        if shown, let action = personAction(for: current.kind) {
+            offered = false
+            for item in rows.entry(for: current.targetId).model.actions {
+                if item.action == action { offered = true }
             }
-        default:
-            keep = PeopleOrderPolicy.viewerRole(inputs).isHostRole
         }
-        if !keep { clearConfirmation() }
+        let keep = PeopleRolePolicy.keepsConfirmation(kind: current.kind, targetShown: shown, actionOffered: offered,
+                                                      viewerIsHost: PeopleOrderPolicy.viewerRole(inputs).isHostRole)
+        if !keep {
+            clearConfirmation()
+            return
+        }
+        // S50 12 f "Recovery starts": an open confirmation stays, its confirm disabled with the reason.
+        let enabled = blockedReason == MeetingBlockedReason.none.rawValue
+        let reason = enabled ? PeopleActionReason.none : blockedReason
+        if current.isConfirmEnabled != enabled || current.reason != reason {
+            present(PeopleConfirmation(id: current.id, kind: current.kind, targetId: current.targetId,
+                                       targetName: current.targetName, count: current.count, source: current.source,
+                                       canBlock: current.canBlock, isGuest: current.isGuest, isConfirmEnabled: enabled,
+                                       reason: reason))
+        }
     }
 
     private func personAction(for kind: PeopleConfirmationKind) -> PersonActionID? {
@@ -620,6 +688,69 @@ final class PeoplePresenter {
     /// Your display name as People shows it (the notice preview names the sender, S50 8 b).
     func localName() -> String {
         localDisplayName()
+    }
+
+    // MARK: Children (PPL-5, PPL-6)
+
+    /// The ledger's pending entries, for the Q&A child's per-question pending state (PH2).
+    func pendingLedgerEntries() -> [HostLedgerEntry] {
+        ledger.pending
+    }
+
+    /// PPL-6: the host-side PH7 counter for the Participants "%lld new" row (S50 1 k: its own stored property).
+    func qaUnseenChanged(_ value: Int) {
+        let next = max(0, value)
+        if qaUnseen != next { qaUnseen = next }
+    }
+
+    /// Clears a panel failure in one slot (the Q&A panel's close, PL14).
+    func clearFailures(sourceKey: String) {
+        if let failure = lastFailure, failure.sourceKey == sourceKey { lastFailure = nil }
+    }
+
+    func clearFailures(sourcePrefix: String) {
+        if let failure = lastFailure, failure.sourceKey.hasPrefix(sourcePrefix) { lastFailure = nil }
+    }
+
+    // MARK: Stage invitation (S50 12, PH9, PH20; attendee side)
+
+    /// Core only (PH9 `webinar:promoted`): one invitation at a time; a second replaces the first (same id rules as S1
+    /// confirmations). The attendee side plays nothing (remote event, R05).
+    func presentStageInvitation(promotedByName: String, rejoinRoomId: String) {
+        guard PeopleOrderPolicy.viewerRole(inputs) == PersonRole.attendee else { return }
+        nextInvitationId += 1
+        stageInvitation = StageInvitationModel(id: nextInvitationId,
+                                               promotedByName: promotedByName.trimmingCharacters(in: .whitespacesAndNewlines),
+                                               rejoinRoomId: rejoinRoomId, session: inputs.callSession)
+    }
+
+    /// Join as a Speaker: the alert closes and the core opens the S10 promotion lobby over the still-playing viewer
+    /// (PH20, RECONCILE R30). A stale id or an invitation from an earlier session does nothing.
+    func acceptStageInvitation(id: Int) {
+        guard let invitation = stageInvitation, invitation.id == id else { return }
+        stageInvitation = nil
+        guard PeopleRolePolicy.acceptsInvitation(invitationSession: invitation.session, currentSession: inputs.callSession,
+                                                 viewerRole: PeopleOrderPolicy.viewerRole(inputs)) else { return }
+        record("acceptStage")
+        onAcceptStageInvitation?(invitation)
+    }
+
+    /// Not Now, Android Back or the lobby's Cancel: `webinar:declineStage` while still an attendee (PH8), so the
+    /// server releases the invite. Stage origin, so a failure uses the S20 toast lane (PL14).
+    func declineStageInvitation(id: Int) {
+        guard let invitation = stageInvitation, invitation.id == id else { return }
+        stageInvitation = nil
+        declineStage()
+    }
+
+    /// The decline itself (also the promotion lobby's Cancel, PH20).
+    @discardableResult
+    func declineStage() -> ControlTapResult {
+        guard PeopleOrderPolicy.viewerRole(inputs) == PersonRole.attendee else { return ControlTapResult.ignored }
+        record("declineStage")
+        return dispatch(PeopleCommand.make(PeopleCommandKind.declineStage),
+                        key: PeopleActionPolicy.ledgerKey(PeopleCommandKind.declineStage, target: PeopleActionPolicy.selfTarget),
+                        source: PeopleActionSource.stage, sourceKey: PeopleActionPolicy.selfTarget, targetName: "")
     }
 
     // MARK: Readouts (Debug fixture and tests)
@@ -731,7 +862,47 @@ final class PeoplePresenter {
             meetingNames.append(model.name)
             namesById[person.userId] = model.name
         }
-        validateConfirmation(rowKeys: rowKeys)
+
+        // PPL-5 (S50 10): webinar hosts see the attendee hand queue and the invited attendees as `attendee:` rows; the
+        // meeting Raised Hands section is not shown in webinar mode (panelists keep their hand glyph on their row).
+        let webinarHost = WebinarPeoplePolicy.showsWebinarSections(isWebinarEnabled: inputs.isWebinarEnabled, viewerRole: viewer)
+        var attendeeHandKeys: [String] = []
+        var attendeeHandSearch: [String] = []
+        var attendeeHandNames: [String] = []
+        var invitedKeys: [String] = []
+        var invitedSearch: [String] = []
+        var invitedNames: [String] = []
+        if webinarHost {
+            let queue = WebinarPeoplePolicy.queueOrder(inputs.webinarHandQueue)
+            var queuePosition = 0
+            for entry in queue {
+                queuePosition += 1
+                let key = PeopleOrderPolicy.attendeeKey(entry.userId)
+                let pending = PeopleActionPolicy.rowPendingAction(ledger.pendingAction(forRow: key))
+                let actions = WebinarPeoplePolicy.attendeeActions(isInvited: false, blockedReason: blocked.rawValue,
+                                                                  pendingAction: pending)
+                let model = WebinarPeoplePolicy.handRowModel(entry, position: queuePosition, actions: actions, pendingAction: pending)
+                if rows.write(model) { rowWriteCount += 1 }
+                rowKeys.append(key)
+                attendeeHandKeys.append(key)
+                attendeeHandSearch.append(model.name.lowercased())
+                attendeeHandNames.append(model.name)
+            }
+            for invite in WebinarPeoplePolicy.invitedRows(inputs.stageInvites, queue: queue) {
+                let key = PeopleOrderPolicy.attendeeKey(invite.userId)
+                let pending = PeopleActionPolicy.rowPendingAction(ledger.pendingAction(forRow: key))
+                let actions = WebinarPeoplePolicy.attendeeActions(isInvited: true, blockedReason: blocked.rawValue,
+                                                                  pendingAction: pending)
+                let model = WebinarPeoplePolicy.invitedRowModel(invite, actions: actions, pendingAction: pending)
+                if rows.write(model) { rowWriteCount += 1 }
+                rowKeys.append(key)
+                invitedKeys.append(key)
+                invitedSearch.append(model.name.lowercased())
+                invitedNames.append(model.name)
+            }
+        }
+
+        validateConfirmation(rowKeys: rowKeys, blockedReason: blocked.rawValue)
         rows.prune(keeping: rowKeys)
         host.peopleChanged(isHostViewer: viewer.isHostRole, blockedReason: blocked.rawValue, hasActiveShare: hasActiveShare,
                            anyHandRaised: !ordered.raisedHands.isEmpty)
@@ -764,12 +935,24 @@ final class PeoplePresenter {
             sections.append(PeopleSection(id: PeopleSectionID.waiting.rawValue, count: waitingKeys.count, rowIds: waitingKeys,
                                           searchKeys: waitingSearch, names: waitingNames))
         }
-        if !handKeys.isEmpty {
-            sections.append(PeopleSection(id: PeopleSectionID.raisedHands.rawValue, count: handKeys.count, rowIds: handKeys,
-                                          searchKeys: handSearch, names: handNames))
+        if webinarHost {
+            // S50 10 b: Raised Hands (attendee queue), Panelists, Attendees (the count row is the views' own leaf).
+            if !attendeeHandKeys.isEmpty {
+                sections.append(PeopleSection(id: PeopleSectionID.raisedHands.rawValue, count: attendeeHandKeys.count,
+                                              rowIds: attendeeHandKeys, searchKeys: attendeeHandSearch, names: attendeeHandNames))
+            }
+            sections.append(PeopleSection(id: PeopleSectionID.panelists.rawValue, count: meetingKeys.count, rowIds: meetingKeys,
+                                          searchKeys: meetingSearch, names: meetingNames))
+            sections.append(PeopleSection(id: PeopleSectionID.attendees.rawValue, count: invitedKeys.count, rowIds: invitedKeys,
+                                          searchKeys: invitedSearch, names: invitedNames))
+        } else {
+            if !handKeys.isEmpty {
+                sections.append(PeopleSection(id: PeopleSectionID.raisedHands.rawValue, count: handKeys.count, rowIds: handKeys,
+                                              searchKeys: handSearch, names: handNames))
+            }
+            sections.append(PeopleSection(id: PeopleSectionID.inMeeting.rawValue, count: meetingKeys.count, rowIds: meetingKeys,
+                                          searchKeys: meetingSearch, names: meetingNames))
         }
-        sections.append(PeopleSection(id: PeopleSectionID.inMeeting.rawValue, count: meetingKeys.count, rowIds: meetingKeys,
-                                      searchKeys: meetingSearch, names: meetingNames))
 
         let candidate = PeopleSnapshot(
             revision: snapshot.revision,
@@ -787,7 +970,7 @@ final class PeoplePresenter {
             accessSummary: PeopleRowPolicy.accessSummary(isRoomLocked: inputs.isRoomLocked, isNoGuests: inputs.isNoGuests).rawValue,
             qaVisible: PeopleRowPolicy.qaVisible(viewerRole: viewer, isWebinarEnabled: inputs.isWebinarEnabled,
                                                  isWebinarQaEnabled: inputs.isWebinarQaEnabled),
-            webinarQueueKnown: false,
+            webinarQueueKnown: webinarHost ? inputs.webinarQueueKnown : true,
             showsLostHostNotice: showsLostHost
         )
         if candidate != snapshot {

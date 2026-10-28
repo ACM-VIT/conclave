@@ -17,6 +17,11 @@ private typealias AppDelegate = ConclaveAppDelegate
                 .frame(minWidth: CGFloat(ConclaveWindowMetrics.minimumWidth), maxWidth: .infinity, maxHeight: .infinity)
         }
         .windowResizability(.contentMinSize)
+        #if os(iOS)
+        // S30 CC20, CL21 (CTL-5): the "Call" hardware keyboard commands (Conclave's `ConclaveCallCommands`); they read
+        // the call's controls presenter through the focused scene value, so the menu is empty outside a call.
+        .commands { ConclaveCallCommands() }
+        #endif
         .onChange(of: scenePhase) { oldPhase, newPhase in
             switch newPhase {
             case .active:

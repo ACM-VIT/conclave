@@ -392,6 +392,15 @@ SFU handlers come in two shapes and each needs the matching client emit:
 Check the handler signature in `packages/sfu/server/socket/handlers/` before
 wiring any new ack event.
 
+## Conclave AI Relay Packets
+
+The web route signs every assistant relay packet over `reasoning`, `reasoningDone`, `tasks` and `errored` as well as
+the text (`relaySigningInput`; the SFU rebuilds the same input). The asker forwards the route's packet unchanged:
+`ConclaveAssistantRelayPacket` keeps those optional fields and both encoders omit them when absent (never a null task
+query). Dropping one fails the SFU signature check and the room never sees the answer. The asker's stream
+(`NativeConclaveAssistantService.ask(...onEvent:)`, `AndroidNativeHttpClient.requestAssistantStream`) feeds
+`ConclaveAssistantStore`, which throttles relays like the web (`maybeRelay`) and coalesces chat refreshes to 100 ms.
+
 ## Chat Message Reconstruction Sites
 
 `ChatMessage` gets REBUILT (not copied) in several places; a new field with an
@@ -573,6 +582,13 @@ Fixed 2026-10-22 and guarded by `testNativeCallCorrectnessBlockersStayFixed`:
   (dropped, no activity, or cancelled by Android behind another dialog) does
   not use up the once-per-process ask
   (`wasLastNotificationsPermissionRequestAnswered()`).
+- SYS-5: the legacy `CallScreenAwake.setActive(_:)` gate above stays, and the
+  call presence also drives keep awake and proximity through
+  `CallScreenAwake.makePresenceAdapter()` (`keepsScreenAwake`, waiting
+  included, and `proximityArmed` on the receiver route), written once per
+  edge. On Android the presence rule is Compose-scoped
+  (`CallKeepScreenOnEffect()` in the native roots) and never touches SkipUI's
+  window flag; the proximity wake lock lives in `ProximityController.kt`.
 
 ## Android `onChange` Crash Pattern
 

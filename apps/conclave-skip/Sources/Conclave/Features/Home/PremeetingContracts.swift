@@ -11,7 +11,7 @@ import Foundation
 /// (S10 0.4), never a route. New pages add a case here, a destination in `PremeetingRoot+iOS.swift` and a key in
 /// `K/ui/home/PremeetingBackStack.kt` (Lobby ENT-3 landed; Account and Privacy ENT-7, Webinar landing ENT-9).
 enum PremeetingRouteKind: String, CaseIterable, Equatable {
-    case lobby, webinarLanding, account, privacyPolicy
+    case lobby, webinarLanding, account, privacyPolicy, settings
 }
 
 struct PremeetingRoute: Hashable {
@@ -289,6 +289,12 @@ enum PremeetingCommand: String, CaseIterable, Equatable {
     /// in a `rejoin` lobby: `MeetingViewModel.rejoinLastMeeting()` joins with the call's original room, invite codes,
     /// client id and media intent (RECONCILE R4; HD request B5-T5 R3).
     case rejoinLastMeeting
+    /// S50 PH20 (PPL-7): "Join as a Speaker" in the promotion lobby: S1 ends the attendee session silently and joins
+    /// the rejoin room with the same identity and the lobby's intents (`MeetingViewModel.joinAsSpeaker()`).
+    case joinAsSpeaker
+    /// S50 PH20: Cancel or Back in the promotion lobby: `webinar:declineStage` while still an attendee; the lobby
+    /// closes and the viewer keeps playing.
+    case cancelPromotion
 }
 
 /// Pushed inputs (S10 0.5 table, S1C 3.2 format). Every field is a scalar the core already owns; `apply(_:)` is

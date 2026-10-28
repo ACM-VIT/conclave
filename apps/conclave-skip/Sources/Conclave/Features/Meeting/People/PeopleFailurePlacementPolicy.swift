@@ -70,10 +70,28 @@ enum PeopleFailureCopy {
     static let access = "access"
     static let notice = "notice"
     static let link = "link"
+    /// PPL-5 (S50 10 g, 9 g): "Couldn't invite %@ on stage.", "%@ is no longer watching.", "Couldn't cancel the
+    /// invite.", "Couldn't update webinar settings."
+    static let invite = "invite"
+    static let inviteGone = "inviteGone"
+    static let cancelInvite = "cancelInvite"
+    static let webinar = "webinar"
+    /// PPL-6 (S50 11 f, g): "Couldn't send your question.", "You're sending questions too quickly.", "Ask a longer
+    /// question.", "Couldn't update the question."
+    static let qaSend = "qaSend"
+    static let qaRateLimited = "qaRateLimited"
+    static let qaTooShort = "qaTooShort"
+    static let qaModerate = "qaModerate"
     static let generic = "generic"
 
     static func kind(action: String, failure: String, sourceKey: String) -> String {
         let typed = HostActionFailure(rawValue: failure)
+        // PPL-6: a question's own refusals read as Q&A sentences (S50 11 f) before the shared reasons.
+        if action == PeopleCommandKind.qaSubmit.rawValue {
+            if typed == HostActionFailure.rateLimited { return qaRateLimited }
+            if typed == HostActionFailure.invalidInput { return qaTooShort }
+        }
+        if action == PeopleCommandKind.bringOnStage.rawValue && typed == HostActionFailure.notFound { return inviteGone }
         if typed == HostActionFailure.superAdmin { return cantRemove }
         if typed == HostActionFailure.rateLimited { return rateLimited }
         if typed == HostActionFailure.notJoined || typed == HostActionFailure.notConnected { return reconnect }
@@ -96,6 +114,11 @@ enum PeopleFailureCopy {
         case .allowKey, .blockKey, .unblockKey, .revokeKey, .refreshAccessLists: return access
         case .sendNotice: return notice
         case .generateLink, .rotateLink: return link
+        case .bringOnStage: return invite
+        case .cancelStageInvite: return cancelInvite
+        case .setMaxAttendees, .setAttendeeCode, .clearAttendeeCode, .setLinkSlug, .clearLinkSlug: return webinar
+        case .qaSubmit: return qaSend
+        case .qaUpvote, .qaModerate: return qaModerate
         default: return generic
         }
     }
@@ -113,7 +136,7 @@ enum PeopleFailureCopy {
     private static func isPersonAction(_ kind: PeopleCommandKind) -> Bool {
         switch kind {
         case .mute, .turnOffCamera, .stopScreenShare, .stopScreenAudio, .remove, .block, .makeCoHost, .makeHost,
-             .moveToAudience, .admit, .deny:
+             .moveToAudience, .admit, .deny, .cancelStageInvite:
             return true
         default:
             return false

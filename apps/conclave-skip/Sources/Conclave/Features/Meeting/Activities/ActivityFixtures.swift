@@ -154,7 +154,8 @@ enum ActivityFixtureScript {
 
     /// What the activity layer adds to the stage fixture inputs (presence and names only, S20 11 j).
     static func stageInputs(named raw: String, base: StageInputs) -> StageInputs {
-        guard let state = state(named: raw) else { return base }
+        // ACT-3 prompt game states (HD request B6-T7 R4); `base` for any other name.
+        guard let state = state(named: raw) else { return PromptGameFixtures.stageInputs(named: raw, base: base) }
         var appId = ""
         var gameActive = false
         var gameName = ""
@@ -298,7 +299,11 @@ enum ActivityFixtureScript {
     @discardableResult
     @MainActor
     static func apply(named raw: String, session: ActivitySession, owner: ActivityFixtureOwner) -> ActivityFixtureState? {
-        guard let state = state(named: raw) else { return nil }
+        guard let state = state(named: raw) else {
+            // ACT-3 prompt game states (HD request B6-T7 R4); nothing for any other name.
+            PromptGameFixtures.apply(named: raw, session: session, owner: owner)
+            return nil
+        }
         session.activities.onCommand = { [weak owner] command in
             owner?.record(command)
         }

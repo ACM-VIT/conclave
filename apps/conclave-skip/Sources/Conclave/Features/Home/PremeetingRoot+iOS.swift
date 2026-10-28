@@ -165,6 +165,8 @@ struct NativeCallBranch<InterimCall: View>: View {
                 CallRoot(shell: shell, stage: stage, people: people, renderers: .live, activitySession: activitySession)
                     .entryExpansion(start: nativeStart, onCovered: onCovered)
                     .modifier(PremeetingSwitchAlert(premeeting: premeeting, isActive: true))
+                    // S50 PH20 (PPL-7, RECONCILE R30): the promotion lobby as a large sheet over the playing viewer.
+                    .modifier(PromotionLobbySheet(premeeting: premeeting))
                     .transition(.asymmetric(insertion: nativeStart == nil ? .opacity : .identity, removal: .opacity))
             } else if premeeting.root.root == .call {
                 interimCall()
@@ -246,6 +248,9 @@ private struct PremeetingDestination: View {
             AccountList(account: premeeting.account, usesRouteLinks: false)
         case .privacyPolicy:
             PrivacyPolicyScreen()
+        case .settings:
+            // Android only (`SettingsKey`); iOS opens app-scope Settings inside the Account sheet.
+            EmptyView()
         }
     }
 }

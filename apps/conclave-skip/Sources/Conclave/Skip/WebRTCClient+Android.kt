@@ -3299,11 +3299,14 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         clearAudioSource()
     }
 
-    private fun microphoneAudioConstraints(): MediaConstraints {
+    // S60 C6-1 (SET-2): noise suppression follows the Settings preference (conclave.pref.noiseSuppression, default
+    // on) whenever a microphone source is built; applyNoiseSuppression passes the new value explicitly. The
+    // factory-time hardware suppressor stays as built (it is a JavaAudioDeviceModule builder option).
+    private fun microphoneAudioConstraints(noiseSuppression: Boolean = SettingsPreferences.noiseSuppression()): MediaConstraints {
         return MediaConstraints().apply {
             optional.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
             optional.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
-            optional.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "true"))
+            optional.add(MediaConstraints.KeyValuePair("googNoiseSuppression", if (noiseSuppression) "true" else "false"))
             optional.add(MediaConstraints.KeyValuePair("googHighpassFilter", "true"))
         }
     }
@@ -6324,18 +6327,125 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         bluetoothConnectPermissionRequestToken = if (completedSynchronously) null else token
     }
 
-    // Plays a short DTMF/beep through the active output so the user can confirm
-    // the selected speaker is audible (mirrors web's "Test speaker").
+    // The legacy Settings "Test speaker" now plays the one shared test tone (S60 C6-7).
     internal fun testSpeaker() {
+        playTestTone()
+    }
+
+    // MARK: Settings audio (S60 C6-1, C6-6, C6-7; SET-2)
+
+    private var testToneTrack: android.media.AudioTrack? = null
+
+    /**
+     * C6-7: one test tone (TestTonePolicy) through the voice route: a static AudioTrack with
+     * USAGE_VOICE_COMMUNICATION, so it follows the communication device (earpiece, speaker, Bluetooth) and the voice
+     * call volume while call audio is live. Tap only, never automatic; released after it plays.
+     */
+    internal fun playTestTone() {
+        releaseTestTone()
         try {
-            val tone = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80)
-            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 250)
-            // Release after the tone finishes so the generator isn't leaked.
+            val count = TestTonePolicy.sampleCount
+            val pcm = ShortArray(count) { index ->
+                val value = TestTonePolicy.sample(index).coerceIn(-1.0, 1.0)
+                (value * Short.MAX_VALUE).toInt().toShort()
+            }
+            val track = android.media.AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build(),
+                )
+                .setAudioFormat(
+                    android.media.AudioFormat.Builder()
+                        .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(TestTonePolicy.sampleRate)
+                        .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
+                        .build(),
+                )
+                .setBufferSizeInBytes(count * 2)
+                .setTransferMode(android.media.AudioTrack.MODE_STATIC)
+                .build()
+            track.write(pcm, 0, pcm.size)
+            track.play()
+            testToneTrack = track
             mainHandler.postDelayed({
-                tone.release()
-            }, 400L)
-        } catch (_: Throwable) {
+                if (testToneTrack === track) releaseTestTone()
+            }, TestTonePolicy.playingMillis.toLong())
+        } catch (error: Throwable) {
+            debugLog("[WebRTC] Test tone failed: ${error}")
+            releaseTestTone()
         }
+    }
+
+    private fun releaseTestTone() {
+        val track = testToneTrack ?: return
+        testToneTrack = null
+        try { track.stop() } catch (_: Throwable) {}
+        try { track.release() } catch (_: Throwable) {}
+    }
+
+    /**
+     * C6-1: the live microphone track can be replaced (org.mediasoup.droid.Producer.replaceTrack, no renegotiation).
+     * [Unverified on device: on devices with a hardware suppressor WebRTC may route the constraint to the platform
+     * effect, which can apply only when recording restarts; if the device cell shows that, return false here and the
+     * row reads "Applies the next time you join."]
+     */
+    internal val supportsLiveNoiseSuppressionChange: Boolean
+        get() = true
+
+    /**
+     * C6-1: builds a new source with [enabled] as its googNoiseSuppression value, creates its track disabled and
+     * replaces the live producer's track (synchronous on the main thread, like every Android producer call, so no
+     * mute can land between the check and the commit), then enables the new track only while the newest intent is
+     * unmuted. The producer is never closed or recreated. Without a live microphone it returns false and the next
+     * microphone start reads the stored preference.
+     */
+    internal suspend fun applyNoiseSuppression(enabled: Boolean): Boolean {
+        val producer = audioProducer ?: return false
+        if (!hasUsableProducer(producer)) return false
+        val factory = peerConnectionFactory ?: return false
+        val generation = configurationGeneration
+        var nextSource: AudioSource? = null
+        var nextTrack: AudioTrack? = null
+        try {
+            nextSource = factory.createAudioSource(microphoneAudioConstraints(noiseSuppression = enabled))
+            nextTrack = factory.createAudioTrack(nextLocalAudioTrackId(), nextSource)
+            val track = nextTrack ?: return false
+            track.setEnabled(false)
+            producer.replaceTrack(track)
+            if (generation != configurationGeneration || audioProducer !== producer || !hasUsableProducer(producer)) {
+                return false
+            }
+            val previousTrack = localAudioTrack
+            val previousSource = audioSource
+            localAudioTrack = track
+            audioSource = nextSource
+            nextTrack = null
+            nextSource = null
+            // The newest intent wins: a mute leaves localAudioTargetEnabled false.
+            track.setEnabled(localAudioTargetEnabled && localAudioEnabled)
+            disposeAudioTrack(previousTrack)
+            previousSource?.dispose()
+            return true
+        } catch (error: Throwable) {
+            debugLog("[WebRTC] Noise suppression track replacement failed: ${error}")
+            return false
+        } finally {
+            disposeAudioTrack(nextTrack)
+            nextSource?.dispose()
+        }
+    }
+
+    /**
+     * C6-6: the sender's audio level (0 to 1) for the Settings meter, polled at 10 Hz only while the Microphone page
+     * is visible; 0 while muted (the track is disabled and the audio device module muted then).
+     */
+    internal fun sampleLocalMicrophoneLevel(): Double {
+        val producer = audioProducer ?: return 0.0
+        if (!localAudioEnabled || localAudioTrack?.enabled() != true) return 0.0
+        val statsJson = try { producer.getStats() } catch (_: Throwable) { return 0.0 }
+        return parseAudioLevel(statsJson) ?: 0.0
     }
 
     private val outgoingBandwidthFairBps = 500_000.0

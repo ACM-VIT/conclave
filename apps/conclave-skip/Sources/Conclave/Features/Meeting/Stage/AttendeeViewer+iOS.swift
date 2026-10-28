@@ -50,6 +50,42 @@ private struct AttendeeWaitingCard: View {
     }
 }
 
+/// S50 12 c (PPL-7, PH9): the stage invitation over the attendee viewer. A system `alert` (not an action sheet: the
+/// decision is not tied to a control the person touched, IOS 10.2) on a zero-size leaf in the call root, so it inherits
+/// the dark stage environment and its reads never invalidate the canvas. The invitation stays in presenter state while
+/// the app is in the background and reappears on return; a second invitation replaces the first. Join as a Speaker
+/// starts the PH20 handoff (the promotion lobby over the still-playing viewer); Not Now declines
+/// (`webinar:declineStage`). Nothing plays on the invitation (remote event, R05). Mounted by the native call root (HD
+/// request B6-T1 R2).
+struct AttendeeRoleLayer: View {
+    let stage: StagePresenter
+
+    var body: some View {
+        let people = stage.people
+        let invitation = people?.stageInvitation
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .alert(ConclaveStrings.text("You\u{2019}re Invited on Stage"),
+                   // The two buttons decide (the cancel role is Not Now); the dismissal itself never declines, so an
+                   // Accept is never read as a decline whatever order the system closes the alert in.
+                   isPresented: Binding(get: { invitation != nil }, set: { _ in }),
+                   presenting: invitation) { open in
+                Button(ConclaveStrings.text("Join as a Speaker")) {
+                    people?.acceptStageInvitation(id: open.id)
+                }
+                .accessibilityIdentifier("stage.invite.accept")
+                Button(ConclaveStrings.text("Not Now"), role: .cancel) {
+                    people?.declineStageInvitation(id: open.id)
+                }
+                .accessibilityIdentifier("stage.invite.decline")
+            } message: { open in
+                Text(AttendeeViewerCopy.invitationMessage(open.promotedByName))
+            }
+            .accessibilityIdentifier("stage.attendee.role")
+    }
+}
+
 /// Attendee copy on iOS (Apple title case; S20 12 g). The chrome resolves the capsule through `capsuleSubtitle` and
 /// `title` (HD request B5-T2 R5), the slot view the feed labels (HD request B5-T2 R7) and the announcer the two
 /// announcement kinds (HD request B5-T2 R5).
@@ -71,6 +107,14 @@ enum AttendeeViewerCopy {
     /// "Live Video from Avery" or "Shared Screen from Avery" (12 i; four-letter prepositions stay lowercase).
     static func feedLabel(isShare: Bool, name: String) -> String {
         isShare ? ConclaveStrings.format("Shared Screen from %@", name) : ConclaveStrings.format("Live Video from %@", name)
+    }
+
+    /// S50 12 g: the invitation message with the host's name, or the fallback when none was sent.
+    static func invitationMessage(_ name: String) -> String {
+        if name.isEmpty {
+            return ConclaveStrings.text("A host wants to bring you into the conversation. You\u{2019}ll rejoin as a speaker and can turn on your microphone and camera.")
+        }
+        return ConclaveStrings.format("%@ wants to bring you into the conversation. You\u{2019}ll rejoin as a speaker and can turn on your microphone and camera.", name)
     }
 
     /// One-shot announcements (12 f, 12 i); nil for kinds this file does not own.

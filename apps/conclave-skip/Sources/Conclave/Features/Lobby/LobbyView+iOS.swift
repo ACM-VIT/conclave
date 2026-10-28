@@ -58,14 +58,18 @@ private struct LobbyControlsColumn: View {
     let premeeting: PremeetingPresenter
 
     var body: some View {
+        // S50 PH20 (RECONCILE R30): the promotion lobby keeps your identity and has no link or Share.
+        let isPromotion = premeeting.lobbyStatus?.intent == LobbyIntent.promotion
         VStack(alignment: .leading, spacing: 16) {
             LobbyIssueSection(premeeting: premeeting)
             LobbyMicrophonePermissionSection(premeeting: premeeting)
             LobbyAudioSection(premeeting: premeeting)
-            LobbyIdentitySection(premeeting: premeeting)
-            LobbyInviteCodeSection(premeeting: premeeting)
-            LobbyGroupedSection {
-                MeetingLinkRow(premeeting: premeeting)
+            if !isPromotion {
+                LobbyIdentitySection(premeeting: premeeting)
+                LobbyInviteCodeSection(premeeting: premeeting)
+                LobbyGroupedSection {
+                    MeetingLinkRow(premeeting: premeeting)
+                }
             }
         }
     }
@@ -362,8 +366,10 @@ private struct LobbyTitle: ViewModifier {
     let route: PremeetingRoute
 
     func body(content: Content) -> some View {
-        let title = premeeting.lobbyLink?.roomLabel ?? route.roomId
         let status = premeeting.lobbyStatus?.routeId == route.id ? premeeting.lobbyStatus : nil
+        // S10 6 g (RECONCILE R30): the promotion lobby's title is "Join as a Speaker".
+        let title = status?.intent == LobbyIntent.promotion ? ConclaveStrings.text("Join as a Speaker")
+            : (premeeting.lobbyLink?.roomLabel ?? route.roomId)
         let subtitle = EntryStatusCopy.subtitle(status: status, presence: premeeting.lobbyPresence)
         if #available(iOS 26.0, *) {
             content
@@ -419,6 +425,7 @@ private struct LobbyChrome: ViewModifier {
     func body(content: Content) -> some View {
         let status = premeeting.lobbyStatus
         let isBusy = status?.routeId == routeId && (status?.mode == .connecting || status?.mode == .waiting)
+        let isPromotion = status?.routeId == routeId && status?.intent == LobbyIntent.promotion
         content
             .navigationBarBackButtonHidden(isBusy)
             .toolbar {
@@ -426,7 +433,11 @@ private struct LobbyChrome: ViewModifier {
                     MeetingShareLinkButton(premeeting: premeeting)
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    if isBusy {
+                    if isPromotion {
+                        // S50 PH20: Cancel declines while still an attendee (`webinar:declineStage`).
+                        Button(ConclaveStrings.text("Cancel"), role: .cancel) { premeeting.cancelPromotion() }
+                            .accessibilityIdentifier("lobby.promotion.cancel")
+                    } else if isBusy {
                         Button(ConclaveStrings.text("Cancel"), role: .cancel) { premeeting.cancelJoin() }
                             .accessibilityIdentifier("lobby.cancel")
                     }

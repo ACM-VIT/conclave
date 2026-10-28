@@ -1,0 +1,215 @@
+import Foundation
+import Observation
+
+// S50 PL12 webinar and Q&A fixture scripts (PPL-5 to PPL-7), shared (transpiled) so both platforms and both test hosts
+// read the same states. Each run builds a People fixture session over a base roster, applies the webinar and Q&A inputs
+// of the state and installs a scripted `onCommand` that acknowledges after the PL12 delays. No view model, WebRTC,
+// audio, capture or network (OD Q19). The demotion states (`demoted-with-slug`, `demoted-no-slug`) exercise the view
+// model's socket handoff and are host tests, not presenter fixtures.
+
+/// Webinar and Q&A fixture states (S50 PL12 table). Raw values are the launch values.
+enum PeopleWebinarFixtureState: String, CaseIterable, Equatable {
+    case webinarHostHands4 = "webinar-host-hands-4"
+    case webinarHostInvited = "webinar-host-invited"
+    case qaAttendee5 = "qa-attendee-5"
+    case qaAttendeeOff = "qa-attendee-off"
+    case qaHostOpen7 = "qa-host-open-7"
+    case qaHostAnswered = "qa-host-answered"
+    case qaHostPromotedMidcall = "qa-host-promoted-midcall"
+    case stageInvite = "stage-invite"
+}
+
+/// One scripted acknowledgement: after `delayMillis`, success or a typed failure.
+struct PeopleFixtureAck: Equatable {
+    let delayMillis: Double
+    /// A `HostActionFailure` raw value, or "" for success.
+    let failure: String
+}
+
+enum PeopleWebinarFixtureScript {
+    static let priyaQueue = "a-priya"
+    static let omarQueue = "a-omar"
+    static let minaQueue = "a-mina"
+    static let joQueue = "a-jo"
+    /// The attendee viewer's own id in the attendee states (Priya N., S50 PL12).
+    static let attendeeSelf = "a-priya#s1"
+
+    static func state(named raw: String) -> PeopleWebinarFixtureState? {
+        PeopleWebinarFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    static func isAttendee(_ state: PeopleWebinarFixtureState) -> Bool {
+        state == PeopleWebinarFixtureState.qaAttendee5 || state == PeopleWebinarFixtureState.qaAttendeeOff
+            || state == PeopleWebinarFixtureState.stageInvite
+    }
+
+    static func isQa(_ state: PeopleWebinarFixtureState) -> Bool {
+        state == PeopleWebinarFixtureState.qaAttendee5 || state == PeopleWebinarFixtureState.qaAttendeeOff
+            || state == PeopleWebinarFixtureState.qaHostOpen7 || state == PeopleWebinarFixtureState.qaHostAnswered
+            || state == PeopleWebinarFixtureState.qaHostPromotedMidcall
+    }
+
+    /// The base People state the run builds over (the host roster, or the guest roster for attendee states).
+    static func baseState(_ state: PeopleWebinarFixtureState) -> PeopleFixtureState {
+        isAttendee(state) ? PeopleFixtureState.guest4 : PeopleFixtureState.host6
+    }
+
+    /// webinar-host-hands-4: Priya (0 s), Omar (20 s), Mina (40 s), Jo (60 s); webinar-host-invited moves Mina to the
+    /// invited rows.
+    static func handQueue(_ state: PeopleWebinarFixtureState) -> [PeopleWebinarHandInput] {
+        let base = PeopleFixtureScript.baseMillis
+        switch state {
+        case .webinarHostHands4:
+            return [PeopleWebinarHandInput.make(userId: priyaQueue, displayName: "Priya N.", raisedAtMillis: base),
+                    PeopleWebinarHandInput.make(userId: omarQueue, displayName: "Omar K.", raisedAtMillis: base + 20000.0),
+                    PeopleWebinarHandInput.make(userId: minaQueue, displayName: "Mina T.", raisedAtMillis: base + 40000.0),
+                    PeopleWebinarHandInput.make(userId: joQueue, displayName: "Jo B.", raisedAtMillis: base + 60000.0)]
+        case .webinarHostInvited:
+            return [PeopleWebinarHandInput.make(userId: priyaQueue, displayName: "Priya N.", raisedAtMillis: base),
+                    PeopleWebinarHandInput.make(userId: omarQueue, displayName: "Omar K.", raisedAtMillis: base + 20000.0),
+                    PeopleWebinarHandInput.make(userId: joQueue, displayName: "Jo B.", raisedAtMillis: base + 60000.0)]
+        default:
+            return []
+        }
+    }
+
+    static func invites(_ state: PeopleWebinarFixtureState) -> [PeopleStageInviteInput] {
+        state == PeopleWebinarFixtureState.webinarHostInvited ? [PeopleStageInviteInput(userId: minaQueue, displayName: "Mina T.")] : []
+    }
+
+    /// The People inputs: the base roster with webinar mode on, 128 watching, the queue and invites; attendee states
+    /// join as an attendee.
+    static func peopleInputs(_ state: PeopleWebinarFixtureState) -> PeopleInputs {
+        let base = PeopleFixtureScript.inputs(for: baseState(state))
+        let attendee = isAttendee(state)
+        return PeopleInputs.make(
+            callSession: base.callSession, attempt: 1, phase: base.phase, isNetworkOffline: false,
+            localUserId: base.localUserId, participants: base.participants, isRosterLoaded: true,
+            isAdmin: attendee ? false : base.isAdmin, hostUserId: base.hostUserId, hostUserIds: base.hostUserIds,
+            isWebinarAttendee: attendee, waiting: [], meetingLink: base.meetingLink, roomLabel: base.roomLabel,
+            isWebinarEnabled: true, isWebinarPublic: true, isWebinarQaEnabled: true, webinarAttendeeCount: 128,
+            supportsMoveToAudience: true, webinarHandQueue: handQueue(state), webinarQueueKnown: true,
+            stageInvites: invites(state))
+    }
+
+    /// qa-attendee-5: 1 answering (12 votes), 2 pending of which 1 is yours, 1 answered with text, 1 of yours dismissed.
+    /// qa-host-open-7: 7 open, 2 answered, 1 dismissed. qa-host-answered: the 2 answered.
+    static func entries(_ state: PeopleWebinarFixtureState, localUserId: String) -> [QaEntryInput] {
+        let base = PeopleFixtureScript.baseMillis
+        switch state {
+        case .qaAttendee5, .qaAttendeeOff:
+            return [
+                QaEntryInput.make(id: "q1", userId: "a-omar#s1", askerName: "Omar K.", question: "How do I rotate the webinar link?",
+                                  status: QaStatus.answering.rawValue, askedAtMillis: base, upvotes: 12),
+                QaEntryInput.make(id: "q2", userId: "a-mina#s1", askerName: "Mina T.", question: "Will slides be shared after?",
+                                  status: QaStatus.pending.rawValue, askedAtMillis: base + 60000.0, upvotes: 4),
+                QaEntryInput.make(id: "q3", userId: localUserId, askerName: "Priya N.", question: "Is there a recording?",
+                                  status: QaStatus.pending.rawValue, askedAtMillis: base + 120000.0, upvotes: 1),
+                QaEntryInput.make(id: "q4", userId: "a-jo#s1", askerName: "Jo B.", question: "Where are the notes?",
+                                  status: QaStatus.answered.rawValue, askedAtMillis: base + 30000.0, upvotes: 6,
+                                  answerText: "Yes, in the chat after the session.", answeredByName: "Ishaan"),
+                QaEntryInput.make(id: "q5", userId: localUserId, askerName: "Priya N.", question: "Can I share my screen?",
+                                  status: QaStatus.dismissed.rawValue, askedAtMillis: base + 90000.0),
+            ]
+        case .qaHostOpen7, .qaHostAnswered:
+            var result: [QaEntryInput] = []
+            var index = 0
+            while index < 10 {
+                let status = index < 7 ? QaStatus.pending.rawValue : (index < 9 ? QaStatus.answered.rawValue : QaStatus.dismissed.rawValue)
+                result.append(QaEntryInput.make(id: "h" + String(index), userId: "a-" + String(index) + "#s1",
+                                                askerName: "Attendee " + String(index + 1), question: "Question " + String(index + 1),
+                                                status: status, askedAtMillis: base + Double(index) * 10000.0, upvotes: 10 - index,
+                                                answerText: status == QaStatus.answered.rawValue ? "Answered live." : ""))
+                index += 1
+            }
+            return result
+        default:
+            return []
+        }
+    }
+
+    static func qaInputs(_ state: PeopleWebinarFixtureState, localUserId: String) -> QaInputs {
+        let attendee = isAttendee(state)
+        return QaInputs.make(
+            callSession: 1, attempt: 1, localUserId: localUserId, role: attendee ? QaRole.attendee : QaRole.host,
+            isWebinarEnabled: true, isQaEnabled: true,
+            isSnapshotReceived: state != PeopleWebinarFixtureState.qaHostPromotedMidcall,
+            becameHostAfterJoin: state == PeopleWebinarFixtureState.qaHostPromotedMidcall,
+            blockedReason: MeetingBlockedReason.none.rawValue, entries: entries(state, localUserId: localUserId), unseen: 0)
+    }
+
+    /// The PL12 "Acks" column per command kind.
+    static func ack(_ state: PeopleWebinarFixtureState, kind: PeopleCommandKind) -> PeopleFixtureAck? {
+        switch kind {
+        case .bringOnStage: return PeopleFixtureAck(delayMillis: 200.0, failure: "")
+        case .cancelStageInvite, .moveToAudience, .qaUpvote, .qaModerate, .declineStage, .setMaxAttendees:
+            return PeopleFixtureAck(delayMillis: 150.0, failure: "")
+        case .qaSubmit: return PeopleFixtureAck(delayMillis: 300.0, failure: "")
+        case .generateLink: return PeopleFixtureAck(delayMillis: 300.0, failure: "")
+        default: return nil
+        }
+    }
+
+    /// qa-attendee-off turns Q&A off 2 s after the panel opens; stage-invite delivers `webinar:promoted` after 1 s.
+    static let qaOffDelayMillis = 2000.0
+    static let promotionDelayMillis = 1000.0
+    static let promotedByName = "Ishaan"
+}
+
+/// One webinar or Q&A fixture run over a People fixture session (the stage, People and Q&A share one shell).
+@MainActor
+final class PeopleWebinarFixtureSession {
+    let state: PeopleWebinarFixtureState
+    let base: PeopleFixtureSession
+    /// `people.counters`: command kinds dispatched, newest last.
+    private(set) var commandLog: [String] = []
+    private(set) var qaInputs: QaInputs
+
+    init(state: PeopleWebinarFixtureState) {
+        self.state = state
+        base = PeopleFixtureSession(state: PeopleWebinarFixtureScript.baseState(state))
+        let local = PeopleWebinarFixtureScript.isAttendee(state) ? PeopleWebinarFixtureScript.attendeeSelf : base.inputs.localUserId
+        qaInputs = PeopleWebinarFixtureScript.qaInputs(state, localUserId: local)
+        let people = base.people
+        people.onCommand = { [weak self] command, ticket in
+            self?.answer(command, ticket)
+        }
+        people.apply(PeopleWebinarFixtureScript.peopleInputs(state))
+        people.qa.apply(qaInputs)
+    }
+
+    var people: PeoplePresenter { base.people }
+
+    /// The scripted acknowledgement: the PL12 delay, then the result through `finish` (core contract, PH2).
+    private func answer(_ command: PeopleCommand, _ ticket: HostActionTicket) {
+        commandLog.append(command.kind.rawValue)
+        guard let ack = PeopleWebinarFixtureScript.ack(state, kind: command.kind) else { return }
+        let presenter = base.people
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(ack.delayMillis * 1_000_000.0))
+            let result = ack.failure.isEmpty ? HostActionResult.completed
+                : HostActionResult.failed(HostActionFailure(rawValue: ack.failure) ?? HostActionFailure.unknown)
+            _ = presenter.finish(ticket, result)
+        }
+    }
+
+    /// qa-attendee-off: the host turns Attendee Q&A off (the open panel closes with "Q&A is off.").
+    func turnQaOff() {
+        let current = qaInputs
+        qaInputs = QaInputs.make(callSession: current.callSession, attempt: current.attempt, localUserId: current.localUserId,
+                                 role: current.role, isWebinarEnabled: current.isWebinarEnabled, isQaEnabled: false,
+                                 isSnapshotReceived: current.isSnapshotReceived, becameHostAfterJoin: current.becameHostAfterJoin,
+                                 blockedReason: current.blockedReason, entries: current.entries, unseen: current.unseen)
+        base.people.qa.apply(qaInputs)
+    }
+
+    /// stage-invite: `webinar:promoted` from Ishaan.
+    func deliverPromotion() {
+        base.people.presentStageInvitation(promotedByName: PeopleWebinarFixtureScript.promotedByName,
+                                           rejoinRoomId: StageFixtureScript.roomLabel)
+    }
+
+    func countersReadout() -> String {
+        commandLog.isEmpty ? "none" : commandLog.joined(separator: ",")
+    }
+}

@@ -12,7 +12,7 @@ struct HostLedgerEntry: Equatable {
     let targetName: String
 }
 
-/// S50 PH2: the one ledger for People, Host Controls and (PPL-6) Q&A tickets, owned by `PeoplePresenter` (S1C SES
+/// S50 PH2: the one ledger for People, Host Controls and Q&A tickets, owned by `PeoplePresenter` (S1C SES
 /// and LED rules, `contract-wp2-first-slice.md:325`, `:330`). A plain, non-observable class: the presenter derives
 /// row and toggle pending state from it and publishes that.
 ///
@@ -79,6 +79,24 @@ final class HostActionLedger {
     func interruptAll() -> Int {
         let count = pending.count
         pending = []
+        interruptedCount += count
+        return count
+    }
+
+    /// PPL-7 (S50 12 f): losing host finishes the pending host tickets silently; your rename, Q&A questions and votes
+    /// and a stage decline stay. Returns how many were interrupted.
+    @discardableResult
+    func interruptHostActions() -> Int {
+        var kept: [HostLedgerEntry] = []
+        var count = 0
+        for entry in pending {
+            if PeopleRolePolicy.isHostCommand(entry.command.kind) {
+                count += 1
+            } else {
+                kept.append(entry)
+            }
+        }
+        pending = kept
         interruptedCount += count
         return count
     }

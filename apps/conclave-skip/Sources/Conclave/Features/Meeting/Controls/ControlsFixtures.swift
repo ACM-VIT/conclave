@@ -6,7 +6,10 @@ import Foundation
 // `RendererProbe`. No WebRTC, audio, capture or network, never `MeetingViewModel`. Shared (transpiled), so both
 // fixture roots and both test hosts read the same states. CTL-1 ships the bar states; CTL-2 the End states (a held
 // acknowledgment in `controls-end-confirm`, a slow one in `controls-end-slow-ack`, a refused one in
-// `controls-end-failed`); the route, recap (TRN-2, CC8), webinar host and More states arrive with CTL-3, CTL-5 and CTL-6.
+// `controls-end-failed`); CTL-5 and CTL-6 the More states (`controls-webinar-host`, `controls-no-link`,
+// `controls-reactions-off`, `controls-host-reactions-off`, `controls-more-hand-raising`) with a scripted request handler
+// (reactions, captions, layout, Flip, Lock); the route and recap states arrive with CTL-3 and TRN-2 (CC8). The art
+// state (`controls-art-shipped`) waits for the flat reaction assets (CC14, S30 Q10).
 
 enum ControlsFixtureState: String, CaseIterable, Equatable {
     case guest = "controls-guest"
@@ -30,6 +33,12 @@ enum ControlsFixtureState: String, CaseIterable, Equatable {
     case leaving = "controls-leaving"
     case wide = "controls-wide"
     case wideRecovering = "controls-wide-recovering"
+    // CTL-5 and CTL-6 (S30 5 l10, l12; 6 l4, l5).
+    case webinarHost = "controls-webinar-host"
+    case noLink = "controls-no-link"
+    case reactionsOff = "controls-reactions-off"
+    case hostReactionsOff = "controls-host-reactions-off"
+    case moreHandRaising = "controls-more-hand-raising"
 }
 
 /// Pure scripts per state (shared by the fixture roots and both test hosts).
@@ -50,7 +59,8 @@ enum ControlsFixtureScript {
 
     static func isHost(_ state: ControlsFixtureState) -> Bool {
         switch state {
-        case .host, .hostWaiting3, .hostRecovering, .hostOffline, .endConfirm, .endSlowAck, .endFailed:
+        case .host, .hostWaiting3, .hostRecovering, .hostOffline, .endConfirm, .endSlowAck, .endFailed, .webinarHost,
+             .hostReactionsOff:
             return true
         default:
             return false
@@ -75,6 +85,17 @@ enum ControlsFixtureScript {
         }
     }
 
+    /// CTL-5: the room link More offers (S30 5 l12: none without a room id).
+    static func meetingLink(_ state: ControlsFixtureState) -> String {
+        state == .noLink ? "" : meetingLink
+    }
+
+    /// CTL-5: a running game behind Activities on the webinar host state (the status line and More's dot stay quiet
+    /// elsewhere).
+    static func gameName(_ state: ControlsFixtureState) -> String {
+        state == .webinarHost ? "Trivia" : ""
+    }
+
     /// The End states open on the host's confirmation, as the Leave menu would leave it (S30 4 l3, l4).
     static func opensOnEndConfirmation(_ state: ControlsFixtureState) -> Bool {
         state == .endConfirm || state == .endSlowAck || state == .endFailed
@@ -90,7 +111,7 @@ enum ControlsFixtureScript {
             connectionState: recovering ? ConnectionState.reconnecting : ConnectionState.joined,
             isRecoveringConnection: recovering,
             isNetworkOffline: state == .offline || state == .hostOffline,
-            roomId: roomLabel,
+            roomId: state == .noLink ? "" : roomLabel,
             displayName: "You",
             isAdmin: isHost(state),
             isWebinarAttendee: isAttendee(state),
@@ -103,6 +124,7 @@ enum ControlsFixtureScript {
             isScreenShareSupported: true,
             unreadChatCount: state == .hostWaiting3 ? 120 : 0,
             pendingUsersCount: state == .hostWaiting3 ? 3 : 0,
+            isReactionsDisabled: state == .reactionsOff || state == .hostReactionsOff,
             terminalOutcome: leaving ? MeetingTerminalOutcome(id: 1, callSession: 1, kind: MeetingTerminalOutcomeKind.left, serverText: "") : nil,
             micToggleInFlight: micInFlight,
             cameraToggleInFlight: cameraInFlight,
@@ -112,23 +134,34 @@ enum ControlsFixtureScript {
         )
     }
 
-    /// The controls-only inputs (CC1, CC9, CC10) a state adds on top of the shell snapshots.
+    /// The controls-only inputs (CC1, CC9, CC10, CTL-5) a state adds on top of the shell snapshots; `local` carries the
+    /// scripted local preferences (captions, layout, lock) the request handler changes.
     @MainActor
-    static func controlsInputs(_ state: ControlsFixtureState, shell: MeetingShellPresenter) -> CallControlsInputs {
+    static func controlsInputs(_ state: ControlsFixtureState, shell: MeetingShellPresenter,
+                               local: ControlsFixtureLocal = ControlsFixtureLocal.initial) -> CallControlsInputs {
         CallControlsInputs.fromShell(
             shell,
             presenterName: state == .remoteShare ? presenterName : "",
             isMicDisabledByHost: state == .hostDisabledMedia,
             isCameraDisabledByHost: state == .hostDisabledMedia,
-            isWebinarQaEnabled: isAttendee(state),
-            webinarQaUnseen: state == .attendeeQa2 ? 2 : 0,
-            attendeeCanRaiseHand: isAttendee(state)
+            isWebinarQaEnabled: isAttendee(state) || state == .webinarHost,
+            webinarQaUnseen: state == .attendeeQa2 || state == .webinarHost ? 2 : 0,
+            attendeeCanRaiseHand: isAttendee(state),
+            isRoomLocked: local.isRoomLocked,
+            isWebinarEnabled: state == .webinarHost,
+            layoutMode: local.layoutMode,
+            meetingLink: meetingLink(state),
+            captionsOn: local.captionsOn,
+            isGameActive: state == .webinarHost,
+            gameName: gameName(state),
+            canFlipCamera: true,
+            isFlipInFlight: false
         )
     }
 
     /// A four-person stage (you plus three remotes with cameras on); a remote presents in `controls-remote-share`.
     static func stageInputs(_ state: ControlsFixtureState, isMuted: Bool, isCameraOff: Bool, isHandRaised: Bool,
-                            recovering: Bool) -> StageInputs {
+                            recovering: Bool, handPending: Bool = false) -> StageInputs {
         var roster: [StageParticipantInput] = []
         roster.append(StageParticipantInput.make(userId: localUserId, displayName: "You", isLocal: true, isMuted: isMuted,
                                                  isCameraOff: isCameraOff, isHandRaised: isHandRaised, joinSerial: 0,
@@ -146,9 +179,18 @@ enum ControlsFixtureScript {
                                 meetingLink: meetingLink, participants: roster,
                                 screenShareUserId: state == .remoteShare ? "r1" : "",
                                 isWebinarAttendee: isAttendee(state), canFlipCamera: true, routeKind: "speaker",
-                                routeName: "Speaker", isHandRaised: isHandRaised, isRecovering: recovering,
-                                joinedAtMillis: joinedAtMillis)
+                                routeName: "Speaker", isHandRaised: isHandRaised, handToggleInFlight: handPending,
+                                isRecovering: recovering, joinedAtMillis: joinedAtMillis)
     }
+}
+
+/// CTL-5: the local preferences the scripted request handler changes (captions, layout, the room lock).
+struct ControlsFixtureLocal: Equatable {
+    let captionsOn: Bool
+    let layoutMode: String
+    let isRoomLocked: Bool
+
+    static let initial = ControlsFixtureLocal(captionsOn: false, layoutMode: "auto", isRoomLocked: false)
 }
 
 /// `controls.counters` (CL13). Plain, never observed: readouts refresh on demand.
@@ -163,6 +205,13 @@ final class ControlsFixtureCounters {
     /// End tickets that reached the scripted core (S30 4 l3: one per dispatched confirm).
     private(set) var endConfirmed = 0
     private(set) var requestPermission = 0
+    /// CTL-5 and CTL-6: requests that reached the scripted core.
+    private(set) var reaction = 0
+    private(set) var flipCamera = 0
+    private(set) var captions = 0
+    private(set) var layout = 0
+    private(set) var lock = 0
+    private(set) var systemEffects = 0
 
     func recordMicrophone() { toggleMicrophone += 1 }
     func recordCamera() { toggleCamera += 1 }
@@ -172,6 +221,19 @@ final class ControlsFixtureCounters {
     func recordLeave() { leave += 1 }
     func recordEndConfirmed() { endConfirmed += 1 }
     func recordPermissionRequest() { requestPermission += 1 }
+    func recordReaction() { reaction += 1 }
+    func recordFlipCamera() { flipCamera += 1 }
+    func recordCaptions() { captions += 1 }
+    func recordLayout() { layout += 1 }
+    func recordLock() { lock += 1 }
+    func recordSystemEffects() { systemEffects += 1 }
+
+    /// CTL-5 and CTL-6 (CL13 `controls.counters`): the core requests plus the presenter's view-side counts.
+    func moreSummary(copyLink: Int, invite: Int, sheetDismissed: Int, keyboard: Int) -> String {
+        "reaction=" + String(reaction) + " flipCamera=" + String(flipCamera) + " captions=" + String(captions)
+            + " layout=" + String(layout) + " lock=" + String(lock) + " copyLink=" + String(copyLink)
+            + " invite=" + String(invite) + " sheetDismissed=" + String(sheetDismissed) + " keyboard=" + String(keyboard)
+    }
 
     /// `endRequested` comes from the presenter: the End requests made through `requestEndForEveryone(from:)` (the Leave
     /// menu, its accessibility action and the fixture button; the failure toast's Retry asks S1 through the stage).
@@ -210,6 +272,10 @@ final class ControlsFixtureSession {
     private var lastPresentationId = 0
     /// `controls-end-confirm` keeps its End ticket unanswered (a held acknowledgment).
     private var heldEndTicket: MeetingActionTicket? = nil
+    /// CTL-5: captions, layout and lock as the scripted core holds them.
+    private var local = ControlsFixtureLocal.initial
+    /// CTL-6 (S20 SC12): the last S1 hand-row pending value the stage saw, so the stage chip follows the ticket.
+    private var stageHandPending = false
 
     init(state: ControlsFixtureState) {
         self.state = state
@@ -221,7 +287,7 @@ final class ControlsFixtureSession {
         // Live by default (a tap plays micOff, 1 l11); muted where the cell starts from a tap toward live.
         isMuted = state == .slowAck || state == .hostDisabledMedia
         isCameraOff = state == .audioOnly || state == .cameraDenied || state == .hostDisabledMedia
-        handInFlight = state == .handRaising
+        handInFlight = state == .handRaising || state == .moreHandRaising
         if ControlsFixtureScript.forcesWide(state) {
             controls.setCompositionOverride(ControlBarComposition.wide)
         }
@@ -235,9 +301,14 @@ final class ControlsFixtureSession {
         // confirmation, a ticket's result) reach the controls at once, as the view model's publish hook does.
         shell.onPublish = { [weak self] _, _, _ in
             self?.refreshControls()
+            self?.followHandTicket()
         }
         controls.onCommand = { [weak self] _ in
             self?.counters.recordPermissionRequest()
+        }
+        // CTL-5 and CTL-6: the scripted core for the local requests (the view model's `controls.onRequest`).
+        controls.onRequest = { [weak self] request in
+            self?.handleRequest(request) ?? false
         }
         if ControlsFixtureScript.isRecovering(state) {
             // Admission first, so the recovery keeps the stage (S10 0.4).
@@ -250,6 +321,10 @@ final class ControlsFixtureSession {
         }
         if state == .endFailed, let id = shell.session.confirmation?.id {
             confirmEnd(id: id)
+        }
+        if state == .moreHandRaising {
+            // S30 6 l5: the raise acknowledges after the scripted delay; the More row and the S20 chip follow in one publish.
+            scheduleHandAck(ticket: nil)
         }
     }
 
@@ -270,6 +345,34 @@ final class ControlsFixtureSession {
 
     func countersReadout() -> String {
         counters.summary(explain: controls.explainCount, permissionAlert: controls.promptCount, endRequested: controls.endRequestCount)
+            + " " + counters.moreSummary(copyLink: controls.copyLinkCount, invite: controls.inviteCount,
+                                         sheetDismissed: controls.moreSheetDismissCount, keyboard: controls.keyboardCommandCount)
+    }
+
+    /// CTL-5 `controls.more`: the row ids in section order, each with "(reason)" while disabled and "*" while pending.
+    func moreReadout() -> String {
+        var parts: [String] = []
+        for section in controls.more.sections {
+            var ids: [String] = []
+            for item in section.items {
+                var text = item.id
+                if !item.isEnabled && item.reason != ControlBlockedReason.none { text += "(" + item.reason.rawValue + ")" }
+                if item.isPending { text += "*" }
+                if item.count > 0 { text += "#" + String(item.count) }
+                ids.append(text)
+            }
+            parts.append(section.id + ":" + ids.joined(separator: ","))
+        }
+        return (controls.more.isRecovering ? "recovering " : "") + (parts.isEmpty ? "none" : parts.joined(separator: " | "))
+    }
+
+    /// CL13 `controls.menuHeight` (iOS): the last budget the More control drew.
+    func menuHeightReadout() -> String { controls.menuHeightReadout }
+
+    /// CTL-6: the hand as the More row and the S20 chip read it (S30 6 l5).
+    func handReadout() -> String {
+        "more=" + controls.handState.rawValue + " stage=" + stage.localHand.rawValue
+            + " reactions=" + controls.reactions.availability.rawValue
     }
 
     func barReadout() -> String { controls.fitReadout }
@@ -410,6 +513,42 @@ final class ControlsFixtureSession {
         }
     }
 
+    /// CTL-5 and CTL-6: the scripted core answers every local request at once.
+    private func handleRequest(_ request: CallControlsRequest) -> Bool {
+        switch request.kind {
+        case .sendReaction:
+            counters.recordReaction()
+        case .flipCamera:
+            counters.recordFlipCamera()
+        case .showSystemVideoEffects:
+            counters.recordSystemEffects()
+        case .setCaptions:
+            counters.recordCaptions()
+            local = ControlsFixtureLocal(captionsOn: request.value == CallControlsRequest.on, layoutMode: local.layoutMode,
+                                         isRoomLocked: local.isRoomLocked)
+            refreshControls()
+        case .setLayoutMode:
+            counters.recordLayout()
+            local = ControlsFixtureLocal(captionsOn: local.captionsOn, layoutMode: request.value, isRoomLocked: local.isRoomLocked)
+            refreshControls()
+        case .setRoomLock:
+            counters.recordLock()
+            local = ControlsFixtureLocal(captionsOn: local.captionsOn, layoutMode: local.layoutMode,
+                                         isRoomLocked: request.value == CallControlsRequest.on)
+            refreshControls()
+        }
+        return true
+    }
+
+    /// S20 SC12 in the fixture (HD/requests/B6-T3.md R1 mirrors it in the view model): the stage chip shows raising in
+    /// the same frame as the hand ticket starts and keeps it until the ticket finishes.
+    private func followHandTicket() {
+        let pending = shell.controls.rows.first(where: { $0.id == MeetingControlID.hand.rawValue })?.isPending ?? false
+        if pending == stageHandPending { return }
+        stageHandPending = pending
+        pushStage()
+    }
+
     private func panelsChanged() {
         stage.panelSnapshotChanged()
         if let current = shell.panels.snapshot.current, current.presentationID != lastPresentationId {
@@ -425,12 +564,17 @@ final class ControlsFixtureSession {
                                                       isScreenSharing: isScreenSharing, micInFlight: micInFlight,
                                                       cameraInFlight: cameraInFlight, handInFlight: handInFlight,
                                                       recovering: recovering))
-        stage.apply(ControlsFixtureScript.stageInputs(state, isMuted: isMuted, isCameraOff: isCameraOff, isHandRaised: isHandRaised,
-                                                      recovering: recovering))
+        stageHandPending = shell.controls.rows.first(where: { $0.id == MeetingControlID.hand.rawValue })?.isPending ?? false
+        pushStage()
         refreshControls()
     }
 
+    private func pushStage() {
+        stage.apply(ControlsFixtureScript.stageInputs(state, isMuted: isMuted, isCameraOff: isCameraOff, isHandRaised: isHandRaised,
+                                                      recovering: recovering, handPending: handInFlight || stageHandPending))
+    }
+
     private func refreshControls() {
-        controls.apply(ControlsFixtureScript.controlsInputs(state, shell: shell))
+        controls.apply(ControlsFixtureScript.controlsInputs(state, shell: shell, local: local))
     }
 }

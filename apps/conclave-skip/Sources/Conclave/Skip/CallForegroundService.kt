@@ -41,6 +41,10 @@ class CallForegroundService : Service() {
     private var fixtureOnly = false
     private var callWakeLock: PowerManager.WakeLock? = null
 
+    /** S70 4 l5 (SYS-5): whether the partial CPU wake lock is held (Robolectric; the AVD cell reads `dumpsys power`). */
+    internal val isCallWakeLockHeld: Boolean
+        get() = callWakeLock?.isHeld == true
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
@@ -89,10 +93,19 @@ class CallForegroundService : Service() {
     /**
      * Swiping Conclave away from Recents is a Leave (S70 1 d, matching the iOS termination rule): a removed task
      * never leaves a headless call. The leave runs now, on the main thread, before the process can go.
+     *
+     * S70 4 d (SYS-5): both wake locks are released first, before the leave runs, so nothing the leave does can leak
+     * them: the untimed partial CPU lock (also released on ACTION_STOP and in onDestroy) and the proximity lock
+     * (released at once, without waiting for the sensor, since no screen is left to protect).
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        CallActionDispatcher.handleCurrentNow(SystemCallCommandKind.leave, SystemCallSource.system)
-        stopCallService()
+        releaseCallWakeLock()
+        ProximityController.releaseNow()
+        try {
+            CallActionDispatcher.handleCurrentNow(SystemCallCommandKind.leave, SystemCallSource.system)
+        } finally {
+            stopCallService()
+        }
         super.onTaskRemoved(rootIntent)
     }
 

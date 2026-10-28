@@ -25,8 +25,11 @@ struct CallControlBar: View {
     var body: some View {
         ConclaveScaledControlDiameter { scaled in
             CallControlBarContent(controls: controls, available: available, scaledDiameter: scaled,
-                                  isAccessibilityText: dynamicTypeSize.isAccessibilitySize)
+                                  isAccessibilityText: dynamicTypeSize.isAccessibilitySize, textSize: dynamicTypeSize)
         }
+        // S30 CL21, CC20 (CTL-5): the scene's "Call" keyboard commands (ConclaveCallCommands) read this presenter; the bar
+        // is mounted for the whole call (chrome fades it, never removes it), so the menu has items only during a call.
+        .focusedSceneValue(controls)
         // S30 CC16 (CTL-2): a touch that begins in the bar holds chrome while a system menu from it is open.
         .callControlsBarTouchHold(controls.stage)
         .background { CallControlsAlertHost(controls: controls) }
@@ -52,6 +55,8 @@ private struct CallControlBarContent: View {
     let available: CGSize
     let scaledDiameter: CGFloat
     let isAccessibilityText: Bool
+    /// The uncapped text size (More's menu budget and its fallback sheet, S30 5 c).
+    let textSize: DynamicTypeSize
 
     var body: some View {
         let bar = controls.bar
@@ -61,13 +66,18 @@ private struct CallControlBarContent: View {
         let diameter = CGFloat(plan.targetWidth)
         let spacing = CGFloat(plan.spacing)
         let measured = bar.axis == ControlBarAxis.vertical ? Double(available.height) - ControlBarPolicy.iosRouteSlot : Double(available.width)
+        let isVertical = bar.axis == ControlBarAxis.vertical
+        // CL16: the room above the horizontal bar for More's native menu (the chrome layer height minus the bar and its
+        // insets); the vertical column always takes the fallback sheet.
+        let menuSpace = isVertical ? 0 : max(0, available.height - diameter - CGFloat(DesignTokens.space12) * 2)
         Group {
             if bar.axis == ControlBarAxis.vertical {
                 // The trailing column (D27). The glass container stays a row-only component (OQ-2b-11); each control
                 // still carries its own surface.
                 VStack(spacing: spacing) {
                     ForEach(shown) { model in
-                        CallControlCell(model: model, controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText)
+                        CallControlCell(model: model, controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText,
+                                        textSize: textSize, menuSpace: menuSpace, isVerticalBar: isVertical)
                     }
                 }
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
@@ -76,7 +86,8 @@ private struct CallControlBarContent: View {
             } else {
                 ConclaveControlBar(spacing: spacing, identifier: "control.bar") {
                     ForEach(shown) { model in
-                        CallControlCell(model: model, controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText)
+                        CallControlCell(model: model, controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText,
+                                        textSize: textSize, menuSpace: menuSpace, isVerticalBar: isVertical)
                     }
                 }
             }

@@ -14,7 +14,11 @@ struct SystemFixtureView: View {
         let session = SystemFixtureSession(state: state, providerMode: providerMode)
         let provider: CallProviding = providerMode == .real ? CallKitManager.shared : FakeCallProvider()
         let adapter = CallKitPresenceAdapter(provider: provider)
-        session.presence.adapters = CallPresenceAdapters([adapter.makeAdapter(for: session.presence)])
+        session.presence.adapters = CallPresenceAdapters([
+            adapter.makeAdapter(for: session.presence),
+            // SYS-5 (S70 4, SX1): keep awake and proximity follow the fixture's snapshot.
+            CallScreenAwake.makePresenceAdapter()
+        ])
         _session = State(initialValue: session)
         _adapter = State(initialValue: adapter)
     }
@@ -26,6 +30,10 @@ struct SystemFixtureView: View {
                     .accessibilityIdentifier(SystemFixtureReadout.presenceKey)
                 LabeledContent(ConclaveStrings.text("Commands"), value: session.commandsReadout)
                     .accessibilityIdentifier(SystemFixtureReadout.commandsKey)
+                LabeledContent(ConclaveStrings.text("Keep Awake"), value: CallScreenAwakeState.shared.awakeReadout)
+                    .accessibilityIdentifier(CallScreenAwakeReadout.awakeKey)
+                LabeledContent(ConclaveStrings.text("Proximity"), value: CallScreenAwakeState.shared.proximityReadout)
+                    .accessibilityIdentifier(CallScreenAwakeReadout.proximityKey)
             }
             Section(ConclaveStrings.text("System Commands")) {
                 Button(ConclaveStrings.text("Mute")) { session.send(.mute, source: .callKit) }
@@ -33,6 +41,8 @@ struct SystemFixtureView: View {
                 Button(ConclaveStrings.text("Hold")) { session.send(.hold, source: .callKit) }
                 Button(ConclaveStrings.text("Resume")) { session.send(.resume, source: .callKit) }
                 Button(ConclaveStrings.text("Leave Call")) { session.send(.leave, source: .callKit) }
+                Button(ConclaveStrings.text("iPhone")) { session.setAudioRoute(.receiver) }
+                Button(ConclaveStrings.text("Speaker")) { session.setAudioRoute(.speaker) }
             }
         }
         .task {

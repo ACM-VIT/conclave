@@ -34,7 +34,7 @@ enum PeopleText {
         case .presenting: return ConclaveStrings.text("Presenting")
         case .reconnecting: return ConclaveStrings.text("Reconnecting")
         case .stageInvited: return ConclaveStrings.text("Invited on stage")
-        case .attendee: return nil
+        case .attendee: return ConclaveStrings.text("Attendee")
         }
     }
 

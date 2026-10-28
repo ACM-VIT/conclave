@@ -137,6 +137,8 @@ struct GameLobbyModel: Equatable {
 
 /// The body's model (S60 0.5 `GameScene`). `kind` is a `GameSceneKind` value; `projection` is the push parsed once.
 /// ACT-3 to ACT-6 add their per-game scene models here (built from `projection`), so the bodies never parse JSON.
+/// ACT-3: the six prompt game scenes (S60 9 j, Games/Native/Scenes/PromptGameScenes.swift); at most one is set, and
+/// private fields come only from the local person's own player view while that person holds a seat.
 struct GameScene: Equatable {
     let revision: Int
     let kind: String
@@ -145,13 +147,21 @@ struct GameScene: Equatable {
     let options: [GameOptionSummaryModel]
     let lobby: GameLobbyModel
     let projection: GameProjection
+    let trivia: TriviaScene?
+    let bluff: BluffScene?
+    let wouldYouRather: ChoiceScene?
+    let mostLikelyTo: PersonVoteScene?
+    let reaction: ReactionScene?
+    let imposter: ImposterScene?
 
     static let empty = GameScene(revision: 0, kind: GameSceneKind.lobby, players: [], pendingJoiners: [], options: [],
-                                 lobby: GameLobbyModel.empty, projection: GameProjection.empty)
+                                 lobby: GameLobbyModel.empty, projection: GameProjection.empty, trivia: nil, bluff: nil,
+                                 wouldYouRather: nil, mostLikelyTo: nil, reaction: nil, imposter: nil)
 
     func withRevision(_ next: Int) -> GameScene {
         GameScene(revision: next, kind: kind, players: players, pendingJoiners: pendingJoiners, options: options, lobby: lobby,
-                  projection: projection)
+                  projection: projection, trivia: trivia, bluff: bluff, wouldYouRather: wouldYouRather, mostLikelyTo: mostLikelyTo,
+                  reaction: reaction, imposter: imposter)
     }
 }
 

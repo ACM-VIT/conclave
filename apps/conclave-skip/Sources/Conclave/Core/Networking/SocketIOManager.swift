@@ -371,6 +371,9 @@ final class SocketIOManager {
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
     var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?
+    /// S40 CH7 (CHT-7): a relayed assistant packet's process state, delivered before its text goes through
+    /// `onChatMessage`.
+    var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Void)?
     var onReaction: ((Reaction) -> Void)?
 
     // Hand raise
@@ -1190,6 +1193,55 @@ final class SocketIOManager {
     func rotateWebinarLink() async throws -> WebinarLinkResponse {
         let data = try await emitAckOnly(event: SocketEvent.webinarRotateLink)
         return try JSONDecoder().decode(WebinarLinkResponse.self, from: data)
+    }
+
+    // MARK: - Webinar roles and Q&A (S50 PH7, PH8, PH10; webinarInteractionHandlers.ts)
+
+    /// PH10: Attendee Q&A through `webinar:updateConfig` (SFU webinar.ts:347-350).
+    func updateWebinarQaEnabled(_ enabled: Bool) async throws -> WebinarConfigSnapshot {
+        try await updateWebinarConfigPayload(["qaEnabled": enabled])
+    }
+
+    /// PH8: `webinar:promoteAttendee` (`(data, callback)`, host only); the SFU tells only the attendee.
+    func promoteWebinarAttendee(userId: String) async throws {
+        _ = try await emit(event: SocketEvent.webinarPromoteAttendee, payload: WebinarUserRequest(userId: userId))
+    }
+
+    /// PH8: `webinar:demoteParticipant`; on an attendee it only revokes the stage invite.
+    func demoteWebinarParticipant(userId: String) async throws {
+        _ = try await emit(event: SocketEvent.webinarDemoteParticipant, payload: WebinarUserRequest(userId: userId))
+    }
+
+    /// PH8, S20 Q10: the attendee hand (`webinar:setHandRaised`); the ack echoes `raised`.
+    func setWebinarHandRaised(_ raised: Bool) async throws -> Bool {
+        let data = try await emit(event: SocketEvent.webinarSetHandRaised, payload: SetHandRaisedRequest(raised: raised))
+        let response = try? JSONDecoder().decode(WebinarHandRaisedResponse.self, from: data)
+        return response?.raised ?? raised
+    }
+
+    /// PH8: `webinar:declineStage` is a `(callback)` handler, so it is emitted ack-only (AGENTS "Socket Ack Shapes").
+    func declineWebinarStage() async throws {
+        _ = try await emitAckOnly(event: SocketEvent.webinarDeclineStage)
+    }
+
+    /// PH7: `webinar:qa:submit`; returns the new question id.
+    func submitWebinarQuestion(_ question: String) async throws -> String {
+        let data = try await emit(event: SocketEvent.webinarQaSubmit, payload: WebinarQaSubmitRequest(question: question))
+        let response = try? JSONDecoder().decode(WebinarQaSubmitResponse.self, from: data)
+        return response?.id ?? ""
+    }
+
+    /// PH7: `webinar:qa:upvote`; the ack carries the viewer's own `upvotes` and `hasUpvoted`.
+    func upvoteWebinarQuestion(id: String) async throws -> WebinarQaUpvoteResponse {
+        let data = try await emit(event: SocketEvent.webinarQaUpvote, payload: WebinarQaUpvoteRequest(id: id))
+        return (try? JSONDecoder().decode(WebinarQaUpvoteResponse.self, from: data))
+            ?? WebinarQaUpvoteResponse(success: true, upvotes: nil, hasUpvoted: nil)
+    }
+
+    /// PH7: `webinar:qa:moderate` (answering, answered, dismissed, reopen; a written answer up to 1,000 characters).
+    func moderateWebinarQuestion(id: String, action: String, answerText: String?) async throws {
+        _ = try await emit(event: SocketEvent.webinarQaModerate,
+                           payload: WebinarQaModerateRequest(id: id, action: action, answerText: answerText))
     }
 
     func getBrowserState() async throws -> BrowserStateNotification {
@@ -2184,6 +2236,11 @@ final class SocketIOManager {
             guard let self, let first = data.first,
                   self.socket === socket,
                   let activeRoomId = self.activeRoomId else { return }
+            // S40 CH7 (CHT-7): the packet's process state first; its text then goes through the chat pipeline.
+            if let packet = self.decode(ConclaveAssistantMessageNotification.self, from: first),
+               self.eventRoomIdMatchesActiveOrPending(packet.roomId, allowMissingRoomId: true) {
+                self.onConclaveAssistantPacket?(packet)
+            }
             if let notification = self.decode(ChatMessageNotification.self, from: first) {
                 guard self.eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId: true) else { return }
                 self.onChatMessage?(notification.chatMessage(taggedRoomId: activeRoomId))

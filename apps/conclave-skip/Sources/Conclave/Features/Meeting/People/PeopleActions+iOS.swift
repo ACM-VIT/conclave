@@ -100,7 +100,12 @@ enum PeopleActionText {
             return DialogCopy(title: ConclaveStrings.text("Stop All Screen Shares?"),
                               message: ConclaveStrings.text("Everyone who is presenting stops sharing."),
                               confirm: ConclaveStrings.text("Stop All Shares"), isDestructive: false, blockTitle: nil)
-        case .clearInviteCode, .clearAttendeeCode:
+        case .clearAttendeeCode:
+            // S50 9 g: the attendee code page mirrors 7 c with its own strings.
+            return DialogCopy(title: ConclaveStrings.text("Remove Attendee Code?"),
+                              message: ConclaveStrings.text("Attendees can watch without a code."),
+                              confirm: ConclaveStrings.text("Remove Code"), isDestructive: true, blockTitle: nil)
+        case .clearInviteCode:
             return DialogCopy(title: ConclaveStrings.text("Remove Invite Code?"),
                               message: ConclaveStrings.text("People can join without a code. Anyone already waiting stays in the waiting room."),
                               confirm: ConclaveStrings.text("Remove Code"), isDestructive: true, blockTitle: nil)
@@ -147,6 +152,15 @@ enum PeopleActionText {
         case PeopleFailureCopy.codeRemove: return ConclaveStrings.text("Couldn\u{2019}t remove the invite code.")
         case PeopleFailureCopy.access: return ConclaveStrings.text("Couldn\u{2019}t update the access list.")
         case PeopleFailureCopy.notice: return ConclaveStrings.text("Couldn\u{2019}t send the notice.")
+        case PeopleFailureCopy.link: return ConclaveStrings.text("Webinar link unavailable.")
+        case PeopleFailureCopy.invite: return ConclaveStrings.format("Couldn\u{2019}t invite %@ on stage.", name)
+        case PeopleFailureCopy.inviteGone: return ConclaveStrings.format("%@ is no longer watching.", name)
+        case PeopleFailureCopy.cancelInvite: return ConclaveStrings.text("Couldn\u{2019}t cancel the invite.")
+        case PeopleFailureCopy.webinar: return ConclaveStrings.text("Couldn\u{2019}t update webinar settings.")
+        case PeopleFailureCopy.qaSend: return ConclaveStrings.text("Couldn\u{2019}t send your question.")
+        case PeopleFailureCopy.qaRateLimited: return ConclaveStrings.text("You\u{2019}re sending questions too quickly.")
+        case PeopleFailureCopy.qaTooShort: return ConclaveStrings.text("Ask a longer question.")
+        case PeopleFailureCopy.qaModerate: return ConclaveStrings.text("Couldn\u{2019}t update the question.")
         default: return ConclaveStrings.text("That didn\u{2019}t go through. Try again.")
         }
     }
@@ -194,6 +208,13 @@ enum PeopleActionText {
         case PeopleAnnouncementKind.policyOff:
             return ConclaveStrings.format("%@ turned off by another host.", HostText.policyTitle(HostPolicyID(rawValue: announcement.name)))
         case PeopleAnnouncementKind.noticeSent: return ConclaveStrings.text("Notice sent")
+        case PeopleAnnouncementKind.invitedToStage: return ConclaveStrings.format("Invited %@ on stage.", announcement.name)
+        case PeopleAnnouncementKind.joinedStage: return ConclaveStrings.format("%@ joined the stage.", announcement.name)
+        case PeopleAnnouncementKind.movedToAudience: return ConclaveStrings.format("%@ moved to the audience.", announcement.name)
+        case PeopleAnnouncementKind.newLinkCopied: return ConclaveStrings.text("New link copied.")
+        case PeopleAnnouncementKind.questionSent: return ConclaveStrings.text("Your question was sent.")
+        case PeopleAnnouncementKind.qaOff: return ConclaveStrings.text("Q&A is off.")
+        case PeopleAnnouncementKind.newHost: return ConclaveStrings.format("%@ is now the host.", announcement.name)
         default: return nil
         }
     }

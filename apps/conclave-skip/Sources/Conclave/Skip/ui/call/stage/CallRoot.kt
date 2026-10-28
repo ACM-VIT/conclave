@@ -2,6 +2,7 @@ package conclave.module
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -72,6 +75,8 @@ internal fun CallRoot(
             PipController.setNativeRootComposed(true)
             onDispose { PipController.setNativeRootComposed(false) }
         }
+        // SYS-5 (S70 4 d): Compose-scoped keep awake while the call presence keeps the screen on.
+        CallKeepScreenOnEffect()
         // PiP or moveTaskToBack, never a leave (S20 1 a); enabled only with no panel open (AND 10.2 item 4).
         BackHandler(enabled = panels.current == null) { onMinimize() }
         val ledger = renderers.ledger
@@ -105,10 +110,23 @@ internal fun CallRoot(
                 content()
             }
         }
-        if (ledger != null) {
-            CompositionLocalProvider(LocalRendererLedger provides ledger) { provided() }
-        } else {
-            provided()
+        // S30 1 d, 1 g (CTL-5, HD request B6-T3 R2): the Ctrl shortcuts at the call root. The focus anchor lets key events
+        // reach the root while nothing inside is focused; a focused text field is a descendant, so the root's
+        // onPreviewKeyEvent still sees the keys first, and a command the presenter does not accept passes through.
+        val rootFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) { runCatching { rootFocus.requestFocus() } }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .callControlsKeyboardShortcuts(LocalCallControls.current)
+                .focusRequester(rootFocus)
+                .focusable()
+        ) {
+            if (ledger != null) {
+                CompositionLocalProvider(LocalRendererLedger provides ledger) { provided() }
+            } else {
+                provided()
+            }
         }
     }
 }
@@ -170,6 +188,8 @@ private fun StageSurface(
             StageSoloLayer(stage, Modifier.fillMaxSize())
             // STG-8 (S20 12 d): the attendee waiting state; reads only stage.attendee.
             AttendeeWaitingLayer(stage, Modifier.attendeeLayer())
+            // PPL-7 (S50 12 d, PH9): the stage invitation AlertDialog (in-call theme; Back declines).
+            AttendeeRoleLayer(stage)
             ReactionBurstLayer(stage)
             // PPL-2 (S50 3 j, R50-9): tile-menu confirmations over the stage, HostingTheme(inCall = true) inside.
             StagePeopleConfirmationHost(people)
@@ -215,6 +235,9 @@ private fun StageAnnouncementRegion(stage: StagePresenter) {
 @Composable
 private fun stageAnnouncementText(announcement: StageAnnouncement): String = when (announcement.kind) {
     StageAnnouncement.joinedKind -> conclaveString("stg_announce_joined", announcement.name)
+    // CTL-6 (S30 CC7, 6 i; HD request B6-T3 R3): your own hand change, once the server confirms it.
+    StageAnnouncement.handRaisedKind -> conclaveString("ctl_announce_hand_raised")
+    StageAnnouncement.handLoweredKind -> conclaveString("ctl_announce_hand_lowered")
     // S70 R70-1 (STG-5): recovery starts and ends on the same one-shot channel.
     StageNoticeAnnouncementKind.reconnecting -> conclaveString("sys_announce_reconnecting")
     StageNoticeAnnouncementKind.reconnected -> conclaveString("sys_announce_reconnected")
@@ -286,6 +309,7 @@ private fun CallPanelContent(
             miniTileVideo = miniTileVideo,
             webinarLinkProvider = webinarLinkProvider,
             people = people,
+            settings = shell.settings,
         )
         return
     }
@@ -324,6 +348,38 @@ private fun CallPanelContent(
         // controls (R50-2); the access, notice and webinar pages push on the same stack.
         HostControlsPage(
             people = people,
+            request = request,
+            variant = variant,
+            appearance = if (decision.inCallAppearance) PanelAppearance.inCall else PanelAppearance.system,
+            miniTile = if (decision.showsMiniTile) stageMiniTileModel(stage) else null,
+            onClose = { shell.panels.dismiss(cancelPending = true) },
+            onMounted = onMounted,
+            onDisposed = onDisposed,
+            miniTileVideo = miniTileVideo,
+        )
+        return
+    }
+    if (request.panel == MeetingPanel.webinarQA && people != null) {
+        // PPL-6 (S50 11 d): the Webinar Q&A page, InCallPage in lazyList mode with the attendee composer slot.
+        QaPage(
+            people = people,
+            request = request,
+            variant = variant,
+            appearance = if (decision.inCallAppearance) PanelAppearance.inCall else PanelAppearance.system,
+            miniTile = if (decision.showsMiniTile) stageMiniTileModel(stage) else null,
+            onClose = { shell.panels.dismiss(cancelPending = true) },
+            onMounted = onMounted,
+            onDisposed = onDisposed,
+            miniTileVideo = miniTileVideo,
+        )
+        return
+    }
+    if (request.panel == MeetingPanel.settings) {
+        // SET-1 (S60 1 d): Settings as an InCallPage in lazyList mode on the host's page stack (L6-11).
+        SettingsPage(
+            settings = shell.settings,
+            people = people,
+            panels = shell.panels,
             request = request,
             variant = variant,
             appearance = if (decision.inCallAppearance) PanelAppearance.inCall else PanelAppearance.system,

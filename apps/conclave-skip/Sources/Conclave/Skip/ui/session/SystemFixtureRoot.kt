@@ -2,6 +2,8 @@ package conclave.module
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,10 +32,12 @@ fun SystemFixtureRoot(stateName: String) {
     val state = SystemFixtureScript.state(named = stateName) ?: SystemFixtureState.presenceLive
     val session = remember(state) {
         SystemFixtureSession(state = state, providerMode = SystemFixtureProviderMode.fake).also {
-            it.presence.adapters = CallNotificationBridge.fixtureAdapters(it.presence)
+            it.presence.adapters = CallScreenAwake.withScreenAwake(CallNotificationBridge.fixtureAdapters(it.presence))
         }
     }
     LaunchedEffect(session) { session.start() }
+    // SYS-5 (S70 4 d, l2): the Compose-scoped keep awake follows the fixture's snapshot (dumpsys window).
+    CallKeepScreenOnEffect()
     // SYS-4 (S70 SX1, 3 l2, 3 l3): pip-speaker draws a full-bleed static pattern behind the readouts and Back minimizes
     // (PiP when eligible). PipController.isInCall stays false, so Main.kt keeps this root composed in PiP.
     val ledger = remember { RendererIdentityLedger() }
@@ -49,6 +53,7 @@ fun SystemFixtureRoot(stateName: String) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .safeDrawingPadding()
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -70,6 +75,10 @@ fun SystemFixtureRoot(stateName: String) {
                 FixtureCommand(conclaveString("ds_leave_call")) { session.send(SystemCallCommandKind.leave, source = SystemCallSource.notification) }
                 // SYS-4 and SYS-8 (S70 3 l2, 8 l2): the sys.pip and sys.pipSuppressions readouts and the hand-off commands.
                 PipFixtureReadouts()
+                // SYS-5 (S70 4 l2): sys.awake and sys.proximity, and the route switch that releases proximity.
+                ScreenAwakeFixtureReadouts()
+                FixtureCommand(conclaveString("ctl_route_phone")) { session.setAudioRoute(AudioRouteKind.receiver) }
+                FixtureCommand(conclaveString("ctl_route_speaker")) { session.setAudioRoute(AudioRouteKind.speaker) }
                 FixtureCommand(conclaveString("chat_link_open")) { NativeExternalHandoff.openWebLink("https://conclave.acmvit.in") }
                 FixtureCommand(conclaveString("ds_open_settings")) { PermissionHelper.openAppSettings() }
             }

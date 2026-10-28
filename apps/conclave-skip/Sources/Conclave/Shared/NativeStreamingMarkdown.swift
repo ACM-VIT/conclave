@@ -102,6 +102,27 @@ enum StreamingMarkdownParser {
             .replacingOccurrences(of: "\r", with: "\n")
     }
 
+    /// Plain text of a markdown answer (S40 4 i, CHT-7: the completion announcement's first sentence): one line per
+    /// block with the inline markers removed, a paragraph's soft line breaks joined with spaces, code kept as text and
+    /// rules skipped. Shared by both platforms; never called from a view body.
+    static func plainText(in source: String) -> String {
+        let parsed = blocks(in: normalized(source), startingAt: 0, isStreamingTail: false)
+        var lines: [String] = []
+        for block in parsed {
+            if block.kind == StreamingMarkdownBlockKind.rule { continue }
+            if block.kind == StreamingMarkdownBlockKind.codeFence {
+                lines.append(block.text)
+                continue
+            }
+            var line = ""
+            for run in StreamingMarkdownInlineParser.runs(in: block.text, isStreaming: false) {
+                line += run.text
+            }
+            lines.append(line.replacingOccurrences(of: "\n", with: " "))
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Returns the largest prefix ending at a blank line outside a code fence.
     /// That prefix cannot be changed by later appended tokens and can be cached.
     static func safeCommittedPrefixLength(in source: String) -> Int {
@@ -724,6 +745,11 @@ enum NativeTextShimmerLayout {
 /// Native reimplementation of the web `shimmer.tsx`: a faint text base with a
 /// single compositor-driven highlight band. One state transition starts the
 /// repeating animation; no timer or per-frame model mutation is involved.
+///
+/// Legacy screens only (ChatViews, TranscriptPanelView on the default route).
+/// The native chat rows (CHT-7, S40 4 h, R13) never use it: their progress is
+/// a static label with the system spinner, and they render the parser's blocks
+/// through `AssistantMarkdownView` (iOS) and `AssistantMarkdown` (Android).
 struct NativeTextShimmer: View {
     let text: String
     var font: Font = ACMFont.trial(12)

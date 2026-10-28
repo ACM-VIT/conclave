@@ -130,6 +130,10 @@ final class MeetingState {
     @ObservationIgnored var onActivityInputChanged: (() -> Void)? = nil
     /// S60 8 (ACT-2): a game push or identity change for the game shell (parsed once per push).
     @ObservationIgnored var onActivityGameChanged: (() -> Void)? = nil
+    /// S50 PH7 (PPL-6): the Q&A presenter's own refresh hook (entries, Q&A state, the unseen counters), separate from
+    /// People rows, so a vote never rebuilds People and a roster change never rebuilds Q&A. The view model binds it to
+    /// `requestQaRefresh()`.
+    @ObservationIgnored var onQaInputChanged: (() -> Void)? = nil
     /// S40 CH13: the chat presenter's own refresh hook, separate from S1 and the stage, with a change hint so changes
     /// that touch no messages skip the message diff. The view model installs one closure (`bindChatInputs()`).
     @ObservationIgnored var onChatInputChanged: ((ChatInputChange) -> Void)? = nil
@@ -189,6 +193,12 @@ final class MeetingState {
     }
     var isNetworkOffline: Bool = false {
         didSet { onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate) }
+    }
+    /// SYS-6 (S70 SY22, 6 d; S20 10 f banner 2): Android only. The active network reports a captive portal and is not
+    /// validated, so the banner lane shows "This Wi-Fi network needs you to sign in." instead of offline. iOS has no
+    /// such signal and never sets it.
+    var isCaptivePortal: Bool = false {
+        didSet { if oldValue != isCaptivePortal { onStageInputChanged?() } }
     }
     var waitingMessage: String? = nil {
         didSet { onShellInputChanged?() }
@@ -274,11 +284,15 @@ final class MeetingState {
     }
 
     // Webinar State
+    /// S50 PH9: mutable after the join (a promotion or demotion rejoins with the new role).
     var webinarRole: String? = nil {
-        didSet { onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate); onPeopleInputChanged?() }
+        didSet {
+            onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate); onPeopleInputChanged?()
+            onQaInputChanged?()
+        }
     }
     var isWebinarEnabled: Bool = false {
-        didSet { onStageInputChanged?(); onControlsInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?() }
+        didSet { onStageInputChanged?(); onControlsInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?(); onQaInputChanged?() }
     }
     var isWebinarPublicAccess: Bool = false {
         didSet { onStageInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?() }
@@ -304,6 +318,46 @@ final class MeetingState {
     var webinarFeedMode: String = "active-speaker" {
         didSet { onStageInputChanged?() }
     }
+    /// S50 PH10 (PPL-5): Attendee Q&A, from the join ack and `webinar:configChanged`; the host toggles it in Webinar
+    /// Settings. People (the Q&A row), Host Controls (the switch), the stage (the attendee badge), the controls (the
+    /// attendee Q&A control) and Q&A read it.
+    var isWebinarQaEnabled: Bool = false {
+        didSet {
+            onStageInputChanged?(); onControlsInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?()
+            onQaInputChanged?()
+        }
+    }
+    /// S50 PH8 (PPL-5): the attendee hand queue as the SFU last sent it to admins (the whole queue per change,
+    /// webinarNotifications.ts:166-174), and whether one arrived this call session (false for a host promoted
+    /// mid-webinar until the next change, S50 10 f).
+    var webinarHandQueue: [WebinarHandQueueEntry] = [] {
+        didSet { onPeopleInputChanged?() }
+    }
+    var webinarHandQueueReceived: Bool = false {
+        didSet { onPeopleInputChanged?() }
+    }
+    /// S50 PH9 interim (Q15): attendees invited on stage from this device in this call session, queue userId to name.
+    var webinarStageInvites: [String: String] = [:] {
+        didSet { onPeopleInputChanged?() }
+    }
+    /// S50 PH7 (PPL-6): Q&A entries by id (the presenter orders them), the first-snapshot flag, the viewer's own votes
+    /// (change events carry no per-viewer vote, webinarNotifications.ts) and the two unseen counters (RECONCILE R18:
+    /// attendees count questions newly answering or answered, hosts new pending questions, since the last close).
+    var webinarQaEntries: [String: WebinarQaEntry] = [:] {
+        didSet { onQaInputChanged?() }
+    }
+    var isWebinarQaSnapshotReceived: Bool = false {
+        didSet { onQaInputChanged?() }
+    }
+    var webinarQaVotes: [String: Bool] = [:] {
+        didSet { onQaInputChanged?() }
+    }
+    var webinarQaUnseenAttendee: Int = 0 {
+        didSet { onQaInputChanged?(); onStageInputChanged?(); onControlsInputChanged?() }
+    }
+    var webinarQaUnseenHost: Int = 0 {
+        didSet { onQaInputChanged?(); onControlsInputChanged?() }
+    }
     var webinarSpeakerUserId: String? {
         didSet { onStageInputChanged?() }
     }
@@ -327,12 +381,13 @@ final class MeetingState {
     }
     var isAdmin: Bool = false {
         didSet {
+            onQaInputChanged?()
             onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate); onPeopleInputChanged?()
             // S60 7, 8 (ACT-1, ACT-2): the launcher's and the game shell's host flag.
             onActivityInputChanged?(); onActivityGameChanged?()
-            // S50 PH11 (INM D5): waiting requests and access lists go with the host role, so no stale waiting badge
-            // (Participants control, More row) and no stale list remains after losing host. The hand queue (PH8)
-            // joins this when PPL-5 adds it.
+            // S50 PH11 (INM D5): waiting requests, access lists, the attendee hand queue and the interim stage invites
+            // (PH8, PH9) go with the host role, so no stale waiting badge (Participants control, More row) and no stale
+            // list remains after losing host. The host Q&A counter goes too (RECONCILE R18).
             if oldValue && !isAdmin { clearHostOnlyState() }
         }
     }
@@ -342,6 +397,23 @@ final class MeetingState {
         if !adminAllowedUserKeys.isEmpty { adminAllowedUserKeys = [] }
         if !adminLockedAllowedUserKeys.isEmpty { adminLockedAllowedUserKeys = [] }
         if !adminBlockedUserKeys.isEmpty { adminBlockedUserKeys = [] }
+        if !webinarHandQueue.isEmpty { webinarHandQueue = [] }
+        if webinarHandQueueReceived { webinarHandQueueReceived = false }
+        if !webinarStageInvites.isEmpty { webinarStageInvites = [:] }
+        if webinarQaUnseenHost != 0 { webinarQaUnseenHost = 0 }
+    }
+
+    /// S50 PH7, PH8, PH9: the webinar role, Q&A and hand queue state of one call session, cleared together on a fresh
+    /// join and on cleanup (the counters and invites never carry into another session).
+    func resetWebinarInteractionState() {
+        if !webinarHandQueue.isEmpty { webinarHandQueue = [] }
+        if webinarHandQueueReceived { webinarHandQueueReceived = false }
+        if !webinarStageInvites.isEmpty { webinarStageInvites = [:] }
+        if !webinarQaEntries.isEmpty { webinarQaEntries = [:] }
+        if isWebinarQaSnapshotReceived { isWebinarQaSnapshotReceived = false }
+        if !webinarQaVotes.isEmpty { webinarQaVotes = [:] }
+        if webinarQaUnseenAttendee != 0 { webinarQaUnseenAttendee = 0 }
+        if webinarQaUnseenHost != 0 { webinarQaUnseenHost = 0 }
     }
     var hostUserId: String? {
         didSet { onPeopleInputChanged?() }

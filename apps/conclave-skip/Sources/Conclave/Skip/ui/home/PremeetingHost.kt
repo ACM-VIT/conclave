@@ -103,6 +103,9 @@ internal fun PremeetingHost(
     val callComposed = rootTransition.currentState == PremeetingRootKind.call ||
         rootTransition.targetState == PremeetingRootKind.call
     HostingTheme {
+        // SYS-5 (S70 4 a, d): Compose-scoped keep awake while the call presence keeps the screen on (waiting,
+        // connecting, live, recovering, on hold); it covers the interim legacy call content hosted here too.
+        CallKeepScreenOnEffect()
         Box(Modifier.fillMaxSize().onGloballyPositioned { anchors.hostOrigin = it.positionInRoot() }) {
             rootTransition.AnimatedContent(
                 modifier = Modifier.fillMaxSize(),
@@ -127,6 +130,10 @@ internal fun PremeetingHost(
                         PremeetingStack(premeeting)
                     }
                 }
+            }
+            // S50 PH20 (PPL-7, RECONCILE R30): the promotion lobby over the still-playing viewer (native call root only).
+            if (inCall && usesNativeCallRoot && stage != null) {
+                PromotionLobbyOverlay(premeeting)
             }
             val start = expansionStart
             if (start != null && !expansionDone) {
@@ -210,8 +217,10 @@ private fun PremeetingPage(premeeting: PremeetingPresenter, key: PremeetingKey) 
             account = premeeting.account,
             onBack = { premeetingBack(premeeting) },
             onOpenPrivacy = { premeeting.openPrivacyPolicy() },
+            onOpenSettings = { premeeting.openAppSettings() },
         )
         is PremeetingKey.PrivacyKey -> PrivacyPolicyScreen(onBack = { premeetingBack(premeeting) })
+        is PremeetingKey.SettingsKey -> AppSettingsScreen(onBack = { premeetingBack(premeeting) })
         is PremeetingKey.OutcomeKey -> OutcomeScreen(premeeting)
     }
 }
