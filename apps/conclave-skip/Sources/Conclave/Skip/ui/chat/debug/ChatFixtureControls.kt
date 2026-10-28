@@ -57,5 +57,16 @@ internal fun ChatFixtureControlsBar(driver: ChatFixtureDriver) {
             ConclaveText(latency, line = "chat.openLatency", style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 16.dp).testTag("chat.openLatency"))
         }
+        ChatGateLineReadout(driver)
     }
+}
+
+/**
+ * T3 borrow P7 (R8): `chat.composer.gateLine`, the gate the status line draws, the real gate and the show counter. It
+ * reads `presenter.composer` (through the readout) in its own scope, so the delayed line's publish refreshes it.
+ */
+@Composable
+private fun ChatGateLineReadout(driver: ChatFixtureDriver) {
+    ConclaveText(driver.gateLineReadout, line = "chat.composer.gateLine", style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier.padding(horizontal = 16.dp).testTag("chat.composer.gateLine"))
 }

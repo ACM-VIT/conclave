@@ -96,6 +96,17 @@ final class ChatPresenter {
     /// the tail block changes while an answer streams.
     @ObservationIgnored private var markdownStates: [String: StreamingMarkdownRenderState] = [:]
     @ObservationIgnored private var lastTailGrowthMillis = -1_000_000.0
+    /// T3 borrow P7: the composer status line's delayed gate (`composer.gateLine`), stepped on every apply and once
+    /// when the one cancellable task wakes at its deadline. Send keeps following the real gate at once.
+    @ObservationIgnored private var gateLineStatus = ChatPresenter.initialGateLineStatus
+    /// The first apply after init or reset is immediate (fixtures that start closed show the line at once).
+    @ObservationIgnored private var gateLineIsFirstApply = true
+    @ObservationIgnored private var gateLineTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var gateLineTaskDeadline = -1.0
+    /// Diagnostics: gate line tasks started, and how often the line went from hidden to drawn (the fixture readout),
+    /// both counted from init or the last reset (a first apply that draws the line at once counts as a show).
+    @ObservationIgnored private(set) var gateLineTasksStarted = 0
+    @ObservationIgnored private(set) var gateLineShowCount = 0
 
     /// `sendingSlow` after this long (S40 0.5).
     static let slowSendMillis = 1000.0
@@ -105,6 +116,9 @@ final class ChatPresenter {
     static let replyPreviewLimit = 280
     /// The iOS 17 follow counter moves at most this often while an answer streams (S40 2 c, 0.5).
     static let tailGrowthIntervalMillis = 250.0
+    /// The gate line before the first apply: equal to `ChatComposerSnapshot.initial.gate` (not joined), already drawn.
+    static let initialGateLineStatus = DelayedStatus(phase: DelayedStatusPhase.shown, value: ChatSendGate.notJoined.rawValue,
+                                                     deadline: 0.0)
 
     init() {
         embeds.onResolved = { [weak self] _ in
@@ -142,6 +156,8 @@ final class ChatPresenter {
         if rowsChanged || change == ChatInputChange.messages {
             rebuildRows(previousRowIds: timeline.rowIds)
         }
+        stepGateLine(isFirstApply: gateLineIsFirstApply, at: now())
+        gateLineIsFirstApply = false
         publishPanel()
         publishComposer()
         publishPlayback()
@@ -233,6 +249,14 @@ final class ChatPresenter {
         markdownStates = [:]
         lastTailGrowthMillis = -1_000_000.0
         hasTimeline = false
+        // P7: the gate line task is cancelled, and the next apply is immediate again.
+        gateLineTask?.cancel()
+        gateLineTask = nil
+        gateLineTaskDeadline = -1.0
+        gateLineStatus = ChatPresenter.initialGateLineStatus
+        gateLineIsFirstApply = true
+        gateLineTasksStarted = 0
+        gateLineShowCount = 0
     }
 
     // MARK: - Actions
@@ -338,9 +362,22 @@ final class ChatPresenter {
         return await search(kind, query, page)
     }
 
+    /// T3 borrow P4: whether a photo can be handed over now (the gate is open, the mode is not private, photos are on
+    /// and no photo is in the composer). The views refuse intake at once while this is false (the iPad drop, Android
+    /// keyboard, clipboard and drop images), matching the Photo Library item that is already disabled. Reads only
+    /// `composer`, so a view that reads it redraws with the composer.
+    var canAcceptPhoto: Bool {
+        let current = composer
+        return current.gate == ChatSendGate.allowed && current.privateTo == nil && current.photosEnabled
+            && current.attachment.phase == ChatAttachmentPhase.none
+    }
+
     /// CH6: hands over a picked, pasted or dropped photo, a file already copied into the caches directory (never
     /// image bytes through the main actor). The chip shows `preparing` at once; the core prepares and uploads it.
     /// For `attachPhoto` the request's `fileURL` is the file, `text` the picker's file name and `emoji` its MIME type.
+    /// T3 borrow P4: one attachment at a time on every intake path; while a photo is in the composer (any phase but
+    /// `none`) a second one is refused with the existing "Send one attachment at a time." notice and nothing is sent to
+    /// the core, so the first photo and its chip stay.
     func attachPhoto(fileURL: String, mimeType: String, fileName: String) {
         if fileURL.isEmpty || inputs.gate != ChatSendGate.allowed { return }
         if !privateToUserId.isEmpty {
@@ -349,6 +386,10 @@ final class ChatPresenter {
         }
         if !inputs.photosEnabled {
             setInlineNotice(ChatFailure.photosDisabled)
+            return
+        }
+        if composer.attachment.phase != ChatAttachmentPhase.none {
+            setInlineNotice(ChatFailure.oneAttachment)
             return
         }
         localAttachment = ChatAttachmentState(phase: ChatAttachmentPhase.preparing, progress: -1, thumbnailKey: fileURL,
@@ -1109,6 +1150,68 @@ final class ChatPresenter {
         rebuildRows(previousRowIds: timeline.rowIds)
     }
 
+    // MARK: - Gate line (T3 borrow P7)
+
+    /// The gate the status line draws now (`composer.gateLine`).
+    private var currentGateLine: ChatSendGate {
+        ChatSendGate(rawValue: DelayedStatusPolicy.visible(gateLineStatus)) ?? ChatSendGate.allowed
+    }
+
+    /// Diagnostics and tests: whether the one gate line task is waiting for a deadline.
+    var hasGateLineTask: Bool {
+        gateLineTask != nil
+    }
+
+    /// Steps the delayed gate line for the current gate at `time`. Locked, attendee and the first apply after init or
+    /// reset are immediate; everything else waits 400 ms and holds 400 ms (`DelayedStatusPolicy`).
+    private func stepGateLine(isFirstApply: Bool, at time: Double) {
+        let gate = inputs.gate
+        let value = ChatGateLinePolicy.statusValue(gate)
+        let immediate = isFirstApply || ChatGateLinePolicy.isImmediate(gate)
+        // Before the first apply the status only mirrors the initial snapshot ("not joined"), so a first apply that
+        // draws a line (a fixture or a call that starts reconnecting or offline) counts as a show.
+        let wasDrawn = isFirstApply ? false : ChatGateLinePolicy.showsLine(currentGateLine)
+        gateLineStatus = DelayedStatusPolicy.step(gateLineStatus, value: value, isImmediate: immediate, now: time)
+        if !wasDrawn && ChatGateLinePolicy.showsLine(currentGateLine) {
+            gateLineShowCount += 1
+        }
+        scheduleGateLineTask(value: value, at: time)
+    }
+
+    /// One stored, cancellable task sleeps to the next deadline through the injected `sleep`; a task already waiting
+    /// for the same deadline is kept, any other is cancelled.
+    private func scheduleGateLineTask(value: String, at time: Double) {
+        let wake = DelayedStatusPolicy.wakeDeadline(gateLineStatus, value: value, now: time)
+        if wake >= 0 && wake == gateLineTaskDeadline && gateLineTask != nil { return }
+        gateLineTask?.cancel()
+        gateLineTask = nil
+        gateLineTaskDeadline = -1.0
+        guard wake >= 0 else { return }
+        gateLineTaskDeadline = wake
+        gateLineTasksStarted += 1
+        let wait = sleep
+        let delay = max(0.0, wake - time)
+        gateLineTask = Task { @MainActor [weak self] in
+            await wait(delay)
+            if Task.isCancelled { return }
+            guard let self = self else { return }
+            self.gateLineTask = nil
+            self.gateLineDeadlineDidPass()
+        }
+    }
+
+    /// What the gate line task runs after its sleep (tests call it directly): the deadline it slept to counts as
+    /// passed even when the injected clock lags, so a wake always moves the line on (pending to drawn, or a hold that
+    /// ended to hidden) and never spins.
+    func gateLineDeadlineDidPass() {
+        let deadline = gateLineStatus.deadline
+        gateLineTask?.cancel()
+        gateLineTask = nil
+        gateLineTaskDeadline = -1.0
+        stepGateLine(isFirstApply: false, at: max(now(), deadline))
+        publishComposer()
+    }
+
     // MARK: - Publishing
 
     private func publishTimeline(_ next: ChatTimelineSnapshot) {
@@ -1185,6 +1288,7 @@ final class ChatPresenter {
         let next = ChatComposerSnapshot(
             revision: composerRevision,
             gate: inputs.gate,
+            gateLine: currentGateLine,
             isHost: inputs.isHost,
             isLockedForOthers: inputs.isLocked && inputs.isHost,
             privateTo: privateTo,
@@ -1207,7 +1311,8 @@ final class ChatPresenter {
             attachKinds: ChatComposerPolicy.attachKinds
         )
         let current = composer
-        let same = current.gate == next.gate && current.isHost == next.isHost && current.isLockedForOthers == next.isLockedForOthers
+        let same = current.gate == next.gate && current.gateLine == next.gateLine && current.isHost == next.isHost
+            && current.isLockedForOthers == next.isLockedForOthers
             && current.privateTo == next.privateTo && current.recipients == next.recipients
             && current.privateEnabled == next.privateEnabled && current.photosEnabled == next.photosEnabled
             && current.voiceEnabled == next.voiceEnabled && current.reply == next.reply && current.attachment == next.attachment
@@ -1219,7 +1324,8 @@ final class ChatPresenter {
         composerRevision += 1
         composerPublishCount += 1
         composer = ChatComposerSnapshot(
-            revision: composerRevision, gate: next.gate, isHost: next.isHost, isLockedForOthers: next.isLockedForOthers,
+            revision: composerRevision, gate: next.gate, gateLine: next.gateLine, isHost: next.isHost,
+            isLockedForOthers: next.isLockedForOthers,
             privateTo: next.privateTo, recipients: next.recipients, privateEnabled: next.privateEnabled,
             photosEnabled: next.photosEnabled, voiceEnabled: next.voiceEnabled, reply: next.reply, attachment: next.attachment,
             isVoiceMode: next.isVoiceMode, voiceKind: next.voiceKind, textLimit: next.textLimit, voiceLimit: next.voiceLimit,

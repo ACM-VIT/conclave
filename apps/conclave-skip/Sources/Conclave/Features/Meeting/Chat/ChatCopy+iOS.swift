@@ -132,6 +132,32 @@ enum ChatCopy {
         }
     }
 
+    /// A mention suggestion's title (6 g): "Conclave AI", "%@ (You)" or the name.
+    static func mentionTitle(_ option: ChatMentionOption) -> String {
+        if option.isYou { return ConclaveStrings.format("%@ (You)", option.name) }
+        if option.isAssistant { return ConclaveStrings.text("Conclave AI") }
+        return option.name
+    }
+
+    /// A mention suggestion's second line: the assistant hint (its private-mode reason while dimmed, D24) or "@token".
+    static func mentionDetail(_ option: ChatMentionOption, isPrivateMode: Bool) -> String {
+        if option.isAssistant {
+            return isPrivateMode ? ConclaveStrings.text("Conclave AI replies are public. Switch to Everyone to ask.")
+                : ConclaveStrings.text("Ask the meeting AI. Everyone sees the reply.")
+        }
+        return "@" + option.token
+    }
+
+    /// A command suggestion's second line: the description, or the reason while dimmed.
+    static func commandDetail(_ row: ChatCommandRow) -> String {
+        row.isAvailable ? commandDescription(row.id) : commandReason(row.reason)
+    }
+
+    /// T3 borrow P1: what a hardware arrow move posts politely, the highlighted row's title and second line.
+    static func suggestionAnnouncement(title: String, detail: String) -> String {
+        detail.isEmpty ? title : title + ", " + detail
+    }
+
     /// Why a command row is dimmed (6 g).
     static func commandReason(_ reason: String) -> String {
         switch reason {
@@ -149,6 +175,23 @@ enum ChatCopy {
         case .offline: return ConclaveStrings.text("You're offline. You can send when you're back online.")
         case .notJoined: return ConclaveStrings.text("Chat is available once you've joined.")
         default: return ""
+        }
+    }
+
+    /// T3 borrow P6 (S40 6 i, AX2): the reason Send is disabled, read as the Send button's value (the label stays the
+    /// control's name) and posted once for a blocked hardware Return. `overBy` is the count past the limit; a failed
+    /// photo reuses the chip's status line. "" for `none` and `attendee` (the composer is absent).
+    static func sendBlockReason(_ block: ChatSendBlock, overBy: Int, attachment: ChatAttachmentState) -> String {
+        switch block {
+        case .none, .attendee: return ""
+        case .empty: return ConclaveStrings.text("Type a message")
+        case .notJoined: return ConclaveStrings.text("Not joined yet")
+        case .reconnecting: return ConclaveStrings.text("Reconnecting")
+        case .offline: return ConclaveStrings.text("Offline")
+        case .locked: return ConclaveStrings.text("Chat locked by host")
+        case .overLimit: return ConclaveStrings.format("%lld characters over the limit", max(overBy, 1))
+        case .photoPending: return ConclaveStrings.text("Uploading photo")
+        case .photoFailed: return ChatMediaCopy.attachmentStatus(attachment)
         }
     }
 

@@ -50,6 +50,10 @@ enum ConclaveComposerMetrics {
     static let attachDiameter = 44.0
     static let fieldHorizontalPadding = 12.0
     static let fieldVerticalPadding = 8.0
+    /// The gap between the text and the Send target inside the field container (T3 borrow P5). The 12 by 8 padding
+    /// wraps the text only, so one line is one 44 pt row, the 44 pt Send target fills the row at the trailing edge and
+    /// the Send glyph sits concentric with the container's 22 pt trailing corner.
+    static let fieldTrailingGap = 4.0
     static let minimumFieldHeight = 44.0
     static let maximumLines = 6
     /// The composer column: accessory rows, the field row, then the counter.
@@ -80,6 +84,27 @@ enum ConclaveComposerCounterPolicy {
         if limit <= 0 || count <= limit { return 0 }
         return count - limit
     }
+
+    /// The counter band (S40 6 i; T3 borrow P9): hidden below `visibleFrom` (exactly where the counter is not drawn),
+    /// over when `overflow` is above 0, near otherwise. With limit 1,000 and visibleFrom 900: 899 is hidden, 900 and
+    /// 1,000 are near, 1,001 is over.
+    static func band(count: Int, limit: Int, visibleFrom: Int) -> ConclaveCounterBand {
+        if count < visibleFrom { return .hidden }
+        if overflow(count: count, limit: limit) > 0 { return .over }
+        return .near
+    }
+
+    /// An opted-in counter speaks once when it enters a visible band: hidden to near, hidden to over, and every
+    /// crossing between near and over. Leaving for hidden and staying inside a band say nothing.
+    static func announces(previous: ConclaveCounterBand, next: ConclaveCounterBand) -> Bool {
+        return next != previous && next != .hidden
+    }
+}
+
+/// Where a counter stands against its limit (T3 borrow P9). Only the band, never the count, decides when an opted-in
+/// counter is announced, so typing inside a band never speaks.
+enum ConclaveCounterBand: String, CaseIterable {
+    case hidden, near, over
 }
 
 /// The attachment chip phases (S40 6 f; CH6 prepare and upload). The presenter maps its attachment state here.

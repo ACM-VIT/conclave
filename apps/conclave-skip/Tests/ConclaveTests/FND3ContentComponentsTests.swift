@@ -96,8 +96,10 @@ struct FND3ContentComponentsTests {
         let opaque = fnd3Normalized(outside)
         #expect(opaque.contains(".background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: CGFloat(ConclaveComposerMetrics.opaqueCornerRadius), style: .continuous))"))
         #expect(opaque.contains(".strokeBorder(Color(uiColor: .separator), lineWidth: 1)"))
-        // Send sits inside the field container in both branches; the container keeps 12 by 8 padding and 44 pt.
-        #expect(fnd3Normalized(code).contains("HStack(alignment: .bottom, spacing: CGFloat(ConclaveComposerMetrics.clusterSpacing)) { field send }"))
+        // Send sits inside the field container in both branches; the container is one 44 pt row. T3 borrow P5 (a
+        // recorded C19 c deviation): the 12 by 8 padding wraps the field only and Send is never padded, so a single
+        // line is centred in 44 pt and Send stays on the last line as the text grows (T3BorrowComposerComponentTests).
+        #expect(fnd3Normalized(code).contains("HStack(alignment: .bottom, spacing: 0) { field .padding(.vertical, CGFloat(ConclaveComposerMetrics.fieldVerticalPadding)) .frame(maxWidth: .infinity, minHeight: CGFloat(ConclaveComposerMetrics.minimumFieldHeight), alignment: .leading) .padding(.leading, CGFloat(ConclaveComposerMetrics.fieldHorizontalPadding)) .padding(.trailing, CGFloat(ConclaveComposerMetrics.fieldTrailingGap)) send } .frame(minHeight: CGFloat(ConclaveComposerMetrics.minimumFieldHeight))"))
         #expect(code.components(separatedBy: "fieldContainer").count - 1 >= 3)
         // iOS 27 reduced resource usage selects the opaque field; the Debug force is read Debug-only.
         #expect(code.contains("@Environment(\\.systemPrefersReducedResourceUsage) private var prefersReducedResourceUsage"))

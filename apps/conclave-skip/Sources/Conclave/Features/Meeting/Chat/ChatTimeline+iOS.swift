@@ -7,10 +7,38 @@ import UIKit
 // jump pill counting unseen remote messages. iOS 18 reads bottom proximity from scroll geometry; iOS 17 uses a bottom
 // sentinel whose appearance callbacks write a plain reference box plus a value-guarded flag (AGENTS appearance-
 // callback rule). No merge, sort or format in a body; no timers except the one highlight task a jump starts.
+// T3 borrow P8 (S40 2 c composer focus): when the composer's field gains focus and the newest row is at least partly
+// visible, the list scrolls to the newest row (.snappy, instant under Reduce Motion); farther up, the position and the
+// pill stay. Row visibility comes from onScrollVisibilityChange on iOS 18 and from appearance callbacks on iOS 17, both
+// written into a plain reference box. On iOS 17 the newest row is re-pinned once after the keyboard settles, because
+// the bottom anchor there does not follow the container shrinking.
 
 /// The iOS 17 sentinel's reference box: mutating it never invalidates a body.
 private final class ChatBottomSentinelState {
     var isVisible = true
+}
+
+/// P8: which rows are at least partly visible, plus the iOS 17 keyboard re-pin latch. A plain reference box held in
+/// `@State`: the visibility and appearance callbacks write it without invalidating any body, and the focus handler reads
+/// it on demand (AGENTS appearance-callback rule).
+private final class ChatRowVisibilityBox {
+    /// iOS 18: at least this share of a row inside the viewport counts as visible ("at least partly").
+    static let partlyVisibleThreshold = 0.01
+    private(set) var visibleRowIds: Set<String> = []
+    /// iOS 17: set when a focus gain followed to the newest row; the next keyboard show re-pins it once.
+    var repinsAfterKeyboard = false
+
+    func setVisible(_ rowId: String, _ visible: Bool) {
+        if visible {
+            visibleRowIds.insert(rowId)
+        } else {
+            visibleRowIds.remove(rowId)
+        }
+    }
+
+    func isVisible(_ rowId: String) -> Bool {
+        !rowId.isEmpty && visibleRowIds.contains(rowId)
+    }
 }
 
 /// One rotor entry (2 c): a row after the unread divider.
@@ -26,6 +54,7 @@ struct ChatTimeline: View {
     @State private var unseen = 0
     @State private var highlightId = ""
     @State private var sentinel = ChatBottomSentinelState()
+    @State private var visibility = ChatRowVisibilityBox()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -42,6 +71,7 @@ struct ChatTimeline: View {
                         ForEach(timeline.rowIds, id: \.self) { rowId in
                             ChatRowView(entry: chat.rows.entry(for: rowId), actions: actions,
                                         isHighlighted: highlightId == rowId)
+                                .modifier(ChatRowVisibilityProbe(rowId: rowId, box: visibility))
                                 .id(rowId)
                         }
                         if !ChatTimelinePlatform.usesScrollGeometry {
@@ -62,6 +92,9 @@ struct ChatTimeline: View {
                     if !ChatTimelinePlatform.usesScrollGeometry {
                         ChatStreamingFollow17(chat: chat, proxy: proxy, isAtBottom: isAtBottom)
                     }
+                }
+                .background {
+                    ChatComposerFocusFollow(chat: chat, actions: actions, proxy: proxy, visibility: visibility)
                 }
                 .modifier(ChatBottomProximity(isAtBottom: $isAtBottom))
                 .scrollDismissesKeyboard(.interactively)
@@ -203,6 +236,80 @@ private struct ChatStreamingFollow17: View {
                 let newest = chat.timeline.newestId
                 if !newest.isEmpty { proxy.scrollTo(newest, anchor: .bottom) }
             }
+    }
+}
+
+/// P8: records whether a row is at least partly visible into the plain box. iOS 18 reads the scroll viewport
+/// (`onScrollVisibilityChange`); iOS 17 uses the lazy row's appearance callbacks. Neither writes observed state.
+private struct ChatRowVisibilityProbe: ViewModifier {
+    let rowId: String
+    let box: ChatRowVisibilityBox
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollVisibilityChange(threshold: ChatRowVisibilityBox.partlyVisibleThreshold) { visible in
+                box.setVisible(rowId, visible)
+            }
+        } else {
+            content
+                .onAppear { box.setVisible(rowId, true) }
+                .onDisappear { box.setVisible(rowId, false) }
+        }
+    }
+}
+
+/// P8 (S40 2 c, the T3 "follow when at the end" rule with one visibility test on every platform): a leaf that alone
+/// reads `actions.composerFocusRevision`, so a focus gain re-runs no list body. On a focus gain it scrolls to the newest
+/// row only when that row is at least partly visible; otherwise it leaves the position and the unseen pill alone. On
+/// iOS 17 it re-pins the newest row once after the keyboard has settled (the bottom anchor does not follow the
+/// container shrinking there); the latch clears when the keyboard hides or the timeline leaves the screen.
+private struct ChatComposerFocusFollow: View {
+    let chat: ChatPresenter
+    let actions: ChatRowActions
+    let proxy: ScrollViewProxy
+    let visibility: ChatRowVisibilityBox
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onChange(of: actions.composerFocusRevision) { _, _ in
+                followComposerFocus()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                repinAfterKeyboard()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                visibility.repinsAfterKeyboard = false
+            }
+            .onDisappear {
+                visibility.repinsAfterKeyboard = false
+            }
+    }
+
+    private func followComposerFocus() {
+        let newest = chat.timeline.newestId
+        let follows = visibility.isVisible(newest)
+        visibility.repinsAfterKeyboard = follows && !ChatTimelinePlatform.usesScrollGeometry
+        guard follows else { return }
+        scrollToNewest(newest)
+    }
+
+    private func repinAfterKeyboard() {
+        guard visibility.repinsAfterKeyboard else { return }
+        visibility.repinsAfterKeyboard = false
+        let newest = chat.timeline.newestId
+        guard !newest.isEmpty else { return }
+        scrollToNewest(newest)
+    }
+
+    private func scrollToNewest(_ newest: String) {
+        if reduceMotion {
+            proxy.scrollTo(newest, anchor: .bottom)
+        } else {
+            withAnimation(.snappy) { proxy.scrollTo(newest, anchor: .bottom) }
+        }
     }
 }
 

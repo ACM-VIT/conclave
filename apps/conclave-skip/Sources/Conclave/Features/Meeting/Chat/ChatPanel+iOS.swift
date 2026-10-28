@@ -34,6 +34,9 @@ final class ChatRowActions {
     var photoSheetRowId = ""
     /// Bumped to focus the composer (Reply, Send Private Message, Ask Conclave AI; S40 Q11).
     private(set) var focusRequest = 0
+    /// T3 borrow P8 (S40 2 c composer focus): bumped by the composer each time its field gains focus. Only the
+    /// timeline's small follow leaf reads it, so a focus gain re-runs no list or row body.
+    private(set) var composerFocusRevision = 0
     /// Text the composer inserts with the next focus ("@Conclave " from the empty state).
     @ObservationIgnored var pendingInsert = ""
     /// D23: a link that leaves Conclave waits here for its confirmation.
@@ -49,6 +52,12 @@ final class ChatRowActions {
     func focusComposer(inserting text: String = "") {
         pendingInsert = text
         focusRequest += 1
+    }
+
+    /// P8: the composer's field gained focus (`.onChange(of: focused)` to true). The timeline scrolls to the newest row
+    /// only when that row is at least partly visible; otherwise the position and the jump pill stay.
+    func composerDidFocus() {
+        composerFocusRevision += 1
     }
 
     func reply(_ rowId: String) {
