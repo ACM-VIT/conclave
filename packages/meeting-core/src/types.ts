@@ -20,7 +20,7 @@ export type ConnectionState =
   | "error";
 
 export type ProducerType = "webcam" | "screen";
-export type JoinMode = "meeting" | "webinar_attendee";
+export type JoinMode = "meeting" | "webinar_attendee" | "ocs_ghost";
 
 export type ReactionKind = "emoji" | "asset";
 

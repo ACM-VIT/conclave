@@ -993,7 +993,7 @@ export default function MeetsClient({
   const isAdminFlag = Boolean(currentIsAdmin);
   const isWebinarAttendee =
     joinMode === "webinar_attendee" || webinarRole === "attendee";
-  const isReadOnlyObserver = isWebinarAttendee;
+  const isReadOnlyObserver = isWebinarAttendee || joinMode === "ocs_ghost";
   const canModerateMeeting = isAdminFlag && !isReadOnlyObserver;
   const shouldRunVideoEffects = shouldRunVisualVideoEffects;
   const shouldPublishProcessedVideo = shouldRunVisualVideoEffects;
@@ -1072,7 +1072,7 @@ export default function MeetsClient({
   } = useMeetReactions({
     userId,
     socketRef: refs.socketRef,
-    isObserverMode: isWebinarAttendee,
+    isObserverMode: isReadOnlyObserver,
     reactionAssets,
   });
 
@@ -1151,7 +1151,7 @@ export default function MeetsClient({
       currentUser?.email ||
       currentUser?.id ||
       "You",
-    isObserverMode: isWebinarAttendee,
+    isObserverMode: isReadOnlyObserver,
     isChatLocked,
     isAdmin: isAdminFlag,
     isDmEnabled,
@@ -1216,7 +1216,7 @@ export default function MeetsClient({
     primeAudioOutput,
     refreshScreenAudioProducerForNetworkProfile,
   } = useMeetMedia({
-    isObserverMode: isWebinarAttendee,
+    isObserverMode: isReadOnlyObserver,
     connectionState,
     isMuted,
     setIsMuted,
@@ -2154,7 +2154,7 @@ export default function MeetsClient({
     isHandRaised,
     setIsHandRaised,
     isHandRaisedRef: refs.isHandRaisedRef,
-    isObserverMode: isWebinarAttendee,
+    isObserverMode: isReadOnlyObserver,
     socketRef: refs.socketRef,
   });
 
@@ -2460,7 +2460,7 @@ export default function MeetsClient({
 
   const transcript = useMeetingTranscript({
     roomId,
-    isJoined: connectionState === "joined" && !isWebinarAttendee,
+    isJoined: connectionState === "joined" && !isReadOnlyObserver,
     currentUserId: userId,
     currentDisplayName:
       displayNameInput ||
@@ -2510,7 +2510,7 @@ export default function MeetsClient({
     browserState?.active || isBrowserServiceAvailable,
   );
 
-  const roomAi = useRoomAi(appsSocket, connectionState === "joined" && !isWebinarAttendee, userId, canModerateMeeting, roomId);
+  const roomAi = useRoomAi(appsSocket, connectionState === "joined" && !isReadOnlyObserver, userId, canModerateMeeting, roomId);
   useEffect(() => { roomAiRef.current = roomAi; }, [roomAi]);
   const voiceAgent = useVoiceAgentParticipant({
     roomAi,
@@ -3339,7 +3339,7 @@ export default function MeetsClient({
         joinRoomById={joinRoomById}
         retryReconnect={retryReconnect}
         reconnectRecoveryStatus={reconnectRecoveryStatus}
-        hideJoinUI={hideJoinUI || joinMode === "webinar_attendee"}
+        hideJoinUI={hideJoinUI || joinMode === "webinar_attendee" || joinMode === "ocs_ghost"}
         isWebinarAttendee={isWebinarAttendee}
         enableRoomRouting={enableRoomRouting}
         forceJoinOnly={forceJoinOnly}
@@ -3442,7 +3442,7 @@ export default function MeetsClient({
         replyTarget={replyTarget}
         onReplyToMessage={startReply}
         onToggleMessageReaction={
-          isWebinarAttendee ? undefined : toggleMessageReaction
+          isReadOnlyObserver ? undefined : toggleMessageReaction
         }
         onCancelReply={cancelReply}
         activeTtsMessageId={activeTtsMessageId}

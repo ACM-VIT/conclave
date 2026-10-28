@@ -156,6 +156,12 @@ Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening a PR.
 
 ---
 
+## OCS 2027 interview rooms
+
+The OCS portal signs a two-minute join capability after checking a confirmed booking or a scoped staff grant. Conclave web verifies it before minting an SFU token. The SFU checks the `ocs27-` room namespace and participant role again; a room link alone cannot enter. Candidate joins wait for host admission. Interviewers can open the room. A ghost observer is receive-only and hidden from the applicant roster and participant count; staff can see ghost presence. Ordinary Conclave rooms are unaffected.
+
+Set `OCS27_CONCLAVE_SIGNING_KEY` on the web deployment to the same randomly generated value set on the OCS Convex deployment. Keep it server-side; never use `NEXT_PUBLIC_` or include it in a URL. Without this key, OCS room joins are denied. Both deployments must use the same code before enabling the integration. Complete manual browser and SFU checks before production rollout, including candidate denial without a capability, host admission, ghost invisibility, media/chat/reaction restrictions, and expiry.
+
 ## Community & Conduct
 
 By participating in this project, you agree to follow [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).

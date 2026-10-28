@@ -23,6 +23,21 @@ const readError = readResponseError;
 
 const defaultClientId = resolveBrowserSfuClientId();
 const JOIN_INFO_REQUEST_TIMEOUT_MS = 15000;
+let interviewCapability: string | null = null;
+
+const readInterviewCapability = (): string | null => {
+  if (typeof window === "undefined") return null;
+  const token = new URLSearchParams(window.location.hash.slice(1)).get("ocs");
+  if (token) {
+    interviewCapability = token;
+    window.history.replaceState(
+      window.history.state,
+      "",
+      window.location.pathname + window.location.search,
+    );
+  }
+  return interviewCapability;
+};
 
 const fetchJoinInfoWithTimeout = async (
   init: RequestInit,
@@ -109,6 +124,9 @@ export default function MeetsClientPage({
           allowRoomCreation: forceJoinOnly,
           clientId: resolvedClientId,
           joinMode: resolvedJoinMode,
+          ...(roomId.startsWith("ocs27-")
+            ? { ocsCapability: readInterviewCapability() }
+            : {}),
         }),
       });
 

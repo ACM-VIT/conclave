@@ -23,7 +23,8 @@ export interface ClientOptions {
 export type ProducerType = "webcam" | "screen";
 export type ClientMode =
   | "participant"
-  | "webinar_attendee";
+  | "webinar_attendee"
+  | "ocs_ghost";
 
 export type ProducerKey = `${MediaKind}-${ProducerType}`;
 
@@ -178,7 +179,11 @@ export class Client {
   }
 
   get isObserver(): boolean {
-    return this.isWebinarAttendee;
+    return this.isWebinarAttendee || this.mode === "ocs_ghost";
+  }
+
+  get isOcsGhost(): boolean {
+    return this.mode === "ocs_ghost";
   }
 
   addProducer(producer: Producer): Producer | null {

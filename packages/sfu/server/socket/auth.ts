@@ -19,6 +19,12 @@ export type SfuAuthPayload = JwtPayload & {
   isForcedHost?: boolean;
   isSuperAdmin?: boolean;
   allowRoomCreation?: boolean;
+  ocs?: {
+    roomId: string;
+    bookingId: string;
+    profileId: string;
+    role: "candidate" | "interviewer" | "ghost";
+  };
 };
 
 const isSfuAuthPayload = (

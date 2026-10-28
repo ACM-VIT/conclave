@@ -164,7 +164,7 @@ export const registerTranscriptHandlers = (
         return;
       }
 
-      if (client.isWebinarAttendee) {
+      if (client.isObserver) {
         respond(callback, {
           error: "Transcript is available to meeting participants only",
         });
@@ -259,7 +259,7 @@ export const registerTranscriptHandlers = (
         respond(callback, { error: "Not in a room" });
         return;
       }
-      if (client.isWebinarAttendee) {
+      if (client.isObserver) {
         respond(callback, {
           error: "Transcript relay is available to meeting participants only",
         });
@@ -315,7 +315,7 @@ export const registerTranscriptHandlers = (
         respond(callback, { error: "Not in a room" });
         return;
       }
-      if (client.isWebinarAttendee) {
+      if (client.isObserver) {
         respond(callback, {
           error: "Transcript relay is available to meeting participants only",
         });

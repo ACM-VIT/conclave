@@ -97,7 +97,9 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
   const roomCode = decodeURIComponent(rawCode);
   const resolvedRoomCode =
     roomCode === "undefined" || roomCode === "null" ? "" : roomCode;
-  const bypassMediaPermissions = isTruthyParam(resolvedSearchParams.recorder);
+  const ocsGhostRequested = resolvedRoomCode.startsWith("ocs27-") &&
+    getParamValue(resolvedSearchParams.mode) === "ghost";
+  const bypassMediaPermissions = isTruthyParam(resolvedSearchParams.recorder) || ocsGhostRequested;
   const devOverridesEnabled = process.env.NODE_ENV === "development";
   const safeBotOverridesEnabled =
     devOverridesEnabled || bypassMediaPermissions;
@@ -109,7 +111,11 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
     ? getParamValue(resolvedSearchParams.mode)
     : undefined;
   const joinMode =
-    joinModeParam === "webinar_attendee" ? "webinar_attendee" : undefined;
+    ocsGhostRequested
+      ? "ocs_ghost"
+      : joinModeParam === "webinar_attendee"
+        ? "webinar_attendee"
+        : undefined;
   const sanitizedRoomCode =
     joinMode === "webinar_attendee"
       ? sanitizeWebinarLinkCode(resolvedRoomCode)
@@ -160,7 +166,7 @@ async function MeetRoomContent({ params, searchParams }: MeetRoomPageProps) {
       forceJoinOnly={true}
       bypassMediaPermissions={bypassMediaPermissions}
       sfuClientId={resolvedSfuClientId}
-      autoJoinOnMount={autoJoinOnMount}
+      autoJoinOnMount={autoJoinOnMount || joinMode === "ocs_ghost"}
       hideJoinUI={hideJoinUI}
       joinMode={joinMode}
       user={user}

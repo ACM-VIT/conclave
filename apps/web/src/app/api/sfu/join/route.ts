@@ -8,6 +8,7 @@ import {
   resolveServerSfuClientId,
 } from "@/lib/sfu-client-id";
 import { lookupScheduledWebinarByRoomId } from "@/lib/sfu-user-auth";
+import { OCS_CLIENT_ID, verifyOcsJoinCapability } from "@/lib/ocs-join";
 import { isSfuSuperAdminEmail } from "@/lib/sfu-super-admin";
 import {
   normalizeSfuUrl,
@@ -54,6 +55,7 @@ type JoinRequestBody = {
   ghost?: boolean;
   allowRoomCreation?: boolean;
   clientId?: string;
+  ocsCapability?: string;
 };
 
 type IceServer = {
@@ -652,10 +654,25 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing session ID" }, { status: 400 });
   }
 
+  const isOcsJoin = roomId.startsWith("ocs27-");
+  if (!isOcsJoin && body.ocsCapability) {
+    return NextResponse.json({ error: "Invalid interview room" }, { status: 400 });
+  }
+  const ocs =
+    isOcsJoin && typeof body.ocsCapability === "string"
+      ? verifyOcsJoinCapability(body.ocsCapability, roomId)
+      : null;
+  if (isOcsJoin && !ocs) {
+    return NextResponse.json({ error: "Interview authorization required" }, { status: 403 });
+  }
+
   const iceServersPromise = resolveIceServers();
-  const clientId = resolveClientId(request, body);
-  const joinMode =
-    body?.joinMode === "webinar_attendee" ? "webinar_attendee" : "meeting";
+  const clientId = ocs ? OCS_CLIENT_ID : resolveClientId(request, body);
+  const joinMode = ocs?.role === "ghost"
+    ? "ocs_ghost"
+    : body?.joinMode === "webinar_attendee" && !ocs
+      ? "webinar_attendee"
+      : "meeting";
   const session = await auth.api
     .getSession({
       headers: request.headers,
@@ -676,19 +693,24 @@ export async function POST(request: Request) {
   // for the SFU's user-keyed reconnect, allow/block-list, and host-tracking
   // paths. Synthetic web/mobile guests must stay session-scoped because the
   // clients render their local participant as guest-${sessionId}.
-  const email = sessionEmail || bodyEmail;
+  const email = ocs?.email || sessionEmail || bodyEmail;
   const name =
-    sessionUser?.name?.trim() || body?.user?.name?.trim() || undefined;
+    ocs?.name || sessionUser?.name?.trim() || body?.user?.name?.trim() || undefined;
   const normalizedSessionEmail = normalizeEmail(sessionEmail);
   const providedId = sessionUser?.id?.trim() || bodyUserId || undefined;
-  const baseUserId = email || providedId || `guest-${sessionId}`;
+  const baseUserId = ocs
+    ? `ocs27:${ocs.role}:${ocs.sub}`
+    : email || providedId || `guest-${sessionId}`;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isScheduledHostRoom = isScheduledRoomId(roomId);
   // Only the authenticated session may confer super admin status; native/body
   // identity fields are not proof of ownership of an allowlisted email.
-  const isSuperAdmin = isSfuSuperAdminEmail(normalizedSessionEmail);
-  const isForcedHost = !isWebinarAttendeeJoin && isSuperAdmin;
-  const requestedHost = Boolean(body?.isHost ?? body?.isAdmin);
+  const isSuperAdmin = ocs ? false : isSfuSuperAdminEmail(normalizedSessionEmail);
+  const isForcedHost = ocs?.role === "interviewer" ||
+    (!isWebinarAttendeeJoin && isSuperAdmin);
+  const requestedHost = ocs
+    ? ocs.role === "interviewer"
+    : Boolean(body?.isHost ?? body?.isAdmin);
 
   // For scheduled webinar rooms, only the actual host or a registered co-host
   // may claim host status. We resolve this by looking the scheduled webinar
@@ -710,7 +732,7 @@ export async function POST(request: Request) {
   // security invariant + regression tests) lives in resolveHostGrant: a host
   // *intent* only grants room-creation, so the creator becomes host via the
   // SFU's server-authoritative createdRoom path — never seizing an existing room.
-  const { isHost, allowRoomCreation } = resolveHostGrant({
+  const hostGrant = resolveHostGrant({
     isWebinarAttendeeJoin,
     isForcedHost,
     scheduledRoomHostMatch,
@@ -721,6 +743,10 @@ export async function POST(request: Request) {
     // promotes the requester through its server-authoritative createdRoom path.
     bodyAllowRoomCreation: Boolean(body?.allowRoomCreation),
   });
+  const isHost = ocs ? ocs.role === "interviewer" : hostGrant.isHost;
+  const allowRoomCreation = ocs
+    ? ocs.role === "interviewer"
+    : hostGrant.allowRoomCreation;
 
   const secret = process.env.SFU_SECRET || "development-secret";
   const routedSfu = await resolveRoutedSfuUrl({
@@ -752,7 +778,7 @@ export async function POST(request: Request) {
   const token = jwt.sign(
     {
       userId: baseUserId,
-      email,
+      email: ocs ? undefined : email,
       name,
       isForcedHost,
       isSuperAdmin,
@@ -762,9 +788,16 @@ export async function POST(request: Request) {
       clientId,
       sessionId,
       joinMode,
+      ...(ocs
+        ? { ocs: { roomId, bookingId: ocs.bookingId, profileId: ocs.sub, role: ocs.role } }
+        : {}),
     },
     secret,
-    { expiresIn: "12h" },
+    {
+      expiresIn: ocs
+        ? Math.max(1, Math.min(120, ocs.exp - Math.floor(Date.now() / 1000)))
+        : "12h",
+    },
   );
 
   const iceServers = await iceServersPromise;

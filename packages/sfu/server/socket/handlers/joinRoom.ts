@@ -11,6 +11,7 @@ import type {
 } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
 import { canonicalizeClientId } from "../../clientIds.js";
+import { authorizedOcsSfuJoin } from "../../ocsJoin.js";
 import { MAX_DISPLAY_NAME_LENGTH } from "../../constants.js";
 import {
   buildUserIdentity,
@@ -100,6 +101,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           respond(callback, { error: "Missing room ID" });
           return;
         }
+        const ocs = user?.ocs;
+        if (!authorizedOcsSfuJoin(requestedRoomId, user)) {
+          respond(callback, { error: "Interview authorization required" });
+          return;
+        }
+        const isOcsGhostJoin = ocs?.role === "ghost";
         if (data?.sessionId !== undefined) {
           const normalizedSessionId = normalizeIdentifier(
             data.sessionId,
@@ -323,6 +330,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         }
 
         if (!room) {
+          if (ocs && ocs.role !== "interviewer") {
+            respond(callback, { error: "Interview host has not opened the room." });
+            return;
+          }
           const assignment = await state.roomRegistry.getAssignment(roomChannelId);
           if (assignment && !state.roomRegistry.isLocalOwner(assignment)) {
             respondWithRoomOwner(assignment);
@@ -477,7 +488,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room.removeClient(targetUserId);
 
           if (!options?.notifyPeers) return;
-          if (!client.isWebinarAttendee) {
+          if (client.isOcsGhost) {
+            for (const admin of room.getAdmins()) admin.socket.emit("userLeft", {
+              userId: targetUserId,
+              roomId: room.id,
+            });
+          } else if (!client.isWebinarAttendee) {
             io.to(roomChannelId).emit("userLeft", {
               userId: targetUserId,
               roomId: room.id,
@@ -506,11 +522,13 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             isPersistedAdminForExistingRoom ||
             (hostRequested &&
               (clientPolicy.allowHostJoin || forcedHostJoin)));
-        const isAdminJoin = isWebinarAttendeeJoin
+        const isAdminJoin = ocs && ocs.role !== "interviewer"
           ? false
-          : createdRoom
-            ? true
-            : isAdminForExistingRoom;
+          : isWebinarAttendeeJoin
+            ? false
+            : createdRoom
+              ? true
+              : isAdminForExistingRoom;
         const hasPrivilegedJoinAccess = isAdminJoin;
 
         if (
@@ -538,6 +556,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const requiresMeetingInviteCode = room.requiresMeetingInviteCode;
         const shouldValidateMeetingInviteCode =
           !isWebinarAttendeeJoin &&
+          !ocs &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
           requiresMeetingInviteCode &&
@@ -592,6 +611,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         const canSetDisplayName = Boolean(
           !isWebinarAttendeeJoin &&
+            !ocs &&
             (clientPolicy.allowDisplayNameUpdate || isAdminJoin),
         );
         const requestedDisplayName =
@@ -602,6 +622,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         if (
           !isWebinarAttendeeJoin &&
+          !isOcsGhostJoin &&
           room.isLocked &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
@@ -654,7 +675,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         if (
           !isWebinarAttendeeJoin &&
-          clientPolicy.useWaitingRoom &&
+          (clientPolicy.useWaitingRoom || ocs?.role === "candidate") &&
           !hasPrivilegedJoinAccess &&
           !isWebinarPromotedJoin &&
           !room.isAllowed(userKey) &&
@@ -750,7 +771,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
           previousRoom.removeClient(previousClientId);
 
-          if (!context.currentClient.isWebinarAttendee) {
+          if (context.currentClient.isOcsGhost) {
+            for (const admin of previousRoom.getAdmins()) admin.socket.emit("userLeft", {
+              userId: previousClientId,
+              roomId: previousRoom.id,
+            });
+          } else if (!context.currentClient.isWebinarAttendee) {
             socket
               .to(previousChannelId)
               .emit("userLeft", {
@@ -783,11 +809,11 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             socket,
             mediaCapabilities: data?.mediaCapabilities,
           });
-        } else if (isWebinarAttendeeJoin) {
+        } else if (isWebinarAttendeeJoin || isOcsGhostJoin) {
           context.currentClient = new Client({
             id: userId,
             socket,
-            mode: "webinar_attendee",
+            mode: isOcsGhostJoin ? "ocs_ghost" : "webinar_attendee",
             mediaCapabilities: data?.mediaCapabilities,
           });
         } else {
@@ -830,7 +856,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
         const resolvedDisplayName =
           context.currentRoom.getDisplayNameForUser(userId) || displayName;
         if (!wasReconnecting) {
-          if (!context.currentClient.isWebinarAttendee) {
+          if (!context.currentClient.isObserver) {
             for (const [clientId, client] of context.currentRoom.clients) {
               if (clientId === userId) {
                 continue;
@@ -849,12 +875,22 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
                 roomId: context.currentRoom.id,
               });
             }
+          } else if (isOcsGhostJoin) {
+            for (const client of context.currentRoom.clients.values()) {
+              if (client instanceof Admin && !client.isObserver) {
+                client.socket.emit("userJoined", {
+                  userId,
+                  displayName: resolvedDisplayName,
+                  roomId: context.currentRoom.id,
+                });
+              }
+            }
           }
         } else if (wasReconnectNoticeEmitted) {
           Logger.info(`User ${userId} reconnected to room ${roomId}.`);
           if (
             context.currentClient &&
-            !context.currentClient.isWebinarAttendee
+            !context.currentClient.isObserver
           ) {
             io.to(roomChannelId).emit("participantConnectionState", {
               userId,
@@ -870,6 +906,7 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         const displayNameSnapshot = context.currentRoom.getDisplayNameSnapshot({
           includeWebinarAttendees: false,
+          includeOcsGhosts: isAdminJoin,
         });
         socket.emit("displayNameSnapshot", {
           users: displayNameSnapshot,

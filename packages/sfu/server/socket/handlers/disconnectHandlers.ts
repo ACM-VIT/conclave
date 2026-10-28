@@ -91,7 +91,12 @@ export const registerDisconnectHandlers = (
             );
           });
         void state.transcriptRelays.syncRoom(activeRoom);
-        if (!isWebinarAttendee) {
+        if (activeClient.isOcsGhost) {
+          for (const admin of activeRoom.getAdmins()) admin.socket.emit("userLeft", {
+            userId,
+            roomId: activeRoom.id,
+          });
+        } else if (!isWebinarAttendee) {
           io.to(roomChannelId).emit("userLeft", {
             userId,
             roomId: activeRoom.id,

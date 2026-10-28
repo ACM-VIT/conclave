@@ -698,12 +698,14 @@ export class Room {
 
   getDisplayNameSnapshot(options?: {
     includeWebinarAttendees?: boolean;
+    includeOcsGhosts?: boolean;
   }): { userId: string; displayName: string }[] {
     const snapshot: { userId: string; displayName: string }[] = [];
     for (const [userId, client] of this.clients.entries()) {
       if (client.isWebinarAttendee && !options?.includeWebinarAttendees) {
         continue;
       }
+      if (client.isOcsGhost && !options?.includeOcsGhosts) continue;
       const displayName = this.getDisplayNameForUser(userId) || userId;
       snapshot.push({ userId, displayName });
     }
