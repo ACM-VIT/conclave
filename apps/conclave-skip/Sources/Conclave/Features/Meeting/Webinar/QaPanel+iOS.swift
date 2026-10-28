@@ -253,7 +253,8 @@ private struct QaComposer: View {
                     }
                 } footer: {
                     ConclaveCharacterCounter(count: text.count, limit: QaLimits.questionMax,
-                                             visibleFrom: QaLimits.questionCounterFrom, identifier: "qa.composer.counter")
+                                             visibleFrom: QaLimits.questionCounterFrom, identifier: "qa.composer.counter",
+                                             announcesBands: true)
                 }
             }
         }

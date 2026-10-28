@@ -95,21 +95,71 @@ struct ConclaveFieldError: View {
 /// The near-limit counter ("38/40"), visible from `visibleFrom` characters, with tabular digits and the spoken
 /// value "38 of 40 Characters" (F00 C19 f; S10 `DisplayNamePolicy`: cap 40, visible from 30). Composers pass
 /// `ConclaveComposerCounterPolicy.visibleFrom(limit:)` (90%), or 0 in voice mode where it always shows.
+/// `announcesBands` (opt-in, S40 6 i; T3 borrow P9; only the chat composer and the Q&A question pass true): one polite
+/// announcement when the counter appears and at every crossing between near and over, never per character. Every
+/// other caller keeps the silent counter.
 struct ConclaveCharacterCounter: View {
     let count: Int
     let limit: Int
     let visibleFrom: Int
     let identifier: String
+    let announcesBands: Bool
+
+    init(count: Int, limit: Int, visibleFrom: Int, identifier: String, announcesBands: Bool = false) {
+        self.count = count
+        self.limit = limit
+        self.visibleFrom = visibleFrom
+        self.identifier = identifier
+        self.announcesBands = announcesBands
+    }
 
     var body: some View {
-        if count >= visibleFrom {
+        let band = ConclaveComposerCounterPolicy.band(count: count, limit: limit, visibleFrom: visibleFrom)
+        if band != .hidden {
             Text(ConclaveStrings.format("Character Counter %lld %lld", count, limit))
                 .font(.footnote)
                 .monospacedDigit()
                 .foregroundStyle(count > limit ? Color(uiColor: .systemRed) : HostingTheme.secondaryText)
                 .accessibilityLabel(ConclaveStrings.format("%lld of %lld Characters", count, limit))
                 .accessibilityIdentifier(identifier)
+                .modifier(ConclaveCounterBandAnnouncement(isEnabled: announcesBands, band: band, count: count, limit: limit))
         }
+    }
+}
+
+/// The band-change handler of an opted-in counter (T3 borrow P9). `task(id: band)` starts when the counter appears in
+/// a band (hidden to near or over) and restarts only when the band changes while it shows (near to over and back), so
+/// typing inside a band posts nothing and leaving for hidden posts nothing. The text is fixed at the crossing ("900 of
+/// 1000 Characters", "200 characters over the limit"). The handler sits on the visible counter: a host that stayed
+/// in the composer column while the counter is hidden would add the column's 8 pt spacing under the field at rest.
+private struct ConclaveCounterBandAnnouncement: ViewModifier {
+    let isEnabled: Bool
+    let band: ConclaveCounterBand
+    let count: Int
+    let limit: Int
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.task(id: band) {
+                var text = AttributedString(ConclaveCounterText.announcement(band: band, count: count, limit: limit))
+                text.accessibilitySpeechAnnouncementPriority = .low
+                AccessibilityNotification.Announcement(text).post()
+            }
+        } else {
+            content
+        }
+    }
+}
+
+/// The counter's spoken copy (S40 6 g): near reuses the counter label, over the Send reason's plural.
+enum ConclaveCounterText {
+    static func announcement(band: ConclaveCounterBand, count: Int, limit: Int) -> String {
+        if band == .over {
+            return ConclaveStrings.format("%lld characters over the limit",
+                                          ConclaveComposerCounterPolicy.overflow(count: count, limit: limit))
+        }
+        return ConclaveStrings.format("%lld of %lld Characters", count, limit)
     }
 }
 

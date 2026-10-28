@@ -224,6 +224,11 @@
     <string name="ds_unavailable_reconnecting">Unavailable while reconnecting</string>
     <!-- Batch 6: components -->
     <string name="ds_attendee">Attendee</string>
+    <!-- T3 borrow: composer counter announcement (P9) -->
+    <plurals name="ds_char_over_limit">
+        <item quantity="one">%1$d character over the limit</item>
+        <item quantity="other">%1$d characters over the limit</item>
+    </plurals>
 
     <!-- Call notification, notification channel and system fixture (SYS-1): sys_ -->
     <string name="sys_call_fallback_title">Conclave meeting</string>
@@ -1106,6 +1111,11 @@
     <string name="chat_preview_label">Message from %1$s: %2$s</string>
     <string name="chat_preview_open">Open chat</string>
     <string name="chat_preview_dismiss">Dismiss message from %1$s</string>
+    <!-- T3 borrow: chat Send button reasons (P6) -->
+    <string name="chat_send_reason_offline">Offline</string>
+    <string name="chat_send_reason_not_joined">Not joined yet</string>
+    <string name="chat_send_reason_empty">Type a message</string>
+    <string name="chat_send_reason_uploading">Uploading photo</string>
 
     <!-- Activities launcher, game shell, apps and shared browser (ACT-1, ACT-2): act_, gm_, br_, app_, set_ -->
     <string name="act_action_failed">That didn’t go through. Try again.</string>
