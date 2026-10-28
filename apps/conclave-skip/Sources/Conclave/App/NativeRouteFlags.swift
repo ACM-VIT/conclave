@@ -71,13 +71,12 @@ final class NativeRouteFlags {
         return keys
     }
 
-    /// iOS: the Debug launch environment. A no-op in Release and on Android (MainActivity configures instead).
+    /// iOS: Debug environment or `--conclave-config=KEY=VALUE` arguments. A no-op in Release and on Android.
     func configureFromLaunchEnvironment() {
         #if DEBUG && !SKIP
-        let environment = ProcessInfo.processInfo.environment
         configure(
-            routes: environment[NativeRouteFlags.routesEnvironmentKey],
-            premeetingFixture: environment[NativeRouteFlags.premeetingFixtureEnvironmentKey],
+            routes: NativeRuntimeConfig.debugLaunchValue(forKey: NativeRouteFlags.routesEnvironmentKey),
+            premeetingFixture: NativeRuntimeConfig.debugLaunchValue(forKey: NativeRouteFlags.premeetingFixtureEnvironmentKey),
             debugEligible: true
         )
         #endif

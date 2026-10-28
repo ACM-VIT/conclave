@@ -423,7 +423,14 @@ enum NativeAuthService {
 
     private static func resolveDebugAppBaseURL() -> URL? {
         for key in appBaseURLConfigKeys {
-            if let value = ProcessInfo.processInfo.environment[key],
+            #if DEBUG && !SKIP
+            // Preserve key order: the canonical key precedes aliases. For each key, environment
+            // precedes an explicit Debug launch argument, which precedes bundled configuration.
+            let launchValue = NativeRuntimeConfig.debugLaunchValue(forKey: key)
+            #else
+            let launchValue = ProcessInfo.processInfo.environment[key]
+            #endif
+            if let value = launchValue,
                let url = configuredBaseURL(from: value) {
                 return url
             }

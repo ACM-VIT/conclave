@@ -349,7 +349,7 @@ enum SfuJoinService {
         return productionJoinURL()
         #else
         #if DEBUG
-        if let envUrl = ProcessInfo.processInfo.environment["SFU_JOIN_URL"],
+        if let envUrl = NativeRuntimeConfig.debugLaunchValue(forKey: "SFU_JOIN_URL"),
            let url = configuredJoinURL(from: envUrl, allowProductionHost: true) {
             return url
         }
