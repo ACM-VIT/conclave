@@ -477,9 +477,9 @@ private final class CTL5Harness {
     let shell = MeetingShellPresenter()
     let stage: StagePresenter
     let controls: CallControlsPresenter
-    private let make: (MeetingShellPresenter) -> CallControlsInputs
+    private let make: @MainActor (MeetingShellPresenter) -> CallControlsInputs
 
-    init(_ inputs: MeetingShellInputs, make: @escaping (MeetingShellPresenter) -> CallControlsInputs = { CallControlsInputs.fromShell($0) }) {
+    init(_ inputs: MeetingShellInputs, make: @escaping @MainActor (MeetingShellPresenter) -> CallControlsInputs = { CallControlsInputs.fromShell($0) }) {
         stage = StagePresenter(shell: shell)
         controls = CallControlsPresenter(shell: shell, stage: stage)
         self.make = make

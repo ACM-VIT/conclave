@@ -287,6 +287,10 @@ struct MeetingErrorClassifierViewModelTests {
     }
 }
 
+/// Waits (bounded by wall-clock time) for a condition the view model's tasks make true. Main actor: the condition
+/// reads view model state, so it is polled on the actor that writes it (a nonisolated async helper would run it on
+/// the global executor).
+@MainActor
 private func classifierSettle(timeout: Duration = .seconds(5), _ condition: () -> Bool) async -> Bool {
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: timeout)

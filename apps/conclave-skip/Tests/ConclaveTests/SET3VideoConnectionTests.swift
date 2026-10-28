@@ -495,7 +495,8 @@ struct SET3VideoConnectionTests {
                                 bytesReceived: nil, videoCodec: "")
     }
 
-    static func freshDefaults() -> UserDefaults {
+    /// Nonisolated: `make`'s default argument calls it, and default arguments are evaluated outside the main actor.
+    nonisolated static func freshDefaults() -> UserDefaults {
         let suite = "set3-video-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
         defaults.removePersistentDomain(forName: suite)

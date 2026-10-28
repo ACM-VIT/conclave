@@ -570,7 +570,13 @@ enum NativeConclaveAssistantService {
     }
 }
 
-private struct NativeConclaveAssistantRequestBody: Codable {
+// The Codable wire types below are internal, not private, on purpose. A private Swift type transpiles to a private
+// (JVM package-private) Kotlin class, and SkipFoundation's JSONDecoder finds a type's decoder through kotlin-reflect
+// `companionObjectInstance`, which reads the static `Companion` field from kotlin.reflect.jvm.internal without
+// setAccessible. ART only checks the field's own flags, but the JVM (Robolectric, CHT7AssistantBridgeTests) also needs
+// the class to be public, so every decode of a private type throws there and `try?` turns each frame into nil.
+
+struct NativeConclaveAssistantRequestBody: Codable {
     let answerId: String
     let question: String
     let history: [ConclaveAssistantHistoryItem]
@@ -579,7 +585,7 @@ private struct NativeConclaveAssistantRequestBody: Codable {
 }
 
 /// The wire shape of one stream event (`AssistantStreamEvent`); unknown fields are ignored.
-private struct NativeConclaveAssistantWireEvent: Decodable {
+struct NativeConclaveAssistantWireEvent: Decodable {
     let type: String
     let delta: String?
     let done: Bool?
@@ -588,7 +594,7 @@ private struct NativeConclaveAssistantWireEvent: Decodable {
     let relay: ConclaveAssistantRelayPacket?
 }
 
-private struct NativeConclaveAssistantErrorResponse: Decodable {
+struct NativeConclaveAssistantErrorResponse: Decodable {
     let code: String?
     let error: String?
 }
@@ -598,7 +604,7 @@ private struct NativeConclaveAssistantHTTPResult {
     let statusCode: Int
 }
 
-private struct NativeConclaveAssistantAndroidHTTPResponse: Decodable {
+struct NativeConclaveAssistantAndroidHTTPResponse: Decodable {
     let statusCode: Int
     let body: String
     let setCookieHeaders: [String]

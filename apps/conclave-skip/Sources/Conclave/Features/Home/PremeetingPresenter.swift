@@ -381,7 +381,7 @@ final class PremeetingPresenter {
 
     func newMeeting() {
         guard !blockedByUpdate() else { return }
-        let code = EntryPolicies.generateRoomCode()
+        let code = generateRoomCode()
         openOrQueue(PremeetingRouteTarget(routeId: allocateRouteId(), kind: .lobby, intent: .newMeeting, roomId: code,
                                            title: code, joinMode: .meeting, meetingInviteCode: nil,
                                            webinarInviteCode: nil, clientId: nil, allowRoomCreation: true))

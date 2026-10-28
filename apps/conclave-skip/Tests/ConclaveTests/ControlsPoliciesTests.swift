@@ -49,11 +49,11 @@ struct ControlsPoliciesTests {
         var explanations: [ControlExplanation] = []
         var controlCommands: [CallControlsCommand] = []
         var refreshes = 0
-        var extras: (MeetingShellPresenter) -> CallControlsInputs = { shell in CallControlsInputs.fromShell(shell) }
+        var extras: @MainActor (MeetingShellPresenter) -> CallControlsInputs = { shell in CallControlsInputs.fromShell(shell) }
 
         init(_ inputs: MeetingShellInputs, admitFirst: MeetingShellInputs? = nil,
              width: ControlsWindowClass = .compact, height: ControlsWindowClass = .regular, isPhone: Bool = true,
-             extras: ((MeetingShellPresenter) -> CallControlsInputs)? = nil) {
+             extras: (@MainActor (MeetingShellPresenter) -> CallControlsInputs)? = nil) {
             let owner = MeetingShellPresenter()
             let stagePresenter = StagePresenter(shell: owner)
             shell = owner

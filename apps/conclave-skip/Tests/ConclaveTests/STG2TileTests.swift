@@ -17,9 +17,10 @@ struct STG2TileTests {
     static let titles = TileMenuTitles(pin: "Pin", unpin: "Unpin", flipCamera: "Flip Camera", minimizeSelfView: "Minimize Self View",
                                        showSelfView: "Show Self View", showFullVideo: "Show Full Video", cropToFill: "Crop to Fill")
 
-    private func presenter(_ inputs: StageInputs, viewport: StageViewport = StagePoliciesTests.iphoneSE) -> StagePresenter {
+    /// `nil` is the iPhone SE viewport, read here on the main actor rather than in a nonisolated default argument.
+    private func presenter(_ inputs: StageInputs, viewport: StageViewport? = nil) -> StagePresenter {
         let stage = StagePresenter(shell: MeetingShellPresenter())
-        stage.setViewport(viewport)
+        stage.setViewport(viewport ?? StagePoliciesTests.iphoneSE)
         stage.apply(inputs)
         return stage
     }

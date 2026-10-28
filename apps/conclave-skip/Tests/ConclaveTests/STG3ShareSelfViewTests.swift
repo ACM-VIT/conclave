@@ -21,9 +21,10 @@ struct STG3ShareSelfViewTests {
     static let videoWidth = 1920.0
     static let videoHeight = 1080.0
 
-    private func presenter(_ inputs: StageInputs, viewport: StageViewport = StagePoliciesTests.iphoneSE) -> StagePresenter {
+    /// `nil` is the iPhone SE viewport, read here on the main actor rather than in a nonisolated default argument.
+    private func presenter(_ inputs: StageInputs, viewport: StageViewport? = nil) -> StagePresenter {
         let stage = StagePresenter(shell: MeetingShellPresenter())
-        stage.setViewport(viewport)
+        stage.setViewport(viewport ?? StagePoliciesTests.iphoneSE)
         stage.apply(inputs)
         return stage
     }

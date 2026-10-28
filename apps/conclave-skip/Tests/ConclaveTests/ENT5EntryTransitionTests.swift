@@ -461,6 +461,9 @@ private final class ENT5JoinTransport {
     }
 }
 
+/// Waits for a condition the presenter's tasks make true. Main actor: the condition reads presenter state, so it is
+/// polled on the actor that writes it (a nonisolated async helper would run it on the global executor).
+@MainActor
 private func ent5Settle(_ condition: () -> Bool) async -> Bool {
     for _ in 0..<1000 {
         if condition() { return true }

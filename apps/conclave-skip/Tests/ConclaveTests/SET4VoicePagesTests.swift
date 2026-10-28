@@ -198,7 +198,8 @@ struct SET4VoicePagesTests {
         return (presenter, core)
     }
 
-    static func freshDefaults() -> UserDefaults {
+    /// Nonisolated: `make`'s default argument calls it, and default arguments are evaluated outside the main actor.
+    nonisolated static func freshDefaults() -> UserDefaults {
         let suite = "set4-voice-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite) ?? UserDefaults.standard
         defaults.removePersistentDomain(forName: suite)

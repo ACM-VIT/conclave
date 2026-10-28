@@ -71,14 +71,15 @@ struct ChatGifPickerState: Equatable {
                            phase: ChatGifPickerPhase.loading, isLoadingMore: false, loadMoreFailed: false)
     }
 
-    /// The first page for `generation`; an older generation's page is dropped.
+    /// The first page for `generation`; an older generation's page is dropped. `self.generation` stays explicit: Kotlin
+    /// names the parameter by its label (`generation`), which would shadow the property and make the guard always pass.
     func acceptingFirst(_ result: ChatGifPage, generation answered: Int) -> ChatGifPickerState {
-        if answered != generation { return self }
+        if answered != self.generation { return self }
         if result.failed {
-            return ChatGifPickerState(kind: kind, query: query, generation: generation, items: [], page: 0, hasNext: false,
+            return ChatGifPickerState(kind: kind, query: query, generation: self.generation, items: [], page: 0, hasNext: false,
                                       phase: ChatGifPickerPhase.error, isLoadingMore: false, loadMoreFailed: false)
         }
-        return ChatGifPickerState(kind: kind, query: query, generation: generation, items: result.items, page: 1,
+        return ChatGifPickerState(kind: kind, query: query, generation: self.generation, items: result.items, page: 1,
                                   hasNext: result.hasNext,
                                   phase: result.items.isEmpty ? ChatGifPickerPhase.empty : ChatGifPickerPhase.results,
                                   isLoadingMore: false, loadMoreFailed: false)
@@ -98,11 +99,12 @@ struct ChatGifPickerState: Equatable {
     }
 
     /// The next page for `generation`; a failure keeps `hasNext`, so Retry (or the next scroll) asks again. Items
-    /// already shown are never duplicated (Klipy can repeat an id across pages).
+    /// already shown are never duplicated (Klipy can repeat an id across pages). `self.generation` stays explicit (see
+    /// `acceptingFirst`).
     func acceptingMore(_ result: ChatGifPage, generation answered: Int) -> ChatGifPickerState {
-        if answered != generation || !isLoadingMore { return self }
+        if answered != self.generation || !isLoadingMore { return self }
         if result.failed {
-            return ChatGifPickerState(kind: kind, query: query, generation: generation, items: items, page: page,
+            return ChatGifPickerState(kind: kind, query: query, generation: self.generation, items: items, page: page,
                                       hasNext: hasNext, phase: phase, isLoadingMore: false, loadMoreFailed: true)
         }
         var merged = items
@@ -113,7 +115,7 @@ struct ChatGifPickerState: Equatable {
             }
             if !seen { merged.append(item) }
         }
-        return ChatGifPickerState(kind: kind, query: query, generation: generation, items: merged, page: page + 1,
+        return ChatGifPickerState(kind: kind, query: query, generation: self.generation, items: merged, page: page + 1,
                                   hasNext: result.hasNext, phase: phase, isLoadingMore: false, loadMoreFailed: false)
     }
 
@@ -138,7 +140,9 @@ private struct KlipyHTTPResult {
 }
 
 #if SKIP
-private struct AndroidKlipyHTTPResponse: Decodable {
+// Internal, not private: SkipFoundation's JSONDecoder reads a decodable's companion through kotlin-reflect, which the
+// JVM (Robolectric) refuses for a package-private class (see NativeConclaveAssistantWireEvent).
+struct AndroidKlipyHTTPResponse: Decodable {
     let statusCode: Int
     let body: String
     let setCookieHeaders: [String]

@@ -111,7 +111,20 @@ class ControlsBridgeTests {
         assertEquals(before + 1, h.refreshes)
         assertEquals(CallControlVisual.engaged, h.model(CallControlKind.participants)?.visual)
         assertEquals(MeetingPanel.participants.rawValue, h.shell.panels.currentPanelName)
+        // A second tap closes it (one refresh); the host's acknowledgment clears Engaged (one refresh). Chat tapped while
+        // Participants is still current would only queue behind its dismissal (PanelCoordinator.present), as in the
+        // Swift twin ControlsPoliciesTests.invokersToggleTheirPanelAndDrawEngagedFromTheSnapshot.
+        assertEquals(ControlTapResult.dispatched, h.controls.tap(CallControlKind.participants))
+        assertEquals(before + 2, h.refreshes)
+        assertTrue(h.shell.panels.snapshot.isDismissing)
+        val closing = h.shell.panels.snapshot.current
+        assertNotNull(closing)
+        h.shell.panels.didDismiss(session = h.shell.panels.snapshot.session, presentationID = closing!!.presentationID)
+        assertEquals(before + 3, h.refreshes)
+        assertEquals(CallControlVisual.on, h.model(CallControlKind.participants)?.visual)
+        // Chat open hides its badge (1 f).
         h.controls.tap(CallControlKind.chat)
+        assertEquals(MeetingPanel.chat.rawValue, h.shell.panels.currentPanelName)
         assertEquals(CallControlVisual.engaged, h.model(CallControlKind.chat)?.visual)
         assertEquals(0, h.model(CallControlKind.chat)?.badgeCount)
     }
