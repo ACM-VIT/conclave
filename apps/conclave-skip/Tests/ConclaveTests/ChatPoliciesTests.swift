@@ -435,7 +435,7 @@ struct ChatViewModelWiringTests {
 
     @Test func aFailedSendStaysWithItsTextAndRetries() async {
         let viewModel = joinedViewModel()
-        viewModel.socketManager.testSendChatError = SocketError.timeout
+        viewModel.socketManager.testSendChatError = ChatWiringHostError("Timed out waiting for the SFU")
         viewModel.performChatCommand(ChatCommandRequest.make(.send, text: "this times out", emoji: ChatRouteKind.publicText.rawValue))
         try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(viewModel.state.chatMessages.count == 1)
@@ -455,7 +455,7 @@ struct ChatViewModelWiringTests {
 
     @Test func deleteRemovesOnlyAFailedRow() async {
         let viewModel = joinedViewModel()
-        viewModel.socketManager.testSendChatError = SocketError.serverError("Message too long (max 1000 characters)")
+        viewModel.socketManager.testSendChatError = ChatWiringHostError("Message too long (max 1000 characters)")
         viewModel.performChatCommand(ChatCommandRequest.make(.send, text: "nope", emoji: ChatRouteKind.publicText.rawValue))
         try? await Task.sleep(nanoseconds: 50_000_000)
         let clientId = viewModel.state.chatMessages.first?.clientId ?? ""
@@ -468,7 +468,7 @@ struct ChatViewModelWiringTests {
         let viewModel = joinedViewModel()
         viewModel.state.chatMessages = [ChatMessage(id: "s-1", userId: "remote@example.com#w", displayName: "Remote",
                                                     content: "hi", roomId: "room-a")]
-        viewModel.socketManager.testChatReactionError = SocketError.serverError("Reactions disabled by host")
+        viewModel.socketManager.testChatReactionError = ChatWiringHostError("Reactions disabled by host")
         viewModel.toggleChatReaction(messageId: "s-1", emoji: "👍")
         #expect(viewModel.state.chatMessages.first?.reactions == [ChatMessageReaction(emoji: "👍", userIds: ["local@example.com"])])
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -525,6 +525,14 @@ struct ChatViewModelWiringTests {
         #expect(viewModel.state.systemMessages.last?.notice == ChatNotice.alreadyMuted.rawValue)
         #expect(viewModel.state.chatMessages.isEmpty)
     }
+}
+
+/// The texts of the iOS `SocketError` cases (`timeout` and `serverError`), which exist only in the iOS build; the macOS
+/// host classifies an error by its text, like `PresenterHostError` in PresenterSessionTests.
+private struct ChatWiringHostError: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
 }
 #endif
 

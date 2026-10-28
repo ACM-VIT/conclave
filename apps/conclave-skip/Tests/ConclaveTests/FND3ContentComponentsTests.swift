@@ -416,7 +416,7 @@ struct FND3ContentComponentsTests {
     }
 
     @Test func fnd3SourcesAreDashFreeAndFlat() throws {
-        for file in Self.fnd3Files {
+        for file in Self.fnd3CheckedFiles {
             let text = try fnd3Source(file)
             #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) contains an en or em dash")
             for word in ["Gradient", "gradient", "dynamicLightColorScheme", "dynamicDarkColorScheme", ".shadow(", "Icons.Default"] {
@@ -428,7 +428,7 @@ struct FND3ContentComponentsTests {
 
     static let composerGlassFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift"
     static let composerBranchCondition = "if #available(iOS 26.0, *), ConclaveComposerMaterialPolicy.material(glassAvailable: true, reduceTransparency: reduceTransparency, forceOpaque: forceOpaque, prefersReducedResourceUsage: prefersReducedResourceUsage) == .glass {"
-    static let fnd3Files = [
+    static let fnd3CheckedFiles = [
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveContentModels.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift",

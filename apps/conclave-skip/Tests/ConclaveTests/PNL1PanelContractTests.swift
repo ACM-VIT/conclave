@@ -230,8 +230,9 @@ struct PNL1PanelContractTests {
                 let android = PanelPresentationPolicy.resolve(request(panel), window: PanelPresentationPolicy.androidWindow(width: 411, height: 891),
                                                               platform: .android, isAccessibilitySize: isAccessibilitySize)
                 // SET-5 (WP1-3c): Layout and Effects are the Android bottom sheet; content panels the full overlay.
-                let sheet = panel == .layout || panel == .effects
-                #expect(android.detents.isEmpty && android.initialDetent == nil && android.style == (sheet ? .bottomSheet : .overlay), "\(panel)")
+                let isBottomSheet = panel == .layout || panel == .effects
+                #expect(android.detents.isEmpty && android.initialDetent == nil
+                        && android.style == (isBottomSheet ? PanelHostStyle.bottomSheet : PanelHostStyle.overlay), "\(panel)")
             }
         }
         // Android reads accessibility sizes from the font scale.

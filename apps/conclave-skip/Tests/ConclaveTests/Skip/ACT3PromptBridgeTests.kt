@@ -53,7 +53,7 @@ class ACT3PromptBridgeTests {
         assertTrue(games.scene.bluff!!.canSubmit)
         val reveal = presenter(PromptGameFixtureState.bluffReveal).scene.bluff!!
         assertEquals("flamboyance", reveal.truthText)
-        assertTrue(reveal.options.first { it.id == "o1" }.isMine)
+        assertTrue(reveal.options.toList().first { it.id == "o1" }.isMine)
     }
 
     @Test fun votesNameADepartedTargetAndTies() {
@@ -80,7 +80,7 @@ class ACT3PromptBridgeTests {
         assertEquals(ActivityTapResult.dispatched, go.send(GameMoveIntent.tap()))
         assertEquals(ActivityTapResult.ignored, go.send(GameMoveIntent.tap()))
         val reveal = presenter(PromptGameFixtureState.reactionReveal).scene.reaction!!
-        assertEquals(listOf("r1", "you", "r3", "r2", "r4", "r5"), reveal.results.map { it.id })
+        assertEquals(listOf("r1", "you", "r3", "r2", "r4", "r5"), reveal.results.toList().map { it.id })
     }
 
     @Test fun imposterWordReachesOnlyASeatedCrewMember() {

@@ -37,7 +37,7 @@ struct STG7OrientationPipTests {
 
     @Test func pipTargetFollowsTheContentOrderAndNeverPicksYou() {
         // The live share wins over everything.
-        let sharing = [person("you", local: true, serial: 0), person("r1", serial: 1, sharing: true), person("r2", serial: 2)]
+        let sharing = [Self.person("you", local: true, serial: 0), Self.person("r1", serial: 1, sharing: true), Self.person("r2", serial: 2)]
         let share = PipTargetPolicy.choose(inputs: Self.inputs(sharing, share: "r1", pinned: "r2"), layout: Self.layout(pinned: "r2"))
         #expect(share == PipTargetChoice(slotId: "share:r1", userId: "r1", isShare: true))
         // Then the pinned person, camera or not.
@@ -50,18 +50,18 @@ struct STG7OrientationPipTests {
         // Then the first remote with video by join order (r1 has no camera, so r2).
         #expect(featuredCameraOff.userId == "r2")
         // Then the first remote at all.
-        let cameraless = [person("you", local: true, serial: 0), person("r2", cameraOn: false, serial: 2), person("r1", cameraOn: false, serial: 1)]
+        let cameraless = [Self.person("you", local: true, serial: 0), Self.person("r2", cameraOn: false, serial: 2), Self.person("r1", cameraOn: false, serial: 1)]
         #expect(PipTargetPolicy.choose(inputs: Self.inputs(cameraless), layout: Self.layout()).userId == "r1")
         // Never you: your own share, your own pin and the featured you are skipped; alone there is no target.
         let mine = PipTargetPolicy.choose(inputs: Self.inputs(Self.roster, share: "you", localSharing: true, pinned: "you"),
                                           layout: Self.layout(pinned: "you", featured: "you"))
         #expect(mine.userId == "r2" && !mine.isShare)
-        let alone = PipTargetPolicy.choose(inputs: Self.inputs([person("you", local: true, serial: 0)]), layout: Self.layout())
+        let alone = PipTargetPolicy.choose(inputs: Self.inputs([Self.person("you", local: true, serial: 0)]), layout: Self.layout())
         #expect(alone == PipTargetChoice.none && alone.isEmpty)
         // A leaving remote is never a target.
-        let leaving = [person("you", local: true, serial: 0),
+        let leaving = [Self.person("you", local: true, serial: 0),
                        StageParticipantInput.make(userId: "r1", isCameraOff: false, isLeaving: true, joinSerial: 1, videoKey: "probe:r1"),
-                       person("r2", cameraOn: false, serial: 2)]
+                       Self.person("r2", cameraOn: false, serial: 2)]
         #expect(PipTargetPolicy.choose(inputs: Self.inputs(leaving), layout: Self.layout()).userId == "r2")
         // A webinar attendee follows the program feed's speaker after a share.
         let attendee = PipTargetPolicy.choose(inputs: Self.inputs(Self.roster, attendee: true, webinarSpeaker: "r3"), layout: Self.layout())

@@ -489,7 +489,7 @@ struct CHT7AssistantRowTests {
         "tasks":[{"id":"w","kind":"web_search","status":"done"}],"errored":false}
         """
         let packet = try JSONDecoder().decode(ConclaveAssistantRelayPacket.self, from: Data(json.utf8))
-        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(packet)) as? [String: Any])
+        let object = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(packet)) as? [String: Any])
         #expect(object["reasoning"] as? String == "Hmm" && object["reasoningDone"] as? Bool == true)
         let tasks = try #require(object["tasks"] as? [[String: Any]])
         #expect(tasks.count == 1 && tasks[0]["kind"] as? String == "web_search" && tasks[0]["query"] == nil)
