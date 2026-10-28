@@ -42,6 +42,8 @@ final class PremeetingPresenter {
     private(set) var lobbyLink: LobbyLinkSnapshot? = nil
     private(set) var lobbyAudio: LobbyAudioSnapshot? = nil
     private(set) var outcome: OutcomeModel? = nil
+    /// ENT-9 (S10 12 j): the webinar landing on top, observed by the landing alone; nil when no landing is on top.
+    private(set) var webinar: WebinarLandingSnapshot? = nil
     /// iOS sheet; Android pushes `.account` instead (S10 5).
     private(set) var isJoinSheetPresented = false
     private(set) var isAccountSheetPresented = false
@@ -73,6 +75,13 @@ final class PremeetingPresenter {
     @ObservationIgnored var presenceIntervalMillis: Double = LobbyPresencePolicy.pollIntervalMillis
     /// ENT-5: the slow notice delay (S10 0.5 task table: one-shot 8 s; tests shorten it).
     @ObservationIgnored var slowNoticeDelayMillis: Double = EntrySlowNoticePolicy.delayMillis
+    /// ENT-9 (S10 12): the landing's lookup and attendee join (production wiring; the L9 fixture scripts them; nil in
+    /// tests unless they record them).
+    @ObservationIgnored var webinarHooks: WebinarLandingHooks? = nil
+    /// ENT-9: the refetch interval (S10 0.5 task table: 20 s; tests shorten it).
+    @ObservationIgnored var webinarRefetchIntervalMillis: Double = WebinarLandingPolicy.refetchIntervalMillis
+    /// ENT-9 (S10 12 l7, Android): the L9 fixture flag that makes Add to calendar behave as if no calendar app resolves.
+    @ObservationIgnored var webinarCalendarResolverDisabled = false
 
     @ObservationIgnored private var inputs = PremeetingInputs.make()
     @ObservationIgnored private var records: [RecentMeetingRecord] = []
@@ -123,6 +132,37 @@ final class PremeetingPresenter {
     @ObservationIgnored private var rejoinCommands = 0
     /// PH20: the lobby state currently belongs to the promotion lobby (its preview may run while in a call).
     @ObservationIgnored private var lobbyRouteIsPromotion = false
+    // ENT-9 webinar landing state (per landing route; reset when another landing opens)
+    @ObservationIgnored private var webinarRouteId = 0
+    @ObservationIgnored private var visibleWebinarRouteId = 0
+    @ObservationIgnored private var webinarSceneActive = true
+    @ObservationIgnored private var webinarAnswer: WebinarLookupAnswer? = nil
+    @ObservationIgnored private var webinarNameDraft = ""
+    @ObservationIgnored private var webinarInviteDraft = ""
+    @ObservationIgnored private var webinarNeedsInviteCode = false
+    @ObservationIgnored private var webinarInviteInvalid = false
+    /// A non-invite form error after Start Watching ("No room found."): the landing says the webinar isn't available.
+    @ObservationIgnored private var webinarFormUnavailable = false
+    /// Start Watching (or a Rejoin card's connect) began a join from this landing: join failures and form errors
+    /// after it belong to the landing. Cleared on Cancel, in the call and when another landing opens.
+    @ObservationIgnored private var webinarAttempted = false
+    /// The join hook ran and the session has not left `home` yet (the landing shows Getting You In meanwhile).
+    @ObservationIgnored private var webinarJoinPending = false
+    /// The S1 form error present when the attempt began (or already classified): only a newer one belongs to it.
+    @ObservationIgnored private var webinarFormBaselineKey = ""
+    /// The automatic retry from the wait for the host (S10 12 f): the landing keeps saying it waits until the call.
+    @ObservationIgnored private var webinarSilentRetry = false
+    @ObservationIgnored private var webinarRefetchTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var webinarOpenWakeTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var webinarWakeAtMillis: Double = 0.0
+    @ObservationIgnored private var webinarLastFetchMillis: Double = 0.0
+    @ObservationIgnored private var webinarRevision = 0
+    @ObservationIgnored private var webinarLookups = 0
+    @ObservationIgnored private var webinarJoinRequests = 0
+    /// The landing's slug and title for the next attendee call, so its recents row reopens the landing by slug (the
+    /// session's room id becomes the internal room after the join).
+    @ObservationIgnored private var webinarSessionSlug = ""
+    @ObservationIgnored private var webinarSessionTitle = ""
 
     init() {
         // ENT-7 (S10 5 e): the account's async outcomes (signInSucceeded, sessionExpired) join this token stream.
@@ -140,8 +180,19 @@ final class PremeetingPresenter {
     /// a lobby is visible in `editing`, and the C17 code check while a start is in flight.
     var liveTaskCount: Int {
         (rejoinExpiryTask == nil ? 0 : 1) + (presenceTask == nil ? 0 : 1) + (collisionTask == nil ? 0 : 1)
-            + (slowNoticeTask == nil ? 0 : 1)
+            + (slowNoticeTask == nil ? 0 : 1) + webinarTaskCount
     }
+    /// ENT-9 (S10 0.5 task table): the landing's refetch while visible and the one open wake-up while early.
+    var webinarTaskCount: Int {
+        (webinarRefetchTask == nil ? 0 : 1) + (webinarOpenWakeTask == nil ? 0 : 1)
+    }
+    /// ENT-9 Debug counters (S10 12 l2: no join until Start Watching).
+    var webinarLookupCount: Int { webinarLookups }
+    var webinarJoinRequestCount: Int { webinarJoinRequests }
+    /// ENT-9: the landing's typed name and invite code, so a field that comes back (after Cancel) reseeds from them.
+    /// Not observed: the fields read them once when they appear.
+    var webinarNameText: String { webinarNameDraft }
+    var webinarInviteText: String { webinarInviteDraft }
     var recentRecords: [RecentMeetingRecord] { records }
     /// ENT-3 Debug counters (S10 6 l6: polling stops when the lobby is popped).
     var presenceFetchCount: Int { presenceFetches }
@@ -299,6 +350,10 @@ final class PremeetingPresenter {
     /// iOS `NavigationStack(path:)` and NavigationLink values, Android NavDisplay pops. A route appended by a recent
     /// row's NavigationLink is prepared exactly like `openRecent(id:)` (target from the record, no network).
     func setPath(_ routes: [PremeetingRoute]) {
+        // ENT-9 (S10 12 f): read before the landing's state resets with its route.
+        let landingRouteId = webinarRouteId
+        let landingJoinInFlight = landingRouteId != 0 && isWebinarJoinInFlight()
+        let landingFailureShowing = landingRouteId != 0 && isWebinarFailureShowing()
         var accepted: [PremeetingRoute] = []
         for route in routes {
             if target(forRoute: route.id) != nil {
@@ -310,6 +365,16 @@ final class PremeetingPresenter {
         }
         setPathValue(accepted)
         refreshLobby()
+        if landingRouteId != 0 && !PremeetingPresenter.routesContain(accepted, routeId: landingRouteId) {
+            if landingJoinInFlight {
+                // Back during the automatic retry from the wait for the host: the join never continues unseen.
+                onCommand?(.leave)
+            } else if landingFailureShowing {
+                // Back or Back to Home from a failed attendee join: the S1 failure ends with the landing, so no later
+                // input pushes a failed lobby for it (S10 0.4 initial `joinFailed` row).
+                onCommand?(.dismissOutcome)
+            }
+        }
     }
 
     // MARK: - Home actions
@@ -457,9 +522,19 @@ final class PremeetingPresenter {
         setUpdatePrompt(false)
     }
 
-    /// Cancel while connecting or waiting: `shell.leave()` (no haptic, Q11).
+    /// Cancel while connecting or waiting: `shell.leave()` (no haptic, Q11). On the webinar landing (Cancel in the
+    /// iOS toolbar, the Android Close icon and Back while joining) the landing returns to its lookup state.
     func cancelJoin() {
+        let onLanding = webinarRouteId != 0
+        if onLanding {
+            webinarJoinPending = false
+            webinarSilentRetry = false
+            webinarAttempted = false
+        }
         onCommand?(.leave)
+        if onLanding {
+            refreshWebinar()
+        }
     }
 
     // MARK: - Promotion lobby (S50 PH20, S10 6 promotion; RECONCILE R30)
@@ -743,6 +818,77 @@ final class PremeetingPresenter {
         }
     }
 
+    // MARK: - Webinar landing (ENT-9, S10 12 j)
+
+    /// The landing appeared (iOS `.task(id:)`, Android composition): the lookup and its 20 s refetch run while it stays
+    /// visible. Keyed by route, so a replaced landing's late disappearance never stops the new one.
+    func webinarDidAppear(routeId: Int) {
+        guard let target = topWebinarTarget(), target.routeId == routeId else { return }
+        visibleWebinarRouteId = routeId
+        refreshWebinar()
+    }
+
+    /// The landing left (popped, replaced, covered by the call): the refetch and the open wake-up stop.
+    func webinarDidDisappear(routeId: Int) {
+        guard visibleWebinarRouteId == routeId else { return }
+        visibleWebinarRouteId = 0
+        refreshWebinar()
+    }
+
+    /// iOS `scenePhase`, Android ON_RESUME and ON_PAUSE. Becoming active re-runs the status policy at once, so an early
+    /// landing that slept past the open time flips without waiting for the refetch (S10 12 c, l6); the refetch resumes
+    /// and fetches at once when the last answer is older than the interval.
+    func webinarSceneDidChange(isActive: Bool) {
+        guard isActive != webinarSceneActive else { return }
+        webinarSceneActive = isActive
+        refreshWebinar()
+    }
+
+    /// The landing name as typed, capped at 40 (RECONCILE R41); the field keeps its own text.
+    func setWebinarName(_ name: String) {
+        let capped = DisplayNamePolicy.capped(name)
+        guard capped != webinarNameDraft else { return }
+        webinarNameDraft = capped
+        refreshWebinar()
+    }
+
+    func setWebinarInviteCode(_ code: String) {
+        guard code != webinarInviteDraft else { return }
+        webinarInviteDraft = code
+        webinarInviteInvalid = false
+        refreshWebinar()
+    }
+
+    /// Start Watching (S10 12 j, Q7): the one deliberate tap that joins, as an attendee with the microphone and camera
+    /// off. Nothing else on the landing ever joins.
+    func startWatching() {
+        guard let target = topWebinarTarget(), let snapshot = webinar, snapshot.routeId == target.routeId,
+              snapshot.status == .open, snapshot.isPrimaryEnabled else { return }
+        guard !blockedByUpdate() else { return }
+        sendWebinarJoin(target, silent: false)
+    }
+
+    /// Try Again: a failed lookup looks up again; a failed join joins again with the kept name and code (one tap).
+    func retryWebinar() {
+        guard let target = topWebinarTarget(), let snapshot = webinar, snapshot.routeId == target.routeId,
+              snapshot.status == .failed else { return }
+        if snapshot.failure == .join {
+            guard !blockedByUpdate() else { return }
+            sendWebinarJoin(target, silent: false)
+            return
+        }
+        webinarAnswer = nil
+        webinarLastFetchMillis = 0.0
+        stopWebinarRefetch()
+        refreshWebinar()
+    }
+
+    /// Back to Home from an end or error state: the stack becomes `[Home]` (a failed attempt's S1 failure ends with the
+    /// landing, see `setPath(_:)`).
+    func webinarBackHome() {
+        setPath([])
+    }
+
     // MARK: - Outcome
 
     /// S10 10 j: Back to Home dismisses (`shell.dismissOutcome()`); Rejoin and Try Again push `lobby(rejoin)` and ask
@@ -976,6 +1122,18 @@ final class PremeetingPresenter {
         return targetFromRecord(record, routeId: route.id, intent: .join)
     }
 
+    private func topWebinarTarget() -> PremeetingRouteTarget? {
+        guard let top = path.last, top.kind == .webinarLanding else { return nil }
+        return target(forRoute: top.id)
+    }
+
+    private static func routesContain(_ routes: [PremeetingRoute], routeId: Int) -> Bool {
+        for route in routes where route.id == routeId {
+            return true
+        }
+        return false
+    }
+
     private func topLobbyTarget() -> PremeetingRouteTarget? {
         // PH20: the promotion lobby over the viewer is the lobby while it is open.
         if let promotion = promotionRoute { return target(forRoute: promotion.id) }
@@ -1030,12 +1188,23 @@ final class PremeetingPresenter {
         var changed = false
         if next.phase == .inCall && next.callSession != recordedCallSession && !sessionRoomId.isEmpty {
             recordedCallSession = next.callSession
-            let id = RecentMeetingsPolicy.recordId(roomId: sessionRoomId, joinMode: next.currentJoinMode)
+            // ENT-9: an attendee call that started on the landing is recorded by the landing's slug and webinar title,
+            // so its row (and Rejoin card) reopen the landing; the session's room id is the internal room by now.
+            // The join mode comes from the view model's join context, so it holds before the attendee role arrives.
+            let fromLanding = (next.isWebinarAttendee || next.currentJoinMode == .webinarAttendee) && !webinarSessionSlug.isEmpty
+            let roomId = fromLanding ? webinarSessionSlug : sessionRoomId
+            let id = RecentMeetingsPolicy.recordId(roomId: roomId, joinMode: next.currentJoinMode)
             recordedRecordId = id
-            let role: RecentRole = next.isWebinarAttendee ? RecentRole.attendee : (next.isLocalHost ? RecentRole.host : RecentRole.participant)
-            let title = next.roomLabel.isEmpty ? sessionRoomId : next.roomLabel
+            let role: RecentRole = (next.isWebinarAttendee || fromLanding) ? RecentRole.attendee
+                : (next.isLocalHost ? RecentRole.host : RecentRole.participant)
+            var title = next.roomLabel.isEmpty ? sessionRoomId : next.roomLabel
+            if fromLanding {
+                title = webinarSessionTitle.isEmpty ? webinarSessionSlug : webinarSessionTitle
+            }
+            webinarSessionSlug = ""
+            webinarSessionTitle = ""
             records = RecentMeetingsPolicy.upsert(records, RecentMeetingRecord(
-                id: id, roomId: sessionRoomId, title: title, joinMode: next.currentJoinMode.rawValue, role: role.rawValue,
+                id: id, roomId: roomId, title: title, joinMode: next.currentJoinMode.rawValue, role: role.rawValue,
                 lastJoinedAtMillis: now, endedAtMillis: 0, end: ""))
             changed = true
         }
@@ -1169,6 +1338,8 @@ final class PremeetingPresenter {
     /// Rebuilds the six lobby snapshots for the lobby on top (each published only when it changed), then the presence
     /// poll and the preview demand follow. No lobby on top clears all six and stops both.
     private func refreshLobby() {
+        // ENT-9: the webinar landing follows the same inputs and path changes as the lobby.
+        refreshWebinar()
         guard let target = topLobbyTarget() else {
             clearLobby()
             return
@@ -1545,6 +1716,347 @@ final class PremeetingPresenter {
     private func advanceFeedback(_ kind: FeedbackKind) {
         let token = FeedbackToken(sequence: feedbackState.token.sequence + 1, kind: kind)
         feedbackState = MeetingShellFeedbackState(session: feedbackState.session, token: token)
+        publishCount += 1
+    }
+
+    // MARK: - Private: the webinar landing (ENT-9, S10 12)
+
+    /// Rebuilds the landing snapshot for the landing on top (published only when it changed), then the refetch and the
+    /// open wake-up follow. No landing on top clears it and stops both. Called from `refreshLobby()`, so the landing
+    /// follows every input and path change; it never calls back into the lobby.
+    private func refreshWebinar() {
+        guard let target = topWebinarTarget() else {
+            clearWebinar()
+            return
+        }
+        if target.routeId != webinarRouteId {
+            beginWebinar(target)
+        }
+        if webinarJoinPending && inputs.phase != .home && inputs.phase != .outcome {
+            // The session took the attempt (entering): the phase speaks for it from now on. Until then a Try Again
+            // still sees the last attempt's outcome, which no longer describes the landing.
+            webinarJoinPending = false
+        }
+        updateWebinarFormIssue()
+        let now = nowMillis()
+        let status = webinarStatus(now: now)
+        var failure = WebinarLandingFailure.none
+        if status == .failed {
+            failure = isWebinarFailureShowing() ? WebinarLandingFailure.join : WebinarLandingFailure.lookup
+        }
+        let answer = webinarAnswer
+        let needsName = WebinarLandingPolicy.needsName(isSignedIn: inputs.isSignedIn, accountName: inputs.accountName)
+        let linkCode = (target.webinarInviteCode ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // The field shows once the server asked for a code, or up front when the lookup says one is required and the
+        // link carries none (one round trip fewer than waiting for the join's form error).
+        let needsInviteCode = webinarNeedsInviteCode || (answer?.requiresInviteCode == true && linkCode.isEmpty)
+        let primaryEnabled = root.root == .premeeting && WebinarLandingPolicy.isPrimaryEnabled(
+            status: status, needsName: needsName, nameDraft: webinarNameDraft, needsInviteCode: needsInviteCode,
+            inviteDraft: webinarInviteDraft, linkHasInviteCode: !linkCode.isEmpty && !webinarNeedsInviteCode)
+        setWebinarSnapshot(WebinarLandingSnapshot(
+            revision: 0,
+            routeId: target.routeId,
+            slug: target.roomId,
+            status: status,
+            tag: WebinarLandingPolicy.tag(status: status, answer: answer, nowMillis: now),
+            title: answer?.title ?? "",
+            hostName: answer?.hostName ?? "",
+            startsAtMillis: answer?.startsAtMillis ?? 0.0,
+            endsAtMillis: answer?.endsAtMillis ?? 0.0,
+            earlyEntryMinutes: answer?.earlyEntryMinutes ?? 0,
+            needsName: needsName,
+            nameLimit: DisplayNamePolicy.limit,
+            needsInviteCode: needsInviteCode,
+            inviteCodeInvalid: webinarInviteInvalid,
+            isPrimaryEnabled: primaryEnabled,
+            action: WebinarLandingPolicy.action(status),
+            failure: failure,
+            link: WebinarLandingPolicy.shareLink(slug: target.roomId, serverLink: answer?.link ?? "")
+        ))
+        updateWebinarRefetch(status: status)
+        updateWebinarWake(status: status, now: now)
+    }
+
+    /// The status from the attempt first (joining, the wait for the host, a failed join, a form error), else from the
+    /// lookup. An ended or cancelled answer ends the wait for the host.
+    private func webinarStatus(now: Double) -> WebinarLandingStatus {
+        let lookup = WebinarLandingPolicy.lookupStatus(webinarAnswer, nowMillis: now)
+        if let join = webinarJoinStatus() {
+            if join == .waitingForHost && (lookup == .ended || lookup == .cancelled) {
+                return lookup
+            }
+            return join
+        }
+        if webinarFormUnavailable {
+            return .unavailable
+        }
+        return lookup
+    }
+
+    /// The attempt this landing started, or nil when there is none: Getting You In, then Almost There once the socket
+    /// connected (the automatic retry keeps saying it waits for the host), then the S1 join failure's class.
+    private func webinarJoinStatus() -> WebinarLandingStatus? {
+        guard webinarAttempted else { return nil }
+        if isWebinarJoinInFlight() || inputs.phase == .inCall {
+            if webinarSilentRetry {
+                return .waitingForHost
+            }
+            return inputs.entrySocketConnected ? WebinarLandingStatus.almostThere : WebinarLandingStatus.joining
+        }
+        if isWebinarFailureShowing() {
+            return WebinarLandingPolicy.joinFailureStatus(category: inputs.joinFailureCategory,
+                                                          diagnosticCode: inputs.joinFailureCode,
+                                                          serverText: inputs.outcomeServerText)
+        }
+        return nil
+    }
+
+    /// A join this landing started is under way: the hook ran and the session has not taken it yet (still at home, or
+    /// still showing the last attempt's outcome), or it is entering, waiting or recovering before the first admission.
+    private func isWebinarJoinInFlight() -> Bool {
+        guard webinarAttempted else { return false }
+        switch inputs.phase {
+        case .home, .outcome:
+            return webinarJoinPending
+        case .entering, .waiting:
+            return true
+        case .recovering:
+            return !inputs.hasBeenAdmittedThisSession
+        case .inCall, .leaving:
+            return false
+        }
+    }
+
+    /// The S1 `joinFailed` outcome of this landing's attempt is what the landing shows (an initial failure keeps the
+    /// landing on top: `pushLobbyIfAbsent` never covers it).
+    private func isWebinarFailureShowing() -> Bool {
+        webinarAttempted && !webinarJoinPending && inputs.phase == .outcome && inputs.outcomeKind == .joinFailed
+    }
+
+    /// The view model's recoverable form errors after Start Watching (S1 `formError` at home), classified once: an
+    /// invite code error reveals the invite field (invalid when the server said so); anything else ("No room found.")
+    /// says the webinar isn't available. The attempt is over either way.
+    private func updateWebinarFormIssue() {
+        guard webinarAttempted, inputs.phase == .home, inputs.notice == .formError else { return }
+        let key = sessionNoticeKey(inputs)
+        guard key != webinarFormBaselineKey else { return }
+        webinarFormBaselineKey = key
+        webinarAttempted = false
+        webinarJoinPending = false
+        webinarSilentRetry = false
+        if WebinarLandingPolicy.isInviteCodeError(inputs.noticeText) {
+            webinarNeedsInviteCode = true
+            webinarInviteInvalid = WebinarLandingPolicy.isInviteCodeInvalid(inputs.noticeText)
+            webinarFormUnavailable = false
+        } else {
+            webinarFormUnavailable = true
+        }
+    }
+
+    /// Another landing opened: the drafts, the answer and the attempt start fresh. A Rejoin card's connect for an
+    /// attendee record (ENT-6) begins on this landing, so its progress and failure show here.
+    private func beginWebinar(_ target: PremeetingRouteTarget) {
+        stopWebinarRefetch()
+        stopWebinarWake()
+        webinarRouteId = target.routeId
+        webinarAnswer = nil
+        webinarNameDraft = ""
+        webinarInviteDraft = ""
+        webinarNeedsInviteCode = false
+        webinarInviteInvalid = false
+        webinarFormUnavailable = false
+        webinarAttempted = false
+        webinarJoinPending = false
+        webinarSilentRetry = false
+        webinarFormBaselineKey = inputs.notice == .formError ? sessionNoticeKey(inputs) : ""
+        webinarLastFetchMillis = 0.0
+        if target.intent == .rejoin && canRejoin(roomId: target.roomId) {
+            webinarAttempted = true
+            webinarJoinPending = true
+            webinarSessionSlug = target.roomId
+            webinarSessionTitle = target.title
+        }
+    }
+
+    private func clearWebinar() {
+        stopWebinarRefetch()
+        stopWebinarWake()
+        if webinarRouteId != 0 {
+            webinarRouteId = 0
+            webinarAnswer = nil
+            webinarNameDraft = ""
+            webinarInviteDraft = ""
+            webinarNeedsInviteCode = false
+            webinarInviteInvalid = false
+            webinarFormUnavailable = false
+            webinarAttempted = false
+            webinarJoinPending = false
+            webinarSilentRetry = false
+            webinarFormBaselineKey = ""
+            webinarLastFetchMillis = 0.0
+            // The call (if one started here) was recorded on `inCall`; a later meeting never inherits the slug.
+            webinarSessionSlug = ""
+            webinarSessionTitle = ""
+        }
+        visibleWebinarRouteId = 0
+        setWebinarSnapshot(nil)
+    }
+
+    /// The attendee join (`WebinarJoinRequest`): the landing's name (or the identity's), the typed or linked invite code,
+    /// the link's client id and the lookup's title. `silent` is the automatic retry from the wait for the host.
+    private func sendWebinarJoin(_ target: PremeetingRouteTarget, silent: Bool) {
+        let typedCode = webinarInviteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let linkCode = (target.webinarInviteCode ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var inviteCode: String? = nil
+        if !typedCode.isEmpty {
+            inviteCode = typedCode
+        } else if !linkCode.isEmpty {
+            inviteCode = linkCode
+        }
+        let title = webinarAnswer?.title ?? ""
+        let request = WebinarJoinRequest(
+            routeId: target.routeId,
+            slug: target.roomId,
+            displayName: WebinarLandingPolicy.displayName(isSignedIn: inputs.isSignedIn, accountName: inputs.accountName,
+                                                          nameDraft: webinarNameDraft),
+            isGuest: !inputs.isSignedIn,
+            webinarInviteCode: inviteCode,
+            clientId: target.clientId,
+            title: title
+        )
+        webinarAttempted = true
+        webinarJoinPending = true
+        webinarSilentRetry = silent
+        webinarFormUnavailable = false
+        webinarInviteInvalid = false
+        webinarFormBaselineKey = inputs.notice == .formError ? sessionNoticeKey(inputs) : ""
+        // Recents record this call by the landing's slug and title (the session's room id becomes the internal room).
+        webinarSessionSlug = target.roomId
+        webinarSessionTitle = title.isEmpty ? target.title : title
+        webinarJoinRequests += 1
+        webinarHooks?.join?(request)
+        refreshWebinar()
+    }
+
+    /// S10 12 f: the wait for the host retries on its own once a fresh answer reads open. Called only when a lookup
+    /// answers, so a retry happens at most once per refetch.
+    private func retryWaitingForHostIfOpen() {
+        guard let target = topWebinarTarget(), let snapshot = webinar, snapshot.routeId == target.routeId,
+              snapshot.status == .waitingForHost, !isWebinarJoinInFlight() else { return }
+        guard WebinarLandingPolicy.lookupStatus(webinarAnswer, nowMillis: nowMillis()) == .open else { return }
+        guard root.root == .premeeting, !inputs.updateRequired else { return }
+        sendWebinarJoin(target, silent: true)
+    }
+
+    /// The refetch (S10 0.5 task table): only while the landing is visible, the app and scene are active, no call shows,
+    /// the status still changes on its own (loading, early, open, the wait for the host) and a lookup hook exists.
+    private func updateWebinarRefetch(status: WebinarLandingStatus) {
+        let visible = visibleWebinarRouteId != 0 && visibleWebinarRouteId == webinarRouteId
+        let wanted = visible && webinarSceneActive && inputs.isAppActive && root.root == .premeeting
+            && webinarHooks?.lookup != nil && WebinarLandingPolicy.refetches(status)
+        guard wanted else {
+            stopWebinarRefetch()
+            return
+        }
+        guard webinarRefetchTask == nil else { return }
+        let routeId = webinarRouteId
+        webinarRefetchTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let presenter = self else { return }
+                let wait = presenter.webinarRefetchWaitMillis()
+                if wait <= 0.0 {
+                    await presenter.lookUpWebinarOnce(routeId: routeId)
+                } else {
+                    try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000.0))
+                }
+            }
+        }
+    }
+
+    /// Zero when a lookup is due (none yet, Try Again, or the interval passed), else the time left.
+    private func webinarRefetchWaitMillis() -> Double {
+        guard webinarLastFetchMillis > 0.0 else { return 0.0 }
+        return max(0.0, webinarLastFetchMillis + max(1.0, webinarRefetchIntervalMillis) - nowMillis())
+    }
+
+    private func stopWebinarRefetch() {
+        webinarRefetchTask?.cancel()
+        webinarRefetchTask = nil
+    }
+
+    /// One lookup. The attempt time is recorded first, so a missing hook or target never spins the loop; a lookup
+    /// cancelled before any answer arrived is due again at once when the landing returns.
+    private func lookUpWebinarOnce(routeId: Int) async {
+        webinarLastFetchMillis = max(1.0, nowMillis())
+        guard let lookup = webinarHooks?.lookup, let target = self.target(forRoute: routeId) else { return }
+        webinarLookups += 1
+        let answer = await lookup(target.roomId, target.clientId ?? "")
+        guard webinarRouteId == routeId else { return }
+        guard !Task.isCancelled else {
+            if webinarAnswer == nil {
+                webinarLastFetchMillis = 0.0
+            }
+            return
+        }
+        // A failed refetch keeps the last good answer; only a landing with none says "Couldn't load this webinar."
+        if answer.outcome == WebinarLookupOutcome.failed && webinarAnswer != nil {
+            return
+        }
+        webinarAnswer = answer
+        refreshWebinar()
+        retryWaitingForHostIfOpen()
+    }
+
+    /// The one open wake-up (S10 0.5 task table): at `startsAt - earlyEntryMinutes` while an early landing is visible
+    /// and active, so the early state flips to open without waiting for the refetch.
+    private func updateWebinarWake(status: WebinarLandingStatus, now: Double) {
+        let visible = visibleWebinarRouteId != 0 && visibleWebinarRouteId == webinarRouteId
+        guard visible, webinarSceneActive, inputs.isAppActive, root.root == .premeeting, status == .early,
+              let answer = webinarAnswer,
+              let delay = WebinarLandingPolicy.openWakeDelayMillis(answer, nowMillis: now) else {
+            stopWebinarWake()
+            return
+        }
+        let opensAt = WebinarLandingPolicy.opensAtMillis(answer)
+        if webinarOpenWakeTask != nil && webinarWakeAtMillis == opensAt {
+            return
+        }
+        stopWebinarWake()
+        webinarWakeAtMillis = opensAt
+        let routeId = webinarRouteId
+        webinarOpenWakeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(1.0, delay) * 1_000_000.0))
+            guard !Task.isCancelled else { return }
+            self?.webinarOpenWakeFired(routeId: routeId)
+        }
+    }
+
+    private func webinarOpenWakeFired(routeId: Int) {
+        webinarOpenWakeTask = nil
+        webinarWakeAtMillis = 0.0
+        guard webinarRouteId == routeId else { return }
+        refreshWebinar()
+    }
+
+    private func stopWebinarWake() {
+        webinarOpenWakeTask?.cancel()
+        webinarOpenWakeTask = nil
+        webinarWakeAtMillis = 0.0
+    }
+
+    /// Equality-guarded on everything but the revision, which counts real changes only.
+    private func setWebinarSnapshot(_ value: WebinarLandingSnapshot?) {
+        guard let value else {
+            guard webinar != nil else { return }
+            webinar = nil
+            publishCount += 1
+            return
+        }
+        if let current = webinar, current.withRevision(0) == value.withRevision(0) {
+            return
+        }
+        webinarRevision += 1
+        webinar = value.withRevision(webinarRevision)
         publishCount += 1
     }
 

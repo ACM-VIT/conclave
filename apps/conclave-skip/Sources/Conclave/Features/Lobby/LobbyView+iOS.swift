@@ -67,6 +67,8 @@ private struct LobbyControlsColumn: View {
             LobbyAudioSection(premeeting: premeeting)
             if !isPromotion {
                 LobbyIdentitySection(premeeting: premeeting)
+                // SYS-3 (S10 9 c, RECONCILE R5): the waiting-room row under the Audio and Name rows (iOS, O3-gated).
+                AdmissionNotifySection(premeeting: premeeting)
                 LobbyInviteCodeSection(premeeting: premeeting)
                 LobbyGroupedSection {
                     MeetingLinkRow(premeeting: premeeting)

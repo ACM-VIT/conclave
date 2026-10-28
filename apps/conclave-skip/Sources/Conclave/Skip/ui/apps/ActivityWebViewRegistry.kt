@@ -38,6 +38,14 @@ import java.io.ByteArrayInputStream
  * WebView, so WebViewFeature.WEB_MESSAGE_LISTENER is checked at run time and its absence shows the failure state.
  * shouldOverrideUrlLoading blocks other origins (a user link asks first, then Custom Tabs with PiP auto-enter suppressed);
  * onRenderProcessGone returns true and moves the card to the failure state, so the call survives.
+ *
+ * ACT-8: Watch Together's page frames the privacy-enhanced YouTube player and nothing else (AppEmbedFramePolicy, shared
+ * with the iOS registry and the page CSP frame-src). Only for that app, subresource requests that are not the main
+ * frame may reach the network (the page itself has connect-src 'none' and hash-only scripts, so they come from the
+ * YouTube frame) and a subframe may navigate to the YouTube embed path; every other app keeps the empty 403 for anything
+ * outside the bundle. Watch and the Wheel may start media without a tap inside the page (the room's playback follows;
+ * the spin sounds follow the native Spin tap), AppEmbedFramePolicy.playsMediaWithoutTap; the player's own play button
+ * stays the prompt when the engine still blocks it.
  */
 internal object ActivityWebViewRegistry {
     /** Web views created (app.registrySerial) and recreations for Try Again (app.reloads). */
@@ -90,7 +98,7 @@ internal object ActivityWebViewRegistry {
             return null
         }
         val wrapper = MutableContextWrapper(context)
-        val webView = makeWebView(wrapper, id, session, backgroundArgb)
+        val webView = makeWebView(wrapper, id, model.appId, session, backgroundArgb)
         val entry = Entry(webView, wrapper, model.reloadSerial, session)
         entries[id] = entry
         session.bundleOrigin = AppBridgeProtocol.androidOrigin
@@ -142,7 +150,7 @@ internal object ActivityWebViewRegistry {
         runCatching { context.assets.open(path).use { true } }.getOrDefault(false)
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun makeWebView(context: Context, id: String, session: ActiveAppSession, backgroundArgb: Int): WebView {
+    private fun makeWebView(context: Context, id: String, appId: String, session: ActiveAppSession, backgroundArgb: Int): WebView {
         val loader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
             .build()
@@ -158,7 +166,7 @@ internal object ActivityWebViewRegistry {
             allowContentAccess = false
             javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
-            mediaPlaybackRequiresUserGesture = true
+            mediaPlaybackRequiresUserGesture = !AppEmbedFramePolicy.playsMediaWithoutTap(appId = appId)
             cacheMode = WebSettings.LOAD_NO_CACHE
             setGeolocationEnabled(false)
         }
@@ -168,12 +176,19 @@ internal object ActivityWebViewRegistry {
                 if (url.scheme == "https" && url.host == WebViewAssetLoader.DEFAULT_DOMAIN) {
                     return loader.shouldInterceptRequest(url) ?: blocked()
                 }
+                // ACT-8: the YouTube frame's own requests (Watch Together only); null lets the engine load them.
+                if (AppEmbedFramePolicy.allowsNetworkSubresource(appId = appId, url = url.toString(), isMainFrame = request.isForMainFrame)) {
+                    return null
+                }
                 return blocked()
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val target = request.url.toString()
                 if (request.isForMainFrame && AppBridgeProtocol.isBundleURL(target, origin = AppBridgeProtocol.androidOrigin)) {
+                    return false
+                }
+                if (!request.isForMainFrame && AppEmbedFramePolicy.allowsSubframe(appId = appId, url = target)) {
                     return false
                 }
                 if (request.hasGesture() && AppBridgeProtocol.isOpenableExternalLink(target)) {

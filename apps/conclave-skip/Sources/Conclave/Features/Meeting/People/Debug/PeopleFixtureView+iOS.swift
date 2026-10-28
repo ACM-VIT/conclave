@@ -100,6 +100,9 @@ private struct PeopleFixtureReadouts: View {
             readout(session.recomposeReadout(), identifier: "people.recompose")
             readout(session.focusReadout(), identifier: "people.focus")
             readout(session.countersReadout(), identifier: "people.counters")
+            // PPL-3: the action log with the last outcome token, and the knock banner state.
+            readout(session.actionsReadout(), identifier: "people.actions")
+            readout(session.noticesReadout(), identifier: "stage.notices")
             readout(session.panelReadout(), identifier: "panel.current")
             readout(session.renderersReadout(), identifier: "stage.renderers")
             readout("refresh " + String(refresh), identifier: "people.fixture.refreshCount")

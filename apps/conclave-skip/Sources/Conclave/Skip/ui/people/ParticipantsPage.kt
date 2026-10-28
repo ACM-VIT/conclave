@@ -239,13 +239,14 @@ private fun PeopleRoot(people: PeoplePresenter, reservation: PaddingValues, onOp
                         // PPL-5: the Attendees header counts watchers in its own leaf (S50 10 k).
                         WebinarAttendeesHeader(people)
                     } else {
-                        ConclaveSectionHeader(title = conclaveString(peopleSectionTitleName(item.sectionId)),
-                            identifier = "people.section.${item.sectionId}.header", count = item.count)
+                        // PPL-3 (S50 1 d, 4 d, 5 d): the merged heading plus the host actions, hidden while searching.
+                        PeopleSectionHeaderRow(people, item.sectionId, item.count, showsActions = !searching)
                     }
                     // Only Raised Hands rows read the queue size, so a hand change never recomposes the others.
                     PeopleItemKind.Person -> PeopleActionRow(people, item.rowKey, item.sectionId,
                         if (item.sectionId == PeopleSectionID.raisedHands.rawValue) queueCount else 0)
-                    PeopleItemKind.Waiting -> PeopleWaitingNameRow(people.waiting.entry(item.rowKey), people.recompose)
+                    // PPL-3 (S50 PL2, 4 d): Deny and Admit on each waiting row.
+                    PeopleItemKind.Waiting -> WaitingRow(people, item.rowKey)
                     PeopleItemKind.Loading -> ConclaveLoadingStatus(identifier = "people.loading", label = conclaveString("ppl_loading"))
                     PeopleItemKind.Footer -> ConclaveSectionFooter(text = conclaveString(peopleFooterName(item.rowKey)),
                         identifier = "people.section.${item.sectionId}.footer")

@@ -210,6 +210,8 @@ final class SocketIOManager {
     func upvoteWebinarQuestion(id: String) async throws -> WebinarQaUpvoteResponse { fatalError() }
     func moderateWebinarQuestion(id: String, action: String, answerText: String?) async throws { fatalError() }
     func getBrowserState() async throws -> BrowserStateNotification { fatalError() }
+    /// C6-20 (ACT-9): ack-only, no payload, 22 s (K/SocketIOManager+Android.kt).
+    func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse { fatalError() }
     func launchBrowser(url: String) async throws -> LaunchBrowserResponse { fatalError() }
     func navigateBrowser(url: String) async throws -> LaunchBrowserResponse { fatalError() }
     func closeBrowser() async throws { fatalError() }

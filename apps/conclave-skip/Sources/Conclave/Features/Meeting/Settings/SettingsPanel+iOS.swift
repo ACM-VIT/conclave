@@ -437,9 +437,8 @@ private struct SettingsGeneralSection<Route: Hashable>: View {
                             .accessibilityIdentifier("settings.row.connection")
                     }
                 case .messageNotifications:
-                    LabeledContent(SettingsCopy.rowTitle(.messageNotifications),
-                                   value: general.messageNotificationsOn ? ConclaveStrings.text("On") : ConclaveStrings.text("Off"))
-                        .accessibilityIdentifier("settings.row.messageNotifications")
+                    // SYS-3 (S70 2 c): the switch reads preference AND granted; turning it on asks once.
+                    MessageNotificationsRow(notifications: SystemNotifications.shared)
                 case .alwaysShowControls:
                     Toggle(SettingsCopy.rowTitle(.alwaysShowControls),
                            isOn: Binding(get: { general.alwaysShowControls }, set: { settings.setAlwaysShowControls($0) }))
@@ -457,7 +456,7 @@ private struct SettingsGeneralSection<Route: Hashable>: View {
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 if rows.contains(SettingsRowID.messageNotifications) {
-                    Text(SettingsCopy.notificationPermission(general.notificationPermission))
+                    MessageNotificationsFooter(notifications: SystemNotifications.shared)
                 }
                 if rows.contains(SettingsRowID.alwaysShowControls) {
                     Text(ConclaveStrings.text("Keeps call controls on screen instead of hiding them after a few seconds."))

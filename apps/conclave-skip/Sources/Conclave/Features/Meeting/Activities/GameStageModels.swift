@@ -140,6 +140,8 @@ struct GameLobbyModel: Equatable {
 /// ACT-3: the six prompt game scenes (S60 9 j, Games/Native/Scenes/PromptGameScenes.swift); at most one is set, and
 /// private fields come only from the local person's own player view while that person holds a seat.
 /// ACT-4: the Wordle scene (S60 10 j, declared with its builder at the end of GameStagePresenter.swift).
+/// ACT-5: the chess scene (S60 11 j, declared with its builder at the end of GameStagePresenter.swift).
+/// ACT-6: the Zip scene (S60 12 j, declared with its builder in Games/Native/Boards/ZipScene.swift).
 struct GameScene: Equatable {
     let revision: Int
     let kind: String
@@ -155,15 +157,17 @@ struct GameScene: Equatable {
     let reaction: ReactionScene?
     let imposter: ImposterScene?
     let wordle: WordleScene?
+    let chess: ChessScene?
+    let zip: ZipScene?
 
     static let empty = GameScene(revision: 0, kind: GameSceneKind.lobby, players: [], pendingJoiners: [], options: [],
                                  lobby: GameLobbyModel.empty, projection: GameProjection.empty, trivia: nil, bluff: nil,
-                                 wouldYouRather: nil, mostLikelyTo: nil, reaction: nil, imposter: nil, wordle: nil)
+                                 wouldYouRather: nil, mostLikelyTo: nil, reaction: nil, imposter: nil, wordle: nil, chess: nil, zip: nil)
 
     func withRevision(_ next: Int) -> GameScene {
         GameScene(revision: next, kind: kind, players: players, pendingJoiners: pendingJoiners, options: options, lobby: lobby,
                   projection: projection, trivia: trivia, bluff: bluff, wouldYouRather: wouldYouRather, mostLikelyTo: mostLikelyTo,
-                  reaction: reaction, imposter: imposter, wordle: wordle)
+                  reaction: reaction, imposter: imposter, wordle: wordle, chess: chess, zip: zip)
     }
 }
 

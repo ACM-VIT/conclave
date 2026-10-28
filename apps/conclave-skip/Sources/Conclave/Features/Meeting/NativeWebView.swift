@@ -1,5 +1,11 @@
 import SwiftUI
 
+// Legacy shared browser web view (ACT-9, S60 14 m): used only by the legacy `SharedBrowserLayoutView` on the default
+// (non-native) call route. The native call root never reaches it: the browser card renders the WebRTC track and the
+// controller's noVNC input layer through `BrowserSurface+iOS.swift` and `K/ui/browser/BrowserSurface.kt`, with one
+// load-state contract and a registry-held web view per browser session. Kept unchanged until the legacy route retires
+// (CALL-FLIP, WP11); do not add native-path features here.
+
 #if os(iOS) && canImport(WebKit) && !SKIP
 import WebKit
 

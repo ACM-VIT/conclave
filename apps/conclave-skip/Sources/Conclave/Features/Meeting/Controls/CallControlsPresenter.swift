@@ -9,7 +9,10 @@ import Observation
 /// CallKit, the notification and Magic Tap share one media path (D18, S1C 3.3 MUTE).
 ///
 /// Extension points (later slices add their snapshots here, keeping one presenter): CTL-2 the Leave control, the host
-/// Leave menu and the End dialog over `leaveState`, with the End progress and failure toasts (CC7); CTL-3 `route`;
+/// Leave menu and the End dialog over `leaveState`, with the End progress and failure toasts (CC7); CTL-3 (here) `route`
+/// (the WP3 route owner's one snapshot, CC4), `requestRoute(id:)`, `requestInput(id:)`, `setSpeaker(_:)`,
+/// `openAudioSettings()`, the iOS route picker report and the `routeFailed` toast; CTL-4 (here) `shortcuts` (the Camera
+/// long-press items), `microphoneShortcuts(chooser:)` and `selectShortcut(_:)`;
 /// CTL-5 (here) `more`, `moreMetrics`, `commands`, `select(_:)`, `setCaptions(_:)`, `setLayoutMode(_:)`,
 /// `copyLink(postsToast:)` and `perform(_:)`; CTL-6 (here) `reactions` and `sendReaction(id:)`. Local actions the core
 /// performs (a reaction, captions, the layout, Flip, Lock, the iOS system effects) go out through `onRequest`. TRN-2
@@ -34,8 +37,17 @@ final class CallControlsPresenter {
     private(set) var reactions: ReactionPaletteSnapshot = ReactionPaletteSnapshot.empty
     /// CTL-5: the iOS scene commands and the Android key handler only (S30 1 g, CL21).
     private(set) var commands: CallCommandsSnapshot = CallCommandsSnapshot.empty
+    /// CTL-4 (S30 2 j): the Camera control's long-press items only (the iOS context menu, the Android dropdown and both
+    /// platforms' accessibility actions), from the controls inputs; published only on a change.
+    private(set) var shortcuts: MediaShortcutSnapshot = MediaShortcutSnapshot.empty
     /// TRN-2 (S30 0.5 outcome tokens): `recapPostingStarted` (silent) when `leaveState.endPhase` becomes `postingRecap`.
+    /// CTL-3: `routeSwitchFailed` when a person's route request did not apply (the owner's 3 s timeout or a refusal).
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
+
+    /// CTL-3 (S30 3, CC4, SYS-2): the single routing authority. The process-wide owner by default; the Debug fixtures and
+    /// the tests install their own with a scripted backend. Never observed by this presenter (no self-observation): views
+    /// read `route`, which reads the owner's one observed property, as the Settings presenter does (SET-2).
+    @ObservationIgnored var routeOwner: AudioRouteOwner = AudioRouteOwner.shared
 
     @ObservationIgnored let shell: MeetingShellPresenter
     /// S20; the local explanation toasts (CC7) and the bar hold (CC16).
@@ -105,6 +117,18 @@ final class CallControlsPresenter {
     @ObservationIgnored private(set) var menuHeightReadout = "none"
     /// CTL-6: the direction of the hand ticket this presenter dispatched, until the S1 row stops pending (S30 6 f).
     @ObservationIgnored private(set) var handIntent = MeetingActionDirection.none
+    /// CTL-3 and CTL-4 diagnostics (never observed): CL13 `controls.counters` (routeRequest, inputRequest, speaker) and the
+    /// tests.
+    @ObservationIgnored private(set) var routeRequestCount = 0
+    @ObservationIgnored private(set) var bluetoothAccessRequestCount = 0
+    @ObservationIgnored private(set) var inputRequestCount = 0
+    @ObservationIgnored private(set) var speakerRequestCount = 0
+    @ObservationIgnored private(set) var audioSettingsCount = 0
+    @ObservationIgnored private(set) var routeFailureCount = 0
+    @ObservationIgnored private(set) var routeRetryCount = 0
+    @ObservationIgnored private(set) var routePickerCloseCount = 0
+    @ObservationIgnored private(set) var inputPickerCount = 0
+    @ObservationIgnored private(set) var micModesRequestCount = 0
 
     init(shell: MeetingShellPresenter, stage: StagePresenter) {
         self.shell = shell
@@ -432,6 +456,157 @@ final class CallControlsPresenter {
         }
     }
 
+    // MARK: Audio route (CTL-3)
+
+    /// The route owner's one snapshot (S30 0.5 `route`): read only by the Mic shortcut menu, the Android route sheet and
+    /// their accessibility actions (S30 2 k, 3 k), never by a bar cell body.
+    var route: AudioRouteSnapshot { routeOwner.route }
+
+    /// A route row in the Android sheet, or the Retry of the failure toast (S30 3 d). The owner makes it the person's
+    /// intent at once and reports `switching` until it lands (`failed` after 3 s or a refusal, which reaches
+    /// `routeFailed(id:)` through the core). The R70-2 row asks for nearby-devices access instead: the only
+    /// `BLUETOOTH_CONNECT` request (SY17, RECONCILE R24). Recovering and offline do not block routing (S30 3 f).
+    @discardableResult
+    func requestRoute(id: String) -> ControlTapResult {
+        stage.noteControlAction()
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || inputs.phase == MeetingPhaseKind.leaving { return ControlTapResult.ignored }
+        let current = routeOwner.route
+        if RoutePickerPolicy.isAccessRow(trimmed) {
+            if current.bluetoothAccess == BluetoothRouteAccess.notNeeded { return ControlTapResult.ignored }
+            bluetoothAccessRequestCount += 1
+            routeOwner.requestBluetoothAccess()
+            return ControlTapResult.dispatched
+        }
+        var known = false
+        for option in current.options {
+            if option.id == trimmed { known = true }
+        }
+        if !known { return ControlTapResult.ignored }
+        routeRequestCount += 1
+        routeOwner.requestRoute(id: trimmed)
+        return ControlTapResult.dispatched
+    }
+
+    /// The `routeFailed` toast's Retry (S30 3 d, CC7): the core forwards the notice command with the failed route id.
+    @discardableResult
+    func retryRoute(id: String) -> ControlTapResult {
+        routeRetryCount += 1
+        return requestRoute(id: id)
+    }
+
+    /// The iOS 17 to 25 Mic shortcut's microphone `Picker` (S30 2 c, CL17), over `setAudioInput(_:)` through the owner.
+    @discardableResult
+    func requestInput(id: String) -> ControlTapResult {
+        stage.noteControlAction()
+        let current = routeOwner.route
+        if id.isEmpty || id == current.currentInputId || inputs.phase == MeetingPhaseKind.leaving { return ControlTapResult.ignored }
+        var known = false
+        for input in current.inputs {
+            if input.id == id { known = true }
+        }
+        if !known { return ControlTapResult.ignored }
+        inputRequestCount += 1
+        routeOwner.requestInput(id: id)
+        return ControlTapResult.dispatched
+    }
+
+    /// The iOS Mic shortcut's Speaker toggle (S30 2 c): on routes to the speaker, off to the best headset or the receiver
+    /// (the owner decides). Only with a receiver (never on iPad); a toggle to the state it already has is ignored.
+    @discardableResult
+    func setSpeaker(_ on: Bool) -> ControlTapResult {
+        stage.noteControlAction()
+        let current = routeOwner.route
+        if !current.canToggleSpeaker || current.isSpeakerOn == on || inputs.phase == MeetingPhaseKind.leaving {
+            return ControlTapResult.ignored
+        }
+        speakerRequestCount += 1
+        routeOwner.setSpeaker(on)
+        return ControlTapResult.dispatched
+    }
+
+    /// "Audio Settings" (iOS Mic shortcut) and "Audio settings" (Android route sheet footer): Settings at its Audio
+    /// section (S30 CC6, invoker `.call`). The Android sheet calls it only after it finished hiding (D17).
+    @discardableResult
+    func openAudioSettings() -> ControlTapResult {
+        stage.noteControlAction()
+        if !MoreMenuPolicy.isLanded(MeetingPanel.settings) || inputs.phase == MeetingPhaseKind.leaving { return ControlTapResult.ignored }
+        audioSettingsCount += 1
+        shell.panels.present(MeetingPanel.settings, from: PanelInvoker.call, destination: PanelDestination.settingsAudio)
+        return ControlTapResult.dispatched
+    }
+
+    /// The iOS route button (`AVRoutePickerView`, S30 3 c): the system list opening and closing. Open keeps chrome
+    /// visible (CC16 `route.picker`); close tells the owner that a route change in the next 2 s is the person's choice,
+    /// which it adopts instead of fighting (S70 5 c).
+    func setRoutePickerOpen(_ open: Bool) {
+        stage.setTransientChrome(id: ChromeAutoHidePolicy.routePicker, open: open)
+        if !open {
+            routePickerCloseCount += 1
+            routeOwner.noteSystemRoutePickerDismissed()
+        }
+    }
+
+    /// Core only (the route owner's `onRouteFailed`, S30 CC7): a person's request did not apply. Posts "Couldn't switch
+    /// audio. Try again." with Retry in the stage toast lane and the `routeSwitchFailed` outcome token; automatic
+    /// changes never get here (R11).
+    func routeFailed(id: String) {
+        routeFailureCount += 1
+        stage.postLocal(RoutePickerPolicy.failureNotice(routeId: id))
+        feedbackState = MeetingShellFeedbackState(session: inputs.callSession,
+                                                  token: FeedbackToken(sequence: feedbackState.token.sequence + 1,
+                                                                       kind: FeedbackKind.routeSwitchFailed))
+    }
+
+    // MARK: Mic and Camera shortcuts (CTL-4)
+
+    /// The iOS Mic shortcut items for the route right now (S30 2 c). Called only where the menu content or the cell's
+    /// accessibility actions are built, so the bar cell body never observes the route.
+    func microphoneShortcuts(chooser: MicrophoneInputChooser) -> [MediaShortcutItem] {
+        MediaShortcutPolicy.microphoneItems(route: routeOwner.route, chooser: chooser,
+                                            opensAudioSettings: MoreMenuPolicy.isLanded(MeetingPanel.settings),
+                                            isLeaving: inputs.phase == MeetingPhaseKind.leaving)
+    }
+
+    /// One shortcut item from a menu or an accessibility action (S30 2 c, d, j). Flip and the iOS system modules go to
+    /// the core (`onRequest`); Effects opens its panel from the call; the Speaker toggle, the microphone and Audio
+    /// Settings go to the route owner or Settings. `chooseMicrophone` returns `dispatched` when the iOS 26 picker may
+    /// present (the view presents it). A missing or disabled item is ignored and plays nothing.
+    @discardableResult
+    func selectShortcut(_ kind: MediaShortcutItemID) -> ControlTapResult {
+        switch kind {
+        case .flipCamera, .effects, .systemVideoEffects:
+            stage.noteControlAction()
+            guard let item = shortcuts.cameraItem(kind), item.isEnabled else { return ControlTapResult.ignored }
+            if kind == MediaShortcutItemID.flipCamera {
+                flipRequestCount += 1
+                return submit(CallControlsRequest.make(CallControlsRequestKind.flipCamera))
+            }
+            if kind == MediaShortcutItemID.effects {
+                panelRequestCount += 1
+                shell.panels.present(MeetingPanel.effects, from: PanelInvoker.call)
+                return ControlTapResult.dispatched
+            }
+            systemEffectsRequestCount += 1
+            return submit(CallControlsRequest.make(CallControlsRequestKind.showSystemVideoEffects))
+        case .speaker:
+            return setSpeaker(!routeOwner.route.isSpeakerOn)
+        case .chooseMicrophone:
+            stage.noteControlAction()
+            if routeOwner.route.inputs.isEmpty || inputs.phase == MeetingPhaseKind.leaving { return ControlTapResult.ignored }
+            inputPickerCount += 1
+            return ControlTapResult.dispatched
+        case .microphone, .audioSettings:
+            // "Microphone" as an accessibility action opens Settings at Audio, where the input list lives (S30 2 c).
+            return openAudioSettings()
+        case .micMode:
+            stage.noteControlAction()
+            if !routeOwner.route.canShowMicModes || inputs.phase == MeetingPhaseKind.leaving { return ControlTapResult.ignored }
+            micModesRequestCount += 1
+            return submit(CallControlsRequest.make(CallControlsRequestKind.showSystemMicrophoneModes))
+        }
+    }
+
     // MARK: Reactions and hand (CTL-6)
 
     /// One palette, tray or row tap (S30 0.5): the id resolves to a `MeetingReactionOption` or the tap is ignored; the
@@ -563,6 +738,11 @@ final class CallControlsPresenter {
                                                         lock: more.item(MoreItemID.lockMeeting), revision: commands.revision)
         if commandsCandidate != commands {
             commands = commandsCandidate.withRevision(commands.revision + 1)
+        }
+        // CTL-4 (S30 2 k): the Camera items change only with the camera, the flip capability and the effects inputs.
+        let shortcutsCandidate = MediaShortcutSnapshot(revision: shortcuts.revision, camera: MediaShortcutPolicy.cameraItems(inputs: inputs))
+        if shortcutsCandidate != shortcuts {
+            shortcuts = shortcutsCandidate.withRevision(shortcuts.revision + 1)
         }
         followEndResult()
     }

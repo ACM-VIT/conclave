@@ -39,6 +39,8 @@ enum PremeetingFixtureState: String, CaseIterable, Equatable {
     case lobby
     /// S10 6 l10: the same lobby with no name, so the primary is disabled with its reason.
     case lobbyNameMissing = "lobby-name-missing"
+    /// S10 6 f `newMeeting`: the generated code as the title, Start Meeting, no link and no Share (Q1), no camera.
+    case lobbyNewMeeting = "lobby-new-meeting"
     /// ENT-4 (S10 7 l; HD request B7-T8 R3): the permission priming states, each a joined-by-link lobby like `lobby` with
     /// the permissions `PermissionPrimingFixture` names (S/Features/Lobby/PermissionPrimingPolicy.swift). The fixture's
     /// hooks never request, so no system prompt can appear.
@@ -87,6 +89,39 @@ enum PremeetingFixtureState: String, CaseIterable, Equatable {
     /// 2 j, RECONCILE R4: the Rejoin card with the view model's rejoin context; Rejoin connects with the previous
     /// intent (microphone on, camera off) instead of opening an editable lobby.
     case homeRejoin = "home-rejoin"
+    // ENT-9 (S10 12 l): the webinar landing, opened through the production intake with a scripted lookup stub
+    // (`WebinarLandingFixtureScript`, S/Features/Join/WebinarLandingFixtures.swift). States reached only after Start
+    // Watching use a scripted tap answered by a scripted join; nothing joins a call.
+    case webinarLoading = "webinar-loading"
+    /// "Starts in 12:41", the lobby opening 10 minutes before (12 b), Add to Calendar and Share Link (12 l4 counter).
+    case webinarEarly = "webinar-early"
+    /// 12 l8: the opens note for 1 minute (the 10 minute form is `webinar-early`).
+    case webinarEarlyOneMinute = "webinar-early-one-minute"
+    /// 12 l6: early, opening 20 s after launch (background past it, then return: no trap, the status flips).
+    case webinarEarlyShort = "webinar-early-short"
+    /// 12 l7 (Android): early with the calendar resolver disabled (the "No calendar app found." snackbar).
+    case webinarNoCalendar = "webinar-no-calendar"
+    /// Live, stored guest name "Avery": the attendee note and Start Watching.
+    case webinarOpen = "webinar-open"
+    /// 12 l5: live, no name: the name field (40, counter from 30) and Start Watching disabled until a name exists.
+    case webinarNameNeeded = "webinar-name-needed"
+    /// Live, the lookup says an invite code is required and the link has none: the invite field.
+    case webinarInviteCode = "webinar-invite-code"
+    /// After a scripted Start Watching: Getting You In (Cancel in the toolbar or the Close icon).
+    case webinarJoining = "webinar-joining"
+    /// After a scripted Start Watching: Almost There (the socket connected).
+    case webinarAlmostThere = "webinar-almost-there"
+    /// After a scripted Start Watching: the call stand-in 2 s later (the joined cross-fade).
+    case webinarToCall = "webinar-to-call"
+    /// After a scripted Start Watching: "Webinar is not live." (the wait for the host; it retries on each refetch).
+    case webinarWaitingHost = "webinar-waiting-host"
+    case webinarLocked = "webinar-locked"
+    case webinarFull = "webinar-full"
+    case webinarUnavailable = "webinar-unavailable"
+    case webinarEnded = "webinar-ended"
+    case webinarCancelled = "webinar-cancelled"
+    /// The lookup failed: "We Hit a Snag" with Try Again.
+    case webinarFailed = "webinar-failed"
 }
 
 /// One scripted step: shell inputs and the premeeting-only inputs, applied after `delayMillis` from the previous step.
@@ -311,6 +346,13 @@ enum PremeetingFixtureScript {
             ]
         case .homeRejoin:
             return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: base(rejoinRoomId: roomLabel))]
+        case .webinarLoading, .webinarEarly, .webinarEarlyOneMinute, .webinarEarlyShort, .webinarNoCalendar, .webinarOpen,
+             .webinarNameNeeded, .webinarInviteCode, .webinarJoining, .webinarAlmostThere, .webinarToCall,
+             .webinarWaitingHost, .webinarLocked, .webinarFull, .webinarUnavailable, .webinarEnded, .webinarCancelled,
+             .webinarFailed:
+            // ENT-9: Home with the attendee identity; the session opens the landing after the steps.
+            return [PremeetingFixtureStep(delayMillis: 0, shell: home(),
+                                          base: WebinarLandingFixtureScript.base(guestName: WebinarLandingFixtureScript.guestName(for: state)))]
         }
     }
 
@@ -405,6 +447,10 @@ final class PremeetingFixtureSession {
     @ObservationIgnored private var lastShell = MeetingShellInputs.make()
     @ObservationIgnored private var failed = false
     @ObservationIgnored private var started = false
+    // ENT-9: the scripted Start Watching tap and the scripted join's later outcome.
+    @ObservationIgnored private var webinarTapTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var webinarOutcomeTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var webinarOutcomeId = 0
 
     init(state: PremeetingFixtureState) {
         self.state = state
@@ -441,6 +487,9 @@ final class PremeetingFixtureSession {
         if PremeetingFixtureScript.isLobbyFixture(state) {
             openLobby()
         }
+        if WebinarLandingFixtureScript.isWebinarFixture(state) {
+            openWebinarLanding(startedAtMillis: now)
+        }
         timeline?.cancel()
         timeline = Task { @MainActor [weak self] in
             for step in remaining {
@@ -461,6 +510,10 @@ final class PremeetingFixtureSession {
     func stop() {
         timeline?.cancel()
         timeline = nil
+        webinarTapTask?.cancel()
+        webinarTapTask = nil
+        webinarOutcomeTask?.cancel()
+        webinarOutcomeTask = nil
     }
 
     /// A deep link into the fixture route (S10 4 l2, l3): the same intake as production.
@@ -532,10 +585,84 @@ final class PremeetingFixtureSession {
                                     base: lastBase))
     }
 
+    // MARK: Webinar landing fixtures (ENT-9, S10 12 l)
+
+    /// The scripted lookup and join, then the landing through the production intake; states reached after Start
+    /// Watching get a scripted tap once the landing is open.
+    private func openWebinarLanding(startedAtMillis: Double) {
+        premeeting.webinarCalendarResolverDisabled = WebinarLandingFixtureScript.disablesCalendarResolver(state)
+        premeeting.webinarHooks = makeWebinarHooks(startedAtMillis: startedAtMillis)
+        premeeting.handleIncomingURL(WebinarLandingFixtureScript.link)
+        guard WebinarLandingFixtureScript.join(for: state) != WebinarFixtureJoin.none else { return }
+        webinarTapTask?.cancel()
+        webinarTapTask = Task { @MainActor [weak self] in
+            var attempt = 0
+            while attempt < WebinarLandingFixtureScript.tapAttempts {
+                attempt += 1
+                try? await Task.sleep(nanoseconds: UInt64(Double(WebinarLandingFixtureScript.tapIntervalMillis) * 1_000_000.0))
+                guard !Task.isCancelled, let self else { return }
+                if self.premeeting.webinarJoinRequestCount > 0 {
+                    return
+                }
+                self.premeeting.startWatching()
+            }
+        }
+    }
+
+    private func makeWebinarHooks(startedAtMillis: Double) -> WebinarLandingHooks {
+        let hooks = WebinarLandingHooks()
+        let fixtureState = state
+        hooks.lookup = { _, _ in
+            let delay = WebinarLandingFixtureScript.lookupDelayMillis(for: fixtureState)
+            if delay > 0.0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000.0))
+            }
+            return WebinarLandingFixtureScript.answer(for: fixtureState, startedAtMillis: startedAtMillis)
+        }
+        hooks.join = { [weak self] _ in
+            self?.scriptWebinarJoin()
+        }
+        return hooks
+    }
+
+    /// Getting You In (or Almost There) at once, then the scripted outcome: the call, or the SFU sentence.
+    private func scriptWebinarJoin() {
+        let join = WebinarLandingFixtureScript.join(for: state)
+        let name = WebinarLandingFixtureScript.guestName(for: state)
+        apply(PremeetingFixtureStep(delayMillis: 0, shell: WebinarLandingFixtureScript.connecting(guestName: name),
+                                    base: WebinarLandingFixtureScript.base(guestName: name,
+                                                                           socketConnected: join == WebinarFixtureJoin.almostThere)))
+        guard join == WebinarFixtureJoin.call || WebinarLandingFixtureScript.endsInFailure(join) else { return }
+        webinarOutcomeTask?.cancel()
+        let delay = join == WebinarFixtureJoin.call ? WebinarLandingFixtureScript.callDelayMillis
+            : WebinarLandingFixtureScript.outcomeDelayMillis
+        webinarOutcomeId += 1
+        let outcomeId = webinarOutcomeId
+        webinarOutcomeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Double(delay) * 1_000_000.0))
+            guard !Task.isCancelled, let self else { return }
+            self.webinarOutcomeTask = nil
+            if join == WebinarFixtureJoin.call {
+                self.apply(PremeetingFixtureStep(delayMillis: 0, shell: WebinarLandingFixtureScript.joined(guestName: name),
+                                                 base: WebinarLandingFixtureScript.base(guestName: name, socketConnected: true)))
+            } else {
+                self.apply(PremeetingFixtureStep(
+                    delayMillis: 0,
+                    shell: WebinarLandingFixtureScript.failed(guestName: name, serverText: WebinarLandingFixtureScript.serverText(join),
+                                                              outcomeId: outcomeId),
+                    base: WebinarLandingFixtureScript.base(guestName: name,
+                                                           joinFailureCategory: WebinarLandingFixtureScript.failureCategory(join),
+                                                           joinFailureCode: WebinarLandingFixtureScript.failureCode(join))))
+            }
+        }
+    }
+
     private func answer(_ command: PremeetingCommand) {
         switch command {
         case .leave, .dismissOutcome:
-            // Scripted, never a view model: the session goes Home.
+            // Scripted, never a view model: the session goes Home (a pending scripted webinar outcome is dropped).
+            webinarOutcomeTask?.cancel()
+            webinarOutcomeTask = nil
             apply(PremeetingFixtureStep(delayMillis: 0, shell: PremeetingFixtureScript.home(), base: lastBase))
         case .joinAsSpeaker, .cancelPromotion:
             // S50 PH20: the promotion lobby lives over the attendee viewer in the call root, never in this fixture.

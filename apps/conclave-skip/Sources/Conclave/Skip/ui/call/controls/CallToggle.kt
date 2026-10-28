@@ -15,8 +15,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.toggleableState
@@ -31,7 +33,9 @@ import androidx.compose.ui.unit.dp
  * clickable while it draws the disabled treatment (Q11: the tap explains; a disabled M3 button would swallow it). R01
  * colors through the shared conclaveCallToggleColors (owner OQ1), 38% alpha while blocked, a 48 dp target, a constant
  * description and the state in the state description. hapticFeedbackEnabled = false: the cell plays the gesture kind
- * itself, only on a dispatched tap (S30 1 h).
+ * itself, only on a dispatched tap (S30 1 h). CTL-4 (S30 2 d): Mic and Camera pass their long press (it plays
+ * `longPress` itself, so the built-in haptic stays off and it plays once), its label, and the TalkBack custom actions
+ * that duplicate every shortcut item (AX4).
  */
 
 /** CallControlVisual to the WP1-2b R01 roles. */
@@ -53,6 +57,7 @@ internal fun CallToggle(
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
     onLongClickLabel: String? = null,
+    customActions: List<CustomAccessibilityAction> = emptyList(),
 ) {
     val colors = conclaveCallToggleColors(callControlVisual(control.visual))
     val content = Color(colors.content)
@@ -73,6 +78,7 @@ internal fun CallToggle(
                 contentDescription = label
                 stateDescription = stateText
                 toggleableState = ToggleableState(control.isOn)
+                if (customActions.isNotEmpty()) this.customActions = customActions
             },
         contentAlignment = Alignment.Center,
     ) {

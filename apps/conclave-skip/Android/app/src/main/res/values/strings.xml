@@ -271,6 +271,17 @@
     <string name="sys_channel_share_desc">Shows while you’re sharing your screen.</string>
     <string name="sys_share_notif_title">Sharing your screen</string>
     <string name="sys_call_stop_sharing">Stop sharing</string>
+    <!-- Batch 8: notification channels and local notifications (SYS-3) -->
+    <string name="sys_notif_admitted_body">You’re in. Tap to return to the call.</string>
+    <string name="sys_notif_mention">Mentioned you</string>
+    <string name="sys_notif_mention_line">Mentioned you: %1$s</string>
+    <string name="sys_channel_admission">Waiting room</string>
+    <string name="sys_channel_admission_desc">Tells you when you’re let into a meeting.</string>
+    <string name="sys_channel_messages">Private messages and mentions</string>
+    <string name="sys_channel_messages_desc">Messages for you while you’re in another app.</string>
+    <string name="sys_notif_prime_updates">Allow notifications so Conclave can tell you when you’re let in or messaged privately.</string>
+    <string name="sys_notif_messages_channel_off">Private messages and mentions are off in system settings.</string>
+    <string name="sys_fixture_clear_notifications">Clear notifications</string>
 
     <!-- Audio route names (SYS-2): ctl_route_ -->
     <string name="ctl_route_phone">Phone</string>
@@ -389,6 +400,14 @@
     <string name="ctl_end_recap_message">Conclave can post a recap of the meeting to chat before the call ends.</string>
     <string name="ctl_end_post_recap">Post recap and end</string>
     <string name="ctl_end_without_recap">End without recap</string>
+    <!-- Batch 8: audio route sheet and media shortcuts (CTL-3, CTL-4) -->
+    <string name="ctl_audio_output">Audio output</string>
+    <string name="ctl_audio_settings">Audio settings</string>
+    <string name="ctl_route_connecting">Connecting…</string>
+    <string name="ctl_route_switching">Switching</string>
+    <string name="ctl_route_bt_allow">Allow access to use it</string>
+    <string name="ctl_route_bt_allow_settings">Allow access in Settings</string>
+    <string name="ctl_choose_audio_output">Choose audio output</string>
 
     <!-- Premeeting Home, join sheet, switch prompt, lobby and outcome stand-ins (ENT-1, ENT-2): pm_ -->
     <string name="pm_app_title">Conclave</string>
@@ -539,6 +558,41 @@
     <string name="pm_mic_rationale">Conclave needs the microphone so people in the meeting can hear you.</string>
     <string name="pm_camera_rationale">Conclave needs the camera so people in the meeting can see you.</string>
     <string name="pm_allow">Allow</string>
+    <!-- Batch 8: webinar attendee landing (ENT-9) -->
+    <string name="pm_tag_starts_soon">Starts soon</string>
+    <string name="pm_tag_live">Live</string>
+    <string name="pm_tag_ended">Ended</string>
+    <string name="pm_webinar_title">Webinar</string>
+    <string name="pm_webinar_fallback_title">Join the audience</string>
+    <string name="pm_hosted_by">Hosted by %1$s</string>
+    <string name="pm_hosted_by_organizer">Hosted by the organizer</string>
+    <string name="pm_early_title">You’re a little early</string>
+    <string name="pm_starts_in">Starts in %1$s</string>
+    <string name="pm_add_to_calendar">Add to calendar</string>
+    <string name="pm_share_link">Share link</string>
+    <string name="pm_start_watching">Start watching</string>
+    <string name="pm_webinar_name_reason">Add your name so the host knows who’s asking when you join the Q&amp;A.</string>
+    <string name="pm_attendee_note">You’ll join as an attendee. Your camera and mic stay off.</string>
+    <string name="pm_getting_you_in">Getting you in</string>
+    <string name="pm_almost_there">Almost there</string>
+    <string name="pm_waiting_host_start">Waiting for the host to start</string>
+    <string name="pm_waiting_host_body">This page updates on its own when the host opens the room.</string>
+    <string name="pm_webinar_locked">This webinar is locked.</string>
+    <string name="pm_webinar_full">This webinar is full.</string>
+    <string name="pm_webinar_unavailable">This webinar isn’t available.</string>
+    <string name="pm_webinar_ended_title">Webinar ended</string>
+    <string name="pm_webinar_ended_body">Reach out to the organizer for a replay or about future sessions.</string>
+    <string name="pm_webinar_cancelled_title">Webinar cancelled</string>
+    <string name="pm_webinar_cancelled_body">The organizer cancelled this session. Reach out to them for an update.</string>
+    <string name="pm_snag_title">We hit a snag</string>
+    <string name="pm_webinar_load_failed">Couldn’t load this webinar.</string>
+    <string name="pm_loading_webinar">Loading webinar</string>
+    <string name="pm_webinar_invite_footer">Enter the invite code from the organizer.</string>
+    <string name="pm_no_calendar_app">No calendar app found.</string>
+    <plurals name="pm_lobby_opens">
+        <item quantity="one">The lobby opens %1$d minute before the start.</item>
+        <item quantity="other">The lobby opens %1$d minutes before the start.</item>
+    </plurals>
 
     <!-- Call stage, chrome chips and panel titles (STG-1, STG-4): stg_ -->
     <string name="stg_panel_transcript">Transcript</string>
@@ -805,6 +859,16 @@
     <string name="ppl_invite_message">%1$s wants to bring you into the conversation. You’ll rejoin as a speaker and can turn on your microphone and camera.</string>
     <string name="ppl_invite_message_fallback">A host wants to bring you into the conversation. You’ll rejoin as a speaker and can turn on your microphone and camera.</string>
     <string name="ppl_announce_new_host">%1$s is now the host.</string>
+    <!-- Batch 8: admissions and raised hands (PPL-3) -->
+    <string name="ppl_deny_all">Deny all…</string>
+    <string name="ppl_more_waiting">More waiting actions</string>
+    <string name="ppl_admitting">Admitting…</string>
+    <string name="ppl_lower_all">Lower all</string>
+    <string name="ppl_mute_all">Mute all…</string>
+    <plurals name="ppl_announce_admitted_all">
+        <item quantity="one">%1$d admitted</item>
+        <item quantity="other">%1$d admitted</item>
+    </plurals>
 
     <!-- Chat panel, composer, message actions and reactions (CHT-1 to CHT-3): chat_ -->
     <string name="chat_title">Chat</string>
@@ -1174,6 +1238,59 @@
     <string name="app_wb_color_blue">Blue</string>
     <string name="app_wb_color_lavender">Lavender</string>
     <string name="app_wb_color_purple">Purple</string>
+    <!-- Batch 8: Spin the Wheel and Watch Together pages (ACT-8) -->
+    <string name="app_wheel_spin">Spin</string>
+    <string name="app_wheel_edit_names">Edit names</string>
+    <string name="app_wheel_winner">Winner: %1$s</string>
+    <string name="app_wheel_add_name">Add a name</string>
+    <string name="app_wheel_add_everyone">Add everyone here</string>
+    <string name="app_wheel_full">The wheel is full.</string>
+    <string name="app_wheel_empty">No names yet.</string>
+    <string name="app_wheel_shuffle">Shuffle</string>
+    <string name="app_wheel_sort">Sort A to Z</string>
+    <string name="app_wheel_clear_names">Clear names…</string>
+    <string name="app_wheel_clear_title">Clear names?</string>
+    <string name="app_wheel_clear_message">The wheel empties for everyone.</string>
+    <string name="app_wheel_clear_confirm">Clear names</string>
+    <string name="app_wheel_remove_winner">Remove winner after each spin</string>
+    <string name="app_wheel_remove_winner_detail">Winners come off the wheel automatically, so nobody gets picked twice</string>
+    <string name="app_wheel_sounds">Wheel sounds</string>
+    <string name="app_wheel_results">Results</string>
+    <string name="app_wheel_clear_results">Clear results</string>
+    <string name="app_remove">Remove</string>
+    <string name="app_move_up">Move up</string>
+    <string name="app_move_down">Move down</string>
+    <string name="app_page_closed">%1$s is no longer open.</string>
+    <string name="app_watch_queue">Queue</string>
+    <string name="app_watch_search_prompt">Search YouTube or paste a link</string>
+    <string name="app_watch_trending">Trending</string>
+    <string name="app_watch_classics">Or start with a classic</string>
+    <string name="app_watch_everyone_control">Everyone can control</string>
+    <string name="app_watch_everyone_control_detail">Playback, seeking and the queue. Off means host only.</string>
+    <string name="app_watch_waiting">Waiting for the host to start something. Playback stays in sync for everyone.</string>
+    <string name="app_watch_declined">Your request was declined.</string>
+    <string name="app_watch_search_off">Search is switched off on this server. Paste a YouTube link instead.</string>
+    <string name="app_watch_search_failed">Couldn’t search YouTube. Try again.</string>
+    <string name="app_watch_play_now">Play now</string>
+    <string name="app_watch_add_to_queue">Add to queue</string>
+    <string name="app_watch_request">Request</string>
+    <string name="app_watch_up_next">Up next</string>
+    <string name="app_watch_queue_empty">Nothing queued yet.</string>
+    <string name="app_watch_requests">Requests</string>
+    <string name="app_watch_decline">Decline</string>
+    <string name="app_watch_pending">Pending</string>
+    <string name="app_watch_cancel_request">Cancel request</string>
+    <string name="app_watch_request_footer">Picks are sent to the host to approve.</string>
+    <string name="app_watch_playing">Playing</string>
+    <string name="app_watch_paused">Paused</string>
+    <plurals name="app_names">
+        <item quantity="one">%1$d name</item>
+        <item quantity="other">%1$d names</item>
+    </plurals>
+    <plurals name="app_wheel_missing">
+        <item quantity="one">%1$d not on the wheel</item>
+        <item quantity="other">%1$d not on the wheel</item>
+    </plurals>
     <string name="br_detail">Show a website to everyone</string>
     <string name="br_err_empty">Enter a URL to continue.</string>
     <string name="br_err_invalid">Enter a valid URL.</string>
@@ -1193,6 +1310,20 @@
     <string name="br_title">Shared browser</string>
     <string name="br_unavailable">The shared browser isn’t available on this server.</string>
     <string name="br_website">Website</string>
+    <!-- Batch 8: shared browser card (ACT-9) -->
+    <string name="br_keyboard">Keyboard</string>
+    <string name="br_more_actions">More shared browser actions</string>
+    <string name="br_mute_audio">Mute browser audio</string>
+    <string name="br_unmute_audio">Unmute browser audio</string>
+    <string name="br_viewer_hint">Only the person sharing can control it.</string>
+    <string name="br_session_info">Session info</string>
+    <string name="br_region">Shared browser, %1$s</string>
+    <string name="br_shared_by">Shared by %1$s</string>
+    <string name="br_you_sharing">You’re sharing</string>
+    <string name="br_starting">Starting browser</string>
+    <string name="br_load_failed">The shared browser couldn’t load.</string>
+    <string name="br_live">Live</string>
+    <string name="br_reconnecting">Reconnecting</string>
     <string name="gm_correct">Correct</string>
     <string name="gm_end">End</string>
     <string name="gm_end_failed">Couldn’t end the game. Try again.</string>
@@ -1572,6 +1703,137 @@
     <string name="gm_wordle_letter_present">%1$s, in the word</string>
     <string name="gm_wordle_letter_absent">%1$s, not in the word</string>
     <string name="gm_wordle_time_left">%1$s left</string>
+    <!-- Batch 8: chess (ACT-5) and Zip (ACT-6) -->
+    <string name="gm_chess_duel">Live chess duel</string>
+    <string name="gm_chess_teams">Captain-led team chess</string>
+    <string name="gm_chess_you_cpu">You vs the computer</string>
+    <string name="gm_chess_room_cpu">The room vs the computer</string>
+    <string name="gm_chess_your_move">Your move</string>
+    <string name="gm_chess_to_move">%1$s to move</string>
+    <string name="gm_chess_check">Check</string>
+    <string name="gm_chess_you_white">You play White</string>
+    <string name="gm_chess_you_black">You play Black</string>
+    <string name="gm_chess_white_captain">White captain: you move</string>
+    <string name="gm_chess_black_captain">Black captain: you move</string>
+    <string name="gm_chess_white_team">White team: call the moves together</string>
+    <string name="gm_chess_black_team">Black team: call the moves together</string>
+    <string name="gm_chess_watching">Watching</string>
+    <string name="gm_chess_white_mate">White wins by checkmate</string>
+    <string name="gm_chess_black_mate">Black wins by checkmate</string>
+    <string name="gm_chess_white_time">White wins on time</string>
+    <string name="gm_chess_black_time">Black wins on time</string>
+    <string name="gm_chess_draw_time">Draw on time</string>
+    <string name="gm_chess_white_resign">White wins by resignation</string>
+    <string name="gm_chess_black_resign">Black wins by resignation</string>
+    <string name="gm_chess_draw_stalemate">Draw by stalemate</string>
+    <string name="gm_chess_draw_threefold">Draw by threefold repetition</string>
+    <string name="gm_chess_draw_insufficient">Draw by insufficient material</string>
+    <string name="gm_chess_draw_fifty">Draw by the fifty-move rule</string>
+    <string name="gm_chess_draw_agreement">Draw by agreement</string>
+    <string name="gm_chess_white">White</string>
+    <string name="gm_chess_black">Black</string>
+    <string name="gm_chess_no_clock">No clock</string>
+    <string name="gm_chess_low_time">Low time</string>
+    <string name="gm_chess_per_move">%1$d s per move</string>
+    <string name="gm_chess_clock_spoken">%1$s, %2$s left</string>
+    <string name="gm_chess_running">Running</string>
+    <string name="gm_chess_move_left">%1$s left this move</string>
+    <string name="gm_chess_offer_draw">Offer draw</string>
+    <string name="gm_chess_draw_offered_by">%1$s offered a draw.</string>
+    <string name="gm_chess_accept_draw">Accept draw</string>
+    <string name="gm_chess_decline">Decline</string>
+    <string name="gm_chess_draw_offered">Draw offered</string>
+    <string name="gm_chess_request_takeback">Request takeback</string>
+    <string name="gm_chess_takeback_by">%1$s asked for a takeback.</string>
+    <string name="gm_chess_accept_takeback">Accept takeback</string>
+    <string name="gm_chess_takeback_requested">Takeback requested</string>
+    <string name="gm_chess_resign_title">Resign this game?</string>
+    <string name="gm_chess_resign_message">Your side loses.</string>
+    <string name="gm_chess_resign">Resign</string>
+    <string name="gm_chess_takeback_not_moved">Make a move first</string>
+    <string name="gm_chess_takeback_pending">A takeback is pending</string>
+    <string name="gm_chess_promote">Promote to</string>
+    <string name="gm_chess_queen">Queen</string>
+    <string name="gm_chess_rook">Rook</string>
+    <string name="gm_chess_bishop">Bishop</string>
+    <string name="gm_chess_knight">Knight</string>
+    <string name="gm_chess_king">King</string>
+    <string name="gm_chess_pawn">Pawn</string>
+    <string name="gm_chess_flip">Flip board</string>
+    <string name="gm_chess_choose">Choose a move</string>
+    <string name="gm_chess_choose_piece">Choose a piece</string>
+    <string name="gm_chess_choose_square">%1$s: choose a square</string>
+    <string name="gm_chess_piece_on">%1$s on %2$s</string>
+    <string name="gm_chess_takes_on">takes on %1$s</string>
+    <string name="gm_chess_takes_en_passant">takes on %1$s en passant</string>
+    <string name="gm_chess_castles_to">castles to %1$s</string>
+    <string name="gm_chess_promotes">%1$s, promotes</string>
+    <string name="gm_chess_moves">Moves</string>
+    <string name="gm_chess_move_row">%1$d. %2$s %3$s</string>
+    <string name="gm_chess_move_row_white">%1$d. %2$s</string>
+    <string name="gm_chess_auto">Auto-played for %1$s</string>
+    <string name="gm_chess_no_moves">No moves yet</string>
+    <string name="gm_chess_rejected">Move rejected</string>
+    <string name="gm_chess_board">Chess board</string>
+    <string name="gm_chess_square_fact">%1$s, %2$s</string>
+    <string name="gm_chess_empty">empty</string>
+    <string name="gm_chess_legal">legal move</string>
+    <string name="gm_chess_last">last move</string>
+    <string name="gm_chess_in_check">in check</string>
+    <string name="gm_chess_pending">pending</string>
+    <string name="gm_chess_w_k">white king</string>
+    <string name="gm_chess_w_q">white queen</string>
+    <string name="gm_chess_w_r">white rook</string>
+    <string name="gm_chess_w_b">white bishop</string>
+    <string name="gm_chess_w_n">white knight</string>
+    <string name="gm_chess_w_p">white pawn</string>
+    <string name="gm_chess_b_k">black king</string>
+    <string name="gm_chess_b_q">black queen</string>
+    <string name="gm_chess_b_r">black rook</string>
+    <string name="gm_chess_b_b">black bishop</string>
+    <string name="gm_chess_b_n">black knight</string>
+    <string name="gm_chess_b_p">black pawn</string>
+    <string name="gm_chess_select">Select</string>
+    <string name="gm_chess_move_here">Move here</string>
+    <string name="gm_chess_team_white">White: %1$s</string>
+    <string name="gm_chess_team_black">Black: %1$s</string>
+    <string name="gm_chess_captain_name">%1$s (captain)</string>
+    <string name="gm_zip_title">Draw one path, fill every cell</string>
+    <plurals name="gm_zip_cells">
+        <item quantity="one">%1$d of %2$d cell</item>
+        <item quantity="other">%1$d of %2$d cells</item>
+    </plurals>
+    <string name="gm_zip_remaining">Remaining %1$s</string>
+    <string name="gm_zip_undo">Undo</string>
+    <string name="gm_zip_reset">Reset</string>
+    <string name="gm_zip_hint">Hint</string>
+    <string name="gm_zip_hint_cooldown">Hint (%1$d s)</string>
+    <plurals name="gm_zip_hints_used">
+        <item quantity="one">%1$d hint used</item>
+        <item quantity="other">%1$d hints used</item>
+    </plurals>
+    <plurals name="gm_zip_hint_cost">
+        <item quantity="one">Costs %1$d point</item>
+        <item quantity="other">Costs %1$d points</item>
+    </plurals>
+    <string name="gm_zip_choose_next">Choose next cell</string>
+    <string name="gm_zip_no_next">No cell can come next. Undo or reset.</string>
+    <string name="gm_zip_rejected">That path isn’t allowed. Try again.</string>
+    <string name="gm_zip_solved_in">Solved in %1$s</string>
+    <string name="gm_zip_time_up">Time’s up</string>
+    <string name="gm_zip_no_hints">No hints</string>
+    <string name="gm_zip_winner">%1$s solved it first</string>
+    <string name="gm_zip_nobody">Nobody solved it</string>
+    <string name="gm_zip_standings">Standings</string>
+    <string name="gm_zip_final">Final results</string>
+    <string name="gm_zip_round_results">Round %1$d results</string>
+    <string name="gm_zip_waiting_next">Waiting for the host to start the next round</string>
+    <string name="gm_zip_cell">Row %1$d, column %2$d</string>
+    <string name="gm_zip_cell_checkpoint">, checkpoint %1$d</string>
+    <string name="gm_zip_cell_visited">, visited</string>
+    <string name="gm_zip_cell_head">, end of path</string>
+    <string name="gm_zip_cell_next">, next</string>
+    <string name="gm_zip_cell_dead">, not part of the puzzle</string>
 
     <!-- Batch 5: Host Controls (PPL-4) -->
     <string name="hst_announce_on">%1$s turned on by another host.</string>
@@ -1704,6 +1966,11 @@
     <string name="hst_fail_invite">Couldn’t invite %1$s on stage.</string>
     <string name="hst_fail_gone">%1$s is no longer watching.</string>
     <string name="hst_fail_cancel_invite">Couldn’t cancel the invite.</string>
+    <!-- Batch 8: admissions and raised hands failures (PPL-3) -->
+    <string name="hst_fail_admit">Couldn’t admit %1$s.</string>
+    <string name="hst_fail_admit_all">Couldn’t admit everyone.</string>
+    <string name="hst_fail_deny">Couldn’t deny %1$s.</string>
+    <string name="hst_fail_lower_all">Couldn’t lower all hands.</string>
 
     <!-- Batch 6: Webinar questions and answers (PPL-6) -->
     <string name="qa_title">Q&amp;A</string>

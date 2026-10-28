@@ -76,7 +76,8 @@ struct NoticeBannerView: View {
             let banner = ConclaveBanner(kind: NoticeCopy.bannerKind(notice), text: NoticeCopy.bannerText(notice), surface: .inCall,
                                         actions: actions(notice),
                                         onDismiss: notice.isDismissible ? { stage.dismissNotice(id: notice.id) } : nil,
-                                        announces: true, lineLimit: expanded ? nil : ConclaveBannerLaneMetrics.lineLimit,
+                                        announces: notice.announcement != NoticeAnnouncement.none,
+                                        lineLimit: expanded ? nil : ConclaveBannerLaneMetrics.lineLimit,
                                         identifier: "stage.banner." + notice.kind)
             if notice.hasAction(NoticeAction.catchUp) {
                 banner

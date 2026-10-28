@@ -5,22 +5,11 @@ import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -41,7 +30,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.ui.NavDisplay
@@ -142,6 +130,15 @@ internal fun PremeetingHost(
                     anchors.clear()
                 })
             }
+            // SYS-3 (S70 2 d, S10 7 d): the notifications priming banner waits until the root transition (and the card
+            // expansion, when it runs) has settled on the native call root.
+            if (usesNativeCallRoot && stage != null) {
+                StageEntryFinishedEffect(
+                    settled = rootTransition.currentState == PremeetingRootKind.call &&
+                        rootTransition.targetState == PremeetingRootKind.call &&
+                        (expansionStart == null || expansionDone),
+                )
+            }
         }
         if (!callComposed) {
             ConclaveSystemBars(SystemBarPolicy.resolve(rootDark = systemDark, overlayVisible = false, overlayInCall = false,
@@ -182,7 +179,7 @@ private fun StopAskingHost(premeeting: PremeetingPresenter) {
 }
 
 /** Back from the top page: the outcome's secondary path, Cancel while connecting, the Stop asking confirmation while
- *  waiting (S10 9 d), else a pop. */
+ *  waiting (S10 9 d), Cancel while the webinar landing joins (S10 12 d), else a pop. */
 private fun premeetingBack(premeeting: PremeetingPresenter) {
     if (premeeting.outcome != null) {
         premeeting.performOutcomeAction(OutcomeAction.backHome)
@@ -204,6 +201,12 @@ private fun premeetingBack(premeeting: PremeetingPresenter) {
             return
         }
     }
+    val webinar = premeeting.webinar
+    if (top != null && top.kind == PremeetingRouteKind.webinarLanding && webinar != null && webinar.routeId == top.id &&
+        WebinarLandingPolicy.isJoining(webinar.status)) {
+        premeeting.cancelJoin()
+        return
+    }
     premeeting.setPath(skip.lib.Array(PremeetingBackStack.popped(premeeting.path.toList())))
 }
 
@@ -212,7 +215,7 @@ private fun PremeetingPage(premeeting: PremeetingPresenter, key: PremeetingKey) 
     when (key) {
         is PremeetingKey.HomeKey -> HomeScreen(premeeting)
         is PremeetingKey.LobbyKey -> LobbyScreen(premeeting, key, onBack = { premeetingBack(premeeting) })
-        is PremeetingKey.WebinarLandingKey -> WebinarStandInPage(premeeting, key)
+        is PremeetingKey.WebinarLandingKey -> WebinarLandingScreen(premeeting, key, onBack = { premeetingBack(premeeting) })
         is PremeetingKey.AccountKey -> AccountScreen(
             account = premeeting.account,
             onBack = { premeetingBack(premeeting) },
@@ -222,50 +225,6 @@ private fun PremeetingPage(premeeting: PremeetingPresenter, key: PremeetingKey) 
         is PremeetingKey.PrivacyKey -> PrivacyPolicyScreen(onBack = { premeetingBack(premeeting) })
         is PremeetingKey.SettingsKey -> AppSettingsScreen(onBack = { premeetingBack(premeeting) })
         is PremeetingKey.OutcomeKey -> OutcomeScreen(premeeting)
-    }
-}
-
-// MARK: Stand-ins until their slices land (ENT-9 webinar landing; the lobby is ENT-3's LobbyScreen in K/ui/lobby,
-// Account and Privacy are ENT-7's AccountScreen and PrivacyPolicyScreen in K/ui/account, the outcome is ENT-6's
-// OutcomeScreen in K/ui/outcome)
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun StandInScaffold(
-    title: String,
-    showsBack: Boolean,
-    onBack: () -> Unit,
-    actions: @Composable () -> Unit = {},
-    content: @Composable () -> Unit,
-) {
-    val scheme = MaterialTheme.colorScheme
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = { if (showsBack) ConclaveBackButton(toCall = false, onClick = onBack) },
-                actions = { actions() },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface),
-            )
-        },
-        containerColor = scheme.surface,
-        contentWindowInsets = WindowInsets.safeDrawing,
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            content()
-        }
-    }
-}
-
-@Composable
-private fun WebinarStandInPage(premeeting: PremeetingPresenter, key: PremeetingKey.WebinarLandingKey) {
-    StandInScaffold(title = key.roomId, showsBack = true, onBack = { premeetingBack(premeeting) }) {
-        ListItem(
-            headlineContent = { Text(conclaveString("pm_tag_webinar")) },
-            supportingContent = { Text(key.roomId) },
-            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.testTag("webinar.room"),
-        )
     }
 }
 

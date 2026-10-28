@@ -43,7 +43,10 @@ import kotlinx.coroutines.delay
  * stay while chrome hides), the toolbar slot (the S30 control bar, CTL-1) and chrome visibility. Android has no glass: the
  * chrome components draw the flat label scrim. The one timer is a LaunchedEffect keyed on the arm serial and the
  * eligibility, armed only while chrome is visible and nothing blocks; nothing ticks while hidden or blocked (RR8). No
- * immersive mode: the status and navigation bars stay (AND 9.2 item 2).
+ * immersive mode: the status and navigation bars stay (AND 9.2 item 2). CTL-3 (S30 3 d, S20 7 d): with the call's
+ * controls presenter (LocalCallControls) the top-row route button opens the in-call audio route sheet
+ * (AudioRouteSheet.kt), composed here outside the fading row so a chrome fade never disposes it; the stage fixtures
+ * without one keep the caller's onRoute.
  */
 
 /** View-local chrome visibility (SL8) over the shared ChromeAutoHidePolicy state machine. */
@@ -91,6 +94,15 @@ internal fun StageChrome(
         if (screenReader) chrome.send(ChromeVisibilityEvent.screenReaderOn)
     }
     StageChromeRevealObserver(shell, chrome)
+    val controls = LocalCallControls.current
+    var routeSheetOpen by remember { mutableStateOf(false) }
+    val routeAction: () -> Unit = {
+        if (controls != null) {
+            routeSheetOpen = true
+        } else {
+            onRoute()
+        }
+    }
     val visible = !state.isHidden
     val enter = if (access.removeAnimations) EnterTransition.None else fadeIn(animationSpec = ConclaveMotion.chromeFade())
     val exit = if (access.removeAnimations) ExitTransition.None else fadeOut(animationSpec = ConclaveMotion.chromeFade())
@@ -104,7 +116,7 @@ internal fun StageChrome(
             // The row keeps its height while hidden, so the chips below never move.
             Box(Modifier.heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp)) {
                 AnimatedVisibility(visible = visible, enter = enter, exit = exit) {
-                    StageTopRow(stage, capsuleMax, onMinimize, onRoute)
+                    StageTopRow(stage, capsuleMax, onMinimize, routeAction)
                 }
             }
             StageStatusChips(stage)
@@ -122,6 +134,9 @@ internal fun StageChrome(
         ) {
             StageBarSlot(shell, stage, stageWidth, stageHeight)
         }
+    }
+    if (routeSheetOpen && controls != null) {
+        AudioRouteSheet(controls, stage, onDismiss = { routeSheetOpen = false })
     }
 }
 

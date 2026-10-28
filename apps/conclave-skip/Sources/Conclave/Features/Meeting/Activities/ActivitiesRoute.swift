@@ -20,7 +20,7 @@ struct ActivitiesLanding: Equatable {
 }
 
 enum ActivitiesDestinationPolicy {
-    /// SDK app ids whose host pages land with ACT-8; the whiteboard opens on the stage, never a page.
+    /// SDK app ids with an Activities page (ACT-8); the whiteboard opens on the stage, never a page.
     static let appPageIds: [String] = ["wheel", "watch"]
 
     static func landing(destination: PanelDestination, targetId: String) -> ActivitiesLanding {
@@ -37,11 +37,10 @@ enum ActivitiesDestinationPolicy {
         }
     }
 
-    /// The routes this push can render. Wheel and Watch pages arrive with ACT-8; until then they fall back to the root.
+    /// The routes this push can render (the Wheel and Watch pages since ACT-8).
     static func isRenderable(_ route: ActivitiesRoute) -> Bool {
         switch route {
-        case .root, .setup, .browser: return true
-        case .wheel, .watch: return false
+        case .root, .setup, .browser, .wheel, .watch: return true
         }
     }
 }

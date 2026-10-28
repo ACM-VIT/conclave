@@ -16,6 +16,9 @@ final class ActivitySession {
     /// ACT-7 (S60 0.5, 13): the SDK app host behind the app card. The view model binds it to its `ActiveAppSession`
     /// (`MeetingViewModel.bindActiveAppSession()`); the stage fixture binds it to a fixture relay (`AppHostFixtures`).
     @ObservationIgnored let appHost: AppHostPresenter
+    /// ACT-9 (S60 0.5, 14): the shared browser card. The view model pushes `makeBrowserStageInputs()` and performs its
+    /// commands (`MeetingViewModel.bindBrowserStage()`); the stage fixture scripts it (`BrowserStageFixtures`).
+    @ObservationIgnored let browser: BrowserStagePresenter
 
     /// The card's load state for web-backed bodies (S20 11 c). ACT-7 (apps) and ACT-9 (browser) host the web engines
     /// and set these; until then the card shows the opening state for an app or the browser.
@@ -31,6 +34,7 @@ final class ActivitySession {
         self.activities = ActivitiesPresenter()
         self.games = GameStagePresenter()
         self.appHost = AppHostPresenter()
+        self.browser = BrowserStagePresenter()
     }
 
     /// Wires the stage's activity resolution into the launcher (Now Playing `isOnStage`, HD request B4-T8 R1 adds
@@ -38,6 +42,10 @@ final class ActivitySession {
     func bindStage() {
         stage.onActivityResolved = { [weak self] onStageKind in
             self?.activities.setOnStageActivityKind(onStageKind)
+        }
+        // ACT-8 (S60 13 c, R6-5): the Wheel card's Edit Names and Watch Together's Queue open Activities at the app's page.
+        appHost.onOpenPage = { [weak self] appId in
+            self?.stage.openActivities(destination: PanelDestination.activitiesApp, targetId: appId)
         }
     }
 
@@ -72,6 +80,7 @@ final class ActivitySession {
         activities.reset()
         games.reset()
         appHost.reset()
+        browser.reset()
         if appCardPhase != ActivityCardPhase.opening { appCardPhase = ActivityCardPhase.opening }
         if browserCardPhase != ActivityCardPhase.opening { browserCardPhase = ActivityCardPhase.opening }
     }

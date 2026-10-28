@@ -49,10 +49,10 @@ import androidx.compose.ui.unit.dp
  * S20 11 and SL12 (STG-9) on Android: the activity takeover container in the canvas `activity` slot. One flat card
  * (Surface surfaceContainer, RoundedCornerShape(16.dp), BorderStroke(1.dp, ext.border)) with a header owned here
  * (identity, the name as a heading, the status line, the Show video IconToggleButton, then the trailing host or seat
- * actions spec 60 places) and a body slot: the game shell (ACT-2) or the app and browser bodies (ACT-7, ACT-9) with
- * their opening and failed states. Only the card body pads for the IME (windowInsetsPadding(ime.only(Bottom)), fixing
- * the untested legacy Android IME, INM G3), so the stage height never changes. People stay in the strip with you
- * included; no floating self view over the card. The container reads only layout.activityKind; the body reads its
+ * actions spec 60 places) and a body slot: the game shell (ACT-2), the SDK app host (ACT-7) or the shared browser
+ * surface (ACT-9, K/ui/browser/BrowserSurface.kt) with their opening and failed states. Only the card body pads for
+ * the IME (windowInsetsPadding(ime.only(Bottom)), fixing the untested legacy Android IME, INM G3), so the stage height
+ * never changes. People stay in the strip with you included; no floating self view over the card. The container reads only layout.activityKind; the body reads its
  * own presenter, so game pushes never recompose the stage (S20 11 k).
  */
 
@@ -118,7 +118,10 @@ internal fun activityStageAnnouncement(kind: String, name: String): String? {
     }
 }
 
-/** The card's identity: a game reads the shell's chrome (per phase), an app or the browser the Now Playing row. */
+/**
+ * The card's identity: a game reads the shell's chrome (per phase), a live browser card its BrowserStageModel (ACT-9),
+ * an app (or the browser before its card has a session) the Now Playing row.
+ */
 private data class ActivityStageIdentityParts(val name: String, val status: String, val appId: String)
 
 @Composable
@@ -128,6 +131,10 @@ private fun activityStageIdentity(kind: String, session: ActivitySession?): Acti
     if (activityKind == ActivityKind.game) {
         val chrome = session.games.chrome
         return ActivityStageIdentityParts(activityStageDisplayName(kind, chrome.name), gameHeaderStatus(chrome), "")
+    }
+    if (activityKind == ActivityKind.browser && session.browser.model.isActive) {
+        // ACT-9 (S60 14 b, g): the site and the state from the browser card's model ("example.com · Live").
+        return ActivityStageIdentityParts(conclaveString("br_title"), browserHeaderStatus(session.browser.model), "")
     }
     val item = session.activities.snapshot.nowPlayingItem(kind = activityKind)
         ?: return ActivityStageIdentityParts(activityStageDisplayName(kind, ""), "", "")
@@ -172,6 +179,9 @@ private fun ActivityStageHeader(kind: String, stage: StagePresenter, session: Ac
             } else if (activityStageKind(kind) == ActivityKind.app) {
                 // ACT-7 (HD request B7-T1 R2): Lock editing and Close in the host menu (S60 13 d).
                 NativeAppHostMenu(session.appHost)
+            } else if (session.browser.model.isActive) {
+                // ACT-9 (S60 14 d): the browser host menu (audio, Session info, Close with its confirmation).
+                BrowserStageMenu(session.browser)
             } else {
                 ActivityCloseButton(activityStageKind(kind), session.activities)
             }
@@ -179,7 +189,7 @@ private fun ActivityStageHeader(kind: String, stage: StagePresenter, session: Ac
     }
 }
 
-/** The host Close for an app or the browser, with its confirmation (R09); participants get none. */
+/** The Now Playing Close for the browser before its card has a session, with its confirmation (R09); participants get none. */
 @Composable
 private fun ActivityCloseButton(kind: ActivityKind, activities: ActivitiesPresenter) {
     val item = activities.snapshot.nowPlayingItem(kind = kind) ?: return
@@ -220,14 +230,17 @@ private fun ActivityStageBody(kind: String, stage: StagePresenter, session: Acti
     } else if (activityStageKind(kind) == ActivityKind.app) {
         // ACT-7 (HD request B7-T1 R2): the one retained WebView per app session, its states and the tools.
         NativeAppHostBody(session.appHost, onShowVideo = { stage.setShowsVideoOverActivity(true) })
+    } else if (session.browser.model.isActive) {
+        // ACT-9 (S60 14 d): the WebRTC video, the controller's input layer, the address row and the states.
+        BrowserStageBody(session.browser, stage, onShowVideo = { stage.setShowsVideoOverActivity(true) })
     } else {
         ActivityWebBody(kind, stage, session)
     }
 }
 
 /**
- * Apps and the shared browser before their hosts land (ACT-7, ACT-9): "Opening %1$s" with a system spinner, or
- * "Couldn't open %1$s" with Retry and Show video (S60R 25). A live body belongs to the host (one retained WebView).
+ * The shared browser before its card has a session (ACT-9): "Opening %1$s" with a system spinner, or "Couldn't open
+ * %1$s" with Retry and Show video (S60R 25). A live body belongs to the browser surface (one retained WebView).
  */
 @Composable
 private fun ActivityWebBody(kind: String, stage: StagePresenter, session: ActivitySession) {

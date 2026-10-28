@@ -18,7 +18,9 @@ import Observation
 /// coalescing in `MeetingNoticeCenter` (`ChatPreviewPolicy` holds the unread and body rules the core calls). SET-5
 /// (S60 3) added `layoutPanel`, the Layout panel's presenter, fed after every rebuild and notice change from the facts
 /// the stage already holds; SET-6 (S60 4, R6-6) added `effects`, the session's Effects picker, and the iOS rule that
-/// lifts the floating self view above the Effects sheet (`EffectsSelfViewPolicy`).
+/// lifts the floating self view above the Effects sheet (`EffectsSelfViewPolicy`). PPL-3 (S20 10 f row 8, S50 4) routes
+/// the knock banner's Admit and Admit All through the People presenter (`people`), the spec 50 host-actions owner, and
+/// takes its admission-in-flight flag (`setKnockActionsPending(_:)`); View still opens People at Waiting.
 @MainActor
 @Observable
 final class StagePresenter {
@@ -922,6 +924,23 @@ final class StagePresenter {
                 shell.panels.present(MeetingPanel.chat, from: PanelInvoker.call, destination: PanelDestination.chatMessage,
                                      targetId: notice.messageId)
             }
+        case NoticeAction.admit:
+            // PPL-3 (S20 10 f row 8, S50 0.5): the knock banner delegates to the spec 50 host-actions owner, so the
+            // ledger keeps it single flight, `hostAdmitted` comes from People and a failure posts to this toast lane
+            // (PL14 stage origin). Without a People presenter (stage-only fixtures) the core performs it.
+            if let owner = people {
+                owner.admitFromStage(pendingId: notice.userId)
+            } else {
+                onNoticeCommand?(NoticeCommand(actionId: actionId, noticeKind: notice.kind, userId: notice.userId,
+                                               detail: notice.detail))
+            }
+        case NoticeAction.admitAll:
+            if let owner = people {
+                owner.admitAllFromStage()
+            } else {
+                onNoticeCommand?(NoticeCommand(actionId: actionId, noticeKind: notice.kind, userId: notice.userId,
+                                               detail: notice.detail))
+            }
         case NoticeAction.catchUp:
             openTranscript(destination: PanelDestination.transcriptMinutes)
             notices.dismiss(id: notice.id, nowMillis: now())
@@ -931,6 +950,10 @@ final class StagePresenter {
             shell.toggleScreenShare()
         case NoticeAction.notNow:
             notices.dismiss(id: notice.id, nowMillis: now())
+            if notice.kind == NoticeKind.notificationsOff {
+                // SYS-3 (S70 2 d): "Not now" keeps the priming banner away for the session (once per process).
+                SystemNotifications.shared.dismissPriming()
+            }
         case NoticeAction.expand:
             return
         case NoticeAction.retry:
@@ -942,6 +965,14 @@ final class StagePresenter {
         if notice.lane == NoticeLane.toast {
             notices.dismiss(id: notice.id, nowMillis: now())
         }
+        publishNotices()
+    }
+
+    /// PPL-3: the People presenter reports whether an admission is in flight; the knock banner's Admit or Admit All
+    /// stays visible but disabled meanwhile (equality guarded, so People's rebuilds publish nothing new here).
+    func setKnockActionsPending(_ pending: Bool) {
+        if pending == notices.knockActionsPending { return }
+        notices.setKnockActionsPending(pending, nowMillis: now())
         publishNotices()
     }
 

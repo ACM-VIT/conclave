@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import java.util.ArrayDeque
 import skip.foundation.ProcessInfo
@@ -220,6 +221,65 @@ object PermissionHelper {
         }
     }
 
+    // MARK: Notification permission status (SYS-3, S70 2 d, j)
+
+    /**
+     * `shouldShowRequestPermissionRationale` for POST_NOTIFICATIONS (API 33+; read nowhere before SYS-3, CE D6). False
+     * without an activity and below API 33, where notifications are an implicit grant.
+     */
+    fun showsNotificationsRationale(): Boolean {
+        if (Build.VERSION.SDK_INT < 33) {
+            return false
+        }
+        val activity = UIApplication.shared.androidActivity ?: return false
+        return try {
+            ActivityCompat.shouldShowRequestPermissionRationale(activity, android.Manifest.permission.POST_NOTIFICATIONS)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    /** The app-level notifications switch (off reads as permanently denied: only Settings fixes it). */
+    fun areAppNotificationsEnabled(): Boolean {
+        val context = ProcessInfo.processInfo.androidContext
+        return NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
+
+    /** The derived state as a NotificationPermissionState raw value, through the one shared policy. */
+    fun notificationsPermissionState(): String {
+        return NotificationPermissionStatePolicy.androidState(
+            apiLevel = Build.VERSION.SDK_INT,
+            permissionGranted = hasPostNotificationsPermission(),
+            appNotificationsEnabled = areAppNotificationsEnabled(),
+            asked = NotificationPreferences.permissionAsked(),
+            rationale = showsNotificationsRationale()
+        ).rawValue
+    }
+
+    /**
+     * S70 2 a: the app's notification settings (`ACTION_APP_NOTIFICATION_SETTINGS`, API 26) or one channel's
+     * (`ACTION_CHANNEL_NOTIFICATION_SETTINGS`); below API 26 the app details page.
+     */
+    fun notificationSettingsIntent(packageName: String, channelId: String): Intent {
+        if (Build.VERSION.SDK_INT < 26) {
+            return appSettingsIntent(packageName)
+        }
+        if (channelId.isEmpty()) {
+            return Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        }
+        return Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            .putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+    }
+
+    /** Opens them through the one external hand-off (SYS-8: Settings never suppresses PiP auto-enter). */
+    fun openNotificationSettings(channelId: String): Boolean {
+        val activity: Activity? = UIApplication.shared.androidActivity
+        val context: Context = activity ?: ProcessInfo.processInfo.androidContext.applicationContext
+        return NativeExternalHandoff.openSettings(notificationSettingsIntent(context.packageName, channelId))
+    }
+
     fun shouldSuppressShareFromNotificationPermissionPrompt(): Boolean {
         if (Build.VERSION.SDK_INT < 33) {
             return false
@@ -280,6 +340,9 @@ object PermissionHelper {
                 notificationPermissionPromptActive = false
                 suppressShareUntilElapsedMs =
                     SystemClock.elapsedRealtime() + NOTIFICATION_SHARE_SUPPRESSION_MS
+                // SYS-3 (S70 2 d): the persisted asked flag, written only for an answer the person gave, so a later
+                // process tells "never asked" from a refusal (NotificationPermissionStatePolicy).
+                if (permissions.isNotEmpty()) NotificationPreferences.setPermissionAsked()
                 // Empty arrays mean Android cancelled the request without
                 // showing it (another permission dialog was still up).
                 finishNotificationsPermission(

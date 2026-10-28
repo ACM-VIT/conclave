@@ -294,6 +294,11 @@ internal fun peopleFailureMessageOf(context: Context, kind: String, name: String
     PeopleFailureCopy.qaRateLimited -> conclaveStringOf(context, "qa_rate_limited")
     PeopleFailureCopy.qaTooShort -> conclaveStringOf(context, "qa_too_short")
     PeopleFailureCopy.qaModerate -> conclaveStringOf(context, "qa_fail_moderate")
+    // PPL-3 (S50 4 g, 5 g).
+    PeopleFailureCopy.admit -> conclaveStringOf(context, "hst_fail_admit", name)
+    PeopleFailureCopy.admitAll -> conclaveStringOf(context, "hst_fail_admit_all")
+    PeopleFailureCopy.deny -> conclaveStringOf(context, "hst_fail_deny", name)
+    PeopleFailureCopy.hands -> conclaveStringOf(context, "hst_fail_lower_all")
     else -> conclaveStringOf(context, "stg_toast_failed_generic")
 }
 
@@ -346,6 +351,16 @@ internal fun peopleAnnouncementText(announcement: StageAnnouncement): String? {
         PeopleAnnouncementKind.questionSent -> conclaveStringOf(context, "qa_announce_sent")
         PeopleAnnouncementKind.qaOff -> conclaveStringOf(context, "qa_announce_off")
         PeopleAnnouncementKind.newHost -> conclaveStringOf(context, "ppl_announce_new_host", announcement.name)
+        // PPL-3 (S50 4 g, 4 i): `name` carries the count as digits for the counted kinds.
+        PeopleAnnouncementKind.admittedAll -> {
+            val count = announcement.name.toIntOrNull() ?: 0
+            conclavePluralOf(context, "ppl_announce_admitted_all", count, count)
+        }
+        PeopleAnnouncementKind.knock -> conclaveStringOf(context, "stg_banner_knock_one", announcement.name)
+        PeopleAnnouncementKind.knockMany -> {
+            val count = announcement.name.toIntOrNull() ?: 0
+            conclavePluralOf(context, "stg_banner_knock_many", count, count)
+        }
         else -> null
     }
 }

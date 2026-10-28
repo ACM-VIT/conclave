@@ -128,6 +128,32 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case gameWordleFinal = "game-wordle-final"
     case gameWordleSpectator = "game-wordle-spectator"
     case gameWordleReconnecting = "game-wordle-reconnecting"
+    // ACT-5 (S60 11 l): raw values equal `ChessFixtureState` raw values (end of Activities/GameStagePresenter.swift).
+    case gameChessYourMove = "game-chess-your-move"
+    case gameChessWaiting = "game-chess-waiting"
+    case gameChessCheck = "game-chess-check"
+    case gameChessPromotion = "game-chess-promotion"
+    case gameChessCastleEnPassant = "game-chess-castle-en-passant"
+    case gameChessDrawOffered = "game-chess-draw-offered"
+    case gameChessTakeback = "game-chess-takeback"
+    case gameChessTeamsMember = "game-chess-teams-member"
+    case gameChessComputer = "game-chess-computer"
+    case gameChessSpectator = "game-chess-spectator"
+    case gameChessLowTime = "game-chess-low-time"
+    case gameChessCheckmate = "game-chess-checkmate"
+    case gameChessDrawAgreed = "game-chess-draw-agreed"
+    case gameChessReconnecting = "game-chess-reconnecting"
+    // ACT-6 (S60 12 l): raw values equal `ZipFixtureState` raw values (Games/Native/Boards/ZipFixtures.swift).
+    case gameZipPlaying = "game-zip-playing"
+    case gameZipHintCooldown = "game-zip-hint-cooldown"
+    case gameZipDeadEnd = "game-zip-dead-end"
+    case gameZipSolved = "game-zip-solved"
+    case gameZipRejected = "game-zip-rejected"
+    case gameZipSpectator = "game-zip-spectator"
+    case gameZipReconnecting = "game-zip-reconnecting"
+    case gameZipRoundResults = "game-zip-round-results"
+    case gameZipTimeout = "game-zip-timeout"
+    case gameZipFinal = "game-zip-final"
     // ACT-7 (S60 13 l): raw values equal `AppHostFixtureState` raw values (Activities/AppHostPresenter.swift).
     case appWhiteboardReady = "app-whiteboard-ready"
     case appWhiteboardViewOnly = "app-whiteboard-view-only"
@@ -135,6 +161,20 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case appWhiteboardReconnecting = "app-whiteboard-reconnecting"
     case appVersionMismatch = "app-version-mismatch"
     case appRendererGone = "app-renderer-gone"
+    // ACT-8 (S60 13 l): raw values equal `AppPageFixtureState` raw values (Activities/AppHostPresenter.swift).
+    case appWheelReady = "app-wheel-ready"
+    case appWheelViewOnly = "app-wheel-view-only"
+    case appWatchHost = "app-watch-host"
+    case appWatchParticipant = "app-watch-participant"
+    case appWatchSearchOff = "app-watch-search-off"
+    // ACT-9 (S60 14 l): raw values equal `BrowserStageFixtureState` raw values (Activities/BrowserStagePresenter.swift).
+    case browserController = "browser-controller"
+    case browserViewer = "browser-viewer"
+    case browserStarting = "browser-starting"
+    case browserFailed = "browser-failed"
+    case browserRendererGone = "browser-renderer-gone"
+    case browserReconnecting = "browser-reconnecting"
+    case browserKitesurf = "browser-kitesurf"
     // STG-6 Meeting Details (S20 15 l): each opens the panel from the capsule on start.
     case meetingInfoHost = "meetingInfo-host"
     case meetingInfoGuest = "meetingInfo-guest"
@@ -330,8 +370,16 @@ enum StageFixtureScript {
              .gameWordleGuess, .gameWordleSolved, .gameWordleOutOfTries, .gameWordleSetWord, .gameWordleWaitingWord,
              .gameWordleSetterWatching, .gameWordleRoundResults, .gameWordleTimeout, .gameWordleFinal, .gameWordleSpectator,
              .gameWordleReconnecting,
+             .gameChessYourMove, .gameChessWaiting, .gameChessCheck, .gameChessPromotion, .gameChessCastleEnPassant,
+             .gameChessDrawOffered, .gameChessTakeback, .gameChessTeamsMember, .gameChessComputer, .gameChessSpectator,
+             .gameChessLowTime, .gameChessCheckmate, .gameChessDrawAgreed, .gameChessReconnecting,
+             .gameZipPlaying, .gameZipHintCooldown, .gameZipDeadEnd, .gameZipSolved, .gameZipRejected, .gameZipSpectator,
+             .gameZipReconnecting, .gameZipRoundResults, .gameZipTimeout, .gameZipFinal,
              .appWhiteboardReady, .appWhiteboardViewOnly, .appWhiteboardLockedHost, .appWhiteboardReconnecting,
-             .appVersionMismatch, .appRendererGone:
+             .appVersionMismatch, .appRendererGone,
+             .appWheelReady, .appWheelViewOnly, .appWatchHost, .appWatchParticipant, .appWatchSearchOff,
+             .browserController, .browserViewer, .browserStarting, .browserFailed, .browserRendererGone,
+             .browserReconnecting, .browserKitesurf:
             return ActivityFixtureScript.stageInputs(named: state.rawValue, base: base(count: 6))
         case .meetingInfoHost:
             return copy(base(count: 4), participants: hostRoster(count: 4), isRoomLocked: true, captionsOn: true,

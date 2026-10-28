@@ -161,6 +161,11 @@ enum PeopleActionText {
         case PeopleFailureCopy.qaRateLimited: return ConclaveStrings.text("You\u{2019}re sending questions too quickly.")
         case PeopleFailureCopy.qaTooShort: return ConclaveStrings.text("Ask a longer question.")
         case PeopleFailureCopy.qaModerate: return ConclaveStrings.text("Couldn\u{2019}t update the question.")
+        // PPL-3 (S50 4 g, 5 g).
+        case PeopleFailureCopy.admit: return ConclaveStrings.format("Couldn’t admit %@.", name)
+        case PeopleFailureCopy.admitAll: return ConclaveStrings.text("Couldn’t admit everyone.")
+        case PeopleFailureCopy.deny: return ConclaveStrings.format("Couldn’t deny %@.", name)
+        case PeopleFailureCopy.hands: return ConclaveStrings.text("Couldn’t lower all hands.")
         default: return ConclaveStrings.text("That didn\u{2019}t go through. Try again.")
         }
     }
@@ -215,6 +220,12 @@ enum PeopleActionText {
         case PeopleAnnouncementKind.questionSent: return ConclaveStrings.text("Your question was sent.")
         case PeopleAnnouncementKind.qaOff: return ConclaveStrings.text("Q&A is off.")
         case PeopleAnnouncementKind.newHost: return ConclaveStrings.format("%@ is now the host.", announcement.name)
+        // PPL-3 (S50 4 g, 4 i): `name` carries the count as digits for the counted kinds.
+        case PeopleAnnouncementKind.admittedAll:
+            return ConclaveStrings.format("%lld admitted", Int(announcement.name) ?? 0)
+        case PeopleAnnouncementKind.knock: return ConclaveStrings.format("%@ wants to join", announcement.name)
+        case PeopleAnnouncementKind.knockMany:
+            return ConclaveStrings.format("People Want To Join %lld", Int(announcement.name) ?? 0)
         default: return nil
         }
     }
@@ -404,6 +415,10 @@ enum PeopleFailureScope {
         case .admit, .deny, .admitAll, .denyAll, .mute, .turnOffCamera, .stopScreenShare, .stopScreenAudio, .remove, .block,
              .makeCoHost, .makeHost, .moveToAudience, .bringOnStage, .cancelStageInvite:
             return true
+        case .bulk:
+            // PPL-3: Lower All and Mute All... started from a Participants header report here; the same bulk actions
+            // from Host Controls report on their own rows there (PL14 inline at the source).
+            return PeopleAdmissionsPolicy.isHeaderBulkSource(failure.sourceKey)
         default:
             return false
         }

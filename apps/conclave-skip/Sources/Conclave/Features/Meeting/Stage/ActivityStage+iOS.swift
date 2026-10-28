@@ -4,9 +4,9 @@ import SwiftUI
 // S20 11 and SL12 (STG-9) on iOS: the activity takeover container. The `activity` slot of the canvas holds one flat
 // card (`iosInCallSurface`, radius 16, 1 pt `inCallBorder`) with a header owned here (identity glyph, name as a
 // heading, status line, the Show Video toggle, then the trailing host or seat actions spec 60 places) and a body slot
-// filled by the activity: the game shell (ACT-2) or the web-backed app and browser bodies (ACT-7, ACT-9) with their
-// opening and failed states. People stay in the strip (you always included, last before "+N"); the card never floats
-// a self view. The meeting column ignores the keyboard; only the card body pads by the real keyboard overlap, so the
+// filled by the activity: the game shell (ACT-2), the SDK app host (ACT-7) or the shared browser surface (ACT-9,
+// `BrowserSurface+iOS.swift`) with their opening and failed states. People stay in the strip (you always included,
+// last before "+N"); the card never floats a self view. The meeting column ignores the keyboard; only the card body pads by the real keyboard overlap, so the
 // stage never compresses (AGENTS.md game stage layout rules). The container reads only `layout.activityKind`; the body
 // observes its own presenter, so game pushes never invalidate the stage (S20 11 k).
 
@@ -117,8 +117,8 @@ struct ActivityStageHeader: View {
     }
 }
 
-/// Glyph, name and status. A game reads the shell's `chrome` (per phase, never per move); an app or the browser reads
-/// the launcher's Now Playing row.
+/// Glyph, name and status. A game reads the shell's `chrome` (per phase, never per move); a live browser card reads its
+/// `BrowserStageModel` (ACT-9); an app, or the browser before its card has a session, reads the Now Playing row.
 struct ActivityStageIdentity: View {
     let kind: String
     let session: ActivitySession?
@@ -161,6 +161,10 @@ struct ActivityStageIdentity: View {
             let chrome = session.games.chrome
             return Parts(name: ActivityStageCopy.displayName(kind: raw, name: chrome.name), status: GameCopy.headerStatus(chrome), appId: "")
         }
+        if kind == .browser && session.browser.model.isActive {
+            // ACT-9 (S60 14 b, g): the site and the state from the browser card's model ("example.com · Live").
+            return Parts(name: BrowserCopy.title, status: BrowserCopy.headerStatus(session.browser.model), appId: "")
+        }
         if let item = session.activities.snapshot.nowPlayingItem(kind: kind) {
             // ACT-7 (HD request B7-T1 R2): an app's status comes from its host ("%lld editing", "Editing locked").
             let hostStatus = kind == .app ? AppHostHeader.status(session.appHost) : ""
@@ -194,8 +198,9 @@ struct ActivityShowVideoButton: View {
     }
 }
 
-/// The trailing slot: the game's seat control and host End (ACT-2), or the host Close for an app or the browser with
-/// its confirmation (R09). Participants get no close.
+/// The trailing slot: the game's seat control and host End (ACT-2), the app host menu (ACT-7) or the browser host menu
+/// (ACT-9: audio, Session Info, Close with its confirmation). Participants get no close; before the browser card has a
+/// session the Now Playing Close stands in.
 struct ActivityStageTrailing: View {
     let kind: String
     let session: ActivitySession?
@@ -207,6 +212,9 @@ struct ActivityStageTrailing: View {
             } else if ActivityStageCopy.kind(kind) == .app {
                 // ACT-7 (HD request B7-T1 R2): Lock Editing and Close in the host menu (S60 13 c).
                 NativeAppHostMenu(host: session.appHost)
+            } else if session.browser.model.isActive {
+                // ACT-9 (S60 14 c): the browser host menu.
+                BrowserStageMenu(browser: session.browser)
             } else {
                 ActivityCloseButton(kind: ActivityStageCopy.kind(kind), activities: session.activities)
             }
@@ -245,7 +253,8 @@ struct ActivityCloseButton: View {
     }
 }
 
-/// The body slot: the game shell, or the web-backed body with its opening and failed states (S60R 25).
+/// The body slot: the game shell, the app host, or the shared browser surface; `ActivityWebBody` covers the moment
+/// before the browser card has a session (S60R 25).
 struct ActivityStageBody: View {
     let kind: String
     let stage: StagePresenter
@@ -259,6 +268,9 @@ struct ActivityStageBody: View {
             } else if ActivityStageCopy.kind(kind) == .app {
                 // ACT-7 (HD request B7-T1 R2): the one retained web view per app session, its states and the tools.
                 NativeAppHostBody(host: session.appHost, onShowVideo: { stage.setShowsVideoOverActivity(true) })
+            } else if session.browser.model.isActive {
+                // ACT-9 (S60 14 c): the WebRTC video, the controller's input layer, the address row and the states.
+                BrowserStageBody(browser: session.browser, stage: stage, onShowVideo: { stage.setShowsVideoOverActivity(true) })
             } else {
                 ActivityWebBody(kind: kind, stage: stage, session: session)
             }
@@ -268,8 +280,8 @@ struct ActivityStageBody: View {
     }
 }
 
-/// Apps and the shared browser before their hosts land (ACT-7, ACT-9): "Opening %@" with a system spinner, or
-/// "Couldn't Open %@" with Retry and Show Video. A live body is the host's (one retained web engine per active app).
+/// The shared browser before its card has a session (ACT-9): "Opening %@" with a system spinner, or "Couldn't Open %@"
+/// with Retry and Show Video. A live body is the browser surface's (one retained web engine per browser session).
 struct ActivityWebBody: View {
     let kind: String
     let stage: StagePresenter

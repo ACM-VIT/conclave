@@ -69,6 +69,7 @@ internal object ConclaveBannerMotion {
 internal fun ConclaveBanner(
     kind: ConclaveBannerKind, text: String, identifier: String, inCall: Boolean, modifier: Modifier = Modifier,
     actions: List<ConclaveBannerAction> = emptyList(), onDismiss: (() -> Unit)? = null, maxLines: Int = Int.MAX_VALUE,
+    announces: Boolean = true,
 ) {
     val scheme = MaterialTheme.colorScheme
     // The extended roles (F00 2.6 A4) from the theme; an in-call banner always takes the dark set.
@@ -91,7 +92,9 @@ internal fun ConclaveBanner(
             BannerGlyph(kind, glyph)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ConclaveText(text, line = "$identifier.text", style = MaterialTheme.typography.bodyMedium, maxLines = maxLines,
-                    modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite })
+                    // S50 4 i (PPL-3): a banner the lane marks silent (the knock while Participants is current) keeps
+                    // its merged text node without the live region, so TalkBack reads the news once (People's).
+                    modifier = Modifier.semantics(mergeDescendants = true) { if (announces) liveRegion = LiveRegionMode.Polite })
                 if (actions.isNotEmpty()) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (action in actions) {

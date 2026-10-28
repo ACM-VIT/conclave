@@ -1,0 +1,79 @@
+/* The native Spin the Wheel embed page (ACT-8): full-bleed on the dark activity card, no page scroll or zoom, no
+   selection callouts, flat only. The few utility classes the SDK wheel uses (WheelStage.tsx) are defined here, so the
+   page needs no Tailwind build; the winner card is this page's own. */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  font-family: -apple-system, system-ui, "Roboto", sans-serif;
+}
+
+.flex { display: flex; }
+.h-full { height: 100%; }
+.w-full { width: 100%; }
+.max-h-full { max-height: 100%; }
+.max-w-full { max-width: 100%; }
+.items-center { align-items: center; }
+.justify-center { justify-content: center; }
+.p-4 { padding: 16px; box-sizing: border-box; }
+.cursor-pointer { cursor: pointer; }
+
+.wheel-page {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.wheel-winner {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  background: rgba(11, 11, 11, 0.78);
+}
+
+.wheel-winner-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  padding: 16px 24px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: #141417;
+}
+
+.wheel-winner-swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+}
+
+.wheel-winner-label {
+  min-width: 0;
+  color: #fafafa;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}

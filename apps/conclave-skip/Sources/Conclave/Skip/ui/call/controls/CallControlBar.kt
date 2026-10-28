@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -123,11 +124,17 @@ private fun MoreControlCell(controls: CallControlsPresenter, control: CallContro
     if (sheetOpen) MoreSheet(controls, onDismissed = { sheetOpen = false })
 }
 
-/** Mic and Camera (optimistic: spinner after 600 ms) and Raise Hand and Share Screen (spinner at once, tooltips). */
+/** Mic and Camera (optimistic: spinner after 600 ms) and Raise Hand and Share Screen (spinner at once, tooltips).
+ *  CTL-4 (S30 2 d): the Mic long press opens the route sheet (AudioRouteSheet.kt, the same sheet as the top-row route
+ *  button); the Camera long press opens its dropdown (MediaShortcutMenu.kt) only when an item can act, otherwise the
+ *  Camera keeps the plain tooltip. Each plays `longPress` as it opens; TalkBack gets the same shortcuts as custom actions
+ *  (AX4) and the long-click label. */
 @Composable
 private fun CallToggleCell(controls: CallControlsPresenter, control: CallControlUi, width: Dp) {
     val haptics = rememberConclaveHaptics()
     var slowAck by remember { mutableStateOf(false) }
+    var routeSheetOpen by remember { mutableStateOf(false) }
+    var cameraMenuOpen by remember { mutableStateOf(false) }
     LaunchedEffect(control.isPending) {
         slowAck = false
         if (control.isPending) {
@@ -143,17 +150,87 @@ private fun CallToggleCell(controls: CallControlsPresenter, control: CallControl
         val kind = control.gesture
         if (controls.tap(control.kind) == ControlTapResult.dispatched && kind != null) haptics.gesture(kind)
     }
+    val shortcut = rememberCallToggleShortcut(controls, control, onRouteSheet = { routeSheetOpen = true },
+        onCameraMenu = { cameraMenuOpen = true })
+    val opens = shortcut.opens
+    val longPress: (() -> Unit)? = if (opens != null) {
+        {
+            haptics.gesture(FeedbackKind.longPress)
+            opens()
+        }
+    } else {
+        null
+    }
     val toggle: @Composable () -> Unit = {
         CallToggle(control = control, label = label, stateText = stateText, icon = callControlIcon(control), width = width,
-            showsSpinner = showsSpinner, onClick = { dispatch() })
+            showsSpinner = showsSpinner, onClick = { dispatch() }, onLongClick = longPress,
+            onLongClickLabel = shortcut.longClickLabel, customActions = shortcut.actions)
     }
     Box {
-        // Mic and Camera have no tooltip: their long press becomes the CTL-4 shortcut (S30 1 d).
-        if (optimistic) toggle() else CallControlTooltip(label) { toggle() }
+        // A Mic or Camera with a shortcut has no tooltip: its long press is the CTL-4 shortcut (S30 1 d, 2 d). A Camera
+        // with no enabled item keeps the plain "Camera" tooltip instead of a dead-end menu.
+        if (longPress != null) toggle() else CallControlTooltip(label) { toggle() }
         if (control.reason == ControlBlockedReason.permissionDenied) {
             Icon(ConclaveIcons.WarningFill1, contentDescription = null, tint = LocalConclaveExtendedColors.current.warning,
                 modifier = Modifier.align(Alignment.TopEnd).size(14.dp))
         }
+        val cameraItems = shortcut.cameraItems
+        if (control.kind == CallControlKind.camera && cameraItems != null) {
+            CameraShortcutMenu(controls, cameraItems, expanded = cameraMenuOpen, onDismiss = { cameraMenuOpen = false })
+        }
+    }
+    if (routeSheetOpen && control.kind == CallControlKind.microphone) {
+        AudioRouteSheet(controls, controls.stage, onDismiss = { routeSheetOpen = false })
+    }
+}
+
+/** What a toggle's long press opens (null: no long press), its long-click label and its TalkBack custom actions. */
+internal class CallToggleShortcut(
+    val opens: (() -> Unit)?,
+    val longClickLabel: String?,
+    val actions: List<CustomAccessibilityAction>,
+    val cameraItems: MediaShortcutsUi?,
+)
+
+/** S30 2 d: the Mic's route sheet (always, while the Mic has its shortcut) and the Camera's dropdown (only with an
+ *  enabled item); Raise Hand and Share Screen have none. Only the Camera reads `controls.shortcuts` (CL14 cache); the
+ *  route snapshot is read only by the sheet (S30 2 k). */
+@Composable
+private fun rememberCallToggleShortcut(
+    controls: CallControlsPresenter, control: CallControlUi, onRouteSheet: () -> Unit, onCameraMenu: () -> Unit,
+): CallToggleShortcut {
+    when (control.kind) {
+        CallControlKind.microphone -> {
+            val chooseOutput = conclaveString("ctl_choose_audio_output")
+            if (!control.hasShortcut) return CallToggleShortcut(opens = null, longClickLabel = null, actions = emptyList(), cameraItems = null)
+            val action = CustomAccessibilityAction(chooseOutput) {
+                onRouteSheet()
+                true
+            }
+            return CallToggleShortcut(opens = onRouteSheet, longClickLabel = chooseOutput, actions = listOf(action), cameraItems = null)
+        }
+        CallControlKind.camera -> {
+            val cache = remember(controls) { MediaShortcutsCache(controls) }
+            val items = cache.current()
+            val flipLabel = mediaShortcutActionLabel(MediaShortcutItemID.flipCamera)
+            val effectsLabel = mediaShortcutActionLabel(MediaShortcutItemID.effects)
+            val haptics = rememberConclaveHaptics()
+            val actions = mutableListOf<CustomAccessibilityAction>()
+            for (item in items.accessibilityItems) {
+                val kind = item.kind
+                val title = if (kind == MediaShortcutItemID.effects) effectsLabel else flipLabel
+                actions.add(CustomAccessibilityAction(title) {
+                    val result = controls.selectShortcut(kind)
+                    val feedback = MediaShortcutPolicy.gestureKind(kind, result = result)
+                    if (feedback != null) haptics.gesture(feedback)
+                    result == ControlTapResult.dispatched
+                })
+            }
+            val opens = if (control.hasShortcut && items.hasEnabledCameraItem) onCameraMenu else null
+            val label = if (opens == null) null else if (items.accessibilityItems.firstOrNull()?.kind == MediaShortcutItemID.effects) effectsLabel else flipLabel
+            return CallToggleShortcut(opens = opens, longClickLabel = label, actions = actions, cameraItems = items)
+        }
+        else -> return CallToggleShortcut(opens = null, longClickLabel = null, actions = emptyList(), cameraItems = null)
     }
 }
 

@@ -231,8 +231,8 @@ private struct PremeetingRootContent: View {
     }
 }
 
-/// One destination per route kind. New kinds (ENT-7 account and privacy, ENT-9 webinar landing) replace their
-/// stand-in here; the lobby is ENT-3's `LobbyView` (S/Features/Lobby).
+/// One destination per route kind: the lobby is ENT-3's `LobbyView` (S/Features/Lobby), the webinar landing ENT-9's
+/// `WebinarLandingView` (S/Features/Join), Account and Privacy ENT-7's.
 private struct PremeetingDestination: View {
     let route: PremeetingRoute
     let premeeting: PremeetingPresenter
@@ -242,7 +242,7 @@ private struct PremeetingDestination: View {
         case .lobby:
             LobbyView(route: route, premeeting: premeeting)
         case .webinarLanding:
-            PremeetingWebinarStandIn(route: route)
+            WebinarLandingView(route: route, premeeting: premeeting)
         case .account:
             // iOS presents Account as a sheet; a pushed account route (never pushed on iOS) shows the same list.
             AccountList(account: premeeting.account, usesRouteLinks: false)
@@ -252,25 +252,6 @@ private struct PremeetingDestination: View {
             // Android only (`SettingsKey`); iOS opens app-scope Settings inside the Account sheet.
             EmptyView()
         }
-    }
-}
-
-// MARK: - Stand-ins until their slices land (the outcome screen is ENT-6's OutcomeView)
-
-/// The webinar landing stand-in (ENT-9 builds the landing).
-private struct PremeetingWebinarStandIn: View {
-    let route: PremeetingRoute
-
-    var body: some View {
-        List {
-            Section {
-                LabeledContent(ConclaveStrings.text("Webinar"), value: route.roomId)
-                    .accessibilityIdentifier("webinar.room")
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle(route.roomId)
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

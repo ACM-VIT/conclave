@@ -24,7 +24,7 @@ struct CallControlCell: View {
     var body: some View {
         switch model.kind {
         case .microphone, .camera, .screenShare, .hand:
-            CallControlToggleCell(model: model, controls: controls, diameter: diameter)
+            CallControlToggleCell(model: model, controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText)
         case .chat, .participants, .qa:
             CallControlInvokerCell(model: model, controls: controls, diameter: diameter)
         case .more:
@@ -37,13 +37,18 @@ struct CallControlCell: View {
 }
 
 /// Microphone, Camera, Share Screen and Raise Hand. The gesture kind is computed from `isOn` before the tap and plays
-/// only when the presenter returns `dispatched` (S30 1 h); pending, duplicate and explained taps play nothing.
+/// only when the presenter returns `dispatched` (S30 1 h); pending, duplicate and explained taps play nothing. CTL-4
+/// (S30 2 c): Mic and Camera carry their long-press shortcut and its accessibility actions (MediaShortcutMenu+iOS.swift);
+/// a flip from the Camera shortcut plays `selectionChanged` from here, only on dispatch (RECONCILE R13).
 struct CallControlToggleCell: View {
     let model: CallControlModel
     let controls: CallControlsPresenter
     let diameter: CGFloat
+    /// The uncapped accessibility text size from the bar: no context menu there (the Large Content Viewer owns long press).
+    var isAccessibilityText: Bool = false
     @State private var feedbackKind = FeedbackKind.none
     @State private var feedbackCount = 0
+    @State private var flipCounter = 0
     @State private var slowAck = false
 
     /// Mic and Camera are optimistic: the intended state draws at once and the spinner appears only after 600 ms.
@@ -66,6 +71,9 @@ struct CallControlToggleCell: View {
             }
         }
         .conclaveGestureFeedback(feedbackKind, trigger: feedbackCount)
+        .modifier(MediaShortcutModifier(model: model, controls: controls, isAccessibilityText: isAccessibilityText,
+                                        onFlip: { flipCounter += 1 }))
+        .conclaveGestureFeedback(.selectionChanged, trigger: flipCounter)
         .accessibilityLabel(CallControlsCopy.title(model.kind))
         .accessibilityValue(CallControlsCopy.value(model))
         .accessibilityAddTraits(.isToggle)

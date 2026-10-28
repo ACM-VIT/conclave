@@ -1,0 +1,35 @@
+/* The native Watch Together embed page (ACT-8): the YouTube frame full-bleed on the dark activity card, no page
+   scroll or zoom, no selection callouts, flat only. Idle (no video) the page is empty and the native card shows its
+   own hint. */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+.watch-page {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.watch-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #000000;
+}

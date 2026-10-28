@@ -8,7 +8,9 @@ import Observation
 // No view model, WebRTC, audio, capture or network (OD Q19, silent testing). The scripts are shared (transpiled) so
 // both platforms and both test hosts read the same states. Later People slices add their states and scripted acks
 // here (PPL-2 to PPL-7: host-controls-*, host-access-lists, host-notice-sending, webinar-*, qa-*, stage-invite,
-// demoted-*).
+// demoted-*). PPL-3 adds the scripted acks every state uses (PL12 default: success after 150 ms; Admit and Deny drop
+// the row, Admit All and Deny All empty Waiting, Lower All lowers every hand, Mute All mutes everyone but hosts) and
+// the knock banner on the stage for the states with people waiting, so people-host-waiting-3 opens through its View.
 
 /// Fixture states. Raw values are the launch values (S50 PL12 table).
 enum PeopleFixtureState: String, CaseIterable, Equatable {
@@ -184,7 +186,9 @@ enum PeopleFixtureScript {
                                     raisedAtMillis: person.isHandRaised ? baseMillis + Double(person.handOffsetSeconds) * 1000.0 : 0.0)
     }
 
-    static func peopleInputs(roster: [PeopleFixturePerson], state: PeopleFixtureState, isAdminOverride: Bool? = nil) -> PeopleInputs {
+    /// `waiting` replaces the state's scripted waiting list (the scripted acks remove admitted and denied people).
+    static func peopleInputs(roster: [PeopleFixturePerson], state: PeopleFixtureState, isAdminOverride: Bool? = nil,
+                             waiting: [PeopleWaitingInput]? = nil) -> PeopleInputs {
         var rows: [PeopleParticipantInput] = []
         for person in roster {
             rows.append(peopleRow(person))
@@ -215,7 +219,7 @@ enum PeopleFixtureScript {
             isAdmin: localIsAdmin,
             hostUserId: primary,
             hostUserIds: hosts,
-            waiting: waiting(for: state),
+            waiting: waiting ?? PeopleFixtureScript.waiting(for: state),
             meetingLink: StageFixtureScript.meetingLink,
             roomLabel: StageFixtureScript.roomLabel
         )
@@ -281,6 +285,72 @@ enum PeopleFixtureScript {
         return first
     }
 
+    // MARK: PPL-3 scripts (S50 4, 5; PL12 acks)
+
+    /// PL12: every scripted ack succeeds after 150 ms unless a state says otherwise.
+    static let ackDelayMillis = 150.0
+
+    /// The stage notice inputs for a state with people waiting (the S20 knock banner, row 8); the session applies them
+    /// only for those states (`showsKnock`), so the other states' lanes stay as PPL-1 left them. A recovering state keeps
+    /// its own banner, which outranks the knock as in a call; losing host removes the knock.
+    static func noticeInputs(roster: [PeopleFixturePerson], waiting: [PeopleWaitingInput], state: PeopleFixtureState,
+                             isAdminOverride: Bool? = nil) -> StageNoticeInputs {
+        let local = localId(roster)
+        var isHost = hostIds(roster).contains(local)
+        if let override = isAdminOverride, !override { isHost = false }
+        let ordered = PeopleOrderPolicy.waitingOrder(waiting)
+        var ids: [String] = []
+        for request in ordered {
+            ids.append(request.id)
+        }
+        let firstName = ordered.isEmpty ? "" : ordered[0].displayName
+        return StageNoticeInputs.make(callSession: 1, isHost: isHost, localUserId: local, participantCount: roster.count,
+                                      hasInitialPresenceSnapshot: true, isOffline: state == PeopleFixtureState.hostOffline,
+                                      isRecovering: state == PeopleFixtureState.hostRecovering, pendingUserIds: ids,
+                                      pendingFirstName: firstName)
+    }
+
+    /// The states whose stage shows the knock banner (someone waits at launch).
+    static func showsKnock(_ state: PeopleFixtureState) -> Bool {
+        !waiting(for: state).isEmpty
+    }
+
+    /// Admit or Deny acknowledged: that pending id leaves Waiting.
+    static func withoutWaiting(_ waiting: [PeopleWaitingInput], id: String) -> [PeopleWaitingInput] {
+        var result: [PeopleWaitingInput] = []
+        for request in waiting {
+            if request.id != id { result.append(request) }
+        }
+        return result
+    }
+
+    /// Lower All acknowledged (`admin:handsCleared`): every hand is down.
+    static func handsLowered(_ roster: [PeopleFixturePerson]) -> [PeopleFixturePerson] {
+        var result: [PeopleFixturePerson] = []
+        for person in roster {
+            result.append(PeopleFixturePerson.make(person.userId, person.name, isLocal: person.isLocal, isHost: person.isHost,
+                                                   isCoHost: person.isCoHost, isMuted: person.isMuted,
+                                                   isCameraOff: person.isCameraOff, handOffsetSeconds: -1,
+                                                   isPresenting: person.isPresenting, isReconnecting: person.isReconnecting,
+                                                   joinSerial: person.joinSerial))
+        }
+        return result
+    }
+
+    /// Mute Everyone acknowledged: everyone except hosts and co-hosts is muted (the SFU's `includeAdmins: false`).
+    static func everyoneMuted(_ roster: [PeopleFixturePerson]) -> [PeopleFixturePerson] {
+        var result: [PeopleFixturePerson] = []
+        for person in roster {
+            let muted = person.isHost || person.isCoHost ? person.isMuted : true
+            result.append(PeopleFixturePerson.make(person.userId, person.name, isLocal: person.isLocal, isHost: person.isHost,
+                                                   isCoHost: person.isCoHost, isMuted: muted, isCameraOff: person.isCameraOff,
+                                                   handOffsetSeconds: person.handOffsetSeconds,
+                                                   isPresenting: person.isPresenting, isReconnecting: person.isReconnecting,
+                                                   joinSerial: person.joinSerial))
+        }
+        return result
+    }
+
     /// One field flipped on one person.
     static func toggledMute(_ roster: [PeopleFixturePerson], userId: String) -> [PeopleFixturePerson] {
         var result: [PeopleFixturePerson] = []
@@ -307,10 +377,13 @@ final class PeopleFixtureCounters {
     private(set) var scriptedMutes = 0
     private(set) var lostHost = 0
     private(set) var opens: [String] = []
+    /// PPL-3: scripted acks delivered (one per finished command).
+    private(set) var acks = 0
 
     func recordSpeakerRun() { speakerRuns += 1 }
     func recordScriptedMute() { scriptedMutes += 1 }
     func recordLostHost() { lostHost += 1 }
+    func recordAck() { acks += 1 }
     func recordOpen(_ destination: String) {
         opens.append(destination)
         if opens.count > 10 { opens.removeFirst() }
@@ -318,8 +391,14 @@ final class PeopleFixtureCounters {
 
     func summary() -> String {
         "speakers=" + String(speakerRuns) + " mutes=" + String(scriptedMutes) + " lostHost=" + String(lostHost)
-            + " opens=" + (opens.isEmpty ? "none" : opens.joined(separator: ","))
+            + " opens=" + (opens.isEmpty ? "none" : opens.joined(separator: ",")) + " acks=" + String(acks)
     }
+}
+
+/// One command waiting for its scripted ack (tests hold them and release them in order).
+struct PeopleFixtureQueuedAck: Equatable {
+    let command: PeopleCommand
+    let ticket: HostActionTicket
 }
 
 /// One People fixture run: the stage fixture session over the People roster (request in HD/requests/B4-T7.md adds its
@@ -334,12 +413,20 @@ final class PeopleFixtureSession {
     let counters = PeopleFixtureCounters()
     private(set) var roster: [PeopleFixturePerson]
     private(set) var inputs: PeopleInputs
+    /// PPL-3: the waiting list the scripted acks edit.
+    private(set) var waitingList: [PeopleWaitingInput]
+    /// Tests set it to keep commands queued (`queuedAcks`) until `releaseAcks()`; the roots leave it false, so each
+    /// command finishes after `PeopleFixtureScript.ackDelayMillis`.
+    var holdsAcks = false
+    private(set) var queuedAcks: [PeopleFixtureQueuedAck] = []
+    private var hostLost = false
 
     init(state: PeopleFixtureState, pattern: RendererProbePattern = RendererProbePattern.staticPattern,
          forceScreenReader: Bool = false) {
         self.state = state
         let cast = PeopleFixtureScript.roster(for: state)
         roster = cast
+        waitingList = PeopleFixtureScript.waiting(for: state)
         inputs = PeopleFixtureScript.peopleInputs(roster: cast, state: state)
         let session = StageFixtureSession(state: StageFixtureState.grid6, pattern: pattern, forceScreenReader: forceScreenReader,
                                           initialInputs: PeopleFixtureScript.stageInputs(roster: cast, state: state))
@@ -356,6 +443,13 @@ final class PeopleFixtureSession {
             self?.people.panelSnapshotChanged()
         }
         presenter.apply(inputs)
+        // PPL-3: the knock banner for the states with people waiting (S20 10 f row 8), and the PL12 scripted acks.
+        if PeopleFixtureScript.showsKnock(state) {
+            session.stage.applyNotices(PeopleFixtureScript.noticeInputs(roster: cast, waiting: waitingList, state: state))
+        }
+        presenter.onCommand = { [weak self] command, ticket in
+            self?.scheduleAck(command, ticket)
+        }
     }
 
     var shell: MeetingShellPresenter { stageSession.shell }
@@ -365,7 +459,57 @@ final class PeopleFixtureSession {
     /// (`peopleWaiting`, through the stage like S20 10) or the raised-hand toast View (`peopleRaisedHands`).
     func open(destination: PanelDestination) {
         counters.recordOpen(destination.rawValue)
+        if destination == PanelDestination.peopleWaiting, let banner = stage.banner, banner.kind == NoticeKind.knock {
+            // S20 10 f row 8: the knock banner's View opens People at Waiting (PPL-3).
+            stage.performNoticeAction(noticeId: banner.id, actionId: NoticeAction.view)
+            return
+        }
         stage.openPeople(destination: destination)
+    }
+
+    // MARK: Scripted acks (PL12, PPL-3)
+
+    private func scheduleAck(_ command: PeopleCommand, _ ticket: HostActionTicket) {
+        if holdsAcks {
+            queuedAcks.append(PeopleFixtureQueuedAck(command: command, ticket: ticket))
+            return
+        }
+        let delay = PeopleFixtureScript.ackDelayMillis
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000.0))
+            self?.completeAck(command, ticket)
+        }
+    }
+
+    /// Delivers every held ack in dispatch order (tests).
+    func releaseAcks() {
+        let held = queuedAcks
+        queuedAcks = []
+        for ack in held {
+            completeAck(ack.command, ack.ticket)
+        }
+    }
+
+    /// The scripted server effect, then the acknowledgement: the row leaves before `finish` publishes the token, as
+    /// the pending list update and the ack arrive in a call.
+    private func completeAck(_ command: PeopleCommand, _ ticket: HostActionTicket) {
+        switch command.kind {
+        case .admit, .deny:
+            waitingList = PeopleFixtureScript.withoutWaiting(waitingList, id: command.targetId)
+        case .admitAll, .denyAll:
+            waitingList = []
+        case .bulk:
+            if command.text == HostBulkID.lowerAllHands.rawValue {
+                roster = PeopleFixtureScript.handsLowered(roster)
+            } else if command.text == HostBulkID.muteAll.rawValue {
+                roster = PeopleFixtureScript.everyoneMuted(roster)
+            }
+        default:
+            break
+        }
+        push(isAdminOverride: hostLost ? false : nil)
+        counters.recordAck()
+        people.finish(ticket, HostActionResult.completed)
     }
 
     /// 20 scripted speaker changes at the injected clock (S50 1 l6).
@@ -391,13 +535,19 @@ final class PeopleFixtureSession {
     /// people-lost-host: `adminUsersChanged` without you (PL12, S50 1 l9). The roots call it 1 s after opening.
     func loseHost() {
         counters.recordLostHost()
+        hostLost = true
         push(isAdminOverride: false)
     }
 
     private func push(isAdminOverride: Bool?) {
-        inputs = PeopleFixtureScript.peopleInputs(roster: roster, state: state, isAdminOverride: isAdminOverride)
+        inputs = PeopleFixtureScript.peopleInputs(roster: roster, state: state, isAdminOverride: isAdminOverride,
+                                                  waiting: waitingList)
         people.apply(inputs)
         stage.apply(PeopleFixtureScript.stageInputs(roster: roster, state: state))
+        if PeopleFixtureScript.showsKnock(state) {
+            stage.applyNotices(PeopleFixtureScript.noticeInputs(roster: roster, waiting: waitingList, state: state,
+                                                                isAdminOverride: isAdminOverride))
+        }
     }
 
     // MARK: Readouts (outside the panel subtree, PS 7.6)
@@ -409,6 +559,26 @@ final class PeopleFixtureSession {
     func focusReadout() -> String { people.focusReadout() }
 
     func countersReadout() -> String { counters.summary() }
+
+    /// `people.actions` (PL12): the presenter's perform, confirm and command log and the last host outcome token, so a
+    /// cell can read "one hostAdmitted" after Admit (S50 4 l) or "one hostBulkApplied" after Lower All (5 l).
+    func actionsReadout() -> String {
+        let token = people.feedbackState.token
+        return people.countersReadout() + " token=" + token.kind.rawValue + "#" + String(token.sequence)
+    }
+
+    /// `stage.notices`: the knock banner (and its Admit state) and the toast lane.
+    func noticesReadout() -> String {
+        var knock = "none"
+        if let banner = stage.banner, banner.kind == NoticeKind.knock {
+            var enabled = true
+            for action in banner.actions {
+                if action.id != NoticeAction.view && !action.isEnabled { enabled = false }
+            }
+            knock = String(banner.count) + (enabled ? ":ready" : ":pending")
+        }
+        return stage.noticesReadout() + " knock=" + knock
+    }
 
     func panelReadout() -> String { stageSession.panelReadout() }
 

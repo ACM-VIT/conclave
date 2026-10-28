@@ -146,7 +146,8 @@ class ActivityBridgeTests {
         assertEquals(ActivitiesKey(ActivitiesRoute.browser, ""), ActivitiesKey.decode("browser|"))
         assertNull(ActivitiesKey.decode("nope|x"))
         assertNull(ActivitiesKey.decode(null))
-        assertNull(ActivitiesKey.from(ActivitiesLanding(ActivitiesRoute.wheel, "wheel", false)))
+        assertEquals(ActivitiesKey(ActivitiesRoute.wheel, "wheel"), ActivitiesKey.from(ActivitiesLanding(ActivitiesRoute.wheel, "wheel", false)))
+        assertNull(ActivitiesKey.from(ActivitiesLanding(ActivitiesRoute.root, "", false)))
         // Four labels of 40 px in a 360 px row at density 1 fit (40 + 50 <= 90); at 2.0 they do not.
         assertTrue(gameOptionSegmentsFit(listOf(40f, 40f, 40f, 40f), 360f, 1f))
         assertFalse(gameOptionSegmentsFit(listOf(40f, 40f, 40f, 40f), 360f, 2f))

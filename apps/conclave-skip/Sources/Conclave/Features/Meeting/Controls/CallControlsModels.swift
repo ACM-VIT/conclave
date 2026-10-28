@@ -3,9 +3,11 @@ import Foundation
 // S30 0.5 shared controls contract (CTL-1). Everything here crosses into handwritten Kotlin, so it follows the S1C 3.6
 // rules: String raw-value enums, scalar structs and arrays of structs, no associated values, no tuples, no protocols.
 // Views read only these snapshots, never `MeetingState` or `MeetingViewModel` (F00 P1). Later slices extend the set:
-// CTL-2 added the host menu facts to `LeaveSnapshot` (LeaveControlPolicy.swift reads them), CTL-3 the route snapshot,
-// CTL-5 the More snapshot, menu metrics and keyboard commands (MoreMenuPolicy.swift), CTL-6 the reaction palette
-// (ReactionPalettePolicy.swift); both add the More inputs below and the `CallControlsRequest` core requests.
+// CTL-2 added the host menu facts to `LeaveSnapshot` (LeaveControlPolicy.swift reads them), CTL-3 the route picker rules
+// over the route owner's snapshot (RoutePickerPolicy.swift), CTL-4 the Mic and Camera shortcut items
+// (MediaShortcutPolicy.swift), CTL-5 the More snapshot, menu metrics and keyboard commands (MoreMenuPolicy.swift), CTL-6
+// the reaction palette (ReactionPalettePolicy.swift); CTL-5 and CTL-6 add the More inputs below and the
+// `CallControlsRequest` core requests.
 
 /// Which controls the bar shows (S30 0.6): compact five on phones, wide eight from medium width (RECONCILE R7), the
 /// webinar attendee three.
@@ -179,9 +181,10 @@ enum CallControlsCommand: String, CaseIterable, Equatable {
 /// CTL-5 and CTL-6: local actions the controls hand to the core with one value (the S30 0.5 mapping table). Kept apart
 /// from `CallControlsCommand` so the core's exhaustive command switch is unaffected. `value` is the reaction wire value
 /// (`sendReaction`), "on" or "off" (`setCaptions`, `setRoomLock`), a `MeetingViewMode` raw value (`setLayoutMode`), or ""
-/// (`flipCamera`, `showSystemVideoEffects`).
+/// (`flipCamera`, `showSystemVideoEffects`, `showSystemMicrophoneModes`). CTL-4 (S30 CC11): the two iOS system modules
+/// (`AVCaptureDevice.showSystemUserInterface`), which the core opens through the WP3 capture owner.
 enum CallControlsRequestKind: String, CaseIterable, Equatable {
-    case sendReaction, setCaptions, setLayoutMode, flipCamera, setRoomLock, showSystemVideoEffects
+    case sendReaction, setCaptions, setLayoutMode, flipCamera, setRoomLock, showSystemVideoEffects, showSystemMicrophoneModes
 }
 
 struct CallControlsRequest: Equatable {

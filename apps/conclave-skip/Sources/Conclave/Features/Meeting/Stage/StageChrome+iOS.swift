@@ -3,9 +3,10 @@ import Accessibility
 import SwiftUI
 
 // S20 7 and 8 (STG-4): the top chrome (meeting capsule plus the system route picker in one glass cluster through the
-// single glass entry), the flat status chips (never glass, they stay while chrome hides), the bar slot (the S30 control
-// bar, CTL-1) and chrome visibility. `StageChromeLayer` is the only view that reads `chrome.state.isHidden`; it owns
-// `.persistentSystemOverlays` and the status bar. The one timer is a view-local one-shot keyed on the arm serial:
+// single glass entry; CTL-3 routes the picker's report through the controls presenter), the flat status chips (never
+// glass, they stay while chrome hides), the bar slot (the S30 control bar, CTL-1) and chrome visibility.
+// `StageChromeLayer` is the only view that reads `chrome.state.isHidden`; it owns `.persistentSystemOverlays` and the
+// status bar. The one timer is a view-local one-shot keyed on the arm serial:
 // nothing ticks while chrome is hidden or blocked (RR8).
 
 /// View-local chrome visibility (SL8): the pure `ChromeAutoHidePolicy` state machine plus whether hiding is allowed,
@@ -172,18 +173,26 @@ enum StageAnnouncementText {
 }
 
 /// Capsule plus the system route picker in one `GlassEffectContainer` on iOS 26 (the single glass entry's cluster);
-/// no minimize on iOS (system PiP covers it). The route picker is created once per stage (C03 k).
+/// no minimize on iOS (system PiP covers it). The route picker is created once per stage (C03 k). CTL-3 (S30 3 c): with
+/// the call's controls presenter in the environment (the native call route and the controls fixture) the route button
+/// reports through it (`CallRoutePickerButton`: the auto-hide blocker plus the route owner's picker window, S70 5 c);
+/// the stage fixtures without one keep the stage-only report.
 struct StageTopRow: View {
     let stage: StagePresenter
     let capsuleMaxWidth: CGFloat
+    @Environment(CallControlsPresenter.self) private var routeControls: CallControlsPresenter?
 
     var body: some View {
         ConclaveTopChromeCluster(spacing: CGFloat(DesignTokens.space12)) {
             StageCapsuleButton(stage: stage, maxWidth: capsuleMaxWidth)
             Spacer(minLength: CGFloat(DesignTokens.space8))
-            ConclaveRoutePickerButton(identifier: "stage.route", onPresentingChange: { open in
-                stage.setTransientChrome(id: ChromeAutoHidePolicy.routePicker, open: open)
-            })
+            if let routeControls {
+                CallRoutePickerButton(controls: routeControls)
+            } else {
+                ConclaveRoutePickerButton(identifier: "stage.route", onPresentingChange: { open in
+                    stage.setTransientChrome(id: ChromeAutoHidePolicy.routePicker, open: open)
+                })
+            }
         }
     }
 }

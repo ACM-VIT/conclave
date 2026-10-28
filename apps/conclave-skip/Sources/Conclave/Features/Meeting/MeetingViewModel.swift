@@ -451,6 +451,11 @@ final class MeetingViewModel {
         AudioRouteOwner.shared.onRouteEvent = { [weak viewModel] event in
             viewModel?.stage.post(StageEvent.make(kind: event.kind, name: event.name, detail: event.routeKind.rawValue))
         }
+        // CTL-3 (S30 3 d, CC7): a person's route request that did not apply within 3 s or was refused posts "Couldn't
+        // switch audio. Try again." with Retry and the `routeSwitchFailed` token through the controls presenter.
+        AudioRouteOwner.shared.onRouteFailed = { [weak viewModel] routeId in
+            viewModel?.controls.routeFailed(id: routeId)
+        }
         return viewModel
     }
 
@@ -531,6 +536,7 @@ final class MeetingViewModel {
             state.resetParticipantJoinSerials()
             // S50 PH13 and Q14: user keys and the rename session flag are per call session.
             state.participantUserKeys = [:]
+            state.raisedAtByUserId = [:]
             displayNameEditor.resetSession()
             requestShellRefresh(); requestStageRefresh(); requestPeopleRefresh(); requestQaRefresh()
         }
@@ -850,6 +856,13 @@ final class MeetingViewModel {
     private var gameEndArmTask: Task<Void, Never>?
     private var browserActivityTask: Task<Void, Never>?
     private var browserActivityContext: CallActionContext?
+    /// S60 C6-20 (ACT-9): the `browser:getCapabilities` probe loop (hosts, every 30 s while joined) and its single flight.
+    private var browserCapabilityTask: Task<Void, Never>?
+    private var browserCapabilityContext: CallActionContext?
+    private var isBrowserCapabilityProbeInFlight = false
+    /// S60 14 k: `resolvedBrowserNoVncURL()` runs once per URL (and SFU host) change, never per render.
+    private var browserInputURLSource = ""
+    private var browserInputURLResolved = ""
     private var adminNoticeDismissTask: Task<Void, Never>?
     private var adminNoticeDismissToken: UUID?
     private let reactionCooldownSeconds: TimeInterval = 0.1
@@ -1338,6 +1351,18 @@ final class MeetingViewModel {
         premeeting.onCommand = { [weak self] command in
             self?.performPremeetingCommand(command)
         }
+        // SYS-3 (S70 2 j): the process-lifetime notification presenter. Its platform answers (status read, permission
+        // answered, stage entry, priming dismissed) refresh the stage notices and Settings; it never calls back from
+        // `apply`. A tap on a delivered notification returns to the call (Chat at the message for chat notifications).
+        SystemNotifications.shared.onChange = { [weak self] in
+            self?.systemNotificationsChanged()
+        }
+        SystemNotifications.shared.onTap = { [weak self] tap in
+            self?.handleLocalNotificationTap(tap)
+        }
+        if let tap = SystemNotifications.shared.takePendingTap() {
+            handleLocalNotificationTap(tap)
+        }
         bindShellInputs()
         // S20 SC1, SC6, SC7: the stage's own hooks and commands.
         stage.onCommand = { [weak self] command in
@@ -1421,6 +1446,8 @@ final class MeetingViewModel {
         // S60 13 (ACT-7): the SDK app host and its relay. The relay reaches the socket only through these closures and
         // only inside a joined call for a non-attendee; the presenter's Close and Lock Editing use the existing paths.
         bindActiveAppSession()
+        // S60 14 (ACT-9): the shared browser card's commands (navigate, audio, close, refresh) over the existing paths.
+        bindBrowserStage()
         bindActivityInputs()
         // S40 0.5, CH13: the chat presenter's commands and its own refresh hook.
         chat.onCommand = { [weak self] request in
@@ -1839,6 +1866,8 @@ final class MeetingViewModel {
             Task { @MainActor in
                 guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
                 guard let context = self.lastJoinContext else { return }
+                // SYS-3 (S70 2 c, d): "You're in" while Conclave is not in front, before the entry starts.
+                SystemNotifications.shared.admittedWhileBackgrounded(roomLabel: self.shell.session.roomLabel)
                 self.state.connectionState = ConnectionState.joining
                 self.state.waitingMessage = nil
                 self.beginMeetingEntry(action: .join)
@@ -2181,6 +2210,14 @@ final class MeetingViewModel {
                 if !isFromCurrentUser && !isHiddenSender && !isEmptyAssistantStart {
                     // Legacy chat overlay, unchanged (the legacy view hides it for attendees).
                     self.showChatOverlayMessage(appendedMessage)
+                }
+                // SYS-3 (S70 2 c, d, O5): private messages and mentions of you while Conclave is not in front; the
+                // presenter applies every rule (active, Chat visible, attendee, own, assistant, preference, permission,
+                // channel).
+                if !isHiddenSender && !isEmptyAssistantStart {
+                    SystemNotifications.shared.chatMessageForYou(
+                        LocalChatMessageInput.from(message: appendedMessage, localName: self.chatLocalName,
+                                                   isFromSelf: isFromCurrentUser))
                 }
                 if ChatPreviewPolicy.postsPreview(isOwn: isFromCurrentUser, isHiddenSender: isHiddenSender,
                                                   isEmptyAssistantStart: isEmptyAssistantStart, isAttendee: isAttendee) {
@@ -3399,6 +3436,7 @@ final class MeetingViewModel {
             await reassertLocalAudioPublishingIfNeeded(context: currentSocketEventContext())
             refreshAdminConfigQuietly()
             refreshBrowserState()
+            startBrowserCapabilityLoop()
             refreshAppsState()
             refreshGameState()
         } catch {
@@ -3709,28 +3747,43 @@ final class MeetingViewModel {
 
     private func applyHandRaisedSnapshot(_ snapshot: HandRaisedSnapshotNotification) {
         guard isCurrentRoomEvent(snapshot.roomId) else { return }
+        // S50 PH3: snapshot entries carry no time; a hand still raised keeps the time this client already knew (the
+        // queue keeps its order after a reconnect), a hand first seen here stays untimed (sorts after timed hands).
+        let knownTimes = state.raisedAtByUserId
         clearRaisedHands()
+        var keptTimes: [String: Double] = [:]
         for entry in snapshot.users {
             guard let userId = normalizedParticipantUserId(entry.userId) else { continue }
             if state.isLocalIdentityUserId(userId) {
                 state.isHandRaised = entry.raised
+                if entry.raised, let time = knownTimes[state.userId] { keptTimes[state.userId] = time }
             } else {
                 guard !shouldIgnoreDepartedParticipant(userId) else { continue }
                 ensureParticipantPresent(userId)
-                state.participants[participantStateId(for: userId)]?.isHandRaised = entry.raised
+                let handStateId = participantStateId(for: userId)
+                state.participants[handStateId]?.isHandRaised = entry.raised
+                let timeId = state.canonicalStageUserId(handStateId) ?? handStateId
+                if entry.raised, let time = knownTimes[timeId] { keptTimes[timeId] = time }
             }
         }
+        if !keptTimes.isEmpty { state.raisedAtByUserId = keptTimes }
     }
 
     private func applyHandRaisedNotification(_ notification: HandRaisedNotification) {
         guard let userId = normalizedParticipantUserId(notification.userId) else { return }
         if state.isLocalIdentityUserId(userId) {
+            // S50 PH3: the SFU echoes your own raise to the whole room with its time (`io.to(channel)`).
+            recordHandRaiseTime(state.userId, raised: notification.raised, timestamp: notification.timestamp)
             state.isHandRaised = notification.raised
             return
         }
         guard !shouldIgnoreDepartedParticipant(userId) else { return }
         guard ensureParticipantPresent(userId) else { return }
-        state.participants[participantStateId(for: userId)]?.isHandRaised = notification.raised
+        let handStateId = participantStateId(for: userId)
+        // S50 PH3: keyed like `makePeopleInputs()` keys the row (`canonicalStageUserId(participant.id)`).
+        recordHandRaiseTime(state.canonicalStageUserId(handStateId) ?? handStateId, raised: notification.raised,
+                            timestamp: notification.timestamp)
+        state.participants[handStateId]?.isHandRaised = notification.raised
         // STG-5 (S20 SC18): remote hands only (the local branch returned above).
         if notification.raised, let id = state.canonicalStageUserId(userId) {
             stage.post(StageEvent.make(kind: StageEventKind.handRaised, userId: id, name: displayNameForUser(id)))
@@ -5541,7 +5594,12 @@ final class MeetingViewModel {
                     self.stopBrowserActivityLoop()
                     return
                 }
-                self.socketManager.sendBrowserActivity()
+                // C6-20 (INM H1 8): only hosts keep the remote session alive; the SFU ignores everyone else's heartbeat.
+                if BrowserHeartbeatPolicy.shouldSend(isActive: self.state.isBrowserActive,
+                                                     isJoined: self.state.connectionState == .joined,
+                                                     isHost: self.state.isAdmin, isAttendee: self.state.isWebinarAttendee) {
+                    self.socketManager.sendBrowserActivity()
+                }
             }
         }
     }
@@ -5726,6 +5784,17 @@ final class MeetingViewModel {
         activitySession.appHost.onCommand = { [weak self] command in
             self?.performAppHostCommand(command)
         }
+        // ACT-8 (S60 13 c, f): Watch search and trending through the app backend (the embed has no network), and the
+        // roster for the Wheel's "Add Everyone Here".
+        activitySession.appHost.watchSearch = { query in
+            return await WatchSearchService.search(query: query)
+        }
+        activitySession.appHost.watchTrending = {
+            return await WatchSearchService.trending()
+        }
+        activitySession.appHost.rosterNames = { [weak self] in
+            return self?.appHostRosterNames() ?? []
+        }
     }
 
     /// S60 13 j: Close and Lock Editing over the existing host paths; failures come back as `closeFailed()` and
@@ -5737,6 +5806,21 @@ final class MeetingViewModel {
         case .setLocked:
             if command.flag != state.isAppsLocked { toggleAppsLock() }
         }
+    }
+
+    /// ACT-8: everyone in the call (you first), full display names deduped, for the Wheel's "Add Everyone Here" and
+    /// "%lld not on the wheel". Read by the presenter only when the Wheel's page data changes or its page appears.
+    private func appHostRosterNames() -> [String] {
+        var ids: [String] = [state.userId]
+        for id in state.participants.keys.sorted() where id != state.userId {
+            ids.append(id)
+        }
+        var names: [String] = []
+        for id in ids where !id.isEmpty {
+            let name = state.chatDisplayName(for: id)
+            if !name.isEmpty && !names.contains(name) { names.append(name) }
+        }
+        return names
     }
 
     /// The app host's inputs and the relay's coarse state, on the activity refresh path (app, lock, role, connection).
@@ -5761,6 +5845,18 @@ final class MeetingViewModel {
         state.isHandRaised = false
         for userId in Array(state.participants.keys) {
             state.participants[userId]?.isHandRaised = false
+        }
+        // S50 PH3: every hand is down, so no raise time survives (admin:handsCleared, Lower All acknowledged).
+        if !state.raisedAtByUserId.isEmpty { state.raisedAtByUserId = [:] }
+    }
+
+    /// S50 PH3: the server's raise time for `id` (the People id); a lowered hand forgets it. Repeated raises keep the
+    /// newest server time, as the SFU stamps each `setHandRaised`.
+    private func recordHandRaiseTime(_ id: String, raised: Bool, timestamp: Double) {
+        if raised && timestamp > 0 {
+            if state.raisedAtByUserId[id] != timestamp { state.raisedAtByUserId[id] = timestamp }
+        } else if state.raisedAtByUserId[id] != nil {
+            state.raisedAtByUserId[id] = nil
         }
     }
 
@@ -6190,6 +6286,7 @@ final class MeetingViewModel {
             if state.activeScreenShareUserId == producerUserId {
                 state.activeScreenShareUserId = nil
             }
+            refreshBrowserStage()
             return
         }
         guard state.isRemoteParticipantUserId(producerUserId) else { return }
@@ -6438,6 +6535,7 @@ final class MeetingViewModel {
             if state.activeScreenShareUserId == producerUserId {
                 state.activeScreenShareUserId = nil
             }
+            refreshBrowserStage()
             return
         }
         if MeetingState.isVoiceAgentUserId(producerUserId) {
@@ -6945,6 +7043,7 @@ final class MeetingViewModel {
         await reassertLocalVideoPublishingIfNeeded(context: currentSocketEventContext())
         refreshAdminConfigQuietly()
         refreshBrowserState()
+        startBrowserCapabilityLoop()
         refreshAppsState()
         refreshGameState()
     }
@@ -7424,6 +7523,10 @@ final class MeetingViewModel {
             if MeetingState.isBrowserAudioUserId(producer.producerUserId) {
                 refreshBrowserAudioPresence()
                 applyBrowserAudioMuteState()
+            }
+            if MeetingState.isBrowserVideoUserId(producer.producerUserId) {
+                // S60 14 c (ACT-9): the browser card binds the consumer's track once it exists.
+                refreshBrowserStage()
             }
             pendingProducers.removeValue(forKey: producer.producerId)
             pendingProducerContexts.removeValue(forKey: producer.producerId)
@@ -7958,6 +8061,66 @@ final class MeetingViewModel {
         requestControlsRefresh()
         // TRN-1 (SC13, C6-11): the transcript stream follows the published phase and the attendee role.
         syncTranscriptStream()
+        // SYS-3 (S70 2 j): the notification presenter follows the published phase, foreground, Chat and PiP.
+        syncSystemNotifications()
+    }
+
+    /// SYS-3 (S70 2 j): the call facts the notification presenter reads (equality guarded there). Conclave counts as
+    /// active only in the foreground and outside PiP (a PiP window shows the call, so Chat is not visible there); the
+    /// phase flags mirror the S1 phase so an admission posted while waiting survives the connect that follows it.
+    private func syncSystemNotifications() {
+        let session = shell.session
+        let presence = callPresence.snapshot
+        let phase = session.phase
+        #if SKIP
+        let isInPictureInPicture = PipController.inPipMode
+        #else
+        let isInPictureInPicture = presence.isInPictureInPicture
+        #endif
+        let isForeground = appForegroundAllowsRemoteVideoReceive
+        let usesNativeStage = NativeRouteFlags.shared.isEnabled(NativeRouteKey.call)
+        SystemNotifications.shared.apply(SystemNotificationInputs.make(
+            callSession: session.identity.callSession,
+            presenceSession: presence.presenceSession,
+            roomId: state.roomId,
+            roomLabel: session.roomLabel,
+            isWaiting: phase == .waiting,
+            isConnecting: phase == .entering,
+            isLive: phase == .inCall,
+            isRecovering: phase == .recovering,
+            isEntering: state.isEnteringMeeting,
+            isInPictureInPicture: isInPictureInPicture,
+            isAppActive: isForeground && !isInPictureInPicture,
+            isChatVisible: state.isChatOpen && isForeground,
+            isAttendee: session.isWebinarAttendee,
+            usesNativeStage: usesNativeStage,
+            nativeRoutesActive: usesNativeStage || NativeRouteFlags.shared.routesPremeetingNatively
+        ))
+    }
+
+    /// SYS-3: a platform answer changed the notifications snapshot (the priming banner, the Settings rows).
+    private func systemNotificationsChanged() {
+        if stageRefreshBatchDepth == 0 {
+            stage.applyNotices(makeStageNoticeInputs())
+        }
+        requestSettingsRefresh()
+    }
+
+    /// SYS-3 (S70 2 a, c): a tap on a delivered notification returns to the call; a chat notification then opens Chat
+    /// at the message (the native call root; the legacy root opens its chat). A tap for another room or after the call
+    /// ended only brings the app forward. Android's MainActivity already recorded returnToCall for the tap intent.
+    private func handleLocalNotificationTap(_ tap: LocalNotificationTap) {
+        guard !tap.roomId.isEmpty, tap.roomId == state.roomId, CallSessionCoordinator.shared.isInCall else { return }
+        #if !SKIP
+        callPresence.handle(.returnToCall, source: .system, presenceSession: tap.presenceSession)
+        #endif
+        guard tap.kind != LocalNotificationKind.admission, !state.isWebinarAttendee else { return }
+        if NativeRouteFlags.shared.isEnabled(NativeRouteKey.call) {
+            shell.panels.present(MeetingPanel.chat, from: PanelInvoker.call, destination: PanelDestination.chatMessage,
+                                 targetId: tap.messageId)
+        } else if !state.isChatOpen {
+            toggleChat()
+        }
     }
 
     private func beginShellRefreshBatch() {
@@ -8222,6 +8385,8 @@ final class MeetingViewModel {
                                                   isAttendee: state.isWebinarAttendee),
             isAudioOnly: state.isAudioOnlyMode,
             connectionQuality: state.connectionQuality,
+            // SYS-3 (S70 2 d, R70-1): Android 13+, native stage, after stage entry, once per process.
+            showsNotificationsPrime: SystemNotifications.shared.snapshot.showsPrimingBanner,
             knockSoundOn: SettingsPreferences.knockSound(),
             handSoundOn: SettingsPreferences.handSound()
         )
@@ -8270,22 +8435,24 @@ final class MeetingViewModel {
         case NoticeAction.shareAgain:
             shell.toggleScreenShare()
         case NoticeAction.allow:
-            #if SKIP
-            PermissionHelper.requestNotificationsPermissionIfNeeded()
-            #endif
-            break
+            // SYS-3 (S70 2 d): one serialized POST_NOTIFICATIONS request; the banner leaves at once either way.
+            SystemNotifications.shared.requestPermission(reason: NotificationRequestReason.call)
         case NoticeCommand.dismissHostNotice:
             dismissAdminNotice()
         case NoticeAction.retry:
             // S50 PL14: a stage-origin People failure (tile menu) retries its own command.
             if command.noticeKind == PeopleFailurePlacementPolicy.stageNoticeKind {
                 people.retry(failureId: PeopleFailurePlacementPolicy.stageFailureId(command.detail))
+            } else if command.noticeKind == NoticeKind.routeFailed {
+                // CTL-3 (S30 3 d): the route failure toast's Retry asks the route owner for the same route again (the
+                // notice's `detail` is the route id, `RoutePickerPolicy.failureNotice(routeId:)`).
+                _ = controls.retryRoute(id: command.detail)
             }
         case NoticeAction.endNow:
             // S30 CC8: the recap banner's End Now ends at once.
             recapCoordinator.endNow()
         default:
-            // Retry for the route and lock failures (CTL-3, PPL) lands with its owners.
+            // Retry for the lock failure lands with its owner (PPL).
             break
         }
     }
@@ -8372,9 +8539,24 @@ final class MeetingViewModel {
             isFlipInFlight: isCameraSwitchInFlight,
             // SET-6 (OQ6 default A): the Effects panel entries follow the one availability value (false in production).
             effectsPanelAvailable: EffectsAvailabilityPolicy.showsPanelEntry(stage.effects.snapshot.availability),
+            // S30 CC11 (CTL-4): iOS "Video Effects…" (More and the Camera shortcut) only while the camera captures.
+            canShowSystemVideoEffects: canShowSystemVideoEffectsNow(),
             isRoomLockPending: lockRow?.isPending ?? false,
             roomLockRequestedOn: lockRow?.requestedOn ?? false
         )
+    }
+
+    /// S30 CC11 (CTL-4): the system video effects module is offered only while the call camera captures (iOS 15 API;
+    /// always false on Android, which has no such module).
+    func canShowSystemVideoEffectsNow() -> Bool {
+        #if os(iOS) && !SKIP
+        let running = MediaShortcutPolicy.isCameraCaptureRunning(isCameraOff: state.isCameraOff, isAudioOnly: state.isAudioOnlyMode,
+                                                                 isCameraInterrupted: state.isLocalCameraPaused,
+                                                                 isPublishingDisabled: state.mediaPublishingDisabled)
+        return SystemCameraEffectsOwner.canShowSystemVideoEffects(isCaptureRunning: running)
+        #else
+        return false
+        #endif
     }
 
     /// The in-context permission request (S10 7). The shell rows read `.granted` until WP3's permission provider reports
@@ -8413,8 +8595,20 @@ final class MeetingViewModel {
             requestControlsRefresh()
             return result == ControlTapResult.dispatched
         case .showSystemVideoEffects:
-            // S30 CC11 (WP3) is not built: `canShowSystemVideoEffects` stays false, so the row never shows.
+            // S30 CC11 (CTL-4): Control Center's video effects module through the WP3 capture owner. iOS only: Android
+            // never offers the row (its input stays false).
+            #if os(iOS) && !SKIP
+            return SystemCameraEffectsOwner.shared.showSystemVideoEffects()
+            #else
             return false
+            #endif
+        case .showSystemMicrophoneModes:
+            // S30 CC11 (CTL-4): Control Center's Mic Mode module ("Mic Mode…" in the iOS Mic shortcut, S30 Q7).
+            #if os(iOS) && !SKIP
+            return SystemCameraEffectsOwner.shared.showSystemMicrophoneModes()
+            #else
+            return false
+            #endif
         }
     }
 
@@ -8462,6 +8656,7 @@ final class MeetingViewModel {
             isCameraOff: state.isCameraOff,
             isHandRaised: state.isHandRaised,
             isScreenSharing: state.isScreenSharing,
+            raisedAtMillis: state.isHandRaised ? (state.raisedAtByUserId[localId] ?? 0) : 0,
             userKey: state.userKey(for: localId)
         ))
         for participant in state.mergedRemoteParticipants {
@@ -8478,6 +8673,8 @@ final class MeetingViewModel {
                 isReconnecting: participant.connectionStatus?.state == .reconnecting,
                 isWebinarAttendee: participant.isWebinarAttendee,
                 joinSerial: state.participantJoinSerials[id] ?? 0,
+                // S50 PH3: the server's raise time (0 when unknown: sorts after timed hands by join order).
+                raisedAtMillis: participant.isHandRaised ? (state.raisedAtByUserId[id] ?? 0) : 0,
                 // S40 CH21 and S50 PH13: the hide state and the key "Remove and Block" blocks.
                 messagesHidden: chat.isSenderHidden(id),
                 userKey: state.userKey(for: participant.id)
@@ -9302,6 +9499,7 @@ final class MeetingViewModel {
     private func requestActivityRefresh() {
         activitySession.applyActivities(makeActivitiesInputs())
         refreshAppHost()
+        refreshBrowserStage()
     }
 
     /// One game push, parsed once by the shell (C6-15).
@@ -9372,8 +9570,8 @@ final class MeetingViewModel {
             isAppsLocked: state.isAppsLocked,
             isAppsActionInFlight: state.isAppsActionInFlight,
             appIds: ActivitiesCatalogPolicy.defaultAppIds,
-            // C6-20 (ACT-9) adds the capability probe; until then the launcher offers the browser as legacy did.
-            isBrowserAvailable: true,
+            // C6-20 (ACT-9): the `browser:getCapabilities` probe's settled answer (false until it says available).
+            isBrowserAvailable: state.isBrowserAvailable,
             isBrowserActive: state.isBrowserActive,
             isBrowserLaunching: state.isBrowserLaunching,
             isBrowserNavigating: state.isBrowserNavigating,
@@ -9569,8 +9767,8 @@ final class MeetingViewModel {
         }
     }
 
-    /// SET-6 (S60 4 j): what the Effects picker reads from the core. `canShowSystemVideoEffects` stays false until CTL-4
-    /// (S30 CC11) ships the system module entry; the iOS system effects come from the WP3 capture owner (C6-21).
+    /// SET-6 (S60 4 j): what the Effects picker reads from the core. `canShowSystemVideoEffects` follows the CTL-4
+    /// capture gate (S30 CC11); the iOS system effects come from the WP3 capture owner (C6-21).
     func makeEffectsInputs() -> EffectsInputs {
         var system = SystemCameraEffects.none
         #if os(iOS) && !SKIP
@@ -9584,7 +9782,7 @@ final class MeetingViewModel {
             isCameraBlocked: MediaPermissionStatusProvider.status(LobbyMediaKind.camera) == MediaPermissionState.denied,
             isCameraInterrupted: state.isLocalCameraPaused,
             preview: LocalPreviewController.shared.state,
-            canShowSystemVideoEffects: false,
+            canShowSystemVideoEffects: canShowSystemVideoEffectsNow(),
             system: system
         )
     }
@@ -9622,7 +9820,10 @@ final class MeetingViewModel {
             }
             #endif
         case .showSystemVideoEffects:
-            // S30 CC11 ships with CTL-4 (batch 8), which extends SystemCameraEffects+iOS.swift.
+            // S30 CC11 (CTL-4): Control Center's video effects module through the WP3 capture owner.
+            #if os(iOS) && !SKIP
+            SystemCameraEffectsOwner.shared.showSystemVideoEffects()
+            #endif
             break
         case .select, .clearAll, .setAppearance, .recenter, .removePersonalImage:
             // The WP10 engine's intents (W10-3, not in this push).
@@ -9922,7 +10123,11 @@ final class MeetingViewModel {
             rejoinRoomId: rejoinContext?.roomId ?? "",
             serverRestartText: state.serverRestartNotice ?? "",
             joinFailureCategory: lastJoinFailureCategory,
-            joinFailureCode: lastJoinFailureCode
+            joinFailureCode: lastJoinFailureCode,
+            // ENT-9 (S10 12 f, HD request B8-T7 R1): the socket is up for this attempt, so the webinar landing says
+            // "Almost There" after "Getting You In".
+            entrySocketConnected: state.connectionState == ConnectionState.connected
+                || state.connectionState == ConnectionState.joining
         ))
     }
 
@@ -10127,7 +10332,11 @@ final class MeetingViewModel {
     /// notification so it appears immediately; a denial leaves the service
     /// running with its notification listed only in the system Task Manager.
     private func scheduleCallNotificationPermissionRequest() {
-        guard !hasRequestedCallNotificationPermission,
+        // SYS-3 (S70 2 d): the native call root primes through the S20 banner after stage entry instead; the legacy
+        // root (no banner lane) keeps this prompt 500 ms after the overlay until CALL-FLIP.
+        guard NotificationPrimingPolicy.usesLegacyPrompt(isAndroid: true,
+                                                        usesNativeStage: NativeRouteFlags.shared.isEnabled(NativeRouteKey.call)),
+              !hasRequestedCallNotificationPermission,
               !PermissionHelper.hasPostNotificationsPermission() else { return }
         // Never launch the permission Activity in the same main-thread turn
         // that clears the entry overlay: Compose has not rendered the overlay
@@ -10490,6 +10699,7 @@ final class MeetingViewModel {
     private func handlePictureInPictureEntered() {
         let context = currentSocketEventContext()
         lastObservedPipMode = true
+        syncSystemNotifications()
         scheduleRemoteConsumerBandwidthPolicyUpdate()
         Task { @MainActor [weak self] in
             guard let self,
@@ -10513,6 +10723,7 @@ final class MeetingViewModel {
     }
 
     private func handlePictureInPictureRefresh() {
+        syncSystemNotifications()
         guard state.connectionState == .joined,
               PipController.isInCall else { return }
         let isInPictureInPicture = PipController.inPipMode
@@ -10632,6 +10843,7 @@ final class MeetingViewModel {
         state.isParticipantUnmuteAllowed = true
         state.isParticipantVideoAllowed = true
         state.participantUserKeys = [:]
+        state.raisedAtByUserId = [:]
         isHostConfigLoading = false
         hostConfigRefreshToken += 1
         state.isTtsDisabled = false
@@ -10658,6 +10870,12 @@ final class MeetingViewModel {
         state.resetWebinarInteractionState()
         resetWebinarRoleTracking()
         clearBrowserState()
+        // S60 C6-20 (ACT-9): no probe outlives the call; the next call probes again.
+        stopBrowserCapabilityLoop()
+        isBrowserCapabilityProbeInFlight = false
+        state.isBrowserAvailable = false
+        browserInputURLSource = ""
+        browserInputURLResolved = ""
         clearAppsState()
         clearGameState(clearCatalog: false)
         state.isChatOpen = false
@@ -13148,8 +13366,8 @@ final class MeetingViewModel {
         shell.settings.apply(makeSettingsInputs())
     }
 
-    /// S60 1 j: what Settings reads from the core. Capabilities of later slices stay false (D11, R70-4): message
-    /// notifications and the Android status rows (SYS-3, S70 9), Record and Replay (C6-6, Q8) and the personal voice
+    /// S60 1 j: what Settings reads from the core. Capabilities of later slices stay false (D11, R70-4): the
+    /// Open Conclave links status row (S70 9), Record and Replay (C6-6, Q8) and the personal voice
     /// (W10-4). Data Saver and the camera pages (SET-3) and Export Diagnostics (SYS-15) landed in batch 7.
     func makeSettingsInputs() -> SettingsInputs {
         let user = AppState.shared.currentUser
@@ -13211,6 +13429,12 @@ final class MeetingViewModel {
             canUsePersonalVoice: false,
             hasPersonalVoice: false,
             isStandardPreviewPlaying: VoicePreviewPolicy.isPreviewPlaying(activeMessageId: ttsSpeaker.activeMessageId),
+            // SYS-3 (S70 2 c, g; R70-4): Message Notifications on both platforms, the call notification status on Android.
+            messageNotificationsAvailable: true,
+            messageNotificationsOn: SystemNotifications.shared.snapshot.messageNotificationsPreference,
+            notificationPermission: SystemNotifications.shared.snapshot.settingsPermission,
+            callNotificationStatusAvailable: SystemNotifications.platformIsAndroid,
+            callNotificationEnabled: SystemNotifications.shared.snapshot.callNotificationOn,
             // SET-3 (S60 C6-4, C6-5, C6-29, D11).
             isScreenShareSupported: state.isScreenShareSupported,
             isScreenSharing: state.isScreenSharing,
@@ -14656,6 +14880,154 @@ final class MeetingViewModel {
         }
     }
 
+    // MARK: - Shared browser stage (S60 14, C6-20; ACT-9)
+
+    /// The browser card's commands over the existing paths; failures come back as `navigateFailed()` and
+    /// `closeFailed()`, a command that never left as `commandRejected(_:)`.
+    private func bindBrowserStage() {
+        activitySession.browser.onCommand = { [weak self] command in
+            self?.performBrowserStageCommand(command)
+        }
+    }
+
+    private func performBrowserStageCommand(_ command: BrowserStageCommand) {
+        switch command.kind {
+        case .navigate:
+            if !navigateSharedBrowser(url: command.text) {
+                activitySession.browser.commandRejected(BrowserStageCommandKind.navigate)
+            }
+        case .toggleAudio:
+            toggleBrowserAudio()
+        case .close:
+            if !beginCloseSharedBrowser() {
+                activitySession.browser.commandRejected(BrowserStageCommandKind.close)
+            }
+        case .refresh:
+            refreshBrowserState()
+        }
+    }
+
+    /// The card's inputs on the activity refresh path (browser fields, role, connection) and on browser video producer
+    /// changes. Equality guarded in the presenter.
+    private func refreshBrowserStage() {
+        activitySession.browser.apply(makeBrowserStageInputs())
+    }
+
+    /// S60 14 j: the browser card's inputs. The video track key is the consumer behind the `shared-browser-video:`
+    /// producer (a screen-type consumer, keyed "<user>-screen" by the media client), "" until it is consumed.
+    func makeBrowserStageInputs() -> BrowserStageInputs {
+        let active = state.isBrowserActive
+        let controller = state.browserControllerUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var videoUserId = ""
+        var videoTrackKey = ""
+        if active, let producer = activeBrowserVideoProducer() {
+            videoUserId = producer.producerUserId
+            videoTrackKey = webRTCClient.remoteVideoTrack(forUserId: producer.producerUserId + "-screen")?.id ?? ""
+        }
+        return BrowserStageInputs.make(
+            callSession: callSessionSerial,
+            isActive: active,
+            isHost: state.isAdmin,
+            isAttendee: state.isWebinarAttendee,
+            url: state.browserURL ?? "",
+            inputBaseURL: active ? cachedBrowserInputURL() : "",
+            controllerName: controller.isEmpty ? "" : displayNameForUser(controller),
+            isYouController: !controller.isEmpty && state.isLocalIdentityUserId(controller),
+            provider: state.browserProvider ?? "",
+            hasAudio: state.hasBrowserAudio,
+            isAudioMuted: state.isBrowserAudioMuted,
+            isNavigating: state.isBrowserNavigating,
+            videoUserId: videoUserId,
+            videoTrackKey: videoTrackKey,
+            isReconnecting: state.connectionState != .joined || state.isRecoveringConnection
+        )
+    }
+
+    /// The tracked browser video producer (one per room; the lowest id wins if a replacement briefly overlaps).
+    private func activeBrowserVideoProducer() -> ProducerInfo? {
+        var match: ProducerInfo? = nil
+        for producer in producerInfosById.values {
+            guard producer.kind == "video", MeetingState.isBrowserVideoUserId(producer.producerUserId) else { continue }
+            if let current = match, current.producerId <= producer.producerId { continue }
+            match = producer
+        }
+        return match
+    }
+
+    /// `resolvedBrowserNoVncURL()` once per raw URL and SFU host (S60 14 k), not on every refresh.
+    private func cachedBrowserInputURL() -> String {
+        let key = (state.browserNoVncURL ?? "") + "|" + (currentJoinInfo?.sfuUrl ?? "")
+        if key != browserInputURLSource {
+            browserInputURLSource = key
+            browserInputURLResolved = resolvedBrowserNoVncURL() ?? ""
+        }
+        return browserInputURLResolved
+    }
+
+    /// C6-20: `browser:getCapabilities`, ack-only with no payload and a 22 s timeout (SocketIOManager), hosts only. A
+    /// timeout, an error or `available: false` leave the launcher's shared browser unavailable (web parity).
+    private func refreshBrowserCapabilities() {
+        guard BrowserCapabilityPolicy.shouldProbe(isJoined: state.connectionState == .joined, isHost: state.isAdmin,
+                                                  isAttendee: state.isWebinarAttendee) else {
+            if state.isBrowserAvailable { state.isBrowserAvailable = false }
+            return
+        }
+        guard !isBrowserCapabilityProbeInFlight else { return }
+        isBrowserCapabilityProbeInFlight = true
+        let actionContext = currentCallActionContext()
+
+        Task {
+            defer { isBrowserCapabilityProbeInFlight = false }
+            guard isCurrentJoinedCall(actionContext) else { return }
+            var available = false
+            do {
+                let response = try await socketManager.getBrowserCapabilities()
+                available = BrowserCapabilityPolicy.isAvailable(response)
+            } catch {
+                available = false
+                debugLog("[Meeting] Browser capability probe: \(error.localizedDescription)")
+            }
+            guard isCurrentJoinedCall(actionContext) else { return }
+            if state.isBrowserAvailable != available { state.isBrowserAvailable = available }
+        }
+    }
+
+    /// Probes now and every 30 s while this call lasts (a person who becomes host mid-call gets the launcher row within
+    /// one interval). One loop per call context, like the heartbeat loop.
+    private func startBrowserCapabilityLoop() {
+        guard state.connectionState == .joined else { return }
+        refreshBrowserCapabilities()
+        let actionContext = currentCallActionContext()
+        if BrowserActivityLoopPolicy.shouldReuseLoop(
+            hasActiveTask: browserCapabilityTask != nil,
+            existingRoomId: browserCapabilityContext?.roomId,
+            existingJoinAttemptId: browserCapabilityContext?.joinAttemptId,
+            nextRoomId: actionContext.roomId,
+            nextJoinAttemptId: actionContext.joinAttemptId
+        ) {
+            return
+        }
+        stopBrowserCapabilityLoop()
+        browserCapabilityContext = actionContext
+        browserCapabilityTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(Double(SharedBrowserTimeouts.capabilitiesRefreshMillis) * 1_000_000.0))
+                guard let self, !Task.isCancelled else { return }
+                guard self.isCurrentJoinedCall(actionContext) else {
+                    self.stopBrowserCapabilityLoop()
+                    return
+                }
+                self.refreshBrowserCapabilities()
+            }
+        }
+    }
+
+    private func stopBrowserCapabilityLoop() {
+        browserCapabilityTask?.cancel()
+        browserCapabilityTask = nil
+        browserCapabilityContext = nil
+    }
+
     func refreshAppsState() {
         guard state.connectionState == .joined else { return }
         let actionContext = currentCallActionContext()
@@ -14938,9 +15310,15 @@ final class MeetingViewModel {
     }
 
     func closeSharedBrowser() {
-        guard state.isAdmin, !state.isWebinarAttendee else { return }
+        _ = beginCloseSharedBrowser()
+    }
+
+    /// False when the close never left (not a host, or an admin action already in flight); the browser card then drops
+    /// its pending state silently (ACT-9).
+    private func beginCloseSharedBrowser() -> Bool {
+        guard state.isAdmin, !state.isWebinarAttendee else { return false }
         let actionKey = "browserClose"
-        guard let actionToken = beginAdminAction(actionKey) else { return }
+        guard let actionToken = beginAdminAction(actionKey) else { return false }
         let actionContext = currentCallActionContext()
 
         Task {
@@ -14953,8 +15331,10 @@ final class MeetingViewModel {
             } catch {
                 applyActionError(error, context: actionContext)
                 activitySession.activities.commandFailed(.closeBrowser, serverText: "")
+                activitySession.browser.closeFailed()
             }
         }
+        return true
     }
 
     @discardableResult
@@ -14984,6 +15364,7 @@ final class MeetingViewModel {
                 guard response.success != false else {
                     state.errorMessage = response.error ?? "Could not navigate the shared browser."
                     activitySession.activities.commandFailed(.navigateBrowser, serverText: response.error ?? "")
+                    activitySession.browser.navigateFailed()
                     return
                 }
                 state.browserURL = normalizedURL
@@ -14993,6 +15374,7 @@ final class MeetingViewModel {
             } catch {
                 applyActionError(error, context: actionContext)
                 activitySession.activities.commandFailed(.navigateBrowser, serverText: "")
+                activitySession.browser.navigateFailed()
             }
         }
         return true

@@ -73,6 +73,7 @@ enum SfuClientEvent: String {
     case browserNavigate = "browser:navigate"
     case browserClose = "browser:close"
     case browserGetState = "browser:getState"
+    case browserGetCapabilities = "browser:getCapabilities"
     case browserActivity = "browser:activity"
     case appsOpen = "apps:open"
     case appsClose = "apps:close"

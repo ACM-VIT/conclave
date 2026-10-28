@@ -182,21 +182,3 @@ private fun PeopleSpeakingIcon(speaking: TileSpeakingState) {
             tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
     }
 }
-
-/**
- * PPL-1 waiting row: the avatar and name under Waiting, one merged node. PPL-3 replaces it with WaitingRow.kt (Deny
- * TextButton and FilledTonalButton Admit, S50 PL2, 4 d).
- */
-@Composable
-internal fun PeopleWaitingNameRow(entry: WaitingRowEntry, probe: PeopleRecomposeLedger?, modifier: Modifier = Modifier) {
-    val model = entry.model
-    val identity = remember(model.avatarSeed) { ConclaveAvatarIdentity.fromSeed(model.avatarSeed) }
-    val identifier = "people.row.${model.id}"
-    SideEffect { probe?.record("${PeopleSectionID.waiting.rawValue}:${model.id}") }
-    ListItem(
-        headlineContent = { ConclaveText(model.name, line = "$identifier.name", maxLines = 2, overflow = TextOverflow.Ellipsis) },
-        leadingContent = { ConclaveAvatar(identity, ConclaveAvatarSize.row.diameter.dp) },
-        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = modifier.heightIn(min = 56.dp).testTag(identifier).semantics(mergeDescendants = true) { },
-    )
-}

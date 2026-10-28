@@ -9,6 +9,7 @@ import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
 import type { NativeTransport } from "./bridge";
 import {
+  HOST_COMMAND_TYPES,
   NATIVE_EMBED_BUNDLE_VERSION,
   NATIVE_EMBED_LIMITS,
   base64FromBytes,
@@ -46,6 +47,35 @@ export type EmbedStatusPayload = {
   editorCount: number;
 };
 
+/** Spin the Wheel page data (ACT-8, `status.app`; bounds in `WHEEL_LIMITS`). */
+export type WheelAppStatus = {
+  kind: "wheel";
+  entries: { id: string; label: string }[];
+  /** Newest first. */
+  results: { id: string; label: string; byName: string }[];
+  removeWinner: boolean;
+  sounds: boolean;
+  spinning: boolean;
+  /** The last spin that settled live in this embed (never a replayed one), for the native "Winner: %@". */
+  winnerSpinId: string;
+  winnerLabel: string;
+};
+
+/** Watch Together page data (ACT-8, `status.app`; bounds in `WATCH_LIMITS`). */
+export type WatchAppStatus = {
+  kind: "watch";
+  videoId: string;
+  title: string;
+  playback: "playing" | "paused" | "none";
+  queue: { id: string; videoId: string; title: string; byName: string }[];
+  requests: { id: string; videoId: string; title: string; byId: string; byName: string }[];
+  myRequestId: string;
+  requestDeclined: boolean;
+};
+
+/** A Wheel or Watch embed's status: only the page data (native keeps its Whiteboard defaults). */
+export type AppStatusPayload = { app: WheelAppStatus | WatchAppStatus };
+
 export type CommandResult = { ok: boolean; error?: string; pngBase64?: string };
 export type CommandHandler = (envelope: Envelope<NativeToEmbedType>) => CommandResult;
 
@@ -61,20 +91,7 @@ const INITIAL_HOST_STATUS: HostStatus = {
   userName: "",
 };
 
-const COMMAND_TYPES: ReadonlySet<string> = new Set([
-  "setTool",
-  "setColor",
-  "setStrokeWidth",
-  "setFill",
-  "undo",
-  "redo",
-  "setPage",
-  "addPage",
-  "renamePage",
-  "deletePage",
-  "zoomToFit",
-  "export",
-]);
+const COMMAND_TYPES: ReadonlySet<string> = new Set<string>(HOST_COMMAND_TYPES);
 
 const AWARENESS_INTERVAL_MS = 50;
 const REMOTE = "remote";
@@ -141,8 +158,8 @@ export class NativeEmbedSession {
     this.commandHandler = handler;
   }
 
-  /** The renderer's status (tool, ink, history, pages, presence); sent only when it changes. */
-  sendStatus(status: EmbedStatusPayload): void {
+  /** The renderer's status (tool, ink, history, pages, presence, or a Wheel or Watch page's data); sent only on change. */
+  sendStatus(status: EmbedStatusPayload | AppStatusPayload): void {
     if (this.closed) return;
     const key = JSON.stringify(status);
     if (key === this.lastStatus) return;

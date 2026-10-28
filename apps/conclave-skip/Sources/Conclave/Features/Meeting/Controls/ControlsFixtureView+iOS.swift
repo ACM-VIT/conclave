@@ -86,6 +86,8 @@ private struct ControlsFixtureReadouts: View {
             readout(session.moreReadout(), identifier: "controls.more")
             readout(session.menuHeightReadout(), identifier: "controls.menuHeight")
             readout(session.handReadout(), identifier: "controls.hand")
+            readout(session.routeReadout(), identifier: "controls.route")
+            readout(session.shortcutsReadout(), identifier: "controls.shortcuts")
             readout(session.noticesReadout(), identifier: "stage.notices")
             readout(session.panelReadout(), identifier: "panel.current")
             readout(session.chromeReadout(), identifier: "chrome.transient")
