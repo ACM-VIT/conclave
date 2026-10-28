@@ -77,6 +77,7 @@ struct NoticeBannerView: View {
                                         actions: actions(notice),
                                         onDismiss: notice.isDismissible ? { stage.dismissNotice(id: notice.id) } : nil,
                                         announces: notice.announcement != NoticeAnnouncement.none,
+                                        isAssertive: notice.announcement == NoticeAnnouncement.assertiveOnce,
                                         lineLimit: expanded ? nil : ConclaveBannerLaneMetrics.lineLimit,
                                         identifier: "stage.banner." + notice.kind)
             if notice.hasAction(NoticeAction.catchUp) {
@@ -255,7 +256,7 @@ enum NoticeCopy {
         let showsAvatar = notice.kind == NoticeKind.chatPreview || notice.kind == NoticeKind.handRaised
         return ConclaveToastItem(id: notice.id, message: toastMessage(notice), actionTitle: actionTitle, actionId: actionId,
                                  avatarName: showsAvatar ? notice.name : "", avatarId: showsAvatar ? notice.userId : "",
-                                 isFailure: notice.isFailure)
+                                 isFailure: notice.isFailure, isProgress: notice.severity == .progress)
     }
 
     static func toastMessage(_ notice: MeetingNotice) -> String {

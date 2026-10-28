@@ -36,11 +36,11 @@ internal fun AttendeeWaitingLayer(stage: StagePresenter, modifier: Modifier = Mo
             bottom = StageCanvasMetrics.BAR_RESERVE_DP.dp),
         contentAlignment = Alignment.Center,
     ) {
-        // The broadcast concept is pending in the icon manifest (S20 SR1); the video glyph stands in.
+        // Canonical webinar/broadcast artwork (S20 SR1).
         ConclaveEmptyStatus(
             title = conclaveString("stg_webinar_waiting_title"),
             body = body,
-            icon = ConclaveIcons.VideocamFill1,
+            icon = ConclaveIcons.PodcastsFill0,
             identifier = "stage.attendee.waiting",
         )
     }

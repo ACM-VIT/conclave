@@ -1,6 +1,7 @@
 package conclave.module
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -78,6 +79,8 @@ class STG2TileBridgeTests {
         val sections = TileMenuPolicy.sections(context(), titles = titles, people = people)
         assertEquals(listOf(TileMenuPolicy.stageSectionId, "ppl.1", "ppl.0", "ppl.3"), sections.toList().map { it.id })
         assertEquals(listOf("message"), sections[2].items.toList().map { it.id })
+        assertEquals(listOf("pin", "fit_video"), sections[0].items.toList().map { it.concept })
+        sections[0].items.forEach { assertNotNull(conclaveMenuIcon(it.concept)) }
         assertEquals(reason, sections[1].items[0].disabledReason)
         assertTrue(ConclaveMenuPolicy.destructiveItemsAreLast(sections))
         for (section in sections) assertTrue(section.id, ConclaveMenuPolicy.isIconConsistent(section))

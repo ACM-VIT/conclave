@@ -263,6 +263,30 @@ export function NativeWhiteboardEmbed({ session }: { session: NativeEmbedSession
           const png = exportPng(canvasRef.current);
           return png ? { ok: true, pngBase64: png } : { ok: false, error: "exportFailed" };
         }
+        // Relay messages and commands for another app retain the same rejection as unknown commands.
+        case "snapshot":
+        case "update":
+        case "awareness":
+        case "status":
+        case "resync":
+        case "close":
+        case "addEntries":
+        case "removeEntry":
+        case "shuffle":
+        case "sort":
+        case "clearEntries":
+        case "spin":
+        case "setRemoveWinner":
+        case "setSounds":
+        case "clearResults":
+        case "playNow":
+        case "enqueue":
+        case "request":
+        case "approve":
+        case "decline":
+        case "cancelRequest":
+        case "move":
+        case "remove":
         default:
           return { ok: false, error: "unknownCommand" };
       }

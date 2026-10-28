@@ -70,8 +70,7 @@ struct ConclaveErrorStatus: View {
     }
 }
 
-/// Offline, with the component copy (F00 C14 g, final in S70 7 g). The offline concept is pending in the icon
-/// manifest, so the glyph is the `wifi.exclamationmark` stand-in (FND-1 carry, F00 7.3).
+/// Offline with canonical artwork and component copy (F00 C14 g, S70 7 g).
 struct ConclaveOfflineStatus: View {
     let identifier: String
     let onRetry: (() -> Void)?
@@ -83,7 +82,7 @@ struct ConclaveOfflineStatus: View {
 
     var body: some View {
         ContentUnavailableView {
-            StatusTitle(title: ConclaveStrings.text("You’re Offline"), systemImage: ConclaveSymbols.wifiExclamationmark)
+            StatusTitle(title: ConclaveStrings.text("You’re Offline"), systemImage: ConclaveSymbols.wifiSlash)
         } description: {
             Text(ConclaveStrings.text("This will load when you’re back online."))
         } actions: {

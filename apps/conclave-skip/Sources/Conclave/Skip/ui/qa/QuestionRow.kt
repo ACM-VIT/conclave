@@ -47,8 +47,7 @@ import java.util.Locale
 /*
  * S50 11 d (PPL-6, PL5): the Android question row. One Column per question reading only its QaQuestionEntry, so a vote
  * change recomposes one row (11 k). Attendees get the upvote FilterChip (selected = secondaryContainer, the count in
- * tabular digits; the R50-4 `upvote` glyph is pending in the icon manifest, so the chip carries its count until it
- * lands) that plays `upvoteChanged` after a dispatched toggle. Hosts get a static count, and the row opens the host
+ * tabular digits with the canonical R50-4 upvote glyph) that plays `upvoteChanged` after a dispatched toggle. Hosts get a static count, and the row opens the host
  * DropdownMenu on tap or long press (longPress through the gesture route), the same items as TalkBack custom actions;
  * while an action is pending a spinner replaces the menu affordance. Status labels: "Being answered" in `live` with the
  * speaking glyph, "Answered" in `success`, "Waiting" and "Dismissed" in onSurfaceVariant. Static times, no clock.
@@ -189,7 +188,11 @@ internal fun QuestionRow(people: PeoplePresenter, entry: QaQuestionEntry, isHost
                     selected = model.hasUpvoted,
                     onClick = { if (qa.toggleUpvote(id = model.id) == ControlTapResult.dispatched) haptics.gesture(FeedbackKind.upvoteChanged) },
                     enabled = model.isEnabled,
-                    label = { ConclaveText(model.upvotes.toString(), line = "$identifier.upvote.count", style = rememberTabular(MaterialTheme.typography.labelLarge)) },
+                    label = { ConclaveText(model.upvotes.toString(), line = "$identifier.upvote.count", style = rememberTabular(MaterialTheme.typography.labelLarge), color = scheme.onSurface) },
+                    leadingIcon = {
+                        Icon(if (model.hasUpvoted) ConclaveIcons.ArrowUpwardFill1 else ConclaveIcons.ArrowUpwardFill0,
+                            contentDescription = null, modifier = Modifier.size(18.dp))
+                    },
                     modifier = Modifier.heightIn(min = 48.dp).testTag("$identifier.upvote").semantics {
                         contentDescription = conclaveStringOf(context, if (model.hasUpvoted) "qa_upvoted" else "qa_upvote")
                         stateDescription = texts.votes

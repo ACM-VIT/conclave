@@ -32,6 +32,22 @@ enum ConclaveMenuSymbols {
         case "search": return ConclaveSymbols.magnifyingglass
         case "host": return ConclaveSymbols.crownFill
         case "delete": return ConclaveSymbols.trash
+        case "private_message": return ConclaveSymbols.lockFill
+        case "hide_sender": return ConclaveSymbols.eyeSlash
+        case "visibility": return ConclaveSymbols.eye
+        case "change_name": return ConclaveSymbols.pencil
+        case "lower_hand": return ConclaveSymbols.handRaisedSlash
+        case "request_declined": return ConclaveSymbols.handRaisedSlash
+        case "speaker_off": return ConclaveSymbols.speakerSlashFill
+        case "move_to_audience": return ConclaveSymbols.arrowDownCircle
+        case "admit": return ConclaveSymbols.checkmark
+        case "bring_on_stage": return ConclaveSymbols.arrowUpCircle
+        case "close": return ConclaveSymbols.xmark
+        case "flip_camera": return ConclaveSymbols.arrowTriangle2CirclepathCamera
+        case "self_view_minimize": return ConclaveSymbols.pipExit
+        case "picture_in_picture": return ConclaveSymbols.pipEnter
+        case "fit_video": return ConclaveSymbols.arrowDownRightAndArrowUpLeft
+        case "fill_video": return ConclaveSymbols.arrowUpLeftAndArrowDownRight
         default: return nil
         }
     }

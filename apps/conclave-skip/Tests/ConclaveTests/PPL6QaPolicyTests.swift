@@ -172,6 +172,30 @@ struct PPL6QaPolicyTests {
         #expect(people.qa.toggleUpvote(id: "q2") == .ignored)
     }
 
+    @Test func fixtureVoteAcknowledgementPublishesTheAuthoritativeRow() async throws {
+        let session = PeopleWebinarFixtureSession(state: .qaAttendee5)
+        for selected in [true, false] {
+            let result = session.people.qa.toggleUpvote(id: "q2")
+            #expect(result == .dispatched)
+            let duplicate = session.people.qa.toggleUpvote(id: "q2")
+            #expect(duplicate == .ignored)
+            for _ in 0..<100 where !session.people.qa.questions.entry(for: "q2").model.pendingAction.isEmpty {
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let row = session.people.qa.questions.entry(for: "q2").model
+            #expect(row.pendingAction.isEmpty)
+            #expect(row.hasUpvoted == selected)
+            #expect(row.upvotes == (selected ? 5 : 4))
+            #expect(row.text == "Will slides be shared after?")
+        }
+        let pending = session.people.qa.toggleUpvote(id: "q2")
+        #expect(pending == .dispatched)
+        session.people.reset()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let retained = try #require(session.qaInputs.entries.first { $0.id == "q2" })
+        #expect(!retained.hasUpvoted && retained.upvotes == 4)
+    }
+
     @Test func hostsModerateByStatusAndPostWrittenAnswers() {
         let (people, log) = qaPeople(role: QaRole.host)
         let qa = people.qa

@@ -247,7 +247,7 @@ internal fun GameKitScoreboard(rows: Iterable<GameScoreboardRow>) {
                 Text(if (row.isYou) conclaveString("ds_you") else row.name, style = MaterialTheme.typography.bodyLarge,
                     color = scheme.onSurface, maxLines = 2, modifier = Modifier.weight(1f))
                 if (row.isLeader) {
-                    // The text twin of the leader row until the R6-1 `trophy` concept lands in the icon manifest.
+                    Icon(ConclaveIcons.EmojiEventsFill1, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.size(16.dp))
                     GameKitTag(conclaveString("act_leading"))
                 }
                 Text(gameScore(row.score), style = tabular, color = scheme.onSurface)

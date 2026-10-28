@@ -8,15 +8,14 @@ import SwiftUI
 // local ("Only you will hear it"). No haptic for play, stop or voice mode (D6, Q11). The rows and the composer mount
 // these (HD request B5-T7 R2 to B5-T6, who owns the chat row and composer files this batch).
 
-/// Pending icon concepts (F00 7.3 `play`, `stop`; S40 R40-5 `voice_message`) with ConclaveSymbols stand-ins until the
-/// icon lane adds them (HD request B5-T7 R5). `speaking` is the S40 3 e concept (`waveform`).
+/// Canonical playback, stop and voice-message artwork; `speaking` remains the S40 3 e waveform.
 enum VoiceSymbols {
-    static let play = ConclaveSymbols.waveform
-    static let stop = ConclaveSymbols.xmark
+    static let play = ConclaveSymbols.playFill
+    static let stop = ConclaveSymbols.stopFill
     static let speaking = ConclaveSymbols.waveform
-    static let voiceMessage = ConclaveSymbols.waveform
+    static let voiceMessage = ConclaveSymbols.speakerWave2
 
-    /// The trailing speaking mark shows once the play concept has its own glyph (no doubled stand-in).
+    /// Speaking status has distinct artwork from the playback action.
     static var showsSpeakingMark: Bool {
         play != speaking
     }

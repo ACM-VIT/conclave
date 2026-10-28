@@ -12,9 +12,7 @@ import UIKit
 // `controls.shortcuts`. Menus inherit the dark stage environment [Unverified on iOS 17 and 26, F00 2.1]. Feedback: the
 // system menu plays its own on open; Flip plays `selectionChanged` from the cell, only on dispatch (RECONCILE R13, H2
 // row 23); nothing else plays (S30 2 h). Icons: F00 concepts through `ConclaveSymbols` (no raw symbol names); the
-// CL11 `speaker_route` and `effects` concepts are not in the icon manifest yet (HD/requests/B8-T6.md), so the Speaker
-// toggle sits in its own icon-free section (F00 7.1: a group is icon-complete or icon-free) and Effects uses More's
-// stand-in glyph.
+// CL11 Speaker and Effects use canonical artwork; the microphone menu group is icon-complete.
 
 /// Attaches the shortcut for the Mic or the Camera cell; other kinds pass through.
 struct MediaShortcutModifier: ViewModifier {
@@ -97,20 +95,15 @@ private struct MicShortcutMenu: View {
     var body: some View {
         let route = controls.route
         let items = controls.microphoneShortcuts(chooser: MediaShortcutCopy.inputChooser)
-        if MediaShortcutPolicy.item(items, MediaShortcutItemID.speaker) != nil {
-            Section {
-                // The system menu toggle plays its own selection feedback; the route list confirms nothing else (3 h).
-                Toggle(isOn: Binding(get: { controls.route.isSpeakerOn }, set: { on in _ = controls.setSpeaker(on) })) {
-                    Text(MediaShortcutCopy.title(MediaShortcutItemID.speaker))
-                }
-                .accessibilityIdentifier("control.microphone.shortcut.speaker")
-            }
-        }
         Section {
             ForEach(items) { item in
                 switch item.kind {
                 case .speaker:
-                    EmptyView()
+                    // The system menu toggle owns its selection feedback (3 h).
+                    Toggle(isOn: Binding(get: { controls.route.isSpeakerOn }, set: { on in _ = controls.setSpeaker(on) })) {
+                        Label(MediaShortcutCopy.title(item.kind), systemImage: ConclaveSymbols.speakerWave2Fill)
+                    }
+                    .accessibilityIdentifier("control.microphone.shortcut.speaker")
                 case .microphone:
                     // iOS 17 to 25: one submenu level over the route's inputs (CL17).
                     Picker(selection: Binding(get: { controls.route.currentInputId },
@@ -271,14 +264,15 @@ enum MediaShortcutCopy {
     }
 
     /// S30 2 e concepts: microphone, `speaking` (waveform) for Mic Mode, settings (gearshape), flip_camera; Effects uses
-    /// More's stand-in until the CL11 `effects` concept lands. The Speaker toggle draws no icon (its own section).
+    /// Canonical media-shortcut glyphs (CL11).
     static func glyph(_ kind: MediaShortcutItemID) -> String {
         switch kind {
-        case .speaker, .micMode: return ConclaveSymbols.waveform
+        case .speaker: return ConclaveSymbols.speakerWave2Fill
+        case .micMode: return ConclaveSymbols.waveform
         case .chooseMicrophone, .microphone: return ConclaveSymbols.micFill
         case .audioSettings: return ConclaveSymbols.gearshape
         case .flipCamera: return ConclaveSymbols.arrowTriangle2CirclepathCamera
-        case .effects, .systemVideoEffects: return ConclaveSymbols.videoFill
+        case .effects, .systemVideoEffects: return ConclaveSymbols.cameraFilters
         }
     }
 }

@@ -159,7 +159,7 @@ class CTL3CTL4BridgeTests {
         assertEquals("Available after reconnecting", items[0].disabledReason)
         assertTrue(ConclaveMenuPolicy.isIconConsistent(sections[0]))
         assertEquals(ConclaveIcons.CameraswitchFill0, mediaShortcutIcon("flipCamera"))
-        assertEquals(ConclaveIcons.MoodFill1, mediaShortcutIcon("effects"))
+        assertEquals(ConclaveIcons.AutoAwesomeFill0, mediaShortcutIcon("effects"))
         assertNull(mediaShortcutIcon("systemVideoEffects"))
         // The iOS system module never becomes an Android row.
         val system = ControlsFixtureSession(state = ControlsFixtureState.systemEffects).controls

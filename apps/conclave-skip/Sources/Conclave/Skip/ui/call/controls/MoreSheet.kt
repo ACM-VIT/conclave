@@ -152,8 +152,8 @@ private fun moreTileIcon(item: MoreItem): ImageVector = when (item.kind) {
     MoreItemID.participants -> ConclaveIcons.GroupFill0
     MoreItemID.activities -> ConclaveIcons.AppsFill0
     MoreItemID.transcript -> ConclaveIcons.DescriptionFill0
-    MoreItemID.layout -> ConclaveIcons.FeaturedVideoFill0
-    MoreItemID.effects -> ConclaveIcons.MoodFill1
+    MoreItemID.layout -> ConclaveIcons.ViewQuiltFill0
+    MoreItemID.effects -> ConclaveIcons.AutoAwesomeFill0
     MoreItemID.invite -> ConclaveIcons.ShareFill0
     MoreItemID.copyLink -> ConclaveIcons.ContentCopyFill0
     MoreItemID.meetingDetails -> ConclaveIcons.InfoFill0

@@ -151,7 +151,7 @@ enum PeopleActionPolicy {
 
     /// The menu sections in emitted order, one section per group, with resolved titles and reasons. Concepts follow
     /// F00 7.1 and H-06: a section is icon-complete or icon-free, so a section with an item whose glyph is not in the
-    /// manifest yet (R50-4: hide messages, change name, lower hand, move to audience, stop screen audio) drops its icons.
+    /// catalog drops all its icons. Every current action has a canonical mapping.
     static func menuSections(_ actions: [PersonActionModel], titles: PeopleActionTitles) -> [MenuSectionModel] {
         var sections: [MenuSectionModel] = []
         var currentGroup = -1
@@ -223,20 +223,27 @@ enum PeopleActionPolicy {
     }
 
     /// The manifest concept per item (F00 7.3 names; `ConclaveMenuSymbols` and `conclaveMenuIcon` resolve them). ""
-    /// marks an R50-4 concept still pending in the manifest.
+    /// is reserved for a future action with no canonical artwork.
     static func concept(_ action: PersonActionID) -> String {
         switch action {
         case .pin: return "pin"
         case .unpin: return "unpin"
-        case .sendPrivateMessage: return "chat"
+        case .sendPrivateMessage: return "private_message"
         case .mute: return "mute_person"
         case .turnOffCamera: return "camera_off_person"
         case .stopScreenShare: return "stop_sharing"
         case .makeCoHost, .makeHost: return "host"
         case .remove: return "remove_person"
-        case .hideMessages, .showMessages, .changeName, .lowerOwnHand, .stopScreenAudio, .moveToAudience, .admit, .deny,
-             .bringOnStage, .cancelStageInvite:
-            return ""
+        case .hideMessages: return "hide_sender"
+        case .showMessages: return "visibility"
+        case .changeName: return "change_name"
+        case .lowerOwnHand: return "lower_hand"
+        case .stopScreenAudio: return "speaker_off"
+        case .moveToAudience: return "move_to_audience"
+        case .admit: return "admit"
+        case .deny: return "request_declined"
+        case .bringOnStage: return "bring_on_stage"
+        case .cancelStageInvite: return "close"
         }
     }
 

@@ -591,19 +591,51 @@ struct ACT5ChessTests {
         }
     }
 
-    /// S60 Q9: no unlicensed piece art ships; glyphs only in Debug (debuggable) builds, a lettered disc otherwise.
-    @Test func piecesAreGlyphsOnlyInDebugUntilTheLicensedArtShips() throws {
+    /// S60 Q9: both native templates preserve every licensed source path, cover all pieces and ship the full notice.
+    @Test func licensedPieceArtworkCoversEveryKindOnBothPlatforms() throws {
         let ios = try stageSource(iosPath)
         let kotlin = try stageSource(kotlinPath)
-        #expect(ios.contains("#if DEBUG") && ios.contains("\\u{265F}\\u{FE0E}") && ios.contains("static func letter(_ code: String)"))
-        #expect(kotlin.contains("isDebuggableApp(context)") && kotlin.contains("\\u265F\\uFE0E") && kotlin.contains("fun chessPieceLetter(code: String)"))
-        for forbidden in ["Image(\"", "painterResource", "ImageVector.vectorResource"] {
-            #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the board ships piece art via \(forbidden)")
+        func pathValues(_ attribute: String, in text: String) throws -> [String] {
+            let regex = try NSRegularExpression(pattern: "\\b" + attribute + "=\"([^\"]*)\"")
+            return regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)).compactMap {
+                Range($0.range(at: 1), in: text).map { String(text[$0]) }
+            }
         }
-        // A `chess_piece*` image resource name; B8-T3's own "Knight on g1" label `gm_chess_piece_on` is copy, not art.
-        let pieceArt = #"\bchess_piece"#
-        #expect(stageMatches(pieceArt, in: ios).isEmpty && stageMatches(pieceArt, in: kotlin).isEmpty,
-                "the board ships piece art via a chess_piece resource")
+        let kinds = [("K", "King"), ("Q", "Queen"), ("R", "Rook"), ("B", "Bishop"), ("N", "Knight"), ("P", "Pawn")]
+        for (code, title) in kinds {
+            let kind = title.lowercased()
+            let originalName = kind == "pawn" ? "chess" : "chess-" + kind
+            let original = try stageSource("artwork/chess-tabler/originals/\(originalName).svg")
+            let asset = "Darwin/Assets.xcassets/ChessPiece\(title).imageset"
+            let svg = try stageSource("\(asset)/ChessPiece\(title).svg")
+            let contents = try stageSource("\(asset)/Contents.json")
+            let vector = try stageSource("Android/app/src/main/res/drawable/chess_piece_\(kind).xml")
+            let paths = try pathValues("d", in: original)
+            #expect(!paths.isEmpty)
+            #expect(try pathValues("d", in: svg) == paths)
+            #expect(try pathValues("android:pathData", in: vector) == paths)
+            #expect(svg.contains("viewBox=\"0 0 24 24\""))
+            #expect(contents.contains("\"preserves-vector-representation\": true"))
+            #expect(vector.contains("android:autoMirrored=\"false\""))
+            #expect(vector.contains("android:viewportWidth=\"24\" android:viewportHeight=\"24\""))
+            #expect(ios.contains("\"ChessPiece\(title)\"") && kotlin.contains("\"chess_piece_\(kind)\""))
+            #if os(iOS)
+            for side in ["w", "b"] {
+                #expect(ChessPieceArt.assetName(side + code) == "ChessPiece" + title)
+            }
+            #else
+            _ = code
+            #endif
+        }
+        #expect(ios.contains("Image(name, bundle: .main)"))
+        #expect(!ios.contains("usesGlyphs") && !kotlin.contains("isDebuggableApp(context)"))
+        let license = try stageSource("artwork/chess-tabler/LICENSE")
+        #expect(license.contains("MIT License") && license.contains("Paweł Kuna"))
+        for root in ["Sources/Conclave/Resources", "Android/app/src/main/assets"] {
+            #expect(try stageSource("\(root)/TablerChess-LICENSE.txt") == license)
+            let attribution = try stageSource("\(root)/TablerChess-ATTRIBUTION.txt")
+            #expect(attribution.contains("ed177a085b652fe04ec4f37ced867c94621e7840"))
+        }
     }
 
     @Test func everyChessEnumCaseHasCopyOnBothPlatforms() throws {

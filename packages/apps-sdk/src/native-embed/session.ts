@@ -214,6 +214,36 @@ export class NativeEmbedSession {
       case "close":
         this.close();
         return "none";
+      // Every host command shares this dispatch path; unknown runtime values still reject below.
+      case "setTool":
+      case "setColor":
+      case "setStrokeWidth":
+      case "setFill":
+      case "undo":
+      case "redo":
+      case "setPage":
+      case "addPage":
+      case "renamePage":
+      case "deletePage":
+      case "zoomToFit":
+      case "export":
+      case "addEntries":
+      case "removeEntry":
+      case "shuffle":
+      case "sort":
+      case "clearEntries":
+      case "spin":
+      case "setRemoveWinner":
+      case "setSounds":
+      case "clearResults":
+      case "playNow":
+      case "enqueue":
+      case "request":
+      case "approve":
+      case "decline":
+      case "cancelRequest":
+      case "move":
+      case "remove":
       default:
         if (!COMMAND_TYPES.has(envelope.type)) return this.reject("unknownType");
         this.runCommand(envelope);

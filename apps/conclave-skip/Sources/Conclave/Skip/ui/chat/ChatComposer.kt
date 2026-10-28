@@ -736,7 +736,7 @@ private fun ChatSuggestionList(model: ChatSuggestionsModel, keys: ChatComposerKe
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         if (option.isAssistant) {
-                            Icon(ConclaveIcons.ChatBubbleFill1, contentDescription = null, tint = scheme.primary,
+                            Icon(ConclaveIcons.AutoAwesomeFill0, contentDescription = null, tint = scheme.primary,
                                 modifier = Modifier.size(24.dp))
                         } else {
                             ConclaveAvatar(option.name, option.id, ConclaveAvatarSize.mention)
@@ -847,7 +847,7 @@ private fun ChatAttachMenuButton(
             enabled = composer.gate == ChatSendGate.allowed,
             modifier = Modifier.testTag("chat.composer.attach"),
         ) {
-            Icon(ConclaveIcons.ImageFill0, contentDescription = conclaveString("chat_attach"))
+            Icon(ConclaveIcons.AddFill0, contentDescription = conclaveString("chat_attach"))
         }
         DropdownMenu(
             expanded = expanded,

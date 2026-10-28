@@ -6,8 +6,8 @@ import Testing
 /// SYS-9 (S70 9 c, d, f, l 1 to 4; S70 0.7 SY14; RECONCILE R42; S10 4 m): the operating-system link layer.
 /// Every check reads the shipped file (the AASA and assetlinks.json in apps/web, the Android manifest, the
 /// entitlements and the xcconfig) and matches sample paths with each platform's own rules (AASA component
-/// globs on iOS, `PatternMatcher` simple globs on Android), so the files are checked as Apple and Android
-/// read them. Routing after intake is ENT-2 (S10 4); the parser cases themselves live with it.
+/// globs on iOS, a forward-only advanced-glob model on Android). SYS9AppLinkMatcherTests also feeds the shipped
+/// Android patterns to the framework matcher. Routing after intake is ENT-2 (S10 4).
 @MainActor
 struct SYS9DeepLinkTests {
     private static let appID = "RZGK9VX3KX.com.acmvit.conclave"
@@ -20,8 +20,12 @@ struct SYS9DeepLinkTests {
     ]
     private static let includes = ["/w/*", "/*-*-*", "/sched-*"]
 
-    // S70 9 d and SY14: the Android twin of the includes, per verified host.
-    private static let androidPathSpecs: Set<String> = ["pathPrefix=/w/", "pathPattern=/.*-.*-.*", "pathPattern=/sched-.*"]
+    // SYS-9 owner policy: strict paths on API 31+, browser fallback on API 28 to 30.
+    private static let androidPathSpecs: Set<String> = [
+        "pathAdvancedPattern=/w/[a-zA-Z0-9][a-zA-Z0-9-]{0,31}",
+        "pathAdvancedPattern=/[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+",
+        "pathAdvancedPattern=/sched-[0-9a-fA-F]{8}",
+    ]
 
     // Paths both platforms hand to the app; each parses as a join target (S70 9 f).
     private static let meetingPaths = [
@@ -41,9 +45,8 @@ struct SYS9DeepLinkTests {
         "/book/ishaan/intro", "/api/sfu/join",
     ]
 
-    // Web-only paths with two hyphens: the AASA excludes them, but an Android path pattern cannot exclude,
-    // so `/.*-.*-.*` still captures them on Android (recorded gap, see androidCannotExcludeTwoHyphenWebOnlyPaths).
-    private static let iosOnlyExcludedPaths = [
+    // Former Android false positives: these must now remain in the browser on both platforms.
+    private static let webOnlyExcludedPaths = [
         "/book/ishaan/30-min-chat", "/schedule/team-sync-call", "/_next/static/chunks/main-app-1a2b.js",
         "/transcript-pcm-processor.js",
     ]
@@ -108,7 +111,7 @@ struct SYS9DeepLinkTests {
         for path in Self.meetingPaths {
             #expect(sys9AASAHandles(path, components: components), "\(path) must open the app")
         }
-        for path in Self.browserPaths + Self.iosOnlyExcludedPaths {
+        for path in Self.browserPaths + Self.webOnlyExcludedPaths {
             #expect(!sys9AASAHandles(path, components: components), "\(path) must stay in the browser")
         }
     }
@@ -117,7 +120,8 @@ struct SYS9DeepLinkTests {
 
     @Test func androidAppLinksClaimTheSameMeetingPathsOnBothHosts() throws {
         let manifest = try sys9Source("Android/app/src/main/AndroidManifest.xml")
-        let filters = sys9AppLinkFilters(manifest)
+        let alias = try sys9AppLinkAlias(manifest)
+        let filters = sys9AppLinkFilters(alias)
         #expect(filters.count == 2, "one verified filter per host")
         var verifiedHosts: Set<String> = []
         for filter in filters {
@@ -143,6 +147,43 @@ struct SYS9DeepLinkTests {
         #expect(manifest.contains("<data android:scheme=\"conclave\" />"))
     }
 
+    @Test func androidHttpsAliasIsDisabledUntilApi31AndLeavesMainActivityIntact() throws {
+        let manifest = try sys9Source("Android/app/src/main/AndroidManifest.xml")
+        let alias = try sys9AppLinkAlias(manifest)
+        #expect(alias.contains("android:targetActivity=\".MainActivity\""))
+        #expect(alias.contains("android:enabled=\"@bool/conclave_verified_app_links_enabled\""))
+        #expect(alias.contains("android:exported=\"true\""))
+        #expect(!alias.contains("android:launchMode="), "alias inherits the target's singleTask mode")
+        #expect(!alias.contains("android.intent.category.LAUNCHER"))
+        let main = try #require(sys9Matches(#"<activity\s+android:name=".MainActivity"([\s\S]*?)</activity>"#, in: manifest).first?.first)
+        #expect(main.contains("android:launchMode=\"singleTask\""))
+        #expect(main.contains("android.intent.category.LAUNCHER"))
+        #expect(main.contains("<data android:scheme=\"conclave\" />"))
+        #expect(!main.contains("android:scheme=\"https\""))
+        let beforeAlias = try #require(manifest.components(separatedBy: "<activity-alias").first)
+        #expect(beforeAlias.contains("</activity>"), "target must precede alias")
+        #expect(sys9AppLinkFilters(manifest).count == sys9AppLinkFilters(alias).count,
+                "every verified filter must live on the gated alias")
+        #expect(try !sys9AndroidAliasEnabled(apiLevel: 28))
+        #expect(try !sys9AndroidAliasEnabled(apiLevel: 29))
+        #expect(try !sys9AndroidAliasEnabled(apiLevel: 30))
+        #expect(try sys9AndroidAliasEnabled(apiLevel: 31))
+        #expect(try sys9AndroidAliasEnabled(apiLevel: 36))
+    }
+
+    @Test func androidNineThroughElevenKeepEveryHttpsLinkInTheBrowser() throws {
+        let filters = sys9AppLinkFilters(try sys9Source("Android/app/src/main/AndroidManifest.xml"))
+        for apiLevel in 28...30 {
+            let enabled = try sys9AndroidAliasEnabled(apiLevel: apiLevel)
+            for host in Self.hosts {
+                for path in Self.meetingPaths + Self.browserPaths + Self.webOnlyExcludedPaths {
+                    #expect(!sys9AndroidCaptures(path, host: host, filters: filters, aliasEnabled: enabled),
+                            "API \(apiLevel): \(host)\(path) must stay in the browser")
+                }
+            }
+        }
+    }
+
     @Test func androidHandsOnlyMeetingPathsToTheApp() throws {
         let filters = sys9AppLinkFilters(try sys9Source("Android/app/src/main/AndroidManifest.xml"))
         for host in Self.hosts.sorted() {
@@ -156,17 +197,39 @@ struct SYS9DeepLinkTests {
         }
     }
 
-    // Recorded gap (S70 9 f "browser (no filter match)"): Android path patterns have no exclusions, so a
-    // web-only path with two hyphens still matches `/.*-.*-.*`. Closing it needs Android 15 dynamic App Link
-    // rules in assetlinks.json or API 31 pathAdvancedPattern filters (web and build owner follow-up). When it
-    // closes, this known issue stops reproducing and the test fails, so update the lists above.
-    @Test func androidCannotExcludeTwoHyphenWebOnlyPaths() throws {
+    @Test func androidExcludesAllFourFormerWebOnlyCaptures() throws {
         let filters = sys9AppLinkFilters(try sys9Source("Android/app/src/main/AndroidManifest.xml"))
-        withKnownIssue("Android App Link filters cannot exclude two-hyphen web-only paths") {
-            for path in Self.iosOnlyExcludedPaths {
-                #expect(!sys9AndroidCaptures(path, host: "conclave.acmvit.in", filters: filters), "\(path)")
+        for host in Self.hosts {
+            for path in Self.webOnlyExcludedPaths {
+                #expect(!sys9AndroidCaptures(path, host: host, filters: filters), "\(host)\(path)")
+                #expect(NativeJoinLinkParser.classify("https://\(host)\(path)") == .webOnly)
             }
         }
+    }
+
+    @Test func androidAdvancedGlobsRejectNestedDottedAndMalformedCodes() throws {
+        let filters = sys9AppLinkFilters(try sys9Source("Android/app/src/main/AndroidManifest.xml"))
+        let rejected = [
+            "/a-b-c/d", "/a/b-c-d", "/a-b-c.js", "/a-b-c/", "/a--c", "/-b-c", "/a-b-", "/a-b-c-d",
+            "/w/", "/w/a/b", "/w/a.js", "/w/-", "/w/" + String(repeating: "a", count: 33),
+            "/sched-", "/sched-1234567", "/sched-123456789", "/sched-ghijklmn", "/sched-12345678/file",
+            "/a-b-c%2Fd", "/a-b-c%2Ejs", "/w/a%2Fb", "/w/a%2Ejs",
+        ]
+        for path in rejected {
+            #expect(!sys9AndroidCaptures(path, host: "conclave.acmvit.in", filters: filters), "\(path)")
+        }
+        for path in ["/A1-b2-C3", "/w/a", "/w/" + String(repeating: "a", count: 32), "/sched-Ab12Cd34"] {
+            #expect(sys9AndroidCaptures(path, host: "conclave.acmvit.in", filters: filters), "\(path)")
+            #expect(!NativeJoinLinkParser.parse("https://conclave.acmvit.in\(path)").roomId.isEmpty)
+        }
+    }
+
+    @Test func androidMatcherDoesNotBacktrackAcrossGreedyTokens() {
+        #expect(!sys9AndroidAdvancedGlobMatches("[a-z]+b", "ab"))
+        #expect(!sys9AndroidAdvancedGlobMatches("[a-z]{1,3}b", "ab"))
+        #expect(sys9AndroidAdvancedGlobMatches("[a-z]+-[a-z]+", "ab-cd"))
+        #expect(sys9AndroidAdvancedGlobMatches("[a-z][a-z-]{0,2}", "a"))
+        #expect(!sys9AndroidAdvancedGlobMatches("[a-z][a-z-]{0,2}", "abcd"))
     }
 
     @Test func bothPlatformsHandTheSameMeetingPathsToTheApp() throws {
@@ -191,6 +254,7 @@ struct SYS9DeepLinkTests {
             #expect(prefixes.contains(segment), "\(segment) is missing from webOnlyConclavePathPrefixes")
         }
         let components = try sys9AASAComponents()
+        let filters = sys9AppLinkFilters(try sys9Source("Android/app/src/main/AndroidManifest.xml"))
         var webOnlyPaths: [String] = []
         for segment in prefixes.sorted() {
             webOnlyPaths += ["/\(segment)", "/\(segment)/rose-sora-luffy", "/\(segment)/a-b-c"]
@@ -199,6 +263,7 @@ struct SYS9DeepLinkTests {
         webOnlyPaths += ["/transcript-pcm-processor.js", "/.well-known/apple-app-site-association", "/og.png"]
         for path in webOnlyPaths {
             #expect(!sys9AASAHandles(path, components: components), "\(path) is web-only but opens the app on iOS")
+            #expect(!sys9AndroidCaptures(path, host: "conclave.acmvit.in", filters: filters), "\(path) is web-only but opens the app on Android")
             let target = NativeJoinLinkParser.parse("https://conclave.acmvit.in\(path)", allowRoomCreationForURLs: true)
             #expect(target.roomId.isEmpty, "\(path) is excluded by the AASA but the parser makes a room of it")
         }
@@ -450,40 +515,91 @@ private func sys9AppLinkFilters(_ manifest: String) -> [SYS9AppLinkFilter] {
     }
 }
 
-/// Android merges every data element of a filter, so a verified filter captures a URL when its scheme and host
-/// are declared and any path, pathPrefix or pathPattern in the filter matches.
-private func sys9AndroidCaptures(_ path: String, host: String, filters: [SYS9AppLinkFilter]) -> Bool {
+private func sys9AppLinkAlias(_ manifest: String) throws -> String {
+    try #require(sys9Matches(#"(<activity-alias\s+android:name=".MeetingAppLinks"[\s\S]*?</activity-alias>)"#, in: manifest).first?.first)
+}
+
+private func sys9AndroidAliasEnabled(apiLevel: Int) throws -> Bool {
+    let directory = apiLevel >= 31 ? "values-v31" : "values"
+    let xml = try sys9Source("Android/app/src/main/res/\(directory)/app_links.xml")
+    let value = try #require(sys9Matches(#"<bool name="conclave_verified_app_links_enabled">(true|false)</bool>"#, in: xml).first?.first)
+    return value == "true"
+}
+
+/// Android merges data elements inside each filter. Uri.getPath() is decoded once before framework matching.
+/// The enabled resource is tested separately: API 28 to 30 does not participate in HTTPS resolution at all.
+private func sys9AndroidCaptures(_ path: String, host: String, filters: [SYS9AppLinkFilter], aliasEnabled: Bool = true) -> Bool {
+    guard aliasEnabled else { return false }
+    let decoded = path.removingPercentEncoding ?? path
     for filter in filters where filter.hosts.contains(host) && filter.schemes.contains("https") {
         for element in filter.data {
-            if let literal = element["path"], literal == path { return true }
-            if let prefix = element["pathPrefix"], path.hasPrefix(prefix) { return true }
-            if let pattern = element["pathPattern"], sys9FullMatch(sys9AndroidGlobRegex(pattern), path) { return true }
+            if let pattern = element["pathAdvancedPattern"], sys9AndroidAdvancedGlobMatches(pattern, decoded) { return true }
         }
     }
     return false
 }
 
-/// `android.os.PatternMatcher` PATTERN_SIMPLE_GLOB as a whole-path regex: "." is any character, "*" repeats the
-/// character before it and a backslash escapes the next one. Android scans ".*" forward without backtracking;
-/// for the manifest's patterns (a literal or "-" after each ".*") that gives the same answers as this regex.
-private func sys9AndroidGlobRegex(_ pattern: String) -> String {
-    var regex = "^"
-    var escaping = false
-    for character in pattern {
-        if escaping {
-            regex += NSRegularExpression.escapedPattern(for: String(character))
-            escaping = false
-        } else if character == "\\" {
-            escaping = true
-        } else if character == "." {
-            regex += "."
-        } else if character == "*" {
-            regex += "*"
+/// A bounded model of the shipped advanced-glob subset: ASCII literals, positive sets/ranges, +, * and {m,n}.
+/// Each token greedily consumes its input and never gives characters back. This deliberately does not turn
+/// the pattern into a regular expression: Android rejects [a-z]+b against ab, unlike a backtracking regex.
+/// Unsupported syntax fails closed. Framework PatternMatcher/IntentFilter tests provide the Android oracle.
+private func sys9AndroidAdvancedGlobMatches(_ pattern: String, _ path: String) -> Bool {
+    let bytes = Array(pattern.utf8)
+    let input = Array(path.utf8)
+    var p = 0
+    var i = 0
+    while p < bytes.count {
+        var allowed: Set<UInt8> = []
+        if bytes[p] == 91 { // [
+            p += 1
+            while p < bytes.count && bytes[p] != 93 {
+                if p + 2 < bytes.count && bytes[p + 1] == 45 && bytes[p + 2] != 93 {
+                    guard bytes[p] <= bytes[p + 2] else { return false }
+                    allowed.formUnion(bytes[p]...bytes[p + 2])
+                    p += 3
+                } else {
+                    guard bytes[p] != 94 && bytes[p] != 92 else { return false }
+                    allowed.insert(bytes[p])
+                    p += 1
+                }
+            }
+            guard p < bytes.count && !allowed.isEmpty else { return false }
+            p += 1
         } else {
-            regex += NSRegularExpression.escapedPattern(for: String(character))
+            guard ![46, 42, 43, 123, 125, 92, 93].contains(bytes[p]) else { return false }
+            allowed.insert(bytes[p])
+            p += 1
         }
+        var minimum = 1
+        var maximum = 1
+        if p < bytes.count && (bytes[p] == 43 || bytes[p] == 42) {
+            minimum = bytes[p] == 43 ? 1 : 0
+            maximum = input.count
+            p += 1
+        } else if p < bytes.count && bytes[p] == 123 { // {
+            p += 1
+            let start = p
+            while p < bytes.count && bytes[p] != 125 { p += 1 }
+            guard p < bytes.count else { return false }
+            let pieces = String(decoding: bytes[start..<p], as: UTF8.self).split(separator: ",", omittingEmptySubsequences: false)
+            guard (1...2).contains(pieces.count), let lower = Int(pieces[0]), lower >= 0 else { return false }
+            minimum = lower
+            if pieces.count == 1 {
+                maximum = lower
+            } else {
+                guard let upper = Int(pieces[1]), upper >= lower else { return false }
+                maximum = upper
+            }
+            p += 1
+        }
+        var consumed = 0
+        while i < input.count && consumed < maximum && allowed.contains(input[i]) {
+            i += 1
+            consumed += 1
+        }
+        guard consumed >= minimum else { return false }
     }
-    return regex + "$"
+    return i == input.count
 }
 
 // MARK: Parser source

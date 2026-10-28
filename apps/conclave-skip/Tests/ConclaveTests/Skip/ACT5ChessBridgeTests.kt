@@ -129,11 +129,14 @@ class ACT5ChessBridgeTests {
         assertEquals("0:08", chessClock(8, Locale.US))
         assertEquals(8, ChessClockModel.wholeSeconds(7001.0))
         assertEquals(12, ChessPieceCodes.size)
+        val artworkKinds = mapOf("K" to "king", "Q" to "queen", "R" to "rook", "B" to "bishop", "N" to "knight", "P" to "pawn")
         for (code in ChessPieceCodes) {
-            assertTrue(chessGlyph(code).endsWith("︎"))
-            assertEquals(1, chessPieceLetter(code).length)
+            assertEquals("chess_piece_${artworkKinds[code.takeLast(1)]}", chessPieceAssetName(code))
             assertTrue(chessPieceNameResource(code)!!.startsWith("gm_chess_"))
         }
+        assertEquals(6, ChessPieceCodes.map { chessPieceAssetName(it) }.toSet().size)
+        assertNull(chessPieceAssetName(""))
+        assertNull(chessPieceAssetName("wX"))
         assertNull(chessPieceNameResource(""))
         for (value in ChessRole.entries) assertTrue(chessRoleResource(value).startsWith("gm_chess_"))
         for (value in ChessMode.entries) assertTrue(chessModeResource(value, false).startsWith("gm_chess_"))

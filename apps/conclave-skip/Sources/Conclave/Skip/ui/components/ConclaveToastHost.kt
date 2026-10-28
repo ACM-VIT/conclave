@@ -50,7 +50,7 @@ internal fun ConclaveToastHost(
             message = shown.message,
             actionLabel = if (shown.hasAction) shown.actionTitle else null,
             withDismissAction = false,
-            duration = if (shown.hasAction) SnackbarDuration.Long else SnackbarDuration.Short,
+            duration = conclaveToastDuration(shown),
         )
         if (result == SnackbarResult.ActionPerformed) currentAction(shown)
         if (currentItem?.id == shown.id) currentDismiss(shown.id)
@@ -63,6 +63,13 @@ internal fun ConclaveToastHost(
             Snackbar(data, shape = MaterialTheme.shapes.small)
         }
     }
+}
+
+/** Progress stays until its owner removes it. Other durations keep stock accessibility adjustment. */
+internal fun conclaveToastDuration(item: ConclaveToastItem): SnackbarDuration = when {
+    item.isProgress -> SnackbarDuration.Indefinite
+    item.hasAction -> SnackbarDuration.Long
+    else -> SnackbarDuration.Short
 }
 
 /** The dark stage-lane snackbar, with the 24 dp avatar row for chat previews and raised hands (S40 R40-8). */

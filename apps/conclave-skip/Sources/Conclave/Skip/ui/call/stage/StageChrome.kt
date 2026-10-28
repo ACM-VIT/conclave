@@ -188,7 +188,7 @@ private fun StageCapsule(stage: StagePresenter, maxWidth: Dp, modifier: Modifier
     val title = if (model.subtitleKind == AttendeeViewerPolicy.capsuleLiveKind) attendeeTitle(model.title) else model.title
     ConclaveMeetingCapsule(title = title, subtitle = stageCapsuleSubtitle(model), identifier = "stage.capsule",
         onClick = { stage.openMeetingInfo() }, modifier = modifier, locked = model.isLocked, captionsOn = model.captionsOn,
-        maxWidth = maxWidth)
+        live = model.subtitleKind == AttendeeViewerPolicy.capsuleLiveKind, maxWidth = maxWidth)
 }
 
 @Composable

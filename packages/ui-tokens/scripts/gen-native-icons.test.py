@@ -243,7 +243,9 @@ class XMLProfile(unittest.TestCase):
         self.assertEqual(g.svg_path(self.svg()), 'M0 -960Z')
         m, _ = g.validate(g.ROOT)
         for a in m['artwork']:
-            self.assertTrue(g.normalize(g.svg_path((g.ROOT / g.VENDOR / a['local_path']).read_bytes(), a['id'])))
+            self.assertTrue(g.artwork_ops(g.ROOT, a))
+            if '_vendor_root' not in a:
+                self.assertTrue(g.normalize(g.svg_path((g.ROOT / g.VENDOR / a['local_path']).read_bytes(), a['id'])))
 
     def test_reject_features_and_entity_expansion(self):
         raw = self.svg()
@@ -354,6 +356,100 @@ def binding(m, key):
 
 
 class ValidationAndDrift(unittest.TestCase):
+    def test_additions_preserve_base_selection_and_append_only(self):
+        base = json.loads(MANIFEST.read_bytes())
+        merged, _ = g.validate(g.ROOT)
+        self.assertEqual(merged['concepts'][:36], base['concepts'])
+        self.assertEqual(merged['artwork'][:54], base['artwork'])
+        self.assertEqual(merged['sf_literals'][:50], base['sf_literals'])
+        self.assertEqual(g.digest(g.canonical(base['vendor_files'])), g.VENDOR_SEAL_SHA)
+        ext = json.loads((g.ROOT / g.ADDITIONS / 'manifest.json').read_bytes())
+        self.assertEqual(ext['history'], {'fresh_pinned_acquisitions': 61, 'historical_exact_matches': 0})
+        self.assertEqual(len(ext['concepts']), 70)
+        self.assertEqual(len(ext['sf_literals']), 69)
+        self.assertNotIn('xmark.bubble', merged['sf_literals'])
+        dismiss = next(c for c in ext['concepts'] if c['id'] == 'dismiss_question')
+        self.assertEqual(dismiss['sf_symbols'][0]['name'], 'xmark.circle')
+        self.assertEqual(dismiss['bindings'][0]['artwork'], 'cancel.fill0')
+
+    def test_addition_receipts_axes_and_semantics_fail_closed_after_resealing(self):
+        # Recompute the outer hash to exercise the inner constraints, not just the seal.
+        path = g.ROOT / g.ADDITIONS / 'manifest.json'
+        original = json.loads(path.read_bytes())
+        read = Path.read_bytes
+        mutations = {
+            'wrong pin': lambda m: m.update(source_revision='0' * 40),
+            'wrong license': lambda m: m.update(license_sha256='0' * 64),
+            'wrong axes evidence': lambda m: m.update(axis_evidence='unverified.json'),
+            'wrong implicit geometry identity': lambda m: next(a for a in m['artwork'] if a['id'] == 'auto_awesome.fill0').update(sha256='0' * 64),
+            'duplicate base artwork': lambda m: m['artwork'][0].update(id='check.fill0'),
+            'extra receipt': lambda m: m['files'].update({'http/extra.json': '0' * 64}),
+            'changed mirroring': lambda m: m['artwork'][0].update(autoMirror=True),
+            'missing binding': lambda m: m['concepts'][0].update(bindings=[]),
+            'duplicate base concept': lambda m: m['concepts'][0].update(id='microphone'),
+            'raw glyph label': lambda m: m['concepts'][0]['bindings'][0]['accessibility'].update(label='video_call.fill0'),
+            'unlocalized icon owner': lambda m: m['concepts'][0]['bindings'][0]['accessibility'].update(icon_exposure='spoken'),
+            'unavailable literal': lambda m: m['sf_literals'].append('xmark.bubble'),
+            'cyclic alias': lambda m: m['aliases'].update(retry='rejoin'),
+            'false historical claim': lambda m: m['history'].update(historical_exact_matches=1),
+            'request absent': lambda m: m['concepts'][0]['bindings'][0].update(references=[]),
+            'undocumented fill': lambda m: m['concepts'][0]['bindings'][0].update(decision_id='P99'),
+        }
+        for name, mutate in mutations.items():
+            changed = json.loads(json.dumps(original))
+            mutate(changed)
+            payload = json.dumps(changed).encode()
+            base = json.loads(MANIFEST.read_bytes())
+            base['additions']['sha256'] = g.digest(payload)
+            def fake(p):
+                if p == path:
+                    return payload
+                if p == MANIFEST:
+                    return json.dumps(base).encode()
+                return read(p)
+            with self.subTest(name=name), patch.object(Path, 'read_bytes', fake), self.assertRaises(g.IconError):
+                g.generate(g.ROOT)
+
+    def test_implicit_viewport_is_scoped_and_scaled_without_geometry_substitution(self):
+        m, _ = g.validate(g.ROOT)
+        a = next(a for a in m['artwork'] if a['id'] == 'auto_awesome.fill0')
+        raw = (g.ROOT / g.ADDITIONS / a['local_path']).read_bytes()
+        with self.assertRaises(g.IconError):
+            g.svg_path(raw, a['id'])  # the original font960 profile is still strict
+        self.assertEqual(g.digest(raw), g.ADDITIVE_24PX[a['id']])
+        ops = g.artwork_ops(g.ROOT, a)
+        # Independent first contour coordinates from the original 24px source.
+        self.assertEqual(ops[:2], [('M', F(760), F(332)), ('Q', F(755), F(332), F(18738, 25), F(329))])
+        self.assertEqual(ops[-2:], [('M', F(360), F(480)), ('Z',)])
+        self.assertTrue(all(0 <= v <= 960 for op in ops for v in op[1:]))
+
+    def test_extension_origin_receipt_rejects_redirects_and_wrong_commit(self):
+        read = Path.read_bytes
+        ext_path = g.ROOT / g.ADDITIONS / 'manifest.json'
+        receipt_name = 'http/reply.fill0.json'
+        receipt_path = g.ROOT / g.ADDITIONS / receipt_name
+        for field, value in [('final_url', 'https://example.invalid/reply.svg'),
+                             ('source_revision', '0' * 40), ('http_status', 302),
+                             ('bytes', 0), ('historical_status', 'historical_exact_match')]:
+            receipt = json.loads(read(receipt_path))
+            receipt[field] = value
+            receipt_bytes = json.dumps(receipt).encode()
+            extension = json.loads(read(ext_path))
+            extension['files'][receipt_name] = g.digest(receipt_bytes)
+            ext_bytes = json.dumps(extension).encode()
+            base = json.loads(read(MANIFEST))
+            base['additions']['sha256'] = g.digest(ext_bytes)
+            def fake(p):
+                if p == receipt_path:
+                    return receipt_bytes
+                if p == ext_path:
+                    return ext_bytes
+                if p == MANIFEST:
+                    return json.dumps(base).encode()
+                return read(p)
+            with self.subTest(field=field), patch.object(Path, 'read_bytes', fake), self.assertRaises(g.IconError):
+                g.generate(g.ROOT)
+
     def test_duplicate_keys_nonfinite_and_closed_schema(self):
         for data in ['{"a":1,"a":2}', '{"a":NaN}', '{"a":Infinity}', '{"a":-Infinity}']:
             with self.subTest(data=data), self.assertRaises(g.IconError):
@@ -459,26 +555,29 @@ class ValidationAndDrift(unittest.TestCase):
         b = g.generate(g.ROOT)
         self.assertEqual(a, b)
         report = json.loads(a[g.REPORT])
-        self.assertEqual(len(report['assets']), 54)
-        self.assertTrue(all(F(x['maximum_float32_error']) == 0 for x in report['assets']))
+        self.assertEqual(report['base_counts'], g.COUNTS)
+        self.assertEqual(report['counts'], {'concepts': 106, 'material_names': 108, 'artwork': 115, 'bindings': 134, 'sf_literals': 116})
+        self.assertEqual(len(report['assets']), 115)
+        self.assertTrue(all(F(x['maximum_float32_error']) == 0 for x in report['assets'][:54]))
+        self.assertTrue(all(F(x['maximum_float32_error']) <= F(1, 51200) for x in report['assets']))
         vectors = a[g.ANDROID / 'ConclaveIcons.kt'].decode()
-        self.assertEqual(vectors.count('lazy(LazyThreadSafetyMode.SYNCHRONIZED)'), 54)
-        self.assertEqual(vectors.count('internal val '), 54)
-        self.assertEqual(vectors.count('autoMirror = true'), 2)
-        self.assertEqual(len(re.findall(r'// [a-z_]+\.fill[01]; input SHA256 [0-9a-f]{64}\.', vectors)), 54)
+        self.assertEqual(vectors.count('lazy(LazyThreadSafetyMode.SYNCHRONIZED)'), 115)
+        self.assertEqual(vectors.count('internal val '), 115)
+        self.assertEqual(vectors.count('autoMirror = true'), 4)
+        self.assertEqual(len(re.findall(r'// [a-z_]+\.fill[01]; input SHA256 [0-9a-f]{64}\.', vectors)), 115)
         self.assertIn('Material Symbols by Google', vectors)
         self.assertIn('PathFillType.NonZero', vectors)
         self.assertNotIn('EvenOdd', vectors)
         self.assertNotRegex(vectors, r'\bmapOf\b|\barrayOf\b|\binit \{|PathParser|addPathNodes|\bparse\w*\(')
         catalog = a[g.ANDROID / 'NativeIconCatalog.kt'].decode()
-        self.assertEqual(catalog.count('NativeIconBinding('), 58)
-        self.assertEqual(catalog.count('NativeIconArtwork('), 54)
+        self.assertEqual(catalog.count('NativeIconBinding('), 134)
+        self.assertEqual(catalog.count('NativeIconArtwork('), 115)
         symbols = a[g.IOS / 'ConclaveSymbols.swift'].decode()
-        self.assertEqual(symbols.count('static let '), 50)
+        self.assertEqual(symbols.count('static let '), 116)
         self.assertIn('#if os(iOS) && !SKIP', symbols)
         self.assertNotRegex(symbols, r'\bcase\b|func |\.fill"\s*\+')
         rows = a[g.IOS / 'NativeSymbolCatalog.swift'].decode()
-        self.assertEqual(rows.count('symbol: ConclaveSymbols.'), sum(len(c['sf_literals']) for c in vendored_index()['concepts']))
+        self.assertEqual(rows.count('symbol: ConclaveSymbols.'), sum(len(c['sf_symbols']) for c in g.validate(g.ROOT)[0]['concepts']))
         self.assertEqual(rows.count('symbol: nil'), 3)
         license_bytes = (g.ROOT / g.VENDOR / 'upstream/LICENSE').read_bytes()
         self.assertEqual(g.digest(license_bytes), g.LICENSE_SHA)

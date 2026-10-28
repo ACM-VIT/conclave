@@ -89,15 +89,15 @@ enum OutcomeCopy {
         }
     }
 
-    /// Pending icon concepts (S10 R1) use catalog stand-ins: `request_declined` is the raised hand.
+    /// Canonical outcome concepts (S10 R1).
     static func symbol(_ variant: OutcomeVariant) -> String {
         switch variant {
         case .removed:
             return ConclaveSymbols.personFillXmark
         case .denied:
-            return ConclaveSymbols.handRaised
+            return ConclaveSymbols.handRaisedSlash
         case .connectionLost:
-            return ConclaveSymbols.wifiExclamationmark
+            return ConclaveSymbols.wifiSlash
         case .serverDisconnected, .rejoinFailed:
             return ConclaveSymbols.exclamationmarkTriangleFill
         }

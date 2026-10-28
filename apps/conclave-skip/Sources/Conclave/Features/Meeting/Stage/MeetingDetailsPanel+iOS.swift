@@ -351,8 +351,8 @@ private struct MeetingDetailsHostControlsRow: View {
                     Text(ConclaveStrings.text("Unavailable while reconnecting"))
                 }
             } label: {
-                // `host_controls_item` is pending the icon lane (S30 CL11); the host concept glyph stands in, as in People.
-                Label(ConclaveStrings.text("Host Controls"), systemImage: ConclaveSymbols.crownFill)
+                // Host controls are distinct from the host badge.
+                Label(ConclaveStrings.text("Host Controls"), systemImage: ConclaveSymbols.personBadgeShieldCheckmarkFill)
             }
         }
         .disabled(!isEnabled)

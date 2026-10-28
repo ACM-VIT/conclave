@@ -44,12 +44,13 @@ struct ConclaveBanner: View {
     let actions: [ConclaveBannerAction]
     let onDismiss: (() -> Void)?
     let announces: Bool
+    let isAssertive: Bool
     let lineLimit: Int?
     let identifier: String
     @State private var announced = BannerAnnouncementLatch()
 
     init(kind: ConclaveBannerKind, text: String, surface: ConclaveBannerSurface = .inCall,
-         actions: [ConclaveBannerAction] = [], onDismiss: (() -> Void)? = nil, announces: Bool = true,
+         actions: [ConclaveBannerAction] = [], onDismiss: (() -> Void)? = nil, announces: Bool = true, isAssertive: Bool = false,
          lineLimit: Int? = nil, identifier: String) {
         self.kind = kind
         self.text = text
@@ -57,6 +58,7 @@ struct ConclaveBanner: View {
         self.actions = actions
         self.onDismiss = onDismiss
         self.announces = announces
+        self.isAssertive = isAssertive
         self.lineLimit = lineLimit
         self.identifier = identifier
     }
@@ -115,7 +117,9 @@ struct ConclaveBanner: View {
     private func announce() {
         guard announces, announced.text != text else { return }
         announced.text = text
-        AccessibilityNotification.Announcement(text).post()
+        var announcement = AttributedString(text)
+        announcement.accessibilitySpeechAnnouncementPriority = isAssertive ? .high : .low
+        AccessibilityNotification.Announcement(announcement).post()
     }
 
     private var textColor: Color {
@@ -151,8 +155,7 @@ enum ConclaveBannerMetrics {
     static let dismissTarget: CGFloat = 44
 }
 
-/// The status glyph, or a system spinner while reconnecting. The success and offline concepts are pending in the
-/// icon manifest, so success uses the checkmark stand-in (FND-1 carry, F00 7.3).
+/// The canonical status glyph, or a system spinner while reconnecting.
 private struct BannerGlyph: View {
     let kind: ConclaveBannerKind
     let color: Color
@@ -170,7 +173,7 @@ private struct BannerGlyph: View {
             case .error:
                 Image(systemName: ConclaveSymbols.exclamationmarkOctagonFill)
             case .success:
-                Image(systemName: ConclaveSymbols.checkmark)
+                Image(systemName: ConclaveSymbols.checkmarkCircleFill)
             }
         }
         .font(.body)

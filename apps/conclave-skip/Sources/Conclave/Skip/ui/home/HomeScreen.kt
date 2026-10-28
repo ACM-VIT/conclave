@@ -1,5 +1,7 @@
 package conclave.module
 
+import androidx.compose.foundation.layout.size
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -56,14 +58,11 @@ import androidx.compose.ui.unit.dp
  * the update banner, the notice, Join with a code, the Rejoin card and the recents. Observes `premeeting.home` only.
  */
 
-/** The premeeting icon concepts (S10 0.6 R1) with catalog stand-ins until the manifest lane adds them. */
+/** Canonical premeeting icon concepts (S10 0.6 R1). */
 internal object PremeetingIcons {
-    /** Pending `new_meeting` (`video_call`): stand-in VideocamFill1. */
-    val NewMeeting: ImageVector get() = ConclaveIcons.VideocamFill1
-    /** Pending `account` (`account_circle`): stand-in GroupFill0. */
-    val Account: ImageVector get() = ConclaveIcons.GroupFill0
-    /** Pending `recent` (`history`): stand-in VideocamFill1. */
-    val Recent: ImageVector get() = ConclaveIcons.VideocamFill1
+    val NewMeeting: ImageVector get() = ConclaveIcons.VideoCallFill0
+    val Account: ImageVector get() = ConclaveIcons.AccountCircleFill0
+    val Recent: ImageVector get() = ConclaveIcons.HistoryFill0
     val Info: ImageVector get() = ConclaveIcons.InfoFill0
     val Close: ImageVector get() = ConclaveIcons.CloseFill0
     val More: ImageVector get() = ConclaveIcons.MoreVertFill0
@@ -135,6 +134,7 @@ internal fun HomeScreen(premeeting: PremeetingPresenter, modifier: Modifier = Mo
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).heightIn(min = 48.dp)
                             .testTag("home.join"),
                     ) {
+                        Icon(ConclaveIcons.KeyboardFill0, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
                         Text(conclaveString("pm_join_with_code"))
                     }
                 }

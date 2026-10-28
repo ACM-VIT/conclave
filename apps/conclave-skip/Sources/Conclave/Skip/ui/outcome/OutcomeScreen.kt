@@ -131,11 +131,11 @@ internal object OutcomeUi {
         OutcomeAction.backHome, OutcomeAction.none -> "pm_back_home"
     }
 
-    /** Pending icon concepts (S10 R1) use catalog stand-ins: `request_declined` is the raised hand. */
+    /** Canonical outcome concepts (S10 R1). */
     fun icon(variant: OutcomeVariant): ImageVector = when (variant) {
         OutcomeVariant.removed -> ConclaveIcons.PersonRemoveFill0
-        OutcomeVariant.denied -> ConclaveIcons.FrontHandFill0
-        OutcomeVariant.connectionLost -> ConclaveIcons.SignalWifiBadFill0
+        OutcomeVariant.denied -> ConclaveIcons.DoNotTouchFill0
+        OutcomeVariant.connectionLost -> ConclaveIcons.WifiOffFill0
         OutcomeVariant.serverDisconnected, OutcomeVariant.rejoinFailed -> ConclaveIcons.WarningFill1
     }
 

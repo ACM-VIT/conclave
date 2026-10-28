@@ -1,5 +1,9 @@
 package conclave.module
 
+import androidx.compose.foundation.layout.size
+
+import androidx.compose.material3.Icon
+
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
@@ -145,6 +149,7 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
                                     }
                                 },
                                 label = { Text(conclaveString("pm_paste")) },
+                                leadingIcon = { Icon(ConclaveIcons.ContentPasteFill0, contentDescription = null, modifier = Modifier.size(18.dp)) },
                                 modifier = Modifier.testTag("join.paste"),
                             )
                         }

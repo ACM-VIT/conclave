@@ -1,5 +1,9 @@
 package conclave.module
 
+import androidx.compose.foundation.layout.size
+
+import androidx.compose.material3.Icon
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -149,7 +153,7 @@ internal fun ChatTimeline(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp).testTag("chat.jumpPill"),
             ) {
-                // The scroll_to_latest glyph is a pending icon concept (R40-5); text only until it lands.
+                Icon(ConclaveIcons.ArrowDownwardFill0, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
                 val label = if (unseen > 0) conclavePlural("chat_jump_new", unseen, unseen) else conclaveString("chat_jump_latest")
                 ConclaveText(label, line = "chat.jumpPill.label")
             }

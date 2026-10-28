@@ -118,7 +118,11 @@ private struct WordleTimerFace: View {
         let warning = seconds <= WordleBoardPolicy.warningSeconds
         let clock = WordleCopy.clock(seconds)
         let ink = warning ? HostingTheme.token(DesignTokens.iosInCallWarning) : HostingTheme.token(DesignTokens.iosInCallText)
-        Text(warning ? WordleCopy.timeLeft(clock) : clock)
+        Label {
+            Text(warning ? WordleCopy.timeLeft(clock) : clock)
+        } icon: {
+            Image(systemName: ConclaveSymbols.timer).accessibilityHidden(true)
+        }
             .font(.subheadline.weight(.semibold))
             .monospacedDigit()
             .foregroundStyle(ink)
@@ -215,7 +219,13 @@ struct WordleInputArea: View {
                     .accessibilityIdentifier("game.wordle.useLetterKeys")
             } else {
                 WordleLetterKeyboard(scene: scene, games: games)
-                Button(WordleCopy.typeYourGuess()) { onTextEntry(true) }
+                Button { onTextEntry(true) } label: {
+                    Label {
+                        Text(WordleCopy.typeYourGuess())
+                    } icon: {
+                        Image(systemName: ConclaveSymbols.keyboard).accessibilityHidden(true)
+                    }
+                }
                     .buttonStyle(.bordered)
                     .tint(HostingTheme.token(DesignTokens.iosInCallText))
                     .frame(minHeight: 44)
@@ -719,7 +729,7 @@ struct WordleLetterKey: View {
     }
 }
 
-/// Enter (text) and Delete (the `backspace` concept; `xmark` stands in until the R6-1 icon lands, HD request R7).
+/// Enter (text) and Delete (canonical R6-1 backspace artwork).
 struct WordleWideKey: View {
     let title: String
     let symbol: String
@@ -767,9 +777,9 @@ struct WordleWideKey: View {
 
 // MARK: Style and copy
 
-/// Stand-ins until the R6-1 concepts (`backspace`, `keyboard`, `timer`) join the icon manifest (HD request R7).
+/// Canonical R6-1 Wordle concepts.
 enum WordleSymbols {
-    static let backspace = ConclaveSymbols.xmark
+    static let backspace = ConclaveSymbols.deleteBackward
 }
 
 struct WordleCellStyle {

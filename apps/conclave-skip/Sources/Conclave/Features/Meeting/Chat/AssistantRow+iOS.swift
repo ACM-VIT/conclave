@@ -14,10 +14,9 @@ import UIKit
 // answer keeps its headings and links as their own elements behind the header, which carries the summary and the row
 // actions. The approval card and the key prompt are W10-2 (not shown).
 
-/// Symbol stand-ins: the `assistant` concept (sparkles) is pending in the icon manifest (S40 R40-5; HD/requests/B6-T4.md
-/// R4), `admit` is the checkmark.
+/// Canonical assistant artwork; completion and error retain their existing meanings.
 enum AssistantSymbols {
-    static let assistant = ConclaveSymbols.messageFill
+    static let assistant = ConclaveSymbols.sparkles
     static let taskDone = ConclaveSymbols.checkmark
     static let error = ConclaveSymbols.exclamationmarkOctagonFill
 }

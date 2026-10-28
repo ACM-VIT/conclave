@@ -312,7 +312,7 @@ private fun ChatGifElement(row: ChatRowModel, actions: ChatRowActions, media: Ch
                 ChatImageBox(poster, ChatMediaGeometry.gifWidth.dp, height, shape = RoundedCornerShape(0.dp),
                     onOpen = { actions.openLink(target) })
                 Surface(shape = CircleShape, color = scheme.surface) {
-                    Icon(ConclaveIcons.VideocamFill1, contentDescription = null, tint = scheme.onSurface,
+                    Icon(ConclaveIcons.PlayArrowFill1, contentDescription = null, tint = scheme.onSurface,
                         modifier = Modifier.padding(12.dp).size(24.dp))
                 }
                 Surface(shape = MaterialTheme.shapes.small, color = scheme.surface, modifier = Modifier.align(Alignment.BottomStart).padding(8.dp)) {

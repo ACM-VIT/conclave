@@ -7,7 +7,7 @@ import SwiftUI
 // beside the stage (never inside its subtree, PS 7.6). Never `MeetingViewModel`, WebRTC, audio, capture or network.
 
 enum ControlsFixtureLaunch {
-    static func state(environment: [String: String] = ProcessInfo.processInfo.environment) -> ControlsFixtureState? {
+    static func state(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> ControlsFixtureState? {
         guard let raw = environment["CONCLAVE_STAGE_FIXTURE"] else { return nil }
         return ControlsFixtureScript.state(named: raw)
     }

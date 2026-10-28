@@ -125,7 +125,8 @@ struct FND2InCallChromeTests {
         let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveStageChrome.kt"))
         #expect(android.components(separatedBy: "color = ext.labelScrim,").count - 1 == 3)
         #expect(android.components(separatedBy: "border = BorderStroke(1.dp, ext.border),").count - 1 == 3)
-        #expect(android.contains("\"usb\"") == false, "USB and hearing aid fall back to the speaker glyph until CL11 lands")
+        #expect(android.contains("\"usb\" -> ConclaveIcons.UsbFill0"))
+        #expect(android.contains("\"hearingAid\" -> ConclaveIcons.HearingFill0"))
         #expect(android.contains("ConclaveChromeButton(conclaveString(\"ds_minimize_call\"), ConclaveIcons.ArrowBackFill0,"))
     }
 
@@ -172,7 +173,7 @@ struct FND2InCallChromeTests {
         #expect(!fndContainsDash(android))
         let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveToast+iOS.swift"))
         #expect(ios.contains(".task(id: item.id) {"))
-        #expect(ios.contains("ConclaveToastTiming.durationMillis(hasAction: item.hasAction, isScreenReaderRunning: isScreenReaderRunning)"))
+        #expect(ios.contains("ConclaveToastTiming.durationMillis(hasAction: item.hasAction, isScreenReaderRunning: isScreenReaderRunning, isProgress: item.isProgress)"))
         #expect(ios.contains("text.accessibilitySpeechAnnouncementPriority = item.isFailure ? .high : .low"))
         #expect(ios.contains(".accessibilityAction(.escape) { onDismiss(item.id) }"))
         #expect(ios.contains(".tint(HostingTheme.inCallCoralText)"))

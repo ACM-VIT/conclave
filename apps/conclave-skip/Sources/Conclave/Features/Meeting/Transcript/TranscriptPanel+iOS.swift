@@ -141,13 +141,16 @@ private struct TranscriptPanelMenu: View {
                 .accessibilityIdentifier("transcript.menu.copy")
             }
             if snapshot.offersRecapToChat {
-                // The assistant concept (R6-1) is pending in the icon manifest; text only until it lands.
-                Button(TranscriptCopy.postRecap) { transcript.postRecapToChat() }
+                Button { transcript.postRecapToChat() } label: {
+                    Label(TranscriptCopy.postRecap, systemImage: ConclaveSymbols.sparkles)
+                }
                     .disabled(snapshot.recap == RecapPhase.posting)
                     .accessibilityIdentifier("transcript.menu.recap")
             }
             if snapshot.canStop {
-                Button(TranscriptCopy.stopMenu, role: .destructive) { transcript.requestStop() }
+                Button(role: .destructive) { transcript.requestStop() } label: {
+                    Label(TranscriptCopy.stopMenu, systemImage: ConclaveSymbols.stopFill)
+                }
                     .disabled(snapshot.controlsDisabled)
                     .accessibilityIdentifier("transcript.menu.stop")
             }
@@ -667,13 +670,17 @@ private struct TranscriptPanelBottomProximity: ViewModifier {
     }
 }
 
-/// S40 CL5 unchanged: neutral, never coral. The scroll_to_latest glyph (R40-5) is pending in the icon manifest.
+/// S40 CL5: neutral latest affordance with canonical decorative artwork.
 private struct TranscriptPanelJumpPill: View {
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Text(TranscriptCopy.jumpToLatest)
+            Label {
+                Text(TranscriptCopy.jumpToLatest)
+            } icon: {
+                Image(systemName: ConclaveSymbols.arrowDown).accessibilityHidden(true)
+            }
         }
         .buttonStyle(.bordered)
         .tint(.primary)
@@ -773,7 +780,7 @@ private struct TranscriptPanelAskList: View {
         let ids = thread.rowIds
         if ids.isEmpty {
             ContentUnavailableView {
-                Label(TranscriptCopy.askEmptyTitle, systemImage: ConclaveSymbols.questionmarkBubble)
+                Label(TranscriptCopy.askEmptyTitle, systemImage: ConclaveSymbols.sparkles)
                     .accessibilityAddTraits(.isHeader)
             } description: {
                 Text(TranscriptCopy.askEmptyBody)
@@ -999,7 +1006,7 @@ private struct TranscriptPanelMinutesList: View {
         .overlay {
             if empty != MinutesEmptyKind.none {
                 ConclaveEmptyStatus(title: TranscriptCopy.emptyTitle(empty), message: TranscriptCopy.emptyBody(empty),
-                                    systemImage: ConclaveSymbols.textQuote, identifier: "transcript.minutes.empty")
+                                    systemImage: ConclaveSymbols.listBulletClipboard, identifier: "transcript.minutes.empty")
                     .padding(.top, 120)
             }
         }

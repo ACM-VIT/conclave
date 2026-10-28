@@ -54,11 +54,10 @@ internal fun ConclaveErrorStatus(
     StatusColumn(title, body, icon, identifier, modifier, retryTitle ?: conclaveString("ds_try_again"), onRetry)
 }
 
-/** Offline with the component copy (F00 C14 g, final in S70 7 g). The offline concept is pending in the icon
- *  manifest, so the glyph is the SignalWifiBad stand-in (FND-1 carry, F00 7.3). */
+/** Offline with canonical artwork and component copy (F00 C14 g, S70 7 g). */
 @Composable
 internal fun ConclaveOfflineStatus(identifier: String, modifier: Modifier = Modifier, onRetry: (() -> Unit)? = null) {
-    StatusColumn(conclaveString("ds_offline_title"), conclaveString("ds_offline_body"), ConclaveIcons.SignalWifiBadFill0,
+    StatusColumn(conclaveString("ds_offline_title"), conclaveString("ds_offline_body"), ConclaveIcons.WifiOffFill0,
         identifier, modifier, retryTitle = if (onRetry == null) null else conclaveString("ds_try_again"), onRetry = onRetry)
 }
 

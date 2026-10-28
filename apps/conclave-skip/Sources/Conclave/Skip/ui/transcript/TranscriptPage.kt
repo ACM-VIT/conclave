@@ -289,9 +289,9 @@ private fun TranscriptOverflowMenu(
                 )
             }
             if (snapshot.offersRecapToChat) {
-                // The assistant concept (R6-1) is pending in the icon manifest; text only until it lands.
                 DropdownMenuItem(
                     text = { ConclaveText(conclaveString("trn_post_recap"), line = "transcript.menu.recap") },
+                    leadingIcon = { Icon(ConclaveIcons.AutoAwesomeFill0, contentDescription = null, tint = scheme.onSurfaceVariant) },
                     enabled = snapshot.recap != RecapPhase.posting,
                     onClick = {
                         page.menuOpen = false
@@ -303,6 +303,7 @@ private fun TranscriptOverflowMenu(
             if (snapshot.canStop) {
                 DropdownMenuItem(
                     text = { ConclaveText(conclaveString("trn_stop_menu"), line = "transcript.menu.stop", color = scheme.error) },
+                    leadingIcon = { Icon(ConclaveIcons.StopFill1, contentDescription = null, tint = scheme.error) },
                     enabled = !snapshot.controlsDisabled,
                     onClick = {
                         page.menuOpen = false

@@ -56,7 +56,13 @@ struct JoinCodeSheet: View {
                 }
                 if let suggestion {
                     Section {
-                        Button(ConclaveStrings.format("Rejoin %@", suggestion)) { premeeting.rejoin() }
+                        Button { premeeting.rejoin() } label: {
+                            Label {
+                                Text(ConclaveStrings.format("Rejoin %@", suggestion))
+                            } icon: {
+                                Image(systemName: ConclaveSymbols.arrowClockwise).accessibilityHidden(true)
+                            }
+                        }
                             .tint(HostingTheme.coralText)
                             .accessibilityIdentifier("join.rejoinSuggestion")
                     }

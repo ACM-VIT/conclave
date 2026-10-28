@@ -1,5 +1,6 @@
 package conclave.module
 
+import android.os.Looper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -7,7 +8,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import java.util.concurrent.TimeUnit
 
 /**
  * PPL-6 through the transpiled Q&A presenter and policies (the Swift half is T/PPL6QaPolicyTests.swift), plus the
@@ -92,6 +95,34 @@ class PPL6QaBridgeTests {
         assertFalse(people.qa.questions.entry("q2").model.isEnabled)
         people.finish(log.tickets.last(), HostActionResult.completed)
         assertTrue(people.qa.questions.entry("q2").model.isEnabled)
+    }
+
+    @Test
+    fun fixtureVoteAcknowledgementPublishesTheAuthoritativeRow() {
+        val session = PeopleWebinarFixtureSession(state = PeopleWebinarFixtureState.qaAttendee5)
+        for (selected in listOf(true, false)) {
+            assertEquals(ControlTapResult.dispatched, session.people.qa.toggleUpvote(id = "q2"))
+            assertEquals(ControlTapResult.ignored, session.people.qa.toggleUpvote(id = "q2"))
+            val deadline = System.nanoTime() + 2_000_000_000L
+            while (session.people.qa.questions.entry("q2").model.pendingAction.isNotEmpty() && System.nanoTime() < deadline) {
+                shadowOf(Looper.getMainLooper()).idleFor(10, TimeUnit.MILLISECONDS)
+                Thread.sleep(10)
+            }
+            val row = session.people.qa.questions.entry("q2").model
+            assertTrue(row.pendingAction.isEmpty())
+            assertEquals(selected, row.hasUpvoted)
+            assertEquals(if (selected) 5 else 4, row.upvotes)
+            assertEquals("Will slides be shared after?", row.text)
+        }
+        assertEquals(ControlTapResult.dispatched, session.people.qa.toggleUpvote(id = "q2"))
+        session.people.reset()
+        repeat(40) {
+            shadowOf(Looper.getMainLooper()).idleFor(10, TimeUnit.MILLISECONDS)
+            Thread.sleep(10)
+        }
+        val retained = requireNotNull(session.qaInputs.entries.first { it.id == "q2" })
+        assertFalse(retained.hasUpvoted)
+        assertEquals(4, retained.upvotes)
     }
 
     @Test

@@ -55,6 +55,22 @@ internal fun conclaveMenuIcon(concept: String): ImageVector? = when (concept) {
     "search" -> ConclaveIcons.SearchFill0
     "host" -> ConclaveIcons.ShieldPersonFill0
     "delete" -> ConclaveIcons.DeleteFill0
+    "private_message" -> ConclaveIcons.LockFill1
+    "hide_sender" -> ConclaveIcons.VisibilityOffFill0
+    "visibility" -> ConclaveIcons.VisibilityFill0
+    "change_name" -> ConclaveIcons.EditFill0
+    "lower_hand" -> ConclaveIcons.DoNotTouchFill0
+    "request_declined" -> ConclaveIcons.DoNotTouchFill0
+    "speaker_off" -> ConclaveIcons.VolumeOffFill1
+    "move_to_audience" -> ConclaveIcons.MoveDownFill0
+    "admit" -> ConclaveIcons.CheckFill0
+    "bring_on_stage" -> ConclaveIcons.MoveUpFill0
+    "close" -> ConclaveIcons.CloseFill0
+    "flip_camera" -> ConclaveIcons.CameraswitchFill0
+    "self_view_minimize" -> ConclaveIcons.PictureInPictureAltFill0
+    "picture_in_picture" -> ConclaveIcons.PictureInPictureAltFill0
+    "fit_video" -> ConclaveIcons.FitScreenFill0
+    "fill_video" -> ConclaveIcons.CropFill0
     else -> null
 }
 

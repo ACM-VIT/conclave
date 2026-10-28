@@ -38,7 +38,7 @@ struct ConclaveToastHost: View {
                     .onAppear { announce(item) }
                     .task(id: item.id) {
                         let millis = ConclaveToastTiming.durationMillis(hasAction: item.hasAction,
-                                                                        isScreenReaderRunning: isScreenReaderRunning)
+                                                                        isScreenReaderRunning: isScreenReaderRunning, isProgress: item.isProgress)
                         guard millis > 0 else { return }
                         try? await Task.sleep(for: .milliseconds(Int(millis)))
                         if !Task.isCancelled { onDismiss(item.id) }

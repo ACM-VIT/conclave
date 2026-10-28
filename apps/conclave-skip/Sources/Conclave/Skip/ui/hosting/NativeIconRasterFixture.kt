@@ -31,7 +31,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal const val ICON_RASTER_MAX_CASES = 532
+internal const val ICON_RASTER_MAX_CASES = 1127
 internal const val ICON_RASTER_MAX_PIXELS = 144
 private const val ICON_RASTER_READINESS_MS = 3_000L
 private const val ICON_RASTER_RUN_MS = 600_000L
@@ -46,7 +46,7 @@ internal data class IconRasterRequest(
     val painterKey: String get() = "${artwork.id}.$density"
 }
 
-/** Finite matrix: 432 primary LTR, 16 Back/Send RTL cycles and 52 nonmirroring 72px RTL controls. */
+/** Finite matrix: 920 primary LTR, 32 directional RTL cycles (three frames each) and 111 nonmirroring 72px RTL controls. */
 internal fun iconRasterCases(plan: IconRasterPlan): List<IconRasterRequest> = buildList {
     fun addCase(a: NativeIconArtwork, dp: Int = 24, density: Int = 3,
                 direction: LayoutDirection = LayoutDirection.Ltr, repetition: String = "primary") {

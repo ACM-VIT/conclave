@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "profile": "material-rounded-24-absolute-v1",
   "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
   "vendor_files": {
@@ -2246,5 +2246,9 @@
     "waveform",
     "wifi.exclamationmark",
     "xmark"
-  ]
+  ],
+  "additions": {
+    "path": "packages/ui-tokens/icons/additions/polish-20261029/manifest.json",
+    "sha256": "d7b318fed5c76cdfcf6af894771d4ca9154731e8e65001abafe6628c8dc14835"
+  }
 }

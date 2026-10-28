@@ -10,8 +10,8 @@ import SwiftUI
 // touch exploration and the dump find "e4" at its drawn frame. The move chooser is the complete non-visual path
 // (piece, destination, promotion). The board never mirrors (D18) and is read from one immutable scene per push; the
 // move in flight is its own presenter property (`chessPendingMove`), read only by the board and the status lines.
-// Pieces: licensed flat vector art is not shipped in this push (S60 Q9), so Debug builds draw the Unicode chess glyphs
-// with a 1 pt contrasting outline and other builds draw a lettered disc; release stays blocked until the art lands.
+// Pieces: bundled MIT-licensed Tabler vectors in both Debug and Release (S60 Q9), tinted paper or ink with a
+// contrasting 1 pt outline. The original geometry and full license are preserved in artwork/chess-tabler.
 
 // MARK: Scene
 
@@ -421,80 +421,52 @@ struct ChessCanvas: View {
     }
 }
 
-/// Piece drawing until the licensed flat vector art ships (S60 Q9). Debug: the filled Unicode glyph in paper (White)
-/// or ink (Black) with a 1 pt contrasting outline and no shadow, sized to the cell. Other builds: a flat disc with the
-/// piece letter, outlined the same way.
+/// Bundled Tabler Icons artwork (MIT), shared geometry for both sides. Darwin/Assets.xcassets belongs to the app,
+/// so these template images resolve from Bundle.main, not the Swift package resource bundle.
 enum ChessPieceArt {
-    static var usesGlyphs: Bool {
-        #if DEBUG
-        return true
-        #else
-        return false
-        #endif
-    }
-
-    /// The filled glyph for both colors (the outline separates them), with the text presentation selector so the
-    /// pawn never renders as an emoji.
-    static func glyph(_ code: String) -> String {
-        guard let kind = ChessBoardPolicy.kind(ofPiece: code) else { return "" }
+    static func assetName(_ code: String) -> String? {
+        guard let kind = ChessBoardPolicy.kind(ofPiece: code) else { return nil }
         switch kind {
-        case .king: return "\u{265A}\u{FE0E}"
-        case .queen: return "\u{265B}\u{FE0E}"
-        case .rook: return "\u{265C}\u{FE0E}"
-        case .bishop: return "\u{265D}\u{FE0E}"
-        case .knight: return "\u{265E}\u{FE0E}"
-        case .pawn: return "\u{265F}\u{FE0E}"
+        case .king: return "ChessPieceKing"
+        case .queen: return "ChessPieceQueen"
+        case .rook: return "ChessPieceRook"
+        case .bishop: return "ChessPieceBishop"
+        case .knight: return "ChessPieceKnight"
+        case .pawn: return "ChessPiecePawn"
         }
     }
 
-    /// SAN letters (K, Q, R, B, N; P for a pawn) for the lettered disc.
-    static func letter(_ code: String) -> String {
-        guard let kind = ChessBoardPolicy.kind(ofPiece: code) else { return "" }
-        switch kind {
-        case .king: return "K"
-        case .queen: return "Q"
-        case .rook: return "R"
-        case .bishop: return "B"
-        case .knight: return "N"
-        case .pawn: return "P"
-        }
-    }
+    // Eight radial copies under the fill form a 1 pt silhouette outline without changing the licensed paths.
+    private static let outlineOffsets: [CGSize] = [
+        CGSize(width: -1, height: 0), CGSize(width: 1, height: 0),
+        CGSize(width: 0, height: -1), CGSize(width: 0, height: 1),
+        CGSize(width: -0.70710678, height: -0.70710678), CGSize(width: 0.70710678, height: -0.70710678),
+        CGSize(width: -0.70710678, height: 0.70710678), CGSize(width: 0.70710678, height: 0.70710678),
+    ]
 
     static func draw(_ code: String, in rect: CGRect, context: GraphicsContext, paper: Color, ink: Color) {
+        guard let name = assetName(code) else { return }
         let isWhite = ChessBoardPolicy.side(ofPiece: code) == .white
         let fill = isWhite ? paper : ink
         let edge = isWhite ? ink : paper
-        let center = CGPoint(x: rect.midX, y: rect.midY)
-        if usesGlyphs {
-            drawText(glyph(code), font: .largeTitle, height: rect.height * 0.8, at: center, context: context, fill: fill, edge: edge)
-            return
-        }
-        let radius = rect.width * 0.36
-        let disc = Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
-        context.fill(disc, with: .color(fill))
-        context.stroke(disc, with: .color(edge), lineWidth: 1)
-        drawText(letter(code), font: .headline.weight(.bold), height: radius * 1.1, at: center, context: context, fill: edge, edge: fill)
-    }
-
-    /// Draws `text` scaled to `height` (no fixed point size: a resolved text style is scaled into the cell), with a
-    /// 1 pt outline in `edge` drawn as eight offset copies under the fill.
-    private static func drawText(_ text: String, font: Font, height: Double, at center: CGPoint, context: GraphicsContext,
-                                 fill: Color, edge: Color) {
-        var local = context
-        var resolved = local.resolve(Text(text).font(font))
-        let measured = resolved.measure(in: CGSize(width: 1000, height: 1000))
-        let scale = max(0.01, height / max(1.0, Double(measured.height)))
-        local.translateBy(x: center.x, y: center.y)
-        local.scaleBy(x: CGFloat(scale), y: CGFloat(scale))
-        let step = CGFloat(1.0 / scale)
-        resolved.shading = .color(edge)
-        for dx in [-step, 0, step] {
-            for dy in [-step, 0, step] where dx != 0 || dy != 0 {
-                local.draw(resolved, at: CGPoint(x: dx, y: dy), anchor: .center)
+        // A square viewport preserves the source's 24 x 24 aspect and leaves room for the outline inside the cell.
+        let side = min(rect.width, rect.height) * 0.96
+        let frame = CGRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side)
+        let resolved = context.resolve(Image(name, bundle: .main).renderingMode(.original))
+        // Composite through the artwork's alpha. The compiled vector rendition can ignore ResolvedImage.shading;
+        // separate layers preserve both side colors and keep source-in blending away from the board underneath.
+        context.drawLayer { layer in
+            for offset in outlineOffsets {
+                layer.draw(resolved, in: frame.offsetBy(dx: offset.width, dy: offset.height))
             }
+            layer.blendMode = .sourceIn
+            layer.fill(Path(frame.insetBy(dx: -1, dy: -1)), with: .color(edge))
         }
-        resolved.shading = .color(fill)
-        local.draw(resolved, at: .zero, anchor: .center)
+        context.drawLayer { layer in
+            layer.draw(resolved, in: frame)
+            layer.blendMode = .sourceIn
+            layer.fill(Path(frame), with: .color(fill))
+        }
     }
 }
 

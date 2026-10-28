@@ -22,10 +22,10 @@ class NativeIconContractTests {
         // FND1FND2BridgeTests, camera menu icons in CTL3CTL4BridgeTests) may already have loaded a few accessors,
         // so the contract starts from whatever is loaded now. Metadata never evaluates an accessor.
         val baseline = ConclaveIcons.initializedCount()
-        assertEquals(54, NativeIconCatalog.artwork.size)
-        assertEquals(58, NativeIconCatalog.bindings.size)
+        assertEquals(115, NativeIconCatalog.artwork.size)
+        assertEquals(134, NativeIconCatalog.bindings.size)
         assertEquals(baseline, ConclaveIcons.initializedCount())
-        assertEquals(setOf("arrow_back.fill0", "send.fill1"), NativeIconCatalog.artwork.filter { it.mirrors }.map { it.id }.toSet())
+        assertEquals(setOf("arrow_back.fill0", "send.fill1", "backspace.fill0", "reply.fill0"), NativeIconCatalog.artwork.filter { it.mirrors }.map { it.id }.toSet())
         assertEquals(baseline, ConclaveIcons.initializedCount())
         val pool = Executors.newFixedThreadPool(4)
         try {
@@ -40,14 +40,32 @@ class NativeIconContractTests {
                 assertEquals(a.id, first.name)
             }
         } finally { pool.shutdown() }
-        assertEquals(54, ConclaveIcons.initializedCount())
-        assertEquals(54, NativeIconCatalog.artwork.map { it.id }.toSet().size)
-        assertEquals(58, NativeIconCatalog.bindings.map { it.id }.toSet().size)
+        assertEquals(115, ConclaveIcons.initializedCount())
+        assertEquals(115, NativeIconCatalog.artwork.map { it.id }.toSet().size)
+        assertEquals(134, NativeIconCatalog.bindings.map { it.id }.toSet().size)
         val bindings = NativeIconCatalog.bindings.associateBy { it.id }
         assertSame(bindings.getValue("admit.action").vector(), bindings.getValue("copy_link.copied").vector())
         assertSame(bindings.getValue("host.host_badge").vector(), bindings.getValue("host.host_controls_action").vector())
         assertSame(ConclaveIcons.CheckFill0, bindings.getValue("admit.action").vector())
         assertFalse(ConclaveIcons.CheckFill0.autoMirror)
+        // Every mapped People action resolves on Android; section completeness cannot mask a missing resolver.
+        for (action in PersonActionID.allCases) {
+            val concept = PeopleActionPolicy.concept(action)
+            assertTrue(action.rawValue, concept.isNotEmpty())
+            assertNotNull(concept, conclaveMenuIcon(concept))
+        }
+        assertSame(ConclaveIcons.VisibilityOffFill0, conclaveMenuIcon("hide_sender"))
+        assertSame(ConclaveIcons.FitScreenFill0, conclaveMenuIcon("fit_video"))
+        // Base identities remain stable; new meanings use canonical artwork rather than stand-ins.
+        assertSame(ConclaveIcons.ReplyFill0, bindings.getValue("reply.action").vector())
+        assertSame(ConclaveIcons.PlayArrowFill1, VoiceIcons.play)
+        assertSame(ConclaveIcons.StopFill1, VoiceIcons.stop)
+        assertSame(ConclaveIcons.RecordVoiceOverFill0, VoiceIcons.voiceMessage)
+        assertSame(ConclaveIcons.BackspaceFill0, WordleIcons.backspace)
+        assertSame(ConclaveIcons.AutoAwesomeFill0, bindings.getValue("assistant.decorative_mark").vector())
+        assertSame(ConclaveIcons.AutoAwesomeFill0, bindings.getValue("effects.action").vector())
+        assertSame(ConclaveIcons.ArrowUpwardFill0, bindings.getValue("upvote.unselected").vector())
+        assertSame(ConclaveIcons.ArrowUpwardFill1, bindings.getValue("upvote.selected").vector())
     }
 
     @Test fun bindingSemanticsAreCallerOwnedAndMatchTheArchivedRecords() {
@@ -104,14 +122,14 @@ class NativeIconContractTests {
         val cases = iconRasterCases(IconRasterPlan.Artwork)
         assertEquals(ICON_RASTER_MAX_CASES, cases.size)
         val primary = cases.filter { it.repetition == "primary" }
-        assertEquals(432, primary.size)
+        assertEquals(920, primary.size)
         assertTrue(primary.all { it.direction == LayoutDirection.Ltr })
-        assertEquals(54, primary.filter { it.pixels == 72 }.size)
-        assertEquals(16, cases.count { it.repetition == "cycle-rtl" && it.direction == LayoutDirection.Rtl && it.artwork.mirrors })
-        assertEquals(16, cases.count { it.repetition == "cycle-before" && it.direction == LayoutDirection.Ltr })
-        assertEquals(16, cases.count { it.repetition == "cycle-after" && it.direction == LayoutDirection.Ltr })
+        assertEquals(115, primary.filter { it.pixels == 72 }.size)
+        assertEquals(32, cases.count { it.repetition == "cycle-rtl" && it.direction == LayoutDirection.Rtl && it.artwork.mirrors })
+        assertEquals(32, cases.count { it.repetition == "cycle-before" && it.direction == LayoutDirection.Ltr })
+        assertEquals(32, cases.count { it.repetition == "cycle-after" && it.direction == LayoutDirection.Ltr })
         val controls = cases.filter { it.repetition == "nonmirror-control" }
-        assertEquals(52, controls.count { !it.artwork.mirrors && it.pixels == 72 && it.direction == LayoutDirection.Rtl })
+        assertEquals(111, controls.count { !it.artwork.mirrors && it.pixels == 72 && it.direction == LayoutDirection.Rtl })
         assertTrue(controls.any { it.artwork.id == "check.fill0" })
         assertTrue(cases.all { it.pixels in 18..ICON_RASTER_MAX_PIXELS })
         assertEquals(cases.indices.toList(), cases.map { it.ordinal })

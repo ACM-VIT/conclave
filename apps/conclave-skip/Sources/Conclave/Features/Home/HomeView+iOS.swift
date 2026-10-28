@@ -2,14 +2,10 @@
 import SwiftUI
 import UIKit
 
-/// The premeeting icon concepts (S10 0.6 R1). The pending ones (`account`, `recent`) use catalog stand-ins until the
-/// icon manifest lane adds them (HD request B3-T1 R2); every Home and join sheet glyph goes through here, so the
-/// swap is one line each.
+/// Canonical premeeting icon concepts (S10 0.6 R1).
 enum PremeetingSymbols {
-    /// Pending `account` (`person.crop.circle`): stand-in `person.2`.
-    static let account = ConclaveSymbols.person2
-    /// Pending `recent` (`clock.arrow.circlepath`): stand-in `video.fill`.
-    static let recent = ConclaveSymbols.videoFill
+    static let account = ConclaveSymbols.personCropCircle
+    static let recent = ConclaveSymbols.clockArrowCirclepath
     static let info = ConclaveSymbols.infoCircle
     static let close = ConclaveSymbols.xmark
     static let copyLink = ConclaveSymbols.docOnDoc

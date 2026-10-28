@@ -66,13 +66,13 @@ internal fun hostBulkTitleOf(context: Context, row: HostBulkRow): String = when 
 
 /**
  * The Everyone rows' leading glyphs (S50 6 d, e; Android rows only, iOS Form rows carry none, H-06). Lower all hands
- * uses the S20 hand glyph until the R50-4 `lower_hand` concept lands in the manifest, so the group stays icon-complete.
+ * uses the canonical R50-4 lower-hand glyph, keeping the group icon-complete.
  */
 internal fun hostBulkIcon(bulk: HostBulkID): ImageVector = when (bulk) {
     HostBulkID.muteAll -> ConclaveIcons.MicOffFill1
     HostBulkID.camerasOff -> ConclaveIcons.VideocamOffFill1
     HostBulkID.stopAllShares -> ConclaveIcons.CancelPresentationFill1
-    HostBulkID.lowerAllHands -> ConclaveIcons.FrontHandFill0
+    HostBulkID.lowerAllHands -> ConclaveIcons.DoNotTouchFill0
 }
 
 /** PL4 on Android. Reads the host snapshot; the tap dispatches through `setPolicy` (no state write before the ack). */

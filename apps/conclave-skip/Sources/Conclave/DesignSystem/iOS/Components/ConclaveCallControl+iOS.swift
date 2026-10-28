@@ -652,23 +652,25 @@ enum ConclaveChromeMetrics {
 /// when the room is locked and the captions glyph while captions are on. Owner decision 2026-10-28: no visible
 /// subtitle (the two-line capsule read too heavy); the subtitle (participant count, "{name} is presenting") stays
 /// the accessibility value. It is a Button that opens meeting info; label = title, value = subtitle plus "Locked".
-/// Capped at xxxLarge with the Large Content Viewer. The disclosure chevron waits for its manifest concept (F00 7.3).
+/// Capped at xxxLarge with the Large Content Viewer and a decorative disclosure chevron (F00 7.3).
 struct ConclaveMeetingCapsule: View {
     let title: String
     let subtitle: String
     let isLocked: Bool
     let captionsOn: Bool
+    let isLive: Bool
     let maxWidth: CGFloat?
     let context: ConclaveChromeContext
     let identifier: String
     let action: () -> Void
 
-    init(title: String, subtitle: String, isLocked: Bool = false, captionsOn: Bool = false, maxWidth: CGFloat? = nil,
+    init(title: String, subtitle: String, isLocked: Bool = false, captionsOn: Bool = false, isLive: Bool = false, maxWidth: CGFloat? = nil,
          context: ConclaveChromeContext = .stage, identifier: String, action: @escaping () -> Void) {
         self.title = title
         self.subtitle = subtitle
         self.isLocked = isLocked
         self.captionsOn = captionsOn
+        self.isLive = isLive
         self.maxWidth = maxWidth
         self.context = context
         self.identifier = identifier
@@ -682,6 +684,12 @@ struct ConclaveMeetingCapsule: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
+                if isLive {
+                    Circle()
+                        .fill(HostingTheme.token(DesignTokens.iosInCallLive))
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                }
                 if isLocked {
                     Image(systemName: ConclaveSymbols.lockFill)
                         .font(.subheadline)
@@ -696,6 +704,9 @@ struct ConclaveMeetingCapsule: View {
                         .font(.subheadline)
                         .accessibilityHidden(true)
                 }
+                Image(systemName: ConclaveSymbols.chevronRight)
+                    .font(.caption.weight(.semibold))
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 12)
             .frame(minHeight: ConclaveChromeMetrics.height)

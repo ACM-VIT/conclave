@@ -7,16 +7,16 @@ import SwiftUI
 // as if VoiceOver ran. Standalone presenters only: never `MeetingViewModel`, WebRTC, audio, capture or network.
 
 enum StageFixtureLaunch {
-    static func state(environment: [String: String] = ProcessInfo.processInfo.environment) -> StageFixtureState? {
+    static func state(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> StageFixtureState? {
         guard let raw = environment["CONCLAVE_STAGE_FIXTURE"] else { return nil }
         return StageFixtureScript.state(named: raw)
     }
 
-    static func pattern(environment: [String: String] = ProcessInfo.processInfo.environment) -> RendererProbePattern {
+    static func pattern(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> RendererProbePattern {
         StageFixtureScript.pattern(named: environment["CONCLAVE_STAGE_FIXTURE_PATTERN"])
     }
 
-    static func forcesScreenReader(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+    static func forcesScreenReader(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> Bool {
         environment["CONCLAVE_STAGE_FORCE_SCREEN_READER"] == "1"
     }
 }
@@ -49,7 +49,7 @@ struct StageFixtureView: View {
             }
             // TRN-2 (S60 L6-12, HD request B7-T5 R5): `CONCLAVE_TRANSCRIPT_FIXTURE=<state>` layers the Transcript fixture
             // (FakeTranscriptOwner) on this stage fixture and opens the panel.
-            if let transcriptState = TranscriptFixtureDriver.fixtureState(named: ProcessInfo.processInfo.environment["CONCLAVE_TRANSCRIPT_FIXTURE"]) {
+            if let transcriptState = TranscriptFixtureDriver.fixtureState(named: NativeRuntimeConfig.debugLaunchValue(forKey: "CONCLAVE_TRANSCRIPT_FIXTURE")) {
                 TranscriptFixtureDriver.installOnStage(state: transcriptState, shell: session.shell)
             }
         }

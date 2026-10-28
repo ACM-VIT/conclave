@@ -50,9 +50,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
@@ -60,6 +63,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -94,8 +98,8 @@ import kotlinx.coroutines.isActive
  * semantics (clearAndSetSemantics with the square label, selected and onClick), placed at each square's frame and
  * read from one immutable scene per push. The move chooser is the complete non-visual path. The board never mirrors in
  * RTL (D18). The move in flight is GameStagePresenter.chessPendingMove, read only by the board and the status lines.
- * Pieces: licensed flat vector art is not shipped in this push (S60 Q9), so debuggable builds draw the Unicode chess
- * glyphs with a 1 dp contrasting outline and other builds draw a lettered disc; release stays blocked until the art.
+ * Pieces: bundled MIT-licensed Tabler vectors in every build (S60 Q9), tinted paper or ink with a contrasting 1 dp
+ * outline. The original geometry and full license are preserved in artwork/chess-tabler.
  */
 
 private val ChessChooserRowHeight = 48.dp
@@ -313,12 +317,11 @@ private fun ChessMoveTimerChip(clocks: ChessClockModel, nowMillis: Double) {
 
 // MARK: Board (B3)
 
-/** Squares, coordinates and piece layouts measured once per board size (the canvas only draws). */
+/** Coordinates measured once per board size and bundled piece painters resolved outside the canvas draw loop. */
 private class ChessBoardText(
-    val pieces: Map<String, TextLayoutResult>,
+    val pieces: Map<String, Painter>,
     val ranks: Map<Int, TextLayoutResult>,
     val files: Map<Int, TextLayoutResult>,
-    val glyphs: Boolean,
 )
 
 /**
@@ -381,34 +384,41 @@ private fun ChessBoardLayer(scene: ChessScene, games: GameStagePresenter, orient
 
 private data class ChessBoardColors(val light: Color, val dark: Color, val paper: Color, val ink: Color, val red: Color)
 
-/** Glyph or letter layouts sized to the cell (px, so font scale never changes the geometry-bound board, F00 5). */
+/** Coordinate layouts sized to the cell (px, so font scale never changes the geometry-bound board, F00 5). */
 @Composable
 private fun rememberChessBoardText(sidePx: Float): ChessBoardText {
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    val context = LocalContext.current.applicationContext
-    val glyphs = remember(context) { isDebuggableApp(context) }
+    val pieces = rememberChessPiecePainters()
     val labelSize = MaterialTheme.typography.labelSmall.fontSize
-    return remember(sidePx, glyphs, measurer, density, labelSize) {
+    return remember(sidePx, pieces, measurer, density, labelSize) {
         val cell = sidePx / 8f
-        val pieceStyle = with(density) {
-            if (glyphs) TextStyle(fontSize = (cell * 0.74f).toSp()) else TextStyle(fontSize = (cell * 0.36f).toSp(), fontWeight = FontWeight.Bold)
-        }
         val coordinatePx = with(density) { minOf(labelSize.toPx(), cell * 0.28f) }
         val coordinateStyle = with(density) { TextStyle(fontSize = coordinatePx.toSp()) }
-        val pieces = HashMap<String, TextLayoutResult>()
-        for (code in ChessPieceCodes) {
-            val shown = if (glyphs) chessGlyph(code) else chessPieceLetter(code)
-            pieces[code] = measurer.measure(shown, style = pieceStyle)
-        }
         val ranks = HashMap<Int, TextLayoutResult>()
         val files = HashMap<Int, TextLayoutResult>()
         for (index in 0..7) {
             ranks[index + 1] = measurer.measure((index + 1).toString(), style = coordinateStyle)
             files[index] = measurer.measure(chessFileLetter(index), style = coordinateStyle)
         }
-        ChessBoardText(pieces, ranks, files, glyphs)
+        ChessBoardText(pieces, ranks, files)
     }
+}
+
+/** Six cached template painters serve both colors; resource lookup and vector parsing never run in Canvas.draw. */
+@Composable
+private fun rememberChessPiecePainters(): Map<String, Painter> {
+    val context = LocalContext.current
+    val painters = LinkedHashMap<String, Painter>()
+    for (code in ChessPieceCodes) {
+        val name = chessPieceAssetName(code) ?: continue
+        if (name !in painters) {
+            val id = remember(context, name) { conclaveDrawableId(context, name) }
+            check(id != 0) { "Missing bundled chess artwork: $name" }
+            painters[name] = painterResource(id)
+        }
+    }
+    return painters
 }
 
 /**
@@ -470,27 +480,33 @@ private fun DrawScope.drawSquareOutline(left: Float, top: Float, cell: Float, in
     drawRect(color, topLeft = Offset(left + inset, top + inset), size = Size(cell - inset * 2f, cell - inset * 2f), style = Stroke(width = width))
 }
 
-/**
- * Until the licensed flat vector art ships (S60 Q9): debuggable builds draw the filled Unicode glyph in paper (White) or
- * ink (Black) with a 1 dp contrasting outline (a 2 dp stroke under the fill) and no shadow; other builds a flat disc
- * with the piece letter, outlined the same way.
- */
+/** Eight radial offsets form the 1 dp contrasting silhouette without changing the licensed path geometry. */
+private val ChessPieceOutlineOffsets = listOf(
+    Offset(-1f, 0f), Offset(1f, 0f), Offset(0f, -1f), Offset(0f, 1f),
+    Offset(-0.70710678f, -0.70710678f), Offset(0.70710678f, -0.70710678f),
+    Offset(-0.70710678f, 0.70710678f), Offset(0.70710678f, 0.70710678f),
+)
+
+/** MIT-licensed Tabler vector artwork in Debug and Release, with paper/ink sides and no automatic RTL mirroring. */
 private fun DrawScope.drawChessPiece(code: String, center: Offset, cell: Float, text: ChessBoardText, colors: ChessBoardColors,
                                      outline: Float) {
-    val layout = text.pieces[code] ?: return
+    val name = chessPieceAssetName(code) ?: return
+    val painter = text.pieces[name] ?: return
     val isWhite = ChessBoardPolicy.side(code) == ChessSide.white
     val fill = if (isWhite) colors.paper else colors.ink
     val edge = if (isWhite) colors.ink else colors.paper
-    val topLeft = Offset(center.x - layout.size.width / 2f, center.y - layout.size.height / 2f)
-    if (text.glyphs) {
-        drawText(layout, color = edge, topLeft = topLeft, drawStyle = Stroke(width = outline * 2f))
-        drawText(layout, color = fill, topLeft = topLeft)
-        return
+    val side = cell * 0.96f
+    val artSize = Size(side, side)
+    val left = center.x - side / 2f
+    val top = center.y - side / 2f
+    for (offset in ChessPieceOutlineOffsets) {
+        translate(left + offset.x * outline, top + offset.y * outline) {
+            with(painter) { draw(artSize, colorFilter = ColorFilter.tint(edge)) }
+        }
     }
-    val radius = cell * 0.36f
-    drawCircle(fill, radius = radius, center = center)
-    drawCircle(edge, radius = radius, center = center, style = Stroke(width = outline))
-    drawText(layout, color = edge, topLeft = topLeft)
+    translate(left, top) {
+        with(painter) { draw(artSize, colorFilter = ColorFilter.tint(fill)) }
+    }
 }
 
 /**
@@ -819,26 +835,15 @@ private fun ChessMoveRow(row: ChessMoveRowModel) {
 /** Every piece code the board can show (color, then K Q R B N P). */
 internal val ChessPieceCodes = listOf("wK", "wQ", "wR", "wB", "wN", "wP", "bK", "bQ", "bR", "bB", "bN", "bP")
 
-/** The filled glyph for both colors (the outline separates them), with the text presentation selector. */
-internal fun chessGlyph(code: String): String = when (ChessBoardPolicy.kind(code)) {
-    ChessPieceKind.king -> "\u265A\uFE0E"
-    ChessPieceKind.queen -> "\u265B\uFE0E"
-    ChessPieceKind.rook -> "\u265C\uFE0E"
-    ChessPieceKind.bishop -> "\u265D\uFE0E"
-    ChessPieceKind.knight -> "\u265E\uFE0E"
-    ChessPieceKind.pawn -> "\u265F\uFE0E"
-    null -> ""
-}
-
-/** SAN letters for the lettered disc (P for a pawn). */
-internal fun chessPieceLetter(code: String): String = when (ChessBoardPolicy.kind(code)) {
-    ChessPieceKind.king -> "K"
-    ChessPieceKind.queen -> "Q"
-    ChessPieceKind.rook -> "R"
-    ChessPieceKind.bishop -> "B"
-    ChessPieceKind.knight -> "N"
-    ChessPieceKind.pawn -> "P"
-    null -> ""
+/** All six licensed templates are shared by white/black pieces; side color is applied only while drawing. */
+internal fun chessPieceAssetName(code: String): String? = when (ChessBoardPolicy.kind(code)) {
+    ChessPieceKind.king -> "chess_piece_king"
+    ChessPieceKind.queen -> "chess_piece_queen"
+    ChessPieceKind.rook -> "chess_piece_rook"
+    ChessPieceKind.bishop -> "chess_piece_bishop"
+    ChessPieceKind.knight -> "chess_piece_knight"
+    ChessPieceKind.pawn -> "chess_piece_pawn"
+    null -> null
 }
 
 /** Board coordinate letters stay a to h in every locale (algebraic notation). */

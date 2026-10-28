@@ -117,8 +117,9 @@ struct STG2TileTests {
         for section in sections {
             #expect(ConclaveMenuPolicy.isIconConsistent(section), "\(section.id) mixes icons")
         }
-        // The stage group is icon-free until the SR1 glyphs exist.
-        #expect(sections[0].items.allSatisfy { $0.concept.isEmpty && $0.role == .normal && $0.isEnabled })
+        // The stage group is complete and preserves action roles/enabled state.
+        #expect(sections[0].items.map(\.concept) == ["pin", "fit_video"])
+        #expect(sections[0].items.allSatisfy { $0.role == .normal && $0.isEnabled })
         #expect(TileMenuPolicy.itemCount(sections) == 5)
         // No items: no sections at all.
         #expect(TileMenuPolicy.sections(context(slotId: "share:r1", role: .share), titles: Self.titles, people: []).isEmpty)

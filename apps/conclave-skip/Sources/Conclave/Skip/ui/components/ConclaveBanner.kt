@@ -69,7 +69,7 @@ internal object ConclaveBannerMotion {
 internal fun ConclaveBanner(
     kind: ConclaveBannerKind, text: String, identifier: String, inCall: Boolean, modifier: Modifier = Modifier,
     actions: List<ConclaveBannerAction> = emptyList(), onDismiss: (() -> Unit)? = null, maxLines: Int = Int.MAX_VALUE,
-    announces: Boolean = true,
+    announces: Boolean = true, isAssertive: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
     // The extended roles (F00 2.6 A4) from the theme; an in-call banner always takes the dark set.
@@ -94,7 +94,7 @@ internal fun ConclaveBanner(
                 ConclaveText(text, line = "$identifier.text", style = MaterialTheme.typography.bodyMedium, maxLines = maxLines,
                     // S50 4 i (PPL-3): a banner the lane marks silent (the knock while Participants is current) keeps
                     // its merged text node without the live region, so TalkBack reads the news once (People's).
-                    modifier = Modifier.semantics(mergeDescendants = true) { if (announces) liveRegion = LiveRegionMode.Polite })
+                    modifier = Modifier.semantics(mergeDescendants = true) { if (announces) liveRegion = if (isAssertive) LiveRegionMode.Assertive else LiveRegionMode.Polite })
                 if (actions.isNotEmpty()) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         for (action in actions) {
@@ -120,8 +120,7 @@ internal fun ConclaveBanner(
     }
 }
 
-/** The status glyph, or the system spinner while reconnecting. Success and offline are pending in the icon
- *  manifest, so success uses the check stand-in (FND-1 carry, F00 7.3). Glyphs carry no description. */
+/** The canonical status glyph, or the system spinner while reconnecting. Glyphs carry no description. */
 @Composable
 private fun BannerGlyph(kind: ConclaveBannerKind, color: Color) {
     val modifier = Modifier.size(20.dp)
@@ -130,7 +129,7 @@ private fun BannerGlyph(kind: ConclaveBannerKind, color: Color) {
         ConclaveBannerKind.Info -> Icon(ConclaveIcons.InfoFill0, contentDescription = null, modifier = modifier, tint = color)
         ConclaveBannerKind.Warning -> Icon(ConclaveIcons.WarningFill1, contentDescription = null, modifier = modifier, tint = color)
         ConclaveBannerKind.Error -> Icon(ConclaveIcons.ErrorFill1, contentDescription = null, modifier = modifier, tint = color)
-        ConclaveBannerKind.Success -> Icon(ConclaveIcons.CheckFill0, contentDescription = null, modifier = modifier, tint = color)
+        ConclaveBannerKind.Success -> Icon(ConclaveIcons.CheckCircleFill1, contentDescription = null, modifier = modifier, tint = color)
     }
 }
 

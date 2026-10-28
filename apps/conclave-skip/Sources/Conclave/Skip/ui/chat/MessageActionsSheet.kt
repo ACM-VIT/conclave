@@ -51,7 +51,7 @@ private class ChatMenuAction(val tag: String, val label: String, val icon: Image
 @Composable
 private fun chatMenuActions(row: ChatRowModel, actions: ChatRowActions, close: () -> Unit, openViewer: () -> Unit): List<List<ChatMenuAction>> {
     val main = mutableListOf<ChatMenuAction>()
-    if (row.canReply) main.add(ChatMenuAction("reply", conclaveString("chat_action_reply"), ConclaveIcons.ChatBubbleFill0, false) {
+    if (row.canReply) main.add(ChatMenuAction("reply", conclaveString("chat_action_reply"), ConclaveIcons.ReplyFill0, false) {
         close(); actions.reply(row.id)
     })
     if (row.canMessagePrivately) main.add(ChatMenuAction("private", conclaveString("chat_action_private"), ConclaveIcons.LockFill1, false) {
@@ -68,7 +68,7 @@ private fun chatMenuActions(row: ChatRowModel, actions: ChatRowActions, close: (
     })
     val safety = mutableListOf<ChatMenuAction>()
     if (row.canHideSender) safety.add(ChatMenuAction("hide", conclaveString("chat_action_hide_sender", row.senderName),
-        ConclaveIcons.PersonRemoveFill0, false) {
+        ConclaveIcons.VisibilityOffFill0, false) {
         close(); actions.hideSender(row.senderId)
     })
     val failed = mutableListOf<ChatMenuAction>()

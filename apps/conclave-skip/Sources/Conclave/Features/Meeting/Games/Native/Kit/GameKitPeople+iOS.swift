@@ -119,7 +119,7 @@ struct GameKitScoreboard: View {
                         .font(.body)
                         .lineLimit(2)
                     if row.isLeader {
-                        // The text twin of the leader row until the R6-1 `trophy` concept lands in the icon manifest.
+                        Image(systemName: ConclaveSymbols.trophyFill).font(.caption).accessibilityHidden(true)
                         GameKitTag(title: ConclaveStrings.text("Leading"))
                     }
                     Spacer(minLength: 8)

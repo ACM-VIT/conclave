@@ -181,6 +181,15 @@ struct FND1FoundationPackTests {
         #expect(ConclaveToastTiming.durationMillis(hasAction: true, isScreenReaderRunning: true) == 0)
     }
 
+    @Test func progressToastsWaitForTheOperationOwner() {
+        for hasAction in [false, true] {
+            for screenReader in [false, true] {
+                #expect(ConclaveToastTiming.durationMillis(hasAction: hasAction, isScreenReaderRunning: screenReader,
+                                                           isProgress: true) == 0)
+            }
+        }
+    }
+
     // MARK: Plurals (S10 R11) and tabular digits (S60 R6-13)
 
     @Test func pluralsAndTabularDigitsHaveOneHelperEach() throws {

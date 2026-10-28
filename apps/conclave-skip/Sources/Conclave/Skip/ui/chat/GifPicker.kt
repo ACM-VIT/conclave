@@ -216,7 +216,7 @@ private fun GifTile(gif: ChatGifAttachment, kind: ChatGifKind, onSend: () -> Uni
         )
         if (kind == ChatGifKind.clip) {
             Surface(shape = CircleShape, color = scheme.surface) {
-                Icon(ConclaveIcons.VideocamFill1, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.padding(8.dp).size(20.dp))
+                Icon(ConclaveIcons.PlayArrowFill1, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.padding(8.dp).size(20.dp))
             }
         }
     }

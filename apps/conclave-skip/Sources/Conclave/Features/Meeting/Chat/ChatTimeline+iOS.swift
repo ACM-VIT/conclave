@@ -353,8 +353,11 @@ private struct ChatJumpPill: View {
 
     var body: some View {
         Button(action: action) {
-            // The scroll_to_latest glyph is a pending icon concept (R40-5, request R4); text only until it lands.
-            Text(unseen > 0 ? ConclaveStrings.format("%lld New Messages", unseen) : ConclaveStrings.text("Jump to Latest"))
+            Label {
+                Text(unseen > 0 ? ConclaveStrings.format("%lld New Messages", unseen) : ConclaveStrings.text("Jump to Latest"))
+            } icon: {
+                Image(systemName: ConclaveSymbols.arrowDown).accessibilityHidden(true)
+            }
         }
         .buttonStyle(.bordered)
         .tint(.primary)

@@ -361,6 +361,34 @@ export function NativeWatchEmbed({ session }: { session: NativeEmbedSession }) {
           removeQueueItem(doc, itemId);
           return { ok: true };
         }
+        // Relay messages and commands for another app retain the same rejection as unknown commands.
+        case "snapshot":
+        case "update":
+        case "awareness":
+        case "status":
+        case "resync":
+        case "close":
+        case "setTool":
+        case "setColor":
+        case "setStrokeWidth":
+        case "setFill":
+        case "undo":
+        case "redo":
+        case "setPage":
+        case "addPage":
+        case "renamePage":
+        case "deletePage":
+        case "zoomToFit":
+        case "export":
+        case "addEntries":
+        case "removeEntry":
+        case "shuffle":
+        case "sort":
+        case "clearEntries":
+        case "spin":
+        case "setRemoveWinner":
+        case "setSounds":
+        case "clearResults":
         default:
           return { ok: false, error: "unknownCommand" };
       }

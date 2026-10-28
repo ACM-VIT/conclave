@@ -122,7 +122,8 @@ enum SystemAccessibilityMapping {
 /// The toast host times a toast itself; the presenter sets no expiry (S20 SR5). An action toast persists under a
 /// screen reader until it is dismissed or replaced (F00 AX11); 0 means "persist".
 enum ConclaveToastTiming {
-    static func durationMillis(hasAction: Bool, isScreenReaderRunning: Bool) -> Double {
+    static func durationMillis(hasAction: Bool, isScreenReaderRunning: Bool, isProgress: Bool = false) -> Double {
+        if isProgress { return 0.0 }
         if hasAction && isScreenReaderRunning { return 0.0 }
         return hasAction ? SystemAccessibilityDefaults.actionToastMillis : SystemAccessibilityDefaults.toastMillis
     }
@@ -141,6 +142,20 @@ struct ConclaveToastItem: Equatable, Identifiable {
     let avatarId: String
     /// Failures announce at high priority on iOS; events at low priority.
     let isFailure: Bool
+    /// The operation owner removes or replaces progress; platform timeout must not hide it.
+    let isProgress: Bool
+
+    init(id: String, message: String, actionTitle: String, actionId: String, avatarName: String, avatarId: String,
+         isFailure: Bool, isProgress: Bool = false) {
+        self.id = id
+        self.message = message
+        self.actionTitle = actionTitle
+        self.actionId = actionId
+        self.avatarName = avatarName
+        self.avatarId = avatarId
+        self.isFailure = isFailure
+        self.isProgress = isProgress
+    }
 
     var hasAction: Bool { !actionTitle.isEmpty }
     var hasAvatar: Bool { !avatarName.isEmpty || !avatarId.isEmpty }

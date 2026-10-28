@@ -10015,8 +10015,10 @@ final class ConclaveTests: XCTestCase {
     func testAndroidManifestDoesNotCaptureWebOnlySignInLinks() throws {
         let manifest = try sourceFileContents("Android/app/src/main/AndroidManifest.xml")
 
-        XCTAssertTrue(manifest.contains("android:pathPrefix=\"/w/\""))
-        XCTAssertTrue(manifest.contains("android:pathPattern=\"/.*-.*-.*\""))
+        XCTAssertTrue(manifest.contains("android:pathAdvancedPattern=\"/w/[a-zA-Z0-9][a-zA-Z0-9-]{0,31}\""))
+        XCTAssertTrue(manifest.contains("android:pathAdvancedPattern=\"/[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+\""))
+        XCTAssertTrue(manifest.contains("android:enabled=\"@bool/conclave_verified_app_links_enabled\""))
+        XCTAssertFalse(manifest.contains("android:pathPattern=\"/.*-.*-.*\""))
         XCTAssertFalse(manifest.contains("android:path=\"/sign-in\""))
         XCTAssertFalse(manifest.contains("android:pathPrefix=\"/sign-in/\""))
     }

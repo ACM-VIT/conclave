@@ -98,7 +98,9 @@ test("the Swift twin matches the limits, commands and entry files", () => {
     assert.ok(block, `missing Swift enum ${enumName}`);
     return Object.fromEntries([...block[1].matchAll(/static let (\w+) = (\d+)/g)].map((match) => [match[1], Number(match[2])]));
   };
-  assert.deepEqual(limits("AppWheelLimits"), { ...protocol.WHEEL_LIMITS });
+  // Swift names the entry bound maxEntries; the protocol's wire-side constant is entries.
+  const { entries, ...wheelLimits } = protocol.WHEEL_LIMITS;
+  assert.deepEqual(limits("AppWheelLimits"), { maxEntries: entries, ...wheelLimits });
   assert.deepEqual(limits("AppWatchLimits"), { ...protocol.WATCH_LIMITS });
   const kinds = presenter.match(/enum AppPageCommandKind: String, CaseIterable, Equatable \{([\s\S]*?)\n\}/);
   assert.ok(kinds, "missing Swift enum AppPageCommandKind");
@@ -171,13 +173,17 @@ const loadSessionModule = async () => {
 const sessionModule = await loadSessionModule();
 const skipSession = sessionModule === null ? "esbuild is not installed in the workspace" : false;
 
-test("Wheel and Watch commands reach the renderer and are acked under their request ids", { skip: skipSession }, () => {
+test("Wheel and Watch commands reach the renderer and are acked under their request ids", { skip: skipSession }, (context) => {
   const { Y } = sessionModule;
   const outbox = [];
   let deliver = () => "none";
   const transport = { platform: "ios", post: (message) => outbox.push(message), onMessage: (next) => { deliver = next; } };
   const scope = { callSessionId: "call-1-contract", appSessionId: "app-wheel-contract", appId: "wheel" };
   const session = new sessionModule.NativeEmbedSession(transport, scope, new Y.Doc());
+  context.after(() => {
+    session.close();
+    session.doc.destroy(); // Y.Doc destruction also stops Awareness's interval.
+  });
   const seen = [];
   session.setCommandHandler((command) => {
     seen.push(command.type);

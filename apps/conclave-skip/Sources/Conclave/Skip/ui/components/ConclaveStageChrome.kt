@@ -1,8 +1,10 @@
 package conclave.module
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -54,7 +56,7 @@ internal object ConclaveChromeMetrics {
 @Composable
 internal fun ConclaveMeetingCapsule(
     title: String, subtitle: String, identifier: String, onClick: () -> Unit, modifier: Modifier = Modifier,
-    locked: Boolean = false, captionsOn: Boolean = false, maxWidth: Dp = Dp.Unspecified,
+    locked: Boolean = false, captionsOn: Boolean = false, live: Boolean = false, maxWidth: Dp = Dp.Unspecified,
 ) {
     val ext = LocalConclaveExtendedColors.current
     val scheme = MaterialTheme.colorScheme
@@ -72,6 +74,7 @@ internal fun ConclaveMeetingCapsule(
     ) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically) {
+            if (live) Box(Modifier.size(8.dp).background(ext.live, CircleShape))
             if (locked) Icon(ConclaveIcons.LockFill1, contentDescription = null, modifier = Modifier.size(20.dp), tint = scheme.onSurface)
             ConclaveText(title, line = "$identifier.title", style = MaterialTheme.typography.titleSmall, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
@@ -117,7 +120,7 @@ internal fun ConclaveMinimizeButton(onClick: () -> Unit, modifier: Modifier = Mo
 /**
  * The audio route button (top trailing): the icon follows the S30 route kind raw value (speaker, receiver,
  * bluetooth, wired, usb, hearingAid, unknown), the state description is the route name, and it opens the route
- * sheet. USB and hearing aid use the speaker glyph until their manifest concepts land (S30 CL11 fallback).
+ * sheet. Each known route uses its canonical glyph; unknown routes use the speaker glyph.
  */
 @Composable
 internal fun ConclaveRouteButton(
@@ -143,6 +146,8 @@ internal fun conclaveRouteIcon(kind: String): ImageVector = when (kind) {
     "receiver" -> ConclaveIcons.PhoneInTalkFill0
     "bluetooth" -> ConclaveIcons.BluetoothFill0
     "wired" -> ConclaveIcons.HeadphonesFill0
+    "usb" -> ConclaveIcons.UsbFill0
+    "hearingAid" -> ConclaveIcons.HearingFill0
     else -> ConclaveIcons.VolumeUpFill0
 }
 

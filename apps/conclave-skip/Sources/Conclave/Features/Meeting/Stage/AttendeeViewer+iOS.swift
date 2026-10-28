@@ -26,8 +26,7 @@ struct AttendeeWaitingLayer: View {
     }
 }
 
-/// The system empty state in the in-call theme: the broadcast glyph (pending the icon manifest, S20 SR1; the video glyph
-/// stands in), the title and, when others wait too, the count. Refreshed by events, no timer (12 f).
+/// The system empty state uses the canonical webinar glyph, title and waiting count. Refreshed by events, no timer (12 f).
 private struct AttendeeWaitingCard: View {
     let count: Int
 
@@ -37,7 +36,7 @@ private struct AttendeeWaitingCard: View {
                 Text(ConclaveStrings.text("The Webinar Will Begin Soon"))
                     .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
             } icon: {
-                Image(systemName: ConclaveSymbols.videoFill)
+                Image(systemName: ConclaveSymbols.dotRadiowavesLeftAndRight)
                     .foregroundStyle(HostingTheme.inCallTextSecondary)
                     .accessibilityHidden(true)
             }

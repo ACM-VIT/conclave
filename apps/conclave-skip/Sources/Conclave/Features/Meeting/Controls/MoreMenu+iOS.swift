@@ -491,9 +491,7 @@ enum MoreTextScale {
 }
 
 /// iOS copy for More (S30 5 g, 6 g and 7; Apple title case for titles, sentence case for subtitles). String Catalog
-/// keys through `ConclaveStrings`. Glyph stand-ins until the CL11 manifest concepts land: Layout uses
-/// `rectangleInsetFilledOnRectangle` (for `rectangle.3.group`), Effects `videoFill` (for `camera.filters`), Host Controls
-/// `crownFill` (for `person.badge.shield.checkmark.fill`); Layout and Effects are hidden in this push anyway.
+/// keys through `ConclaveStrings`; Layout, Effects and Host Controls use the canonical CL11 concepts.
 enum MoreCopy {
     static func title(_ item: MoreItem) -> String {
         switch item.kind {
@@ -583,13 +581,13 @@ enum MoreCopy {
         case .activities: return ConclaveSymbols.squareGrid2x2
         case .transcript: return ConclaveSymbols.textQuote
         case .qa: return ConclaveSymbols.questionmarkBubble
-        case .layout: return ConclaveSymbols.rectangleInsetFilledOnRectangle
-        case .effects, .systemVideoEffects: return ConclaveSymbols.videoFill
+        case .layout: return ConclaveSymbols.rectangle3Group
+        case .effects, .systemVideoEffects: return ConclaveSymbols.cameraFilters
         case .settings: return ConclaveSymbols.gearshape
         case .invite: return ConclaveSymbols.squareAndArrowUp
         case .copyLink: return ConclaveSymbols.docOnDoc
         case .meetingDetails: return ConclaveSymbols.infoCircle
-        case .hostControls: return ConclaveSymbols.crownFill
+        case .hostControls: return ConclaveSymbols.personBadgeShieldCheckmarkFill
         case .lockMeeting: return item.isOn ? ConclaveSymbols.lockFill : ConclaveSymbols.lockOpen
         case .endForEveryone: return ConclaveSymbols.phoneDownFill
         }

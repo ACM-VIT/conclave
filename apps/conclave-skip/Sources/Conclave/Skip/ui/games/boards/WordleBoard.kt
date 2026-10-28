@@ -183,8 +183,12 @@ private fun WordleTimerChip(model: CountdownModel) {
             border = BorderStroke(1.dp, ext.border),
             modifier = Modifier.testTag("game.wordle.timer").clearAndSetSemantics { contentDescription = spoken },
         ) {
-            Text(shown, style = rememberTabular(MaterialTheme.typography.labelLarge), color = if (warning) ext.warning else scheme.onSurface,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+            Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(ConclaveIcons.TimerFill0, contentDescription = null, tint = if (warning) ext.warning else scheme.onSurface,
+                    modifier = Modifier.size(16.dp))
+                Text(shown, style = rememberTabular(MaterialTheme.typography.labelLarge), color = if (warning) ext.warning else scheme.onSurface)
+            }
         }
         // One persistent polite live region whose text changes only at 60 s and 10 s.
         Box(Modifier.size(1.dp).semantics {
@@ -248,9 +252,9 @@ private fun WordlePlayingView(scene: WordleScene, games: GameStagePresenter) {
                         }
                     } else {
                         WordleLetterKeyboard(scene, games)
-                        // The R6-1 `keyboard` glyph joins this button when the icon lands (HD request B7-T7 R7).
                         OutlinedButton(onClick = { entryMode = 1 },
                             modifier = Modifier.heightIn(min = 48.dp).testTag("game.wordle.typeGuess")) {
+                            Icon(ConclaveIcons.KeyboardFill0, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
                             Text(conclaveString("gm_wordle_type_guess"))
                         }
                     }
@@ -555,7 +559,7 @@ private fun WordleLetterKey(letterKey: WordleKeyModel, width: Dp, enabled: Boole
     }
 }
 
-/** Enter (text) and Delete (the `backspace` concept; CloseFill0 stands in until the R6-1 icon lands, HD request R7). */
+/** Enter (text) and Delete (canonical R6-1 backspace artwork). */
 @Composable
 private fun WordleWideKey(text: String, icon: ImageVector?, label: String, width: Dp, enabled: Boolean, pending: Boolean, tag: String,
                           onTap: () -> Unit) {
@@ -672,9 +676,9 @@ private fun WordleSecretEntry(scene: WordleScene, games: GameStagePresenter) {
 
 // MARK: Style and copy
 
-/** Stand-ins until the R6-1 concepts (`backspace`, `keyboard`, `timer`) join the icon manifest (HD request B7-T7 R7). */
+/** Canonical R6-1 Wordle concepts. */
 internal object WordleIcons {
-    val backspace: ImageVector get() = ConclaveIcons.CloseFill0
+    val backspace: ImageVector get() = ConclaveIcons.BackspaceFill0
 }
 
 private data class WordleColors(val fill: Color, val ink: Color, val border: Color, val borderWidth: Dp)

@@ -8,18 +8,31 @@ import SwiftUI
 // stage subtree (PS 7.6). Standalone presenters only: never `MeetingViewModel`, WebRTC, audio, capture or network.
 
 enum PeopleFixtureLaunch {
-    static func state(environment: [String: String] = ProcessInfo.processInfo.environment) -> PeopleFixtureState? {
+    static func state(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> PeopleFixtureState? {
         guard let raw = environment["CONCLAVE_PEOPLE_FIXTURE"] else { return nil }
-        return PeopleFixtureScript.state(named: raw)
+        if let state = PeopleFixtureScript.state(named: raw) { return state }
+        // Report the Q&A route as a valid fixture before app lifecycle callbacks can reach production owners.
+        guard let qa = qaState(environment: environment) else { return nil }
+        return PeopleWebinarFixtureScript.baseState(qa)
+    }
+
+    static func qaState(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> PeopleWebinarFixtureState? {
+        guard let raw = environment["CONCLAVE_PEOPLE_FIXTURE"],
+              PeopleWebinarFixtureScript.state(named: raw) == .qaAttendee5 else { return nil }
+        return .qaAttendee5
     }
 }
 
 struct PeopleFixtureView: View {
     @State private var session: PeopleFixtureSession
+    @State private var qaSession: PeopleWebinarFixtureSession?
 
-    init(state: PeopleFixtureState, pattern: RendererProbePattern = StageFixtureLaunch.pattern(),
+    init(state: PeopleFixtureState, qaState: PeopleWebinarFixtureState? = nil,
+         pattern: RendererProbePattern = StageFixtureLaunch.pattern(),
          forceScreenReader: Bool = StageFixtureLaunch.forcesScreenReader()) {
-        _session = State(initialValue: PeopleFixtureSession(state: state, pattern: pattern, forceScreenReader: forceScreenReader))
+        let qa = qaState.map { PeopleWebinarFixtureSession(state: $0) }
+        _qaSession = State(initialValue: qa)
+        _session = State(initialValue: qa?.base ?? PeopleFixtureSession(state: state, pattern: pattern, forceScreenReader: forceScreenReader))
     }
 
     var body: some View {
@@ -31,6 +44,10 @@ struct PeopleFixtureView: View {
             PeopleFixtureControls(session: session)
         }
         .task {
+            if let qaSession {
+                qaSession.people.openQuestionsAndAnswers()
+                return
+            }
             // Open the way the state's cell does (the knock View for Waiting, the hand toast View for Raised Hands).
             session.open(destination: PeopleFixtureScript.openDestination(for: session.state))
             if session.state == PeopleFixtureState.lostHost {

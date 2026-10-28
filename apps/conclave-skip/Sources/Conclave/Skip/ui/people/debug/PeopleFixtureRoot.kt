@@ -41,11 +41,18 @@ import kotlinx.coroutines.delay
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun PeopleFixtureRoot(stateName: String, patternName: String? = null, forceScreenReader: Boolean = false) {
-    val state = PeopleFixtureScript.state(named = stateName) ?: PeopleFixtureState.host6
-    val session = remember(state) {
-        PeopleFixtureSession(state = state, pattern = StageFixtureScript.pattern(named = patternName), forceScreenReader = forceScreenReader)
+    // Keep the scripted owner alive: its weak completion callback must survive while the real Q&A page is open.
+    val qaState = PeopleWebinarFixtureScript.state(named = stateName)?.takeIf { it == PeopleWebinarFixtureState.qaAttendee5 }
+    val qaSession = remember(qaState) { qaState?.let { PeopleWebinarFixtureSession(state = it) } }
+    val state = PeopleFixtureScript.state(named = stateName) ?: qaState?.let { PeopleWebinarFixtureScript.baseState(it) } ?: PeopleFixtureState.host6
+    val session = remember(state, qaSession) {
+        qaSession?.base ?: PeopleFixtureSession(state = state, pattern = StageFixtureScript.pattern(named = patternName), forceScreenReader = forceScreenReader)
     }
     LaunchedEffect(session) {
+        if (qaSession != null) {
+            qaSession.people.openQuestionsAndAnswers()
+            return@LaunchedEffect
+        }
         // Open the way the state's cell does (the knock View for Waiting, the hand toast View for Raised Hands).
         session.open(destination = PeopleFixtureScript.openDestination(state))
         if (state == PeopleFixtureState.lostHost) {

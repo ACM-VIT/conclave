@@ -3,8 +3,8 @@ import SwiftUI
 
 // S50 11 c (PPL-6, PL5): the iOS question row and the upvote control. Each row observes one `QaQuestionEntry`, so a
 // vote change re-evaluates one row (11 k). Attendees get the upvote control (neutral bordered `.tint(.primary)` in both
-// states, `.isSelected` when voted; the selected count is drawn in `coralText`, coral only as a small mark, D4; the
-// R50-4 `upvote` glyph is pending in the icon manifest, so the control carries its count until it lands). Hosts get a
+// states, `.isSelected` when voted; only the selected glyph uses `coralText`, and the count stays primary, D4; the
+// R50-4 upvote arrow accompanies the count). Hosts get a
 // static count, the trailing `Menu` ("Actions for This Question") with the same items as the context menu (which hides
 // unavailable items, HIG) and the swipes (leading Answer Live or Mark Answered, trailing Dismiss, no full swipe).
 // Static times, no relative clock (11 k).
@@ -151,10 +151,16 @@ struct QuestionRow: View {
                 Button {
                     if qa.toggleUpvote(id: model.id) == ControlTapResult.dispatched { upvoteTicks += 1 }
                 } label: {
-                    Text(model.upvotes, format: .number)
+                    Label {
+                        Text(model.upvotes, format: .number)
+                            .foregroundStyle(.primary)
+                    } icon: {
+                        Image(systemName: ConclaveSymbols.arrowUp)
+                            .foregroundStyle(model.hasUpvoted ? AnyShapeStyle(HostingTheme.coralText) : AnyShapeStyle(.primary))
+                            .accessibilityHidden(true)
+                    }
                         .monospacedDigit()
                         .fontWeight(model.hasUpvoted ? .semibold : .regular)
-                        .foregroundStyle(model.hasUpvoted ? AnyShapeStyle(HostingTheme.coralText) : AnyShapeStyle(.primary))
                         .frame(minWidth: 28, minHeight: 28)
                 }
                 .buttonStyle(.bordered)

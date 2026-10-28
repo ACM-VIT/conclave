@@ -61,6 +61,35 @@ open class MainActivity: AppCompatActivity {
     constructor() {
     }
 
+    private var fixtureSelectorRequested = false
+    private var hostingPreviewRequested = false
+    private var nativePremeetingRequested = false
+    private var productionWiringInstalled = false
+
+    private fun updateFixturePresentation() {
+        val wasFixture = NativeFixtureLaunch.suppressesProductionLifecycle
+        val fixturePresented = NativeFixtureLaunch.androidRootPresented(
+            selectorRequested = fixtureSelectorRequested,
+            hostingPreviewRequested = hostingPreviewRequested,
+            isInCall = PipController.isInCall,
+            showsLegacyPipContent = PipController.showsLegacyPipContent,
+            debugEligible = BuildConfig.DEBUG,
+        )
+        NativeFixtureLaunch.configurePresentation(
+            selectorPresented = fixturePresented && fixtureSelectorRequested,
+            hostingPreviewPresented = fixturePresented && hostingPreviewRequested,
+            debugEligible = BuildConfig.DEBUG,
+        )
+        if (!fixturePresented && nativePremeetingRequested && !productionWiringInstalled) {
+            // Install only when production actually wins the root switch, including after preview Close.
+            NativeRouteLaunch.installProductionWiring()
+            productionWiringInstalled = true
+        }
+        if (wasFixture && !fixturePresented) {
+            AppDelegate.shared.onFixturePresentationEnded()
+        }
+    }
+
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         UIApplication.launch(this)
@@ -80,25 +109,21 @@ open class MainActivity: AppCompatActivity {
         )
         val premeetingFixture = NativeRouteLaunch.premeetingFixture
         val nativePremeeting = NativeRouteLaunch.usesNativePremeeting
-        if (nativePremeeting) {
-            // S10 1 c and 0.8 C8, C9: identity, recents and the link target before the first frame.
-            NativeRouteLaunch.installProductionWiring()
-        }
+        // Snapshot launch selectors just as the remembered roots do; onNewIntent does not replace those roots.
+        val systemFixture = if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra("conclave.systemFixture") else null
+        val stageFixture = if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra("conclave.stageFixture") else null
+        val peopleFixture = if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra("conclave.peopleFixture") else null
+        hostingPreviewRequested = BuildConfig.DEBUG && intent?.getBooleanExtra("conclave.hostingPreview", false) == true
+        fixtureSelectorRequested = NativeFixtureLaunch.androidSelector(
+            system = systemFixture, stage = stageFixture, people = peopleFixture, premeeting = premeetingFixture,
+        )
+        nativePremeetingRequested = nativePremeeting
+        updateFixturePresentation()
 
         setContent {
             // Launch-only proof route. Release and ordinary launches keep the working root.
             var showsHostingPreview by remember {
-                mutableStateOf(BuildConfig.DEBUG && intent?.getBooleanExtra("conclave.hostingPreview", false) == true)
-            }
-            // S70 SX1: Debug-only system fixture (standalone CallPresence; never WebRTC, audio, capture or network).
-            val systemFixture = remember {
-                val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-                if (BuildConfig.DEBUG && debuggable) intent?.getStringExtra("conclave.systemFixture") else null
-            }
-            // S20 SL14: Debug-only stage fixture (standalone presenters; never WebRTC, audio, capture or network).
-            val stageFixture = remember {
-                val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-                if (BuildConfig.DEBUG && debuggable) intent?.getStringExtra("conclave.stageFixture") else null
+                mutableStateOf(hostingPreviewRequested)
             }
             val stageFixturePattern = remember { if (stageFixture != null) intent?.getStringExtra("conclave.stageFixturePattern") else null }
             val stageForceScreenReader = remember {
@@ -110,10 +135,6 @@ open class MainActivity: AppCompatActivity {
             val transcriptFixture = remember { if (stageFixture != null) intent?.getStringExtra("conclave.transcriptFixture") else null }
             // S50 PL12 (HD request B4-T7 R5): Debug-only People fixture over the stage fixture (standalone presenters;
             // never WebRTC, audio, capture or network). The stage fixture's pattern and screen-reader extras apply.
-            val peopleFixture = remember {
-                val debuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-                if (BuildConfig.DEBUG && debuggable) intent?.getStringExtra("conclave.peopleFixture") else null
-            }
             val peopleFixturePattern = remember { if (peopleFixture != null) intent?.getStringExtra("conclave.stageFixturePattern") else null }
             val peopleForceScreenReader = remember {
                 peopleFixture != null && intent?.getBooleanExtra("conclave.stageForceScreenReader", false) == true
@@ -135,10 +156,18 @@ open class MainActivity: AppCompatActivity {
             }
             // WP2-S2b (S70 12 d): the single production feedback root, outside the PiP swap and the route switch,
             // so neither remounts it (a rotation recreates it with a baselined cursor). Never for a fixture.
-            if (systemFixture == null && stageFixture == null && peopleFixture == null && premeetingFixture.isEmpty()) {
+            val fixturePresented = NativeFixtureLaunch.androidRootPresented(
+                selectorRequested = fixtureSelectorRequested,
+                hostingPreviewRequested = showsHostingPreview,
+                isInCall = PipController.isInCall,
+                showsLegacyPipContent = PipController.showsLegacyPipContent,
+                debugEligible = BuildConfig.DEBUG,
+            )
+            SideEffect { updateFixturePresentation() }
+            if (!fixturePresented) {
                 ConclaveRootFeedback()
             }
-            if (nativePremeeting && systemFixture == null && stageFixture == null && peopleFixture == null) {
+            if (nativePremeeting && !fixturePresented) {
                 // ENT-1: the premeeting stream, the second production delivery (launch-time route, never remounted).
                 NativePremeetingRootFeedback()
             }
@@ -162,7 +191,11 @@ open class MainActivity: AppCompatActivity {
                 PremeetingFixtureHost(premeetingFixture)
             } else if (showsHostingPreview && !PipController.isInCall) {
                 // The library cannot see the app build type; it also checks FLAG_DEBUGGABLE at run time.
-                NativeHostingPreviewRoot(fixtureEligible = BuildConfig.DEBUG, onClose = { showsHostingPreview = false })
+                NativeHostingPreviewRoot(fixtureEligible = BuildConfig.DEBUG, onClose = {
+                    showsHostingPreview = false
+                    hostingPreviewRequested = false
+                    updateFixturePresentation()
+                })
             } else if (nativePremeeting) {
                 // PLAN-screens 2: the native premeeting root (S10 0.4); the legacy root is the interim call content.
                 NativePremeetingHost(callContent = legacyRoot)
@@ -182,16 +215,19 @@ open class MainActivity: AppCompatActivity {
         }
         // S70 SY18: the volume keys change call volume while a call is live, even during silence.
         AudioRouteOwnerBridge.applyVolumeControlStream(this)
+        updateFixturePresentation()
         AppDelegate.shared.onResume()
     }
 
     override fun onPause() {
         super.onPause()
+        updateFixturePresentation()
         AppDelegate.shared.onPause()
     }
 
     override fun onStop() {
         super.onStop()
+        updateFixturePresentation()
         AppDelegate.shared.onStop()
     }
 

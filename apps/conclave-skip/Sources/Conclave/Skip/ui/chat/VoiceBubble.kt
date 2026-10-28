@@ -33,14 +33,13 @@ import androidx.compose.ui.unit.dp
  */
 
 /**
- * Pending icon concepts (F00 7.3 play and stop; S40 R40-5 voice_message, Material record_voice_over) with ConclaveIcons
- * stand-ins until the icon lane adds them (HD request B5-T7 R5). speaking is the S40 3 e concept (GraphicEqFill0).
+ * Canonical playback, stop and voice-message artwork; speaking remains the S40 3 e GraphicEqFill0.
  */
 internal object VoiceIcons {
-    val play: ImageVector get() = ConclaveIcons.VolumeUpFill0
-    val stop: ImageVector get() = ConclaveIcons.CloseFill0
+    val play: ImageVector get() = ConclaveIcons.PlayArrowFill1
+    val stop: ImageVector get() = ConclaveIcons.StopFill1
     val speaking: ImageVector get() = ConclaveIcons.GraphicEqFill0
-    val voiceMessage: ImageVector get() = ConclaveIcons.VolumeUpFill0
+    val voiceMessage: ImageVector get() = ConclaveIcons.RecordVoiceOverFill0
 }
 
 /** S40 3 g and 6 g voice copy (Material sentence case). */

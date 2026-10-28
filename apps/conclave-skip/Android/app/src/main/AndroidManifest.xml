@@ -79,29 +79,38 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="conclave" />
             </intent-filter>
-            <!-- App Links (S70 9 d, SY14): each verified host claims only meeting shaped paths,
-                 the same includes as the AASA components list: webinar attendee links (/w/),
-                 three-word meeting codes and scheduled webinar host rooms (sched- plus 8 hex).
-                 Every data element carries a path, so no filter captures a whole host and
-                 web-only pages stay in the browser. Custom-tenant and single-word codes have
-                 no safe pattern and also stay in the browser (S10 4 m). -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPrefix="/w/" />
-                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPattern="/.*-.*-.*" />
-                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPattern="/sched-.*" />
-            </intent-filter>
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathPrefix="/w/" />
-                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathPattern="/.*-.*-.*" />
-                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathPattern="/sched-.*" />
-            </intent-filter>
         </activity>
+
+        <!-- SYS-9: API 28 to 30 keeps HTTPS in the browser. pathAdvancedPattern is only
+             parsed by API 31+, so put verified links on a separately gated alias: an old
+             OS must never ignore the unknown path and turn this into a whole-host filter.
+             The target's singleTask launch mode applies to the alias; launcher and
+             conclave:// continue to target MainActivity directly on every API level.
+             Advanced globs are greedy without backtracking. Meeting token classes exclude
+             their hyphen delimiters; webinar codes exclude slash/dot and stay one segment.
+             Custom-tenant, single/two-word codes, nested paths and static files stay on web. -->
+        <activity-alias
+            android:name=".MeetingAppLinks"
+            android:targetActivity=".MainActivity"
+            android:enabled="@bool/conclave_verified_app_links_enabled"
+            android:exported="true">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathAdvancedPattern="/w/[a-zA-Z0-9][a-zA-Z0-9-]{0,31}" />
+                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathAdvancedPattern="/[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+" />
+                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathAdvancedPattern="/sched-[0-9a-fA-F]{8}" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathAdvancedPattern="/w/[a-zA-Z0-9][a-zA-Z0-9-]{0,31}" />
+                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathAdvancedPattern="/[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+" />
+                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathAdvancedPattern="/sched-[0-9a-fA-F]{8}" />
+            </intent-filter>
+        </activity-alias>
         
         <service
             android:name="conclave.module.CallForegroundService"

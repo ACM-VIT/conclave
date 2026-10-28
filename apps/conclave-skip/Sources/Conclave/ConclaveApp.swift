@@ -16,9 +16,9 @@ let logger: Logger = Logger(subsystem: "com.acmvit.conclave", category: "Conclav
 public struct ConclaveRootView: View {
     @State private var appState = AppState.shared
     #if DEBUG && os(iOS) && !SKIP
-    @State private var showsHostingPreview = ProcessInfo.processInfo.environment["CONCLAVE_HOSTING_PREVIEW"] == "1"
+    @State private var showsHostingPreview = NativeRuntimeConfig.debugLaunchValue(forKey: "CONCLAVE_HOSTING_PREVIEW") == "1"
     /// S70 SX1: `CONCLAVE_SYSTEM_FIXTURE=<state>` (Debug only) mounts the system fixture instead of the app.
-    @State private var systemFixture = SystemFixtureLaunch.state()
+    @State private var systemFixture = SystemFixtureLaunch.state(environment: NativeRuntimeConfig.debugLaunchEnvironment())
     /// S20 SL14: `CONCLAVE_STAGE_FIXTURE=<state>` (Debug only) mounts the stage fixture instead of the app.
     @State private var stageFixture = StageFixtureLaunch.state()
     /// S30 CL13 (CTL-1, HD request B4-T6 R3): `CONCLAVE_STAGE_FIXTURE=controls-<state>` mounts the controls fixture
@@ -27,6 +27,7 @@ public struct ConclaveRootView: View {
     /// S50 PL12 (PPL-1, HD request B4-T7 R5): `CONCLAVE_PEOPLE_FIXTURE=<state>` (Debug only) mounts the People fixture
     /// over the stage fixture.
     @State private var peopleFixture = PeopleFixtureLaunch.state()
+    @State private var peopleQaFixture = PeopleFixtureLaunch.qaState()
     /// S10 L9: `CONCLAVE_PREMEETING_FIXTURE=<state>` (Debug only) mounts the premeeting fixture route with standalone
     /// presenters; it never creates the view model.
     @State private var premeetingFixture = PremeetingFixtureScript.state(named: NativeRouteFlags.shared.premeetingFixture)
@@ -38,17 +39,21 @@ public struct ConclaveRootView: View {
     public var body: some View {
         #if DEBUG && os(iOS) && !SKIP
         if let systemFixture {
-            SystemFixtureView(state: systemFixture, providerMode: SystemFixtureLaunch.providerMode())
+            SystemFixtureView(state: systemFixture, providerMode: SystemFixtureLaunch.providerMode(environment: NativeRuntimeConfig.debugLaunchEnvironment()))
         } else if let controlsFixture {
             ControlsFixtureView(state: controlsFixture)
         } else if let peopleFixture {
-            PeopleFixtureView(state: peopleFixture)
+            PeopleFixtureView(state: peopleFixture, qaState: peopleQaFixture)
         } else if let stageFixture {
             StageFixtureView(state: stageFixture)
         } else if let premeetingFixture {
             PremeetingFixtureRoot(state: premeetingFixture)
         } else if showsHostingPreview {
-            NativeHostingPreview(onClose: { showsHostingPreview = false })
+            NativeHostingPreview(onClose: {
+                showsHostingPreview = false
+                NativeRouteFlags.shared.dismissHostingPreview()
+                ConclaveAppDelegate.shared.onFixturePresentationEnded()
+            })
         } else {
             productionRoot
         }
@@ -111,11 +116,33 @@ enum ConclaveAppLifecyclePolicy {
     }
 }
 
+/// Tracks observed phases separately from delivery so leaving a fixture can activate production exactly once.
+struct ConclaveAppLifecycleGate {
+    private(set) var observedPhase = ConclaveAppLifecyclePhase.launching
+    private var deliveredPhase: ConclaveAppLifecyclePhase? = .launching
+
+    mutating func record(_ next: ConclaveAppLifecyclePhase, fixturePresented: Bool) -> Bool {
+        observedPhase = next
+        guard !fixturePresented else {
+            deliveredPhase = nil
+            return false
+        }
+        guard deliveredPhase != next else { return false }
+        deliveredPhase = next
+        return true
+    }
+
+    mutating func resumeAfterFixture(fixturePresented: Bool) -> Bool {
+        guard observedPhase == .active else { return false }
+        return record(.active, fixturePresented: fixturePresented)
+    }
+}
+
 public final class ConclaveAppDelegate: Sendable {
     public static let shared = ConclaveAppDelegate()
     @MainActor private var lastOpenURLString: String?
     @MainActor private var lastOpenURLAt = Date.distantPast
-    @MainActor private var lifecyclePhase = ConclaveAppLifecyclePhase.launching
+    @MainActor private var lifecycleGate = ConclaveAppLifecycleGate()
     /// S10 0.8 C9: the native root's premeeting presenter (production or the L9 fixture); links that arrive before
     /// the root registers it wait in `pendingNativeLink` (a cold-start link, S10 1 d).
     @MainActor private var premeetingLinkTarget: PremeetingPresenter? = nil
@@ -154,11 +181,22 @@ public final class ConclaveAppDelegate: Sendable {
     public func onResume() {
         Task { @MainActor in
             guard self.transitionLifecycle(to: .active) else { return }
-            MeetingViewModel.shared.handleAppBecameActive()
-            // S10 0.8 C8: the native premeeting presenter learns app activity (relative times, presence later).
-            if NativeRouteFlags.shared.isEnabled(.premeeting) {
-                MeetingViewModel.shared.setPremeetingAppActive(true)
-            }
+            self.deliverActiveLifecycle()
+        }
+    }
+
+    @MainActor
+    public func onFixturePresentationEnded() {
+        guard lifecycleGate.resumeAfterFixture(fixturePresented: NativeRouteFlags.shared.suppressesProductionLifecycle) else { return }
+        deliverActiveLifecycle()
+    }
+
+    @MainActor
+    private func deliverActiveLifecycle() {
+        MeetingViewModel.shared.handleAppBecameActive()
+        // S10 0.8 C8: the native premeeting presenter learns app activity (relative times, presence later).
+        if NativeRouteFlags.shared.isEnabled(.premeeting) {
+            MeetingViewModel.shared.setPremeetingAppActive(true)
         }
     }
 
@@ -232,14 +270,7 @@ public final class ConclaveAppDelegate: Sendable {
 
     @MainActor
     private func transitionLifecycle(to next: ConclaveAppLifecyclePhase) -> Bool {
-        guard ConclaveAppLifecyclePolicy.shouldDeliver(
-            previous: lifecyclePhase,
-            next: next
-        ) else {
-            return false
-        }
-        lifecyclePhase = next
-        return true
+        lifecycleGate.record(next, fixturePresented: NativeRouteFlags.shared.suppressesProductionLifecycle)
     }
 
     /// The native root registers its presenter (production wiring or the L9 fixture); a waiting link is delivered.

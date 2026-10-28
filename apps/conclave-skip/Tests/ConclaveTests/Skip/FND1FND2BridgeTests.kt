@@ -184,12 +184,31 @@ class FND1FND2BridgeTests {
         assertEquals(4000.0, ConclaveToastTiming.durationMillis(hasAction = false, isScreenReaderRunning = true), 0.0)
     }
 
+    @Test fun progressToastUsesAnIndefinitePlatformDuration() {
+        fun item(progress: Boolean, action: Boolean) = ConclaveToastItem(
+            id = "operation", message = "Ending meeting", actionTitle = if (action) "Retry" else "",
+            actionId = if (action) "retry" else "", avatarName = "", avatarId = "",
+            isFailure = false, isProgress = progress,
+        )
+        for (action in listOf(false, true)) {
+            assertEquals(androidx.compose.material3.SnackbarDuration.Indefinite, conclaveToastDuration(item(true, action)))
+            for (screenReader in listOf(false, true)) {
+                assertEquals(0.0, ConclaveToastTiming.durationMillis(hasAction = action,
+                    isScreenReaderRunning = screenReader, isProgress = true), 0.0)
+            }
+        }
+        assertEquals(androidx.compose.material3.SnackbarDuration.Short, conclaveToastDuration(item(false, false)))
+        assertEquals(androidx.compose.material3.SnackbarDuration.Long, conclaveToastDuration(item(false, true)))
+    }
+
     @Test fun routeIconsFollowTheS30Kinds() {
         assertSame(ConclaveIcons.PhoneInTalkFill0, conclaveRouteIcon("receiver"))
         assertSame(ConclaveIcons.BluetoothFill0, conclaveRouteIcon("bluetooth"))
         assertSame(ConclaveIcons.HeadphonesFill0, conclaveRouteIcon("wired"))
         // CL11 fallback until the usb and hearing concepts land in the manifest.
-        for (kind in listOf("speaker", "usb", "hearingAid", "unknown")) assertSame(kind, ConclaveIcons.VolumeUpFill0, conclaveRouteIcon(kind))
+        assertSame(ConclaveIcons.UsbFill0, conclaveRouteIcon("usb"))
+        assertSame(ConclaveIcons.HearingFill0, conclaveRouteIcon("hearingAid"))
+        for (kind in listOf("speaker", "unknown")) assertSame(kind, ConclaveIcons.VolumeUpFill0, conclaveRouteIcon(kind))
         assertSame(ConclaveIcons.FrontHandFill1, conclaveTileBadgeIcon(ConclaveTileBadgeKind.handRaised))
         assertNull(conclaveMenuIcon("not_a_concept"))
         assertSame(ConclaveIcons.PersonRemoveFill0, conclaveMenuIcon("remove_person"))

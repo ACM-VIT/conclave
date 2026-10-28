@@ -120,7 +120,7 @@ private fun ChatEmbedLargeImage(url: String, showsPlay: Boolean) {
         ChatImageBox(url, ChatEmbedLayoutAndroid.cardWidth, ChatEmbedLayoutAndroid.largeImageHeight, shape = RoundedCornerShape(0.dp))
         if (showsPlay) {
             Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface) {
-                Icon(ConclaveIcons.VideocamFill1, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface,
+                Icon(ConclaveIcons.PlayArrowFill1, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(12.dp).size(24.dp))
             }
         }
@@ -215,7 +215,7 @@ internal fun ChatComposerLinkPreview(presenter: ChatPresenter, draft: String, di
             if (model.imageURL.isEmpty()) {
                 Box(Modifier.size(ChatEmbedLayoutAndroid.previewThumb).background(scheme.surfaceContainerHighest, MaterialTheme.shapes.small)
                     .clearAndSetSemantics { }, contentAlignment = Alignment.Center) {
-                    Icon(ConclaveIcons.PublicFill0, contentDescription = null, tint = scheme.onSurfaceVariant)
+                    Icon(ConclaveIcons.LinkFill0, contentDescription = null, tint = scheme.onSurfaceVariant)
                 }
             } else {
                 ChatImageBox(model.imageURL, ChatEmbedLayoutAndroid.previewThumb, ChatEmbedLayoutAndroid.previewThumb,

@@ -185,12 +185,38 @@ final class PeopleWebinarFixtureSession {
         commandLog.append(command.kind.rawValue)
         guard let ack = PeopleWebinarFixtureScript.ack(state, kind: command.kind) else { return }
         let presenter = base.people
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(ack.delayMillis * 1_000_000.0))
             let result = ack.failure.isEmpty ? HostActionResult.completed
                 : HostActionResult.failed(HostActionFailure(rawValue: ack.failure) ?? HostActionFailure.unknown)
-            _ = presenter.finish(ticket, result)
+            if presenter.finish(ticket, result), ack.failure.isEmpty, command.kind == .qaUpvote {
+                self?.publishUpvote(command)
+            }
         }
+    }
+
+    /// The real transport sends a question snapshot as well as an acknowledgement. Mirror that authoritative update
+    /// in the local fixture only after the ticket is accepted; a reset or stale completion must not resurrect it.
+    private func publishUpvote(_ command: PeopleCommand) {
+        let current = qaInputs
+        var entries: [QaEntryInput] = []
+        for entry in current.entries {
+            if entry.id != command.targetId {
+                entries.append(entry)
+                continue
+            }
+            let count = entry.hasUpvoted == command.flag ? entry.upvotes
+                : max(0, entry.upvotes + (command.flag ? 1 : -1))
+            entries.append(QaEntryInput.make(id: entry.id, userId: entry.userId, askerName: entry.askerName,
+                                             question: entry.question, status: entry.status, askedAtMillis: entry.askedAtMillis,
+                                             upvotes: count, hasUpvoted: command.flag, answerText: entry.answerText,
+                                             answeredByName: entry.answeredByName))
+        }
+        qaInputs = QaInputs.make(callSession: current.callSession, attempt: current.attempt, localUserId: current.localUserId,
+                                 role: current.role, isWebinarEnabled: current.isWebinarEnabled, isQaEnabled: current.isQaEnabled,
+                                 isSnapshotReceived: current.isSnapshotReceived, becameHostAfterJoin: current.becameHostAfterJoin,
+                                 blockedReason: current.blockedReason, entries: entries, unseen: current.unseen)
+        base.people.qa.apply(qaInputs)
     }
 
     /// qa-attendee-off: the host turns Attendee Q&A off (the open panel closes with "Q&A is off.").

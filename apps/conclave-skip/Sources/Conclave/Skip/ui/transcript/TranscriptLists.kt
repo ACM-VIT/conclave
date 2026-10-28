@@ -1,5 +1,7 @@
 package conclave.module
 
+import androidx.compose.material3.Icon
+
 import android.text.format.DateUtils
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -115,7 +117,7 @@ internal fun TranscriptFeedList(feed: TranscriptFeed, reservation: PaddingValues
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 modifier = Modifier.heightIn(min = 48.dp).testTag("transcript.jumpPill"),
             ) {
-                // The scroll_to_latest glyph is a pending icon concept (R40-5); text only until it lands.
+                Icon(ConclaveIcons.ArrowDownwardFill0, contentDescription = null, modifier = Modifier.padding(end = 8.dp).size(18.dp))
                 ConclaveText(conclaveString("chat_jump_latest"), line = "transcript.jumpPill.label")
             }
         }
@@ -193,7 +195,7 @@ internal fun TranscriptAskList(presenter: TranscriptPresenter, page: TranscriptP
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             ConclaveEmptyStatus(title = conclaveString("trn_ask_empty_title"), body = conclaveString("trn_ask_empty_body"),
-                icon = ConclaveIcons.QuizFill0, identifier = "transcript.ask.emptyStatus")
+                icon = ConclaveIcons.AutoAwesomeFill0, identifier = "transcript.ask.emptyStatus")
             for (name in listOf("trn_ask_suggest_decisions", "trn_ask_suggest_summary", "trn_ask_suggest_actions")) {
                 val suggestion = conclaveString(name)
                 // Fills the field, never sends; tonal so the coral prominent action stays the only coral one.
@@ -420,7 +422,7 @@ internal fun TranscriptMinutesList(presenter: TranscriptPresenter, snapshot: Tra
                 val title = TranscriptCopy.emptyTitle(empty)
                 val body = TranscriptCopy.emptyBody(empty)
                 if (title != null && body != null) {
-                    ConclaveEmptyStatus(title = conclaveString(title), body = conclaveString(body), icon = ConclaveIcons.DescriptionFill0,
+                    ConclaveEmptyStatus(title = conclaveString(title), body = conclaveString(body), icon = ConclaveIcons.SummarizeFill0,
                         identifier = "transcript.minutes.empty")
                 }
             }

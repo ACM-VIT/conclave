@@ -85,16 +85,15 @@ enum ChatMediaCopy {
     static var clipTag: String { ConclaveStrings.text("Clip") }
 }
 
-/// Symbol concepts for CHT-4 and CHT-5. `add_attachment`, `play` and `link` are pending manifest concepts (R40-5):
-/// existing ConclaveSymbols stand in until the parent icon lane adds them (HD/requests/B5-T6.md R4).
+/// Canonical attachment, playback and link concepts for CHT-4 and CHT-5.
 enum ChatMediaSymbols {
-    static let addAttachment = ConclaveSymbols.photoOnRectangle
+    static let addAttachment = ConclaveSymbols.plus
     static let photo = ConclaveSymbols.photo
-    static let gif = ConclaveSymbols.photoOnRectangle
-    static let play = ConclaveSymbols.videoFill
-    static let link = ConclaveSymbols.globe
+    static let gif = ConclaveSymbols.faceSmiling
+    static let play = ConclaveSymbols.playFill
+    static let link = ConclaveSymbols.link
     static let share = ConclaveSymbols.squareAndArrowUp
-    static let failed = ConclaveSymbols.exclamationmarkOctagonFill
+    static let failed = ConclaveSymbols.exclamationmarkCircleFill
 }
 
 private struct ChatPhotoNamespaceKey: EnvironmentKey {

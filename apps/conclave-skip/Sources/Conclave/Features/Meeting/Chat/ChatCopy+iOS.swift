@@ -5,16 +5,15 @@ import Foundation
 // controls and titles, sentence case for body, status lines and announcements). The presenter supplies kinds and
 // data only; names, message text and server text are data, never keys.
 
-/// Symbol concepts for chat. Pending manifest concepts (R40-5: reply, delivery_failed, hide_sender, scroll_to_latest,
-/// add_attachment) use existing ConclaveSymbols stand-ins until the parent icon lane adds them (request R4).
+/// Canonical chat concepts. Artwork remains decorative inside localized controls.
 enum ChatSymbols {
-    static let reply = ConclaveSymbols.textQuote
+    static let reply = ConclaveSymbols.arrowshapeTurnUpLeft
     static let privateMessage = ConclaveSymbols.lockFill
     static let copy = ConclaveSymbols.docOnDoc
     static let copyLink = ConclaveSymbols.docOnDoc
     static let reactions = ConclaveSymbols.faceSmiling
-    static let hideSender = ConclaveSymbols.personFillXmark
-    static let deliveryFailed = ConclaveSymbols.exclamationmarkOctagonFill
+    static let hideSender = ConclaveSymbols.eyeSlash
+    static let deliveryFailed = ConclaveSymbols.exclamationmarkCircleFill
     static let systemError = ConclaveSymbols.exclamationmarkOctagonFill
     static let everyone = ConclaveSymbols.person2
     static let delete = ConclaveSymbols.trash

@@ -341,7 +341,8 @@ fun NativePremeetingRootFeedback() {
 
 /**
  * ENT-1 (S10 0.5): the premeeting stream as the second production delivery, beside ConclaveRootFeedback. MainActivity
- * composes it once, outside the PiP swap, only behind the `premeeting` flag. It plays only DeliveredTokenKinds.
+ * composes it once, outside the PiP swap, only behind the `premeeting` flag. It admits only the native premeeting
+ * publisher's kinds; the legacy form retains its separate validation-failure facade path.
  */
 @Composable
 internal fun PremeetingRootFeedback(premeeting: PremeetingPresenter) {
@@ -350,7 +351,7 @@ internal fun PremeetingRootFeedback(premeeting: PremeetingPresenter) {
         NativeFeedbackDelivery(
             source = { FeedbackSourceState(session = premeeting.feedbackState.session, token = premeeting.feedbackState.token) },
             sink = { ConclaveHaptics.perform(view, it) },
-            deliversKind = { DeliveredTokenKinds.delivers(it) },
+            deliversKind = { NativePremeetingFeedbackKinds.delivers(it) },
             records = FeedbackDeliveryRecords.shared,
         )
     }

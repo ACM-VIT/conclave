@@ -118,6 +118,7 @@ private fun NoticeBanner(stage: StagePresenter, notice: MeetingNotice) {
         onDismiss = if (notice.isDismissible) ({ stage.dismissNotice(id = notice.id) }) else null,
         maxLines = if (expanded) Int.MAX_VALUE else ConclaveBannerLaneMetrics.LINE_LIMIT,
         announces = notice.announcement != NoticeAnnouncement.none,
+        isAssertive = notice.announcement == NoticeAnnouncement.assertiveOnce,
     )
 }
 
@@ -247,6 +248,7 @@ internal fun noticeToastItem(notice: MeetingNotice): ConclaveToastItem {
         avatarName = if (showsAvatar) notice.name else "",
         avatarId = if (showsAvatar) notice.userId else "",
         isFailure = notice.isFailure,
+        isProgress = notice.severity == NoticeSeverity.progress,
     )
 }
 

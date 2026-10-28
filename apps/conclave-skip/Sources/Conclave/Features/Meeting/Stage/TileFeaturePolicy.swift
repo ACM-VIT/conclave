@@ -120,13 +120,24 @@ enum TileMenuPolicy {
 
     /// The whole tile menu: the stage section first, then the people sections (PPL-2: the S50 `PeopleActionPolicy`
     /// items for that person in the People row order, minus Admit and Deny; RECONCILE R19) without their own Pin and
-    /// Unpin, because S20 keeps Pin. The stage section is icon-free until the SR1 manifest glyphs (`fit_video`,
-    /// `fill_video`, `self_view_minimize`) exist, so the group stays icon-consistent (F00 C16 c, H-06).
+    /// Unpin, because S20 keeps Pin. Every stage item has a canonical glyph (F00 C16 c, H-06).
+    static func concept(_ id: TileMenuItemId) -> String {
+        switch id {
+        case .pin: return "pin"
+        case .unpin: return "unpin"
+        case .flipCamera: return "flip_camera"
+        case .minimizeSelfView: return "self_view_minimize"
+        case .showSelfView: return "picture_in_picture"
+        case .showFullVideo: return "fit_video"
+        case .cropToFill: return "fill_video"
+        }
+    }
+
     static func sections(_ context: TileMenuContext, titles: TileMenuTitles, people: [MenuSectionModel]) -> [MenuSectionModel] {
         var result: [MenuSectionModel] = []
         var items: [MenuItemModel] = []
         for id in stageItems(context) {
-            items.append(MenuItemModel(id: id.rawValue, title: title(id, titles: titles), concept: "", role: MenuItemRole.normal,
+            items.append(MenuItemModel(id: id.rawValue, title: title(id, titles: titles), concept: concept(id), role: MenuItemRole.normal,
                                        isOn: false, isEnabled: true, disabledReason: ""))
         }
         if !items.isEmpty {

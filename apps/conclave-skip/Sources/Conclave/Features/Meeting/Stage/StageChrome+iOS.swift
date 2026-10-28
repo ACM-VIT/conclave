@@ -207,7 +207,7 @@ struct StageCapsuleButton: View {
         let isAttendee = model.subtitleKind == AttendeeViewerPolicy.capsuleLiveKind
         ConclaveMeetingCapsule(title: isAttendee ? AttendeeViewerCopy.title(model.title) : model.title,
                                subtitle: StageCapsuleText.subtitle(model), isLocked: model.isLocked,
-                               captionsOn: model.captionsOn, maxWidth: maxWidth, identifier: "stage.capsule") {
+                               captionsOn: model.captionsOn, isLive: isAttendee, maxWidth: maxWidth, identifier: "stage.capsule") {
             stage.openMeetingInfo()
         }
         .accessibilityHint(ConclaveStrings.text("Shows meeting details."))

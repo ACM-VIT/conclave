@@ -229,8 +229,8 @@ private struct PeopleActionRows: View {
                     LabeledContent {
                         Text(PeopleText.accessSummary(snapshot.accessSummary))
                     } label: {
-                        // `host_controls_item` is pending the icon lane (R50-4); the host concept glyph stands in.
-                        Label(ConclaveStrings.text("Host Controls"), systemImage: ConclaveSymbols.crownFill)
+                        // Host controls are distinct from the host badge.
+                        Label(ConclaveStrings.text("Host Controls"), systemImage: ConclaveSymbols.personBadgeShieldCheckmarkFill)
                     }
                 }
                 .accessibilityIdentifier("people.hostControls")

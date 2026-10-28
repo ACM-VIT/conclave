@@ -168,10 +168,17 @@ const sessionModule = await loadSessionModule();
 const skipConvergence = sessionModule === null ? "esbuild is not installed in the workspace" : false;
 
 /** The fake native host and room: validates every embed message like native does, keeps the room's Y.Doc. */
-const makeRoom = (mod) => {
+const makeRoom = (mod, context) => {
   const { Y } = mod;
   const room = new Y.Doc();
   const clients = [];
+  context.after(() => {
+    for (const client of clients) {
+      client.session.close();
+      client.session.doc.destroy(); // Y.Doc destruction also stops Awareness's interval.
+    }
+    room.destroy();
+  });
   const roomUpdates = [];
   const deliver = (client, type, payload, requestId) => {
     client.requestNumber += 1;
@@ -255,8 +262,8 @@ const makeRoom = (mod) => {
 
 const text = (Y, doc) => doc.getMap("whiteboard").toJSON();
 
-test("two embeds converge: snapshot first, then only what the room lacks", { skip: skipConvergence }, () => {
-  const harness = makeRoom(sessionModule);
+test("two embeds converge: snapshot first, then only what the room lacks", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
   assert.ok(ada.session.isSynced);
   ada.session.doc.getMap("whiteboard").set("stroke-1", "ada");
@@ -270,8 +277,8 @@ test("two embeds converge: snapshot first, then only what the room lacks", { ski
   assert.deepEqual(text(harness.Y, harness.room), { "stroke-1": "ada", "stroke-2": "ben" });
 });
 
-test("a reconnect resyncs and sends nothing twice", { skip: skipConvergence }, () => {
-  const harness = makeRoom(sessionModule);
+test("a reconnect resyncs and sends nothing twice", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
   const ben = harness.join("ben");
   ada.host = { ...ada.host, connection: "reconnecting" };
@@ -290,16 +297,16 @@ test("a reconnect resyncs and sends nothing twice", { skip: skipConvergence }, (
   assert.equal(harness.roomUpdates.length, 1, "a second resync with nothing new sends nothing");
 });
 
-test("read-only embeds draw nothing into the room", { skip: skipConvergence }, () => {
-  const harness = makeRoom(sessionModule);
+test("read-only embeds draw nothing into the room", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
   const viewer = harness.join("viewer", { readOnly: true });
   viewer.session.doc.getMap("whiteboard").set("blocked", "x");
   harness.pump();
   assert.equal(harness.roomUpdates.length, 0);
 });
 
-test("hostile host messages are dropped and counted by reason", { skip: skipConvergence }, () => {
-  const harness = makeRoom(sessionModule);
+test("hostile host messages are dropped and counted by reason", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
   const stale = JSON.stringify({ v: 1, type: "update", callSessionId: ada.scope.callSessionId, appSessionId: "app-old", requestId: "n-90", payload: { update: "AQID" } });
   assert.equal(ada.handler(stale), "staleAppSession");
@@ -310,8 +317,8 @@ test("hostile host messages are dropped and counted by reason", { skip: skipConv
   assert.ok(ada.session.rejections.includes("staleAppSession"));
 });
 
-test("commands answer with an ack carrying their request id", { skip: skipConvergence }, () => {
-  const harness = makeRoom(sessionModule);
+test("commands answer with an ack carrying their request id", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
   ada.session.setCommandHandler((command) => ({ ok: command.type === "setTool" }));
   harness.deliver(ada, "setTool", { tool: "eraser" }, "h-1");
@@ -320,8 +327,8 @@ test("commands answer with an ack carrying their request id", { skip: skipConver
   assert.deepEqual(ada.acks.map((ack) => [ack.requestId, ack.payload.ok]), [["h-1", true], ["h-2", false]]);
 });
 
-test("close invalidates the session for good", { skip: skipConvergence }, () => {
-  const harness = makeRoom(sessionModule);
+test("close invalidates the session for good", { skip: skipConvergence }, (context) => {
+  const harness = makeRoom(sessionModule, context);
   const ada = harness.join("ada");
   harness.deliver(ada, "close", {});
   assert.ok(ada.session.isClosed);

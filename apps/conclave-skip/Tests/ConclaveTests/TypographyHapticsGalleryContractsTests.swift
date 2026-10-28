@@ -1196,7 +1196,7 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(kotlinRows.contains("Column(modifier.testTag(identifier).selectableGroup())"))
         #expect(kotlinRows.contains(".selectable(selected = selected, role = Role.RadioButton,"))
         #expect(kotlinRows.contains(".toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)"))
-        #expect(normalized(try source("Sources/Conclave/Skip/ui/components/ConclaveBanner.kt")).contains("liveRegion = LiveRegionMode.Polite"))
+        #expect(normalized(try source("Sources/Conclave/Skip/ui/components/ConclaveBanner.kt")).contains("if (announces) liveRegion = if (isAssertive) LiveRegionMode.Assertive else LiveRegionMode.Polite"))
         // Every Text call in the Kotlin component files is the one inside ConclaveText, which reports its layout.
         for file in Self.androidComponentFiles {
             let calls = regexMatches(#"(?<![A-Za-z])Text\("#, in: withoutComments(try source(file))).count

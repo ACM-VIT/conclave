@@ -9,7 +9,7 @@ import SwiftUI
 
 @MainActor
 enum ChatFixtureLaunch {
-    static func state(environment: [String: String] = ProcessInfo.processInfo.environment) -> ChatFixtureState? {
+    static func state(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> ChatFixtureState? {
         ChatFixtureDriver.state(named: environment["CONCLAVE_CHAT_FIXTURE"])
     }
 }

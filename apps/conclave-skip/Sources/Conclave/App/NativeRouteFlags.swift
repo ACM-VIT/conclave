@@ -26,6 +26,22 @@ final class NativeRouteFlags {
     private(set) var enabledKeys: [NativeRouteKey] = []
     /// The S10 L9 fixture state name ("" for an ordinary launch).
     private(set) var premeetingFixture: String = ""
+    private var fixtureSelectorPresented = false
+    private var hostingPreviewPresented = false
+
+    /// Presentation, not route flags: ordinary native routes still receive production lifecycle events.
+    var suppressesProductionLifecycle: Bool {
+        fixtureSelectorPresented || hostingPreviewPresented
+    }
+
+    func configureFixturePresentation(selectorPresented: Bool, hostingPreviewPresented: Bool, debugEligible: Bool) {
+        fixtureSelectorPresented = debugEligible && selectorPresented
+        self.hostingPreviewPresented = debugEligible && hostingPreviewPresented
+    }
+
+    func dismissHostingPreview() {
+        hostingPreviewPresented = false
+    }
 
     init() {
     }
@@ -42,6 +58,8 @@ final class NativeRouteFlags {
     func reset() {
         enabledKeys = []
         premeetingFixture = ""
+        fixtureSelectorPresented = false
+        hostingPreviewPresented = false
     }
 
     func isEnabled(_ key: NativeRouteKey) -> Bool {
@@ -79,6 +97,59 @@ final class NativeRouteFlags {
             premeetingFixture: NativeRuntimeConfig.debugLaunchValue(forKey: NativeRouteFlags.premeetingFixtureEnvironmentKey),
             debugEligible: true
         )
+        #if os(iOS)
+        let environment = NativeRuntimeConfig.debugLaunchEnvironment()
+        configureFixturePresentation(
+            selectorPresented: NativeFixtureLaunch.iOSSelector(
+                system: environment["CONCLAVE_SYSTEM_FIXTURE"],
+                stage: environment["CONCLAVE_STAGE_FIXTURE"],
+                people: environment["CONCLAVE_PEOPLE_FIXTURE"],
+                premeeting: premeetingFixture
+            ),
+            hostingPreviewPresented: environment["CONCLAVE_HOSTING_PREVIEW"] == "1",
+            debugEligible: true
+        )
         #endif
+        #endif
+    }
+}
+
+/// Mirrors each platform's existing root selection without changing invalid-input fallback behavior.
+public enum NativeFixtureLaunch {
+    /// Boolean-only bridge for the Android app module; the route registry remains internal to the library.
+    public static var suppressesProductionLifecycle: Bool {
+        NativeRouteFlags.shared.suppressesProductionLifecycle
+    }
+
+    public static func configurePresentation(selectorPresented: Bool, hostingPreviewPresented: Bool, debugEligible: Bool) {
+        NativeRouteFlags.shared.configureFixturePresentation(
+            selectorPresented: selectorPresented,
+            hostingPreviewPresented: hostingPreviewPresented,
+            debugEligible: debugEligible
+        )
+    }
+
+    static func iOSSelector(system: String?, stage: String?, people: String?, premeeting: String?) -> Bool {
+        SystemFixtureScript.state(named: system ?? "") != nil
+            || ControlsFixtureScript.state(named: stage ?? "") != nil
+            || StageFixtureScript.state(named: stage ?? "") != nil
+            || PeopleFixtureScript.state(named: people ?? "") != nil
+            || PremeetingFixtureScript.state(named: premeeting ?? "") != nil
+    }
+
+    public static func androidSelector(system: String?, stage: String?, people: String?, premeeting: String?) -> Bool {
+        // Android's wrappers intentionally mount their default fixture for any non-null raw selector.
+        system != nil || stage != nil || people != nil
+            || PremeetingFixtureScript.state(named: premeeting ?? "") != nil
+    }
+
+    public static func androidRootPresented(
+        selectorRequested: Bool,
+        hostingPreviewRequested: Bool,
+        isInCall: Bool,
+        showsLegacyPipContent: Bool,
+        debugEligible: Bool
+    ) -> Bool {
+        debugEligible && !isInCall && !showsLegacyPipContent && (selectorRequested || hostingPreviewRequested)
     }
 }

@@ -63,10 +63,10 @@ internal fun rememberMediaShortcutTitles(): MediaShortcutTitles {
     }
 }
 
-/** S30 2 e concepts: flip_camera, and More's Effects stand-in until the CL11 `effects` concept lands (HD request). */
+/** Canonical S30 2 e flip-camera and CL11 Effects concepts. */
 internal fun mediaShortcutIcon(id: String): ImageVector? = when (id) {
     MediaShortcutItemID.flipCamera.rawValue -> ConclaveIcons.CameraswitchFill0
-    MediaShortcutItemID.effects.rawValue -> ConclaveIcons.MoodFill1
+    MediaShortcutItemID.effects.rawValue -> ConclaveIcons.AutoAwesomeFill0
     else -> null
 }
 

@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 import os
+import plistlib
 from pathlib import Path
 import re
 import struct
@@ -50,7 +51,8 @@ SYSTEM_DRAWABLES = (('conclave_mic_fill1', 'mic.fill1'), ('conclave_mic_off_fill
                     ('conclave_call_end_fill1', 'call_end.fill1'),
                     ('conclave_cancel_presentation_fill1', 'cancel_presentation.fill1'))
 REPORT = ICON / 'generated-report.json'
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+ADDITIONS = ICON / "additions/polish-20261029"
 PROFILE = 'material-rounded-24-absolute-v1'
 PIN = '49d4db35df873165d6bd6ba09b063c7dafbac2f4'
 VENDOR_SEAL_SHA = '8e27e9055db4a2128410afc01ae8334aaa6d30bea557a289e20f4bf4d5e7f3b3'
@@ -66,6 +68,8 @@ SEMANTICS_EVIDENCE = {
 }
 COUNTS = {'concepts': 36, 'material_names': 48, 'artwork': 54, 'bindings': 58, 'sf_literals': 50}
 MIRRORED = ('arrow_back.fill0', 'send.fill1')
+# Exact pinned exception: upstream auto_awesome uses implicit 24px coordinates.
+ADDITIVE_24PX = {'auto_awesome.fill0': '1063105af20333199d63de238ae67b803f56bccf9cf593967e0b8cd4f5107796'}
 ROLES = ('button', 'switch', 'checkbox', 'status', 'decorative')
 LABELED_ROLES = ('button', 'switch', 'checkbox')
 FILL_BASES = ('requirement', 'derived_requirement', 'recommendation')
@@ -156,7 +160,7 @@ def listed(directory):
 
 # ---------------------------------------------------------------- strict SVG profile
 
-def svg_path(data, asset='fixture'):
+def svg_path(data, asset='fixture', *, implicit_24=False):
     require(len(data) <= MAX_BYTES, 'SVG exceeds byte bound', 'E_SVG_PROFILE', asset=asset)
     require(b'&' not in data, 'entities/references forbidden', 'E_SVG_PROFILE', asset=asset)
     parser = expat.ParserCreate()
@@ -168,8 +172,10 @@ def svg_path(data, asset='fixture'):
 
     def start(name, attrs):
         if not stack:
-            require(name == 'svg' and attrs == {'xmlns': 'http://www.w3.org/2000/svg', 'width': '24',
-                                                'height': '24', 'viewBox': '0 -960 960 960'},
+            expected = {'xmlns': 'http://www.w3.org/2000/svg', 'width': '24', 'height': '24'}
+            if not implicit_24:
+                expected['viewBox'] = '0 -960 960 960'
+            require(name == 'svg' and attrs == expected,
                     'unexpected SVG root or attributes', 'E_SVG_PROFILE', asset=asset, offset=parser.CurrentByteIndex)
         else:
             require(stack == ['svg'] and name == 'path' and set(attrs) == {'d'} and not paths,
@@ -378,10 +384,11 @@ def float_literal(value, asset):
 
 # ---------------------------------------------------------------- manifest validation
 
-def validate_concepts(m, idx, artwork_ids, labels_forbidden):
+def validate_concepts(m, idx, artwork_ids, labels_forbidden, expected_counts=COUNTS,
+                      reference_pattern=r"(F00|S10|S20|S30|S40|S50|S60):[1-9][0-9]*"):
     used = set()
     total = 0
-    require(type(m['concepts']) is list and len(m['concepts']) == len(idx['concepts']) == COUNTS['concepts'],
+    require(type(m['concepts']) is list and len(m['concepts']) == len(idx['concepts']) == expected_counts['concepts'],
             'concept inventory mismatch', pointer='/concepts')
     seen = set()
     for i, (c, original) in enumerate(zip(m['concepts'], idx['concepts'])):
@@ -424,7 +431,7 @@ def validate_concepts(m, idx, artwork_ids, labels_forbidden):
             else:
                 require(b['decision_id'] in m['decisions'], 'undeclared fill: missing accepted decision', pointer=bp)
             require(type(b['references']) is list and b['references'] and all(
-                type(r) is str and re.fullmatch('(F00|S10|S20|S30|S40|S50|S60):[1-9][0-9]*', r) for r in b['references']),
+                type(r) is str and re.fullmatch(reference_pattern, r) for r in b['references']),
                 'invalid spec references', pointer=bp)
             a = b['accessibility']
             keys(a, 'label value role icon_exposure', bp + '/accessibility')
@@ -436,7 +443,7 @@ def validate_concepts(m, idx, artwork_ids, labels_forbidden):
             require((a['label'] is not None) == (a['role'] in LABELED_ROLES), 'owner label/role mismatch', pointer=bp)
             require(a['label'] not in labels_forbidden, 'raw glyph identifier used as label', pointer=bp)
             total += 1
-    require(total == COUNTS['bindings'], 'binding count', pointer='/concepts')
+    require(total == expected_counts['bindings'], 'binding count', pointer='/concepts')
     require(used == artwork_ids, 'selected artwork without a binding', 'E_INPUT', pointer='/artwork')
 
 
@@ -444,7 +451,7 @@ def validate(root):
     manifest_bytes = safe(root, ICON / 'manifest.json').read_bytes()
     m = strict_json(manifest_bytes)
     keys(m, 'schema_version profile source_revision vendor_files semantics_evidence decisions accessibility '
-            'history concepts artwork sf_literals', '/')
+            'history concepts artwork sf_literals additions', '/')
     require(type(m['schema_version']) is int and m['schema_version'] == SCHEMA_VERSION and m['profile'] == PROFILE
             and m['source_revision'] == PIN, 'unsupported schema/profile/pin')
 
@@ -529,7 +536,131 @@ def validate(root):
     validate_concepts(m, idx, ids, forbidden)
     symbol_union = {s['name'] for c in m['concepts'] for s in c['sf_symbols']}
     require(symbol_union == set(m['sf_literals']), 'SF literal not owned by a concept', pointer='/sf_literals')
-    return m, digest(manifest_bytes)
+    return validate_additions(root, m), digest(manifest_bytes)
+
+
+def artwork_ops(root, a):
+    raw = safe(root, a.get('_vendor_root', VENDOR) / a['local_path']).read_bytes()
+    implicit = a.get('_vendor_root') == ADDITIONS and a['id'] in ADDITIVE_24PX
+    if implicit:
+        require(digest(raw) == ADDITIVE_24PX[a['id']], 'implicit viewport exception identity', 'E_PROVENANCE', asset=a['id'])
+    ops = normalize(svg_path(raw, a['id'], implicit_24=implicit), a['id'])
+    if implicit:
+        # normalize() translates font960 Y by +960. Undo that translation, then scale
+        # the original implicit 24px canvas exactly by 40 in both axes.
+        ops = [tuple([op[0]] + [(v - (960 if i % 2 else 0)) * 40 for i, v in enumerate(op[1:])]) for op in ops]
+    return ops
+
+
+def inventory(m):
+    return {'concepts': len(m['concepts']), 'material_names': len({a['name'] for a in m['artwork']}),
+            'artwork': len(m['artwork']), 'bindings': sum(len(c['bindings']) for c in m['concepts']),
+            'sf_literals': len(m['sf_literals'])}
+
+
+def validate_additions(root, base):
+    """Append-only selection: the original sealed package is fully validated first.
+
+    Each extension input is hash-linked from the top-level manifest. SVG origins are
+    constrained to the same official commit/path/axes as the original package; no
+    network, dynamic discovery, arbitrary vendor root or silent fallback is allowed.
+    """
+    ref = base['additions']
+    keys(ref, 'path sha256', '/additions')
+    require(ref['path'] == str(ADDITIONS / 'manifest.json'), 'unknown extension path', 'E_PROVENANCE')
+    raw = safe(root, ref['path']).read_bytes()
+    require(digest(raw) == ref['sha256'], 'extension manifest hash mismatch', 'E_HASH')
+    ext = strict_json(raw)
+    keys(ext, 'schema_version profile source_revision license_sha256 axis_evidence files decisions history '
+              'artwork concepts sf_literals aliases', '/additions')
+    require(type(ext['schema_version']) is int and ext['schema_version'] == 1 and ext['profile'] == PROFILE
+            and ext['source_revision'] == PIN and ext['license_sha256'] == LICENSE_SHA,
+            'unsupported extension schema/profile/pin/license', 'E_PROVENANCE')
+    require(ext['axis_evidence'] == str(VENDOR / 'axis-family-evidence.json'),
+            'extension must reuse the sealed axis evidence', 'E_PROVENANCE')
+    folder = safe(root, ADDITIONS)
+    require(type(ext['files']) is dict and listed(folder) == set(ext['files']) | {'manifest.json'},
+            'missing/unused extension input', 'E_INPUT')
+    for name, h in ext['files'].items():
+        require(type(h) is str and re.fullmatch('[a-f0-9]{64}', h), 'invalid extension hash', 'E_HASH')
+        require(digest(safe(folder, name).read_bytes()) == h, 'changed extension input', 'E_HASH', asset=name)
+    require(set(ext['decisions']) == {'P01', 'P02', 'P03'}, 'extension decisions changed')
+    for key, value in ext['decisions'].items():
+        text(value, '/additions/decisions/' + key)
+    keys(ext['history'], 'fresh_pinned_acquisitions historical_exact_matches', '/additions/history')
+    require(type(ext['artwork']) is list and ext['history'] == {
+        'fresh_pinned_acquisitions': len(ext['artwork']), 'historical_exact_matches': 0},
+        'false extension historical provenance', 'E_PROVENANCE')
+    ids = {a['id'] for a in base['artwork']}
+    properties = {a['kotlin_property'] for a in base['artwork']}
+    paths = set()
+    for a in ext['artwork']:
+        keys(a, 'id name fill autoMirror kotlin_property local_path sha256', '/additions/artwork')
+        require(type(a['fill']) is int and a['fill'] in (0, 1) and type(a['autoMirror']) is bool,
+                'invalid extension fill/mirror type')
+        require(type(a['name']) is str and re.fullmatch('[a-z][a-z0-9_]*', a['name']), 'invalid Material name', 'E_ID')
+        aid = f"{a['name']}.fill{a['fill']}"
+        prop = ''.join(w.title() for w in a['name'].split('_')) + f"Fill{a['fill']}"
+        require(a['id'] == aid and aid not in ids and a['kotlin_property'] == prop and prop not in properties,
+                'colliding/invalid extension artwork', 'E_ID', asset=aid)
+        require(a['autoMirror'] == (aid in ('reply.fill0', 'backspace.fill0')), 'unexpected extension mirroring', 'E_ID')
+        ids.add(aid); properties.add(prop)
+        suffix = '_fill1' if a['fill'] else ''
+        upstream = f"symbols/web/{a['name']}/materialsymbolsrounded/{a['name']}{suffix}_24px.svg"
+        require(a['local_path'] == 'assets/' + upstream, 'wrong extension family/axes path', 'E_PROVENANCE', asset=aid)
+        paths.add(a['local_path'])
+        svg = safe(folder, a['local_path']).read_bytes()
+        require(digest(svg) == a['sha256'], 'extension SVG hash mismatch', 'E_HASH', asset=aid)
+        receipt = strict_json(safe(folder, f'http/{aid}.json').read_bytes())
+        keys(receipt, 'id source_revision request_url final_url http_status headers started_at completed_at '
+                      'sha256 bytes body_file historical_status', '/additions/http/' + aid)
+        url = f'https://raw.githubusercontent.com/google/material-design-icons/{PIN}/' + upstream
+        require(receipt['request_url'] == receipt['final_url'] == url and receipt['http_status'] == 200
+                and receipt['id'] == aid and receipt['source_revision'] == PIN
+                and receipt['sha256'] == a['sha256'] and receipt['bytes'] == len(svg)
+                and receipt['body_file'] == a['local_path']
+                and receipt['historical_status'] == 'fresh_pinned_acquisition',
+                'extension origin/receipt mismatch', 'E_PROVENANCE', asset=aid)
+        # Validate raw XML and geometry before any output or mutation.
+        artwork_ops(root, {**a, '_vendor_root': ADDITIONS})
+    require({p for p in ext['files'] if p.endswith('.svg')} == paths, 'unselected extension SVG', 'E_INPUT')
+    require({p for p in ext['files'] if p.startswith('http/')} == {f"http/{a['id']}.json" for a in ext['artwork']},
+            'unused extension receipt', 'E_INPUT')
+    require(type(ext['sf_literals']) is list and ext['sf_literals'] == sorted(set(ext['sf_literals'])), 'SF extension inventory')
+    availability = strict_json(safe(folder, 'evidence/sf-availability.json').read_bytes())
+    catalog = safe(folder, 'evidence/name_availability.plist').read_bytes()
+    require(digest(catalog) == availability['catalog_sha256'], 'SF availability catalog hash', 'E_HASH')
+    apple = plistlib.loads(catalog)
+    expected = []
+    for name in ext['sf_literals']:
+        year = apple['symbols'].get(name)
+        ios = apple['year_to_release'].get(year, {}).get('iOS')
+        require(type(ios) is str and tuple(int(v) for v in ios.split('.')) <= (17, 0),
+                'SF symbol unavailable on minimum iOS 17', 'E_PROVENANCE', asset=name)
+        expected.append({'name': name, 'year': year, 'ios': ios})
+    require(availability['symbols'] == expected, 'SF availability evidence differs', 'E_PROVENANCE')
+    require(type(ext['concepts']) is list and not ({c['id'] for c in base['concepts']} & {c['id'] for c in ext['concepts']}),
+            'extension overwrites a base concept', 'E_ID')
+    require(type(ext['aliases']) is dict, 'extension aliases must be explicit')
+    concept_ids = {c['id'] for c in base['concepts'] + ext['concepts']}
+    for alias, target in ext['aliases'].items():
+        require(re.fullmatch('[a-z][a-z0-9_]*', alias) and alias not in concept_ids and target in concept_ids,
+                'invalid/cyclic concept alias', 'E_ID')
+    used = {b['artwork'] for c in ext['concepts'] for b in c['bindings']}
+    require(used <= ids and {a['id'] for a in ext['artwork']} <= used, 'unbound extension artwork', 'E_ID')
+    idx = {'concepts': [{**c, 'sf_literals': [s['name'] for s in c['sf_symbols']],
+                        'android_bindings': [{'state': b['state'], 'artwork_id': b['artwork']} for b in c['bindings']]}
+                       for c in ext['concepts']]}
+    forbidden = ids | properties | set(base['sf_literals']) | set(ext['sf_literals']) | {a['name'] for a in base['artwork'] + ext['artwork']}
+    validate_concepts(ext, idx, used, forbidden, inventory(ext), r'B[2-8]-T[1-8]:R[1-9][0-9]*')
+    require({s['name'] for c in ext['concepts'] for s in c['sf_symbols']} == set(ext['sf_literals']),
+            'unowned extension SF literal', 'E_ID')
+    # Preserve base order and identity. Only this validated in-memory projection gains vendor-root metadata.
+    merged = dict(base)
+    merged['concepts'] = base['concepts'] + ext['concepts']
+    merged['artwork'] = base['artwork'] + [{**a, '_vendor_root': ADDITIONS} for a in ext['artwork']]
+    merged['sf_literals'] = base['sf_literals'] + [s for s in ext['sf_literals'] if s not in base['sf_literals']]
+    return merged
 
 
 # ---------------------------------------------------------------- generation
@@ -634,7 +765,7 @@ def app_drawables(root, m, generator_sha):
     by_id = {a['id']: a for a in m['artwork']}
     for name, artwork in SYSTEM_DRAWABLES:
         a = by_id[artwork]
-        ops = normalize(svg_path(safe(root, VENDOR / a['local_path']).read_bytes(), a['id']), a['id'])
+        ops = artwork_ops(root, a)
         require(not a['autoMirror'], 'system drawable must not mirror', 'E_ID', asset=a['id'])
         comment = (f'{a["id"]}: Material Symbols by Google (Apache-2.0), input SHA256 {a["sha256"]}; '
                    f'generator SHA256 {generator_sha}.')
@@ -731,20 +862,21 @@ def generate(root):
     header = (f'// GENERATED by {GENERATOR}; do not edit.\n'
               f'// Profile {PROFILE}; manifest SHA256 {manifest_sha}; generator SHA256 {generator_sha}.\n')
     attribution = ('// Material Symbols by Google. Conclave converted the original SVGs (strict SVG parsing,\n'
-                   '// exact-decimal translation by (0,+960)) to absolute native path operations.\n'
+                   '// exact-decimal font960 translation or sealed implicit24 scaling) to absolute native paths.\n'
                    f'// Source commit {PIN}; per-input SHA256 above each vector and in the build-time manifest.\n'
                    '// Apache-2.0, complete text: packages/ui-tokens/icons/vendor/material-symbols/upstream/LICENSE\n'
                    '// (packaged as MaterialSymbols-LICENSE.txt).\n')
     report = {'profile': PROFILE, 'manifest_sha256': manifest_sha, 'generator_sha256': generator_sha,
               'arithmetic': 'exact rational decimals; finite binary32 round-to-nearest-even; nine-digit roundtrip literals',
-              'counts': COUNTS, 'assets': []}
+              'counts': inventory(m), 'base_counts': COUNTS, 'assets': []}
     vectors = [header + attribution + IMPORTS + '\ninternal object ConclaveIcons {\n']
     for a in m['artwork']:
-        ops = normalize(svg_path(safe(root, VENDOR / a['local_path']).read_bytes(), a['id']), a['id'])
+        ops = artwork_ops(root, a)
         body, error = vector_source(a['kotlin_property'], ops, a['autoMirror'], a['id'], a['sha256'])
         vectors.append(body)
         kinds = {k: sum(1 for op in ops if op[0] == k) for k in 'MLQZ'}
         report['assets'].append({'id': a['id'], 'input_sha256': a['sha256'], 'segments': len(ops), 'operations': kinds,
+                                 'coordinate_profile': 'implicit24-scale40' if a.get('_vendor_root') == ADDITIONS and a['id'] in ADDITIVE_24PX else 'font960-translate-y',
                                  'maximum_float32_error': str(error),
                                  'maximum_float32_error_decimal': format(float(error), '.12g')})
     vectors.append('    // Metadata probe; reading isInitialized never evaluates a lazy initializer.\n'
@@ -891,7 +1023,7 @@ def main():
         outputs = generate(ROOT)
         changed = publish(ROOT, outputs, args.check)
         print(json.dumps({'status': 'checked' if args.check else 'generated', 'outputs': len(outputs),
-                          'changed': len(changed), 'profile': PROFILE, **COUNTS}, sort_keys=True))
+                          'changed': len(changed), 'profile': PROFILE, **strict_json(outputs[REPORT])['counts']}, sort_keys=True))
     except (IconError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 1

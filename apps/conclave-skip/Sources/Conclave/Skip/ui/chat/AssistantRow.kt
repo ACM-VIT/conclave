@@ -30,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
@@ -40,7 +39,6 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 
 /*
@@ -108,13 +106,13 @@ internal fun AssistantRow(entry: ChatRowEntry, actions: ChatRowActions, sidePane
     }
 }
 
-/** CL4: the brand speaking. The `assistant` concept (auto_awesome) is pending in the icon manifest (R40-5); stand-in. */
+/** CL4: the canonical assistant mark. */
 @Composable
 private fun AssistantMark() {
     val scheme = MaterialTheme.colorScheme
     Surface(shape = CircleShape, color = scheme.primaryContainer, modifier = Modifier.size(32.dp).clearAndSetSemantics { }) {
         Box(contentAlignment = Alignment.Center) {
-            Icon(ConclaveIcons.ChatBubbleFill1, contentDescription = null, tint = scheme.onPrimaryContainer,
+            Icon(ConclaveIcons.AutoAwesomeFill0, contentDescription = null, tint = scheme.onPrimaryContainer,
                 modifier = Modifier.size(18.dp))
         }
     }
@@ -216,8 +214,7 @@ private fun AssistantThinkingLine() {
 
 /**
  * A reasoning or steps header: one Button node with the expand or collapse click label and the expanded or collapsed
- * state, 48 dp tall. The `expand` concept (expand_more) is pending in the icon manifest (R40-5); the arrow_back
- * stand-in turns to point down when closed and up when open, in either reading direction (it is auto-mirrored).
+ * state, 48 dp tall. The nonmirroring disclosure points down when closed and up when open in either reading direction.
  */
 @Composable
 private fun AssistantDisclosure(
@@ -232,8 +229,7 @@ private fun AssistantDisclosure(
     val reduceMotion = rememberReduceMotion()
     val clickLabel = if (expanded) conclaveString("chat_assistant_collapse") else conclaveString("chat_assistant_expand")
     val stateText = if (expanded) conclaveString("chat_assistant_expanded") else conclaveString("chat_assistant_collapsed")
-    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    val angle = if (rtl) (if (expanded) 270f else 90f) else (if (expanded) 90f else 270f)
+    val angle = if (expanded) 180f else 0f
     Column {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(identifier)
@@ -245,7 +241,7 @@ private fun AssistantDisclosure(
             leading?.invoke()
             ConclaveText(title, line = "$identifier.title", style = MaterialTheme.typography.labelLarge,
                 color = scheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-            Icon(ConclaveIcons.ArrowBackFill0, contentDescription = null, tint = scheme.onSurfaceVariant,
+            Icon(ConclaveIcons.ExpandMoreFill0, contentDescription = null, tint = scheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp).rotate(angle))
         }
         if (reduceMotion) {
