@@ -29,3 +29,21 @@ The live text-size test initially exposed a navigation reset. The final fix keep
 ## Limits
 
 Android docked-keyboard coverage was blocked because no on-screen IME appeared. Full simultaneous name/Sign In clearance in a compact iOS keyboard viewport remains inconclusive. This pass does not establish live media, minimum-OS, physical-device, performance or signed-release readiness. Owner devices were left untouched; spare settings were restored and owned app/device claims released.
+
+
+## Regular native glass follow-up — 2026-10-29
+
+Source `794f5c03` uses the regular system glass style for floating action buttons, removes nested custom capsule fills from native Home toolbar items, and hides the fixed modern-iOS navigation background. Native top scroll protection remains automatic when content moves behind the title; bottom scroll protection is separate from the button surface. iOS 17 and accessibility opaque fallbacks remain available.
+
+Unedited offline Debug captures from the spare iPhone Duo on iOS 27.1:
+
+- [Regular glass Start Meeting and resting header](ios-regular-glass-lobby.png).
+- [Single native glass surface for each Home action](ios-native-home-actions.png).
+
+Manual checks: open the Home rejoin fixture, inspect Join/New Meeting; open the New Meeting fixture, scroll, change light/dark appearance, and enlarge text. Regular glass labels and native title were readable; Start remained reachable at the largest text size. Restore original appearance/text settings and close the spare. No live meeting, authentication, recording, messages or game start.
+
+All eight fresh native gates passed: Swift build/test, Android compile/unit tests and Release/Debug packaging, simulator Debug and unsigned device Release. Counts: 461 XCTest, 1,718 Swift Testing, 492 Kotlin tests. Source manifest SHA-256 `bea514f50c49219eec1d2108c82a00229788e978e40d25b3d585b40f804887bc`. Simulator bundle tree SHA-256 `6599473dc65f4922bb1c18a1ce277866efd4e6365e21b917852dd8300508b28b`.
+
+The Android Release is unchanged byte-for-byte: `e9476fd1df4d7a423ec0cde7e457fd011a7d4a7d16625a3ee50403b23de01191`, 133,376,807 bytes, version 2.0.0 (50), signed with the local test certificate. The user-requested Azure public download was checked anonymously against the full hash. It is a sideloading artifact, not store-signing acceptance.
+
+Limits: native scroll protection is still visible while scrolling. AX5 preview guidance/control overlap and Audio route truncation were observed outside the changed button/header surfaces; baseline attribution was not tested. On Duo, the game setup appeared in the settled accessibility tree and then disappeared before visual capture, so that caller's fresh visual acceptance is inconclusive. Physical devices, minimum OS, full accessibility, production media and store release remain open. The screenshots above establish only the depicted Home/lobby appearance.
