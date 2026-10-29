@@ -320,6 +320,7 @@ private struct LobbyTitle: ViewModifier {
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationSubtitle(subtitle)
+                .toolbarBackground(.hidden, for: .navigationBar)
         } else {
             content
                 .navigationTitle(title)

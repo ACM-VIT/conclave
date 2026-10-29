@@ -51,18 +51,18 @@ struct ConclaveFloatingActionButton: View {
                 Button(action: action) {
                     HStack(spacing: 8) {
                         if isPending {
-                            ProgressView().tint(HostingTheme.onCoral).accessibilityHidden(true)
+                            ProgressView().tint(HostingTheme.coralText).accessibilityHidden(true)
                         }
                         Text(title)
                             .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .foregroundStyle(HostingTheme.onCoral)
+                    .foregroundStyle(HostingTheme.coralText)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
                 .controlSize(.large)
-                .tint(HostingTheme.coralFill)
+                .tint(HostingTheme.coralText)
                 .disabled(!isEnabled || isPending)
                 .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)
                 .accessibilityValue(isPending ? ConclaveStrings.text("In Progress") : "")

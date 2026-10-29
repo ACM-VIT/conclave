@@ -541,7 +541,7 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(glassFiles.isEmpty)
 
         for entry in entries {
-            let expectedSurface = entry == Self.floatingActionBarFile ? ".buttonStyle(.glassProminent)" : ".glassEffect("
+            let expectedSurface = entry == Self.floatingActionBarFile ? ".buttonStyle(.glass)" : ".glassEffect("
             #expect(try source(entry).contains(expectedSurface), "\(entry)")
         }
         let lobby = normalized(try source(Self.lobbyMediaToggleFile))

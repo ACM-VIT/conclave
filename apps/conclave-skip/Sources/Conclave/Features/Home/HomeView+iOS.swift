@@ -95,8 +95,7 @@ struct HomeView: View {
             }
             ToolbarItemGroup(placement: .bottomBar) {
                 Button(ConclaveStrings.text("Join")) { premeeting.openJoinSheet() }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.capsule)
+                    .buttonStyle(.plain)
                     .controlSize(.large)
                     .tint(Color.primary)
                     .keyboardShortcut("j", modifiers: .command)
@@ -107,12 +106,10 @@ struct HomeView: View {
                 } label: {
                     Text(ConclaveStrings.text("New Meeting"))
                         .font(.headline)
-                        .foregroundStyle(HostingTheme.onCoral)
-                        .padding(.horizontal, 24)
-                        .frame(minHeight: 48)
-                        .background(HostingTheme.coralFill, in: Capsule())
+                        .foregroundStyle(HostingTheme.coralText)
                 }
                 .buttonStyle(.plain)
+                .controlSize(.large)
                 .keyboardShortcut("n", modifiers: .command)
                 .accessibilityIdentifier("home.newMeeting")
             }
