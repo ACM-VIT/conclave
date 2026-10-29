@@ -25,26 +25,24 @@ struct StageFixtureView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            CallRoot(shell: session.shell, stage: session.stage,
-                     renderers: StageRendererProvider.probes(ledger: session.renderers, pattern: session.pattern),
-                     forceScreenReader: session.forceScreenReader, activitySession: session.activity,
-                     webinarLinkProvider: { await session.ensureWebinarLink() })
-
-                .environment(\.stageRenderTargetResize, { session.counters.recordRenderTargetResize() })
-
-            StageFixtureControls(session: session)
-        }
-        .task {
-
-            if let chatState = ChatFixtureLaunch.state() {
-                _ = ChatFixtureDriver.installOnStage(state: chatState, shell: session.shell)
+        CallRoot(shell: session.shell, stage: session.stage,
+                 renderers: StageRendererProvider.probes(ledger: session.renderers, pattern: session.pattern),
+                 forceScreenReader: session.forceScreenReader, activitySession: session.activity,
+                 webinarLinkProvider: { await session.ensureWebinarLink() })
+            .environment(\.stageRenderTargetResize, { session.counters.recordRenderTargetResize() })
+            .overlay(alignment: .leading) {
+                StageFixtureControls(session: session)
             }
+            .task {
 
-            if let transcriptState = TranscriptFixtureDriver.fixtureState(named: NativeRuntimeConfig.debugLaunchValue(forKey: "CONCLAVE_TRANSCRIPT_FIXTURE")) {
-                TranscriptFixtureDriver.installOnStage(state: transcriptState, shell: session.shell)
+                if let chatState = ChatFixtureLaunch.state() {
+                    _ = ChatFixtureDriver.installOnStage(state: chatState, shell: session.shell)
+                }
+
+                if let transcriptState = TranscriptFixtureDriver.fixtureState(named: NativeRuntimeConfig.debugLaunchValue(forKey: "CONCLAVE_TRANSCRIPT_FIXTURE")) {
+                    TranscriptFixtureDriver.installOnStage(state: transcriptState, shell: session.shell)
+                }
             }
-        }
     }
 }
 
@@ -57,28 +55,33 @@ private struct StageFixtureControls: View {
         VStack(alignment: .leading, spacing: 4) {
             fixtureButton("Fixture", identifier: "stage.fixture.toggle") { expanded.toggle() }
             if expanded {
-                fixtureButton("Magic Tap", identifier: "stage.fixture.magicTap") { session.magicTap(); refresh += 1 }
-                fixtureButton("Speakers", identifier: "stage.fixture.speakers") { session.runSpeakerScript(); refresh += 1 }
-                fixtureButton("Speak Hidden", identifier: "stage.fixture.speakHidden") { session.speakHiddenParticipant(); refresh += 1 }
-                fixtureButton("Speak Self", identifier: "stage.fixture.speakSelf") { session.speakSelf(); refresh += 1 }
-                fixtureButton("Next Role", identifier: "stage.fixture.rolesNext") { session.nextRolesSweepStep(); refresh += 1 }
-                fixtureButton("Reactions", identifier: "stage.fixture.reactions") { session.replayReactions(); refresh += 1 }
-                fixtureButton("Join Burst", identifier: "stage.fixture.joinBurst") { session.postJoinBurst(); refresh += 1 }
-                fixtureButton("Dismiss Toast", identifier: "stage.fixture.dismissToast") { session.dismissCurrentToast(); refresh += 1 }
-                fixtureButton("Previews 1 Sender", identifier: "stage.fixture.previews.sameSender3") { session.postChatPreviewScript(named: "sameSender3"); refresh += 1 }
-                fixtureButton("Previews 3 Senders", identifier: "stage.fixture.previews.mixed3") { session.postChatPreviewScript(named: "mixed3"); refresh += 1 }
-                fixtureButton("Suspend Toasts", identifier: "stage.fixture.suspendToasts") { session.toggleToastSuspension(); refresh += 1 }
-                fixtureButton("Next Caption", identifier: "stage.fixture.nextCaption") { session.nextCaption(); refresh += 1 }
-                fixtureButton("Reconnect", identifier: "stage.fixture.reconnect") { session.toggleReconnecting(); refresh += 1 }
-                fixtureButton("Toggle Lock", identifier: "stage.fixture.lock") { session.toggleRoomLock(); refresh += 1 }
-                fixtureButton("Refresh", identifier: "stage.fixture.refresh") { refresh += 1 }
-                StageFixtureReadouts(session: session, refresh: refresh)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        fixtureButton("Magic Tap", identifier: "stage.fixture.magicTap") { session.magicTap(); refresh += 1 }
+                        fixtureButton("Speakers", identifier: "stage.fixture.speakers") { session.runSpeakerScript(); refresh += 1 }
+                        fixtureButton("Speak Hidden", identifier: "stage.fixture.speakHidden") { session.speakHiddenParticipant(); refresh += 1 }
+                        fixtureButton("Speak Self", identifier: "stage.fixture.speakSelf") { session.speakSelf(); refresh += 1 }
+                        fixtureButton("Next Role", identifier: "stage.fixture.rolesNext") { session.nextRolesSweepStep(); refresh += 1 }
+                        fixtureButton("Reactions", identifier: "stage.fixture.reactions") { session.replayReactions(); refresh += 1 }
+                        fixtureButton("Join Burst", identifier: "stage.fixture.joinBurst") { session.postJoinBurst(); refresh += 1 }
+                        fixtureButton("Dismiss Toast", identifier: "stage.fixture.dismissToast") { session.dismissCurrentToast(); refresh += 1 }
+                        fixtureButton("Previews 1 Sender", identifier: "stage.fixture.previews.sameSender3") { session.postChatPreviewScript(named: "sameSender3"); refresh += 1 }
+                        fixtureButton("Previews 3 Senders", identifier: "stage.fixture.previews.mixed3") { session.postChatPreviewScript(named: "mixed3"); refresh += 1 }
+                        fixtureButton("Suspend Toasts", identifier: "stage.fixture.suspendToasts") { session.toggleToastSuspension(); refresh += 1 }
+                        fixtureButton("Next Caption", identifier: "stage.fixture.nextCaption") { session.nextCaption(); refresh += 1 }
+                        fixtureButton("Reconnect", identifier: "stage.fixture.reconnect") { session.toggleReconnecting(); refresh += 1 }
+                        fixtureButton("Toggle Lock", identifier: "stage.fixture.lock") { session.toggleRoomLock(); refresh += 1 }
+                        fixtureButton("Refresh", identifier: "stage.fixture.refresh") { refresh += 1 }
+                        StageFixtureReadouts(session: session, refresh: refresh)
+                    }
+                }
+                .frame(maxHeight: 360)
             }
         }
         .padding(8)
         .frame(maxWidth: 220, alignment: .leading)
         .background(HostingTheme.inCallLabelScrim, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .padding(.leading, 8)
+        .padding([.leading, .vertical], 8)
         .environment(\.colorScheme, .dark)
     }
 
