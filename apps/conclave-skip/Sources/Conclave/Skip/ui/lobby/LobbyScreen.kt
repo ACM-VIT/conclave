@@ -86,13 +86,14 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             val wide = maxWidth >= 640.dp
+            val visibleHeight = maxHeight
             if (wide) {
                 Row(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
                     Column(Modifier.weight(1f).widthIn(max = 560.dp).verticalScroll(rememberScrollState()).padding(bottom = actionClearance)) {
-                        LobbyCardSlot(premeeting, routeId, cache, wide = true, visibleHeight = maxHeight,
+                        LobbyCardSlot(premeeting, routeId, cache, wide = true, visibleHeight = visibleHeight,
                             modifier = Modifier.padding(vertical = 12.dp))
                     }
                     Column(
@@ -107,7 +108,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                     modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = actionClearance),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    LobbyCardSlot(premeeting, routeId, cache, wide = false, visibleHeight = maxHeight,
+                    LobbyCardSlot(premeeting, routeId, cache, wide = false, visibleHeight = visibleHeight,
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp))
                     LobbyControls(premeeting, routeId, snackbarHostState)
                 }
