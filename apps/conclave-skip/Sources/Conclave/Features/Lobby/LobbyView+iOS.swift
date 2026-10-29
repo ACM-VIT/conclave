@@ -259,15 +259,24 @@ private struct LobbyInviteCodeSection: View {
 private struct LobbyBottomBar: ViewModifier {
     let premeeting: PremeetingPresenter
     let routeId: Int
+    @State private var contentHeight: CGFloat = 0
 
     func body(content: Content) -> some View {
-        content.safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                Divider()
+        let isEditing = premeeting.lobbyStatus?.routeId == routeId && premeeting.lobbyStatus?.mode == .editing
+        content
+            .safeAreaPadding(.bottom, contentHeight)
+            .overlay(alignment: .bottom) {
                 EntryStatusBlock(premeeting: premeeting, routeId: routeId)
+                    .background {
+                        if !isEditing { Color(uiColor: .systemGroupedBackground) }
+                    }
+                    .overlay(alignment: .top) {
+                        if !isEditing { Divider() }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        if contentHeight != $0 { contentHeight = $0 }
+                    }
             }
-            .background(Color(uiColor: .systemGroupedBackground))
-        }
     }
 }
 

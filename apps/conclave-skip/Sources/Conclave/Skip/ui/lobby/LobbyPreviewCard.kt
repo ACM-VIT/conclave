@@ -35,6 +35,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.max
 import androidx.compose.ui.viewinterop.AndroidView
 
+private val lobbyPreviewControlsClearance = 72.dp
+
 @Composable
 internal fun LobbyPreviewCard(
     card: LobbyCardUi,
@@ -47,19 +49,18 @@ internal fun LobbyPreviewCard(
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalConclaveExtendedColors.current
-    val scheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(DesignTokens.radiusTile.dp)
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     val minimumVideoHeight = (if (card.showsCameraOverlay) 280.dp else 200.dp) * LocalDensity.current.fontScale.coerceAtLeast(1f)
     BoxWithConstraints(modifier.fillMaxWidth().testTag("lobby.card")) {
         val natural = if (wide) maxWidth * (9f / 16f) else maxWidth * (10f / 16f)
         val videoHeight = natural.coerceIn(minimumVideoHeight, max(minimumVideoHeight, screenHeight * 0.40f))
-        Column(Modifier.fillMaxWidth().clip(shape).border(1.dp, ext.border, shape)) {
-            LobbyPreviewVideo(card, onFlip, onOpenSettings, Modifier.fillMaxWidth().height(videoHeight).background(ext.tile))
+        Box(Modifier.fillMaxWidth().height(videoHeight).clip(shape).border(1.dp, ext.border, shape)) {
+            LobbyPreviewVideo(card, onFlip, onOpenSettings, Modifier.fillMaxSize().background(ext.tile))
             Row(
-                modifier = Modifier.fillMaxWidth().background(scheme.surfaceContainer).padding(vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.Top,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 LobbyToggles(card, onMic, onCamera, onEffects)
             }
@@ -85,23 +86,24 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, onFlip: () -> Unit, onOpenSetti
             },
             contentAlignment = Alignment.Center,
         ) {
-            when {
-                card.showsSurface -> LocalPreviewSurface(card.previewSessionId)
-                card.showsCameraOverlay -> Unit
-                else -> LobbyCameraOffContent(card)
-            }
-            if (card.preview == PreviewState.interrupted) {
-                Text(
-                    conclaveString("pm_camera_paused"),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = scheme.onSurface,
-                    modifier = Modifier.clip(CircleShape).background(ext.labelScrim).padding(horizontal = 10.dp, vertical = 4.dp),
-                )
+            if (card.showsSurface) LocalPreviewSurface(card.previewSessionId)
+            Box(Modifier.fillMaxSize().padding(bottom = lobbyPreviewControlsClearance), contentAlignment = Alignment.Center) {
+                if (!card.showsSurface && !card.showsCameraOverlay) LobbyCameraOffContent(card)
+                if (card.preview == PreviewState.interrupted) {
+                    Text(
+                        conclaveString("pm_camera_paused"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = scheme.onSurface,
+                        modifier = Modifier.clip(CircleShape).background(ext.labelScrim).padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
             }
         }
         if (card.showsCameraOverlay) {
 
-            PermissionPrimingCardOverlay(card.cameraPriming, onOpenSettings, Modifier.align(Alignment.Center))
+            Box(Modifier.fillMaxSize().padding(bottom = lobbyPreviewControlsClearance)) {
+                PermissionPrimingCardOverlay(card.cameraPriming, onOpenSettings, Modifier.align(Alignment.Center))
+            }
         }
         Text(
             conclaveString("ds_you"),
@@ -112,7 +114,7 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, onFlip: () -> Unit, onOpenSetti
         )
         if (card.preview == PreviewState.live) {
             ConclaveFlipCameraButton(isFront = card.isFrontCamera, onClick = onFlip,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp), identifier = "lobby.flip")
+                modifier = Modifier.align(Alignment.TopEnd).padding(12.dp), identifier = "lobby.flip")
         }
     }
 }
@@ -145,9 +147,12 @@ private fun LobbyCameraOffContent(card: LobbyCardUi) {
 
 @Composable
 private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: (Boolean) -> Unit, onEffects: () -> Unit) {
-    ConclaveLabelledCallToggle(
+    ConclaveCallToggle(
         label = conclaveString("ds_microphone"),
-        stateText = if (card.micOn) conclaveString("ds_state_on") else conclaveString("ds_state_muted"),
+        stateText = lobbyToggleStateText(
+            stateText = if (card.micOn) conclaveString("ds_state_on") else conclaveString("ds_state_muted"),
+            stateReason = permissionReasonText(LobbyMediaKind.microphone, card.micReason),
+        ),
         icon = if (card.micOn) ConclaveIcons.MicFill1 else ConclaveIcons.MicOffFill1,
         visual = if (card.micOn) ConclaveCallControlVisual.On else ConclaveCallControlVisual.Off,
         checked = card.micOn,
@@ -156,11 +161,13 @@ private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: 
         width = 56.dp,
         feedback = LobbyToggleFeedbackPolicy.kind(isOn = card.micOn, permission = card.micPermission,
             onKind = FeedbackKind.micOn, offKind = FeedbackKind.micOff, canAskAgain = card.canAskAgainMicrophone),
-        stateReason = permissionReasonText(LobbyMediaKind.microphone, card.micReason),
     )
-    ConclaveLabelledCallToggle(
+    ConclaveCallToggle(
         label = conclaveString("ds_camera"),
-        stateText = if (card.cameraOn) conclaveString("ds_state_on") else conclaveString("ds_state_off"),
+        stateText = lobbyToggleStateText(
+            stateText = if (card.cameraOn) conclaveString("ds_state_on") else conclaveString("ds_state_off"),
+            stateReason = permissionReasonText(LobbyMediaKind.camera, card.cameraReason),
+        ),
         icon = if (card.cameraOn) ConclaveIcons.VideocamFill1 else ConclaveIcons.VideocamOffFill1,
         visual = if (card.cameraOn) ConclaveCallControlVisual.On else ConclaveCallControlVisual.Off,
         checked = card.cameraOn,
@@ -170,10 +177,9 @@ private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: 
         enabled = card.cameraPermission != MediaPermissionState.unavailable,
         feedback = LobbyToggleFeedbackPolicy.kind(isOn = card.cameraOn, permission = card.cameraPermission,
             onKind = FeedbackKind.cameraOn, offKind = FeedbackKind.cameraOff, canAskAgain = card.canAskAgainCamera),
-        stateReason = permissionReasonText(LobbyMediaKind.camera, card.cameraReason),
     )
     if (card.showsEffects) {
-        ConclaveLabelledCallToggle(
+        ConclaveCallToggle(
             label = conclaveString("pm_effects"),
             stateText = if (card.isCameraBlocked) conclaveString("pm_effects_camera_off")
             else if (card.effectsActive) conclaveString("ds_state_on") else conclaveString("ds_state_off"),
@@ -187,6 +193,9 @@ private fun LobbyToggles(card: LobbyCardUi, onMic: (Boolean) -> Unit, onCamera: 
         )
     }
 }
+
+private fun lobbyToggleStateText(stateText: String, stateReason: String): String =
+    if (stateReason.isEmpty()) stateText else "$stateText, $stateReason"
 
 @Composable
 internal fun LocalPreviewSurface(sessionId: Int, modifier: Modifier = Modifier) {

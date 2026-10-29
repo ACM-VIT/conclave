@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
@@ -20,7 +20,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FabPosition
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -29,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -41,12 +42,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,16 +65,23 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
     }
     val cache = remember(routeId) { LobbyUiCache() }
     val snackbarHostState = remember { SnackbarHostState() }
+    var actionHeightPx by remember(routeId) { mutableIntStateOf(0) }
+    val actionClearance = with(LocalDensity.current) { actionHeightPx.toDp() } + 32.dp
     LobbyBusyBackHandler(premeeting, routeId, onBack)
     PermissionPrimingResumeEffect(premeeting, routeId)
     val scheme = MaterialTheme.colorScheme
     Scaffold(
         topBar = { LobbyTopBar(premeeting, key, onBack) },
-        bottomBar = { LobbyBottomBar(premeeting, routeId, cache) },
+        floatingActionButton = {
+            LobbyFloatingAction(premeeting, routeId, cache) { height ->
+                if (actionHeightPx != height) actionHeightPx = height
+            }
+        },
+        floatingActionButtonPosition = FabPosition.Center,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = scheme.surface,
         contentWindowInsets = WindowInsets.safeDrawing,
-        modifier = Modifier.testTag("lobby"),
+        modifier = Modifier.imePadding().testTag("lobby"),
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             val wide = maxWidth >= 640.dp
@@ -79,11 +90,11 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
-                    Column(Modifier.weight(1f).widthIn(max = 560.dp).verticalScroll(rememberScrollState())) {
+                    Column(Modifier.weight(1f).widthIn(max = 560.dp).verticalScroll(rememberScrollState()).padding(bottom = actionClearance)) {
                         LobbyCardSlot(premeeting, routeId, cache, wide = true, modifier = Modifier.padding(vertical = 12.dp))
                     }
                     Column(
-                        modifier = Modifier.width(360.dp).verticalScroll(rememberScrollState()),
+                        modifier = Modifier.width(360.dp).verticalScroll(rememberScrollState()).padding(bottom = actionClearance),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         LobbyControls(premeeting, routeId, snackbarHostState)
@@ -91,7 +102,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                 }
             } else {
                 Column(
-                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = actionClearance),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     LobbyCardSlot(premeeting, routeId, cache, wide = false,
@@ -343,16 +354,22 @@ private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
 }
 
 @Composable
-private fun LobbyBottomBar(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache) {
+private fun LobbyFloatingAction(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache, onHeightChanged: (Int) -> Unit) {
     val snapshot = premeeting.lobbyStatus?.takeIf { it.routeId == routeId } ?: return
     val status = cache.status(snapshot)
     val scheme = MaterialTheme.colorScheme
-    Surface(color = scheme.surface) {
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding()) {
-            HorizontalDivider(color = scheme.outlineVariant)
-            Box(Modifier.fillMaxWidth().padding(16.dp)) {
-                EntryStatusBlock(premeeting, status)
+    Box(
+        Modifier.padding(horizontal = 16.dp).widthIn(min = 200.dp, max = 360.dp).width(IntrinsicSize.Max)
+            .onSizeChanged { onHeightChanged(it.height) },
+    ) {
+        if (status.mode == LobbyMode.waiting || status.mode == LobbyMode.failed) {
+            Surface(color = scheme.surfaceContainer, shape = RoundedCornerShape(24.dp), shadowElevation = 6.dp) {
+                Box(Modifier.padding(16.dp)) {
+                    EntryStatusBlock(premeeting, status)
+                }
             }
+        } else {
+            EntryStatusBlock(premeeting, status)
         }
     }
 }

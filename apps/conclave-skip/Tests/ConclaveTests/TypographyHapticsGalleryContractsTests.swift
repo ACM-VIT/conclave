@@ -514,7 +514,7 @@ struct TypographyHapticsGalleryContractsTests {
         let galleryFile = "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"
 
         let entries = Self.sanctionedGlassFiles
-        #expect(entries == [Self.callControlFile, Self.composerGlassFile, Self.lobbyMediaToggleFile])
+        #expect(entries == [Self.callControlFile, Self.composerGlassFile, Self.lobbyMediaToggleFile, Self.entryStatusBlockFile])
         for entry in entries { #expect(files.contains(entry), "\(entry) is outside the scanned scope") }
         var glassFiles: [String] = []
         for file in files where !entries.contains(file) {
@@ -539,11 +539,16 @@ struct TypographyHapticsGalleryContractsTests {
         }
         #expect(glassFiles.isEmpty)
 
-        for entry in entries { #expect(try source(entry).contains(".glassEffect("), "\(entry)") }
+        for entry in entries {
+            let expectedSurface = entry == Self.entryStatusBlockFile ? ".buttonStyle(.glassProminent)" : ".glassEffect("
+            #expect(try source(entry).contains(expectedSurface), "\(entry)")
+        }
         let lobby = normalized(try source(Self.lobbyMediaToggleFile))
-        #expect(lobby.contains("if #available(iOS 26.0, *), !reduceTransparency, contrast != .increased, !forceOpaque, !prefersReducedResourceUsage {"))
+        #expect(lobby.contains("if #available(iOS 26.0, *), allowsGlass {"))
+        #expect(lobby.contains("return !reduceTransparency && contrast != .increased && !forceOpaque"))
+        #expect(lobby.contains("content(allowsGlass && !prefersReducedResourceUsage)"))
         #expect(lobby.components(separatedBy: ".glassEffect(").count - 1 == 1)
-        #expect(lobby.contains("} else { ConclaveLabelledCallToggle(title: title, value: value, systemImage: systemImage, state: state,"))
+        #expect(lobby.contains("} else { ConclaveCallToggle(title: title, value: value, systemImage: systemImage, state: state,"))
         #expect(lobby.contains(".accessibilityLabel(title)") && lobby.contains(".accessibilityValue(value)"))
         #expect(lobby.contains(".accessibilityAddTraits(.isToggle)") && lobby.contains(".disabled(!isEnabled)"))
     }
@@ -796,7 +801,8 @@ struct TypographyHapticsGalleryContractsTests {
 
     static let composerGlassFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift"
     static let lobbyMediaToggleFile = "Sources/Conclave/Features/Lobby/LobbyMediaToggle+iOS.swift"
-    static let sanctionedGlassFiles = [callControlFile, composerGlassFile, lobbyMediaToggleFile]
+    static let entryStatusBlockFile = "Sources/Conclave/Features/Lobby/EntryStatusBlock+iOS.swift"
+    static let sanctionedGlassFiles = [callControlFile, composerGlassFile, lobbyMediaToggleFile, entryStatusBlockFile]
     static let iosComponentFiles = [
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveButtons+iOS.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveRows+iOS.swift",
