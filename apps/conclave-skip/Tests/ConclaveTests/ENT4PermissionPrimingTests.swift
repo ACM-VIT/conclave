@@ -349,20 +349,21 @@ struct ENT4PermissionPrimingTests {
         }
     }
 
-    @Test func iosShowsTheRowTheOverlayAndTheHints() throws {
+    @Test func iosShowsInlinePermissionGuidanceAndHints() throws {
         let row = ent4Flat(try ent4Source("Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift"))
         #expect(row.contains(".buttonStyle(.borderless) .tint(HostingTheme.coralText)"), "the row's Open Settings is coralText")
-        #expect(row.contains(".buttonStyle(.bordered) .tint(HostingTheme.token(DesignTokens.iosInCallText))"),
-                "the overlay's Open Settings is neutral, never coral")
-        #expect(row.contains(".foregroundStyle(HostingTheme.statusWarning)"))
+        #expect(row.contains(".foregroundStyle(HostingTheme.secondaryText)"))
+        #expect(row.contains(".accessibilityHint(PermissionPrimingCopy.body(model.kind, priming: model.priming))"))
+        #expect(row.contains("if camera.placement == .card { models.append(camera) }"), "camera guidance remains reachable outside the preview")
+        #expect(row.contains("premeeting.openSystemSettings()") && row.contains("\"lobby.camera.openSettings\""))
         #expect(row.contains("AccessibilityNotification.Announcement(PermissionPrimingCopy.title(model.kind)).post()"))
-        #expect(row.contains(".task(id: model.priming)") && row.contains(".task(id: priming)"), "announced once when it appears")
+        #expect(row.components(separatedBy: ".task(id: model.priming)").count - 1 == 1, "one announcement owner for both permission kinds")
         #expect(row.contains(".accessibilityElement(children: .contain)"))
         let lobby = ent4Flat(try ent4Source("Sources/Conclave/Features/Lobby/LobbyView+iOS.swift"))
         #expect(lobby.contains("LobbyIssueSection(premeeting: premeeting) PermissionPrimingSection(premeeting: premeeting)"))
         #expect(!lobby.contains("LobbyMicrophonePermissionSection"))
         let card = ent4Flat(try ent4Source("Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift"))
-        #expect(card.contains("PermissionPrimingCardOverlay("))
+        #expect(!card.contains("PermissionPrimingCardOverlay("), "permission guidance no longer covers the preview")
         #expect(!card.contains("LobbyCameraPermissionOverlay"))
         #expect(card.contains(".accessibilityHint(hint(.microphone))") && card.contains(".accessibilityHint(hint(.camera))"))
         #expect(card.contains("premeeting.setMicIntent(!micOn)") && card.contains("premeeting.setCameraIntent(!cameraOn)"))
@@ -371,9 +372,10 @@ struct ENT4PermissionPrimingTests {
         #expect(services.contains("UIApplication.openSettingsURLString"))
     }
 
-    @Test func androidShowsTheRationaleTheSettingsRowAndTheOverlay() throws {
+    @Test func androidShowsInlineRationaleAndSettingsActions() throws {
         let row = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/PermissionPrimingRow.kt"))
-        #expect(row.contains("kind = ConclaveBannerKind.Warning"))
+        #expect(row.contains("val color = MaterialTheme.colorScheme.onSurfaceVariant"))
+        #expect(!row.contains("ConclaveBanner("), "permission guidance uses quiet inline content")
         for name in ["\"pm_mic_rationale\"", "\"pm_camera_rationale\"", "\"pm_allow\"", "\"ds_not_now\"", "\"ds_open_settings\"",
                      "\"pm_mic_access_off_reason\"", "\"pm_camera_access_off_reason\""] {
             #expect(row.contains(name), "PermissionPrimingRow.kt lacks \(name)")
@@ -381,7 +383,9 @@ struct ENT4PermissionPrimingTests {
         #expect(row.contains("onAllow = { if (camera) premeeting.setCameraIntent(true) else premeeting.setMicIntent(true) }"),
                 "Allow asks again through the toggle intent")
         #expect(row.contains("var microphoneDismissed by remember(routeId) { mutableStateOf(false) }"), "Not now is per lobby")
-        #expect(row.contains("FilledTonalButton(onClick = onOpenSettings"))
+        #expect(row.contains("TextButton(onClick = action.onClick, modifier = Modifier.testTag(action.identifier))"))
+        #expect(row.contains("ConclaveBannerAction(conclaveString(\"ds_open_settings\"), \"$base.openSettings\", onClick = onOpenSettings)"))
+        #expect(row.contains("if (cameraModel.placement == PermissionPrimingPlacement.card) rowModels + cameraModel else rowModels"))
         #expect(row.contains("Lifecycle.Event.ON_RESUME && paused") && row.contains("premeeting.lobbyDidAppear(routeId = routeId)"))
         #expect(row.contains("liveRegion = LiveRegionMode.Polite"))
         let screen = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyScreen.kt"))
@@ -389,7 +393,7 @@ struct ENT4PermissionPrimingTests {
         #expect(screen.contains("PermissionPrimingRows(premeeting, routeId)") && screen.contains("PermissionPrimingResumeEffect(premeeting, routeId)"))
         #expect(!screen.contains("LobbyMicrophonePermissionBanner"))
         let card = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt"))
-        #expect(card.contains("PermissionPrimingCardOverlay(card.cameraPriming, onOpenSettings, Modifier.align(Alignment.Center))"))
+        #expect(!card.contains("PermissionPrimingCardOverlay("), "camera guidance is rendered with the permission rows")
         #expect(card.contains("stateReason = permissionReasonText(LobbyMediaKind.microphone, card.micReason)"))
         #expect(!card.contains("LobbyCameraPermissionOverlay"))
         let cache = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyUiCache.kt"))

@@ -41,6 +41,9 @@ struct GameOptionControl: View {
             VStack(alignment: .leading, spacing: 4) {
                 TextField(option.label, text: $text, prompt: option.placeholder.isEmpty ? nil : Text(option.placeholder))
                     .focused($focused)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.large)
+                    .frame(minHeight: 44)
                     .submitLabel(.done)
                     .onChange(of: text) { _, value in
                         var next = value

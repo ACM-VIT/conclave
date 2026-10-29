@@ -97,6 +97,7 @@ internal fun TranscriptPage(
     val recapPosted = conclaveString("trn_recap_posted")
     val recapFailed = conclaveString("trn_recap_failed")
     val tryAgain = conclaveString("ds_try_again")
+    val showsStartBar = TranscriptViewPolicy.showsStartBar(body = snapshot.body, offersStart = snapshot.offersStart)
 
     val announcement = presenter.announcement
     LaunchedEffect(announcement?.id) {
@@ -122,10 +123,11 @@ internal fun TranscriptPage(
             if (snapshot.body == TranscriptBody.content &&
                 TranscriptViewPolicy.showsAskComposer(tab = tab, canAsk = snapshot.canAsk, phase = snapshot.phase)) {
                 TranscriptAskComposer(presenter, snapshot, page)
-            } else if (TranscriptViewPolicy.showsStartBar(body = snapshot.body, offersStart = snapshot.offersStart)) {
+            } else if (showsStartBar) {
                 TranscriptStartBar(presenter, snapshot, page)
             }
         },
+        composerOverlaysContent = showsStartBar,
         contentMode = InCallPageContent.lazyList,
         snackbarHost = { SnackbarHost(snackbars) },
         actions = {
@@ -440,36 +442,44 @@ private fun TranscriptStartCard(presenter: TranscriptPresenter, snapshot: Transc
     ) {
         item(key = "header", contentType = "header") {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ConclaveText(conclaveString("trn_kicker"), line = "transcript.kicker", style = typography.labelLarge, color = scheme.primary)
-                    TranscriptTag(conclaveString("trn_beta"), "transcript.beta")
-                    if (snapshot.isViewOnly) TranscriptTag(conclaveString("trn_view_only"), "transcript.viewOnly")
-                }
                 ConclaveText(conclaveString(TranscriptCopy.startTitle(snapshot.startKind)), line = "transcript.startTitle",
                     style = typography.headlineSmall, modifier = Modifier.semantics { heading() })
                 ConclaveText(conclaveString(TranscriptCopy.blurb(blurb)), line = "transcript.blurb", style = typography.bodyMedium,
                     color = scheme.onSurfaceVariant)
+                if (snapshot.isViewOnly) TranscriptTag(conclaveString("trn_view_only"), "transcript.viewOnly")
             }
         }
         if (snapshot.offersStart) {
+            item(key = "provider", contentType = "segmented") {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ConclaveText(conclaveString("trn_provider"), line = "transcript.provider.label", style = typography.labelLarge,
+                        color = scheme.onSurfaceVariant)
+                    val options = TranscriptConfiguration.providers.toList().map {
+                        ConclaveSegmentModel(id = it.rawValue, title = it.label, isEnabled = true)
+                    }
+                    ConclaveSegmentedRow(options = options, selectedId = page.provider.rawValue, identifier = "transcript.options.provider",
+                        onSelect = { raw -> page.updateProvider(TranscriptProvider.init(rawValue = raw) ?: TranscriptProvider.openAI) },
+                        fallback = ConclaveSegmentedFallback.menu)
+                }
+            }
+            if (needsProviderKey) {
+                item(key = "providerKey", contentType = "field") {
+                    TranscriptKeyField(conclaveString("trn_provider_key", page.provider.label), page.providerKey,
+                        { page.updateProviderKey(it) }, "transcript.options.providerKey")
+                }
+            }
+            if (needsAssistantKey) {
+                item(key = "assistantKey", contentType = "field") {
+                    TranscriptKeyField(conclaveString("trn_assistant_key"), page.assistantKey, { page.updateAssistantKey(it) },
+                        "transcript.options.assistantKey")
+                }
+            }
             item(key = "optionsToggle", contentType = "button") {
                 TextButton(onClick = { page.toggleOptions() }, modifier = Modifier.heightIn(min = 48.dp).testTag("transcript.options")) {
                     ConclaveText(conclaveString(if (page.optionsExpanded) "trn_hide_options" else "trn_show_options"), line = "transcript.options")
                 }
             }
             if (page.optionsExpanded) {
-                item(key = "provider", contentType = "segmented") {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        ConclaveText(conclaveString("trn_provider"), line = "transcript.provider.label", style = typography.labelLarge,
-                            color = scheme.onSurfaceVariant)
-                        val options = TranscriptConfiguration.providers.toList().map {
-                            ConclaveSegmentModel(id = it.rawValue, title = it.label, isEnabled = true)
-                        }
-                        ConclaveSegmentedRow(options = options, selectedId = page.provider.rawValue, identifier = "transcript.options.provider",
-                            onSelect = { raw -> page.updateProvider(TranscriptProvider.init(rawValue = raw) ?: TranscriptProvider.openAI) },
-                            fallback = ConclaveSegmentedFallback.menu)
-                    }
-                }
                 item(key = "assistant", contentType = "listItem") {
                     val label = TranscriptConfiguration.assistantModels.toList().firstOrNull { it.id == page.assistantModel }?.label
                         ?: page.assistantModel
@@ -480,18 +490,6 @@ private fun TranscriptStartCard(presenter: TranscriptPresenter, snapshot: Transc
                         modifier = Modifier.testTag("transcript.options.assistant").semantics { role = Role.Button }
                             .clickable { page.modelDialogOpen = true },
                     )
-                }
-                if (needsProviderKey) {
-                    item(key = "providerKey", contentType = "field") {
-                        TranscriptKeyField(conclaveString("trn_provider_key", page.provider.label), page.providerKey,
-                            { page.updateProviderKey(it) }, "transcript.options.providerKey")
-                    }
-                }
-                if (needsAssistantKey) {
-                    item(key = "assistantKey", contentType = "field") {
-                        TranscriptKeyField(conclaveString("trn_assistant_key"), page.assistantKey, { page.updateAssistantKey(it) },
-                            "transcript.options.assistantKey")
-                    }
                 }
             }
             item(key = "coverage", contentType = "listItem") {
@@ -585,19 +583,20 @@ private fun TranscriptStartBar(presenter: TranscriptPresenter, snapshot: Transcr
     val ready = TranscriptKeyPolicy.hasRequiredKeys(provider = page.provider, keysKnown = snapshot.keysKnown,
         openAICovered = snapshot.openAICovered, sarvamCovered = snapshot.sarvamCovered, providerKey = page.providerKey,
         assistantKey = page.assistantKey)
-    ConclaveButton(
-        title = conclaveString(TranscriptCopy.startButton(snapshot.startKind)),
-        role = ConclaveButtonRole.Primary,
-        identifier = "transcript.start",
-        enabled = ready,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        onClick = {
-            val options = TranscriptKeyPolicy.options(provider = page.provider, assistantModel = page.assistantModel,
-                openAICovered = snapshot.openAICovered, sarvamCovered = snapshot.sarvamCovered, providerKey = page.providerKey,
-                assistantKey = page.assistantKey)
-            if (presenter.start(options = options)) page.clearKeys()
-        },
-    )
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        ConclaveButton(
+            title = conclaveString(TranscriptCopy.startButton(snapshot.startKind)),
+            role = ConclaveButtonRole.Primary,
+            identifier = "transcript.start",
+            enabled = ready,
+            onClick = {
+                val options = TranscriptKeyPolicy.options(provider = page.provider, assistantModel = page.assistantModel,
+                    openAICovered = snapshot.openAICovered, sarvamCovered = snapshot.sarvamCovered, providerKey = page.providerKey,
+                    assistantKey = page.assistantKey)
+                if (presenter.start(options = options)) page.clearKeys()
+            },
+        )
+    }
 }
 
 @Composable

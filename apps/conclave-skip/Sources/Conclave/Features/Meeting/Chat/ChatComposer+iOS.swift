@@ -32,6 +32,8 @@ struct ChatComposer: View {
     @State private var keyMemo = ChatComposerKeyMemo()
     @FocusState private var focused: Bool
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @ScaledMetric(relativeTo: .body) private var photoPickerHeight: CGFloat = 300
 
     var body: some View {
         let composer = chat.composer
@@ -79,7 +81,13 @@ struct ChatComposer: View {
             }
         } field: {
             ConclaveComposerField(identifier: "chat.composer.cluster") {
-                ChatAttachMenu(chat: chat, composer: composer, onPhoto: { openPhotoLibrary() }, onGifs: { openGifs() })
+                if showsPhotoPicker {
+                    ConclaveComposerDismissButton(
+                        title: ConclaveStrings.format("Close %@", ConclaveStrings.text("Photo Library")),
+                        identifier: "chat.photos.close", action: { showsPhotoPicker = false })
+                } else {
+                    ChatAttachMenu(chat: chat, composer: composer, onPhoto: { openPhotoLibrary() }, onGifs: { openGifs() })
+                }
             } field: {
                 TextField(ChatCopy.placeholder(composer), text: $text, axis: .vertical)
                     .lineLimit(1...ConclaveComposerMetrics.maximumLines)
@@ -115,21 +123,12 @@ struct ChatComposer: View {
                                      visibleFrom: composer.isVoiceMode ? 0 : ConclaveComposerCounterPolicy.visibleFrom(limit: limit),
                                      identifier: "chat.composer.counter", announcesBands: true)
             if showsPhotoPicker {
-                VStack(spacing: CGFloat(DesignTokens.space4)) {
-                    HStack {
-                        Text(ConclaveStrings.text("Photo Library"))
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Button(ConclaveStrings.text("Done")) { showsPhotoPicker = false }
-                            .accessibilityIdentifier("chat.photos.close")
-                    }
-                    PhotosPicker(selection: $pickedItem, matching: .images, preferredItemEncoding: .current) {
-                        Text(ConclaveStrings.text("Photo Library"))
-                    }
-                    .photosPickerStyle(.compact)
-                    .frame(height: 180)
-                    .accessibilityIdentifier("chat.photos.inline")
+                PhotosPicker(selection: $pickedItem, matching: .images, preferredItemEncoding: .current) {
+                    Text(ConclaveStrings.text("Photo Library"))
                 }
+                .photosPickerStyle(.inline)
+                .frame(height: min(photoPickerHeight, verticalSizeClass == .compact ? 220 : 400))
+                .accessibilityIdentifier("chat.photos.inline")
             }
         }
         .task(id: composer.draftKey) {
@@ -154,8 +153,10 @@ struct ChatComposer: View {
             focused = true
         }
         .onChange(of: focused) { _, now in
-
-            if now { actions.composerDidFocus() }
+            if now {
+                showsPhotoPicker = false
+                actions.composerDidFocus()
+            }
         }
         .onChange(of: composer.inlineNotice) { _, notice in
             guard notice != ChatFailure.none else { return }

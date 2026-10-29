@@ -1,5 +1,6 @@
 package conclave.module
 
+import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -23,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -31,8 +31,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.coerceIn
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.max
 import androidx.compose.ui.viewinterop.AndroidView
 
 private val lobbyPreviewControlsClearance = 72.dp
@@ -41,22 +41,24 @@ private val lobbyPreviewControlsClearance = 72.dp
 internal fun LobbyPreviewCard(
     card: LobbyCardUi,
     wide: Boolean,
+    visibleHeight: Dp,
     onMic: (Boolean) -> Unit,
     onCamera: (Boolean) -> Unit,
     onFlip: () -> Unit,
     onEffects: () -> Unit,
-    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val ext = LocalConclaveExtendedColors.current
     val shape = RoundedCornerShape(DesignTokens.radiusTile.dp)
-    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
-    val minimumVideoHeight = (if (card.showsCameraOverlay) 280.dp else 200.dp) * LocalDensity.current.fontScale.coerceAtLeast(1f)
+    val compact = wide || LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val minimumVideoHeight = if (compact) 180.dp else 280.dp
+    val maximumVideoHeight = if (compact) 320.dp else 420.dp
     BoxWithConstraints(modifier.fillMaxWidth().testTag("lobby.card")) {
-        val natural = if (wide) maxWidth * (9f / 16f) else maxWidth * (10f / 16f)
-        val videoHeight = natural.coerceIn(minimumVideoHeight, max(minimumVideoHeight, screenHeight * 0.40f))
+        val natural = if (compact) maxWidth * (9f / 16f) else maxWidth
+        val upper = (visibleHeight * (if (compact) 0.75f else 0.58f)).coerceIn(minimumVideoHeight, maximumVideoHeight)
+        val videoHeight = natural.coerceIn(minimumVideoHeight, upper)
         Box(Modifier.fillMaxWidth().height(videoHeight).clip(shape).border(1.dp, ext.border, shape)) {
-            LobbyPreviewVideo(card, onFlip, onOpenSettings, Modifier.fillMaxSize().background(ext.tile))
+            LobbyPreviewVideo(card, compact, onFlip, Modifier.fillMaxSize().background(ext.tile))
             Row(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -69,7 +71,7 @@ internal fun LobbyPreviewCard(
 }
 
 @Composable
-private fun LobbyPreviewVideo(card: LobbyCardUi, onFlip: () -> Unit, onOpenSettings: () -> Unit, modifier: Modifier) {
+private fun LobbyPreviewVideo(card: LobbyCardUi, compact: Boolean, onFlip: () -> Unit, modifier: Modifier) {
     val scheme = MaterialTheme.colorScheme
     val ext = LocalConclaveExtendedColors.current
     val previewLabel = conclaveString("pm_your_preview")
@@ -88,7 +90,7 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, onFlip: () -> Unit, onOpenSetti
         ) {
             if (card.showsSurface) LocalPreviewSurface(card.previewSessionId)
             Box(Modifier.fillMaxSize().padding(bottom = lobbyPreviewControlsClearance), contentAlignment = Alignment.Center) {
-                if (!card.showsSurface && !card.showsCameraOverlay) LobbyCameraOffContent(card)
+                if (!card.showsSurface) LobbyCameraOffContent(card, compact)
                 if (card.preview == PreviewState.interrupted) {
                     Text(
                         conclaveString("pm_camera_paused"),
@@ -97,12 +99,6 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, onFlip: () -> Unit, onOpenSetti
                         modifier = Modifier.clip(CircleShape).background(ext.labelScrim).padding(horizontal = 10.dp, vertical = 4.dp),
                     )
                 }
-            }
-        }
-        if (card.showsCameraOverlay) {
-
-            Box(Modifier.fillMaxSize().padding(bottom = lobbyPreviewControlsClearance)) {
-                PermissionPrimingCardOverlay(card.cameraPriming, onOpenSettings, Modifier.align(Alignment.Center))
             }
         }
         Text(
@@ -120,17 +116,13 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, onFlip: () -> Unit, onOpenSetti
 }
 
 @Composable
-private fun LobbyCameraOffContent(card: LobbyCardUi) {
+private fun LobbyCameraOffContent(card: LobbyCardUi, compact: Boolean) {
     val scheme = MaterialTheme.colorScheme
     val unavailable = card.preview == PreviewState.unavailable || card.cameraPermission == MediaPermissionState.unavailable
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.padding(horizontal = 24.dp).clearAndSetSemantics { },
-    ) {
+    val content: @Composable () -> Unit = {
         ConclaveAvatar(
             identity = ConclaveAvatarIdentity.make(name = card.avatarName, id = if (card.avatarSeed.isEmpty()) null else card.avatarSeed),
-            diameter = 76.dp,
+            diameter = if (compact) 56.dp else 76.dp,
         )
         if (card.preview == PreviewState.starting) {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = scheme.onSurface)
@@ -142,6 +134,19 @@ private fun LobbyCameraOffContent(card: LobbyCardUi) {
                 textAlign = TextAlign.Center,
             )
         }
+    }
+    if (compact) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = 24.dp).clearAndSetSemantics { },
+        ) { content() }
+    } else {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.padding(horizontal = 24.dp).clearAndSetSemantics { },
+        ) { content() }
     }
 }
 

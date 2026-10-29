@@ -32,31 +32,35 @@ struct NativePanelSheetHost<PanelContent: View>: ViewModifier {
                 let resolved = PanelPresentationPolicy.resolve(presentation.request, window: window, platform: .iOS,
                                                                isAccessibilitySize: accessibilitySize)
                 let shortHeight = adapter.shortDetentHeight
+                let activities = presentation.request.panel == .activities
                 panelContent(presentation, resolved)
                     .environment(\.panelReportShortDetentHeight, PanelShortDetentHeightAction(action: { adapter.setShortDetentHeight($0) }))
-                    .presentationDetents(Set(resolved.detents.map { Self.systemDetent($0, shortHeight: shortHeight) }), selection: Binding(
-                        get: { Self.systemDetent(adapter.detent, shortHeight: shortHeight) },
-                        set: { adapter.selectDetent(Self.panelDetent($0, shortHeight: shortHeight)) }
+                    .presentationDetents(Set(resolved.detents.map { Self.systemDetent($0, shortHeight: shortHeight, activities: activities) }), selection: Binding(
+                        get: {
+                            let selected = resolved.detents.contains(adapter.detent) ? adapter.detent : resolved.initialDetent ?? .large
+                            return Self.systemDetent(selected, shortHeight: shortHeight, activities: activities)
+                        },
+                        set: { adapter.selectDetent(Self.panelDetent($0, shortHeight: shortHeight, activities: activities)) }
                     ))
                     .modifier(PanelStageInteraction(upThrough: PanelPresentationPolicy.stageInteractiveDetent(resolved)
-                        .map { Self.systemDetent($0, shortHeight: shortHeight) }))
+                        .map { Self.systemDetent($0, shortHeight: shortHeight, activities: activities) }))
                     .modifier(PanelCompactHeightRule(keepsSheet: PanelPresentationPolicy.keepsSheetInCompactHeight(resolved)))
             }
     }
 
-    private static func systemDetent(_ detent: PanelDetent, shortHeight: Double) -> PresentationDetent {
+    private static func systemDetent(_ detent: PanelDetent, shortHeight: Double, activities: Bool) -> PresentationDetent {
         switch detent {
         case .short:
             return .height(CGFloat(shortHeight))
         case .medium:
-            return .medium
+            return activities ? .fraction(0.78) : .medium
         case .large:
             return .large
         }
     }
 
-    private static func panelDetent(_ detent: PresentationDetent, shortHeight: Double) -> PanelDetent {
-        if detent == .medium { return .medium }
+    private static func panelDetent(_ detent: PresentationDetent, shortHeight: Double, activities: Bool) -> PanelDetent {
+        if detent == .medium || (activities && detent == .fraction(0.78)) { return .medium }
         if detent == .height(CGFloat(shortHeight)) { return .short }
         return .large
     }

@@ -33,7 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -110,7 +109,6 @@ internal fun StageChrome(
                 }
             }
             StageStatusChips(stage)
-            StageSoloLayer(stage, chrome, Modifier.fillMaxWidth())
         }
         val stageWidth = maxWidth
         val stageHeight = maxHeight
@@ -193,7 +191,6 @@ private fun StageStatusChips(stage: StagePresenter) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         StageHandChip(stage)
         StageNowPlayingChip(stage)
-        StageShareInviteChip(stage)
     }
 }
 
@@ -230,19 +227,6 @@ private fun StageNowPlayingChip(stage: StagePresenter) {
     ConclaveStageChip(title = conclaveString("stg_activity_running", name), identifier = "stage.chip.nowPlaying", icon = icon,
         actionTitle = conclaveString("stg_show"), onAction = { stage.showHiddenActivity() },
         actionDescription = conclaveString("stg_show_activity", name))
-}
-
-@Composable
-private fun StageShareInviteChip(stage: StagePresenter) {
-    val layout = stage.layout
-    if (layout.kind != StageKind.solo || !layout.isAloneConfirmed || layout.meetingLink.isEmpty() || layout.slots.count == 0) return
-    val entry = stage.tileChrome.entry(layout.slots[0].userId)
-    if (entry.model.isCameraOff) return
-    val context = LocalContext.current
-    val link = layout.meetingLink
-    val roomLabel = stage.capsule.title
-    ConclaveStageChip(title = conclaveString("ds_share_invite"), identifier = "stage.chip.shareInvite", icon = ConclaveIcons.ShareFill0,
-        onClick = { stageShareMeetingLink(context, link, roomLabel) })
 }
 
 @Composable

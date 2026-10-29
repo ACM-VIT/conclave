@@ -5,19 +5,35 @@ struct PermissionPrimingSection: View {
     let premeeting: PremeetingPresenter
 
     var body: some View {
-        ForEach(rows, id: \.kind) { model in
-            LobbyGroupedSection {
-                LobbyGroupedRow {
-                    PermissionPrimingRow(model: model, onOpenSettings: { premeeting.openSystemSettings() })
+        let models = rows
+        if !models.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(models, id: \.kind) { model in
+                    if model.placement == .card {
+                        VStack(alignment: .leading, spacing: 0) {
+                            PermissionPrimingRow(model: model, onOpenSettings: { premeeting.openSystemSettings() })
+                        }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("lobby.camera.denied")
+                    } else {
+                        PermissionPrimingRow(model: model, onOpenSettings: { premeeting.openSystemSettings() })
+                    }
                 }
             }
+            .padding(.horizontal, 32)
         }
     }
 
     private var rows: [PermissionPrimingModel] {
         guard let media = premeeting.lobbyMedia else { return [] }
-        return PermissionPrimingPolicy.rows(media: media, supportsRationale: PermissionPrimingPolicy.platformSupportsRationale,
-                                            microphoneRationaleDismissed: false, cameraRationaleDismissed: false)
+        var models = PermissionPrimingPolicy.rows(media: media, supportsRationale: PermissionPrimingPolicy.platformSupportsRationale,
+                                                  microphoneRationaleDismissed: false, cameraRationaleDismissed: false)
+        let camera = PermissionPrimingPolicy.model(kind: .camera, permission: media.cameraPermission,
+                                                   canAskAgain: media.canAskAgainCamera,
+                                                   supportsRationale: PermissionPrimingPolicy.platformSupportsRationale,
+                                                   rationaleDismissed: false)
+        if camera.placement == .card { models.append(camera) }
+        return models
     }
 }
 
@@ -31,28 +47,29 @@ struct PermissionPrimingRow: View {
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
             : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
         layout {
-            VStack(alignment: .leading, spacing: 4) {
-                Label {
-                    Text(PermissionPrimingCopy.title(model.kind))
-                        .font(.subheadline.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: PermissionPrimingCopy.symbol(model.kind))
-                        .foregroundStyle(HostingTheme.statusWarning)
-                        .accessibilityHidden(true)
-                }
-                Text(PermissionPrimingCopy.body(model.kind, priming: model.priming))
+            Label {
+                Text(model.priming == .restricted
+                     ? PermissionPrimingCopy.body(model.kind, priming: model.priming)
+                     : PermissionPrimingCopy.title(model.kind))
                     .font(.footnote)
-                    .foregroundStyle(HostingTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityHint(PermissionPrimingCopy.body(model.kind, priming: model.priming))
+            } icon: {
+                Image(systemName: PermissionPrimingCopy.symbol(model.kind))
+                    .font(.footnote)
+                    .accessibilityHidden(true)
             }
+            .foregroundStyle(HostingTheme.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
             if PermissionPrimingCopy.showsOpenSettings(model.priming) {
                 Button(ConclaveStrings.text("Open Settings"), action: onOpenSettings)
                     .buttonStyle(.borderless)
                     .tint(HostingTheme.coralText)
-                    .fixedSize()
-                    .accessibilityIdentifier(PermissionPrimingCopy.identifier(model.kind) + ".openSettings")
+                    .font(.footnote)
+                    .frame(minHeight: 44)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(model.placement == .card ? "lobby.camera.openSettings"
+                                             : PermissionPrimingCopy.identifier(model.kind) + ".openSettings")
             }
         }
         .accessibilityElement(children: .contain)
@@ -60,41 +77,6 @@ struct PermissionPrimingRow: View {
 
         .task(id: model.priming) {
             AccessibilityNotification.Announcement(PermissionPrimingCopy.title(model.kind)).post()
-        }
-    }
-}
-
-struct PermissionPrimingCardOverlay: View {
-    let priming: PermissionPrimingKind
-    let onOpenSettings: () -> Void
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: ConclaveSymbols.videoSlash)
-                .font(.title2)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .accessibilityHidden(true)
-            Text(PermissionPrimingCopy.title(.camera))
-                .font(.headline)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .multilineTextAlignment(.center)
-            Text(PermissionPrimingCopy.body(.camera, priming: priming))
-                .font(.subheadline)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(HostingTheme.inCallTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if PermissionPrimingCopy.showsOpenSettings(priming) {
-                Button(ConclaveStrings.text("Open Settings"), action: onOpenSettings)
-                    .buttonStyle(.bordered)
-                    .tint(HostingTheme.token(DesignTokens.iosInCallText))
-                    .accessibilityIdentifier("lobby.camera.openSettings")
-            }
-        }
-        .padding(20)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("lobby.camera.denied")
-        .task(id: priming) {
-            AccessibilityNotification.Announcement(PermissionPrimingCopy.title(.camera)).post()
         }
     }
 }

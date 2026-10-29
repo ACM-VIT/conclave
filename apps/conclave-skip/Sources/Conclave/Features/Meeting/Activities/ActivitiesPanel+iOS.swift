@@ -436,13 +436,15 @@ private struct GameSetupPage: View {
 
     var body: some View {
         let setup = activities.setup
-        Form {
-            if let setup = setup, setup.gameId == gameId {
-                Section {
-                    if !setup.detail.isEmpty { Text(setup.detail) }
-                    LabeledContent(ConclaveStrings.text("Players"), value: ActivitiesCopy.playerRange(setup.minPlayers, setup.maxPlayers))
-                }
-                Section {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                if let setup = setup, setup.gameId == gameId {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if !setup.detail.isEmpty { Text(setup.detail).font(.subheadline) }
+                        Text(ActivitiesCopy.playerRange(setup.minPlayers, setup.maxPlayers))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     ForEach(setup.options) { option in
                         if option.isVisible {
                             GameOptionControl(option: option, initialText: activities.draftText(option.id),
@@ -451,16 +453,19 @@ private struct GameSetupPage: View {
                                               onText: { activities.setText(option.id, text: $0) })
                         }
                     }
+                } else {
+                    ProgressView()
                 }
-            } else {
-                ProgressView()
             }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle(setup?.name ?? "")
         .task(id: gameId) { activities.beginSetup(gameId) }
-        .modifier(PinnedBottomBar {
+        .conclaveFloatingActionBar {
             SetupStartBar(activities: activities)
-        })
+        }
         .accessibilityIdentifier("activities.setup")
     }
 }
@@ -471,22 +476,11 @@ private struct SetupStartBar: View {
     var body: some View {
         if let setup = activities.setup {
             VStack(spacing: 6) {
-                Button {
+                ConclaveFloatingActionButton(title: ActivitiesCopy.startTitle(setup), isEnabled: setup.canStart,
+                                             isPending: setup.phase == .starting || setup.phase == .slow,
+                                             identifier: "activities.setup.start") {
                     activities.startGame()
-                } label: {
-                    HStack(spacing: 8) {
-                        if setup.phase == .starting || setup.phase == .slow { ProgressView().tint(HostingTheme.onCoral) }
-                        Text(ActivitiesCopy.startTitle(setup))
-                    }
-                    .foregroundStyle(HostingTheme.onCoral)
-                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(HostingTheme.coralFill)
-                .controlSize(.large)
-                .disabled(!setup.canStart || setup.phase == .starting || setup.phase == .slow)
-                .opacity(setup.canStart ? 1 : HostingTheme.disabledOpacity)
-                .accessibilityIdentifier("activities.setup.start")
                 if let footer = ActivitiesCopy.setupFooter(setup) {
                     Text(footer)
                         .font(.footnote)
@@ -495,6 +489,7 @@ private struct SetupStartBar: View {
                         .accessibilityIdentifier("activities.setup.footer")
                 }
             }
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
         }
@@ -534,37 +529,16 @@ private struct BrowserLauncherPage: View {
             }
         }
         .navigationTitle(ConclaveStrings.text("Shared Browser"))
-        .modifier(PinnedBottomBar {
-            Button {
+        .conclaveFloatingActionBar {
+            ConclaveFloatingActionButton(title: ActivitiesCopy.browserPrimary(browser), isEnabled: browser.isAvailable,
+                                         isPending: browser.phase != .idle, identifier: "activities.browser.primary") {
                 activities.submitBrowserURL(url)
-            } label: {
-                HStack(spacing: 8) {
-                    if browser.phase != .idle { ProgressView().tint(HostingTheme.onCoral) }
-                    Text(ActivitiesCopy.browserPrimary(browser))
-                }
-                .foregroundStyle(HostingTheme.onCoral)
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(HostingTheme.coralFill)
-            .controlSize(.large)
-            .disabled(browser.phase != .idle || !browser.isAvailable)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .accessibilityIdentifier("activities.browser.primary")
-        })
-    }
-}
-
-private struct PinnedBottomBar<Bar: View>: ViewModifier {
-    @ViewBuilder let bar: () -> Bar
-
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.safeAreaBar(edge: .bottom) { bar() }
-        } else {
-            content.safeAreaInset(edge: .bottom, spacing: 0) { bar().background(Color(uiColor: .systemGroupedBackground)) }
         }
     }
 }
+
 #endif

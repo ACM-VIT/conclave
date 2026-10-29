@@ -197,10 +197,12 @@ struct StageVisibilityReporter: View {
     let chrome: StageChromeVisibility
     let window: PanelWindow
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var coverage: String {
         guard let current = panels.snapshot.current else { return StageVisibilityPolicy.coverageNone }
-        let presentation = PanelPresentationPolicy.resolve(current, window: window, platform: PanelPlatform.iOS)
+        let presentation = PanelPresentationPolicy.resolve(current, window: window, platform: PanelPlatform.iOS,
+                                                            isAccessibilitySize: dynamicTypeSize.isAccessibilitySize)
         return PanelPresentationPolicy.coverage(presentation, detent: adapter.detent).rawValue
     }
 

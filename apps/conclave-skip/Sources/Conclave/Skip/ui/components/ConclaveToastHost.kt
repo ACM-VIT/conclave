@@ -1,14 +1,18 @@
 package conclave.module
 
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -17,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 
@@ -63,27 +68,48 @@ internal fun conclaveToastDuration(item: ConclaveToastItem): SnackbarDuration = 
 @Composable
 private fun ConclaveStageSnackbar(message: String, toast: ConclaveToastItem?, identifier: String, onAction: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
-    val shape = MaterialTheme.shapes.small
-    Snackbar(
-        modifier = Modifier.border(1.dp, ext.border, shape).testTag("$identifier.toast"),
-        action = if (toast != null && toast.hasAction) {
-            {
-                TextButton(onClick = onAction, modifier = Modifier.testTag("$identifier.action")) {
-                    ConclaveText(toast.actionTitle, line = "$identifier.action", color = scheme.primary)
+    val stackAction = LocalDensity.current.fontScale >= 1.3f
+    Surface(
+        modifier = Modifier.widthIn(max = 480.dp).testTag("$identifier.toast"),
+        shape = RoundedCornerShape(24.dp),
+        color = scheme.surfaceContainerHigh,
+        contentColor = scheme.onSurface,
+        tonalElevation = 6.dp,
+        shadowElevation = 3.dp,
+    ) {
+        if (stackAction) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ConclaveStageToastMessage(message, toast, identifier)
+                if (toast != null && toast.hasAction) {
+                    ConclaveStageToastAction(toast, identifier, onAction)
                 }
             }
-        } else null,
-        shape = shape,
-        containerColor = scheme.surfaceContainerHigh,
-        contentColor = scheme.onSurface,
-        actionContentColor = scheme.primary,
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (toast != null && toast.hasAvatar) {
-                ConclaveAvatar(toast.avatarName, if (toast.avatarId.isEmpty()) null else toast.avatarId, ConclaveAvatarSize.mention)
+        } else {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                ConclaveStageToastMessage(message, toast, identifier, Modifier.weight(1f, fill = false))
+                if (toast != null && toast.hasAction) {
+                    ConclaveStageToastAction(toast, identifier, onAction)
+                }
             }
-            ConclaveText(message, line = "$identifier.message", style = MaterialTheme.typography.bodyMedium, color = scheme.onSurface)
         }
+    }
+}
+
+@Composable
+private fun ConclaveStageToastMessage(message: String, toast: ConclaveToastItem?, identifier: String, modifier: Modifier = Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (toast != null && toast.hasAvatar) {
+            ConclaveAvatar(toast.avatarName, if (toast.avatarId.isEmpty()) null else toast.avatarId, ConclaveAvatarSize.mention)
+        }
+        ConclaveText(message, line = "$identifier.message", style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+@Composable
+private fun ConclaveStageToastAction(toast: ConclaveToastItem, identifier: String, onAction: () -> Unit) {
+    TextButton(onClick = onAction, modifier = Modifier.testTag("$identifier.action")) {
+        ConclaveText(toast.actionTitle, line = "$identifier.action", color = MaterialTheme.colorScheme.primary)
     }
 }

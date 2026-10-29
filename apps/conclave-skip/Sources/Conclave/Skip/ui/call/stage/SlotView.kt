@@ -11,7 +11,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -19,20 +18,13 @@ import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -53,7 +45,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
@@ -202,6 +193,8 @@ private fun ParticipantTile(
             onAccessibilityLongPress = if (menu.hasItems) { { menuState.open(Offset.Zero) } } else null,
 
             accessibilityName = if (role == StageSlotRole.programFeed) attendeeFeedLabel(isShare = isShare, name = model.displayName) else null,
+            isSolo = kind == StageKind.solo && model.isLocal && !isShare,
+            showsHandBadge = !model.isLocal,
             overlayInsets = PaddingValues(start = tileInsets.leading.dp, top = tileInsets.top.dp,
                 end = tileInsets.trailing.dp, bottom = tileInsets.bottom.dp),
         ) {
@@ -485,55 +478,6 @@ internal fun stageLiveTrack(userId: String, isLocal: Boolean, isShare: Boolean, 
     }
     val consumerUserId = if (isShare) "$userId-screen" else userId
     return client.remoteVideoTrack(forUserId = consumerUserId)?.rtcVideoTrack
-}
-
-@Composable
-internal fun StageSoloLayer(stage: StagePresenter, chrome: StageChromeVisibilityState, modifier: Modifier = Modifier) {
-    val layout = stage.layout
-    if (layout.kind != StageKind.solo || !layout.isAloneConfirmed || layout.meetingLink.isEmpty()) return
-    val localId = if (layout.slots.count > 0) layout.slots[0].userId else return
-    val entry = stage.tileChrome.entry(localId)
-    if (!entry.model.isCameraOff || chrome.state.isHidden) return
-    Box(modifier.padding(horizontal = 4.dp), contentAlignment = Alignment.TopCenter) {
-        StageSoloCard(link = layout.meetingLink, roomLabel = stage.capsule.title)
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun StageSoloCard(link: String, roomLabel: String) {
-    val stackActions = LocalDensity.current.fontScale >= 1.3f
-    val context = LocalContext.current
-    val haptics = rememberConclaveHaptics()
-    val ext = LocalConclaveExtendedColors.current
-    val scheme = MaterialTheme.colorScheme
-    Surface(
-        modifier = Modifier.widthIn(max = 340.dp).testTag("stage.solo"),
-        shape = MaterialTheme.shapes.medium,
-        color = scheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, ext.border),
-    ) {
-        FlowRow(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            maxItemsInEachRow = if (stackActions) 1 else 2,
-        ) {
-            Button(
-                onClick = { stageShareMeetingLink(context, link, roomLabel) },
-                colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
-                modifier = Modifier.weight(1f).testTag("stage.solo.share"),
-            ) {
-                ConclaveText(conclaveString("ds_share_invite"), line = "stage.solo.share")
-            }
-            TextButton(onClick = {
-                stageCopyMeetingLink(context, link, roomLabel)
-                haptics.gesture(FeedbackKind.linkCopied)
-            }, modifier = Modifier.weight(1f).testTag("stage.solo.copy")) {
-                ConclaveText(conclaveString("stg_copy_link"), line = "stage.solo.copy", color = scheme.primary)
-            }
-        }
-    }
 }
 
 internal fun stageShareMeetingLink(context: Context, link: String, roomLabel: String) {

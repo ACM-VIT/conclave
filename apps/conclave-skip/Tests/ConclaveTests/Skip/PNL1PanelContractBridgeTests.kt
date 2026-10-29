@@ -125,7 +125,7 @@ class PNL1PanelContractBridgeTests {
             Row(MeetingPanel.chat, listOf(large), large, large),
             Row(MeetingPanel.participants, listOf(medium, large), medium, medium),
             Row(MeetingPanel.transcript, listOf(large), large, large),
-            Row(MeetingPanel.activities, listOf(medium, large), medium, medium),
+            Row(MeetingPanel.activities, listOf(medium, large), medium, large),
             Row(MeetingPanel.effects, listOf(short, large), short, large),
             Row(MeetingPanel.hostControls, listOf(medium, large), large, large),
             Row(MeetingPanel.settings, listOf(medium, large), large, large),
@@ -138,7 +138,8 @@ class PNL1PanelContractBridgeTests {
             for (accessibilitySize in listOf(false, true)) {
                 val sheet = PanelPresentationPolicy.resolve(request(row.panel), window = phone, platform = PanelPlatform.iOS,
                     isAccessibilitySize = accessibilitySize)
-                assertEquals("${row.panel}", row.detents, detents(sheet))
+                val expectedDetents = if (row.panel == MeetingPanel.activities && accessibilitySize) listOf(large) else row.detents
+                assertEquals("${row.panel}", expectedDetents, detents(sheet))
                 assertEquals("${row.panel}", if (accessibilitySize) row.accessible else row.initial, sheet.initialDetent)
                 assertEquals("${row.panel}", if (accessibilitySize) row.accessible else row.initial,
                     PanelPresentationPolicy.initialSheetDetent(row.panel, isAccessibilitySize = accessibilitySize))
@@ -167,6 +168,69 @@ class PNL1PanelContractBridgeTests {
         assertEquals(panelHostDecision(request(MeetingPanel.layout), tablet),
             panelHostDecision(request(MeetingPanel.layout), tablet, isAccessibilitySize = true))
         assertTrue(panelHostDecision(request(MeetingPanel.effects), tablet).inCallAppearance)
+    }
+
+    @Test fun activitiesSheetUsesLargeForAccessibilityAndShortWindows() {
+        for (height in listOf(390.0, 599.0, 600.0, 844.0)) {
+            val window = PanelWindow(width = 390.0, height = height, horizontalRegular = false, verticalRegular = height >= 480)
+            for (accessible in listOf(false, true)) {
+                val sheet = PanelPresentationPolicy.resolve(request(MeetingPanel.activities), window = window, platform = PanelPlatform.iOS,
+                    isAccessibilitySize = accessible)
+                val needsLarge = accessible || height < 600
+                assertEquals(PanelHostStyle.sheet, sheet.style)
+                assertEquals(PanelAppearance.system, sheet.appearance)
+                assertFalse(sheet.hasBottomComposer)
+                assertEquals(if (needsLarge) listOf(PanelDetent.large) else listOf(PanelDetent.medium, PanelDetent.large), detents(sheet))
+                assertEquals(if (needsLarge) PanelDetent.large else PanelDetent.medium, sheet.initialDetent)
+                assertEquals(if (needsLarge) PanelStageCoverage.full else PanelStageCoverage.partial,
+                    PanelPresentationPolicy.coverage(sheet, detent = null))
+                assertEquals(if (needsLarge) PanelStageCoverage.full else PanelStageCoverage.partial,
+                    PanelPresentationPolicy.coverage(sheet, detent = PanelDetent.medium))
+                assertEquals(if (needsLarge) null else PanelDetent.medium, PanelPresentationPolicy.stageInteractiveDetent(sheet))
+
+                val people = PanelPresentationPolicy.resolve(request(MeetingPanel.participants), window = window, platform = PanelPlatform.iOS,
+                    isAccessibilitySize = accessible)
+                assertEquals(listOf(PanelDetent.medium, PanelDetent.large), detents(people))
+                assertEquals(PanelDetent.medium, people.initialDetent)
+                val android = PanelPresentationPolicy.resolve(request(MeetingPanel.activities), window = window, platform = PanelPlatform.android,
+                    isAccessibilitySize = accessible)
+                assertEquals(PanelHostStyle.overlay, android.style)
+                assertTrue(android.detents.isEmpty)
+                assertNull(android.initialDetent)
+            }
+        }
+    }
+
+    @Test fun activitiesLargeDetentDoesNotReplaceRegularPanes() {
+        val window = PanelWindow(width = 1180.0, height = 550.0, horizontalRegular = true, verticalRegular = true)
+        for (accessible in listOf(false, true)) {
+            for (platform in listOf(PanelPlatform.iOS, PanelPlatform.android)) {
+                val pane = PanelPresentationPolicy.resolve(request(MeetingPanel.activities), window = window, platform = platform,
+                    isAccessibilitySize = accessible)
+                assertEquals(if (platform == PanelPlatform.iOS) PanelHostStyle.inspector else PanelHostStyle.sidePane, pane.style)
+                assertTrue(pane.detents.isEmpty)
+                assertNull(pane.initialDetent)
+                assertEquals(360.0, pane.paneWidth, 0.0)
+                assertEquals(PanelStageCoverage.none, PanelPresentationPolicy.coverage(pane, detent = null))
+            }
+            val sheet = PanelPresentationPolicy.resolve(request(MeetingPanel.activities), window = window, platform = PanelPlatform.iOS,
+                isAccessibilitySize = accessible, sideStylesEnabled = false)
+            assertEquals(PanelHostStyle.sheet, sheet.style)
+            assertEquals(listOf(PanelDetent.large), detents(sheet))
+            assertEquals(PanelDetent.large, sheet.initialDetent)
+        }
+    }
+
+    @Test fun activitiesAccessibilityChangesReclassifyAnUnchangedMediumDetent() {
+        val window = PanelWindow(width = 390.0, height = 844.0, horizontalRegular = false, verticalRegular = true)
+        val adapterDetent = PanelDetent.medium
+        val changes = listOf(false to PanelStageCoverage.partial, true to PanelStageCoverage.full, false to PanelStageCoverage.partial)
+        for ((accessible, expectedCoverage) in changes) {
+            val sheet = PanelPresentationPolicy.resolve(request(MeetingPanel.activities), window = window, platform = PanelPlatform.iOS,
+                isAccessibilitySize = accessible)
+            assertEquals(if (accessible) listOf(PanelDetent.large) else listOf(PanelDetent.medium, PanelDetent.large), detents(sheet))
+            assertEquals(expectedCoverage, PanelPresentationPolicy.coverage(sheet, detent = adapterDetent))
+        }
     }
 
     @Test fun pageStackPopsBeforeThePanelCloses() {

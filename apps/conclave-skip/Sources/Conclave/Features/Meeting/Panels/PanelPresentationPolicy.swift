@@ -98,6 +98,10 @@ enum PanelPresentationPolicy {
         if isSheet {
             detents = PanelPresentationPolicy.sheetDetents(request.panel)
             initialDetent = PanelPresentationPolicy.initialSheetDetent(request.panel, isAccessibilitySize: isAccessibilitySize)
+            if request.panel == .activities && (isAccessibilitySize || window.height < 600) {
+                detents = [.large]
+                initialDetent = .large
+            }
         }
         return PanelPresentation(
             style: hostStyle,
@@ -126,7 +130,9 @@ enum PanelPresentationPolicy {
             return isAccessibilitySize ? PanelDetent.large : PanelDetent.short
         case .layout:
             return isAccessibilitySize ? PanelDetent.large : PanelDetent.medium
-        case .participants, .activities, .meetingInfo:
+        case .activities:
+            return isAccessibilitySize ? PanelDetent.large : PanelDetent.medium
+        case .participants, .meetingInfo:
             return PanelDetent.medium
         case .chat, .transcript, .webinarQA, .hostControls, .settings:
             return PanelDetent.large

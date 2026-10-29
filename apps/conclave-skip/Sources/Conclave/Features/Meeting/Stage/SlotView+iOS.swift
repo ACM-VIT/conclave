@@ -99,6 +99,8 @@ struct ParticipantTile: View {
 
                            accessibilityName: slot.role == .programFeed
                                ? AttendeeViewerCopy.feedLabel(isShare: isShare, name: model.displayName) : nil,
+                           isSolo: stage.kind == .solo && model.isLocal && !isShare,
+                           showsHandBadge: !model.isLocal,
                            overlayInsets: EdgeInsets(top: CGFloat(insets.top), leading: CGFloat(insets.leading),
                                                     bottom: CGFloat(insets.bottom), trailing: CGFloat(insets.trailing))) {
             ShareZoomContainer(zoom: zoom, isZoomable: zoomable, slotId: slot.id, stage: stage) {
@@ -549,96 +551,4 @@ struct SelfViewDragModifier: ViewModifier {
     }
 }
 
-struct StageSoloLayer: View {
-    let stage: StagePresenter
-    let chrome: StageChromeVisibility
-
-    var body: some View {
-        let layout = stage.layout
-        if layout.kind == .solo && layout.isAloneConfirmed, let localId = layout.slots.first?.userId {
-            StageSoloCardGate(entry: stage.tileChrome.entry(for: localId), link: layout.meetingLink,
-                              roomLabel: stage.capsule.title)
-                .opacity(chrome.state.isHidden ? 0 : 1)
-                .allowsHitTesting(!chrome.state.isHidden)
-                .accessibilityHidden(chrome.state.isHidden)
-        }
-    }
-}
-
-private struct StageSoloCardGate: View {
-    let entry: TileChromeEntry
-    let link: String
-    let roomLabel: String
-
-    var body: some View {
-        if entry.model.isCameraOff, let url = URL(string: link), !link.isEmpty {
-            StageSoloCard(url: url, roomLabel: roomLabel)
-                .padding(.horizontal, 4)
-                .frame(maxWidth: .infinity)
-        }
-    }
-}
-
-struct StageSoloCard: View {
-    let url: URL
-    let roomLabel: String
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @State private var copies = 0
-    @State private var showsCopied = false
-
-    var body: some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(spacing: 8))
-            : AnyLayout(HStackLayout(spacing: 12))
-        layout {
-            ShareLink(item: url, subject: Text(ConclaveStrings.text("Join My Conclave Meeting")),
-                      message: Text(ConclaveStrings.text("Join me in this Conclave meeting.")),
-                      preview: SharePreview(Text(roomLabel))) {
-                Text(ConclaveStrings.text("Share Invite"))
-                    .font(.body.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(HostingTheme.inCallOnCoral)
-                    .padding(.horizontal, 16)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(HostingTheme.coralFill, in: Capsule())
-            }
-            .accessibilityIdentifier("stage.solo.share")
-            Button {
-                UIPasteboard.general.url = url
-                copies += 1
-            } label: {
-                Label(showsCopied ? ConclaveStrings.text("Copied") : ConclaveStrings.text("Copy Link"),
-                      systemImage: showsCopied ? ConclaveSymbols.checkmark : ConclaveSymbols.docOnDoc)
-                    .font(.body.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-            }
-            .buttonStyle(.borderless)
-            .tint(HostingTheme.inCallCoralText)
-            .conclaveGestureFeedback(.linkCopied, trigger: copies)
-            .accessibilityIdentifier("stage.solo.copy")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : 340, alignment: .leading)
-        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(HostingTheme.inCallBorder, lineWidth: 1)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("stage.solo")
-
-        .task(id: copies) {
-            guard copies > 0 else { return }
-            showsCopied = true
-            AccessibilityNotification.Announcement(ConclaveStrings.text("Link copied")).post()
-            try? await Task.sleep(for: .seconds(2))
-            if Task.isCancelled { return }
-            showsCopied = false
-        }
-    }
-}
 #endif

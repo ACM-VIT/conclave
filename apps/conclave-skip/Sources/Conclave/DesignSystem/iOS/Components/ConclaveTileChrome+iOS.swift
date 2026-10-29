@@ -24,6 +24,8 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
     let identifier: String
 
     let accessibilityName: String?
+    let isSolo: Bool
+    let showsHandBadge: Bool
     let overlayInsets: EdgeInsets
     @ViewBuilder let renderer: () -> Renderer
     @ViewBuilder let selfViewAccessory: () -> SelfViewAccessory
@@ -31,6 +33,7 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
     init(model: TileChromeModel, speaking: TileSpeakingState, variant: ConclaveTileVariant = .grid,
          isSpotlight: Bool = false, cornerRadius: CGFloat = CGFloat(DesignTokens.radiusTile),
          actions: [ConclaveTileAction] = [], identifier: String, accessibilityName: String? = nil,
+         isSolo: Bool = false, showsHandBadge: Bool = true,
          overlayInsets: EdgeInsets = EdgeInsets(),
          @ViewBuilder renderer: @escaping () -> Renderer,
          @ViewBuilder selfViewAccessory: @escaping () -> SelfViewAccessory) {
@@ -42,6 +45,8 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
         self.actions = actions
         self.identifier = identifier
         self.accessibilityName = accessibilityName
+        self.isSolo = isSolo
+        self.showsHandBadge = showsHandBadge
         self.overlayInsets = overlayInsets
         self.renderer = renderer
         self.selfViewAccessory = selfViewAccessory
@@ -55,9 +60,10 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
                 renderer()
                     .accessibilityIgnoresInvertColors()
                 if model.isCameraOff {
-                    CameraOffFace(model: model, density: density)
+                    CameraOffFace(model: model, density: density, isSolo: isSolo, contentInsets: overlayInsets)
                 }
                 TileOverlays(model: model, speaking: speaking, variant: variant, density: density,
+                             showsName: !isSolo || !model.isCameraOff, showsHandBadge: showsHandBadge,
                              selfViewAccessory: selfViewAccessory)
                     .padding(overlayInsets)
                 ConclaveSpeakingRing(state: speaking, cornerRadius: cornerRadius)
@@ -139,11 +145,16 @@ struct ConclaveSpeakingRing: View {
 private struct CameraOffFace: View {
     let model: TileChromeModel
     let density: TileChromeDensity
+    let isSolo: Bool
+    let contentInsets: EdgeInsets
 
     var body: some View {
         ZStack {
             HostingTheme.token(DesignTokens.iosInCallTile)
-            if model.isVoiceAgent {
+            if isSolo {
+                SoloCameraOffIdentity(model: model)
+                    .padding(contentInsets)
+            } else if model.isVoiceAgent {
 
                 Image(systemName: ConclaveSymbols.waveform)
                     .resizable()
@@ -163,11 +174,52 @@ private struct CameraOffFace: View {
     }
 }
 
+private struct SoloCameraOffIdentity: View {
+    let model: TileChromeModel
+
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            VStack(spacing: 16) {
+                avatar(diameter: 96)
+                identity
+            }
+            HStack(spacing: 16) {
+                avatar(diameter: 64)
+                identity
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityHidden(true)
+    }
+
+    private func avatar(diameter: CGFloat) -> some View {
+        ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(model.avatarSeed), size: .tile, diameter: diameter)
+    }
+
+    private var identity: some View {
+        VStack(spacing: 6) {
+            Text(ConclaveStrings.text("You"))
+                .font(.headline)
+                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+            if model.isMuted {
+                Label(ConclaveStrings.text("Muted"), systemImage: ConclaveSymbols.micSlashFill)
+                    .font(.subheadline)
+                    .foregroundStyle(HostingTheme.inCallTextSecondary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .multilineTextAlignment(.center)
+    }
+}
+
 private struct TileOverlays<SelfViewAccessory: View>: View {
     let model: TileChromeModel
     let speaking: TileSpeakingState
     let variant: ConclaveTileVariant
     let density: TileChromeDensity
+    let showsName: Bool
+    let showsHandBadge: Bool
     let selfViewAccessory: () -> SelfViewAccessory
 
     var body: some View {
@@ -175,13 +227,13 @@ private struct TileOverlays<SelfViewAccessory: View>: View {
         let inset: CGFloat = density == .dense ? 4 : 8
         ZStack {
             Color.clear
-            if variant == .grid {
+            if variant == .grid && showsName {
                 TileNamePill(model: model, speaking: speaking, density: density)
                     .padding(inset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
             HStack(spacing: 4) {
-                if model.isHandRaised {
+                if model.isHandRaised && showsHandBadge {
                     ConclaveTileBadge(kind: .handRaised, size: badge)
                 }
                 if variant == .selfView && model.isMuted {

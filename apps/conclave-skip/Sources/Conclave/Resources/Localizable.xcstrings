@@ -792,10 +792,16 @@
     "Add a Name" : {
       "extractionState" : "manual"
     },
+    "Add an OpenAI key for answers and notes." : {
+      "extractionState" : "manual"
+    },
     "Add to Calendar" : {
       "extractionState" : "manual"
     },
     "Add to Queue" : {
+      "extractionState" : "manual"
+    },
+    "Add your key to continue." : {
       "extractionState" : "manual"
     },
     "Add your name so the host knows who’s asking when you join the Q&A." : {
@@ -1340,6 +1346,9 @@
     "Captions will appear here." : {
       "extractionState" : "manual"
     },
+    "Capture the conversation" : {
+      "extractionState" : "manual"
+    },
     "Catch Up Minutes %lld" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1880,6 +1889,9 @@
       "extractionState" : "manual"
     },
     "Connection timed out" : {
+      "extractionState" : "manual"
+    },
+    "Continue the transcript" : {
       "extractionState" : "manual"
     },
     "Continue with Google" : {
@@ -3158,6 +3170,9 @@
       "extractionState" : "manual"
     },
     "Live notes stopped" : {
+      "extractionState" : "manual"
+    },
+    "Live transcript, answers, and meeting notes." : {
       "extractionState" : "manual"
     },
     "Live, App" : {
@@ -4546,6 +4561,9 @@
     "Resume Notes" : {
       "extractionState" : "manual"
     },
+    "Resume with Conclave’s shared key." : {
+      "extractionState" : "manual"
+    },
     "Resumed at %@" : {
       "extractionState" : "manual"
     },
@@ -5435,6 +5453,9 @@
       "extractionState" : "manual"
     },
     "The transcript and minutes so far stay available to export." : {
+      "extractionState" : "manual"
+    },
+    "The transcript will appear when the host starts it." : {
       "extractionState" : "manual"
     },
     "The truth" : {
@@ -6579,6 +6600,9 @@
       "extractionState" : "manual"
     },
     "Your connection looks good." : {
+      "extractionState" : "manual"
+    },
+    "Your key is only used for this meeting." : {
       "extractionState" : "manual"
     },
     "Your microphone is paused in the meeting while you record." : {

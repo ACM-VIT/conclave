@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
@@ -56,6 +57,7 @@ internal fun ConclaveTileChrome(
     accessibilityLongPressLabel: String? = null, onAccessibilityLongPress: (() -> Unit)? = null,
 
     accessibilityName: String? = null,
+    isSolo: Boolean = false, showsHandBadge: Boolean = true,
     overlayInsets: PaddingValues = PaddingValues(0.dp),
     renderer: @Composable () -> Unit,
 ) {
@@ -90,7 +92,9 @@ internal fun ConclaveTileChrome(
             if (model.isCameraOff) {
                 Box(Modifier.fillMaxSize().background(ext.tile), contentAlignment = Alignment.Center) {
                     val identity = remember(model.avatarSeed) { ConclaveAvatarIdentity.fromSeed(model.avatarSeed) }
-                    if (model.isVoiceAgent) {
+                    if (isSolo) {
+                        SoloCameraOffIdentity(model, Modifier.fillMaxSize().padding(overlayInsets))
+                    } else if (model.isVoiceAgent) {
                         Box(Modifier.size(TileChromePolicy.avatarSize(density).dp).clip(CircleShape).background(ext.labelScrim),
                             contentAlignment = Alignment.Center) {
                             Icon(ConclaveIcons.GraphicEqFill0, contentDescription = null,
@@ -102,11 +106,45 @@ internal fun ConclaveTileChrome(
                 }
             }
             Box(Modifier.fillMaxSize().padding(overlayInsets)) {
-                TileOverlays(model, variant, density, selfViewAccessory)
+                TileOverlays(model, variant, density, !isSolo || !model.isCameraOff, showsHandBadge, selfViewAccessory)
             }
             SpeakingStroke(speaking, cornerRadius)
             if (variant == ConclaveTileVariant.SelfView) {
                 Box(Modifier.fillMaxSize().border(1.dp, ext.border, shape))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SoloCameraOffIdentity(model: TileChromeModel, modifier: Modifier) {
+    val identity = remember(model.avatarSeed) { ConclaveAvatarIdentity.fromSeed(model.avatarSeed) }
+    BoxWithConstraints(modifier.padding(24.dp), contentAlignment = Alignment.Center) {
+        if (maxHeight < 260.dp) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                ConclaveAvatar(identity, 64.dp)
+                SoloIdentityLabel(model, Modifier.widthIn(max = 240.dp))
+            }
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                ConclaveAvatar(identity, 96.dp)
+                SoloIdentityLabel(model, Modifier.widthIn(max = 240.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SoloIdentityLabel(model: TileChromeModel, modifier: Modifier) {
+    val scheme = MaterialTheme.colorScheme
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ConclaveText(conclaveString("ds_you"), line = "stage.solo.name", style = MaterialTheme.typography.titleMedium,
+            color = scheme.onSurface)
+        if (model.isMuted) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(ConclaveIcons.MicOffFill1, contentDescription = null, modifier = Modifier.size(16.dp), tint = scheme.onSurfaceVariant)
+                ConclaveText(conclaveString("ds_state_muted"), line = "stage.solo.muted", style = MaterialTheme.typography.bodyMedium,
+                    color = scheme.onSurfaceVariant)
             }
         }
     }
@@ -133,15 +171,16 @@ private fun SpeakingStroke(speaking: TileSpeakingState, cornerRadius: Dp) {
 }
 
 @Composable
-private fun TileOverlays(model: TileChromeModel, variant: ConclaveTileVariant, density: TileChromeDensity, selfViewAccessory: @Composable () -> Unit) {
+private fun TileOverlays(model: TileChromeModel, variant: ConclaveTileVariant, density: TileChromeDensity,
+                         showsName: Boolean, showsHandBadge: Boolean, selfViewAccessory: @Composable () -> Unit) {
     val badge = TileChromePolicy.badgeSize(density).dp
     val inset = if (density == TileChromeDensity.dense) 4.dp else 8.dp
     Box(Modifier.fillMaxSize().padding(inset)) {
-        if (variant == ConclaveTileVariant.Grid) {
+        if (variant == ConclaveTileVariant.Grid && showsName) {
             TileNamePill(model, density, Modifier.align(Alignment.BottomStart))
         }
         Row(Modifier.align(Alignment.TopStart), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (model.isHandRaised) ConclaveTileBadge(ConclaveTileBadgeKind.handRaised, badge)
+            if (model.isHandRaised && showsHandBadge) ConclaveTileBadge(ConclaveTileBadgeKind.handRaised, badge)
             if (variant == ConclaveTileVariant.SelfView && model.isMuted) MutedBadge(badge)
         }
         Row(Modifier.align(Alignment.TopEnd), horizontalArrangement = Arrangement.spacedBy(4.dp)) {

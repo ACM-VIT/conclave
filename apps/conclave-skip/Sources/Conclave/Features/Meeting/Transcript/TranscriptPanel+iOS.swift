@@ -39,8 +39,11 @@ private struct TranscriptPanelContent: View {
         let snapshot = transcript.snapshot
         TranscriptPanelBody(transcript: transcript, snapshot: snapshot, showsCopied: showsCopied)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    TranscriptPanelMenu(transcript: transcript, snapshot: snapshot, onCopy: copy)
+                if TranscriptViewPolicy.menuEnabled(hasContent: snapshot.hasContent, canStop: snapshot.canStop,
+                                                    offersRecap: snapshot.offersRecapToChat) {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        TranscriptPanelMenu(transcript: transcript, snapshot: snapshot, onCopy: copy)
+                    }
                 }
             }
             .conclaveGestureFeedback(.linkCopied, trigger: copyCount)
@@ -217,7 +220,7 @@ private struct TranscriptPanelStartCard: View {
 
     var body: some View {
         if TranscriptViewPolicy.showsStartBar(body: snapshot.body, offersStart: snapshot.offersStart) {
-            form.conclaveComposerBar { startBar }
+            form.conclaveFloatingActionBar { startBar }
         } else {
             form
         }
@@ -229,35 +232,22 @@ private struct TranscriptPanelStartCard: View {
     }
 
     private var form: some View {
-        Form {
-            Section {
-                EmptyView()
-            } header: {
-                VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space8)) {
-                    HStack(spacing: CGFloat(DesignTokens.space8)) {
-                        Text(TranscriptCopy.kicker)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(HostingTheme.coralText)
-                        TranscriptPanelTag(title: TranscriptCopy.beta)
-                        if snapshot.isViewOnly { TranscriptPanelTag(title: TranscriptCopy.viewOnly) }
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text(TranscriptCopy.startTitle(snapshot.startKind))
-                        .font(.title2)
-                        .foregroundStyle(Color.primary)
+                        .font(.title2.weight(.semibold))
                         .accessibilityAddTraits(.isHeader)
                     Text(TranscriptCopy.blurb(TranscriptViewPolicy.blurb(kind: snapshot.startKind, coverage: coverage,
                                                                          isViewOnly: snapshot.isViewOnly)))
-                        .font(.body)
+                        .font(.subheadline)
                         .foregroundStyle(HostingTheme.secondaryText)
+                    if snapshot.isViewOnly { TranscriptPanelTag(title: TranscriptCopy.viewOnly) }
                 }
-                .textCase(nil)
-                .padding(.bottom, CGFloat(DesignTokens.space8))
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("transcript.startCard.header")
-            }
-            if snapshot.offersStart {
-                Section {
-                    DisclosureGroup(TranscriptCopy.options, isExpanded: $optionsExpanded) {
+                if snapshot.offersStart {
+                    VStack(alignment: .leading, spacing: 16) {
                         Picker(TranscriptCopy.provider, selection: $provider) {
                             ForEach(TranscriptConfiguration.providers) { option in
                                 Text(TranscriptCopy.providerName(option)).tag(option)
@@ -265,19 +255,15 @@ private struct TranscriptPanelStartCard: View {
                         }
                         .pickerStyle(.segmented)
                         .accessibilityIdentifier("transcript.options.provider")
-                        Picker(TranscriptCopy.assistant, selection: $assistantModel) {
-                            ForEach(TranscriptConfiguration.assistantModels) { model in
-                                Text(verbatim: model.label).tag(model.id)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .accessibilityIdentifier("transcript.options.assistant")
                         if TranscriptKeyPolicy.needsProviderKey(provider: provider, openAICovered: snapshot.openAICovered,
                                                                 sarvamCovered: snapshot.sarvamCovered) {
                             SecureField(TranscriptCopy.providerKey(provider), text: $providerKey)
                                 .textContentType(.password)
                                 .autocorrectionDisabled()
                                 .textInputAutocapitalization(.never)
+                                .textFieldStyle(.roundedBorder)
+                                .controlSize(.large)
+                                .frame(minHeight: 44)
                                 .accessibilityIdentifier("transcript.options.providerKey")
                         }
                         if TranscriptKeyPolicy.needsAssistantKey(provider: provider, openAICovered: snapshot.openAICovered) {
@@ -285,15 +271,33 @@ private struct TranscriptPanelStartCard: View {
                                 .textContentType(.password)
                                 .autocorrectionDisabled()
                                 .textInputAutocapitalization(.never)
+                                .textFieldStyle(.roundedBorder)
+                                .controlSize(.large)
+                                .frame(minHeight: 44)
                                 .accessibilityIdentifier("transcript.options.assistantKey")
                         }
+                        TranscriptPanelCoverageLine(coverage: coverage)
+                            .font(.caption)
+                            .foregroundStyle(HostingTheme.secondaryText)
+                        DisclosureGroup(TranscriptCopy.options, isExpanded: $optionsExpanded) {
+                            Picker(TranscriptCopy.assistant, selection: $assistantModel) {
+                                ForEach(TranscriptConfiguration.assistantModels) { model in
+                                    Text(verbatim: model.label).tag(model.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .padding(.top, 8)
+                            .accessibilityIdentifier("transcript.options.assistant")
+                        }
+                        .font(.subheadline)
+                        .accessibilityIdentifier("transcript.options")
                     }
-                    .accessibilityIdentifier("transcript.options")
-                } footer: {
-                    TranscriptPanelCoverageLine(coverage: coverage)
                 }
             }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollDismissesKeyboard(.interactively)
         .onAppear(perform: seed)
         .onChange(of: provider) { _, value in transcript.drafts.provider = value }
         .onChange(of: assistantModel) { _, value in transcript.drafts.assistantModel = value }
@@ -307,8 +311,8 @@ private struct TranscriptPanelStartCard: View {
         let ready = TranscriptKeyPolicy.hasRequiredKeys(provider: provider, keysKnown: snapshot.keysKnown,
                                                         openAICovered: snapshot.openAICovered, sarvamCovered: snapshot.sarvamCovered,
                                                         providerKey: providerKey, assistantKey: assistantKey)
-        return ConclaveButton(TranscriptCopy.startButton(snapshot.startKind), role: .primary, isEnabled: ready,
-                              identifier: "transcript.start") {
+        return ConclaveFloatingActionButton(title: TranscriptCopy.startButton(snapshot.startKind), isEnabled: ready,
+                                            identifier: "transcript.start") {
             let options = TranscriptKeyPolicy.options(provider: provider, assistantModel: assistantModel,
                                                       openAICovered: snapshot.openAICovered, sarvamCovered: snapshot.sarvamCovered,
                                                       providerKey: providerKey, assistantKey: assistantKey)

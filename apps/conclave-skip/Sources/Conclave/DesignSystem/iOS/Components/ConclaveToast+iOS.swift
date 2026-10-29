@@ -59,33 +59,35 @@ struct ConclaveToast: View {
     let item: ConclaveToastItem
     let identifier: String
     let onAction: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(spacing: 12) {
-            if item.hasAvatar {
-                ConclaveAvatar(name: item.avatarName, id: item.avatarId.isEmpty ? nil : item.avatarId, size: .mention)
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(spacing: 12))
+        layout {
+            HStack(spacing: 10) {
+                if item.hasAvatar {
+                    ConclaveAvatar(name: item.avatarName, id: item.avatarId.isEmpty ? nil : item.avatarId, size: .mention)
+                }
+                Text(item.message)
+                    .font(.subheadline)
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text(item.message)
-                .font(.subheadline)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
             if item.hasAction {
                 Button(item.actionTitle, action: onAction)
                     .buttonStyle(.borderless)
                     .font(.subheadline.weight(.semibold))
                     .tint(HostingTheme.inCallCoralText)
                     .frame(minHeight: ConclaveToastMetrics.actionTarget)
+                    .fixedSize(horizontal: true, vertical: false)
                     .accessibilityIdentifier(identifier + ".action")
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
-                    in: RoundedRectangle(cornerRadius: ConclaveToastMetrics.radius))
-        .overlay {
-            RoundedRectangle(cornerRadius: ConclaveToastMetrics.radius).strokeBorder(HostingTheme.inCallBorder, lineWidth: 1)
-        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
     }

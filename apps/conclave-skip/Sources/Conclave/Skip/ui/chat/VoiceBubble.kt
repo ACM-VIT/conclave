@@ -67,22 +67,24 @@ internal object VoiceCopyAndroid {
 internal fun ChatVoiceControl(row: ChatRowModel, presenter: ChatPresenter) {
     val isPlaying = presenter.playback.activeVoiceRowId == row.id
     val tint = LocalContentColor.current
+    val label = VoiceCopyAndroid.playTitle(isPlaying)
+    val status = VoiceCopyAndroid.header(isPlaying)
+    val hint = conclaveString("chat_voice_play_hint")
+    val controlTint = if (row.canPlayVoice) tint else tint.copy(alpha = 0.45f)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (row.canPlayVoice) {
-            val label = VoiceCopyAndroid.playTitle(isPlaying)
-            val hint = conclaveString("chat_voice_play_hint")
-            IconButton(
-                onClick = { if (isPlaying) presenter.stopVoice() else presenter.playVoice(row.id) },
-                modifier = Modifier.testTag("chat.row.${row.id}.voice").semantics {
-                    if (!isPlaying) stateDescription = hint
-                },
-            ) {
-                Icon(if (isPlaying) VoiceIcons.stop else VoiceIcons.play, contentDescription = label, tint = tint)
-            }
+        IconButton(
+            onClick = { if (isPlaying) presenter.stopVoice() else presenter.playVoice(row.id) },
+            enabled = row.canPlayVoice,
+            modifier = Modifier.size(48.dp).testTag("chat.row.${row.id}.voice").semantics {
+                stateDescription = if (isPlaying) status else hint
+            },
+        ) {
+            Icon(if (isPlaying) VoiceIcons.stop else VoiceIcons.play, contentDescription = label, tint = controlTint,
+                modifier = Modifier.size(24.dp))
         }
-        ConclaveText(VoiceCopyAndroid.header(isPlaying), line = "chat.row.${row.id}.voice.label",
-            style = MaterialTheme.typography.labelMedium, color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.clearAndSetSemantics { })
+        ConclaveText(conclaveString("chat_voice"), line = "chat.row.${row.id}.voice.label",
+            style = MaterialTheme.typography.labelMedium, color = tint, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false).clearAndSetSemantics { })
         Icon(VoiceIcons.speaking, contentDescription = null, tint = tint,
             modifier = Modifier.size(16.dp).clearAndSetSemantics { })
     }

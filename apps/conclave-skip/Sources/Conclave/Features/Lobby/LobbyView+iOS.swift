@@ -29,7 +29,9 @@ struct LobbyView: View {
         }
         .background(Color(uiColor: .systemGroupedBackground))
         .scrollDismissesKeyboard(.interactively)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { viewportSize = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: {
+            if viewportSize != $0 { viewportSize = $0 }
+        }
         .modifier(LobbyBottomBar(premeeting: premeeting, routeId: route.id))
         .modifier(LobbyTitle(premeeting: premeeting, route: route))
         .modifier(LobbyChrome(premeeting: premeeting, routeId: route.id))
@@ -186,28 +188,28 @@ private struct LobbyGuestNameSection: View {
     @State private var name = ""
 
     var body: some View {
-        LobbyGroupedSection {
-            LobbyGroupedRow {
-                HStack(spacing: 8) {
-                    ConclaveTextField(ConclaveStrings.text("Your Name"), text: $name, kind: .name, identifier: "lobby.name")
-                    ConclaveCharacterCounter(count: name.count, limit: identity.nameLimit,
-                                             visibleFrom: DisplayNamePolicy.counterThreshold,
-                                             identifier: "lobby.name.counter")
+        VStack(spacing: 20) {
+            LobbyGroupedSection {
+                LobbyGroupedRow {
+                    HStack(spacing: 8) {
+                        ConclaveTextField(ConclaveStrings.text("Your Name"), text: $name, kind: .name, identifier: "lobby.name")
+                        ConclaveCharacterCounter(count: name.count, limit: identity.nameLimit,
+                                                 visibleFrom: DisplayNamePolicy.counterThreshold,
+                                                 identifier: "lobby.name.counter")
+                    }
                 }
             }
-            LobbyGroupedDivider()
-            LobbyGroupedRow {
-                Button { premeeting.openAccount() } label: {
-                    Text(ConclaveStrings.text("Sign In"))
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity, minHeight: 48)
-                        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Capsule())
-                        .overlay { Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 1) }
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("lobby.signIn")
+            Button { premeeting.openAccount() } label: {
+                Text(ConclaveStrings.text("Sign In"))
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
+                    .overlay { Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 1) }
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("lobby.signIn")
+            .padding(.horizontal, 16)
         }
         .task(id: identity.routeId) {
             if name != identity.guestName {
@@ -259,22 +261,17 @@ private struct LobbyInviteCodeSection: View {
 private struct LobbyBottomBar: ViewModifier {
     let premeeting: PremeetingPresenter
     let routeId: Int
-    @State private var contentHeight: CGFloat = 0
 
     func body(content: Content) -> some View {
         let isEditing = premeeting.lobbyStatus?.routeId == routeId && premeeting.lobbyStatus?.mode == .editing
         content
-            .safeAreaPadding(.bottom, contentHeight)
-            .overlay(alignment: .bottom) {
+            .conclaveFloatingActionBar {
                 EntryStatusBlock(premeeting: premeeting, routeId: routeId)
                     .background {
                         if !isEditing { Color(uiColor: .systemGroupedBackground) }
                     }
                     .overlay(alignment: .top) {
                         if !isEditing { Divider() }
-                    }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                        if contentHeight != $0 { contentHeight = $0 }
                     }
             }
     }

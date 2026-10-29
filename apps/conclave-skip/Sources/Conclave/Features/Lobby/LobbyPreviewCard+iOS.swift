@@ -6,23 +6,25 @@ struct LobbyPreviewCard: View {
     let premeeting: PremeetingPresenter
     let isWide: Bool
     let visibleHeight: CGFloat
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var cardWidth: CGFloat = 0
     @State private var controlsHeight: CGFloat = 84
-    @ScaledMetric(relativeTo: .body) private var minimumVideoHeight: CGFloat = 200
+    private var isCompact: Bool { isWide || verticalSizeClass == .compact }
 
-    private func videoHeight(needsPermissionSpace: Bool) -> CGFloat {
-        let minimum = minimumVideoHeight * (needsPermissionSpace ? 1.4 : 1)
-        let ratio: CGFloat = isWide ? 9.0 / 16.0 : 10.0 / 16.0
+    private var videoHeight: CGFloat {
+        let minimum: CGFloat = isCompact ? 180 : 280
+        let maximum: CGFloat = isCompact ? 320 : 420
+        let ratio: CGFloat = isCompact ? 9.0 / 16.0 : 1
         let natural = max(cardWidth, 1) * ratio
-        let upper = max(minimum, visibleHeight * 0.40)
+        let upper = min(maximum, max(minimum, visibleHeight * (isCompact ? 0.75 : 0.58)))
         return min(max(natural, minimum), upper)
     }
 
     var body: some View {
         if let media = premeeting.lobbyMedia {
-            LobbyPreviewVideo(media: media, premeeting: premeeting, controlsInset: controlsHeight)
+            LobbyPreviewVideo(media: media, premeeting: premeeting, controlsInset: controlsHeight, compact: isCompact)
                 .frame(maxWidth: .infinity)
-                .frame(height: videoHeight(needsPermissionSpace: media.preview == .blocked))
+                .frame(height: videoHeight)
                 .background(HostingTheme.token(DesignTokens.iosInCallTile))
                 .overlay(alignment: .bottom) {
                     LobbyToggleStrip(media: media, premeeting: premeeting)
@@ -36,7 +38,9 @@ struct LobbyPreviewCard: View {
                     RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusTile), style: .continuous)
                         .strokeBorder(HostingTheme.inCallBorder, lineWidth: 1)
                 )
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { cardWidth = $0 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                    if cardWidth != $0 { cardWidth = $0 }
+                }
                 .entryTransitionAnchor(routeId: media.routeId)
                 .conclaveInCallRegion()
                 .accessibilityElement(children: .contain)
@@ -49,6 +53,7 @@ private struct LobbyPreviewVideo: View {
     let media: LobbyMediaSnapshot
     let premeeting: PremeetingPresenter
     let controlsInset: CGFloat
+    let compact: Bool
 
     private var showsSurface: Bool {
         media.preview == .live || media.preview == .interrupted || media.preview == .published
@@ -67,8 +72,8 @@ private struct LobbyPreviewVideo: View {
                 LocalPreviewSurface(sessionId: media.previewSessionId)
                     .id(media.previewSessionId)
                     .accessibilityIgnoresInvertColors()
-            } else if media.preview != .blocked {
-                LobbyCameraOffContent(media: media)
+            } else {
+                LobbyCameraOffContent(media: media, compact: compact)
                     .padding(.bottom, controlsInset)
             }
             if media.preview == .interrupted {
@@ -79,18 +84,9 @@ private struct LobbyPreviewVideo: View {
                     .padding(.vertical, 4)
                     .background(Capsule().fill(HostingTheme.inCallLabelScrim))
             }
-            if media.preview == .blocked {
-                PermissionPrimingCardOverlay(
-                    priming: PermissionPrimingPolicy.priming(permission: media.cameraPermission,
-                                                             canAskAgain: media.canAskAgainCamera,
-                                                             supportsRationale: PermissionPrimingPolicy.platformSupportsRationale,
-                                                             rationaleDismissed: false),
-                    onOpenSettings: { premeeting.openSystemSettings() })
-                    .padding(.bottom, controlsInset)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: media.preview == .blocked ? .contain : .ignore)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(ConclaveStrings.text("Your Preview"))
         .accessibilityValue(previewValue)
         .accessibilityIdentifier("lobby.preview")
@@ -124,6 +120,7 @@ private struct LobbyPreviewVideo: View {
 
 private struct LobbyCameraOffContent: View {
     let media: LobbyMediaSnapshot
+    let compact: Bool
     @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = 76
 
     private var caption: String {
@@ -133,10 +130,11 @@ private struct LobbyCameraOffContent: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
+        let layout = compact ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(spacing: 12))
+        layout {
             ConclaveAvatar(identity: ConclaveAvatarIdentity.make(name: media.avatarName,
                                                                  id: media.avatarSeed.isEmpty ? nil : media.avatarSeed),
-                           size: .lobby, diameter: min(max(avatarSize, 56), 120))
+                           size: .lobby, diameter: compact ? 56 : min(max(avatarSize, 56), 120))
             if media.preview == .starting {
                 ProgressView()
                     .tint(HostingTheme.token(DesignTokens.iosInCallText))

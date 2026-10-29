@@ -2,6 +2,7 @@ package conclave.module
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -42,6 +43,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -50,6 +53,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 internal data class ActivitiesKey(val route: ActivitiesRoute, val id: String) {
@@ -421,8 +425,17 @@ private fun GameSetupPage(activities: ActivitiesPresenter, gameId: String, reser
     LaunchedEffect(gameId) { activities.beginSetup(gameId) }
     val setup = activities.setup
     val scheme = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxSize().testTag("activities.setup")) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+    val density = LocalDensity.current
+    var startHeightPx by remember(gameId) { mutableIntStateOf(0) }
+    val hasSetup = setup != null && setup.gameId == gameId
+    val startClearance = if (hasSetup) {
+        if (startHeightPx > 0) with(density) { startHeightPx.toDp() } else 64.dp
+    } else 0.dp
+    Box(Modifier.fillMaxSize().testTag("activities.setup")) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(
+            top = reservation.calculateTopPadding(),
+            bottom = reservation.calculateBottomPadding() + startClearance + 8.dp,
+        )) {
             if (setup != null && setup.gameId == gameId) {
                 if (setup.detail.isNotEmpty()) {
                     item(key = "detail") {
@@ -443,31 +456,36 @@ private fun GameSetupPage(activities: ActivitiesPresenter, gameId: String, reser
                 item(key = "loading") { LoadingRow() }
             }
         }
-        if (setup != null) SetupStartBar(activities, setup, reservation)
+        if (setup != null && setup.gameId == gameId) {
+            SetupStartBar(activities, setup, modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(bottom = reservation.calculateBottomPadding()).onSizeChanged { size ->
+                    if (startHeightPx != size.height) startHeightPx = size.height
+                })
+        }
     }
 }
 
 @Composable
-private fun SetupStartBar(activities: ActivitiesPresenter, setup: GameSetupModel, reservation: PaddingValues) {
+private fun SetupStartBar(activities: ActivitiesPresenter, setup: GameSetupModel, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
     val starting = setup.phase == SetupPhase.starting || setup.phase == SetupPhase.slow
-    Column(Modifier.fillMaxWidth().padding(PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp))
-        .padding(bottom = reservation.calculateBottomPadding()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Button(
             onClick = { activities.startGame() },
             enabled = setup.canStart && !starting,
             colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("activities.setup.start"),
+            modifier = Modifier.heightIn(min = 48.dp).testTag("activities.setup.start"),
         ) {
             if (starting) {
                 CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onPrimaryContainer, strokeWidth = 2.dp)
                 Spacer(Modifier.size(8.dp))
             }
-            Text(activitiesStartTitle(setup))
+            Text(activitiesStartTitle(setup), textAlign = TextAlign.Center)
         }
         val footer = activitiesSetupFooter(setup)
         if (footer != null) {
-            Text(footer, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+            Text(footer, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, textAlign = TextAlign.Center,
                 modifier = Modifier.testTag("activities.setup.footer"))
         }
     }

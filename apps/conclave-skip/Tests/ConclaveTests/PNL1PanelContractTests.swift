@@ -190,7 +190,7 @@ struct PNL1PanelContractTests {
             (.chat, [.large], .large, .large),
             (.participants, [.medium, .large], .medium, .medium),
             (.transcript, [.large], .large, .large),
-            (.activities, [.medium, .large], .medium, .medium),
+            (.activities, [.medium, .large], .medium, .large),
             (.effects, [.short, .large], .short, .large),
             (.hostControls, [.medium, .large], .large, .large),
             (.settings, [.medium, .large], .large, .large),
@@ -207,7 +207,8 @@ struct PNL1PanelContractTests {
             for isAccessibilitySize in [false, true] {
                 let sheet = PanelPresentationPolicy.resolve(request(panel), window: Self.phonePortrait, platform: .iOS,
                                                             isAccessibilitySize: isAccessibilitySize)
-                #expect(sheet.detents == detents, "\(panel)")
+                let expectedDetents: [PanelDetent] = panel == .activities && isAccessibilitySize ? [.large] : detents
+                #expect(sheet.detents == expectedDetents, "\(panel)")
                 #expect(sheet.initialDetent == (isAccessibilitySize ? accessible : initial), "\(panel)")
                 #expect(sheet.detents.contains(sheet.initialDetent ?? .large), "\(panel)")
 
@@ -229,6 +230,57 @@ struct PNL1PanelContractTests {
         #expect(PanelPresentationPolicy.androidIsAccessibilitySize(fontScale: 1.5))
         #expect(PanelPresentationPolicy.androidIsAccessibilitySize(fontScale: 2.0))
         #expect(PanelPresentationPolicy.defaultShortDetentHeight == 222)
+    }
+
+    @Test func activitiesSheetReservesLargeDetentForAccessibilityAndShortWindows() {
+        for height in [390.0, 599.0, 600.0, 844.0] {
+            let window = PanelWindow(width: 390, height: height, horizontalRegular: false, verticalRegular: height >= 480)
+            for accessible in [false, true] {
+                let sheet = PanelPresentationPolicy.resolve(request(.activities), window: window, platform: .iOS,
+                                                            isAccessibilitySize: accessible)
+                let needsLarge = accessible || height < 600
+                #expect(sheet.style == .sheet && sheet.appearance == .system && !sheet.hasBottomComposer)
+                #expect(sheet.detents == (needsLarge ? [.large] : [.medium, .large]))
+                #expect(sheet.initialDetent == (needsLarge ? .large : .medium))
+                #expect(PanelPresentationPolicy.coverage(sheet, detent: nil) == (needsLarge ? .full : .partial))
+                #expect(PanelPresentationPolicy.coverage(sheet, detent: .medium) == (needsLarge ? .full : .partial))
+                #expect(PanelPresentationPolicy.stageInteractiveDetent(sheet) == (needsLarge ? nil : .medium))
+
+                let people = PanelPresentationPolicy.resolve(request(.participants), window: window, platform: .iOS,
+                                                             isAccessibilitySize: accessible)
+                #expect(people.detents == [.medium, .large] && people.initialDetent == .medium)
+                let android = PanelPresentationPolicy.resolve(request(.activities), window: window, platform: .android,
+                                                              isAccessibilitySize: accessible)
+                #expect(android.style == .overlay && android.detents.isEmpty && android.initialDetent == nil)
+            }
+        }
+    }
+
+    @Test func activitiesLargeDetentRuleDoesNotReplaceRegularPanes() {
+        let window = PanelWindow(width: 1180, height: 550, horizontalRegular: true, verticalRegular: true)
+        for accessible in [false, true] {
+            for platform in [PanelPlatform.iOS, .android] {
+                let pane = PanelPresentationPolicy.resolve(request(.activities), window: window, platform: platform,
+                                                           isAccessibilitySize: accessible)
+                #expect(pane.style == (platform == .iOS ? .inspector : .sidePane))
+                #expect(pane.detents.isEmpty && pane.initialDetent == nil && pane.paneWidth == 360)
+                #expect(PanelPresentationPolicy.coverage(pane, detent: nil) == .none)
+            }
+            let sheet = PanelPresentationPolicy.resolve(request(.activities), window: window, platform: .iOS,
+                                                        isAccessibilitySize: accessible, sideStylesEnabled: false)
+            #expect(sheet.style == .sheet && sheet.detents == [.large] && sheet.initialDetent == .large)
+        }
+    }
+
+    @Test func activitiesAccessibilityChangesReclassifyAnUnchangedMediumDetent() {
+        let adapterDetent = PanelDetent.medium
+        let changes: [(Bool, PanelStageCoverage)] = [(false, .partial), (true, .full), (false, .partial)]
+        for (accessible, expectedCoverage) in changes {
+            let sheet = PanelPresentationPolicy.resolve(request(.activities), window: Self.phonePortrait, platform: .iOS,
+                                                        isAccessibilitySize: accessible)
+            #expect(sheet.detents == (accessible ? [.large] : [.medium, .large]))
+            #expect(PanelPresentationPolicy.coverage(sheet, detent: adapterDetent) == expectedCoverage)
+        }
     }
 
     @Test func layoutAndEffectsAreInCallForEveryInvokerOnBothPlatforms() {
@@ -277,9 +329,10 @@ struct PNL1PanelContractTests {
         }
     }
 
-    @Test func adapterOpensLayoutAndEffectsLargeAtAccessibilitySizes() throws {
+    @Test func adapterOpensLayoutEffectsAndActivitiesLargeAtAccessibilitySizes() throws {
         let rows: [(MeetingPanel, PanelDetent, PanelDetent)] = [
-            (.effects, .short, .large), (.layout, .medium, .large), (.participants, .medium, .medium), (.settings, .large, .large),
+            (.effects, .short, .large), (.layout, .medium, .large), (.activities, .medium, .large),
+            (.participants, .medium, .medium), (.settings, .large, .large),
         ]
         for (panel, regular, accessible) in rows {
             let panels = PanelCoordinator(session: 1)
@@ -379,10 +432,10 @@ struct PNL1PanelContractTests {
     @Test func inCallPageCarriesTheOneTargetSignature() throws {
         let page = pnl1Normalized(try pnl1Source("Sources/Conclave/Skip/ui/call/panels/InCallPage.kt"))
 
-        #expect(page.contains("internal fun InCallPage( title: String, variant: InCallPageVariant, appearance: PanelAppearance = PanelAppearance.system, hasComposer: Boolean, miniTile: CallMiniTileModel?, onClose: () -> Unit, onMounted: () -> Unit, onDisposed: () -> Unit, miniTileVideo: (@Composable () -> Unit)? = null, composer: @Composable () -> Unit = {}, contentMode: InCallPageContent = InCallPageContent.scroll, snackbarHost: @Composable () -> Unit = {}, hideMiniTileWithIme: Boolean = false, isNested: Boolean = false, onBack: (() -> Unit)? = null, actions: @Composable RowScope.() -> Unit = {}, content: @Composable ColumnScope.(reservation: PaddingValues) -> Unit, )"))
+        #expect(page.contains("internal fun InCallPage( title: String, variant: InCallPageVariant, appearance: PanelAppearance = PanelAppearance.system, hasComposer: Boolean, miniTile: CallMiniTileModel?, onClose: () -> Unit, onMounted: () -> Unit, onDisposed: () -> Unit, miniTileVideo: (@Composable () -> Unit)? = null, composer: @Composable () -> Unit = {}, composerOverlaysContent: Boolean = false, contentMode: InCallPageContent = InCallPageContent.scroll, snackbarHost: @Composable () -> Unit = {}, hideMiniTileWithIme: Boolean = false, isNested: Boolean = false, onBack: (() -> Unit)? = null, actions: @Composable RowScope.() -> Unit = {}, content: @Composable ColumnScope.(reservation: PaddingValues) -> Unit, )"))
         #expect(page.contains("internal enum class InCallPageContent { scroll, lazyList }"))
 
-        #expect(page.contains("if (lazyList) { Column(Modifier.fillMaxSize().testTag(\"panel.body\")) { content(PaddingValues(top = reservation.top, bottom = reservation.bottom)) } } else {"))
+        #expect(page.contains("if (lazyList) { Column(Modifier.fillMaxSize().testTag(\"panel.body\")) { content(PaddingValues(top = reservation.top, bottom = reservation.bottom + composerClearance)) } } else {"))
         #expect(page.components(separatedBy: "verticalScroll(").count - 1 == 1)
         #expect(page.contains("content(PaddingValues(0.dp))"))
 

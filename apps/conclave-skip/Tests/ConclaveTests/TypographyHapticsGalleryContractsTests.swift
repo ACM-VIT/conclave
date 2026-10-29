@@ -514,7 +514,7 @@ struct TypographyHapticsGalleryContractsTests {
         let galleryFile = "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"
 
         let entries = Self.sanctionedGlassFiles
-        #expect(entries == [Self.callControlFile, Self.composerGlassFile, Self.lobbyMediaToggleFile, Self.entryStatusBlockFile])
+        #expect(entries == [Self.callControlFile, Self.composerGlassFile, Self.lobbyMediaToggleFile, Self.floatingActionBarFile])
         for entry in entries { #expect(files.contains(entry), "\(entry) is outside the scanned scope") }
         var glassFiles: [String] = []
         for file in files where !entries.contains(file) {
@@ -540,17 +540,27 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(glassFiles.isEmpty)
 
         for entry in entries {
-            let expectedSurface = entry == Self.entryStatusBlockFile ? ".buttonStyle(.glassProminent)" : ".glassEffect("
+            let expectedSurface = entry == Self.floatingActionBarFile ? ".buttonStyle(.glassProminent)" : ".glassEffect("
             #expect(try source(entry).contains(expectedSurface), "\(entry)")
         }
         let lobby = normalized(try source(Self.lobbyMediaToggleFile))
         #expect(lobby.contains("if #available(iOS 26.0, *), allowsGlass {"))
-        #expect(lobby.contains("return !reduceTransparency && contrast != .increased && !forceOpaque"))
-        #expect(lobby.contains("content(allowsGlass && !prefersReducedResourceUsage)"))
+        #expect(lobby.contains("ConclaveGlassAvailabilityReader { allowsGlass in"))
         #expect(lobby.components(separatedBy: ".glassEffect(").count - 1 == 1)
         #expect(lobby.contains("} else { ConclaveCallToggle(title: title, value: value, systemImage: systemImage, state: state,"))
         #expect(lobby.contains(".accessibilityLabel(title)") && lobby.contains(".accessibilityValue(value)"))
         #expect(lobby.contains(".accessibilityAddTraits(.isToggle)") && lobby.contains(".disabled(!isEnabled)"))
+        let floating = normalized(try source(Self.floatingActionBarFile))
+        #expect(floating.contains("return !reduceTransparency && contrast != .increased && !forceOpaque"))
+        #expect(floating.contains("if #available(iOS 27.0, *)") && floating.contains("@available(iOS 27.0, *)"))
+        #expect(floating.contains("content(allowsGlass && !prefersReducedResourceUsage)"))
+        #expect(floating.contains("if #available(iOS 26.0, *), allowsGlass {"))
+        #expect(floating.contains(".disabled(!isEnabled || isPending)"))
+        #expect(floating.contains("ConclaveButton(title, role: .primary, isEnabled: isEnabled, isPending: isPending, identifier: identifier, action: action)"))
+        #expect(floating.contains("reduceTransparency || contrast == .increased"))
+        #expect(floating.contains(".scrollEdgeEffectStyle(.soft, for: .bottom) .safeAreaBar(edge: .bottom, spacing: 0)"))
+        #expect(floating.contains("content.safeAreaInset(edge: .bottom, spacing: 0)"))
+        #expect(floating.contains("if needsOpaqueSurface { Color(uiColor: .systemBackground) } else { Rectangle().fill(.ultraThinMaterial)"))
     }
 
     @Test func labelCasingFollowsOwnerRule() throws {
@@ -801,8 +811,8 @@ struct TypographyHapticsGalleryContractsTests {
 
     static let composerGlassFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift"
     static let lobbyMediaToggleFile = "Sources/Conclave/Features/Lobby/LobbyMediaToggle+iOS.swift"
-    static let entryStatusBlockFile = "Sources/Conclave/Features/Lobby/EntryStatusBlock+iOS.swift"
-    static let sanctionedGlassFiles = [callControlFile, composerGlassFile, lobbyMediaToggleFile, entryStatusBlockFile]
+    static let floatingActionBarFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFloatingActionBar+iOS.swift"
+    static let sanctionedGlassFiles = [callControlFile, composerGlassFile, lobbyMediaToggleFile, floatingActionBarFile]
     static let iosComponentFiles = [
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveButtons+iOS.swift",
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveRows+iOS.swift",
@@ -847,7 +857,7 @@ struct TypographyHapticsGalleryContractsTests {
     ]
     static let glassBranchCondition = "if #available(iOS 26.0, *), !reduceTransparency, !forceOpaque {"
 
-    @Test func controlSurfaceShimIsTheOnlyGlassEntry() throws {
+    @Test func controlSurfaceShimKeepsItsGlassBranchesGuarded() throws {
         let glass = ["glassEffect", "GlassEffectContainer", "GlassStyle", "glassProminent", "ultraThinMaterial",
                      "thinMaterial", "regularMaterial", "thickMaterial", "ultraThickMaterial"]
         let galleryFile = "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"
@@ -858,7 +868,7 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(files.contains(Self.callControlFile) && files.contains(galleryFile))
         var entries: [String] = []
 
-        for file in files where file != Self.callControlFile && file != galleryFile && file != Self.composerGlassFile {
+        for file in files where !Self.sanctionedGlassFiles.contains(file) && file != galleryFile {
             let text = try source(file)
             if glass.contains(where: { text.contains($0) }) { entries.append(file) }
         }

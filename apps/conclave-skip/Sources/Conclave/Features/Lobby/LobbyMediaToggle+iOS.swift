@@ -16,7 +16,7 @@ struct LobbyMediaToggle: View {
     @ScaledMetric(relativeTo: .body) private var diameter: CGFloat = 52
 
     var body: some View {
-        LobbyGlassAvailabilityReader { allowsGlass in
+        ConclaveGlassAvailabilityReader { allowsGlass in
             controls(allowsGlass: allowsGlass)
         }
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
@@ -59,47 +59,4 @@ struct LobbyMediaToggle: View {
     }
 }
 
-struct LobbyGlassAvailabilityReader<Content: View>: View {
-    @ViewBuilder let content: (Bool) -> Content
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
-    #if DEBUG
-    @Environment(\.conclaveForceOpaqueControls) private var forceOpaqueSetting
-    #endif
-
-    private var forceOpaque: Bool {
-        #if DEBUG
-        return forceOpaqueSetting
-        #else
-        return false
-        #endif
-    }
-
-    private var allowsGlass: Bool {
-        if #available(iOS 26.0, *) {
-            return !reduceTransparency && contrast != .increased && !forceOpaque
-        }
-        return false
-    }
-
-    var body: some View {
-        if #available(iOS 27.0, *) {
-            LobbyReducedResourceReader { prefersReducedResourceUsage in
-                content(allowsGlass && !prefersReducedResourceUsage)
-            }
-        } else {
-            content(allowsGlass)
-        }
-    }
-}
-
-@available(iOS 27.0, *)
-private struct LobbyReducedResourceReader<Content: View>: View {
-    @Environment(\.systemPrefersReducedResourceUsage) private var prefersReducedResourceUsage
-    @ViewBuilder let content: (Bool) -> Content
-
-    var body: some View {
-        content(prefersReducedResourceUsage)
-    }
-}
 #endif

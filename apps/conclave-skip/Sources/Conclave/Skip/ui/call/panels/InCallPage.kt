@@ -32,13 +32,18 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
@@ -110,6 +115,7 @@ internal fun InCallPage(
     onDisposed: () -> Unit,
     miniTileVideo: (@Composable () -> Unit)? = null,
     composer: @Composable () -> Unit = {},
+    composerOverlaysContent: Boolean = false,
     contentMode: InCallPageContent = InCallPageContent.scroll,
     snackbarHost: @Composable () -> Unit = {},
     hideMiniTileWithIme: Boolean = false,
@@ -124,12 +130,18 @@ internal fun InCallPage(
     }
     val imeVisible = WindowInsets.isImeVisible
     val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
     val landscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val margin = if (configuration.screenWidthDp >= 600) 24.dp else 16.dp
     val titleFocus = remember { FocusRequester() }
     val tileVisible = inCallPageTileVisible(miniTile != null, variant, hasComposer, hideMiniTileWithIme, imeVisible)
     val lazyList = contentMode == InCallPageContent.lazyList
+    val floatingComposer = hasComposer && composerOverlaysContent
+    var composerHeightPx by remember { mutableIntStateOf(0) }
+    val composerClearance = if (floatingComposer) {
+        if (composerHeightPx > 0) with(density) { composerHeightPx.toDp() } else 64.dp
+    } else 0.dp
 
     LaunchedEffect(Unit) {
         if (variant != InCallPageVariant.Sheet) {
@@ -169,23 +181,21 @@ internal fun InCallPage(
             } else insets
 
             val tileClearance = if (tileVisible) miniTileReservationDp(landscape, true).dp else 0.dp
-            val reservation = inCallPageReservation(contentMode, landscape, false, hasComposer,
-                if (tileVisible) 0.dp else bottomInset)
+            val reservation = inCallPageReservation(contentMode, landscape, tileVisible && !hasComposer, hasComposer, bottomInset)
             Column(Modifier.fillMaxSize().padding(bodyPadding).consumeWindowInsets(insets)) {
                 Box(Modifier.weight(1f).fillMaxSize()) {
                     Box(Modifier.fillMaxSize().padding(
                         top = if (hasComposer) tileClearance else 0.dp,
-                        bottom = if (tileVisible && !hasComposer) tileClearance + bottomInset else 0.dp,
                     )) {
                         if (lazyList) {
                             Column(Modifier.fillMaxSize().testTag("panel.body")) {
-                                content(PaddingValues(top = reservation.top, bottom = reservation.bottom))
+                                content(PaddingValues(top = reservation.top, bottom = reservation.bottom + composerClearance))
                             }
                         } else {
                             Column(
                                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).testTag("panel.body")
                                     .padding(horizontal = margin)
-                                    .padding(top = reservation.top, bottom = reservation.bottom),
+                                    .padding(top = reservation.top, bottom = reservation.bottom + composerClearance),
                                 verticalArrangement = Arrangement.spacedBy(12.dp),
                             ) {
                                 content(PaddingValues(0.dp))
@@ -202,9 +212,14 @@ internal fun InCallPage(
                         )
                     }
 
-                    if (hasComposer) Box(Modifier.align(Alignment.BottomCenter)) { snackbarHost() }
+                    if (floatingComposer) {
+                        Box(Modifier.align(Alignment.BottomCenter).onSizeChanged { size ->
+                            if (composerHeightPx != size.height) composerHeightPx = size.height
+                        }.padding(horizontal = margin, vertical = 8.dp)) { composer() }
+                        Box(Modifier.align(Alignment.BottomCenter).padding(bottom = composerClearance)) { snackbarHost() }
+                    } else if (hasComposer) Box(Modifier.align(Alignment.BottomCenter)) { snackbarHost() }
                 }
-                if (hasComposer) Box(Modifier.padding(horizontal = margin, vertical = 8.dp)) { composer() }
+                if (hasComposer && !floatingComposer) Box(Modifier.padding(horizontal = margin, vertical = 8.dp)) { composer() }
             }
         }
     }

@@ -47,6 +47,7 @@ internal fun ConclaveMeetingCapsule(
     val scheme = MaterialTheme.colorScheme
     val lockedText = conclaveString("ds_locked")
     val state = if (locked) "$subtitle, $lockedText" else subtitle
+    val compact = maxWidth.value.isFinite() && maxWidth < 180.dp
     Surface(
         modifier = modifier.widthIn(max = maxWidth).heightIn(min = ConclaveChromeMetrics.HEIGHT_DP.dp).testTag(identifier)
             .clip(RoundedCornerShape(50))
@@ -57,13 +58,13 @@ internal fun ConclaveMeetingCapsule(
         contentColor = scheme.onSurface,
         border = BorderStroke(1.dp, ext.border),
     ) {
-        Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            if (live) Box(Modifier.size(8.dp).background(ext.live, CircleShape))
-            if (locked) Icon(ConclaveIcons.LockFill1, contentDescription = null, modifier = Modifier.size(20.dp), tint = scheme.onSurface)
+            if (live && !compact) Box(Modifier.size(8.dp).background(ext.live, CircleShape))
+            if (locked && !compact) Icon(ConclaveIcons.LockFill1, contentDescription = null, modifier = Modifier.size(20.dp), tint = scheme.onSurface)
             ConclaveText(title, line = "$identifier.title", style = MaterialTheme.typography.titleSmall, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            if (captionsOn) Icon(ConclaveIcons.ClosedCaptionFill1, contentDescription = null, modifier = Modifier.size(20.dp), tint = scheme.onSurface)
+            if (captionsOn && !compact) Icon(ConclaveIcons.ClosedCaptionFill1, contentDescription = null, modifier = Modifier.size(20.dp), tint = scheme.onSurface)
         }
     }
 }

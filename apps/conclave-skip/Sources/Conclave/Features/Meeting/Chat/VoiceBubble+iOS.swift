@@ -60,40 +60,49 @@ enum VoiceCopy {
 struct ChatVoiceControl: View {
     let row: ChatRowModel
     let chat: ChatPresenter
-    @ScaledMetric(relativeTo: .body) private var glyphSize: CGFloat = 28
+    @ScaledMetric(relativeTo: .body) private var glyphSize: CGFloat = 24
 
     var body: some View {
         let isPlaying = chat.playback.activeVoiceRowId == row.id
         HStack(spacing: CGFloat(DesignTokens.space4)) {
-            if row.canPlayVoice {
-                Button {
-                    if isPlaying {
-                        chat.stopVoice()
-                    } else {
-                        chat.playVoice(rowId: row.id)
-                    }
-                } label: {
-                    Image(systemName: isPlaying ? VoiceSymbols.stop : VoiceSymbols.play)
-                        .font(.body.weight(.semibold))
-                        .frame(width: min(glyphSize, 44), height: min(glyphSize, 44))
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
-                        .accessibilityHidden(true)
+            Button {
+                if isPlaying {
+                    chat.stopVoice()
+                } else {
+                    chat.playVoice(rowId: row.id)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(VoiceCopy.playTitle(isPlaying: isPlaying))
-                .accessibilityHint(isPlaying ? "" : VoiceCopy.playHint)
-                .accessibilityIdentifier("chat.row." + row.id + ".voice")
+            } label: {
+                ZStack {
+                    Image(systemName: VoiceSymbols.play).opacity(isPlaying ? 0 : 1)
+                    Image(systemName: VoiceSymbols.stop).opacity(isPlaying ? 1 : 0)
+                }
+                .font(.system(size: min(glyphSize, 28), weight: .semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+                .accessibilityHidden(true)
             }
-            Text(VoiceCopy.header(isPlaying: isPlaying))
+            .buttonStyle(.plain)
+            .fixedSize()
+            .disabled(!row.canPlayVoice)
+            .opacity(row.canPlayVoice ? 1 : 0.45)
+            .accessibilityLabel(VoiceCopy.playTitle(isPlaying: isPlaying))
+            .accessibilityValue(VoiceCopy.header(isPlaying: isPlaying))
+            .accessibilityHint(isPlaying ? "" : VoiceCopy.playHint)
+            .accessibilityIdentifier("chat.row." + row.id + ".voice")
+            Text(VoiceCopy.modeTitle)
                 .font(.caption.weight(.semibold))
-                .lineLimit(1)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityHidden(true)
             if VoiceSymbols.showsSpeakingMark {
                 Image(systemName: VoiceSymbols.speaking)
                     .font(.caption)
                     .accessibilityHidden(true)
             }
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
         }
         .accessibilityElement(children: .contain)
     }

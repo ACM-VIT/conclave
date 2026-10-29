@@ -138,8 +138,9 @@ struct FND2InCallChromeTests {
 
     @Test func darkSnackbarSlotUsesTheInCallRoles() throws {
         let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveToastHost.kt"))
-        #expect(android.contains("containerColor = scheme.surfaceContainerHigh, contentColor = scheme.onSurface, actionContentColor = scheme.primary,"))
-        #expect(android.contains("modifier = Modifier.border(1.dp, ext.border, shape)"))
+        #expect(android.contains("color = scheme.surfaceContainerHigh, contentColor = scheme.onSurface,"))
+        #expect(android.contains("ConclaveText(toast.actionTitle, line = \"$identifier.action\", color = MaterialTheme.colorScheme.primary)"))
+        #expect(!android.contains("Modifier.border("), "the elevated stage toast has no enclosing outline")
         #expect(android.contains("Snackbar(data, shape = MaterialTheme.shapes.small)"), "in-page snackbars stay stock")
         #expect(!android.contains("textAllCaps") && !android.contains("uppercase"))
 

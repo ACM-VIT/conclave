@@ -41,8 +41,8 @@ private struct EntryEditingBlock: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            LobbyPrimaryButton(title: LobbyPrimaryCopy.title(status.intent), isEnabled: status.isPrimaryEnabled,
-                               isPending: status.isPrimaryPending) {
+            ConclaveFloatingActionButton(title: LobbyPrimaryCopy.title(status.intent), isEnabled: status.isPrimaryEnabled,
+                                         isPending: status.isPrimaryPending, identifier: "lobby.primary") {
                 premeeting.startOrJoin()
             }
             .frame(maxWidth: .infinity)
@@ -52,44 +52,6 @@ private struct EntryEditingBlock: View {
                     .foregroundStyle(HostingTheme.secondaryText)
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier("lobby.primary.reason")
-            }
-        }
-    }
-}
-
-private struct LobbyPrimaryButton: View {
-    let title: String
-    let isEnabled: Bool
-    let isPending: Bool
-    let action: () -> Void
-
-    var body: some View {
-        LobbyGlassAvailabilityReader { allowsGlass in
-            if #available(iOS 26.0, *), allowsGlass {
-                Button(action: action) {
-                    HStack(spacing: 8) {
-                        if isPending {
-                            ProgressView()
-                                .tint(HostingTheme.onCoral)
-                                .accessibilityHidden(true)
-                        }
-                        Text(title)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .foregroundStyle(HostingTheme.onCoral)
-                }
-                .buttonStyle(.glassProminent)
-                .buttonBorderShape(.capsule)
-                .controlSize(.large)
-                .tint(HostingTheme.coralFill)
-                .disabled(!isEnabled || isPending)
-                .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)
-                .accessibilityValue(isPending ? ConclaveStrings.text("In Progress") : "")
-                .accessibilityIdentifier("lobby.primary")
-            } else {
-                ConclaveButton(title, role: .primary, isEnabled: isEnabled, isPending: isPending,
-                               identifier: "lobby.primary", action: action)
             }
         }
     }

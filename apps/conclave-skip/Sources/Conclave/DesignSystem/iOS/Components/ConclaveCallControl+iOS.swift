@@ -612,15 +612,16 @@ struct ConclaveMeetingCapsule: View {
     }
 
     var body: some View {
+        let compact = (maxWidth ?? .infinity) < 180
         Button(action: action) {
             HStack(spacing: 8) {
-                if isLive {
+                if isLive && !compact {
                     Circle()
                         .fill(HostingTheme.token(DesignTokens.iosInCallLive))
                         .frame(width: 8, height: 8)
                         .accessibilityHidden(true)
                 }
-                if isLocked {
+                if isLocked && !compact {
                     Image(systemName: ConclaveSymbols.lockFill)
                         .font(.subheadline)
                         .accessibilityHidden(true)
@@ -629,7 +630,7 @@ struct ConclaveMeetingCapsule: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if captionsOn {
+                if captionsOn && !compact {
                     Image(systemName: ConclaveSymbols.captionsBubbleFill)
                         .font(.subheadline)
                         .accessibilityHidden(true)
@@ -640,10 +641,10 @@ struct ConclaveMeetingCapsule: View {
             }
             .padding(.horizontal, 12)
             .frame(minHeight: ConclaveChromeMetrics.height)
-            .frame(maxWidth: maxWidth, alignment: .leading)
             .contentShape(Capsule())
         }
         .buttonStyle(ConclaveChromeButtonStyle(shape: .capsule, context: context))
+        .frame(maxWidth: maxWidth, alignment: .leading)
         .accessibilityLabel(title)
         .accessibilityValue(value)
         .accessibilityShowsLargeContentViewer {

@@ -54,6 +54,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,7 +92,8 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
                     Column(Modifier.weight(1f).widthIn(max = 560.dp).verticalScroll(rememberScrollState()).padding(bottom = actionClearance)) {
-                        LobbyCardSlot(premeeting, routeId, cache, wide = true, modifier = Modifier.padding(vertical = 12.dp))
+                        LobbyCardSlot(premeeting, routeId, cache, wide = true, visibleHeight = maxHeight,
+                            modifier = Modifier.padding(vertical = 12.dp))
                     }
                     Column(
                         modifier = Modifier.width(360.dp).verticalScroll(rememberScrollState()).padding(bottom = actionClearance),
@@ -105,7 +107,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                     modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = actionClearance),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    LobbyCardSlot(premeeting, routeId, cache, wide = false,
+                    LobbyCardSlot(premeeting, routeId, cache, wide = false, visibleHeight = maxHeight,
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp))
                     LobbyControls(premeeting, routeId, snackbarHostState)
                 }
@@ -115,7 +117,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
 }
 
 @Composable
-private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache, wide: Boolean, modifier: Modifier) {
+private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache, wide: Boolean, visibleHeight: Dp, modifier: Modifier) {
     val media = premeeting.lobbyMedia?.takeIf { it.routeId == routeId } ?: return
     val card = cache.card(media)
     val anchors = LocalEntryTransitionAnchors.current
@@ -125,6 +127,7 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
         LobbyPreviewCard(
             card = card,
             wide = wide,
+            visibleHeight = visibleHeight,
             onMic = { premeeting.setMicIntent(it) },
             onCamera = { premeeting.setCameraIntent(it) },
             onFlip = { premeeting.flipCamera() },
@@ -132,7 +135,6 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
                 premeeting.openEffects()
                 if (media.showsEffects) showsEffectsSheet = true
             },
-            onOpenSettings = { premeeting.openSystemSettings() },
             modifier = modifier.entryTransitionAnchor(anchors, routeId),
         )
         if (showsEffectsSheet) {
@@ -322,7 +324,7 @@ private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
         }
         OutlinedButton(
             onClick = { premeeting.openAccount() },
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth()
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp).fillMaxWidth()
                 .heightIn(min = 50.dp).testTag("lobby.signIn"),
             shape = CircleShape,
             colors = ButtonDefaults.outlinedButtonColors(contentColor = scheme.onSurface),

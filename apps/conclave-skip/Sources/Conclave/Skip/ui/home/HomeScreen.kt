@@ -2,7 +2,6 @@ package conclave.module
 
 import androidx.compose.foundation.layout.size
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -33,7 +32,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -252,25 +250,21 @@ private fun RejoinCardItem(card: RejoinCard, onRejoin: () -> Unit) {
         conclaveString("pm_left_at", card.endedAtText)
     }
     val rejoinLabel = conclaveString("pm_rejoin_named", card.title)
-    OutlinedCard(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("home.rejoin.card"),
-        border = BorderStroke(1.dp, scheme.outlineVariant),
-    ) {
-        ListItem(
-            headlineContent = { Text(card.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-            supportingContent = { Text(subtitle) },
-            trailingContent = {
-                FilledTonalButton(
-                    onClick = onRejoin,
-                    modifier = Modifier.heightIn(min = 48.dp).testTag("home.rejoin")
-                        .semantics { this.contentDescription = rejoinLabel },
-                ) {
-                    Text(conclaveString("pm_rejoin"))
-                }
-            },
-            colors = ListItemDefaults.colors(containerColor = scheme.surface),
-        )
-    }
+    ListItem(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).testTag("home.rejoin.card"),
+        headlineContent = { Text(card.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        supportingContent = { Text(subtitle) },
+        trailingContent = {
+            FilledTonalButton(
+                onClick = onRejoin,
+                modifier = Modifier.heightIn(min = 48.dp).testTag("home.rejoin")
+                    .semantics { this.contentDescription = rejoinLabel },
+            ) {
+                Text(conclaveString("pm_rejoin"))
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = scheme.surface),
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

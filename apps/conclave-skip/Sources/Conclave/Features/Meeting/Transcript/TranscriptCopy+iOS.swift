@@ -26,8 +26,8 @@ enum TranscriptCopy {
 
     static func startTitle(_ kind: TranscriptStartKind) -> String {
         switch kind {
-        case .start: return ConclaveStrings.text("Turn On Live Notes")
-        case .takeover: return ConclaveStrings.text("Pick Up the Live Notes")
+        case .start: return ConclaveStrings.text("Capture the conversation")
+        case .takeover: return ConclaveStrings.text("Continue the transcript")
         }
     }
 
@@ -40,14 +40,14 @@ enum TranscriptCopy {
 
     static func blurb(_ blurb: TranscriptBlurb) -> String {
         switch blurb {
-        case .turnOn: return ConclaveStrings.text("Transcribe the room, ask it questions, and get minutes as the meeting happens.")
-        case .takeoverCovered: return ConclaveStrings.text("The last host stepped away. Resume it with Conclave\u{2019}s shared key.")
-        case .takeoverBringKey: return ConclaveStrings.text("The last host stepped away. Bring your key to keep the room transcribed.")
-        case .viewOnly: return ConclaveStrings.text("Follow the live transcript and minutes once someone with controls turns them on.")
+        case .turnOn: return ConclaveStrings.text("Live transcript, answers, and meeting notes.")
+        case .takeoverCovered: return ConclaveStrings.text("Resume with Conclave\u{2019}s shared key.")
+        case .takeoverBringKey: return ConclaveStrings.text("Add your key to continue.")
+        case .viewOnly: return ConclaveStrings.text("The transcript will appear when the host starts it.")
         }
     }
 
-    static var options: String { ConclaveStrings.text("Options") }
+    static var options: String { ConclaveStrings.text("Advanced") }
     static var provider: String { ConclaveStrings.text("Provider") }
     static var assistant: String { ConclaveStrings.text("Assistant") }
 
@@ -65,8 +65,8 @@ enum TranscriptCopy {
         switch coverage {
         case .unknown: return ConclaveStrings.text("Checking key coverage")
         case .covered: return ConclaveStrings.text("Covered by Conclave. No key needed.")
-        case .sarvamNeedsOpenAI: return ConclaveStrings.text("Sarvam is covered. Add an OpenAI key for Ask and Minutes.")
-        case .needsKeys: return ConclaveStrings.text("Keys are used only for this session and are never stored.")
+        case .sarvamNeedsOpenAI: return ConclaveStrings.text("Add an OpenAI key for answers and notes.")
+        case .needsKeys: return ConclaveStrings.text("Your key is only used for this meeting.")
         }
     }
 

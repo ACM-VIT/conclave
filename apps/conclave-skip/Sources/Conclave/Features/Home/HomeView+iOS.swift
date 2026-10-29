@@ -49,6 +49,9 @@ struct HomeView: View {
             if let card = home.rejoin {
                 Section {
                     RejoinCardRow(card: card, onRejoin: { premeeting.rejoin() })
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                 }
             }
             if !home.recents.isEmpty {

@@ -58,8 +58,6 @@ struct StageChromeLayer: View {
                     .accessibilitySortPriority(6)
                 StageStatusChips(stage: stage)
                     .accessibilitySortPriority(5)
-                StageSoloLayer(stage: stage, chrome: chrome)
-                    .accessibilitySortPriority(3)
             }
             .padding(.horizontal, CGFloat(DesignTokens.space12))
             .padding(.top, CGFloat(DesignTokens.space12))
@@ -222,7 +220,6 @@ struct StageStatusChips: View {
         HStack(spacing: CGFloat(DesignTokens.space8)) {
             StageHandChip(stage: stage)
             StageNowPlayingChip(stage: stage)
-            StageShareInviteChip(stage: stage)
         }
     }
 }
@@ -272,42 +269,6 @@ struct StageNowPlayingChip: View {
         case "app": return ConclaveSymbols.squareGrid2x2
         case "browser": return ConclaveSymbols.globe
         default: return ConclaveSymbols.gamecontrollerFill
-        }
-    }
-}
-
-struct StageShareInviteChip: View {
-    let stage: StagePresenter
-
-    var body: some View {
-        let layout = stage.layout
-        if layout.kind == .solo && layout.isAloneConfirmed, let localId = layout.slots.first?.userId,
-           let url = URL(string: layout.meetingLink), !layout.meetingLink.isEmpty {
-            StageShareInviteChipGate(entry: stage.tileChrome.entry(for: localId), url: url, roomLabel: stage.capsule.title)
-        }
-    }
-}
-
-private struct StageShareInviteChipGate: View {
-    let entry: TileChromeEntry
-    let url: URL
-    let roomLabel: String
-
-    var body: some View {
-        if !entry.model.isCameraOff {
-            ShareLink(item: url, subject: Text(ConclaveStrings.text("Join My Conclave Meeting")),
-                      message: Text(ConclaveStrings.text("Join me in this Conclave meeting.")),
-                      preview: SharePreview(Text(roomLabel))) {
-                Label(ConclaveStrings.text("Share Invite"), systemImage: ConclaveSymbols.squareAndArrowUp)
-                    .font(.subheadline)
-                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: ConclaveStageChipMetrics.targetHeight)
-                    .background(HostingTheme.inCallLabelScrim, in: Capsule())
-                    .overlay { Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
-            }
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            .accessibilityIdentifier("stage.chip.shareInvite")
         }
     }
 }
