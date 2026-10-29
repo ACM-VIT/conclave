@@ -22,7 +22,7 @@ struct DebugViewerProfileTests {
     @Test func missingMetadataRetainsOrdinaryDebugRoutesAndLocalSimulatorDefault() {
         let profile = NativeRuntimeConfig.isDebugViewerProfileEnabled(configuredValue: nil, debugEligible: true)
         let flags = makeFlags(profile: profile)
-        #expect(flags.enabledKeys.isEmpty)
+        #expect(flags.enabledKeys == [.premeeting, .call])
         #expect(flags.premeetingFixture.isEmpty)
         #expect(!flags.suppressesProductionLifecycle)
         #expect(SfuJoinService.resolveDebugJoinURL(
@@ -47,11 +47,11 @@ struct DebugViewerProfileTests {
         }
     }
 
-    @Test func releaseEligibilityIgnoresEnabledMetadataAndRouteDefaults() {
+    @Test func releaseEligibilityIgnoresViewerMetadataAndKeepsProductionRoutes() {
         let profile = NativeRuntimeConfig.isDebugViewerProfileEnabled(configuredValue: "true", debugEligible: false)
         let flags = makeFlags(profile: profile, debugEligible: false)
         #expect(!profile)
-        #expect(flags.enabledKeys.isEmpty)
+        #expect(flags.enabledKeys == [.premeeting, .call])
         #expect(flags.premeetingFixture.isEmpty)
         #expect(SfuJoinService.configuredProductionJoinURL(from: localJoin) == nil)
         #expect(SfuJoinService.configuredProductionJoinURL(from: productionJoin)?.absoluteString == productionJoin)
@@ -135,7 +135,7 @@ struct DebugViewerProfileTests {
     #endif
 
     private func makeFlags(profile: Bool, routes: String? = nil, fixture: String? = nil, debugEligible: Bool = true) -> NativeRouteFlags {
-        let flags = NativeRouteFlags()
+        let flags = NativeRouteFlags(nativeUIAvailable: true)
         flags.configure(
             routes: NativeRuntimeConfig.debugViewerRoutes(explicitValue: routes, premeetingFixture: fixture, profileEnabled: profile),
             premeetingFixture: fixture,

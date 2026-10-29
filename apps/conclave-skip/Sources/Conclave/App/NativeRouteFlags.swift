@@ -13,7 +13,16 @@ final class NativeRouteFlags {
     static let premeetingFixtureEnvironmentKey = "CONCLAVE_PREMEETING_FIXTURE"
     static let premeetingFixtureExtraKey = "conclave.premeetingFixture"
 
-    private(set) var enabledKeys: [NativeRouteKey] = []
+    static var nativeUIAvailable: Bool {
+        #if os(iOS) || SKIP
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    private let productionKeys: [NativeRouteKey]
+    private(set) var enabledKeys: [NativeRouteKey]
 
     private(set) var premeetingFixture: String = ""
     private var fixtureSelectorPresented = false
@@ -32,17 +41,24 @@ final class NativeRouteFlags {
         hostingPreviewPresented = false
     }
 
-    init() {
+    init(nativeUIAvailable: Bool = NativeRouteFlags.nativeUIAvailable) {
+        productionKeys = nativeUIAvailable ? [.premeeting, .call] : []
+        enabledKeys = productionKeys
     }
 
     func configure(routes: String?, premeetingFixture: String?, debugEligible: Bool) {
-        guard debugEligible else { return }
-        enabledKeys = NativeRouteFlags.parse(routes)
+        guard debugEligible else {
+            reset()
+            return
+        }
         self.premeetingFixture = (premeetingFixture ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        enabledKeys = routes == nil && self.premeetingFixture.isEmpty
+            ? productionKeys
+            : NativeRouteFlags.parse(routes)
     }
 
     func reset() {
-        enabledKeys = []
+        enabledKeys = productionKeys
         premeetingFixture = ""
         fixtureSelectorPresented = false
         hostingPreviewPresented = false

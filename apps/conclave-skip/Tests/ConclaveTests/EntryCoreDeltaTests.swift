@@ -33,7 +33,7 @@ struct EntryCoreDeltaTests {
         #expect(presenter.path.map { $0.roomId } == ["lily-zoro-iris"])
     }
 
-    @Test func theNativeRootsStayBehindTheDebugFlagsAndTheLegacyRootStaysTheDefault() throws {
+    @Test func nativeRootSelectionKeepsFixturesBehindDebugGates() throws {
         let app = try entrySource("Sources/Conclave/ConclaveApp.swift")
 
         #expect(app.components(separatedBy: ".conclaveRootFeedback(shell: MeetingViewModel.shared.shell)").count - 1 == 1)
@@ -51,7 +51,7 @@ struct EntryCoreDeltaTests {
         #expect(app.contains("MeetingViewModel.shared.setPremeetingAppActive(false)"))
 
         let flags = try entrySource("Sources/Conclave/App/NativeRouteFlags.swift")
-        #expect(entryFlat(flags).contains("func configure(routes: String?, premeetingFixture: String?, debugEligible: Bool) { guard debugEligible else { return }"))
+        #expect(entryFlat(flags).contains("guard debugEligible else { reset() return }"))
         #expect(entryFlat(flags).contains("func configureFromLaunchEnvironment() { #if DEBUG && !SKIP"))
 
         let main = try entrySource("Android/app/src/main/kotlin/Main.kt")

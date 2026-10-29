@@ -85,7 +85,8 @@ struct NativeRootFeedbackIntegrationTests {
     }
 
     @Test func callDeliveryRequiresBothProductionNativeRoutes() {
-        let routes = NativeRouteFlags()
+        let routes = NativeRouteFlags(nativeUIAvailable: true)
+        #expect(NativeCallFeedbackSource.isEnabled(routes: routes))
         for value in ["", "call", "premeeting", "unknown"] {
             routes.configure(routes: value, premeetingFixture: nil, debugEligible: true)
             #expect(!NativeCallFeedbackSource.isEnabled(routes: routes))
@@ -94,7 +95,7 @@ struct NativeRootFeedbackIntegrationTests {
         #expect(NativeCallFeedbackSource.isEnabled(routes: routes))
         routes.reset()
         routes.configure(routes: "call,premeeting", premeetingFixture: nil, debugEligible: false)
-        #expect(!NativeCallFeedbackSource.isEnabled(routes: routes))
+        #expect(NativeCallFeedbackSource.isEnabled(routes: routes))
     }
 
     @Test func productionSelectionKeepsIndependentPublishersAndShellUntouched() throws {

@@ -181,15 +181,39 @@ class EntryPoliciesBridgeTests {
         assertEquals(RecentRole.host, second[0].role)
     }
 
-    @Test fun routeRegistryIgnoresReleaseAndParsesKeys() {
+    @Test fun routeRegistryIgnoresReleaseOverridesAndParsesKeys() {
         assertEquals(listOf(NativeRouteKey.premeeting, NativeRouteKey.call), NativeRouteFlags.parse(" Call , premeeting,bogus").toList())
         val flags = NativeRouteFlags()
         flags.configure(routes = "premeeting", premeetingFixture = "home", debugEligible = false)
-        assertFalse(flags.isEnabled(NativeRouteKey.premeeting))
-        assertFalse(flags.routesPremeetingNatively)
+        assertTrue(flags.isEnabled(NativeRouteKey.premeeting))
+        assertTrue(flags.isEnabled(NativeRouteKey.call))
+        assertTrue(flags.routesPremeetingNatively)
+        assertEquals("", flags.premeetingFixture)
         flags.configure(routes = "premeeting", premeetingFixture = null, debugEligible = true)
         assertTrue(flags.isEnabled(NativeRouteKey.premeeting))
         assertEquals("conclave.nativeRoutes", NativeRouteLaunch.ROUTES_EXTRA)
         assertEquals("conclave.premeetingFixture", NativeRouteLaunch.PREMEETING_FIXTURE_EXTRA)
+    }
+
+    @Test fun ordinaryAndroidLaunchUsesNativeRootsWithoutExtras() {
+        val flags = NativeRouteFlags()
+        assertEquals(listOf(NativeRouteKey.premeeting, NativeRouteKey.call), flags.enabledKeys.toList())
+        assertTrue(flags.routesPremeetingNatively)
+        assertFalse(flags.suppressesProductionLifecycle)
+        flags.configure(routes = null, premeetingFixture = null, debugEligible = true)
+        assertEquals(listOf(NativeRouteKey.premeeting, NativeRouteKey.call), flags.enabledKeys.toList())
+    }
+
+    @Test fun releaseRestoresProductionAfterDebugOverridesAndRejectsFixtures() {
+        val flags = NativeRouteFlags()
+        flags.configure(routes = "none", premeetingFixture = "home", debugEligible = true)
+        flags.configureFixturePresentation(selectorPresented = true, hostingPreviewPresented = true, debugEligible = true)
+        flags.configure(routes = "none", premeetingFixture = "home", debugEligible = false)
+        assertEquals(listOf(NativeRouteKey.premeeting, NativeRouteKey.call), flags.enabledKeys.toList())
+        assertEquals("", flags.premeetingFixture)
+        assertFalse(flags.suppressesProductionLifecycle)
+        flags.configure(routes = "premeeting", premeetingFixture = null, debugEligible = true)
+        flags.reset()
+        assertEquals(listOf(NativeRouteKey.premeeting, NativeRouteKey.call), flags.enabledKeys.toList())
     }
 }

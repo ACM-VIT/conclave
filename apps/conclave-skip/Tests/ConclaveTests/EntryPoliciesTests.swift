@@ -231,15 +231,16 @@ struct EntryPoliciesTests {
         #expect(stayed.path.map { $0.roomId } == ["lily-zoro-iris"], "Stay consumes the link")
     }
 
-    @Test func theRouteRegistryParsesKeysAndReleaseIgnoresIt() {
+    @Test func theRouteRegistryParsesKeysAndReleaseIgnoresOverrides() {
         #expect(NativeRouteFlags.parse("premeeting") == [.premeeting])
         #expect(NativeRouteFlags.parse(" Call , premeeting,premeeting, bogus,,") == [.premeeting, .call])
         #expect(NativeRouteFlags.parse(nil).isEmpty)
         #expect(NativeRouteFlags.parse("").isEmpty)
-        let flags = NativeRouteFlags()
+        let flags = NativeRouteFlags(nativeUIAvailable: true)
         flags.configure(routes: "premeeting,call", premeetingFixture: "home", debugEligible: false)
-        #expect(!flags.isEnabled(.premeeting) && !flags.isEnabled(.call), "Release ignores the registry")
-        #expect(!flags.routesPremeetingNatively)
+        #expect(flags.isEnabled(.premeeting) && flags.isEnabled(.call))
+        #expect(flags.routesPremeetingNatively)
+        #expect(flags.premeetingFixture.isEmpty)
         flags.configure(routes: "premeeting", premeetingFixture: nil, debugEligible: true)
         #expect(flags.isEnabled(.premeeting) && !flags.isEnabled(.call))
         #expect(flags.routesPremeetingNatively)
@@ -249,11 +250,40 @@ struct EntryPoliciesTests {
         flags.configure(routes: nil, premeetingFixture: "not-a-state", debugEligible: true)
         #expect(!flags.routesPremeetingNatively)
         flags.reset()
-        #expect(flags.enabledKeys.isEmpty && flags.premeetingFixture.isEmpty)
+        #expect(flags.enabledKeys == [.premeeting, .call] && flags.premeetingFixture.isEmpty)
         #expect(NativeRouteFlags.routesEnvironmentKey == "CONCLAVE_NATIVE_ROUTES")
         #expect(NativeRouteFlags.premeetingFixtureEnvironmentKey == "CONCLAVE_PREMEETING_FIXTURE")
         #expect(NativeRouteFlags.routesExtraKey == "conclave.nativeRoutes")
         #expect(NativeRouteFlags.premeetingFixtureExtraKey == "conclave.premeetingFixture")
+    }
+
+    @Test func ordinaryMobileLaunchUsesBothNativeRootsWithoutConfiguration() {
+        let flags = NativeRouteFlags(nativeUIAvailable: true)
+        #expect(flags.enabledKeys == [.premeeting, .call])
+        #expect(flags.routesPremeetingNatively)
+        #expect(flags.premeetingFixture.isEmpty)
+        #expect(!flags.suppressesProductionLifecycle)
+        flags.configure(routes: nil, premeetingFixture: nil, debugEligible: true)
+        #expect(flags.enabledKeys == [.premeeting, .call])
+    }
+
+    @Test(arguments: ["", "none", "premeeting", "call"])
+    func releaseLaunchRestoresNativeRootsAndRejectsFixtureOverrides(routes: String) {
+        let flags = NativeRouteFlags(nativeUIAvailable: true)
+        flags.configure(routes: routes, premeetingFixture: "home", debugEligible: true)
+        flags.configureFixturePresentation(selectorPresented: true, hostingPreviewPresented: true, debugEligible: true)
+        flags.configure(routes: routes, premeetingFixture: "home", debugEligible: false)
+        #expect(flags.enabledKeys == [.premeeting, .call])
+        #expect(flags.premeetingFixture.isEmpty)
+        #expect(!flags.suppressesProductionLifecycle)
+    }
+
+    @Test func legacyOnlyHostsKeepTheirEntryScreen() {
+        let flags = NativeRouteFlags(nativeUIAvailable: false)
+        #expect(!flags.routesPremeetingNatively)
+        flags.configure(routes: "premeeting,call", premeetingFixture: "home", debugEligible: false)
+        #expect(flags.enabledKeys.isEmpty)
+        #expect(flags.premeetingFixture.isEmpty)
     }
 }
 #endif
