@@ -33,6 +33,33 @@ struct FixtureLifecycleTests {
         #expect(!NativeFixtureLaunch.androidSelector(system: nil, stage: nil, people: nil, premeeting: nil))
     }
 
+    @Test func iosPeopleRootsAndLifecycleUseTheSameSelection() {
+        for raw in PeopleFixtureState.allCases.map({ $0.rawValue }) + PeopleWebinarFixtureState.allCases.map({ $0.rawValue }) + ["unknown", ""] {
+            let displayed = NativeFixtureLaunch.iOSPeopleState(raw) != nil
+            let selected = NativeFixtureLaunch.iOSSelector(system: nil, stage: nil, people: raw, premeeting: nil)
+            #expect(selected == displayed)
+            if NativeFixtureLaunch.iOSPeopleQaState(raw) != nil {
+                #expect(displayed && NativeFixtureLaunch.iOSPeopleState(raw) == .guest4)
+            }
+        }
+    }
+
+    @Test func qaFixtureSuppressesResumeAcrossBackgroundAndForeground() {
+        let selected = NativeFixtureLaunch.iOSSelector(system: nil, stage: nil, people: " qa-attendee-5 ", premeeting: nil)
+        #expect(selected)
+        let flags = NativeRouteFlags()
+        flags.configureFixturePresentation(selectorPresented: selected, hostingPreviewPresented: false, debugEligible: true)
+        var gate = ConclaveAppLifecycleGate()
+        for phase in [ConclaveAppLifecyclePhase.active, .inactive, .background, .active] {
+            let delivered = gate.record(phase, fixturePresented: flags.suppressesProductionLifecycle)
+            #expect(!delivered)
+        }
+        let resumed = gate.resumeAfterFixture(fixturePresented: flags.suppressesProductionLifecycle)
+        #expect(!resumed)
+        flags.configureFixturePresentation(selectorPresented: selected, hostingPreviewPresented: false, debugEligible: false)
+        #expect(!flags.suppressesProductionLifecycle)
+    }
+
     @Test func routeFlagsAloneAndReleaseEligibilityNeverSuppressProduction() {
         let flags = NativeRouteFlags()
         flags.configure(routes: "premeeting,call", premeetingFixture: nil, debugEligible: true)

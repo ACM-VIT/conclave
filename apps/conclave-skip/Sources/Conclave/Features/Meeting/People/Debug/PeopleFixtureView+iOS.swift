@@ -3,17 +3,11 @@ import SwiftUI
 
 enum PeopleFixtureLaunch {
     static func state(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> PeopleFixtureState? {
-        guard let raw = environment["CONCLAVE_PEOPLE_FIXTURE"] else { return nil }
-        if let state = PeopleFixtureScript.state(named: raw) { return state }
-
-        guard let qa = qaState(environment: environment) else { return nil }
-        return PeopleWebinarFixtureScript.baseState(qa)
+        NativeFixtureLaunch.iOSPeopleState(environment["CONCLAVE_PEOPLE_FIXTURE"])
     }
 
     static func qaState(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> PeopleWebinarFixtureState? {
-        guard let raw = environment["CONCLAVE_PEOPLE_FIXTURE"],
-              PeopleWebinarFixtureScript.state(named: raw) == .qaAttendee5 else { return nil }
-        return .qaAttendee5
+        NativeFixtureLaunch.iOSPeopleQaState(environment["CONCLAVE_PEOPLE_FIXTURE"])
     }
 }
 

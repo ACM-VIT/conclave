@@ -119,8 +119,20 @@ public enum NativeFixtureLaunch {
         SystemFixtureScript.state(named: system ?? "") != nil
             || ControlsFixtureScript.state(named: stage ?? "") != nil
             || StageFixtureScript.state(named: stage ?? "") != nil
-            || PeopleFixtureScript.state(named: people ?? "") != nil
+            || iOSPeopleState(people) != nil
             || PremeetingFixtureScript.state(named: premeeting ?? "") != nil
+    }
+
+    static func iOSPeopleState(_ raw: String?) -> PeopleFixtureState? {
+        guard let raw else { return nil }
+        if let state = PeopleFixtureScript.state(named: raw) { return state }
+        guard let qa = iOSPeopleQaState(raw) else { return nil }
+        return PeopleWebinarFixtureScript.baseState(qa)
+    }
+
+    static func iOSPeopleQaState(_ raw: String?) -> PeopleWebinarFixtureState? {
+        guard let raw, PeopleWebinarFixtureScript.state(named: raw) == .qaAttendee5 else { return nil }
+        return .qaAttendee5
     }
 
     public static func androidSelector(system: String?, stage: String?, people: String?, premeeting: String?) -> Bool {
