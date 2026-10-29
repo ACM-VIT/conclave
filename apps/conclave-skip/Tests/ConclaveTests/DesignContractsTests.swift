@@ -1028,7 +1028,7 @@ struct DesignContractsTests {
         #expect(flat.contains(".environment(\\.panelReportShortDetentHeight, PanelShortDetentHeightAction(action: { adapter.setShortDetentHeight($0) }))"))
 
         #expect(flat.contains(".modifier(PanelStageInteraction(upThrough: PanelPresentationPolicy.stageInteractiveDetent(resolved) .map { Self.systemDetent($0, shortHeight: shortHeight, activities: activities) }))"))
-        #expect(flat.contains("content.presentationBackgroundInteraction(.enabled(upThrough: upThrough))"))
+        #expect(flat.contains("content.presentationBackgroundInteraction(upThrough.map { .enabled(upThrough: $0) } ?? .disabled)"))
 
         #expect(flat.contains(".modifier(PanelCompactHeightRule(keepsSheet: PanelPresentationPolicy.keepsSheetInCompactHeight(resolved)))"))
         #expect(flat.contains("content.presentationCompactAdaptation(horizontal: .automatic, vertical: .sheet)"))

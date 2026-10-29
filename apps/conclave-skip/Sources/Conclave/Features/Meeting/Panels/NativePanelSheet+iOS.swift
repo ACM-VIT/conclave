@@ -100,13 +100,8 @@ struct NativePanelInspectorHost<PanelContent: View>: ViewModifier {
 private struct PanelStageInteraction: ViewModifier {
     let upThrough: PresentationDetent?
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if let upThrough {
-            content.presentationBackgroundInteraction(.enabled(upThrough: upThrough))
-        } else {
-            content
-        }
+        content.presentationBackgroundInteraction(upThrough.map { .enabled(upThrough: $0) } ?? .disabled)
     }
 }
 
