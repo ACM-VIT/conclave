@@ -1,6 +1,7 @@
 package conclave.module
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -12,8 +13,10 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -47,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -112,6 +116,17 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp))
                     LobbyControls(premeeting, routeId, snackbarHostState)
                 }
+            }
+            if (premeeting.lobbyStatus?.mode == LobbyMode.editing) {
+                Box(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                        .height(actionClearance + padding.calculateBottomPadding() + 32.dp)
+                        .offset(y = padding.calculateBottomPadding())
+                        .background(Brush.verticalGradient(
+                            colors = listOf(scheme.surface.copy(alpha = 0f), scheme.surface.copy(alpha = 0.92f)),
+                            endY = with(LocalDensity.current) { 32.dp.toPx() },
+                        )),
+                )
             }
         }
     }

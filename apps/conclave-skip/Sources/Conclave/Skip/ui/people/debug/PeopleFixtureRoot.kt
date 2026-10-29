@@ -32,7 +32,9 @@ import kotlinx.coroutines.delay
 @Composable
 fun PeopleFixtureRoot(stateName: String, patternName: String? = null, forceScreenReader: Boolean = false) {
 
-    val qaState = PeopleWebinarFixtureScript.state(named = stateName)?.takeIf { it == PeopleWebinarFixtureState.qaAttendee5 }
+    val qaState = PeopleWebinarFixtureScript.state(named = stateName)?.takeIf {
+        it == PeopleWebinarFixtureState.qaAttendee5 || it == PeopleWebinarFixtureState.qaHostOpen7
+    }
     val qaSession = remember(qaState) { qaState?.let { PeopleWebinarFixtureSession(state = it) } }
     val state = PeopleFixtureScript.state(named = stateName) ?: qaState?.let { PeopleWebinarFixtureScript.baseState(it) } ?: PeopleFixtureState.host6
     val session = remember(state, qaSession) {

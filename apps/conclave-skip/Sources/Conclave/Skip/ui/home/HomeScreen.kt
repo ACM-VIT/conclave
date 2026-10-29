@@ -313,8 +313,26 @@ private fun RecentRowItem(row: HomeRecentUi, onOpen: () -> Unit, onRemove: () ->
             headlineContent = { Text(row.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
             supportingContent = { Text(subtitle) },
             trailingContent = {
-                IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("home.recent.more." + row.id)) {
-                    Icon(PremeetingIcons.More, contentDescription = moreLabel)
+                Box {
+                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("home.recent.more." + row.id)) {
+                        Icon(PremeetingIcons.More, contentDescription = moreLabel)
+                    }
+                    ConclaveDropdownMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                        sections = sections,
+                        identifier = "home.recent.menu." + row.id,
+                        onSelect = { item ->
+                            menuOpen = false
+                            when (item.id) {
+                                "join" -> onOpen()
+                                "copy" -> copy()
+                                "share" -> share()
+                                "remove" -> onRemove()
+                            }
+                        },
+                        icon = { null },
+                    )
                 }
             },
             colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
@@ -337,22 +355,6 @@ private fun RecentRowItem(row: HomeRecentUi, onOpen: () -> Unit, onRemove: () ->
                         CustomAccessibilityAction(removeTitle) { onRemove(); true },
                     )
                 },
-        )
-        ConclaveDropdownMenu(
-            expanded = menuOpen,
-            onDismissRequest = { menuOpen = false },
-            sections = sections,
-            identifier = "home.recent.menu." + row.id,
-            onSelect = { item ->
-                menuOpen = false
-                when (item.id) {
-                    "join" -> onOpen()
-                    "copy" -> copy()
-                    "share" -> share()
-                    "remove" -> onRemove()
-                }
-            },
-            icon = { null },
         )
     }
 }

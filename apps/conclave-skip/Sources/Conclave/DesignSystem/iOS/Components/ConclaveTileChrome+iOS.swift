@@ -56,6 +56,7 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
         GeometryReader { proxy in
             let density = TileChromePolicy.density(width: Double(proxy.size.width), height: Double(proxy.size.height),
                                                    isSpotlight: isSpotlight)
+            let insetSpeakingRing = cornerRadius == 0 && (overlayInsets.top > 0 || overlayInsets.bottom > 0)
             ZStack {
                 renderer()
                     .accessibilityIgnoresInvertColors()
@@ -66,11 +67,13 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
                              showsName: !isSolo || !model.isCameraOff, showsHandBadge: showsHandBadge,
                              selfViewAccessory: selfViewAccessory)
                     .padding(overlayInsets)
-                ConclaveSpeakingRing(state: speaking, cornerRadius: cornerRadius)
                 if variant == .selfView {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .strokeBorder(HostingTheme.inCallBorder, lineWidth: 1)
                 }
+                ConclaveSpeakingRing(state: speaking, cornerRadius: insetSpeakingRing ? CGFloat(DesignTokens.radiusTile) : cornerRadius)
+                    .padding(insetSpeakingRing ? overlayInsets : EdgeInsets())
+                    .padding(insetSpeakingRing ? CGFloat(DesignTokens.space8) : 0)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }

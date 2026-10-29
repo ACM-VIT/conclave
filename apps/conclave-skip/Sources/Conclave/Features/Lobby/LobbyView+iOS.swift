@@ -265,7 +265,7 @@ private struct LobbyBottomBar: ViewModifier {
     func body(content: Content) -> some View {
         let isEditing = premeeting.lobbyStatus?.routeId == routeId && premeeting.lobbyStatus?.mode == .editing
         content
-            .conclaveFloatingActionBar {
+            .conclaveFloatingActionBar(shaded: isEditing) {
                 EntryStatusBlock(premeeting: premeeting, routeId: routeId)
                     .background {
                         if !isEditing { Color(uiColor: .systemGroupedBackground) }

@@ -113,10 +113,15 @@ internal fun PersonRow(
             trailingContent = {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     PeopleStatusIcons(model, speaking, showsQueue)
-                    if (model.pendingAction.isNotEmpty()) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else if (onOpenMenu != null) {
-                        Icon(ConclaveIcons.MoreVertFill0, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (model.pendingAction.isNotEmpty() || onOpenMenu != null) {
+                        Box {
+                            if (model.pendingAction.isNotEmpty()) {
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(ConclaveIcons.MoreVertFill0, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            menu()
+                        }
                     }
                 }
             },
@@ -125,7 +130,6 @@ internal fun PersonRow(
                 .semantics(mergeDescendants = true) { if (texts.states.isNotEmpty()) stateDescription = texts.states }
                 .semantics { if (actions.isNotEmpty()) customActions = actions },
         )
-        menu()
     }
 }
 

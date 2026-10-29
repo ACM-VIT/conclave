@@ -77,6 +77,7 @@ private fun StageFixtureControls(session: StageFixtureSession, modifier: Modifie
             FixtureButton("Magic Tap", "stage.fixture.magicTap") { session.magicTap(); refresh++ }
             FixtureButton("Speakers", "stage.fixture.speakers") { session.runSpeakerScript(); refresh++ }
             FixtureButton("Speak hidden", "stage.fixture.speakHidden") { session.speakHiddenParticipant(); refresh++ }
+            FixtureButton("Speak self", "stage.fixture.speakSelf") { session.speakSelf(); refresh++ }
             FixtureButton("Next role", "stage.fixture.rolesNext") { session.nextRolesSweepStep(); refresh++ }
             FixtureButton("Reactions", "stage.fixture.reactions") { session.replayReactions(); refresh++ }
             FixtureButton("Join burst", "stage.fixture.joinBurst") { session.postJoinBurst(); refresh++ }

@@ -561,7 +561,7 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(floating.contains("reduceTransparency || contrast == .increased"))
         #expect(floating.contains(".scrollEdgeEffectStyle(.soft, for: .bottom) .safeAreaBar(edge: .bottom, spacing: 0)"))
         #expect(floating.contains("content.safeAreaInset(edge: .bottom, spacing: 0)"))
-        #expect(floating.contains("if needsOpaqueSurface { Color(uiColor: .systemBackground) } else { Rectangle().fill(.ultraThinMaterial)"))
+        #expect(floating.contains("if needsOpaqueSurface { Color(uiColor: .systemBackground) } else if shaded { shadedBackdrop } else { Rectangle().fill(.ultraThinMaterial)"))
     }
 
     @Test func labelCasingFollowsOwnerRule() throws {

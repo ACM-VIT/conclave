@@ -163,10 +163,21 @@ internal fun QuestionRow(people: PeoplePresenter, entry: QaQuestionEntry, isHost
             }
             if (isHost) {
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (model.pendingAction.isNotEmpty()) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else if (model.isEnabled) {
-                        Icon(ConclaveIcons.MoreVertFill0, contentDescription = null, tint = scheme.onSurfaceVariant)
+                    Box {
+                        if (model.pendingAction.isNotEmpty()) {
+                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else if (model.isEnabled) {
+                            Icon(ConclaveIcons.MoreVertFill0, contentDescription = null, tint = scheme.onSurfaceVariant)
+                        }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, modifier = Modifier.testTag("$identifier.menu")) {
+                            for (action in hostActions) {
+                                DropdownMenuItem(
+                                    text = { ConclaveText(conclaveString(qaHostActionName(action)), line = "$identifier.menu.$action") },
+                                    onClick = { run(action) },
+                                    modifier = Modifier.testTag("$identifier.menu.$action"),
+                                )
+                            }
+                        }
                     }
                     ConclaveText(model.upvotes.toString(), line = "$identifier.votes", style = rememberTabular(MaterialTheme.typography.labelLarge),
                         color = scheme.onSurfaceVariant, modifier = Modifier.semantics { contentDescription = texts.votes })
@@ -187,17 +198,6 @@ internal fun QuestionRow(people: PeoplePresenter, entry: QaQuestionEntry, isHost
                         selected = model.hasUpvoted
                     },
                 )
-            }
-        }
-        if (isHost) {
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, modifier = Modifier.testTag("$identifier.menu")) {
-                for (action in hostActions) {
-                    DropdownMenuItem(
-                        text = { ConclaveText(conclaveString(qaHostActionName(action)), line = "$identifier.menu.$action") },
-                        onClick = { run(action) },
-                        modifier = Modifier.testTag("$identifier.menu.$action"),
-                    )
-                }
             }
         }
     }

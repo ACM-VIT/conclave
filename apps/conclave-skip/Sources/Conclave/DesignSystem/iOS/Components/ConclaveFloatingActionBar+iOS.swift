@@ -2,15 +2,17 @@
 import SwiftUI
 
 extension View {
-    func conclaveFloatingActionBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
-        modifier(ConclaveFloatingActionBar(bar: bar()))
+    func conclaveFloatingActionBar<Bar: View>(shaded: Bool = false, @ViewBuilder _ bar: () -> Bar) -> some View {
+        modifier(ConclaveFloatingActionBar(bar: bar(), shaded: shaded))
     }
 }
 
 private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
     let bar: Bar
+    let shaded: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.colorScheme) private var colorScheme
 
     private var needsOpaqueSurface: Bool { reduceTransparency || contrast == .increased }
 
@@ -21,7 +23,11 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
                 .scrollEdgeEffectStyle(.soft, for: .bottom)
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     bar.background {
-                        if needsOpaqueSurface { Color(uiColor: .systemBackground) }
+                        if needsOpaqueSurface {
+                            Color(uiColor: .systemBackground).ignoresSafeArea(edges: .bottom)
+                        } else if shaded {
+                            shadedBackdrop
+                        }
                     }
                 }
         } else {
@@ -29,12 +35,31 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
                 bar.background {
                     if needsOpaqueSurface {
                         Color(uiColor: .systemBackground)
+                    } else if shaded {
+                        shadedBackdrop
                     } else {
                         Rectangle().fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom)
                     }
                 }
             }
         }
+    }
+
+    private var shadedBackdrop: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay(Color.black.opacity(colorScheme == .dark ? 0.18 : 0.04))
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 32)
+                    Color.black
+                }
+            }
+            .padding(.top, -32)
+            .ignoresSafeArea(edges: .bottom)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

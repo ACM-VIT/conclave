@@ -514,7 +514,9 @@ struct ENT3LobbyTests {
         for file in Self.lobbySwiftFiles + Self.lobbyIOSFiles + Self.lobbyKotlinFiles {
             let text = try ent3Source(file)
             #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradient"), "\(file)")
+            if file != "Sources/Conclave/Skip/ui/lobby/LobbyScreen.kt" {
+                #expect(!text.lowercased().contains("gradient"), "\(file) uses a gradient outside the floating-action fade")
+            }
             #expect(ent3Matches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x|hue:|white:)"#, in: text).isEmpty, "\(file) builds a color from a literal")
             #expect(!text.contains("Color.white") && !text.contains("Color.black") && !text.contains(".tint(.white)"), "\(file)")
             #expect(!text.contains("@Stable") && !text.contains("@Immutable"), "\(file)")

@@ -89,7 +89,7 @@ internal fun ConclaveActionSheet(
     haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
 ) {
     HostingTheme(inCall = true) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
         val scope = rememberCoroutineScope()
         val paneTitle = conclaveString("ds_more_options")
         ModalBottomSheet(

@@ -72,6 +72,8 @@ internal fun ConclaveTileChrome(
     val custom = remember(actions) { actions.map { action -> CustomAccessibilityAction(action.label) { action.onAction(); true } } }
     BoxWithConstraints(modifier.clip(shape).testTag(identifier)) {
         val density = TileChromePolicy.density(width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble(), isSpotlight = spotlight)
+        val insetSpeakingRing = cornerRadius == 0.dp
+            && (overlayInsets.calculateTopPadding() > 0.dp || overlayInsets.calculateBottomPadding() > 0.dp)
         Box(Modifier.fillMaxSize()) { renderer() }
         val ext = LocalConclaveExtendedColors.current
 
@@ -108,9 +110,15 @@ internal fun ConclaveTileChrome(
             Box(Modifier.fillMaxSize().padding(overlayInsets)) {
                 TileOverlays(model, variant, density, !isSolo || !model.isCameraOff, showsHandBadge, selfViewAccessory)
             }
-            SpeakingStroke(speaking, cornerRadius)
             if (variant == ConclaveTileVariant.SelfView) {
                 Box(Modifier.fillMaxSize().border(1.dp, ext.border, shape))
+            }
+            if (insetSpeakingRing) {
+                Box(Modifier.fillMaxSize().padding(overlayInsets).padding(DesignTokens.space8.dp)) {
+                    SpeakingStroke(speaking, DesignTokens.radiusTile.dp)
+                }
+            } else {
+                SpeakingStroke(speaking, cornerRadius)
             }
         }
     }

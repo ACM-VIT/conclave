@@ -60,6 +60,7 @@ private struct StageFixtureControls: View {
                 fixtureButton("Magic Tap", identifier: "stage.fixture.magicTap") { session.magicTap(); refresh += 1 }
                 fixtureButton("Speakers", identifier: "stage.fixture.speakers") { session.runSpeakerScript(); refresh += 1 }
                 fixtureButton("Speak Hidden", identifier: "stage.fixture.speakHidden") { session.speakHiddenParticipant(); refresh += 1 }
+                fixtureButton("Speak Self", identifier: "stage.fixture.speakSelf") { session.speakSelf(); refresh += 1 }
                 fixtureButton("Next Role", identifier: "stage.fixture.rolesNext") { session.nextRolesSweepStep(); refresh += 1 }
                 fixtureButton("Reactions", identifier: "stage.fixture.reactions") { session.replayReactions(); refresh += 1 }
                 fixtureButton("Join Burst", identifier: "stage.fixture.joinBurst") { session.postJoinBurst(); refresh += 1 }

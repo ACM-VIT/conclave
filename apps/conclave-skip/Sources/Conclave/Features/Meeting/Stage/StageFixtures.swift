@@ -1169,6 +1169,10 @@ final class StageFixtureSession {
         stage.speakerChanged(StageFixtureScript.hiddenSpeaker(for: state), atMillis: stage.now())
     }
 
+    func speakSelf() {
+        stage.speakerChanged(StageFixtureScript.localUserId, atMillis: stage.now())
+    }
+
     func nextRolesSweepStep() {
         rolesSweepStep += 1
         inputs = StageFixtureScript.rolesSweepStep(rolesSweepStep)

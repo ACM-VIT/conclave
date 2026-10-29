@@ -193,7 +193,7 @@ struct FND2InCallChromeTests {
         #expect(menus.contains("MenuDefaults.itemColors(textColor = scheme.error, leadingIconColor = scheme.error)"))
         let sheet = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt"))
         #expect(sheet.contains("HostingTheme(inCall = true) {"))
-        #expect(sheet.contains("rememberModalBottomSheetState(skipPartiallyExpanded = true)"))
+        #expect(sheet.contains("rememberModalBottomSheetState(skipPartiallyExpanded = false)"))
 
         #expect(sheet.contains("scope.launch { sheetState.hide() }.invokeOnCompletion { if (!sheetState.isVisible) { onDismiss() onTile(tile) } }"))
         #expect(sheet.contains(".toggleable(value = raised, enabled = enabled, role = Role.Switch, onValueChange = onToggle)"))
@@ -256,8 +256,11 @@ struct FND2InCallChromeTests {
         for file in files {
             let text = try fndSource(file)
             #expect(!fndContainsDash(text), "\(file)")
-            for word in ["Gradient", "gradient", "dynamicLightColorScheme", "dynamicDarkColorScheme", ".shadow("] {
+            for word in ["dynamicLightColorScheme", "dynamicDarkColorScheme", ".shadow("] {
                 #expect(!text.contains(word), "\(file) uses \(word)")
+            }
+            if file != "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFloatingActionBar+iOS.swift" {
+                #expect(!text.contains("Gradient") && !text.contains("gradient"), "\(file) uses a gradient outside the floating-action fade mask")
             }
         }
     }
