@@ -1021,13 +1021,13 @@ struct DesignContractsTests {
         #expect(flat.contains("if value == nil { adapter.sheetBindingLost(captured, coordinator: coordinator) }"))
         #expect(flat.contains("adapter.sheetDidDismiss(captured, coordinator: coordinator)"))
         #expect(flat.components(separatedBy: "PanelPresentationPolicy.resolve(presentation.request, window: window, platform: .iOS, isAccessibilitySize: accessibilitySize)").count - 1 == 2)
-        #expect(flat.contains(".presentationDetents(Set(resolved.detents.map { Self.systemDetent($0, shortHeight: shortHeight) }), selection: Binding("))
-        #expect(flat.contains("set: { adapter.selectDetent(Self.panelDetent($0, shortHeight: shortHeight)) }"))
+        #expect(flat.contains(".presentationDetents(Set(resolved.detents.map { Self.systemDetent($0, shortHeight: shortHeight, activities: activities) }), selection: Binding("))
+        #expect(flat.contains("set: { adapter.selectDetent(Self.panelDetent($0, shortHeight: shortHeight, activities: activities)) }"))
 
         #expect(flat.contains("case .short: return .height(CGFloat(shortHeight))"))
         #expect(flat.contains(".environment(\\.panelReportShortDetentHeight, PanelShortDetentHeightAction(action: { adapter.setShortDetentHeight($0) }))"))
 
-        #expect(flat.contains(".modifier(PanelStageInteraction(upThrough: PanelPresentationPolicy.stageInteractiveDetent(resolved) .map { Self.systemDetent($0, shortHeight: shortHeight) }))"))
+        #expect(flat.contains(".modifier(PanelStageInteraction(upThrough: PanelPresentationPolicy.stageInteractiveDetent(resolved) .map { Self.systemDetent($0, shortHeight: shortHeight, activities: activities) }))"))
         #expect(flat.contains("content.presentationBackgroundInteraction(.enabled(upThrough: upThrough))"))
 
         #expect(flat.contains(".modifier(PanelCompactHeightRule(keepsSheet: PanelPresentationPolicy.keepsSheetInCompactHeight(resolved)))"))

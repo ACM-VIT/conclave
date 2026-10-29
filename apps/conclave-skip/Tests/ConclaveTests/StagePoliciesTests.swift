@@ -655,8 +655,7 @@ struct StagePoliciesTests {
         #expect(slot.components(separatedBy: "ConclaveTileChrome(").count - 1 == 1)
         #expect(slot.contains(".transaction { transaction in transaction.animation = nil } .accessibilityHidden(true) .accessibilityIgnoresInvertColors()"))
         #expect(slot.contains(".opacity(slot.role == .selfMinimized ? 0 : 1)"))
-        #expect(slot.contains("ShareLink(item: url") && slot.contains("UIPasteboard.general.url = url"))
-        #expect(slot.contains(".conclaveGestureFeedback(.linkCopied, trigger: copies)"))
+        #expect(!slot.contains("StageSoloCard") && !slot.contains("stage.solo.share") && !slot.contains("stage.solo.copy"))
     }
 
     @Test func androidCallRootKeysRenderersAndMinimizesOnBack() throws {

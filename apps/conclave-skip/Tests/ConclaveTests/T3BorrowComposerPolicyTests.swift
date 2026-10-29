@@ -298,7 +298,7 @@ struct T3BorrowComposerPolicyTests {
         #expect(ios.contains("guard result == ChatSendResult.blocked, chat.composer.inlineNotice == noticeBefore,"))
         #expect(!ios.contains("ConclaveStrings.text(\"Reconnecting\")"), "the reason lives in ChatCopy.sendBlockReason")
         #expect(ios.contains("ChatCopy.gateLine(composer.gateLine)") && !ios.contains("ChatCopy.gateLine(composer.gate)"))
-        #expect(ios.contains("if now { actions.composerDidFocus() }"))
+        #expect(ios.contains("if now {\n                showsPhotoPicker = false\n                actions.composerDidFocus()\n            }"))
         #expect(ios.contains("identifier: \"chat.composer.counter\", announcesBands: true)"))
         #expect(ios.contains("if !photoIntakeInFlight && chat.canAcceptPhoto { return true }"))
         #expect(ios.contains("photoIntakeInFlight = true\n        ChatPickedImageFile.attachFirst(providers, to: chat) {"))

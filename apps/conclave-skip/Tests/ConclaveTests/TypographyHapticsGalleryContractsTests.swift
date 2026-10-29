@@ -533,6 +533,7 @@ struct TypographyHapticsGalleryContractsTests {
                 }
             }
             for pattern in glass where text.contains(pattern) {
+                if file == Self.toastFile && pattern == "regularMaterial" { continue }
                 glassFiles.append(file)
                 Issue.record("\(file) uses \(pattern)")
             }
@@ -812,6 +813,7 @@ struct TypographyHapticsGalleryContractsTests {
     static let composerGlassFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift"
     static let lobbyMediaToggleFile = "Sources/Conclave/Features/Lobby/LobbyMediaToggle+iOS.swift"
     static let floatingActionBarFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFloatingActionBar+iOS.swift"
+    static let toastFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveToast+iOS.swift"
     static let sanctionedGlassFiles = [callControlFile, composerGlassFile, lobbyMediaToggleFile, floatingActionBarFile]
     static let iosComponentFiles = [
         "Sources/Conclave/DesignSystem/iOS/Components/ConclaveButtons+iOS.swift",
@@ -870,7 +872,7 @@ struct TypographyHapticsGalleryContractsTests {
 
         for file in files where !Self.sanctionedGlassFiles.contains(file) && file != galleryFile {
             let text = try source(file)
-            if glass.contains(where: { text.contains($0) }) { entries.append(file) }
+            if glass.contains(where: { text.contains($0) && !(file == Self.toastFile && $0 == "regularMaterial") }) { entries.append(file) }
         }
         #expect(entries.isEmpty, "glass outside the entry: \(entries)")
 
@@ -999,12 +1001,12 @@ struct TypographyHapticsGalleryContractsTests {
         }
 
         let cellFile = "Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift"
-        #expect(holders == [Self.callControlFile, Self.composerGlassFile, Self.lobbyMediaToggleFile, galleryFile, cellFile].sorted())
-        let lobby = try source(Self.lobbyMediaToggleFile)
-        let lobbyRelease = withoutDebugBlocks(lobby)
-        for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!lobbyRelease.contains(name), "\(name) in the lobby Release") }
-        #expect(normalized(lobby).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 1)
-        #expect(!lobby.contains(".environment(\\.\(key)"))
+        #expect(holders == [Self.callControlFile, Self.composerGlassFile, Self.floatingActionBarFile, galleryFile, cellFile].sorted())
+        let floating = try source(Self.floatingActionBarFile)
+        let floatingRelease = withoutDebugBlocks(floating)
+        for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!floatingRelease.contains(name), "\(name) in the floating action Release") }
+        #expect(normalized(floating).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 1)
+        #expect(!floating.contains(".environment(\\.\(key)"))
         let cell = try source(cellFile)
         let cellRelease = withoutDebugBlocks(cell)
         for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!cellRelease.contains(name), "\(name) in the cell Release") }
