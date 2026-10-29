@@ -169,9 +169,6 @@ android {
         debug {
             isPseudoLocalesEnabled = true
             manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = debugViewerProfile.toString()
-            if (debugViewerProfile && conclaveAuthBaseUrl.isBlank()) {
-                manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = productionConclaveBaseUrl
-            }
         }
         release {
             signingConfig = signingConfigs.findByName("release")
