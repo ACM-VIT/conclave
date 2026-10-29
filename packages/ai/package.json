@@ -1,0 +1,34 @@
+{
+  "name": "@conclave/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./models": "./src/models.ts",
+    "./room-settings": "./src/room-settings.ts",
+    "./limits": "./src/limits.ts",
+    "./server": "./src/server.ts",
+    "./room": "./src/room.ts",
+    "./room-server": "./src/room-server.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0",
+    "openai": "^7.33.0"
+  },
+  "devDependencies": {
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^5.0.4"
+  },
+  "imports": {
+    "#types": "./src/types.ts",
+    "#errors": "./src/errors.ts",
+    "#request-options": "./src/request-options.ts",
+    "#catalog-server": "./src/catalog-server.ts",
+    "#openai": "./src/providers/openai.ts",
+    "#anthropic": "./src/providers/anthropic.ts"
+  }
+}

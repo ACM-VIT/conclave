@@ -1,3 +1,7 @@
+import { AI_PROVIDERS, getProviderApiKey, readAiEnvironment, type AiEnvironment } from "@conclave/ai/models";
+import { isRoomAiProvider } from "@conclave/ai/room";
+import { isAiFeature, resolveAiFeatureSettings } from "@conclave/ai/room-settings";
+import { ROOM_AI_ENV_FIELDS } from "@conclave/ai/room-server";
 import type { MediaKind } from "mediasoup/types";
 import { randomBytes } from "node:crypto";
 import cors from "cors";
@@ -40,6 +44,7 @@ import { registerScheduledWebinarRoutes } from "./scheduledWebinarRoutes.js";
 import { registerScheduledMeetingRoutes } from "./scheduledMeetingRoutes.js";
 import { registerSchedulingRoutes } from "./schedulingRoutes.js";
 import type { SfuState } from "../state.js";
+import type { RedisPublisherHealth } from "../socket/redisPublisher.js";
 import { resolveWebinarLinkTarget } from "../webinar.js";
 import { canonicalizeClientId } from "../clientIds.js";
 import {
@@ -62,6 +67,7 @@ export type CreateSfuAppOptions = {
   config?: typeof defaultConfig;
   getIo?: () => SocketIOServer | null;
   moderateImage?: typeof moderateChatImage;
+  getSocketAdapterHealth?: () => RedisPublisherHealth | null;
 };
 
 type ChatImageUploadLocals = {
@@ -270,6 +276,7 @@ export const createSfuApp = ({
   config = defaultConfig,
   getIo,
   moderateImage = moderateChatImage,
+  getSocketAdapterHealth = () => null,
 }: CreateSfuAppOptions): Express => {
   const app = express();
   // Env-driven CORS allow-list. Defaults to "*" (unchanged dev behavior); set
@@ -492,13 +499,15 @@ export const createSfuApp = ({
 
   app.get("/health", (_req, res) => {
     const healthyWorkers = state.workers.filter((worker) => !worker.closed);
-    const isHealthy = healthyWorkers.length > 0;
+    const socketAdapter = getSocketAdapterHealth();
+    const isHealthy = healthyWorkers.length > 0 && socketAdapter?.healthy !== false;
 
     const healthData = {
       status: isHealthy ? "healthy" : "unhealthy",
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       port: config.port,
+      ...(socketAdapter ? { socketAdapter } : {}),
       workers: {
         total: state.workers.length,
         healthy: healthyWorkers.length,
@@ -507,7 +516,6 @@ export const createSfuApp = ({
     };
 
     if (!isHealthy) {
-      Logger.error("Health check failed: No healthy workers available");
       return res.status(503).json(healthData);
     }
 
@@ -591,12 +599,24 @@ export const createSfuApp = ({
         return;
       }
 
+      const abort = new AbortController();
+      const onClose = () => { if (!res.writableEnded) abort.abort(); };
+      res.on("close", onClose);
       try {
+        const imageSettings = resolveAiFeatureSettings({}, "images", room.aiCredentials.effectiveFeatureSettings());
+        if (!imageSettings.enabled) {
+          res.status(403).json({error: "Image safety is disabled in Room AI settings."});
+          return;
+        }
         const moderation = await moderateImage({
           data: req.body,
           mimeType,
-          timeoutMs: config.chatImageModeration.timeoutMs,
+          timeoutMs: imageSettings.timeoutMs,
+          model: imageSettings.model,
+          apiKey: config.openAi.apiKey || room.aiCredentials.get("openai"),
+          signal: abort.signal,
         });
+        if (abort.signal.aborted) return;
         if (moderation.blocked) {
           Logger.warn(
             `Blocked chat image in room ${room.id} (categories=${
@@ -614,6 +634,7 @@ export const createSfuApp = ({
           return;
         }
       } catch (error) {
+        if (abort.signal.aborted) return;
         Logger.warn(
           `Chat image moderation unavailable in room ${room.id}; upload rejected`,
           error,
@@ -622,6 +643,8 @@ export const createSfuApp = ({
           error: "Image safety check is temporarily unavailable. Try again.",
         });
         return;
+      } finally {
+        res.off("close", onClose);
       }
 
       const id = randomBytes(24).toString("base64url");
@@ -698,6 +721,86 @@ export const createSfuApp = ({
   // Keep the chat-image authorization middleware ahead of any body parser so
   // replayed capabilities are rejected before request bytes are buffered.
   app.use(express.json());
+
+  const roomAiMember = (req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store");
+    const secret = req.get("x-room-ai-secret") || "";
+    if (
+      !secretsMatch(secret, config.sfuSecret) &&
+      !secretsMatch(
+        secret,
+        process.env.TRANSCRIPT_TOKEN_SECRET || config.sfuSecret,
+      )
+    ) {
+      res.status(401).json({ error: "Unauthorized" });
+      return null;
+    }
+    const body = requestBody(req);
+    const room =
+      typeof body.channelId === "string"
+        ? state.rooms.get(body.channelId)
+        : undefined;
+    const member =
+      typeof body.userId === "string"
+        ? room?.getClient(body.userId)
+        : undefined;
+    if (
+      !room ||
+      room.id !== body.roomId ||
+      room.clientId !== body.clientId ||
+      !member ||
+      member.isObserver ||
+      (body.requireHost === true && !(member instanceof Admin))
+    ) {
+      res.status(403).json({ error: "Room membership is no longer active." });
+      return null;
+    }
+    return {room, member, body};
+  };
+
+  app.post("/internal/ai/settings", (req: Request, res: Response) => {
+    const lookup = roomAiMember(req, res);
+    if (!lookup) return;
+    const { room, member, body } = lookup;
+    const environment = readAiEnvironment(process.env);
+    if (body.feature !== undefined) {
+      try {
+        if (!isAiFeature(body.feature)) throw new Error("Choose an AI feature.");
+        room.aiCredentials.configureFeature(body.feature, body.settings, member.id, member instanceof Admin, environment);
+        getIo?.()?.to(room.channelId).emit("ai:changed", room.aiCredentials.status(environment));
+      } catch (error) {
+        res.status(403).json({error: error instanceof Error ? error.message : "Could not save AI settings."});
+        return;
+      }
+    }
+    res.json({state: room.aiCredentials.status(environment)});
+  });
+
+  app.post("/internal/ai/credentials", (req: Request, res: Response) => {
+    const lookup = roomAiMember(req, res);
+    if (!lookup) return;
+    const { room, body } = lookup;
+    const result: AiEnvironment = {};
+    const environment = readAiEnvironment(process.env);
+    for (const field of ROOM_AI_ENV_FIELDS) {
+      if (!field.endsWith("_API_KEY") && environment[field]) result[field] = environment[field];
+    }
+    for (const provider of Array.isArray(body.providers)
+      ? body.providers
+      : []) {
+      if (!isRoomAiProvider(provider)) continue;
+      const key =
+        getProviderApiKey(environment, provider) ||
+        room.aiCredentials.get(provider);
+      if (key) result[AI_PROVIDERS[provider].keyEnv] = key;
+    }
+    if (room.aiCredentials.assistantModel) {
+      result.CONCLAVE_ASSISTANT_MODEL = room.aiCredentials.assistantModel;
+    }
+    result.CONCLAVE_AI_SETTINGS = JSON.stringify(room.aiCredentials.effectiveFeatureSettings(environment));
+    res.json(result);
+  });
+
 
   app.get("/rooms", (req, res) => {
     if (!hasValidSecret(req, config.sfuSecret)) {
@@ -829,6 +932,11 @@ export const createSfuApp = ({
         });
         return;
       }
+      if (!existing && getSocketAdapterHealth()?.healthy === false) {
+        res.set("Retry-After", "2");
+        res.status(503).json({ error: "Meeting server is reconnecting" });
+        return;
+      }
 
       const result = await state.roomRegistry.reservePlacement({
         channelId,
@@ -858,8 +966,11 @@ export const createSfuApp = ({
       return res.status(401).json({ error: "Unauthorized" });
     }
 
+    const socketAdapter = getSocketAdapterHealth();
     return res.json({
       instanceId: config.instanceId,
+      healthy: socketAdapter?.healthy !== false && state.workers.some((worker) => !worker.closed),
+      ...(socketAdapter ? { socketAdapter } : {}),
       region: config.region,
       version: config.version,
       draining: state.isDraining,

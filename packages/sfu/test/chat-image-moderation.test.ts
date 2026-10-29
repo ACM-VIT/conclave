@@ -64,7 +64,7 @@ describe("chat image moderation", () => {
           },
         ],
       },
-      { timeout: 1000 },
+      { timeout: 1000, maxRetries: 0 },
     );
   });
 

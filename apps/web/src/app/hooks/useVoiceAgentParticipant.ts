@@ -1,5 +1,10 @@
 "use client";
 
+import type { RoomAiController } from "./useRoomAi";
+import { resolveAiFeatureSettings } from "@conclave/ai/room-settings";
+
+import { AI_DEFAULT_MODELS, AI_ENDPOINTS } from "@conclave/ai/models";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Socket } from "socket.io-client";
 import type { Device as MediasoupDevice, Producer, Transport } from "mediasoup-client/types";
@@ -53,6 +58,7 @@ type RuntimeState = {
 };
 
 type UseVoiceAgentParticipantOptions = {
+  roomAi?: RoomAiController;
   roomId: string;
   isJoined: boolean;
   isAdmin: boolean;
@@ -73,7 +79,7 @@ type UseVoiceAgentParticipantOptions = {
   voice?: string;
 };
 
-const DEFAULT_MODEL = "gpt-realtime-1.5";
+const DEFAULT_MODEL = AI_DEFAULT_MODELS.voice;
 const DEFAULT_VOICE = "marin";
 const DEFAULT_INSTRUCTIONS =
   "You are Conclave's in-meeting voice assistant. Answer in one or two short sentences unless asked for detail. Ground answers in the meeting: check the transcript, notes, chat, or participant tools before answering questions about what was said or decided. Never invent meeting content.";
@@ -635,6 +641,7 @@ const waitForDataChannelOpen = (channel: RTCDataChannel) => {
 };
 
 export function useVoiceAgentParticipant({
+  roomAi,
   roomId,
   isJoined,
   isAdmin,
@@ -652,6 +659,8 @@ export function useVoiceAgentParticipant({
   model = DEFAULT_MODEL,
   voice = DEFAULT_VOICE,
 }: UseVoiceAgentParticipantOptions) {
+  const voiceSettings = resolveAiFeatureSettings({}, "voice", roomAi?.state.features ?? {});
+  model = roomAi?.state.features?.voice?.model ?? model;
   const runtimeRef = useRef<RuntimeState>(createRuntimeState());
   const pendingRemoteTrackRef = useRef<MediaStreamTrack | null>(null);
   const mountedRef = useRef(true);
@@ -1049,7 +1058,9 @@ export function useVoiceAgentParticipant({
       return;
     }
     const apiKey = providedApiKey?.trim() || "";
-    if (!apiKey) {
+    const useRoomKey = Boolean(roomAi?.requestAccessToken && (roomAi.state.openai.source || apiKey));
+    if (!voiceSettings.enabled) { setSafeError("The voice assistant is disabled in Room AI settings."); setSafeStatus("error"); return; }
+    if (!apiKey && !useRoomKey) {
       setSafeError("Enter your OpenAI API key before starting the voice agent.");
       setSafeStatus("error");
       return;
@@ -1064,7 +1075,7 @@ export function useVoiceAgentParticipant({
     pendingRemoteTrackRef.current = null;
 
     try {
-      const sessionInstructions = buildSessionInstructions();
+      const sessionInstructions = [buildSessionInstructions(), !useRoomKey ? voiceSettings.instructions : ""].filter(Boolean).join("\n\n");
       const AudioContextImpl = getAudioContextCtor();
       if (!AudioContextImpl) {
         throw new Error(
@@ -1099,12 +1110,14 @@ export function useVoiceAgentParticipant({
         },
       };
 
+      const roomToken = useRoomKey ? await roomAi!.requestAccessToken!("voice") : null;
+      if (runtimeRef.current !== runtime) return;
       const clientSecretResponse = await fetch(
-        "https://api.openai.com/v1/realtime/client_secrets",
+        roomToken ? "/api/conclave/voice" : AI_ENDPOINTS.openai.realtimeClientSecrets,
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${roomToken ?? apiKey}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(sessionPayload),
@@ -1117,6 +1130,7 @@ export function useVoiceAgentParticipant({
         | RealtimeClientSecretResponse
         | null;
 
+      if (runtimeRef.current !== runtime) return;
       const clientSecret =
         clientSecretBody?.client_secret?.value?.trim() ||
         clientSecretBody?.value?.trim() ||
@@ -1180,9 +1194,11 @@ export function useVoiceAgentParticipant({
       runtime.openAiPc.addTrack(micTrack, runtime.openAiMicStream);
 
       const offer = await runtime.openAiPc.createOffer();
+      if (runtimeRef.current !== runtime) return;
       await runtime.openAiPc.setLocalDescription(offer);
+      if (runtimeRef.current !== runtime) return;
 
-      const sdpResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+      const sdpResponse = await fetch(AI_ENDPOINTS.openai.realtimeCalls, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${clientSecret}`,
@@ -1200,6 +1216,7 @@ export function useVoiceAgentParticipant({
       }
 
       const answerSdp = await sdpResponse.text();
+      if (runtimeRef.current !== runtime) return;
       await runtime.openAiPc.setRemoteDescription({
         type: "answer",
         sdp: answerSdp,
@@ -1207,13 +1224,14 @@ export function useVoiceAgentParticipant({
 
       if (runtime.openAiDataChannel) {
         await waitForDataChannelOpen(runtime.openAiDataChannel);
+        if (runtimeRef.current !== runtime) return;
         runtime.openAiDataChannel.send(
           JSON.stringify({
             type: "session.update",
             session: {
               type: "realtime",
-              model,
-              instructions: sessionInstructions,
+              // Preserve the authoritative model and instructions from the room proxy.
+              ...(!useRoomKey ? {model, instructions: sessionInstructions} : {}),
               audio: {
                 input: {
                   turn_detection: {
@@ -1262,6 +1280,7 @@ export function useVoiceAgentParticipant({
       if (!joinInfoResponse.ok || !token || !sfuUrl) {
         throw new Error(joinInfo?.error ?? "Failed to create SFU token for voice agent.");
       }
+      if (runtimeRef.current !== runtime) return;
 
       const connectAgentSocket = async (url: string) => {
         const socket = await createSocketConnection(url, token);
@@ -1369,6 +1388,9 @@ export function useVoiceAgentParticipant({
     isAdmin,
     isJoined,
     model,
+    roomAi,
+    voiceSettings.enabled,
+    voiceSettings.instructions,
     producePendingTrack,
     rebuildOpenAiMix,
     roomId,

@@ -8,6 +8,15 @@ import {
 } from "../src/lib/sfu-routing-policy";
 
 describe("selectPreOwnerSfu", () => {
+  it("does not select an explicitly unhealthy publisher even as a fallback", () => {
+    expect(selectPreOwnerSfu([
+      { index: 0, url: "https://a.test", availability: "unhealthy" },
+      { index: 1, url: "https://b.test", availability: "unknown" },
+    ], "room")).toMatchObject({ kind: "selected", candidate: { url: "https://b.test" } });
+    expect(selectPreOwnerSfu([
+      { index: 0, url: "https://a.test", availability: "unhealthy" },
+    ], "room")).toEqual({ kind: "empty" });
+  });
   it("is stable for the same room regardless of response order", () => {
     const candidates: SfuRoutingCandidate[] = [
       { index: 0, url: "https://a.example", availability: "healthy" },

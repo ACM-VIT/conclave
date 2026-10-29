@@ -1,3 +1,5 @@
+import { AI_GENERATION_LIMITS } from "@conclave/ai/limits";
+import { AI_DEFAULT_MODELS, getProviderApiKey, getResponseProvider, readAiEnvironment, resolveConfiguredResponseModel } from "@conclave/ai/models";
 import dotenv from "dotenv";
 import path from "path";
 import { existsSync } from "fs";
@@ -247,6 +249,8 @@ const plainTransportAnnouncedIp =
   process.env.PLAIN_TRANSPORT_ANNOUNCED_IP?.trim() || announcedIp;
 const socketRedisUrl =
   process.env.SFU_REDIS_URL?.trim() || process.env.REDIS_URL?.trim() || "";
+const gameAiModel = resolveConfiguredResponseModel(process.env.SFU_GAME_AI_MODEL, AI_DEFAULT_MODELS.games);
+const gameAiApiKey = getProviderApiKey(readAiEnvironment(process.env), getResponseProvider(gameAiModel));
 const openAiApiKey = process.env.OPENAI_API_KEY?.trim() || "";
 const requireRedisAdapter = toBoolean(process.env.SFU_REQUIRE_REDIS_ADAPTER);
 if (requireRedisAdapter && !socketRedisUrl) {
@@ -381,19 +385,20 @@ export const config = {
     }),
   },
   gameAi: {
-    enabled: !gameAiDisabled && Boolean(openAiApiKey),
-    model: "gpt-5.6-luna",
+    enabled: !gameAiDisabled,
+    model: gameAiModel,
+    apiKey: gameAiApiKey,
     reasoningEffort: "low" as const,
     storeResponses: false,
-    timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, 25000, {
+    timeoutMs: toNumber(process.env.SFU_GAME_AI_TIMEOUT_MS, AI_GENERATION_LIMITS.timeoutMs, {
       integer: true,
-      min: 500,
-      max: 120000,
+      min: AI_GENERATION_LIMITS.minTimeoutMs,
+      max: AI_GENERATION_LIMITS.maxTimeoutMs,
     }),
-    maxOutputTokens: toNumber(process.env.SFU_GAME_AI_MAX_OUTPUT_TOKENS, 2200, {
+    maxOutputTokens: toNumber(process.env.SFU_GAME_AI_MAX_OUTPUT_TOKENS, AI_GENERATION_LIMITS.outputTokens, {
       integer: true,
       min: 128,
-      max: 4096,
+      max: AI_GENERATION_LIMITS.maxOutputTokens,
     }),
     topicMaxLength: toNumber(process.env.SFU_GAME_AI_TOPIC_MAX_LENGTH, 120, {
       integer: true,

@@ -1,5 +1,7 @@
 "use client";
 
+import { useSharedVoiceStart } from "./hooks/useSharedVoiceStart";
+
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkey } from "@tanstack/react-hotkeys";
@@ -50,6 +52,7 @@ import { useMeetRefs } from "./hooks/useMeetRefs";
 import { useMeetRooms } from "./hooks/useMeetRooms";
 import { useMeetSocket } from "./hooks/useMeetSocket";
 import { useMeetState } from "./hooks/useMeetState";
+import { useRoomAi, type RoomAiController } from "./hooks/useRoomAi";
 import { useMeetTts } from "./hooks/useMeetTts";
 import { useWebcamReceiverCapacityProof } from "./hooks/useWebcamReceiverCapacityProof";
 import { selectActiveWebcamReceiverCapacityProof } from "./lib/webcam-receiver-capacity-proof";
@@ -81,7 +84,6 @@ import { useVoiceAgentParticipant } from "./hooks/useVoiceAgentParticipant";
 import VoiceAgentDialog from "./components/VoiceAgentDialog";
 import {
   clearStoredVoiceAgentKey,
-  getStoredVoiceAgentKey,
   storeVoiceAgentKey,
 } from "./lib/voice-agent-key";
 import type { ChatMessage, JoinMode, PrejoinMediaHandoff } from "./lib/types";
@@ -1074,6 +1076,8 @@ export default function MeetsClient({
     reactionAssets,
   });
 
+  const roomAiRef = useRef<RoomAiController | null>(null);
+  const getRoomAi = useCallback(() => roomAiRef.current, []);
   const {
     ttsSpeakerId,
     activeTtsMessageId,
@@ -1088,6 +1092,7 @@ export default function MeetsClient({
     clearClonedVoice,
     outgoingTtsVoiceToken,
   } = useMeetTts({
+    getRoomAi,
     meetVolume,
     audioOutputDeviceId: selectedAudioOutputDeviceId,
   });
@@ -2505,7 +2510,10 @@ export default function MeetsClient({
     browserState?.active || isBrowserServiceAvailable,
   );
 
+  const roomAi = useRoomAi(appsSocket, connectionState === "joined" && !isWebinarAttendee, userId, canModerateMeeting, roomId);
+  useEffect(() => { roomAiRef.current = roomAi; }, [roomAi]);
   const voiceAgent = useVoiceAgentParticipant({
+    roomAi,
     roomId,
     isJoined: connectionState === "joined",
     isAdmin: canModerateMeeting,
@@ -2532,31 +2540,25 @@ export default function MeetsClient({
     errorCode: voiceAgentErrorCode,
   } = voiceAgent;
 
+  const onVoiceKeyReady = useCallback((apiKey: string, remember: boolean) => {
+    storeVoiceAgentKey(apiKey, remember);
+    void startVoiceAgent(apiKey);
+  }, [startVoiceAgent]);
+  const voiceKeyStart = useSharedVoiceStart(roomAi, `${roomId}:${connectionState}`, onVoiceKeyReady);
+  const {start: handleVoiceAgentDialogStart, cancel: cancelVoiceKeyStart, pending: isVoiceKeySharing, error: voiceKeyShareError} = voiceKeyStart;
   const handleStartVoiceAgent = useCallback(() => {
-    // The dialog is the single surface for starting: it shows the key form,
-    // or — when a key is already remembered for this tab — a connecting state
-    // while the agent joins. It closes itself once the agent is live.
     clearVoiceAgentError();
+    cancelVoiceKeyStart();
     setIsVoiceAgentDialogOpen(true);
-    const storedKey = getStoredVoiceAgentKey();
-    if (storedKey) void startVoiceAgent(storedKey);
-  }, [clearVoiceAgentError, startVoiceAgent]);
-
-  const handleVoiceAgentDialogStart = useCallback(
-    (apiKey: string, remember: boolean) => {
-      storeVoiceAgentKey(apiKey, remember);
-      void startVoiceAgent(apiKey);
-    },
-    [startVoiceAgent],
-  );
+    if (roomAi.state.openai.source) void startVoiceAgent("");
+  }, [clearVoiceAgentError, cancelVoiceKeyStart, startVoiceAgent, roomAi.state.openai.source]);
 
   const handleCloseVoiceAgentDialog = useCallback(() => {
+    cancelVoiceKeyStart();
     setIsVoiceAgentDialogOpen(false);
-    // Cancelling mid-connect aborts the start; otherwise just drop any
-    // stale error so the next open starts clean.
-    if (isVoiceAgentStarting) stopVoiceAgent();
-    else clearVoiceAgentError();
-  }, [clearVoiceAgentError, isVoiceAgentStarting, stopVoiceAgent]);
+    stopVoiceAgent();
+    clearVoiceAgentError();
+  }, [cancelVoiceKeyStart, clearVoiceAgentError, stopVoiceAgent]);
 
   // The dialog stays open (showing progress) until the agent is actually
   // live, so failures land inline instead of in a toast after the fact.
@@ -2572,11 +2574,12 @@ export default function MeetsClient({
   }, [voiceAgentErrorCode]);
 
   const handleStopVoiceAgent = useCallback(() => {
+    cancelVoiceKeyStart();
     // Deliberately keeps the remembered key: stop → start again later in the
     // meeting shouldn't demand re-entering it. It dies with the tab.
     setIsVoiceAgentDialogOpen(false);
     stopVoiceAgent();
-  }, [stopVoiceAgent]);
+  }, [cancelVoiceKeyStart, stopVoiceAgent]);
 
   const { mounted } = useMeetLifecycle({
     cleanup: socket.cleanup,
@@ -3276,8 +3279,8 @@ export default function MeetsClient({
   const voiceAgentKeyPrompt = (
     <VoiceAgentDialog
       open={isVoiceAgentDialogOpen}
-      isStarting={isVoiceAgentStarting}
-      error={voiceAgent.error}
+      isStarting={isVoiceAgentStarting || isVoiceKeySharing}
+      error={voiceKeyShareError ?? voiceAgent.error}
       onStart={handleVoiceAgentDialogStart}
       onClose={handleCloseVoiceAgentDialog}
     />
@@ -3324,6 +3327,7 @@ export default function MeetsClient({
         />
       )}
       <MeetsMainContent
+        roomAi={roomAi}
         isJoined={isJoined}
         isMobile={isMobile}
         viewSettings={viewSettings}

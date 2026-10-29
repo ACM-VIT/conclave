@@ -1,7 +1,8 @@
+import { AI_DEFAULT_MODELS, AI_ENDPOINTS, getProviderApiKey, readAiEnvironment } from "@conclave/ai/models";
 import { CompactEncrypt, compactDecrypt } from "jose";
 import { TTS_MAX_TEXT_LENGTH } from "@conclave/meeting-core/chat-commands";
 
-const ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1";
+const ELEVENLABS_API_BASE = AI_ENDPOINTS.elevenlabs.apiBase;
 const VOICE_TOKEN_ISSUER = "conclave-web";
 const VOICE_TOKEN_AUDIENCE = "conclave-tts";
 const VOICE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
@@ -40,7 +41,7 @@ const createVoiceTokenKey = async (): Promise<Uint8Array> => {
 };
 
 const requireElevenLabsApiKey = (): string => {
-  const value = process.env.ELEVENLABS_API_KEY?.trim();
+  const value = getProviderApiKey(readAiEnvironment(process.env), "elevenlabs");
   if (!value) {
     throw new Error("Voice cloning is not configured.");
   }
@@ -159,16 +160,21 @@ export const createInstantVoiceClone = async ({
 export const synthesizeClonedSpeech = async ({
   voiceId,
   text,
+  model,
+  timeoutMs,
 }: {
   voiceId: string;
   text: string;
+  model?: string;
+  timeoutMs?: number;
 }): Promise<Response> => {
   const modelId =
-    process.env.ELEVENLABS_TTS_MODEL?.trim() || "eleven_multilingual_v2";
+    model || process.env.ELEVENLABS_TTS_MODEL?.trim() || AI_DEFAULT_MODELS.tts;
   const response = await fetch(
     `${ELEVENLABS_API_BASE}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
     {
       method: "POST",
+      ...(timeoutMs ? {signal: AbortSignal.timeout(timeoutMs)} : {}),
       headers: {
         "xi-api-key": requireElevenLabsApiKey(),
         "content-type": "application/json",

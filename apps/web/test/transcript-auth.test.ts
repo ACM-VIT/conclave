@@ -69,6 +69,13 @@ describe("verifyTranscriptToken", () => {
     });
   });
 
+  it("accepts room credential routing only from an SFU-issued signed token", async () => {
+    const routed = validPayload({ iss: "conclave-sfu", sfuUrl: "https://sfu.example" });
+    expect(await verifyTranscriptToken(await signToken(routed), "secret")).toHaveProperty("sfuUrl", "https://sfu.example");
+    const other = { ...routed, iss: undefined };
+    expect((await verifyTranscriptToken(await signToken(other), "secret"))?.sfuUrl).toBeUndefined();
+  });
+
   it("preserves view-only capabilities", async () => {
     const token = await signToken(
       validPayload({

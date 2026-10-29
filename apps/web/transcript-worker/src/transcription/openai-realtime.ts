@@ -1,7 +1,7 @@
 import {
   buildRealtimeTranscriptionConfig,
   realtimeEndpoint,
-} from "../openai";
+} from "../ai";
 import { safeJsonParse } from "../utils";
 import type {
   LiveTranscriptionCallbacks,

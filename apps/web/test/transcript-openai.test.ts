@@ -14,7 +14,7 @@ import {
   buildRealtimeTranscriptionConfig,
   buildTranscriptionPrompt,
   realtimeEndpoint,
-} from "../transcript-worker/src/openai";
+} from "../transcript-worker/src/ai";
 import {
   applyMinutesUpdateFromText,
   boundMinutesSnapshot,

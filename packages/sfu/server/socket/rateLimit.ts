@@ -95,6 +95,8 @@ export const takeToken = (
  * Capacity = burst allowance; refillPerSec = sustained rate.
  */
 export const RATE_LIMITS = {
+  // Model lists are cached per room, but personal-key lookups still need a cap.
+  aiModels: { capacity: 12, refillPerSec: 0.5 },
   // Awareness updates are the chattiest (cursor moves, presence). ~20/s sustained.
   appsAwareness: { capacity: 40, refillPerSec: 20 },
   // Full Yjs sync can encode a large document; keep request bursts modest.

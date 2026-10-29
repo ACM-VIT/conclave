@@ -22,6 +22,7 @@ import { useOneTimeHint } from "../hooks/useOneTimeHint";
 
 interface GifPickerProps {
   disabled?: boolean;
+  showHint?: boolean;
   onSelect: (gif: ChatGifAttachment) => void;
   variant?: "desktop" | "mobile";
 }
@@ -41,6 +42,7 @@ const MEDIA_TABS: ReadonlyArray<{
 
 function GifPicker({
   disabled = false,
+  showHint = true,
   onSelect,
   variant = "desktop",
 }: GifPickerProps) {
@@ -69,7 +71,7 @@ function GifPicker({
   // Announce the newly added stickers + clips catalogs on the picker itself, so
   // even people who already dismissed the original "GIFs are here" tip see it.
   const stickersClipsTip = useOneTimeHint("chat-stickers-clips", {
-    enabled: !disabled && !isOpen,
+    enabled: showHint && !disabled && !isOpen,
     delay: 900,
   });
 
