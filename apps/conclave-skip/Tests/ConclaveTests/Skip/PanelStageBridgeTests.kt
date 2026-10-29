@@ -43,6 +43,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.AndroidUiFrameClock
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -654,6 +655,7 @@ class PanelStageBridgeTests {
         var pageComposer by mutableStateOf(false)
         var pageBodyBounds: Rect? = null
         var pageTileBounds: Rect? = null
+        var pageBottomPaddingPx = 0f
         var pageMounts = 0
         var reservation: PaddingValues? = null
         var pageStack: PanelPageStack? = null
@@ -707,6 +709,7 @@ class PanelStageBridgeTests {
                                 composer = { Text("Fixture composer") },
                             ) { padding ->
                                 reservation = padding
+                                pageBottomPaddingPx = with(LocalDensity.current) { padding.calculateBottomPadding().toPx() }
                                 pageStack = LocalPanelPageStack.current
                                 LazyColumn(Modifier.fillMaxSize().onGloballyPositioned { pageBodyBounds = it.boundsInRoot() }, contentPadding = padding) {
                                     item(key = "row") { Text("Row") }
@@ -822,7 +825,8 @@ class PanelStageBridgeTests {
         assertTrue(reservation!!.calculateBottomPadding() >= 16.dp)
         assertNotNull(pageBodyBounds)
         assertNotNull(pageTileBounds)
-        assertTrue("the measured body stays above the lower mini tile", pageBodyBounds!!.bottom <= pageTileBounds!!.top)
+        assertTrue("the list viewport extends beside the lower mini tile", pageBodyBounds!!.bottom >= pageTileBounds!!.bottom)
+        assertTrue("scroll end padding clears the floating tile", pageBottomPaddingPx + 1f >= pageBodyBounds!!.bottom - pageTileBounds!!.top)
         pageComposer = true
         settleHost(activity)
         assertEquals("a composer change never remounts the page", 1, pageMounts)
