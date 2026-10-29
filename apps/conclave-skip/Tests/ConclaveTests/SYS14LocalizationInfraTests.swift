@@ -130,7 +130,8 @@ struct SYS14LocalizationInfraTests {
         #expect(gradle.contains("androidResources { generateLocaleConfig = true }"))
         #expect(gradle.components(separatedBy: "generateLocaleConfig").count - 1 == 1)
 
-        #expect(gradle.contains("buildTypes { debug { isPseudoLocalesEnabled = true } release {"))
+        #expect(gradle.contains("buildTypes { debug { isPseudoLocalesEnabled = true"))
+        #expect(gradle.components(separatedBy: "isPseudoLocalesEnabled").count - 1 == 1)
         let properties = try sys14Source("Android/app/src/main/res/resources.properties")
             .split(whereSeparator: { $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespaces) }

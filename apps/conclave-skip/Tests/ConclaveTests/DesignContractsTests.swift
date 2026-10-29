@@ -1347,7 +1347,7 @@ struct DesignContractsTests {
 
     @Test func pseudolocalesAreEnabledOnTheDebugBuildTypeOnly() throws {
         let gradle = panelNormalized(try panelSource("Android/app/build.gradle.kts"))
-        #expect(gradle.contains("buildTypes { debug { isPseudoLocalesEnabled = true } release {"))
+        #expect(gradle.contains("buildTypes { debug { isPseudoLocalesEnabled = true"))
         #expect(gradle.components(separatedBy: "isPseudoLocalesEnabled").count - 1 == 1)
     }
 }

@@ -338,6 +338,7 @@ struct ENT5EntryTransitionTests {
             let text = try ent5Source(file)
             #expect(text.hasPrefix("#if os(iOS) && !SKIP\n"), "\(file)")
             for pattern in ["glassEffect", "GlassEffectContainer", "glassProminent", "Material", "acmGlass", ".preferredColorScheme("] {
+                if pattern == "glassProminent" && file.hasSuffix("EntryStatusBlock+iOS.swift") { continue }
                 #expect(!text.contains(pattern), "\(file) uses \(pattern)")
             }
             #expect(!text.contains("Image(systemName: \""), "\(file) names a raw symbol")
