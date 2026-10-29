@@ -411,4 +411,9 @@ struct TranscriptExportSnapshot {
 extension TranscriptExportLabels: Sendable {}
 extension TranscriptExportFile: Sendable {}
 extension TranscriptExportSnapshot: Sendable {}
+extension TranscriptExportSnapshot {
+    func data(timeLabel: (Double) -> String) -> Data {
+        Data(TranscriptExportPolicy.markdown(finals: finals, minutes: minutes, labels: labels, timeLabel: timeLabel).utf8)
+    }
+}
 #endif

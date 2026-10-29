@@ -19,10 +19,11 @@ struct OwnerExportPerformanceTests {
         presenter.recordExport(byteCount: 7, callSession: presenter.inputs.callSession)
         let result = await Task.detached {
             #expect(!Thread.isMainThread)
-            return snapshot.file(timeLabel: { _ in "10:41" })
+            return snapshot.data(timeLabel: { _ in "10:41" })
         }.value
-        #expect(result == expected)
-        presenter.recordExport(byteCount: result.byteCount, callSession: oldSession)
+        #expect(result == Data(expected.content.utf8))
+        #expect(result.count == expected.byteCount)
+        presenter.recordExport(byteCount: result.count, callSession: oldSession)
         #expect(presenter.exportBytes == 7)
     }
 }

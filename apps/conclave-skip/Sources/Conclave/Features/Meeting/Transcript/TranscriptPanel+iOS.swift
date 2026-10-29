@@ -163,48 +163,37 @@ private struct TranscriptPanelMenu: View {
 struct TranscriptPanelExportItem: Transferable {
     let presenter: TranscriptPresenter
     let expectedCallSession: Int
+    let fileName: String
 
     @MainActor
     init(presenter: TranscriptPresenter) {
         self.presenter = presenter
         expectedCallSession = presenter.inputs.callSession
+        fileName = TranscriptExportPolicy.fileName(roomId: presenter.inputs.roomId)
     }
 
     static let contentType: UTType = UTType(filenameExtension: "md", conformingTo: .plainText) ?? .plainText
 
     static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(exportedContentType: TranscriptPanelExportItem.contentType) { item in
+        DataRepresentation(exportedContentType: TranscriptPanelExportItem.contentType) { item in
             let input = try await MainActor.run {
                 guard item.presenter.inputs.callSession == item.expectedCallSession else { throw CancellationError() }
                 return (item.presenter.exportSnapshot(labels: TranscriptCopy.exportLabels(roomId: item.presenter.inputs.roomId)),
                  item.presenter.inputs.callSession)
             }
             let prepared = try await Task.detached(priority: .userInitiated) {
-                let file = input.0.file(timeLabel: { TranscriptCopy.clock($0) })
-                let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-                let url = directory.appendingPathComponent(file.fileName)
-                do {
-                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                    try file.content.write(to: url, atomically: true, encoding: .utf8)
-                    return (url, directory, file.byteCount)
-                } catch {
-                    try? FileManager.default.removeItem(at: directory)
-                    throw error
-                }
-            }.value
-            do {
                 try Task.checkCancellation()
-                return try await MainActor.run {
-                    try Task.checkCancellation()
-                    guard item.presenter.inputs.callSession == input.1 else { throw CancellationError() }
-                    item.presenter.recordExport(byteCount: prepared.2, callSession: input.1)
-                    return SentTransferredFile(prepared.0)
-                }
-            } catch {
-                await Task.detached { try? FileManager.default.removeItem(at: prepared.1) }.value
-                throw error
+                return input.0.data(timeLabel: { TranscriptCopy.clock($0) })
+            }.value
+            try Task.checkCancellation()
+            return try await MainActor.run {
+                try Task.checkCancellation()
+                guard item.presenter.inputs.callSession == input.1 else { throw CancellationError() }
+                item.presenter.recordExport(byteCount: prepared.count, callSession: input.1)
+                return prepared
             }
         }
+        .suggestedFileName { $0.fileName }
     }
 }
 
