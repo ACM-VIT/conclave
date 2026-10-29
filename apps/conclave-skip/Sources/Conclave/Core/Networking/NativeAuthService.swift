@@ -420,6 +420,11 @@ enum NativeAuthService {
     }
 
     private static func resolveDebugAppBaseURL() -> URL? {
+        #if DEBUG && targetEnvironment(simulator) && !SKIP
+        let allowProductionBundle = NativeRuntimeConfig.usesDebugViewerProfile
+        #else
+        let allowProductionBundle = true
+        #endif
         for key in appBaseURLConfigKeys {
             #if DEBUG && !SKIP
 
@@ -432,10 +437,7 @@ enum NativeAuthService {
                 return url
             }
             if let value = NativeRuntimeConfig.bundledString(forKey: key),
-               let url = configuredBaseURL(from: value) {
-                if shouldIgnoreBundledProductionBaseURL(url) {
-                    continue
-                }
+               let url = configuredDebugBundledBaseURL(from: value, allowProductionHost: allowProductionBundle) {
                 return url
             }
         }
@@ -603,15 +605,11 @@ enum NativeAuthService {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private static func shouldIgnoreBundledProductionBaseURL(_ url: URL) -> Bool {
-        guard let host = url.host else { return false }
-        #if SKIP
-        return false
-        #elseif DEBUG && targetEnvironment(simulator)
-        return SfuJoinService.isProductionHost(host)
-        #else
-        return false
-        #endif
+    static func configuredDebugBundledBaseURL(from value: String, allowProductionHost: Bool) -> URL? {
+        guard let url = configuredBaseURL(from: value),
+              let host = url.host,
+              allowProductionHost || !SfuJoinService.isProductionHost(host) else { return nil }
+        return url
     }
 
     private static func baseURL(from url: URL) -> URL? {

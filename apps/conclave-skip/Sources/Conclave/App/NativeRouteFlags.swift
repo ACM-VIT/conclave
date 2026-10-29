@@ -74,9 +74,14 @@ final class NativeRouteFlags {
 
     func configureFromLaunchEnvironment() {
         #if DEBUG && !SKIP
+        let fixture = NativeRuntimeConfig.debugLaunchValue(forKey: NativeRouteFlags.premeetingFixtureEnvironmentKey)
         configure(
-            routes: NativeRuntimeConfig.debugLaunchValue(forKey: NativeRouteFlags.routesEnvironmentKey),
-            premeetingFixture: NativeRuntimeConfig.debugLaunchValue(forKey: NativeRouteFlags.premeetingFixtureEnvironmentKey),
+            routes: NativeRuntimeConfig.debugViewerRoutes(
+                explicitValue: NativeRuntimeConfig.debugLaunchValue(forKey: NativeRouteFlags.routesEnvironmentKey),
+                premeetingFixture: fixture,
+                profileEnabled: NativeRuntimeConfig.usesDebugViewerProfile
+            ),
+            premeetingFixture: fixture,
             debugEligible: true
         )
         #if os(iOS)

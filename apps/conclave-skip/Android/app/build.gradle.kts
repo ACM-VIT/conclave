@@ -63,6 +63,7 @@ val conclaveAuthBaseUrl = configuredValue(
 
 val productionConclaveBaseUrl = "https://conclave.acmvit.in"
 val productionSfuJoinUrl = "$productionConclaveBaseUrl/api/sfu/join"
+val debugViewerProfile = configuredValue("CONCLAVE_DEBUG_VIEWER_PROFILE").lowercase() in setOf("yes", "true", "1")
 val sfuJoinUrl = configuredValue("SFU_JOIN_URL").ifBlank { productionSfuJoinUrl }
 val releaseArtifactRequested = gradle.startParameter.taskNames.any { taskName ->
     val lower = taskName.substringAfterLast(":").lowercase()
@@ -116,6 +117,7 @@ android {
         manifestPlaceholders["GOOGLE_SIGN_IN_WEB_CLIENT_ID"] = googleSignInWebClientId
         manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = conclaveAuthBaseUrl
         manifestPlaceholders["SFU_JOIN_URL"] = sfuJoinUrl
+        manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = "false"
         manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "true"
 
     }
@@ -166,6 +168,10 @@ android {
     buildTypes {
         debug {
             isPseudoLocalesEnabled = true
+            manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = debugViewerProfile.toString()
+            if (debugViewerProfile && conclaveAuthBaseUrl.isBlank()) {
+                manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = productionConclaveBaseUrl
+            }
         }
         release {
             signingConfig = signingConfigs.findByName("release")
@@ -173,6 +179,7 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
             isDebuggable = false
+            manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = "false"
             manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = productionConclaveBaseUrl
             manifestPlaceholders["SFU_JOIN_URL"] = productionSfuJoinUrl
             manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "false"

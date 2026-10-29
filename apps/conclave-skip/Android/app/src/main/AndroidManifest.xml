@@ -55,6 +55,9 @@
         <meta-data
             android:name="SFU_JOIN_URL"
             android:value="${SFU_JOIN_URL}" />
+        <meta-data
+            android:name="CONCLAVE_DEBUG_VIEWER_PROFILE"
+            android:value="${CONCLAVE_DEBUG_VIEWER_PROFILE}" />
 
         <activity
             android:name=".MainActivity"

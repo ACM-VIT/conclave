@@ -349,24 +349,17 @@ enum SfuJoinService {
         return productionJoinURL()
         #else
         #if DEBUG
-        if let envUrl = NativeRuntimeConfig.debugLaunchValue(forKey: "SFU_JOIN_URL"),
-           let url = configuredJoinURL(from: envUrl, allowProductionHost: true) {
-            return url
-        }
-
         #if targetEnvironment(simulator)
-        if let bundledUrl = resolveBundledJoinURL(allowProductionHost: false) {
-            return bundledUrl
-        }
-
-        return URL(string: "http://127.0.0.1:3000/api/sfu/join")!
+        let isSimulator = true
         #else
-        if let bundledUrl = resolveBundledJoinURL(allowProductionHost: true) {
-            return bundledUrl
-        }
-
-        return productionJoinURL()
+        let isSimulator = false
         #endif
+        return resolveDebugJoinURL(
+            launchValue: NativeRuntimeConfig.debugLaunchValue(forKey: "SFU_JOIN_URL"),
+            bundledValue: NativeRuntimeConfig.bundledString(forKey: "SFU_JOIN_URL"),
+            isSimulator: isSimulator,
+            viewerProfileEnabled: NativeRuntimeConfig.usesDebugViewerProfile
+        )
         #else
         if let envUrl = ProcessInfo.processInfo.environment["SFU_JOIN_URL"],
            let url = configuredProductionJoinURL(from: envUrl) {
@@ -380,6 +373,26 @@ enum SfuJoinService {
         return productionJoinURL()
         #endif
         #endif
+    }
+
+    static func resolveDebugJoinURL(
+        launchValue: String?,
+        bundledValue: String?,
+        isSimulator: Bool,
+        viewerProfileEnabled: Bool
+    ) -> URL {
+        if let launchValue,
+           let url = configuredJoinURL(from: launchValue, allowProductionHost: true) {
+            return url
+        }
+        if let bundledValue,
+           let url = configuredJoinURL(from: bundledValue, allowProductionHost: !isSimulator || viewerProfileEnabled) {
+            return url
+        }
+        if isSimulator && !viewerProfileEnabled {
+            return URL(string: "http://127.0.0.1:3000/api/sfu/join")!
+        }
+        return productionJoinURL()
     }
 
     static func isAndroidDebugRuntime() -> Bool {

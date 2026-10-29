@@ -7,10 +7,15 @@ ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor
 
 INFOPLIST_FILE = Info.plist
 GENERATE_INFOPLIST_FILE = NO
+CONCLAVE_DEBUG_VIEWER_PROFILE = NO
+CONCLAVE_DEBUG_SFU_JOIN_URL_NO = http:/$()/127.0.0.1:3000/api/sfu/join
+CONCLAVE_DEBUG_SFU_JOIN_URL_YES = https:/$()/conclave.acmvit.in/api/sfu/join
+CONCLAVE_DEBUG_AUTH_BASE_URL_NO = http:/$()/127.0.0.1:3000
+CONCLAVE_DEBUG_AUTH_BASE_URL_YES = https:/$()/conclave.acmvit.in
 SFU_JOIN_URL = https:/$()/conclave.acmvit.in/api/sfu/join
-SFU_JOIN_URL[config=Debug][sdk=iphonesimulator*] = http:/$()/127.0.0.1:3000/api/sfu/join
+SFU_JOIN_URL[config=Debug][sdk=iphonesimulator*] = $(CONCLAVE_DEBUG_SFU_JOIN_URL_$(CONCLAVE_DEBUG_VIEWER_PROFILE))
 CONCLAVE_AUTH_BASE_URL = https:/$()/conclave.acmvit.in
-CONCLAVE_AUTH_BASE_URL[config=Debug][sdk=iphonesimulator*] = http:/$()/127.0.0.1:3000
+CONCLAVE_AUTH_BASE_URL[config=Debug][sdk=iphonesimulator*] = $(CONCLAVE_DEBUG_AUTH_BASE_URL_$(CONCLAVE_DEBUG_VIEWER_PROFILE))
 
 IPHONEOS_DEPLOYMENT_TARGET = 17.0
 MACOSX_DEPLOYMENT_TARGET = 14.0

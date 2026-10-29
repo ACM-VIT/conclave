@@ -242,7 +242,15 @@ object NativeRouteLaunch {
     const val PREMEETING_FIXTURE_EXTRA = "conclave.premeetingFixture"
 
     fun configure(routes: String?, premeetingFixture: String?, debugEligible: Boolean) {
-        NativeRouteFlags.shared.configure(routes = routes, premeetingFixture = premeetingFixture, debugEligible = debugEligible)
+        NativeRouteFlags.shared.configure(
+            routes = NativeRuntimeConfig.debugViewerRoutes(
+                explicitValue = routes,
+                premeetingFixture = premeetingFixture,
+                profileEnabled = NativeRuntimeConfig.usesDebugViewerProfile,
+            ),
+            premeetingFixture = premeetingFixture,
+            debugEligible = debugEligible,
+        )
     }
 
     val premeetingFixture: String

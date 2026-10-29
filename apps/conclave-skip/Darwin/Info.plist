@@ -49,6 +49,8 @@
 	<string>$(GOOGLE_IOS_REVERSED_CLIENT_ID)</string>
 	<key>CONCLAVE_AUTH_BASE_URL</key>
 	<string>$(CONCLAVE_AUTH_BASE_URL)</string>
+	<key>CONCLAVE_DEBUG_VIEWER_PROFILE</key>
+	<string>$(CONCLAVE_DEBUG_VIEWER_PROFILE)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

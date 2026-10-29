@@ -1,6 +1,38 @@
 import Foundation
 
 enum NativeRuntimeConfig {
+    static let debugViewerProfileKey = "CONCLAVE_DEBUG_VIEWER_PROFILE"
+
+    static var usesDebugViewerProfile: Bool {
+        #if SKIP
+        return isDebugViewerProfileEnabled(
+            configuredValue: bundledString(forKey: debugViewerProfileKey),
+            debugEligible: AndroidRuntimeConfig.isDebuggable()
+        )
+        #elseif DEBUG
+        return isDebugViewerProfileEnabled(
+            configuredValue: bundledString(forKey: debugViewerProfileKey),
+            debugEligible: true
+        )
+        #else
+        return false
+        #endif
+    }
+
+    static func isDebugViewerProfileEnabled(configuredValue: String?, debugEligible: Bool) -> Bool {
+        guard debugEligible, let value = configuredValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return value == "yes" || value == "true" || value == "1"
+    }
+
+    static func debugViewerRoutes(explicitValue: String?, premeetingFixture: String?, profileEnabled: Bool) -> String? {
+        if let explicitValue { return explicitValue }
+        guard profileEnabled,
+              (premeetingFixture ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return "premeeting,call"
+    }
+
     #if DEBUG && !SKIP
     private static let debugArgumentKeys = [
         "CONCLAVE_NATIVE_ROUTES", "CONCLAVE_PREMEETING_FIXTURE", "SFU_JOIN_URL", "CONCLAVE_AUTH_BASE_URL",
