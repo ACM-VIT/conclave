@@ -5,6 +5,10 @@ extension View {
     func conclaveFloatingActionBar<Bar: View>(shaded: Bool = true, @ViewBuilder _ bar: () -> Bar) -> some View {
         modifier(ConclaveFloatingActionBar(bar: bar(), shaded: shaded))
     }
+
+    func conclaveFloatingActionBar<Bar: View>(shaded: Bool, over surface: Color, @ViewBuilder _ bar: () -> Bar) -> some View {
+        modifier(ConclaveFloatingActionBar(bar: bar(), shaded: shaded, surface: surface))
+    }
 }
 
 private enum ConclaveFloatingActionVeil {
@@ -16,6 +20,7 @@ private enum ConclaveFloatingActionVeil {
 private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
     let bar: Bar
     let shaded: Bool
+    var surface: Color? = nil
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var colorScheme
@@ -77,7 +82,9 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
 
     @ViewBuilder
     private var shadedFill: some View {
-        if #available(iOS 26.0, *) {
+        if let surface {
+            Rectangle().fill(veil.opacity(veilOpacity)).background(surface)
+        } else if #available(iOS 26.0, *) {
             Rectangle().fill(veil.opacity(veilOpacity))
         } else {
             Rectangle().fill(veil.opacity(veilOpacity)).background(.ultraThinMaterial)

@@ -291,7 +291,7 @@ struct ENT5EntryTransitionTests {
         #expect(card.contains(".entryTransitionAnchor(routeId: media.routeId)"))
         let lobby = try ent5Source("Sources/Conclave/Features/Lobby/LobbyView+iOS.swift")
 
-        #expect(lobby.components(separatedBy: "EntryStatusBlock(premeeting: premeeting, routeId: routeId)").count - 1 == 1)
+        #expect(lobby.components(separatedBy: "EntryStatusBlock(premeeting: premeeting, routeId: routeId, reservesNameReason: nameFocused)").count - 1 == 1)
         #expect(!lobby.contains("LobbyEntryStatusBlock"))
     }
 

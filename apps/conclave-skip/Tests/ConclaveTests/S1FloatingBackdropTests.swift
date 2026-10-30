@@ -58,7 +58,7 @@ struct S1FloatingBackdropTests {
         #expect(bar.contains("ConclaveButton(title, role: .primary, isEnabled: isEnabled, isPending: isPending, identifier: identifier, action: action)"))
 
         let lobby = s1bFlat(try s1bSource(Self.lobbyViewFile))
-        #expect(lobby.contains(".conclaveFloatingActionBar(shaded: isEditing) {"))
+        #expect(lobby.contains(".conclaveFloatingActionBar(shaded: isEditing, over: Color(uiColor: .systemGroupedBackground)) {"))
         for file in ["Sources/Conclave/Features/Meeting/Activities/ActivitiesPanel+iOS.swift",
                      "Sources/Conclave/Features/Meeting/Transcript/TranscriptPanel+iOS.swift"] {
             let text = try s1bSource(file)
@@ -70,9 +70,28 @@ struct S1FloatingBackdropTests {
     @Test func belowIOS26TheVeilKeepsTheMaterialBlurUnderTheTokenTint() throws {
         let bar = s1bFlat(try s1bSource(Self.floatingActionBarFile))
         #expect(bar.contains("private var shadedBackdrop: some View { shadedFill .mask {"))
-        #expect(bar.contains("@ViewBuilder private var shadedFill: some View { if #available(iOS 26.0, *) { Rectangle().fill(veil.opacity(veilOpacity)) } else { Rectangle().fill(veil.opacity(veilOpacity)).background(.ultraThinMaterial) } }"),
-                "iOS 26 relies on the soft bottom scroll edge; older systems blur the rows under the tint")
+        #expect(bar.contains("@ViewBuilder private var shadedFill: some View { if let surface { Rectangle().fill(veil.opacity(veilOpacity)).background(surface) } else if #available(iOS 26.0, *) { Rectangle().fill(veil.opacity(veilOpacity)) } else { Rectangle().fill(veil.opacity(veilOpacity)).background(.ultraThinMaterial) } }"),
+                "a known page surface makes the band opaque; otherwise iOS 26 relies on the soft bottom scroll edge and older systems blur the rows under the tint")
         #expect(bar.components(separatedBy: ".ultraThinMaterial").count - 1 == 2, "the shaded blur below 26 and the unshaded band")
+    }
+
+    @Test func theLobbyBandIsOpaqueAndKeepsItsHeightWhenTheHintHides() throws {
+        let bar = s1bFlat(try s1bSource(Self.floatingActionBarFile))
+        #expect(bar.contains("func conclaveFloatingActionBar<Bar: View>(shaded: Bool, over surface: Color, @ViewBuilder _ bar: () -> Bar) -> some View { modifier(ConclaveFloatingActionBar(bar: bar(), shaded: shaded, surface: surface)) }"))
+        #expect(bar.contains("let shaded: Bool var surface: Color? = nil"))
+        #expect(bar.contains("func conclaveFloatingActionBar<Bar: View>(shaded: Bool = true, @ViewBuilder _ bar: () -> Bar) -> some View { modifier(ConclaveFloatingActionBar(bar: bar(), shaded: shaded)) }"),
+                "sheet bars keep the translucent veil")
+
+        let lobbySource = try s1bSource(Self.lobbyViewFile)
+        #expect(s1bFlat(lobbySource).contains(".modifier(LobbyBottomBar(premeeting: premeeting, routeId: route.id, nameFocused: isNameFocused))"))
+        let lobbyBar = s1bFlat(try s1bBlock(lobbySource, from: "private struct LobbyBottomBar: ViewModifier {", to: "enum LobbyPrimaryCopy {"))
+        #expect(lobbyBar.contains("EntryStatusBlock(premeeting: premeeting, routeId: routeId, reservesNameReason: nameFocused) .background {"))
+        #expect(!lobbySource.contains("hintReservation") && !lobbySource.contains(".hidden()"), "the lobby never copies the hint's geometry")
+
+        let entry = s1bFlat(try s1bSource("Sources/Conclave/Features/Lobby/EntryStatusBlock+iOS.swift"))
+        #expect(entry.contains("let reserved = reservesNameReason ? LobbyPrimaryCopy.reason(nameReason.rawValue) : nil"))
+        #expect(entry.contains("if let line = reason ?? reserved { Text(line) .font(.footnote) .foregroundStyle(HostingTheme.secondaryText) .multilineTextAlignment(.center) .opacity(reason == nil ? 0 : 1) .accessibilityHidden(reason == nil) .accessibilityIdentifier(\"lobby.primary.reason\") }"),
+                "the hint keeps its own row while the name is focused, so typing never changes the bar height")
     }
 
     @Test func theCameraCaptionIsDecorativeAndThePreviewValueCarriesTheState() throws {

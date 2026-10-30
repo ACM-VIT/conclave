@@ -20,6 +20,7 @@ struct NoticeLanesLayer: View {
             NoticeBottomLanes(stage: stage, forceScreenReader: forceScreenReader)
                 .accessibilitySortPriority(0.4)
         }
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .ignoresSafeArea()
         .environment(\.colorScheme, .dark)
         .onAppear {

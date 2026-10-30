@@ -45,7 +45,7 @@ struct LobbyView: View {
                 if shrank && isNameFocused && !nameRevealed {
                     nameRevealed = true
                     withAnimation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion)) {
-                        proxy.scrollTo(LobbyScrollAnchor.name, anchor: .center)
+                        proxy.scrollTo(LobbyScrollAnchor.name, anchor: LobbyScrollAnchor.nameReveal)
                     }
                 }
             }
@@ -53,7 +53,7 @@ struct LobbyView: View {
         .onChange(of: isNameFocused) {
             if !isNameFocused { nameRevealed = false }
         }
-        .modifier(LobbyBottomBar(premeeting: premeeting, routeId: route.id))
+        .modifier(LobbyBottomBar(premeeting: premeeting, routeId: route.id, nameFocused: isNameFocused))
         .modifier(LobbyTitle(premeeting: premeeting, route: route))
         .modifier(LobbyChrome(premeeting: premeeting, routeId: route.id))
         .task(id: route.id) {
@@ -68,6 +68,8 @@ struct LobbyView: View {
 
 private enum LobbyScrollAnchor {
     case name
+
+    static let nameReveal = UnitPoint(x: 0.5, y: 0.3)
 }
 
 private struct LobbyControlsColumn: View {
@@ -291,12 +293,13 @@ private struct LobbyInviteCodeSection: View {
 private struct LobbyBottomBar: ViewModifier {
     let premeeting: PremeetingPresenter
     let routeId: Int
+    let nameFocused: Bool
 
     func body(content: Content) -> some View {
         let isEditing = premeeting.lobbyStatus?.routeId == routeId && premeeting.lobbyStatus?.mode == .editing
         content
-            .conclaveFloatingActionBar(shaded: isEditing) {
-                EntryStatusBlock(premeeting: premeeting, routeId: routeId)
+            .conclaveFloatingActionBar(shaded: isEditing, over: Color(uiColor: .systemGroupedBackground)) {
+                EntryStatusBlock(premeeting: premeeting, routeId: routeId, reservesNameReason: nameFocused)
                     .background {
                         if !isEditing { Color(uiColor: .systemGroupedBackground) }
                     }

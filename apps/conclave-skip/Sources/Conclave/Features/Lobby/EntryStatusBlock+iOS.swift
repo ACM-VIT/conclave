@@ -4,10 +4,11 @@ import SwiftUI
 struct EntryStatusBlock: View {
     let premeeting: PremeetingPresenter
     let routeId: Int
+    let reservesNameReason: Bool
 
     var body: some View {
         if let status = premeeting.lobbyStatus, status.routeId == routeId {
-            EntryStatusContent(status: status, premeeting: premeeting)
+            EntryStatusContent(status: status, premeeting: premeeting, reservesNameReason: reservesNameReason)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .onChange(of: status.mode) { previous, current in
@@ -20,11 +21,12 @@ struct EntryStatusBlock: View {
 private struct EntryStatusContent: View {
     let status: LobbyStatusSnapshot
     let premeeting: PremeetingPresenter
+    let reservesNameReason: Bool
 
     var body: some View {
         switch status.mode {
         case .editing:
-            EntryEditingBlock(status: status, premeeting: premeeting)
+            EntryEditingBlock(status: status, premeeting: premeeting, reservesNameReason: reservesNameReason)
         case .connecting:
             EntryConnectingBlock(status: status)
         case .waiting:
@@ -38,19 +40,25 @@ private struct EntryStatusContent: View {
 private struct EntryEditingBlock: View {
     let status: LobbyStatusSnapshot
     let premeeting: PremeetingPresenter
+    let reservesNameReason: Bool
 
     var body: some View {
+        let reason = LobbyPrimaryCopy.reason(status.primaryReason)
+        let nameReason = status.intent == .newMeeting ? LobbyPrimaryReason.nameMissingStart : LobbyPrimaryReason.nameMissingJoin
+        let reserved = reservesNameReason ? LobbyPrimaryCopy.reason(nameReason.rawValue) : nil
         VStack(spacing: 8) {
             ConclaveFloatingActionButton(title: LobbyPrimaryCopy.title(status.intent), isEnabled: status.isPrimaryEnabled,
                                          isPending: status.isPrimaryPending, identifier: "lobby.primary") {
                 premeeting.startOrJoin()
             }
             .frame(maxWidth: .infinity)
-            if let reason = LobbyPrimaryCopy.reason(status.primaryReason) {
-                Text(reason)
+            if let line = reason ?? reserved {
+                Text(line)
                     .font(.footnote)
                     .foregroundStyle(HostingTheme.secondaryText)
                     .multilineTextAlignment(.center)
+                    .opacity(reason == nil ? 0 : 1)
+                    .accessibilityHidden(reason == nil)
                     .accessibilityIdentifier("lobby.primary.reason")
             }
         }
