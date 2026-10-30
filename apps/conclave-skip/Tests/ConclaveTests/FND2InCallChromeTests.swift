@@ -259,8 +259,8 @@ struct FND2InCallChromeTests {
             for word in ["dynamicLightColorScheme", "dynamicDarkColorScheme", ".shadow("] {
                 #expect(!text.contains(word), "\(file) uses \(word)")
             }
-            if file != "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFloatingActionBar+iOS.swift" {
-                #expect(!text.contains("Gradient") && !text.contains("gradient"), "\(file) uses a gradient outside the floating-action fade mask")
+            if !S1FloatingBackdropTests.gradientAllowlist.contains(file) {
+                #expect(!text.contains("Gradient") && !text.contains("gradient"), "\(file) uses a gradient outside the D-1 allowlist")
             }
         }
     }

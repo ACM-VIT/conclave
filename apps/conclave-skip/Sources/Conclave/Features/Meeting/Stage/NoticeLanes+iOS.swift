@@ -4,7 +4,6 @@ import SwiftUI
 import UIKit
 
 enum NoticeLaneMetrics {
-    static let chipRow: CGFloat = 52
     static let toastGap: CGFloat = 8
     static let maxToastWidth: CGFloat = 560
 }
@@ -39,8 +38,7 @@ struct NoticeBannerLane: View {
     let stage: StagePresenter
 
     var body: some View {
-        let geometry = stage.noticeGeometry
-        let top = CGFloat(geometry.bannerTop) + (geometry.chipsVisible ? NoticeLaneMetrics.chipRow : 0)
+        let top = CGFloat(stage.noticeGeometry.bannerTop)
         VStack(spacing: 0) {
             ConclaveBannerLane(noticeID: stage.banner?.id, identifier: "stage.banner") {
                 NoticeBannerView(stage: stage)

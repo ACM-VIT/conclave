@@ -66,6 +66,23 @@ struct RecentMeetingRow: Equatable, Identifiable {
     let relativeTime: String
     let role: RecentRole
     let end: RecentEnd
+    let avatarSeed: String
+    let code: String
+}
+
+enum RecentMeetingRowPolicy {
+    static func avatarSeed(roomId: String) -> String {
+        roomId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func code(title: String, roomId: String) -> String {
+        let code = avatarSeed(roomId: roomId)
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if code.isEmpty || name.lowercased() == code.lowercased() {
+            return ""
+        }
+        return code
+    }
 }
 
 struct RejoinCard: Equatable {

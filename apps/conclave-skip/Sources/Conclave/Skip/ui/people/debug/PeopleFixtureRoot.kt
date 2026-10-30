@@ -51,6 +51,10 @@ fun PeopleFixtureRoot(stateName: String, patternName: String? = null, forceScree
             delay(PeopleFixtureScript.lostHostDelayMillis.toLong())
             session.loseHost()
         }
+        if (state == PeopleFixtureState.hostWaitingLate) {
+            delay(PeopleFixtureScript.lateWaitingDelayMillis.toLong())
+            session.deliverLateWaiting()
+        }
     }
     Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) {
         CallRoot(

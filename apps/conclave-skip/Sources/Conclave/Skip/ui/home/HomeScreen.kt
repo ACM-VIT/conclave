@@ -6,7 +6,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ButtonDefaults
@@ -166,15 +165,12 @@ internal fun HomeScreen(premeeting: PremeetingPresenter, modifier: Modifier = Mo
                 }
                 if (rows.isEmpty() && card == null) {
                     item("empty") {
-                        Column(
-                            Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp).testTag("home.empty"),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(conclaveString("pm_empty_title"), style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.SemiBold)
-                            Text(conclaveString("pm_empty_body"), style = MaterialTheme.typography.bodyMedium,
-                                color = scheme.onSurfaceVariant)
-                        }
+                        Text(
+                            conclaveString("pm_empty_title"),
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 32.dp).testTag("home.empty"),
+                        )
                     }
                 }
             }
@@ -272,6 +268,7 @@ private fun RejoinCardItem(card: RejoinCard, onRejoin: () -> Unit) {
 private fun RecentRowItem(row: HomeRecentUi, onOpen: () -> Unit, onRemove: () -> Unit, modifier: Modifier = Modifier) {
     val haptics = rememberConclaveHaptics()
     var menuOpen by remember { mutableStateOf(false) }
+    val identity = remember(row.avatarSeed) { ConclaveAvatarIdentity.fromSeed(row.avatarSeed) }
     val link = if (row.isWebinar) EntryPolicies.recentLink(roomId = row.roomId, isWebinar = true)
     else MeetingLinkBuilder.url(roomCode = row.roomId, clientId = null)
     val shareSubject = conclaveString("ds_share_subject")
@@ -311,7 +308,18 @@ private fun RecentRowItem(row: HomeRecentUi, onOpen: () -> Unit, onRemove: () ->
     Box(modifier) {
         ListItem(
             headlineContent = { Text(row.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-            supportingContent = { Text(subtitle) },
+            supportingContent = {
+                if (row.code.isEmpty()) {
+                    Text(subtitle)
+                } else {
+                    Column {
+                        Text(row.code, style = MaterialTheme.typography.bodyMedium.monospaced(), maxLines = 1,
+                            overflow = TextOverflow.MiddleEllipsis)
+                        Text(subtitle)
+                    }
+                }
+            },
+            leadingContent = { ConclaveAvatar(identity, ConclaveAvatarSize.row.diameter.dp) },
             trailingContent = {
                 Box {
                     IconButton(onClick = { menuOpen = true }, modifier = Modifier.testTag("home.recent.more." + row.id)) {

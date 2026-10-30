@@ -51,7 +51,6 @@ struct HomeView: View {
                     RejoinCardRow(card: card, onRejoin: { premeeting.rejoin() })
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                 }
             }
             if !home.recents.isEmpty {
@@ -69,17 +68,11 @@ struct HomeView: View {
             }
             if home.recents.isEmpty && home.rejoin == nil {
                 Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(ConclaveStrings.text("No Recent Meetings"))
-                            .font(.title2.weight(.semibold))
-                        Text(ConclaveStrings.text("Start a meeting, or join one with a code or link."))
-                            .font(.subheadline)
-                            .foregroundStyle(HostingTheme.secondaryText)
-                    }
-                    .padding(.vertical, 20)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("home.empty")
-                    .listRowBackground(Color.clear)
+                    Text(ConclaveStrings.text("No Recent Meetings"))
+                        .font(.title2.weight(.semibold))
+                        .padding(.vertical, 20)
+                        .accessibilityIdentifier("home.empty")
+                        .listRowBackground(Color.clear)
                 }
             }
         }
@@ -280,6 +273,7 @@ private struct RecentMeetingRowView: View {
     let onJoin: () -> Void
     let onRemove: () -> Void
     @State private var copyCount = 0
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var link: String {
         row.routeKind == .webinarLanding
@@ -299,14 +293,26 @@ private struct RecentMeetingRowView: View {
     }
 
     var body: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 12))
         NavigationLink(value: PremeetingRoute(id: row.routeId, kind: row.routeKind, roomId: row.roomId)) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.title)
-                    .font(.body)
-                    .lineLimit(2)
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(HostingTheme.secondaryText)
+            layout {
+                ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(row.avatarSeed), size: .row)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.title)
+                        .font(.body)
+                        .lineLimit(2)
+                    if !row.code.isEmpty {
+                        Text(row.code)
+                            .font(.subheadline.monospaced())
+                            .foregroundStyle(HostingTheme.secondaryText)
+                    }
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(HostingTheme.secondaryText)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityElement(children: .combine)
         }

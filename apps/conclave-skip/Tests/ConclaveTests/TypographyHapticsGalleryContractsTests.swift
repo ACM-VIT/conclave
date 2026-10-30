@@ -562,6 +562,12 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(floating.contains(".scrollEdgeEffectStyle(.soft, for: .bottom) .safeAreaBar(edge: .bottom, spacing: 0)"))
         #expect(floating.contains("content.safeAreaInset(edge: .bottom, spacing: 0)"))
         #expect(floating.contains("if needsOpaqueSurface { Color(uiColor: .systemBackground) } else if shaded { shadedBackdrop } else { Rectangle().fill(.ultraThinMaterial)"))
+        #expect(floating.contains("if needsOpaqueSurface { Color(uiColor: .systemBackground).ignoresSafeArea(edges: .bottom) } else if shaded { shadedBackdrop }"))
+        #expect(floating.contains("func conclaveFloatingActionBar<Bar: View>(shaded: Bool = true, @ViewBuilder _ bar: () -> Bar) -> some View {"),
+                "every floating action gets the backdrop by default (D-1)")
+        #expect(floating.contains("private var veil: Color { HostingTheme.token(DesignTokens.neutralStage) }"))
+        #expect(floating.contains(".fill(veil.opacity(veilOpacity))"))
+        #expect(!floating.contains("Color.black") && !floating.contains(".overlay(Color"), "the veil is tinted from the stage token, not black")
     }
 
     @Test func labelCasingFollowsOwnerRule() throws {

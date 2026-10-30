@@ -395,9 +395,13 @@ enum GameProjectionJSON {
         return ""
     }
 
+    static let maxExactInteger = 9007199254740992.0
+
     static func numberText(_ value: Double) -> String {
         let rounded = value.rounded()
-        if abs(value - rounded) < 0.0001 { return String(Int(rounded)) }
+        if abs(value - rounded) < 0.0001 && abs(rounded) <= GameProjectionJSON.maxExactInteger {
+            return String(Int64(rounded))
+        }
         return String(value)
     }
 

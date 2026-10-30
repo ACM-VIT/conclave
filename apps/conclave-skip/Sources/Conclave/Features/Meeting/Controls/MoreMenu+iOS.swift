@@ -533,7 +533,7 @@ enum MoreCopy {
         case .live: return ConclaveStrings.text("Live")
         case .paused: return ConclaveStrings.text("Paused")
         case .attention: return ConclaveStrings.text("Needs attention")
-        case .notesOff: return ConclaveStrings.text("Starts when live notes are on")
+        case .notesOff: return ConclaveStrings.text("Live notes off")
         default: break
         }
         if item.kind == MoreItemID.layout { return layoutTitle(item.statusName) }

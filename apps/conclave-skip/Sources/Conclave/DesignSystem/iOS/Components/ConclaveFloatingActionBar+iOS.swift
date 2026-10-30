@@ -2,9 +2,15 @@
 import SwiftUI
 
 extension View {
-    func conclaveFloatingActionBar<Bar: View>(shaded: Bool = false, @ViewBuilder _ bar: () -> Bar) -> some View {
+    func conclaveFloatingActionBar<Bar: View>(shaded: Bool = true, @ViewBuilder _ bar: () -> Bar) -> some View {
         modifier(ConclaveFloatingActionBar(bar: bar(), shaded: shaded))
     }
+}
+
+private enum ConclaveFloatingActionVeil {
+    static let fadeHeight: CGFloat = 32
+    static let lightOpacity = 0.2
+    static let darkOpacity = 0.55
 }
 
 private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
@@ -15,6 +21,13 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
 
     private var needsOpaqueSurface: Bool { reduceTransparency || contrast == .increased }
+    private var veil: Color { HostingTheme.token(DesignTokens.neutralStage) }
+    private var veilOpacity: Double {
+        colorScheme == .dark ? ConclaveFloatingActionVeil.darkOpacity : ConclaveFloatingActionVeil.lightOpacity
+    }
+    private var veilClearance: CGFloat {
+        shaded && !needsOpaqueSurface ? ConclaveFloatingActionVeil.fadeHeight : 0
+    }
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -29,6 +42,7 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
                             shadedBackdrop
                         }
                     }
+                    .padding(.top, veilClearance)
                 }
         } else {
             content.safeAreaInset(edge: .bottom, spacing: 0) {
@@ -41,25 +55,33 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
                         Rectangle().fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom)
                     }
                 }
+                .padding(.top, veilClearance)
             }
         }
     }
 
     private var shadedBackdrop: some View {
-        Rectangle()
-            .fill(.ultraThinMaterial)
-            .overlay(Color.black.opacity(colorScheme == .dark ? 0.18 : 0.04))
+        shadedFill
             .mask {
                 VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 32)
-                    Color.black
+                    LinearGradient(colors: [veil.opacity(0), veil], startPoint: .top, endPoint: .bottom)
+                        .frame(height: ConclaveFloatingActionVeil.fadeHeight)
+                    veil
                 }
             }
-            .padding(.top, -32)
+            .padding(.top, -ConclaveFloatingActionVeil.fadeHeight)
             .ignoresSafeArea(edges: .bottom)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var shadedFill: some View {
+        if #available(iOS 26.0, *) {
+            Rectangle().fill(veil.opacity(veilOpacity))
+        } else {
+            Rectangle().fill(veil.opacity(veilOpacity)).background(.ultraThinMaterial)
+        }
     }
 }
 
@@ -83,13 +105,13 @@ struct ConclaveFloatingActionButton: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .foregroundStyle(HostingTheme.coralText)
+                    .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)
                 }
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
                 .controlSize(.large)
                 .tint(HostingTheme.coralText)
                 .disabled(!isEnabled || isPending)
-                .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)
                 .accessibilityValue(isPending ? ConclaveStrings.text("In Progress") : "")
                 .accessibilityIdentifier(identifier)
             } else {

@@ -1,6 +1,7 @@
 package conclave.module
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
@@ -30,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -58,7 +61,6 @@ internal fun EntryStatusBlock(premeeting: PremeetingPresenter, status: LobbyStat
 
 @Composable
 private fun EntryStatusContent(premeeting: PremeetingPresenter, status: LobbyStatusUi) {
-    val scheme = MaterialTheme.colorScheme
     when (status.mode) {
         LobbyMode.editing -> {
             EntryPrimaryButton(
@@ -69,8 +71,7 @@ private fun EntryStatusContent(premeeting: PremeetingPresenter, status: LobbySta
             ) { premeeting.startOrJoin() }
             val reason = lobbyPrimaryReasonText(status.reason)
             if (reason.isNotEmpty()) {
-                Text(reason, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center, modifier = Modifier.testTag("lobby.primary.reason"))
+                EntryFloatingNote(reason, identifier = "lobby.primary.reason")
             }
         }
         LobbyMode.connecting -> {
@@ -81,14 +82,25 @@ private fun EntryStatusContent(premeeting: PremeetingPresenter, status: LobbySta
                 identifier = "lobby.primary",
             ) {}
             if (status.showsSlowNotice) {
-                Text(conclaveString("pm_still_connecting"), style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant, textAlign = TextAlign.Center,
-                    modifier = Modifier.testTag("lobby.slowNotice"))
+                EntryFloatingNote(conclaveString("pm_still_connecting"), identifier = "lobby.slowNotice")
             }
         }
         LobbyMode.waiting -> EntryWaitingBlock(premeeting, status)
         LobbyMode.failed -> EntryFailedBlock(premeeting, status)
     }
+}
+
+@Composable
+private fun EntryFloatingNote(text: String, identifier: String) {
+    val scheme = MaterialTheme.colorScheme
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = scheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.background(scheme.surface, MaterialTheme.shapes.medium)
+            .padding(horizontal = 8.dp, vertical = 2.dp).testTag(identifier),
+    )
 }
 
 @Composable
@@ -155,10 +167,11 @@ internal fun EntryPrimaryButton(
 ) {
     val scheme = MaterialTheme.colorScheme
     val inProgress = conclaveString("ds_in_progress")
+    val colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer)
     Button(
         onClick = onClick,
         enabled = enabled && !pending,
-        colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
+        colors = colors.copy(disabledContainerColor = colors.disabledContainerColor.compositeOver(scheme.surface)),
         modifier = modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(identifier)
             .semantics { if (pending) stateDescription = inProgress },
     ) {

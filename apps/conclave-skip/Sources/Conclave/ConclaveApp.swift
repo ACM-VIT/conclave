@@ -144,10 +144,6 @@ public final class ConclaveAppDelegate: Sendable {
     }
 
     public func onInit() {
-        #if !SKIP
-        FontRegistration.registerFonts()
-        #endif
-
         NativeRouteFlags.shared.configureFromLaunchEnvironment()
         PerformanceDiagnostics.install()
         #if os(iOS) && !SKIP
@@ -257,6 +253,13 @@ public final class ConclaveAppDelegate: Sendable {
     }
 
     public func onDestroy() {
+        #if !SKIP
+        MeetingResumeMarker.write()
+        guard Thread.isMainThread else { return }
+        MainActor.assumeIsolated {
+            MeetingViewModel.shared.handleAppWillTerminate()
+        }
+        #endif
     }
 
     public func onLowMemory() {

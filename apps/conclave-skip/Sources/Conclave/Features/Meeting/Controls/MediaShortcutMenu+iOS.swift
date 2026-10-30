@@ -106,6 +106,7 @@ private struct MicShortcutMenu: View {
                         MoreRowLabel(title: MediaShortcutCopy.title(item.kind), subtitle: nil,
                                      systemImage: MediaShortcutCopy.glyph(item.kind))
                     }
+                    .accessibilityLabel(MediaShortcutCopy.actionTitle(item.kind))
                     .accessibilityIdentifier("control.microphone.shortcut." + item.id)
                 }
             }
@@ -209,7 +210,7 @@ enum MediaShortcutCopy {
     static func title(_ kind: MediaShortcutItemID) -> String {
         switch kind {
         case .speaker: return ConclaveStrings.text("Speaker")
-        case .chooseMicrophone: return ConclaveStrings.text("Choose Microphone…")
+        case .chooseMicrophone: return ConclaveStrings.text("Microphone…")
         case .microphone: return ConclaveStrings.text("Microphone")
         case .micMode: return ConclaveStrings.text("Mic Mode…")
         case .audioSettings: return ConclaveStrings.text("Audio Settings")

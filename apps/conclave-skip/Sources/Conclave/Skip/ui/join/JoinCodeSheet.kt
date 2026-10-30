@@ -41,6 +41,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
@@ -65,7 +66,7 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
     val clipboardHasText = remember { joinClipboardHasText(context) }
     val suggestion = premeeting.home.rejoin?.title
     val isValid = EntryPolicies.isValidJoinInput(text)
-    val scheme = MaterialTheme.colorScheme
+    val compactHeight = LocalConfiguration.current.screenHeightDp < 480
 
     DisposableEffect(premeeting) {
         onDispose { premeeting.joinSheetDidDismiss() }
@@ -96,11 +97,12 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
         modifier = Modifier.testTag("join.sheet"),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = 24.dp),
+            modifier = Modifier.padding(horizontal = 24.dp).padding(bottom = if (compactHeight) 0.dp else 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Column(
-                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())
+                    .padding(bottom = if (compactHeight) 24.dp else 0.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Text(
@@ -154,21 +156,28 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
                         }
                     }
                 }
+                if (compactHeight) JoinConfirmButton(enabled = isValid && !isSubmitting, onClick = { submit() })
             }
-            Button(
-                onClick = { submit() },
-                enabled = isValid && !isSubmitting,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("join.confirm"),
-                colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
-            ) {
-                Text(conclaveString("pm_join"))
-            }
+            if (!compactHeight) JoinConfirmButton(enabled = isValid && !isSubmitting, onClick = { submit() })
 
             LaunchedEffect(Unit) {
                 snapshotFlow { sheetState.isVisible }.first { it }
                 focus.requestFocus()
             }
         }
+    }
+}
+
+@Composable
+private fun JoinConfirmButton(enabled: Boolean, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("join.confirm"),
+        colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
+    ) {
+        Text(conclaveString("pm_join"))
     }
 }
 

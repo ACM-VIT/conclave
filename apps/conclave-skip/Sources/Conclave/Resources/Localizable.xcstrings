@@ -804,13 +804,10 @@
     "Add your key to continue." : {
       "extractionState" : "manual"
     },
+    "Add your name" : {
+      "extractionState" : "manual"
+    },
     "Add your name so the host knows who’s asking when you join the Q&A." : {
-      "extractionState" : "manual"
-    },
-    "Add your name to join." : {
-      "extractionState" : "manual"
-    },
-    "Add your name to start." : {
       "extractionState" : "manual"
     },
     "Adds the copied image as a photo" : {
@@ -1290,9 +1287,6 @@
     "Camera is off for the meeting." : {
       "extractionState" : "manual"
     },
-    "Camera isn’t available. You can join with it off." : {
-      "extractionState" : "manual"
-    },
     "Camera off" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -1694,10 +1688,6 @@
       }
     },
     "Choose Microphone" : {
-      "extractionState" : "manual",
-      "generatesSymbol" : false
-    },
-    "Choose Microphone…" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
@@ -3411,6 +3401,10 @@
     "Microphone unavailable" : {
       "extractionState" : "manual"
     },
+    "Microphone…" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
+    },
     "Mine" : {
       "extractionState" : "manual"
     },
@@ -5074,17 +5068,6 @@
     "Start Watching" : {
       "extractionState" : "manual"
     },
-    "Start a meeting, or join one with a code or link." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Start a meeting or join with a link."
-          }
-        }
-      }
-    },
     "Start the Leader" : {
       "extractionState" : "manual"
     },
@@ -5964,6 +5947,9 @@
     "Waiting" : {
       "extractionState" : "manual"
     },
+    "Waiting for others" : {
+      "extractionState" : "manual"
+    },
     "Waiting for the Host to Start" : {
       "extractionState" : "manual"
     },
@@ -6469,9 +6455,6 @@
       "extractionState" : "manual"
     },
     "You asked" : {
-      "extractionState" : "manual"
-    },
-    "You can invite people after you start." : {
       "extractionState" : "manual"
     },
     "You can keep up to 8 personal images. Remove one to add another." : {

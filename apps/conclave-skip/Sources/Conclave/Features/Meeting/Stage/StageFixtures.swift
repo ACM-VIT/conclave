@@ -11,6 +11,8 @@ enum StageFixtureState: String, CaseIterable, Equatable {
     case soloCameraOff = "solo-cameraOff"
     case soloCameraOn = "solo-cameraOn"
     case soloUnconfirmed = "solo-unconfirmed"
+    case soloCameraOffAlone = "solo-cameraOff-alone"
+    case soloCameraOffAloneHand = "solo-cameraOff-alone-hand"
     case oneOnOne = "oneOnOne"
     case grid3 = "grid-3"
     case grid4 = "grid-4"
@@ -262,8 +264,10 @@ enum StageFixtureScript {
     // swiftlint:disable:next cyclomatic_complexity
     static func inputs(for state: StageFixtureState) -> StageInputs {
         switch state {
-        case .soloCameraOff:
+        case .soloCameraOff, .soloCameraOffAlone:
             return base(count: 1)
+        case .soloCameraOffAloneHand:
+            return copy(base(count: 1), participants: roster(count: 1, localHandRaised: true), isHandRaised: true)
         case .soloCameraOn:
             return base(count: 1, localCameraOn: true)
         case .soloUnconfirmed:

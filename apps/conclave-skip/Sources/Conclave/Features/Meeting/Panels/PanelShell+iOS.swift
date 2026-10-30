@@ -51,6 +51,7 @@ struct PanelShell<Content: View, Page: Hashable>: View {
     let onPromoteToLarge: () -> Void
     @ViewBuilder let content: () -> Content
     @AccessibilityFocusState private var headingFocused: Bool
+    @Environment(\.conclaveInCallRoot) private var isUnderCallRoot
 
     init(title: String, presentation: PanelPresentation, hostStyle: PanelHostStyle, systemScheme: ColorScheme,
          path: Binding<[Page]>, onClose: @escaping () -> Void, onPromoteToLarge: @escaping () -> Void,
@@ -92,7 +93,7 @@ struct PanelShell<Content: View, Page: Hashable>: View {
     }
 
     private var scheme: ColorScheme {
-        presentation.appearance == .inCall ? .dark : AppearancePreference.shared.mode.colorScheme ?? systemScheme
+        isUnderCallRoot || presentation.appearance == .inCall ? .dark : AppearancePreference.shared.mode.colorScheme ?? systemScheme
     }
 
     @ViewBuilder

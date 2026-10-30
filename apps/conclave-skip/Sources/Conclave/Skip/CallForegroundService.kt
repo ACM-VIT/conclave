@@ -83,6 +83,7 @@ class CallForegroundService : Service() {
     override fun onTaskRemoved(rootIntent: Intent?) {
         releaseCallWakeLock()
         ProximityController.releaseNow()
+        ProcessExitReasonBridge.writeTaskRemovedMarker(this)
         try {
             CallActionDispatcher.handleCurrentNow(SystemCallCommandKind.leave, SystemCallSource.system)
         } finally {

@@ -43,6 +43,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -172,10 +174,12 @@ private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinis
             stackedScene()
         } else {
             val fontScale = LocalDensity.current.fontScale.toDouble()
-            BoxWithConstraints(Modifier.fillMaxSize().testTag("game.body")) {
+            val bounds = rememberGameShellBounds()
+            BoxWithConstraints(Modifier.fillMaxSize().gameShellBounds(bounds) { probe, rect -> probe.body = rect }.testTag("game.body")) {
                 val plan = ChessCardLayoutPolicy.resolve(width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble(),
                     detailsWidth = ChessCardLayoutPolicy.minimumDetailsWidth * fontScale)
                 if (plan.usesColumns && !chooserOpen) {
+                    SideEffect { bounds?.bar = Rect.Zero }
                     Row(Modifier.fillMaxSize().padding(ChessCardLayoutPolicy.compactPadding.dp).testTag("game.scene.chess"),
                         horizontalArrangement = Arrangement.spacedBy(ChessCardLayoutPolicy.columnGap.dp)) {
                         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
@@ -185,7 +189,9 @@ private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinis
                         }
                         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (canMove) ChessChooserButton(onOpen = { selected = ""; chooserOpen = true })
-                            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).testTag("game.chess.details"),
+                            Column(Modifier.weight(1f).fillMaxWidth().gameShellBounds(bounds) { probe, rect -> probe.viewport = rect }
+                                .verticalScroll(rememberScrollState()).gameShellBounds(bounds) { probe, rect -> probe.content = rect }
+                                .testTag("game.chess.details"),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 cardHeader(true)
                                 GameShellNotices(games)
@@ -205,14 +211,13 @@ private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinis
                     Column(Modifier.fillMaxSize()) {
                         cardHeader(false)
                         HorizontalDivider(color = LocalConclaveExtendedColors.current.border)
-                        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            GameShellNotices(games)
+                        GameShellScrollColumn(games, Modifier.weight(1f).fillMaxWidth(), bounds) {
                             stackedScene()
                         }
-                        GameShellBottomBar(games)
+                        GameShellBottomBar(games, Modifier.gameShellBounds(bounds) { probe, rect -> probe.bar = rect })
                     }
                 }
+                if (bounds != null) GameShellBoundsReadout(bounds, Modifier.align(Alignment.TopStart))
             }
         }
         PromptAnnouncement(games, scene.turnKey, conclaveString("gm_chess_your_move"))

@@ -20,7 +20,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -28,7 +30,6 @@ import skip.ui.UIApplication
 
 private object NoticeLaneDefaults {
 
-    const val CHIP_ROW_DP = 56.0
     const val TOAST_GAP_DP = 8
     const val MAX_TOAST_WIDTH_DP = 560
 }
@@ -60,8 +61,7 @@ private fun NoticeBannerLane(stage: StagePresenter) {
     val notice = stage.banner
     val retained = remember { RetainedNotice() }
     if (notice != null) retained.notice = notice
-    val top = geometry.bannerTop + (if (geometry.chipsVisible) NoticeLaneDefaults.CHIP_ROW_DP else 0.0)
-    ConclaveBannerLane(noticeId = notice?.id, identifier = "stage.banner", modifier = Modifier.padding(top = top.dp)) {
+    ConclaveBannerLane(noticeId = notice?.id, identifier = "stage.banner", modifier = Modifier.padding(top = geometry.bannerTop.dp)) {
         val shown = retained.notice
         if (shown != null) NoticeBanner(stage, shown)
     }
@@ -122,7 +122,9 @@ private fun NoticeBottomLanes(stage: StagePresenter) {
 private fun NoticeToastLane(stage: StagePresenter, modifier: Modifier) {
     val notice = stage.toast
     val item = if (notice == null || ChatPreviewPolicy.isChatPreview(notice)) null else noticeToastItem(notice)
-    Box(modifier.testTag("stage.toast.lane"), contentAlignment = Alignment.BottomCenter) {
+    val density = LocalDensity.current
+    val measured = Modifier.onSizeChanged { size -> stage.setToastHeight(with(density) { size.height.toDp() }.value.toDouble()) }
+    Box(modifier.testTag("stage.toast.lane").then(measured), contentAlignment = Alignment.BottomCenter) {
         ConclaveToastHost(
             item = item,
             identifier = "stage.toast",

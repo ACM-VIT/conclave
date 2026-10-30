@@ -514,8 +514,8 @@ struct ENT3LobbyTests {
         for file in Self.lobbySwiftFiles + Self.lobbyIOSFiles + Self.lobbyKotlinFiles {
             let text = try ent3Source(file)
             #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            if file != "Sources/Conclave/Skip/ui/lobby/LobbyScreen.kt" {
-                #expect(!text.lowercased().contains("gradient"), "\(file) uses a gradient outside the floating-action fade")
+            if !S1FloatingBackdropTests.gradientAllowlist.contains(file) {
+                #expect(!text.lowercased().contains("gradient"), "\(file) uses a gradient outside the D-1 allowlist")
             }
             #expect(ent3Matches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x|hue:|white:)"#, in: text).isEmpty, "\(file) builds a color from a literal")
             #expect(!text.contains("Color.white") && !text.contains("Color.black") && !text.contains(".tint(.white)"), "\(file)")
@@ -552,6 +552,32 @@ struct ENT3LobbyTests {
 
         let devices = try ent3Source("Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift")
         #expect(devices.contains("#if os(iOS) && !SKIP\nimport AVFoundation\nimport UIKit\n#endif"))
+    }
+
+    @Test func lobbyCopyStaysShortOnBothPlatforms() throws {
+        let view = ent3Flat(try ent3Source("Sources/Conclave/Features/Lobby/LobbyView+iOS.swift"))
+        #expect(view.contains("case .nameMissingJoin, .nameMissingStart: return ConclaveStrings.text(\"Add your name\")"))
+        #expect(view.components(separatedBy: "ConclaveStrings.text(\"Add your name\")").count - 1 == 1, "one literal for both reasons")
+        #expect(!view.contains("Add your name to join.") && !view.contains("Add your name to start."))
+        let card = try ent3Source("Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift")
+        #expect(card.contains("ConclaveStrings.text(\"Camera unavailable\")"))
+        #expect(!card.contains("Camera isn") && !card.contains("join with it off"))
+
+        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent3Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
+        let strings = try #require(catalog["strings"] as? [String: Any])
+        for key in ["Add your name", "Camera unavailable"] {
+            #expect(strings[key] != nil, "missing iOS key \(key)")
+        }
+        for key in ["Add your name to join.", "Add your name to start.", "Camera isn\u{2019}t available. You can join with it off."] {
+            #expect(strings[key] == nil, "stale iOS key \(key)")
+        }
+        let xml = try ent3Source("Android/app/src/main/res/values/strings.xml")
+        for (name, value) in [("pm_camera_unavailable", "Camera unavailable"), ("pm_need_name_join", "Add your name"),
+                              ("pm_need_name_start", "Add your name")] {
+            #expect(xml.contains("<string name=\"\(name)\">\(value)</string>"), "\(name) is \(value)")
+        }
+        let kotlinCard = try ent3Source("Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt")
+        #expect(kotlinCard.contains("if (unavailable) conclaveString(\"pm_camera_unavailable\") else conclaveString(\"pm_camera_off\")"))
     }
 
     @Test func theLobbyNeverAppliesARouteOrHandsThePreviewToAProducer() throws {

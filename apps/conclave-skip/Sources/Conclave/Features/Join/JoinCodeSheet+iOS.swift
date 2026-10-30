@@ -1,12 +1,20 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
+private enum JoinCodeSheetAnchor {
+    static let rejoin = "join.row.rejoin"
+    static let confirm = "join.row.confirm"
+}
+
 struct JoinCodeSheet: View {
     let premeeting: PremeetingPresenter
     @State private var input = ""
     @State private var showsInvalid = false
+    @State private var invalidReveal = 0
     @State private var detent: PresentationDetent = .medium
     @FocusState private var isFocused: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isValid: Bool {
         EntryPolicies.isValidJoinInput(input)
@@ -14,6 +22,10 @@ struct JoinCodeSheet: View {
 
     private var suggestion: String? {
         premeeting.home.rejoin?.title
+    }
+
+    private var confirmsInForm: Bool {
+        dynamicTypeSize.isAccessibilitySize
     }
 
     private var inputBinding: Binding<String> {
@@ -25,45 +37,62 @@ struct JoinCodeSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField(text: inputBinding, prompt: Text(ConclaveStrings.text("Code or Link"))) {
-                        Text(ConclaveStrings.text("Meeting Code or Link"))
-                    }
-                    .keyboardType(.URL)
-                    .textContentType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.join)
-                    .onSubmit(submit)
-                    .focused($isFocused)
-                    .accessibilityIdentifier("join.field")
-                    PasteButton(payloadType: String.self) { strings in
-                        guard let first = strings.first else { return }
-                        input = EntryPolicies.sanitizeRoomInput(first)
-                        showsInvalid = EntryPolicies.showsInvalidJoinInput(input)
-                    }
-                    .accessibilityIdentifier("join.paste")
-                } header: {
-                    Text(ConclaveStrings.text("Meeting Code or Link"))
-                } footer: {
-                    JoinCodeFooter(showsInvalid: showsInvalid)
-                }
-                if let suggestion {
+            ScrollViewReader { proxy in
+                Form {
                     Section {
-                        Button { premeeting.rejoin() } label: {
-                            Label {
-                                Text(ConclaveStrings.format("Rejoin %@", suggestion))
-                            } icon: {
-                                Image(systemName: ConclaveSymbols.arrowClockwise).accessibilityHidden(true)
-                            }
+                        TextField(text: inputBinding, prompt: Text(ConclaveStrings.text("Code or Link"))) {
+                            Text(ConclaveStrings.text("Meeting Code or Link"))
                         }
+                        .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.join)
+                        .onSubmit(submit)
+                        .focused($isFocused)
+                        .accessibilityIdentifier("join.field")
+                        PasteButton(payloadType: String.self) { strings in
+                            guard let first = strings.first else { return }
+                            input = EntryPolicies.sanitizeRoomInput(first)
+                            revealInvalid(EntryPolicies.showsInvalidJoinInput(input))
+                        }
+                        .accessibilityIdentifier("join.paste")
+                    } header: {
+                        Text(ConclaveStrings.text("Meeting Code or Link"))
+                    } footer: {
+                        JoinCodeFooter(showsInvalid: showsInvalid)
+                    }
+                    if let suggestion {
+                        Section {
+                            Button { premeeting.rejoin() } label: {
+                                Label {
+                                    Text(ConclaveStrings.format("Rejoin %@", suggestion))
+                                } icon: {
+                                    Image(systemName: ConclaveSymbols.arrowClockwise).accessibilityHidden(true)
+                                }
+                            }
                             .tint(HostingTheme.coralText)
                             .accessibilityIdentifier("join.rejoinSuggestion")
+                            .id(JoinCodeSheetAnchor.rejoin)
+                        }
+                    }
+                    if confirmsInForm {
+                        Section {
+                            JoinConfirmButton(isValid: isValid, action: submit)
+                                .listRowInsets(EdgeInsets())
+                                .listRowBackground(Color.clear)
+                                .id(JoinCodeSheetAnchor.confirm)
+                        }
+                    }
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: invalidReveal) {
+                    guard confirmsInForm else { return }
+                    withAnimation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion)) {
+                        proxy.scrollTo(suggestion == nil ? JoinCodeSheetAnchor.confirm : JoinCodeSheetAnchor.rejoin)
                     }
                 }
             }
-            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(ConclaveStrings.text("Join Meeting"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -72,14 +101,7 @@ struct JoinCodeSheet: View {
                         .accessibilityIdentifier("join.cancel")
                 }
             }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 0) {
-                    Divider()
-                    JoinConfirmButton(isValid: isValid, action: submit)
-                        .padding(16)
-                }
-                .background(Color(uiColor: .systemGroupedBackground))
-            }
+            .modifier(JoinConfirmBar(isVisible: !confirmsInForm, bar: JoinConfirmButton(isValid: isValid, action: submit)))
         }
         .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
@@ -90,14 +112,48 @@ struct JoinCodeSheet: View {
         }
     }
 
+    private func revealInvalid(_ invalid: Bool) {
+        showsInvalid = invalid
+        if invalid {
+            invalidReveal += 1
+        }
+    }
+
     private func submit() {
         guard isValid else {
-
-            showsInvalid = !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            revealInvalid(!input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             premeeting.submitJoinInput(input)
             return
         }
         premeeting.submitJoinInput(input)
+    }
+}
+
+private struct JoinConfirmBar<Bar: View>: ViewModifier {
+    let isVisible: Bool
+    let bar: Bar
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content
+                .scrollEdgeEffectStyle(.soft, for: .bottom)
+                .safeAreaBar(edge: .bottom, spacing: 0) {
+                    if isVisible {
+                        bar.padding(16)
+                    }
+                }
+        } else {
+            content.safeAreaInset(edge: .bottom, spacing: 0) {
+                if isVisible {
+                    VStack(spacing: 0) {
+                        Divider()
+                        bar.padding(16)
+                    }
+                    .background(Color(uiColor: .systemGroupedBackground))
+                }
+            }
+        }
     }
 }
 
@@ -122,16 +178,24 @@ private struct JoinConfirmButton: View {
 
     var body: some View {
         Button(action: action) {
-            Text(ConclaveStrings.text("Join"))
-                .foregroundStyle(HostingTheme.onCoral)
+            label
                 .frame(maxWidth: .infinity, minHeight: 28)
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
         .tint(HostingTheme.coralFill)
-        .opacity(isValid ? 1 : HostingTheme.disabledOpacity)
         .disabled(!isValid)
         .accessibilityIdentifier("join.confirm")
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        if isValid {
+            Text(ConclaveStrings.text("Join"))
+                .foregroundStyle(HostingTheme.onCoral)
+        } else {
+            Text(ConclaveStrings.text("Join"))
+        }
     }
 }
 #endif

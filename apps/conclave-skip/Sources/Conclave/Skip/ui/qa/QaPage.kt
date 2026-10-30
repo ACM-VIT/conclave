@@ -1,12 +1,18 @@
 package conclave.module
 
+import android.content.res.Configuration
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,9 +31,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun QaPage(
     people: PeoplePresenter,
@@ -44,6 +54,10 @@ internal fun QaPage(
     val snapshot = qa.snapshot
     val snackbar = remember { SnackbarHostState() }
     var answering by rememberSaveable { mutableStateOf("") }
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val tileVisible = inCallPageTileVisible(miniTile != null, variant, snapshot.isAttendee, hideMiniTileWithIme = true,
+        imeVisible = WindowInsets.isImeVisible)
+    val tileGutter = qaTileGutterDp(landscape, tileVisible, hasComposer = snapshot.isAttendee).dp
     InCallPage(
         title = conclaveString("qa_title"),
         variant = variant,
@@ -63,7 +77,7 @@ internal fun QaPage(
         snackbarHost = { SnackbarHost(snackbar) },
         hideMiniTileWithIme = true,
     ) { reservation ->
-        QaContent(people, snapshot, request, reservation, onAnswerInWriting = { answering = it })
+        QaContent(people, snapshot, request, reservation, tileGutter, onAnswerInWriting = { answering = it })
         PeopleFailureSnackbar(people, snackbar)
     }
     if (answering.isNotEmpty()) {
@@ -73,8 +87,9 @@ internal fun QaPage(
 
 @Composable
 private fun QaContent(people: PeoplePresenter, snapshot: QaPanelSnapshot, request: PanelRequest, reservation: PaddingValues,
-                      onAnswerInWriting: (String) -> Unit) {
+                      tileGutter: Dp, onAnswerInWriting: (String) -> Unit) {
     val qa = people.qa
+    val layoutDirection = LocalLayoutDirection.current
     val listState = rememberLazyListState()
     val ids = remember(snapshot.revision) { snapshot.questionIds.toList() }
     LaunchedEffect(request.presentationID) {
@@ -128,7 +143,16 @@ private fun QaContent(people: PeoplePresenter, snapshot: QaPanelSnapshot, reques
                         identifier = "qa.empty", modifier = Modifier.padding(reservation))
                 }
             }
-            else -> LazyColumn(state = listState, contentPadding = reservation, modifier = Modifier.weight(1f).testTag("qa.list")) {
+            else -> LazyColumn(
+                state = listState,
+                contentPadding = PaddingValues(
+                    start = reservation.calculateStartPadding(layoutDirection),
+                    top = reservation.calculateTopPadding(),
+                    end = reservation.calculateEndPadding(layoutDirection) + tileGutter,
+                    bottom = reservation.calculateBottomPadding(),
+                ),
+                modifier = Modifier.weight(1f).testTag("qa.list"),
+            ) {
                 if (snapshot.isAttendee) {
                     item(key = "privacy", contentType = "privacy") {
                         ConclaveSectionFooter(text = conclaveString("qa_privacy"), identifier = "qa.privacy")
@@ -141,6 +165,9 @@ private fun QaContent(people: PeoplePresenter, snapshot: QaPanelSnapshot, reques
         }
     }
 }
+
+internal fun qaTileGutterDp(landscape: Boolean, tileVisible: Boolean, hasComposer: Boolean): Int =
+    if (landscape && tileVisible && !hasComposer) callMiniTileWidthDp(landscape) + 16 else 0
 
 internal fun qaSortName(raw: String): String = when (raw) {
     QaSort.recent.rawValue -> "qa_recent"

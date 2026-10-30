@@ -143,12 +143,13 @@ enum StageLayoutPolicy {
         let gridFrames = kind == StageKind.grid ? gridFramesFor(viewport: viewport, slots: gridSlots) : []
         let railFrames = railFramesFor(viewport: viewport, slots: railSlots)
         let mainFrame = mainFrameFor(viewport: viewport, kind: kind, hasRail: !railSlots.isEmpty)
+        let selfLift = selfNameTagLift(viewport: viewport, kind: kind, slots: slots, corner: selfCorner)
         for slot in slots {
             switch slot.role {
             case .spotlightMain, .share, .activity, .programFeed:
                 result.append(StageFrame(slotId: slot.id, x: mainFrame.x, y: mainFrame.y, width: mainFrame.width, height: mainFrame.height))
             case .selfFloating, .selfMinimized:
-                result.append(selfFrame(viewport: viewport, role: slot.role, corner: selfCorner, slotId: slot.id))
+                result.append(selfFrame(viewport: viewport, role: slot.role, corner: selfCorner, slotId: slot.id, lift: selfLift))
             case .speakerInset:
                 result.append(selfFrame(viewport: viewport, role: StageSlotRole.selfFloating, corner: "bottom-right", slotId: slot.id))
             case .grid, .gridWide, .rail, .overflow:
@@ -318,7 +319,18 @@ enum StageLayoutPolicy {
         return result
     }
 
-    static func selfFrame(viewport: StageViewport, role: StageSlotRole, corner: String, slotId: String) -> StageFrame {
+    static func selfNameTagLift(viewport: StageViewport, kind: StageKind, slots: [StageSlot], corner: String) -> Double {
+        if corner != SelfViewSnapPolicy.bottomLeft { return 0.0 }
+        for slot in slots {
+            let insets = StageViewportPolicy.tileInsets(kind: kind, role: slot.role, viewport: viewport)
+            if insets.bottom <= 0.0 { continue }
+            let clearance = insets.bottom + StageViewportPolicy.nameTagBand + StageViewportPolicy.tileControlGap
+            return max(0.0, clearance - viewport.insetBottom - selfViewMargin)
+        }
+        return 0.0
+    }
+
+    static func selfFrame(viewport: StageViewport, role: StageSlotRole, corner: String, slotId: String, lift: Double = 0.0) -> StageFrame {
         let width: Double
         let height: Double
         if role == StageSlotRole.selfMinimized {
@@ -332,7 +344,8 @@ enum StageLayoutPolicy {
         let leading = corner == "top-left" || corner == "bottom-left"
         let top = corner == "top-left" || corner == "top-right"
         let x = leading ? viewport.insetLeading + selfViewMargin : viewport.width - viewport.insetTrailing - selfViewMargin - width
-        let y = top ? viewport.insetTop + selfViewMargin : viewport.height - viewport.insetBottom - selfViewMargin - height
+        let resting = top ? viewport.insetTop + selfViewMargin : viewport.height - viewport.insetBottom - selfViewMargin - height
+        let y = lift > 0.0 ? max(viewport.insetTop + selfViewMargin, resting - lift) : resting
         return StageFrame(slotId: slotId, x: x, y: y, width: width, height: height)
     }
 
@@ -347,5 +360,53 @@ enum StageLayoutPolicy {
 
     static func overlaps(_ a: StageFrame, _ b: StageFrame) -> Bool {
         a.x < b.maxX - 0.001 && b.x < a.maxX - 0.001 && a.y < b.maxY - 0.001 && b.y < a.maxY - 0.001
+    }
+}
+
+enum StageAlonePolicy {
+    static let avatarDiameter = 72.0
+    static let compactAvatarDiameter = 40.0
+    static let edgeInset = 24.0
+    static let avatarSpacing = 12.0
+    static let lineSpacing = 4.0
+    static let toastClearance = 52.0
+    static let titleLineHeight = 28.0
+    static let statusLineHeight = 20.0
+    static let maxTitleLines = 2
+
+    static func bottomPadding(_ viewport: StageViewport) -> Double {
+        viewport.insetBottom + toastClearance + edgeInset
+    }
+
+    static func topPadding(_ viewport: StageViewport) -> Double {
+        viewport.insetTop
+    }
+
+    static func bandHeight(_ viewport: StageViewport) -> Double {
+        max(0.0, viewport.height - topPadding(viewport) - bottomPadding(viewport))
+    }
+
+    static func compositionHeight(compact: Bool, titleLines: Int, titleLine: Double, statusLine: Double) -> Double {
+        let text = titleLine * Double(titleLines) + lineSpacing + statusLine
+        return compact ? max(compactAvatarDiameter, text) : avatarDiameter + avatarSpacing + text
+    }
+
+    static func usesCompactLayout(_ viewport: StageViewport, titleLine: Double, statusLine: Double) -> Bool {
+        compositionHeight(compact: false, titleLines: 1, titleLine: titleLine, statusLine: statusLine) > bandHeight(viewport)
+    }
+
+    static func titleLineLimit(_ viewport: StageViewport, titleLine: Double, statusLine: Double) -> Int {
+        let compact = usesCompactLayout(viewport, titleLine: titleLine, statusLine: statusLine)
+        let full = compositionHeight(compact: compact, titleLines: maxTitleLines, titleLine: titleLine, statusLine: statusLine)
+        return full <= bandHeight(viewport) ? maxTitleLines : 1
+    }
+
+    static func snapshot(_ inputs: StageInputs, kind: StageKind) -> StageAloneSnapshot? {
+        if kind != StageKind.solo || !inputs.isAloneConfirmed || inputs.isWebinarAttendee { return nil }
+        if inputs.roomLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+        guard let local = inputs.participant(inputs.localUserId) else { return nil }
+        if !local.isCameraOff { return nil }
+        return StageAloneSnapshot(slotId: StageSlot.participantId(inputs.localUserId), roomLabel: inputs.roomLabel,
+                                  seed: inputs.roomLabel)
     }
 }

@@ -6,11 +6,20 @@ private struct ConclaveSystemColorSchemeKey: EnvironmentKey {
     static let defaultValue: ColorScheme = .light
 }
 
+private struct ConclaveInCallRootKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
 
     var conclaveSystemColorScheme: ColorScheme {
         get { self[ConclaveSystemColorSchemeKey.self] }
         set { self[ConclaveSystemColorSchemeKey.self] = newValue }
+    }
+
+    var conclaveInCallRoot: Bool {
+        get { self[ConclaveInCallRootKey.self] }
+        set { self[ConclaveInCallRootKey.self] = newValue }
     }
 }
 
@@ -29,8 +38,7 @@ struct ConclaveAppAppearance: ViewModifier {
     let isCall: Bool
 
     private var preference: ColorScheme? {
-        if #available(iOS 27.0, *) { return AppearancePreference.shared.mode.colorScheme }
-        return isCall ? .dark : AppearancePreference.shared.mode.colorScheme
+        isCall ? .dark : AppearancePreference.shared.mode.colorScheme
     }
 
     func body(content: Content) -> some View {
@@ -56,7 +64,8 @@ struct ConclaveCallAppearance: ViewModifier {
         content
             .environment(\.colorScheme, .dark)
             .environment(\.conclaveSystemColorScheme, AppearancePreference.shared.mode.colorScheme ?? sceneScheme ?? inheritedScheme)
-            .modifier(ConclaveCallStatusBar())
+            .environment(\.conclaveInCallRoot, true)
+            .preferredColorScheme(.dark)
             .background {
                 ConclaveSceneSchemeReader { scheme in
                     if sceneScheme != scheme { sceneScheme = scheme }
@@ -64,17 +73,6 @@ struct ConclaveCallAppearance: ViewModifier {
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
             }
-    }
-}
-
-private struct ConclaveCallStatusBar: ViewModifier {
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 27.0, *) {
-            content.toolbarColorScheme(.dark, for: .statusBar)
-        } else {
-            content.preferredColorScheme(.dark)
-        }
     }
 }
 

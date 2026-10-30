@@ -608,6 +608,7 @@ struct StagePoliciesTests {
                             "announceForAccessibility", "@Stable", "@Immutable", "FloatingToolbar", "ButtonGroup",
                             "dynamicLightColorScheme", "dynamicDarkColorScheme", "LazyVGrid", "LazyVerticalGrid", "ScrollView",
                             "HapticManager", "MeetingShare."] {
+                if pattern == "ScrollView" && file.hasSuffix(Self.debugFixtureName) { continue }
                 #expect(!text.contains(pattern), "\(file) uses \(pattern)")
             }
             #expect(stageMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
@@ -627,7 +628,16 @@ struct StagePoliciesTests {
             #expect(!text.contains("inout "), "\(file) uses inout")
             #expect(!text.contains("isLetter"), "\(file) uses Character.isLetter")
         }
+
+        let fixture = try stageSource("Sources/Conclave/Features/Meeting/Stage/" + Self.debugFixtureName)
+        #expect(fixture.hasPrefix("#if DEBUG && os(iOS) && !SKIP\n"), "the scrolling fixture panel is Debug only")
+        let fixtureBody = stageNormalized(fixture)
+        #expect(fixtureBody.components(separatedBy: "ScrollView {").count - 1 == 1)
+        #expect(fixtureBody.contains(".frame(maxHeight: 360)"))
+        #expect(fixtureBody.contains(".overlay(alignment: .leading) { StageFixtureControls(session: session) }"))
     }
+
+    static let debugFixtureName = "StageFixtureView+iOS.swift"
 
     @Test func iosCallRootIsOneContainerWithMagicTapAndSiblingLayers() throws {
         let root = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/CallRoot+iOS.swift"))

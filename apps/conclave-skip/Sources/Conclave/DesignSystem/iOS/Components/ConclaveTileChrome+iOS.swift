@@ -67,6 +67,7 @@ struct ConclaveTileChrome<Renderer: View, SelfViewAccessory: View>: View {
                              showsName: !isSolo || !model.isCameraOff, showsHandBadge: showsHandBadge,
                              selfViewAccessory: selfViewAccessory)
                     .padding(overlayInsets)
+                    .padding(insetSpeakingRing ? CGFloat(DesignTokens.space8) : 0)
                 if variant == .selfView {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .strokeBorder(HostingTheme.inCallBorder, lineWidth: 1)

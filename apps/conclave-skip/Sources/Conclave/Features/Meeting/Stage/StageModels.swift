@@ -139,6 +139,12 @@ struct StageLayoutSnapshot: Equatable {
     }
 }
 
+struct StageAloneSnapshot: Equatable {
+    let slotId: String
+    let roomLabel: String
+    let seed: String
+}
+
 struct StageCapsuleModel: Equatable {
     let title: String
     let subtitleKind: String

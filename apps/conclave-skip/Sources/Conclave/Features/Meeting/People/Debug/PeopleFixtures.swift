@@ -13,6 +13,7 @@ enum PeopleFixtureState: String, CaseIterable, Equatable {
     case alone = "people-alone"
     case longNames = "people-long-names"
     case lostHost = "people-lost-host"
+    case hostWaitingLate = "people-host-waiting-late"
 }
 
 struct PeopleFixturePerson: Equatable {
@@ -75,7 +76,7 @@ enum PeopleFixtureScript {
                 PeopleFixturePerson.make(lee, "Lee Park", isMuted: false, isPresenting: true, joinSerial: 3),
                 PeopleFixturePerson.make(sam, "Sam Ito", isLocal: true),
             ]
-        case .host6, .hostWaiting3, .hostRecovering, .hostOffline, .searchNone, .lostHost:
+        case .host6, .hostWaiting3, .hostRecovering, .hostOffline, .searchNone, .lostHost, .hostWaitingLate:
             return hostSix()
         case .hostHands3:
             return [
@@ -126,9 +127,11 @@ enum PeopleFixtureScript {
 
     static let lostHostDelayMillis = 1000.0
 
+    static let lateWaitingDelayMillis = 600.0
+
     static func openDestination(for state: PeopleFixtureState) -> PanelDestination {
         switch state {
-        case .hostWaiting3: return PanelDestination.peopleWaiting
+        case .hostWaiting3, .hostWaitingLate: return PanelDestination.peopleWaiting
         case .hostHands3: return PanelDestination.peopleRaisedHands
         default: return PanelDestination.none
         }
@@ -486,6 +489,11 @@ final class PeopleFixtureSession {
         counters.recordLostHost()
         hostLost = true
         push(isAdminOverride: false)
+    }
+
+    func deliverLateWaiting() {
+        waitingList = PeopleFixtureScript.waiting(for: PeopleFixtureState.hostWaiting3)
+        push(isAdminOverride: nil)
     }
 
     private func push(isAdminOverride: Bool?) {

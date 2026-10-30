@@ -48,6 +48,10 @@ final class ChatRowActions {
         composerFocusRevision += 1
     }
 
+    func composerDidResize() {
+        composerFocusRevision += 1
+    }
+
     func reply(_ rowId: String) {
         chat.beginReply(rowId: rowId)
         focusComposer()

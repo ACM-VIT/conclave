@@ -22,29 +22,63 @@ struct LobbyPreviewCard: View {
 
     var body: some View {
         if let media = premeeting.lobbyMedia {
-            LobbyPreviewVideo(media: media, premeeting: premeeting, controlsInset: controlsHeight, compact: isCompact)
+            VStack(spacing: 8) {
+                LobbyPreviewVideo(media: media, premeeting: premeeting, controlsInset: controlsHeight, compact: isCompact)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: videoHeight)
+                    .background(HostingTheme.token(DesignTokens.iosInCallTile))
+                    .overlay(alignment: .bottom) {
+                        LobbyToggleStrip(media: media, premeeting: premeeting)
+                            .padding(16)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                                if controlsHeight != $0 { controlsHeight = $0 }
+                            }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusTile), style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusTile), style: .continuous)
+                            .strokeBorder(HostingTheme.inCallBorder, lineWidth: 1)
+                    )
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                        if cardWidth != $0 { cardWidth = $0 }
+                    }
+                    .entryTransitionAnchor(routeId: media.routeId)
+                    .conclaveInCallRegion()
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("lobby.card")
+                LobbyPreviewCaption(media: media)
+            }
+        }
+    }
+}
+
+private extension LobbyMediaSnapshot {
+    var cameraIsUnavailable: Bool { preview == .unavailable || cameraPermission == .unavailable }
+}
+
+private struct LobbyPreviewCaption: View {
+    let media: LobbyMediaSnapshot
+
+    private var captionText: String {
+        switch media.preview {
+        case .live, .interrupted, .published, .starting:
+            return ""
+        case .off, .unavailable, .blocked:
+            return media.cameraIsUnavailable ? ConclaveStrings.text("Camera unavailable") : ConclaveStrings.text("Camera Off")
+        }
+    }
+
+    var body: some View {
+        let caption = captionText
+        if !caption.isEmpty {
+            Text(caption)
+                .font(.footnote)
+                .foregroundStyle(HostingTheme.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity)
-                .frame(height: videoHeight)
-                .background(HostingTheme.token(DesignTokens.iosInCallTile))
-                .overlay(alignment: .bottom) {
-                    LobbyToggleStrip(media: media, premeeting: premeeting)
-                        .padding(16)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                            if controlsHeight != $0 { controlsHeight = $0 }
-                        }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusTile), style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusTile), style: .continuous)
-                        .strokeBorder(HostingTheme.inCallBorder, lineWidth: 1)
-                )
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
-                    if cardWidth != $0 { cardWidth = $0 }
-                }
-                .entryTransitionAnchor(routeId: media.routeId)
-                .conclaveInCallRegion()
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("lobby.card")
+                .padding(.horizontal, 16)
+                .accessibilityHidden(true)
         }
     }
 }
@@ -63,7 +97,7 @@ private struct LobbyPreviewVideo: View {
         if media.preview == .live {
             return media.isFrontCamera ? ConclaveStrings.text("Front Camera") : ConclaveStrings.text("Back Camera")
         }
-        return ConclaveStrings.text("Camera Off")
+        return media.cameraIsUnavailable ? ConclaveStrings.text("Camera unavailable") : ConclaveStrings.text("Camera Off")
     }
 
     var body: some View {
@@ -123,12 +157,6 @@ private struct LobbyCameraOffContent: View {
     let compact: Bool
     @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = 76
 
-    private var caption: String {
-        media.preview == .unavailable || media.cameraPermission == .unavailable
-            ? ConclaveStrings.text("Camera isn\u{2019}t available. You can join with it off.")
-            : ConclaveStrings.text("Camera Off")
-    }
-
     var body: some View {
         let layout = compact ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(spacing: 12))
         layout {
@@ -139,12 +167,6 @@ private struct LobbyCameraOffContent: View {
                 ProgressView()
                     .tint(HostingTheme.token(DesignTokens.iosInCallText))
                     .accessibilityHidden(true)
-            } else {
-                Text(caption)
-                    .font(.subheadline)
-                    .foregroundStyle(HostingTheme.inCallTextSecondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, 24)

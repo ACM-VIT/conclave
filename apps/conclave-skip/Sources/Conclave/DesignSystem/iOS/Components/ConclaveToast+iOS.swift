@@ -62,11 +62,14 @@ struct ConclaveToast: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        let layout = dynamicTypeSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-            : AnyLayout(HStackLayout(spacing: 12))
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(spacing: 8))
+        let shape = RoundedRectangle(cornerRadius: stacked ? ConclaveToastMetrics.radius : ConclaveToastMetrics.pillRadius,
+                                     style: .continuous)
         layout {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 if item.hasAvatar {
                     ConclaveAvatar(name: item.avatarName, id: item.avatarId.isEmpty ? nil : item.avatarId, size: .mention)
                 }
@@ -75,6 +78,7 @@ struct ConclaveToast: View {
                     .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .padding(.vertical, 6)
             if item.hasAction {
                 Button(item.actionTitle, action: onAction)
                     .buttonStyle(.borderless)
@@ -85,9 +89,12 @@ struct ConclaveToast: View {
                     .accessibilityIdentifier(identifier + ".action")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .padding(.leading, item.hasAvatar ? 10 : 16)
+        .padding(.trailing, item.hasAction ? 12 : 16)
+        .padding(.vertical, stacked ? 8 : (item.hasAction ? 0 : 2))
+        .frame(minHeight: ConclaveToastMetrics.pillHeight)
+        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: shape)
+        .overlay { shape.strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
     }
@@ -95,6 +102,8 @@ struct ConclaveToast: View {
 
 enum ConclaveToastMetrics {
     static let radius = CGFloat(DesignTokens.radiusMedium)
+    static let pillRadius: CGFloat = 22
+    static let pillHeight: CGFloat = 44
     static let actionTarget: CGFloat = 44
 }
 #endif

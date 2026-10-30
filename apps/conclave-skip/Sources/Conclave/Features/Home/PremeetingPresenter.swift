@@ -1130,7 +1130,9 @@ final class PremeetingPresenter {
                 title: record.title,
                 relativeTime: PremeetingTimeFormatting.relative(millis: record.lastJoinedAtMillis, nowMillis: now),
                 role: record.recentRole,
-                end: record.recentEnd ?? RecentEnd.left
+                end: record.recentEnd ?? RecentEnd.left,
+                avatarSeed: RecentMeetingRowPolicy.avatarSeed(roomId: record.roomId),
+                code: RecentMeetingRowPolicy.code(title: record.title, roomId: record.roomId)
             ))
         }
         var card: RejoinCard? = nil

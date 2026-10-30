@@ -184,4 +184,30 @@ class CTL5CTL6BridgeTests {
         assertEquals(6, palette.emoji.size)
         assertTrue(palette.art.isEmpty() && palette.isAvailable)
     }
+
+    @Test fun moreGridDropsColumnsBeforeALabelWordWouldSplit() {
+        val row = 996
+        val gap = 21
+        val padding = 21
+        assertEquals(3, ConclaveActionSheetMetrics.columns(rowWidth = row, longestWord = 0, gap = gap, padding = padding))
+        assertEquals(3, ConclaveActionSheetMetrics.columns(rowWidth = row, longestWord = 276, gap = gap, padding = padding))
+        assertEquals(2, ConclaveActionSheetMetrics.columns(rowWidth = row, longestWord = 277, gap = gap, padding = padding))
+        assertEquals(2, ConclaveActionSheetMetrics.columns(rowWidth = row, longestWord = 445, gap = gap, padding = padding))
+        assertEquals(1, ConclaveActionSheetMetrics.columns(rowWidth = row, longestWord = 446, gap = gap, padding = padding))
+        assertEquals(1, ConclaveActionSheetMetrics.columns(rowWidth = 0, longestWord = 1, gap = gap, padding = padding))
+        assertEquals(ConclaveActionSheetMetrics.COLUMNS, ConclaveActionSheetMetrics.columns(rowWidth = 1680, longestWord = 400,
+            gap = gap, padding = padding))
+
+        assertTrue(ConclaveActionSheetMetrics.inlineTile(rowSize = 1, columns = 3))
+        assertTrue(ConclaveActionSheetMetrics.inlineTile(rowSize = 1, columns = 2))
+        assertFalse(ConclaveActionSheetMetrics.inlineTile(rowSize = 1, columns = 1))
+        assertFalse(ConclaveActionSheetMetrics.inlineTile(rowSize = 2, columns = 2))
+        assertFalse(ConclaveActionSheetMetrics.inlineTile(rowSize = 3, columns = 3))
+
+        assertEquals(listOf("Meeting", "details"), ConclaveActionSheetMetrics.words("Meeting details"))
+        assertEquals(listOf("Q&A"), ConclaveActionSheetMetrics.words(" Q&A "))
+        assertEquals(listOf("Participants"), ConclaveActionSheetMetrics.words("Participants"))
+        assertEquals(listOf("Q\u00A0&\u00A0A"), ConclaveActionSheetMetrics.words("Q\u00A0&\u00A0A"))
+        assertTrue(ConclaveActionSheetMetrics.words("").isEmpty())
+    }
 }

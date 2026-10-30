@@ -1,11 +1,12 @@
 package conclave.module
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,8 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -50,7 +51,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -60,7 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.LobbyKey, onBack: () -> Unit) {
     val routeId = key.routeId
@@ -72,6 +72,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
     val snackbarHostState = remember { SnackbarHostState() }
     var actionHeightPx by remember(routeId) { mutableIntStateOf(0) }
     val actionClearance = with(LocalDensity.current) { actionHeightPx.toDp() } + 32.dp
+    val imeVisible = WindowInsets.isImeVisible
     LobbyBusyBackHandler(premeeting, routeId, onBack)
     PermissionPrimingResumeEffect(premeeting, routeId)
     val scheme = MaterialTheme.colorScheme
@@ -96,12 +97,12 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
-                    Column(Modifier.weight(1f).widthIn(max = 560.dp).verticalScroll(rememberScrollState()).padding(bottom = actionClearance)) {
+                    Column(Modifier.weight(1f).widthIn(max = 560.dp).lobbyScroll(rememberScrollState(), actionClearance, imeVisible)) {
                         LobbyCardSlot(premeeting, routeId, cache, wide = true, visibleHeight = visibleHeight,
                             modifier = Modifier.padding(vertical = 12.dp))
                     }
                     Column(
-                        modifier = Modifier.width(360.dp).verticalScroll(rememberScrollState()).padding(bottom = actionClearance),
+                        modifier = Modifier.width(360.dp).lobbyScroll(rememberScrollState(), actionClearance, imeVisible),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         LobbyControls(premeeting, routeId, snackbarHostState)
@@ -109,7 +110,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                 }
             } else {
                 Column(
-                    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = actionClearance),
+                    modifier = Modifier.fillMaxSize().lobbyScroll(rememberScrollState(), actionClearance, imeVisible),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     LobbyCardSlot(premeeting, routeId, cache, wide = false, visibleHeight = visibleHeight,
@@ -118,19 +119,19 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                 }
             }
             if (premeeting.lobbyStatus?.mode == LobbyMode.editing) {
-                Box(
-                    Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                        .height(actionClearance + padding.calculateBottomPadding() + 32.dp)
-                        .offset(y = padding.calculateBottomPadding())
-                        .background(Brush.verticalGradient(
-                            colors = listOf(scheme.surface.copy(alpha = 0f), scheme.surface.copy(alpha = 0.92f)),
-                            endY = with(LocalDensity.current) { 32.dp.toPx() },
-                        )),
+                ConclaveFloatingActionScrim(
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(actionClearance),
+                    bottomPadding = padding.calculateBottomPadding(),
                 )
             }
         }
     }
 }
+
+private fun Modifier.lobbyScroll(state: ScrollState, actionClearance: Dp, imeVisible: Boolean): Modifier =
+    padding(bottom = if (imeVisible) actionClearance else 0.dp)
+        .verticalScroll(state)
+        .padding(bottom = if (imeVisible) 0.dp else actionClearance)
 
 @Composable
 private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache, wide: Boolean, visibleHeight: Dp, modifier: Modifier) {
@@ -158,6 +159,7 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
                 preview = { LocalPreviewSurface(card.previewSessionId) })
         }
     }
+    LobbyPreviewCaption(card, Modifier.padding(horizontal = if (wide) 0.dp else 16.dp))
 }
 
 @Composable

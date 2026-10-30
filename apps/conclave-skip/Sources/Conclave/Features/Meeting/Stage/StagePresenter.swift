@@ -21,6 +21,10 @@ final class StagePresenter {
 
     private(set) var noticeGeometry: NoticeLaneGeometry = NoticeLaneGeometry.zero
 
+    private(set) var chipRowVisible: Bool = false
+
+    private(set) var alone: StageAloneSnapshot? = nil
+
     private(set) var captionsActive: Bool = false
 
     private(set) var meetingInfo: MeetingInfoSnapshot? = nil
@@ -67,6 +71,7 @@ final class StagePresenter {
 
     @ObservationIgnored private(set) var inputs = StageInputs.make()
     @ObservationIgnored private(set) var viewport = StageViewport.zero
+    @ObservationIgnored private(set) var toastHeight = 0.0
     @ObservationIgnored private(set) var visibility = StageVisibilityReport.none
 
     @ObservationIgnored private(set) var hasVisibilityReport = false
@@ -436,6 +441,8 @@ final class StagePresenter {
             layout = StageLayoutSnapshot.empty.withRevision(layout.revision + 1)
         }
         if capsule != StageCapsuleModel.empty { capsule = StageCapsuleModel.empty }
+        if alone != nil { alone = nil }
+        if chipRowVisible { chipRowVisible = false }
         if localHand != LocalHandState.lowered { localHand = LocalHandState.lowered }
         if autoHideBlocker != AutoHideBlocker.none { autoHideBlocker = AutoHideBlocker.none }
         if chrome.withRevision(0) != StageChromeSnapshot.empty {
@@ -516,6 +523,8 @@ final class StagePresenter {
             layout = candidate.withRevision(layout.revision + 1)
         }
         if kind != nextKind { kind = nextKind }
+        let nextAlone = StageAlonePolicy.snapshot(inputs, kind: nextKind)
+        if nextAlone != alone { alone = nextAlone }
         let nextPip = PipTargetPolicy.choose(inputs: inputs, layout: layout)
         if nextPip != pipTarget { pipTarget = nextPip }
 
@@ -543,10 +552,9 @@ final class StagePresenter {
             localHand = hand
         }
         recomputeBlocker()
-        let chips = statusChipsVisible(present)
-        let geometry = NoticeLaneGeometryPolicy.geometry(viewport: viewport, frames: currentFrames(), slots: layout.slots,
-                                                         chipsVisible: chips)
-        if geometry != noticeGeometry { noticeGeometry = geometry }
+        let chips = statusChipsVisible()
+        if chips != chipRowVisible { chipRowVisible = chips }
+        refreshNoticeGeometry()
         updateCaptionsActive()
         publishActivityChanges(activityResolution)
         refreshAttendee()
@@ -569,13 +577,28 @@ final class StagePresenter {
                                       isAttendee: inputs.isWebinarAttendee)
     }
 
-    private func statusChipsVisible(_ present: [StageParticipantInput]) -> Bool {
-        if localHand != LocalHandState.lowered || chrome.nowPlaying != nil { return true }
-        if layout.kind == StageKind.solo && layout.isAloneConfirmed && !layout.meetingLink.isEmpty {
-            let local = StageOrderPolicy.participant(inputs.localUserId, in: present)
-            return !(local?.isCameraOff ?? true)
-        }
-        return false
+    private func statusChipsVisible() -> Bool {
+        localHand != LocalHandState.lowered || chrome.nowPlaying != nil
+    }
+
+    func setToastHeight(_ height: Double) {
+        let next = max(0.0, height)
+        if next == toastHeight { return }
+        toastHeight = next
+        refreshNoticeGeometry()
+    }
+
+    private func refreshNoticeGeometry() {
+        let frames = currentFrames()
+        let lanes = NoticeLaneGeometryPolicy.geometry(viewport: viewport, frames: frames, slots: layout.slots,
+                                                      chipsVisible: chipRowVisible)
+        let untagged = StageViewportPolicy.untaggedSoloSlotId(inputs, kind: layout.kind)
+        let toastBottom = StageViewportPolicy.toastBottom(viewport: viewport, toastHeight: toastHeight, kind: layout.kind,
+                                                          frames: frames, slots: layout.slots, untaggedSlotId: untagged)
+        let geometry = NoticeLaneGeometry(bannerTop: lanes.bannerTop, chipsVisible: lanes.chipsVisible,
+                                          toastBottom: max(lanes.toastBottom, toastBottom), toastLeading: lanes.toastLeading,
+                                          toastTrailing: lanes.toastTrailing)
+        if geometry != noticeGeometry { noticeGeometry = geometry }
     }
 
     private func updateCaptionsActive() {

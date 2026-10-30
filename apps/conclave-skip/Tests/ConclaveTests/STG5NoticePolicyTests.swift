@@ -460,7 +460,7 @@ struct STG5NoticePolicyTests {
         let stage = presenter(clock)
         let viewport = StagePoliciesTests.iphoneSE
         #expect(stage.noticeGeometry.bannerTop == viewport.insetTop && !stage.noticeGeometry.chipsVisible)
-        #expect(stage.noticeGeometry.toastBottom == viewport.insetBottom)
+        #expect(stage.noticeGeometry.toastBottom == viewport.insetBottom + StageLayoutPolicy.compactPadding + StageViewportPolicy.nameTagBand)
         #expect(stage.noticeGeometry.toastLeading == NoticeLaneGeometryPolicy.edgeMargin)
         stage.apply(StageFixtureScript.inputs(for: .handRaised))
         #expect(stage.noticeGeometry.chipsVisible)

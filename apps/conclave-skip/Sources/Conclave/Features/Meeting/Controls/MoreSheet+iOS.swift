@@ -76,7 +76,7 @@ private struct MoreSheetReactions: View {
                 MoreSheetReactionRow(options: reactions.art, controls: controls, actions: actions, identifier: "sheet.more.ios.art")
             }
         } else if let item = section.items.first {
-            MoreRowLabel(title: MoreCopy.title(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
+            MoreSheetRowLabel(title: MoreCopy.title(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
                 .foregroundStyle(.secondary)
                 .accessibilityElement(children: .combine)
         }
@@ -118,14 +118,10 @@ private struct MoreSheetRow: View {
     var body: some View {
         switch item.kind {
         case .captions:
-            Toggle(isOn: Binding(get: { item.isOn }, set: { on in _ = controls.setCaptions(on) })) {
-                MoreRowLabel(title: MoreCopy.title(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
-            }
-            .disabled(!item.isEnabled)
-            .accessibilityIdentifier("sheet.more.ios." + item.id)
+            MoreSheetCaptionsRow(item: item, controls: controls)
         case .lockMeeting:
             Toggle(isOn: Binding(get: { item.isOn }, set: { _ in actions.choose(item, controls: controls) })) {
-                MoreRowLabel(title: MoreCopy.title(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
+                MoreSheetRowLabel(title: MoreCopy.title(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
             }
             .disabled(!item.isEnabled)
             .accessibilityIdentifier("sheet.more.ios." + item.id)
@@ -135,7 +131,7 @@ private struct MoreSheetRow: View {
                     Text(MoreCopy.layoutTitle(raw)).tag(raw)
                 }
             } label: {
-                MoreRowLabel(title: MoreCopy.title(item), subtitle: nil, systemImage: MoreCopy.glyph(item))
+                MoreSheetRowLabel(title: MoreCopy.title(item), subtitle: nil, systemImage: MoreCopy.glyph(item))
             }
             .pickerStyle(.menu)
             .disabled(!item.isEnabled)
@@ -150,7 +146,7 @@ private struct MoreSheetRow: View {
                 ShareLink(item: url, subject: Text(ConclaveStrings.text("Join My Conclave Meeting")),
                           message: Text(ConclaveStrings.text("Join me in this Conclave meeting.")),
                           preview: SharePreview(Text(more.roomLabel))) {
-                    MoreRowLabel(title: ConclaveStrings.text("Share Invite"), subtitle: nil, systemImage: MoreCopy.glyph(item))
+                    MoreSheetRowLabel(title: ConclaveStrings.text("Share Invite"), subtitle: nil, systemImage: MoreCopy.glyph(item))
                 }
                 .accessibilityIdentifier("sheet.more.ios.invite")
             }
@@ -158,14 +154,14 @@ private struct MoreSheetRow: View {
             Button {
                 actions.copyLink(more.meetingLink, controls: controls)
             } label: {
-                MoreRowLabel(title: MoreCopy.title(item), subtitle: nil, systemImage: MoreCopy.glyph(item))
+                MoreSheetRowLabel(title: MoreCopy.title(item), subtitle: nil, systemImage: MoreCopy.glyph(item))
             }
             .accessibilityIdentifier("sheet.more.ios.copyLink")
         case .endForEveryone:
             Button(role: .destructive) {
                 actions.choose(item, controls: controls)
             } label: {
-                MoreRowLabel(title: MoreCopy.title(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
+                MoreSheetRowLabel(title: MoreCopy.title(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
             }
             .disabled(!item.isEnabled)
             .accessibilityIdentifier("sheet.more.ios.endForEveryone")
@@ -173,11 +169,89 @@ private struct MoreSheetRow: View {
             Button {
                 actions.choose(item, controls: controls)
             } label: {
-                MoreRowLabel(title: MoreCopy.accessibilityTitle(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
+                MoreSheetRowLabel(title: MoreCopy.accessibilityTitle(item), subtitle: MoreCopy.subtitle(item), systemImage: MoreCopy.glyph(item))
             }
             .disabled(!item.isEnabled)
             .accessibilityIdentifier("sheet.more.ios." + item.id)
         }
+    }
+}
+
+private struct MoreSheetCaptionsRow: View {
+    let item: MoreItem
+    let controls: CallControlsPresenter
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        let isOn = Binding(get: { item.isOn }, set: { on in _ = controls.setCaptions(on) })
+        let title = MoreCopy.title(item)
+        let subtitle = MoreCopy.subtitle(item)
+        let glyph = MoreCopy.glyph(item)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    MoreRowLabel(title: title, subtitle: nil, systemImage: glyph)
+                        .labelStyle(MoreSheetStackedLabelStyle())
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    Toggle(title, isOn: isOn)
+                        .labelsHidden()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityRepresentation {
+                    Toggle(isOn: isOn) {
+                        MoreRowLabel(title: title, subtitle: subtitle, systemImage: glyph)
+                    }
+                }
+            } else {
+                Toggle(isOn: isOn) {
+                    MoreRowLabel(title: title, subtitle: subtitle, systemImage: glyph)
+                }
+            }
+        }
+        .disabled(!item.isEnabled)
+        .accessibilityIdentifier("sheet.more.ios." + item.id)
+    }
+}
+
+private struct MoreSheetRowLabel: View {
+    let title: String
+    let subtitle: String?
+    let systemImage: String
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } icon: {
+                Image(systemName: systemImage)
+            }
+            .labelStyle(MoreSheetStackedLabelStyle())
+        } else {
+            MoreRowLabel(title: title, subtitle: subtitle, systemImage: systemImage)
+        }
+    }
+}
+
+private struct MoreSheetStackedLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            configuration.icon
+                .accessibilityHidden(true)
+            configuration.title
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 #endif

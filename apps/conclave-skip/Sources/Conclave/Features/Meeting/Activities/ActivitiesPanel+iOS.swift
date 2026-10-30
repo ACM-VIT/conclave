@@ -447,10 +447,8 @@ private struct GameSetupPage: View {
                     }
                     ForEach(setup.options) { option in
                         if option.isVisible {
-                            GameOptionControl(option: option, initialText: activities.draftText(option.id),
-                                              isEnabled: setup.phase != .starting && setup.phase != .slow,
-                                              onSelect: { activities.setOption(option.id, value: $0) },
-                                              onText: { activities.setText(option.id, text: $0) })
+                            GameSetupOptionRow(option: option, activities: activities,
+                                               isEnabled: setup.phase != .starting && setup.phase != .slow)
                         }
                     }
                 } else {
@@ -467,6 +465,87 @@ private struct GameSetupPage: View {
             SetupStartBar(activities: activities)
         }
         .accessibilityIdentifier("activities.setup")
+    }
+}
+
+private struct GameSetupOptionRow: View {
+    let option: GameOptionModel
+    let activities: ActivitiesPresenter
+    let isEnabled: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if dynamicTypeSize.isAccessibilitySize && option.kind != GameOptionModel.textKind {
+            LargeTextGameChoiceControl(option: option, isEnabled: isEnabled,
+                                       onSelect: { activities.setOption(option.id, value: $0) })
+        } else {
+            GameOptionControl(option: option, initialText: activities.draftText(option.id), isEnabled: isEnabled,
+                              onSelect: { activities.setOption(option.id, value: $0) },
+                              onText: { activities.setText(option.id, text: $0) })
+        }
+    }
+}
+
+private struct LargeTextGameChoiceControl: View {
+    let option: GameOptionModel
+    let isEnabled: Bool
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(option.label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if option.choices.count <= ActivitiesCatalogPolicy.maxSegments {
+                ViewThatFits(in: .horizontal) {
+                    picker.pickerStyle(.segmented)
+                    menu
+                }
+            } else {
+                menu
+            }
+        }
+        .padding(.vertical, 2)
+        .disabled(!isEnabled)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("activities.option." + option.id)
+    }
+
+    private var selectedLabel: String {
+        option.choices.first { $0.id == option.value }?.label ?? ""
+    }
+
+    private var picker: some View {
+        Picker(option.label, selection: Binding(get: { option.value }, set: { onSelect($0) })) {
+            ForEach(option.choices) { choice in
+                Text(choice.label).tag(choice.id)
+            }
+        }
+        .labelsHidden()
+    }
+
+    private var menu: some View {
+        Menu {
+            picker.pickerStyle(.inline)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(selectedLabel)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Image(systemName: ConclaveSymbols.chevronDown)
+                    .imageScale(.small)
+                    .accessibilityHidden(true)
+            }
+            .frame(maxWidth: .infinity, minHeight: ConclaveRowMetrics.minimumHeight, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuIndicator(.hidden)
+        .accessibilityLabel(option.label)
+        .accessibilityValue(selectedLabel)
+        .accessibilityIdentifier("activities.option." + option.id + ".value")
     }
 }
 

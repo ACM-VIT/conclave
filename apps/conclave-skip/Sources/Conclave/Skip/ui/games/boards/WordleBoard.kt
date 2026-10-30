@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -59,6 +60,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.key.utf16CodePoint
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -74,6 +76,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -85,6 +88,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 private val WordleKeyHeight = 48.dp
+private val WordleWideKeyLabelFloor = 9.dp
 
 @Composable
 internal fun WordleSceneBody(games: GameStagePresenter) {
@@ -499,6 +503,11 @@ private fun WordleWideKey(text: String, icon: ImageVector?, label: String, width
     val scheme = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(6.dp)
     val inProgress = conclaveString("ds_in_progress")
+    val labelStyle = MaterialTheme.typography.labelMedium
+    val density = LocalDensity.current
+    val labelSize = remember(density, labelStyle.fontSize) {
+        TextAutoSize.StepBased(minFontSize = with(density) { WordleWideKeyLabelFloor.toSp() }, maxFontSize = labelStyle.fontSize)
+    }
     Box(
         Modifier
             .size(width = width, height = WordleKeyHeight)
@@ -519,8 +528,8 @@ private fun WordleWideKey(text: String, icon: ImageVector?, label: String, width
         } else if (icon != null) {
             Icon(icon, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.size(20.dp))
         } else {
-            Text(text, style = MaterialTheme.typography.labelMedium, color = scheme.onSurface, maxLines = 1, softWrap = false,
-                modifier = Modifier.wrapContentSize(unbounded = true).clearAndSetSemantics {})
+            Text(text, modifier = Modifier.padding(horizontal = 4.dp).clearAndSetSemantics {}, color = scheme.onSurface,
+                autoSize = labelSize, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, style = labelStyle)
         }
     }
 }

@@ -91,6 +91,8 @@ import kotlinx.coroutines.isActive
 
 private const val ZipMaxFontScale = 1.3f
 
+private const val ZipStackedFontScale = 1.5f
+
 private val ZipNoPath: skip.lib.Array<Int> get() = skip.lib.Array()
 
 @Composable
@@ -113,20 +115,33 @@ private fun ZipSceneView(scene: ZipScene, games: GameStagePresenter, isFinished:
 
 @Composable
 private fun ZipHeader(scene: ZipScene, games: GameStagePresenter, isFinished: Boolean) {
+    val playing = scene.phase == ZipPhase.playing
+    if (playing && zipHeaderStacks(LocalDensity.current.fontScale)) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ZipHeaderText(scene, isFinished, playing)
+            ZipTimerSlot(games)
+        }
+    } else {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ZipHeaderText(scene, isFinished, playing, Modifier.weight(1f))
+            if (playing) ZipTimerSlot(games)
+        }
+    }
+}
+
+@Composable
+private fun ZipHeaderText(scene: ZipScene, isFinished: Boolean, playing: Boolean, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(zipTitle(scene, isFinished), style = MaterialTheme.typography.titleMedium, color = scheme.onSurface,
-                modifier = Modifier.semantics { heading() })
-            if (scene.phase == ZipPhase.playing) {
-                val meta = zipMeta(scene)
-                if (meta.isNotEmpty()) {
-                    Text(meta, style = rememberTabular(MaterialTheme.typography.bodySmall), color = scheme.onSurfaceVariant,
-                        modifier = Modifier.testTag("game.zip.progress"))
-                }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(zipTitle(scene, isFinished), style = MaterialTheme.typography.titleMedium, color = scheme.onSurface,
+            modifier = Modifier.semantics { heading() })
+        if (playing) {
+            val meta = zipMeta(scene)
+            if (meta.isNotEmpty()) {
+                Text(meta, style = rememberTabular(MaterialTheme.typography.bodySmall), color = scheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("game.zip.progress"))
             }
         }
-        if (scene.phase == ZipPhase.playing) ZipTimerSlot(games)
     }
 }
 
@@ -754,6 +769,19 @@ internal fun zipKeyDirection(key: Key): ZipDirection? = when (key) {
 internal fun zipCappedFontSize(size: TextUnit, fontScale: Float): TextUnit =
     if (fontScale <= ZipMaxFontScale || fontScale <= 0f) size else (size.value * ZipMaxFontScale / fontScale).sp
 
+internal fun zipHeaderStacks(fontScale: Float): Boolean = fontScale >= ZipStackedFontScale
+
+internal fun zipGluedFacts(joined: String, first: String, second: String): String {
+    val start = if (first.isEmpty() || second.isEmpty()) -1 else joined.indexOf(first)
+    if (start < 0) return joined
+    val firstEnd = start + first.length
+    val secondStart = joined.indexOf(second, firstEnd)
+    if (secondStart < 0) return joined
+    val separator = joined.substring(firstEnd, secondStart).trimStart()
+    if (separator.isEmpty() || separator.length == secondStart - firstEnd) return joined
+    return joined.substring(0, firstEnd) + "\u00A0" + separator + joined.substring(secondStart)
+}
+
 internal fun zipTitleResource(phase: ZipPhase, isFinal: Boolean): String = when (phase) {
     ZipPhase.lobby, ZipPhase.playing -> "gm_zip_title"
     ZipPhase.results -> if (isFinal) "gm_zip_final" else "gm_zip_round_results"
@@ -786,7 +814,8 @@ private fun zipTitle(scene: ZipScene, isFinished: Boolean): String {
 private fun zipMeta(scene: ZipScene): String {
     val round = if (scene.roundTotal > 1 && scene.round > 0) conclaveString("act_round_of", scene.round, scene.roundTotal) else ""
     if (scene.role == ZipRole.spectator) return round
-    return promptTwoFacts(round, zipCells(scene.visitedCount, scene.totalCells))
+    val cells = zipCells(scene.visitedCount, scene.totalCells)
+    return zipGluedFacts(promptTwoFacts(round, cells), round, cells)
 }
 
 @Composable

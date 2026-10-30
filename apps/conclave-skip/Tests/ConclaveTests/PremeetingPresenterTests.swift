@@ -38,10 +38,13 @@ struct PremeetingPresenterTests {
         #expect(home.rejoin?.end == .left)
         #expect(home.rejoin?.endedAtText.isEmpty == false)
 
-        #expect(home.recents.map { $0.title } == ["lily-zoro-iris", "maple-goku-tulip"])
-        #expect(home.recents.map { $0.routeId } == [PremeetingRoute.recentRouteIdBase + 1, PremeetingRoute.recentRouteIdBase + 2])
+        #expect(home.recents.map { $0.title } == ["lily-zoro-iris", "maple-goku-tulip", WebinarLandingFixtureScript.title])
+        #expect(home.recents.map { $0.routeId } == [PremeetingRoute.recentRouteIdBase + 1, PremeetingRoute.recentRouteIdBase + 2,
+                                                    PremeetingRoute.recentRouteIdBase + 3])
         #expect(home.recents.first?.role == .host)
-        #expect(home.recents.allSatisfy { !$0.relativeTime.isEmpty && $0.routeKind == .lobby })
+        #expect(home.recents.last?.role == .attendee)
+        #expect(home.recents.map { $0.routeKind } == [PremeetingRouteKind.lobby, .lobby, .webinarLanding])
+        #expect(home.recents.allSatisfy { !$0.relativeTime.isEmpty })
         #expect(home.revision > 0)
 
         #expect(presenter.liveTaskCount == 1)
@@ -52,7 +55,7 @@ struct PremeetingPresenterTests {
         let presenter = presenter(now: Self.now + 13.0 * Self.minute)
         presenter.bootstrap(user: nil, recents: PremeetingFixtureScript.recents(for: .home, nowMillis: Self.now))
         #expect(presenter.home.rejoin == nil)
-        #expect(presenter.home.recents.count == 3)
+        #expect(presenter.home.recents.count == 4)
         #expect(presenter.liveTaskCount == 0)
         #expect(RecentMeetingsPolicy.rejoinWindowMillis == 15.0 * Self.minute)
     }
@@ -365,7 +368,7 @@ struct PremeetingPresenterTests {
             #expect(PremeetingFixtureScript.state(named: " \(state.rawValue) ") == state)
             switch state {
             case .home:
-                #expect(premeeting.home.rejoin != nil && premeeting.home.recents.count == 2)
+                #expect(premeeting.home.rejoin != nil && premeeting.home.recents.count == 3)
                 #expect(premeeting.path.isEmpty && premeeting.root == PremeetingRootDecision.home)
             case .empty:
                 #expect(premeeting.home.recents.isEmpty && premeeting.home.rejoin == nil)

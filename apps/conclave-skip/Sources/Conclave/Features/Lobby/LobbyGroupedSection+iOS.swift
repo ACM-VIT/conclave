@@ -52,21 +52,29 @@ struct LobbyGroupedDivider: View {
 
 struct LobbyAudioRouteRow: View {
     let premeeting: PremeetingPresenter
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         let audio = premeeting.lobbyAudio
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
         LobbyGroupedRow {
-            LabeledContent {
-                HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                layout {
+                    Text(ConclaveStrings.text("Audio"))
+                        .layoutPriority(1)
                     Text(LobbyAudioCopy.routeName(kind: audio?.routeKind ?? "", name: audio?.routeName ?? ""))
                         .foregroundStyle(HostingTheme.secondaryText)
-                        .lineLimit(1)
-                    LobbyRoutePicker(onDismiss: { premeeting.routePickerDidDismiss() })
-                        .frame(width: 44, height: 44)
-                        .accessibilityIdentifier("lobby.audio.picker")
+                        .multilineTextAlignment(stacked ? .leading : .trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: stacked ? .leading : .trailing)
                 }
-            } label: {
-                Text(ConclaveStrings.text("Audio"))
+                .accessibilityElement(children: .combine)
+                LobbyRoutePicker(onDismiss: { premeeting.routePickerDidDismiss() })
+                    .frame(width: 44, height: 44)
+                    .accessibilityIdentifier("lobby.audio.picker")
             }
         }
         .accessibilityIdentifier("lobby.audio")

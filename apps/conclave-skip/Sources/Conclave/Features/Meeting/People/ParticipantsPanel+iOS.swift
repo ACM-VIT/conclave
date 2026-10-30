@@ -27,7 +27,9 @@ struct ParticipantsPanel: View {
                    systemScheme: systemScheme, path: $route,
                    onClose: { shell.panels.dismiss(cancelPending: true) },
                    onPromoteToLarge: { adapter.promoteToLarge() }) {
-            ParticipantsList(people: people, query: $query, isSearching: $isSearching)
+            ParticipantsList(people: people,
+                             isMediumDetent: resolved.style == PanelHostStyle.sheet && adapter.detent == PanelDetent.medium,
+                             query: $query, isSearching: $isSearching)
                 .navigationDestination(for: PeopleRoute.self) { page in
 
                     HostPageView(people: people, page: page, link: { $0 })
@@ -54,17 +56,20 @@ struct ParticipantsPanel: View {
 
 private struct ParticipantsList: View {
     let people: PeoplePresenter
+    let isMediumDetent: Bool
     @Binding var query: String
     @Binding var isSearching: Bool
     @Environment(\.panelPromoteToLargeDetent) private var promoteToLarge
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var rotorNamespace
+    @State private var placement = PeopleFocusPlacement()
 
     var body: some View {
         let snapshot = people.snapshot
         let searching = PeopleSearchPolicy.isSearching(query)
         let shown = PeopleSearchPolicy.filter(snapshot.sections, query: query)
         let queueCount = snapshot.section(PeopleSectionID.raisedHands)?.count ?? 0
+        let focusId = people.focusRequest?.id ?? 0
         ScrollViewReader { proxy in
             List {
 
@@ -73,6 +78,7 @@ private struct ParticipantsList: View {
                     Section {
                         ConclaveBanner(kind: .info, text: ConclaveStrings.text("You\u{2019}re no longer a host."), surface: .app,
                                        identifier: "people.lostHost")
+                            .id(PeopleFocusTarget.lostHost)
                     }
                 }
                 if !searching {
@@ -89,18 +95,22 @@ private struct ParticipantsList: View {
                             PeopleSectionRow(people: people, sectionId: section.id, key: key,
                                              queueCount: section.id == PeopleSectionID.raisedHands.rawValue ? queueCount : 0,
                                              rotorNamespace: rotorNamespace)
+                                .id(PeopleFocusTarget.row(section.id, key))
                         }
                         if section.id == PeopleSectionID.inMeeting.rawValue && !snapshot.isRosterLoaded && !searching {
 
                             ConclaveLoadingStatus(label: ConclaveStrings.text("Loading Participants"), identifier: "people.loading")
                         }
                     } header: {
-                        if section.id == PeopleSectionID.attendees.rawValue {
-                            WebinarAttendeesHeader(people: people)
-                        } else {
+                        Group {
+                            if section.id == PeopleSectionID.attendees.rawValue {
+                                WebinarAttendeesHeader(people: people)
+                            } else {
 
-                            PeopleSectionHeader(people: people, section: section, showsActions: !searching)
+                                PeopleSectionHeader(people: people, section: section, showsActions: !searching)
+                            }
                         }
+                        .modifier(PeopleFocusHeaderTarget(sectionId: section.id, placement: placement))
                     } footer: {
                         if section.id == PeopleSectionID.attendees.rawValue && !searching {
                             WebinarAttendeesFooter(people: people, snapshot: snapshot)
@@ -110,10 +120,17 @@ private struct ParticipantsList: View {
                             ConclaveSectionFooter(text, identifier: "people.section." + section.id + ".footer")
                         }
                     }
-                    .id(section.id)
                 }
             }
             .listStyle(.insetGrouped)
+            .onGeometryChange(for: CGRect.self) { geometry in
+                let frame = geometry.frame(in: .global)
+                let insets = geometry.safeAreaInsets
+                return CGRect(x: frame.minX, y: frame.minY + insets.top, width: frame.width,
+                              height: max(0, frame.height - insets.top - insets.bottom))
+            } action: { viewport in
+                placement.viewport = viewport
+            }
             .overlay {
                 if searching && shown.isEmpty {
 
@@ -126,14 +143,45 @@ private struct ParticipantsList: View {
 
                 if on { promoteToLarge() }
             }
-            .task(id: people.focusRequest?.id ?? 0) {
+            .task(id: PeopleFocusKey(id: focusId, isMediumDetent: focusId != 0 && isMediumDetent)) {
                 guard let request = people.focusRequest else { return }
-                if snapshot.section(PeopleSectionID(rawValue: request.sectionId) ?? PeopleSectionID.inMeeting) != nil {
-                    if reduceMotion {
-                        proxy.scrollTo(request.sectionId, anchor: .top)
+                let isShown = shown.contains { $0.id == request.sectionId }
+                let step = people.focusStep(id: request.id, isShown: isShown, isSearching: searching, revision: snapshot.revision)
+                if step == PeopleFocusStep.consumeNow || step == PeopleFocusStep.awaitSection {
+                    people.focusRequestHandled(id: request.id)
+                    return
+                }
+                guard step == PeopleFocusStep.placeHeader else { return }
+                let target = PeopleFocusTarget.header(request.sectionId)
+                var isLive = true
+                var isPlaced = false
+                var attempts = 0
+                while isLive && !isPlaced && attempts < PeopleFocusTiming.scrollAttempts {
+                    attempts += 1
+                    let lead = PeopleFocusTarget.lead(before: request.sectionId,
+                                                      in: PeopleSearchPolicy.filter(people.snapshot.sections, query: query),
+                                                      snapshot: people.snapshot, isSearching: PeopleSearchPolicy.isSearching(query))
+                    if let lead {
+                        if reduceMotion {
+                            proxy.scrollTo(lead, anchor: .top)
+                        } else {
+                            withAnimation { proxy.scrollTo(lead, anchor: .top) }
+                        }
+                    } else if reduceMotion {
+                        proxy.scrollTo(target, anchor: .top)
                     } else {
-                        withAnimation { proxy.scrollTo(request.sectionId, anchor: .top) }
+                        withAnimation { proxy.scrollTo(target, anchor: .top) }
                     }
+                    try? await Task.sleep(for: .milliseconds(reduceMotion ? PeopleFocusTiming.reducedSettleMilliseconds
+                                                                           : PeopleFocusTiming.settleMilliseconds))
+                    guard !Task.isCancelled else { return }
+                    isLive = PeopleSearchPolicy.filter(people.snapshot.sections, query: query).contains { $0.id == request.sectionId }
+                    isPlaced = isLive && placement.isHeaderPlaced(request.sectionId)
+                }
+                if isLive && PeopleFocusPolicy.promotesToLarge(isPlaced: isPlaced, isMediumDetent: isMediumDetent) {
+                    promoteToLarge()
+                    try? await Task.sleep(for: .milliseconds(PeopleFocusTiming.settleMilliseconds))
+                    guard !Task.isCancelled else { return }
                 }
 
                 people.focusRequestHandled(id: request.id)
@@ -162,6 +210,86 @@ private struct PeopleRotorEntry: Identifiable {
                                            label: name.isEmpty ? ConclaveStrings.text("You") : name))
         }
         return result
+    }
+}
+
+private struct PeopleFocusKey: Equatable {
+    let id: Int
+    let isMediumDetent: Bool
+}
+
+private enum PeopleFocusTarget {
+    static let lostHost = "people.lead.lostHost"
+    static let invite = "people.lead.invite"
+    static let hostControls = "people.lead.hostControls"
+    static let questions = "people.lead.questions"
+
+    static func header(_ sectionId: String) -> String {
+        "people.header." + sectionId
+    }
+
+    static func row(_ sectionId: String, _ key: String) -> String {
+        "people.row." + sectionId + ":" + key
+    }
+
+    static func lead(before sectionId: String, in sections: [PeopleSection], snapshot: PeopleSnapshot,
+                     isSearching: Bool) -> String? {
+        guard let index = sections.firstIndex(where: { $0.id == sectionId }) else { return nil }
+        if index > 0 {
+            let previous = sections[index - 1]
+            guard let key = previous.rowIds.last else { return nil }
+            return row(previous.id, key)
+        }
+        if !isSearching && snapshot.isHostViewer {
+            return snapshot.qaVisible ? questions : hostControls
+        }
+        if !isSearching && !snapshot.inviteLink.isEmpty && URL(string: snapshot.inviteLink) != nil {
+            return invite
+        }
+        return snapshot.showsLostHostNotice ? lostHost : nil
+    }
+}
+
+private enum PeopleFocusTiming {
+    static let settleMilliseconds = 450
+    static let reducedSettleMilliseconds = 80
+    static let scrollAttempts = 2
+}
+
+private final class PeopleFocusPlacement {
+    var viewport = CGRect.null
+    private var headers: [String: CGRect] = [:]
+
+    func record(_ sectionId: String, frame: CGRect) {
+        headers[sectionId] = frame
+    }
+
+    func forget(_ sectionId: String) {
+        headers[sectionId] = nil
+    }
+
+    func isHeaderPlaced(_ sectionId: String) -> Bool {
+        guard let frame = headers[sectionId], !viewport.isNull else { return false }
+        return PeopleFocusPolicy.isHeaderPlaced(headerTop: Double(frame.minY), headerBottom: Double(frame.maxY),
+                                                viewportTop: Double(viewport.minY), viewportBottom: Double(viewport.maxY))
+    }
+}
+
+private struct PeopleFocusHeaderTarget: ViewModifier {
+    let sectionId: String
+    let placement: PeopleFocusPlacement
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { geometry in
+                geometry.frame(in: .global)
+            } action: { frame in
+                placement.record(sectionId, frame: frame)
+            }
+            .onDisappear {
+                placement.forget(sectionId)
+            }
+            .id(PeopleFocusTarget.header(sectionId))
     }
 }
 
@@ -207,6 +335,7 @@ private struct PeopleActionRows: View {
                     Label(ConclaveStrings.text("Share Invite"), systemImage: ConclaveSymbols.squareAndArrowUp)
                 }
                 .accessibilityIdentifier("people.invite")
+                .id(PeopleFocusTarget.invite)
             }
         }
         if snapshot.isHostViewer {
@@ -220,6 +349,7 @@ private struct PeopleActionRows: View {
                     }
                 }
                 .accessibilityIdentifier("people.hostControls")
+                .id(PeopleFocusTarget.hostControls)
                 if snapshot.qaVisible {
                     Button {
                         people.openQuestionsAndAnswers()
@@ -231,6 +361,7 @@ private struct PeopleActionRows: View {
                         }
                     }
                     .accessibilityIdentifier("people.qa")
+                    .id(PeopleFocusTarget.questions)
                 }
             }
         }

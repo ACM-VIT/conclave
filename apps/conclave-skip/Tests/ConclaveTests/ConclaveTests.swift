@@ -10495,42 +10495,77 @@ final class ConclaveTests: XCTestCase {
                 )
             ),
             sessionId: "native-session",
-            isMuted: true,
-            isCameraOff: true,
+            isMuted: false,
+            isCameraOff: false,
             savedAt: savedAt
         )
-        let freshNow = Date(
-            timeInterval: MeetingResumePolicy.maximumAge - 1.0,
-            since: savedAt
-        )
-        let staleNow = Date(
-            timeInterval: MeetingResumePolicy.maximumAge + 1.0,
-            since: savedAt
-        )
+        let nineMinutes = Date(timeInterval: 540.0, since: savedAt)
+        let elevenMinutes = Date(timeInterval: 660.0, since: savedAt)
+        let formerWindow = Date(timeInterval: 43_200.0 - 1.0, since: savedAt)
 
-        XCTAssertTrue(MeetingResumePolicy.isFresh(snapshot, now: freshNow))
-        XCTAssertFalse(MeetingResumePolicy.isFresh(snapshot, now: staleNow))
+        XCTAssertEqual(MeetingResumePolicy.maximumAge, 600.0)
+        XCTAssertTrue(MeetingResumePolicy.isFresh(snapshot, now: nineMinutes))
+        XCTAssertTrue(MeetingResumePolicy.isFresh(snapshot, now: Date(timeInterval: MeetingResumePolicy.maximumAge, since: savedAt)))
+        XCTAssertFalse(MeetingResumePolicy.isFresh(snapshot, now: elevenMinutes))
+        XCTAssertFalse(MeetingResumePolicy.isFresh(snapshot, now: formerWindow))
+        XCTAssertTrue(MeetingResumePolicy.isFresh(snapshot, now: Date(timeInterval: -299.0, since: savedAt)))
+        XCTAssertFalse(MeetingResumePolicy.isFresh(snapshot, now: Date(timeInterval: -301.0, since: savedAt)))
         XCTAssertTrue(MeetingResumePolicy.shouldRestore(
             connectionState: ConnectionState.disconnected,
             hasLiveJoinContext: false,
             alreadyAttempted: false,
             snapshot: snapshot,
-            now: freshNow
+            now: nineMinutes
+        ))
+        XCTAssertFalse(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: false,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            now: elevenMinutes
         ))
         XCTAssertFalse(MeetingResumePolicy.shouldRestore(
             connectionState: ConnectionState.joining,
             hasLiveJoinContext: false,
             alreadyAttempted: false,
             snapshot: snapshot,
-            now: freshNow
+            now: nineMinutes
         ))
         XCTAssertFalse(MeetingResumePolicy.shouldRestore(
             connectionState: ConnectionState.disconnected,
             hasLiveJoinContext: false,
             alreadyAttempted: true,
             snapshot: snapshot,
-            now: freshNow
+            now: nineMinutes
         ))
+        XCTAssertFalse(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: true,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            now: nineMinutes
+        ))
+        XCTAssertFalse(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: false,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            markerMillis: MeetingResumePolicy.savedAtMillis(snapshot) + 1.0,
+            now: nineMinutes
+        ))
+        XCTAssertTrue(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: false,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            markerMillis: MeetingResumePolicy.savedAtMillis(snapshot) - 1.0,
+            now: nineMinutes
+        ))
+        XCTAssertTrue(MeetingResumePolicy.persists(ConnectionState.joined))
+        XCTAssertTrue(MeetingResumePolicy.persists(ConnectionState.reconnecting))
+        XCTAssertFalse(MeetingResumePolicy.persists(ConnectionState.waiting))
+        XCTAssertFalse(MeetingResumePolicy.persists(ConnectionState.joining))
+        XCTAssertFalse(MeetingResumePolicy.persists(ConnectionState.disconnected))
     }
 
     func testLocalVideoMirrorPolicyMirrorsOnlyFrontCamera() throws {

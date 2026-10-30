@@ -78,6 +78,7 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, compact: Boolean, onFlip: () ->
     val previewValue = when {
         card.preview == PreviewState.live && card.isFrontCamera -> conclaveString("ds_front")
         card.preview == PreviewState.live -> conclaveString("ds_back_camera")
+        card.cameraIsUnavailable -> conclaveString("pm_camera_unavailable")
         else -> conclaveString("pm_camera_off")
     }
     Box(modifier.testTag("lobby.preview")) {
@@ -115,10 +116,25 @@ private fun LobbyPreviewVideo(card: LobbyCardUi, compact: Boolean, onFlip: () ->
     }
 }
 
+private val LobbyCardUi.cameraIsUnavailable: Boolean
+    get() = preview == PreviewState.unavailable || cameraPermission == MediaPermissionState.unavailable
+
+@Composable
+internal fun LobbyPreviewCaption(card: LobbyCardUi, modifier: Modifier = Modifier) {
+    if (card.showsSurface || card.preview == PreviewState.starting) return
+    val unavailable = card.cameraIsUnavailable
+    Text(
+        if (unavailable) conclaveString("pm_camera_unavailable") else conclaveString("pm_camera_off"),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = modifier.fillMaxWidth().testTag("lobby.preview.caption").clearAndSetSemantics { },
+    )
+}
+
 @Composable
 private fun LobbyCameraOffContent(card: LobbyCardUi, compact: Boolean) {
     val scheme = MaterialTheme.colorScheme
-    val unavailable = card.preview == PreviewState.unavailable || card.cameraPermission == MediaPermissionState.unavailable
     val content: @Composable () -> Unit = {
         ConclaveAvatar(
             identity = ConclaveAvatarIdentity.make(name = card.avatarName, id = if (card.avatarSeed.isEmpty()) null else card.avatarSeed),
@@ -126,13 +142,6 @@ private fun LobbyCameraOffContent(card: LobbyCardUi, compact: Boolean) {
         )
         if (card.preview == PreviewState.starting) {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = scheme.onSurface)
-        } else {
-            Text(
-                if (unavailable) conclaveString("pm_camera_unavailable") else conclaveString("pm_camera_off"),
-                style = MaterialTheme.typography.bodyMedium,
-                color = scheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
         }
     }
     if (compact) {

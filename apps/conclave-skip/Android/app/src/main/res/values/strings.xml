@@ -425,7 +425,6 @@
     <string name="pm_remove_from_recents">Remove from recents</string>
     <string name="pm_more_options_for">More options for %1$s</string>
     <string name="pm_empty_title">No recent meetings</string>
-    <string name="pm_empty_body">Start a meeting or join with a link.</string>
     <string name="pm_notice_ended_by_host">The host ended the meeting.</string>
     <string name="pm_notice_room_closed">This meeting has ended.</string>
     <string name="pm_notice_invalid_link">This link can’t be opened in Conclave.</string>
@@ -471,7 +470,7 @@
     </plurals>
     <string name="pm_your_preview">Your preview</string>
     <string name="pm_camera_off">Camera off</string>
-    <string name="pm_camera_unavailable">Camera isn’t available. You can join with it off.</string>
+    <string name="pm_camera_unavailable">Camera unavailable</string>
     <string name="pm_camera_paused">Camera paused</string>
     <string name="pm_effects">Effects</string>
     <string name="pm_effects_camera_off">Camera permission is off</string>
@@ -493,13 +492,12 @@
     <string name="pm_invite_footer">Enter the invite code from the host.</string>
     <string name="pm_invite_invalid">That invite code didn’t work. Check it and try again.</string>
     <string name="pm_meeting_link">Meeting link</string>
-    <string name="pm_invite_after_start">You can invite people after you start.</string>
     <string name="pm_clip_label">Meeting link</string>
     <string name="pm_link_copied">Link copied</string>
     <string name="pm_start_meeting">Start meeting</string>
     <string name="pm_join_as_speaker">Join as a speaker</string>
-    <string name="pm_need_name_join">Add your name to join.</string>
-    <string name="pm_need_name_start">Add your name to start.</string>
+    <string name="pm_need_name_join">Add your name</string>
+    <string name="pm_need_name_start">Add your name</string>
     <string name="pm_offline">You’re offline. Connect to the internet to join.</string>
     <string name="pm_room_not_found">No meeting found with this code. Check it and try again.</string>
     <string name="pm_sign_in_required">This meeting needs you to sign in.</string>
@@ -610,6 +608,7 @@
         <item quantity="other">%1$d participants</item>
     </plurals>
     <string name="stg_just_you">Just you</string>
+    <string name="stg_waiting_for_others">Waiting for others</string>
     <string name="stg_you_presenting">You’re presenting</string>
     <string name="stg_raising_hand">Raising hand…</string>
     <string name="stg_lower">Lower</string>

@@ -6,7 +6,11 @@ struct LobbyView: View {
     let premeeting: PremeetingPresenter
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var viewportSize = CGSize(width: 390, height: 667)
+    @State private var visibleHeight: CGFloat = 0
+    @State private var nameRevealed = false
+    @FocusState private var isNameFocused: Bool
 
     private var isWide: Bool {
         viewportSize.width >= 640 && (horizontalSizeClass == .regular || verticalSizeClass == .compact)
@@ -16,21 +20,38 @@ struct LobbyView: View {
         let layout = isWide
             ? AnyLayout(HStackLayout(alignment: .top, spacing: 24))
             : AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
-        ScrollView {
-            layout {
-                LobbyPreviewCard(premeeting: premeeting, isWide: isWide, visibleHeight: viewportSize.height)
-                    .frame(maxWidth: isWide ? 560 : .infinity)
-                    .padding(.horizontal, isWide ? 0 : 16)
-                LobbyControlsColumn(premeeting: premeeting)
-                    .frame(minWidth: isWide ? 360 : nil, maxWidth: isWide ? 420 : .infinity)
+        ScrollViewReader { proxy in
+            ScrollView {
+                layout {
+                    LobbyPreviewCard(premeeting: premeeting, isWide: isWide, visibleHeight: viewportSize.height)
+                        .frame(maxWidth: isWide ? 560 : .infinity)
+                        .padding(.horizontal, isWide ? 0 : 16)
+                    LobbyControlsColumn(premeeting: premeeting, nameFocus: $isNameFocused)
+                        .frame(minWidth: isWide ? 360 : nil, maxWidth: isWide ? 420 : .infinity)
+                }
+                .padding(.horizontal, isWide ? 16 : 0)
+                .padding(.vertical, 12)
             }
-            .padding(.horizontal, isWide ? 16 : 0)
-            .padding(.vertical, 12)
+            .background(Color(uiColor: .systemGroupedBackground))
+            .scrollDismissesKeyboard(.interactively)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: {
+                if viewportSize != $0 { viewportSize = $0 }
+            }
+            .onGeometryChange(for: CGFloat.self) {
+                $0.size.height - $0.safeAreaInsets.top - $0.safeAreaInsets.bottom
+            } action: { height in
+                let shrank = height < visibleHeight
+                visibleHeight = height
+                if shrank && isNameFocused && !nameRevealed {
+                    nameRevealed = true
+                    withAnimation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion)) {
+                        proxy.scrollTo(LobbyScrollAnchor.name, anchor: .center)
+                    }
+                }
+            }
         }
-        .background(Color(uiColor: .systemGroupedBackground))
-        .scrollDismissesKeyboard(.interactively)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: {
-            if viewportSize != $0 { viewportSize = $0 }
+        .onChange(of: isNameFocused) {
+            if !isNameFocused { nameRevealed = false }
         }
         .modifier(LobbyBottomBar(premeeting: premeeting, routeId: route.id))
         .modifier(LobbyTitle(premeeting: premeeting, route: route))
@@ -45,8 +66,13 @@ struct LobbyView: View {
     }
 }
 
+private enum LobbyScrollAnchor {
+    case name
+}
+
 private struct LobbyControlsColumn: View {
     let premeeting: PremeetingPresenter
+    let nameFocus: FocusState<Bool>.Binding
 
     var body: some View {
         let isPromotion = premeeting.lobbyStatus?.intent == LobbyIntent.promotion
@@ -55,7 +81,7 @@ private struct LobbyControlsColumn: View {
             PermissionPrimingSection(premeeting: premeeting)
             LobbyAudioSection(premeeting: premeeting)
             if !isPromotion {
-                LobbyIdentitySection(premeeting: premeeting)
+                LobbyIdentitySection(premeeting: premeeting, nameFocus: nameFocus)
                 AdmissionNotifySection(premeeting: premeeting)
                 LobbyInviteCodeSection(premeeting: premeeting)
                 if let link = premeeting.lobbyLink, link.canShare, !link.meetingLink.isEmpty {
@@ -146,6 +172,7 @@ private struct LobbyAudioSection: View {
 
 private struct LobbyIdentitySection: View {
     let premeeting: PremeetingPresenter
+    let nameFocus: FocusState<Bool>.Binding
 
     var body: some View {
         if let identity = premeeting.lobbyIdentity {
@@ -176,7 +203,7 @@ private struct LobbyIdentitySection: View {
                 }
                 .accessibilityIdentifier("lobby.identity")
             } else {
-                LobbyGuestNameSection(premeeting: premeeting, identity: identity)
+                LobbyGuestNameSection(premeeting: premeeting, identity: identity, nameFocus: nameFocus)
             }
         }
     }
@@ -185,6 +212,7 @@ private struct LobbyIdentitySection: View {
 private struct LobbyGuestNameSection: View {
     let premeeting: PremeetingPresenter
     let identity: LobbyIdentitySnapshot
+    let nameFocus: FocusState<Bool>.Binding
     @State private var name = ""
 
     var body: some View {
@@ -193,12 +221,14 @@ private struct LobbyGuestNameSection: View {
                 LobbyGroupedRow {
                     HStack(spacing: 8) {
                         ConclaveTextField(ConclaveStrings.text("Your Name"), text: $name, kind: .name, identifier: "lobby.name")
+                            .focused(nameFocus)
                         ConclaveCharacterCounter(count: name.count, limit: identity.nameLimit,
                                                  visibleFrom: DisplayNamePolicy.counterThreshold,
                                                  identifier: "lobby.name.counter")
                     }
                 }
             }
+            .id(LobbyScrollAnchor.name)
             Button { premeeting.openAccount() } label: {
                 Text(ConclaveStrings.text("Sign In"))
                     .font(.headline)
@@ -291,10 +321,8 @@ enum LobbyPrimaryCopy {
 
     static func reason(_ raw: String) -> String? {
         switch LobbyPrimaryReason(rawValue: raw) ?? LobbyPrimaryReason.none {
-        case .nameMissingJoin:
-            return ConclaveStrings.text("Add your name to join.")
-        case .nameMissingStart:
-            return ConclaveStrings.text("Add your name to start.")
+        case .nameMissingJoin, .nameMissingStart:
+            return ConclaveStrings.text("Add your name")
         case .offline:
             return ConclaveStrings.text("You\u{2019}re offline. Connect to the internet to join.")
         case .updateRequired, .none:
@@ -317,6 +345,7 @@ private struct LobbyTitle: ViewModifier {
             : EntryStatusCopy.subtitle(status: status, presence: premeeting.lobbyPresence)
         if #available(iOS 26.0, *) {
             content
+                .scrollEdgeEffectStyle(.soft, for: .top)
                 .navigationTitle(title)
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationSubtitle(subtitle)

@@ -469,24 +469,27 @@ private fun GameSetupPage(activities: ActivitiesPresenter, gameId: String, reser
 private fun SetupStartBar(activities: ActivitiesPresenter, setup: GameSetupModel, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
     val starting = setup.phase == SetupPhase.starting || setup.phase == SetupPhase.slow
-    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Button(
-            onClick = { activities.startGame() },
-            enabled = setup.canStart && !starting,
-            colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
-            modifier = Modifier.heightIn(min = 48.dp).testTag("activities.setup.start"),
-        ) {
-            if (starting) {
-                CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onPrimaryContainer, strokeWidth = 2.dp)
-                Spacer(Modifier.size(8.dp))
+    Box(modifier.fillMaxWidth().testTag("activities.setup.bar")) {
+        ConclaveFloatingActionScrim(Modifier.matchParentSize())
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Button(
+                onClick = { activities.startGame() },
+                enabled = setup.canStart && !starting,
+                colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
+                modifier = Modifier.heightIn(min = 48.dp).testTag("activities.setup.start"),
+            ) {
+                if (starting) {
+                    CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onPrimaryContainer, strokeWidth = 2.dp)
+                    Spacer(Modifier.size(8.dp))
+                }
+                Text(activitiesStartTitle(setup), textAlign = TextAlign.Center)
             }
-            Text(activitiesStartTitle(setup), textAlign = TextAlign.Center)
-        }
-        val footer = activitiesSetupFooter(setup)
-        if (footer != null) {
-            Text(footer, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, textAlign = TextAlign.Center,
-                modifier = Modifier.testTag("activities.setup.footer"))
+            val footer = activitiesSetupFooter(setup)
+            if (footer != null) {
+                Text(footer, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, textAlign = TextAlign.Center,
+                    modifier = Modifier.testTag("activities.setup.footer"))
+            }
         }
     }
 }
@@ -497,8 +500,14 @@ private fun BrowserLauncherPage(activities: ActivitiesPresenter, reservation: Pa
     val browser = activities.snapshot.browser
     val message = activitiesBrowserMessage(browser)
     val scheme = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+    val density = LocalDensity.current
+    var primaryHeightPx by remember { mutableIntStateOf(0) }
+    val primaryClearance = if (primaryHeightPx > 0) with(density) { primaryHeightPx.toDp() } else 64.dp
+    Box(Modifier.fillMaxSize().testTag("activities.browser.page")) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(
+            top = reservation.calculateTopPadding(),
+            bottom = reservation.calculateBottomPadding() + primaryClearance + 8.dp,
+        )) {
             item(key = "url") {
                 OutlinedTextField(
                     value = url,
@@ -519,18 +528,23 @@ private fun BrowserLauncherPage(activities: ActivitiesPresenter, reservation: Pa
                 }
             }
         }
-        Button(
-            onClick = { activities.submitBrowserURL(url) },
-            enabled = browser.phase == BrowserPhase.idle && browser.isAvailable,
-            colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                .padding(bottom = reservation.calculateBottomPadding()).heightIn(min = 48.dp).testTag("activities.browser.primary"),
-        ) {
-            if (browser.phase != BrowserPhase.idle) {
-                CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onPrimaryContainer, strokeWidth = 2.dp)
-                Spacer(Modifier.size(8.dp))
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = reservation.calculateBottomPadding())
+            .onSizeChanged { size -> if (primaryHeightPx != size.height) primaryHeightPx = size.height }
+            .testTag("activities.browser.bar")) {
+            ConclaveFloatingActionScrim(Modifier.matchParentSize())
+            Button(
+                onClick = { activities.submitBrowserURL(url) },
+                enabled = browser.phase == BrowserPhase.idle && browser.isAvailable,
+                colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).heightIn(min = 48.dp)
+                    .testTag("activities.browser.primary"),
+            ) {
+                if (browser.phase != BrowserPhase.idle) {
+                    CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onPrimaryContainer, strokeWidth = 2.dp)
+                    Spacer(Modifier.size(8.dp))
+                }
+                Text(activitiesBrowserPrimary(browser))
             }
-            Text(activitiesBrowserPrimary(browser))
         }
     }
 }

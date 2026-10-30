@@ -4,10 +4,14 @@ import SwiftUI
 struct GameShellHeaderActions: View {
     let games: GameStagePresenter
     @State private var endPrompt = false
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         let chrome = games.chrome
-        HStack(spacing: 8) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 8))
+        layout {
             GameKitSeatControl(seat: chrome.seat, onJoin: { games.join() })
             if chrome.canEnd || chrome.endPending {
                 Button(role: .destructive) {
@@ -51,6 +55,7 @@ struct GameShellBody: View {
     let games: GameStagePresenter
     let storeURL: String
     let onShowVideo: () -> Void
+    @State private var bounds = GameShellBoundsProbe()
 
     var body: some View {
         ScrollView {
@@ -60,12 +65,84 @@ struct GameShellBody: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(GameShellBoundsMeasure(probe: bounds, part: .content))
         }
+        .modifier(GameShellBoundsMeasure(probe: bounds, part: .viewport))
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             GameShellBottomBar(games: games)
+                .modifier(GameShellBoundsMeasure(probe: bounds, part: .bar))
         }
+        .modifier(GameShellBoundsMeasure(probe: bounds, part: .body))
         .accessibilityIdentifier("game.body")
+        .overlay(alignment: .topLeading) {
+            GameShellBoundsReadout(probe: bounds)
+        }
+    }
+}
+
+enum GameShellBoundsPart {
+    case body, viewport, content, bar
+}
+
+@MainActor
+@Observable
+final class GameShellBoundsProbe {
+    private(set) var bodyRect = GameShellRect.zero
+    private(set) var viewportRect = GameShellRect.zero
+    private(set) var contentRect = GameShellRect.zero
+    private(set) var barRect = GameShellRect.zero
+
+    var readout: String {
+        GameShellInsetPolicy.readout(body: bodyRect, viewport: viewportRect, content: contentRect, bar: barRect)
+    }
+
+    func record(_ part: GameShellBoundsPart, _ frame: CGRect) {
+        let rect = GameShellRect(x: Double(frame.minX), y: Double(frame.minY), width: Double(frame.width), height: Double(frame.height))
+        switch part {
+        case .body: if bodyRect != rect { bodyRect = rect }
+        case .viewport: if viewportRect != rect { viewportRect = rect }
+        case .content: if contentRect != rect { contentRect = rect }
+        case .bar: if barRect != rect { barRect = rect }
+        }
+    }
+
+    func clearBar() {
+        if barRect != GameShellRect.zero { barRect = GameShellRect.zero }
+    }
+}
+
+struct GameShellBoundsMeasure: ViewModifier {
+    let probe: GameShellBoundsProbe
+    let part: GameShellBoundsPart
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        content.onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .global)
+        } action: { frame in
+            probe.record(part, frame)
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+struct GameShellBoundsReadout: View {
+    let probe: GameShellBoundsProbe
+
+    var body: some View {
+        #if DEBUG
+        Color.clear
+            .frame(width: 1, height: 1)
+            .allowsHitTesting(false)
+            .accessibilityElement()
+            .accessibilityLabel(Text(verbatim: probe.readout))
+            .accessibilityIdentifier("game.bounds")
+        #else
+        EmptyView()
+        #endif
     }
 }
 

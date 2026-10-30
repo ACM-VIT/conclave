@@ -24,40 +24,59 @@ struct ChessSceneView: View {
     var cardHeader: ((Bool) -> AnyView)? = nil
     @ScaledMetric(relativeTo: .body) private var detailsWidth: CGFloat = 240
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var selected = ""
     @State private var flipped = false
     @State private var chooserOpen = false
     @State private var promotion: ChessMoveRequest? = nil
     @State private var movedCount = 0
+    @State private var bounds = GameShellBoundsProbe()
 
     var body: some View {
         let orientation = ChessBoardPolicy.orientation(scene, flipped: flipped)
         Group {
             if let cardHeader {
                 GeometryReader { proxy in
-                    let plan = ChessCardLayoutPolicy.resolve(width: Double(proxy.size.width), height: Double(proxy.size.height),
-                                                             detailsWidth: Double(detailsWidth))
+                    let plan = ChessCardLayoutPolicy.resolvePreferringColumns(width: Double(proxy.size.width),
+                                                                              height: Double(proxy.size.height),
+                                                                              detailsWidth: Double(detailsWidth))
+                    let headerScrolls = dynamicTypeSize.isAccessibilitySize
                     if plan.usesColumns && !chooserOpen {
                         compactScene(orientation: orientation, side: plan.boardSide, header: cardHeader)
                     } else {
                         VStack(spacing: 0) {
-                            cardHeader(false)
-                            Rectangle().fill(HostingTheme.inCallBorder).frame(height: 1).accessibilityHidden(true)
-                            ScrollView {
-                                VStack(alignment: .leading, spacing: 14) {
-                                    GameShellNotices(games: games)
-                                    stackedScene(orientation: orientation)
-                                }
-                                .padding(16)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if !headerScrolls {
+                                cardHeader(false)
+                                Rectangle().fill(HostingTheme.inCallBorder).frame(height: 1).accessibilityHidden(true)
                             }
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    if headerScrolls {
+                                        cardHeader(true)
+                                        Rectangle().fill(HostingTheme.inCallBorder).frame(height: 1).accessibilityHidden(true)
+                                    }
+                                    VStack(alignment: .leading, spacing: 14) {
+                                        GameShellNotices(games: games)
+                                        stackedScene(orientation: orientation)
+                                    }
+                                    .padding(16)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .modifier(GameShellBoundsMeasure(probe: bounds, part: .content))
+                            }
+                            .modifier(GameShellBoundsMeasure(probe: bounds, part: .viewport))
                             .scrollDismissesKeyboard(.interactively)
                             GameShellBottomBar(games: games)
+                                .modifier(GameShellBoundsMeasure(probe: bounds, part: .bar))
                         }
                     }
                 }
+                .modifier(GameShellBoundsMeasure(probe: bounds, part: .body))
                 .accessibilityIdentifier("game.body")
+                .overlay(alignment: .topLeading) {
+                    GameShellBoundsReadout(probe: bounds)
+                }
             } else {
                 stackedScene(orientation: orientation)
             }
@@ -92,20 +111,22 @@ struct ChessSceneView: View {
     }
 
     private func compactScene(orientation: ChessSide, side: Double, header: (Bool) -> AnyView) -> some View {
-        HStack(alignment: .top, spacing: CGFloat(ChessCardLayoutPolicy.columnGap)) {
+        let chooserScrolls = dynamicTypeSize.isAccessibilitySize
+        return HStack(alignment: .top, spacing: CGFloat(ChessCardLayoutPolicy.columnGap)) {
             ChessBoardLayer(scene: scene, games: games, orientation: orientation, selected: selected,
                             onTap: tap, side: side)
                 .frame(width: CGFloat(side), height: CGFloat(side))
                 .environment(\.layoutDirection, .leftToRight)
                 .accessibilityIdentifier("game.chess.board")
             VStack(alignment: .leading, spacing: 8) {
-                if scene.canMove { ChessChooserButton(onOpen: openChooser) }
+                if scene.canMove && !chooserScrolls { ChessChooserButton(onOpen: openChooser) }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         header(true)
                         GameShellNotices(games: games)
                         ChessHeader(scene: scene, onFlip: { flipped.toggle() })
                         ChessClocksRow(scene: scene, orientation: orientation)
+                        if scene.canMove && chooserScrolls { ChessChooserButton(onOpen: openChooser) }
                         ChessStatusLines(scene: scene, games: games)
                         ChessActionsBar(scene: scene, games: games)
                         ChessTeamsList(scene: scene)
@@ -117,12 +138,15 @@ struct ChessSceneView: View {
                         GameShellBottomBar(games: games)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .modifier(GameShellBoundsMeasure(probe: bounds, part: .content))
                 }
+                .modifier(GameShellBoundsMeasure(probe: bounds, part: .viewport))
                 .accessibilityIdentifier("game.chess.details")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(CGFloat(ChessCardLayoutPolicy.compactPadding))
+        .onAppear { bounds.clearBar() }
     }
 
     private func stackedScene(orientation: ChessSide) -> some View {
@@ -197,10 +221,15 @@ struct ChessSceneView: View {
 struct ChessHeader: View {
     let scene: ChessScene
     let onFlip: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
         VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            layout {
                 Text(ChessCopy.status(scene))
                     .font(.headline)
                     .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
@@ -214,7 +243,9 @@ struct ChessHeader: View {
                         .foregroundStyle(HostingTheme.inCallLeave)
                         .accessibilityIdentifier("game.chess.check")
                 }
-                Spacer(minLength: 8)
+                if !stacked {
+                    Spacer(minLength: 8)
+                }
                 if scene.canFlip {
 
                     Button(ChessCopy.flipBoard(), action: onFlip)
@@ -263,7 +294,7 @@ private struct ChessClocksFace: View {
     var body: some View {
         let clocks = scene.clocks
         let top = ChessBoardPolicy.opposite(orientation)
-        ConclaveFlowLayout(spacing: 8) {
+        ChessWrapLayout(spacing: 8) {
             if clocks.hasClock {
                 ChessClockChip(clocks: clocks, side: top, nowMillis: nowMillis)
                 ChessClockChip(clocks: clocks, side: orientation, nowMillis: nowMillis)
@@ -272,6 +303,54 @@ private struct ChessClocksFace: View {
                 ChessMoveTimerChip(clocks: clocks, nowMillis: nowMillis)
             }
         }
+    }
+}
+
+private struct ChessWrapLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+        var widest: CGFloat = 0
+        for subview in subviews {
+            let size = fitted(subview, maxWidth: maxWidth)
+            if x > 0 && x + size.width > maxWidth {
+                y += lineHeight + spacing
+                x = 0
+                lineHeight = 0
+            }
+            x += size.width
+            widest = max(widest, x)
+            x += spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+        return CGSize(width: widest, height: y + lineHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var lineHeight: CGFloat = 0
+        for subview in subviews {
+            let size = fitted(subview, maxWidth: bounds.width)
+            if x > bounds.minX && x + size.width > bounds.maxX {
+                y += lineHeight + spacing
+                x = bounds.minX
+                lineHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
+
+    private func fitted(_ subview: LayoutSubview, maxWidth: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        if ideal.width <= maxWidth { return ideal }
+        return subview.sizeThatFits(ProposedViewSize(width: max(0, maxWidth), height: nil))
     }
 }
 
@@ -690,7 +769,7 @@ struct ChessActionsBar: View {
         let interaction = games.interaction
         let busy = interaction.isPending
         if hasActions {
-            ConclaveFlowLayout(spacing: 8) {
+            ChessWrapLayout(spacing: 8) {
                 if scene.canOfferDraw {
                     actionButton(.offerDraw, title: ChessCopy.offerDraw(), busy: busy, pendingType: interaction.pendingType)
                 }

@@ -8,6 +8,8 @@ internal data class HomeRecentUi(
     val relativeTime: String,
     val role: RecentRole,
     val isWebinar: Boolean,
+    val avatarSeed: String,
+    val code: String,
 ) {
     companion object {
         fun from(row: RecentMeetingRow): HomeRecentUi = HomeRecentUi(
@@ -18,6 +20,8 @@ internal data class HomeRecentUi(
             relativeTime = row.relativeTime,
             role = row.role,
             isWebinar = row.routeKind == PremeetingRouteKind.webinarLanding,
+            avatarSeed = row.avatarSeed,
+            code = row.code,
         )
     }
 }

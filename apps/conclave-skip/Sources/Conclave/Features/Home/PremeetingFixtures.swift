@@ -381,7 +381,12 @@ enum PremeetingFixtureScript {
             RecentMeetingRecord(id: RecentMeetingsPolicy.recordId(roomId: "maple-goku-tulip", joinMode: .meeting),
                                 roomId: "maple-goku-tulip", title: "maple-goku-tulip", joinMode: JoinMode.meeting.rawValue,
                                 role: RecentRole.participant.rawValue, lastJoinedAtMillis: nowMillis - 3.0 * day,
-                                endedAtMillis: nowMillis - 3.0 * day + 45.0 * minute, end: RecentEnd.left.rawValue)
+                                endedAtMillis: nowMillis - 3.0 * day + 45.0 * minute, end: RecentEnd.left.rawValue),
+            RecentMeetingRecord(id: RecentMeetingsPolicy.recordId(roomId: WebinarLandingFixtureScript.slug, joinMode: .webinarAttendee),
+                                roomId: WebinarLandingFixtureScript.slug, title: WebinarLandingFixtureScript.title,
+                                joinMode: JoinMode.webinarAttendee.rawValue, role: RecentRole.attendee.rawValue,
+                                lastJoinedAtMillis: nowMillis - 6.0 * day, endedAtMillis: nowMillis - 6.0 * day + 60.0 * minute,
+                                end: RecentEnd.left.rawValue)
         ]
     }
 

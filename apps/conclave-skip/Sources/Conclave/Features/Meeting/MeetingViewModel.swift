@@ -54,79 +54,6 @@ private enum MeetingViewPreferences {
     }
 }
 
-struct MeetingResumeJoinContext: Codable, Equatable {
-    let roomId: String
-    let displayName: String
-    let socketDisplayName: String?
-    let isHost: Bool
-    let joinMode: JoinMode
-    let meetingInviteCode: String?
-    let webinarInviteCode: String?
-    let clientId: String?
-    let allowRoomCreation: Bool
-    let user: SfuJoinUser?
-}
-
-struct MeetingResumeSnapshot: Codable, Equatable {
-    let joinContext: MeetingResumeJoinContext
-    let sessionId: String
-    let isMuted: Bool
-    let isCameraOff: Bool
-    let savedAt: Date
-}
-
-enum MeetingResumePolicy {
-    static let maximumAge: TimeInterval = 43_200.0
-
-    static func isFresh(
-        _ snapshot: MeetingResumeSnapshot,
-        now: Date = Date(),
-        maximumAge: TimeInterval = MeetingResumePolicy.maximumAge
-    ) -> Bool {
-        let age = now.timeIntervalSince(snapshot.savedAt)
-        return age >= -300.0 && age <= maximumAge
-    }
-
-    static func shouldRestore(
-        connectionState: ConnectionState,
-        hasLiveJoinContext: Bool,
-        alreadyAttempted: Bool,
-        snapshot: MeetingResumeSnapshot?,
-        now: Date = Date()
-    ) -> Bool {
-        guard !alreadyAttempted,
-              !hasLiveJoinContext,
-              connectionState == .disconnected,
-              let snapshot else { return false }
-        return isFresh(snapshot, now: now)
-    }
-}
-
-private enum MeetingResumeStore {
-    private static let key = "conclave.activeMeetingResume.v1"
-
-    static func save(_ snapshot: MeetingResumeSnapshot) {
-        guard let data = try? JSONEncoder().encode(snapshot),
-              let value = String(data: data, encoding: .utf8) else { return }
-        UserDefaults.standard.set(value, forKey: key)
-    }
-
-    static func load(now: Date = Date()) -> MeetingResumeSnapshot? {
-        guard let value = UserDefaults.standard.string(forKey: key),
-              let data = value.data(using: .utf8),
-              let snapshot = try? JSONDecoder().decode(MeetingResumeSnapshot.self, from: data),
-              MeetingResumePolicy.isFresh(snapshot, now: now) else {
-            clear()
-            return nil
-        }
-        return snapshot
-    }
-
-    static func clear() {
-        UserDefaults.standard.removeObject(forKey: key)
-    }
-}
-
 enum PendingPreAckRosterEvent {
     case userJoined(UserJoinedNotification)
     case userLeft(UserLeftNotification)
@@ -619,6 +546,9 @@ final class MeetingViewModel {
     private let networkMonitor = NetworkReachabilityMonitor()
     var lastJoinContext: JoinContext?
     private var didAttemptPersistedMeetingResume = false
+    private var resumeInFlight = false
+    private var resumeRoomId = ""
+    private var isHandlingAppTermination = false
     var shouldRejoinAfterReconnect = false
     var isIntentionalLeave = false
     var isRejoinInFlight = false {
@@ -1032,13 +962,8 @@ final class MeetingViewModel {
     }
 
     private func persistMeetingResumeSnapshot() {
-        guard !isIntentionalLeave, let context = lastJoinContext else { return }
-        switch state.connectionState {
-        case .joined, .reconnecting, .waiting:
-            break
-        case .disconnected, .connecting, .connected, .joining, .error:
-            return
-        }
+        guard !isIntentionalLeave, let context = lastJoinContext,
+              MeetingResumePolicy.persists(state.connectionState) else { return }
         MeetingResumeStore.save(MeetingResumeSnapshot(
             joinContext: MeetingResumeJoinContext(
                 roomId: context.roomId,
@@ -1061,31 +986,72 @@ final class MeetingViewModel {
 
     private func clearMeetingResumeSnapshot() {
         MeetingResumeStore.clear()
+        clearMeetingResumeMarker()
+    }
+
+    private func clearMeetingResumeMarker() {
+        guard !isHandlingAppTermination else { return }
+        MeetingResumeMarker.clear()
+    }
+
+    private func beginResumeInFlight(roomId: String) {
+        resumeInFlight = true
+        resumeRoomId = roomId
+    }
+
+    private func endResumeInFlight() {
+        guard resumeInFlight || !resumeRoomId.isEmpty else { return }
+        resumeInFlight = false
+        resumeRoomId = ""
+        requestShellRefresh()
+    }
+
+    func handleAppWillTerminate() {
+        isHandlingAppTermination = true
+        MeetingResumeMarker.write()
+        MeetingResumeStore.clear()
+        endResumeInFlight()
+        switch state.connectionState {
+        case .disconnected, .error:
+            return
+        case .connecting, .connected, .joining, .joined, .reconnecting, .waiting:
+            leaveRoom()
+        }
     }
 
     @discardableResult
     private func restorePersistedMeetingIfNeeded() -> Bool {
-        let snapshot = MeetingResumeStore.load()
-        let shouldRestore = MeetingResumePolicy.shouldRestore(
+        guard !didAttemptPersistedMeetingResume else { return false }
+        didAttemptPersistedMeetingResume = true
+        guard state.connectionState == .disconnected, lastJoinContext == nil,
+              let snapshot = MeetingResumeStore.load(markerMillis: MeetingResumeMarker.read()) else { return false }
+        #if SKIP
+        ProcessExitReasonBridge.recordUserRequestedExit(snapshotSavedAtMillis: MeetingResumePolicy.savedAtMillis(snapshot))
+        #endif
+        guard MeetingResumePolicy.shouldRestore(
             connectionState: state.connectionState,
             hasLiveJoinContext: lastJoinContext != nil,
-            alreadyAttempted: didAttemptPersistedMeetingResume,
-            snapshot: snapshot
-        )
-        didAttemptPersistedMeetingResume = true
-        guard shouldRestore, let snapshot else { return false }
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            markerMillis: MeetingResumeMarker.read()
+        ) else {
+            MeetingResumeStore.clear()
+            return false
+        }
 
         let context = snapshot.joinContext
         let restoredSessionId = snapshot.sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         if !restoredSessionId.isEmpty {
             state.sessionId = restoredSessionId
         }
-        state.isMuted = snapshot.isMuted
-        state.isCameraOff = snapshot.isCameraOff
+        state.pendingEntryMediaIntent = nil
+        state.isMuted = true
+        state.isCameraOff = true
         PerformanceDiagnostics.event(
             "meeting_resume_restore",
             details: "room=\(context.roomId) ageMs=\(Int(Date().timeIntervalSince(snapshot.savedAt) * 1000.0))"
         )
+        beginResumeInFlight(roomId: context.roomId)
         beginMeetingEntry(action: .join)
         joinRoom(
             roomId: context.roomId,
@@ -3246,6 +3212,8 @@ final class MeetingViewModel {
             redirectContinuationPending = false
             state.connectionState = ConnectionState.joined
             persistMeetingResumeSnapshot()
+            clearMeetingResumeMarker()
+            endResumeInFlight()
             reconcilePendingEntryMediaIntent()
             if isRecoveryJoin, let displayNameSnapshot = response.displayNameSnapshot {
 
@@ -6701,7 +6669,8 @@ final class MeetingViewModel {
                     applyJoinSnapshot(response)
                     redirectContinuationPending = false
                     state.connectionState = ConnectionState.waiting
-                    persistMeetingResumeSnapshot()
+                    clearMeetingResumeSnapshot()
+                    endResumeInFlight()
                     clearConnectionRecovery()
                     clearMeetingEntry()
                     isRejoinInFlight = false
@@ -7580,6 +7549,7 @@ final class MeetingViewModel {
         clearConnectionRecovery()
         resetReconnectRetryState()
         clearMeetingResumeSnapshot()
+        endResumeInFlight()
         state.meetingEndedNoticeMessage = nil
         clearMeetingEntry()
         socketManager.disconnect()
@@ -7601,6 +7571,7 @@ final class MeetingViewModel {
         clearConnectionRecovery()
         resetReconnectRetryState()
         clearMeetingResumeSnapshot()
+        endResumeInFlight()
         clearMeetingEntry()
         recordTerminalOutcome(outcome, serverText: message)
         state.connectionState = ConnectionState.error
@@ -7623,6 +7594,7 @@ final class MeetingViewModel {
         clearConnectionRecovery()
         resetReconnectRetryState()
         clearMeetingResumeSnapshot()
+        endResumeInFlight()
         clearMeetingEntry()
         recordTerminalOutcome(.serverDisconnected, serverText: "")
         state.connectionState = ConnectionState.disconnected
@@ -7657,6 +7629,7 @@ final class MeetingViewModel {
         clearConnectionRecovery()
         resetReconnectRetryState()
         clearMeetingResumeSnapshot()
+        endResumeInFlight()
         clearMeetingEntry()
         recordTerminalOutcome(outcome, serverText: message ?? "")
         state.connectionState = ConnectionState.disconnected
@@ -7717,6 +7690,7 @@ final class MeetingViewModel {
         clearConnectionRecovery()
         resetReconnectRetryState()
         clearMeetingResumeSnapshot()
+        endResumeInFlight()
         clearMeetingEntry()
         socketManager.disconnect()
         await cleanup(lifecycleGeneration: failureGeneration, notifyLocalState: false)
@@ -7744,6 +7718,7 @@ final class MeetingViewModel {
         clearConnectionRecovery()
         resetReconnectRetryState()
         clearMeetingResumeSnapshot()
+        endResumeInFlight()
         clearMeetingEntry()
         socketManager.disconnect()
         clearPendingPreAckRoomEvents()
@@ -9693,6 +9668,8 @@ final class MeetingViewModel {
             isAppActive: premeetingIsAppActive,
             micIntentOn: isPromotionLobbyOpen ? promotionMicIntent : (state.pendingEntryMediaIntent?.mic ?? !state.isMuted),
             cameraIntentOn: isPromotionLobbyOpen ? promotionCameraIntent : (state.pendingEntryMediaIntent?.camera ?? !state.isCameraOff),
+            resumeInFlight: resumeInFlight,
+            resumeRoomId: resumeRoomId,
 
             rejoinRoomId: rejoinContext?.roomId ?? "",
             serverRestartText: state.serverRestartNotice ?? "",

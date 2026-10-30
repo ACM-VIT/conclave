@@ -1,9 +1,6 @@
 
 
 import SwiftUI
-#if canImport(UIKit)
-import UIKit
-#endif
 
 func acmColor(red: Double, green: Double, blue: Double, opacity: Double = 1.0) -> Color {
     Color(red: red / 255.0, green: green / 255.0, blue: blue / 255.0, opacity: opacity)
@@ -107,50 +104,12 @@ enum ACMMotion {
 }
 
 enum ACMFont {
-    #if SKIP
-    static let regular = "polysans_neutral"
-    static let medium = "polysans_median"
-    static let bold = "polysans_bulky"
-    static let wideBold = "polysans_bulkywide"
-    #else
-    static let regular = "PolySans Trial Neutral"
-    static let medium = "PolySans Trial Median"
-    static let bold = "PolySans Trial Bulky"
-    static let wideBold = "PolySans Trial Bulky Wide"
-    #endif
-
     static func trial(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        let name: String
-        switch weight {
-        case .medium, .semibold:
-            name = medium
-        case .bold, .heavy, .black:
-            name = bold
-        default:
-            name = regular
-        }
-        return custom(name, size: size, fallback: .system(size: size, weight: weight, design: .default))
-    }
-
-    static func mono(_ size: CGFloat, weight: Font.Weight = .medium) -> Font {
-        return trial(size, weight: weight)
+        return Font.system(size: size, weight: weight, design: .default)
     }
 
     static func wide(_ size: CGFloat) -> Font {
-        custom(wideBold, size: size, fallback: .system(size: size, weight: .bold, design: .default))
-    }
-
-    static func custom(_ name: String, size: CGFloat, fallback: Font) -> Font {
-        #if SKIP
-        return .custom(name, size: size)
-        #elseif canImport(UIKit)
-        if UIFont(name: name, size: size) != nil {
-            return .custom(name, size: size)
-        }
-        return fallback
-        #else
-        return .custom(name, size: size)
-        #endif
+        return Font.system(size: size, weight: .bold, design: .default)
     }
 }
 

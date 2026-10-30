@@ -8,6 +8,8 @@ enum StageCanvasMetrics {
     static let barReserve: CGFloat = 64
 
     static let trailingReserve: CGFloat = 64
+
+    static let chipRowReserve: CGFloat = CGFloat(StageViewportPolicy.iosChipRowReserve)
 }
 
 struct StageSlotIdKey: LayoutValueKey {
@@ -31,14 +33,15 @@ struct StageCanvas: View {
                 contentWidth: Double(proxy.size.width), contentHeight: Double(proxy.size.height), safeArea: safeArea,
                 regularWidth: horizontalSizeClass == .regular, compactHeight: verticalSizeClass == .compact,
                 topReserve: Double(StageCanvasMetrics.topReserve), barReserve: Double(StageCanvasMetrics.barReserve),
-                trailingReserve: Double(StageCanvasMetrics.trailingReserve)
+                trailingReserve: Double(StageCanvasMetrics.trailingReserve),
+                chipRowReserve: stage.chipRowVisible ? Double(StageCanvasMetrics.chipRowReserve) : 0
             )
             let layout = stage.layout
             let frames = StageLayoutPolicy.frames(viewport: viewport, kind: layout.kind, slots: layout.slots, selfCorner: layout.selfCorner)
             StageSlotLayout(frames: frames) {
                 ForEach(layout.slots) { slot in
-                    SlotView(slot: slot, stage: stage, viewport: viewport, renderers: renderers, overflowCount: layout.overflowCount,
-                             overflowSeeds: layout.overflowSeeds)
+                    StageCanvasSlot(slot: slot, stage: stage, viewport: viewport, renderers: renderers,
+                                    overflowCount: layout.overflowCount, overflowSeeds: layout.overflowSeeds)
                         .layoutValue(key: StageSlotIdKey.self, value: slot.id)
                         .accessibilityRotorEntry(id: slot.id, in: rotorNamespace)
                         .accessibilitySortPriority(slot.role.isSelfView ? 0 : 3)
@@ -74,6 +77,24 @@ struct StageCanvas: View {
         return model.isLocal ? ConclaveStrings.text("You") : model.displayName
     }
 
+}
+
+struct StageCanvasSlot: View {
+    let slot: StageSlot
+    let stage: StagePresenter
+    let viewport: StageViewport
+    let renderers: StageRendererProvider
+    let overflowCount: Int
+    let overflowSeeds: [String]
+
+    var body: some View {
+        if let alone = stage.alone, alone.slotId == slot.id {
+            StageAloneIdentity(alone: alone, viewport: viewport)
+        } else {
+            SlotView(slot: slot, stage: stage, viewport: viewport, renderers: renderers, overflowCount: overflowCount,
+                     overflowSeeds: overflowSeeds)
+        }
+    }
 }
 
 struct StageSlotLayout: Layout {

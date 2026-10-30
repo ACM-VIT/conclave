@@ -3,6 +3,7 @@ package conclave.module
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -69,31 +70,42 @@ internal fun conclaveToastDuration(item: ConclaveToastItem): SnackbarDuration = 
 private fun ConclaveStageSnackbar(message: String, toast: ConclaveToastItem?, identifier: String, onAction: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     val stackAction = LocalDensity.current.fontScale >= 1.3f
+    val hasAction = toast != null && toast.hasAction
+    val start = if (toast != null && toast.hasAvatar) 10.dp else 16.dp
+    val end = if (hasAction) 4.dp else 16.dp
     Surface(
-        modifier = Modifier.widthIn(max = 480.dp).testTag("$identifier.toast"),
-        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.widthIn(max = ConclaveStageToastMetrics.MAX_WIDTH_DP.dp).heightIn(min = ConclaveStageToastMetrics.MIN_HEIGHT_DP.dp)
+            .testTag("$identifier.toast"),
+        shape = if (stackAction) RoundedCornerShape(ConclaveStageToastMetrics.STACKED_RADIUS_DP.dp) else RoundedCornerShape(50),
         color = scheme.surfaceContainerHigh,
         contentColor = scheme.onSurface,
         tonalElevation = 6.dp,
         shadowElevation = 3.dp,
     ) {
         if (stackAction) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.padding(start = start, top = 10.dp, end = end, bottom = if (hasAction) 4.dp else 10.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 ConclaveStageToastMessage(message, toast, identifier)
                 if (toast != null && toast.hasAction) {
                     ConclaveStageToastAction(toast, identifier, onAction)
                 }
             }
         } else {
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                ConclaveStageToastMessage(message, toast, identifier, Modifier.weight(1f, fill = false))
+            Row(Modifier.heightIn(min = ConclaveStageToastMetrics.MIN_HEIGHT_DP.dp).padding(start = start, end = end),
+                horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                ConclaveStageToastMessage(message, toast, identifier, Modifier.weight(1f, fill = false).padding(vertical = 8.dp))
                 if (toast != null && toast.hasAction) {
                     ConclaveStageToastAction(toast, identifier, onAction)
                 }
             }
         }
     }
+}
+
+private object ConclaveStageToastMetrics {
+    const val MAX_WIDTH_DP = 420
+    const val MIN_HEIGHT_DP = 44
+    const val STACKED_RADIUS_DP = 20
 }
 
 @Composable

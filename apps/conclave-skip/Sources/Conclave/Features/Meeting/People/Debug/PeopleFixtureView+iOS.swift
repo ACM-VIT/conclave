@@ -43,6 +43,11 @@ struct PeopleFixtureView: View {
                 if Task.isCancelled { return }
                 session.loseHost()
             }
+            if session.state == PeopleFixtureState.hostWaitingLate {
+                try? await Task.sleep(for: .milliseconds(Int(PeopleFixtureScript.lateWaitingDelayMillis)))
+                if Task.isCancelled { return }
+                session.deliverLateWaiting()
+            }
         }
     }
 }

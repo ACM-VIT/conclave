@@ -33,7 +33,6 @@ struct ChatComposer: View {
     @FocusState private var focused: Bool
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    @ScaledMetric(relativeTo: .body) private var photoPickerHeight: CGFloat = 300
 
     var body: some View {
         let composer = chat.composer
@@ -123,11 +122,16 @@ struct ChatComposer: View {
                                      visibleFrom: composer.isVoiceMode ? 0 : ConclaveComposerCounterPolicy.visibleFrom(limit: limit),
                                      identifier: "chat.composer.counter", announcesBands: true)
             if showsPhotoPicker {
+                let isCompactHeight = verticalSizeClass == .compact
                 PhotosPicker(selection: $pickedItem, matching: .images, preferredItemEncoding: .current) {
                     Text(ConclaveStrings.text("Photo Library"))
                 }
                 .photosPickerStyle(.inline)
-                .frame(height: min(photoPickerHeight, verticalSizeClass == .compact ? 220 : 400))
+                .photosPickerAccessoryVisibility(.hidden, edges: .all)
+                .photosPickerDisabledCapabilities(.selectionActions)
+                .containerRelativeFrame(.vertical) { length, _ in
+                    ChatPhotoPickerSizing.height(available: length, isCompactHeight: isCompactHeight)
+                }
                 .accessibilityIdentifier("chat.photos.inline")
             }
         }
@@ -173,6 +177,9 @@ struct ChatComposer: View {
         .onChange(of: showsPhotoPicker) { _, showing in
 
             if !showing { restoreFocus(wasFocused: focusMemo.takePhotoPicker()) }
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in proxy.size.height } action: { _ in
+            followPhotoPickerResize()
         }
         .onChange(of: pickedItem) { _, item in
             guard let item else { return }
@@ -350,6 +357,12 @@ struct ChatComposer: View {
         actions.openGifs()
     }
 
+    private func followPhotoPickerResize() {
+        guard focusMemo.laidOutWithPhotoPicker != showsPhotoPicker else { return }
+        focusMemo.laidOutWithPhotoPicker = showsPhotoPicker
+        actions.composerDidResize()
+    }
+
     private func restoreFocus(wasFocused: Bool) {
         guard ChatComposerPolicy.restoresComposerFocus(wasFocused: wasFocused, assistiveTechRunning: voiceOverEnabled) else { return }
         if !focused { focused = true }
@@ -398,6 +411,7 @@ struct ChatComposer: View {
 private final class ChatComposerFocusMemo {
     var photoPickerWasFocused = false
     var gifsWasFocused = false
+    var laidOutWithPhotoPicker = false
 
     func takePhotoPicker() -> Bool {
         let value = photoPickerWasFocused
@@ -414,6 +428,22 @@ private final class ChatComposerFocusMemo {
 
 private final class ChatComposerKeyMemo {
     var handledKey: KeyEquivalent? = nil
+}
+
+private enum ChatPhotoPickerSizing {
+    static let regularMinimum: CGFloat = 320
+    static let regularMaximum: CGFloat = 480
+    static let regularShare: CGFloat = 0.5
+    static let regularReserve: CGFloat = 160
+    static let compactHeight: CGFloat = 220
+    static let compactReserve: CGFloat = 120
+
+    static func height(available: CGFloat, isCompactHeight: Bool) -> CGFloat {
+        let preferred = isCompactHeight ? compactHeight
+            : min(max(regularMinimum, available * regularShare), regularMaximum)
+        let reserve = isCompactHeight ? compactReserve : regularReserve
+        return max(0, min(preferred, available - reserve))
+    }
 }
 
 private struct ChatComposerSuggestions {

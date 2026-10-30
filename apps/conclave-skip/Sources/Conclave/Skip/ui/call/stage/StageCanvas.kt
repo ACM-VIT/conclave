@@ -31,7 +31,9 @@ internal object StageCanvasMetrics {
     const val MEDIUM_HEIGHT_DP = 480.0
 }
 
-internal fun stageViewportFrom(width: Double, height: Double, top: Double, bottom: Double, leading: Double, trailing: Double): StageViewport {
+internal fun stageViewportFrom(
+    width: Double, height: Double, top: Double, bottom: Double, leading: Double, trailing: Double, chipRow: Double = 0.0,
+): StageViewport {
     val widthClass = when {
         width < StageCanvasMetrics.MEDIUM_WIDTH_DP -> StageSizeClass.compact
         width < StageCanvasMetrics.EXPANDED_WIDTH_DP -> StageSizeClass.medium
@@ -41,7 +43,7 @@ internal fun stageViewportFrom(width: Double, height: Double, top: Double, botto
     return StageViewport(
         width = width,
         height = height,
-        insetTop = top + StageCanvasMetrics.TOP_RESERVE_DP,
+        insetTop = top + StageCanvasMetrics.TOP_RESERVE_DP + chipRow,
         insetBottom = bottom + StageCanvasMetrics.BAR_RESERVE_DP,
         insetLeading = leading,
         insetTrailing = trailing,
@@ -68,6 +70,7 @@ internal fun StageCanvas(stage: StagePresenter, renderers: StageRenderers, chrom
             bottom = insets.getBottom(density) / scale,
             leading = if (direction == LayoutDirection.Ltr) left else right,
             trailing = if (direction == LayoutDirection.Ltr) right else left,
+            chipRow = if (stage.chipRowVisible) StageViewportPolicy.androidChipRowReserve else 0.0,
         )
 
         val inPip = PipController.inPipMode
@@ -96,7 +99,7 @@ internal fun StageCanvas(stage: StagePresenter, renderers: StageRenderers, chrom
                 CompositionLocalProvider(LocalStageChromeVisibility provides chrome, LocalStageViewport provides viewport) {
                     for (slot in snapshot.slots) {
                         key(slot.id) {
-                            SlotView(slot, stage, renderers, snapshot.overflowCount, seeds, Modifier.layoutId(slot.id))
+                            StageCanvasSlot(slot, stage, renderers, snapshot.overflowCount, seeds, viewport, inPip, Modifier.layoutId(slot.id))
                         }
                     }
                 }
@@ -118,5 +121,18 @@ internal fun StageCanvas(stage: StagePresenter, renderers: StageRenderers, chrom
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StageCanvasSlot(
+    slot: StageSlot, stage: StagePresenter, renderers: StageRenderers, overflowCount: Int, seeds: List<String>, viewport: StageViewport,
+    inPip: Boolean, modifier: Modifier,
+) {
+    val alone = stage.alone
+    if (alone != null && alone.slotId == slot.id && !inPip) {
+        StageAloneIdentity(alone, viewport, modifier)
+    } else {
+        SlotView(slot, stage, renderers, overflowCount, seeds, modifier)
     }
 }

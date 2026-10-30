@@ -19,6 +19,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -85,6 +86,35 @@ internal fun peopleListItems(snapshot: PeopleSnapshot, sections: List<PeopleSect
 }
 
 internal fun peopleHeaderKey(sectionId: String): String = "h:$sectionId"
+
+internal fun peopleFocusWaitRevision(request: PeopleFocusRequest?, entries: List<PeopleListItem>, revision: Int): Int =
+    if (request == null || entries.any { it.key == peopleHeaderKey(request.sectionId) }) -1 else revision
+
+internal suspend fun placePeopleFocus(
+    people: PeoplePresenter,
+    request: PeopleFocusRequest,
+    entries: List<PeopleListItem>,
+    revision: Int,
+    searching: Boolean,
+    latestEntries: () -> List<PeopleListItem>,
+    snap: suspend (Int) -> Unit,
+    scroll: suspend (Int) -> Unit,
+) {
+    val index = entries.indexOfFirst { it.key == peopleHeaderKey(request.sectionId) }
+    when (people.focusStep(id = request.id, isShown = index >= 0, isSearching = searching, revision = revision)) {
+        PeopleFocusStep.placeHeader -> {
+            try {
+                scroll(index)
+                val moved = latestEntries().indexOfFirst { it.key == peopleHeaderKey(request.sectionId) }
+                if (moved >= 0 && moved != index) snap(moved)
+            } finally {
+                people.focusRequestHandled(id = request.id)
+            }
+        }
+        PeopleFocusStep.consumeNow -> people.focusRequestHandled(id = request.id)
+        PeopleFocusStep.awaitSection, PeopleFocusStep.idle -> Unit
+    }
+}
 
 internal fun peoplePageTitleName(top: String?): String = when (top) {
     null, PeopleRoute.root.rawValue -> "native_panel_participants"
@@ -181,14 +211,14 @@ private fun PeopleRoot(people: PeoplePresenter, reservation: PaddingValues, onOp
         snapshotFlow { listState.isScrollInProgress }.collect { scrolling -> if (scrolling) keyboard?.hide() }
     }
     val focus = people.focusRequest
-    LaunchedEffect(focus?.id) {
+    val focusWaitRevision = peopleFocusWaitRevision(focus, entries, snapshot.revision)
+    val currentEntries by rememberUpdatedState(entries)
+    LaunchedEffect(focus?.id, focusWaitRevision) {
         val request = focus ?: return@LaunchedEffect
-        val index = entries.indexOfFirst { it.key == peopleHeaderKey(request.sectionId) }
-        if (index >= 0) {
+        placePeopleFocus(people, request, entries, snapshot.revision, searching,
+            latestEntries = { currentEntries }, snap = { listState.scrollToItem(it) }) { index ->
             if (reduceMotion) listState.scrollToItem(index) else listState.animateScrollToItem(index)
         }
-
-        people.focusRequestHandled(id = request.id)
     }
     Column(Modifier.fillMaxSize()) {
         ConclaveSearchField(

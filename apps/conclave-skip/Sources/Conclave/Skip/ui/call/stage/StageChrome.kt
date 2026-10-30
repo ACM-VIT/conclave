@@ -151,11 +151,13 @@ private fun StageChromeRevealObserver(shell: MeetingShellPresenter, chrome: Stag
 private fun StageTopRow(stage: StagePresenter, capsuleMax: Dp, onMinimize: () -> Unit, onRoute: () -> Unit) {
     val snapshot = stage.chrome
     val haptics = rememberConclaveHaptics()
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         ConclaveMinimizeButton(onClick = onMinimize, identifier = "stage.minimize")
         Spacer(Modifier.width(8.dp))
-        StageCapsule(stage, capsuleMax, Modifier.weight(1f, fill = false))
-        Spacer(Modifier.weight(1f))
+        Box(Modifier.weight(1f)) {
+            StageCapsule(stage, capsuleMax, Modifier)
+        }
+        Spacer(Modifier.width(8.dp))
         ConclaveRouteButton(routeKind = snapshot.routeKind, routeName = snapshot.routeName, onClick = onRoute, identifier = "stage.route")
         if (snapshot.canFlipCamera) {
             Spacer(Modifier.width(8.dp))

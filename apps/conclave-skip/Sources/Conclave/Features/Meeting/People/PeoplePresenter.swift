@@ -57,6 +57,7 @@ final class PeoplePresenter {
 
     @ObservationIgnored private(set) var focusDestinations: [String] = []
     @ObservationIgnored private(set) var focusScrollCount = 0
+    @ObservationIgnored private(set) var focusRevision = 0
 
     @ObservationIgnored private(set) var counterLog: [String] = []
 
@@ -201,6 +202,12 @@ final class PeoplePresenter {
         focusScrollCount += 1
     }
 
+    func focusStep(id: Int, isShown: Bool, isSearching: Bool, revision: Int) -> PeopleFocusStep {
+        guard let request = focusRequest, request.id == id else { return PeopleFocusStep.idle }
+        return PeopleFocusPolicy.step(isShown: isShown, isSearching: isSearching, revision: revision,
+                                      requestRevision: focusRevision)
+    }
+
     func presentationDidChange(coverage: PanelStageCoverage, onHostPage: Bool) {
         self.coverage = coverage
         isOnHostPage = onHostPage
@@ -232,6 +239,7 @@ final class PeoplePresenter {
         isOnHostPage = false
         focusDestinations = []
         focusScrollCount = 0
+        focusRevision = 0
         lastDestinationSequence = -1
         showsLostHost = false
         if focusRequest != nil { focusRequest = nil }
@@ -794,6 +802,7 @@ final class PeoplePresenter {
         if sectionId.isEmpty { return }
         focusDestinations.append(destination.rawValue)
         nextFocusId += 1
+        focusRevision = snapshot.revision
         focusRequest = PeopleFocusRequest(id: nextFocusId, sectionId: sectionId)
     }
 
@@ -1003,5 +1012,29 @@ final class PeoplePresenter {
             snapshot = candidate.withRevision(snapshot.revision + 1)
         }
         if attendeeCount != inputs.webinarAttendeeCount { attendeeCount = inputs.webinarAttendeeCount }
+    }
+}
+
+enum PeopleFocusStep: String, Equatable {
+    case idle, awaitSection, placeHeader, consumeNow
+}
+
+enum PeopleFocusPolicy {
+    static let placementTolerance = 1.0
+
+    static func step(isShown: Bool, isSearching: Bool, revision: Int, requestRevision: Int) -> PeopleFocusStep {
+        if isShown { return PeopleFocusStep.placeHeader }
+        if isSearching || revision > requestRevision { return PeopleFocusStep.consumeNow }
+        return PeopleFocusStep.awaitSection
+    }
+
+    static func isHeaderPlaced(headerTop: Double, headerBottom: Double, viewportTop: Double, viewportBottom: Double) -> Bool {
+        if headerBottom <= headerTop || viewportBottom <= viewportTop { return false }
+        let tolerance = PeopleFocusPolicy.placementTolerance
+        return headerTop >= viewportTop - tolerance && headerBottom <= viewportBottom + tolerance
+    }
+
+    static func promotesToLarge(isPlaced: Bool, isMediumDetent: Bool) -> Bool {
+        isMediumDetent && !isPlaced
     }
 }

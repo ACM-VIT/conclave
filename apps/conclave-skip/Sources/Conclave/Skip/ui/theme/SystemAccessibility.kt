@@ -1,5 +1,6 @@
 package conclave.module
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.UiModeManager
 import android.content.Context
 import android.content.res.Configuration
@@ -69,7 +70,7 @@ internal data class ConclaveSystemAccessibility(
             return from(
                 api = api,
                 touchExploration = manager?.isTouchExplorationEnabled == true,
-                anyServiceEnabled = manager?.isEnabled == true,
+                anyServiceEnabled = manager != null && spokenFeedbackEnabled(manager),
                 fontScale = configuration.fontScale,
                 fontWeightAdjustment = if (api >= 31) SystemAccessibilityApi31.fontWeightAdjustment(configuration) else 0,
                 animatorDurationScale = ConclaveMotion.animatorDurationScale(context),
@@ -77,6 +78,10 @@ internal data class ConclaveSystemAccessibility(
                 recommendedTimeoutMillis = if (api >= 29 && manager != null) SystemAccessibilityApi29.timeout(manager, base) else null,
             )
         }
+
+        fun spokenFeedbackEnabled(manager: AccessibilityManager): Boolean =
+            manager.isEnabled && manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_SPOKEN)
+                .any { (it.feedbackType and AccessibilityServiceInfo.FEEDBACK_SPOKEN) != 0 }
     }
 }
 
@@ -100,6 +105,9 @@ internal fun rememberSystemAccessibility(): ConclaveSystemAccessibility {
         val resumed = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) refresh() }
         manager?.addTouchExplorationStateChangeListener(touch)
         manager?.addAccessibilityStateChangeListener(services)
+        val stopServiceList = if (Build.VERSION.SDK_INT >= 33 && manager != null) {
+            SystemAccessibilityApi33.listen(context, manager) { refresh() }
+        } else null
         context.contentResolver.registerContentObserver(
             Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, animator)
         val stopContrast = if (Build.VERSION.SDK_INT >= 34) SystemAccessibilityApi34.listen(context) { refresh() } else null
@@ -108,6 +116,7 @@ internal fun rememberSystemAccessibility(): ConclaveSystemAccessibility {
             lifecycle.removeObserver(resumed)
             stopContrast?.invoke()
             context.contentResolver.unregisterContentObserver(animator)
+            stopServiceList?.invoke()
             manager?.removeAccessibilityStateChangeListener(services)
             manager?.removeTouchExplorationStateChangeListener(touch)
         }
@@ -127,6 +136,15 @@ private object SystemAccessibilityApi29 {
 @RequiresApi(31)
 private object SystemAccessibilityApi31 {
     fun fontWeightAdjustment(configuration: Configuration): Int = configuration.fontWeightAdjustment
+}
+
+@RequiresApi(33)
+private object SystemAccessibilityApi33 {
+    fun listen(context: Context, manager: AccessibilityManager, onChange: () -> Unit): () -> Unit {
+        val listener = AccessibilityManager.AccessibilityServicesStateChangeListener { onChange() }
+        manager.addAccessibilityServicesStateChangeListener(context.mainExecutor, listener)
+        return { manager.removeAccessibilityServicesStateChangeListener(listener) }
+    }
 }
 
 @RequiresApi(34)

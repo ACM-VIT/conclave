@@ -81,10 +81,13 @@ struct ENT2JoinCodeTests {
 
         #expect(flat.contains("ToolbarItem(placement: .cancellationAction) { Button(ConclaveStrings.text(\"Cancel\"), role: .cancel)"))
         #expect(!flat.contains("ToolbarItem(placement: .confirmationAction)"))
-        #expect(flat.contains(".safeAreaInset(edge: .bottom, spacing: 0) { VStack(spacing: 0) { Divider() JoinConfirmButton(isValid: isValid, action: submit) .padding(16) } .background(Color(uiColor: .systemGroupedBackground)) }"))
+        #expect(flat.contains(".modifier(JoinConfirmBar(isVisible: !confirmsInForm, bar: JoinConfirmButton(isValid: isValid, action: submit)))"))
+        #expect(flat.contains("if #available(iOS 26.0, *) { content .scrollEdgeEffectStyle(.soft, for: .bottom) .safeAreaBar(edge: .bottom, spacing: 0) { if isVisible { bar.padding(16) } } } else { content.safeAreaInset(edge: .bottom, spacing: 0) { if isVisible { VStack(spacing: 0) { Divider() bar.padding(16) } .background(Color(uiColor: .systemGroupedBackground)) } } }"))
         #expect(!ios.contains("role: .close"))
 
-        #expect(flat.contains("Button(action: action) { Text(ConclaveStrings.text(\"Join\")) .foregroundStyle(HostingTheme.onCoral) .frame(maxWidth: .infinity, minHeight: 28) } .buttonStyle(.borderedProminent) .controlSize(.large) .tint(HostingTheme.coralFill) .opacity(isValid ? 1 : HostingTheme.disabledOpacity) .disabled(!isValid)"))
+        #expect(flat.contains("Button(action: action) { label .frame(maxWidth: .infinity, minHeight: 28) } .buttonStyle(.borderedProminent) .controlSize(.large) .tint(HostingTheme.coralFill) .disabled(!isValid)"))
+        #expect(flat.contains("if isValid { Text(ConclaveStrings.text(\"Join\")) .foregroundStyle(HostingTheme.onCoral) } else { Text(ConclaveStrings.text(\"Join\")) }"))
+        #expect(!ios.contains("disabledOpacity") && !ios.contains(".opacity("), "one dimming: the system disabled style only")
         #expect(flat.contains(".scrollDismissesKeyboard(.interactively)"))
         #expect(!ios.contains("Color.white") && !ios.contains(".foregroundStyle(.white)"))
         #expect(flat.contains("input = EntryPolicies.sanitizeRoomInput(newValue)"))
@@ -92,6 +95,20 @@ struct ENT2JoinCodeTests {
         let root = ent2Flat(try ent2Source("Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift"))
         #expect(root.contains(".sheet(isPresented: joinSheetBinding, onDismiss: { premeeting.joinSheetDidDismiss() }) { JoinCodeSheet(premeeting: premeeting) }"))
         #expect(root.contains("Binding(get: { premeeting.isJoinSheetPresented }, set: { if !$0 { premeeting.dismissJoinSheet() } })"))
+    }
+
+    @Test func atAccessibilitySizesJoinMovesIntoTheFormAndAnInvalidEntryScrollsIntoView() throws {
+        let flat = ent2Flat(try ent2Source("Sources/Conclave/Features/Join/JoinCodeSheet+iOS.swift"))
+        #expect(flat.contains("private var confirmsInForm: Bool { dynamicTypeSize.isAccessibilitySize }"))
+        #expect(flat.contains("if confirmsInForm { Section { JoinConfirmButton(isValid: isValid, action: submit) .listRowInsets(EdgeInsets()) .listRowBackground(Color.clear) .id(JoinCodeSheetAnchor.confirm) } }"))
+        #expect(flat.contains(".accessibilityIdentifier(\"join.rejoinSuggestion\") .id(JoinCodeSheetAnchor.rejoin)"))
+        #expect(flat.contains("input = EntryPolicies.sanitizeRoomInput(first) revealInvalid(EntryPolicies.showsInvalidJoinInput(input))"))
+        #expect(flat.contains("guard isValid else { revealInvalid(!input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) premeeting.submitJoinInput(input) return }"))
+        #expect(flat.contains("private func revealInvalid(_ invalid: Bool) { showsInvalid = invalid if invalid { invalidReveal += 1 } }"))
+        #expect(flat.contains(".onChange(of: invalidReveal) { guard confirmsInForm else { return } withAnimation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion)) { proxy.scrollTo(suggestion == nil ? JoinCodeSheetAnchor.confirm : JoinCodeSheetAnchor.rejoin) } }"))
+        let rejoin = try #require(flat.range(of: "if let suggestion { Section {"))
+        let confirm = try #require(flat.range(of: "if confirmsInForm { Section {"))
+        #expect(rejoin.lowerBound < confirm.lowerBound, "focus order stays field, Paste, Rejoin, Join")
     }
 
     @Test func theAndroidSheetFollowsTheS10Layout() throws {

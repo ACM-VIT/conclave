@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -35,6 +36,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +44,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -52,6 +55,11 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
@@ -72,8 +80,35 @@ internal data class ConclaveActionHostRow(
 internal object ConclaveActionSheetMetrics {
     const val COLUMNS = 3
     const val TILE_MIN_HEIGHT_DP = 72
+    const val TILE_GAP_DP = 8
+    const val TILE_PADDING_DP = 8
 
     const val MAX_WIDTH_DP = 640
+
+    fun columns(rowWidth: Int, longestWord: Int, gap: Int, padding: Int): Int {
+        var columns = COLUMNS
+        while (columns > 1) {
+            val tile = (rowWidth - gap * (columns - 1)) / columns
+            if (longestWord <= tile - padding * 2) return columns
+            columns -= 1
+        }
+        return 1
+    }
+
+    fun inlineTile(rowSize: Int, columns: Int): Boolean = rowSize == 1 && columns > 1
+
+    fun words(label: String): List<String> = label.split(' ', '\n', '\t').filter { it.isNotEmpty() }
+}
+
+private fun longestTileWord(labels: List<String>, style: TextStyle, measurer: TextMeasurer): Int {
+    var longest = 0
+    for (label in labels) {
+        for (word in ConclaveActionSheetMetrics.words(label)) {
+            val width = measurer.measure(word, style = style, softWrap = false, maxLines = 1).size.width
+            if (width > longest) longest = width
+        }
+    }
+    return longest
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -131,19 +166,37 @@ internal fun ConclaveActionSheet(
                         if (onRaiseHand(raised)) haptics.gesture(kind)
                     }
                 }
-                for (row in tiles.chunked(ConclaveActionSheetMetrics.COLUMNS)) {
-                    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        for (tile in row) {
-                            ActionTile(tile, "$identifier.${tile.id}", Modifier.weight(1f).fillMaxHeight(), inline = row.size == 1) {
-                                if (tile.dismissesSheet) {
-                                    scope.launch { sheetState.hide() }.invokeOnCompletion {
-                                        if (!sheetState.isVisible) {
-                                            onDismiss()
-                                            onTile(tile)
+                if (tiles.isNotEmpty()) {
+                    val labelStyle = MaterialTheme.typography.labelMedium.copy(hyphens = Hyphens.None, lineBreak = LineBreak.Heading)
+                    val measurer = rememberTextMeasurer()
+                    val density = LocalDensity.current
+                    val labels = tiles.map { it.label }
+                    val longestWord = remember(labels, labelStyle, measurer) { longestTileWord(labels, labelStyle, measurer) }
+                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        val columns = if (constraints.hasBoundedWidth) {
+                            ConclaveActionSheetMetrics.columns(rowWidth = constraints.maxWidth, longestWord = longestWord,
+                                gap = with(density) { ConclaveActionSheetMetrics.TILE_GAP_DP.dp.roundToPx() },
+                                padding = with(density) { ConclaveActionSheetMetrics.TILE_PADDING_DP.dp.roundToPx() })
+                        } else ConclaveActionSheetMetrics.COLUMNS
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            for (row in tiles.chunked(columns)) {
+                                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                                    horizontalArrangement = Arrangement.spacedBy(ConclaveActionSheetMetrics.TILE_GAP_DP.dp)) {
+                                    for (tile in row) {
+                                        ActionTile(tile, "$identifier.${tile.id}", Modifier.weight(1f).fillMaxHeight(), labelStyle,
+                                            inline = ConclaveActionSheetMetrics.inlineTile(rowSize = row.size, columns = columns)) {
+                                            if (tile.dismissesSheet) {
+                                                scope.launch { sheetState.hide() }.invokeOnCompletion {
+                                                    if (!sheetState.isVisible) {
+                                                        onDismiss()
+                                                        onTile(tile)
+                                                    }
+                                                }
+                                            } else {
+                                                onTile(tile)
+                                            }
                                         }
                                     }
-                                } else {
-                                    onTile(tile)
                                 }
                             }
                         }
@@ -232,7 +285,9 @@ private fun RaiseHandTile(
 }
 
 @Composable
-private fun ActionTile(tile: ConclaveActionTile, identifier: String, modifier: Modifier, inline: Boolean = false, onClick: () -> Unit) {
+private fun ActionTile(
+    tile: ConclaveActionTile, identifier: String, modifier: Modifier, labelStyle: TextStyle, inline: Boolean = false, onClick: () -> Unit,
+) {
     val scheme = MaterialTheme.colorScheme
     val ext = LocalConclaveExtendedColors.current
     val spoken = tile.description ?: tile.label
@@ -262,23 +317,26 @@ private fun ActionTile(tile: ConclaveActionTile, identifier: String, modifier: M
                     Icon(tile.icon, contentDescription = null)
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    ConclaveText(tile.label, line = "$identifier.title", style = MaterialTheme.typography.labelLarge,
+                    ConclaveText(tile.label, line = "$identifier.title",
+                        style = MaterialTheme.typography.labelLarge.copy(hyphens = Hyphens.None, lineBreak = LineBreak.Heading),
                         modifier = Modifier.clearAndSetSemantics { })
                     if (tile.statusLine != null) {
-                        ConclaveText(tile.statusLine, line = "$identifier.status", style = MaterialTheme.typography.labelMedium,
+                        ConclaveText(tile.statusLine, line = "$identifier.status",
+                            style = MaterialTheme.typography.labelMedium.copy(hyphens = Hyphens.None, lineBreak = LineBreak.Heading),
                             modifier = Modifier.clearAndSetSemantics { })
                     }
                 }
             }
-        } else Column(Modifier.padding(horizontal = 8.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        } else Column(Modifier.padding(horizontal = ConclaveActionSheetMetrics.TILE_PADDING_DP.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             ConclaveBadgedAnchor(count = tile.badgeCount, identifier = "$identifier.badge") {
                 Icon(tile.icon, contentDescription = null)
             }
-            ConclaveText(tile.label, line = "$identifier.title", style = MaterialTheme.typography.labelMedium, maxLines = 2,
+            ConclaveText(tile.label, line = "$identifier.title", style = labelStyle, maxLines = 2,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.clearAndSetSemantics { })
             if (tile.statusLine != null) {
-                ConclaveText(tile.statusLine, line = "$identifier.status", style = MaterialTheme.typography.labelSmall, maxLines = 2,
+                ConclaveText(tile.statusLine, line = "$identifier.status",
+                    style = MaterialTheme.typography.labelSmall.copy(hyphens = Hyphens.None, lineBreak = LineBreak.Heading), maxLines = 2,
                     color = LocalContentColor.current.copy(alpha = 0.74f),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.clearAndSetSemantics { })
             }

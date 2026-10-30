@@ -272,7 +272,7 @@ struct CTL4MediaShortcutTests {
     @Test func shortcutStringsResolveInBothCatalogs() throws {
 
         let catalog = try ctl4Source("Sources/Conclave/Resources/Localizable.xcstrings")
-        for key in ["Speaker", "Choose Microphone\u{2026}", "Choose Microphone", "Microphone", "Mic Mode\u{2026}", "Mic Mode", "Audio Settings",
+        for key in ["Speaker", "Microphone\u{2026}", "Choose Microphone", "Microphone", "Mic Mode\u{2026}", "Mic Mode", "Audio Settings",
                     "Flip Camera", "Effects", "Video Effects\u{2026}", "Video Effects"] {
             #expect(catalog.contains("\"" + key + "\""), "missing \(key)")
         }
