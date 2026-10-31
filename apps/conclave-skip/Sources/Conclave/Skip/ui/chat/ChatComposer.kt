@@ -36,9 +36,6 @@ import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +53,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -549,31 +547,39 @@ private fun ChatComposerModeRow(
                 },
                 modifier = Modifier.testTag("chat.composer.recipient"),
             )
-            DropdownMenu(
+            ConclaveDropdownMenu(
                 expanded = expanded,
                 onDismissRequest = close,
+                identifier = "chat.composer.recipients",
                 properties = if (capture.menuFocusable) PopupProperties(focusable = true) else PopupProperties(focusable = false),
             ) {
-                NativeSemanticsPopupRoot("chat.composer.recipients")
-                DropdownMenuItem(
-                    text = { ConclaveText(conclaveString("chat_everyone"), line = "chat.recipient.everyone") },
+                val everyone = recipient == null
+                ConclaveMenuItem(
+                    title = conclaveString("chat_everyone"),
+                    identifier = "chat.recipient.everyone",
                     onClick = {
                         presenter.setPrivateTo("")
                         close()
                     },
+                    role = ConclaveMenuRole.Single(everyone),
+                    leadingIcon = ConclaveIcons.GroupFill0,
                 )
-                HorizontalDivider()
-                ConclaveText(conclaveString("chat_send_privately_to"), line = "chat.recipient.header",
-                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                ConclaveMenuDivider()
+                ConclaveMenuHeader(conclaveString("chat_send_privately_to"), "chat.recipient.header")
                 for (person in composer.recipients) {
-                    DropdownMenuItem(
-                        text = { ConclaveText(person.name, line = "chat.recipient.${person.userId}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    val current = recipient?.userId == person.userId
+                    ConclaveMenuItem(
+                        title = person.name,
+                        identifier = "chat.recipient.${person.userId}",
                         onClick = {
                             presenter.setPrivateTo(person.userId)
                             close()
                         },
-                        modifier = Modifier.testTag("chat.recipient.${person.userId}"),
+                        role = ConclaveMenuRole.Single(current),
+                        leadingContent = {
+                            ConclaveAvatar(ConclaveAvatarIdentity.fromSeed(PeopleRowPolicy.avatarSeed(name = person.name,
+                                userId = person.userId, isLocal = false)), 24.dp)
+                        },
                     )
                 }
             }
@@ -629,6 +635,7 @@ private fun ChatSuggestionList(model: ChatSuggestionsModel, keys: ChatComposerKe
                         Modifier.fillMaxWidth().heightIn(min = rowHeight)
                             .then(if (highlighted) Modifier.background(scheme.surfaceContainerHighest, MaterialTheme.shapes.small) else Modifier)
                             .alpha(if (dimmed) 0.38f else 1f)
+                            .clip(MaterialTheme.shapes.small)
                             .clickable(enabled = !dimmed) { onPick(model.insertText(itemId)) }
                             .then(if (highlighted) Modifier.semantics { selected = true } else Modifier)
                             .padding(horizontal = 12.dp).testTag("chat.suggestion.${option.id}"),
@@ -657,6 +664,7 @@ private fun ChatSuggestionList(model: ChatSuggestionsModel, keys: ChatComposerKe
                         Modifier.fillMaxWidth().heightIn(min = rowHeight)
                             .then(if (highlighted) Modifier.background(scheme.surfaceContainerHighest, MaterialTheme.shapes.small) else Modifier)
                             .alpha(if (row.isAvailable) 1f else 0.38f)
+                            .clip(MaterialTheme.shapes.small)
                             .clickable(enabled = row.isAvailable) { onPick(model.insertText(itemId)) }
                             .then(if (highlighted) Modifier.semantics { selected = true } else Modifier)
                             .padding(horizontal = 12.dp).testTag("chat.suggestion.${row.id}"),
@@ -727,7 +735,6 @@ private fun ChatAttachMenuButton(
     var expanded by remember { mutableStateOf(false) }
     var capture by remember { mutableStateOf(ChatFocusCapture.none) }
     val context = LocalContext.current
-    val scheme = MaterialTheme.colorScheme
     Box {
         IconButton(
             onClick = {
@@ -739,15 +746,15 @@ private fun ChatAttachMenuButton(
         ) {
             Icon(ConclaveIcons.AddFill0, contentDescription = conclaveString("chat_attach"))
         }
-        DropdownMenu(
+        ConclaveDropdownMenu(
             expanded = expanded,
             onDismissRequest = {
                 expanded = false
                 if (capture.menuFocusable) restoreFocus(capture)
             },
+            identifier = "chat.composer.attach.menu",
             properties = if (capture.menuFocusable) PopupProperties(focusable = true) else PopupProperties(focusable = false),
         ) {
-            NativeSemanticsPopupRoot("chat.composer.attach.menu")
             for (kind in composer.attachKinds) {
                 if (kind == VoiceMessagePolicy.attachKind) {
                     ChatVoiceAttachMenuItem(presenter, composer, onDismiss = {
@@ -766,26 +773,16 @@ private fun ChatAttachMenuButton(
                 }
                 if (title.isEmpty()) continue
                 val busy = kind == "photo" && composer.attachment.phase != ChatAttachmentPhase.none
-                DropdownMenuItem(
-                    text = {
-                        Column {
-                            ConclaveText(title, line = "chat.composer.attach.$kind.title")
-                            if (reasonText.isNotEmpty()) {
-                                ConclaveText(reasonText, line = "chat.composer.attach.$kind.reason", style = MaterialTheme.typography.bodySmall,
-                                    color = scheme.onSurfaceVariant)
-                            }
-                        }
-                    },
-                    leadingIcon = {
-                        Icon(if (kind == "gif") ConclaveIcons.GifBoxFill0 else ConclaveIcons.ImageFill0, contentDescription = null,
-                            tint = scheme.onSurfaceVariant)
-                    },
-                    enabled = reason.isEmpty() && !busy,
+                ConclaveMenuItem(
+                    title = title,
+                    identifier = "chat.composer.attach.$kind",
                     onClick = {
                         expanded = false
                         if (kind == "photo") onPhoto(capture) else onGifs(capture)
                     },
-                    modifier = Modifier.testTag("chat.composer.attach.$kind"),
+                    leadingIcon = if (kind == "gif") ConclaveIcons.GifBoxFill0 else ConclaveIcons.ImageFill0,
+                    supporting = if (reasonText.isEmpty()) null else reasonText,
+                    enabled = reason.isEmpty() && !busy,
                 )
             }
         }

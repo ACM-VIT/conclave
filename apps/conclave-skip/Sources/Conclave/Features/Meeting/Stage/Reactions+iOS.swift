@@ -22,6 +22,7 @@ private struct ReactionBurstColumn: View {
         ZStack(alignment: .bottomLeading) {
             ForEach(events) { event in
                 ReactionBubble(event: event, reduceMotion: reduceMotion)
+                    .zIndex(event.isLocal ? 1 : 0)
             }
         }
         .padding(.leading, CGFloat(StageReactionPolicy.leadingInset))
@@ -41,9 +42,17 @@ private struct ReactionBubble: View {
     let event: ReactionEvent
     let reduceMotion: Bool
     @State private var rise: CGFloat = 0
+    @State private var drift: CGFloat = 0
+    @State private var popScale: CGFloat
     @State private var appear: Double = 0
     @State private var fade: Double = 1
     @State private var box = ReactionStartBox()
+
+    init(event: ReactionEvent, reduceMotion: Bool) {
+        self.event = event
+        self.reduceMotion = reduceMotion
+        _popScale = State(initialValue: reduceMotion ? 1 : CGFloat(StageReactionPolicy.popFromScale))
+    }
 
     private var name: String {
         if event.isLocal { return ConclaveStrings.text("You") }
@@ -61,17 +70,31 @@ private struct ReactionBubble: View {
                 .frame(width: diameter, height: diameter)
                 .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Circle())
                 .overlay { Circle().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
-            Text(name)
-                .font(.caption2)
-                .lineLimit(1)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(HostingTheme.inCallLabelScrim, in: Capsule())
+            namePill
         }
-        .offset(x: lane * CGFloat(StageReactionPolicy.laneOffset), y: -rise)
+        .scaleEffect(popScale)
+        .offset(x: lane * CGFloat(StageReactionPolicy.laneOffset) + drift, y: -rise)
         .opacity(appear * fade)
         .onAppear(perform: start)
+    }
+
+    @ViewBuilder
+    private var namePill: some View {
+        let label = Text(name)
+            .font(.caption2)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+        if event.isLocal {
+            label
+                .foregroundStyle(HostingTheme.inCallCoralText)
+                .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Capsule())
+                .overlay { Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
+        } else {
+            label
+                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                .background(HostingTheme.inCallLabelScrim, in: Capsule())
+        }
     }
 
     private func start() {
@@ -86,7 +109,11 @@ private struct ReactionBubble: View {
             withAnimation(.easeOut(duration: fadeOut).delay(lifetime - fadeOut)) { fade = 0 }
         } else {
             appear = 1
-            withAnimation(.easeOut(duration: riseSeconds)) { rise = CGFloat(StageReactionPolicy.riseDistance) }
+            withAnimation(.smooth(duration: StageReactionPolicy.popMillis / 1000.0)) { popScale = 1 }
+            withAnimation(.easeOut(duration: riseSeconds)) {
+                rise = CGFloat(StageReactionPolicy.riseDistance)
+                drift = CGFloat(StageReactionPolicy.driftDistance * StageReactionPolicy.driftDirection(eventId: event.id))
+            }
             let fadeStart = riseSeconds * StageReactionPolicy.fadeStartFraction
             withAnimation(.easeIn(duration: riseSeconds - fadeStart).delay(fadeStart)) { fade = 0 }
         }

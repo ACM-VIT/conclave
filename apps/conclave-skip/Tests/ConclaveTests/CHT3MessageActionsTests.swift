@@ -173,7 +173,7 @@ struct CHT3MessageActionsTests {
     @Test func theAndroidSheetMenuAndViewerFollowTheirContainers() throws {
         let sheet = try chatSource("Sources/Conclave/Skip/ui/chat/MessageActionsSheet.kt")
         #expect(sheet.contains("rememberModalBottomSheetState(skipPartiallyExpanded = true)"))
-        #expect(sheet.contains("NativeSemanticsPopupRoot(\"chat.actions.sheet\")") && sheet.contains("NativeSemanticsPopupRoot(\"chat.actions.menu\")"))
+        #expect(sheet.contains("NativeSemanticsPopupRoot(\"chat.actions.sheet\")") && sheet.contains("identifier = \"chat.actions.menu\""))
         #expect(sheet.contains("testTagsAsResourceId = true") && sheet.contains("maxItemsInEachRow = 8"))
         #expect(sheet.contains("haptics.gesture(FeedbackKind.reactionSent)"))
         let row = try chatSource("Sources/Conclave/Skip/ui/chat/ChatRow.kt")

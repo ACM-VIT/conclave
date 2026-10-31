@@ -50,7 +50,6 @@ internal object SettingsCopy {
         SettingsRowID.noiseSuppression -> "set_noise_suppression_detail"
         SettingsRowID.captions -> "set_captions_detail"
         SettingsRowID.captionStyle -> "set_caption_style_detail"
-        SettingsRowID.alwaysShowControls -> "set_always_show_controls_detail"
         SettingsRowID.messageNotifications -> "set_message_notifications_desc"
         else -> null
     }

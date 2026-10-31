@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -126,23 +125,15 @@ internal fun ChatVoiceModeRow(presenter: ChatPresenter, composer: ChatComposerSn
 @Composable
 internal fun ChatVoiceAttachMenuItem(presenter: ChatPresenter, composer: ChatComposerSnapshot, onDismiss: () -> Unit) {
     val reason = VoiceCopyAndroid.unavailableReason(composer)
-    val scheme = MaterialTheme.colorScheme
-    DropdownMenuItem(
-        text = {
-            Column {
-                ConclaveText(conclaveString("chat_attach_voice"), line = "chat.composer.attach.voice.title")
-                if (reason.isNotEmpty()) {
-                    ConclaveText(reason, line = "chat.composer.attach.voice.reason", style = MaterialTheme.typography.bodySmall,
-                        color = scheme.onSurfaceVariant)
-                }
-            }
-        },
+    ConclaveMenuItem(
+        title = conclaveString("chat_attach_voice"),
+        identifier = "chat.composer.attach.voice",
         onClick = {
             presenter.setVoiceMode(true)
             onDismiss()
         },
-        leadingIcon = { Icon(VoiceIcons.voiceMessage, contentDescription = null, tint = LocalContentColor.current) },
+        leadingIcon = VoiceIcons.voiceMessage,
+        supporting = if (reason.isEmpty()) null else reason,
         enabled = reason.isEmpty(),
-        modifier = Modifier.testTag("chat.composer.attach.voice"),
     )
 }

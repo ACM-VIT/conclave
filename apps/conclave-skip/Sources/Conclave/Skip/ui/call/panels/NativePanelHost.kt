@@ -99,6 +99,9 @@ internal fun panelHostDecision(
     )
 }
 
+internal fun PanelHostDecision.underCallRoot(inCallRoot: Boolean): PanelHostDecision =
+    if (inCallRoot && !inCallAppearance) copy(inCallAppearance = true) else this
+
 internal data class PanelBarInputs(val overlayVisible: Boolean, val overlayInCall: Boolean)
 
 internal fun panelBarInputs(state: PanelSnapshot, decision: PanelHostDecision?): PanelBarInputs {
@@ -228,6 +231,7 @@ internal fun NativePanelHost(
     lifetime: NativePanelOverlayLifetime,
     focus: PanelInvokerFocus,
     readout: PanelHostReadout,
+    inCallRoot: Boolean = true,
     systemBars: @Composable (PanelBarInputs) -> Unit,
     stage: @Composable (coverage: PanelStageCoverage) -> Unit,
     panel: @Composable (session: Int, request: PanelRequest, decision: PanelHostDecision, variant: InCallPageVariant) -> Unit,
@@ -238,8 +242,8 @@ internal fun NativePanelHost(
         val accessibilitySize = PanelPresentationPolicy.androidIsAccessibilitySize(fontScale = LocalDensity.current.fontScale.toDouble())
         val rightToLeft = LocalLayoutDirection.current == LayoutDirection.Rtl
         val request = state.current
-        val decision = remember(request, window.horizontalRegular, window.verticalRegular, accessibilitySize) {
-            if (request == null) null else panelHostDecision(request, window, isAccessibilitySize = accessibilitySize)
+        val decision = remember(request, window.horizontalRegular, window.verticalRegular, accessibilitySize, inCallRoot) {
+            if (request == null) null else panelHostDecision(request, window, isAccessibilitySize = accessibilitySize).underCallRoot(inCallRoot)
         }
         val visible = panelContainerVisible(state)
         val overlay = decision != null && decision.style == PanelHostStyle.overlay && visible

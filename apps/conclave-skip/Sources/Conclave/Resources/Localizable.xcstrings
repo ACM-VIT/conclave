@@ -665,7 +665,7 @@
     "A headset or car audio can also change the microphone." : {
       "extractionState" : "manual"
     },
-    "A host is here and can let you in." : {
+    "A host is here" : {
       "extractionState" : "manual"
     },
     "A host lowered your hand." : {
@@ -850,6 +850,9 @@
       "extractionState" : "manual"
     },
     "Allow microphone access in Settings so people can hear you." : {
+      "extractionState" : "manual"
+    },
+    "Allow microphone and camera access in Settings." : {
       "extractionState" : "manual"
     },
     "Allowed" : {
@@ -1064,6 +1067,9 @@
     "Audio Settings" : {
       "extractionState" : "manual"
     },
+    "Audio and video didn’t connect" : {
+      "extractionState" : "manual"
+    },
     "Audio switched to %@" : {
       "extractionState" : "manual"
     },
@@ -1228,6 +1234,9 @@
     "Camera Access Is Off" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
+    },
+    "Camera Access Is Restricted" : {
+      "extractionState" : "manual"
     },
     "Camera Back" : {
       "extractionState" : "manual",
@@ -1982,17 +1991,10 @@
     "Couldn't load stickers." : {
       "extractionState" : "manual"
     },
-    "Couldn’t Join" : {
-      "extractionState" : "manual",
-      "generatesSymbol" : false
-    },
     "Couldn’t Open %@" : {
       "extractionState" : "manual"
     },
     "Couldn’t Rejoin" : {
-      "extractionState" : "manual"
-    },
-    "Couldn’t Start" : {
       "extractionState" : "manual"
     },
     "Couldn’t admit %@." : {
@@ -2074,6 +2076,9 @@
     "Couldn’t raise your hand. Try again." : {
       "extractionState" : "manual"
     },
+    "Couldn’t reach Conclave" : {
+      "extractionState" : "manual"
+    },
     "Couldn’t reach live notes." : {
       "extractionState" : "manual"
     },
@@ -2093,6 +2098,9 @@
       "extractionState" : "manual"
     },
     "Couldn’t send your question." : {
+      "extractionState" : "manual"
+    },
+    "Couldn’t start" : {
       "extractionState" : "manual"
     },
     "Couldn’t start screen sharing. Try again." : {
@@ -2401,9 +2409,6 @@
     "Enter a valid user key or email." : {
       "extractionState" : "manual"
     },
-    "Enter the code from your invite, or paste the link." : {
-      "extractionState" : "manual"
-    },
     "Enter the invite code from the host." : {
       "extractionState" : "manual"
     },
@@ -2620,6 +2625,9 @@
     "Hand raised" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
+    },
+    "Hang tight." : {
+      "extractionState" : "manual"
     },
     "Haptics" : {
       "extractionState" : "manual"
@@ -3018,9 +3026,6 @@
     "Keep speaking, %lld s left" : {
       "extractionState" : "manual"
     },
-    "Keeps call controls on screen instead of hiding them after a few seconds." : {
-      "extractionState" : "manual"
-    },
     "Keeps you in the center of the frame" : {
       "extractionState" : "manual"
     },
@@ -3331,6 +3336,9 @@
     "Meeting Transcript - %@" : {
       "extractionState" : "manual"
     },
+    "Meeting not found" : {
+      "extractionState" : "manual"
+    },
     "Meetings" : {
       "extractionState" : "manual"
     },
@@ -3385,6 +3393,9 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
+    "Microphone Access Is Restricted" : {
+      "extractionState" : "manual"
+    },
     "Microphone access is off in Settings." : {
       "extractionState" : "manual"
     },
@@ -3396,6 +3407,9 @@
       "extractionState" : "manual"
     },
     "Microphone access is restricted on this device." : {
+      "extractionState" : "manual"
+    },
+    "Microphone and Camera Restricted" : {
       "extractionState" : "manual"
     },
     "Microphone unavailable" : {
@@ -3602,6 +3616,9 @@
     "No Messages Yet" : {
       "extractionState" : "manual"
     },
+    "No Microphone or Camera Access" : {
+      "extractionState" : "manual"
+    },
     "No Questions Yet" : {
       "extractionState" : "manual"
     },
@@ -3641,22 +3658,19 @@
     "No hints" : {
       "extractionState" : "manual"
     },
-    "No meeting found with this code. Check it and try again." : {
-      "extractionState" : "manual"
-    },
     "No moves yet" : {
       "extractionState" : "manual"
     },
     "No names yet." : {
       "extractionState" : "manual"
     },
+    "No one can let you in yet" : {
+      "extractionState" : "manual"
+    },
     "No one here yet" : {
       "extractionState" : "manual"
     },
     "No one is blocked." : {
-      "extractionState" : "manual"
-    },
-    "No one is here to let you in yet. You can keep waiting." : {
       "extractionState" : "manual"
     },
     "No one is on the allow list." : {
@@ -4360,11 +4374,15 @@
     "Reconnecting to the meeting…" : {
       "extractionState" : "manual"
     },
+    "Reconnecting, you’ll keep your place" : {
+      "extractionState" : "manual"
+    },
     "Reconnecting. You can send when the call reconnects." : {
       "extractionState" : "manual"
     },
-    "Reconnecting. You’ll keep your place." : {
-      "extractionState" : "manual"
+    "Reconnecting…" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
     },
     "Record" : {
       "extractionState" : "manual"
@@ -4659,17 +4677,6 @@
     "Saving" : {
       "extractionState" : "manual"
     },
-    "Say hello to the room." : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Say hello to the room."
-          }
-        }
-      }
-    },
     "Scores and progress are lost for everyone." : {
       "extractionState" : "manual"
     },
@@ -4784,6 +4791,12 @@
       "extractionState" : "manual"
     },
     "Sends without a link preview" : {
+      "extractionState" : "manual"
+    },
+    "Server is busy" : {
+      "extractionState" : "manual"
+    },
+    "Server is restarting" : {
       "extractionState" : "manual"
     },
     "Session" : {
@@ -4936,6 +4949,9 @@
     "Sign in to create a personal voice for voice messages. Until then, messages use the system voice." : {
       "extractionState" : "manual"
     },
+    "Sign in to join" : {
+      "extractionState" : "manual"
+    },
     "Sign in to keep your name and host meetings from any device." : {
       "extractionState" : "manual"
     },
@@ -4991,9 +5007,6 @@
       "extractionState" : "manual"
     },
     "Someone" : {
-      "extractionState" : "manual"
-    },
-    "Someone in the meeting declined your request to join." : {
       "extractionState" : "manual"
     },
     "Something went wrong while joining. Try again." : {
@@ -5121,7 +5134,7 @@
     "Stickers and Clips, Too" : {
       "extractionState" : "manual"
     },
-    "Still connecting. Check your connection." : {
+    "Still connecting" : {
       "extractionState" : "manual"
     },
     "Still speaking" : {
@@ -5286,6 +5299,9 @@
     "Text, needs 4.5" : {
       "extractionState" : "manual"
     },
+    "That code didn’t work" : {
+      "extractionState" : "manual"
+    },
     "That didn’t go through. Try again." : {
       "extractionState" : "manual"
     },
@@ -5349,9 +5365,6 @@
     "The host limited video quality for this meeting." : {
       "extractionState" : "manual"
     },
-    "The host removed you from this meeting." : {
-      "extractionState" : "manual"
-    },
     "The host starts the game." : {
       "extractionState" : "manual"
     },
@@ -5400,9 +5413,6 @@
       }
     },
     "The media connection didn’t go through. Try again." : {
-      "extractionState" : "manual"
-    },
-    "The meeting server ended your connection. You can rejoin." : {
       "extractionState" : "manual"
     },
     "The meeting server is restarting. Try again in a moment." : {
@@ -5506,16 +5516,13 @@
     "This meeting has ended." : {
       "extractionState" : "manual"
     },
-    "This meeting is locked. The host will review your request." : {
+    "This meeting is locked" : {
       "extractionState" : "manual"
     },
     "This meeting needs you to sign in." : {
       "extractionState" : "manual"
     },
     "This page is a specimen. It does nothing." : {
-      "extractionState" : "manual"
-    },
-    "This page updates on its own when the host opens the room." : {
       "extractionState" : "manual"
     },
     "This permanently deletes your Conclave account and signs you out on this device. This can’t be undone." : {
@@ -5749,6 +5756,9 @@
       "extractionState" : "manual"
     },
     "Update Conclave" : {
+      "extractionState" : "manual"
+    },
+    "Update Conclave to join" : {
       "extractionState" : "manual"
     },
     "Update Conclave to use %@." : {
@@ -6460,6 +6470,9 @@
     "You can keep up to 8 personal images. Remove one to add another." : {
       "extractionState" : "manual"
     },
+    "You can rejoin." : {
+      "extractionState" : "manual"
+    },
     "You can't send a private message to yourself." : {
       "extractionState" : "manual"
     },
@@ -6532,6 +6545,9 @@
       "extractionState" : "manual"
     },
     "Your Name" : {
+      "extractionState" : "manual"
+    },
+    "Your Phone Paused Conclave" : {
       "extractionState" : "manual"
     },
     "Your Preview" : {
@@ -6625,9 +6641,6 @@
     "You’ll join as an attendee. Your camera and mic stay off." : {
       "extractionState" : "manual"
     },
-    "You’ll join as soon as someone lets you in." : {
-      "extractionState" : "manual"
-    },
     "You’ll stay in this call as a guest and lose host controls." : {
       "extractionState" : "manual"
     },
@@ -6664,7 +6677,11 @@
     "You’re now watching as an attendee." : {
       "extractionState" : "manual"
     },
-    "You’re offline. Connect to the internet to join." : {
+    "You’re offline" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
+    },
+    "You’re offline, you’ll keep your place" : {
       "extractionState" : "manual"
     },
     "You’re offline. Host actions return when you reconnect." : {
@@ -6673,13 +6690,7 @@
     "You’re offline. This will be available when you reconnect." : {
       "extractionState" : "manual"
     },
-    "You’re offline. Waiting for a connection." : {
-      "extractionState" : "manual"
-    },
     "You’re offline. We’ll reconnect when your connection is back." : {
-      "extractionState" : "manual"
-    },
-    "You’re offline. You’ll keep your place when you’re back." : {
       "extractionState" : "manual"
     },
     "You’re presenting" : {

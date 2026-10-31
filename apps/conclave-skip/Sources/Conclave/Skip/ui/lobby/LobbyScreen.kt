@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,24 +35,26 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -59,6 +63,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -73,6 +78,8 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
     var actionHeightPx by remember(routeId) { mutableIntStateOf(0) }
     val actionClearance = with(LocalDensity.current) { actionHeightPx.toDp() } + 32.dp
     val imeVisible = WindowInsets.isImeVisible
+    val bandCover = if (actionHeightPx == 0) null
+        else (if (imeVisible) 0.dp else actionClearance) + ConclaveFloatingActionScrimDefaults.fadeHeight
     LobbyBusyBackHandler(premeeting, routeId, onBack)
     PermissionPrimingResumeEffect(premeeting, routeId)
     val scheme = MaterialTheme.colorScheme
@@ -105,7 +112,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                         modifier = Modifier.width(360.dp).lobbyScroll(rememberScrollState(), actionClearance, imeVisible),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        LobbyControls(premeeting, routeId, snackbarHostState)
+                        LobbyControls(premeeting, routeId, snackbarHostState, bandCover)
                     }
                 }
             } else {
@@ -115,15 +122,14 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                 ) {
                     LobbyCardSlot(premeeting, routeId, cache, wide = false, visibleHeight = visibleHeight,
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp))
-                    LobbyControls(premeeting, routeId, snackbarHostState)
+                    LobbyControls(premeeting, routeId, snackbarHostState, bandCover)
                 }
             }
-            if (premeeting.lobbyStatus?.mode == LobbyMode.editing) {
-                ConclaveFloatingActionScrim(
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(actionClearance),
-                    bottomPadding = padding.calculateBottomPadding(),
-                )
-            }
+            ConclaveFloatingActionScrim(
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(actionClearance),
+                bottomPadding = padding.calculateBottomPadding(),
+                opaque = true,
+            )
         }
     }
 }
@@ -159,17 +165,15 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
                 preview = { LocalPreviewSurface(card.previewSessionId) })
         }
     }
-    LobbyPreviewCaption(card, Modifier.padding(horizontal = if (wide) 0.dp else 16.dp))
 }
 
 @Composable
-private fun LobbyControls(premeeting: PremeetingPresenter, routeId: Int, snackbarHostState: SnackbarHostState) {
+private fun LobbyControls(premeeting: PremeetingPresenter, routeId: Int, snackbarHostState: SnackbarHostState, bandCover: Dp?) {
     val isPromotion = premeeting.lobbyStatus?.takeIf { it.routeId == routeId }?.intent == LobbyIntent.promotion
-    LobbyIssueBanner(premeeting, routeId)
-    PermissionPrimingRows(premeeting, routeId)
+    LobbyStatusRows(premeeting, routeId)
     LobbyAudioItem(premeeting)
     if (!isPromotion) {
-        LobbyIdentityItems(premeeting, routeId)
+        LobbyIdentityItems(premeeting, routeId, bandCover)
         MeetingLinkRow(premeeting, snackbarHostState)
     }
     Spacer(Modifier.heightIn(min = 8.dp))
@@ -213,10 +217,7 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
     val isNewMeeting = status?.intent == LobbyIntent.newMeeting
     val roomLabel = link?.roomLabel ?: key.roomId
     val subtitle = when (status?.mode) {
-        LobbyMode.connecting ->
-            if (status?.waitingKind == WaitingKind.reconnecting) conclaveString("pm_subtitle_reconnecting")
-            else conclaveString("pm_subtitle_joining")
-        LobbyMode.waiting, LobbyMode.failed -> ""
+        LobbyMode.connecting, LobbyMode.waiting, LobbyMode.failed -> ""
         else -> if (isNewMeeting) "" else when (presence?.kind) {
             PresenceKind.checking -> conclaveString("pm_presence_checking")
             PresenceKind.empty -> conclaveString("pm_presence_none")
@@ -238,36 +239,6 @@ private fun LobbyTitle(premeeting: PremeetingPresenter, key: PremeetingKey.Lobby
                 modifier = Modifier.testTag("lobby.presence"))
         }
     }
-}
-
-@Composable
-private fun LobbyIssueBanner(premeeting: PremeetingPresenter, routeId: Int) {
-    val status = premeeting.lobbyStatus?.takeIf {
-        it.routeId == routeId && (it.mode == LobbyMode.editing || (it.mode == LobbyMode.connecting && it.issue == LobbyIssue.offline))
-    } ?: return
-    val text = when (status.issue) {
-        LobbyIssue.offline -> if (status.mode == LobbyMode.connecting) conclaveString("pm_offline_waiting") else conclaveString("pm_offline")
-        LobbyIssue.roomNotFound -> conclaveString("pm_room_not_found")
-        LobbyIssue.signInRequired -> conclaveString("pm_sign_in_required")
-        LobbyIssue.appSuspended -> conclaveString("pm_app_suspended")
-        LobbyIssue.updateRequired -> conclaveString("pm_update_body")
-        LobbyIssue.failedServerText -> status.issueServerText
-        else -> ""
-    }
-    if (text.isEmpty()) return
-    val actions = if (status.issue == LobbyIssue.signInRequired) {
-        listOf(ConclaveBannerAction(conclaveString("pm_sign_in"), "lobby.issue.signIn", onClick = { premeeting.openAccount() }))
-    } else {
-        emptyList()
-    }
-    ConclaveBanner(
-        kind = ConclaveBannerKind.Warning,
-        text = text,
-        identifier = "lobby.issue",
-        inCall = false,
-        modifier = Modifier.padding(horizontal = 16.dp),
-        actions = actions,
-    )
 }
 
 @Composable
@@ -301,7 +272,7 @@ private fun LobbyAudioItem(premeeting: PremeetingPresenter) {
 }
 
 @Composable
-private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
+private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int, bandCover: Dp?) {
     val identity = premeeting.lobbyIdentity?.takeIf { it.routeId == routeId } ?: return
     val scheme = MaterialTheme.colorScheme
     if (identity.isSignedIn) {
@@ -352,7 +323,18 @@ private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
     }
     if (identity.needsInviteCode) {
         var code by remember(routeId) { mutableStateOf("") }
-        Column(Modifier.padding(horizontal = 16.dp)) {
+        val reveal = remember { BringIntoViewRequester() }
+        var inviteSize by remember { mutableStateOf(IntSize.Zero) }
+        val coverPx by rememberUpdatedState(with(LocalDensity.current) { (bandCover ?: 0.dp).toPx() })
+        val mode = premeeting.lobbyStatus?.takeIf { it.routeId == routeId }?.mode
+        val bandMeasured = bandCover != null
+        LaunchedEffect(identity.inviteCodeInvalid, mode, bandMeasured) {
+            if (bandMeasured && identity.inviteCodeInvalid && mode != LobbyMode.connecting && mode != LobbyMode.waiting) {
+                withFrameNanos { }
+                reveal.bringIntoView(Rect(0f, 0f, inviteSize.width.toFloat(), inviteSize.height + coverPx))
+            }
+        }
+        Column(Modifier.padding(horizontal = 16.dp).bringIntoViewRequester(reveal).onSizeChanged { inviteSize = it }) {
             ConclaveTextField(
                 label = conclaveString("pm_invite_code"),
                 value = code,
@@ -362,7 +344,7 @@ private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
                 },
                 kind = ConclaveTextFieldKind.Code,
                 identifier = "lobby.invite",
-                error = if (identity.inviteCodeInvalid) conclaveString("pm_invite_invalid") else null,
+                error = if (identity.inviteCodeInvalid) conclaveString("pm_invite_code_wrong") else null,
                 onSubmit = { premeeting.startOrJoin() },
             )
             if (!identity.inviteCodeInvalid) {
@@ -377,19 +359,11 @@ private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int) {
 private fun LobbyFloatingAction(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache, onHeightChanged: (Int) -> Unit) {
     val snapshot = premeeting.lobbyStatus?.takeIf { it.routeId == routeId } ?: return
     val status = cache.status(snapshot)
-    val scheme = MaterialTheme.colorScheme
+    val barMaxWidth = if (entryStatusSideBySide()) 720.dp else 360.dp
     Box(
-        Modifier.padding(horizontal = 16.dp).widthIn(min = 200.dp, max = 360.dp).width(IntrinsicSize.Max)
+        Modifier.padding(horizontal = 16.dp).widthIn(min = 200.dp, max = barMaxWidth).width(IntrinsicSize.Max)
             .onSizeChanged { onHeightChanged(it.height) },
     ) {
-        if (status.mode == LobbyMode.waiting || status.mode == LobbyMode.failed) {
-            Surface(color = scheme.surfaceContainer, shape = RoundedCornerShape(24.dp), shadowElevation = 6.dp) {
-                Box(Modifier.padding(16.dp)) {
-                    EntryStatusBlock(premeeting, status)
-                }
-            }
-        } else {
-            EntryStatusBlock(premeeting, status)
-        }
+        EntryStatusBlock(premeeting, status)
     }
 }

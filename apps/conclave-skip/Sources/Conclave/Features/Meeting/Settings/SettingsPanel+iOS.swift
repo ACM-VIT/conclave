@@ -423,13 +423,8 @@ private struct SettingsGeneralSection<Route: Hashable>: View {
         } header: {
             Text(SettingsCopy.sectionTitle(.general))
         } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                if rows.contains(SettingsRowID.messageNotifications) {
-                    MessageNotificationsFooter(notifications: SystemNotifications.shared)
-                }
-                if rows.contains(SettingsRowID.alwaysShowControls) {
-                    Text(ConclaveStrings.text("Keeps call controls on screen instead of hiding them after a few seconds."))
-                }
+            if rows.contains(SettingsRowID.messageNotifications) {
+                MessageNotificationsFooter(notifications: SystemNotifications.shared)
             }
         }
     }

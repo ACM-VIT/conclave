@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -24,15 +25,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.KeyboardActionHandler
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.PrimaryTabRow
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -63,12 +64,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
@@ -473,23 +471,27 @@ private fun ConclaveSegmentedMenu(
     val current = options.firstOrNull { it.id == selectedId }
     Box(modifier.testTag(identifier)) {
         TextButton(onClick = { expanded = true }, modifier = Modifier.heightIn(min = 48.dp).testTag("$identifier.value")) {
-            ConclaveText(current?.title ?: "", line = "$identifier.value")
+            ConclaveText(current?.title ?: "", line = "$identifier.value", modifier = Modifier.weight(1f, fill = false))
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            Icon(ConclaveIcons.ExpandMoreFill0, contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize),
+                tint = scheme.onSurfaceVariant)
         }
         DropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
-            modifier = Modifier.testTag("$identifier.menu").semantics { testTagsAsResourceId = true },
-            shape = MaterialTheme.shapes.extraSmall,
-            containerColor = scheme.surfaceContainer,
+            modifier = Modifier.widthIn(min = ConclaveMenuDefaults.MinWidth).testTag("$identifier.menu").semantics { testTagsAsResourceId = true },
+            shape = ConclaveMenuDefaults.shape,
+            containerColor = conclaveMenuContainerColor(),
             tonalElevation = 0.dp,
-            shadowElevation = 0.dp,
+            shadowElevation = conclaveMenuShadowElevation(),
             border = BorderStroke(1.dp, scheme.outlineVariant),
         ) {
             NativeSemanticsPopupRoot("$identifier.menu")
             for (option in options) {
                 val isSelected = option.id == selectedId
-                DropdownMenuItem(
-                    text = { ConclaveText(option.title, line = "$identifier.${option.id}") },
+                ConclaveMenuItem(
+                    title = option.title,
+                    identifier = "$identifier.${option.id}",
                     onClick = {
                         expanded = false
                         if (!isSelected) {
@@ -497,11 +499,7 @@ private fun ConclaveSegmentedMenu(
                             onSelect(option.id)
                         }
                     },
-                    modifier = Modifier.testTag("$identifier.${option.id}").semantics {
-                        role = Role.RadioButton
-                        selected = isSelected
-                    },
-                    leadingIcon = { RadioButton(selected = isSelected, onClick = null) },
+                    role = ConclaveMenuRole.Single(isSelected),
                     enabled = option.isEnabled,
                 )
             }
@@ -514,7 +512,8 @@ internal fun ConclaveTabSwitch(
     options: List<ConclaveSegmentModel>, selectedId: String, identifier: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier,
 ) {
     val index = options.indexOfFirst { it.id == selectedId }.coerceAtLeast(0)
-    PrimaryTabRow(selectedTabIndex = index, modifier = modifier.fillMaxWidth().testTag(identifier)) {
+    val scrolls = ConclaveSegmentedPolicy.androidUsesFallback(fontScale = LocalDensity.current.fontScale.toDouble(), segmentCount = options.size)
+    val tabs: @Composable () -> Unit = {
         for (option in options) {
             Tab(
                 selected = option.id == selectedId,
@@ -524,5 +523,10 @@ internal fun ConclaveTabSwitch(
                 text = { ConclaveText(option.title, line = "$identifier.${option.id}") },
             )
         }
+    }
+    if (scrolls) {
+        PrimaryScrollableTabRow(selectedTabIndex = index, modifier = modifier.fillMaxWidth().testTag(identifier)) { tabs() }
+    } else {
+        PrimaryTabRow(selectedTabIndex = index, modifier = modifier.fillMaxWidth().testTag(identifier)) { tabs() }
     }
 }

@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun CameraShortcutMenu(controls: CallControlsPresenter, shortcuts: MediaShortcutsUi, expanded: Boolean, onDismiss: () -> Unit) {
@@ -32,6 +34,7 @@ internal fun CameraShortcutMenu(controls: CallControlsPresenter, shortcuts: Medi
             }
         },
         icon = { item -> mediaShortcutIcon(item.id) },
+        offset = DpOffset(0.dp, -ConclaveMenuDefaults.BarGap),
     )
 }
 

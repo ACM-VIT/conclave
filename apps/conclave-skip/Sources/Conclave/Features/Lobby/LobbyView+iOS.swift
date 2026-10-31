@@ -34,6 +34,7 @@ struct LobbyView: View {
             }
             .background(Color(uiColor: .systemGroupedBackground))
             .scrollDismissesKeyboard(.interactively)
+            .accessibilityIdentifier("lobby")
             .onGeometryChange(for: CGSize.self) { $0.size } action: {
                 if viewportSize != $0 { viewportSize = $0 }
             }
@@ -62,7 +63,6 @@ struct LobbyView: View {
         .onDisappear {
             premeeting.lobbyDidDisappear(routeId: route.id)
         }
-        .accessibilityIdentifier("lobby")
     }
 }
 
@@ -79,9 +79,10 @@ private struct LobbyControlsColumn: View {
     var body: some View {
         let isPromotion = premeeting.lobbyStatus?.intent == LobbyIntent.promotion
         VStack(alignment: .leading, spacing: 16) {
-            LobbyIssueSection(premeeting: premeeting)
-            PermissionPrimingSection(premeeting: premeeting)
-            LobbyAudioSection(premeeting: premeeting)
+            VStack(alignment: .leading, spacing: 0) {
+                LobbyStatusSection(premeeting: premeeting, nameFocused: nameFocus.wrappedValue)
+                LobbyAudioSection(premeeting: premeeting)
+            }
             if !isPromotion {
                 LobbyIdentitySection(premeeting: premeeting, nameFocus: nameFocus)
                 AdmissionNotifySection(premeeting: premeeting)
@@ -93,67 +94,7 @@ private struct LobbyControlsColumn: View {
                 }
             }
         }
-    }
-}
-
-private struct LobbyIssueSection: View {
-    let premeeting: PremeetingPresenter
-
-    var body: some View {
-        if let status = premeeting.lobbyStatus, LobbyIssueCopy.showsRow(status), let text = LobbyIssueCopy.text(status) {
-            LobbyGroupedSection {
-                LobbyGroupedRow {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label {
-                            Text(text)
-                                .font(.subheadline)
-                                .fixedSize(horizontal: false, vertical: true)
-                        } icon: {
-                            Image(systemName: ConclaveSymbols.exclamationmarkTriangleFill)
-                                .foregroundStyle(HostingTheme.statusWarning)
-                                .accessibilityHidden(true)
-                        }
-                        if status.issue == .signInRequired {
-                            Button(ConclaveStrings.text("Sign In")) { premeeting.openAccount() }
-                                .buttonStyle(.borderless)
-                                .tint(HostingTheme.coralText)
-                                .accessibilityIdentifier("lobby.issue.signIn")
-                        }
-                    }
-                }
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("lobby.issue")
-        }
-    }
-}
-
-enum LobbyIssueCopy {
-    static func showsRow(_ status: LobbyStatusSnapshot) -> Bool {
-        status.mode == .editing || (status.mode == .connecting && status.issue == .offline)
-    }
-
-    static func text(_ status: LobbyStatusSnapshot) -> String? {
-        switch status.issue {
-        case .offline:
-            if status.mode == .connecting {
-                return ConclaveStrings.text("You\u{2019}re offline. Waiting for a connection.")
-            }
-            return ConclaveStrings.text("You\u{2019}re offline. Connect to the internet to join.")
-        case .roomNotFound:
-            return ConclaveStrings.text("No meeting found with this code. Check it and try again.")
-        case .signInRequired:
-            return ConclaveStrings.text("This meeting needs you to sign in.")
-        case .appSuspended:
-            return ConclaveStrings.text("Your phone has paused Conclave. Turn off Sleep mode or app restrictions for Conclave, then try again.")
-        case .updateRequired:
-            return ConclaveStrings.text("This version of Conclave can no longer join meetings. Update to continue.")
-        case .failedServerText:
-            return status.issueServerText.isEmpty ? nil : status.issueServerText
-        case .none, .nameMissing, .inviteCodeRequired, .inviteCodeInvalid, .failedNetwork, .failedMedia,
-             .failedServerBusy, .failedUnknown:
-            return nil
-        }
+        .modifier(LobbyInviteAnnouncement(premeeting: premeeting, isPromotion: isPromotion))
     }
 }
 
@@ -265,22 +206,15 @@ private struct LobbyInviteCodeSection: View {
 
     var body: some View {
         if let identity = premeeting.lobbyIdentity, identity.needsInviteCode {
-            VStack(alignment: .leading, spacing: 6) {
-                LobbyGroupedSection(footer: identity.inviteCodeInvalid ? "" : ConclaveStrings.text("Enter the invite code from the host."),
-                                    footerIdentifier: "lobby.invite.footer") {
-                    LobbyGroupedRow {
-                        TextField(ConclaveStrings.text("Invite Code"), text: $code)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .submitLabel(.join)
-                            .onSubmit { premeeting.startOrJoin() }
-                            .accessibilityIdentifier("lobby.invite")
-                    }
-                }
-                if identity.inviteCodeInvalid {
-                    ConclaveFieldError(text: ConclaveStrings.text("That invite code didn\u{2019}t work. Check it and try again."),
-                                       identifier: "lobby.invite.error")
-                        .padding(.horizontal, 32)
+            LobbyGroupedSection(footer: identity.inviteCodeInvalid ? LobbyInviteCopy.invalid : ConclaveStrings.text("Enter the invite code from the host."),
+                                footerIdentifier: identity.inviteCodeInvalid ? "lobby.invite.error" : "lobby.invite.footer") {
+                LobbyGroupedRow {
+                    TextField(ConclaveStrings.text("Invite Code"), text: $code)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.join)
+                        .onSubmit { premeeting.startOrJoin() }
+                        .accessibilityIdentifier("lobby.invite")
                 }
             }
             .onChange(of: code) {
@@ -290,22 +224,33 @@ private struct LobbyInviteCodeSection: View {
     }
 }
 
+private struct LobbyInviteAnnouncement: ViewModifier {
+    let premeeting: PremeetingPresenter
+    let isPromotion: Bool
+
+    func body(content: Content) -> some View {
+        let identity = premeeting.lobbyIdentity
+        let wrongCode = !isPromotion && identity?.needsInviteCode == true && identity?.inviteCodeInvalid == true
+        content
+            .onChange(of: wrongCode) { _, isWrong in
+                if isWrong { EntryStatusAnnouncer.announce(LobbyInviteCopy.invalid) }
+            }
+    }
+}
+
+enum LobbyInviteCopy {
+    static var invalid: String { ConclaveStrings.text("That code didn\u{2019}t work") }
+}
+
 private struct LobbyBottomBar: ViewModifier {
     let premeeting: PremeetingPresenter
     let routeId: Int
     let nameFocused: Bool
 
     func body(content: Content) -> some View {
-        let isEditing = premeeting.lobbyStatus?.routeId == routeId && premeeting.lobbyStatus?.mode == .editing
         content
-            .conclaveFloatingActionBar(shaded: isEditing, over: Color(uiColor: .systemGroupedBackground)) {
+            .conclaveFloatingActionBar(shaded: true, over: Color(uiColor: .systemGroupedBackground)) {
                 EntryStatusBlock(premeeting: premeeting, routeId: routeId, reservesNameReason: nameFocused)
-                    .background {
-                        if !isEditing { Color(uiColor: .systemGroupedBackground) }
-                    }
-                    .overlay(alignment: .top) {
-                        if !isEditing { Divider() }
-                    }
             }
     }
 }
@@ -327,7 +272,7 @@ enum LobbyPrimaryCopy {
         case .nameMissingJoin, .nameMissingStart:
             return ConclaveStrings.text("Add your name")
         case .offline:
-            return ConclaveStrings.text("You\u{2019}re offline. Connect to the internet to join.")
+            return ConclaveStrings.text("You\u{2019}re offline")
         case .updateRequired, .none:
             return nil
         }

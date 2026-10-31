@@ -152,8 +152,16 @@ struct CallControlGlyph: View {
         Image(systemName: systemImage)
             .font(.title3)
             .imageScale(.medium)
-            .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+            .contentTransition(reduceMotion ? .identity : glyphTransition)
+            .animation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion), value: systemImage)
             .accessibilityHidden(true)
+    }
+
+    private var glyphTransition: ContentTransition {
+        if #available(iOS 18.0, *) {
+            return .symbolEffect(.replace.magic(fallback: .replace))
+        }
+        return .symbolEffect(.replace)
     }
 }
 

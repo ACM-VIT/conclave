@@ -7,41 +7,62 @@ struct OutcomeView: View {
     @AccessibilityFocusState private var isTitleFocused: Bool
 
     var body: some View {
-        ContentUnavailableView {
-            Label(OutcomeCopy.title(outcome.variant), systemImage: OutcomeCopy.symbol(outcome.variant))
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityFocused($isTitleFocused)
-                .accessibilityIdentifier("outcome.title")
-        } description: {
-            VStack(spacing: 8) {
-                Text(OutcomeCopy.body(outcome))
-                if !outcome.serverDetail.isEmpty && outcome.variant == .removed {
+        content
+            .toolbar(.hidden, for: .navigationBar)
+            .accessibilityIdentifier("outcome." + outcome.variant.rawValue)
 
+            .task(id: outcome.id) {
+                AccessibilityNotification.ScreenChanged().post()
+                isTitleFocused = true
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if OutcomeCopy.hasDescription(outcome) {
+            ContentUnavailableView {
+                Label(OutcomeCopy.title(outcome.variant), systemImage: OutcomeCopy.symbol(outcome.variant))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityFocused($isTitleFocused)
+                    .accessibilityIdentifier("outcome.title")
+            } description: {
+                if OutcomeCopy.hasBody(outcome.variant) {
+                    Text(OutcomeCopy.body(outcome))
+                } else if outcome.variant == .removed && !outcome.serverDetail.isEmpty {
                     Text(OutcomeCopy.quoted(outcome.serverDetail))
                         .accessibilityIdentifier("outcome.detail")
                 }
+            } actions: {
+                actions
             }
-        } actions: {
-            VStack(spacing: 8) {
-                if outcome.primary != .none {
-                    ConclaveButton(OutcomeCopy.action(outcome.primary), role: .primary, identifier: "outcome.primary") {
-                        premeeting.performOutcomeAction(outcome.primary)
-                    }
-                    .frame(maxWidth: 440)
-                }
-                if outcome.secondary != .none {
-                    ConclaveButton(OutcomeCopy.action(outcome.secondary), role: .text, identifier: "outcome.secondary") {
-                        premeeting.performOutcomeAction(outcome.secondary)
-                    }
-                }
+        } else {
+            ContentUnavailableView {
+                Label(OutcomeCopy.title(outcome.variant), systemImage: OutcomeCopy.symbol(outcome.variant))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityFocused($isTitleFocused)
+                    .accessibilityIdentifier("outcome.title")
+            } description: {
+                Color.clear
+                    .frame(height: 0)
+            } actions: {
+                actions
             }
         }
-        .toolbar(.hidden, for: .navigationBar)
-        .accessibilityIdentifier("outcome." + outcome.variant.rawValue)
+    }
 
-        .task(id: outcome.id) {
-            AccessibilityNotification.ScreenChanged().post()
-            isTitleFocused = true
+    private var actions: some View {
+        VStack(spacing: 8) {
+            if outcome.primary != .none {
+                ConclaveButton(OutcomeCopy.action(outcome.primary), role: .primary, identifier: "outcome.primary") {
+                    premeeting.performOutcomeAction(outcome.primary)
+                }
+                .frame(maxWidth: 440)
+            }
+            if outcome.secondary != .none {
+                ConclaveButton(OutcomeCopy.action(outcome.secondary), role: .text, identifier: "outcome.secondary") {
+                    premeeting.performOutcomeAction(outcome.secondary)
+                }
+            }
         }
     }
 }
@@ -62,16 +83,27 @@ enum OutcomeCopy {
         }
     }
 
+    static func hasBody(_ variant: OutcomeVariant) -> Bool {
+        switch variant {
+        case .removed, .denied:
+            return false
+        case .connectionLost, .serverDisconnected, .rejoinFailed:
+            return true
+        }
+    }
+
+    static func hasDescription(_ outcome: OutcomeModel) -> Bool {
+        hasBody(outcome.variant) || (outcome.variant == .removed && !outcome.serverDetail.isEmpty)
+    }
+
     static func body(_ outcome: OutcomeModel) -> String {
         switch outcome.variant {
-        case .removed:
-            return ConclaveStrings.text("The host removed you from this meeting.")
-        case .denied:
-            return ConclaveStrings.text("Someone in the meeting declined your request to join.")
+        case .removed, .denied:
+            return ""
         case .connectionLost:
             return ConclaveStrings.text("Check your connection, then rejoin.")
         case .serverDisconnected:
-            return ConclaveStrings.text("The meeting server ended your connection. You can rejoin.")
+            return ConclaveStrings.text("You can rejoin.")
         case .rejoinFailed:
 
             if outcome.failure == .failedServerText && !outcome.serverDetail.isEmpty {

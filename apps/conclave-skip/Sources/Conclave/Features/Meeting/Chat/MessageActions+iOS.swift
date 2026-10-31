@@ -17,6 +17,7 @@ struct MessageMenu: View {
                 }
             }
             .controlGroupStyle(.palette)
+            .menuActionDismissBehavior(.enabled)
             if !moreEmojis.isEmpty {
                 Menu(ConclaveStrings.text("More Reactions")) {
                     ForEach(moreEmojis, id: \.self) { emoji in
@@ -25,6 +26,7 @@ struct MessageMenu: View {
                         }
                     }
                 }
+                .menuActionDismissBehavior(.enabled)
             }
         }
         Section {

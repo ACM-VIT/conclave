@@ -17,8 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -169,12 +167,12 @@ internal fun QuestionRow(people: PeoplePresenter, entry: QaQuestionEntry, isHost
                         } else if (model.isEnabled) {
                             Icon(ConclaveIcons.MoreVertFill0, contentDescription = null, tint = scheme.onSurfaceVariant)
                         }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, modifier = Modifier.testTag("$identifier.menu")) {
+                        ConclaveDropdownMenu(expanded = menu, onDismissRequest = { menu = false }, identifier = "$identifier.menu") {
                             for (action in hostActions) {
-                                DropdownMenuItem(
-                                    text = { ConclaveText(conclaveString(qaHostActionName(action)), line = "$identifier.menu.$action") },
+                                ConclaveMenuItem(
+                                    title = conclaveString(qaHostActionName(action)),
+                                    identifier = "$identifier.menu.$action",
                                     onClick = { run(action) },
-                                    modifier = Modifier.testTag("$identifier.menu.$action"),
                                 )
                             }
                         }

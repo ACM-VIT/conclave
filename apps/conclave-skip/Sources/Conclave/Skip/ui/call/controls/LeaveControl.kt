@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -103,6 +104,7 @@ internal fun LeaveControl(controls: CallControlsPresenter, modifier: Modifier = 
                     controls.selectLeaveMenuItem(item.id)
                 },
                 icon = { null },
+                offset = DpOffset(0.dp, -ConclaveMenuDefaults.BarGap),
             )
         }
     }

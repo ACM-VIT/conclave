@@ -488,6 +488,7 @@ struct ENT3LobbyTests {
     static let lobbySwiftFiles = [
         "Sources/Conclave/Features/Lobby/LobbyContracts.swift",
         "Sources/Conclave/Features/Lobby/LobbyPolicies.swift",
+        "Sources/Conclave/Features/Lobby/LobbyStatusPolicy.swift",
         "Sources/Conclave/Features/Lobby/LobbyJoinCoordinator.swift",
         "Sources/Conclave/Features/Lobby/RoomPresenceService.swift",
         "Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift",
@@ -498,7 +499,9 @@ struct ENT3LobbyTests {
         "Sources/Conclave/Features/Lobby/LobbyView+iOS.swift",
         "Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift",
         "Sources/Conclave/Features/Lobby/LobbyGroupedSection+iOS.swift",
-        "Sources/Conclave/Features/Lobby/MeetingLinkRow+iOS.swift"
+        "Sources/Conclave/Features/Lobby/MeetingLinkRow+iOS.swift",
+        "Sources/Conclave/Features/Lobby/LobbyStatusRow+iOS.swift",
+        "Sources/Conclave/Features/Lobby/EntryStatusBlock+iOS.swift"
     ]
     static let lobbyKotlinFiles = [
         "Sources/Conclave/Skip/ui/lobby/LobbyScreen.kt",
@@ -507,6 +510,8 @@ struct ENT3LobbyTests {
         "Sources/Conclave/Skip/ui/lobby/RouteDialog.kt",
         "Sources/Conclave/Skip/ui/lobby/MeetingLinkRow.kt",
         "Sources/Conclave/Skip/ui/lobby/LobbyAudioDevices.kt",
+        "Sources/Conclave/Skip/ui/lobby/LobbyStatusRow.kt",
+        "Sources/Conclave/Skip/ui/lobby/EntryStatusBlock.kt",
         "Sources/Conclave/Skip/LocalPreviewController.kt"
     ]
 
@@ -577,7 +582,8 @@ struct ENT3LobbyTests {
             #expect(xml.contains("<string name=\"\(name)\">\(value)</string>"), "\(name) is \(value)")
         }
         let kotlinCard = try ent3Source("Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt")
-        #expect(kotlinCard.contains("if (unavailable) conclaveString(\"pm_camera_unavailable\") else conclaveString(\"pm_camera_off\")"))
+        #expect(kotlinCard.contains("Text(conclaveString(\"pm_camera_unavailable\"), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,"),
+                "the tile label replaces the caption")
     }
 
     @Test func theLobbyNeverAppliesARouteOrHandsThePreviewToAProducer() throws {

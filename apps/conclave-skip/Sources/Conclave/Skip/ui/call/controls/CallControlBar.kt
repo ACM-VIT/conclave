@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipAnchorPosition
@@ -241,9 +243,21 @@ private fun CallInvokerCell(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CallControlTooltip(label: String, content: @Composable () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val ext = LocalConclaveExtendedColors.current
     TooltipBox(
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-        tooltip = { PlainTooltip { Text(label) } },
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(
+            TooltipAnchorPosition.Above,
+            spacingBetweenTooltipAndAnchor = ConclaveMenuDefaults.BarGap,
+        ),
+        tooltip = {
+            PlainTooltip(
+                modifier = Modifier.border(1.dp, ext.border, MaterialTheme.shapes.small),
+                shape = MaterialTheme.shapes.small,
+                containerColor = scheme.surfaceContainerHigh,
+                contentColor = scheme.onSurface,
+            ) { Text(label) }
+        },
         state = rememberTooltipState(),
     ) { content() }
 }

@@ -285,7 +285,7 @@ private struct WebinarProgressSection: View {
                         .font(.headline)
                 }
                 if status == .waitingForHost {
-                    Text(ConclaveStrings.text("This page updates on its own when the host opens the room."))
+                    Text(ConclaveStrings.text("Hang tight."))
                         .font(.subheadline)
                         .foregroundStyle(HostingTheme.secondaryText)
                 }

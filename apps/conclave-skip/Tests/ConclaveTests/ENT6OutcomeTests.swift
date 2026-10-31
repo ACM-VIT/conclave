@@ -280,6 +280,40 @@ struct ENT6OutcomeTests {
         #expect(!policies.contains("import SwiftUI") && !policies.contains("ConclaveStrings"), "10 l7: no user-visible English in the model")
     }
 
+    @Test func removedAndDeniedShowNoBodyAndNeverTheServerDetailAsOne() throws {
+        let ios = try ent6Source("Sources/Conclave/Features/Outcome/OutcomeView+iOS.swift")
+        let flat = ent6Flat(ios)
+        #expect(flat.contains("} description: { if OutcomeCopy.hasBody(outcome.variant) { Text(OutcomeCopy.body(outcome)) } else if outcome.variant == .removed && !outcome.serverDetail.isEmpty { Text(OutcomeCopy.quoted(outcome.serverDetail)) .accessibilityIdentifier(\"outcome.detail\") } } actions: {"),
+                "S1b-T7: denied emits no description view; removed emits only the quoted host reason")
+        #expect(flat.contains("static func hasBody(_ variant: OutcomeVariant) -> Bool { switch variant { case .removed, .denied: return false case .connectionLost, .serverDisconnected, .rejoinFailed: return true } }"))
+        #expect(flat.contains("switch outcome.variant { case .removed, .denied: return \"\" case .connectionLost:"))
+        #expect(flat.contains("case .serverDisconnected: return ConclaveStrings.text(\"You can rejoin.\")"))
+        let description = try #require(ent6Between(flat, from: "} description: {", to: "} actions: {"))
+        #expect(ent6Count("Text(", in: description) == 2 && !description.contains("VStack"), "one line at most, never a blank body line")
+        #expect(!description.contains("Text(outcome.serverDetail)"))
+        for sentence in ["The host removed you from this meeting.", "Someone in the meeting declined your request to join.",
+                         "The meeting server ended your connection."] {
+            #expect(!ios.contains(sentence), "S1b-T7 cut: \(sentence)")
+        }
+        #expect(flat.contains("return EntryStatusCopy.failureBody(outcome.failure)"), "S1b-T8 keeps the issue overload for rejoinFailed")
+
+        let android = try ent6Source("Sources/Conclave/Skip/ui/outcome/OutcomeScreen.kt")
+        let kotlin = ent6Flat(android)
+        #expect(kotlin.contains("val hasBody = OutcomeUi.hasBody(outcome.variant)"))
+        #expect(kotlin.contains("val body = if (!hasBody) \"\" else if (bodyName.isEmpty()) outcome.serverDetail else conclaveString(bodyName)"),
+                "an empty body name falls back to the server text only where a body exists (F-15)")
+        #expect(kotlin.contains("if (hasBody) { Spacer(Modifier.height(8.dp)) Text(body, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurfaceVariant, textAlign = TextAlign.Center) }"))
+        #expect(kotlin.contains("fun hasBody(variant: OutcomeVariant): Boolean = when (variant) { OutcomeVariant.removed, OutcomeVariant.denied -> false OutcomeVariant.connectionLost, OutcomeVariant.serverDisconnected, OutcomeVariant.rejoinFailed -> true }"))
+        #expect(kotlin.contains("fun bodyName(outcome: OutcomeModel): String = when (outcome.variant) { OutcomeVariant.removed, OutcomeVariant.denied -> \"\" OutcomeVariant.connectionLost -> \"pm_lost_body\" OutcomeVariant.serverDisconnected -> \"pm_disconnected_body\""))
+        #expect(kotlin.contains("val detail = if (outcome.variant == OutcomeVariant.removed && outcome.serverDetail.isNotEmpty()) { OutcomeUi.quoted(outcome.serverDetail) } else { \"\" }"),
+                "removed keeps its quoted host reason")
+        #expect(kotlin.contains("if (detail.isNotEmpty()) { Spacer(Modifier.height(8.dp)) Text(detail,") && kotlin.contains("Modifier.testTag(\"outcome.detail\")"))
+        #expect(ent6Count("Text(body,", in: kotlin) == 1)
+        for name in ["pm_removed_body", "pm_denied_body"] {
+            #expect(!android.contains(name), "S1b-T7 cut: \(name)")
+        }
+    }
+
     @Test func theViewModelKeepsTheRejoinContext() throws {
         let viewModel = ent6Flat(try ent6Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"))
         #expect(viewModel.contains("captureRejoinContext(kind, joinContext: joinContext ?? lastJoinContext)"))
@@ -294,17 +328,52 @@ struct ENT6OutcomeTests {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent6Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
         for key in ["Removed From Meeting", "Request Declined", "Connection Lost", "You Were Disconnected", "Couldn\u{2019}t Rejoin",
-                    "The host removed you from this meeting.", "Someone in the meeting declined your request to join.",
-                    "Check your connection, then rejoin.", "The meeting server ended your connection. You can rejoin.",
+                    "Check your connection, then rejoin.", "You can rejoin.",
                     "Rejoin", "Try Again", "Back to Home", "We couldn\u{2019}t reach Conclave. Check your connection and try again."] {
             #expect(strings[key] != nil, "missing iOS key \(key)")
         }
+        for key in ["The host removed you from this meeting.", "Someone in the meeting declined your request to join.",
+                    "The meeting server ended your connection. You can rejoin."] {
+            #expect(strings[key] == nil, "S1b-T7 removed or renamed iOS key \(key)")
+        }
         let xml = try ent6Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["pm_removed_title", "pm_removed_body", "pm_denied_title", "pm_denied_body", "pm_lost_title", "pm_lost_body",
+        for name in ["pm_removed_title", "pm_denied_title", "pm_lost_title", "pm_lost_body",
                      "pm_disconnected_title", "pm_disconnected_body", "pm_couldnt_rejoin", "pm_rejoin", "pm_back_home",
                      "ds_try_again", "pm_fail_network", "pm_fail_unknown"] {
             #expect(xml.contains("<string name=\"\(name)\""), "missing \(name)")
         }
+        #expect(xml.contains("<string name=\"pm_disconnected_body\">You can rejoin.</string>"))
+        for name in ["pm_removed_body", "pm_denied_body"] {
+            #expect(!xml.contains("<string name=\"\(name)\""), "S1b-T7 removed \(name)")
+        }
+    }
+
+    @Test func theS1bT7CopyCutsReachTheLandingAndSettings() throws {
+        let landing = try ent6Source("Sources/Conclave/Features/Join/WebinarLandingView+iOS.swift")
+        #expect(landing.contains("Text(ConclaveStrings.text(\"Hang tight.\"))"))
+        #expect(!landing.contains("This page updates on its own when the host opens the room."))
+        #expect(try ent6Source("Sources/Conclave/Skip/ui/join/WebinarLandingScreen.kt").contains("conclaveString(\"pm_waiting_host_body\")"),
+                "Android keeps the name; only its value changes")
+
+        let settingsIOS = ent6Flat(try ent6Source("Sources/Conclave/Features/Meeting/Settings/SettingsPanel+iOS.swift"))
+        #expect(settingsIOS.contains("} footer: { if rows.contains(SettingsRowID.messageNotifications) { MessageNotificationsFooter(notifications: SystemNotifications.shared) } }"),
+                "the general footer drops the Always Show Controls line and is empty only when General has no Message Notifications row")
+        #expect(!settingsIOS.contains("Keeps call controls on screen"))
+        let rows = try ent6Source("Sources/Conclave/Skip/ui/settings/SettingsRows.kt")
+        #expect(rows.contains("SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), general.alwaysShowControls, tag) { settings.setAlwaysShowControls(it) }"),
+                "no supporting text, so the stock ListItem gets supportingContent = null")
+        for file in ["Sources/Conclave/Skip/ui/settings/SettingsRows.kt", "Sources/Conclave/Skip/ui/copy/SettingsCopy.kt"] {
+            #expect(!(try ent6Source(file)).contains("set_always_show_controls_detail"), "\(file)")
+        }
+
+        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent6Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
+        let strings = try #require(catalog["strings"] as? [String: Any])
+        #expect(strings["Hang tight."] != nil)
+        #expect(strings["This page updates on its own when the host opens the room."] == nil)
+        #expect(strings["Keeps call controls on screen instead of hiding them after a few seconds."] == nil)
+        let xml = try ent6Source("Android/app/src/main/res/values/strings.xml")
+        #expect(xml.contains("<string name=\"pm_waiting_host_body\">Hang tight.</string>"))
+        #expect(!xml.contains("<string name=\"set_always_show_controls_detail\""))
     }
 }
 
@@ -328,6 +397,17 @@ private func ent6Source(_ packageRelativePath: String) throws -> String {
 
 private func ent6Flat(_ text: String) -> String {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+}
+
+private func ent6Between(_ text: String, from start: String, to end: String) -> String? {
+    guard let lower = text.range(of: start), let upper = text.range(of: end, range: lower.upperBound..<text.endIndex) else {
+        return nil
+    }
+    return String(text[lower.upperBound..<upper.lowerBound])
+}
+
+private func ent6Count(_ needle: String, in text: String) -> Int {
+    text.components(separatedBy: needle).count - 1
 }
 
 private func ent6Matches(_ pattern: String, in text: String) -> [String] {

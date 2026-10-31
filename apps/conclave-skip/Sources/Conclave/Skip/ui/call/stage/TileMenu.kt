@@ -43,6 +43,8 @@ internal class StageTileMenu(
     val actionItems: List<MenuItemModel>,
     val titles: TileMenuTitles? = null,
     val extra: List<MenuSectionModel> = emptyList(),
+    val name: String = "",
+    val avatarSeed: String = "",
 ) {
 
     val hasItems: Boolean get() = sections.isNotEmpty()
@@ -84,7 +86,8 @@ internal fun stageTileMenu(slot: StageSlot, model: TileChromeModel, kind: StageK
     val context = TileMenuContext.make(slot = slot, model = model, kind = kind, canFlipCamera = false, offersFlipItem = false)
     val sections = TileMenuPolicy.sections(context, titles = titles, people = skip.lib.Array(people)).toList()
     val items = TileMenuPolicy.accessibilityItems(skip.lib.Array(sections)).toList()
-    return StageTileMenu(context, sections, items, titles, people)
+    return StageTileMenu(context, sections, items, titles, people,
+        name = if (model.isVoiceAgent) "" else model.displayName, avatarSeed = model.avatarSeed)
 }
 
 internal fun stageTileActions(menu: StageTileMenu, stage: StagePresenter): List<ConclaveTileAction> {
@@ -152,6 +155,9 @@ internal fun TileMenuAnchor(state: TileMenuState, menu: StageTileMenu, stage: St
 
     val context = LocalContext.current
     val sections = if (open && menu.isPeopleCandidate) menu.withPeople(tilePeopleSections(context, menu.context, stage)) else menu.sections
+    val name = if (menu.context.isLocal) conclaveString("ds_you") else menu.name
+    val seed = menu.avatarSeed
+    val identity = remember(seed) { ConclaveAvatarIdentity.fromSeed(seed) }
     Box(modifier.absoluteOffset { IntOffset(state.anchor.x.roundToInt(), state.anchor.y.roundToInt()) }.size(0.dp)) {
         ConclaveDropdownMenu(
             expanded = open,
@@ -162,6 +168,7 @@ internal fun TileMenuAnchor(state: TileMenuState, menu: StageTileMenu, stage: St
                 state.dismiss()
                 tileMenuPerform(item.id, menu.context, stage)
             },
+            header = if (name.isEmpty()) null else { { ConclaveMenuHeader(title = name, identifier = "$identifier.header", avatar = identity) } },
         )
     }
 }

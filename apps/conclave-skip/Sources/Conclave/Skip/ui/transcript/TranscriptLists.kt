@@ -26,8 +26,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
@@ -270,15 +268,14 @@ private fun TranscriptAskRow(row: AskRow, maxBubbleDp: Float, onRetry: () -> Uni
                         }
                     }
                 }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    NativeSemanticsPopupRoot("transcript.ask.menu")
-                    DropdownMenuItem(
-                        text = { ConclaveText(copyAnswer, line = "transcript.ask.copyAnswer") },
+                ConclaveDropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, identifier = "transcript.ask.menu") {
+                    ConclaveMenuItem(
+                        title = copyAnswer,
+                        identifier = "transcript.ask.copyAnswer",
                         onClick = {
                             menuOpen = false
                             TranscriptExport.copy(context, copyAnswer, row.answerText)
                         },
-                        modifier = Modifier.testTag("transcript.ask.copyAnswer"),
                     )
                 }
             }

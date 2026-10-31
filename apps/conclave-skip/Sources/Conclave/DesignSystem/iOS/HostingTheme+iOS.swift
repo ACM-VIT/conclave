@@ -21,6 +21,16 @@ enum HostingTheme {
         if traits.userInterfaceStyle == .dark { return .secondaryLabel }
         return color(traits.accessibilityContrast == .high ? DesignTokens.iosAppTextSecondaryLightHighContrast : DesignTokens.iosAppTextSecondaryLight)
     })
+    static let floatingBarSecondaryText = Color(uiColor: UIColor { traits in
+        if traits.userInterfaceStyle == .dark { return .secondaryLabel }
+        return color(DesignTokens.iosAppTextSecondaryLightHighContrast)
+    })
+    static let floatingActionLabel = Color(uiColor: UIColor { traits in
+        if traits.userInterfaceStyle == .dark {
+            return color(traits.accessibilityContrast == .high ? DesignTokens.coralBrightHighContrast : DesignTokens.coralBright)
+        }
+        return color(DesignTokens.coralDeepHighContrast)
+    })
 
     static let inCallTextSecondary = contrastPair(DesignTokens.iosInCallTextSecondary, DesignTokens.iosInCallTextSecondaryHighContrast)
 

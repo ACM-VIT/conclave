@@ -22,8 +22,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -260,50 +258,51 @@ private fun TranscriptOverflowMenu(
         IconButton(onClick = { page.menuOpen = true }, modifier = Modifier.testTag("transcript.menu")) {
             Icon(ConclaveIcons.MoreVertFill0, contentDescription = conclaveString("trn_more_actions"), tint = scheme.onSurfaceVariant)
         }
-        DropdownMenu(expanded = page.menuOpen, onDismissRequest = { page.menuOpen = false }) {
-            NativeSemanticsPopupRoot("transcript.menu")
+        ConclaveDropdownMenu(expanded = page.menuOpen, onDismissRequest = { page.menuOpen = false }, identifier = "transcript.menu") {
             if (snapshot.hasContent) {
-                DropdownMenuItem(
-                    text = { ConclaveText(conclaveString("trn_export"), line = "transcript.menu.export") },
-                    leadingIcon = { Icon(ConclaveIcons.ShareFill0, contentDescription = null, tint = scheme.onSurfaceVariant) },
+                ConclaveMenuItem(
+                    title = conclaveString("trn_export"),
+                    identifier = "transcript.menu.export",
                     onClick = {
                         page.menuOpen = false
                         onExport()
                     },
-                    modifier = Modifier.testTag("transcript.menu.export"),
+                    leadingIcon = ConclaveIcons.ShareFill0,
                 )
-                DropdownMenuItem(
-                    text = { ConclaveText(conclaveString("trn_copy"), line = "transcript.menu.copy") },
-                    leadingIcon = { Icon(ConclaveIcons.ContentCopyFill0, contentDescription = null, tint = scheme.onSurfaceVariant) },
+                ConclaveMenuItem(
+                    title = conclaveString("trn_copy"),
+                    identifier = "transcript.menu.copy",
                     onClick = {
                         page.menuOpen = false
                         onCopy()
                     },
-                    modifier = Modifier.testTag("transcript.menu.copy"),
+                    leadingIcon = ConclaveIcons.ContentCopyFill0,
                 )
             }
             if (snapshot.offersRecapToChat) {
-                DropdownMenuItem(
-                    text = { ConclaveText(conclaveString("trn_post_recap"), line = "transcript.menu.recap") },
-                    leadingIcon = { Icon(ConclaveIcons.AutoAwesomeFill0, contentDescription = null, tint = scheme.onSurfaceVariant) },
-                    enabled = snapshot.recap != RecapPhase.posting,
+                ConclaveMenuItem(
+                    title = conclaveString("trn_post_recap"),
+                    identifier = "transcript.menu.recap",
                     onClick = {
                         page.menuOpen = false
                         presenter.postRecapToChat()
                     },
-                    modifier = Modifier.testTag("transcript.menu.recap"),
+                    leadingIcon = ConclaveIcons.AutoAwesomeFill0,
+                    enabled = snapshot.recap != RecapPhase.posting,
                 )
             }
             if (snapshot.canStop) {
-                DropdownMenuItem(
-                    text = { ConclaveText(conclaveString("trn_stop_menu"), line = "transcript.menu.stop", color = scheme.error) },
-                    leadingIcon = { Icon(ConclaveIcons.StopFill1, contentDescription = null, tint = scheme.error) },
-                    enabled = !snapshot.controlsDisabled,
+                if (snapshot.hasContent || snapshot.offersRecapToChat) ConclaveMenuDivider()
+                ConclaveMenuItem(
+                    title = conclaveString("trn_stop_menu"),
+                    identifier = "transcript.menu.stop",
                     onClick = {
                         page.menuOpen = false
                         presenter.requestStop()
                     },
-                    modifier = Modifier.testTag("transcript.menu.stop"),
+                    role = ConclaveMenuRole.Destructive,
+                    leadingIcon = ConclaveIcons.StopFill1,
+                    enabled = !snapshot.controlsDisabled,
                 )
             }
         }

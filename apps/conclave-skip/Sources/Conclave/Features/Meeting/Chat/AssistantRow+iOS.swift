@@ -66,6 +66,13 @@ enum AssistantCopy {
 struct AssistantRowView: View {
     let entry: ChatRowEntry
     let actions: ChatRowActions
+    @State private var initialChipIds: Set<String>
+
+    init(entry: ChatRowEntry, actions: ChatRowActions) {
+        self.entry = entry
+        self.actions = actions
+        _initialChipIds = State(initialValue: Set(entry.row.reactions.map { $0.emoji }))
+    }
 
     var body: some View {
         let row = entry.row
@@ -79,7 +86,7 @@ struct AssistantRowView: View {
                         width * CGFloat(ConclaveBubbleGeometry.maxWidthFraction)
                     }
                 if !row.reactions.isEmpty {
-                    ConclaveReactionChipRow(chips: chipModels(row), identifier: "chat.row." + row.id + ".chip") { chip in
+                    ConclaveReactionChipRow(chips: chipModels(row), initialIds: initialChipIds, identifier: "chat.row." + row.id + ".chip") { chip in
                         actions.toggle(row.id, emoji: chip.emoji)
                     }
                 }

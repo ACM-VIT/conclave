@@ -38,6 +38,19 @@ enum PremeetingFixtureState: String, CaseIterable, Equatable {
     case lobbyPermissionsDenied = "lobby-permissions-denied"
     case lobbyPermissionsRestricted = "lobby-permissions-restricted"
 
+    case lobbyOffline = "lobby-offline"
+    case lobbyCameraUnavailable = "lobby-camera-unavailable"
+    case lobbyMicRestricted = "lobby-mic-restricted"
+    case lobbyCameraRestricted = "lobby-camera-restricted"
+    case lobbyMediaAskable = "lobby-media-askable"
+    case lobbyMediaMixed = "lobby-media-mixed"
+    case lobbyRoomNotFound = "lobby-room-not-found"
+    case lobbySignInRequired = "lobby-sign-in-required"
+    case lobbyServerText = "lobby-server-text"
+    case lobbyAppSuspended = "lobby-app-suspended"
+    case lobbyInviteInvalid = "lobby-invite-invalid"
+    case lobbyUpdateRequired = "lobby-update-required"
+
     case accountSignedOut = "account-signed-out"
     case accountSignedIn = "account-signed-in"
     case accountSignInCancel = "account-sign-in-cancel"
@@ -51,6 +64,12 @@ enum PremeetingFixtureState: String, CaseIterable, Equatable {
     case failedNetwork = "failed-network"
 
     case failedServerBusy = "failed-server-busy"
+
+    case connectingOffline = "connecting-offline"
+    case failedMedia = "failed-media"
+    case failedServerText = "failed-server-text"
+    case failedOffline = "failed-offline"
+    case failedNewMeeting = "failed-new-meeting"
 
     case retryAfter = "retry-after"
 
@@ -173,8 +192,9 @@ enum PremeetingFixtureScript {
         MeetingShellInputs.make(identity: identity, connectionState: .joined, roomId: roomLabel, displayName: "Avery")
     }
 
-    static func ended(_ kind: MeetingTerminalOutcomeKind, connectionState: ConnectionState) -> MeetingShellInputs {
-        let outcome = MeetingTerminalOutcome(id: 1, callSession: identity.callSession, kind: kind, serverText: "")
+    static func ended(_ kind: MeetingTerminalOutcomeKind, connectionState: ConnectionState,
+                      serverText: String = "") -> MeetingShellInputs {
+        let outcome = MeetingTerminalOutcome(id: 1, callSession: identity.callSession, kind: kind, serverText: serverText)
         return MeetingShellInputs.make(identity: identity, connectionState: connectionState, roomId: roomLabel,
                                        displayName: "Avery", terminalOutcome: outcome)
     }
@@ -185,6 +205,7 @@ enum PremeetingFixtureScript {
 
     static func steps(for state: PremeetingFixtureState) -> [PremeetingFixtureStep] {
         let plain = base()
+        let named = base(guestName: lobbyGuestName)
         switch state {
         case .home, .empty, .noticeInvalidLink, .noticeMovedToAudience,
              .accountSignedOut, .accountSignedIn, .accountSignInCancel, .accountSignInFailure, .accountExpired,
@@ -230,27 +251,79 @@ enum PremeetingFixtureScript {
             ]
         case .joinFailed:
             return [
-                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
-                PremeetingFixtureStep(delayMillis: 0, shell: ended(.joinFailed, connectionState: .error), base: plain)
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: named),
+                PremeetingFixtureStep(delayMillis: 0, shell: ended(.joinFailed, connectionState: .error), base: named)
             ]
         case .lobby, .lobbyNewMeeting, .lobbyPermissionsUndetermined, .lobbyMicRationale, .lobbyCameraRationale,
-             .lobbyPermissionsDenied, .lobbyPermissionsRestricted:
-            return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: base(guestName: lobbyGuestName))]
+             .lobbyPermissionsDenied, .lobbyPermissionsRestricted, .lobbyCameraUnavailable, .lobbyMicRestricted,
+             .lobbyCameraRestricted, .lobbyMediaAskable, .lobbyMediaMixed:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: named)]
+        case .lobbyOffline:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: home(),
+                                          base: base(guestName: lobbyGuestName, isNetworkOffline: true))]
+        case .lobbyRoomNotFound, .lobbySignInRequired, .lobbyServerText, .lobbyAppSuspended, .lobbyInviteInvalid:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: home(), base: named),
+                PremeetingFixtureStep(delayMillis: delayedStepMillis,
+                                      shell: MeetingShellInputs.make(joinFormErrorMessage: formError(for: state)), base: named)
+            ]
+        case .lobbyUpdateRequired:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: home(), base: named),
+                PremeetingFixtureStep(delayMillis: delayedStepMillis, shell: home(),
+                                      base: base(updateRequired: true, guestName: lobbyGuestName))
+            ]
+        case .connectingOffline:
+            return [PremeetingFixtureStep(delayMillis: 0, shell: connecting(),
+                                          base: base(guestName: lobbyGuestName, isNetworkOffline: true))]
         case .lobbyNameMissing:
             return [PremeetingFixtureStep(delayMillis: 0, shell: home(), base: plain)]
         case .failedNetwork:
             return [
-                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: named),
                 PremeetingFixtureStep(delayMillis: 0, shell: ended(.joinFailed, connectionState: .error),
-                                      base: base(joinFailureCategory: MeetingErrorCategory.serverUnreachable.rawValue,
+                                      base: base(guestName: lobbyGuestName,
+                                                 joinFailureCategory: MeetingErrorCategory.serverUnreachable.rawValue,
                                                  joinFailureCode: "url.unreachable"))
             ]
         case .failedServerBusy:
             return [
-                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: plain),
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: named),
                 PremeetingFixtureStep(delayMillis: 2000, shell: ended(.joinFailed, connectionState: .error),
-                                      base: base(joinFailureCategory: MeetingErrorCategory.serverBusy.rawValue,
+                                      base: base(guestName: lobbyGuestName,
+                                                 joinFailureCategory: MeetingErrorCategory.serverBusy.rawValue,
                                                  joinFailureCode: "http.503"))
+            ]
+        case .failedMedia:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: named),
+                PremeetingFixtureStep(delayMillis: 0, shell: ended(.joinFailed, connectionState: .error),
+                                      base: base(guestName: lobbyGuestName,
+                                                 joinFailureCategory: MeetingErrorCategory.serverUnreachable.rawValue,
+                                                 joinFailureCode: "media.transport"))
+            ]
+        case .failedServerText:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: named),
+                PremeetingFixtureStep(delayMillis: 0,
+                                      shell: ended(.joinFailed, connectionState: .error, serverText: endedByHostSentence),
+                                      base: named)
+            ]
+        case .failedOffline:
+            let offline = base(guestName: lobbyGuestName, isNetworkOffline: true)
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: connecting(), base: offline),
+                PremeetingFixtureStep(delayMillis: 0, shell: ended(.joinFailed, connectionState: .error),
+                                      base: base(guestName: lobbyGuestName, isNetworkOffline: true,
+                                                 joinFailureCategory: MeetingErrorCategory.serverUnreachable.rawValue,
+                                                 joinFailureCode: "url.unreachable"))
+            ]
+        case .failedNewMeeting:
+            return [
+                PremeetingFixtureStep(delayMillis: 0, shell: home(), base: named),
+                PremeetingFixtureStep(delayMillis: delayedStepMillis, shell: connecting(), base: named),
+                PremeetingFixtureStep(delayMillis: delayedStepMillis, shell: ended(.joinFailed, connectionState: .error),
+                                      base: named)
             ]
         case .retryAfter:
             return [
@@ -334,30 +407,84 @@ enum PremeetingFixtureScript {
 
     static let lobbyGuestName = "Avery"
 
+    static let delayedStepMillis = 500
+
+    static let endedByHostSentence = "This meeting has been ended by the host."
+
+    static func formError(for state: PremeetingFixtureState) -> String {
+        switch state {
+        case .lobbyRoomNotFound:
+            return "No room found."
+        case .lobbySignInRequired:
+            return "Guests are not allowed in this meeting."
+        case .lobbyServerText:
+            return "You are not allowed to join this meeting."
+        case .lobbyAppSuspended:
+            return "Your phone has paused Conclave."
+        case .lobbyInviteInvalid:
+            return "Invalid meeting invite code."
+        default:
+            return ""
+        }
+    }
+
     static let newMeetingCode = "lily-zoro-iris"
 
     static let presenceCount = 2
 
     static func lobbyLink(for state: PremeetingFixtureState) -> String {
-        state == .lobby || state == .lobbyNameMissing || PermissionPrimingFixture.permissions(forState: state.rawValue) != nil
-            ? "https://conclave.acmvit.in/" + roomLabel : ""
+        opensLinkLobby(state) ? "https://conclave.acmvit.in/" + roomLabel : ""
     }
 
     static func opensNewMeeting(for state: PremeetingFixtureState) -> Bool {
-        state == .lobbyNewMeeting
+        state == .lobbyNewMeeting || state == .failedNewMeeting
     }
 
     static func isLobbyFixture(_ state: PremeetingFixtureState) -> Bool {
-        state == .lobby || state == .lobbyNameMissing || state == .lobbyNewMeeting
-            || PermissionPrimingFixture.permissions(forState: state.rawValue) != nil
+        opensLinkLobby(state) || opensNewMeeting(for: state)
     }
 
     static func cameraPermission(for state: PremeetingFixtureState) -> MediaPermissionState {
-        state == .lobbyNewMeeting ? MediaPermissionState.unavailable : MediaPermissionState.denied
+        switch state {
+        case .lobbyNewMeeting, .failedNewMeeting, .lobbyCameraUnavailable:
+            return .unavailable
+        case .lobbyOffline, .lobbyMicRestricted:
+            return .notDetermined
+        case .lobbyCameraRestricted:
+            return .restricted
+        default:
+            return .denied
+        }
     }
 
     static func micPermission(for state: PremeetingFixtureState) -> MediaPermissionState {
-        MediaPermissionState.granted
+        switch state {
+        case .lobbyOffline, .lobbyCameraUnavailable, .lobbyMediaAskable, .lobbyMediaMixed:
+            return .denied
+        case .lobbyMicRestricted:
+            return .restricted
+        default:
+            return .granted
+        }
+    }
+
+    static func canAskAgainMicrophone(for state: PremeetingFixtureState) -> Bool {
+        state == .lobbyOffline || state == .lobbyMediaAskable
+    }
+
+    static func canAskAgainCamera(for state: PremeetingFixtureState) -> Bool {
+        state == .lobbyOffline || state == .lobbyMicRestricted || state == .lobbyMediaAskable || state == .lobbyMediaMixed
+    }
+
+    private static func opensLinkLobby(_ state: PremeetingFixtureState) -> Bool {
+        switch state {
+        case .lobby, .lobbyNameMissing, .lobbyOffline, .lobbyCameraUnavailable, .lobbyMicRestricted, .lobbyCameraRestricted,
+             .lobbyMediaAskable, .lobbyMediaMixed, .lobbyRoomNotFound, .lobbySignInRequired, .lobbyServerText,
+             .lobbyAppSuspended, .lobbyInviteInvalid, .lobbyUpdateRequired:
+            return true
+        default:
+            return PermissionPrimingFixture.permissions(forState: state.rawValue) != nil
+        }
     }
 
     static let lobbyRoutes: [AudioRouteOption] = [
@@ -507,7 +634,8 @@ final class PremeetingFixtureSession {
         } else {
             premeeting.applyPermissions(microphone: PremeetingFixtureScript.micPermission(for: state),
                                         camera: PremeetingFixtureScript.cameraPermission(for: state),
-                                        canAskAgainMicrophone: false, canAskAgainCamera: false)
+                                        canAskAgainMicrophone: PremeetingFixtureScript.canAskAgainMicrophone(for: state),
+                                        canAskAgainCamera: PremeetingFixtureScript.canAskAgainCamera(for: state))
         }
         premeeting.applyAudioRoutes(outputs: PremeetingFixtureScript.lobbyRoutes, currentOutputId: "fixture-speaker",
                                     inputOptions: [], currentInputId: "")

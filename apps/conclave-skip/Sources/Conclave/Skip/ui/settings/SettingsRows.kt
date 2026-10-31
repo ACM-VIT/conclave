@@ -188,8 +188,7 @@ private fun SettingsRootRow(
         SettingsRowID.openLinks -> SettingsOpenLinksItem(settings, tag)
         SettingsRowID.alwaysShowControls -> {
             val general = settings.general
-            SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), general.alwaysShowControls, tag,
-                supporting = conclaveString("set_always_show_controls_detail")) { settings.setAlwaysShowControls(it) }
+            SettingsSwitchItem(conclaveString(SettingsCopy.rowName(row)), general.alwaysShowControls, tag) { settings.setAlwaysShowControls(it) }
         }
         SettingsRowID.name_ -> SettingsNameItem(settings, tag)
         SettingsRowID.identity -> SettingsIdentityItem(settings, tag)

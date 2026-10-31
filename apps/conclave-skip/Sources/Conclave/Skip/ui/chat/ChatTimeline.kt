@@ -1,6 +1,9 @@
 package conclave.module
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 
 import androidx.compose.material3.Icon
 
@@ -35,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CollectionInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.collectionInfo
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -192,16 +196,29 @@ private fun ChatEmptyState(presenter: ChatPresenter, actions: ChatRowActions) {
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        ChatGhostArt()
         ConclaveText(conclaveString("chat_empty_title"), line = "chat.empty.title",
             style = MaterialTheme.typography.titleMedium)
-        ConclaveText(conclaveString("chat_empty_greeting"), line = "chat.empty.body",
-            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center)
         if (showsAssistant) {
             FilledTonalButton(onClick = { actions.focusComposer("@Conclave ") }, modifier = Modifier.testTag("chat.askAssistant")) {
                 ConclaveText(conclaveString("chat_ask_assistant"), line = "chat.askAssistant.label")
             }
         }
+    }
+}
+
+@Composable
+private fun ChatGhostArt() {
+    Column(Modifier.size(width = 160.dp, height = 88.dp).clearAndSetSemantics { },
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.align(Alignment.Start), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Box(Modifier.width(112.dp).height(26.dp)
+                .background(ConclaveBubbleColors.fill(ConclaveBubbleTone.peer), conclaveBubbleShape(false, false, true)))
+            Box(Modifier.width(80.dp).height(26.dp)
+                .background(ConclaveBubbleColors.fill(ConclaveBubbleTone.peer), conclaveBubbleShape(false, true, false)))
+        }
+        Box(Modifier.align(Alignment.End).width(64.dp).height(26.dp)
+            .background(ConclaveBubbleColors.fill(ConclaveBubbleTone.own), conclaveBubbleShape(true, false, false)))
     }
 }
 

@@ -215,11 +215,33 @@ enum StageCapsuleText {
 
 struct StageStatusChips: View {
     let stage: StagePresenter
+    @State private var raiseCount = 0
+    @State private var raiseArmed = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: CGFloat(DesignTokens.space8)) {
-            StageHandChip(stage: stage)
+            handChip
             StageNowPlayingChip(stage: stage)
+        }
+        .onChange(of: stage.localHand, initial: true) { _, new in
+            if new == LocalHandState.raising {
+                raiseArmed = true
+            } else if new == LocalHandState.lowered {
+                raiseArmed = false
+            } else if new == LocalHandState.raised {
+                if raiseArmed { raiseCount += 1 }
+                raiseArmed = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var handChip: some View {
+        if #available(iOS 18.0, *) {
+            StageHandChip(stage: stage).symbolEffectsRemoved(reduceMotion).symbolEffect(.wiggle, value: raiseCount)
+        } else {
+            StageHandChip(stage: stage).symbolEffectsRemoved(reduceMotion).symbolEffect(.bounce, value: raiseCount)
         }
     }
 }

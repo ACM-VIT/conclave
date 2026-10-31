@@ -82,6 +82,13 @@ private struct ChatSwipeToReply: ViewModifier {
 private struct ChatMessageRowView: View {
     let row: ChatRowModel
     let actions: ChatRowActions
+    @State private var initialChipIds: Set<String>
+
+    init(row: ChatRowModel, actions: ChatRowActions) {
+        self.row = row
+        self.actions = actions
+        _initialChipIds = State(initialValue: Set(row.reactions.map { $0.emoji }))
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: CGFloat(DesignTokens.space8)) {
@@ -99,7 +106,7 @@ private struct ChatMessageRowView: View {
                         width * CGFloat(ConclaveBubbleGeometry.maxWidthFraction)
                     }
                 if !row.reactions.isEmpty {
-                    ConclaveReactionChipRow(chips: chipModels, identifier: "chat.row." + row.id + ".chip") { chip in
+                    ConclaveReactionChipRow(chips: chipModels, initialIds: initialChipIds, identifier: "chat.row." + row.id + ".chip") { chip in
                         actions.toggle(row.id, emoji: chip.emoji)
                     }
                 }

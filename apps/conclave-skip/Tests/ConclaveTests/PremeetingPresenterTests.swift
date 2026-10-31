@@ -414,6 +414,28 @@ struct PremeetingPresenterTests {
                  .lobbyPermissionsRestricted:
                 #expect(premeeting.lobbyStatus?.mode == .editing, "\(state)")
                 #expect(PermissionPrimingFixture.permissions(forState: state.rawValue) != nil, "\(state)")
+            case .lobbyOffline:
+                #expect(premeeting.lobbyStatus?.mode == .editing && premeeting.lobbyStatus?.issue == .offline)
+                #expect(premeeting.lobbyStatus?.primaryReason == LobbyPrimaryReason.offline.rawValue)
+                #expect(premeeting.lobbyMedia?.micPermission == .denied && premeeting.lobbyMedia?.canAskAgainMicrophone == true)
+                #expect(premeeting.lobbyMedia?.cameraPermission == .notDetermined)
+            case .lobbyCameraUnavailable:
+                #expect(premeeting.lobbyMedia?.micPermission == .denied && premeeting.lobbyMedia?.canAskAgainMicrophone == false)
+                #expect(premeeting.lobbyMedia?.preview == .unavailable)
+            case .lobbyMicRestricted:
+                #expect(premeeting.lobbyMedia?.micPermission == .restricted && premeeting.lobbyMedia?.cameraPermission == .notDetermined)
+            case .lobbyCameraRestricted:
+                #expect(premeeting.lobbyMedia?.micPermission == .granted && premeeting.lobbyMedia?.cameraPermission == .restricted)
+            case .lobbyMediaAskable:
+                #expect(premeeting.lobbyMedia?.micPermission == .denied && premeeting.lobbyMedia?.cameraPermission == .denied)
+                #expect(premeeting.lobbyMedia?.canAskAgainMicrophone == true && premeeting.lobbyMedia?.canAskAgainCamera == true)
+            case .lobbyMediaMixed:
+                #expect(premeeting.lobbyMedia?.micPermission == .denied && premeeting.lobbyMedia?.cameraPermission == .denied)
+                #expect(premeeting.lobbyMedia?.canAskAgainMicrophone == false && premeeting.lobbyMedia?.canAskAgainCamera == true)
+            case .lobbyRoomNotFound, .lobbySignInRequired, .lobbyServerText, .lobbyAppSuspended, .lobbyInviteInvalid,
+                 .lobbyUpdateRequired:
+                #expect(premeeting.lobbyStatus?.mode == .editing && premeeting.lobbyStatus?.issue == LobbyIssue.none, "\(state)")
+                #expect(premeeting.lobbyStatus?.isPrimaryEnabled == true, "\(state): the refusal arrives in a later step")
 
             case .accountSignedOut, .accountSignedIn, .accountSignInCancel, .accountSignInFailure, .accountExpired,
                  .accountDeleteFailure, .accountGoogleOnly, .accountAppleOnly, .accountProvidersFailed:
@@ -423,6 +445,19 @@ struct PremeetingPresenterTests {
 
             case .failedNetwork:
                 #expect(premeeting.lobbyStatus?.mode == .failed && premeeting.lobbyStatus?.issue == .failedNetwork)
+                #expect(premeeting.lobbyStatus?.primaryReason == "")
+            case .connectingOffline:
+                #expect(premeeting.lobbyStatus?.mode == .connecting && premeeting.lobbyStatus?.issue == .offline)
+            case .failedMedia:
+                #expect(premeeting.lobbyStatus?.mode == .failed && premeeting.lobbyStatus?.issue == .failedMedia)
+            case .failedServerText:
+                #expect(premeeting.lobbyStatus?.mode == .failed && premeeting.lobbyStatus?.issue == .failedServerText)
+                #expect(premeeting.lobbyStatus?.issueServerText == PremeetingFixtureScript.endedByHostSentence)
+            case .failedOffline:
+                #expect(premeeting.lobbyStatus?.mode == .failed)
+                #expect(premeeting.lobbyStatus?.primaryReason == LobbyPrimaryReason.offline.rawValue)
+            case .failedNewMeeting:
+                #expect(premeeting.lobbyStatus?.intent == .newMeeting && premeeting.lobbyStatus?.mode == .editing)
             case .failedServerBusy, .retryAfter:
                 #expect(premeeting.lobbyStatus?.mode == .connecting, "\(state)")
             case .recoveringBeforeAdmission:

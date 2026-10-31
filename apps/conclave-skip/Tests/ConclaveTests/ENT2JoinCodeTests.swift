@@ -143,7 +143,7 @@ struct ENT2JoinCodeTests {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent2Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
         for key in ["Meetings", "New Meeting", "Join", "Recent", "Join Meeting", "Meeting Code or Link", "Code or Link",
-                    "Enter the code from your invite, or paste the link.", "This isn\u{2019}t a Conclave code or link.",
+                    "This isn\u{2019}t a Conclave code or link.",
                     "Join Another Meeting?", "You\u{2019}re in %@. Leave it and join %@?", "Stay", "Leave and Join",
                     "This link can\u{2019}t be opened in Conclave.", "Update Conclave", "No Recent Meetings"] {
             let entry = strings[key] as? [String: Any]
@@ -152,7 +152,7 @@ struct ENT2JoinCodeTests {
         }
         let xml = try ent2Source("Android/app/src/main/res/values/strings.xml")
         for name in ["pm_app_title", "pm_new_meeting", "pm_join_with_code", "pm_join_meeting", "pm_code_or_link_label",
-                     "pm_code_help", "pm_code_invalid", "pm_paste", "pm_join", "pm_switch_title", "pm_switch_body",
+                     "pm_code_invalid", "pm_paste", "pm_join", "pm_switch_title", "pm_switch_body",
                      "pm_switch_stay", "pm_switch_leave_and_join", "pm_notice_invalid_link", "pm_update_title", "pm_empty_title"] {
             #expect(xml.contains("<string name=\"\(name)\">"), "missing \(name)")
         }

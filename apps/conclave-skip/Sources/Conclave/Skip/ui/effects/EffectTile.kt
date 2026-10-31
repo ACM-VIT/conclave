@@ -18,8 +18,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -124,12 +122,13 @@ internal fun EffectTile(
                 color = scheme.onSurfaceVariant, textAlign = TextAlign.Center, maxLines = 2)
         }
         if (personal) {
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(text = { ConclaveText(changeLabel, line = "effects.tile.change") }, onClick = {
+            ConclaveDropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, identifier = "effects.tile.${item.id}.menu") {
+                ConclaveMenuItem(title = changeLabel, identifier = "effects.tile.change", onClick = {
                     menuOpen = false
                     onChangeImage?.invoke()
                 })
-                DropdownMenuItem(text = { ConclaveText(removeLabel, line = "effects.tile.remove", color = scheme.error) }, onClick = {
+                ConclaveMenuDivider()
+                ConclaveMenuItem(title = removeLabel, identifier = "effects.tile.remove", role = ConclaveMenuRole.Destructive, onClick = {
                     menuOpen = false
                     onRemoveImage?.invoke()
                 })

@@ -25,6 +25,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.material3.Surface
@@ -129,6 +130,7 @@ private fun ChatSwipeToReply(row: ChatRowModel, actions: ChatRowActions, content
 @Composable
 private fun ChatMessageRow(row: ChatRowModel, actions: ChatRowActions, sidePane: Boolean, maxBubble: Dp) {
     val haptics = rememberConclaveHaptics()
+    val initialChipIds = remember(row.id) { row.reactions.toList().map { it.emoji }.toSet() }
     Row(
         Modifier.fillMaxWidth().pointerInput(row.id) {
             detectTapGestures(onLongPress = {
@@ -159,6 +161,7 @@ private fun ChatMessageRow(row: ChatRowModel, actions: ChatRowActions, sidePane:
                     onLongPress = { _ -> actions.openViewer(row.id) },
                     longPressLabel = conclaveString("chat_action_reactions"),
                     haptics = haptics,
+                    initialIds = initialChipIds,
                 )
             }
 

@@ -24,6 +24,14 @@ struct JoinCodeSheet: View {
         premeeting.home.rejoin?.title
     }
 
+    private var seed: String {
+        JoinRoomIdentityPolicy.seed(input: input, knownRoomIds: JoinRoomIdentityPolicy.knownRoomIds(home: premeeting.home))
+    }
+
+    private var rejoinSeed: String {
+        JoinRoomIdentityPolicy.rejoinSeed(home: premeeting.home)
+    }
+
     private var confirmsInForm: Bool {
         dynamicTypeSize.isAccessibilitySize
     }
@@ -40,17 +48,21 @@ struct JoinCodeSheet: View {
             ScrollViewReader { proxy in
                 Form {
                     Section {
-                        TextField(text: inputBinding, prompt: Text(ConclaveStrings.text("Code or Link"))) {
-                            Text(ConclaveStrings.text("Meeting Code or Link"))
+                        HStack(spacing: 12) {
+                            JoinRoomSlot(seed: seed)
+                            TextField(text: inputBinding, prompt: Text(ConclaveStrings.text("Code or Link"))) {
+                                Text(ConclaveStrings.text("Meeting Code or Link"))
+                            }
+                            .keyboardType(.URL)
+                            .textContentType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.join)
+                            .onSubmit(submit)
+                            .focused($isFocused)
+                            .accessibilityIdentifier("join.field")
+                            .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] }
                         }
-                        .keyboardType(.URL)
-                        .textContentType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.join)
-                        .onSubmit(submit)
-                        .focused($isFocused)
-                        .accessibilityIdentifier("join.field")
                         PasteButton(payloadType: String.self) { strings in
                             guard let first = strings.first else { return }
                             input = EntryPolicies.sanitizeRoomInput(first)
@@ -68,7 +80,12 @@ struct JoinCodeSheet: View {
                                 Label {
                                     Text(ConclaveStrings.format("Rejoin %@", suggestion))
                                 } icon: {
-                                    Image(systemName: ConclaveSymbols.arrowClockwise).accessibilityHidden(true)
+                                    if rejoinSeed.isEmpty {
+                                        Image(systemName: ConclaveSymbols.arrowClockwise).accessibilityHidden(true)
+                                    } else {
+                                        ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(rejoinSeed), size: .mention, diameter: 24)
+                                            .accessibilityHidden(true)
+                                    }
                                 }
                             }
                             .tint(HostingTheme.coralText)
@@ -157,6 +174,27 @@ private struct JoinConfirmBar<Bar: View>: ViewModifier {
     }
 }
 
+private struct JoinRoomSlot: View {
+    let seed: String
+
+    var body: some View {
+        ZStack {
+            if seed.isEmpty {
+                Image(systemName: ConclaveSymbols.link)
+                    .foregroundStyle(HostingTheme.secondaryText)
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            } else {
+                ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(seed), size: .mention, diameter: 28)
+                    .id(seed)
+                    .transition(.scale(0.85).combined(with: .opacity))
+            }
+        }
+        .frame(width: 28, height: 28)
+        .animation(ConclaveMotion.snap, value: seed)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct JoinCodeFooter: View {
     let showsInvalid: Bool
 
@@ -165,9 +203,6 @@ private struct JoinCodeFooter: View {
             Label(ConclaveStrings.text("This isn\u{2019}t a Conclave code or link."), systemImage: PremeetingSymbols.error)
                 .foregroundStyle(Color(uiColor: .systemRed))
                 .accessibilityIdentifier("join.error")
-        } else {
-            Text(ConclaveStrings.text("Enter the code from your invite, or paste the link."))
-                .accessibilityIdentifier("join.help")
         }
     }
 }

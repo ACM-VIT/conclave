@@ -436,7 +436,6 @@
     <string name="pm_update_action">Update</string>
     <string name="pm_join_meeting">Join meeting</string>
     <string name="pm_code_or_link_label">Meeting code or link</string>
-    <string name="pm_code_help">Enter the code from your invite, or paste the link.</string>
     <string name="pm_code_invalid">This isn’t a Conclave code or link.</string>
     <string name="pm_paste">Paste</string>
     <string name="pm_cancel">Cancel</string>
@@ -446,19 +445,15 @@
     <string name="pm_other_meeting_fallback">another meeting</string>
     <string name="pm_switch_stay">Stay</string>
     <string name="pm_switch_leave_and_join">Leave and join</string>
-    <string name="pm_subtitle_joining">Joining</string>
-    <string name="pm_subtitle_reconnecting">Reconnecting</string>
     <string name="pm_asking_to_join">Asking to join</string>
     <string name="pm_couldnt_join">Couldn’t join</string>
     <string name="pm_couldnt_start">Couldn’t start</string>
     <string name="pm_removed_title">Removed from meeting</string>
-    <string name="pm_removed_body">The host removed you from this meeting.</string>
     <string name="pm_denied_title">Request declined</string>
-    <string name="pm_denied_body">Someone in the meeting declined your request to join.</string>
     <string name="pm_lost_title">Connection lost</string>
     <string name="pm_lost_body">Check your connection, then rejoin.</string>
     <string name="pm_disconnected_title">You were disconnected</string>
-    <string name="pm_disconnected_body">The meeting server ended your connection. You can rejoin.</string>
+    <string name="pm_disconnected_body">You can rejoin.</string>
     <string name="pm_couldnt_rejoin">Couldn’t rejoin</string>
     <string name="pm_back_home">Back to home</string>
 
@@ -491,6 +486,7 @@
     <string name="pm_invite_code">Invite code</string>
     <string name="pm_invite_footer">Enter the invite code from the host.</string>
     <string name="pm_invite_invalid">That invite code didn’t work. Check it and try again.</string>
+    <string name="pm_invite_code_wrong">That code didn’t work</string>
     <string name="pm_meeting_link">Meeting link</string>
     <string name="pm_clip_label">Meeting link</string>
     <string name="pm_link_copied">Link copied</string>
@@ -498,10 +494,12 @@
     <string name="pm_join_as_speaker">Join as a speaker</string>
     <string name="pm_need_name_join">Add your name</string>
     <string name="pm_need_name_start">Add your name</string>
-    <string name="pm_offline">You’re offline. Connect to the internet to join.</string>
-    <string name="pm_room_not_found">No meeting found with this code. Check it and try again.</string>
     <string name="pm_sign_in_required">This meeting needs you to sign in.</string>
     <string name="pm_app_suspended">Your phone has paused Conclave. Turn off Sleep mode or app restrictions for Conclave, then try again.</string>
+    <string name="pm_status_update_required">Update Conclave to join</string>
+    <string name="pm_status_room_not_found">Meeting not found</string>
+    <string name="pm_status_sign_in_required">Sign in to join</string>
+    <string name="pm_status_app_suspended">Your phone paused Conclave</string>
     <string name="pm_cancel_joining">Cancel joining</string>
     <string name="pm_account_value_line">Sign in to keep your name and host meetings from any device.</string>
     <string name="pm_providers_loading">Loading sign-in options</string>
@@ -528,21 +526,23 @@
 
     <string name="pm_joining">Joining…</string>
     <string name="pm_starting">Starting…</string>
-    <string name="pm_still_connecting">Still connecting. Check your connection.</string>
-    <string name="pm_offline_waiting">You’re offline. Waiting for a connection.</string>
+    <string name="pm_reconnecting">Reconnecting…</string>
     <string name="pm_fail_network">We couldn’t reach Conclave. Check your connection and try again.</string>
     <string name="pm_fail_media">The media connection didn’t go through. Try again.</string>
     <string name="pm_fail_server_busy">The meeting server is restarting. Try again in a moment.</string>
     <string name="pm_fail_unknown">Something went wrong while joining. Try again.</string>
+    <string name="pm_status_still_connecting">Still connecting</string>
+    <string name="pm_status_fail_network">Couldn’t reach Conclave</string>
+    <string name="pm_status_fail_media">Audio and video didn’t connect</string>
+    <string name="pm_status_fail_server_busy">Server is busy</string>
     <string name="pm_announce_joining">Joining %1$s</string>
-    <string name="pm_announce_couldnt_join">Couldn’t join</string>
-    <string name="pm_wait_standard">You’ll join as soon as someone lets you in.</string>
-    <string name="pm_wait_locked">This meeting is locked. The host will review your request.</string>
-    <string name="pm_wait_no_host">No one is here to let you in yet. You can keep waiting.</string>
-    <string name="pm_wait_host_available">A host is here and can let you in.</string>
-    <string name="pm_wait_reconnecting">Reconnecting. You’ll keep your place.</string>
-    <string name="pm_wait_offline">You’re offline. You’ll keep your place when you’re back.</string>
-    <string name="pm_wait_server_restart">The meeting server is restarting. You’ll be reconnected automatically.</string>
+    <string name="pm_status_wait_standard">Hang tight.</string>
+    <string name="pm_status_wait_locked">This meeting is locked</string>
+    <string name="pm_status_wait_no_host">No one can let you in yet</string>
+    <string name="pm_status_wait_host_available">A host is here</string>
+    <string name="pm_status_wait_reconnecting">Reconnecting, you’ll keep your place</string>
+    <string name="pm_status_wait_offline">You’re offline, you’ll keep your place</string>
+    <string name="pm_status_wait_server_restart">Server is restarting</string>
     <string name="pm_admitted">You’re in. Joining now.</string>
     <string name="pm_stop_asking_title">Stop asking to join?</string>
     <string name="pm_stop_asking_body">You’ll lose your place, and someone will need to let you in again.</string>
@@ -551,9 +551,13 @@
 
     <string name="pm_camera_access_off_reason">Camera access is off in Settings.</string>
     <string name="pm_mic_access_off_reason">Microphone access is off in Settings.</string>
-    <string name="pm_mic_rationale">Conclave needs the microphone so people in the meeting can hear you.</string>
-    <string name="pm_camera_rationale">Conclave needs the camera so people in the meeting can see you.</string>
     <string name="pm_allow">Allow</string>
+    <string name="pm_status_media_off">No mic or camera access</string>
+    <string name="pm_status_mic_restricted">Microphone access is restricted</string>
+    <string name="pm_status_camera_restricted">Camera access is restricted</string>
+    <string name="pm_status_media_restricted">Microphone and camera restricted</string>
+    <string name="pm_status_allow_mic_label">Allow the microphone so people can hear you</string>
+    <string name="pm_status_allow_camera_label">Allow the camera so people can see you</string>
 
     <string name="pm_tag_starts_soon">Starts soon</string>
     <string name="pm_tag_live">Live</string>
@@ -572,7 +576,7 @@
     <string name="pm_getting_you_in">Getting you in</string>
     <string name="pm_almost_there">Almost there</string>
     <string name="pm_waiting_host_start">Waiting for the host to start</string>
-    <string name="pm_waiting_host_body">This page updates on its own when the host opens the room.</string>
+    <string name="pm_waiting_host_body">Hang tight.</string>
     <string name="pm_webinar_locked">This webinar is locked.</string>
     <string name="pm_webinar_full">This webinar is full.</string>
     <string name="pm_webinar_unavailable">This webinar isn’t available.</string>
@@ -1425,7 +1429,6 @@
     <string name="set_message_notifications">Message notifications</string>
     <string name="set_message_notifications_desc">Get notified about private messages and mentions while you’re in another app</string>
     <string name="set_always_show_controls">Always show controls</string>
-    <string name="set_always_show_controls_detail">Keeps call controls on screen instead of hiding them after a few seconds</string>
     <string name="set_haptics">Haptics</string>
     <string name="set_name">Name</string>
     <string name="set_name_reconnect">Reconnect before updating your name</string>
@@ -2208,5 +2211,4 @@
     <string name="appearance_system">System</string>
     <string name="appearance_light">Light</string>
     <string name="appearance_dark">Dark</string>
-    <string name="chat_empty_greeting">Say hello to the room.</string>
 </resources>

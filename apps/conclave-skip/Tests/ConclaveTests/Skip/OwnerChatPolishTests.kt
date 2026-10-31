@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Recomposer
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -38,6 +41,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -205,6 +209,38 @@ class OwnerChatPolishTests {
         val density = activity.resources.displayMetrics.density
         assertEquals("default retains 16 dp at each side", 32f * density, pageField.width - defaultField.width, 1f)
         assertEquals("page-owned padding is not doubled", tagged(activity, "page").boundsInRoot.left, pageField.left, 1f)
+    }
+
+    @Test fun aLandingChipKeepsOneSpokenNodeAndFollowsItsCount() {
+        var count by mutableIntStateOf(1)
+        val activity = activity()
+        activity.setContent(runtime()) {
+            MaterialTheme {
+                Box(Modifier.requiredSize(360.dp, 120.dp)) {
+                    ConclaveReactionChipRow(
+                        chips = listOf(ConclaveReactionChipModel(id = "a", emoji = "\uD83D\uDC4D", count = count, isMine = false,
+                            canToggle = true, accessibilityLabel = "Thumbs up")),
+                        identifier = "chips", onToggle = {}, initialIds = emptySet(),
+                    )
+                }
+            }
+        }
+        settle(activity)
+        val landed = mergedTagged(activity, "chips.a")
+        assertEquals(listOf("Thumbs up"), landed.config.getOrNull(SemanticsProperties.ContentDescription))
+        assertEquals("1", landed.config.getOrNull(SemanticsProperties.StateDescription))
+        assertNull("the emoji and count texts stay out of the spoken chip", landed.config.getOrNull(SemanticsProperties.Text))
+        count = 2
+        settle(activity)
+        val rolled = mergedTagged(activity, "chips.a")
+        assertEquals("2", rolled.config.getOrNull(SemanticsProperties.StateDescription))
+        assertNull("the count roll adds no spoken text", rolled.config.getOrNull(SemanticsProperties.Text))
+    }
+
+    private fun mergedTagged(activity: ComponentActivity, tag: String): SemanticsNode {
+        fun descend(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap { descend(it) }
+        return roots(activity.window.decorView).flatMap { descend(it.semanticsOwner.rootSemanticsNode) }
+            .firstOrNull { it.config.getOrNull(SemanticsProperties.TestTag) == tag } ?: error("Missing merged semantics tag: $tag")
     }
 
     private fun activity(): ComponentActivity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get().also {

@@ -782,6 +782,8 @@ enum StageFixtureScript {
         }
     }
 
+    static let reactionIntervalMillis = 300.0
+
     static func copy(_ source: StageInputs, participants: [StageParticipantInput]? = nil, viewMode: String? = nil,
                      hideTilesWithoutVideo: Bool? = nil, selfViewMode: String? = nil, pinnedUserId: String? = nil,
                      isGameActive: Bool? = nil, gameName: String? = nil, screenShareUserId: String? = nil,
@@ -891,6 +893,7 @@ final class StageFixtureSession {
     private var captionStep = 0
     private var isMuted = true
     private var isCameraOff = true
+    private var reactionTimeline: Task<Void, Never>? = nil
 
     private(set) var isAudioOnly = false
 
@@ -938,7 +941,7 @@ final class StageFixtureSession {
         }
         let reactionCount = StageFixtureScript.reactionCount(for: state)
         if reactionCount > 0 {
-            stage.reactionsChanged(StageFixtureScript.reactions(count: reactionCount))
+            playReactions(count: reactionCount)
         }
 
         let counters = self.counters
@@ -1185,7 +1188,23 @@ final class StageFixtureSession {
 
     func replayReactions() {
         stage.reactionsChanged([])
-        stage.reactionsChanged(StageFixtureScript.reactions(count: max(1, StageFixtureScript.reactionCount(for: state))))
+        playReactions(count: max(1, StageFixtureScript.reactionCount(for: state)))
+    }
+
+    private func playReactions(count: Int) {
+        reactionTimeline?.cancel()
+        reactionTimeline = nil
+        stage.reactionsChanged(StageFixtureScript.reactions(count: 1))
+        guard count > 1 else { return }
+        reactionTimeline = Task { @MainActor [weak self] in
+            var delivered = 1
+            while delivered < count {
+                try? await Task.sleep(nanoseconds: UInt64(StageFixtureScript.reactionIntervalMillis * 1_000_000.0))
+                guard !Task.isCancelled, let self else { return }
+                delivered += 1
+                self.stage.reactionsChanged(StageFixtureScript.reactions(count: delivered))
+            }
+        }
     }
 
     func toggleReconnecting() {

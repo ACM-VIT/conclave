@@ -46,7 +46,6 @@ struct LobbyPreviewCard: View {
                     .conclaveInCallRegion()
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("lobby.card")
-                LobbyPreviewCaption(media: media)
             }
         }
     }
@@ -56,38 +55,12 @@ private extension LobbyMediaSnapshot {
     var cameraIsUnavailable: Bool { preview == .unavailable || cameraPermission == .unavailable }
 }
 
-private struct LobbyPreviewCaption: View {
-    let media: LobbyMediaSnapshot
-
-    private var captionText: String {
-        switch media.preview {
-        case .live, .interrupted, .published, .starting:
-            return ""
-        case .off, .unavailable, .blocked:
-            return media.cameraIsUnavailable ? ConclaveStrings.text("Camera unavailable") : ConclaveStrings.text("Camera Off")
-        }
-    }
-
-    var body: some View {
-        let caption = captionText
-        if !caption.isEmpty {
-            Text(caption)
-                .font(.footnote)
-                .foregroundStyle(HostingTheme.secondaryText)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 16)
-                .accessibilityHidden(true)
-        }
-    }
-}
-
 private struct LobbyPreviewVideo: View {
     let media: LobbyMediaSnapshot
     let premeeting: PremeetingPresenter
     let controlsInset: CGFloat
     let compact: Bool
+    @State private var selfChipWidth: CGFloat = 0
 
     private var showsSurface: Bool {
         media.preview == .live || media.preview == .interrupted || media.preview == .published
@@ -107,7 +80,7 @@ private struct LobbyPreviewVideo: View {
                     .id(media.previewSessionId)
                     .accessibilityIgnoresInvertColors()
             } else {
-                LobbyCameraOffContent(media: media, compact: compact)
+                LobbyCameraOffContent(media: media, compact: compact, chipInset: selfChipWidth + 24)
                     .padding(.bottom, controlsInset)
             }
             if media.preview == .interrupted {
@@ -133,6 +106,9 @@ private struct LobbyPreviewVideo: View {
                 .background(Capsule().fill(HostingTheme.inCallLabelScrim))
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                 .accessibilityHidden(true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                    if selfChipWidth != $0 { selfChipWidth = $0 }
+                }
                 .padding(12)
         }
         .overlay(alignment: .topTrailing) {
@@ -155,21 +131,47 @@ private struct LobbyPreviewVideo: View {
 private struct LobbyCameraOffContent: View {
     let media: LobbyMediaSnapshot
     let compact: Bool
+    let chipInset: CGFloat
     @ScaledMetric(relativeTo: .body) private var avatarSize: CGFloat = 76
+
+    private var horizontalInset: CGFloat { compact ? max(24, chipInset) : 24 }
 
     var body: some View {
         let layout = compact ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(spacing: 12))
-        layout {
-            ConclaveAvatar(identity: ConclaveAvatarIdentity.make(name: media.avatarName,
-                                                                 id: media.avatarSeed.isEmpty ? nil : media.avatarSeed),
-                           size: .lobby, diameter: compact ? 56 : min(max(avatarSize, 56), 120))
-            if media.preview == .starting {
-                ProgressView()
-                    .tint(HostingTheme.token(DesignTokens.iosInCallText))
-                    .accessibilityHidden(true)
+        if media.cameraIsUnavailable && media.preview != .starting {
+            ViewThatFits(in: .vertical) {
+                layout {
+                    avatar
+                    unavailableLabel.fixedSize(horizontal: false, vertical: true)
+                }
+                unavailableLabel
             }
+            .padding(.horizontal, horizontalInset)
+        } else {
+            layout {
+                avatar
+                if media.preview == .starting {
+                    ProgressView()
+                        .tint(HostingTheme.token(DesignTokens.iosInCallText))
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, horizontalInset)
         }
-        .padding(.horizontal, 24)
+    }
+
+    private var avatar: some View {
+        ConclaveAvatar(identity: ConclaveAvatarIdentity.make(name: media.avatarName,
+                                                             id: media.avatarSeed.isEmpty ? nil : media.avatarSeed),
+                       size: .lobby, diameter: compact ? 56 : min(max(avatarSize, 56), 120))
+    }
+
+    private var unavailableLabel: some View {
+        Text(ConclaveStrings.text("Camera unavailable"))
+            .font(.footnote)
+            .foregroundStyle(HostingTheme.inCallTextSecondary)
+            .multilineTextAlignment(.center)
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 }
 

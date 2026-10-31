@@ -58,7 +58,9 @@ struct S1FloatingBackdropTests {
         #expect(bar.contains("ConclaveButton(title, role: .primary, isEnabled: isEnabled, isPending: isPending, identifier: identifier, action: action)"))
 
         let lobby = s1bFlat(try s1bSource(Self.lobbyViewFile))
-        #expect(lobby.contains(".conclaveFloatingActionBar(shaded: isEditing, over: Color(uiColor: .systemGroupedBackground)) {"))
+        #expect(lobby.contains(".conclaveFloatingActionBar(shaded: true, over: Color(uiColor: .systemGroupedBackground)) {"),
+                "the lobby keeps the opaque band under its fade in every mode")
+        #expect(!lobby.contains("shaded: isEditing"))
         for file in ["Sources/Conclave/Features/Meeting/Activities/ActivitiesPanel+iOS.swift",
                      "Sources/Conclave/Features/Meeting/Transcript/TranscriptPanel+iOS.swift"] {
             let text = try s1bSource(file)
@@ -85,23 +87,26 @@ struct S1FloatingBackdropTests {
         let lobbySource = try s1bSource(Self.lobbyViewFile)
         #expect(s1bFlat(lobbySource).contains(".modifier(LobbyBottomBar(premeeting: premeeting, routeId: route.id, nameFocused: isNameFocused))"))
         let lobbyBar = s1bFlat(try s1bBlock(lobbySource, from: "private struct LobbyBottomBar: ViewModifier {", to: "enum LobbyPrimaryCopy {"))
-        #expect(lobbyBar.contains("EntryStatusBlock(premeeting: premeeting, routeId: routeId, reservesNameReason: nameFocused) .background {"))
+        #expect(lobbyBar.contains("EntryStatusBlock(premeeting: premeeting, routeId: routeId, reservesNameReason: nameFocused) } } }"))
+        #expect(!lobbyBar.contains(".background") && !lobbyBar.contains("Divider()"), "no grouped band and no hairline in any mode")
         #expect(!lobbySource.contains("hintReservation") && !lobbySource.contains(".hidden()"), "the lobby never copies the hint's geometry")
 
         let entry = s1bFlat(try s1bSource("Sources/Conclave/Features/Lobby/EntryStatusBlock+iOS.swift"))
         #expect(entry.contains("let reserved = reservesNameReason ? LobbyPrimaryCopy.reason(nameReason.rawValue) : nil"))
-        #expect(entry.contains("if let line = reason ?? reserved { Text(line) .font(.footnote) .foregroundStyle(HostingTheme.secondaryText) .multilineTextAlignment(.center) .opacity(reason == nil ? 0 : 1) .accessibilityHidden(reason == nil) .accessibilityIdentifier(\"lobby.primary.reason\") }"),
-                "the hint keeps its own row while the name is focused, so typing never changes the bar height")
+        #expect(entry.contains("if !dynamicTypeSize.isAccessibilitySize, let line = current ?? LobbyStatusCopy.reservedLine(reserved) { LobbyStatusLineLabel(line: line) .font(.footnote) .foregroundStyle(HostingTheme.floatingBarSecondaryText) .multilineTextAlignment(.center) .lineLimit(LobbyStatusPolicy.lineMaxLines) .fixedSize(horizontal: false, vertical: true) .opacity(current == nil ? 0 : 1) .accessibilityHidden(current == nil) .accessibilityIdentifier(line.identifier) }"),
+                "the line keeps its own row while the name is focused, so typing never changes the bar height")
     }
 
     @Test func theCameraCaptionIsDecorativeAndThePreviewValueCarriesTheState() throws {
         let card = try s1bSource(Self.lobbyCardFile)
         let flatCard = s1bFlat(card)
         #expect(flatCard.contains("private extension LobbyMediaSnapshot { var cameraIsUnavailable: Bool { preview == .unavailable || cameraPermission == .unavailable } }"))
-        let caption = s1bFlat(try s1bBlock(card, from: "private struct LobbyPreviewCaption: View {", to: "private struct LobbyPreviewVideo: View {"))
-        #expect(caption.contains("return media.cameraIsUnavailable ? ConclaveStrings.text(\"Camera unavailable\") : ConclaveStrings.text(\"Camera Off\")"))
-        #expect(caption.contains(".accessibilityHidden(true)") && !caption.contains("accessibilityIdentifier"),
-                "VoiceOver reads the camera state once, on the preview")
+        #expect(!card.contains("LobbyPreviewCaption"), "no caption under the card")
+        let cameraOff = s1bFlat(try s1bBlock(card, from: "private struct LobbyCameraOffContent: View {", to: "private struct LobbyToggleStrip: View {"))
+        #expect(cameraOff.contains("if media.cameraIsUnavailable && media.preview != .starting { ViewThatFits(in: .vertical) { layout { avatar unavailableLabel.fixedSize(horizontal: false, vertical: true) } unavailableLabel }"),
+                "camera unavailable sits in the tile under the face, and replaces the face only when both do not fit")
+        #expect(cameraOff.contains("private var unavailableLabel: some View { Text(ConclaveStrings.text(\"Camera unavailable\")) .font(.footnote) .foregroundStyle(HostingTheme.inCallTextSecondary) .multilineTextAlignment(.center) .dynamicTypeSize(...DynamicTypeSize.xxxLarge) }"))
+        #expect(!cameraOff.contains("accessibilityIdentifier"), "VoiceOver reads the camera state once, on the preview")
         let video = s1bFlat(try s1bBlock(card, from: "private struct LobbyPreviewVideo: View {", to: "private struct LobbyCameraOffContent: View {"))
         #expect(video.contains("private var previewValue: String { if media.preview == .live { return media.isFrontCamera ? ConclaveStrings.text(\"Front Camera\") : ConclaveStrings.text(\"Back Camera\") } return media.cameraIsUnavailable ? ConclaveStrings.text(\"Camera unavailable\") : ConclaveStrings.text(\"Camera Off\") }"))
         #expect(video.contains(".accessibilityValue(previewValue)"))
@@ -110,17 +115,22 @@ struct S1FloatingBackdropTests {
         #expect(kotlinCard.contains("private val LobbyCardUi.cameraIsUnavailable: Boolean get() = preview == PreviewState.unavailable || cameraPermission == MediaPermissionState.unavailable"))
         #expect(kotlinCard.contains("card.preview == PreviewState.live -> conclaveString(\"ds_back_camera\") card.cameraIsUnavailable -> conclaveString(\"pm_camera_unavailable\") else -> conclaveString(\"pm_camera_off\")"))
         #expect(kotlinCard.contains("stateDescription = previewValue"))
-        #expect(kotlinCard.contains("modifier = modifier.fillMaxWidth().testTag(\"lobby.preview.caption\").clearAndSetSemantics { },"),
-                "TalkBack reads the camera state once, on the preview; the tag stays outside the cleared semantics")
+        #expect(!kotlinCard.contains("lobby.preview.caption") && !kotlinCard.contains("LobbyPreviewCaption"), "the caption under the card is gone")
+        let kotlinTile = s1bFlat(try s1bBlock(try s1bSource(Self.lobbyKotlinCardFile), from: "private fun LobbyCameraOffContent(", to: "private fun LobbyToggles("))
+        #expect(kotlinTile.contains("} else if (card.cameraIsUnavailable) { Text(conclaveString(\"pm_camera_unavailable\"), style = MaterialTheme.typography.bodySmall,"),
+                "camera unavailable is said inside the tile, under the face")
+        #expect(kotlinTile.components(separatedBy: ".clearAndSetSemantics { }").count - 1 == 2, "TalkBack reads the camera state once, on the preview")
     }
 
     @Test func theAndroidScrimTintsFromTheStageTokenAndStaysDecorative() throws {
         let raw = try s1bSource(Self.floatingActionScrimFile)
         let scrim = s1bFlat(raw)
-        #expect(scrim.contains("internal fun ConclaveFloatingActionScrim(modifier: Modifier = Modifier, bottomPadding: Dp = 0.dp) {"))
+        #expect(scrim.contains("internal fun ConclaveFloatingActionScrim(modifier: Modifier = Modifier, bottomPadding: Dp = 0.dp, opaque: Boolean = false) {"))
+        #expect(scrim.contains("val ground = if (opaque) veil.copy(alpha = alpha).compositeOver(MaterialTheme.colorScheme.surface) else veil.copy(alpha = alpha)"),
+                "the lobby asks for an opaque ground under the same ramp; every other caller keeps the translucent veil")
         #expect(scrim.contains("val fadeHeight: Dp = 32.dp"))
         #expect(scrim.contains("val veil = Color(DesignTokens.neutralStage)"))
-        #expect(scrim.contains("val band = (size.height + bottomPadding.toPx()).coerceAtLeast(0f) val span = fade + band + fade val clear = veil.copy(alpha = 0f) val solid = veil.copy(alpha = alpha)"))
+        #expect(scrim.contains("val band = (size.height + bottomPadding.toPx()).coerceAtLeast(0f) val span = fade + band + fade val clear = ground.copy(alpha = 0f) val solid = ground"))
         #expect(scrim.contains("Brush.verticalGradient( 0f to clear, fade / span to solid, (fade + band) / span to solid, 1f to clear, startY = -fade, endY = band + fade, )"),
                 "the veil fades in above and out below the action, never a band with a hard edge")
         #expect(scrim.contains("drawRect(brush = ramp, topLeft = Offset(0f, -fade), size = Size(size.width, span))"))
@@ -138,7 +148,9 @@ struct S1FloatingBackdropTests {
         let screen = try s1bSource(Self.lobbyScreenFile)
         #expect(!screen.contains("Brush"))
         let flat = s1bFlat(screen)
-        #expect(flat.contains("if (premeeting.lobbyStatus?.mode == LobbyMode.editing) { ConclaveFloatingActionScrim( modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(actionClearance), bottomPadding = padding.calculateBottomPadding(), ) }"))
+        #expect(flat.contains("ConclaveFloatingActionScrim( modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(actionClearance), bottomPadding = padding.calculateBottomPadding(), opaque = true, )"),
+                "the opaque band shows under the action in every mode")
+        #expect(!flat.contains("mode == LobbyMode.editing"))
         #expect(flat.contains("val actionClearance = with(LocalDensity.current) { actionHeightPx.toDp() } + 32.dp"))
         #expect(flat.contains("floatingActionButtonPosition = FabPosition.Center,"))
         #expect(flat.contains("TopAppBar(") && flat.contains("colors = TopAppBarDefaults.topAppBarColors(containerColor = scheme.surface),"),
@@ -157,15 +169,13 @@ struct S1FloatingBackdropTests {
     @Test func lobbyGuidanceSitsBelowTheCardAndTheAudioRouteWraps() throws {
         let card = try s1bSource(Self.lobbyCardFile)
         let flatCard = s1bFlat(card)
-        #expect(flatCard.contains(".accessibilityIdentifier(\"lobby.card\") LobbyPreviewCaption(media: media) }"))
+        #expect(flatCard.contains(".accessibilityIdentifier(\"lobby.card\") } } } }"))
         #expect(flatCard.contains("VStack(spacing: 8) { LobbyPreviewVideo("))
+        #expect(!card.contains("LobbyPreviewCaption"))
         let cameraOff = try s1bBlock(card, from: "private struct LobbyCameraOffContent: View {", to: "private struct LobbyToggleStrip: View {")
-        #expect(!cameraOff.contains("Text("), "the camera caption no longer sits under the media toggles")
-        let caption = s1bFlat(try s1bBlock(card, from: "private struct LobbyPreviewCaption: View {", to: "private struct LobbyPreviewVideo: View {"))
-        #expect(caption.contains(".fixedSize(horizontal: false, vertical: true)"))
-        #expect(caption.contains(".foregroundStyle(HostingTheme.secondaryText)"))
-        #expect(caption.contains(".accessibilityHidden(true)"))
-        #expect(!caption.contains("lineLimit"))
+        #expect(cameraOff.components(separatedBy: "Text(").count - 1 == 1 && cameraOff.contains("Text(ConclaveStrings.text(\"Camera unavailable\"))"),
+                "the only text in the tile is the camera unavailable label; nothing sits under the media toggles")
+        #expect(!cameraOff.contains("lineLimit"))
 
         let grouped = try s1bSource(Self.lobbyGroupedFile)
         let route = s1bFlat(try s1bBlock(grouped, from: "struct LobbyAudioRouteRow: View {", to: "struct LobbyMicrophoneInputRow: View {"))
@@ -176,12 +186,13 @@ struct S1FloatingBackdropTests {
         #expect(route.contains(".accessibilityIdentifier(\"lobby.audio.picker\")") && route.contains(".accessibilityIdentifier(\"lobby.audio\")"))
 
         let kotlinCard = try s1bSource(Self.lobbyKotlinCardFile)
-        #expect(s1bFlat(kotlinCard).contains("internal fun LobbyPreviewCaption(card: LobbyCardUi, modifier: Modifier = Modifier) {"))
+        #expect(!kotlinCard.contains("LobbyPreviewCaption"))
         let kotlinCameraOff = try s1bBlock(kotlinCard, from: "private fun LobbyCameraOffContent(", to: "private fun LobbyToggles(")
-        #expect(!kotlinCameraOff.contains("Text("), "the camera caption no longer sits under the media toggles")
+        #expect(kotlinCameraOff.components(separatedBy: "Text(").count - 1 == 1 && kotlinCameraOff.contains("Text(conclaveString(\"pm_camera_unavailable\")"),
+                "the only text in the tile content is its label, above the toggles")
         let screen = try s1bSource(Self.lobbyScreenFile)
-        #expect(s1bFlat(screen).contains("preview = { LocalPreviewSurface(card.previewSessionId) }) } } LobbyPreviewCaption(card, Modifier.padding(horizontal = if (wide) 0.dp else 16.dp)) }"),
-                "the caption is drawn after the card and outside the in-call theme")
+        #expect(!screen.contains("LobbyPreviewCaption"))
+        #expect(s1bFlat(screen).contains("preview = { LocalPreviewSurface(card.previewSessionId) }) } } }"), "nothing is drawn under the card")
         let audio = try s1bBlock(screen, from: "private fun LobbyAudioItem(", to: "private fun LobbyIdentityItems(")
         #expect(audio.contains("supportingContent = { Text(routeName) },"))
         #expect(!audio.contains("maxLines") && !audio.contains("TextOverflow"), "the Audio route wraps instead of truncating")

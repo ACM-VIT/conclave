@@ -14,7 +14,7 @@ extension View {
 private enum ConclaveFloatingActionVeil {
     static let fadeHeight: CGFloat = 32
     static let lightOpacity = 0.2
-    static let darkOpacity = 0.55
+    static let darkOpacity = 1.0
 }
 
 private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
@@ -98,20 +98,25 @@ struct ConclaveFloatingActionButton: View {
     var isPending = false
     let identifier: String
     let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        let pendingOnOneLine = isPending && dynamicTypeSize.isAccessibilitySize
         ConclaveGlassAvailabilityReader { allowsGlass in
             if #available(iOS 26.0, *), allowsGlass {
                 Button(action: action) {
                     HStack(spacing: 8) {
                         if isPending {
-                            ProgressView().tint(HostingTheme.coralText).accessibilityHidden(true)
+                            ProgressView().tint(HostingTheme.floatingActionLabel).accessibilityHidden(true)
+                                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                         }
                         Text(title)
                             .multilineTextAlignment(.center)
+                            .lineLimit(pendingOnOneLine ? 1 : nil)
+                            .minimumScaleFactor(pendingOnOneLine ? 0.5 : 1)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .foregroundStyle(HostingTheme.coralText)
+                    .foregroundStyle(HostingTheme.floatingActionLabel)
                     .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)
                 }
                 .buttonStyle(.glass)

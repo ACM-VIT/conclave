@@ -6,14 +6,16 @@ struct ConclaveReactionChip: View {
     let chip: ConclaveReactionChipModel
     let gestureRoute: ConclaveGestureRoute
     let identifier: String
+    let reduceMotion: Bool
     let onToggle: (ConclaveReactionChipModel) -> Void
     @State private var adds = 0
 
-    init(chip: ConclaveReactionChipModel, gestureRoute: ConclaveGestureRoute = .live, identifier: String,
+    init(chip: ConclaveReactionChipModel, gestureRoute: ConclaveGestureRoute = .live, identifier: String, reduceMotion: Bool,
          onToggle: @escaping (ConclaveReactionChipModel) -> Void) {
         self.chip = chip
         self.gestureRoute = gestureRoute
         self.identifier = identifier
+        self.reduceMotion = reduceMotion
         self.onToggle = onToggle
     }
 
@@ -30,7 +32,7 @@ struct ConclaveReactionChip: View {
                 }
                 onToggle(chip)
             } label: {
-                ConclaveReactionChipLabel(chip: chip)
+                ConclaveReactionChipLabel(chip: chip, reduceMotion: reduceMotion)
             }
             .buttonStyle(.plain)
             .modifier(ConclaveReactionChipFeedback(route: gestureRoute, trigger: adds))
@@ -39,7 +41,7 @@ struct ConclaveReactionChip: View {
             .accessibilityAddTraits(chip.isMine ? [.isSelected] : [])
             .accessibilityIdentifier(identifier)
         } else {
-            ConclaveReactionChipLabel(chip: chip)
+            ConclaveReactionChipLabel(chip: chip, reduceMotion: reduceMotion)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(chip.accessibilityLabel)
                 .accessibilityValue(chip.count.formatted())
@@ -50,9 +52,12 @@ struct ConclaveReactionChip: View {
 
 private struct ConclaveReactionChipLabel: View {
     let chip: ConclaveReactionChipModel
+    let reduceMotion: Bool
 
     var body: some View {
         Text(verbatim: chip.emoji + " " + chip.count.formatted())
+            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(chip.count)))
+            .animation(ConclaveMotion.travel(.snappy(duration: 0.14), reduceMotion: reduceMotion), value: chip.count)
             .font(.footnote.monospacedDigit())
             .foregroundStyle(.primary)
             .padding(.horizontal, CGFloat(ConclaveReactionChipPolicy.horizontalPadding))
@@ -83,25 +88,50 @@ private struct ConclaveReactionChipFeedback: ViewModifier {
     }
 }
 
+private struct ConclaveReactionChipLanding: ViewModifier {
+    let isNew: Bool
+    let reduceMotion: Bool
+    @State private var landed = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(isNew && !reduceMotion && !landed ? 0.5 : 1)
+            .onAppear {
+                guard isNew && !landed else { return }
+                if reduceMotion {
+                    landed = true
+                } else {
+                    withAnimation(.bouncy(duration: 0.18, extraBounce: 0.15)) {
+                        landed = true
+                    }
+                }
+            }
+    }
+}
+
 struct ConclaveReactionChipRow: View {
     let chips: [ConclaveReactionChipModel]
     let gestureRoute: ConclaveGestureRoute
     let identifier: String
     let onToggle: (ConclaveReactionChipModel) -> Void
+    @State private var initialIds: Set<String>
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(chips: [ConclaveReactionChipModel], gestureRoute: ConclaveGestureRoute = .live, identifier: String,
-         onToggle: @escaping (ConclaveReactionChipModel) -> Void) {
+    init(chips: [ConclaveReactionChipModel], gestureRoute: ConclaveGestureRoute = .live, initialIds: Set<String>? = nil,
+         identifier: String, onToggle: @escaping (ConclaveReactionChipModel) -> Void) {
         self.chips = chips
         self.gestureRoute = gestureRoute
         self.identifier = identifier
         self.onToggle = onToggle
+        _initialIds = State(initialValue: initialIds ?? Set(chips.map { $0.id }))
     }
 
     var body: some View {
         ConclaveFlowLayout(spacing: CGFloat(ConclaveReactionChipPolicy.spacing)) {
             ForEach(chips) { chip in
                 ConclaveReactionChip(chip: chip, gestureRoute: gestureRoute, identifier: identifier + "." + chip.id,
-                                     onToggle: onToggle)
+                                     reduceMotion: reduceMotion, onToggle: onToggle)
+                    .modifier(ConclaveReactionChipLanding(isNew: !initialIds.contains(chip.id), reduceMotion: reduceMotion))
             }
         }
         .accessibilityElement(children: .contain)

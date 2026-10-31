@@ -30,6 +30,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -120,19 +121,6 @@ private val LobbyCardUi.cameraIsUnavailable: Boolean
     get() = preview == PreviewState.unavailable || cameraPermission == MediaPermissionState.unavailable
 
 @Composable
-internal fun LobbyPreviewCaption(card: LobbyCardUi, modifier: Modifier = Modifier) {
-    if (card.showsSurface || card.preview == PreviewState.starting) return
-    val unavailable = card.cameraIsUnavailable
-    Text(
-        if (unavailable) conclaveString("pm_camera_unavailable") else conclaveString("pm_camera_off"),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Center,
-        modifier = modifier.fillMaxWidth().testTag("lobby.preview.caption").clearAndSetSemantics { },
-    )
-}
-
-@Composable
 private fun LobbyCameraOffContent(card: LobbyCardUi, compact: Boolean) {
     val scheme = MaterialTheme.colorScheme
     val content: @Composable () -> Unit = {
@@ -142,6 +130,9 @@ private fun LobbyCameraOffContent(card: LobbyCardUi, compact: Boolean) {
         )
         if (card.preview == PreviewState.starting) {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = scheme.onSurface)
+        } else if (card.cameraIsUnavailable) {
+            Text(conclaveString("pm_camera_unavailable"), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+                textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
     if (compact) {

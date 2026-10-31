@@ -113,6 +113,10 @@ enum StageReactionPolicy {
     static let reducedFadeInMillis = 150.0
     static let reducedFadeOutMillis = 300.0
 
+    static let popMillis = 160.0
+    static let popFromScale = 0.85
+    static let driftDistance = 10.0
+
     static let laneCount = 3
     static let laneOffset = 20.0
     static let bubbleDiameter = 48.0
@@ -140,6 +144,15 @@ enum StageReactionPolicy {
     static func lane(for eventId: Int) -> Int {
         let value = eventId % laneCount
         return value < 0 ? value + laneCount : value
+    }
+
+    static func driftDirection(eventId: Int) -> Double {
+        switch ((eventId % 4) + 4) % 4 {
+        case 0: return -1.0
+        case 1: return -0.5
+        case 2: return 0.5
+        default: return 1.0
+        }
     }
 
     static func opacity(progress: Double) -> Double {

@@ -296,6 +296,7 @@ struct ENT4PermissionPrimingTests {
 
     static let iosFiles = [
         "Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift",
+        "Sources/Conclave/Features/Lobby/LobbyStatusRow+iOS.swift",
         "Sources/Conclave/Features/Lobby/LobbyView+iOS.swift",
         "Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift"
     ]
@@ -303,10 +304,12 @@ struct ENT4PermissionPrimingTests {
         "Sources/Conclave/Skip/ui/lobby/PermissionPrimingRow.kt",
         "Sources/Conclave/Skip/ui/lobby/LobbyScreen.kt",
         "Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt",
-        "Sources/Conclave/Skip/ui/lobby/LobbyUiCache.kt"
+        "Sources/Conclave/Skip/ui/lobby/LobbyUiCache.kt",
+        "Sources/Conclave/Skip/ui/lobby/LobbyStatusRow.kt"
     ]
     static let sharedFiles = [
         "Sources/Conclave/Features/Lobby/PermissionPrimingPolicy.swift",
+        "Sources/Conclave/Features/Lobby/LobbyStatusPolicy.swift",
         "Sources/Conclave/Features/Join/EntryPolicies.swift",
         "Sources/Conclave/Features/Lobby/LobbyContracts.swift",
         "Sources/Conclave/Features/Lobby/LobbyPolicies.swift",
@@ -331,9 +334,12 @@ struct ENT4PermissionPrimingTests {
                     "\(file) has a literal label")
         }
 
-        let row = try ent4Source("Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift")
-        for pattern in ["withAnimation", ".animation(", ".transition(", "sensoryFeedback", "HapticManager", "onAppear"] {
-            #expect(!row.contains(pattern), "the iOS priming row uses \(pattern)")
+        for file in ["Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift",
+                     "Sources/Conclave/Features/Lobby/LobbyStatusRow+iOS.swift"] {
+            let row = try ent4Source(file)
+            for pattern in ["withAnimation", ".animation(", ".transition(", "sensoryFeedback", "HapticManager", "onAppear"] {
+                #expect(!row.contains(pattern), "\(file) uses \(pattern)")
+            }
         }
         for file in Self.kotlinFiles {
             let text = try ent4Source(file)
@@ -341,7 +347,8 @@ struct ENT4PermissionPrimingTests {
             #expect(!text.contains("performHapticFeedback") && !text.contains("LocalHapticFeedback") && !text.contains("Vibrator"), "\(file)")
             #expect(!text.contains("fontFamily") && !text.contains("ConclaveSystemBars("), "\(file)")
         }
-        for file in ["Sources/Conclave/Features/Lobby/PermissionPrimingPolicy.swift", "Sources/Conclave/Features/Join/EntryPolicies.swift"] {
+        for file in ["Sources/Conclave/Features/Lobby/PermissionPrimingPolicy.swift", "Sources/Conclave/Features/Join/EntryPolicies.swift",
+                     "Sources/Conclave/Features/Lobby/LobbyStatusPolicy.swift"] {
             let text = try ent4Source(file)
             #expect(!text.contains("import SwiftUI") && !text.contains("import AVFoundation"), "\(file)")
             #expect(ent4Matches(#"\.(?:map|compactMap|flatMap)\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*\)"#, in: text).isEmpty, "\(file)")
@@ -350,17 +357,26 @@ struct ENT4PermissionPrimingTests {
     }
 
     @Test func iosShowsInlinePermissionGuidanceAndHints() throws {
-        let row = ent4Flat(try ent4Source("Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift"))
+        let row = ent4Flat(try ent4Source("Sources/Conclave/Features/Lobby/LobbyStatusRow+iOS.swift"))
         #expect(row.contains(".buttonStyle(.borderless) .tint(HostingTheme.coralText)"), "the row's Open Settings is coralText")
         #expect(row.contains(".foregroundStyle(HostingTheme.secondaryText)"))
-        #expect(row.contains(".accessibilityHint(PermissionPrimingCopy.body(model.kind, priming: model.priming))"))
-        #expect(row.contains("if camera.placement == .card { models.append(camera) }"), "camera guidance remains reachable outside the preview")
-        #expect(row.contains("premeeting.openSystemSettings()") && row.contains("\"lobby.camera.openSettings\""))
-        #expect(row.contains("AccessibilityNotification.Announcement(PermissionPrimingCopy.title(model.kind)).post()"))
-        #expect(row.components(separatedBy: ".task(id: model.priming)").count - 1 == 1, "one announcement owner for both permission kinds")
+        #expect(row.contains("Button(action: onAction) { Text(LobbyStatusCopy.actionTitle(model.action)) .frame(minHeight: 44) .contentShape(Rectangle()) } .buttonStyle(.borderless) .tint(HostingTheme.coralText) .font(.footnote) .accessibilityHint(LobbyStatusCopy.hint(model))"),
+                "the hint sits on the button whose result it describes")
+        #expect(row.components(separatedBy: ".accessibilityHint(").count - 1 == 1, "no hint on the static text")
+        #expect(row.contains(".accessibilityElement(children: .contain) .accessibilityIdentifier(\"lobby.camera.denied\")"),
+                "camera guidance remains reachable outside the preview")
+        #expect(row.contains("premeeting.openSystemSettings()") && row.contains("base = \"lobby.camera\""))
+        #expect(row.contains(".onChange(of: rows) { previous, next in guard settled else { return } for row in next where !previous.contains(row) { EntryStatusAnnouncer.announce(LobbyStatusCopy.text(row)) } }"))
+        #expect(row.components(separatedBy: ".onChange(of: rows)").count - 1 == 1, "one announcement owner for every row")
+        #expect(!row.contains(".task(id:") && row.contains(".task { try? await Task.sleep(for: .milliseconds(Self.settleMillis)) if Task.isCancelled { return } settled = true }"), "nothing is announced when the lobby first appears")
         #expect(row.contains(".accessibilityElement(children: .contain)"))
+        let priming = ent4Flat(try ent4Source("Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift"))
+        #expect(priming.contains("enum PermissionPrimingCopy {"))
+        #expect(!priming.contains("struct PermissionPrimingSection") && !priming.contains("struct PermissionPrimingRow"),
+                "the row views moved to LobbyStatusRow+iOS.swift")
         let lobby = ent4Flat(try ent4Source("Sources/Conclave/Features/Lobby/LobbyView+iOS.swift"))
-        #expect(lobby.contains("LobbyIssueSection(premeeting: premeeting) PermissionPrimingSection(premeeting: premeeting)"))
+        #expect(lobby.contains("LobbyStatusSection(premeeting: premeeting, nameFocused: nameFocus.wrappedValue) LobbyAudioSection(premeeting: premeeting)"))
+        #expect(!lobby.contains("LobbyIssueSection") && !lobby.contains("PermissionPrimingSection"))
         #expect(!lobby.contains("LobbyMicrophonePermissionSection"))
         let card = ent4Flat(try ent4Source("Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift"))
         #expect(!card.contains("PermissionPrimingCardOverlay("), "permission guidance no longer covers the preview")
@@ -372,28 +388,35 @@ struct ENT4PermissionPrimingTests {
         #expect(services.contains("UIApplication.openSettingsURLString"))
     }
 
-    @Test func androidShowsInlineRationaleAndSettingsActions() throws {
-        let row = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/PermissionPrimingRow.kt"))
-        #expect(row.contains("val color = MaterialTheme.colorScheme.onSurfaceVariant"))
-        #expect(!row.contains("ConclaveBanner("), "permission guidance uses quiet inline content")
-        for name in ["\"pm_mic_rationale\"", "\"pm_camera_rationale\"", "\"pm_allow\"", "\"ds_not_now\"", "\"ds_open_settings\"",
-                     "\"pm_mic_access_off_reason\"", "\"pm_camera_access_off_reason\""] {
-            #expect(row.contains(name), "PermissionPrimingRow.kt lacks \(name)")
+    @Test func androidShowsOneLineStatusRowsWithOneAction() throws {
+        let rows = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyStatusRow.kt"))
+        let priming = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/PermissionPrimingRow.kt"))
+        for text in [rows, priming] {
+            for name in ["\"pm_mic_rationale\"", "\"pm_camera_rationale\"", "\"ds_not_now\""] {
+                #expect(!text.contains(name), "the Android rationale sentence and Not now leave the lobby: \(name)")
+            }
+            #expect(!text.contains("ConclaveBanner("), "permission guidance uses quiet inline content")
+            #expect(!text.contains("microphoneDismissed") && !text.contains("cameraDismissed"), "no per-lobby dismissal once Not now is gone")
         }
-        #expect(row.contains("onAllow = { if (camera) premeeting.setCameraIntent(true) else premeeting.setMicIntent(true) }"),
-                "Allow asks again through the toggle intent")
-        #expect(row.contains("var microphoneDismissed by remember(routeId) { mutableStateOf(false) }"), "Not now is per lobby")
-        #expect(row.contains("TextButton(onClick = action.onClick, modifier = Modifier.testTag(action.identifier))"))
-        #expect(row.contains("ConclaveBannerAction(conclaveString(\"ds_open_settings\"), \"$base.openSettings\", onClick = onOpenSettings)"))
-        #expect(row.contains("if (cameraModel.placement == PermissionPrimingPlacement.card) rowModels + cameraModel else rowModels"))
-        #expect(row.contains("Lifecycle.Event.ON_RESUME && paused") && row.contains("premeeting.lobbyDidAppear(routeId = routeId)"))
-        #expect(row.contains("liveRegion = LiveRegionMode.Polite"))
+        for name in ["\"pm_allow\"", "\"ds_open_settings\"", "\"pm_mic_denied_title\"", "\"pm_camera_denied_title\""] {
+            #expect(rows.contains(name), "LobbyStatusRow.kt lacks \(name)")
+        }
+        for name in ["\"pm_mic_access_off_reason\"", "\"pm_camera_access_off_reason\""] {
+            #expect(priming.contains(name), "PermissionPrimingRow.kt lacks \(name)")
+        }
+        #expect(rows.components(separatedBy: "ListItem(").count - 1 == 1, "one stock ListItem per row")
+        #expect(rows.contains("TextButton( onClick = action.onClick, modifier = Modifier.testTag(action.identifier)"))
+        #expect(rows.contains("onAllow = { if (model.mediaKind == LobbyMediaKind.camera) premeeting.setCameraIntent(true) else premeeting.setMicIntent(true) }"),
+                "Allow asks for the row's own permission through the toggle intent")
+        #expect(rows.contains("onOpenSettings = { premeeting.openSystemSettings() }"))
+        #expect(rows.contains("liveRegion = LiveRegionMode.Polite"))
+        #expect(priming.contains("Lifecycle.Event.ON_RESUME && paused") && priming.contains("premeeting.lobbyDidAppear(routeId = routeId)"))
         let screen = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyScreen.kt"))
-        #expect(screen.contains("LobbyIssueBanner(premeeting, routeId)"))
-        #expect(screen.contains("PermissionPrimingRows(premeeting, routeId)") && screen.contains("PermissionPrimingResumeEffect(premeeting, routeId)"))
+        #expect(!screen.contains("ConclaveBanner(") && !screen.contains("LobbyIssueBanner("))
+        #expect(screen.contains("LobbyStatusRows(premeeting, routeId)") && screen.contains("PermissionPrimingResumeEffect(premeeting, routeId)"))
         #expect(!screen.contains("LobbyMicrophonePermissionBanner"))
         let card = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt"))
-        #expect(!card.contains("PermissionPrimingCardOverlay("), "camera guidance is rendered with the permission rows")
+        #expect(!card.contains("PermissionPrimingCardOverlay("), "camera guidance is rendered with the status rows")
         #expect(card.contains("stateReason = permissionReasonText(LobbyMediaKind.microphone, card.micReason)"))
         #expect(!card.contains("LobbyCameraPermissionOverlay"))
         let cache = ent4Flat(try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyUiCache.kt"))
@@ -479,6 +502,7 @@ struct ENT4PermissionPrimingTests {
         let catalog = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         let keys = Set((try #require(catalog["strings"] as? [String: Any])).keys)
         let row = try ent4Source("Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift")
+            + (try ent4Source("Sources/Conclave/Features/Lobby/LobbyStatusRow+iOS.swift"))
         for match in ent4Matches(#"ConclaveStrings\.text\("[^"]+"\)"#, in: row) {
             let key = String(match.dropFirst("ConclaveStrings.text(\"".count).dropLast(2))
                 .replacingOccurrences(of: "\\u{2019}", with: "\u{2019}")
@@ -487,6 +511,7 @@ struct ENT4PermissionPrimingTests {
         let resources = try ent4Source("Android/app/src/main/res/values/strings.xml")
         let kotlin = try ent4Source("Sources/Conclave/Skip/ui/lobby/PermissionPrimingRow.kt")
             + (try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt"))
+            + (try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyStatusRow.kt"))
         for match in ent4Matches(#"conclaveString\("[a-z0-9_]+"\)"#, in: kotlin) {
             let name = String(match.dropFirst("conclaveString(\"".count).dropLast(2))
             #expect(resources.contains("name=\"\(name)\""), "missing Android resource \(name)")

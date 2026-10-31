@@ -107,6 +107,7 @@ private struct MeetingDetailsSection: View {
         ForEach(MeetingInfoPolicy.sectionRows(info, section: section)) { row in
             MeetingDetailsRowView(row: row.row, info: info, webinarLinkProvider: webinarLinkProvider)
                 .accessibilityIdentifier("meetingInfo.row." + row.id)
+                .listRowBackground(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised))
         }
     }
 }
@@ -205,6 +206,7 @@ private struct MeetingDetailsCopyRow: View {
     let announcement: String
     @State private var copies = 0
     @State private var showsCopied = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button {
@@ -215,6 +217,8 @@ private struct MeetingDetailsCopyRow: View {
         } label: {
             Label(showsCopied ? ConclaveStrings.text("Copied") : title,
                   systemImage: showsCopied ? ConclaveSymbols.checkmark : ConclaveSymbols.docOnDoc)
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                .animation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion), value: showsCopied)
         }
         .conclaveGestureFeedback(.linkCopied, trigger: copies)
         .task(id: copies) {
@@ -268,6 +272,7 @@ private struct MeetingDetailsWebinarCopyRow: View {
     @State private var isGenerating = false
     @State private var copies = 0
     @State private var showsCopied = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Button {
@@ -276,6 +281,8 @@ private struct MeetingDetailsWebinarCopyRow: View {
             HStack {
                 Label(showsCopied ? ConclaveStrings.text("Copied") : ConclaveStrings.text("Copy Link"),
                       systemImage: showsCopied ? ConclaveSymbols.checkmark : ConclaveSymbols.docOnDoc)
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                    .animation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion), value: showsCopied)
                 Spacer(minLength: 8)
                 if isGenerating {
                     ProgressView()

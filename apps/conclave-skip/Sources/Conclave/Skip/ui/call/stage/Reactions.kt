@@ -3,6 +3,9 @@ package conclave.module
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +28,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -49,6 +53,8 @@ internal fun ReactionBurstLayer(stage: StagePresenter, modifier: Modifier = Modi
 @Composable
 private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean) {
     val rise = remember { Animatable(0f) }
+    val drift = remember { Animatable(0f) }
+    val pop = remember { Animatable(if (reduceMotion) 1f else StageReactionPolicy.popFromScale.toFloat()) }
     val alpha = remember { Animatable(if (reduceMotion) 0f else 1f) }
     LaunchedEffect(Unit) {
         val riseMillis = StageReactionPolicy.riseMillis.toInt()
@@ -60,7 +66,14 @@ private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean) {
             alpha.animateTo(0f, tween(fadeOut))
         } else {
             launch {
+                pop.animateTo(1f, spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium))
+            }
+            launch {
                 rise.animateTo(StageReactionPolicy.riseDistance.toFloat(), tween(riseMillis, easing = CubicBezierEasing(0f, 0f, 0.2f, 1f)))
+            }
+            launch {
+                drift.animateTo((StageReactionPolicy.driftDirection(event.id) * StageReactionPolicy.driftDistance).toFloat(),
+                    tween(riseMillis, easing = LinearOutSlowInEasing))
             }
             val fadeStart = (riseMillis * StageReactionPolicy.fadeStartFraction).toInt()
             delay(fadeStart.toLong())
@@ -76,8 +89,11 @@ private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean) {
         else -> event.senderName
     }
     Column(
-        Modifier.offset(x = (lane * StageReactionPolicy.laneOffset).dp).graphicsLayer {
+        Modifier.zIndex(if (event.isLocal) 1f else 0f).offset(x = (lane * StageReactionPolicy.laneOffset).dp).graphicsLayer {
+            translationX = drift.value.dp.toPx()
             translationY = -rise.value.dp.toPx()
+            scaleX = pop.value
+            scaleY = pop.value
             this.alpha = alpha.value
         },
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -94,9 +110,15 @@ private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean) {
                     style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Clip)
             }
         }
-        Surface(shape = CircleShape, color = ext.labelScrim, contentColor = scheme.onSurface) {
+        val label: @Composable () -> Unit = {
             ConclaveText(name, line = "stage.reaction.${event.id}.name", style = MaterialTheme.typography.labelSmall, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+        }
+        if (event.isLocal) {
+            Surface(shape = CircleShape, color = scheme.surfaceContainerHigh, contentColor = scheme.primary,
+                border = BorderStroke(1.dp, ext.border)) { label() }
+        } else {
+            Surface(shape = CircleShape, color = ext.labelScrim, contentColor = scheme.onSurface) { label() }
         }
     }
 }

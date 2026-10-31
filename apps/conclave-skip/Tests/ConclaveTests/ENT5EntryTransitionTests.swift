@@ -269,9 +269,11 @@ struct ENT5EntryTransitionTests {
     @Test func theIOSEntryFilesFollowTheSpec() throws {
         let block = try ent5Source("Sources/Conclave/Features/Lobby/EntryStatusBlock+iOS.swift")
         let flatBlock = ent5Flat(block)
-        #expect(flatBlock.contains("ConclaveButton(EntryStatusCopy.pendingTitle(status.intent), role: .primary, isEnabled: false, isPending: true, identifier: \"lobby.primary\") {}"))
-        #expect(flatBlock.contains("ConclaveButton(ConclaveStrings.text(\"Cancel\"), role: .tonal, identifier: \"lobby.waiting.cancel\") { premeeting.cancelJoin() }"),
-                "9 c: no coral action while waiting")
+        #expect(flatBlock.components(separatedBy: "ConclaveFloatingActionButton(").count - 1 == 1,
+                "one main action for editing, connecting, waiting and failed, so focus survives Join to Try Again")
+        #expect(flatBlock.contains("let isPending = LobbyStatusPolicy.pendingKind(status: status) != LobbyPendingKind.none || status.isPrimaryPending"))
+        #expect(flatBlock.contains("isPending: isPending, identifier: isFailed ? \"lobby.retry\" : \"lobby.primary\")"))
+        #expect(!block.contains("ConclaveButton("), "9 c: the toolbar Cancel is the one Cancel while waiting")
         #expect(block.contains(".accessibilityFocused($isRetryFocused)"), "8 i: Try Again is focused")
         #expect(block.contains("AccessibilityNotification.Announcement(ConclaveStrings.format(\"Joining %@\", label)).post()"))
         #expect(!block.contains("Notify Me When"), "RECONCILE R5: the Notify row stays hidden until SYS-3")
@@ -371,18 +373,18 @@ struct ENT5EntryTransitionTests {
     @Test func entryStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent5Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Joining\u{2026}", "Starting\u{2026}", "Still connecting. Check your connection.",
-                    "You\u{2019}re offline. Waiting for a connection.", "Joining %@", "Couldn\u{2019}t join",
-                    "You\u{2019}ll join as soon as someone lets you in.", "You\u{2019}re in. Joining now.",
+        for key in ["Joining\u{2026}", "Starting\u{2026}", "Still connecting", "Reconnecting\u{2026}", "Joining %@",
+                    "Couldn\u{2019}t join", "Couldn\u{2019}t reach Conclave", "Hang tight.", "You\u{2019}re in. Joining now.",
                     "The meeting server is restarting. Try again in a moment."] {
             #expect(strings[key] != nil, "missing iOS key \(key)")
         }
         let xml = try ent5Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["pm_joining", "pm_starting", "pm_still_connecting", "pm_offline_waiting", "pm_fail_network", "pm_fail_media",
-                     "pm_fail_server_busy", "pm_fail_unknown", "pm_announce_joining", "pm_announce_couldnt_join", "pm_wait_standard",
-                     "pm_wait_locked", "pm_wait_no_host", "pm_wait_host_available", "pm_wait_reconnecting", "pm_wait_offline",
-                     "pm_wait_server_restart", "pm_admitted", "pm_stop_asking_title", "pm_stop_asking_body",
-                     "pm_stop_asking_confirm", "pm_keep_waiting"] {
+        for name in ["pm_joining", "pm_starting", "pm_reconnecting", "pm_status_still_connecting", "pm_fail_network", "pm_fail_media",
+                     "pm_fail_server_busy", "pm_fail_unknown", "pm_status_fail_network", "pm_status_fail_media",
+                     "pm_status_fail_server_busy", "pm_announce_joining", "pm_status_wait_standard", "pm_status_wait_locked",
+                     "pm_status_wait_no_host", "pm_status_wait_host_available", "pm_status_wait_reconnecting",
+                     "pm_status_wait_offline", "pm_status_wait_server_restart", "pm_admitted", "pm_stop_asking_title",
+                     "pm_stop_asking_body", "pm_stop_asking_confirm", "pm_keep_waiting"] {
             #expect(xml.contains("<string name=\"\(name)\""), "missing \(name)")
         }
     }

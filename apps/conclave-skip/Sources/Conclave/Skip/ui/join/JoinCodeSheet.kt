@@ -4,6 +4,14 @@ import androidx.compose.foundation.layout.size
 
 import androidx.compose.material3.Icon
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.clearAndSetSemantics
+
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
@@ -65,6 +73,11 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
     var isSubmitting by remember { mutableStateOf(false) }
     val clipboardHasText = remember { joinClipboardHasText(context) }
     val suggestion = premeeting.home.rejoin?.title
+    val seed = remember(text, premeeting.home.revision) {
+        JoinRoomIdentityPolicy.seed(input = text, knownRoomIds = JoinRoomIdentityPolicy.knownRoomIds(home = premeeting.home))
+    }
+    val rejoinSeed = remember(premeeting.home.revision) { JoinRoomIdentityPolicy.rejoinSeed(home = premeeting.home) }
+    val rejoinIdentity = remember(rejoinSeed) { ConclaveAvatarIdentity.fromSeed(rejoinSeed) }
     val isValid = EntryPolicies.isValidJoinInput(text)
     val compactHeight = LocalConfiguration.current.screenHeightDp < 480
 
@@ -117,8 +130,27 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
                         showsInvalid = false
                     },
                     label = { Text(conclaveString("pm_code_or_link_label")) },
-                    supportingText = {
-                        Text(if (showsInvalid) conclaveString("pm_code_invalid") else conclaveString("pm_code_help"))
+                    leadingIcon = {
+                        AnimatedContent(
+                            targetState = seed,
+                            modifier = Modifier.size(28.dp).clearAndSetSemantics { },
+                            transitionSpec = {
+                                (scaleIn(ConclaveMotion.spatialDefault(), initialScale = 0.85f) + fadeIn(ConclaveMotion.fast())) togetherWith
+                                    fadeOut(ConclaveMotion.fast())
+                            },
+                            contentAlignment = Alignment.Center,
+                        ) { s ->
+                            if (s.isEmpty()) {
+                                Icon(ConclaveIcons.LinkFill0, null)
+                            } else {
+                                ConclaveAvatar(remember(s) { ConclaveAvatarIdentity.fromSeed(s) }, 28.dp)
+                            }
+                        }
+                    },
+                    supportingText = if (showsInvalid) {
+                        { Text(conclaveString("pm_code_invalid")) }
+                    } else {
+                        null
                     },
                     isError = showsInvalid,
                     singleLine = true,
@@ -152,6 +184,11 @@ internal fun JoinCodeSheet(premeeting: PremeetingPresenter) {
                                 onClick = { premeeting.rejoin() },
                                 label = { Text(conclaveString("pm_rejoin_named", suggestion)) },
                                 modifier = Modifier.testTag("join.rejoinSuggestion"),
+                                icon = if (rejoinSeed.isEmpty()) {
+                                    null
+                                } else {
+                                    { ConclaveAvatar(rejoinIdentity, 18.dp) }
+                                },
                             )
                         }
                     }

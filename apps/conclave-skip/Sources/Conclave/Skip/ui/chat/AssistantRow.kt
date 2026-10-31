@@ -47,6 +47,7 @@ internal fun AssistantRow(entry: ChatRowEntry, actions: ChatRowActions, sidePane
     val model = entry.assistant ?: AssistantRowModel.placeholder
     val finished = model.state == AssistantRowState.done
     val haptics = rememberConclaveHaptics()
+    val initialChipIds = remember(row.id) { row.reactions.toList().map { it.emoji }.toSet() }
     val label = assistantRowLabel(row, model)
     val retryLabel = conclaveString("ds_try_again")
     val hasMenu = row.canReply || row.canReact || row.canCopy || row.canCopyLink || row.reactions.count > 0
@@ -85,6 +86,7 @@ internal fun AssistantRow(entry: ChatRowEntry, actions: ChatRowActions, sidePane
                     onLongPress = { _ -> actions.openViewer(row.id) },
                     longPressLabel = conclaveString("chat_action_reactions"),
                     haptics = haptics,
+                    initialIds = initialChipIds,
                 )
             }
         }

@@ -38,8 +38,9 @@ internal fun OutcomeScreen(premeeting: PremeetingPresenter) {
     val outcome = premeeting.outcome ?: return
     val scheme = MaterialTheme.colorScheme
     val title = conclaveString(OutcomeUi.titleName(outcome.variant))
+    val hasBody = OutcomeUi.hasBody(outcome.variant)
     val bodyName = OutcomeUi.bodyName(outcome)
-    val body = if (bodyName.isEmpty()) outcome.serverDetail else conclaveString(bodyName)
+    val body = if (!hasBody) "" else if (bodyName.isEmpty()) outcome.serverDetail else conclaveString(bodyName)
     val detail = if (outcome.variant == OutcomeVariant.removed && outcome.serverDetail.isNotEmpty()) {
         OutcomeUi.quoted(outcome.serverDetail)
     } else {
@@ -62,9 +63,11 @@ internal fun OutcomeScreen(premeeting: PremeetingPresenter) {
                 Spacer(Modifier.height(16.dp))
                 Text(title, style = MaterialTheme.typography.headlineSmall, color = scheme.onSurface,
                     textAlign = TextAlign.Center, modifier = Modifier.semantics { heading() }.testTag("outcome.title"))
-                Spacer(Modifier.height(8.dp))
-                Text(body, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center)
+                if (hasBody) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(body, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center)
+                }
                 if (detail.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     Text(detail, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurfaceVariant,
@@ -104,9 +107,13 @@ internal object OutcomeUi {
         OutcomeVariant.rejoinFailed -> "pm_couldnt_rejoin"
     }
 
+    fun hasBody(variant: OutcomeVariant): Boolean = when (variant) {
+        OutcomeVariant.removed, OutcomeVariant.denied -> false
+        OutcomeVariant.connectionLost, OutcomeVariant.serverDisconnected, OutcomeVariant.rejoinFailed -> true
+    }
+
     fun bodyName(outcome: OutcomeModel): String = when (outcome.variant) {
-        OutcomeVariant.removed -> "pm_removed_body"
-        OutcomeVariant.denied -> "pm_denied_body"
+        OutcomeVariant.removed, OutcomeVariant.denied -> ""
         OutcomeVariant.connectionLost -> "pm_lost_body"
         OutcomeVariant.serverDisconnected -> "pm_disconnected_body"
         OutcomeVariant.rejoinFailed ->

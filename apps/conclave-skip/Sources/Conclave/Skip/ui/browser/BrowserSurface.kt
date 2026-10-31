@@ -24,8 +24,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -353,33 +351,35 @@ internal fun BrowserStageMenu(browser: BrowserStagePresenter) {
                 Icon(ConclaveIcons.MoreVertFill0, contentDescription = conclaveString("br_more_actions"), tint = scheme.onSurface)
             }
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "browser.actions") {
             if (model.showsAudioControl) {
-                DropdownMenuItem(
-                    text = { Text(conclaveString(if (model.isAudioMuted) "br_unmute_audio" else "br_mute_audio")) },
+                ConclaveMenuItem(
+                    title = conclaveString(if (model.isAudioMuted) "br_unmute_audio" else "br_mute_audio"),
+                    identifier = "browser.menu.audio",
                     onClick = {
                         expanded = false
                         browser.toggleAudio()
                     },
-                    modifier = Modifier.testTag("browser.menu.audio"),
                 )
             }
-            DropdownMenuItem(
-                text = { Text(conclaveString("br_session_info")) },
+            ConclaveMenuItem(
+                title = conclaveString("br_session_info"),
+                identifier = "browser.menu.sessionInfo",
                 onClick = {
                     expanded = false
                     sessionInfo = true
                 },
-                modifier = Modifier.testTag("browser.menu.sessionInfo"),
             )
-            DropdownMenuItem(
-                text = { Text(conclaveString("act_close_browser"), color = scheme.error) },
+            ConclaveMenuDivider()
+            ConclaveMenuItem(
+                title = conclaveString("act_close_browser"),
+                identifier = "browser.menu.close",
                 onClick = {
                     expanded = false
                     confirmClose = true
                 },
+                role = ConclaveMenuRole.Destructive,
                 enabled = !model.closePending,
-                modifier = Modifier.testTag("browser.menu.close"),
             )
         }
     }

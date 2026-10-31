@@ -44,7 +44,8 @@ struct ConclaveButton: View {
         switch role {
         case .primary:
             Button(action: action) {
-                ButtonTitle(title: title, isPending: isPending, lineLimit: lineLimit, spinnerTint: HostingTheme.onCoral)
+                ButtonTitle(title: title, isPending: isPending, lineLimit: lineLimit, neutralWhenDisabled: true,
+                            spinnerTint: HostingTheme.onCoral)
                     .foregroundStyle(HostingTheme.onCoral)
             }
             .buttonStyle(.borderedProminent)
@@ -85,20 +86,38 @@ private struct ButtonTitle: View {
     let title: String
     let isPending: Bool
     let lineLimit: Int?
+    var neutralWhenDisabled = false
 
     let spinnerTint: Color?
+    @Environment(\.isEnabled) private var isEnabled
+
+    private var usesNeutralLabel: Bool { neutralWhenDisabled && !isEnabled }
 
     var body: some View {
         HStack(spacing: 8) {
             if isPending {
                 ProgressView()
-                    .tint(spinnerTint)
+                    .tint(usesNeutralLabel ? Color.primary : spinnerTint)
                     .accessibilityHidden(true)
             }
             Text(title)
                 .lineLimit(lineLimit)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        .modifier(NeutralLabel(isActive: usesNeutralLabel))
+    }
+}
+
+private struct NeutralLabel: ViewModifier {
+    let isActive: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isActive {
+            content.foregroundStyle(Color.primary)
+        } else {
+            content
         }
     }
 }

@@ -20,8 +20,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -307,8 +305,8 @@ private fun AppWatchVideoItem(host: AppHostPresenter, watch: WatchPageModel, vid
                             Icon(ConclaveIcons.MoreVertFill0, contentDescription = conclaveString("ds_more_options"),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                            DropdownMenuItem(text = { Text(conclaveString("app_watch_play_now")) }, onClick = {
+                        ConclaveDropdownMenu(expanded = menu, onDismissRequest = { menu = false }, identifier = "app.watch.video.menu") {
+                            ConclaveMenuItem(title = conclaveString("app_watch_play_now"), identifier = "app.watch.video.playNow", onClick = {
                                 menu = false
                                 host.pickWatchVideo(video, action = WatchPickAction.playNow)
                             })
@@ -352,19 +350,21 @@ private fun AppWatchQueueItem(host: AppHostPresenter, watch: WatchPageModel, ite
                                 Icon(ConclaveIcons.MoreVertFill0, contentDescription = conclaveString("ds_more_options"),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                DropdownMenuItem(text = { Text(upLabel) }, enabled = canUp, onClick = {
+                            ConclaveDropdownMenu(expanded = menu, onDismissRequest = { menu = false }, identifier = "app.watch.queue.menu") {
+                                ConclaveMenuItem(title = upLabel, identifier = "app.watch.queue.up", enabled = canUp, onClick = {
                                     menu = false
                                     host.moveQueuedVideo(item.id, direction = -1)
                                 })
-                                DropdownMenuItem(text = { Text(downLabel) }, enabled = canDown, onClick = {
+                                ConclaveMenuItem(title = downLabel, identifier = "app.watch.queue.down", enabled = canDown, onClick = {
                                     menu = false
                                     host.moveQueuedVideo(item.id, direction = 1)
                                 })
-                                DropdownMenuItem(text = { Text(conclaveString("app_remove"), color = MaterialTheme.colorScheme.error) }, onClick = {
-                                    menu = false
-                                    host.removeQueuedVideo(item.id)
-                                })
+                                ConclaveMenuDivider()
+                                ConclaveMenuItem(title = conclaveString("app_remove"), identifier = "app.watch.queue.remove",
+                                    role = ConclaveMenuRole.Destructive, onClick = {
+                                        menu = false
+                                        host.removeQueuedVideo(item.id)
+                                    })
                             }
                         }
                     }

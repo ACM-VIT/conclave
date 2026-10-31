@@ -9,6 +9,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -20,17 +21,18 @@ internal object ConclaveFloatingActionScrimDefaults {
 }
 
 @Composable
-internal fun ConclaveFloatingActionScrim(modifier: Modifier = Modifier, bottomPadding: Dp = 0.dp) {
+internal fun ConclaveFloatingActionScrim(modifier: Modifier = Modifier, bottomPadding: Dp = 0.dp, opaque: Boolean = false) {
     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val veil = Color(DesignTokens.neutralStage)
     val alpha = if (dark) ConclaveFloatingActionScrimDefaults.darkAlpha else ConclaveFloatingActionScrimDefaults.lightAlpha
+    val ground = if (opaque) veil.copy(alpha = alpha).compositeOver(MaterialTheme.colorScheme.surface) else veil.copy(alpha = alpha)
     Spacer(
         modifier.drawWithCache {
             val fade = ConclaveFloatingActionScrimDefaults.fadeHeight.toPx()
             val band = (size.height + bottomPadding.toPx()).coerceAtLeast(0f)
             val span = fade + band + fade
-            val clear = veil.copy(alpha = 0f)
-            val solid = veil.copy(alpha = alpha)
+            val clear = ground.copy(alpha = 0f)
+            val solid = ground
             val ramp = Brush.verticalGradient(
                 0f to clear,
                 fade / span to solid,

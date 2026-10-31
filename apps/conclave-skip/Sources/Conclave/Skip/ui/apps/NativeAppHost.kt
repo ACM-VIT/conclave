@@ -26,10 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -174,28 +171,30 @@ internal fun NativeAppHostMenu(host: AppHostPresenter) {
                 Icon(ConclaveIcons.MoreVertFill0, contentDescription = conclaveString("app_more_actions", name), tint = scheme.onSurface)
             }
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.host.actions") {
             if (model.canLock) {
-                DropdownMenuItem(
-                    text = { Text(conclaveString("app_lock_editing")) },
+                ConclaveMenuItem(
+                    title = conclaveString("app_lock_editing"),
+                    identifier = "app.host.lock",
                     onClick = {
                         expanded = false
                         host.setLocked(!model.isLocked)
                     },
+                    role = ConclaveMenuRole.Toggle(model.isLocked),
                     enabled = !model.lockPending,
-                    trailingIcon = { Checkbox(checked = model.isLocked, onCheckedChange = null) },
-                    modifier = Modifier.testTag("app.host.lock"),
                 )
             }
             if (model.canClose) {
-                DropdownMenuItem(
-                    text = { Text(conclaveString("act_close_app", name), color = scheme.error) },
+                if (model.canLock) ConclaveMenuDivider()
+                ConclaveMenuItem(
+                    title = conclaveString("act_close_app", name),
+                    identifier = "app.host.close",
                     onClick = {
                         expanded = false
                         confirmClose = true
                     },
+                    role = ConclaveMenuRole.Destructive,
                     enabled = !model.closePending,
-                    modifier = Modifier.testTag("app.host.close"),
                 )
             }
         }
@@ -401,16 +400,16 @@ private fun ShapeMenu(host: AppHostPresenter, onSelect: (AppWhiteboardTool) -> U
         AppToolChip(appHostCommand(AppHostCommandKind.setFill), selected = isShape,
             pending = toolbar.isPending(AppHostCommandKind.setTool) || toolbar.isPending(AppHostCommandKind.setFill),
             enabled = true, identifier = "app.wb.shape") { expanded = true }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.wb.shape.menu") {
             for (tool in listOf(AppWhiteboardTool.rect, AppWhiteboardTool.ellipse, AppWhiteboardTool.line, AppWhiteboardTool.arrow)) {
-                CheckedMenuItem(appHostTool(tool), checked = toolbar.tool == tool.rawValue) {
+                WhiteboardChoiceItem(appHostTool(tool), "app.wb.shape.${tool.rawValue}", checked = toolbar.tool == tool.rawValue) {
                     expanded = false
                     onSelect(tool)
                 }
             }
-            HorizontalDivider()
+            ConclaveMenuDivider()
             for (fill in listOf(AppShapeFill.outline, AppShapeFill.filled)) {
-                CheckedMenuItem(appHostFill(fill), checked = toolbar.filled == (fill == AppShapeFill.filled)) {
+                WhiteboardChoiceItem(appHostFill(fill), "app.wb.fill.${fill.rawValue}", checked = toolbar.filled == (fill == AppShapeFill.filled)) {
                     expanded = false
                     host.perform(AppHostCommandKind.setFill, value = fill.rawValue)
                 }
@@ -428,19 +427,13 @@ private fun ColorMenu(host: AppHostPresenter) {
         AppToolChip(appHostCommand(AppHostCommandKind.setColor), selected = false, pending = toolbar.isPending(AppHostCommandKind.setColor),
             enabled = true, identifier = "app.wb.color", stateText = currentName,
             leading = { InkSwatch(toolbar.color) }) { expanded = true }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.wb.color.menu") {
             for (color in AppInkColor.allCases) {
-                DropdownMenuItem(
-                    text = { Text(appHostColor(color)) },
-                    leadingIcon = { InkSwatch(color.rawValue) },
-                    trailingIcon = if (toolbar.color == color.rawValue) {
-                        { Icon(ConclaveIcons.CheckFill0, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface) }
-                    } else null,
-                    onClick = {
-                        expanded = false
-                        host.perform(AppHostCommandKind.setColor, value = color.rawValue)
-                    },
-                )
+                WhiteboardChoiceItem(appHostColor(color), "app.wb.color.${color.rawValue.removePrefix("#")}", checked = toolbar.color == color.rawValue,
+                    leadingContent = { Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { InkSwatch(color.rawValue) } }) {
+                    expanded = false
+                    host.perform(AppHostCommandKind.setColor, value = color.rawValue)
+                }
             }
         }
     }
@@ -454,9 +447,9 @@ private fun WidthMenu(host: AppHostPresenter) {
         AppToolChip(appHostCommand(AppHostCommandKind.setStrokeWidth), selected = false,
             pending = toolbar.isPending(AppHostCommandKind.setStrokeWidth), enabled = true, identifier = "app.wb.width",
             stateText = appHostWidth(toolbar.strokeWidth)) { expanded = true }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.wb.width.menu") {
             for (width in AppStrokeWidths.steps) {
-                CheckedMenuItem(appHostWidth(width), checked = toolbar.strokeWidth == width) {
+                WhiteboardChoiceItem(appHostWidth(width), "app.wb.width.$width", checked = toolbar.strokeWidth == width) {
                     expanded = false
                     host.perform(AppHostCommandKind.setStrokeWidth, value = width.toString())
                 }
@@ -474,24 +467,25 @@ private fun PageMenu(host: AppHostPresenter, onRename: () -> Unit, onDelete: () 
     Box {
         AppToolChip(appHostCommand(AppHostCommandKind.setPage), selected = false, pending = pending, enabled = true,
             identifier = "app.wb.page", stateText = toolbar.pageName) { expanded = true }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.wb.page.menu") {
             for (page in toolbar.pages) {
-                CheckedMenuItem(page.name, checked = page.isCurrent) {
+                WhiteboardChoiceItem(page.name, "app.wb.page.select.${page.id}", checked = page.isCurrent) {
                     expanded = false
                     host.perform(AppHostCommandKind.setPage, value = page.id)
                 }
             }
-            HorizontalDivider()
-            DropdownMenuItem(text = { Text(appHostCommand(AppHostCommandKind.addPage)) }, onClick = {
+            ConclaveMenuDivider()
+            ConclaveMenuItem(title = appHostCommand(AppHostCommandKind.addPage), identifier = "app.wb.page.add", onClick = {
                 expanded = false
                 host.perform(AppHostCommandKind.addPage)
             })
-            DropdownMenuItem(text = { Text(appHostCommand(AppHostCommandKind.renamePage)) }, enabled = toolbar.pageId.isNotEmpty(), onClick = {
-                expanded = false
-                onRename()
-            })
-            DropdownMenuItem(text = { Text(appHostCommand(AppHostCommandKind.deletePage), color = MaterialTheme.colorScheme.error) },
-                enabled = toolbar.pages.count >= 2, onClick = {
+            ConclaveMenuItem(title = appHostCommand(AppHostCommandKind.renamePage), identifier = "app.wb.page.rename",
+                enabled = toolbar.pageId.isNotEmpty(), onClick = {
+                    expanded = false
+                    onRename()
+                })
+            ConclaveMenuItem(title = appHostCommand(AppHostCommandKind.deletePage), identifier = "app.wb.page.delete",
+                role = ConclaveMenuRole.Destructive, enabled = toolbar.pages.count >= 2, onClick = {
                     expanded = false
                     onDelete()
                 })
@@ -500,15 +494,14 @@ private fun PageMenu(host: AppHostPresenter, onRename: () -> Unit, onDelete: () 
 }
 
 @Composable
-private fun CheckedMenuItem(label: String, checked: Boolean, onClick: () -> Unit) {
-    DropdownMenuItem(
-        text = { Text(label) },
-        trailingIcon = if (checked) {
-            { Icon(ConclaveIcons.CheckFill0, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface) }
-        } else null,
-        onClick = onClick,
-        modifier = Modifier.semantics { if (checked) stateDescription = label },
-    )
+private fun WhiteboardChoiceItem(
+    label: String,
+    identifier: String,
+    checked: Boolean,
+    leadingContent: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    ConclaveMenuItem(title = label, identifier = identifier, onClick = onClick, role = ConclaveMenuRole.Single(checked), leadingContent = leadingContent)
 }
 
 @Composable

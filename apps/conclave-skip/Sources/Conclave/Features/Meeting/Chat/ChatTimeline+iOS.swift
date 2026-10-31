@@ -329,15 +329,18 @@ private struct ChatJumpPill: View {
 private struct ChatEmptyState: View {
     let chat: ChatPresenter
     let actions: ChatRowActions
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         ContentUnavailableView {
-            Text(ConclaveStrings.text("No Messages Yet"))
-                .accessibilityAddTraits(.isHeader)
-        } description: {
-            VStack(spacing: CGFloat(DesignTokens.space8)) {
-                Text(ConclaveStrings.text("Say hello to the room."))
+            Label {
+                Text(ConclaveStrings.text("No Messages Yet"))
+            } icon: {
+                if !dynamicTypeSize.isAccessibilitySize {
+                    ChatGhostArt()
+                }
             }
+            .accessibilityAddTraits(.isHeader)
         } actions: {
             if chat.composer.assistant != AssistantAvailability.unavailable {
                 Button(ConclaveStrings.text("Ask Conclave AI")) {
@@ -349,6 +352,28 @@ private struct ChatEmptyState: View {
             }
         }
         .accessibilityIdentifier("chat.empty")
+    }
+}
+
+private struct ChatGhostArt: View {
+    var body: some View {
+        VStack(spacing: CGFloat(DesignTokens.space8)) {
+            VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space2)) {
+                RoundedRectangle(cornerRadius: CGFloat(ConclaveBubbleGeometry.iosCornerRadius), style: .continuous)
+                    .fill(ConclaveBubbleColors.fill(.peer))
+                    .frame(width: 112, height: 26)
+                RoundedRectangle(cornerRadius: CGFloat(ConclaveBubbleGeometry.iosCornerRadius), style: .continuous)
+                    .fill(ConclaveBubbleColors.fill(.peer))
+                    .frame(width: 80, height: 26)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            RoundedRectangle(cornerRadius: CGFloat(ConclaveBubbleGeometry.iosCornerRadius), style: .continuous)
+                .fill(ConclaveBubbleColors.fill(.own))
+                .frame(width: 64, height: 26)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .frame(width: 160, height: 88)
+        .accessibilityHidden(true)
     }
 }
 #endif
