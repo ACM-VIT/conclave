@@ -476,7 +476,7 @@ final class StagePresenter {
         if inputs.isWebinarAttendee { nextKind = AttendeeViewerPolicy.kind(attendeeFeed) }
         let capacity = StageLayoutPolicy.capacity(viewport: viewport, kind: nextKind, count: present.count,
                                                   viewMaxTiles: inputs.viewMaxTiles)
-        let keepSpeaker = currentSpeakerId.isEmpty ? featuredUserId : currentSpeakerId
+        let keepSpeaker = currentSpeakerId
         let filtered = StageOrderPolicy.applyHideFilter(remoteOrder, participants: present,
                                                         hideTilesWithoutVideo: inputs.hideTilesWithoutVideo,
                                                         featuredUserId: keepSpeaker, pinnedUserId: inputs.pinnedUserId)
@@ -492,7 +492,9 @@ final class StagePresenter {
             presenterUserId: inputs.screenShareUserId,
             selfViewMode: inputs.selfViewMode,
             webinarSpeakerUserId: inputs.webinarSpeakerUserId,
-            fitOverrides: fitOverrides
+            fitOverrides: fitOverrides,
+            viewMode: inputs.viewMode,
+            hasActivitySurface: !inputs.activeAppId.isEmpty || inputs.isBrowserActive
         ))
 
         let corner = EffectsSelfViewPolicy.corner(selfViewCorner: inputs.selfViewCorner,

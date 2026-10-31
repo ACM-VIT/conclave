@@ -1,0 +1,242 @@
+#if !SKIP
+import Foundation
+import Testing
+@testable import Conclave
+
+struct ENTFlipAndroidThemeTests {
+
+    static let res = "Android/app/src/main/res"
+    static let baseTheme = "Android/app/src/main/res/values/themes.xml"
+    static let manifest = "Android/app/src/main/AndroidManifest.xml"
+    static let accentItems: [String: String] = [
+        "colorPrimary": "@color/conclave_primary",
+        "colorOnPrimary": "@color/conclave_on_primary",
+        "colorSecondary": "@color/conclave_primary",
+        "colorOnSecondary": "@color/conclave_on_primary",
+        "colorControlActivated": "@color/conclave_primary",
+        "android:colorAccent": "@color/conclave_primary",
+    ]
+
+    @Test func theLaunchThemeFollowsTheSystemAppearance() throws {
+        let base = try entFlipSource(Self.baseTheme)
+        #expect(base.contains("<style name=\"Base.Theme.Conclave\" parent=\"Theme.Material3.DayNight.NoActionBar\">"))
+        #expect(base.contains("<style name=\"Theme.Conclave\" parent=\"Base.Theme.Conclave\" />"))
+        for file in try entFlipValuesFiles() {
+            #expect(!(try entFlipSource(file)).contains("Theme.Material3.Dark"), "\(file) pins the always dark parent")
+        }
+        #expect(try entFlipSource(Self.manifest).contains("android:theme=\"@style/Theme.Conclave\""))
+    }
+
+    @Test func theWindowBackgroundIsTheGeneratedBackgroundInBothAppearances() throws {
+        let items = try entFlipStyleItems(Self.baseTheme, style: "Base.Theme.Conclave")
+        #expect(items["android:windowBackground"] == "@color/conclave_window_background")
+        #expect(items["android:colorBackground"] == "@color/conclave_window_background")
+        #expect(items["colorPrimaryDark"] == "@color/conclave_window_background")
+        let day = try entFlipColors("values"), night = try entFlipColors("values-night")
+        #expect(day["conclave_window_background"] == entFlipARGB(DesignTokens.androidLightBackground))
+        #expect(night["conclave_window_background"] == entFlipARGB(DesignTokens.androidDarkBackground))
+        #expect(day["conclave_window_background"] == "#FFFFFFFF")
+        #expect(night["conclave_window_background"] == "#FF0A0A0B")
+    }
+
+    @Test func theSplashBackgroundMatchesTheWindowPerQualifier() throws {
+        var splash: [String: [String]] = [:]
+        for file in try entFlipValuesFiles() {
+            let folder = URL(fileURLWithPath: file).deletingLastPathComponent().lastPathComponent
+            for item in try entFlipItems(file) where item.name == "android:windowSplashScreenBackground" {
+                splash[folder, default: []].append(item.value)
+            }
+        }
+        #expect(splash == ["values-v31": ["@color/conclave_window_background"], "values-night-v31": ["@color/conclave_window_background"]])
+        for folder in ["values-v31", "values-night-v31"] {
+            let path = "\(Self.res)/\(folder)/themes.xml"
+            #expect(try entFlipSource(path).contains("<style name=\"Theme.Conclave\" parent=\"Base.Theme.Conclave\">"), "\(folder)")
+            let items = try entFlipStyleItems(path, style: "Theme.Conclave")
+            #expect(items == ["android:windowSplashScreenBackground": "@color/conclave_window_background"], "\(folder)")
+        }
+    }
+
+    @Test func accentItemsReadTheGeneratedPrimaryPair() throws {
+        let items = try entFlipStyleItems(Self.baseTheme, style: "Base.Theme.Conclave")
+        for (name, value) in Self.accentItems {
+            #expect(items[name] == value, "\(name)")
+        }
+        let day = try entFlipColors("values"), night = try entFlipColors("values-night")
+        #expect(day["conclave_primary"] == entFlipARGB(DesignTokens.androidLightPrimary))
+        #expect(day["conclave_on_primary"] == entFlipARGB(DesignTokens.androidLightOnPrimary))
+        #expect(night["conclave_primary"] == entFlipARGB(DesignTokens.androidDarkPrimary))
+        #expect(night["conclave_on_primary"] == entFlipARGB(DesignTokens.androidDarkOnPrimary))
+        #expect(day["conclave_primary"] == "#FFB94333" && day["conclave_on_primary"] == "#FFFFFFFF")
+        #expect(night["conclave_primary"] == "#FFFF7D66" && night["conclave_on_primary"] == "#FF0A0A0B")
+
+        let generated = Set(day.keys)
+        #expect(Set(night.keys).isSubset(of: generated))
+        for file in try entFlipValuesFiles() where file.hasSuffix("/themes.xml") {
+            for item in try entFlipItems(file) {
+                #expect(!item.value.hasPrefix("#"), "\(file) \(item.name) uses a colour literal")
+                if item.value.hasPrefix("@color/") {
+                    let name = String(item.value.dropFirst("@color/".count))
+                    #expect(generated.contains(name), "\(file) \(item.name) reads \(item.value) outside the generated colours")
+                }
+            }
+        }
+        for folder in ["values", "values-night"] {
+            let xml = try entFlipSource("\(Self.res)/\(folder)/colors.xml")
+            #expect(xml.contains("<!-- GENERATED by packages/ui-tokens/scripts/gen-native-tokens.mjs. Do not edit. -->"), "\(folder)")
+        }
+        let generator = try entFlipSource("../../packages/ui-tokens/scripts/gen-native-tokens.mjs")
+        #expect(generator.contains("[\"conclave_primary\", tokens.android[mode].primary],"))
+        #expect(generator.contains("[\"conclave_on_primary\", tokens.android[mode].onPrimary],"))
+    }
+
+    @Test func noLegacyPaletteRemainsUnderResources() throws {
+        let files = FileManager.default
+        #expect(!files.fileExists(atPath: entFlipPackagePath("\(Self.res)/values/colors-legacy.xml")))
+        let pink = try NSRegularExpression(pattern: "#(?:[0-9a-f]{2})?ff007a(?![0-9a-f])", options: [.caseInsensitive])
+        let root = URL(fileURLWithPath: entFlipPackagePath(Self.res))
+        let enumerator = try #require(files.enumerator(at: root, includingPropertiesForKeys: nil))
+        var scanned = 0
+        while let url = enumerator.nextObject() as? URL {
+            guard ["xml", "properties"].contains(url.pathExtension) else { continue }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            scanned += 1
+            let ns = text as NSString
+            #expect(pink.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) == nil, "\(url.path) holds the legacy pink")
+            for needle in ["colors-legacy", "md_theme_", "acm_", "status_bar_color", "navigation_bar_color"] {
+                #expect(!text.contains(needle), "\(url.path) still names \(needle)")
+            }
+        }
+        #expect(scanned >= 20)
+    }
+
+    @Test func deprecatedBarColorsAreGoneAndLaunchIconsFollowTheAppearance() throws {
+        var lightBars: [String] = []
+        for file in try entFlipValuesFiles() {
+            let text = try entFlipSource(file)
+            #expect(!text.contains("statusBarColor") && !text.contains("navigationBarColor"), "\(file) sets a deprecated bar colour")
+            for item in try entFlipItems(file) where item.name == "android:windowLightStatusBar" || item.name == "android:windowLightNavigationBar" {
+                lightBars.append("\(file) \(item.style) \(item.name)=\(item.value)")
+            }
+        }
+        #expect(lightBars == ["\(Self.baseTheme) Base.Theme.Conclave android:windowLightStatusBar=?attr/isLightTheme"])
+        #expect(!FileManager.default.fileExists(atPath: entFlipPackagePath("\(Self.res)/values-night/themes.xml")))
+    }
+
+    @Test func predictiveBackNeedsNoLegacyBackOverride() throws {
+        #expect(try entFlipSource(Self.manifest).contains("android:enableOnBackInvokedCallback=\"true\""))
+        var sources = ["Android/app/src/main/kotlin/Main.kt"]
+        let skip = entFlipPackagePath("Sources/Conclave/Skip")
+        let enumerator = try #require(FileManager.default.enumerator(atPath: skip))
+        while let file = enumerator.nextObject() as? String {
+            guard file.hasSuffix(".kt") else { continue }
+            sources.append("Sources/Conclave/Skip/\(file)")
+        }
+        #expect(sources.count > 100)
+        for file in sources {
+            let text = try entFlipSource(file)
+            #expect(!text.contains("override fun onBackPressed"), "\(file) overrides onBackPressed")
+            #expect(!text.contains("KEYCODE_BACK"), "\(file) intercepts the back key")
+        }
+    }
+
+    @Test func themeResourcesStayFlatAndDashFree() throws {
+        var files = try entFlipValuesFiles().filter { $0.hasSuffix("/themes.xml") || $0.hasSuffix("/colors.xml") }
+        #expect(files.count >= 5)
+        files += [Self.manifest, "Tests/ConclaveTests/ENTFlipAndroidThemeTests.swift"]
+        for file in files {
+            let text = try entFlipSource(file)
+            #expect(!text.lowercased().contains("gradi" + "ent"), "\(file) mentions a forbidden fill")
+            #expect(!text.unicodeScalars.contains { $0.value == 0x2013 || $0.value == 0x2014 }, "\(file) has an en or em dash")
+        }
+    }
+}
+
+private struct ENTFlipItem {
+    let style: String
+    let name: String
+    let value: String
+}
+
+private final class ENTFlipItemCollector: NSObject, XMLParserDelegate {
+    var items: [ENTFlipItem] = []
+    private var style = ""
+    private var name: String?
+    private var text = ""
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName: String?,
+                attributes: [String: String] = [:]) {
+        if elementName == "style" { style = attributes["name"] ?? "" }
+        guard elementName == "item" else { return }
+        name = attributes["name"] ?? ""
+        text = ""
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if name != nil { text += string }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName: String?) {
+        if elementName == "style" {
+            style = ""
+            return
+        }
+        guard elementName == "item", let current = name else { return }
+        items.append(ENTFlipItem(style: style, name: current, value: text.trimmingCharacters(in: .whitespacesAndNewlines)))
+        name = nil
+    }
+}
+
+private func entFlipItems(_ packageRelativePath: String) throws -> [ENTFlipItem] {
+    let parser = try #require(XMLParser(contentsOf: URL(fileURLWithPath: entFlipPackagePath(packageRelativePath))))
+    let collector = ENTFlipItemCollector()
+    parser.delegate = collector
+    #expect(parser.parse(), "\(packageRelativePath) is not well-formed XML")
+    return collector.items
+}
+
+private func entFlipStyleItems(_ packageRelativePath: String, style: String) throws -> [String: String] {
+    var result: [String: String] = [:]
+    for item in try entFlipItems(packageRelativePath) where item.style == style {
+        #expect(result[item.name] == nil, "\(packageRelativePath) sets \(item.name) twice in \(style)")
+        result[item.name] = item.value
+    }
+    return result
+}
+
+private func entFlipValuesFiles() throws -> [String] {
+    let res = entFlipPackagePath(ENTFlipAndroidThemeTests.res)
+    var files: [String] = []
+    for folder in try FileManager.default.contentsOfDirectory(atPath: res).sorted() where folder.hasPrefix("values") {
+        for name in try FileManager.default.contentsOfDirectory(atPath: res + "/" + folder).sorted() where name.hasSuffix(".xml") {
+            files.append("\(ENTFlipAndroidThemeTests.res)/\(folder)/\(name)")
+        }
+    }
+    return files
+}
+
+private func entFlipColors(_ folder: String) throws -> [String: String] {
+    let xml = try entFlipSource("\(ENTFlipAndroidThemeTests.res)/\(folder)/colors.xml")
+    var result: [String: String] = [:]
+    let regex = try NSRegularExpression(pattern: #"<color name="([a-z0-9_]+)">(#[0-9A-F]{8})</color>"#)
+    let ns = xml as NSString
+    for match in regex.matches(in: xml, range: NSRange(location: 0, length: ns.length)) {
+        result[ns.substring(with: match.range(at: 1))] = ns.substring(with: match.range(at: 2))
+    }
+    return result
+}
+
+private func entFlipARGB(_ argb: Int64) -> String { String(format: "#%08llX", argb) }
+
+private func entFlipSource(_ packageRelativePath: String) throws -> String {
+    try String(contentsOf: URL(fileURLWithPath: entFlipPackagePath(packageRelativePath)).standardizedFileURL, encoding: .utf8)
+}
+
+private func entFlipPackagePath(_ packageRelativePath: String) -> String {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent(packageRelativePath)
+        .path
+}
+#endif

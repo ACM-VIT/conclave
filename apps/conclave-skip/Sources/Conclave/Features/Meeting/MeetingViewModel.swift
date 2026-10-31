@@ -571,6 +571,9 @@ final class MeetingViewModel {
     private var reconnectRetryTask: Task<Void, Never>?
     private var foregroundResumePresentationTask: Task<Void, Never>?
     private var pendingIceRestartTasks: [String: Task<Void, Never>] = [:]
+    private var transportConnectedTimingStartedAt = Date()
+    private(set) var transportConnectedMilestoneCallSession = 0
+    private(set) var transportConnectedMilestoneCount = 0
     private var participantConnectionStatusTasks: [String: Task<Void, Never>] = [:]
     private var remoteConsumerBandwidthPolicyTask: Task<Void, Never>?
     private var appForegroundAllowsRemoteVideoReceive = true {
@@ -2934,6 +2937,7 @@ final class MeetingViewModel {
         case "connected", "completed", "new":
             pendingIceRestartTasks[transportKind]?.cancel()
             pendingIceRestartTasks[transportKind] = nil
+            recordTransportConnectedMilestoneIfNeeded(stateName: stateName)
         case "disconnected":
             guard state.connectionState == .joined,
                   socketManager.isConnected,
@@ -2977,6 +2981,20 @@ final class MeetingViewModel {
         default:
             break
         }
+    }
+
+    private func recordTransportConnectedMilestoneIfNeeded(stateName: String) {
+        guard DiagnosticsTransportMilestonePolicy.shouldRecord(
+            stateName: stateName,
+            callSession: callSessionSerial,
+            recordedCallSession: transportConnectedMilestoneCallSession
+        ) else { return }
+        transportConnectedMilestoneCallSession = callSessionSerial
+        transportConnectedMilestoneCount += 1
+        PerformanceDiagnostics.timing(
+            DiagnosticsTransportMilestonePolicy.timingName,
+            startedAt: transportConnectedTimingStartedAt
+        )
     }
 
     private func reconnectDelayNanoseconds() -> UInt64 {
@@ -3139,6 +3157,7 @@ final class MeetingViewModel {
 
         webRTCJoinAttemptId = joinAttemptId
         let configureStartedAt = Date()
+        transportConnectedTimingStartedAt = configureStartedAt
         webRTCClient.configure(
             socketManager: socketManager,
             rtpCapabilities: response.rtpCapabilities,
@@ -3978,8 +3997,8 @@ final class MeetingViewModel {
 
     private func removeStalePendingUserIfNeeded(userId: String, error: Error, context: CallActionContext) -> Bool {
         guard isCurrentJoinedCall(context) else { return true }
-        let message = error.localizedDescription.lowercased()
-        guard message.contains("not found in waiting room") else {
+        let classified = MeetingErrorClassifier.classify(error, context: .hostAction, isNetworkOffline: state.isNetworkOffline)
+        guard classified.category == .pendingUserNotFound else {
             return false
         }
 
@@ -7971,9 +7990,12 @@ final class MeetingViewModel {
             isHost: state.isAdmin,
             videoKey: state.isCameraOff ? "" : "local"
         ))
+        var stageIds = Set<String>()
         for rawId in state.participants.keys.sorted() {
-            guard let participant = state.participants[rawId], !participant.isLeaving,
-                  let id = state.canonicalStageUserId(rawId), id != localId else { continue }
+            guard let raw = state.participants[rawId], !raw.isLeaving,
+                  let id = state.canonicalStageUserId(rawId), id != localId, !stageIds.contains(id) else { continue }
+            stageIds.insert(id)
+            let participant = state.participant(for: id) ?? raw
             rows.append(StageParticipantInput.make(
                 userId: id,
                 displayName: displayNameForUser(id),
@@ -7999,7 +8021,7 @@ final class MeetingViewModel {
         }
         let phase = shell.session.phase
         let inCall = phase == .inCall || phase == .leaving || (phase == .recovering && shell.session.hasBeenAdmittedThisSession)
-        let presenter = state.isScreenSharing ? localId : (state.canonicalStageUserId(state.activeScreenShareUserId) ?? "")
+        let presenter = state.isScreenSharing ? localId : (state.canonicalStageUserId(state.presentationScreenShareUserId) ?? "")
         return StageInputs.make(
             callSession: callSessionSerial,
             isInCall: inCall,
@@ -10561,16 +10583,8 @@ final class MeetingViewModel {
     }
 
     private func shouldForceRejoinAfterAudioPublishingFailure(_ error: Error) -> Bool {
-        let message = error.localizedDescription.lowercased()
-        let transportFailures = [
-            "not configured",
-            "transport not created",
-            "send transport",
-            "stale configuration",
-            "session was replaced",
-            "socket not configured"
-        ]
-        return transportFailures.contains { message.contains($0) }
+        let classified = MeetingErrorClassifier.classify(error, context: .media, isNetworkOffline: state.isNetworkOffline)
+        return classified.category == .mediaSessionStale
     }
 
     private func toggleMuteIntentDuringRecovery() {
@@ -11389,15 +11403,9 @@ final class MeetingViewModel {
         }
         #endif
 
-        for userId in state.visibleGridUserIds {
+        for userId in StageOrderPolicy.consumerFallbackRemoteIds(layout: stage.layout, inputs: stage.inputs, speakerUserId: stage.speakerUserId) {
             insertPresentRemoteConsumerUserId(userId, into: &ids)
         }
-
-        for participant in state.tileStripSnapshot().participants {
-            insertPresentRemoteConsumerUserId(participant.id, into: &ids)
-        }
-
-        insertPresentRemoteConsumerUserId(state.spotlightUserId, into: &ids)
 
         insertPresentRemoteConsumerUserId(state.presentationScreenShareUserId, into: &ids)
 

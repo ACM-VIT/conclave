@@ -62,11 +62,13 @@ struct EntryCoreDeltaTests {
         #expect(main.contains("NativeRouteLaunch.installProductionWiring()"))
         #expect(main.components(separatedBy: "ConclaveRootFeedback()").count - 1 == 1)
         let rootCall = try #require(main.range(of: "ConclaveRootFeedback()"))
-        let pipBranch = try #require(main.range(of: "if (PipController.showsLegacyPipContent) {"))
-        #expect(rootCall.lowerBound < pipBranch.lowerBound)
+        let rootSwitch = try #require(main.range(of: "if (systemFixture != null && !PipController.isInCall) {"))
+        let nativeHost = try #require(main.range(of: "NativePremeetingHost(callContent = legacyRoot)"))
+        #expect(rootCall.lowerBound < rootSwitch.lowerBound && rootSwitch.lowerBound < nativeHost.lowerBound)
+        #expect(!main.contains("showsLegacy" + "PipContent"))
         #expect(main.components(separatedBy: "SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }").count - 1 == 1)
 
-        #expect(entryFlat(main).contains("} else { legacyRoot() }"))
+        #expect(entryFlat(main).contains("} else { Box(Modifier.fillMaxSize()) { legacyRoot() NativeLegacyRootPipOverlay() } }"))
 
         let host = try entrySource("Sources/Conclave/Skip/ui/home/PremeetingHost.kt")
         #expect(host.contains("const val ROUTES_EXTRA = \"conclave.nativeRoutes\""))

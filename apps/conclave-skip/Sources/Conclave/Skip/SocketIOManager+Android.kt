@@ -856,8 +856,9 @@ internal class SocketIOManager {
                 timeoutMs = timeoutMilliseconds.coerceAtLeast(100).toLong(),
             )
         } catch (error: Throwable) {
-            val message = (error.message ?: error.toString()).lowercase()
-            if (message.contains("consumer not found") || message.contains("not_found")) {
+            val message = error.message ?: error.toString()
+            val classified = MeetingErrorClassifier.classify(serverMessage = message, context = MeetingErrorContext.media)
+            if (classified.category == MeetingErrorCategory.consumerNotFound) {
                 return
             }
             throw error

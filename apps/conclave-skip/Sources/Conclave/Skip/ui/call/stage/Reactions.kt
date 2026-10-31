@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -32,8 +33,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
@@ -49,20 +52,53 @@ internal fun ReactionBurstLayer(stage: StagePresenter, modifier: Modifier = Modi
     val tileLabelLine = MaterialTheme.typography.labelMedium.lineHeight.value.toDouble()
     val bottomInset = StageReactionPolicy.layerBottomInset(barReserve = StageCanvasMetrics.BAR_RESERVE_DP,
         labelLineHeight = tileLabelLine * LocalDensity.current.fontScale, defaultLabelLineHeight = tileLabelLine)
-    Box(
-        modifier.fillMaxSize().clearAndSetSemantics { }
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
-            .padding(start = StageReactionPolicy.leadingInset.dp, bottom = bottomInset.dp),
-        contentAlignment = Alignment.BottomStart,
-    ) {
-        for (event in events) {
-            key(event.id) { ReactionBubble(event, reduceMotion) }
+    val density = LocalDensity.current
+    val direction = LocalLayoutDirection.current
+    val fontScale = density.fontScale.toDouble()
+    val pillLine = MaterialTheme.typography.labelSmall.lineHeight.value.toDouble() * minOf(fontScale, StageReactionPolicy.reducedPillMaxFontScale)
+    val slotHeight = StageReactionPolicy.reducedSlotHeight(pillLineHeight = pillLine)
+    val insets = WindowInsets.safeDrawing
+    BoxWithConstraints(modifier.fillMaxSize().clearAndSetSemantics { }) {
+        val scale = density.density.toDouble()
+        val left = insets.getLeft(density, direction) / scale
+        val right = insets.getRight(density, direction) / scale
+        val safeBottom = insets.getBottom(density) / scale
+        val viewport = stageViewportFrom(
+            width = maxWidth.value.toDouble(),
+            height = maxHeight.value.toDouble(),
+            top = insets.getTop(density) / scale,
+            bottom = safeBottom,
+            leading = if (direction == LayoutDirection.Ltr) left else right,
+            trailing = if (direction == LayoutDirection.Ltr) right else left,
+            chipRow = if (stage.chipRowVisible) StageViewportPolicy.androidChipRowReserve else 0.0,
+        )
+        val placement = if (reduceMotion) {
+            val layout = stage.layout
+            val metrics = StageReactionSlotMetrics(defaultBottomInset = bottomInset, layerLeading = viewport.insetLeading,
+                layerBottom = safeBottom, slotHeight = slotHeight,
+                labelBand = StageReactionPolicy.tileLabelBand(lineHeight = tileLabelLine * fontScale),
+                barMaxWidth = ControlBarPolicy.androidMaxToolbarWidth)
+            val frames = StageLayoutPolicy.frames(viewport = viewport, kind = layout.kind, slots = layout.slots, selfCorner = layout.selfCorner)
+            StageReactionPolicy.reducedPlacement(viewport = viewport, kind = layout.kind, slots = layout.slots, frames = frames,
+                metrics = metrics)
+        } else {
+            StageReactionSlotPlacement(bottomInset = bottomInset, shape = StageReactionSlotShape.row)
+        }
+        Box(
+            Modifier.fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Start))
+                .padding(start = StageReactionPolicy.leadingInset.dp, bottom = placement.bottomInset.dp),
+            contentAlignment = Alignment.BottomStart,
+        ) {
+            for (event in events) {
+                key(event.id) { ReactionBubble(event, reduceMotion, placement.shape, slotHeight) }
+            }
         }
     }
 }
 
 @Composable
-private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean) {
+private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean, slotShape: StageReactionSlotShape, slotHeight: Double) {
     val rise = remember { Animatable(0f) }
     val drift = remember { Animatable(0f) }
     val pop = remember { Animatable(if (reduceMotion) 1f else StageReactionPolicy.popFromScale.toFloat()) }
@@ -101,7 +137,8 @@ private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean) {
     }
     Column(
         Modifier.zIndex(if (event.isLocal) 1f else 0f)
-            .offset(x = (lane * (if (reduceMotion) StageReactionPolicy.reducedLaneOffset else StageReactionPolicy.laneOffset)).dp)
+            .offset(x = StageReactionPolicy.slotOffsetX(lane = lane, reduceMotion = reduceMotion, shape = slotShape).dp,
+                y = (-StageReactionPolicy.slotOffsetY(lane = lane, shape = slotShape, slotHeight = slotHeight)).dp)
             .then(if (reduceMotion) Modifier.width(StageReactionPolicy.reducedSlotWidth.dp) else Modifier).graphicsLayer {
             translationX = drift.value.dp.toPx()
             translationY = -rise.value.dp.toPx()

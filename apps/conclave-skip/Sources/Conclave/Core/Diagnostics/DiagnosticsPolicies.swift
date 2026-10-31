@@ -325,9 +325,24 @@ enum DiagnosticsTimingBridge {
             return DiagnosticsMilestone.producerCreated
         case "join_socket_join_room":
             return DiagnosticsMilestone.joinedResponse
+        case "join_transport_connected":
+            return DiagnosticsMilestone.transportConnected
         default:
             return nil
         }
+    }
+}
+
+enum DiagnosticsTransportMilestonePolicy {
+    static let timingName = "join_transport_connected"
+
+    static func isConnectedState(_ stateName: String) -> Bool {
+        stateName == "connected" || stateName == "completed"
+    }
+
+    static func shouldRecord(stateName: String, callSession: Int, recordedCallSession: Int) -> Bool {
+        guard callSession > 0, callSession != recordedCallSession else { return false }
+        return isConnectedState(stateName)
     }
 }
 

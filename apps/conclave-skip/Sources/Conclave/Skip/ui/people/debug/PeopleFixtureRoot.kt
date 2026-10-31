@@ -32,9 +32,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun PeopleFixtureRoot(stateName: String, patternName: String? = null, forceScreenReader: Boolean = false) {
 
-    val qaState = PeopleWebinarFixtureScript.state(named = stateName)?.takeIf {
-        it == PeopleWebinarFixtureState.qaAttendee5 || it == PeopleWebinarFixtureState.qaHostOpen7
-    }
+    val qaState = PeopleWebinarFixtureScript.state(named = stateName)
     val qaSession = remember(qaState) { qaState?.let { PeopleWebinarFixtureSession(state = it) } }
     val state = PeopleFixtureScript.state(named = stateName) ?: qaState?.let { PeopleWebinarFixtureScript.baseState(it) } ?: PeopleFixtureState.host6
     val session = remember(state, qaSession) {
@@ -42,11 +40,24 @@ fun PeopleFixtureRoot(stateName: String, patternName: String? = null, forceScree
     }
     LaunchedEffect(session) {
         if (qaSession != null) {
-            qaSession.people.openQuestionsAndAnswers()
+            val webinar = qaSession.state
+            if (PeopleWebinarFixtureScript.opensParticipants(webinar)) {
+                session.open(destination = PanelDestination.none)
+            } else if (PeopleWebinarFixtureScript.opensQuestionsAndAnswers(webinar)) {
+                qaSession.openQuestionsAndAnswers()
+            }
+            if (PeopleWebinarFixtureScript.turnsQaOff(webinar)) {
+                delay(PeopleWebinarFixtureScript.qaOffDelayMillis.toLong())
+                qaSession.turnQaOff()
+            }
+            if (PeopleWebinarFixtureScript.deliversPromotion(webinar)) {
+                delay(PeopleWebinarFixtureScript.promotionDelayMillis.toLong())
+                qaSession.deliverPromotion()
+            }
             return@LaunchedEffect
         }
 
-        session.open(destination = PeopleFixtureScript.openDestination(state))
+        session.openOnLaunch()
         if (state == PeopleFixtureState.lostHost) {
             delay(PeopleFixtureScript.lostHostDelayMillis.toLong())
             session.loseHost()
@@ -66,13 +77,13 @@ fun PeopleFixtureRoot(stateName: String, patternName: String? = null, forceScree
             onMinimize = { session.stageSession.minimize() },
         )
         HostingTheme(inCall = true) {
-            PeopleFixtureControls(session, Modifier.align(Alignment.CenterStart))
+            PeopleFixtureControls(session, qaSession, Modifier.align(Alignment.CenterStart))
         }
     }
 }
 
 @Composable
-private fun PeopleFixtureControls(session: PeopleFixtureSession, modifier: Modifier) {
+private fun PeopleFixtureControls(session: PeopleFixtureSession, webinar: PeopleWebinarFixtureSession?, modifier: Modifier) {
     var expanded by remember { mutableStateOf(true) }
     var refresh by remember { mutableIntStateOf(0) }
     val ext = LocalConclaveExtendedColors.current
@@ -83,11 +94,21 @@ private fun PeopleFixtureControls(session: PeopleFixtureSession, modifier: Modif
         FixtureButton("Fixture", "people.fixture.toggle") { expanded = !expanded }
         if (expanded) {
             FixtureButton("Open", "people.fixture.open") { session.open(destination = PanelDestination.none); refresh++ }
+            if (PeopleFixtureScript.opensHostControls(session.state)) {
+                FixtureButton("Host controls", "people.fixture.hostControls") {
+                    session.openHostControls(destination = PanelDestination.none); refresh++
+                }
+            }
+            if (webinar != null && PeopleWebinarFixtureScript.deliversPromotion(webinar.state)) {
+                FixtureButton("Promote", "people.fixture.promote") { webinar.deliverPromotion(); refresh++ }
+            }
             FixtureButton("Knock view", "people.fixture.knockView") { session.open(destination = PanelDestination.peopleWaiting); refresh++ }
             FixtureButton("Hand view", "people.fixture.handView") { session.open(destination = PanelDestination.peopleRaisedHands); refresh++ }
             FixtureButton("Speakers", "people.fixture.speakers") { session.runSpeakerScript(); refresh++ }
-            FixtureButton("Mute row", "people.fixture.mute") { session.scriptedMute(); refresh++ }
-            FixtureButton("Lose host", "people.fixture.loseHost") { session.loseHost(); refresh++ }
+            if (webinar == null) {
+                FixtureButton("Mute row", "people.fixture.mute") { session.scriptedMute(); refresh++ }
+                FixtureButton("Lose host", "people.fixture.loseHost") { session.loseHost(); refresh++ }
+            }
             FixtureButton("Refresh", "people.fixture.refresh") { refresh++ }
             val tick = refresh
             FixtureReadout(session.revisionReadout(), "people.revision", tick)
@@ -99,6 +120,12 @@ private fun PeopleFixtureControls(session: PeopleFixtureSession, modifier: Modif
             FixtureReadout(session.noticesReadout(), "stage.notices", tick)
             FixtureReadout(session.panelReadout(), "panel.current", tick)
             FixtureReadout(session.renderersReadout(), "stage.renderers", tick)
+            if (PeopleFixtureScript.opensHostControls(session.state)) {
+                FixtureReadout(session.hostReadout(), "host.controls", tick)
+            }
+            if (webinar != null) {
+                FixtureReadout(webinar.countersReadout(), "people.webinar", tick)
+            }
         }
     }
 }

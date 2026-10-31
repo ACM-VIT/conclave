@@ -64,12 +64,13 @@ struct S1bStageMomentsTests {
     @Test func iosBubblePopsFromThePolicyScaleOnTheSystemSmoothSpring() throws {
         let ios = stageNormalized(try stageSource(Self.iosReactionsFile))
         #expect(ios.hasPrefix("#if os(iOS) && !SKIP"))
-        #expect(ios.contains("init(event: ReactionEvent, reduceMotion: Bool) {"))
+        #expect(ios.contains("init(event: ReactionEvent, reduceMotion: Bool, slotShape: StageReactionSlotShape, slotHeight: Double) {"))
         #expect(ios.contains("_popScale = State(initialValue: reduceMotion ? 1 : CGFloat(StageReactionPolicy.popFromScale))"))
         #expect(ios.contains("@State private var popScale: CGFloat") && ios.contains("@State private var drift: CGFloat = 0"))
         #expect(ios.contains("withAnimation(.smooth(duration: StageReactionPolicy.popMillis / 1000.0)) { popScale = 1 }"))
         #expect(count("popScale = 1 }", in: ios) == 1)
-        #expect(ios.contains(".scaleEffect(popScale) .offset(x: lane * CGFloat(reduceMotion ? StageReactionPolicy.reducedLaneOffset : StageReactionPolicy.laneOffset) + drift, y: -rise)"))
+        #expect(ios.contains("let lane = StageReactionPolicy.lane(for: event.id) let slotX = CGFloat(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: reduceMotion, shape: slotShape)) let slotY = CGFloat(StageReactionPolicy.slotOffsetY(lane: lane, shape: slotShape, slotHeight: slotHeight))"))
+        #expect(ios.contains(".scaleEffect(popScale) .offset(x: slotX + drift, y: -rise - slotY)"))
         #expect(ios.contains("guard !box.started else { return } box.started = true"))
         for pattern in [".linear(", ".spring(response:", ".bouncy", "keyframeAnimator", "extraBounce"] {
             #expect(!ios.contains(pattern), "the iOS bubble uses \(pattern)")
@@ -292,13 +293,15 @@ struct S1bStageMomentsTests {
         #expect(count("visibleEvents(", in: ios) == 1)
         #expect(ios.contains("if reduceMotion { namePill .truncationMode(.tail) .frame(maxWidth: CGFloat(StageReactionPolicy.reducedSlotWidth)) .dynamicTypeSize(...DynamicTypeSize.xxxLarge) } else { namePill }"))
         #expect(ios.contains("let label = Text(name) .font(.caption2) .lineLimit(1) .padding(.horizontal, 6)"))
-        #expect(count("reducedLaneOffset", in: ios) == 1)
+        #expect(count("reducedLaneOffset", in: ios) == 0)
+        #expect(count("slotOffsetX(", in: ios) == 1 && count("slotOffsetY(", in: ios) == 1)
         #expect(count("reducedSlotWidth", in: ios) == 1)
 
         let kotlin = stageNormalized(try stageSource(Self.androidReactionsFile))
         #expect(kotlin.contains("val reduceMotion = rememberReduceMotion() val events = remember(snapshot, reduceMotion) { StageReactionPolicy.visibleEvents(snapshot, reduceMotion).toList() }"))
         #expect(count("visibleEvents(", in: kotlin) == 1)
-        #expect(kotlin.contains(".offset(x = (lane * (if (reduceMotion) StageReactionPolicy.reducedLaneOffset else StageReactionPolicy.laneOffset)).dp) .then(if (reduceMotion) Modifier.width(StageReactionPolicy.reducedSlotWidth.dp) else Modifier).graphicsLayer {"))
+        #expect(kotlin.contains(".offset(x = StageReactionPolicy.slotOffsetX(lane = lane, reduceMotion = reduceMotion, shape = slotShape).dp, y = (-StageReactionPolicy.slotOffsetY(lane = lane, shape = slotShape, slotHeight = slotHeight)).dp) .then(if (reduceMotion) Modifier.width(StageReactionPolicy.reducedSlotWidth.dp) else Modifier).graphicsLayer {"))
+        #expect(count("reducedLaneOffset", in: kotlin) == 0)
         #expect(count("reducedSlotWidth", in: kotlin) == 1)
         #expect(kotlin.contains("import androidx.compose.foundation.layout.width "))
         #expect(!kotlin.contains("pillWidth") && !kotlin.contains("widthIn"))
@@ -375,7 +378,9 @@ struct S1bStageMomentsTests {
         let kotlin = stageNormalized(try stageSource(Self.androidReactionsFile))
         let burstLayer = try section(kotlin, from: "internal fun ReactionBurstLayer(", to: "private fun ReactionBubble(")
         #expect(burstLayer.contains("val tileLabelLine = MaterialTheme.typography.labelMedium.lineHeight.value.toDouble() val bottomInset = StageReactionPolicy.layerBottomInset(barReserve = StageCanvasMetrics.BAR_RESERVE_DP, labelLineHeight = tileLabelLine * LocalDensity.current.fontScale, defaultLabelLineHeight = tileLabelLine)"))
-        #expect(burstLayer.contains("modifier.fillMaxSize().clearAndSetSemantics { } .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)) .padding(start = StageReactionPolicy.leadingInset.dp, bottom = bottomInset.dp),"))
+        #expect(burstLayer.contains("BoxWithConstraints(modifier.fillMaxSize().clearAndSetSemantics { }) {"))
+        #expect(burstLayer.contains("Box( Modifier.fillMaxSize() .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Start)) .padding(start = StageReactionPolicy.leadingInset.dp, bottom = placement.bottomInset.dp),"))
+        #expect(burstLayer.contains("} else { StageReactionSlotPlacement(bottomInset = bottomInset, shape = StageReactionSlotShape.row) }"))
         #expect(count("layerBottomInset(", in: kotlin) == 1)
         #expect(!kotlin.contains("+ 64"))
         for name in ["WindowInsets", "WindowInsetsSides", "only", "safeDrawing", "windowInsetsPadding"] {
@@ -385,12 +390,13 @@ struct S1bStageMomentsTests {
         let ios = stageNormalized(try stageSource(Self.iosReactionsFile))
         #expect(ios.hasPrefix("#if os(iOS) && !SKIP import SwiftUI import UIKit "))
         #expect(ios.contains("@Environment(\\.dynamicTypeSize) private var dynamicTypeSize"))
-        #expect(ios.contains("ReactionBurstColumn(stage: stage, reduceMotion: reduceMotion, bottomInset: bottomInset)"))
+        #expect(ios.contains("ReactionBurstColumn(stage: stage, reduceMotion: reduceMotion, bottomInset: bottomInset, slots: reducedSlots)"))
         #expect(ios.contains("let tileLabelSize = min(dynamicTypeSize, DynamicTypeSize.xxxLarge)"))
         #expect(ios.contains("let tileLabel = UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(tileLabelSize)))"))
         #expect(ios.contains("let defaultLabel = UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: UITraitCollection(preferredContentSizeCategory: .large))"))
         #expect(ios.contains("return CGFloat(StageReactionPolicy.layerBottomInset(barReserve: Double(StageCanvasMetrics.barReserve), labelLineHeight: Double(tileLabel.lineHeight), defaultLabelLineHeight: Double(defaultLabel.lineHeight)))"))
-        #expect(ios.contains(".padding(.leading, CGFloat(StageReactionPolicy.leadingInset)) .padding(.bottom, bottomInset) .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)"))
+        #expect(ios.contains(".padding(.leading, CGFloat(StageReactionPolicy.leadingInset)) .padding(.bottom, CGFloat(placement.bottomInset)) .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)"))
+        #expect(ios.contains("let placement = reduceMotion ? reducedPlacement : StageReactionSlotPlacement(bottomInset: Double(bottomInset), shape: .row)"))
         #expect(count("layerBottomInset(", in: ios) == 1)
         #expect(!ios.contains("+ 64"))
 
@@ -414,6 +420,339 @@ struct S1bStageMomentsTests {
         let namePill = try section(iosTile, from: "private struct TileNamePill: View {", to: "private struct PillWaveform: View {")
         #expect(namePill.contains(".font(density == .dense ? .caption2 : .footnote)"))
         #expect(namePill.contains(".padding(.horizontal, 8) .padding(.vertical, 4)"))
+    }
+
+    static let androidLandscape = StageViewport(width: 914.3, height: 411.4, insetTop: 84.2, insetBottom: 100.2, insetLeading: 0,
+                                                insetTrailing: 0, widthClass: StageSizeClass.expanded, heightClass: StageSizeClass.compact,
+                                                placement: .bottomBar)
+    static let androidSafeBottom = 24.2
+    static let androidCutoutLandscape = StageViewport(width: 914.3, height: 411.4, insetTop: 84.2, insetBottom: 100.2, insetLeading: 32,
+                                                      insetTrailing: 0, widthClass: StageSizeClass.expanded,
+                                                      heightClass: StageSizeClass.compact, placement: .bottomBar)
+    static let androidGestureLandscape = StageViewport(width: 892, height: 412, insetTop: 84, insetBottom: 100, insetLeading: 0,
+                                                       insetTrailing: 0, widthClass: StageSizeClass.expanded,
+                                                       heightClass: StageSizeClass.compact, placement: .bottomBar)
+    static let androidShortLandscape = StageViewport(width: 800, height: 360, insetTop: 84, insetBottom: 100, insetLeading: 0,
+                                                     insetTrailing: 0, widthClass: StageSizeClass.medium, heightClass: StageSizeClass.compact,
+                                                     placement: .bottomBar)
+    static let androidGestureSafeBottom = 24.0
+    static let iosLandscape = StageViewportPolicy.iOS(contentWidth: 750, contentHeight: 369,
+                                                      safeArea: StageChromeInsets(top: 0, bottom: 21, leading: 47, trailing: 47),
+                                                      regularWidth: false, compactHeight: true, topReserve: 56, barReserve: 64,
+                                                      trailingReserve: 64)
+    static let iosSafeBottom = 21.0
+
+    private func burstStage(_ viewport: StageViewport, count: Int = 6) -> StagePresenter {
+        let stage = StagePresenter(shell: MeetingShellPresenter())
+        stage.setViewport(viewport)
+        stage.apply(count == 6 ? StageFixtureScript.inputs(for: .reactionsBurst25) : StageFixtureScript.base(count: count))
+        return stage
+    }
+
+    private func androidMetrics(fontScale: Double, viewport: StageViewport = S1bStageMomentsTests.androidLandscape,
+                                safeBottom: Double = S1bStageMomentsTests.androidSafeBottom) -> StageReactionSlotMetrics {
+        StageReactionSlotMetrics(
+            defaultBottomInset: StageReactionPolicy.layerBottomInset(barReserve: 76, labelLineHeight: 16 * fontScale, defaultLabelLineHeight: 16),
+            layerLeading: viewport.insetLeading, layerBottom: safeBottom,
+            slotHeight: StageReactionPolicy.reducedSlotHeight(pillLineHeight: 16 * min(fontScale, StageReactionPolicy.reducedPillMaxFontScale)),
+            labelBand: StageReactionPolicy.tileLabelBand(lineHeight: 16 * fontScale), barMaxWidth: ControlBarPolicy.androidMaxToolbarWidth)
+    }
+
+    private func iosMetrics(tileLine: Double, pillLine: Double) -> StageReactionSlotMetrics {
+        StageReactionSlotMetrics(
+            defaultBottomInset: StageReactionPolicy.layerBottomInset(barReserve: 64, labelLineHeight: tileLine, defaultLabelLineHeight: 15.5),
+            layerLeading: Self.iosLandscape.insetLeading, layerBottom: Self.iosSafeBottom,
+            slotHeight: StageReactionPolicy.reducedSlotHeight(pillLineHeight: pillLine),
+            labelBand: StageReactionPolicy.tileLabelBand(lineHeight: tileLine), barMaxWidth: 0)
+    }
+
+    private func slotRects(_ placement: StageReactionSlotPlacement, viewport: StageViewport, metrics: StageReactionSlotMetrics) -> [StageFrame] {
+        let bottom = viewport.height - metrics.layerBottom - placement.bottomInset
+        var rects: [StageFrame] = []
+        for lane in 0..<StageReactionPolicy.laneCount {
+            let x = metrics.layerLeading + StageReactionPolicy.leadingInset
+                + StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: true, shape: placement.shape)
+            let lift = StageReactionPolicy.slotOffsetY(lane: lane, shape: placement.shape, slotHeight: metrics.slotHeight)
+            rects.append(StageFrame(slotId: "slot" + String(lane), x: x, y: bottom - lift - metrics.slotHeight,
+                                    width: StageReactionPolicy.reducedSlotWidth, height: metrics.slotHeight))
+        }
+        return rects
+    }
+
+    private func tileLabels(viewport: StageViewport, layout: StageLayoutSnapshot, frames: [StageFrame], line: Double) -> [StageFrame] {
+        var labels: [StageFrame] = []
+        for slot in layout.slots where StageViewportPolicy.carriesNameTag(slot.role) {
+            guard let frame = StageLayoutPolicy.find(slot.id, in: frames) else { continue }
+            let insets = StageViewportPolicy.tileInsets(kind: layout.kind, role: slot.role, viewport: viewport)
+            let height = 2 * 4.0 + max(16.0, line)
+            for inset in [8.0, 4.0] {
+                let bottom = frame.maxY - insets.bottom - inset
+                labels.append(StageFrame(slotId: slot.id, x: frame.x + insets.leading + inset, y: bottom - height,
+                                         width: frame.width - insets.leading - insets.trailing - 2 * inset, height: height))
+            }
+        }
+        return labels
+    }
+
+    private func coveredArea(_ rects: [StageFrame], labels: [StageFrame]) -> Double {
+        var total = 0.0
+        for rect in rects {
+            for label in labels {
+                let width = min(rect.maxX, label.maxX) - max(rect.x, label.x)
+                let height = min(rect.maxY, label.maxY) - max(rect.y, label.y)
+                if width > 0 && height > 0 { total += width * height }
+            }
+        }
+        return total
+    }
+
+    private func expectClear(viewport: StageViewport, layout: StageLayoutSnapshot, frames: [StageFrame], metrics: StageReactionSlotMetrics,
+                             line: Double, _ name: String) -> StageReactionSlotPlacement {
+        let placement = StageReactionPolicy.reducedPlacement(viewport: viewport, kind: layout.kind, slots: layout.slots, frames: frames,
+                                                             metrics: metrics)
+        let labels = tileLabels(viewport: viewport, layout: layout, frames: frames, line: line)
+        #expect(!labels.isEmpty, "\(name)")
+        for rect in slotRects(placement, viewport: viewport, metrics: metrics) {
+            for label in labels {
+                #expect(!StageLayoutPolicy.overlaps(rect, label), "\(name) \(rect.slotId) covers the \(label.slotId) label")
+            }
+            #expect(rect.y >= viewport.insetTop - 0.001, "\(name) \(rect.slotId) rises into the top chrome")
+            #expect(rect.maxY <= viewport.height - metrics.layerBottom + 0.001, "\(name) \(rect.slotId) leaves the layer")
+            #expect(rect.x >= viewport.insetLeading + StageReactionPolicy.leadingInset - 0.001, "\(name) \(rect.slotId) leaves the safe area")
+        }
+        return placement
+    }
+
+    private func expectClear(_ stage: StagePresenter, metrics: StageReactionSlotMetrics, line: Double, _ name: String) -> StageReactionSlotPlacement {
+        expectClear(viewport: stage.viewport, layout: stage.layout, frames: stage.currentFrames(), metrics: metrics, line: line, name)
+    }
+
+    @Test func reducedSlotsNeverSitOverATileLabelInATwoByThreeLandscapeGrid() {
+        let android = burstStage(Self.androidLandscape)
+        let frames = android.currentFrames()
+        #expect(android.layout.kind == .grid && frames.count == 6)
+        #expect(Set(frames.map { Int($0.x.rounded()) }).count == 3 && Set(frames.map { Int($0.y.rounded()) }).count == 2)
+
+        let androidDefault = expectClear(android, metrics: androidMetrics(fontScale: 1.0), line: 16, "android default")
+        #expect(androidDefault.shape == .column)
+        #expect(abs(androidDefault.bottomInset - 71.0) < 0.01)
+        let androidLarge = expectClear(android, metrics: androidMetrics(fontScale: 2.0), line: 32, "android font 2.0")
+        #expect(androidLarge.shape == .column)
+        #expect(abs(androidLarge.bottomInset - 47.0) < 0.01)
+        for placement in [androidDefault, androidLarge] {
+            let column = slotRects(placement, viewport: Self.androidLandscape, metrics: androidMetrics(fontScale: 1.0))
+            for rect in column {
+                #expect(frames.allSatisfy { rect.maxX <= $0.x }, "the stacked slots stay in the margin beside the grid")
+            }
+        }
+
+        let ios = burstStage(Self.iosLandscape)
+        #expect(ios.layout.kind == .grid && ios.currentFrames().count == 6)
+        let iosDefault = expectClear(ios, metrics: iosMetrics(tileLine: 15.5, pillLine: 13.13), line: 15.5, "ios default")
+        #expect(iosDefault.shape == .row && iosDefault.bottomInset != 128)
+        let iosLarge = expectClear(ios, metrics: iosMetrics(tileLine: 22.7, pillLine: 20.29), line: 22.7, "ios AX5")
+        #expect(iosLarge.shape == .row && abs(iosLarge.bottomInset - 135.2) > 1)
+    }
+
+    @Test func whenNeitherARowNorAColumnClearsTheLabelsTheSlotsTakeAMarginBlock() {
+        let viewport = Self.androidGestureLandscape
+        let stage = burstStage(viewport, count: 7)
+        let frames = stage.currentFrames()
+        #expect(stage.layout.kind == .grid && frames.count == 7)
+        #expect(Set(frames.map { Int($0.y.rounded()) }).count == 2)
+        for scale in [1.0, 2.0] {
+            let metrics = androidMetrics(fontScale: scale, viewport: viewport, safeBottom: Self.androidGestureSafeBottom)
+            let resting = StageReactionSlotPlacement(bottomInset: metrics.defaultBottomInset, shape: .row)
+            let labels = tileLabels(viewport: viewport, layout: stage.layout, frames: frames, line: 16 * scale)
+            #expect(coveredArea(slotRects(resting, viewport: viewport, metrics: metrics), labels: labels) > 0,
+                    "the 2c060c7a row covers a label here at font \(scale)")
+            let placement = expectClear(stage, metrics: metrics, line: 16 * scale, "seven tiles font \(scale)")
+            #expect(placement.shape == .block, "font \(scale)")
+            #expect(abs(placement.bottomInset - (scale == 1.0 ? 34.0 : 18.0)) < 0.01, "font \(scale)")
+        }
+    }
+
+    @Test func whenNothingClearsTheSlotsTakeTheLeastCoveredPlaceNotTheRestingRow() {
+        let viewport = Self.androidGestureLandscape
+        let stage = burstStage(viewport, count: 8)
+        let frames = stage.currentFrames()
+        #expect(stage.layout.kind == .grid && frames.count == 8)
+        let metrics = androidMetrics(fontScale: 2.0, viewport: viewport, safeBottom: Self.androidGestureSafeBottom)
+        let resting = StageReactionSlotPlacement(bottomInset: metrics.defaultBottomInset, shape: .row)
+        let placement = StageReactionPolicy.reducedPlacement(viewport: viewport, kind: stage.layout.kind, slots: stage.layout.slots,
+                                                             frames: frames, metrics: metrics)
+        #expect(placement != resting)
+        let labels = tileLabels(viewport: viewport, layout: stage.layout, frames: frames, line: 32)
+        let restingCover = coveredArea(slotRects(resting, viewport: viewport, metrics: metrics), labels: labels)
+        let placedCover = coveredArea(slotRects(placement, viewport: viewport, metrics: metrics), labels: labels)
+        #expect(placedCover < restingCover / 10, "covered \(placedCover) against \(restingCover) at rest")
+        for rect in slotRects(placement, viewport: viewport, metrics: metrics) {
+            #expect(rect.y >= viewport.insetTop - 0.001 && rect.maxY <= viewport.height - metrics.layerBottom + 0.001)
+        }
+    }
+
+    @Test func theShortLandscapePhoneKeepsOneRowOfTilesAndTheSlotsClearItsLabels() {
+        let viewport = Self.androidShortLandscape
+        let stage = burstStage(viewport)
+        let frames = stage.currentFrames()
+        #expect(stage.layout.kind == .grid && frames.count == 4)
+        #expect(stage.layout.slots.contains { $0.role == .overflow })
+        #expect(Set(frames.map { Int($0.y.rounded()) }).count == 1)
+        for scale in [1.0, 2.0] {
+            let metrics = androidMetrics(fontScale: scale, viewport: viewport, safeBottom: Self.androidGestureSafeBottom)
+            let placement = expectClear(stage, metrics: metrics, line: 16 * scale, "800 by 360 font \(scale)")
+            #expect(placement.shape == .row, "font \(scale)")
+        }
+    }
+
+    @Test func aLeadingCutoutMovesTheSlotsWithTheGrid() {
+        let viewport = Self.androidCutoutLandscape
+        let stage = burstStage(viewport)
+        let frames = stage.currentFrames()
+        #expect(frames.count == 6 && frames.allSatisfy { $0.x >= viewport.insetLeading })
+        for scale in [1.0, 2.0] {
+            let metrics = androidMetrics(fontScale: scale, viewport: viewport)
+            #expect(metrics.layerLeading == 32)
+            let placement = expectClear(stage, metrics: metrics, line: 16 * scale, "cutout font \(scale)")
+            #expect(placement.shape == .column, "font \(scale)")
+            for rect in slotRects(placement, viewport: viewport, metrics: metrics) {
+                #expect(abs(rect.x - 44) < 0.001, "the column starts at the cutout plus 12")
+            }
+        }
+    }
+
+    @Test func aRotationWithTheSameSlotsPlacesTheSlotsFromTheLayersOwnLandscapeGeometry() throws {
+        let portrait = StageViewport(width: 411.4, height: 914.3, insetTop: 84.2, insetBottom: 100.2, insetLeading: 0, insetTrailing: 0,
+                                     widthClass: StageSizeClass.compact, heightClass: StageSizeClass.medium, placement: .bottomBar)
+        let stage = burstStage(portrait)
+        let layout = stage.layout
+        #expect(layout.kind == .grid && layout.slots.count == 6)
+        let metrics = androidMetrics(fontScale: 1.0)
+        let stale = StageReactionPolicy.reducedPlacement(viewport: stage.viewport, kind: layout.kind, slots: layout.slots,
+                                                         frames: stage.currentFrames(), metrics: metrics)
+        #expect(stale == StageReactionSlotPlacement(bottomInset: metrics.defaultBottomInset, shape: .row))
+        let landscapeFrames = StageLayoutPolicy.frames(viewport: Self.androidLandscape, kind: layout.kind, slots: layout.slots,
+                                                       selfCorner: layout.selfCorner)
+        let labels = tileLabels(viewport: Self.androidLandscape, layout: layout, frames: landscapeFrames, line: 16)
+        #expect(coveredArea(slotRects(stale, viewport: Self.androidLandscape, metrics: metrics), labels: labels) > 0,
+                "the portrait placement would cover a label after the rotation")
+        let rotated = expectClear(viewport: Self.androidLandscape, layout: layout, frames: landscapeFrames, metrics: metrics, line: 16, "rotated")
+        #expect(rotated.shape == .column)
+
+        let ios = stageNormalized(try stageSource(Self.iosReactionsFile))
+        let kotlin = stageNormalized(try stageSource(Self.androidReactionsFile))
+        for (name, text) in [("ios", ios), ("android", kotlin)] {
+            #expect(!text.contains("stage.viewport") && !text.contains("stage.currentFrames()"), "\(name) reads the presenter's stored viewport")
+        }
+        let iosCanvas = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/StageCanvas+iOS.swift"))
+        let iosShared = "regularWidth: horizontalSizeClass == .regular, compactHeight: verticalSizeClass == .compact, topReserve: Double(StageCanvasMetrics.topReserve), barReserve: Double(StageCanvasMetrics.barReserve), trailingReserve: Double(StageCanvasMetrics.trailingReserve), chipRowReserve: stage.chipRowVisible ? Double(StageCanvasMetrics.chipRowReserve) : 0 )"
+        #expect(iosCanvas.contains(iosShared) && ios.contains(iosShared))
+        #expect(ios.contains(".onGeometryChange(for: ReactionLayerGeometry.self) { proxy in ReactionLayerGeometry(width: Double(proxy.size.width), height: Double(proxy.size.height), top: Double(proxy.safeAreaInsets.top), bottom: Double(proxy.safeAreaInsets.bottom), leading: Double(proxy.safeAreaInsets.leading), trailing: Double(proxy.safeAreaInsets.trailing)) } action: { next in if next != layer { layer = next } }"))
+        #expect(ios.contains("contentWidth: layer.width, contentHeight: layer.height, safeArea: StageChromeInsets(top: layer.top, bottom: layer.bottom, leading: layer.leading, trailing: layer.trailing),"))
+        #expect(ios.contains("let frames = StageLayoutPolicy.frames(viewport: viewport, kind: layout.kind, slots: layout.slots, selfCorner: layout.selfCorner)"))
+        let androidCanvas = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt"))
+        for shared in ["val left = insets.getLeft(density, direction) / scale val right = insets.getRight(density, direction) / scale",
+                       "width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble(), top = insets.getTop(density) / scale,",
+                       "leading = if (direction == LayoutDirection.Ltr) left else right, trailing = if (direction == LayoutDirection.Ltr) right else left, chipRow = if (stage.chipRowVisible) StageViewportPolicy.androidChipRowReserve else 0.0, )"] {
+            #expect(androidCanvas.contains(shared) && kotlin.contains(shared), "\(shared)")
+        }
+        #expect(kotlin.contains("val frames = StageLayoutPolicy.frames(viewport = viewport, kind = layout.kind, slots = layout.slots, selfCorner = layout.selfCorner)"))
+        for name in ["foundation.layout.BoxWithConstraints", "ui.platform.LocalLayoutDirection", "ui.unit.LayoutDirection"] {
+            #expect(kotlin.contains("import androidx.compose.\(name) "), "Reactions.kt lacks the \(name) import")
+        }
+    }
+
+    @Test func portraitAndClearLandscapeStagesKeepTheRestingReducedLayer() {
+        let portrait = StageViewport(width: 411.4, height: 914.3, insetTop: 84.2, insetBottom: 100.2, insetLeading: 0, insetTrailing: 0,
+                                     widthClass: StageSizeClass.compact, heightClass: StageSizeClass.medium, placement: .bottomBar)
+        for scale in [1.0, 2.0] {
+            let metrics = androidMetrics(fontScale: scale)
+            let stage = burstStage(portrait)
+            let placement = StageReactionPolicy.reducedPlacement(viewport: portrait, kind: stage.layout.kind, slots: stage.layout.slots,
+                                                                 frames: stage.currentFrames(), metrics: metrics)
+            #expect(placement == StageReactionSlotPlacement(bottomInset: metrics.defaultBottomInset, shape: .row), "portrait \(scale)")
+        }
+        let empty = StageReactionPolicy.reducedPlacement(viewport: .zero, kind: .grid, slots: [], frames: [], metrics: androidMetrics(fontScale: 1.0))
+        #expect(empty == StageReactionSlotPlacement(bottomInset: 140, shape: .row))
+
+        let oneOnOne = burstStage(Self.androidLandscape, count: 2)
+        #expect(oneOnOne.layout.kind == .oneOnOne)
+        for scale in [1.0, 2.0] {
+            let metrics = androidMetrics(fontScale: scale)
+            let placement = expectClear(oneOnOne, metrics: metrics, line: 16 * scale, "android one on one \(scale)")
+            #expect(placement == StageReactionSlotPlacement(bottomInset: metrics.defaultBottomInset, shape: .row))
+        }
+        let iosOneOnOne = burstStage(Self.iosLandscape, count: 2)
+        let iosPlacement = expectClear(iosOneOnOne, metrics: iosMetrics(tileLine: 22.7, pillLine: 20.29), line: 22.7, "ios one on one")
+        #expect(iosPlacement == StageReactionSlotPlacement(bottomInset: 135.2, shape: .row))
+    }
+
+    @Test func theReducedSlotGeometryMirrorsTheRenderedBubbleAndTileLabel() throws {
+        #expect(StageReactionPolicy.reducedSlotGap == StageReactionPolicy.reducedLaneOffset - StageReactionPolicy.reducedSlotWidth)
+        #expect(StageReactionPolicy.reducedSlotHeight(pillLineHeight: 16) == 72)
+        #expect(StageReactionPolicy.reducedSlotHeight(pillLineHeight: 24) == 80)
+        #expect(StageReactionPolicy.tileLabelBand(lineHeight: 16) == 32)
+        #expect(StageReactionPolicy.tileLabelBand(lineHeight: 32) == 48)
+        #expect(StageReactionPolicy.tileLabelBand(lineHeight: 15.5) == 32)
+        #expect(StageReactionPolicy.labelClearance == 8)
+        #expect(StageReactionPolicy.reducedShapes == [.row, .column, .block])
+        #expect(StageReactionPolicy.shapeWidth(.row) == 208 && StageReactionPolicy.shapeWidth(.column) == 64
+                && StageReactionPolicy.shapeWidth(.block) == 136)
+        #expect(StageReactionPolicy.shapeHeight(.row, slotHeight: 72) == 72 && StageReactionPolicy.shapeHeight(.column, slotHeight: 72) == 232
+                && StageReactionPolicy.shapeHeight(.block, slotHeight: 72) == 152)
+        let blockX: [Double] = [0, 72, 0]
+        let blockY: [Double] = [0, 0, 80]
+        for lane in 0..<StageReactionPolicy.laneCount {
+            for shape in StageReactionSlotShape.allCases {
+                #expect(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: false, shape: shape) == Double(lane) * StageReactionPolicy.laneOffset)
+            }
+            #expect(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: true, shape: .row) == Double(lane) * StageReactionPolicy.reducedLaneOffset)
+            #expect(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: true, shape: .column) == 0)
+            #expect(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: true, shape: .block) == blockX[lane])
+            #expect(StageReactionPolicy.slotOffsetY(lane: lane, shape: .row, slotHeight: 72) == 0)
+            #expect(StageReactionPolicy.slotOffsetY(lane: lane, shape: .column, slotHeight: 72) == Double(lane) * 80)
+            #expect(StageReactionPolicy.slotOffsetY(lane: lane, shape: .block, slotHeight: 72) == blockY[lane])
+        }
+        for shape in StageReactionSlotShape.allCases {
+            let rects = slotRects(StageReactionSlotPlacement(bottomInset: 0, shape: shape), viewport: Self.androidLandscape,
+                                  metrics: androidMetrics(fontScale: 1.0))
+            for first in 0..<rects.count {
+                for second in (first + 1)..<rects.count {
+                    #expect(!StageLayoutPolicy.overlaps(rects[first], rects[second]), "\(shape) lanes \(first) and \(second) overlap")
+                }
+            }
+        }
+
+        let ios = stageNormalized(try stageSource(Self.iosReactionsFile))
+        #expect(ios.contains("VStack(spacing: 4) {"))
+        #expect(ios.contains(".font(.caption2) .lineLimit(1) .padding(.horizontal, 6) .padding(.vertical, 2)"))
+        #expect(ios.contains("let tileLine = UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: cappedTraits).lineHeight"))
+        #expect(ios.contains("let pillLine = UIFont.preferredFont(forTextStyle: .caption2, compatibleWith: cappedTraits).lineHeight"))
+        #expect(ios.contains("viewport: viewport, safeBottom: layer.bottom)"))
+        #expect(ios.contains("barMaxWidth: StageLayoutPolicy.isCompactHeight(viewport) ? 0.0 : viewport.width)"))
+        #expect(ios.contains("return StageReactionPolicy.reducedPlacement(viewport: viewport, kind: layout.kind, slots: layout.slots, frames: frames, metrics: metrics)"))
+        #expect(ios.contains("ReactionBubble(event: event, reduceMotion: reduceMotion, slotShape: placement.shape, slotHeight: slots.slotHeight)"))
+        #expect(count("reducedPlacement(", in: ios) == 1)
+
+        let kotlin = stageNormalized(try stageSource(Self.androidReactionsFile))
+        #expect(kotlin.contains("verticalArrangement = Arrangement.spacedBy(4.dp),"))
+        #expect(kotlin.contains("modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)"))
+        #expect(kotlin.contains("val pillLine = MaterialTheme.typography.labelSmall.lineHeight.value.toDouble() * minOf(fontScale, StageReactionPolicy.reducedPillMaxFontScale)"))
+        #expect(kotlin.contains("val safeBottom = insets.getBottom(density) / scale"))
+        #expect(kotlin.contains("StageReactionSlotMetrics(defaultBottomInset = bottomInset, layerLeading = viewport.insetLeading, layerBottom = safeBottom,"))
+        #expect(kotlin.contains("labelBand = StageReactionPolicy.tileLabelBand(lineHeight = tileLabelLine * fontScale), barMaxWidth = ControlBarPolicy.androidMaxToolbarWidth)"))
+        #expect(kotlin.contains("StageReactionPolicy.reducedPlacement(viewport = viewport, kind = layout.kind, slots = layout.slots, frames = frames, metrics = metrics)"))
+        #expect(kotlin.contains("key(event.id) { ReactionBubble(event, reduceMotion, placement.shape, slotHeight) }"))
+        #expect(kotlin.contains("private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean, slotShape: StageReactionSlotShape, slotHeight: Double) {"))
+        #expect(count("reducedPlacement(", in: kotlin) == 1)
+
+        let policy = stageNormalized(try stageSource(Self.policyFile))
+        #expect(policy.contains("enum StageReactionSlotShape: String, CaseIterable, Equatable { case row, column, block }"))
+        #expect(policy.contains("if viewport.isEmpty || !viewport.isLandscape { return resting }"))
+        #expect(policy.contains("if !slotsCollide(restingFrames, bands: bands) { return resting }"))
+        #expect(policy.contains("if clearY >= 0.0 { return StageReactionSlotPlacement(bottomInset: layerBottomY - clearY, shape: shape) } } return fallback }"))
+        let androidBar = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/controls/CallControlBar.kt"))
+        #expect(androidBar.contains("modifier = Modifier.widthIn(max = ControlBarPolicy.androidMaxToolbarWidth.dp),"))
     }
 }
 #endif

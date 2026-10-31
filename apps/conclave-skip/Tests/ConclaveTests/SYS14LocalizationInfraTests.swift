@@ -145,6 +145,13 @@ struct SYS14LocalizationInfraTests {
         let changes = try #require(sys14Matches(#"android:configChanges="([^"]+)""#, in: manifest).first?.first)
         let kinds = Set(changes.split(separator: "|").map { String($0) })
         #expect(kinds.isSuperset(of: ["locale", "layoutDirection"]))
+        #expect(kinds.contains("uiMode"))
+
+        let application = try #require(sys14Matches(#"<application\s([^>]*)>"#, in: manifest).first?.first)
+        #expect(application.contains("android:enableOnBackInvokedCallback=\"true\""))
+        #expect(manifest.components(separatedBy: "enableOnBackInvokedCallback").count - 1 == 1)
+        let activity = try #require(sys14Matches(#"<activity\s([^>]*)>"#, in: manifest).first?.first)
+        #expect(!activity.contains("enableOnBackInvokedCallback"))
     }
 
     @Test func androidManifestPermissionsMatchTheReleaseDeclarationList() throws {

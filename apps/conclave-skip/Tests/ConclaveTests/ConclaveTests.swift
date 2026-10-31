@@ -3137,17 +3137,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains(".acmColorBackground(isCreateMeetingEnabled ? ACMColors.primaryOrange : ACMColors.subtleFill)"))
     }
 
-    func testNativeJoinScreenStartsOnFlatLobbyLikeWeb() throws {
-        let source = try sourceFileContents("Sources/Conclave/Features/Join/JoinView.swift")
-
-        XCTAssertTrue(source.contains("@State private var phase: JoinPhase = .join"))
-        XCTAssertTrue(source.contains("case auth, join"))
-        XCTAssertFalse(source.contains("case welcome"))
-        XCTAssertFalse(source.contains("private var welcomePhase"))
-        XCTAssertFalse(source.contains("Get started"))
-        XCTAssertFalse(source.contains("guard appState.isAuthenticated || appState.currentUser != nil"))
-    }
-
     func testJoinGuestSignInFooterStaysVisibleForNoGuestsRecoveryOnCompact() throws {
         XCTAssertTrue(JoinGuestSignInFooterPolicy.shouldShow(
             hasSignedInAccount: false,
@@ -8842,12 +8831,77 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(meetingSource.components(separatedBy: "viewModel.state.activeReactions").count - 1, 1)
     }
 
-    func testAndroidPipRendererKeyTracksTargetAndTrackIdentity() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/PipContent.kt")
+    func testRemoteConsumerFallbackFollowsTheStagePlanWhenNoVisibilityIsReported() throws {
+        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let start = try XCTUnwrap(source.range(of: "private func remoteVisibleConsumerUserIds() -> Set<String> {"))
+        let end = try XCTUnwrap(source.range(
+            of: "private func insertPresentRemoteConsumerUserId(",
+            range: start.upperBound..<source.endIndex
+        ))
+        let body = String(source[start.upperBound..<end.lowerBound])
+        let fallbackStart = try XCTUnwrap(body.range(of: "var ids = Set<String>()"))
+        let fallback = String(body[fallbackStart.upperBound...])
 
-        XCTAssertTrue(source.contains("val trackKey = videoState.track.id()"))
-        XCTAssertTrue(source.contains("rendererKey = \"pip:${videoState.surfaceVersion}:${videoState.targetId}:$trackKey\""))
-        XCTAssertTrue(source.contains("clearBeforeAttach = false"))
+        XCTAssertTrue(body.contains("if stage.hasVisibilityReport {"))
+        XCTAssertTrue(body.contains("for userId in StageConsumerVisibilityPolicy.visibleVideoUserIds(stage.visibility) {"))
+        XCTAssertTrue(fallback.contains(
+            "#if SKIP\n        if PipController.inPipMode {\n            insertPresentRemoteConsumerUserId(resolvedPipTargetId(), into: &ids)\n        }\n        #endif"
+        ))
+        XCTAssertTrue(fallback.contains(
+            "for userId in StageOrderPolicy.consumerFallbackRemoteIds(layout: stage.layout, inputs: stage.inputs, speakerUserId: stage.speakerUserId) {"
+        ))
+        XCTAssertTrue(fallback.contains("insertPresentRemoteConsumerUserId(state.presentationScreenShareUserId, into: &ids)"))
+        for legacy in ["state.visibleGridUserIds", "state.tileStripSnapshot(", "state.spotlightUserId",
+                       "visibleGridSnapshot(", "spotlightSnapshot(", "resolvedSelfViewMode",
+                       "visibleRemoteIds(stage.layout.slots"] {
+            XCTAssertFalse(body.contains(legacy), legacy)
+        }
+
+        let focusStart = try XCTUnwrap(source.range(of: "private func remoteFocusedConsumerUserIds() -> Set<String> {"))
+        XCTAssertLessThan(focusStart.lowerBound, start.lowerBound)
+        let focus = String(source[focusStart.upperBound..<start.lowerBound])
+        XCTAssertTrue(focus.contains("insertPresentRemoteConsumerUserId(state.spotlightUserId, into: &ids)"))
+    }
+
+    @MainActor
+    func testRemoteConsumerFallbackKeepsEveryRemoteUntilTheStageIsMeasuredThenUsesThePhoneCap() throws {
+        var participants = [StageParticipantInput.make(userId: "local", isLocal: true, joinSerial: 1)]
+        for index in 1...9 {
+            participants.append(StageParticipantInput.make(userId: "remote-\(index)", joinSerial: index + 1))
+        }
+        let everyone = ["remote-1", "remote-2", "remote-3", "remote-4", "remote-5", "remote-6", "remote-7", "remote-8", "remote-9"]
+        let firstFour = ["remote-1", "remote-2", "remote-3", "remote-4"]
+        let inputs = StageInputs.make(callSession: 1, isInCall: true, localUserId: "local", participants: participants,
+                                      selfViewMode: "tile")
+
+        let unmeasured = StagePresenter(shell: MeetingShellPresenter())
+        unmeasured.apply(inputs)
+        XCTAssertEqual(unmeasured.layout.kind, StageKind.grid)
+        XCTAssertEqual(unmeasured.layout.capacity, StageCapacity.zero)
+        XCTAssertTrue(StageOrderPolicy.visibleRemoteIds(unmeasured.layout.slots, localUserId: "local").isEmpty)
+        XCTAssertEqual(StageOrderPolicy.consumerFallbackRemoteIds(layout: unmeasured.layout, inputs: unmeasured.inputs,
+                                                                  speakerUserId: unmeasured.speakerUserId), everyone)
+
+        let capped = StagePresenter(shell: MeetingShellPresenter())
+        capped.apply(StageInputs.make(callSession: 1, isInCall: true, localUserId: "local", participants: participants,
+                                      viewMaxTiles: 6, selfViewMode: "tile"))
+        XCTAssertEqual(capped.layout.capacity, StageCapacity.zero)
+        XCTAssertEqual(StageOrderPolicy.consumerFallbackRemoteIds(layout: capped.layout, inputs: capped.inputs,
+                                                                  speakerUserId: capped.speakerUserId), firstFour)
+
+        let measured = StagePresenter(shell: MeetingShellPresenter())
+        measured.setViewport(StageViewport(width: 375.0, height: 667.0, insetTop: 76.0, insetBottom: 64.0, insetLeading: 0.0,
+                                           insetTrailing: 0.0, widthClass: StageSizeClass.compact,
+                                           heightClass: StageSizeClass.regular, placement: StageChromePlacement.bottomBar))
+        measured.apply(inputs)
+        let ids = StageOrderPolicy.consumerFallbackRemoteIds(layout: measured.layout, inputs: measured.inputs,
+                                                             speakerUserId: measured.speakerUserId)
+
+        XCTAssertEqual(measured.layout.capacity, StageCapacity(gridSlots: 6, railSlots: 0))
+        XCTAssertEqual(ids, firstFour)
+        XCTAssertEqual(ids, StageOrderPolicy.visibleRemoteIds(measured.layout.slots, localUserId: "local"))
+        XCTAssertEqual(measured.layout.overflowCount, 5)
+        XCTAssertFalse(ids.contains("local"))
     }
 
     func testAndroidMeetingVideoRendererDoesNotClearStableTrackReattachments() throws {
@@ -8914,7 +8968,8 @@ final class ConclaveTests: XCTestCase {
             MeetingErrorLegacyCopy.message(classified("DevicesNotFoundError"), device: MeetingMediaDevice.microphone),
             "Your microphone isn't available right now."
         )
-        XCTAssertEqual(classified("Send transport not ready").category, .serverUnreachable)
+        XCTAssertEqual(classified("Send transport not ready").category, .mediaSessionStale)
+        XCTAssertEqual(classified("Send transport not ready", .screenShare).category, .serverUnreachable)
         XCTAssertEqual(MeetingErrorLegacyCopy.message(classified("Send transport not ready")), "That didn't go through. Try again.")
         XCTAssertEqual(classified("No rear camera available").category, .deviceUnavailable)
         XCTAssertEqual(classified("No screen capture permission", .screenShare).category, .screenCapturePermission)
@@ -11526,6 +11581,21 @@ final class ConclaveTests: XCTestCase {
         return (entry.state, try XCTUnwrap(entry.command))
     }
 
+}
+
+@available(macOS 13, *)
+final class LegacyEntryJoinViewTests: XCTestCase {
+
+    func testNativeJoinScreenStartsOnFlatLobbyLikeWeb() throws {
+        let source = try sourceFileContents("Sources/Conclave/Features/Join/JoinView.swift")
+
+        XCTAssertTrue(source.contains("@State private var phase: JoinPhase = .join"))
+        XCTAssertTrue(source.contains("case auth, join"))
+        XCTAssertFalse(source.contains("case welcome"))
+        XCTAssertFalse(source.contains("private var welcomePhase"))
+        XCTAssertFalse(source.contains("Get started"))
+        XCTAssertFalse(source.contains("guard appState.isAuthenticated || appState.currentUser != nil"))
+    }
 }
 
 #if !SKIP

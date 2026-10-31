@@ -127,7 +127,7 @@ struct BrandAssetContractsTests {
         }
         #expect(parsedFiles >= 6)
 
-        #expect(backgrounds == ["values-night-v31": ["@color/conclave_window_background"], "values-v31": ["?android:attr/colorBackground"]])
+        #expect(backgrounds == ["values-night-v31": ["@color/conclave_window_background"], "values-v31": ["@color/conclave_window_background"]])
         let night = try brandSource("Android/app/src/main/res/values-night-v31/themes.xml")
         let day = try brandSource("Android/app/src/main/res/values-v31/themes.xml")
         let base = try brandSource("Android/app/src/main/res/values/themes.xml")
@@ -135,7 +135,8 @@ struct BrandAssetContractsTests {
             #expect(theme.contains("<style name=\"Theme.Conclave\" parent=\"Base.Theme.Conclave\">"))
         }
         #expect(try brandColors("values-night")["conclave_window_background"] == brandARGB(DesignTokens.androidDarkSurface))
-        #expect(base.contains("<style name=\"Base.Theme.Conclave\" parent=\"Theme.Material3.Dark.NoActionBar\">"))
+        #expect(try brandColors("values")["conclave_window_background"] == brandARGB(DesignTokens.androidLightSurface))
+        #expect(base.contains("<style name=\"Base.Theme.Conclave\" parent=\"Theme.Material3.DayNight.NoActionBar\">"))
         #expect(base.contains("<style name=\"Theme.Conclave\" parent=\"Base.Theme.Conclave\" />"))
         #expect(!base.contains("windowSplashScreen"))
         #expect(try brandSource("Android/app/src/main/AndroidManifest.xml").contains("android:theme=\"@style/Theme.Conclave\""))

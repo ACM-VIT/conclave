@@ -1,5 +1,7 @@
 package conclave.module
 
+import android.content.Context
+import android.view.KeyboardShortcutGroup
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.background
@@ -97,12 +99,14 @@ internal fun PremeetingHost(
                     anchors.clear()
                 })
             }
+            val entrySettled = rootTransition.currentState == PremeetingRootKind.call &&
+                rootTransition.targetState == PremeetingRootKind.call &&
+                (expansionStart == null || expansionDone)
             if (usesNativeCallRoot && stage != null) {
-                StageEntryFinishedEffect(
-                    settled = rootTransition.currentState == PremeetingRootKind.call &&
-                        rootTransition.targetState == PremeetingRootKind.call &&
-                        (expansionStart == null || expansionDone),
-                )
+                StageEntryFinishedEffect(settled = entrySettled)
+            }
+            if (stage != null) {
+                PremeetingPipOverlay(shell, stage, entrySettled)
             }
         }
         if (!callComposed) {
@@ -116,6 +120,16 @@ internal fun PremeetingHost(
         if (premeeting.isUpdatePromptPresented) {
             PremeetingUpdateDialog(premeeting)
         }
+    }
+}
+
+@Composable
+private fun PremeetingPipOverlay(shell: MeetingShellPresenter, stage: StagePresenter, entrySettled: Boolean) {
+    if (!PipController.pipAwaitsCallRoot(entrySettled)) return
+    HostingTheme(inCall = true) {
+        NativePipOverlay(stage, CallPresencePhasePolicy.phase(sessionPhase = shell.session.phase,
+            interruption = AudioInterruptionKind.none), Modifier.background(LocalConclaveExtendedColors.current.stage),
+            rendersVideo = false)
     }
 }
 
@@ -281,6 +295,19 @@ fun NativePremeetingHost(callContent: @Composable () -> Unit) {
             callContent = callContent,
         )
     }
+}
+
+fun nativeCallKeyboardShortcutGroup(context: Context): KeyboardShortcutGroup? {
+    if (!PipController.isInCall || !PipController.nativeRootComposed) return null
+    val group = callControlsKeyboardShortcutGroup(context, MeetingViewModel.shared.controls)
+    return if (group.items.isEmpty()) null else group
+}
+
+@Composable
+fun NativeLegacyRootPipOverlay() {
+    if (!PipController.pipAwaitsCallRoot(entrySettled = false)) return
+    val viewModel = MeetingViewModel.shared
+    PremeetingPipOverlay(viewModel.shell, viewModel.stage, entrySettled = false)
 }
 
 @Composable

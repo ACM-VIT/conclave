@@ -3,5 +3,7 @@
 <resources>
     <color name="conclave_window_background">#FFFFFFFF</color>
     <color name="sys_notification_accent">#FFB94333</color>
+    <color name="conclave_primary">#FFB94333</color>
+    <color name="conclave_on_primary">#FFFFFFFF</color>
     <color name="ic_launcher_background">#FF0A0A0B</color>
 </resources>

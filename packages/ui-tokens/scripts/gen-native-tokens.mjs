@@ -171,6 +171,9 @@ export function renderNativeTokens(tokens = native) {
       ["conclave_window_background", tokens.android[mode].background],
       // S70 SX8: notification accent (Notification.setColor) from the scheme's primary; follows night mode on re-post.
       ["sys_notification_accent", tokens.android[mode].primary],
+      // S2-T2 (EF-2): the launch theme accent, so View-based UI (WebView handles, system dialogs) follows the scheme.
+      ["conclave_primary", tokens.android[mode].primary],
+      ["conclave_on_primary", tokens.android[mode].onPrimary],
     ];
     // S70 11 d: the adaptive icon tile is the stage color in every appearance, so it has no night variant.
     if (mode === "light") resources.push(["ic_launcher_background", tokens.android.extended.stage]);

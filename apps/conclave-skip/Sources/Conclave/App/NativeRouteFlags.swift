@@ -147,8 +147,8 @@ public enum NativeFixtureLaunch {
     }
 
     static func iOSPeopleQaState(_ raw: String?) -> PeopleWebinarFixtureState? {
-        guard let raw, PeopleWebinarFixtureScript.state(named: raw) == .qaAttendee5 else { return nil }
-        return .qaAttendee5
+        guard let raw else { return nil }
+        return PeopleWebinarFixtureScript.state(named: raw)
     }
 
     public static func androidSelector(system: String?, stage: String?, people: String?, premeeting: String?) -> Bool {
@@ -161,9 +161,8 @@ public enum NativeFixtureLaunch {
         selectorRequested: Bool,
         hostingPreviewRequested: Bool,
         isInCall: Bool,
-        showsLegacyPipContent: Bool,
         debugEligible: Bool
     ) -> Bool {
-        debugEligible && !isInCall && !showsLegacyPipContent && (selectorRequested || hostingPreviewRequested)
+        debugEligible && !isInCall && (selectorRequested || hostingPreviewRequested)
     }
 }

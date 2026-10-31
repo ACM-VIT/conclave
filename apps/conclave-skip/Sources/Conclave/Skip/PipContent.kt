@@ -18,69 +18,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 @Composable
-fun PipContent() {
-    val videoState = PipController.pipVideoState
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0A0A0B)),
-        contentAlignment = Alignment.Center
-    ) {
-        if (videoState.track != null && !videoState.cameraOff) {
-            val trackKey = videoState.track.id()
-            VideoTrackView(
-                track = videoState.track,
-                mirror = false,
-                fit = false,
-                useOverlaySurface = false,
-                rendererKey = "pip:${videoState.surfaceVersion}:${videoState.targetId}:$trackKey",
-                clearBeforeAttach = false
-            )
-        } else {
-            PipAvatar(videoState.displayName)
-        }
-    }
-}
-
-@Composable
-private fun PipAvatar(name: String) {
-    val initial = name.trim().take(1).uppercase().ifEmpty { "?" }
-    Box(
-        modifier = Modifier
-            .size(72.dp)
-            .clip(CircleShape)
-            .background(Color(0xFF232327)),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = initial,
-            color = Color(0xFFFAFAFA),
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
-@Composable
-internal fun NativePipOverlay(stage: StagePresenter, phase: CallPresencePhase, modifier: Modifier = Modifier) {
+internal fun NativePipOverlay(stage: StagePresenter, phase: CallPresencePhase, modifier: Modifier = Modifier, rendersVideo: Boolean = true) {
     val choice = stage.pipTarget
     val chrome = if (choice.isEmpty) null else stage.tileChrome.entry(choice.userId).model
-    val videoKey = if (choice.isEmpty) "" else stage.bindings.binding(choice.slotId).videoKey
+    val videoKey = if (choice.isEmpty || !rendersVideo) "" else stage.bindings.binding(choice.slotId).videoKey
     val hasVideo = videoKey.isNotEmpty() && (choice.isShare || !(chrome?.isCameraOff ?: true))
     BoxWithConstraints(modifier.fillMaxSize()) {
         val content = PipContentPolicy.content(

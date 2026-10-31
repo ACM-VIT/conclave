@@ -69,7 +69,9 @@ enum StageLayoutPolicy {
         if !inputs.screenShareUserId.isEmpty { return StageKind.presentation }
         if count <= 1 { return StageKind.solo }
         if inputs.viewMode == "spotlight" { return StageKind.spotlight }
-        if count == 2 && inputs.viewMode == "auto" && inputs.selfViewMode != "tile" { return StageKind.oneOnOne }
+        if count == 2 && inputs.viewMode == "auto" {
+            return inputs.selfViewMode == "tile" ? StageKind.spotlight : StageKind.oneOnOne
+        }
         if inputs.viewMode == "sidebar" || (inputs.viewMode == "auto" && count > MeetingViewConstants.autoTiledThreshold) {
             return StageKind.sidebar
         }

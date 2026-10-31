@@ -144,6 +144,11 @@ enum PremeetingFixtureScript {
         PremeetingFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    static func selfCheckReadout(check: String, lobbyOpenMillis: Int?) -> String {
+        guard let lobbyOpenMillis else { return check }
+        return check + " lobbyOpen=" + String(lobbyOpenMillis) + "ms"
+    }
+
     static let identity = MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "fixture-1")
 
     static func base(updateRequired: Bool = false, resumeInFlight: Bool = false, guestName: String = "",
@@ -536,7 +541,7 @@ final class PremeetingFixtureSession {
     let premeeting = PremeetingPresenter()
     let state: PremeetingFixtureState
 
-    private(set) var selfCheckReadout = "pending"
+    private(set) var selfCheckStatus = "pending"
     @ObservationIgnored private var timeline: Task<Void, Never>? = nil
     @ObservationIgnored private var appliedSteps = 0
     @ObservationIgnored private var baselineShellPublishes = 0
@@ -552,6 +557,10 @@ final class PremeetingFixtureSession {
 
     init(state: PremeetingFixtureState) {
         self.state = state
+    }
+
+    var selfCheckReadout: String {
+        PremeetingFixtureScript.selfCheckReadout(check: selfCheckStatus, lobbyOpenMillis: premeeting.lastLobbyOpenMillis)
     }
 
     func start() {
@@ -775,8 +784,8 @@ final class PremeetingFixtureSession {
             failed = true
         }
         let value = (failed ? "overwritten step=" : "ok step=") + String(appliedSteps)
-        if value != selfCheckReadout {
-            selfCheckReadout = value
+        if value != selfCheckStatus {
+            selfCheckStatus = value
         }
     }
 }

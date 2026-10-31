@@ -2,6 +2,6 @@
 <resources>
 
     <style name="Theme.Conclave" parent="Base.Theme.Conclave">
-        <item name="android:windowSplashScreenBackground">?android:attr/colorBackground</item>
+        <item name="android:windowSplashScreenBackground">@color/conclave_window_background</item>
     </style>
 </resources>

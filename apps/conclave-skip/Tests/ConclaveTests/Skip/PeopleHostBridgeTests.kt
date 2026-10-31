@@ -187,4 +187,259 @@ class PeopleHostBridgeTests {
         assertEquals("zz", PeopleFixtureSession(state = PeopleFixtureState.searchNone).people.initialSearchQuery)
         assertEquals(PanelDestination.peopleWaiting, PeopleFixtureScript.openDestination(PeopleFixtureState.hostWaiting3))
     }
+
+    private fun held(state: PeopleFixtureState): PeopleFixtureSession {
+        val session = PeopleFixtureSession(state = state)
+        session.people.platform = NoticePlatform.android
+        session.holdsAcks = true
+        return session
+    }
+
+    @Test fun hostControlsFixtureNamesMatchSwiftAndOpenHostControls() {
+        val names = listOf("host-controls-default", "host-controls-pending-lock", "host-access-lists", "host-notice-sending",
+            "people-host-6-slow-ack", "people-host-6-refused")
+        for (name in names) {
+            val state = PeopleFixtureScript.state(named = " $name ")
+            assertNotNull(name, state)
+            assertEquals(name, state?.rawValue)
+            assertNull(name, PeopleWebinarFixtureScript.state(named = name))
+        }
+        val defaults = PeopleFixtureSession(state = PeopleFixtureState.hostControlsDefault)
+        assertTrue(defaults.people.host.snapshot.isAvailable)
+        assertEquals(2, defaults.people.host.snapshot.access.allowedCount)
+        assertEquals(1, defaults.people.host.snapshot.access.blockedCount)
+        defaults.openOnLaunch()
+        assertEquals(MeetingPanel.hostControls, defaults.shell.panels.snapshot.current?.panel)
+        val lists = PeopleFixtureSession(state = PeopleFixtureState.hostAccessLists)
+        lists.openOnLaunch()
+        assertEquals(PanelDestination.hostControlsAccess, lists.shell.panels.snapshot.current?.destination)
+        val slow = PeopleFixtureSession(state = PeopleFixtureState.host6SlowAck)
+        slow.openOnLaunch()
+        assertEquals(MeetingPanel.participants, slow.shell.panels.snapshot.current?.panel)
+    }
+
+    @Test fun lockAckFlipsTheSwitchAndThePendingLockFailsOnce() {
+        val session = held(PeopleFixtureState.hostControlsDefault)
+        val host = session.people.host
+        assertEquals(ControlTapResult.dispatched, host.setPolicy(HostPolicyID.lockMeeting, on = true))
+        session.releaseAcks()
+        assertEquals(true, host.snapshot.policy(HostPolicyID.lockMeeting)?.isOn)
+        assertEquals(PeopleAccessSummary.locked.rawValue, session.people.snapshot.accessSummary)
+        assertTrue(session.hostReadout().contains("locked=1"))
+
+        val pending = held(PeopleFixtureState.hostControlsPendingLock)
+        val pendingHost = pending.people.host
+        assertEquals(ControlTapResult.dispatched, pendingHost.setPolicy(HostPolicyID.lockMeeting, on = true))
+        assertEquals(ControlTapResult.ignored, pendingHost.setPolicy(HostPolicyID.lockMeeting, on = false))
+        assertEquals(PeopleFixtureAck(delayMillis = 2000.0, failure = HostActionFailure.rejectedByServer.rawValue), pending.queuedAcks[0].ack)
+        assertEquals(true, pendingHost.snapshot.policy(HostPolicyID.lockMeeting)?.shownOn)
+        pending.releaseAcks()
+        assertEquals(false, pendingHost.snapshot.policy(HostPolicyID.lockMeeting)?.shownOn)
+        assertEquals(HostFailurePlacement.panelSnackbar.rawValue, pending.people.lastFailure?.placement)
+        assertEquals(HostActionFailure.rejectedByServer.rawValue, pending.people.lastFailure?.failure)
+    }
+
+    @Test fun accessListsAndNoticeFollowTheirScriptedAcks() {
+        val lists = held(PeopleFixtureState.hostAccessLists)
+        val host = lists.people.host
+        assertEquals(listOf("ana@example.org", "guest-71a2"), host.snapshot.access.allowed.toList())
+        assertEquals(listOf("ana@example.org"), host.snapshot.access.lockedAllowed.toList())
+        host.revoke("guest-71a2")
+        lists.releaseAcks()
+        assertEquals(listOf("ana@example.org"), host.snapshot.access.allowed.toList())
+        host.dispatchBlock("troll@example.org")
+        lists.releaseAcks()
+        val failure = lists.people.lastFailure
+        assertEquals(HostActionFailure.rateLimited.rawValue, failure?.failure)
+        assertEquals(listOf("spam@example.org"), host.snapshot.access.blocked.toList())
+        lists.people.retry(failureId = failure?.id ?: 0)
+        lists.releaseAcks()
+        assertEquals(listOf("spam@example.org", "troll@example.org"), host.snapshot.access.blocked.toList())
+
+        val notice = held(PeopleFixtureState.hostNoticeSending)
+        val noticeHost = notice.people.host
+        noticeHost.sendNotice("Five minutes left", level = HostNoticeLevel.info)
+        assertEquals(PeopleFixtureAck(delayMillis = 1500.0, failure = ""), notice.queuedAcks[0].ack)
+        notice.releaseAcks()
+        assertEquals(HostFieldPhase.sent, noticeHost.snapshot.noticePhase)
+        noticeHost.sendNotice("Wrapping up", level = HostNoticeLevel.warning)
+        notice.releaseAcks()
+        assertEquals(HostFieldPhase.failed, noticeHost.snapshot.noticePhase)
+        assertEquals(HostActionFailure.ackTimedOut.rawValue, notice.people.lastFailure?.failure)
+    }
+
+    @Test fun slowAckAndRefusedVariantsOfHostSix() {
+        val slow = held(PeopleFixtureState.host6SlowAck)
+        assertEquals(ControlTapResult.dispatched, slow.people.perform(PersonActionID.mute, rowId = "u-priya", source = PeopleActionSource.rowMenu))
+        assertEquals(ControlTapResult.ignored, slow.people.perform(PersonActionID.mute, rowId = "u-priya", source = PeopleActionSource.rowMenu))
+        assertEquals(1, slow.queuedAcks.count)
+        assertEquals(PeopleFixtureAck(delayMillis = 2000.0, failure = HostActionFailure.rejectedByServer.rawValue), slow.queuedAcks[0].ack)
+        assertEquals(PersonActionID.mute.rawValue, slow.people.rows.entry("u-priya").model.pendingAction)
+        slow.releaseAcks()
+        assertTrue(slow.people.rows.entry("u-priya").model.pendingAction.isEmpty())
+        assertFalse(slow.people.rows.entry("u-priya").model.isMuted)
+        assertEquals(HostActionFailure.rejectedByServer.rawValue, slow.people.lastFailure?.failure)
+
+        val refused = held(PeopleFixtureState.host6Refused)
+        refused.people.beginRename()
+        refused.people.submitRename("Ishaan K")
+        refused.releaseAcks()
+        assertEquals(HostActionFailure.renameRateLimited.rawValue, refused.people.rename.refusal)
+        refused.people.submitRename("Ishaan K")
+        refused.releaseAcks()
+        assertEquals(HostActionFailure.renameDisabled.rawValue, refused.people.rename.refusal)
+        refused.people.perform(PersonActionID.remove, rowId = "u-lee", source = PeopleActionSource.rowMenu)
+        refused.people.confirm(id = refused.people.confirmation?.id ?: 0, block = false)
+        refused.releaseAcks()
+        assertEquals(HostActionFailure.superAdmin.rawValue, refused.people.lastFailure?.failure)
+        assertTrue(refused.people.rows.contains("u-lee"))
+    }
+
+    @Test fun webinarAttendeeAcknowledgementAndPromotionStates() {
+        assertEquals(PeopleWebinarFixtureState.webinarAttendeeAck, PeopleWebinarFixtureScript.state(named = "webinar-attendee-ack"))
+        assertEquals(PeopleWebinarFixtureState.webinarAttendeePromoted, PeopleWebinarFixtureScript.state(named = "webinar-attendee-promoted"))
+        assertTrue(PeopleWebinarFixtureScript.opensQuestionsAndAnswers(PeopleWebinarFixtureState.webinarAttendeeAck))
+        assertTrue(PeopleWebinarFixtureScript.deliversPromotion(PeopleWebinarFixtureState.webinarAttendeePromoted))
+        assertTrue(PeopleWebinarFixtureScript.deliversPromotion(PeopleWebinarFixtureState.stageInvite))
+        assertTrue(PeopleWebinarFixtureScript.opensParticipants(PeopleWebinarFixtureState.webinarHostHands4))
+
+        val ack = PeopleWebinarFixtureSession(state = PeopleWebinarFixtureState.webinarAttendeeAck)
+        ack.holdsAcks = true
+        assertTrue(ack.people.snapshot.webinarEnabled)
+        assertEquals(PersonRole.attendee, ack.people.snapshot.viewerRole)
+        assertEquals(ControlTapResult.dispatched, ack.people.qa.submit("Will the deck be shared?"))
+        assertEquals(PeopleFixtureAck(delayMillis = 2000.0, failure = ""), ack.queuedAcks[0].ack)
+        ack.releaseAcks()
+        assertEquals(FeedbackKind.questionSent, ack.people.feedbackState.token.kind)
+        assertEquals(1, ack.submissions)
+        assertEquals(6, ack.qaInputs.entries.count)
+        assertEquals(ControlTapResult.dispatched, ack.people.qa.submit("Is there a replay?"))
+        assertEquals(PeopleFixtureAck(delayMillis = 300.0, failure = HostActionFailure.ackTimedOut.rawValue), ack.queuedAcks[0].ack)
+        ack.releaseAcks()
+        assertEquals(FeedbackKind.questionFailed, ack.people.feedbackState.token.kind)
+        assertEquals(1, ack.submissions)
+        assertEquals(ControlTapResult.dispatched, ack.people.qa.toggleUpvote(id = "q2"))
+        assertEquals("upvote", ack.people.qa.questions.entry("q2").model.pendingAction)
+        ack.releaseAcks()
+        assertTrue(ack.people.qa.questions.entry("q2").model.hasUpvoted)
+
+        val promoted = PeopleWebinarFixtureSession(state = PeopleWebinarFixtureState.webinarAttendeePromoted)
+        promoted.holdsAcks = true
+        promoted.deliverPromotion()
+        val invitation = promoted.people.stageInvitation
+        assertEquals("Ishaan", invitation?.promotedByName)
+        promoted.people.declineStageInvitation(id = invitation?.id ?: 0)
+        assertEquals(1, promoted.queuedAcks.count)
+        assertEquals(PeopleCommandKind.declineStage, promoted.queuedAcks[0].command.kind)
+        promoted.releaseAcks()
+        assertEquals("declineStage", promoted.countersReadout())
+        promoted.deliverPromotion()
+        promoted.people.acceptStageInvitation(id = promoted.people.stageInvitation?.id ?: 0)
+        assertEquals("declineStage,acceptStage", promoted.countersReadout())
+        promoted.landSpeakerSession()
+        assertEquals(PersonRole.participant, promoted.people.snapshot.viewerRole)
+        assertTrue(promoted.people.snapshot.webinarEnabled)
+        promoted.deliverPromotion()
+        assertNull(promoted.people.stageInvitation)
+    }
+
+    @Test fun webinarHostAcksMoveRowsAndQuestions() {
+        val hands = PeopleWebinarFixtureSession(state = PeopleWebinarFixtureState.webinarHostHands4)
+        hands.holdsAcks = true
+        val people = hands.people
+        assertEquals(ControlTapResult.dispatched,
+            people.perform(PersonActionID.bringOnStage, rowId = "attendee:a-priya", source = PeopleActionSource.rowMenu))
+        assertEquals(PeopleFixtureAck(delayMillis = 200.0, failure = ""), hands.queuedAcks[0].ack)
+        assertEquals(listOf("attendee:a-priya", "attendee:a-omar", "attendee:a-mina", "attendee:a-jo"), ids(people, PeopleSectionID.raisedHands))
+        hands.releaseAcks()
+        assertEquals(listOf("attendee:a-omar", "attendee:a-mina", "attendee:a-jo"), ids(people, PeopleSectionID.raisedHands))
+        assertEquals(listOf("attendee:a-priya"), ids(people, PeopleSectionID.attendees))
+        assertEquals(PersonDetail.stageInvited, people.rows.entry("attendee:a-priya").model.detail)
+        assertEquals(FeedbackKind.hostInvitedToStage, people.feedbackState.token.kind)
+        assertEquals(ControlTapResult.dispatched,
+            people.perform(PersonActionID.cancelStageInvite, rowId = "attendee:a-priya", source = PeopleActionSource.rowMenu))
+        hands.releaseAcks()
+        assertTrue(ids(people, PeopleSectionID.attendees).isEmpty())
+        assertEquals(ControlTapResult.dispatched,
+            people.perform(PersonActionID.moveToAudience, rowId = "u-lee", source = PeopleActionSource.rowMenu))
+        people.confirm(id = people.confirmation?.id ?: 0, block = false)
+        assertTrue(ids(people, PeopleSectionID.panelists).contains("u-lee"))
+        hands.releaseAcks()
+        assertFalse(ids(people, PeopleSectionID.panelists).contains("u-lee"))
+        assertEquals(129, people.attendeeCount)
+        assertEquals("bringOnStage,cancelStageInvite,moveToAudience", hands.countersReadout())
+
+        val invited = PeopleWebinarFixtureSession(state = PeopleWebinarFixtureState.webinarHostInvited)
+        invited.holdsAcks = true
+        assertEquals(listOf("attendee:a-mina"), ids(invited.people, PeopleSectionID.attendees))
+        invited.people.perform(PersonActionID.cancelStageInvite, rowId = "attendee:a-mina", source = PeopleActionSource.rowMenu)
+        invited.releaseAcks()
+        assertTrue(ids(invited.people, PeopleSectionID.attendees).isEmpty())
+
+        val moderated = PeopleWebinarFixtureSession(state = PeopleWebinarFixtureState.qaHostOpen7)
+        moderated.holdsAcks = true
+        val qa = moderated.people.qa
+        assertEquals(ControlTapResult.dispatched, qa.perform(hostAction = QaModerationAction.answered, id = "h0"))
+        assertEquals(PeopleFixtureAck(delayMillis = 150.0, failure = ""), moderated.queuedAcks[0].ack)
+        moderated.releaseAcks()
+        assertEquals(QaStatus.answered, qa.questions.entry("h0").model.status)
+        assertFalse(qa.snapshot.questionIds.toList().contains("h0"))
+        assertEquals(ControlTapResult.dispatched,
+            qa.moderate(id = "h1", action = QaStatus.answered, reopen = false, answerText = "In the chat after the session."))
+        assertEquals(PeopleFixtureAck(delayMillis = 300.0, failure = ""), moderated.queuedAcks[0].ack)
+        moderated.releaseAcks()
+        assertEquals(QaStatus.answered, qa.questions.entry("h1").model.status)
+        assertEquals("In the chat after the session.", qa.questions.entry("h1").model.answerText)
+        assertEquals(ControlTapResult.dispatched, qa.perform(hostAction = QaModerationAction.reopen, id = "h7"))
+        moderated.releaseAcks()
+        assertEquals(QaStatus.pending, qa.questions.entry("h7").model.status)
+    }
+
+    @Test fun qaHostAnsweredOpensOnTheAnsweredFilter() {
+        val answered = PeopleWebinarFixtureSession(state = PeopleWebinarFixtureState.qaHostAnswered)
+        answered.openQuestionsAndAnswers()
+        val current = answered.base.shell.panels.snapshot.current
+        assertEquals(MeetingPanel.webinarQA, current?.panel)
+        assertEquals(QaHostFilter.answered, answered.people.qa.snapshot.filter)
+        assertEquals(listOf("h7", "h8"), answered.people.qa.snapshot.questionIds.toList())
+        answered.people.qa.panelDidOpen(presentationID = current?.presentationID ?: 0)
+        assertEquals(QaHostFilter.answered, answered.people.qa.snapshot.filter)
+
+        val open = PeopleWebinarFixtureSession(state = PeopleWebinarFixtureState.qaHostOpen7)
+        open.openQuestionsAndAnswers()
+        assertEquals(MeetingPanel.webinarQA, open.base.shell.panels.snapshot.current?.panel)
+        assertEquals(QaHostFilter.openQuestions, open.people.qa.snapshot.filter)
+        assertEquals(7, open.people.qa.snapshot.questionIds.count)
+    }
+
+    @Test fun hostControlsDefaultEndsStopsSharesAndProjectsWebinarPolicies() {
+        val ending = held(PeopleFixtureState.hostControlsDefault)
+        val endHost = ending.people.host
+        assertTrue(endHost.snapshot.canEndForEveryone)
+        assertTrue(ending.shell.session.canEndForEveryone)
+        endHost.requestEndForEveryone()
+        val dialog = ending.shell.session.confirmation
+        assertNotNull(dialog)
+        assertEquals(MeetingConfirmationInvoker.hostControls, dialog?.invoker)
+        ending.shell.confirmEndForEveryone(id = dialog?.id ?: 0)
+        assertEquals(HostEndPhase.ending, endHost.snapshot.endPhase)
+        assertFalse(PeopleFixtureSession(state = PeopleFixtureState.host6).people.host.snapshot.canEndForEveryone)
+
+        val session = held(PeopleFixtureState.hostControlsDefault)
+        val host = session.people.host
+        assertEquals("probe:share:u-lee", session.stage.inputs.participant("u-lee")?.shareVideoKey)
+        assertEquals(ControlTapResult.dispatched, host.requestBulk(HostBulkID.stopAllShares))
+        session.people.confirm(id = session.people.confirmation?.id ?: 0, block = false)
+        session.releaseAcks()
+        assertTrue(session.stage.inputs.screenShareUserId.isEmpty())
+        assertEquals(false, host.snapshot.bulkRow(HostBulkID.stopAllShares)?.isVisible)
+
+        assertFalse(session.people.snapshot.webinarEnabled)
+        assertEquals(ControlTapResult.dispatched, host.setPolicy(HostPolicyID.webinarMode, on = true))
+        session.releaseAcks()
+        assertTrue(session.people.snapshot.webinarEnabled)
+        assertEquals(ControlTapResult.dispatched, host.setPolicy(HostPolicyID.directMessages, on = false))
+        session.releaseAcks()
+        assertFalse(session.people.inputs.isDmEnabled)
+    }
 }

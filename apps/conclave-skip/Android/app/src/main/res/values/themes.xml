@@ -1,29 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Base.Theme.Conclave" parent="Theme.Material3.Dark.NoActionBar">
-
-        <item name="colorPrimary">@color/md_theme_primary</item>
-        <item name="colorOnPrimary">@color/md_theme_onPrimary</item>
-        <item name="colorPrimaryContainer">@color/md_theme_primaryContainer</item>
-        <item name="colorOnPrimaryContainer">@color/md_theme_onPrimaryContainer</item>
-        <item name="colorSecondary">@color/md_theme_secondary</item>
-        <item name="colorOnSecondary">@color/md_theme_onSecondary</item>
-        <item name="colorSecondaryContainer">@color/md_theme_secondaryContainer</item>
-        <item name="colorOnSecondaryContainer">@color/md_theme_onSecondaryContainer</item>
-        <item name="android:colorBackground">@color/md_theme_background</item>
-        <item name="colorOnBackground">@color/md_theme_onBackground</item>
-        <item name="colorSurface">@color/md_theme_surface</item>
-        <item name="colorOnSurface">@color/md_theme_onSurface</item>
-        <item name="colorSurfaceVariant">@color/md_theme_surfaceVariant</item>
-        <item name="colorOnSurfaceVariant">@color/md_theme_onSurfaceVariant</item>
-        <item name="colorError">@color/md_theme_error</item>
-        <item name="colorOnError">@color/md_theme_onError</item>
-        <item name="colorOutline">@color/md_theme_outline</item>
-        <item name="android:statusBarColor">@color/status_bar_color</item>
-        <item name="android:navigationBarColor">@color/navigation_bar_color</item>
-        <item name="android:windowLightStatusBar">false</item>
+    <style name="Base.Theme.Conclave" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/conclave_primary</item>
+        <item name="colorOnPrimary">@color/conclave_on_primary</item>
+        <item name="colorSecondary">@color/conclave_primary</item>
+        <item name="colorOnSecondary">@color/conclave_on_primary</item>
+        <item name="colorControlActivated">@color/conclave_primary</item>
+        <item name="android:colorAccent">@color/conclave_primary</item>
+        <item name="colorPrimaryDark">@color/conclave_window_background</item>
+        <item name="android:colorBackground">@color/conclave_window_background</item>
+        <item name="android:windowBackground">@color/conclave_window_background</item>
+        <item name="android:windowLightStatusBar">?attr/isLightTheme</item>
     </style>
-
 
     <style name="Theme.Conclave" parent="Base.Theme.Conclave" />
 </resources>

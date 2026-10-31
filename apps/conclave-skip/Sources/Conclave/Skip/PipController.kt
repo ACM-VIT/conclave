@@ -53,8 +53,8 @@ object PipController {
     var lastSuppressionReason by mutableStateOf("")
         private set
 
-    val showsLegacyPipContent: Boolean
-        get() = inPipMode && isInCall && !nativeRootComposed
+    fun pipAwaitsCallRoot(entrySettled: Boolean): Boolean =
+        inPipMode && isInCall && (!nativeRootComposed || !entrySettled)
 
     val chromeHiddenForPip: Boolean
         get() = inPipMode || isTransitioningToPip

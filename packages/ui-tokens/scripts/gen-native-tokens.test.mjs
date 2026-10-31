@@ -101,9 +101,12 @@ test("asset catalogs encode all four coral appearances and platform-specific lau
   assert.deepEqual(assetColors(outputs.get(`${assetsPath}/LaunchBackground.colorset/Contents.json`)).map((color) => color.rgb), ["F2F2F7", "000000"]);
   const expected = {
     // S70 SX8: the notification accent is the light and night primary; S70 11 d: the launcher tile is the stage.
+    // S2-T2 (EF-2): the launch theme accent pair is the scheme's primary and onPrimary.
     values: [["conclave_window_background", "#FFFFFFFF"], ["sys_notification_accent", "#FFB94333"],
+      ["conclave_primary", "#FFB94333"], ["conclave_on_primary", "#FFFFFFFF"],
       ["ic_launcher_background", "#FF0A0A0B"]],
-    "values-night": [["conclave_window_background", "#FF0A0A0B"], ["sys_notification_accent", "#FFFF7D66"]],
+    "values-night": [["conclave_window_background", "#FF0A0A0B"], ["sys_notification_accent", "#FFFF7D66"],
+      ["conclave_primary", "#FFFF7D66"], ["conclave_on_primary", "#FF0A0A0B"]],
   };
   for (const [folder, colors] of Object.entries(expected)) {
     const xml = outputs.get(`${resourcesPath}/${folder}/colors.xml`);
@@ -117,18 +120,27 @@ test("system notification accent and launcher tile follow their tokens, never a 
   const fixture = structuredClone(native);
   fixture.android.light.primary = 0xFF102030;
   fixture.android.dark.primary = 0xFF405060;
+  fixture.android.light.onPrimary = 0xFF112131;
+  fixture.android.dark.onPrimary = 0xFF415161;
   fixture.android.extended.stage = 0xFF708090;
   const outputs = renderNativeTokens(fixture);
   const day = outputs.get(`${resourcesPath}/values/colors.xml`);
   const night = outputs.get(`${resourcesPath}/values-night/colors.xml`);
   assert.match(day, /<color name="sys_notification_accent">#FF102030<\/color>/);
   assert.match(night, /<color name="sys_notification_accent">#FF405060<\/color>/);
+  assert.match(day, /<color name="conclave_primary">#FF102030<\/color>/);
+  assert.match(night, /<color name="conclave_primary">#FF405060<\/color>/);
+  assert.match(day, /<color name="conclave_on_primary">#FF112131<\/color>/);
+  assert.match(night, /<color name="conclave_on_primary">#FF415161<\/color>/);
   assert.match(day, /<color name="ic_launcher_background">#FF708090<\/color>/);
   assert.doesNotMatch(night, /ic_launcher_background/);
   assert.equal(native.android.light.primary, native.brand.coralDeep);
   assert.equal(native.android.dark.primary, native.brand.coralBright);
+  assert.equal(native.android.light.onPrimary, native.neutral.white);
+  assert.equal(native.android.dark.onPrimary, native.brand.ink);
   assert.equal(native.android.extended.stage, native.brand.ink);
-  for (const name of ["sys_notification_accent", "ic_launcher_background", "conclave_window_background"]) {
+  for (const name of ["sys_notification_accent", "ic_launcher_background", "conclave_window_background",
+    "conclave_primary", "conclave_on_primary"]) {
     assert.match(name, /^[a-z][a-z0-9_]*$/);
   }
 });

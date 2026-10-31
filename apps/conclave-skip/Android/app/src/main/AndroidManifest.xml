@@ -43,6 +43,7 @@
         android:name=".AndroidAppMain"
         android:supportsRtl="true"
         android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
         android:usesCleartextTraffic="${USES_CLEARTEXT_TRAFFIC}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher">

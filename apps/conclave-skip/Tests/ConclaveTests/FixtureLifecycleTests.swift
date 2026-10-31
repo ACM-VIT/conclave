@@ -38,10 +38,23 @@ struct FixtureLifecycleTests {
             let displayed = NativeFixtureLaunch.iOSPeopleState(raw) != nil
             let selected = NativeFixtureLaunch.iOSSelector(system: nil, stage: nil, people: raw, premeeting: nil)
             #expect(selected == displayed)
-            if NativeFixtureLaunch.iOSPeopleQaState(raw) != nil {
-                #expect(displayed && NativeFixtureLaunch.iOSPeopleState(raw) == .guest4)
+            if let qa = NativeFixtureLaunch.iOSPeopleQaState(raw) {
+                #expect(displayed && NativeFixtureLaunch.iOSPeopleState(raw) == PeopleWebinarFixtureScript.baseState(qa))
             }
         }
+    }
+
+    @Test func iosQaSelectorOpensTheAttendeeAndTheHostQaLikeAndroid() {
+        #expect(NativeFixtureLaunch.iOSPeopleQaState("qa-attendee-5") == .qaAttendee5)
+        #expect(NativeFixtureLaunch.iOSPeopleState("qa-attendee-5") == .guest4)
+        #expect(NativeFixtureLaunch.iOSPeopleQaState("qa-host-open-7") == .qaHostOpen7)
+        #expect(NativeFixtureLaunch.iOSPeopleQaState(" qa-host-open-7 ") == .qaHostOpen7)
+        #expect(NativeFixtureLaunch.iOSPeopleState("qa-host-open-7") == .host6)
+        #expect(NativeFixtureLaunch.iOSSelector(system: nil, stage: nil, people: "qa-host-open-7", premeeting: nil))
+        for raw in ["", "qa-unknown", "people-host-6"] {
+            #expect(NativeFixtureLaunch.iOSPeopleQaState(raw) == nil)
+        }
+        #expect(NativeFixtureLaunch.iOSPeopleQaState(nil) == nil)
     }
 
     @Test func qaFixtureSuppressesResumeAcrossBackgroundAndForeground() {
@@ -78,17 +91,15 @@ struct FixtureLifecycleTests {
         for selector in [false, true] {
             for hosting in [false, true] {
                 for inCall in [false, true] {
-                    for legacyPip in [false, true] {
-                        for debugEligible in [false, true] {
-                            let actual = NativeFixtureLaunch.androidRootPresented(
-                                selectorRequested: selector, hostingPreviewRequested: hosting,
-                                isInCall: inCall, showsLegacyPipContent: legacyPip, debugEligible: debugEligible
-                            )
-                            if inCall || legacyPip || !debugEligible || (!selector && !hosting) {
-                                #expect(!actual)
-                            } else {
-                                #expect(actual)
-                            }
+                    for debugEligible in [false, true] {
+                        let actual = NativeFixtureLaunch.androidRootPresented(
+                            selectorRequested: selector, hostingPreviewRequested: hosting,
+                            isInCall: inCall, debugEligible: debugEligible
+                        )
+                        if inCall || !debugEligible || (!selector && !hosting) {
+                            #expect(!actual)
+                        } else {
+                            #expect(actual)
                         }
                     }
                 }

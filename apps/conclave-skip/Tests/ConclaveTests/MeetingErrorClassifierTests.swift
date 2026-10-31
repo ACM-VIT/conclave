@@ -20,8 +20,17 @@ struct MeetingErrorClassifierTests {
         ("NotAllowedError", .media, .microphonePermission),
         ("No screen capture permission", .screenShare, .screenCapturePermission),
         ("Screen source unavailable", .screenShare, .deviceUnavailable),
-        ("Send transport not ready", .media, .serverUnreachable),
-        ("Transport not created", .media, .serverUnreachable),
+        ("Send transport not ready", .media, .mediaSessionStale),
+        ("Transport not created", .media, .mediaSessionStale),
+        ("Send transport not ready", .join, .serverUnreachable),
+        ("Transport not created", .hostAction, .serverUnreachable),
+        ("WebRTC client not configured", .media, .mediaSessionStale),
+        ("WebRTC session was replaced", .media, .mediaSessionStale),
+        ("Socket not configured", .media, .mediaSessionStale),
+        ("Device not configured", .media, .mediaSessionStale),
+        ("User not found in waiting room", .hostAction, .pendingUserNotFound),
+        ("Consumer not found", .media, .consumerNotFound),
+        ("Consumer not found", .hostAction, .unknown),
         ("No camera available", .media, .deviceUnavailable),
         ("No rear camera available", .media, .deviceUnavailable),
         ("DevicesNotFoundError", .media, .deviceUnavailable),
@@ -141,7 +150,7 @@ struct MeetingErrorClassifierTests {
             .microphonePermission: .permissionDenied, .cameraPermission: .permissionDenied,
             .screenCapturePermission: .permissionDenied, .deviceUnavailable: .deviceUnavailable,
             .deviceInUse: .deviceUnavailable, .roleRequired: .roleRequired, .attendeeOnly: .roleRequired,
-            .unknown: .unknown, .cancelled: .unknown,
+            .unknown: .unknown, .cancelled: .unknown, .mediaSessionStale: .notConnected, .consumerNotFound: .unknown,
         ]
         for category in MeetingErrorCategory.allCases {
             let error = ClassifiedError(category: category, context: .hostAction, serverText: "", diagnosticCode: "test", retryAfterSeconds: 0)
@@ -229,6 +238,97 @@ struct MeetingErrorClassifierTests {
         #expect(android.contains("if (sdkInt >= 31 && className == FOREGROUND_SERVICE_NOT_ALLOWED) \"platformRefused\" else \"\""))
         #expect(!android.contains("import android.app.ForegroundServiceStartNotAllowedException"))
     }
+
+    @Test func recoveryCategoriesAreAddedWithoutRenamingAnyPersistedRawValue() {
+        let persisted = [
+            "offline", "serverUnreachable", "timedOut", "serverBusy", "serverRestarting", "sessionExpired", "notJoined",
+            "microphonePermission", "cameraPermission", "screenCapturePermission", "deviceUnavailable", "deviceInUse",
+            "rateLimited", "roleRequired", "lockedByHost", "disabledByHost", "attendeeOnly", "invalidInput",
+            "roomNotFound", "inviteCodeRequired", "inviteCodeInvalid", "signInRequired", "roomEnded", "rejectedByServer",
+            "platformRefused", "cancelled", "unknown",
+        ]
+        for raw in persisted {
+            #expect(MeetingErrorCategory(rawValue: raw) != nil, "\(raw) was renamed or removed")
+        }
+        #expect(MeetingErrorCategory.mediaSessionStale.rawValue == "mediaSessionStale")
+        #expect(MeetingErrorCategory.pendingUserNotFound.rawValue == "pendingUserNotFound")
+        #expect(MeetingErrorCategory.consumerNotFound.rawValue == "consumerNotFound")
+        #expect(MeetingErrorCategory.allCases.count == persisted.count + 3)
+
+        let stale = MeetingErrorClassifier.classify(serverMessage: "Send transport not ready", context: .media)
+        #expect(stale.diagnosticCode == "message.mediaSessionStale")
+        #expect(!stale.isSilent)
+        #expect(MeetingErrorClassifier.actionFailure(stale) == .notConnected)
+        #expect(MeetingErrorLegacyCopy.message(stale, device: .microphone) == MeetingErrorLegacyCopy.genericFailure)
+
+        let pending = MeetingErrorClassifier.classify(serverMessage: "User not found in waiting room", context: .hostAction)
+        #expect(pending.diagnosticCode == "message.pendingUserNotFound")
+        #expect(pending.serverText == "User not found in waiting room")
+        #expect(MeetingErrorClassifier.actionFailure(pending) == .rejectedByServer)
+        #expect(MeetingErrorLegacyCopy.message(pending) == "User not found in waiting room")
+        #expect(HostActionFailurePolicy.failure(message: "User not found in waiting room") == .notFound)
+
+        let consumer = MeetingErrorClassifier.classify(serverMessage: "Consumer not found", context: .media)
+        #expect(consumer.diagnosticCode == "message.consumerNotFound")
+        #expect(consumer.serverText.isEmpty)
+        #expect(MeetingErrorClassifier.actionFailure(consumer) == .unknown)
+        #expect(MeetingErrorLegacyCopy.message(consumer) == MeetingErrorLegacyCopy.genericFailure)
+        #expect(MeetingErrorClassifier.classify(serverMessage: "{\"error\":\"x\",\"code\":\"not_found\"}", context: .media).category == .consumerNotFound)
+
+        #expect(MeetingErrorClassifier.classify(httpStatus: 404, retryAfterSeconds: 0, serverMessage: "Consumer not found", context: .media).category == .roomNotFound)
+        #expect(MeetingErrorClassifier.classify(httpStatus: 401, retryAfterSeconds: 0, serverMessage: "Socket not configured", context: .media).category == .sessionExpired)
+
+        let wrapped = NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: "WebRTC session was replaced"])
+        #expect(MeetingErrorClassifier.classify(wrapped, context: .media).category == .mediaSessionStale)
+        #expect(MeetingErrorClassifier.classify(wrapped, context: .screenShare).category != .mediaSessionStale)
+        let socket = NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: "Socket is not connected"])
+        #expect(MeetingErrorClassifier.classify(socket, context: .media).category == .serverUnreachable)
+        let cancelled = NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: "StandaloneCoroutine was cancelled"])
+        #expect(MeetingErrorClassifier.classify(cancelled, context: .media).category == .cancelled)
+    }
+
+    @Test func recoveryDecisionsReadCategoriesNotWording() throws {
+        let vm = try classifierSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let rejoin = try classifierBody(vm, from: "private func shouldForceRejoinAfterAudioPublishingFailure(_ error: Error) -> Bool {",
+                                        to: "private func toggleMuteIntentDuringRecovery() {")
+        #expect(rejoin.contains("MeetingErrorClassifier.classify(error, context: .media, isNetworkOffline: state.isNetworkOffline)"))
+        #expect(rejoin.contains("return classified.category == .mediaSessionStale"))
+        let waiting = try classifierBody(vm, from: "private func removeStalePendingUserIfNeeded(",
+                                         to: "private func ensureParticipantPresent(")
+        #expect(waiting.contains("MeetingErrorClassifier.classify(error, context: .hostAction, isNetworkOffline: state.isNetworkOffline)"))
+        #expect(waiting.contains("guard classified.category == .pendingUserNotFound else {"))
+        for site in [rejoin, waiting] {
+            #expect(!site.contains(".contains("))
+            #expect(!site.contains("localizedDescription"))
+            #expect(!site.contains("lowercased()"))
+            #expect(!site.contains("\""))
+        }
+        for gone in ["\"not found in waiting room\"", "\"stale configuration\"", "\"socket not configured\"", "transportFailures"] {
+            #expect(!vm.contains(gone), "\(gone) is still in the view model")
+        }
+
+        let ios = try classifierSource("Sources/Conclave/Core/Networking/SocketIOManager.swift")
+        let iosClose = try classifierBody(ios, from: "func closeConsumerAndWait(", to: "func setConsumerPreferences(")
+        #expect(iosClose.contains("if MeetingErrorClassifier.classify(error, context: .media).category == .consumerNotFound {"))
+        let android = try classifierSource("Sources/Conclave/Skip/SocketIOManager+Android.kt")
+        let androidClose = try classifierBody(android, from: "internal suspend fun closeConsumerAndWait(",
+                                              to: "internal suspend fun setConsumerPreferences(")
+        #expect(androidClose.contains("MeetingErrorClassifier.classify(serverMessage = message, context = MeetingErrorContext.media)"))
+        #expect(androidClose.contains("if (classified.category == MeetingErrorCategory.consumerNotFound) {"))
+        for site in [iosClose, androidClose] {
+            #expect(!site.contains("not found"))
+            #expect(!site.contains("not_found"))
+            #expect(!site.contains(".contains("))
+            #expect(!site.contains("lowercase"))
+        }
+
+        let classifier = try classifierSource("Sources/Conclave/Core/Session/MeetingErrorClassifier.swift")
+        for fragment in ["\"not configured\"", "\"transport not created\"", "\"send transport\"", "\"stale configuration\"",
+                         "\"session was replaced\"", "\"socket not configured\"", "\"consumer not found\"", "\"not_found\"",
+                         "\"not found in waiting room\""] {
+            #expect(classifier.contains(fragment), "\(fragment) left the classifier table")
+        }
+    }
 }
 
 #if os(macOS)
@@ -296,5 +396,17 @@ private func classifierSettle(timeout: Duration = .seconds(5), _ condition: () -
 private func classifierSource(_ packageRelativePath: String) throws -> String {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
+}
+
+private struct ClassifierSourceRangeMissing: Error {
+    let marker: String
+}
+
+private func classifierBody(_ source: String, from start: String, to end: String) throws -> String {
+    guard let startRange = source.range(of: start) else { throw ClassifierSourceRangeMissing(marker: start) }
+    guard let endRange = source.range(of: end, range: startRange.upperBound..<source.endIndex) else {
+        throw ClassifierSourceRangeMissing(marker: end)
+    }
+    return String(source[startRange.upperBound..<endRange.lowerBound])
 }
 #endif

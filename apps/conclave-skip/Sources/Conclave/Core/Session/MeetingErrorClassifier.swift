@@ -6,6 +6,8 @@ enum MeetingErrorCategory: String, CaseIterable, Equatable {
     case rateLimited, roleRequired, lockedByHost, disabledByHost, attendeeOnly, invalidInput
 
     case roomNotFound, inviteCodeRequired, inviteCodeInvalid, signInRequired, roomEnded, rejectedByServer, platformRefused, cancelled, unknown
+
+    case mediaSessionStale, pendingUserNotFound, consumerNotFound
 }
 
 enum MeetingErrorContext: String, CaseIterable, Equatable {
@@ -105,7 +107,8 @@ enum MeetingErrorClassifier {
             case .noCameraAvailable:
                 return typed(.deviceUnavailable, context: context, code: "media.noCamera")
             case .notConfigured, .staleConfiguration, .noTransport:
-                return typed(.serverUnreachable, context: context, code: "media.transport")
+                let category: MeetingErrorCategory = context == .media ? .mediaSessionStale : .serverUnreachable
+                return typed(category, context: context, code: "media.transport")
             case .connectionFailed:
                 return typed(.serverUnreachable, context: context, code: "media.connectionFailed")
             }
@@ -194,7 +197,7 @@ enum MeetingErrorClassifier {
     static func actionFailure(_ error: ClassifiedError) -> MeetingActionFailure {
         if error.diagnosticCode == "socket.replaced" { return .socketReplaced }
         switch error.category {
-        case .offline, .serverUnreachable:
+        case .offline, .serverUnreachable, .mediaSessionStale:
             return .notConnected
         case .timedOut:
             return .ackTimedOut
@@ -206,11 +209,11 @@ enum MeetingErrorClassifier {
             return .deviceUnavailable
         case .roleRequired, .attendeeOnly:
             return .roleRequired
-        case .unknown, .cancelled:
+        case .unknown, .cancelled, .consumerNotFound:
             return .unknown
         case .serverBusy, .serverRestarting, .sessionExpired, .rateLimited, .lockedByHost, .disabledByHost,
              .invalidInput, .roomNotFound, .inviteCodeRequired, .inviteCodeInvalid, .signInRequired, .roomEnded,
-             .rejectedByServer, .platformRefused:
+             .rejectedByServer, .platformRefused, .pendingUserNotFound:
             return .rejectedByServer
         }
     }
@@ -243,9 +246,19 @@ enum MeetingErrorClassifier {
         "http", "://", "null", "undefined", "{", "}", "request failed", "errordomain", "nsurl",
     ]
 
+    private static let mediaSessionStaleFragments: [String] = [
+        "not configured", "transport not created", "send transport", "stale configuration", "session was replaced",
+        "socket not configured",
+    ]
+
+    private static let consumerNotFoundFragments: [String] = ["consumer not found", "not_found"]
+
+    private static let pendingUserNotFoundFragments: [String] = ["not found in waiting room"]
+
     private static func isSpecific(_ category: MeetingErrorCategory) -> Bool {
         switch category {
-        case .unknown, .rejectedByServer, .serverUnreachable, .timedOut:
+        case .unknown, .rejectedByServer, .serverUnreachable, .timedOut, .mediaSessionStale, .pendingUserNotFound,
+             .consumerNotFound:
             return false
         default:
             return true
@@ -264,6 +277,15 @@ enum MeetingErrorClassifier {
     }
 
     private static func messageRow(_ text: String, context: MeetingErrorContext) -> MeetingErrorRow {
+        if context == .media && containsAny(text, mediaSessionStaleFragments) {
+            return MeetingErrorRow(category: .mediaSessionStale, code: "message.mediaSessionStale")
+        }
+        if context == .media && containsAny(text, consumerNotFoundFragments) {
+            return MeetingErrorRow(category: .consumerNotFound, code: "message.consumerNotFound")
+        }
+        if containsAny(text, pendingUserNotFoundFragments) {
+            return MeetingErrorRow(category: .pendingUserNotFound, code: "message.pendingUserNotFound")
+        }
         if containsAny(text, ["cancelled", "canceled"]) {
             return MeetingErrorRow(category: .cancelled, code: "message.cancelled")
         }
@@ -397,10 +419,11 @@ enum MeetingErrorLegacyCopy {
                 : "Another app is using your camera."
         case .platformRefused:
             return error.context == .screenShare ? "Couldn't start screen sharing. Try again." : genericFailure
-        case .serverUnreachable, .timedOut, .serverBusy, .serverRestarting, .unknown:
+        case .serverUnreachable, .timedOut, .serverBusy, .serverRestarting, .unknown, .mediaSessionStale:
             return genericFailure
         case .notJoined, .rateLimited, .roleRequired, .lockedByHost, .disabledByHost, .attendeeOnly, .invalidInput,
-             .roomNotFound, .inviteCodeRequired, .inviteCodeInvalid, .signInRequired, .roomEnded, .rejectedByServer:
+             .roomNotFound, .inviteCodeRequired, .inviteCodeInvalid, .signInRequired, .roomEnded, .rejectedByServer,
+             .pendingUserNotFound, .consumerNotFound:
             return error.serverText.isEmpty ? genericFailure : error.serverText
         }
     }
@@ -416,7 +439,7 @@ enum MeetingErrorLegacyCopy {
         case .serverBusy, .serverRestarting:
             return "The meeting server is restarting. Try again in a moment."
         case .microphonePermission, .cameraPermission, .screenCapturePermission, .deviceUnavailable, .deviceInUse,
-             .platformRefused:
+             .platformRefused, .mediaSessionStale:
             return "The media connection didn't go through. Try again."
         case .unknown:
             return "Something went wrong while joining. Try again."

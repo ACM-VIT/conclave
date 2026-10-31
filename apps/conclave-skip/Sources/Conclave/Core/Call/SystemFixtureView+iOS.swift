@@ -32,6 +32,8 @@ struct SystemFixtureView: View {
                     .accessibilityIdentifier(CallScreenAwakeReadout.awakeKey)
                 LabeledContent(ConclaveStrings.text("Proximity"), value: CallScreenAwakeState.shared.proximityReadout)
                     .accessibilityIdentifier(CallScreenAwakeReadout.proximityKey)
+                Text(verbatim: VideoCallPictureInPicture.shared.readout)
+                    .accessibilityIdentifier("sys.pip")
             }
             Section(ConclaveStrings.text("System Commands")) {
                 Button(ConclaveStrings.text("Mute")) { session.send(.mute, source: .callKit) }

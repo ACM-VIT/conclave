@@ -11,6 +11,7 @@ import android.content.pm.ApplicationInfo
 import android.graphics.Color as AndroidColor
 import android.os.Handler
 import android.os.Looper
+import android.view.KeyboardShortcutGroup
 import androidx.activity.compose.setContent
 import androidx.activity.compose.LocalActivity
 import androidx.activity.enableEdgeToEdge
@@ -70,7 +71,6 @@ open class MainActivity: AppCompatActivity {
             selectorRequested = fixtureSelectorRequested,
             hostingPreviewRequested = hostingPreviewRequested,
             isInCall = PipController.isInCall,
-            showsLegacyPipContent = PipController.showsLegacyPipContent,
             debugEligible = BuildConfig.DEBUG,
         )
         NativeFixtureLaunch.configurePresentation(
@@ -147,7 +147,6 @@ open class MainActivity: AppCompatActivity {
                 selectorRequested = fixtureSelectorRequested,
                 hostingPreviewRequested = showsHostingPreview,
                 isInCall = PipController.isInCall,
-                showsLegacyPipContent = PipController.showsLegacyPipContent,
                 debugEligible = BuildConfig.DEBUG,
             )
             SideEffect { updateFixturePresentation() }
@@ -159,9 +158,7 @@ open class MainActivity: AppCompatActivity {
                 NativePremeetingRootFeedback()
             }
 
-            if (PipController.showsLegacyPipContent) {
-                PipContent()
-            } else if (systemFixture != null && !PipController.isInCall) {
+            if (systemFixture != null && !PipController.isInCall) {
                 SystemFixtureRoot(systemFixture)
             } else if (peopleFixture != null && !PipController.isInCall) {
                 PeopleFixtureRoot(peopleFixture, peopleFixturePattern, peopleForceScreenReader)
@@ -186,7 +183,10 @@ open class MainActivity: AppCompatActivity {
 
                 NativePremeetingHost(callContent = legacyRoot)
             } else {
-                legacyRoot()
+                Box(Modifier.fillMaxSize()) {
+                    legacyRoot()
+                    NativeLegacyRootPipOverlay()
+                }
             }
         }
 
@@ -295,6 +295,12 @@ open class MainActivity: AppCompatActivity {
 
         val transitioning = android.os.Build.VERSION.SDK_INT >= 35 && pipState.isTransitioningToPip
         PipManager.handlePictureInPictureUiStateChanged(stashed = pipState.isStashed, transitioningToPip = transitioning)
+    }
+
+    override fun onProvideKeyboardShortcuts(data: MutableList<KeyboardShortcutGroup>?, menu: android.view.Menu?, deviceId: Int) {
+        super.onProvideKeyboardShortcuts(data, menu, deviceId)
+        val group = nativeCallKeyboardShortcutGroup(this) ?: return
+        data?.add(group)
     }
 
     override fun onDestroy() {

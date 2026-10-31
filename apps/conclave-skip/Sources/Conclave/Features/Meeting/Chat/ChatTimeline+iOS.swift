@@ -3,7 +3,8 @@ import SwiftUI
 import UIKit
 
 private final class ChatBottomSentinelState {
-    var isVisible = true
+    var isVisible = !ChatTimelinePlatform.usesScrollGeometry
+    var hiddenAtNewestId = ""
 }
 
 private final class ChatRowVisibilityBox {
@@ -59,13 +60,10 @@ struct ChatTimeline: View {
                                 .modifier(ChatRowVisibilityProbe(rowId: rowId, box: visibility))
                                 .id(rowId)
                         }
-                        if !ChatTimelinePlatform.usesScrollGeometry {
-                            Color.clear
-                                .frame(height: 1)
-                                .accessibilityHidden(true)
-                                .onAppear { setBottomVisible(true) }
-                                .onDisappear { setBottomVisible(false) }
-                        }
+                        Color.clear
+                            .frame(height: 1)
+                            .accessibilityHidden(true)
+                            .modifier(ChatBottomSentinelProbe { visible in setBottomVisible(visible) })
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, CGFloat(DesignTokens.space16))
@@ -82,9 +80,9 @@ struct ChatTimeline: View {
                 }
                 .modifier(ChatBottomProximity(isAtBottom: $isAtBottom))
                 .scrollDismissesKeyboard(.interactively)
-                .safeAreaInset(edge: .bottom, spacing: 0) {
+                .overlay(alignment: .bottom) {
                     if initialPositioned && ChatTimelinePolicy.showsJumpToLatest(isAtBottom: isAtBottom, unseenCount: unseen) {
-                        ChatJumpPill(unseen: unseen) { jumpToLatest(proxy, timeline: timeline) }
+                        ChatJumpPill(unseen: unseen) { jumpToLatest(proxy, timeline: chat.timeline) }
                             .padding(.bottom, CGFloat(DesignTokens.space8))
                     }
                 }
@@ -101,7 +99,7 @@ struct ChatTimeline: View {
                     scrollToFocus(proxy, timeline: chat.timeline)
                 }
                 .onChange(of: isAtBottom) { _, atBottom in
-                    if atBottom && unseen != 0 { unseen = 0 }
+                    if ChatTimelinePolicy.clearsUnseen(isAtBottom: atBottom, endVisible: sentinel.isVisible) && unseen != 0 { unseen = 0 }
                 }
             }
             .accessibilityIdentifier("chat.timeline")
@@ -110,7 +108,9 @@ struct ChatTimeline: View {
 
     private func setBottomVisible(_ visible: Bool) {
         sentinel.isVisible = visible
-        if isAtBottom != visible { isAtBottom = visible }
+        if !visible { sentinel.hiddenAtNewestId = chat.timeline.newestId }
+        if visible && unseen != 0 { unseen = 0 }
+        if !ChatTimelinePlatform.usesScrollGeometry && isAtBottom != visible { isAtBottom = visible }
     }
 
     private func place(_ proxy: ScrollViewProxy, timeline: ChatTimelineSnapshot) {
@@ -130,19 +130,23 @@ struct ChatTimeline: View {
     private func follow(_ proxy: ScrollViewProxy, timeline: ChatTimelineSnapshot) {
         guard initialPositioned else { return }
         let atBottom = ChatTimelinePlatform.usesScrollGeometry ? isAtBottom : sentinel.isVisible
-        if atBottom || timeline.newestIsOwn {
-            if reduceMotion {
-                proxy.scrollTo(timeline.newestId, anchor: .bottom)
-            } else {
-                withAnimation(.snappy) { proxy.scrollTo(timeline.newestId, anchor: .bottom) }
-            }
-        } else if timeline.newestIsRemoteMessage {
-            unseen += 1
+        let endVisible = ChatTimelinePolicy.endVisibleAtInsert(endVisible: sentinel.isVisible, endHiddenAtNewestId: sentinel.hiddenAtNewestId,
+                                                               newestId: timeline.newestId)
+        let follows = ChatTimelinePolicy.followsNewest(isAtBottom: atBottom, endVisible: endVisible, newestIsOwn: timeline.newestIsOwn)
+        let nextUnseen = ChatTimelinePolicy.unseenAfterNewest(unseen: unseen, follows: follows,
+                                                               newestIsRemoteMessage: timeline.newestIsRemoteMessage)
+        if nextUnseen != unseen { unseen = nextUnseen }
+        guard follows else { return }
+        if reduceMotion {
+            proxy.scrollTo(timeline.newestId, anchor: .bottom)
+        } else {
+            withAnimation(.snappy) { proxy.scrollTo(timeline.newestId, anchor: .bottom) }
         }
     }
 
     private func jumpToLatest(_ proxy: ScrollViewProxy, timeline: ChatTimelineSnapshot) {
         unseen = 0
+        guard ChatTimelinePolicy.jumpScrolls(isAtBottom: isAtBottom) else { return }
         if reduceMotion {
             proxy.scrollTo(timeline.newestId, anchor: .bottom)
         } else {
@@ -221,6 +225,20 @@ private struct ChatStreamingFollow17: View {
                 let newest = chat.timeline.newestId
                 if !newest.isEmpty { proxy.scrollTo(newest, anchor: .bottom) }
             }
+    }
+}
+
+private struct ChatBottomSentinelProbe: ViewModifier {
+    let onVisibleChange: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollVisibilityChange { visible in onVisibleChange(visible) }
+        } else {
+            content
+                .onAppear { onVisibleChange(true) }
+                .onDisappear { onVisibleChange(false) }
+        }
     }
 }
 

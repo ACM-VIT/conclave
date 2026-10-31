@@ -3,4 +3,6 @@
 <resources>
     <color name="conclave_window_background">#FF0A0A0B</color>
     <color name="sys_notification_accent">#FFFF7D66</color>
+    <color name="conclave_primary">#FFFF7D66</color>
+    <color name="conclave_on_primary">#FF0A0A0B</color>
 </resources>

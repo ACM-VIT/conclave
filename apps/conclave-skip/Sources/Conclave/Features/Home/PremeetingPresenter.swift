@@ -43,6 +43,8 @@ final class PremeetingPresenter {
 
     private(set) var promotionRoute: PremeetingRoute? = nil
 
+    private(set) var lastLobbyOpenMillis: Int? = nil
+
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
 
     let account = AccountPresenter()
@@ -116,6 +118,10 @@ final class PremeetingPresenter {
 
     @ObservationIgnored private var lobbyRouteIsPromotion = false
 
+    @ObservationIgnored private var lobbyOpenRouteId = 0
+    @ObservationIgnored private var lobbyOpenStartedAtMillis: Double = 0.0
+    @ObservationIgnored private var lobbyOpenTimings = 0
+
     @ObservationIgnored private var webinarRouteId = 0
     @ObservationIgnored private var visibleWebinarRouteId = 0
     @ObservationIgnored private var webinarSceneActive = true
@@ -178,6 +184,8 @@ final class PremeetingPresenter {
     var currentDeviceInputs: LobbyDeviceInputs { device }
 
     var rejoinCommandCount: Int { rejoinCommands }
+
+    var lobbyOpenTimingCount: Int { lobbyOpenTimings }
 
     func target(forRoute id: Int) -> PremeetingRouteTarget? {
         for target in targets where target.routeId == id {
@@ -495,6 +503,7 @@ final class PremeetingPresenter {
         targets.append(target)
         lobbyRouteIsPromotion = true
         promotionRoute = target.route
+        stampLobbyOpen(routeId: target.routeId)
         publishCount += 1
         refreshLobby()
     }
@@ -503,6 +512,7 @@ final class PremeetingPresenter {
         guard let open = promotionRoute else { return }
         promotionRoute = nil
         publishCount += 1
+        if lobbyOpenRouteId == open.id { lobbyOpenRouteId = 0 }
         removeTarget(routeId: open.id)
         if visibleLobbyRouteId == open.id { visibleLobbyRouteId = 0 }
         refreshLobby()
@@ -526,8 +536,39 @@ final class PremeetingPresenter {
     func lobbyDidAppear(routeId: Int) {
         guard let target = topLobbyTarget(), target.routeId == routeId else { return }
         visibleLobbyRouteId = routeId
+        recordLobbyOpen(target)
         lobbyHooks?.refreshDevices?()
         refreshLobby()
+    }
+
+    private func stampLobbyOpen(routeId: Int) {
+        lobbyOpenRouteId = routeId
+        lobbyOpenStartedAtMillis = nowMillis()
+    }
+
+    private func recordLobbyOpen(_ target: PremeetingRouteTarget) {
+        guard lobbyOpenRouteId != 0, lobbyOpenRouteId == target.routeId else { return }
+        lobbyOpenRouteId = 0
+        let elapsed = max(0.0, nowMillis() - lobbyOpenStartedAtMillis)
+        lobbyOpenTimings += 1
+        let millis = Int(elapsed.rounded())
+        if lastLobbyOpenMillis != millis {
+            lastLobbyOpenMillis = millis
+        }
+        PerformanceDiagnostics.timing("lobby_open", startedAt: Date().addingTimeInterval(-elapsed / 1000.0),
+                                      details: "intent=" + target.intent.rawValue)
+    }
+
+    private func noteLobbyPush(previous: [PremeetingRoute]) {
+        if let top = path.last, top.kind == .lobby, !PremeetingPresenter.routesContain(previous, routeId: top.id) {
+            stampLobbyOpen(routeId: top.id)
+            return
+        }
+        let promotionId = promotionRoute?.id ?? 0
+        if lobbyOpenRouteId != 0 && lobbyOpenRouteId != promotionId
+            && !PremeetingPresenter.routesContain(path, routeId: lobbyOpenRouteId) {
+            lobbyOpenRouteId = 0
+        }
     }
 
     func lobbyDidDisappear(routeId: Int) {
@@ -1879,8 +1920,10 @@ final class PremeetingPresenter {
     private func setPathValue(_ routes: [PremeetingRoute]) {
         guard routes != path else { return }
         let hadAccount = PremeetingPresenter.containsAccount(path)
+        let previous = path
         path = routes
         publishCount += 1
+        noteLobbyPush(previous: previous)
         if hadAccount && !PremeetingPresenter.containsAccount(routes) {
 
             account.didDismiss()

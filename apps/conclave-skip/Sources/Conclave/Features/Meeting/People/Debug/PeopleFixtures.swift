@@ -14,6 +14,12 @@ enum PeopleFixtureState: String, CaseIterable, Equatable {
     case longNames = "people-long-names"
     case lostHost = "people-lost-host"
     case hostWaitingLate = "people-host-waiting-late"
+    case hostControlsDefault = "host-controls-default"
+    case hostControlsPendingLock = "host-controls-pending-lock"
+    case hostAccessLists = "host-access-lists"
+    case hostNoticeSending = "host-notice-sending"
+    case host6SlowAck = "people-host-6-slow-ack"
+    case host6Refused = "people-host-6-refused"
 }
 
 struct PeopleFixturePerson: Equatable {
@@ -76,7 +82,8 @@ enum PeopleFixtureScript {
                 PeopleFixturePerson.make(lee, "Lee Park", isMuted: false, isPresenting: true, joinSerial: 3),
                 PeopleFixturePerson.make(sam, "Sam Ito", isLocal: true),
             ]
-        case .host6, .hostWaiting3, .hostRecovering, .hostOffline, .searchNone, .lostHost, .hostWaitingLate:
+        case .host6, .hostWaiting3, .hostRecovering, .hostOffline, .searchNone, .lostHost, .hostWaitingLate,
+             .hostControlsDefault, .hostControlsPendingLock, .host6SlowAck, .host6Refused:
             return hostSix()
         case .hostHands3:
             return [
@@ -91,7 +98,7 @@ enum PeopleFixtureScript {
                 PeopleFixturePerson.make(avery, "Avery Lee", isLocal: true, isCoHost: true),
                 PeopleFixturePerson.make(lee, "Lee Park", joinSerial: 2),
             ]
-        case .alone:
+        case .alone, .hostAccessLists, .hostNoticeSending:
             return [PeopleFixturePerson.make(ishaan, "Ishaan", isLocal: true, isHost: true)]
         case .longNames:
             return [
@@ -133,7 +140,250 @@ enum PeopleFixtureScript {
         switch state {
         case .hostWaiting3, .hostWaitingLate: return PanelDestination.peopleWaiting
         case .hostHands3: return PanelDestination.peopleRaisedHands
+        case .hostAccessLists: return PanelDestination.hostControlsAccess
         default: return PanelDestination.none
+        }
+    }
+
+    static func opensHostControls(_ state: PeopleFixtureState) -> Bool {
+        state == PeopleFixtureState.hostControlsDefault || state == PeopleFixtureState.hostControlsPendingLock
+            || state == PeopleFixtureState.hostAccessLists || state == PeopleFixtureState.hostNoticeSending
+    }
+
+    static let accessAllowed = ["ana@example.org", "guest-71a2"]
+    static let accessLockedAllowed = ["ana@example.org"]
+    static let accessBlocked = ["spam@example.org"]
+
+    static func endsForEveryone(_ state: PeopleFixtureState) -> Bool {
+        state == PeopleFixtureState.hostControlsDefault || state == PeopleFixtureState.hostControlsPendingLock
+    }
+
+    static func hostInputs(for state: PeopleFixtureState) -> HostControlsInputs {
+        switch state {
+        case .hostControlsDefault, .hostControlsPendingLock:
+            return HostControlsInputs.make(callSession: 1, allowedKeys: accessAllowed, blockedKeys: accessBlocked,
+                                           canEndForEveryone: true)
+        case .hostAccessLists:
+            return HostControlsInputs.make(callSession: 1, allowedKeys: accessAllowed, lockedAllowedKeys: accessLockedAllowed,
+                                           blockedKeys: accessBlocked)
+        default:
+            return HostControlsInputs.make(callSession: 1)
+        }
+    }
+
+    static let slowAckDelayMillis = 2000.0
+    static let noticeAckDelayMillis = 1500.0
+
+    static func ack(for state: PeopleFixtureState, command: PeopleCommand, attempt: Int) -> PeopleFixtureAck {
+        let kind = command.kind
+        switch state {
+        case .hostControlsPendingLock:
+            if kind == PeopleCommandKind.setPolicy && command.text == HostPolicyID.lockMeeting.rawValue {
+                return PeopleFixtureAck(delayMillis: slowAckDelayMillis, failure: HostActionFailure.rejectedByServer.rawValue)
+            }
+        case .hostAccessLists:
+            if kind == PeopleCommandKind.blockKey && attempt == 0 {
+                return PeopleFixtureAck(delayMillis: ackDelayMillis, failure: HostActionFailure.rateLimited.rawValue)
+            }
+        case .hostNoticeSending:
+            if kind == PeopleCommandKind.sendNotice {
+                return PeopleFixtureAck(delayMillis: noticeAckDelayMillis,
+                                        failure: attempt == 1 ? HostActionFailure.ackTimedOut.rawValue : "")
+            }
+        case .host6SlowAck:
+            if kind == PeopleCommandKind.mute {
+                return PeopleFixtureAck(delayMillis: slowAckDelayMillis, failure: HostActionFailure.rejectedByServer.rawValue)
+            }
+        case .host6Refused:
+            if kind == PeopleCommandKind.changeName {
+                return PeopleFixtureAck(delayMillis: ackDelayMillis,
+                                        failure: attempt == 0 ? HostActionFailure.renameRateLimited.rawValue
+                                            : HostActionFailure.renameDisabled.rawValue)
+            }
+            if kind == PeopleCommandKind.remove || kind == PeopleCommandKind.block {
+                return PeopleFixtureAck(delayMillis: ackDelayMillis, failure: HostActionFailure.superAdmin.rawValue)
+            }
+        default:
+            break
+        }
+        return PeopleFixtureAck(delayMillis: ackDelayMillis, failure: "")
+    }
+
+    static func adding(_ keys: [String], _ key: String) -> [String] {
+        var result: [String] = []
+        for existing in keys {
+            if existing != key { result.append(existing) }
+        }
+        result.append(key)
+        return result
+    }
+
+    static func removing(_ keys: [String], _ key: String) -> [String] {
+        var result: [String] = []
+        for existing in keys {
+            if existing != key { result.append(existing) }
+        }
+        return result
+    }
+
+    static func withPolicy(_ inputs: HostControlsInputs, policy raw: String, on: Bool) -> HostControlsInputs {
+        guard let id = HostPolicyID(rawValue: raw) else { return inputs }
+        return HostControlsInputs.make(
+            callSession: inputs.callSession,
+            isRoomLocked: id == HostPolicyID.lockMeeting ? on : inputs.isRoomLocked,
+            isNoGuests: id == HostPolicyID.allowGuests ? !on : inputs.isNoGuests,
+            isParticipantUnmuteAllowed: id == HostPolicyID.allowUnmute ? on : inputs.isParticipantUnmuteAllowed,
+            isParticipantVideoAllowed: id == HostPolicyID.allowVideo ? on : inputs.isParticipantVideoAllowed,
+            isChatLocked: id == HostPolicyID.allowChat ? !on : inputs.isChatLocked,
+            isDmEnabled: id == HostPolicyID.directMessages ? on : inputs.isDmEnabled,
+            isImageAttachmentsEnabled: id == HostPolicyID.photos ? on : inputs.isImageAttachmentsEnabled,
+            isTtsDisabled: id == HostPolicyID.readAloud ? !on : inputs.isTtsDisabled,
+            isReactionsDisabled: id == HostPolicyID.reactions ? !on : inputs.isReactionsDisabled,
+            meetingRequiresInviteCode: inputs.meetingRequiresInviteCode,
+            allowedKeys: inputs.allowedKeys,
+            lockedAllowedKeys: inputs.lockedAllowedKeys,
+            blockedKeys: inputs.blockedKeys,
+            isAccessListRefreshing: inputs.isAccessListRefreshing,
+            isWebinarEnabled: id == HostPolicyID.webinarMode ? on : inputs.isWebinarEnabled,
+            isWebinarPublic: id == HostPolicyID.webinarPublic ? on : inputs.isWebinarPublic,
+            isWebinarLocked: id == HostPolicyID.webinarLocked ? on : inputs.isWebinarLocked,
+            webinarRequiresCode: inputs.webinarRequiresCode,
+            webinarMaxAttendees: inputs.webinarMaxAttendees,
+            webinarLinkSlug: inputs.webinarLinkSlug,
+            webinarLinkURL: inputs.webinarLinkURL,
+            webinarAttendeeCount: inputs.webinarAttendeeCount,
+            isWebinarQaEnabled: id == HostPolicyID.webinarQa ? on : inputs.isWebinarQaEnabled,
+            isConfigLoading: inputs.isConfigLoading,
+            canEndForEveryone: inputs.canEndForEveryone,
+            isEnding: inputs.isEnding
+        )
+    }
+
+    static func withAccess(_ inputs: HostControlsInputs, allowed: [String], lockedAllowed: [String], blocked: [String],
+                           requiresCode: Bool) -> HostControlsInputs {
+        HostControlsInputs.make(
+            callSession: inputs.callSession,
+            isRoomLocked: inputs.isRoomLocked,
+            isNoGuests: inputs.isNoGuests,
+            isParticipantUnmuteAllowed: inputs.isParticipantUnmuteAllowed,
+            isParticipantVideoAllowed: inputs.isParticipantVideoAllowed,
+            isChatLocked: inputs.isChatLocked,
+            isDmEnabled: inputs.isDmEnabled,
+            isImageAttachmentsEnabled: inputs.isImageAttachmentsEnabled,
+            isTtsDisabled: inputs.isTtsDisabled,
+            isReactionsDisabled: inputs.isReactionsDisabled,
+            meetingRequiresInviteCode: requiresCode,
+            allowedKeys: allowed,
+            lockedAllowedKeys: lockedAllowed,
+            blockedKeys: blocked,
+            isAccessListRefreshing: inputs.isAccessListRefreshing,
+            isWebinarEnabled: inputs.isWebinarEnabled,
+            isWebinarPublic: inputs.isWebinarPublic,
+            isWebinarLocked: inputs.isWebinarLocked,
+            webinarRequiresCode: inputs.webinarRequiresCode,
+            webinarMaxAttendees: inputs.webinarMaxAttendees,
+            webinarLinkSlug: inputs.webinarLinkSlug,
+            webinarLinkURL: inputs.webinarLinkURL,
+            webinarAttendeeCount: inputs.webinarAttendeeCount,
+            isWebinarQaEnabled: inputs.isWebinarQaEnabled,
+            isConfigLoading: inputs.isConfigLoading,
+            canEndForEveryone: inputs.canEndForEveryone,
+            isEnding: inputs.isEnding
+        )
+    }
+
+    static func withEnding(_ inputs: HostControlsInputs, isEnding: Bool) -> HostControlsInputs {
+        HostControlsInputs.make(
+            callSession: inputs.callSession,
+            isRoomLocked: inputs.isRoomLocked,
+            isNoGuests: inputs.isNoGuests,
+            isParticipantUnmuteAllowed: inputs.isParticipantUnmuteAllowed,
+            isParticipantVideoAllowed: inputs.isParticipantVideoAllowed,
+            isChatLocked: inputs.isChatLocked,
+            isDmEnabled: inputs.isDmEnabled,
+            isImageAttachmentsEnabled: inputs.isImageAttachmentsEnabled,
+            isTtsDisabled: inputs.isTtsDisabled,
+            isReactionsDisabled: inputs.isReactionsDisabled,
+            meetingRequiresInviteCode: inputs.meetingRequiresInviteCode,
+            allowedKeys: inputs.allowedKeys,
+            lockedAllowedKeys: inputs.lockedAllowedKeys,
+            blockedKeys: inputs.blockedKeys,
+            isAccessListRefreshing: inputs.isAccessListRefreshing,
+            isWebinarEnabled: inputs.isWebinarEnabled,
+            isWebinarPublic: inputs.isWebinarPublic,
+            isWebinarLocked: inputs.isWebinarLocked,
+            webinarRequiresCode: inputs.webinarRequiresCode,
+            webinarMaxAttendees: inputs.webinarMaxAttendees,
+            webinarLinkSlug: inputs.webinarLinkSlug,
+            webinarLinkURL: inputs.webinarLinkURL,
+            webinarAttendeeCount: inputs.webinarAttendeeCount,
+            isWebinarQaEnabled: inputs.isWebinarQaEnabled,
+            isConfigLoading: inputs.isConfigLoading,
+            canEndForEveryone: inputs.canEndForEveryone,
+            isEnding: isEnding
+        )
+    }
+
+    static func hostShellInputs(_ stage: StageInputs) -> MeetingShellInputs {
+        var muted = true
+        var cameraOff = true
+        for participant in stage.participants {
+            if participant.isLocal {
+                muted = participant.isMuted
+                cameraOff = participant.isCameraOff
+            }
+        }
+        let shown = StageFixtureScript.shellInputs(stage, isMuted: muted, isCameraOff: cameraOff)
+        return MeetingShellInputs.make(
+            identity: shown.identity,
+            connectionState: shown.connectionState,
+            isRecoveringConnection: shown.isRecoveringConnection,
+            roomId: shown.roomId,
+            displayName: shown.displayName,
+            isAdmin: true,
+            isWebinarAttendee: shown.isWebinarAttendee,
+            isMuted: shown.isMuted,
+            isCameraOff: shown.isCameraOff,
+            isHandRaised: shown.isHandRaised,
+            unreadChatCount: shown.unreadChatCount,
+            handToggleInFlight: shown.handToggleInFlight
+        )
+    }
+
+    static func isEndPending(_ rows: [MeetingControlRow]) -> Bool {
+        for row in rows {
+            if row.id == MeetingControlID.endForEveryone.rawValue { return row.isPending }
+        }
+        return false
+    }
+
+    static func hostInputs(after command: PeopleCommand, current: HostControlsInputs) -> HostControlsInputs {
+        let key = command.targetId
+        switch command.kind {
+        case .setPolicy:
+            return withPolicy(current, policy: command.text, on: command.flag)
+        case .allowKey:
+            return withAccess(current, allowed: adding(current.allowedKeys, key), lockedAllowed: current.lockedAllowedKeys,
+                              blocked: removing(current.blockedKeys, key), requiresCode: current.meetingRequiresInviteCode)
+        case .blockKey:
+            return withAccess(current, allowed: removing(current.allowedKeys, key),
+                              lockedAllowed: removing(current.lockedAllowedKeys, key), blocked: adding(current.blockedKeys, key),
+                              requiresCode: current.meetingRequiresInviteCode)
+        case .unblockKey:
+            return withAccess(current, allowed: current.allowedKeys, lockedAllowed: current.lockedAllowedKeys,
+                              blocked: removing(current.blockedKeys, key), requiresCode: current.meetingRequiresInviteCode)
+        case .revokeKey:
+            return withAccess(current, allowed: removing(current.allowedKeys, key),
+                              lockedAllowed: removing(current.lockedAllowedKeys, key), blocked: current.blockedKeys,
+                              requiresCode: current.meetingRequiresInviteCode)
+        case .setMeetingInviteCode:
+            return withAccess(current, allowed: current.allowedKeys, lockedAllowed: current.lockedAllowedKeys,
+                              blocked: current.blockedKeys, requiresCode: true)
+        case .clearMeetingInviteCode:
+            return withAccess(current, allowed: current.allowedKeys, lockedAllowed: current.lockedAllowedKeys,
+                              blocked: current.blockedKeys, requiresCode: false)
+        default:
+            return current
         }
     }
 
@@ -171,7 +421,8 @@ enum PeopleFixtureScript {
     }
 
     static func peopleInputs(roster: [PeopleFixturePerson], state: PeopleFixtureState, isAdminOverride: Bool? = nil,
-                             waiting: [PeopleWaitingInput]? = nil) -> PeopleInputs {
+                             waiting: [PeopleWaitingInput]? = nil, host: HostControlsInputs? = nil) -> PeopleInputs {
+        let policies = host ?? HostControlsInputs.make()
         var rows: [PeopleParticipantInput] = []
         for person in roster {
             rows.append(peopleRow(person))
@@ -204,7 +455,15 @@ enum PeopleFixtureScript {
             hostUserIds: hosts,
             waiting: waiting ?? PeopleFixtureScript.waiting(for: state),
             meetingLink: StageFixtureScript.meetingLink,
-            roomLabel: StageFixtureScript.roomLabel
+            roomLabel: StageFixtureScript.roomLabel,
+            isRoomLocked: policies.isRoomLocked,
+            isNoGuests: policies.isNoGuests,
+            isWebinarEnabled: policies.isWebinarEnabled,
+            isWebinarPublic: policies.isWebinarPublic,
+            webinarLink: policies.webinarLinkURL,
+            isWebinarQaEnabled: policies.isWebinarQaEnabled,
+            webinarAttendeeCount: policies.webinarAttendeeCount,
+            isDmEnabled: policies.isDmEnabled
         )
     }
 
@@ -321,6 +580,32 @@ enum PeopleFixtureScript {
         return result
     }
 
+    static func camerasTurnedOff(_ roster: [PeopleFixturePerson]) -> [PeopleFixturePerson] {
+        var result: [PeopleFixturePerson] = []
+        for person in roster {
+            let cameraOff = person.isHost || person.isCoHost ? person.isCameraOff : true
+            result.append(PeopleFixturePerson.make(person.userId, person.name, isLocal: person.isLocal, isHost: person.isHost,
+                                                   isCoHost: person.isCoHost, isMuted: person.isMuted, isCameraOff: cameraOff,
+                                                   handOffsetSeconds: person.handOffsetSeconds,
+                                                   isPresenting: person.isPresenting, isReconnecting: person.isReconnecting,
+                                                   joinSerial: person.joinSerial))
+        }
+        return result
+    }
+
+    static func sharesStopped(_ roster: [PeopleFixturePerson]) -> [PeopleFixturePerson] {
+        var result: [PeopleFixturePerson] = []
+        for person in roster {
+            let presenting = person.isHost || person.isCoHost ? person.isPresenting : false
+            result.append(PeopleFixturePerson.make(person.userId, person.name, isLocal: person.isLocal, isHost: person.isHost,
+                                                   isCoHost: person.isCoHost, isMuted: person.isMuted,
+                                                   isCameraOff: person.isCameraOff, handOffsetSeconds: person.handOffsetSeconds,
+                                                   isPresenting: presenting, isReconnecting: person.isReconnecting,
+                                                   joinSerial: person.joinSerial))
+        }
+        return result
+    }
+
     static func toggledMute(_ roster: [PeopleFixturePerson], userId: String) -> [PeopleFixturePerson] {
         var result: [PeopleFixturePerson] = []
         for person in roster {
@@ -366,6 +651,7 @@ final class PeopleFixtureCounters {
 struct PeopleFixtureQueuedAck: Equatable {
     let command: PeopleCommand
     let ticket: HostActionTicket
+    let ack: PeopleFixtureAck
 }
 
 @MainActor
@@ -380,9 +666,12 @@ final class PeopleFixtureSession {
 
     private(set) var waitingList: [PeopleWaitingInput]
 
+    private(set) var hostInputs: HostControlsInputs
+
     var holdsAcks = false
     private(set) var queuedAcks: [PeopleFixtureQueuedAck] = []
     private var hostLost = false
+    private var ackAttempts: [String: Int] = [:]
 
     init(state: PeopleFixtureState, pattern: RendererProbePattern = RendererProbePattern.staticPattern,
          forceScreenReader: Bool = false) {
@@ -390,7 +679,9 @@ final class PeopleFixtureSession {
         let cast = PeopleFixtureScript.roster(for: state)
         roster = cast
         waitingList = PeopleFixtureScript.waiting(for: state)
-        inputs = PeopleFixtureScript.peopleInputs(roster: cast, state: state)
+        let host = PeopleFixtureScript.hostInputs(for: state)
+        hostInputs = host
+        inputs = PeopleFixtureScript.peopleInputs(roster: cast, state: state, host: host)
         let session = StageFixtureSession(state: StageFixtureState.grid6, pattern: pattern, forceScreenReader: forceScreenReader,
                                           initialInputs: PeopleFixtureScript.stageInputs(roster: cast, state: state))
         stageSession = session
@@ -404,7 +695,16 @@ final class PeopleFixtureSession {
             stageForward?()
             self?.people.panelSnapshotChanged()
         }
+        if PeopleFixtureScript.endsForEveryone(state) {
+            session.shell.apply(PeopleFixtureScript.hostShellInputs(session.stage.inputs))
+            let stageCommand = session.shell.onCommand
+            session.shell.onCommand = { [weak self] command, ticket in
+                stageCommand?(command, ticket)
+                self?.shellCommandHandled()
+            }
+        }
         presenter.apply(inputs)
+        presenter.host.apply(host)
 
         if PeopleFixtureScript.showsKnock(state) {
             session.stage.applyNotices(PeopleFixtureScript.noticeInputs(roster: cast, waiting: waitingList, state: state))
@@ -427,27 +727,50 @@ final class PeopleFixtureSession {
         stage.openPeople(destination: destination)
     }
 
+    func openHostControls(destination: PanelDestination) {
+        counters.recordOpen(destination == PanelDestination.none ? MeetingPanel.hostControls.rawValue : destination.rawValue)
+        shell.panels.present(MeetingPanel.hostControls, from: PanelInvoker.call, destination: destination)
+    }
+
+    func openOnLaunch() {
+        let destination = PeopleFixtureScript.openDestination(for: state)
+        if PeopleFixtureScript.opensHostControls(state) {
+            openHostControls(destination: destination)
+        } else {
+            open(destination: destination)
+        }
+    }
+
     private func scheduleAck(_ command: PeopleCommand, _ ticket: HostActionTicket) {
+        let key = command.kind.rawValue
+        let attempt = ackAttempts[key] ?? 0
+        ackAttempts[key] = attempt + 1
+        let ack = PeopleFixtureScript.ack(for: state, command: command, attempt: attempt)
         if holdsAcks {
-            queuedAcks.append(PeopleFixtureQueuedAck(command: command, ticket: ticket))
+            queuedAcks.append(PeopleFixtureQueuedAck(command: command, ticket: ticket, ack: ack))
             return
         }
-        let delay = PeopleFixtureScript.ackDelayMillis
+        let delay = ack.delayMillis
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000.0))
-            self?.completeAck(command, ticket)
+            self?.completeAck(command, ticket, ack)
         }
     }
 
     func releaseAcks() {
         let held = queuedAcks
         queuedAcks = []
-        for ack in held {
-            completeAck(ack.command, ack.ticket)
+        for queued in held {
+            completeAck(queued.command, queued.ticket, queued.ack)
         }
     }
 
-    private func completeAck(_ command: PeopleCommand, _ ticket: HostActionTicket) {
+    private func completeAck(_ command: PeopleCommand, _ ticket: HostActionTicket, _ ack: PeopleFixtureAck) {
+        if !ack.failure.isEmpty {
+            counters.recordAck()
+            people.finish(ticket, HostActionResult.failed(HostActionFailure(rawValue: ack.failure) ?? HostActionFailure.unknown))
+            return
+        }
         switch command.kind {
         case .admit, .deny:
             waitingList = PeopleFixtureScript.withoutWaiting(waitingList, id: command.targetId)
@@ -458,13 +781,29 @@ final class PeopleFixtureSession {
                 roster = PeopleFixtureScript.handsLowered(roster)
             } else if command.text == HostBulkID.muteAll.rawValue {
                 roster = PeopleFixtureScript.everyoneMuted(roster)
+            } else if command.text == HostBulkID.camerasOff.rawValue {
+                roster = PeopleFixtureScript.camerasTurnedOff(roster)
+            } else if command.text == HostBulkID.stopAllShares.rawValue {
+                roster = PeopleFixtureScript.sharesStopped(roster)
             }
         default:
             break
         }
+        let nextHost = PeopleFixtureScript.hostInputs(after: command, current: hostInputs)
+        let hostChanged = nextHost != hostInputs
+        hostInputs = nextHost
         push(isAdminOverride: hostLost ? false : nil)
+        if hostChanged { people.host.apply(nextHost) }
         counters.recordAck()
         people.finish(ticket, HostActionResult.completed)
+    }
+
+    private func shellCommandHandled() {
+        shell.apply(PeopleFixtureScript.hostShellInputs(stage.inputs))
+        let next = PeopleFixtureScript.withEnding(hostInputs, isEnding: PeopleFixtureScript.isEndPending(shell.controls.rows))
+        if next == hostInputs { return }
+        hostInputs = next
+        people.host.apply(next)
     }
 
     func runSpeakerScript() {
@@ -498,7 +837,7 @@ final class PeopleFixtureSession {
 
     private func push(isAdminOverride: Bool?) {
         inputs = PeopleFixtureScript.peopleInputs(roster: roster, state: state, isAdminOverride: isAdminOverride,
-                                                  waiting: waitingList)
+                                                  waiting: waitingList, host: hostInputs)
         people.apply(inputs)
         stage.apply(PeopleFixtureScript.stageInputs(roster: roster, state: state))
         if PeopleFixtureScript.showsKnock(state) {
@@ -514,6 +853,19 @@ final class PeopleFixtureSession {
     func focusReadout() -> String { people.focusReadout() }
 
     func countersReadout() -> String { counters.summary() }
+
+    func hostReadout() -> String {
+        let snapshot = people.host.snapshot
+        let locked = snapshot.policy(HostPolicyID.lockMeeting)?.isOn ?? false
+        let guests = snapshot.policy(HostPolicyID.allowGuests)?.isOn ?? false
+        var pending: [String] = []
+        for row in snapshot.policies {
+            if row.isPending { pending.append(row.policy.rawValue) }
+        }
+        return "rev=" + String(snapshot.revision) + " locked=" + (locked ? "1" : "0") + " guests=" + (guests ? "1" : "0")
+            + " allowed=" + String(snapshot.access.allowedCount) + " blocked=" + String(snapshot.access.blockedCount)
+            + " notice=" + snapshot.noticePhase + " pending=" + (pending.isEmpty ? "none" : pending.joined(separator: ","))
+    }
 
     func actionsReadout() -> String {
         let token = people.feedbackState.token

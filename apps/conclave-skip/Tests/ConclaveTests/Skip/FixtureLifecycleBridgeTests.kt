@@ -24,15 +24,13 @@ class FixtureLifecycleBridgeTests {
 
     @Test fun productionCallAndPipBranchesAndReleaseAlwaysWin() {
         for (selector in listOf(false, true)) for (hosting in listOf(false, true)) {
-            for (inCall in listOf(false, true)) for (legacyPip in listOf(false, true)) {
-                for (debugEligible in listOf(false, true)) {
-                    val actual = NativeFixtureLaunch.androidRootPresented(
-                        selectorRequested = selector, hostingPreviewRequested = hosting,
-                        isInCall = inCall, showsLegacyPipContent = legacyPip, debugEligible = debugEligible,
-                    )
-                    if (inCall || legacyPip || !debugEligible || (!selector && !hosting)) assertFalse(actual)
-                    else assertTrue(actual)
-                }
+            for (inCall in listOf(false, true)) for (debugEligible in listOf(false, true)) {
+                val actual = NativeFixtureLaunch.androidRootPresented(
+                    selectorRequested = selector, hostingPreviewRequested = hosting,
+                    isInCall = inCall, debugEligible = debugEligible,
+                )
+                if (inCall || !debugEligible || (!selector && !hosting)) assertFalse(actual)
+                else assertTrue(actual)
             }
         }
     }

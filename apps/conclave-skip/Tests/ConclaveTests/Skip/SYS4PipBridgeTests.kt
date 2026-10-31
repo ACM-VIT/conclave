@@ -3,6 +3,7 @@ package conclave.module
 import android.content.Intent
 import android.graphics.Rect
 import android.util.Rational
+import android.view.KeyEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -119,14 +120,71 @@ class SYS4PipBridgeTests {
         assertTrue(PipController.feedbackSuspended)
         PipController.inPipMode = true
 
-        assertFalse(PipController.showsLegacyPipContent)
+        assertFalse(PipController.pipAwaitsCallRoot(entrySettled = true))
+        assertTrue(PipController.pipAwaitsCallRoot(entrySettled = false))
         PipController.setNativeRootComposed(false)
-        assertTrue(PipController.showsLegacyPipContent)
+        assertTrue(PipController.pipAwaitsCallRoot(entrySettled = true))
 
         PipController.setInCall(false)
+        assertFalse(PipController.pipAwaitsCallRoot(entrySettled = false))
         assertFalse(PipController.inPipMode)
         assertFalse(PipController.isTransitioningToPip)
         assertFalse(PipController.feedbackSuspended)
+    }
+
+    @Test
+    fun theCallShortcutGroupIsAbsentUntilACallRootIsComposedInACall() {
+        val context = RuntimeEnvironment.getApplication()
+        try {
+            PipController.setInCall(false)
+            PipController.setNativeRootComposed(true)
+            assertNull(nativeCallKeyboardShortcutGroup(context))
+            PipController.setInCall(true)
+            PipController.setNativeRootComposed(false)
+            assertNull(nativeCallKeyboardShortcutGroup(context))
+        } finally {
+            PipController.setNativeRootComposed(false)
+            PipController.setInCall(false)
+        }
+    }
+
+    @Test
+    fun theCallShortcutGroupListsEveryVisibleCommandWithItsKeys() {
+        val context = RuntimeEnvironment.getApplication()
+        val ctrl = KeyEvent.META_CTRL_ON
+        val ctrlAlt = KeyEvent.META_CTRL_ON or KeyEvent.META_ALT_ON
+        val ctrlShift = KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON
+
+        val guestControls = ControlsFixtureSession(state = ControlsFixtureState.guest).controls
+        val guest = callControlsKeyboardShortcutGroup(context, guestControls)
+        assertEquals(conclaveStringOf(context, "ctl_kb_group"), guest.label.toString())
+        assertEquals(6, visibleCommands(guestControls).size)
+        assertEquals(visibleCommands(guestControls).size, guest.items.size)
+        assertEquals(listOf(KeyEvent.KEYCODE_D, KeyEvent.KEYCODE_E, KeyEvent.KEYCODE_H, KeyEvent.KEYCODE_C, KeyEvent.KEYCODE_P,
+            KeyEvent.KEYCODE_S), guest.items.map { it.keycode })
+        assertEquals(listOf(ctrl, ctrl, ctrlAlt, ctrlShift, ctrlShift, ctrlShift), guest.items.map { it.modifiers })
+        assertEquals(visibleCommands(guestControls).map { conclaveStringOf(context, callControlsShortcutLabel(it)) },
+            guest.items.map { it.label.toString() })
+
+        val hostControls = ControlsFixtureSession(state = ControlsFixtureState.host).controls
+        val host = callControlsKeyboardShortcutGroup(context, hostControls)
+        assertEquals(visibleCommands(hostControls).size, host.items.size)
+        assertEquals(CallCommandID.lockMeeting, visibleCommands(hostControls).last())
+        assertEquals(KeyEvent.KEYCODE_L, host.items.last().keycode)
+        assertEquals(ctrlShift, host.items.last().modifiers)
+
+        val attendeeControls = ControlsFixtureSession(state = ControlsFixtureState.attendee).controls
+        val attendee = callControlsKeyboardShortcutGroup(context, attendeeControls)
+        assertEquals(listOf(KeyEvent.KEYCODE_H), attendee.items.map { it.keycode })
+        assertEquals(listOf(ctrlAlt), attendee.items.map { it.modifiers })
+    }
+
+    private fun visibleCommands(controls: CallControlsPresenter): List<CallCommandID> {
+        val result = mutableListOf<CallCommandID>()
+        for (item in controls.commands.items) {
+            if (item.isVisible) result.add(item.command)
+        }
+        return result
     }
 
     @Test

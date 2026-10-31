@@ -29,15 +29,30 @@ struct PeopleFixtureView: View {
                      renderers: StageRendererProvider.probes(ledger: session.stageSession.renderers,
                                                              pattern: session.stageSession.pattern),
                      forceScreenReader: session.stageSession.forceScreenReader)
-            PeopleFixtureControls(session: session)
+            PeopleFixtureControls(session: session, webinar: qaSession)
         }
         .task {
             if let qaSession {
-                qaSession.people.openQuestionsAndAnswers()
+                let webinar = qaSession.state
+                if PeopleWebinarFixtureScript.opensParticipants(webinar) {
+                    session.open(destination: PanelDestination.none)
+                } else if PeopleWebinarFixtureScript.opensQuestionsAndAnswers(webinar) {
+                    qaSession.openQuestionsAndAnswers()
+                }
+                if PeopleWebinarFixtureScript.turnsQaOff(webinar) {
+                    try? await Task.sleep(for: .milliseconds(Int(PeopleWebinarFixtureScript.qaOffDelayMillis)))
+                    if Task.isCancelled { return }
+                    qaSession.turnQaOff()
+                }
+                if PeopleWebinarFixtureScript.deliversPromotion(webinar) {
+                    try? await Task.sleep(for: .milliseconds(Int(PeopleWebinarFixtureScript.promotionDelayMillis)))
+                    if Task.isCancelled { return }
+                    qaSession.deliverPromotion()
+                }
                 return
             }
 
-            session.open(destination: PeopleFixtureScript.openDestination(for: session.state))
+            session.openOnLaunch()
             if session.state == PeopleFixtureState.lostHost {
                 try? await Task.sleep(for: .milliseconds(Int(PeopleFixtureScript.lostHostDelayMillis)))
                 if Task.isCancelled { return }
@@ -54,6 +69,7 @@ struct PeopleFixtureView: View {
 
 private struct PeopleFixtureControls: View {
     let session: PeopleFixtureSession
+    let webinar: PeopleWebinarFixtureSession?
     @State private var expanded = true
     @State private var refresh = 0
 
@@ -65,6 +81,18 @@ private struct PeopleFixtureControls: View {
                     session.open(destination: PanelDestination.none)
                     refresh += 1
                 }
+                if PeopleFixtureScript.opensHostControls(session.state) {
+                    fixtureButton("Host Controls", identifier: "people.fixture.hostControls") {
+                        session.openHostControls(destination: PanelDestination.none)
+                        refresh += 1
+                    }
+                }
+                if let webinar, PeopleWebinarFixtureScript.deliversPromotion(webinar.state) {
+                    fixtureButton("Promote", identifier: "people.fixture.promote") {
+                        webinar.deliverPromotion()
+                        refresh += 1
+                    }
+                }
                 fixtureButton("Knock View", identifier: "people.fixture.knockView") {
                     session.open(destination: PanelDestination.peopleWaiting)
                     refresh += 1
@@ -74,10 +102,12 @@ private struct PeopleFixtureControls: View {
                     refresh += 1
                 }
                 fixtureButton("Speakers", identifier: "people.fixture.speakers") { session.runSpeakerScript(); refresh += 1 }
-                fixtureButton("Mute Row", identifier: "people.fixture.mute") { session.scriptedMute(); refresh += 1 }
-                fixtureButton("Lose Host", identifier: "people.fixture.loseHost") { session.loseHost(); refresh += 1 }
+                if webinar == nil {
+                    fixtureButton("Mute Row", identifier: "people.fixture.mute") { session.scriptedMute(); refresh += 1 }
+                    fixtureButton("Lose Host", identifier: "people.fixture.loseHost") { session.loseHost(); refresh += 1 }
+                }
                 fixtureButton("Refresh", identifier: "people.fixture.refresh") { refresh += 1 }
-                PeopleFixtureReadouts(session: session, refresh: refresh)
+                PeopleFixtureReadouts(session: session, webinar: webinar, refresh: refresh)
             }
         }
         .padding(8)
@@ -102,6 +132,7 @@ private struct PeopleFixtureControls: View {
 
 private struct PeopleFixtureReadouts: View {
     let session: PeopleFixtureSession
+    let webinar: PeopleWebinarFixtureSession?
     let refresh: Int
 
     var body: some View {
@@ -115,6 +146,12 @@ private struct PeopleFixtureReadouts: View {
             readout(session.noticesReadout(), identifier: "stage.notices")
             readout(session.panelReadout(), identifier: "panel.current")
             readout(session.renderersReadout(), identifier: "stage.renderers")
+            if PeopleFixtureScript.opensHostControls(session.state) {
+                readout(session.hostReadout(), identifier: "host.controls")
+            }
+            if let webinar {
+                readout(webinar.countersReadout(), identifier: "people.webinar")
+            }
             readout("refresh " + String(refresh), identifier: "people.fixture.refreshCount")
         }
     }

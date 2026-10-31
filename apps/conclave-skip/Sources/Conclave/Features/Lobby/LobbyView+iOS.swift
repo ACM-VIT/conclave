@@ -19,6 +19,8 @@ struct LobbyView: View {
 
     private var revealsStatusReason: Bool {
         guard let status = premeeting.lobbyStatus, status.routeId == route.id else { return false }
+        let reasonRows = LobbyStatusPolicy.rows(status: status, media: nil, supportsRationale: false, offersAppInfo: false)
+        if reasonRows.contains(where: { $0.kind == .issue }) { return true }
         let refused = status.mode == .editing && [LobbyIssue.roomNotFound, .signInRequired, .failedServerText].contains(status.issue)
         guard status.mode == .failed || refused else { return false }
         let isSignedIn = premeeting.lobbyIdentity?.routeId == route.id && premeeting.lobbyIdentity?.isSignedIn == true

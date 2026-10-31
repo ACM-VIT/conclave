@@ -396,8 +396,17 @@ class PresenterSessionBridgeTests {
             Triple("NotAllowedError", MeetingErrorContext.media, MeetingErrorCategory.microphonePermission),
             Triple("No screen capture permission", MeetingErrorContext.screenShare, MeetingErrorCategory.screenCapturePermission),
             Triple("Screen source unavailable", MeetingErrorContext.screenShare, MeetingErrorCategory.deviceUnavailable),
-            Triple("Send transport not ready", MeetingErrorContext.media, MeetingErrorCategory.serverUnreachable),
-            Triple("Transport not created", MeetingErrorContext.media, MeetingErrorCategory.serverUnreachable),
+            Triple("Send transport not ready", MeetingErrorContext.media, MeetingErrorCategory.mediaSessionStale),
+            Triple("Transport not created", MeetingErrorContext.media, MeetingErrorCategory.mediaSessionStale),
+            Triple("Send transport not ready", MeetingErrorContext.join, MeetingErrorCategory.serverUnreachable),
+            Triple("Transport not created", MeetingErrorContext.hostAction, MeetingErrorCategory.serverUnreachable),
+            Triple("WebRTC client not configured", MeetingErrorContext.media, MeetingErrorCategory.mediaSessionStale),
+            Triple("WebRTC session was replaced", MeetingErrorContext.media, MeetingErrorCategory.mediaSessionStale),
+            Triple("Socket not configured", MeetingErrorContext.media, MeetingErrorCategory.mediaSessionStale),
+            Triple("Device not configured", MeetingErrorContext.media, MeetingErrorCategory.mediaSessionStale),
+            Triple("User not found in waiting room", MeetingErrorContext.hostAction, MeetingErrorCategory.pendingUserNotFound),
+            Triple("Consumer not found", MeetingErrorContext.media, MeetingErrorCategory.consumerNotFound),
+            Triple("Consumer not found", MeetingErrorContext.hostAction, MeetingErrorCategory.unknown),
             Triple("No camera available", MeetingErrorContext.media, MeetingErrorCategory.deviceUnavailable),
             Triple("No rear camera available", MeetingErrorContext.media, MeetingErrorCategory.deviceUnavailable),
             Triple("DevicesNotFoundError", MeetingErrorContext.media, MeetingErrorCategory.deviceUnavailable),
@@ -437,6 +446,18 @@ class PresenterSessionBridgeTests {
 
         val wrapped = skip.lib.ErrorException("Socket not connected")
         assertEquals(MeetingErrorCategory.serverUnreachable, MeetingErrorClassifier.classify(wrapped, context = MeetingErrorContext.hostAction).category)
+        assertEquals(MeetingErrorCategory.mediaSessionStale,
+            MeetingErrorClassifier.classify(skip.lib.ErrorException("WebRTC session was replaced"), context = MeetingErrorContext.media).category)
+        assertEquals(MeetingErrorCategory.mediaSessionStale,
+            MeetingErrorClassifier.classify(skip.lib.ErrorException("Send transport not ready"), context = MeetingErrorContext.media).category)
+        assertEquals(MeetingErrorCategory.serverUnreachable,
+            MeetingErrorClassifier.classify(skip.lib.ErrorException("Socket not connected"), context = MeetingErrorContext.media).category)
+        assertEquals(MeetingErrorCategory.pendingUserNotFound,
+            MeetingErrorClassifier.classify(skip.lib.ErrorException("User not found in waiting room"), context = MeetingErrorContext.hostAction).category)
+        assertEquals(MeetingErrorCategory.consumerNotFound,
+            MeetingErrorClassifier.classify(serverMessage = "Consumer not found", context = MeetingErrorContext.media).category)
+        assertEquals(MeetingErrorCategory.cancelled,
+            MeetingErrorClassifier.classify(serverMessage = "StandaloneCoroutine was cancelled", context = MeetingErrorContext.media).category)
         assertEquals("cancelled", MeetingAndroidErrorTypes.categoryName(java.util.concurrent.CancellationException("stop"), false, 28))
         assertEquals("serverUnreachable", MeetingAndroidErrorTypes.categoryName(java.net.UnknownHostException("conclave.acmvit.in"), false, 28))
         assertEquals("offline", MeetingAndroidErrorTypes.categoryName(java.net.UnknownHostException("conclave.acmvit.in"), true, 28))

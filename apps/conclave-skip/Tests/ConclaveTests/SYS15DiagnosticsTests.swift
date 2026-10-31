@@ -201,7 +201,82 @@ struct SYS15DiagnosticsTests {
         #expect(DiagnosticsTimingBridge.milestone(forTiming: "join_webrtc_configure") == .transportConfigured)
         #expect(DiagnosticsTimingBridge.milestone(forTiming: "join_start_producing") == .producerCreated)
         #expect(DiagnosticsTimingBridge.milestone(forTiming: "join_socket_join_room") == .joinedResponse)
+        #expect(DiagnosticsTimingBridge.milestone(forTiming: "join_transport_connected") == .transportConnected)
+        #expect(DiagnosticsTimingBridge.milestone(forTiming: DiagnosticsTransportMilestonePolicy.timingName) == .transportConnected)
         #expect(DiagnosticsTimingBridge.milestone(forTiming: "meeting_sheet_open") == nil)
+    }
+
+    @Test func transportConnectedIsRecordedOncePerCall() {
+        #expect(DiagnosticsTransportMilestonePolicy.isConnectedState("connected"))
+        #expect(DiagnosticsTransportMilestonePolicy.isConnectedState("completed"))
+        for state in ["new", "checking", "disconnected", "failed", "closed", ""] {
+            #expect(!DiagnosticsTransportMilestonePolicy.isConnectedState(state), "\(state)")
+        }
+
+        var recorded = 0
+        var recordedSession = 0
+        func report(_ state: String, session: Int) {
+            guard DiagnosticsTransportMilestonePolicy.shouldRecord(stateName: state, callSession: session,
+                                                                   recordedCallSession: recordedSession) else { return }
+            recordedSession = session
+            recorded += 1
+        }
+        report("connected", session: 0)
+        #expect(recorded == 0, "no call yet")
+        report("new", session: 3)
+        report("new", session: 3)
+        #expect(recorded == 0, "a new transport is not connected")
+        report("connected", session: 3)
+        #expect(recorded == 1 && recordedSession == 3)
+        report("connected", session: 3)
+        report("completed", session: 3)
+        #expect(recorded == 1, "the second transport of the call is not a second milestone")
+        report("disconnected", session: 3)
+        report("failed", session: 3)
+        report("connected", session: 3)
+        #expect(recorded == 1, "an ICE restart is not a second milestone")
+        report("connected", session: 4)
+        #expect(recorded == 2 && recordedSession == 4, "the next call records once")
+        report("completed", session: 4)
+        #expect(recorded == 2)
+    }
+
+    @Test func transportConnectedRecordsThroughTheJoinSpanAndPassesRedaction() {
+        let recording = RecordingHooks()
+        let diagnostics = CallDiagnostics(store: temporaryStore(), hooks: recording.make())
+        diagnostics.presenceDidChange(from: Self.snapshot(phase: .idle, callSession: 0), to: Self.snapshot(phase: .connecting, callSession: 9))
+        recording.now += 420
+        diagnostics.milestone(DiagnosticsMilestone.transportConnected.rawValue)
+        let milestones = diagnostics.events.filter { $0.kind == DiagnosticsEventKind.milestone.rawValue }
+        #expect(milestones.map { $0.code } == ["join.transportConnected"])
+        #expect(milestones.map { $0.durationMillis } == [420])
+        #expect(milestones.allSatisfy { $0.attempt == 9 && $0.detail.isEmpty })
+        #expect(recording.events == ["transportConnected"])
+        #expect(DiagnosticsRedactionPolicy.isAllowedCode("join.transportConnected"))
+        #expect(diagnostics.rejectedCount == 0)
+    }
+
+    @Test func theTransportMilestoneIsWiredOncePerCallAndTheFrameMilestonesWaitForS6b() throws {
+        let viewModel = try sys15Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let handler = try sys15Body(viewModel, from: "private func handleTransportConnectionStateChanged(transportKind: String, stateName: String) async {",
+                                    to: "case \"disconnected\":")
+        #expect(handler.contains("case \"connected\", \"completed\", \"new\":"))
+        #expect(handler.contains("recordTransportConnectedMilestoneIfNeeded(stateName: stateName)"))
+        let record = try sys15Body(viewModel, from: "private func recordTransportConnectedMilestoneIfNeeded(stateName: String) {",
+                                   to: "private func reconnectDelayNanoseconds()")
+        #expect(record.contains("DiagnosticsTransportMilestonePolicy.shouldRecord("))
+        #expect(record.contains("callSession: callSessionSerial,"))
+        #expect(record.contains("recordedCallSession: transportConnectedMilestoneCallSession"))
+        #expect(record.contains("transportConnectedMilestoneCallSession = callSessionSerial"))
+        #expect(record.contains("PerformanceDiagnostics.timing(\n            DiagnosticsTransportMilestonePolicy.timingName,"))
+        #expect(!record.contains("transportKind"))
+        #expect(viewModel.contains("transportConnectedTimingStartedAt = configureStartedAt"))
+        #expect(viewModel.components(separatedBy: "recordTransportConnectedMilestoneIfNeeded(stateName:").count - 1 == 2)
+
+        let policies = try sys15Source("Sources/Conclave/Core/Diagnostics/DiagnosticsPolicies.swift")
+        let bridge = try sys15Body(policies, from: "enum DiagnosticsTimingBridge {", to: "enum DiagnosticsTransportMilestonePolicy {")
+        #expect(bridge.contains("case \"join_transport_connected\":\n            return DiagnosticsMilestone.transportConnected"))
+        #expect(!bridge.contains("firstDecodedFrame") && !bridge.contains("firstDisplayedFrame"))
     }
 
     @Test func presenceDrivesJoinRecoveryPipAndCleanupSpans() {
@@ -708,6 +783,42 @@ struct SYS15DiagnosticsTests {
         #expect(account.contains("canExportDiagnostics: DiagnosticsExportPolicy.isOffered"))
     }
 }
+
+#if os(macOS)
+@MainActor
+@Suite(.serialized)
+struct SYS15TransportMilestoneViewModelTests {
+    @Test func theTransportCallbackRecordsOneMilestonePerCall() async {
+        let call = RejoinHarness()
+        #expect(await call.join())
+        let session = call.viewModel.callSessionSerial
+        #expect(session > 0)
+        let report = call.media.onTransportConnectionStateChanged
+        report?("send", "new")
+        report?("recv", "new")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(call.viewModel.transportConnectedMilestoneCount == 0)
+
+        report?("send", "connected")
+        #expect(await settle { call.viewModel.transportConnectedMilestoneCount == 1 })
+        #expect(call.viewModel.transportConnectedMilestoneCallSession == session)
+
+        report?("recv", "connected")
+        report?("send", "completed")
+        report?("send", "connected")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(call.viewModel.transportConnectedMilestoneCount == 1)
+
+        #expect(await call.rejoin())
+        await call.land()
+        #expect(call.viewModel.callSessionSerial == session)
+        call.media.onTransportConnectionStateChanged?("send", "connected")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(call.viewModel.transportConnectedMilestoneCount == 1)
+        await call.finish()
+    }
+}
+#endif
 
 private func sys15PackageRoot() -> URL {
     URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

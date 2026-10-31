@@ -15,6 +15,8 @@ struct StageSlotPlanInputs: Equatable {
     let webinarSpeakerUserId: String
 
     let fitOverrides: [String: String]
+    var viewMode: String = ""
+    var hasActivitySurface: Bool = false
 }
 
 struct StageRailPlan: Equatable {
@@ -49,7 +51,7 @@ enum StageOrderPolicy {
         }
         var ids: [String] = []
         for participant in sorted {
-            ids.append(participant.userId)
+            if !ids.contains(participant.userId) { ids.append(participant.userId) }
         }
         return ids
     }
@@ -87,8 +89,10 @@ enum StageOrderPolicy {
         if !hideTilesWithoutVideo { return order }
         var result: [String] = []
         for id in order {
-            let cameraOff = participant(id, in: participants)?.isCameraOff ?? true
-            if !cameraOff || id == featuredUserId || id == pinnedUserId { result.append(id) }
+            let row = participant(id, in: participants)
+            let cameraOff = row?.isCameraOff ?? true
+            let sharing = row?.isScreenSharing ?? false
+            if !cameraOff || sharing || id == featuredUserId || id == pinnedUserId { result.append(id) }
         }
         if result.isEmpty, let first = order.first {
             result.append(first)
@@ -115,6 +119,13 @@ enum StageOrderPolicy {
         }
     }
 
+    static func resolvedSelfRole(_ inputs: StageSlotPlanInputs) -> StageSlotRole? {
+        if let role = selfRole(selfViewMode: inputs.selfViewMode, kind: inputs.kind) { return role }
+        let pinnedOneOnOne = inputs.kind == StageKind.spotlight && inputs.viewMode == "auto" && inputs.selfViewMode != "tile" &&
+            inputs.presenterUserId.isEmpty && !inputs.hasActivitySurface && joinOrder(inputs.participants).count == 1
+        return pinnedOneOnOne ? StageSlotRole.selfFloating : nil
+    }
+
     static func defaultFeatured(remoteOrder: [String], presenterUserId: String, localUserId: String) -> String {
         if !presenterUserId.isEmpty && presenterUserId != localUserId { return presenterUserId }
         return remoteOrder.first ?? ""
@@ -123,7 +134,7 @@ enum StageOrderPolicy {
     static func plan(_ inputs: StageSlotPlanInputs) -> StageSlotPlan {
         let local = participant(inputs.localUserId, in: inputs.participants)
         let hasLocal = local != nil && !(local?.isLeaving ?? true)
-        let localRole: StageSlotRole? = hasLocal ? StageOrderPolicy.selfRole(selfViewMode: inputs.selfViewMode, kind: inputs.kind) : nil
+        let localRole: StageSlotRole? = hasLocal ? StageOrderPolicy.resolvedSelfRole(inputs) : nil
         var slots: [StageSlot] = []
         var overflowCount = 0
         var hidden: [String] = []
@@ -311,6 +322,60 @@ enum StageOrderPolicy {
             }
         }
         return ids
+    }
+
+    static func isCapped(_ kind: StageKind) -> Bool {
+        switch kind {
+        case .grid, .spotlight, .sidebar, .presentation, .game, .app, .browser:
+            return true
+        case .solo, .oneOnOne, .attendeeWaiting, .attendeeLive:
+            return false
+        }
+    }
+
+    static func unmeasuredCapacity(kind: StageKind, viewMaxTiles: Int) -> StageCapacity {
+        if !isCapped(kind) { return StageCapacity.zero }
+        let tiles = MeetingViewConstants.clampTiles(viewMaxTiles)
+        if kind == StageKind.grid { return StageCapacity(gridSlots: tiles, railSlots: 0) }
+        return StageCapacity(gridSlots: 0, railSlots: tiles)
+    }
+
+    static func replan(_ inputs: StageInputs, kind: StageKind, capacity: StageCapacity, isCompactPortrait: Bool,
+                       featuredUserId: String, speakerUserId: String) -> StageSlotPlan {
+        let present = inputs.presentParticipants
+        let order = reconcile(previous: [], participants: present)
+        var featured = featuredUserId
+        if featured.isEmpty || !order.contains(featured) {
+            featured = defaultFeatured(remoteOrder: order, presenterUserId: inputs.screenShareUserId, localUserId: inputs.localUserId)
+        }
+        let filtered = applyHideFilter(order, participants: present, hideTilesWithoutVideo: inputs.hideTilesWithoutVideo,
+                                       featuredUserId: speakerUserId, pinnedUserId: inputs.pinnedUserId)
+        return plan(StageSlotPlanInputs(
+            kind: kind,
+            isCompactPortrait: isCompactPortrait,
+            capacity: capacity,
+            localUserId: inputs.localUserId,
+            remoteOrder: filtered,
+            participants: present,
+            pinnedUserId: inputs.pinnedUserId,
+            featuredUserId: featured,
+            presenterUserId: inputs.screenShareUserId,
+            selfViewMode: inputs.selfViewMode,
+            webinarSpeakerUserId: inputs.webinarSpeakerUserId,
+            fitOverrides: [:],
+            viewMode: inputs.viewMode,
+            hasActivitySurface: !inputs.activeAppId.isEmpty || inputs.isBrowserActive
+        ))
+    }
+
+    static func consumerFallbackRemoteIds(layout: StageLayoutSnapshot, inputs: StageInputs, speakerUserId: String) -> [String] {
+        if !isCapped(layout.kind) || layout.capacity != StageCapacity.zero {
+            return visibleRemoteIds(layout.slots, localUserId: inputs.localUserId)
+        }
+        let planned = replan(inputs, kind: layout.kind,
+                             capacity: unmeasuredCapacity(kind: layout.kind, viewMaxTiles: inputs.viewMaxTiles),
+                             isCompactPortrait: false, featuredUserId: layout.featuredUserId, speakerUserId: speakerUserId)
+        return visibleRemoteIds(planned.slots, localUserId: inputs.localUserId)
     }
 
     static func swapTarget(visibleRemoteIds: [String], lastSpokeAt: [String: Double], participants: [StageParticipantInput],

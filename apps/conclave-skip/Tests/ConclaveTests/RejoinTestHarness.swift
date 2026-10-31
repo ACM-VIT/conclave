@@ -158,6 +158,14 @@ final class RejoinHarness {
         ))
     }
 
+    func deliverWebinarDemoted(slug: String?) {
+        viewModel.socketManager.onWebinarDemoted?(WebinarDemotedNotification(roomId: "room-a", webinarLinkSlug: slug))
+    }
+
+    func deliverServerDisconnect() {
+        viewModel.socketManager.onDisconnected?("io server disconnect")
+    }
+
     func closeLocalCamera(adminEnforced: Bool? = nil) {
         viewModel.socketManager.onProducerClosed?(ProducerClosedNotification(
             producerId: "local-camera",

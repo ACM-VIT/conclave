@@ -16,6 +16,8 @@ struct S1bPostLobbyFailureRevealTests {
 
     static let predicate = "private var revealsStatusReason: Bool { "
         + "guard let status = premeeting.lobbyStatus, status.routeId == route.id else { return false } "
+        + "let reasonRows = LobbyStatusPolicy.rows(status: status, media: nil, supportsRationale: false, offersAppInfo: false) "
+        + "if reasonRows.contains(where: { $0.kind == .issue }) { return true } "
         + "let refused = status.mode == .editing && [LobbyIssue.roomNotFound, .signInRequired, .failedServerText].contains(status.issue) "
         + "guard status.mode == .failed || refused else { return false } "
         + "let isSignedIn = premeeting.lobbyIdentity?.routeId == route.id && premeeting.lobbyIdentity?.isSignedIn == true "
@@ -44,7 +46,7 @@ struct S1bPostLobbyFailureRevealTests {
         #expect(view.contains("@Environment(\\.accessibilityReduceMotion) private var reduceMotion @Environment(\\.dynamicTypeSize) private var dynamicTypeSize"))
         #expect(view.contains(Self.reveal))
         #expect(view.contains("verticalSizeClass == .compact) } " + Self.predicate + " var body: some View {"),
-                "failures and refused joins whose reason has a line, for this route only")
+                "failures and refused joins whose reason has a line or the paused row, for this route only")
         #expect(view.components(separatedBy: "revealsStatusReason").count - 1 == 2, "declared once, observed once")
         #expect(raw.contains("guard reveals, dynamicTypeSize.isAccessibilitySize else { return }"),
                 "below accessibility sizes the line sits in the bar, so nothing scrolls")
@@ -144,6 +146,64 @@ struct S1bPostLobbyFailureRevealTests {
         #expect(LobbyStatusPolicy.lineIdentifier(.roomNotFound) == "lobby.primary.reason")
     }
 
+    @Test func aPausedRefusalRevealsItsStatusRowOnEveryAttemptAndAStaleOneNever() {
+        let sentence = PremeetingFixtureScript.formError(for: .lobbyAppSuspended)
+        let premeeting = presenter(isSignedIn: false, accountName: "Avery", accountSeed: "")
+        premeeting.apply(PremeetingInputs.make(callSession: 1, notice: .formError, noticeText: sentence, accountName: "Avery"))
+        premeeting.handleIncomingURL(Self.link)
+        let routeId = premeeting.path.last?.id ?? -1
+        #expect(premeeting.lobbyStatus?.routeId == routeId && premeeting.lobbyStatus?.issue == LobbyIssue.none)
+        var trail = [reveals(premeeting, routeId: routeId)]
+        for session in [2, 3] {
+            premeeting.apply(PremeetingInputs.make(callSession: session, phase: .entering, roomLabel: "rose-sora-luffy",
+                                                   currentRoomId: "rose-sora-luffy", accountName: "Avery"))
+            trail.append(reveals(premeeting, routeId: routeId))
+            premeeting.apply(PremeetingInputs.make(callSession: session, notice: .formError, noticeText: sentence, accountName: "Avery"))
+            trail.append(reveals(premeeting, routeId: routeId))
+            let status = premeeting.lobbyStatus
+            #expect(status?.mode == .editing && status?.issue == .appSuspended, "attempt \(session)")
+            if let status {
+                #expect(LobbyStatusPolicy.line(status: status, isSignedIn: false) == LobbyStatusLineKind.none,
+                        "the paused reason has no slot line, which is why the line rule alone missed it")
+                let rows = LobbyStatusPolicy.rows(status: status, media: nil, supportsRationale: false, offersAppInfo: false)
+                #expect(rows.map { $0.kind } == [LobbyStatusRowKind.issue] && rows.map { $0.issue } == [LobbyIssue.appSuspended],
+                        "the reason is the status row")
+            }
+        }
+        #expect(trail == [false, false, true, false, true],
+                "a stale pause at open never reveals, and every paused refusal flips the observed value from false to true")
+        #expect(!reveals(premeeting, routeId: routeId + 1), "a status for another route never reveals")
+    }
+
+    @Test func thePausedRowIsTheReasonOnlyWhileTheLobbyIsEditing() {
+        for mode in [LobbyMode.connecting, .waiting, .failed] {
+            let status = LobbyStatusSnapshot(routeId: 1, intent: .join, mode: mode, issue: .appSuspended, issueServerText: "",
+                                             isPrimaryEnabled: false, primaryReason: "", showsSlowNotice: false,
+                                             waitingKind: .standard, isPrimaryPending: false, waitingText: "")
+            #expect(LobbyStatusPolicy.rows(status: status, media: nil, supportsRationale: true, offersAppInfo: true).isEmpty, "\(mode)")
+        }
+        let editing = LobbyStatusSnapshot(routeId: 1, intent: .join, mode: .editing, issue: .appSuspended, issueServerText: "",
+                                          isPrimaryEnabled: true, primaryReason: "", showsSlowNotice: false,
+                                          waitingKind: .standard, isPrimaryPending: false, waitingText: "")
+        for flag in [false, true] {
+            #expect(LobbyStatusPolicy.rows(status: editing, media: nil, supportsRationale: flag, offersAppInfo: flag).map { $0.kind }
+                    == [LobbyStatusRowKind.issue], "the platform flags change the action, never whether the row shows")
+        }
+    }
+
+    @Test func thePausedRowSitsInsideTheStatusAnchorAndTheFixtureRefusesAfterHalfASecond() throws {
+        let rows = s1bpfrFlat(try s1bpfrBlock(try s1bpfrSource(Self.rowsFile), from: "struct LobbyStatusSection: View {",
+                                              to: "struct LobbyStatusRow: View {"))
+        #expect(rows.contains("let rows = LobbyStatusPolicy.rows(status: status, media: routedMedia(status),"))
+        #expect(rows.contains("ForEach(rows, id: \\.kind) { model in"), "the paused row renders in LobbyStatusSection, under the anchor")
+
+        let steps = PremeetingFixtureScript.steps(for: .lobbyAppSuspended)
+        #expect(steps.map { $0.delayMillis } == [0, 500], "the lobby first, the pause 500 ms later")
+        #expect(PremeetingFixtureScript.isLobbyFixture(.lobbyAppSuspended))
+        let classified = LobbyIssuePolicy.classify(formError: PremeetingFixtureScript.formError(for: .lobbyAppSuspended), enteredInviteCode: "")
+        #expect(classified.issue == .appSuspended && !classified.needsInviteCode)
+    }
+
     private func presenter(isSignedIn: Bool, accountName: String, accountSeed: String) -> PremeetingPresenter {
         let premeeting = PremeetingPresenter()
         premeeting.nowMillis = { 1793102400000.0 }
@@ -154,6 +214,8 @@ struct S1bPostLobbyFailureRevealTests {
 
     private func reveals(_ premeeting: PremeetingPresenter, routeId: Int) -> Bool {
         guard let status = premeeting.lobbyStatus, status.routeId == routeId else { return false }
+        let reasonRows = LobbyStatusPolicy.rows(status: status, media: nil, supportsRationale: false, offersAppInfo: false)
+        if reasonRows.contains(where: { $0.kind == .issue }) { return true }
         let refused = status.mode == .editing && [LobbyIssue.roomNotFound, .signInRequired, .failedServerText].contains(status.issue)
         guard status.mode == .failed || refused else { return false }
         let isSignedIn = premeeting.lobbyIdentity?.routeId == routeId && premeeting.lobbyIdentity?.isSignedIn == true

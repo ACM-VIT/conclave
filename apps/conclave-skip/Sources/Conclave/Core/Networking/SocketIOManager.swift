@@ -865,9 +865,7 @@ final class SocketIOManager {
                 timeoutSeconds: timeoutSeconds
             )
         } catch {
-
-            let message = error.localizedDescription.lowercased()
-            if message.contains("consumer not found") || message.contains("not_found") {
+            if MeetingErrorClassifier.classify(error, context: .media).category == .consumerNotFound {
                 return
             }
             throw error

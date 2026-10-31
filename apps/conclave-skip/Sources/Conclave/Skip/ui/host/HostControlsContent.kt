@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -30,7 +31,7 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun HostPageContent(people: PeoplePresenter, route: String, reservation: PaddingValues, snackbar: SnackbarHostState,
-                             onPush: (String) -> Unit, onPop: () -> Unit = {}) {
+                             onPush: (String) -> Unit, onPop: () -> Unit = {}, focusAccess: Boolean = false) {
     when (route) {
         PeopleRoute.inviteCode.rawValue -> InviteCodePage(people, reservation, snackbar)
         PeopleRoute.accessList.rawValue -> AccessListPage(people, reservation, snackbar)
@@ -38,7 +39,7 @@ internal fun HostPageContent(people: PeoplePresenter, route: String, reservation
         PeopleRoute.webinar.rawValue -> WebinarSettingsPage(people, reservation, snackbar, onPush, onPop)
         PeopleRoute.attendeeCode.rawValue -> AttendeeCodePage(people, reservation, snackbar, onPop)
         PeopleRoute.customLink.rawValue -> CustomLinkPage(people, reservation, snackbar, onPop)
-        else -> HostControlsContent(people, reservation, onPush)
+        else -> HostControlsContent(people, reservation, onPush, focusAccess)
     }
     HostConfirmationHost(people)
     PeopleFailureSnackbar(people, snackbar)
@@ -85,7 +86,8 @@ internal fun hostListItems(snapshot: HostControlsSnapshot): List<HostListItem> {
 }
 
 @Composable
-internal fun HostControlsContent(people: PeoplePresenter, reservation: PaddingValues, onPush: (String) -> Unit) {
+internal fun HostControlsContent(people: PeoplePresenter, reservation: PaddingValues, onPush: (String) -> Unit,
+                                 focusAccess: Boolean = false) {
     val snapshot = people.host.snapshot
     if (!snapshot.isAvailable) {
         ConclaveEmptyStatus(title = conclaveString("hst_unavailable_title"), body = conclaveString("ppl_lost_host"),
@@ -93,7 +95,14 @@ internal fun HostControlsContent(people: PeoplePresenter, reservation: PaddingVa
         return
     }
     val items = remember(snapshot) { hostListItems(snapshot) }
-    LazyColumn(Modifier.fillMaxSize().testTag("host.controls"), contentPadding = reservation) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(focusAccess) {
+        if (focusAccess) {
+            val index = items.indexOfFirst { it.key == "h:access" }
+            if (index >= 0) listState.scrollToItem(index)
+        }
+    }
+    LazyColumn(Modifier.fillMaxSize().testTag("host.controls"), state = listState, contentPadding = reservation) {
         items(items, key = { it.key }, contentType = { it.kind }) { item ->
             when (item.kind) {
                 HostItemKind.Loading -> ConclaveLoadingStatus(identifier = "host.loading", label = conclaveString("hst_loading"))
@@ -241,6 +250,6 @@ internal fun HostControlsPage(
         onBack = { pages?.pop() },
     ) { reservation ->
         HostPageContent(people, top ?: PeopleRoute.hostControls.rawValue, reservation, snackbar, onPush = { pages?.push(it) },
-            onPop = { pages?.pop() })
+            onPop = { pages?.pop() }, focusAccess = top == null && request.destination == PanelDestination.hostControlsAccess)
     }
 }
