@@ -45,6 +45,7 @@ class ScreenCaptureService : Service() {
                         startForeground(NOTIFICATION_ID, notification)
                     }
                 } catch (t: Throwable) {
+                    ScreenShareAndroidLog.warn("foregroundRefused", t)
                     debugLog("[ScreenShare] Failed to foreground media projection service: ${t}")
 
                     ScreenCaptureManager.onServiceForegroundFailed()

@@ -1720,6 +1720,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     private var webcamTopologyControlGeneration = 0
     private val intentionalLocalVideoProducerCloseIds: MutableSet<String> = mutableSetOf()
     private var lastWebcamProducerSignalingError: Throwable? = null
+    private val intentionalLocalScreenProducerCloseIds: MutableSet<String> = mutableSetOf()
+    @Volatile private var lastScreenProducerSignalingError: Throwable? = null
+    @Volatile private var screenProduceSignalCount = 0
     private var audioProducerBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
     private var videoProducerBandwidthQuality: ConnectionQuality = ConnectionQuality.unknown
     private var videoProducerBandwidthSignature: String? = null
@@ -2229,6 +2232,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     }
 
     internal suspend fun startScreenSharing() {
+        lastScreenProducerSignalingError = null
         createSendTransportIfNeeded()
         val sendTransport = sendTransport ?: throw ErrorException("Send transport not ready")
         val context = ProcessInfo.processInfo.androidContext
@@ -2255,7 +2259,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             val capture = screenShareCaptureProfile(
                 metrics.widthPixels,
                 metrics.heightPixels,
-                currentLocalBandwidthQuality,
+                ConnectionQuality.good,
             )
 
             capturer.startCapture(
@@ -2263,6 +2267,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 capture.height,
                 capture.maxFramerate,
             )
+            applyScreenOutputFormat(currentLocalBandwidthQuality)
 
             val track = peerConnectionFactory?.createVideoTrack(nextScreenVideoTrackId(), source)
                 ?: throw ErrorException("Screen track unavailable")
@@ -2270,18 +2275,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             screenVideoTrack = track
 
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.screen.rawValue, paused = false))
-            val preferredCodec = preferredVideoCodecJson()
-            val producer = requireRegisteredProducer(
-                sendTransport.produce(
-                    this,
-                    track as MediaStreamTrack,
-                    screenShareEncodings(currentLocalBandwidthQuality),
-                    null,
-                    preferredCodec,
-                    appData,
-                ),
-                "screen"
-            )
+            val producer = produceScreenVideo(sendTransport, track, appData, currentLocalBandwidthQuality)
             pendingProducer = producer
             producer.resume()
             screenProducer = producer
@@ -2307,7 +2301,55 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             screenVideoTrack = null
 
             ScreenCaptureManager.stopCapture()
-            throw ErrorException("Screen sharing failed to start: ${t}")
+            val reported = lastScreenProducerSignalingError ?: t
+            ScreenShareAndroidLog.warn("produce", reported)
+            throw ErrorException("Screen sharing failed to start: ${reported}", reported)
+        }
+    }
+
+    private fun produceScreenVideo(
+        transport: SendTransport,
+        track: VideoTrack,
+        appData: String,
+        connectionQuality: ConnectionQuality,
+    ): Producer {
+        val signalsBefore = screenProduceSignalCount
+        val producer = try {
+            transport.produce(
+                this,
+                track as MediaStreamTrack,
+                screenShareEncodings(connectionQuality),
+                null,
+                null,
+                appData,
+            )
+        } catch (t: Throwable) {
+            if (screenProduceSignalCount != signalsBefore) throw t
+            ScreenShareAndroidLog.warn("produceRetry", t)
+            transport.produce(
+                this,
+                track as MediaStreamTrack,
+                null,
+                null,
+                null,
+                appData,
+            )
+        }
+        return requireRegisteredProducer(producer, "screen")
+    }
+
+    private fun applyScreenOutputFormat(connectionQuality: ConnectionQuality) {
+        val source = screenVideoSource ?: return
+        val metrics = ProcessInfo.processInfo.androidContext.resources.displayMetrics
+        try {
+            val capture = screenShareCaptureProfile(
+                metrics.widthPixels,
+                metrics.heightPixels,
+                connectionQuality,
+            )
+            source.adaptOutputFormat(capture.width, capture.height, capture.maxFramerate)
+        } catch (t: Throwable) {
+            ScreenShareAndroidLog.warn("adaptOutputFormat", t)
         }
     }
 
@@ -3117,6 +3159,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             return true
         }
 
+        if (kind == "video" && isScreen && producerId != null && intentionalLocalScreenProducerCloseIds.remove(producerId)) {
+            return false
+        }
+
         if (kind == "video" && isScreen && matchesProducer(screenProducer, producerId)) {
             stopScreenSharing()
             screenProducerBandwidthQuality = ConnectionQuality.unknown
@@ -3439,20 +3485,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
 
         if (screenProducer != null && screenCapturer != null) {
-            val metrics = ProcessInfo.processInfo.androidContext.resources.displayMetrics
-            val capture = screenShareCaptureProfile(
-                metrics.widthPixels,
-                metrics.heightPixels,
-                connectionQuality,
-            )
-            try {
-                screenCapturer?.changeCaptureFormat(
-                    capture.width,
-                    capture.height,
-                    capture.maxFramerate,
-                )
-            } catch (_: Throwable) {
-            }
+            applyScreenOutputFormat(connectionQuality)
         }
     }
 
@@ -3582,38 +3615,33 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val oldProducer = screenProducer ?: return
         val track = screenVideoTrack ?: return
         screenBandwidthRefreshInFlight = true
+        lastScreenProducerSignalingError = null
         try {
             val appData = encodeJSONString(ProducerAppData(type = ProducerType.screen.rawValue, paused = false))
-            val preferredCodec = preferredVideoCodecJson()
-            val nextProducer = requireRegisteredProducer(
-                transport.produce(
-                    this,
-                    track as MediaStreamTrack,
-                    screenShareEncodings(connectionQuality),
-                    null,
-                    preferredCodec,
-                    appData,
-                ),
-                "screen"
-            )
+            if (intentionalLocalScreenProducerCloseIds.size >= 32) {
+                intentionalLocalScreenProducerCloseIds.clear()
+            }
+            intentionalLocalScreenProducerCloseIds.add(oldProducer.id)
+            val nextProducer = try {
+                produceScreenVideo(transport, track, appData, connectionQuality)
+            } catch (t: Throwable) {
+                intentionalLocalScreenProducerCloseIds.remove(oldProducer.id)
+                throw t
+            }
+            if (screenProducer !== oldProducer || screenVideoTrack !== track) {
+                try {
+                    socket.closeProducer(nextProducer.id)
+                } catch (error: Throwable) {
+                    ScreenShareAndroidLog.warn("refreshFence", error)
+                }
+                nextProducer.close()
+                return
+            }
             nextProducer.resume()
             screenProducer = nextProducer
             screenProducerBandwidthQuality = connectionQuality
             screenProducerBandwidthSignature = localScreenBandwidthSignature(connectionQuality)
-            val metrics = ProcessInfo.processInfo.androidContext.resources.displayMetrics
-            val capture = screenShareCaptureProfile(
-                metrics.widthPixels,
-                metrics.heightPixels,
-                connectionQuality,
-            )
-            try {
-                screenCapturer?.changeCaptureFormat(
-                    capture.width,
-                    capture.height,
-                    capture.maxFramerate,
-                )
-            } catch (_: Throwable) {
-            }
+            applyScreenOutputFormat(connectionQuality)
 
             try {
                 socket.closeProducer(oldProducer.id)
@@ -3623,6 +3651,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             oldProducer.close()
             debugLog("[WebRTC] Refreshed screen producer for ${connectionQuality} bandwidth")
         } catch (error: Throwable) {
+            ScreenShareAndroidLog.warn("refresh", error)
             debugLog("[WebRTC] Failed to refresh screen producer for bandwidth: ${error}")
         } finally {
             screenBandwidthRefreshInFlight = false
@@ -4054,6 +4083,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         webcamProducerTopology = WebcamProducerTopology.other
         intentionalLocalVideoProducerCloseIds.clear()
         lastWebcamProducerSignalingError = null
+        intentionalLocalScreenProducerCloseIds.clear()
+        lastScreenProducerSignalingError = null
     }
 
     private fun hardSingleReceiverConditionsMet(): Boolean {
@@ -7165,6 +7196,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
                 val appDataPayload = decodeJSONString<ProducerAppData>(appData, allowFailure = true)
                 val type = ProducerType(rawValue = appDataPayload?.type ?: "webcam") ?: ProducerType.webcam
+                if (kind == "video" && type == ProducerType.screen) {
+                    screenProduceSignalCount += 1
+                }
                 socket.produceRaw(
                     transportId = transport.id,
                     kind = kind,
@@ -7177,6 +7211,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 val appDataPayload = decodeJSONString<ProducerAppData>(appData, allowFailure = true)
                 if (kind == "video" && appDataPayload?.type == ProducerType.webcam.rawValue) {
                     lastWebcamProducerSignalingError = t
+                } else if (kind == "video" && appDataPayload?.type == ProducerType.screen.rawValue) {
+                    lastScreenProducerSignalingError = t
                 }
                 debugLog("[WebRTC] Produce failed: ${t}")
                 ""

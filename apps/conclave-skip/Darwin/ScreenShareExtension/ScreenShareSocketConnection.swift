@@ -22,6 +22,8 @@ final class ScreenShareSocketConnection {
 
     socketHandle = socket(AF_UNIX, SOCK_STREAM, 0)
     if socketHandle < 0 {
+      let code = errno
+      NSLog("[ScreenShareExtension] connect failed errno=%d", code)
       return false
     }
 
@@ -54,14 +56,21 @@ final class ScreenShareSocketConnection {
     }
 
     let addrSize = socklen_t(MemoryLayout<sockaddr_un>.size)
+    var connectErrno: Int32 = 0
     let connected = withUnsafePointer(to: &addr) { pointer -> Bool in
       return pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { addrPtr in
-        connect(socketHandle, addrPtr, addrSize) == 0
+        let result = connect(socketHandle, addrPtr, addrSize)
+        if result != 0 {
+          connectErrno = errno
+        }
+        return result == 0
       }
     }
 
     if !connected {
+      let code = connectErrno
       close()
+      NSLog("[ScreenShareExtension] connect failed errno=%d", code)
       return false
     }
     return true

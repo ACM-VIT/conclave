@@ -442,8 +442,7 @@ private final class ScreenFrameEncoderPump: @unchecked Sendable {
 private struct ScreenProducerCreationRequest: @unchecked Sendable {
     let transport: SendTransport
     let track: RTCVideoTrack
-    let encoding: RTCRtpEncodingParameters
-    let scalabilityMode: String
+    let encodings: [RTCRtpEncodingParameters]
     let codec: String?
     let appData: String
 }
@@ -2058,6 +2057,8 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     private var intentionalLocalAudioProducerCloseIds: Set<String> = []
 
+    private var intentionalLocalScreenProducerCloseIds: Set<String> = []
+
     private var audioStartTask: Task<Void, Error>?
 
     private var testTonePlayer: AVAudioPlayer?
@@ -2066,6 +2067,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     private var sendProducerOperationQueues: [ObjectIdentifier: DispatchQueue] = [:]
     private var lastWebcamProducerSignalingError: Error?
+    private var lastScreenProducerSignalingError: Error?
     private var audioProducerBandwidthQuality: ConnectionQuality = .unknown
     private var screenProducerBandwidthQuality: ConnectionQuality = .unknown
     private var audioBandwidthRefreshInFlight = false
@@ -2079,10 +2081,6 @@ final class WebRTCClient: NSObject, ObservableObject {
     private let screenFrameEncoderPump = ScreenFrameEncoderPump()
     private var screenShareTemporalLayerCount: Int {
         configuredScreenContentHint == NativeScreenShareContentHint.motion.rawValue ? 3 : 2
-    }
-
-    private var screenShareScalabilityMode: String {
-        "L1T\(screenShareTemporalLayerCount)"
     }
 
     private struct WebcamCaptureProfile {
@@ -2140,6 +2138,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         activeConsumerResetLifecycleGeneration = nil
         resetWebcamTopologyControl()
         intentionalLocalAudioProducerCloseIds.removeAll()
+        intentionalLocalScreenProducerCloseIds.removeAll()
         self.socketManager = socketManager
         self.serverRtpCapabilities = rtpCapabilities
         let trimmedIceServers = iceServersJSON?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2981,16 +2980,14 @@ final class WebRTCClient: NSObject, ObservableObject {
     private func createScreenProducerOffMain(
         on transport: SendTransport,
         track: RTCVideoTrack,
-        encoding: RTCRtpEncodingParameters,
-        scalabilityMode: String,
+        encodings: [RTCRtpEncodingParameters],
         codec: String?,
         appData: String
     ) async throws -> Producer {
         let request = ScreenProducerCreationRequest(
             transport: transport,
             track: track,
-            encoding: encoding,
-            scalabilityMode: scalabilityMode,
+            encodings: encodings,
             codec: codec,
             appData: appData
         )
@@ -2999,8 +2996,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             ScreenProducerCreationResult(
                 producer: try request.transport.createProducer(
                     for: request.track,
-                    encoding: request.encoding,
-                    scalabilityMode: request.scalabilityMode,
+                    encodings: request.encodings,
                     codecOptions: nil,
                     codec: request.codec,
                     appData: request.appData
@@ -3916,6 +3912,13 @@ final class WebRTCClient: NSObject, ObservableObject {
             return true
         }
 
+        if kind == "video",
+           isScreen,
+           let producerId,
+           intentionalLocalScreenProducerCloseIds.remove(producerId) != nil {
+            return false
+        }
+
         if kind == "video", isScreen, matchesProducer(screenProducer, producerId: producerId) {
             await stopScreenSharing()
             return true
@@ -4709,17 +4712,26 @@ final class WebRTCClient: NSObject, ObservableObject {
 
         screenBandwidthRefreshInFlight = true
         defer { screenBandwidthRefreshInFlight = false }
+        lastScreenProducerSignalingError = nil
 
         do {
             let appData = try encodeJSONString(ProducerAppData(type: ProducerType.screen.rawValue, paused: false))
+            if intentionalLocalScreenProducerCloseIds.count >= 32 {
+                intentionalLocalScreenProducerCloseIds.removeAll()
+            }
+            intentionalLocalScreenProducerCloseIds.insert(oldProducer.id)
             let producer = try await createScreenProducerOffMain(
                 on: sendTransport,
                 track: screenTrack,
-                encoding: screenShareEncoding(connectionQuality: connectionQuality),
-                scalabilityMode: screenShareScalabilityMode,
+                encodings: screenShareEncodings(connectionQuality: connectionQuality),
                 codec: preferredVideoCodecJSON(),
                 appData: appData
             )
+            guard screenProducer === oldProducer, rtcScreenTrack === screenTrack else {
+                try? await socketManager.closeProducer(producerId: producer.id)
+                closeSendProducer(producer)
+                return
+            }
             producer.delegate = self
             producer.resume()
             screenProducer = producer
@@ -4735,6 +4747,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             closeSendProducer(oldProducer)
             debugLog("[WebRTC] Refreshed screen producer for \(connectionQuality.rawValue) bandwidth")
         } catch {
+            intentionalLocalScreenProducerCloseIds.remove(oldProducer.id)
             debugLog("[WebRTC] Failed to refresh screen producer for bandwidth: \(error)")
         }
     }
@@ -5497,6 +5510,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         audioBandwidthRefreshInFlight = false
         screenBandwidthRefreshInFlight = false
         intentionalLocalAudioProducerCloseIds.removeAll()
+        intentionalLocalScreenProducerCloseIds.removeAll()
 
         audioStartTask = nil
         audioCaptureReassertionTask?.cancel()
@@ -5690,9 +5704,13 @@ extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, Produce
             } catch {
                 if generation == self.configurationGeneration,
                    transport === self.sendTransport,
-                   kind == .video,
-                   (try? self.decodeJSONString(appData, as: ProducerAppData.self))?.type == ProducerType.webcam.rawValue {
-                    self.lastWebcamProducerSignalingError = error
+                   kind == .video {
+                    let failedType = (try? self.decodeJSONString(appData, as: ProducerAppData.self))?.type
+                    if failedType == ProducerType.webcam.rawValue {
+                        self.lastWebcamProducerSignalingError = error
+                    } else if failedType == ProducerType.screen.rawValue {
+                        self.lastScreenProducerSignalingError = error
+                    }
                 }
                 debugLog("[WebRTC] Produce failed: \(error)")
                 callback(nil)
@@ -6526,6 +6544,7 @@ extension WebRTCClient {
     }
 
     func startScreenSharing() async throws {
+        lastScreenProducerSignalingError = nil
         try await createSendTransportIfNeeded()
         guard let sendTransport = sendTransport else {
             throw WebRTCError.noTransport
@@ -6546,10 +6565,9 @@ extension WebRTCClient {
             let producer = try await createScreenProducerOffMain(
                 on: sendTransport,
                 track: screenTrack,
-                encoding: screenShareEncoding(
+                encodings: screenShareEncodings(
                     connectionQuality: currentLocalBandwidthQuality
                 ),
-                scalabilityMode: screenShareScalabilityMode,
                 codec: preferredVideoCodecJSON(),
                 appData: appData
             )
@@ -6568,7 +6586,7 @@ extension WebRTCClient {
             screenVideoCapturer = nil
             screenProducer = nil
             resetScreenFrameLimiter()
-            throw error
+            throw lastScreenProducerSignalingError ?? error
         }
     }
 

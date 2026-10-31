@@ -121,7 +121,7 @@ struct ScreenShareStartWindow: Equatable {
 
 enum ScreenShareStartPolicy {
 
-    static let returnWindowMs = 5_000.0
+    static let returnWindowMs = 10_000.0
 
     static let connectGraceMs = 8_000.0
 

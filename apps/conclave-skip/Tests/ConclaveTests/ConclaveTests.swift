@@ -10019,7 +10019,8 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(source.contains("sourceWidth.toDouble() / cap.maxWidth.toDouble()"))
         XCTAssertTrue(source.contains("sourceHeight.toDouble() / cap.maxHeight.toDouble()"))
         XCTAssertTrue(source.contains("capturer.startCapture(\n                capture.width,\n                capture.height,\n                capture.maxFramerate,"))
-        XCTAssertTrue(source.contains("screenCapturer?.changeCaptureFormat(\n                    capture.width,\n                    capture.height,\n                    capture.maxFramerate,"))
+        XCTAssertFalse(source.contains("screenCapturer?.changeCaptureFormat("))
+        XCTAssertTrue(source.contains("adaptOutputFormat(capture.width, capture.height, capture.maxFramerate)"))
     }
 
     func testNativeScreenShareUsesSeparatePublishNetworkProfile() throws {

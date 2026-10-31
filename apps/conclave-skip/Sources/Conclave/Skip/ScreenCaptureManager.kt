@@ -8,6 +8,7 @@ import android.media.AudioPlaybackCaptureConfiguration
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +19,14 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import skip.foundation.ProcessInfo
 import skip.ui.UIApplication
 import kotlin.coroutines.resume
+
+internal object ScreenShareAndroidLog {
+    const val TAG = "ConclaveShare"
+
+    fun warn(branch: String, error: Throwable?) {
+        Log.w(TAG, if (error == null) branch else "$branch ${error.javaClass.name}")
+    }
+}
 
 object ScreenCaptureManager {
     private var captureLauncher: ActivityResultLauncher<Intent>? = null
@@ -65,7 +74,7 @@ object ScreenCaptureManager {
                 try {
                     ContextCompat.startForegroundService(ctx, intent)
                 } catch (t: Throwable) {
-
+                    ScreenShareAndroidLog.warn("serviceRefused", t)
                     debugLog("[ScreenShare] Failed to start screen capture service: ${t}")
                     synchronized(stateLock) {
                         resultIntent = null
@@ -92,6 +101,7 @@ object ScreenCaptureManager {
         val activity = UIApplication.shared.androidActivity
         val launcher = captureLauncher
         if (activity == null || launcher == null) {
+            ScreenShareAndroidLog.warn(if (activity == null) "noActivity" else "noLauncher", null)
             synchronized(stateLock) {
                 if (!requestInFlight) lastFailure = ScreenShareFailure.notConfigured
             }
@@ -128,6 +138,7 @@ object ScreenCaptureManager {
         }
 
         if (isScreenCaptureBlockedByPolicy(activity)) {
+            ScreenShareAndroidLog.warn("blockedByPolicy", null)
             debugLog("[ScreenShare] Screen capture is disabled by device policy")
             synchronized(stateLock) {
                 resultIntent = null
@@ -140,6 +151,7 @@ object ScreenCaptureManager {
         }
         val pm = activity.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
         if (pm == null) {
+            ScreenShareAndroidLog.warn("noProjectionService", null)
             debugLog("[ScreenShare] MediaProjection service is unavailable")
             synchronized(stateLock) {
                 resultIntent = null
@@ -162,6 +174,7 @@ object ScreenCaptureManager {
                 awaitingConsent = false
             }
             PipManager.restoreAutoEnterAfterExternalActivity()
+            ScreenShareAndroidLog.warn("launchThrew", t)
             debugLog("[ScreenShare] Failed to launch screen capture consent: ${t}")
             synchronized(stateLock) {
                 resultIntent = null

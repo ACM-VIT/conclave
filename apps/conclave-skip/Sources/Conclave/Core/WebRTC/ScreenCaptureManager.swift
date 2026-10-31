@@ -36,6 +36,8 @@ enum ScreenShareLifecycleBusKeys {
     static let stopRequestedAt = "conclave.screenShare.lifecycle.stopRequestedAt"
 
     static let stopReason = "conclave.screenShare.lifecycle.stopReason"
+
+    static let attemptAt = "conclave.screenShare.lifecycle.attemptAt"
 }
 
 enum ScreenCaptureReconnectPolicy {
@@ -183,6 +185,7 @@ final class ScreenCaptureManager: NSObject {
     private var startWindowTask: Task<Void, Never>?
 
     private var presentedAtEpochSeconds: Double = 0
+    private var stopWrittenForCurrentAttempt = false
 
     private var baselinePresentedController: ObjectIdentifier?
     private var reconnectGraceTask: Task<Void, Never>?
@@ -386,6 +389,7 @@ final class ScreenCaptureManager: NSObject {
     private func cancelPendingStart(generation: Int) {
         guard startGeneration == generation,
               pendingStartContinuation != nil else { return }
+        requestBroadcastStop(reason: ScreenShareBroadcastStopReason.person)
         tearDownCapture()
         finishPendingStart(.failure(ScreenCaptureError.cancelled))
     }
@@ -394,9 +398,7 @@ final class ScreenCaptureManager: NSObject {
                                   stopReason: ScreenShareBroadcastStopReason?) {
         guard startGeneration == generation,
               pendingStartContinuation != nil else { return }
-        if let stopReason {
-            requestBroadcastStop(reason: stopReason)
-        }
+        requestBroadcastStop(reason: stopReason ?? ScreenShareBroadcastStopReason.person)
         tearDownCapture()
         finishPendingStart(.failure(ScreenShareStartError(failure: failure)))
     }
@@ -418,6 +420,9 @@ final class ScreenCaptureManager: NSObject {
     private func openStartWindow(generation: Int) {
         startWindowTask?.cancel()
         presentedAtEpochSeconds = Date().timeIntervalSince1970
+        stopWrittenForCurrentAttempt = false
+        UserDefaults(suiteName: appGroupIdentifier)?.set(presentedAtEpochSeconds,
+                                                         forKey: ScreenShareLifecycleBusKeys.attemptAt)
         startWindow = ScreenShareStartWindow.closed
         applyStartEvent(ScreenShareStartEvent.presented, nowMs: Self.nowMs())
         let pollNanoseconds = UInt64(ScreenShareStartPolicy.pollIntervalMs * 1_000_000.0)
@@ -542,11 +547,13 @@ final class ScreenCaptureManager: NSObject {
     }
 
     private func requestBroadcastStop(reason: ScreenShareBroadcastStopReason) {
-        guard server != nil,
+        guard presentedAtEpochSeconds > 0,
+              !stopWrittenForCurrentAttempt,
               let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
 
         defaults.set(reason.rawValue, forKey: ScreenShareLifecycleBusKeys.stopReason)
         defaults.set(Date().timeIntervalSince1970, forKey: ScreenShareLifecycleBusKeys.stopRequestedAt)
+        stopWrittenForCurrentAttempt = true
     }
 
     private func presentBroadcastPicker() -> Bool {

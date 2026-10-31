@@ -53,7 +53,9 @@ final class SampleHandler: RPBroadcastSampleHandler {
   private let stopRequestedAtKey = "conclave.screenShare.lifecycle.stopRequestedAt"
 
   private let stopReasonKey = "conclave.screenShare.lifecycle.stopReason"
+  private let attemptAtKey = "conclave.screenShare.lifecycle.attemptAt"
   private var broadcastStartedAt: TimeInterval = 0
+  private var attemptStartedAt: TimeInterval = 0
 
   private func log(_ message: String, _ metadata: [String: Any] = [:]) {
     if metadata.isEmpty {
@@ -80,6 +82,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
     droppedFrameCount = 0
     lastFrameSentAt = 0
     broadcastStartedAt = Date().timeIntervalSince1970
+    attemptStartedAt = UserDefaults(suiteName: appGroupIdentifier)?.double(forKey: attemptAtKey) ?? 0
+    if wasStopRequestedByMainApp() {
+      finishBroadcast(stopReasonRequestedByMainApp())
+      return
+    }
     publishLifecycleState("starting")
     reloadPublishConfiguration()
     socketConnection = ScreenShareSocketConnection(appGroupIdentifier: appGroupIdentifier)
@@ -103,6 +110,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     didFinishBroadcast = true
     lastConnectionAttempt = 0
     broadcastStartedAt = 0
+    attemptStartedAt = 0
   }
 
   override func processSampleBuffer(
@@ -329,7 +337,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     guard broadcastStartedAt > 0,
       let defaults = UserDefaults(suiteName: appGroupIdentifier)
     else { return false }
-    return defaults.double(forKey: stopRequestedAtKey) >= broadcastStartedAt
+    return defaults.double(forKey: stopRequestedAtKey) >= (attemptStartedAt > 0 ? attemptStartedAt : broadcastStartedAt)
   }
 
   private func publishLifecycleState(_ state: String) {

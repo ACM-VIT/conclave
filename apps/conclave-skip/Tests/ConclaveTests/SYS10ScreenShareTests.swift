@@ -99,10 +99,95 @@ struct SYS10ScreenShareTests {
         let neverShown = Self.run([])
         #expect(neverShown.decision == .cancelSilently)
         #expect(neverShown.decidedAtMs == ScreenShareStartPolicy.returnWindowMs)
-        #expect(ScreenShareStartPolicy.returnWindowMs == 5_000)
+        #expect(ScreenShareStartPolicy.returnWindowMs == 10_000)
         #expect(ScreenShareStartPolicy.connectGraceMs == 8_000)
 
         #expect(UInt64(ScreenShareStartPolicy.connectGraceMs) * 1_000_000 == ScreenCaptureReconnectPolicy.graceNanoseconds)
+    }
+
+    @Test func aStartAfterTheCountdownAndAColdLaunchStillGoesLive() {
+        let run = Self.run([
+            ScriptedStep(atMs: 300, event: .systemUIShown),
+            ScriptedStep(atMs: 4_000, event: .systemUIHidden),
+            ScriptedStep(atMs: 9_500, event: .extensionStarting),
+            ScriptedStep(atMs: 9_800, event: .connected),
+        ])
+        #expect(run.phases == [.choosing, .starting])
+        #expect(run.decision == .live)
+        #expect(run.toasts == 0)
+
+        var window = ScreenShareStartPolicy.apply(.presented, to: .closed, nowMs: 0)
+        window = ScreenShareStartPolicy.apply(.systemUIShown, to: window, nowMs: 300)
+        window = ScreenShareStartPolicy.apply(.systemUIHidden, to: window, nowMs: 4_000)
+        #expect(window.returnedAtMs == 4_000)
+        #expect(9_000 - window.returnedAtMs >= 5_000, "the old 5 s window cancelled this start at 9_000")
+        #expect(ScreenShareStartPolicy.decision(window, nowMs: 9_000) == .wait)
+        #expect(ScreenShareStartPolicy.decision(window, nowMs: 9_500 + ScreenShareStartPolicy.pollIntervalMs) == .wait)
+        #expect(ScreenShareStartPolicy.decision(window, nowMs: 4_000 + ScreenShareStartPolicy.returnWindowMs) == .cancelSilently)
+    }
+
+    @Test func theAppGivesUpBeforeTheExtensionDoes() throws {
+        #expect(ScreenShareStartPolicy.connectGraceMs < 12_000)
+        let handler = try sys10Source("Darwin/ScreenShareExtension/SampleHandler.swift")
+        #expect(handler.contains("initialConnectionTimeout: TimeInterval = 12"))
+    }
+
+    @Test func everyAbandonmentWritesTheStopBeforeTeardown() throws {
+        let manager = try sys10Source("Sources/Conclave/Core/WebRTC/ScreenCaptureManager.swift")
+        for signature in [
+            "private func cancelPendingStart(generation: Int) {",
+            "private func failPendingStart(generation: Int, failure: ScreenShareFailure,",
+            "func stopCapture() async {",
+        ] {
+            let body = sys10Body(signature, in: manager, closing: "\n    }\n")
+            let stop = try #require(body.range(of: "requestBroadcastStop("), "\(signature)")
+            let teardown = try #require(body.range(of: "tearDownCapture()"), "\(signature)")
+            #expect(stop.lowerBound < teardown.lowerBound, "\(signature)")
+        }
+        let failBody = sys10Body("private func failPendingStart(generation: Int, failure: ScreenShareFailure,", in: manager, closing: "\n    }\n")
+        #expect(failBody.contains("requestBroadcastStop(reason: stopReason ?? ScreenShareBroadcastStopReason.person)"))
+
+        let stopBody = sys10Body("private func requestBroadcastStop(reason: ScreenShareBroadcastStopReason) {", in: manager, closing: "\n    }\n")
+        #expect(!stopBody.isEmpty)
+        #expect(!stopBody.contains("server != nil"))
+        #expect(stopBody.contains("presentedAtEpochSeconds > 0"))
+        #expect(stopBody.contains("!stopWrittenForCurrentAttempt"))
+        #expect(stopBody.contains("stopWrittenForCurrentAttempt = true"))
+        let reason = try #require(stopBody.range(of: "forKey: ScreenShareLifecycleBusKeys.stopReason)"))
+        let requestedAt = try #require(stopBody.range(of: "forKey: ScreenShareLifecycleBusKeys.stopRequestedAt)"))
+        #expect(reason.lowerBound < requestedAt.lowerBound)
+
+        let openBody = sys10Body("private func openStartWindow(generation: Int) {", in: manager, closing: "\n    }\n")
+        #expect(openBody.contains("ScreenShareLifecycleBusKeys.attemptAt"))
+        #expect(openBody.contains("stopWrittenForCurrentAttempt = false"))
+        #expect(manager.contains("private var stopWrittenForCurrentAttempt = false"))
+        #expect(ScreenShareLifecycleBusKeys.attemptAt == "conclave.screenShare.lifecycle.attemptAt")
+    }
+
+    @Test func theExtensionHonoursAStopForItsAttempt() throws {
+        let handler = try sys10Source("Darwin/ScreenShareExtension/SampleHandler.swift")
+        #expect(handler.contains("private let attemptAtKey = \"\(ScreenShareLifecycleBusKeys.attemptAt)\""))
+        #expect(handler.contains("private let stopRequestedAtKey = \"\(ScreenShareLifecycleBusKeys.stopRequestedAt)\""))
+
+        let started = sys10Body("override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {", in: handler, closing: "\n  }\n")
+        let startedAt = try #require(started.range(of: "broadcastStartedAt = Date().timeIntervalSince1970"))
+        let attempt = try #require(started.range(of: "attemptStartedAt = UserDefaults(suiteName: appGroupIdentifier)?.double(forKey: attemptAtKey) ?? 0"))
+        let check = try #require(started.range(of: "if wasStopRequestedByMainApp() {\n      finishBroadcast(stopReasonRequestedByMainApp())\n      return\n    }"))
+        let starting = try #require(started.range(of: "publishLifecycleState(\"starting\")"))
+        #expect(startedAt.lowerBound < attempt.lowerBound)
+        #expect(attempt.lowerBound < check.lowerBound)
+        #expect(check.lowerBound < starting.lowerBound)
+        let socket = try #require(started.range(of: "ScreenShareSocketConnection(appGroupIdentifier: appGroupIdentifier)"))
+        #expect(check.lowerBound < socket.lowerBound)
+
+        let wasStopped = sys10Body("private func wasStopRequestedByMainApp() -> Bool {", in: handler, closing: "\n  }\n")
+        #expect(wasStopped.contains("defaults.double(forKey: stopRequestedAtKey) >= (attemptStartedAt > 0 ? attemptStartedAt : broadcastStartedAt)"))
+
+        let finished = sys10Body("override func broadcastFinished() {", in: handler, closing: "\n  }\n")
+        #expect(finished.contains("attemptStartedAt = 0"))
+
+        let samples = sys10Body("override func processSampleBuffer(", in: handler, closing: "\n  }\n")
+        #expect(samples.contains("if wasStopRequestedByMainApp() {\n      finishBroadcast(stopReasonRequestedByMainApp())\n      return\n    }"))
     }
 
     @Test func startingThenStoppedBeforeAConnectIsASilentCancel() {
@@ -375,6 +460,7 @@ struct SYS10ScreenShareTests {
             "Sources/Conclave/Skip/ScreenCaptureService.kt",
             "Sources/Conclave/Skip/PipManager.kt",
             "Darwin/ScreenShareExtension/SampleHandler.swift",
+            "Darwin/ScreenShareExtension/ScreenShareSocketConnection.swift",
         ]
         for file in files + ["Tests/ConclaveTests/SYS10ScreenShareTests.swift"] {
             let text = try sys10Source(file)
@@ -444,5 +530,12 @@ private func sys10Source(_ packageRelativePath: String) throws -> String {
 
 private func sys10Line(containing needle: String, in text: String) -> String {
     text.split(separator: "\n", omittingEmptySubsequences: false).first { $0.contains(needle) }.map { String($0) } ?? ""
+}
+
+private func sys10Body(_ signature: String, in text: String, closing: String) -> String {
+    guard let start = text.range(of: signature) else { return "" }
+    let rest = text[start.lowerBound...]
+    guard let end = rest.range(of: closing) else { return String(rest) }
+    return String(rest[..<end.upperBound])
 }
 #endif
