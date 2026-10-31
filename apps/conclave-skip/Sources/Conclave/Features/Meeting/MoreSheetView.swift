@@ -131,6 +131,7 @@ struct MoreSheetView: View {
                         : "faint",
                     isDisabled: !canUseParticipantActions
                 ) {
+                    ConclaveHapticFeedback.gesture(viewModel.state.isHandRaised ? FeedbackKind.handLowered : FeedbackKind.handRaised)
                     viewModel.toggleHandRaise()
                     closeSheet()
                 }
@@ -188,6 +189,7 @@ struct MoreSheetView: View {
             HStack(spacing: 0) {
                 ForEach(emojiReactions) { option in
                     Button {
+                        ConclaveHapticFeedback.gesture(FeedbackKind.reactionSent)
                         viewModel.sendReaction(option)
                         closeSheet()
                     } label: {
@@ -206,6 +208,7 @@ struct MoreSheetView: View {
             HStack(spacing: ACMSpacing.xs) {
                 ForEach(assetReactions) { option in
                     Button {
+                        ConclaveHapticFeedback.gesture(FeedbackKind.reactionSent)
                         viewModel.sendReaction(option)
                         closeSheet()
                     } label: {
@@ -1534,8 +1537,7 @@ struct GamesSheetView: View {
             observedActiveGameId = gameId
             if !gameId.isEmpty {
                 cancelConfiguringGame()
-                // A game just went live while this sheet was open: get out of
-                // the way so the stage can show it.
+
                 if !wasActive {
                     closeSheet()
                 }
@@ -1569,8 +1571,6 @@ struct GamesSheetView: View {
         }
     }
 
-    /// The game itself lives on the meeting stage now; the sheet only offers
-    /// a pointer back to it plus host controls.
     private func liveGameSection(_ activeGame: GamePublicState) -> some View {
         let visual = GameCatalogPresentationPolicy.visual(for: activeGame.gameId)
         return VStack(alignment: .leading, spacing: ACMSpacing.xs) {

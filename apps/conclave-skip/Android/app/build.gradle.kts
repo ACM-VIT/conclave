@@ -63,6 +63,7 @@ val conclaveAuthBaseUrl = configuredValue(
 
 val productionConclaveBaseUrl = "https://conclave.acmvit.in"
 val productionSfuJoinUrl = "$productionConclaveBaseUrl/api/sfu/join"
+val debugViewerProfile = configuredValue("CONCLAVE_DEBUG_VIEWER_PROFILE").lowercase() in setOf("yes", "true", "1")
 val sfuJoinUrl = configuredValue("SFU_JOIN_URL").ifBlank { productionSfuJoinUrl }
 val releaseArtifactRequested = gradle.startParameter.taskNames.any { taskName ->
     val lower = taskName.substringAfterLast(":").lowercase()
@@ -96,7 +97,7 @@ kotlin {
 
 android {
     namespace = group as String
-    // OkHttp 5.5 requires Android 17 APIs at compile time.
+
     compileSdk = 37
     compileOptions {
         sourceCompatibility = JavaVersion.toVersion(libs.versions.jvm.get())
@@ -116,15 +117,17 @@ android {
         manifestPlaceholders["GOOGLE_SIGN_IN_WEB_CLIENT_ID"] = googleSignInWebClientId
         manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = conclaveAuthBaseUrl
         manifestPlaceholders["SFU_JOIN_URL"] = sfuJoinUrl
+        manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = "false"
         manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "true"
-        // skip.tools.skip-build-plugin will automatically use Skip.env properties for:
-        // applicationId = ANDROID_APPLICATION_ID ?? PRODUCT_BUNDLE_IDENTIFIER
-        // versionCode = CURRENT_PROJECT_VERSION
-        // versionName = MARKETING_VERSION
+
     }
 
     buildFeatures {
         buildConfig = true
+    }
+
+    androidResources {
+        generateLocaleConfig = true
     }
 
     lint {
@@ -163,20 +166,17 @@ android {
     }
 
     buildTypes {
+        debug {
+            isPseudoLocalesEnabled = true
+            manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = debugViewerProfile.toString()
+        }
         release {
             signingConfig = signingConfigs.findByName("release")
-            // R8 minification miscompiles SkipUI's presentation/preferences code:
-            // it produces a null skip.ui.Preference that crashes PresentationRoot →
-            // PreferenceValues.collectPreferences on sheet / share-chooser
-            // presentation transitions (NPE, sometimes surfacing earlier as a
-            // checkNotNullParameter). Not reproducible in debug (no R8), and
-            // -dontoptimize / keep rules don't contain it. Disabled until Skip
-            // ships an R8-compatible SkipUI. isDebuggable=false still delivers the
-            // release runtime perf win (ART optimization, no debug overhead); the
-            // only cost is a larger APK - use an App Bundle (AAB) to split it.
+
             isMinifyEnabled = false
             isShrinkResources = false
             isDebuggable = false
+            manifestPlaceholders["CONCLAVE_DEBUG_VIEWER_PROFILE"] = "false"
             manifestPlaceholders["CONCLAVE_AUTH_BASE_URL"] = productionConclaveBaseUrl
             manifestPlaceholders["SFU_JOIN_URL"] = productionSfuJoinUrl
             manifestPlaceholders["USES_CLEARTEXT_TRAFFIC"] = "false"
@@ -188,10 +188,5 @@ dependencies {
     implementation(platform("com.squareup.okhttp3:okhttp-bom:5.5.0"))
     implementation("com.squareup.okhttp3:okhttp")
 
-    // The Activity theme (res/values/themes.xml) is `Theme.Material3.Dark.*`,
-    // whose color attributes (colorOnPrimary, colorSurface, …) ship in the
-    // Material Components XML library. Compose Material3 does NOT provide the
-    // XML theme attrs, so this AAR must be a direct dependency or the merged
-    // resources fail with "style attribute 'attr/colorOnPrimary' not found".
     implementation("com.google.android.material:material:1.14.0")
 }

@@ -1,0 +1,128 @@
+{
+  "id": "chat_bubble.fill1",
+  "kind": "git-pinned",
+  "request_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/chat_bubble/materialsymbolsrounded/chat_bubble_fill1_24px.svg",
+  "request_method": "GET",
+  "request_headers": {
+    "Accept-Encoding": "identity",
+    "User-Agent": "Conclave-selected-input-recovery/1.0"
+  },
+  "started_at_utc": "2026-10-23T16:13:49.242216Z",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "historical_status": "fresh_network_retrieval",
+  "body_file": "assets/symbols/web/chat_bubble/materialsymbolsrounded/chat_bubble_fill1_24px.svg",
+  "receipt_file": "http/chat_bubble.fill1.json",
+  "redirect_policy": "record and reject; no substitutions",
+  "redirects": [],
+  "http_status": 200,
+  "final_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/chat_bubble/materialsymbolsrounded/chat_bubble_fill1_24px.svg",
+  "response_headers": [
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Content-Length",
+      "230"
+    ],
+    [
+      "Cache-Control",
+      "max-age=300"
+    ],
+    [
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    ],
+    [
+      "Content-Type",
+      "image/svg+xml"
+    ],
+    [
+      "ETag",
+      "\"76143db1582c6046dd6dcc67603ba2d344f663d5ec899e0d551cabd748815daa\""
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=31536000"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Frame-Options",
+      "deny"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-GitHub-Request-Id",
+      "740A:2C9CEF:B2744:CF14A:6ADB87D5"
+    ],
+    [
+      "x-github-edge-region",
+      "centralindia"
+    ],
+    [
+      "Accept-Ranges",
+      "bytes"
+    ],
+    [
+      "Date",
+      "Fri, 23 Oct 2026 16:14:14 GMT"
+    ],
+    [
+      "Via",
+      "1.1 varnish"
+    ],
+    [
+      "X-Served-By",
+      "cache-maa10242-MAA"
+    ],
+    [
+      "X-Cache",
+      "MISS"
+    ],
+    [
+      "X-Cache-Hits",
+      "0"
+    ],
+    [
+      "X-Timer",
+      "S1792772054.372235,VS0,VE310"
+    ],
+    [
+      "Vary",
+      "Authorization,Accept-Encoding"
+    ],
+    [
+      "Access-Control-Allow-Origin",
+      "*"
+    ],
+    [
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    ],
+    [
+      "X-Fastly-Request-ID",
+      "3be097a3ce6f0a8a3902450365c75828466f9551"
+    ],
+    [
+      "Expires",
+      "Fri, 23 Oct 2026 16:19:14 GMT"
+    ],
+    [
+      "Source-Age",
+      "0"
+    ]
+  ],
+  "bytes": 230,
+  "sha256": "316d437277e361fa6036baccc9320136a262a06720dfd12b1868ea281e9696e0",
+  "body_complete_within_limit": true,
+  "max_bytes": 131072,
+  "errors": [],
+  "completed_at_utc": "2026-10-23T16:14:14.682148Z",
+  "retrieval_ok": true
+}

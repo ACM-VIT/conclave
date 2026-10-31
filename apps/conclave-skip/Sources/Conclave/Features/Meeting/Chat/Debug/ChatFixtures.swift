@@ -1,0 +1,975 @@
+import Foundation
+
+enum ChatFixtureState: String, CaseIterable, Equatable {
+    case empty = "chat-empty"
+    case busy = "chat-busy"
+    case unread12 = "chat-unread-12"
+    case lockedGuest = "chat-locked-guest"
+    case lockedHost = "chat-locked-host"
+    case reconnecting = "chat-reconnecting"
+    case offline = "chat-offline"
+    case privateMode = "chat-private-mode"
+    case reply = "chat-reply"
+    case suggestionsCommands = "chat-suggestions-commands"
+    case suggestionsMentions = "chat-suggestions-mentions"
+    case longText = "chat-long-text"
+
+    case attachmentUploading = "chat-attachment-uploading"
+
+    case voiceMode = "chat-voice-mode"
+
+    case draftMultiline = "chat-draft-multiline"
+
+    case suggestionsMentionQuery = "chat-suggestions-mention-query"
+}
+
+enum ChatFixtureScriptName: String, CaseIterable {
+    case remote5 = "remote:5"
+    case remote1 = "remote:1"
+    case ownSend
+    case ackTimeout
+    case reactionFail
+    case peerReplyToOwn
+    case hideSender
+    case resetCounters
+
+    case attachPhoto
+
+    case photoFail
+
+    case gifMoreFail
+
+    case stream3tasks = "stream:3tasks"
+
+    case assistantFail
+
+    case gateBlip
+
+    case gateLong
+
+    case photoTwice
+}
+
+enum ChatFixtureAssets {
+    static let photoPNG = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAMCAYAAABr5z2BAAAAJElEQVR42mPo6ur6j4yzsrJQMCF5hmFgAKka0OWHgwGj6eA/AIF30dCVjNXgAAAAAElFTkSuQmCC"
+    static let stickerPNG = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKUlEQVR42mNgGJ5g1qxZ/3FhijQTNIQYzXgNGTVgMBhAcTqgSkqkOwAA3V4xWegEg1EAAAAASUVORK5CYII="
+    static let animatedGIF = "R0lGODlhCAAIAPEAAJqamlpaWtDQ0DAwMCH/C05FVFNDQVBFMi4wAwEAAAAh+QQEMgAAACwAAAAACAAIAAACMQRDMARDMAzBEAzBEARDMARDMAzBEAzBEARDMARDMAzBEAzBEARDMARDMAzBEAzBEAUAIfkEBDIAAAAsAAAAAAgACAAAAjEcxVEcxVEUR3EUR3EcxVEcxVEUR3EUR3EcxVEcxVEUR3EUR3EcxVEcxVEUR3EUR3EFADs="
+    static let directoryName = "conclave-chat-fixture"
+
+    static let missingPhotoURL = "file:///conclave-chat-fixture/missing-photo.jpg"
+
+    static var photoURL: String { fileURL("photo.png") }
+    static var stickerURL: String { fileURL("sticker.png") }
+    static var gifURL: String { fileURL("animation.gif") }
+
+    static func install() {
+        guard let folder = directory() else { return }
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: nil)
+        write(photoPNG, to: folder.appendingPathComponent("photo.png"))
+        write(stickerPNG, to: folder.appendingPathComponent("sticker.png"))
+        write(animatedGIF, to: folder.appendingPathComponent("animation.gif"))
+    }
+
+    private static func directory() -> URL? {
+        guard let caches = try? FileManager.default.url(for: FileManager.SearchPathDirectory.cachesDirectory,
+                                                        in: FileManager.SearchPathDomainMask.userDomainMask,
+                                                        appropriateFor: nil, create: true) else { return nil }
+        return caches.appendingPathComponent(directoryName, isDirectory: true)
+    }
+
+    private static func fileURL(_ name: String) -> String {
+        guard let folder = directory() else { return "" }
+        return folder.appendingPathComponent(name).absoluteString
+    }
+
+    private static func write(_ base64: String, to url: URL) {
+        if FileManager.default.fileExists(atPath: url.path) { return }
+        guard let data = Data(base64Encoded: base64) else { return }
+        try? data.write(to: url)
+    }
+}
+
+@MainActor
+final class ChatFixtureCounters {
+    private(set) var counts: [String: Int] = [:]
+    private(set) var openLatencies: [Double] = []
+
+    init() {}
+
+    func bump(_ key: String) {
+        counts[key] = (counts[key] ?? 0) + 1
+    }
+
+    func count(_ key: String) -> Int {
+        counts[key] ?? 0
+    }
+
+    func recordOpenLatency(_ millis: Double) {
+        openLatencies.append(millis)
+    }
+
+    func openLatencyPercentile(_ percentile: Double) -> Double {
+        if openLatencies.isEmpty { return 0 }
+        let sorted = openLatencies.sorted()
+        var index = Int(Double(sorted.count - 1) * percentile + 0.5)
+        if index < 0 { index = 0 }
+        if index >= sorted.count { index = sorted.count - 1 }
+        return sorted[index]
+    }
+
+    func reset() {
+        counts = [:]
+    }
+}
+
+struct ChatFixtureStreamStep {
+    let waitMillis: Double
+    let event: NativeConclaveAssistantStreamEvent
+}
+
+@MainActor
+enum ChatDiagnostics {
+    static var counters: ChatFixtureCounters? = nil
+
+    static var driver: ChatFixtureDriver? = nil
+}
+
+enum ChatFixtureScript {
+    static let localUserId = "jordan@example.com#fixture"
+    static let localName = "Jordan Lee"
+    static let averyId = "avery@example.com#web-1"
+    static let samId = "sam@example.com#web-2"
+    static let priyaId = "priya@example.com#web-3"
+    static let leftId = "morgan@example.com#web-4"
+
+    static let multilineDraft = "Agenda for tomorrow:\nBudget review at 10\nHiring sync after lunch"
+
+    static let mentionQueryDraft = "@av"
+
+    static func roster(longNames: Bool = false) -> [ChatRosterEntry] {
+        [
+            ChatRosterEntry(userId: localUserId, name: localName, isPresent: true),
+            ChatRosterEntry(userId: averyId, name: longNames ? "Avery Montgomery-Castellanos de la Vega" : "Avery Lee", isPresent: true),
+            ChatRosterEntry(userId: samId, name: "Sam Rivera", isPresent: true),
+            ChatRosterEntry(userId: priyaId, name: "Priya Patel", isPresent: true),
+            ChatRosterEntry(userId: leftId, name: "Morgan Diaz", isPresent: false),
+        ]
+    }
+
+    static func inputs(for state: ChatFixtureState, nowMillis: Double) -> ChatInputs {
+        var gate = ChatSendGate.allowed
+        var isLocked = false
+        var isHost = false
+        switch state {
+        case .lockedGuest:
+            gate = ChatSendGate.locked
+            isLocked = true
+        case .lockedHost:
+            isLocked = true
+            isHost = true
+        case .reconnecting:
+            gate = ChatSendGate.reconnecting
+        case .offline:
+            gate = ChatSendGate.offline
+        default:
+            break
+        }
+        let messages: [ChatMessageInput]
+        switch state {
+        case .empty:
+            messages = []
+        case .busy:
+            messages = busyMessages(nowMillis: nowMillis)
+        case .longText:
+            messages = longTextMessages(nowMillis: nowMillis)
+        default:
+            messages = shortConversation(nowMillis: nowMillis)
+        }
+        let localRows: [ChatLocalRow] = state == ChatFixtureState.busy ? busyLocalRows(nowMillis: nowMillis) : []
+        return ChatInputs.make(callSession: 1, roomId: "abc-defg-hij", localUserId: localUserId, localName: localName,
+                               messages: messages, localRows: localRows, isLocked: isLocked, privateEnabled: true,
+                               photosEnabled: true, voiceEnabled: true, reactionsEnabled: true, gate: gate, isHost: isHost,
+                               roster: roster(longNames: state == ChatFixtureState.longText),
+                               assistant: AssistantAvailability.available,
+
+                               activeTtsMessageId: state == ChatFixtureState.busy ? "s-v2" : "")
+    }
+
+    static func message(_ id: String, from userId: String, name: String, _ content: String, at millis: Double,
+                        isOwn: Bool = false, clientId: String = "", isDirect: Bool = false, target: String = "",
+                        targetName: String = "", reply: ChatReplyRef? = nil, reactions: [ChatReactionInput] = [],
+                        delivery: ChatDelivery = ChatDelivery.delivered, failure: ChatFailure = ChatFailure.none,
+                        isRetryable: Bool = false, imageURL: String = "", gifURL: String = "", gifTitle: String = "",
+                        isAssistant: Bool = false, isHistory: Bool = true, gifKind: String = "", gifPreviewURL: String = "",
+                        gifVideoURL: String = "", gifWidth: Double = 0, gifHeight: Double = 0,
+                        suppressEmbeds: Bool = false, isTts: Bool = false,
+                        assistant: ChatAssistantInput? = nil) -> ChatMessageInput {
+        ChatMessageInput.make(id: id, clientId: clientId, senderId: userId, senderName: name, isOwn: isOwn,
+                              isAssistant: isAssistant, content: content, timestampMillis: millis, isDirect: isDirect,
+                              dmTargetUserId: target, dmTargetName: targetName, reply: reply, imageURL: imageURL,
+                              imageFileName: imageURL.isEmpty ? "" : "photo.jpg", gifURL: gifURL, gifPreviewURL: gifPreviewURL,
+                              gifVideoURL: gifVideoURL, gifKind: gifKind, gifWidth: gifWidth, gifHeight: gifHeight,
+                              gifTitle: gifTitle, delivery: delivery, failure: failure, isRetryable: isRetryable,
+                              reactions: reactions, isHistory: isHistory, suppressEmbeds: suppressEmbeds, isTts: isTts,
+                              assistant: assistant)
+    }
+
+    static func copy(_ message: ChatMessageInput, id: String, delivery: ChatDelivery, failure: ChatFailure, isRetryable: Bool,
+                     reactions: [ChatReactionInput], isHistory: Bool) -> ChatMessageInput {
+        ChatMessageInput.make(id: id, clientId: message.clientId, senderId: message.senderId, senderName: message.senderName,
+                              isOwn: message.isOwn, isAssistant: message.isAssistant, content: message.content,
+                              timestampMillis: message.timestampMillis, isDirect: message.isDirect,
+                              dmTargetUserId: message.dmTargetUserId, dmTargetName: message.dmTargetName, reply: message.reply,
+                              imageURL: message.imageURL, imageFileName: message.imageFileName, gifURL: message.gifURL,
+                              gifPreviewURL: message.gifPreviewURL, gifVideoURL: message.gifVideoURL, gifKind: message.gifKind,
+                              gifWidth: message.gifWidth, gifHeight: message.gifHeight, gifTitle: message.gifTitle,
+                              delivery: delivery, failure: failure, isRetryable: isRetryable, reactions: reactions,
+                              isHistory: isHistory, suppressEmbeds: message.suppressEmbeds, isTts: message.isTts,
+                              assistant: message.assistant)
+    }
+
+    static func withAssistant(_ message: ChatMessageInput, content: String, assistant: ChatAssistantInput?) -> ChatMessageInput {
+        ChatMessageInput.make(id: message.id, clientId: message.clientId, senderId: message.senderId, senderName: message.senderName,
+                              isOwn: message.isOwn, isAssistant: message.isAssistant, content: content,
+                              timestampMillis: message.timestampMillis, isDirect: message.isDirect,
+                              dmTargetUserId: message.dmTargetUserId, dmTargetName: message.dmTargetName, reply: message.reply,
+                              imageURL: message.imageURL, imageFileName: message.imageFileName, gifURL: message.gifURL,
+                              gifPreviewURL: message.gifPreviewURL, gifVideoURL: message.gifVideoURL, gifKind: message.gifKind,
+                              gifWidth: message.gifWidth, gifHeight: message.gifHeight, gifTitle: message.gifTitle,
+                              delivery: message.delivery, failure: message.failure, isRetryable: message.isRetryable,
+                              reactions: message.reactions, isHistory: message.isHistory, suppressEmbeds: message.suppressEmbeds,
+                              isTts: message.isTts, assistant: assistant)
+    }
+
+    static func streamScript() -> [ChatFixtureStreamStep] {
+        var steps: [ChatFixtureStreamStep] = [
+            ChatFixtureStreamStep(waitMillis: 300, event: streamTask("start", kind: "reasoning", done: false, query: "")),
+            ChatFixtureStreamStep(waitMillis: 400, event: streamReasoning("Checking the roadmap doc, ", done: false)),
+            ChatFixtureStreamStep(waitMillis: 200, event: streamReasoning("the notes and the shared browser.", done: false)),
+            ChatFixtureStreamStep(waitMillis: 300, event: streamTask("web", kind: "web_search", done: false, query: "q4 roadmap")),
+            ChatFixtureStreamStep(waitMillis: 500, event: streamTask("web", kind: "web_search", done: true, query: "")),
+            ChatFixtureStreamStep(waitMillis: 200, event: streamTask("notes", kind: "transcript", done: false, query: "")),
+            ChatFixtureStreamStep(waitMillis: 500, event: streamTask("notes", kind: "transcript", done: true, query: "")),
+            ChatFixtureStreamStep(waitMillis: 200, event: streamTask("browser", kind: "browser", done: false, query: "roadmap.example.com")),
+            ChatFixtureStreamStep(waitMillis: 500, event: streamTask("browser", kind: "browser", done: true, query: "")),
+            ChatFixtureStreamStep(waitMillis: 200, event: streamReasoning("", done: true)),
+            ChatFixtureStreamStep(waitMillis: 100, event: streamTask("start", kind: "reasoning", done: true, query: "")),
+        ]
+        let deltas = ["## Summary\n", "- Launch moved ", "to **Nov 4**\n", "- Hiring ", "is on track\n", "\n", "```text\n",
+                      "roadmap v2\n", "```\n", "Ask me for details."]
+        for delta in deltas {
+            steps.append(ChatFixtureStreamStep(waitMillis: 150, event: NativeConclaveAssistantStreamEvent(
+                kind: NativeConclaveAssistantStreamEventKind.delta, delta: delta, isReasoningDone: false, task: nil, error: "", relay: nil)))
+        }
+        steps.append(ChatFixtureStreamStep(waitMillis: 200, event: NativeConclaveAssistantStreamEvent(
+            kind: NativeConclaveAssistantStreamEventKind.done, delta: "", isReasoningDone: false, task: nil, error: "", relay: nil)))
+        return steps
+    }
+
+    static func streamTask(_ id: String, kind: String, done: Bool, query: String) -> NativeConclaveAssistantStreamEvent {
+        NativeConclaveAssistantStreamEvent(kind: NativeConclaveAssistantStreamEventKind.task, delta: "", isReasoningDone: false,
+                                           task: ConclaveAssistantRelayTask(id: id, kind: kind, status: done ? "done" : "running",
+                                                                            query: query.isEmpty ? nil : query),
+                                           error: "", relay: nil)
+    }
+
+    static func streamReasoning(_ delta: String, done: Bool) -> NativeConclaveAssistantStreamEvent {
+        NativeConclaveAssistantStreamEvent(kind: NativeConclaveAssistantStreamEventKind.reasoning, delta: delta, isReasoningDone: done, task: nil, error: "", relay: nil)
+    }
+
+    static func gifPage(kind: ChatGifKind, query: String, page: Int) -> ChatGifPage {
+        var items: [ChatGifAttachment] = []
+        var index = 0
+        let name = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Trending" : query
+        while index < 16 {
+            let number = (page - 1) * 16 + index + 1
+            let id = kind.rawValue + "-" + String(number)
+            let still = kind == ChatGifKind.sticker ? ChatFixtureAssets.stickerURL : ChatFixtureAssets.gifURL
+            items.append(ChatGifAttachment(id: id, title: name + " " + String(number), url: still,
+                                           previewUrl: kind == ChatGifKind.clip ? ChatFixtureAssets.photoURL : still, pageUrl: nil,
+                                           width: 16.0, height: kind == ChatGifKind.clip ? 9.0 : 16.0, kind: kind.rawValue,
+                                           videoUrl: kind == ChatGifKind.clip ? "file:///conclave-chat-fixture/clip.mp4" : nil,
+                                           source: "klipy"))
+            index += 1
+        }
+        if query.lowercased() == "nothing" {
+            return ChatGifPage(items: [], hasNext: false, failed: false)
+        }
+        return ChatGifPage(items: items, hasNext: page < 2, failed: false)
+    }
+
+    static func embed(for url: String) -> ChatEmbedModel? {
+        if url == "https://docs.example.com/agenda" {
+            return ChatEmbedModel.make(url: url, kind: ChatEmbedKind.page, siteName: "docs.example.com",
+                                       title: "Agenda for Q4 review", summary: "Budget, hiring and the launch date.",
+                                       imageURL: ChatFixtureAssets.photoURL, isLargeImage: true)
+        }
+        let videoId = LinkEmbedPolicy.youTubeVideoId(url)
+        if !videoId.isEmpty {
+            return ChatEmbedModel.make(url: url, kind: ChatEmbedKind.youtube, siteName: "YouTube", title: "Fixture video",
+                                       summary: "Conclave", imageURL: ChatFixtureAssets.photoURL, isLargeImage: true,
+                                       youTubeId: videoId)
+        }
+        if url.hasPrefix("https://x.com/") {
+            return ChatEmbedModel.make(url: url, kind: ChatEmbedKind.tweet, siteName: "X", authorName: "Conclave",
+                                       authorHandle: "conclave", postText: "Shipping native chat today.",
+                                       media: [ChatEmbedMedia(kind: "photo", url: ChatFixtureAssets.photoURL, videoURL: "", aspect: 16.0 / 12.0)])
+        }
+        return nil
+    }
+
+    static func shortConversation(nowMillis: Double) -> [ChatMessageInput] {
+        let base = nowMillis - 600_000
+        return [
+            message("s-1", from: averyId, name: "Avery Lee", "Can you share the deck?", at: base),
+            message("s-2", from: averyId, name: "Avery Lee", "Starting in 2 min", at: base + 20_000),
+            message("s-3", from: localUserId, name: localName, "Sure, one sec", at: base + 60_000, isOwn: true, clientId: "c-3",
+                    reactions: [ChatReactionInput(emoji: "👍", userIds: [averyId, samId], includesMe: false),
+                                ChatReactionInput(emoji: "😂", userIds: [priyaId], includesMe: false)]),
+            message("s-4", from: samId, name: "Sam Rivera", "Agenda is at docs.example.com/agenda.", at: base + 120_000),
+        ]
+    }
+
+    static func busyMessages(nowMillis: Double) -> [ChatMessageInput] {
+        let yesterday = nowMillis - 86_400_000
+        let base = nowMillis - 1_800_000
+        var cap: [ChatReactionInput] = []
+        for emoji in ChatReactionRules.emojis {
+            cap.append(ChatReactionInput(emoji: emoji, userIds: [averyId], includesMe: false))
+        }
+        for extra in ["🔥", "✅", "👀", "🙏"] {
+            cap.append(ChatReactionInput(emoji: extra, userIds: [samId], includesMe: false))
+        }
+        let replyToAvery = ChatReplyRef(messageId: "s-y1", authorName: "Avery Lee", isAuthorYou: false,
+                                        preview: "Morning! Agenda is in the doc", media: "", isPrivate: false)
+        let replyToOwn = ChatReplyRef(messageId: "s-6", authorName: localName, isAuthorYou: true, preview: "On my way",
+                                      media: "", isPrivate: false)
+        let replyToPhoto = ChatReplyRef(messageId: "s-9", authorName: "Priya Patel", isAuthorYou: false, preview: "",
+                                        media: "photo", isPrivate: false)
+        return [
+            message("s-y1", from: averyId, name: "Avery Lee", "Morning! Agenda is in the doc", at: yesterday),
+            message("s-y2", from: averyId, name: "Avery Lee", "https://docs.example.com/agenda", at: yesterday + 30_000),
+            message("s-1", from: samId, name: "Sam Rivera", "/me waves", at: base),
+            message("s-2", from: averyId, name: "Avery Lee", "Ready when you are @jordanlee", at: base + 60_000),
+            message("s-3", from: averyId, name: "Avery Lee", "Also, email me at avery@example.com", at: base + 70_000),
+            message("s-4", from: averyId, name: "Avery Lee", "Replying here", at: base + 80_000, reply: replyToAvery),
+            message("s-5", from: priyaId, name: "Priya Patel", "Can you mute your laptop?", at: base + 120_000, isDirect: true,
+                    target: localUserId, targetName: localName),
+            message("s-6", from: localUserId, name: localName, "On my way", at: base + 180_000, isOwn: true, clientId: "c-6",
+                    reactions: [ChatReactionInput(emoji: "👍", userIds: [localUserId, averyId], includesMe: true)]),
+            message("s-7", from: localUserId, name: localName, "Done, sorry about that", at: base + 190_000, isOwn: true,
+                    clientId: "c-7", isDirect: true, target: priyaId, targetName: "Priya Patel"),
+            message("s-8", from: samId, name: "Sam Rivera", "Same here", at: base + 240_000, reply: replyToOwn),
+            message("s-9", from: priyaId, name: "Priya Patel", "photo.jpg", at: base + 300_000,
+                    imageURL: ChatFixtureAssets.photoURL),
+            message("s-9b", from: priyaId, name: "Priya Patel", "Whiteboard from earlier", at: base + 305_000,
+                    imageURL: ChatFixtureAssets.missingPhotoURL),
+            message("s-10", from: samId, name: "Sam Rivera", "Nice shot", at: base + 320_000, reply: replyToPhoto),
+            message("s-11", from: averyId, name: "Avery Lee", "Party time", at: base + 360_000,
+                    gifURL: ChatFixtureAssets.gifURL, gifTitle: "Party time", gifKind: "gif", gifPreviewURL: ChatFixtureAssets.gifURL,
+                    gifWidth: 8.0, gifHeight: 8.0),
+            message("s-11b", from: samId, name: "Sam Rivera", "Thumbs up sticker", at: base + 362_000,
+                    gifURL: ChatFixtureAssets.stickerURL, gifTitle: "Thumbs up sticker", gifKind: "sticker",
+                    gifPreviewURL: ChatFixtureAssets.stickerURL, gifWidth: 16.0, gifHeight: 16.0),
+            message("s-11c", from: priyaId, name: "Priya Patel", "Launch clip", at: base + 364_000,
+                    gifURL: "file:///conclave-chat-fixture/clip.mp4", gifTitle: "Launch clip", gifKind: "clip",
+                    gifPreviewURL: ChatFixtureAssets.photoURL, gifVideoURL: "file:///conclave-chat-fixture/clip.mp4",
+                    gifWidth: 16.0, gifHeight: 9.0),
+            message("s-11d", from: averyId, name: "Avery Lee",
+                    "Watch https://www.youtube.com/watch?v=dQw4w9WgXcQ and https://x.com/conclave/status/1234567890",
+                    at: base + 366_000),
+            message("s-11e", from: samId, name: "Sam Rivera", "No card for <https://docs.example.com/agenda>", at: base + 368_000),
+            message("s-11f", from: localUserId, name: localName, "Agenda without a card: https://docs.example.com/agenda",
+                    at: base + 370_000, isOwn: true, clientId: "c-11f", suppressEmbeds: true),
+            message("s-12", from: averyId, name: "Avery Lee", "Everything gets a reaction", at: base + 420_000, reactions: cap),
+
+            message("s-v1", from: averyId, name: "Avery Lee", "TTS: Welcome everyone. We start with the budget,\nthen hiring.",
+                    at: base + 440_000, isTts: true),
+            message("s-v2", from: samId, name: "Sam Rivera", "TTS: Thanks Avery.", at: base + 450_000, isTts: true),
+            message("s-13", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName,
+                    "The agenda covers three items: budget, hiring and the launch date.", at: base + 480_000,
+                    isAssistant: true),
+
+            message("s-a1", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName, "",
+                    at: base + 640_000, isAssistant: true, isHistory: false,
+                    assistant: ChatAssistantInput.make(tasks: [AssistantTask(id: "a1-start", kind: AssistantTaskKind.reasoning, isDone: false, query: "")])),
+            message("s-a2", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName,
+                    "## Summary\n- Launch moved to **Nov 4**\n- Hiring is on track", at: base + 800_000, isAssistant: true,
+                    isHistory: false,
+                    assistant: ChatAssistantInput.make(reasoning: "Checking the roadmap doc and the meeting notes.",
+                                                       reasoningDone: true,
+                                                       tasks: [AssistantTask(id: "a2-web", kind: AssistantTaskKind.webSearch, isDone: true, query: "q4 roadmap"),
+                                                               AssistantTask(id: "a2-notes", kind: AssistantTaskKind.transcript, isDone: false, query: "")],
+                                                       thoughtSeconds: 4)),
+            message("s-a3", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName,
+                    "Here is the config:\n\n```swift\nlet launch = \"2026-11-04\"\nlet owners = [\"Avery\", \"Sam\"]\n```\n\nSee [the plan](https://docs.example.com/agenda).",
+                    at: base + 960_000, isAssistant: true, isHistory: false,
+                    assistant: ChatAssistantInput.make(reasoning: "Pulling the config from the doc.", reasoningDone: true,
+                                                       tasks: [AssistantTask(id: "a3-web", kind: AssistantTaskKind.webSearch, isDone: true, query: "launch config")],
+                                                       isDone: true, thoughtSeconds: 3)),
+            message("s-a4", from: ConclaveAssistantChatIdentity.userId, name: ConclaveAssistantChatIdentity.displayName, "",
+                    at: base + 1_120_000, isAssistant: true, isHistory: false,
+                    assistant: ChatAssistantInput.make(errorKind: AssistantErrorKind.generic, isAsker: true)),
+            message("optimistic-c-14", from: localUserId, name: localName, "Sending this now", at: nowMillis - 2_000,
+                    isOwn: true, clientId: "c-14", delivery: ChatDelivery.sending),
+            message("optimistic-c-15", from: localUserId, name: localName, "This one timed out", at: nowMillis - 1_500,
+                    isOwn: true, clientId: "c-15", delivery: ChatDelivery.failed, failure: ChatFailure.timedOut,
+                    isRetryable: true),
+            message("optimistic-c-16", from: localUserId, name: localName, "This one is too private", at: nowMillis - 1_000,
+                    isOwn: true, clientId: "c-16", delivery: ChatDelivery.failed, failure: ChatFailure.privateTargetLeft,
+                    isRetryable: false),
+        ]
+    }
+
+    static func busyLocalRows(nowMillis: Double) -> [ChatLocalRow] {
+        let base = nowMillis - 1_800_000
+        return [
+            ChatLocalRow(id: "l-1", text: "You're already muted.", notice: ChatNotice.alreadyMuted, isError: false,
+                         timestampMillis: base + 200_000),
+            ChatLocalRow(id: "l-2", text: "Command /camera failed: Camera is unavailable.", notice: ChatNotice.none,
+                         isError: true, timestampMillis: base + 260_000),
+        ]
+    }
+
+    static func longTextMessages(nowMillis: Double) -> [ChatMessageInput] {
+        var long = ""
+        while ChatComposerPolicy.utf16Length(long) < 990 {
+            long += "Pseudo long text wraps everywhere without clipping. "
+        }
+        let longName = "Avery Montgomery-Castellanos de la Vega"
+        return [
+            message("s-1", from: averyId, name: longName, long, at: nowMillis - 120_000),
+            message("s-2", from: averyId, name: longName, "Supercalifragilisticexpialidociouslylongunbrokenwordthatmustwrap",
+                    at: nowMillis - 60_000),
+        ]
+    }
+
+    static func unreadMessages(nowMillis: Double) -> [ChatMessageInput] {
+        var result: [ChatMessageInput] = []
+        var index = 0
+        while index < 12 {
+            result.append(message("s-u" + String(index), from: index % 2 == 0 ? samId : averyId,
+                                  name: index % 2 == 0 ? "Sam Rivera" : "Avery Lee", "Unread message " + String(index + 1),
+                                  at: nowMillis - 60_000 + Double(index * 1000), isHistory: false))
+            index += 1
+        }
+        return result
+    }
+}
+
+@MainActor
+final class ChatFixtureDriver {
+    let state: ChatFixtureState
+    let chat: ChatPresenter
+    let counters = ChatFixtureCounters()
+
+    let voice = TtsRecordingSpeaker(queue: TtsPlaybackQueue())
+
+    let assistant = ConclaveAssistantStore()
+    private(set) var inputs: ChatInputs
+    private(set) var actionLog: [String] = []
+    private var nextId = 100
+    private var failNextSend = false
+    private var failNextReaction = false
+    private var failNextPhoto = false
+    private var failNextGifPage = false
+    private var photoGeneration = 0
+
+    private var streamGeneration = 0
+
+    private var gateGeneration = 0
+
+    var sleep: (Double) async -> Void = { millis in
+        try? await Task.sleep(nanoseconds: UInt64(max(0.0, millis) * 1_000_000.0))
+    }
+
+    init(state: ChatFixtureState, chat: ChatPresenter, nowMillis: Double = Date().timeIntervalSince1970 * 1000.0) {
+        self.state = state
+        self.chat = chat
+        inputs = ChatFixtureScript.inputs(for: state, nowMillis: nowMillis)
+    }
+
+    func install() {
+        ChatDiagnostics.counters = counters
+        ChatDiagnostics.driver = self
+        ChatFixtureAssets.install()
+        chat.onCommand = { [weak self] request in
+            self?.handle(request)
+        }
+
+        chat.gifSearch = { [weak self] kind, query, page in
+            guard let self = self else { return ChatGifPage.failure }
+            return await self.cannedGifPage(kind: kind, query: query, page: page)
+        }
+        chat.embeds.fetcher = { url in
+            ChatFixtureScript.embed(for: url)
+        }
+
+        voice.queue.onPlaybackChanged = { [weak self] messageId, _ in
+            self?.setActiveVoice(messageId)
+        }
+
+        assistant.sleep = sleep
+        assistant.onChange = { [weak self] in
+            self?.applyAssistantState()
+        }
+        if state == ChatFixtureState.attachmentUploading {
+            inputs = withAttachment(ChatAttachmentState(phase: ChatAttachmentPhase.uploading, progress: 0.42,
+                                                        thumbnailKey: ChatFixtureAssets.photoURL, failure: ChatFailure.none))
+        }
+        chat.apply(inputs, change: ChatInputChange.messages)
+        let key = ChatComposerPolicy.draftKey(roomId: inputs.roomId, privateToUserId: "")
+        switch state {
+        case .unread12:
+            var messages = inputs.messages
+            for message in ChatFixtureScript.unreadMessages(nowMillis: Date().timeIntervalSince1970 * 1000.0) {
+                messages.append(message)
+            }
+            replace(messages: messages)
+        case .privateMode:
+            chat.setPrivateTo(userId: ChatFixtureScript.averyId)
+        case .reply:
+            chat.beginReply(rowId: "s-1")
+        case .suggestionsCommands:
+            chat.drafts.setText("/", for: key)
+        case .suggestionsMentions:
+            chat.drafts.setText("@", for: key)
+        case .voiceMode:
+            chat.setVoiceMode(true)
+        case .draftMultiline:
+            chat.drafts.setText(ChatFixtureScript.multilineDraft, for: key)
+        case .suggestionsMentionQuery:
+            chat.drafts.setText(ChatFixtureScript.mentionQueryDraft, for: key)
+        default:
+            break
+        }
+    }
+
+    var gateLineReadout: String {
+        "gateLine=" + chat.composer.gateLine.rawValue + " gate=" + chat.composer.gate.rawValue + " shows="
+            + String(chat.gateLineShowCount)
+    }
+
+    var voiceReadout: String {
+        voice.log
+    }
+
+    var actionsReadout: String {
+        actionLog.joined(separator: "\n")
+    }
+
+    var openLatencyReadout: String {
+        "p50=" + String(Int(counters.openLatencyPercentile(0.5))) + " p95=" + String(Int(counters.openLatencyPercentile(0.95)))
+    }
+
+    static func installOnStage(state: ChatFixtureState, shell: MeetingShellPresenter) -> ChatFixtureDriver {
+        let driver = ChatFixtureDriver(state: state, chat: shell.chat)
+        driver.install()
+        shell.panels.present(MeetingPanel.chat, from: PanelInvoker.call)
+        return driver
+    }
+
+    static func state(named raw: String?) -> ChatFixtureState? {
+        guard let raw = raw else { return nil }
+        return ChatFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    func run(_ script: ChatFixtureScriptName) {
+        switch script {
+        case .remote5:
+            playRemote(count: 5)
+        case .remote1:
+            playRemote(count: 1)
+        case .ownSend:
+            chat.send(text: "Own message from the fixture")
+        case .ackTimeout:
+            failNextSend = true
+            chat.send(text: "This send times out")
+        case .reactionFail:
+            failNextReaction = true
+        case .peerReplyToOwn:
+            playPeerReplyToOwn()
+        case .hideSender:
+            chat.hideSender(userId: ChatFixtureScript.averyId)
+        case .resetCounters:
+            counters.reset()
+        case .attachPhoto:
+
+            removeAttachmentIfAny()
+            chat.attachPhoto(fileURL: ChatFixtureAssets.photoURL, mimeType: "image/png", fileName: "photo.png")
+        case .photoTwice:
+            removeAttachmentIfAny()
+            chat.attachPhoto(fileURL: ChatFixtureAssets.photoURL, mimeType: "image/png", fileName: "photo.png")
+            chat.attachPhoto(fileURL: ChatFixtureAssets.photoURL, mimeType: "image/png", fileName: "second-photo.png")
+        case .gateBlip:
+            playGate(ChatSendGate.reconnecting, forMillis: 250.0)
+        case .gateLong:
+            playGate(ChatSendGate.reconnecting, forMillis: 1500.0)
+        case .photoFail:
+            failNextPhoto = true
+        case .gifMoreFail:
+            failNextGifPage = true
+        case .stream3tasks:
+            nextId += 1
+            playStream(answerId: "fixture-answer-" + String(nextId), appends: true, fails: false)
+        case .assistantFail:
+            nextId += 1
+            playStream(answerId: "fixture-answer-" + String(nextId), appends: true, fails: true)
+        }
+    }
+
+    private func handle(_ request: ChatCommandRequest) {
+        actionLog.append(request.logLine)
+        switch request.kind {
+        case .send:
+            handleSend(request)
+        case .sendGif:
+            handleSendGif(request)
+        case .retry:
+            settle(rowId: request.rowId, delivered: true)
+        case .discard:
+            var kept: [ChatMessageInput] = []
+            for message in inputs.messages {
+                if message.rowId != request.rowId { kept.append(message) }
+            }
+            replace(messages: kept)
+        case .react:
+            handleReaction(request)
+        case .attachPhoto, .retryAttachment:
+            playPhotoUpload(fileURL: request.fileURL)
+        case .removeAttachment:
+            photoGeneration += 1
+            setAttachment(ChatAttachmentState.none)
+        case .playVoice:
+            voice.queue.replay(TtsQueueItem.make(messageId: request.messageId.isEmpty ? request.rowId : request.messageId,
+                                                 userId: request.userId, displayName: request.userId, text: request.text))
+        case .stopVoice:
+            voice.queue.stop()
+        case .retryAssistant:
+
+            if let record = assistant.retryRecord(answerId: request.rowId) {
+                playStream(answerId: record.answerId, appends: false, fails: false)
+            }
+        default:
+            break
+        }
+    }
+
+    private func playStream(answerId: String, appends: Bool, fails: Bool) {
+        streamGeneration += 1
+        let generation = streamGeneration
+        assistant.begin(answerId: answerId, question: "What changed in the roadmap?", questionMessageId: "")
+        if appends {
+            var messages = inputs.messages
+            messages.append(ChatFixtureScript.message(answerId, from: ConclaveAssistantChatIdentity.userId,
+                                                      name: ConclaveAssistantChatIdentity.displayName, "",
+                                                      at: Date().timeIntervalSince1970 * 1000.0, isAssistant: true,
+                                                      isHistory: false))
+            replace(messages: messages)
+        }
+        let steps = fails ? [ChatFixtureStreamStep(waitMillis: 300, event: ChatFixtureScript.streamTask(
+            "start", kind: "reasoning", done: false, query: ""))] : ChatFixtureScript.streamScript()
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            for step in steps {
+                await wait(step.waitMillis)
+                guard let self = self, self.streamGeneration == generation else { return }
+                _ = self.assistant.handle(step.event, answerId: answerId)
+            }
+            await wait(600.0)
+            guard let self = self, self.streamGeneration == generation else { return }
+            if fails {
+                self.assistant.fail(answerId: answerId, kind: AssistantErrorKind.generic)
+            } else {
+                self.assistant.finish(answerId: answerId, content: "")
+            }
+        }
+    }
+
+    private func applyAssistantState() {
+        var messages: [ChatMessageInput] = []
+        for message in inputs.messages {
+            if message.isAssistant && assistant.hasAnswer(message.id) {
+                messages.append(ChatFixtureScript.withAssistant(
+                    message, content: assistant.content(forMessageId: message.id, messageContent: message.content),
+                    assistant: assistant.input(forMessageId: message.id)))
+            } else {
+                messages.append(message)
+            }
+        }
+        inputs = ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                                 localName: inputs.localName, messages: messages, localRows: inputs.localRows,
+                                 isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled,
+                                 photosEnabled: inputs.photosEnabled, voiceEnabled: inputs.voiceEnabled,
+                                 reactionsEnabled: inputs.reactionsEnabled, gate: inputs.gate, isHost: inputs.isHost,
+                                 roster: inputs.roster, assistant: inputs.assistant, attachment: inputs.attachment,
+                                 activeTtsMessageId: inputs.activeTtsMessageId, voiceKind: inputs.voiceKind)
+        chat.apply(inputs, change: ChatInputChange.assistant)
+    }
+
+    var assistantAnnouncementReadout: String {
+        "announce=" + String(counters.count("chat.announcement.assistantAnswered"))
+    }
+
+    private func cannedGifPage(kind: ChatGifKind, query: String, page: Int) async -> ChatGifPage {
+        await sleep(200.0)
+        if page > 1 && failNextGifPage {
+            failNextGifPage = false
+            return ChatGifPage.failure
+        }
+        return ChatFixtureScript.gifPage(kind: kind, query: query, page: page)
+    }
+
+    private func playPhotoUpload(fileURL: String) {
+        photoGeneration += 1
+        let generation = photoGeneration
+        let fails = failNextPhoto
+        failNextPhoto = false
+        setAttachment(ChatAttachmentState(phase: ChatAttachmentPhase.preparing, progress: -1, thumbnailKey: fileURL,
+                                          failure: ChatFailure.none))
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            await wait(300.0)
+            guard let self = self, self.photoGeneration == generation else { return }
+            self.setAttachment(ChatAttachmentState(phase: ChatAttachmentPhase.uploading, progress: 0.42, thumbnailKey: fileURL,
+                                                   failure: ChatFailure.none))
+            await wait(600.0)
+            guard self.photoGeneration == generation else { return }
+            if fails {
+                self.setAttachment(ChatAttachmentState(phase: ChatAttachmentPhase.failed, progress: 0, thumbnailKey: fileURL,
+                                                       failure: ChatFailure.photoUnavailable))
+            } else {
+                self.setAttachment(ChatAttachmentState(phase: ChatAttachmentPhase.ready, progress: 1, thumbnailKey: fileURL,
+                                                       failure: ChatFailure.none))
+            }
+        }
+    }
+
+    private func setAttachment(_ attachment: ChatAttachmentState) {
+        inputs = withAttachment(attachment)
+        chat.apply(inputs, change: ChatInputChange.attachment)
+    }
+
+    private func removeAttachmentIfAny() {
+        if chat.composer.attachment.phase != ChatAttachmentPhase.none {
+            chat.removeAttachment()
+        }
+    }
+
+    private func playGate(_ gate: ChatSendGate, forMillis millis: Double) {
+        gateGeneration += 1
+        let generation = gateGeneration
+        setGate(gate)
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            await wait(millis)
+            guard let self = self, self.gateGeneration == generation else { return }
+            self.setGate(ChatSendGate.allowed)
+        }
+    }
+
+    private func setGate(_ gate: ChatSendGate) {
+        inputs = ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                                 localName: inputs.localName, messages: inputs.messages, localRows: inputs.localRows,
+                                 isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled,
+                                 photosEnabled: inputs.photosEnabled, voiceEnabled: inputs.voiceEnabled,
+                                 reactionsEnabled: inputs.reactionsEnabled, gate: gate, isHost: inputs.isHost,
+                                 roster: inputs.roster, assistant: inputs.assistant, attachment: inputs.attachment,
+                                 activeTtsMessageId: inputs.activeTtsMessageId, voiceKind: inputs.voiceKind)
+        chat.apply(inputs, change: ChatInputChange.gate)
+    }
+
+    private func withAttachment(_ attachment: ChatAttachmentState) -> ChatInputs {
+        ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                        localName: inputs.localName, messages: inputs.messages, localRows: inputs.localRows,
+                        isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled, photosEnabled: inputs.photosEnabled,
+                        voiceEnabled: inputs.voiceEnabled, reactionsEnabled: inputs.reactionsEnabled, gate: inputs.gate,
+                        isHost: inputs.isHost, roster: inputs.roster, assistant: inputs.assistant, attachment: attachment,
+                        activeTtsMessageId: inputs.activeTtsMessageId, voiceKind: inputs.voiceKind)
+    }
+
+    private func setActiveVoice(_ messageId: String) {
+        inputs = ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                                 localName: inputs.localName, messages: inputs.messages, localRows: inputs.localRows,
+                                 isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled,
+                                 photosEnabled: inputs.photosEnabled, voiceEnabled: inputs.voiceEnabled,
+                                 reactionsEnabled: inputs.reactionsEnabled, gate: inputs.gate, isHost: inputs.isHost,
+                                 roster: inputs.roster, assistant: inputs.assistant, attachment: inputs.attachment,
+                                 activeTtsMessageId: messageId, voiceKind: inputs.voiceKind)
+        chat.apply(inputs, change: ChatInputChange.playback)
+    }
+
+    private func handleSendGif(_ request: ChatCommandRequest) {
+        guard let gif = chat.takeSentGif(id: request.text) else { return }
+        nextId += 1
+        let clientId = "c-" + String(nextId)
+        let title = gif.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sending = ChatFixtureScript.message("optimistic-" + clientId, from: ChatFixtureScript.localUserId,
+                                                name: ChatFixtureScript.localName, title.isEmpty ? "GIF" : title,
+                                                at: Date().timeIntervalSince1970 * 1000.0, isOwn: true, clientId: clientId,
+                                                reply: replyRef(rowId: request.rowId), delivery: ChatDelivery.sending,
+                                                gifURL: gif.url, gifTitle: gif.title, isHistory: false, gifKind: gif.kind ?? "gif",
+                                                gifPreviewURL: gif.previewUrl ?? "", gifVideoURL: gif.videoUrl ?? "",
+                                                gifWidth: gif.width ?? 0.0, gifHeight: gif.height ?? 0.0)
+        var messages = inputs.messages
+        messages.append(sending)
+        replace(messages: messages)
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            await wait(300.0)
+            guard let self = self else { return }
+            self.settle(rowId: clientId, delivered: true)
+        }
+    }
+
+    private func replyRef(rowId: String) -> ChatReplyRef? {
+        if rowId.isEmpty { return nil }
+        let row = chat.rows.entry(for: rowId).row
+        var media = ""
+        if row.kind == ChatRowKind.photo { media = "photo" }
+        if row.kind == ChatRowKind.gif { media = "gif" }
+        return ChatReplyRef(messageId: row.serverId, authorName: row.senderName, isAuthorYou: row.isOwn, preview: row.plainText,
+                            media: media, isPrivate: row.privacy != ChatPrivacy.everyone)
+    }
+
+    private func handleSend(_ request: ChatCommandRequest) {
+        if request.emoji == ChatRouteKind.command.rawValue { return }
+        nextId += 1
+        let clientId = "c-" + String(nextId)
+        var text = request.text
+        var isDirect = false
+        var target = ""
+        if request.emoji == ChatRouteKind.privateText.rawValue, let parsed = ChatCommandParser.parseDirectMessage(text) {
+            text = parsed.body
+            isDirect = true
+            target = request.userId
+        }
+        let sending = ChatFixtureScript.message("optimistic-" + clientId, from: ChatFixtureScript.localUserId,
+                                                name: ChatFixtureScript.localName, text.isEmpty && !request.fileURL.isEmpty ? "photo.png" : text,
+                                                at: Date().timeIntervalSince1970 * 1000.0,
+                                                isOwn: true, clientId: clientId, isDirect: isDirect, target: target,
+                                                targetName: target.isEmpty ? "" : "Avery Lee", reply: replyRef(rowId: request.rowId),
+                                                delivery: ChatDelivery.sending, imageURL: request.fileURL, isHistory: false,
+                                                suppressEmbeds: request.flag)
+        var messages = inputs.messages
+        messages.append(sending)
+        if !request.fileURL.isEmpty {
+
+            photoGeneration += 1
+            inputs = withAttachment(ChatAttachmentState.none)
+        }
+        replace(messages: messages)
+        let fails = failNextSend
+        failNextSend = false
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            await wait(fails ? 2500.0 : 300.0)
+            guard let self = self else { return }
+            self.settle(rowId: clientId, delivered: !fails)
+        }
+    }
+
+    private func settle(rowId: String, delivered: Bool) {
+        var messages: [ChatMessageInput] = []
+        for message in inputs.messages {
+            if message.rowId != rowId {
+                messages.append(message)
+                continue
+            }
+            let serverId = delivered ? "s-" + rowId : message.id
+            messages.append(ChatFixtureScript.copy(message, id: serverId,
+                                                   delivery: delivered ? ChatDelivery.delivered : ChatDelivery.failed,
+                                                   failure: delivered ? ChatFailure.none : ChatFailure.timedOut,
+                                                   isRetryable: !delivered, reactions: message.reactions, isHistory: false))
+        }
+        replace(messages: messages)
+    }
+
+    private func handleReaction(_ request: ChatCommandRequest) {
+        if failNextReaction {
+            failNextReaction = false
+            var rows = inputs.localRows
+            nextId += 1
+            rows.append(ChatLocalRow(id: "f-" + String(nextId), text: "Your reaction couldn't be added.",
+                                     notice: ChatNotice.reactionFailed, isError: true,
+                                     timestampMillis: Date().timeIntervalSince1970 * 1000.0))
+            inputs = ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                                     localName: inputs.localName, messages: inputs.messages, localRows: rows,
+                                     isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled,
+                                     photosEnabled: inputs.photosEnabled, voiceEnabled: inputs.voiceEnabled,
+                                     reactionsEnabled: inputs.reactionsEnabled, gate: inputs.gate, isHost: inputs.isHost,
+                                     roster: inputs.roster, assistant: inputs.assistant, attachment: inputs.attachment,
+                                     activeTtsMessageId: inputs.activeTtsMessageId, voiceKind: inputs.voiceKind)
+            chat.apply(inputs, change: ChatInputChange.messages)
+            return
+        }
+        var messages: [ChatMessageInput] = []
+        for message in inputs.messages {
+            if message.serverId != request.messageId {
+                messages.append(message)
+                continue
+            }
+            var wire: [ChatMessageReaction] = []
+            for reaction in message.reactions {
+                wire.append(ChatMessageReaction(emoji: reaction.emoji, userIds: reaction.userIds))
+            }
+            let toggled = ChatReactionRules.toggled(wire, emoji: request.emoji, userId: ChatFixtureScript.localUserId)
+            var next: [ChatReactionInput] = []
+            for reaction in toggled {
+                next.append(ChatReactionInput(emoji: reaction.emoji, userIds: reaction.userIds,
+                                              includesMe: reaction.userIds.contains(ChatFixtureScript.localUserId)))
+            }
+            messages.append(ChatFixtureScript.copy(message, id: message.id, delivery: message.delivery, failure: message.failure,
+                                                   isRetryable: message.isRetryable, reactions: next, isHistory: message.isHistory))
+        }
+        replace(messages: messages)
+    }
+
+    private func playRemote(count: Int) {
+        let wait = sleep
+        Task { @MainActor [weak self] in
+            var index = 0
+            while index < count {
+                await wait(300.0)
+                guard let self = self else { return }
+                self.nextId += 1
+                let id = "s-r" + String(self.nextId)
+                var messages = self.inputs.messages
+                messages.append(ChatFixtureScript.message(id, from: ChatFixtureScript.samId, name: "Sam Rivera",
+                                                          "Remote message " + String(index + 1),
+                                                          at: Date().timeIntervalSince1970 * 1000.0, isHistory: false))
+                self.replace(messages: messages)
+                index += 1
+            }
+        }
+    }
+
+    private func playPeerReplyToOwn() {
+        nextId += 1
+        let clientId = "c-" + String(nextId)
+        let serverId = "s-" + clientId
+        let now = Date().timeIntervalSince1970 * 1000.0
+        var messages = inputs.messages
+        messages.append(ChatFixtureScript.message(serverId, from: ChatFixtureScript.localUserId, name: ChatFixtureScript.localName,
+                                                  "Acknowledged own message", at: now, isOwn: true, clientId: clientId,
+                                                  isHistory: false))
+        messages.append(ChatFixtureScript.message("s-peer" + clientId, from: ChatFixtureScript.averyId, name: "Avery Lee",
+                                                  "Replying to your message", at: now + 1000,
+                                                  reply: ChatReplyRef(messageId: serverId, authorName: ChatFixtureScript.localName,
+                                                                      isAuthorYou: true, preview: "Acknowledged own message",
+                                                                      media: "", isPrivate: false),
+                                                  isHistory: false))
+        replace(messages: messages)
+    }
+
+    private func replace(messages: [ChatMessageInput]) {
+        inputs = ChatInputs.make(callSession: inputs.callSession, roomId: inputs.roomId, localUserId: inputs.localUserId,
+                                 localName: inputs.localName, messages: messages, localRows: inputs.localRows,
+                                 isLocked: inputs.isLocked, privateEnabled: inputs.privateEnabled,
+                                 photosEnabled: inputs.photosEnabled, voiceEnabled: inputs.voiceEnabled,
+                                 reactionsEnabled: inputs.reactionsEnabled, gate: inputs.gate, isHost: inputs.isHost,
+                                 roster: inputs.roster, assistant: inputs.assistant, attachment: inputs.attachment,
+                                 activeTtsMessageId: inputs.activeTtsMessageId, voiceKind: inputs.voiceKind)
+        chat.apply(inputs, change: ChatInputChange.messages)
+    }
+}

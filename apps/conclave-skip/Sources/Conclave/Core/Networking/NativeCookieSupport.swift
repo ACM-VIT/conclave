@@ -6,9 +6,7 @@ import FoundationNetworking
 enum NativeCookieSupport {
     static func attachCookies(to request: inout URLRequest) {
         #if SKIP
-        // Android's CookieManager can lazily initialize WebView internals. The
-        // native HTTP bridge reads cookies on its worker thread instead, keeping
-        // SwiftUI/Compose startup and touch handling off that path.
+
         _ = request
         #else
         guard let url = request.url,

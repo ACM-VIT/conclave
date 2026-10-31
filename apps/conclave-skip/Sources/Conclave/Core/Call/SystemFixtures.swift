@@ -1,0 +1,164 @@
+import Foundation
+import Observation
+
+enum SystemFixtureState: String, CaseIterable, Equatable {
+    case presenceWaiting = "presence-waiting"
+    case presenceConnecting = "presence-connecting"
+    case presenceLive = "presence-live"
+    case presenceLiveMuted = "presence-live-muted"
+    case presenceLiveCamera = "presence-live-camera"
+    case presenceRecovering = "presence-recovering"
+    case presenceOnHold = "presence-on-hold"
+    case presenceAttendee = "presence-attendee"
+    case presenceEnded = "presence-ended"
+
+    case pipSpeaker = "pip-speaker"
+
+    case receiverCameraOff = "receiver-camera-off"
+}
+
+enum SystemFixtureProviderMode: String, CaseIterable, Equatable {
+    case fake, real
+}
+
+enum SystemFixtureScript {
+    static let roomLabel = "lily-zoro-iris"
+
+    static let joinedAtMillis: Double = 1793102400000.0
+
+    static func state(named raw: String) -> SystemFixtureState? {
+        SystemFixtureState(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    static func inputs(for state: SystemFixtureState) -> [CallPresenceInputs] {
+        let connecting = CallPresenceInputs.make(callSession: 1, sessionPhase: .entering, roomLabel: roomLabel)
+        switch state {
+        case .presenceWaiting:
+            return [CallPresenceInputs.make(callSession: 1, sessionPhase: .waiting, roomLabel: roomLabel)]
+        case .presenceConnecting:
+            return [connecting]
+        case .presenceLive:
+            return [connecting, live(isMuted: false, isCameraOff: true)]
+        case .presenceLiveMuted:
+            return [connecting, live(isMuted: true, isCameraOff: true)]
+        case .presenceLiveCamera:
+            return [connecting, live(isMuted: false, isCameraOff: false)]
+        case .presenceRecovering:
+            return [
+                connecting,
+                live(isMuted: false, isCameraOff: true),
+                CallPresenceInputs.make(callSession: 1, sessionPhase: .recovering, roomLabel: roomLabel,
+                                        isMuted: false, joinedAtMillis: joinedAtMillis)
+            ]
+        case .presenceOnHold:
+            return [connecting, live(isMuted: true, isCameraOff: true)]
+        case .presenceAttendee:
+            return [
+                connecting,
+                CallPresenceInputs.make(callSession: 1, sessionPhase: .inCall, roomLabel: roomLabel,
+                                        isWebinarAttendee: true, joinedAtMillis: joinedAtMillis)
+            ]
+        case .presenceEnded:
+            return [
+                connecting,
+                live(isMuted: true, isCameraOff: true),
+                CallPresenceInputs.make(callSession: 1, sessionPhase: .home, outcome: .endedByHost, roomLabel: roomLabel)
+            ]
+        case .pipSpeaker:
+            return [connecting, live(isMuted: true, isCameraOff: true)]
+        case .receiverCameraOff:
+            return [connecting, live(isMuted: false, isCameraOff: true)]
+        }
+    }
+
+    static let pipTarget = PipTargetFrame(slotId: "p:fixture-speaker", left: 0, top: 0, right: 1080, bottom: 1920,
+                                          videoWidth: 720, videoHeight: 1280)
+
+    static func holdsAfterInputs(_ state: SystemFixtureState) -> Bool {
+        state == .presenceOnHold
+    }
+
+    static func audioRoute(for state: SystemFixtureState) -> AudioRouteKind {
+        state == .receiverCameraOff ? .receiver : .speaker
+    }
+
+    private static func live(isMuted: Bool, isCameraOff: Bool) -> CallPresenceInputs {
+        CallPresenceInputs.make(
+            callSession: 1,
+            sessionPhase: .inCall,
+            roomLabel: roomLabel,
+            isMuted: isMuted,
+            isCameraOff: isCameraOff,
+            joinedAtMillis: joinedAtMillis
+        )
+    }
+}
+
+enum SystemFixtureReadout {
+    static let presenceKey = "sys.presence"
+    static let commandsKey = "sys.commands"
+
+    static func presence(_ snapshot: CallPresenceSnapshot) -> String {
+        "\(snapshot.phase.rawValue)/\(snapshot.surface.rawValue)/\(snapshot.surfaceStatus.rawValue)/\(snapshot.presenceSession)"
+    }
+
+    static func commands(_ log: [String]) -> String {
+        log.isEmpty ? "none" : log.joined(separator: ",")
+    }
+}
+
+@MainActor
+@Observable
+final class SystemFixtureSession {
+    let presence = CallPresence()
+    let state: SystemFixtureState
+    let providerMode: SystemFixtureProviderMode
+    private(set) var presenceReadout = "idle/none/inactive/0"
+    private(set) var commandsReadout = "none"
+    @ObservationIgnored private(set) var dispatchedCommands: [SystemCallCommand] = []
+
+    init(state: SystemFixtureState, providerMode: SystemFixtureProviderMode = .fake) {
+        self.state = state
+        self.providerMode = providerMode
+    }
+
+    func start() {
+        presence.onCommand = { [weak self] command in
+            self?.dispatchedCommands.append(command)
+        }
+        presence.reportAudioRoute(SystemFixtureScript.audioRoute(for: state))
+        for step in SystemFixtureScript.inputs(for: state) {
+            presence.apply(step)
+        }
+        if SystemFixtureScript.holdsAfterInputs(state) {
+            presence.handle(.hold, source: .system, presenceSession: presence.snapshot.presenceSession)
+        }
+        if state == .pipSpeaker {
+            presence.reportPipTarget(SystemFixtureScript.pipTarget)
+        }
+        refreshReadouts()
+    }
+
+    @discardableResult
+    func send(_ kind: SystemCallCommandKind, source: SystemCallSource) -> SystemCommandResult {
+        let result = presence.handle(kind, source: source, presenceSession: presence.snapshot.presenceSession)
+        refreshReadouts()
+        return result
+    }
+
+    func setAudioRoute(_ kind: AudioRouteKind) {
+        presence.reportAudioRoute(kind)
+        refreshReadouts()
+    }
+
+    func refreshReadouts() {
+        let presenceValue = SystemFixtureReadout.presence(presence.snapshot)
+        if presenceValue != presenceReadout {
+            presenceReadout = presenceValue
+        }
+        let commandsValue = SystemFixtureReadout.commands(presence.commandLog)
+        if commandsValue != commandsReadout {
+            commandsReadout = commandsValue
+        }
+    }
+}

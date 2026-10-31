@@ -1,18 +1,22 @@
 package conclave.module
 
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import java.util.ArrayDeque
 import skip.foundation.ProcessInfo
 import skip.ui.UIApplication
 
-// Plain-Kotlin permission helper (no `skip.lib.*` import, so the Kotlin stdlib
-// APIs are not shadowed by Skip's Swift-shaped equivalents).
 object PermissionHelper {
     private const val RECORD_AUDIO_REQUEST_CODE = 1002
     private const val CAMERA_REQUEST_CODE = 1003
@@ -42,7 +46,9 @@ object PermissionHelper {
     private val recordAudioPermissionWaiters = ArrayDeque<(Boolean) -> Unit>()
     private val cameraPermissionWaiters = ArrayDeque<(Boolean) -> Unit>()
     private val bluetoothConnectPermissionWaiters = ArrayDeque<(Boolean) -> Unit>()
+    private val notificationsPermissionWaiters = ArrayDeque<(Boolean) -> Unit>()
     @Volatile private var notificationPermissionPromptActive = false
+    @Volatile private var lastNotificationsPermissionRequestAnswered = true
     @Volatile private var activePermissionRequestCode: Int? = null
     @Volatile private var activePermissionTimeoutRequestCode: Int? = null
     private var activePermissionTimeoutRunnable: Runnable? = null
@@ -157,10 +163,12 @@ object PermissionHelper {
 
     fun requestNotificationsPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < 33) {
+            finishNotificationsPermission(true)
             return
         }
 
         if (hasPostNotificationsPermission()) {
+            finishNotificationsPermission(true)
             return
         }
 
@@ -168,10 +176,83 @@ object PermissionHelper {
             requestCode = NOTIFICATIONS_REQUEST_CODE,
             permission = android.Manifest.permission.POST_NOTIFICATIONS,
             isAlreadyGranted = ::hasPostNotificationsPermission,
-            onAlreadyGranted = { notificationPermissionPromptActive = false },
-            onMissingActivity = { notificationPermissionPromptActive = false },
+            onAlreadyGranted = {
+                notificationPermissionPromptActive = false
+                finishNotificationsPermission(true)
+            },
+            onMissingActivity = {
+                notificationPermissionPromptActive = false
+                finishNotificationsPermission(false, answered = false)
+            },
             beforeRequest = { notificationPermissionPromptActive = true }
         )
+    }
+
+    fun requestNotificationsPermissionIfNeeded(callback: (Boolean) -> Unit): PermissionRequestToken {
+        synchronized(permissionLock) {
+            notificationsPermissionWaiters.addLast(callback)
+        }
+        requestNotificationsPermissionIfNeeded()
+        return PermissionRequestToken(NOTIFICATIONS_REQUEST_CODE, callback)
+    }
+
+    fun wasLastNotificationsPermissionRequestAnswered(): Boolean {
+        return lastNotificationsPermissionRequestAnswered
+    }
+
+    fun dropQueuedNotificationsPermissionRequest() {
+        val dropped = synchronized(permissionLock) {
+            pendingPermissionRequests.removeAll { it.requestCode == NOTIFICATIONS_REQUEST_CODE }
+        }
+        if (dropped) {
+            finishNotificationsPermission(false, answered = false)
+        }
+    }
+
+    fun showsNotificationsRationale(): Boolean {
+        if (Build.VERSION.SDK_INT < 33) {
+            return false
+        }
+        val activity = UIApplication.shared.androidActivity ?: return false
+        return try {
+            ActivityCompat.shouldShowRequestPermissionRationale(activity, android.Manifest.permission.POST_NOTIFICATIONS)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun areAppNotificationsEnabled(): Boolean {
+        val context = ProcessInfo.processInfo.androidContext
+        return NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
+
+    fun notificationsPermissionState(): String {
+        return NotificationPermissionStatePolicy.androidState(
+            apiLevel = Build.VERSION.SDK_INT,
+            permissionGranted = hasPostNotificationsPermission(),
+            appNotificationsEnabled = areAppNotificationsEnabled(),
+            asked = NotificationPreferences.permissionAsked(),
+            rationale = showsNotificationsRationale()
+        ).rawValue
+    }
+
+    fun notificationSettingsIntent(packageName: String, channelId: String): Intent {
+        if (Build.VERSION.SDK_INT < 26) {
+            return appSettingsIntent(packageName)
+        }
+        if (channelId.isEmpty()) {
+            return Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        }
+        return Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            .putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+    }
+
+    fun openNotificationSettings(channelId: String): Boolean {
+        val activity: Activity? = UIApplication.shared.androidActivity
+        val context: Context = activity ?: ProcessInfo.processInfo.androidContext.applicationContext
+        return NativeExternalHandoff.openSettings(notificationSettingsIntent(context.packageName, channelId))
     }
 
     fun shouldSuppressShareFromNotificationPermissionPrompt(): Boolean {
@@ -210,29 +291,42 @@ object PermissionHelper {
 
         when (requestCode) {
             RECORD_AUDIO_REQUEST_CODE -> {
-                finishRecordAudioPermission(
-                    permissionGranted(
-                        permissions,
-                        grantResults,
-                        android.Manifest.permission.RECORD_AUDIO,
-                        ::hasRecordAudioPermission
-                    )
+                val granted = permissionGranted(
+                    permissions,
+                    grantResults,
+                    android.Manifest.permission.RECORD_AUDIO,
+                    ::hasRecordAudioPermission
                 )
+
+                if (permissions.isNotEmpty()) recordMediaPermissionAnswer(MEDIA_KIND_MICROPHONE, granted)
+                finishRecordAudioPermission(granted)
             }
             CAMERA_REQUEST_CODE -> {
-                finishCameraPermission(
-                    permissionGranted(
-                        permissions,
-                        grantResults,
-                        android.Manifest.permission.CAMERA,
-                        ::hasCameraPermission
-                    )
+                val granted = permissionGranted(
+                    permissions,
+                    grantResults,
+                    android.Manifest.permission.CAMERA,
+                    ::hasCameraPermission
                 )
+                if (permissions.isNotEmpty()) recordMediaPermissionAnswer(MEDIA_KIND_CAMERA, granted)
+                finishCameraPermission(granted)
             }
             NOTIFICATIONS_REQUEST_CODE -> {
                 notificationPermissionPromptActive = false
                 suppressShareUntilElapsedMs =
                     SystemClock.elapsedRealtime() + NOTIFICATION_SHARE_SUPPRESSION_MS
+
+                if (permissions.isNotEmpty()) NotificationPreferences.setPermissionAsked()
+
+                finishNotificationsPermission(
+                    permissionGranted(
+                        permissions,
+                        grantResults,
+                        android.Manifest.permission.POST_NOTIFICATIONS,
+                        ::hasPostNotificationsPermission
+                    ),
+                    answered = permissions.isNotEmpty()
+                )
             }
             BLUETOOTH_CONNECT_REQUEST_CODE -> {
                 finishBluetoothConnectPermission(
@@ -281,12 +375,17 @@ object PermissionHelper {
                 try {
                     beforeRequest()
                     scheduleActivePermissionTimeout(requestCode)
+
+                    PipManager.suppressForExternalHandoff(ExternalHandoffKind.permissionDialog)
+
+                    noteMediaPermissionLaunch(requestCode, activity)
                     ActivityCompat.requestPermissions(
                         activity,
                         arrayOf(permission),
                         requestCode
                     )
                 } catch (_: Throwable) {
+                    PipManager.restoreAutoEnterAfterExternalActivity()
                     clearActivePermissionTimeout(requestCode)
                     onMissingActivity()
                     finishRuntimePermissionRequest(requestCode)
@@ -329,6 +428,7 @@ object PermissionHelper {
     }
 
     private fun clearQueuedCallPermissionRequests() {
+
         synchronized(permissionLock) {
             pendingPermissionRequests.removeAll { request ->
                 isCallPermissionRequestCode(request.requestCode)
@@ -405,6 +505,7 @@ object PermissionHelper {
                 notificationPermissionPromptActive = false
                 suppressShareUntilElapsedMs =
                     SystemClock.elapsedRealtime() + NOTIFICATION_SHARE_SUPPRESSION_MS
+                finishNotificationsPermission(false)
             }
         }
         finishRuntimePermissionRequest(requestCode)
@@ -444,6 +545,7 @@ object PermissionHelper {
             RECORD_AUDIO_REQUEST_CODE -> recordAudioPermissionWaiters
             CAMERA_REQUEST_CODE -> cameraPermissionWaiters
             BLUETOOTH_CONNECT_REQUEST_CODE -> bluetoothConnectPermissionWaiters
+            NOTIFICATIONS_REQUEST_CODE -> notificationsPermissionWaiters
             else -> ArrayDeque()
         }
     }
@@ -470,5 +572,122 @@ object PermissionHelper {
         val callback = onBluetoothConnectPermissionResult
         onBluetoothConnectPermissionResult = null
         drainPermissionCallbacks(BLUETOOTH_CONNECT_REQUEST_CODE, callback).forEach { it(granted) }
+    }
+
+    private fun finishNotificationsPermission(granted: Boolean, answered: Boolean = true) {
+        lastNotificationsPermissionRequestAnswered = granted || answered
+        drainPermissionCallbacks(NOTIFICATIONS_REQUEST_CODE, null).forEach { it(granted) }
+    }
+
+    private const val MEDIA_PERMISSION_PREFS = "conclave.mediaPermissions"
+    private const val MEDIA_KIND_MICROPHONE = "microphone"
+    private const val MEDIA_KIND_CAMERA = "camera"
+
+    private val mediaRationaleBeforeRequest = HashMap<String, Boolean>()
+
+    fun mediaPermissionState(kind: String): String {
+        return EntryPolicies.androidMediaPermissionState(
+            hasDevice = hasMediaDevice(kind),
+            isGranted = hasMediaPermission(kind),
+            wasRequested = wasMediaPermissionRequested(kind)
+        ).rawValue
+    }
+
+    fun canAskMediaPermissionAgain(kind: String): Boolean {
+        return EntryPolicies.androidCanAskAgain(
+            isGranted = hasMediaPermission(kind),
+            wasRequested = wasMediaPermissionRequested(kind),
+            showsRationale = showsMediaPermissionRationale(kind),
+            isBlocked = isMediaPermissionBlocked(kind)
+        )
+    }
+
+    fun markMediaPermissionRequested(kind: String) {
+        mediaPermissionPrefs().edit().putBoolean(kind, true).apply()
+    }
+
+    fun wasMediaPermissionRequested(kind: String): Boolean {
+        return mediaPermissionPrefs().getBoolean(kind, false)
+    }
+
+    fun showsMediaPermissionRationale(kind: String): Boolean {
+        val activity = UIApplication.shared.androidActivity ?: return false
+        return showsMediaPermissionRationale(kind, activity)
+    }
+
+    fun isMediaPermissionBlocked(kind: String): Boolean {
+        return mediaPermissionPrefs().getBoolean("$kind.blocked", false)
+    }
+
+    private fun showsMediaPermissionRationale(kind: String, activity: Activity): Boolean {
+        return try {
+            ActivityCompat.shouldShowRequestPermissionRationale(activity, mediaManifestPermission(kind))
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun hasMediaPermission(kind: String): Boolean {
+        return if (kind == MEDIA_KIND_CAMERA) hasCameraPermission() else hasRecordAudioPermission()
+    }
+
+    private fun hasMediaDevice(kind: String): Boolean {
+        if (kind != MEDIA_KIND_CAMERA) return true
+        val context = ProcessInfo.processInfo.androidContext
+        return context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+    }
+
+    private fun mediaManifestPermission(kind: String): String {
+        return if (kind == MEDIA_KIND_CAMERA) android.Manifest.permission.CAMERA else android.Manifest.permission.RECORD_AUDIO
+    }
+
+    private fun mediaKind(requestCode: Int): String? {
+        return when (requestCode) {
+            RECORD_AUDIO_REQUEST_CODE -> MEDIA_KIND_MICROPHONE
+            CAMERA_REQUEST_CODE -> MEDIA_KIND_CAMERA
+            else -> null
+        }
+    }
+
+    private fun noteMediaPermissionLaunch(requestCode: Int, activity: Activity) {
+        val kind = mediaKind(requestCode) ?: return
+        val rationale = showsMediaPermissionRationale(kind, activity)
+        synchronized(permissionLock) {
+            mediaRationaleBeforeRequest[kind] = rationale
+        }
+        markMediaPermissionRequested(kind)
+    }
+
+    private fun recordMediaPermissionAnswer(kind: String, granted: Boolean) {
+        val prefs = mediaPermissionPrefs()
+        val before = synchronized(permissionLock) {
+            mediaRationaleBeforeRequest.remove(kind) ?: false
+        }
+        if (granted) {
+            prefs.edit().putInt("$kind.denials", 0).putBoolean("$kind.blocked", false).apply()
+            return
+        }
+        val previous = prefs.getInt("$kind.denials", 0)
+        val blocked = EntryPolicies.androidDenialBlocks(
+            rationaleBefore = before,
+            rationaleAfter = showsMediaPermissionRationale(kind),
+            previousDenials = previous
+        )
+        prefs.edit().putInt("$kind.denials", previous + 1).putBoolean("$kind.blocked", blocked).apply()
+    }
+
+    private fun mediaPermissionPrefs(): android.content.SharedPreferences {
+        val context = ProcessInfo.processInfo.androidContext
+        return context.getSharedPreferences(MEDIA_PERMISSION_PREFS, Context.MODE_PRIVATE)
+    }
+
+    fun appSettingsIntent(packageName: String): Intent {
+        return Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+    }
+
+    fun openAppSettings(): Boolean {
+        val activity: Activity? = UIApplication.shared.androidActivity
+        val context: Context = activity ?: ProcessInfo.processInfo.androidContext.applicationContext
+        return NativeExternalHandoff.openSettings(appSettingsIntent(context.packageName))
     }
 }

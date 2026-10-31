@@ -2,8 +2,10 @@ package conclave.module
 
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import okhttp3.Call
 import okhttp3.Dns
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -27,6 +29,18 @@ object AndroidNativeHttpClient {
         .readTimeout(120, TimeUnit.SECONDS)
         .callTimeout(150, TimeUnit.SECONDS)
         .build()
+
+    private val assistantStreamClient = client.newBuilder()
+        .readTimeout(120, TimeUnit.SECONDS)
+        .callTimeout(300, TimeUnit.SECONDS)
+        .build()
+
+    private class AssistantStream {
+        @Volatile var call: Call? = null
+        @Volatile var cancelled = false
+    }
+
+    private val assistantStreams = ConcurrentHashMap<String, AssistantStream>()
 
     fun requestJson(
         method: String,
@@ -96,6 +110,92 @@ object AndroidNativeHttpClient {
         }
     }
 
+    fun requestAssistantStream(
+        requestId: String,
+        method: String,
+        url: String,
+        body: String?,
+        accept: String?,
+        contentType: String?,
+        authorization: String?,
+        origin: String?,
+        cookieHeader: String?,
+        onChunk: (String) -> Unit,
+        onDone: (String?, String?) -> Unit
+    ) {
+        val stream = AssistantStream()
+        assistantStreams[requestId] = stream
+        thread(name = "ConclaveAssistantStream") {
+            try {
+                val call = assistantStreamClient.newCall(
+                    buildRequest(
+                        method = method,
+                        url = url,
+                        body = body,
+                        accept = accept,
+                        contentType = contentType,
+                        authorization = authorization,
+                        origin = origin,
+                        clientId = null,
+                        cookieHeader = cookieHeader
+                    )
+                )
+
+                stream.call = call
+                if (stream.cancelled) call.cancel()
+                val requestStartedAt = System.nanoTime()
+                call.execute().use { response ->
+                    val setCookieHeaders = JSONArray()
+                    for (header in response.headers("Set-Cookie")) {
+                        setCookieHeaders.put(header)
+                    }
+                    var errorBody = ""
+                    if (response.isSuccessful) {
+                        val source = response.body?.source()
+                        if (source != null) {
+                            val frame = StringBuilder()
+                            while (true) {
+                                val line = source.readUtf8Line() ?: break
+                                frame.append(line).append('\n')
+                                if (line.isEmpty()) {
+                                    onChunk(frame.toString())
+                                    frame.setLength(0)
+                                }
+                            }
+                            if (frame.isNotEmpty()) onChunk(frame.toString())
+                        }
+                    } else {
+                        errorBody = response.body?.string().orEmpty()
+                    }
+                    NativePerformanceDiagnostics.timing(
+                        "http_assistant_stream",
+                        requestStartedAt,
+                        "url=${redactedURLForLog(url)} status=${response.code}"
+                    )
+                    onDone(
+                        JSONObject()
+                            .put("statusCode", response.code)
+                            .put("body", errorBody)
+                            .put("setCookieHeaders", setCookieHeaders)
+                            .toString(),
+                        null
+                    )
+                }
+            } catch (error: Throwable) {
+                debugLog("[HTTP] Android native assistant stream failed: ${error}")
+                onDone(null, error.localizedMessage ?: error.toString())
+            } finally {
+                assistantStreams.remove(requestId)
+            }
+        }
+    }
+
+    fun cancelAssistantStream(requestId: String) {
+        val stream = assistantStreams.remove(requestId) ?: return
+        stream.cancelled = true
+        stream.call?.cancel()
+    }
+
     private fun requestJsonBlocking(
         method: String,
         url: String,
@@ -108,6 +208,52 @@ object AndroidNativeHttpClient {
         cookieHeader: String?,
         httpClient: OkHttpClient = client
     ): String {
+        val request = buildRequest(
+            method = method,
+            url = url,
+            body = body,
+            accept = accept,
+            contentType = contentType,
+            authorization = authorization,
+            origin = origin,
+            clientId = clientId,
+            cookieHeader = cookieHeader
+        )
+        val normalizedMethod = request.method
+        val requestStartedAt = System.nanoTime()
+        httpClient.newCall(request).execute().use { response ->
+            val setCookieHeaders = JSONArray()
+            for (header in response.headers("Set-Cookie")) {
+                setCookieHeaders.put(header)
+            }
+
+            NativePerformanceDiagnostics.timing(
+                "http_request",
+                requestStartedAt,
+                "method=$normalizedMethod url=${redactedURLForLog(url)} status=${response.code}"
+            )
+
+            return JSONObject()
+                .put("statusCode", response.code)
+                .put("body", response.body?.string().orEmpty())
+                .put("setCookieHeaders", setCookieHeaders)
+
+                .put("retryAfter", response.header("Retry-After").orEmpty())
+                .toString()
+        }
+    }
+
+    private fun buildRequest(
+        method: String,
+        url: String,
+        body: String?,
+        accept: String?,
+        contentType: String?,
+        authorization: String?,
+        origin: String?,
+        clientId: String?,
+        cookieHeader: String?
+    ): Request {
         val normalizedMethod = method.trim().uppercase().ifEmpty { "GET" }
         val requestBuilder = Request.Builder().url(url)
         requestBuilder.method(normalizedMethod, requestBodyFor(normalizedMethod, body, contentType))
@@ -155,26 +301,7 @@ object AndroidNativeHttpClient {
         if (mergedCookieHeader.isNotEmpty()) {
             requestBuilder.header("Cookie", mergedCookieHeader)
         }
-
-        val requestStartedAt = System.nanoTime()
-        httpClient.newCall(requestBuilder.build()).execute().use { response ->
-            val setCookieHeaders = JSONArray()
-            for (header in response.headers("Set-Cookie")) {
-                setCookieHeaders.put(header)
-            }
-
-            NativePerformanceDiagnostics.timing(
-                "http_request",
-                requestStartedAt,
-                "method=$normalizedMethod url=${redactedURLForLog(url)} status=${response.code}"
-            )
-
-            return JSONObject()
-                .put("statusCode", response.code)
-                .put("body", response.body?.string().orEmpty())
-                .put("setCookieHeaders", setCookieHeaders)
-                .toString()
-        }
+        return requestBuilder.build()
     }
 
     private fun mergeCookieHeaders(headers: List<String>): String {

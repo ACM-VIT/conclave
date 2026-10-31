@@ -4,12 +4,6 @@ import SwiftUI
 #if canImport(UIKit)
 import UIKit
 
-/// Publishes the keyboard's top edge in global (screen) coordinates.
-///
-/// The meeting column ignores the keyboard safe area - a call UI must never
-/// compress when typing starts (see MeetingView). Views inside the stage that
-/// host text input (the game card) use this observer to pad their scrollable
-/// content by the actual overlap, keeping the focused field reachable.
 @MainActor
 final class KeyboardFrameObserver: ObservableObject {
     @Published var keyboardTopY: CGFloat?
@@ -46,9 +40,6 @@ final class KeyboardFrameObserver: ObservableObject {
     }
 }
 
-/// Pads the modified view's bottom by how far the keyboard overlaps it, so a
-/// ScrollView inside keeps its full content reachable while the keyboard is
-/// up. Zero-cost when the keyboard is hidden.
 struct KeyboardOverlapAvoidance: ViewModifier {
     let keyboardTopY: CGFloat?
 

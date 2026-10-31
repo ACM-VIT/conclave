@@ -1,0 +1,378 @@
+{
+  "comment": "ACT-8 Wheel and Watch page data in status.app. Read by wheel-watch-contract-test.mjs (protocol.ts isValidAppStatus) and by apps/conclave-skip/Tests/ConclaveTests/ACT8WheelWatchTests.swift (AppEmbedAppCodec.parse). ASCII only; booleans are JSON booleans (an iOS number would also cast to Bool). 'generate' cases are built by both tests: wheelEntries and watchQueue repeat a valid item 'count' times with ids i0, i1, ... watchLinks pins WatchLinkPolicy.videoId (Swift) against the SDK parseVideoId (apps/watch/core/youtube/id.ts); expect \"\" means no video (the SDK returns null).",
+  "scope": {
+    "callSessionId": "call-1-contract",
+    "appSessionId": "app-wheel-contract",
+    "appId": "wheel"
+  },
+  "appStatus": [
+    {
+      "name": "absent app",
+      "absent": true,
+      "expect": true
+    },
+    {
+      "name": "wheel minimal",
+      "app": {
+        "kind": "wheel"
+      },
+      "expect": true
+    },
+    {
+      "name": "wheel full",
+      "app": {
+        "kind": "wheel",
+        "entries": [
+          {
+            "id": "lq3x-ab12cd",
+            "label": "Ada"
+          },
+          {
+            "id": "lq3x-ef34gh",
+            "label": "Ben"
+          }
+        ],
+        "results": [
+          {
+            "id": "lq3y-zz99yy",
+            "label": "Ada",
+            "byName": "Cy"
+          }
+        ],
+        "removeWinner": true,
+        "sounds": false,
+        "spinning": false,
+        "winnerSpinId": "lq3y-zz99yy",
+        "winnerLabel": "Ada"
+      },
+      "expect": true
+    },
+    {
+      "name": "wheel blank label",
+      "app": {
+        "kind": "wheel",
+        "entries": [
+          {
+            "id": "e1",
+            "label": "   "
+          }
+        ]
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel label too long",
+      "app": {
+        "kind": "wheel",
+        "entries": [
+          {
+            "id": "e1",
+            "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel entry id with a space",
+      "app": {
+        "kind": "wheel",
+        "entries": [
+          {
+            "id": "e 1",
+            "label": "Ada"
+          }
+        ]
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel entries not a list",
+      "app": {
+        "kind": "wheel",
+        "entries": {
+          "id": "e1",
+          "label": "Ada"
+        }
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel result name too long",
+      "app": {
+        "kind": "wheel",
+        "results": [
+          {
+            "id": "r1",
+            "label": "Ada",
+            "byName": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+          }
+        ]
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel bad winner id",
+      "app": {
+        "kind": "wheel",
+        "winnerSpinId": "bad id"
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel flag as text",
+      "app": {
+        "kind": "wheel",
+        "removeWinner": "yes"
+      },
+      "expect": false
+    },
+    {
+      "name": "wheel 64 entries",
+      "generate": "wheelEntries",
+      "count": 64,
+      "expect": true
+    },
+    {
+      "name": "wheel 65 entries",
+      "generate": "wheelEntries",
+      "count": 65,
+      "expect": false
+    },
+    {
+      "name": "watch minimal",
+      "app": {
+        "kind": "watch"
+      },
+      "expect": true
+    },
+    {
+      "name": "watch full",
+      "app": {
+        "kind": "watch",
+        "videoId": "dQw4w9WgXcQ",
+        "title": "Never Gonna Give You Up",
+        "playback": "playing",
+        "queue": [
+          {
+            "id": "wt_lq3x_abc123def456",
+            "videoId": "9bZkp7q19f0",
+            "title": "",
+            "byName": "Ada"
+          }
+        ],
+        "requests": [
+          {
+            "id": "wr_lq3x_ab12cd",
+            "videoId": "kJQP7kiw5Fk",
+            "title": "Despacito",
+            "byId": "user-7",
+            "byName": "Ben"
+          }
+        ],
+        "myRequestId": "wr_lq3x_ab12cd",
+        "requestDeclined": false
+      },
+      "expect": true
+    },
+    {
+      "name": "watch idle",
+      "app": {
+        "kind": "watch",
+        "videoId": "",
+        "title": "",
+        "playback": "none",
+        "queue": [],
+        "requests": []
+      },
+      "expect": true
+    },
+    {
+      "name": "watch short video id",
+      "app": {
+        "kind": "watch",
+        "videoId": "dQw4w9WgXc"
+      },
+      "expect": false
+    },
+    {
+      "name": "watch unknown playback",
+      "app": {
+        "kind": "watch",
+        "playback": "stopped"
+      },
+      "expect": false
+    },
+    {
+      "name": "watch queue bad video",
+      "app": {
+        "kind": "watch",
+        "queue": [
+          {
+            "id": "q1",
+            "videoId": "javascript:1"
+          }
+        ]
+      },
+      "expect": false
+    },
+    {
+      "name": "watch title too long",
+      "app": {
+        "kind": "watch",
+        "videoId": "dQw4w9WgXcQ",
+        "title": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt"
+      },
+      "expect": false
+    },
+    {
+      "name": "watch request without id",
+      "app": {
+        "kind": "watch",
+        "requests": [
+          {
+            "videoId": "dQw4w9WgXcQ"
+          }
+        ]
+      },
+      "expect": false
+    },
+    {
+      "name": "watch 50 queued",
+      "generate": "watchQueue",
+      "count": 50,
+      "expect": true
+    },
+    {
+      "name": "watch 51 queued",
+      "generate": "watchQueue",
+      "count": 51,
+      "expect": false
+    },
+    {
+      "name": "unknown kind",
+      "app": {
+        "kind": "chess"
+      },
+      "expect": false
+    },
+    {
+      "name": "no kind",
+      "app": {
+        "entries": []
+      },
+      "expect": false
+    },
+    {
+      "name": "app as a list",
+      "app": [],
+      "expect": false
+    },
+    {
+      "name": "app as text",
+      "app": "wheel",
+      "expect": false
+    }
+  ],
+  "hostCommands": [
+    "addEntries",
+    "removeEntry",
+    "shuffle",
+    "sort",
+    "clearEntries",
+    "spin",
+    "setRemoveWinner",
+    "setSounds",
+    "clearResults",
+    "playNow",
+    "enqueue",
+    "request",
+    "approve",
+    "decline",
+    "cancelRequest",
+    "move",
+    "remove"
+  ],
+  "watchLinks": [
+    {
+      "input": "dQw4w9WgXcQ",
+      "expect": "dQw4w9WgXcQ"
+    },
+    {
+      "input": "  dQw4w9WgXcQ  ",
+      "expect": "dQw4w9WgXcQ"
+    },
+    {
+      "input": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s",
+      "expect": "dQw4w9WgXcQ"
+    },
+    {
+      "input": "youtube.com/watch?v=dQw4w9WgXcQ",
+      "expect": "dQw4w9WgXcQ"
+    },
+    {
+      "input": "https://m.youtube.com/watch?feature=share&v=jNQXAC9IVRw",
+      "expect": "jNQXAC9IVRw"
+    },
+    {
+      "input": "https://music.youtube.com/watch?v=fJ9rUzIMcZQ",
+      "expect": "fJ9rUzIMcZQ"
+    },
+    {
+      "input": "https://youtu.be/9bZkp7q19f0?si=abc",
+      "expect": "9bZkp7q19f0"
+    },
+    {
+      "input": "https://www.youtube.com/shorts/aqz-KE-bpKQ",
+      "expect": "aqz-KE-bpKQ"
+    },
+    {
+      "input": "https://www.youtube.com/embed/h6fcK_fRYaI",
+      "expect": "h6fcK_fRYaI"
+    },
+    {
+      "input": "https://www.youtube.com/live/xuCn8ux2gbs?feature=share",
+      "expect": "xuCn8ux2gbs"
+    },
+    {
+      "input": "https://www.youtube.com/v/L_jWHffIx5E",
+      "expect": "L_jWHffIx5E"
+    },
+    {
+      "input": "https://www.youtube.com/watch?v=short",
+      "expect": ""
+    },
+    {
+      "input": "https://www.youtube.com/watch?v=bad&v=dQw4w9WgXcQ",
+      "expect": ""
+    },
+    {
+      "input": "https://vimeo.com/watch?v=dQw4w9WgXcQ",
+      "expect": ""
+    },
+    {
+      "input": "https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ",
+      "expect": ""
+    },
+    {
+      "input": "https://www.youtube.com/channel/UC123",
+      "expect": ""
+    },
+    {
+      "input": "lofi beats to study to",
+      "expect": ""
+    },
+    {
+      "input": "cats",
+      "expect": ""
+    },
+    {
+      "input": "see this ?v=dQw4w9WgXcQ please",
+      "expect": "dQw4w9WgXcQ"
+    },
+    {
+      "input": "",
+      "expect": ""
+    }
+  ]
+}

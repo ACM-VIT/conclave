@@ -1,5 +1,4 @@
-// Participant grid layout shared by SwiftUI and Skip/Compose.
-// Keep the objective and tie-breaks in lockstep with the web grid layout.
+
 
 import Foundation
 #if canImport(CoreGraphics)
@@ -100,11 +99,6 @@ private func buildGridTilePositions(
     )
 }
 
-/// Find the arrangement of `count` aspect-locked tiles that fits the largest
-/// tile inside a `width` × `height` container. Objective: maximise the displayed
-/// video area; ties break toward the grid whose bounding box best matches the
-/// container aspect (so 2 people sit side-by-side in landscape), then fewer
-/// empty cells.
 func computeGridLayout(
     count: Int,
     width: CGFloat,
@@ -121,7 +115,6 @@ func computeGridLayout(
     let pages = Int(ceil(Double(total) / Double(maxTilesPerPage)))
     let perPage = min(total, maxTilesPerPage)
 
-    // Degenerate container - return a single column so the caller still renders.
     if !width.isFinite || !height.isFinite || width <= 0 || height <= 0 {
         let placement = buildGridTilePositions(
             cols: 1, rows: perPage, perPage: perPage,
@@ -149,7 +142,7 @@ func computeGridLayout(
         let cellW = (width - CGFloat(cols - 1) * gap) / CGFloat(cols)
         let cellH = (height - CGFloat(rows - 1) * gap) / CGFloat(rows)
         if cellW > 0 && cellH > 0 {
-            // Largest aspect-locked tile that fits the cell (letterbox-fit).
+
             let tileWidth = min(cellW, cellH * targetAspect)
             let tileHeight = tileWidth / targetAspect
             let empty = cols * rows - perPage
@@ -201,8 +194,6 @@ func computeGridLayout(
     )
 }
 
-// MARK: - Stage mode (Meet "Auto" selection above the grid packer)
-
 enum StageMode {
     case tiled
     case spotlight
@@ -218,8 +209,6 @@ struct StageModeInput {
     var tiledThreshold: Int = 12
 }
 
-/// Meet "Auto" mode selection that runs ABOVE the grid packer. The packer is the
-/// engine for `tiled` and for the people rail in `sidebar`/`sideBySide`.
 func chooseStageMode(_ input: StageModeInput) -> StageMode {
     if input.pinned || input.count <= 2 || (input.presenting && !input.hasActiveVideoSpeaker) {
         return .spotlight

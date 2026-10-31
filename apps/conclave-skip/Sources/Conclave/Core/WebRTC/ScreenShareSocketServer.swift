@@ -1,22 +1,4 @@
-//
-//  ScreenShareSocketServer.swift
-//  Conclave
-//
-//  App-side counterpart to the ReplayKit broadcast-upload extension.
-//
-//  The extension (SampleHandler) captures the whole device screen, JPEG-encodes
-//  each frame and writes it - framed as a serialized CFHTTPMessage with
-//  Content-Length / Buffer-Width / Buffer-Height / Buffer-Orientation headers -
-//  over an AF_UNIX stream socket living in the shared App Group container
-//  (`<group>/rtc_SSFD`). This server binds + listens on that socket, parses the
-//  framed stream (handling coalesced / partial frames), decodes each JPEG back
-//  to a CVPixelBuffer, and emits an RTCVideoFrame the WebRTCClient feeds into
-//  the screen-share producer.
-//
-//  The wire format matches the ReplayKit/WebRTC broadcast pipeline used by the
-//  mobile stack, but the socket reader is owned here so the main app controls
-//  frame backpressure and teardown.
-//
+
 
 #if os(iOS) && !SKIP
 import Foundation
@@ -26,25 +8,13 @@ import CoreGraphics
 import ImageIO
 import WebRTC
 
-/// Carries an already-constructed RTCVideoFrame across the background read
-/// queue → MainActor boundary. RTCVideoFrame is an Obj-C type that isn't
-/// `Sendable`; the frame is produced and consumed single-threaded (built on the
-/// read queue, immediately handed to the WebRTC source), so the unchecked
-/// conformance is safe.
 struct ScreenFrameBox: @unchecked Sendable {
     let frame: RTCVideoFrame
 }
 
-/// Listens on the App-Group AF_UNIX socket the broadcast extension connects to,
-/// reassembles JPEG frames, and emits decoded `RTCVideoFrame`s.
 final class ScreenShareSocketServer: @unchecked Sendable {
     private let socketPath: String
 
-    // fd lifecycle is guarded by `lock`; the accept/read loop runs on a global
-    // queue so stop() (called from the main actor) can tear it down without
-    // deadlocking - recv() is woken by shutdown(), accept() by a self-connect
-    // (see wakeAccept()), since close() alone doesn't reliably interrupt
-    // either on Darwin.
     private let lock = NSLock()
     private var listenHandle: Int32 = -1
     private var clientHandle: Int32 = -1
@@ -52,21 +22,14 @@ final class ScreenShareSocketServer: @unchecked Sendable {
     private var decodeMaxWidth = 3_840
     private var decodeMaxHeight = 2_160
 
-    /// Called on the read queue with each decoded frame.
     private var onFrame: (@Sendable (ScreenFrameBox) -> Void)?
-    /// Called before JPEG decode so constrained links can skip excess frames
-    /// without spending CPU on frames that WebRTC will drop anyway.
+
     private var shouldDecodeFrame: (@Sendable () -> Bool)?
-    /// Called on the read queue when the extension actually connects (the
-    /// broadcast went live) - lets the app distinguish a real share from a
-    /// picker the user cancelled.
+
     private var onClientConnect: (@Sendable () -> Void)?
-    /// Called on the read queue when the extension disconnects (broadcast ended,
-    /// e.g. the user stopped it from Control Center).
+
     private var onClientDisconnect: (@Sendable () -> Void)?
 
-    // CFHTTPMessage streaming-parser accumulator + decode-log throttle
-    // (read-queue only).
     private var message: CFHTTPMessage?
     private var lastDecodeFailureLogAt: TimeInterval = 0
 
@@ -79,9 +42,6 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         socketPath = containerURL.appendingPathComponent("rtc_SSFD").path
     }
 
-    /// Bind + listen, then accept the extension's connection on a background
-    /// queue. `onFrame` fires per decoded frame; `onDisconnect` when the
-    /// extension closes the connection.
     func start(
         onFrame: @escaping @Sendable (ScreenFrameBox) -> Void,
         shouldDecodeFrame: @escaping @Sendable () -> Bool = { true },
@@ -93,7 +53,6 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         self.onClientConnect = onConnect
         self.onClientDisconnect = onDisconnect
 
-        // A stale socket file from a crashed prior session would block bind().
         unlink(socketPath)
 
         let handle = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -156,16 +115,11 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         listenHandle = -1
         lock.unlock()
 
-        // shutdown() wakes a thread blocked in recv() on the client fd.
         if client >= 0 {
             shutdown(client, SHUT_RDWR)
             Darwin.close(client)
         }
-        // close() alone does NOT reliably interrupt a thread blocked in
-        // accept() on Darwin, which would leak the accept-loop thread (e.g. if
-        // the user cancelled the broadcast picker before any client connected).
-        // Self-connect to satisfy the pending accept() so the loop unblocks,
-        // sees !isRunning, and exits. Must run BEFORE closing the listen fd.
+
         if listen >= 0 {
             wakeAccept()
             Darwin.close(listen)
@@ -186,8 +140,6 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         return (decodeMaxWidth, decodeMaxHeight)
     }
 
-    /// Best-effort: connect a throwaway client to the listening socket so a
-    /// blocked accept() returns.
     private func wakeAccept() {
         let waker = socket(AF_UNIX, SOCK_STREAM, 0)
         if waker < 0 { return }
@@ -216,8 +168,6 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         return isRunning
     }
 
-    // MARK: - Read loop
-
     private func acceptLoop(listenFD: Int32) {
         while running() {
             let client = accept(listenFD, nil, nil)
@@ -241,8 +191,6 @@ final class ScreenShareSocketServer: @unchecked Sendable {
             lock.unlock()
             message = nil
 
-            // A reconnect is equivalent to the initial connection to callers;
-            // they can cancel their grace timer and keep the producer alive.
             onClientConnect?()
 
             readLoop(client)
@@ -270,11 +218,10 @@ final class ScreenShareSocketServer: @unchecked Sendable {
                 recv(client, ptr.baseAddress, bufferSize, 0)
             }
             if n <= 0 {
-                // 0 = orderly shutdown (extension closed), <0 = error/interrupt.
+
                 return
             }
-            // ImageIO/CoreGraphics bridge objects can otherwise accumulate in
-            // the long-lived global dispatch worker's autorelease pool.
+
             autoreleasepool {
                 buffer.withUnsafeBytes { ptr in
                     if let base = ptr.baseAddress {
@@ -285,8 +232,6 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         }
     }
 
-    // MARK: - CFHTTPMessage streaming parser
-
     private func appendBytes(_ bytes: UnsafePointer<UInt8>, count: Int) {
         if message == nil {
             message = CFHTTPMessageCreateEmpty(kCFAllocatorDefault, false).takeRetainedValue()
@@ -296,22 +241,16 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         drainCompleteFrames()
     }
 
-    /// A single recv() may carry several whole frames, a partial frame, or a
-    /// frame split across reads. Loop while the accumulated message has a
-    /// complete header AND a body of at least Content-Length bytes; slice off
-    /// each frame and re-seed the parser with whatever bytes belong to the next
-    /// frame.
     private func drainCompleteFrames() {
         while let msg = message, CFHTTPMessageIsHeaderComplete(msg) {
             guard let contentLength = intHeader(msg, "Content-Length"), contentLength > 0 else {
-                // Header complete but no/invalid Content-Length - unrecoverable;
-                // reset to resync on the next bytes.
+
                 message = nil
                 return
             }
             let body = (CFHTTPMessageCopyBody(msg)?.takeRetainedValue() as Data?) ?? Data()
             if body.count < contentLength {
-                // Need more bytes for this frame; keep accumulating.
+
                 return
             }
 
@@ -323,7 +262,6 @@ final class ScreenShareSocketServer: @unchecked Sendable {
                 emitFrame(jpeg: Data(frameData), width: width, height: height, orientation: orientation)
             }
 
-            // Bytes beyond Content-Length are the start of the next frame(s).
             let leftover = body.count > contentLength
                 ? Data(body.suffix(from: contentLength))
                 : Data()
@@ -348,8 +286,6 @@ final class ScreenShareSocketServer: @unchecked Sendable {
         return Int(value.trimmingCharacters(in: .whitespaces))
     }
 
-    // MARK: - Decode → RTCVideoFrame
-
     private func emitFrame(jpeg: Data, width: Int, height: Int, orientation: Int) {
         let resolution = maxResolution()
         guard let pixelBuffer = Self.pixelBuffer(
@@ -357,8 +293,7 @@ final class ScreenShareSocketServer: @unchecked Sendable {
             maxWidth: resolution.width,
             maxHeight: resolution.height
         ) else {
-            // Device-only feature with no CI coverage - a silent decode failure
-            // leaves a black/frozen share undebuggable. Throttled to ~1/s.
+
             let now = Date().timeIntervalSince1970
             if now - lastDecodeFailureLogAt >= 1.0 {
                 lastDecodeFailureLogAt = now
@@ -369,8 +304,7 @@ final class ScreenShareSocketServer: @unchecked Sendable {
             return
         }
         let rtcBuffer = RTCCVPixelBuffer(pixelBuffer: pixelBuffer)
-        // Monotonic clock: wall-clock Date() can step backwards (NTP) and make a
-        // later frame carry an earlier timestamp, confusing the encoder.
+
         let frame = RTCVideoFrame(
             buffer: rtcBuffer,
             rotation: Self.rotation(for: orientation),
@@ -380,17 +314,12 @@ final class ScreenShareSocketServer: @unchecked Sendable {
     }
 
     private static func rotation(for orientation: Int) -> RTCVideoRotation {
-        // RPVideoSampleOrientationKey carries CGImagePropertyOrientation raw
-        // values: .up(1) .down(3) .right(6) .left(8). The extension passes this
-        // through unmodified (no .oriented() bake), so WebRTC applies the
-        // rotation from RTCVideoFrame.rotation. Mapping matches the working
-        // react-native-webrtc ScreenCapturer reader: Left(8)→90, Down(3)→180,
-        // Right(6)→270. (The two landscape cases are the easy ones to invert.)
+
         switch orientation {
-        case 8: return ._90    // .left
-        case 3: return ._180   // .down
-        case 6: return ._270   // .right
-        default: return ._0    // .up (1) / absent (0)
+        case 8: return ._90
+        case 3: return ._180
+        case 6: return ._270
+        default: return ._0
         }
     }
 

@@ -1,0 +1,115 @@
+{
+  "id": "move_down.fill0",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "request_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/move_down/materialsymbolsrounded/move_down_24px.svg",
+  "final_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/move_down/materialsymbolsrounded/move_down_24px.svg",
+  "http_status": 200,
+  "headers": [
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Content-Length",
+      "655"
+    ],
+    [
+      "Cache-Control",
+      "max-age=300"
+    ],
+    [
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    ],
+    [
+      "Content-Type",
+      "image/svg+xml"
+    ],
+    [
+      "ETag",
+      "\"c5bd7c83eb05b92d1b9db4b869341e2ebe7999bb8e49916f81713fadf0ddd22c\""
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=31536000"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Frame-Options",
+      "deny"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-GitHub-Request-Id",
+      "97EE:23E52E:44B200:5495EE:6AE24F94"
+    ],
+    [
+      "x-github-edge-region",
+      "centralindia"
+    ],
+    [
+      "Accept-Ranges",
+      "bytes"
+    ],
+    [
+      "Date",
+      "Wed, 28 Oct 2026 19:40:05 GMT"
+    ],
+    [
+      "Via",
+      "1.1 varnish"
+    ],
+    [
+      "X-Served-By",
+      "cache-maa10220-MAA"
+    ],
+    [
+      "X-Cache",
+      "MISS"
+    ],
+    [
+      "X-Cache-Hits",
+      "0"
+    ],
+    [
+      "X-Timer",
+      "S1793216405.997764,VS0,VE345"
+    ],
+    [
+      "Vary",
+      "Authorization,Accept-Encoding"
+    ],
+    [
+      "Access-Control-Allow-Origin",
+      "*"
+    ],
+    [
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    ],
+    [
+      "X-Fastly-Request-ID",
+      "abb7d57698d97bc7c2d44ebac43e91d7cdd6eaf9"
+    ],
+    [
+      "Expires",
+      "Wed, 28 Oct 2026 19:45:05 GMT"
+    ],
+    [
+      "Source-Age",
+      "0"
+    ]
+  ],
+  "started_at": "2026-10-28T19:40:04.855812+00:00",
+  "completed_at": "2026-10-28T19:40:05.372413+00:00",
+  "sha256": "4ced9e47b8447535eb743c0cd1892da3cc2e5afd5bc4ee5a15d90b4c05d1b15d",
+  "bytes": 655,
+  "body_file": "assets/symbols/web/move_down/materialsymbolsrounded/move_down_24px.svg",
+  "historical_status": "fresh_pinned_acquisition"
+}

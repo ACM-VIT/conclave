@@ -15,7 +15,7 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
-    
+
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
@@ -24,20 +24,26 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:node="remove" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
-    <!-- Enables notification-drawer call controls when the user grants notification access. -->
+
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <queries>
         <package android:name="androidx.test.orchestrator" tools:node="remove" />
         <package android:name="androidx.test.services" tools:node="remove" />
         <package android:name="com.google.android.apps.common.testing.services" tools:node="remove" />
+
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
     </queries>
+
 
     <application
         android:label="${PRODUCT_NAME}"
         android:name=".AndroidAppMain"
         android:supportsRtl="true"
         android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
         android:usesCleartextTraffic="${USES_CLEARTEXT_TRAFFIC}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher">
@@ -50,6 +56,9 @@
         <meta-data
             android:name="SFU_JOIN_URL"
             android:value="${SFU_JOIN_URL}" />
+        <meta-data
+            android:name="CONCLAVE_DEBUG_VIEWER_PROFILE"
+            android:value="${CONCLAVE_DEBUG_VIEWER_PROFILE}" />
 
         <activity
             android:name=".MainActivity"
@@ -70,22 +79,32 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="conclave" />
             </intent-filter>
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPrefix="/w/" />
-                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathPattern="/.*-.*-.*" />
-            </intent-filter>
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathPrefix="/w/" />
-                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathPattern="/.*-.*-.*" />
-            </intent-filter>
         </activity>
-        
+
+
+        <activity-alias
+            android:name=".MeetingAppLinks"
+            android:targetActivity=".MainActivity"
+            android:enabled="@bool/conclave_verified_app_links_enabled"
+            android:exported="true">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathAdvancedPattern="/w/[a-zA-Z0-9][a-zA-Z0-9-]{0,31}" />
+                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathAdvancedPattern="/[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+" />
+                <data android:scheme="https" android:host="conclave.acmvit.in" android:pathAdvancedPattern="/sched-[0-9a-fA-F]{8}" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathAdvancedPattern="/w/[a-zA-Z0-9][a-zA-Z0-9-]{0,31}" />
+                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathAdvancedPattern="/[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+" />
+                <data android:scheme="https" android:host="www.conclave.acmvit.in" android:pathAdvancedPattern="/sched-[0-9a-fA-F]{8}" />
+            </intent-filter>
+        </activity-alias>
+
         <service
             android:name="conclave.module.CallForegroundService"
             android:foregroundServiceType="microphone|camera|mediaPlayback"
@@ -96,9 +115,34 @@
             android:foregroundServiceType="mediaProjection"
             android:exported="false" />
 
-        <!-- Receives the ongoing-call notification + PiP Leave / Mute actions. -->
+
         <receiver
             android:name="conclave.module.CallActionReceiver"
             android:exported="false" />
+
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/conclave_file_paths" />
+        </provider>
+
+
+        <service
+            android:name="com.google.android.gms.metadata.ModuleDependencies"
+            android:enabled="false"
+            android:exported="false"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="com.google.android.gms.metadata.MODULE_DEPENDENCIES" />
+            </intent-filter>
+            <meta-data
+                android:name="photopicker_activity:0:required"
+                android:value="" />
+        </service>
     </application>
 </manifest>

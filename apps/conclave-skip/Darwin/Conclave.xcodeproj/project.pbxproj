@@ -6,134 +6,141 @@
 	objectVersion = 56;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		491F27822DA55B72004926EE /* Conclave in Frameworks */ = {isa = PBXBuildFile; productRef = 491F27812DA55B72004926EE /* Conclave */; };
-		491F27832DA55B72004926EE /* Conclave in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 491F27812DA55B72004926EE /* Conclave */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */; };
-		6D4A1F102E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 6D4A1F0F2E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy */; };
-		7A6D6B2C2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 7A6D6B2B2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy */; };
-		499CD43B2AC5B799001AE8D8 /* Main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49F90C2B2A52156200F06D93 /* Main.swift */; };
-		499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 49F90C2F2A52156300F06D93 /* Assets.xcassets */; };
-		502A04D681B019AAC7B8DC4A /* ScreenShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B4453F91272390D27F4F652A /* ScreenShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
-		A8264D6A672273FA806A3FB6 /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9C74C4304A8EA72CC8134FE /* SampleHandler.swift */; };
-		DFE47E95E36C8EE1B5CCE9EC /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 66D43BF7D33BFBAD3F7B4B90 /* Foundation.framework */; };
-		E6C0BBDB133797BCEB6F5341 /* ReplayKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F8C4FBE6A31E1433318CB3E2 /* ReplayKit.framework */; };
-		FA0957C178416245BF758A86 /* ScreenShareSocketConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C7DBA37CDA1456AE24E503 /* ScreenShareSocketConnection.swift */; };
-/* End PBXBuildFile section */
 
-/* Begin PBXContainerItemProxy section */
-		71D46C2FE4CC3CD76AC25FF9 /* PBXContainerItemProxy */ = {
+		491F27822DA55B72004926EE  = {isa = PBXBuildFile; productRef = 491F27812DA55B72004926EE ; };
+		491F27832DA55B72004926EE  = {isa = PBXBuildFile; productRef = 491F27812DA55B72004926EE ; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		496BDBEE2B8A7E9C00C09264  = {isa = PBXBuildFile; fileRef = 496BDBED2B8A7E9C00C09264 ; };
+		9E14C0A12F0B4D2A00C1A142  = {isa = PBXBuildFile; fileRef = 9E14C0A12F0B4D2A00C1A141 ; };
+		6D4A1F102E1B4D0A9C72A111  = {isa = PBXBuildFile; fileRef = 6D4A1F0F2E1B4D0A9C72A111 ; };
+		7A6D6B2C2E4E4702A581F7A1  = {isa = PBXBuildFile; fileRef = 7A6D6B2B2E4E4702A581F7A1 ; };
+		499CD43B2AC5B799001AE8D8  = {isa = PBXBuildFile; fileRef = 49F90C2B2A52156200F06D93 ; };
+		499CD4402AC5B799001AE8D8  = {isa = PBXBuildFile; fileRef = 49F90C2F2A52156300F06D93 ; };
+		5C11A1C02E9F4B7A00D1A002  = {isa = PBXBuildFile; fileRef = 5C11A1C02E9F4B7A00D1A001 ; };
+		502A04D681B019AAC7B8DC4A  = {isa = PBXBuildFile; fileRef = B4453F91272390D27F4F652A ; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
+		A8264D6A672273FA806A3FB6  = {isa = PBXBuildFile; fileRef = D9C74C4304A8EA72CC8134FE ; };
+		DFE47E95E36C8EE1B5CCE9EC  = {isa = PBXBuildFile; fileRef = 66D43BF7D33BFBAD3F7B4B90 ; };
+		E6C0BBDB133797BCEB6F5341  = {isa = PBXBuildFile; fileRef = F8C4FBE6A31E1433318CB3E2 ; };
+		FA0957C178416245BF758A86  = {isa = PBXBuildFile; fileRef = B2C7DBA37CDA1456AE24E503 ; };
+		5C10A7E12EB0B6A100D1A010  = {isa = PBXBuildFile; fileRef = 5C10A7E12EB0B6A100D1A011 ; };
+
+
+
+		71D46C2FE4CC3CD76AC25FF9  = {
 			isa = PBXContainerItemProxy;
-			containerPortal = 49F90C202A52156200F06D93 /* Project object */;
+			containerPortal = 49F90C202A52156200F06D93 ;
 			proxyType = 1;
 			remoteGlobalIDString = C177BC9AEA385A664A4C4A9D;
 			remoteInfo = ScreenShareExtension;
 		};
-/* End PBXContainerItemProxy section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */ = {
+
+
+		499CD44A2AC5B9C6001AE8D8  = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				491F27832DA55B72004926EE /* Conclave in Embed Frameworks */,
+				491F27832DA55B72004926EE ,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		DED5F813849FF18CBE9AFB5A /* Embed App Extensions */ = {
+		DED5F813849FF18CBE9AFB5A  = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				502A04D681B019AAC7B8DC4A /* ScreenShareExtension.appex in Embed App Extensions */,
+				502A04D681B019AAC7B8DC4A ,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXCopyFilesBuildPhase section */
 
-/* Begin PBXFileReference section */
-		36B0F80D3E4E571FE785B302 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		4900101C2BACEA710000DE33 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		493609562A6B7EAE00C401E2 /* Conclave */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = Conclave; path = ..; sourceTree = "<group>"; };
-		496BDBEB2B89A47800C09264 /* Conclave.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Conclave.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = Localizable.xcstrings; path = ../Sources/Conclave/Resources/Localizable.xcstrings; sourceTree = "<group>"; };
-		496EB72F2A6AE4DE00C1253A /* Skip.env */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Skip.env; path = ../Skip.env; sourceTree = "<group>"; };
-		496EB72F2A6AE4DE00C1253B /* Conclave.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Conclave.xcconfig; sourceTree = "<group>"; };
-		496EB72F2A6AE4DE00C1253C /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = ../README.md; sourceTree = "<group>"; };
-		6D4A1F0F2E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		7A6D6B2B2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
-		499AB9082B0581F4005E8330 /* plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; name = plugins; path = ../../Intermediates.noindex/BuildToolPluginIntermediates; sourceTree = BUILT_PRODUCTS_DIR; };
-		49F90C2B2A52156200F06D93 /* Main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Main.swift; path = Sources/Main.swift; sourceTree = SOURCE_ROOT; };
-		49F90C2F2A52156300F06D93 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		49F90C312A52156300F06D93 /* Entitlements.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Entitlements.plist; sourceTree = "<group>"; };
-		66D43BF7D33BFBAD3F7B4B90 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
-		B1ABD79B5D294DEA239C6EE1 /* ScreenShareExtension.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ScreenShareExtension.entitlements; sourceTree = "<group>"; };
-		B2C7DBA37CDA1456AE24E503 /* ScreenShareSocketConnection.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScreenShareSocketConnection.swift; sourceTree = "<group>"; };
-		B4453F91272390D27F4F652A /* ScreenShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ScreenShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		D9C74C4304A8EA72CC8134FE /* SampleHandler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
-		F8C4FBE6A31E1433318CB3E2 /* ReplayKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/ReplayKit.framework; sourceTree = DEVELOPER_DIR; };
-/* End PBXFileReference section */
 
-/* Begin PBXFrameworksBuildPhase section */
-		27D5FD1C796B4A84CF7197E7 /* Frameworks */ = {
+
+		36B0F80D3E4E571FE785B302  = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4900101C2BACEA710000DE33  = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		9E14C0A12F0B4D2A00C1A141  = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
+		493609562A6B7EAE00C401E2  = {isa = PBXFileReference; lastKnownFileType = wrapper; name = Conclave; path = ..; sourceTree = "<group>"; };
+		496BDBEB2B89A47800C09264  = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Conclave.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		496BDBED2B8A7E9C00C09264  = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; name = Localizable.xcstrings; path = ../Sources/Conclave/Resources/Localizable.xcstrings; sourceTree = "<group>"; };
+		496EB72F2A6AE4DE00C1253A  = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Skip.env; path = ../Skip.env; sourceTree = "<group>"; };
+		496EB72F2A6AE4DE00C1253B  = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Conclave.xcconfig; sourceTree = "<group>"; };
+		496EB72F2A6AE4DE00C1253C  = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = ../README.md; sourceTree = "<group>"; };
+		6D4A1F0F2E1B4D0A9C72A111  = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		7A6D6B2B2E4E4702A581F7A1  = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		499AB9082B0581F4005E8330  = {isa = PBXFileReference; lastKnownFileType = folder; name = plugins; path = ../../Intermediates.noindex/BuildToolPluginIntermediates; sourceTree = BUILT_PRODUCTS_DIR; };
+		49F90C2B2A52156200F06D93  = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Main.swift; path = Sources/Main.swift; sourceTree = SOURCE_ROOT; };
+		49F90C2F2A52156300F06D93  = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		5C11A1C02E9F4B7A00D1A001  = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		49F90C312A52156300F06D93  = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Entitlements.plist; sourceTree = "<group>"; };
+		66D43BF7D33BFBAD3F7B4B90  = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		B1ABD79B5D294DEA239C6EE1  = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = ScreenShareExtension.entitlements; sourceTree = "<group>"; };
+		B2C7DBA37CDA1456AE24E503  = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ScreenShareSocketConnection.swift; sourceTree = "<group>"; };
+		B4453F91272390D27F4F652A  = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ScreenShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D9C74C4304A8EA72CC8134FE  = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		5C10A7E12EB0B6A100D1A011  = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
+		F8C4FBE6A31E1433318CB3E2  = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/ReplayKit.framework; sourceTree = DEVELOPER_DIR; };
+
+
+
+		27D5FD1C796B4A84CF7197E7  = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DFE47E95E36C8EE1B5CCE9EC /* Foundation.framework in Frameworks */,
-				E6C0BBDB133797BCEB6F5341 /* ReplayKit.framework in Frameworks */,
+				DFE47E95E36C8EE1B5CCE9EC ,
+				E6C0BBDB133797BCEB6F5341 ,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		499CD43C2AC5B799001AE8D8 /* Frameworks */ = {
+		499CD43C2AC5B799001AE8D8  = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				491F27822DA55B72004926EE /* Conclave in Frameworks */,
+				491F27822DA55B72004926EE ,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXFrameworksBuildPhase section */
 
-/* Begin PBXGroup section */
-		08049D8876C1F24A3401D4DE /* ScreenShareExtension */ = {
+
+
+		08049D8876C1F24A3401D4DE  = {
 			isa = PBXGroup;
 			children = (
-				D9C74C4304A8EA72CC8134FE /* SampleHandler.swift */,
-				B2C7DBA37CDA1456AE24E503 /* ScreenShareSocketConnection.swift */,
-				36B0F80D3E4E571FE785B302 /* Info.plist */,
-				7A6D6B2B2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy */,
-				B1ABD79B5D294DEA239C6EE1 /* ScreenShareExtension.entitlements */,
+				D9C74C4304A8EA72CC8134FE ,
+				B2C7DBA37CDA1456AE24E503 ,
+				5C10A7E12EB0B6A100D1A011 ,
+				36B0F80D3E4E571FE785B302 ,
+				7A6D6B2B2E4E4702A581F7A1 ,
+				B1ABD79B5D294DEA239C6EE1 ,
 			);
 			name = ScreenShareExtension;
 			path = ScreenShareExtension;
 			sourceTree = SOURCE_ROOT;
 		};
-		23AF4C199783C9F523551BA3 /* Frameworks */ = {
+		23AF4C199783C9F523551BA3  = {
 			isa = PBXGroup;
 			children = (
-				B339E2FDDC355E58C6CC0D80 /* iOS */,
+				B339E2FDDC355E58C6CC0D80 ,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
-		496BDBEC2B89A47800C09264 /* Products */ = {
+		496BDBEC2B89A47800C09264  = {
 			isa = PBXGroup;
 			children = (
-				496BDBEB2B89A47800C09264 /* Conclave.app */,
-				B4453F91272390D27F4F652A /* ScreenShareExtension.appex */,
+				496BDBEB2B89A47800C09264 ,
+				B4453F91272390D27F4F652A ,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		49AB54462B066A7E007B79B2 /* SkipStone */ = {
+		49AB54462B066A7E007B79B2  = {
 			isa = PBXGroup;
 			children = (
-				499AB9082B0581F4005E8330 /* plugins */,
+				499AB9082B0581F4005E8330 ,
 			);
 			name = SkipStone;
 			sourceTree = "<group>";
@@ -141,75 +148,77 @@
 		49F90C1F2A52156200F06D93 = {
 			isa = PBXGroup;
 			children = (
-				496EB72F2A6AE4DE00C1253C /* README.md */,
-				496EB72F2A6AE4DE00C1253A /* Skip.env */,
-				496EB72F2A6AE4DE00C1253B /* Conclave.xcconfig */,
-				496BDBED2B8A7E9C00C09264 /* Localizable.xcstrings */,
-				493609562A6B7EAE00C401E2 /* Conclave */,
-				49F90C2A2A52156200F06D93 /* App */,
-				49AB54462B066A7E007B79B2 /* SkipStone */,
-				496BDBEC2B89A47800C09264 /* Products */,
-				23AF4C199783C9F523551BA3 /* Frameworks */,
-				08049D8876C1F24A3401D4DE /* ScreenShareExtension */,
+				496EB72F2A6AE4DE00C1253C ,
+				496EB72F2A6AE4DE00C1253A ,
+				496EB72F2A6AE4DE00C1253B ,
+				496BDBED2B8A7E9C00C09264 ,
+				493609562A6B7EAE00C401E2 ,
+				49F90C2A2A52156200F06D93 ,
+				49AB54462B066A7E007B79B2 ,
+				496BDBEC2B89A47800C09264 ,
+				23AF4C199783C9F523551BA3 ,
+				08049D8876C1F24A3401D4DE ,
 			);
 			sourceTree = "<group>";
 		};
-		49F90C2A2A52156200F06D93 /* App */ = {
+		49F90C2A2A52156200F06D93  = {
 			isa = PBXGroup;
 			children = (
-				49F90C2B2A52156200F06D93 /* Main.swift */,
-				49F90C2F2A52156300F06D93 /* Assets.xcassets */,
-				49F90C312A52156300F06D93 /* Entitlements.plist */,
-				4900101C2BACEA710000DE33 /* Info.plist */,
-				6D4A1F0F2E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy */,
+				49F90C2B2A52156200F06D93 ,
+				49F90C2F2A52156300F06D93 ,
+				5C11A1C02E9F4B7A00D1A001 ,
+				49F90C312A52156300F06D93 ,
+				4900101C2BACEA710000DE33 ,
+				9E14C0A12F0B4D2A00C1A141 ,
+				6D4A1F0F2E1B4D0A9C72A111 ,
 			);
 			name = App;
 			sourceTree = "<group>";
 		};
-		B339E2FDDC355E58C6CC0D80 /* iOS */ = {
+		B339E2FDDC355E58C6CC0D80  = {
 			isa = PBXGroup;
 			children = (
-				66D43BF7D33BFBAD3F7B4B90 /* Foundation.framework */,
-				F8C4FBE6A31E1433318CB3E2 /* ReplayKit.framework */,
+				66D43BF7D33BFBAD3F7B4B90 ,
+				F8C4FBE6A31E1433318CB3E2 ,
 			);
 			name = iOS;
 			sourceTree = "<group>";
 		};
-/* End PBXGroup section */
 
-/* Begin PBXNativeTarget section */
-		499CD4382AC5B799001AE8D8 /* Conclave App */ = {
+
+
+		499CD4382AC5B799001AE8D8  = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 499CD4412AC5B799001AE8D8 /* Build configuration list for PBXNativeTarget "Conclave App" */;
+			buildConfigurationList = 499CD4412AC5B799001AE8D8 ;
 			buildPhases = (
-				499CD43A2AC5B799001AE8D8 /* Sources */,
-				499CD43C2AC5B799001AE8D8 /* Frameworks */,
-				499CD43E2AC5B799001AE8D8 /* Resources */,
-				499CD4452AC5B869001AE8D8 /* Run skip gradle */,
-				499CD44A2AC5B9C6001AE8D8 /* Embed Frameworks */,
-				DED5F813849FF18CBE9AFB5A /* Embed App Extensions */,
-				8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */,
+				499CD43A2AC5B799001AE8D8 ,
+				499CD43C2AC5B799001AE8D8 ,
+				499CD43E2AC5B799001AE8D8 ,
+				499CD4452AC5B869001AE8D8 ,
+				499CD44A2AC5B9C6001AE8D8 ,
+				DED5F813849FF18CBE9AFB5A ,
+				8D0E0D6B2E5A4A71B57E90C1 ,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				A2053695217560C161E5AD7D /* PBXTargetDependency */,
+				A2053695217560C161E5AD7D ,
 			);
 			name = "Conclave App";
 			packageProductDependencies = (
-				491F27812DA55B72004926EE /* Conclave */,
+				491F27812DA55B72004926EE ,
 			);
 			productName = App;
-			productReference = 496BDBEB2B89A47800C09264 /* Conclave.app */;
+			productReference = 496BDBEB2B89A47800C09264 ;
 			productType = "com.apple.product-type.application";
 		};
-		C177BC9AEA385A664A4C4A9D /* ScreenShareExtension */ = {
+		C177BC9AEA385A664A4C4A9D  = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 715401479CCB56D605A80E7B /* Build configuration list for PBXNativeTarget "ScreenShareExtension" */;
+			buildConfigurationList = 715401479CCB56D605A80E7B ;
 			buildPhases = (
-				DA440F8BDEC4A242AF507D3E /* Sources */,
-				27D5FD1C796B4A84CF7197E7 /* Frameworks */,
-				D8437152ED65B65BAD66390E /* Resources */,
+				DA440F8BDEC4A242AF507D3E ,
+				27D5FD1C796B4A84CF7197E7 ,
+				D8437152ED65B65BAD66390E ,
 			);
 			buildRules = (
 			);
@@ -217,64 +226,64 @@
 			);
 			name = ScreenShareExtension;
 			productName = ScreenShareExtension;
-			productReference = B4453F91272390D27F4F652A /* ScreenShareExtension.appex */;
+			productReference = B4453F91272390D27F4F652A ;
 			productType = "com.apple.product-type.app-extension";
 		};
-/* End PBXNativeTarget section */
 
-/* Begin PBXProject section */
-		49F90C202A52156200F06D93 /* Project object */ = {
+
+
+		49F90C202A52156200F06D93  = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1430;
 				LastUpgradeCheck = 1630;
 			};
-			buildConfigurationList = 49F90C232A52156200F06D93 /* Build configuration list for PBXProject "Conclave" */;
+			buildConfigurationList = 49F90C232A52156200F06D93 ;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 				Base,
-				es,
-				ja,
-				"zh-Hans",
 			);
 			mainGroup = 49F90C1F2A52156200F06D93;
-			productRefGroup = 496BDBEC2B89A47800C09264 /* Products */;
+			productRefGroup = 496BDBEC2B89A47800C09264 ;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				499CD4382AC5B799001AE8D8 /* Conclave App */,
-				C177BC9AEA385A664A4C4A9D /* ScreenShareExtension */,
+				499CD4382AC5B799001AE8D8 ,
+				C177BC9AEA385A664A4C4A9D ,
 			);
 		};
-/* End PBXProject section */
 
-/* Begin PBXResourcesBuildPhase section */
-		499CD43E2AC5B799001AE8D8 /* Resources */ = {
+
+
+		499CD43E2AC5B799001AE8D8  = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				499CD4402AC5B799001AE8D8 /* Assets.xcassets in Resources */,
-				496BDBEE2B8A7E9C00C09264 /* Localizable.xcstrings in Resources */,
-				6D4A1F102E1B4D0A9C72A111 /* PrivacyInfo.xcprivacy in Resources */,
+				499CD4402AC5B799001AE8D8 ,
+				5C11A1C02E9F4B7A00D1A002 ,
+				496BDBEE2B8A7E9C00C09264 ,
+				9E14C0A12F0B4D2A00C1A142 ,
+				6D4A1F102E1B4D0A9C72A111 ,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		D8437152ED65B65BAD66390E /* Resources */ = {
+		D8437152ED65B65BAD66390E  = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				7A6D6B2C2E4E4702A581F7A1 /* PrivacyInfo.xcprivacy in Resources */,
+				7A6D6B2C2E4E4702A581F7A1 ,
+				5C10A7E12EB0B6A100D1A010 ,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXResourcesBuildPhase section */
 
-/* Begin PBXShellScriptBuildPhase section */
-		499CD4452AC5B869001AE8D8 /* Run skip gradle */ = {
+
+
+		499CD4452AC5B869001AE8D8  = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -291,9 +300,9 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = "/bin/sh -e";
-			shellScript = "if [ \"${SKIP_ZERO}\" != \"\" ]; then\n  echo \"note: skipping skip due to SKIP_ZERO\"\n  exit 0\nelif [ \"${ENABLE_PREVIEWS}\" = \"YES\" ]; then\n  echo \"note: skipping skip due to ENABLE_PREVIEWS\"\n  exit 0\nelif [ \"${ACTION}\" = \"install\" ]; then\n  echo \"note: skipping skip due to archive install\"\n  exit 0\nelif [ \"${SKIP_ACTION}\" = \"none\" ]; then\n  echo \"note: skipping skip due to SKIP_ACTION none\"\n  exit 0\nelse\n  SKIP_ACTION=\"${SKIP_ACTION:-launch}\"\nfi\nPATH=${BUILD_ROOT}/Release:${BUILD_ROOT}/Debug:${BUILD_ROOT}/../../SourcePackages/artifacts/skip/skip/skip.artifactbundle/macos:${PATH}:${HOMEBREW_PREFIX:-/opt/homebrew}/bin\necho \"note: running gradle build with: $(which skip) gradle -p ${PWD}/../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\"\nskip gradle -p ../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\n";
+			shellScript = "if [ \"${SKIP_ZERO}\" != \"\" ]; then\n  echo \"note: skipping skip due to SKIP_ZERO\"\n  exit 0\nelif [ \"${ENABLE_PREVIEWS}\" = \"YES\" ]; then\n  echo \"note: skipping skip due to ENABLE_PREVIEWS\"\n  exit 0\nelif [ \"${ACTION}\" = \"install\" ]; then\n  echo \"note: skipping skip due to archive install\"\n  exit 0\nelif [ \"${SKIP_ACTION}\" = \"none\" ]; then\n  echo \"note: skipping skip due to SKIP_ACTION none\"\n  exit 0\nelse\n  SKIP_ACTION=\"${SKIP_ACTION:-launch}\"\nfi\nPATH=${BUILD_ROOT}/Release:${BUILD_ROOT}/Debug:${BUILD_ROOT}/../../SourcePackages/artifacts/skip/skip/skip.artifactbundle/macos:${PATH}:${HOMEBREW_PREFIX:-/opt/homebrew}/bin\nGRADLE_WRAPPER_SHIM_DIR=\"${DERIVED_FILE_DIR}/skip-gradle-wrapper\"\nmkdir -p \"${GRADLE_WRAPPER_SHIM_DIR}\"\nprintf '#!/bin/sh\\nexec \"%s\" \"$@\"\\n' \"${PWD}/../Android/gradlew\" > \"${GRADLE_WRAPPER_SHIM_DIR}/gradle\"\nchmod +x \"${GRADLE_WRAPPER_SHIM_DIR}/gradle\"\nPATH=\"${GRADLE_WRAPPER_SHIM_DIR}:${PATH}\"\nJDK21_HOME=\"${HOMEBREW_PREFIX:-/opt/homebrew}/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home\"\nif [ -z \"${JAVA_HOME}\" ] && [ -d \"${JDK21_HOME}\" ]; then\n  export JAVA_HOME=\"${JDK21_HOME}\"\nfi\necho \"note: running gradle build with: $(which skip) gradle -p ${PWD}/../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\"\nskip gradle -p ../Android ${SKIP_ACTION:-launch}${CONFIGURATION:-Debug}\n";
 		};
-		8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */ = {
+		8D0E0D6B2E5A4A71B57E90C1  = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -316,39 +325,39 @@
 			shellPath = /bin/sh;
 			shellScript = "sh \"${SRCROOT}/Scripts/apply-embedded-privacy-metadata.sh\"\n";
 		};
-/* End PBXShellScriptBuildPhase section */
 
-/* Begin PBXSourcesBuildPhase section */
-		499CD43A2AC5B799001AE8D8 /* Sources */ = {
+
+
+		499CD43A2AC5B799001AE8D8  = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				499CD43B2AC5B799001AE8D8 /* Main.swift in Sources */,
+				499CD43B2AC5B799001AE8D8 ,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		DA440F8BDEC4A242AF507D3E /* Sources */ = {
+		DA440F8BDEC4A242AF507D3E  = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A8264D6A672273FA806A3FB6 /* SampleHandler.swift in Sources */,
-				FA0957C178416245BF758A86 /* ScreenShareSocketConnection.swift in Sources */,
+				A8264D6A672273FA806A3FB6 ,
+				FA0957C178416245BF758A86 ,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXSourcesBuildPhase section */
 
-/* Begin PBXTargetDependency section */
-		A2053695217560C161E5AD7D /* PBXTargetDependency */ = {
+
+
+		A2053695217560C161E5AD7D  = {
 			isa = PBXTargetDependency;
 			name = ScreenShareExtension;
-			target = C177BC9AEA385A664A4C4A9D /* ScreenShareExtension */;
-			targetProxy = 71D46C2FE4CC3CD76AC25FF9 /* PBXContainerItemProxy */;
+			target = C177BC9AEA385A664A4C4A9D ;
+			targetProxy = 71D46C2FE4CC3CD76AC25FF9 ;
 		};
-/* End PBXTargetDependency section */
 
-/* Begin XCBuildConfiguration section */
-		05E041EEC730BBD70F153CF4 /* Release */ = {
+
+
+		05E041EEC730BBD70F153CF4  = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CLANG_ENABLE_OBJC_WEAK = NO;
@@ -356,7 +365,7 @@
 				"CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]" = NO;
 				CODE_SIGN_ENTITLEMENTS = ScreenShareExtension/ScreenShareExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 54;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenShareExtension/Info.plist;
@@ -379,9 +388,9 @@
 			};
 			name = Release;
 		};
-		499CD4422AC5B799001AE8D8 /* Debug */ = {
+		499CD4422AC5B799001AE8D8  = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 496EB72F2A6AE4DE00C1253B /* Conclave.xcconfig */;
+			baseConfigurationReference = 496EB72F2A6AE4DE00C1253B ;
 			buildSettings = {
 				ENABLE_PREVIEWS = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
@@ -389,9 +398,9 @@
 			};
 			name = Debug;
 		};
-		499CD4432AC5B799001AE8D8 /* Release */ = {
+		499CD4432AC5B799001AE8D8  = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 496EB72F2A6AE4DE00C1253B /* Conclave.xcconfig */;
+			baseConfigurationReference = 496EB72F2A6AE4DE00C1253B ;
 			buildSettings = {
 				ENABLE_PREVIEWS = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
@@ -399,7 +408,7 @@
 			};
 			name = Release;
 		};
-		49F90C4B2A52156300F06D93 /* Debug */ = {
+		49F90C4B2A52156300F06D93  = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -418,7 +427,7 @@
 			};
 			name = Debug;
 		};
-		49F90C4C2A52156300F06D93 /* Release */ = {
+		49F90C4C2A52156300F06D93  = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -435,7 +444,7 @@
 			};
 			name = Release;
 		};
-		66A29025C23116E1F8ABC24E /* Debug */ = {
+		66A29025C23116E1F8ABC24E  = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CLANG_ENABLE_OBJC_WEAK = NO;
@@ -451,7 +460,7 @@
 				"CODE_SIGN_STYLE[sdk=iphoneos*]" = "$(CONCLAVE_DEBUG_CODE_SIGN_STYLE)";
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = "$(CONCLAVE_DEVELOPMENT_TEAM)";
 				"PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]" = "$(CONCLAVE_SCREEN_SHARE_DEBUG_PROVISIONING_PROFILE)";
-				CURRENT_PROJECT_VERSION = 50;
+				CURRENT_PROJECT_VERSION = 54;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ScreenShareExtension/Info.plist;
@@ -473,44 +482,44 @@
 			};
 			name = Debug;
 		};
-/* End XCBuildConfiguration section */
 
-/* Begin XCConfigurationList section */
-		499CD4412AC5B799001AE8D8 /* Build configuration list for PBXNativeTarget "Conclave App" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				499CD4422AC5B799001AE8D8 /* Debug */,
-				499CD4432AC5B799001AE8D8 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		49F90C232A52156200F06D93 /* Build configuration list for PBXProject "Conclave" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				49F90C4B2A52156300F06D93 /* Debug */,
-				49F90C4C2A52156300F06D93 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		715401479CCB56D605A80E7B /* Build configuration list for PBXNativeTarget "ScreenShareExtension" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				05E041EEC730BBD70F153CF4 /* Release */,
-				66A29025C23116E1F8ABC24E /* Debug */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-/* End XCConfigurationList section */
 
-/* Begin XCSwiftPackageProductDependency section */
-		491F27812DA55B72004926EE /* Conclave */ = {
+
+		499CD4412AC5B799001AE8D8  = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				499CD4422AC5B799001AE8D8 ,
+				499CD4432AC5B799001AE8D8 ,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		49F90C232A52156200F06D93  = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				49F90C4B2A52156300F06D93 ,
+				49F90C4C2A52156300F06D93 ,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		715401479CCB56D605A80E7B  = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				05E041EEC730BBD70F153CF4 ,
+				66A29025C23116E1F8ABC24E ,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+
+
+
+		491F27812DA55B72004926EE  = {
 			isa = XCSwiftPackageProductDependency;
 			productName = Conclave;
 		};
-/* End XCSwiftPackageProductDependency section */
+
 	};
-	rootObject = 49F90C202A52156200F06D93 /* Project object */;
+	rootObject = 49F90C202A52156200F06D93 ;
 }

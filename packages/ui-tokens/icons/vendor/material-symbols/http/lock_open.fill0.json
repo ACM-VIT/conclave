@@ -1,0 +1,128 @@
+{
+  "id": "lock_open.fill0",
+  "kind": "git-pinned",
+  "request_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/lock_open/materialsymbolsrounded/lock_open_24px.svg",
+  "request_method": "GET",
+  "request_headers": {
+    "Accept-Encoding": "identity",
+    "User-Agent": "Conclave-selected-input-recovery/1.0"
+  },
+  "started_at_utc": "2026-10-23T16:15:32.464065Z",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "historical_status": "fresh_network_retrieval",
+  "body_file": "assets/symbols/web/lock_open/materialsymbolsrounded/lock_open_24px.svg",
+  "receipt_file": "http/lock_open.fill0.json",
+  "redirect_policy": "record and reject; no substitutions",
+  "redirects": [],
+  "http_status": 200,
+  "final_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/lock_open/materialsymbolsrounded/lock_open_24px.svg",
+  "response_headers": [
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Content-Length",
+      "508"
+    ],
+    [
+      "Cache-Control",
+      "max-age=300"
+    ],
+    [
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    ],
+    [
+      "Content-Type",
+      "image/svg+xml"
+    ],
+    [
+      "ETag",
+      "\"41a8c6232df1a7da4bcc98fb28b2b2c39f861123d151a8c34bcfa418190b944a\""
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=31536000"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Frame-Options",
+      "deny"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-GitHub-Request-Id",
+      "284C:3490F:AC224:C8EF6:6ADB883D"
+    ],
+    [
+      "x-github-edge-region",
+      "centralindia"
+    ],
+    [
+      "Accept-Ranges",
+      "bytes"
+    ],
+    [
+      "Date",
+      "Fri, 23 Oct 2026 16:15:57 GMT"
+    ],
+    [
+      "Via",
+      "1.1 varnish"
+    ],
+    [
+      "X-Served-By",
+      "cache-maa10220-MAA"
+    ],
+    [
+      "X-Cache",
+      "MISS"
+    ],
+    [
+      "X-Cache-Hits",
+      "0"
+    ],
+    [
+      "X-Timer",
+      "S1792772158.631734,VS0,VE318"
+    ],
+    [
+      "Vary",
+      "Authorization,Accept-Encoding"
+    ],
+    [
+      "Access-Control-Allow-Origin",
+      "*"
+    ],
+    [
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    ],
+    [
+      "X-Fastly-Request-ID",
+      "dd8f93a580f0b8632fb8fdb05a574b0deb729df5"
+    ],
+    [
+      "Expires",
+      "Fri, 23 Oct 2026 16:20:57 GMT"
+    ],
+    [
+      "Source-Age",
+      "0"
+    ]
+  ],
+  "bytes": 508,
+  "sha256": "a48b483c600fd2f869036741dd3b2a4c74a66af94f7ede64c80da84a6e66fbbd",
+  "body_complete_within_limit": true,
+  "max_bytes": 131072,
+  "errors": [],
+  "completed_at_utc": "2026-10-23T16:15:58.016382Z",
+  "retrieval_ok": true
+}

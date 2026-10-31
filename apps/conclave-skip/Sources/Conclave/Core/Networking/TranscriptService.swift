@@ -17,11 +17,6 @@ enum TranscriptRecoveryErrorPolicy {
     }
 }
 
-/// Drives the transcript worker connection and mirrors the web client's SFU
-/// flow: fetch a worker token over socket.io, open the worker WebSocket, and -
-/// for controllers - send `session.start`, then hand the relay start token to
-/// the SFU so the server streams room audio to the transcription worker.
-/// Everyone else simply receives snapshot + delta/final segments to display.
 @MainActor
 final class TranscriptService {
     private let state: TranscriptState
@@ -30,8 +25,7 @@ final class TranscriptService {
     private var webSocket: TranscriptWebSocket?
     private var roomId = ""
     private var startAfterConnect = false
-    // Whether the queued start should be sent as a takeover (captured before
-    // sessionStatus flips to "starting").
+
     private var pendingStartIsTakeover = false
     private var activeStartOptions = TranscriptStartOptions()
     private var pendingRelayStart = false
@@ -40,8 +34,7 @@ final class TranscriptService {
     private var reconnectAttempt = 0
     private var recoverSessionAfterReconnect = false
     private var startedByThisClient = false
-    // Bumped by close()/open() so an in-flight open() that resumes after a close
-    // doesn't resurrect a WebSocket for a torn-down panel.
+
     private var openGeneration = 0
 
     init(state: TranscriptState, socketManager: SocketIOManager) {
@@ -49,21 +42,18 @@ final class TranscriptService {
         self.socketManager = socketManager
     }
 
-    // MARK: - Lifecycle
-
-    /// Opens the worker WebSocket so live captions stream in. Safe to call for
-    /// any participant; capabilities decide who may start/stop.
     func open() async {
         guard state.connectionStatus == .idle || state.connectionStatus == .error else { return }
         state.connectionStatus = .connecting
         state.errorMessage = nil
+        state.setIssue(.none)
         didRequestClose = false
         openGeneration += 1
         let generation = openGeneration
 
         do {
             let token = try await socketManager.getTranscriptToken()
-            // A close() (or a newer open()) landed while we were awaiting the token.
+
             guard generation == openGeneration, !didRequestClose else { return }
             roomId = token.roomId
             state.applyCapabilities(
@@ -93,13 +83,13 @@ final class TranscriptService {
         }
     }
 
-    /// Closes the local WebSocket without stopping the session for everyone else.
     func close() {
         didRequestClose = true
         openGeneration += 1
         reconnectTask?.cancel()
         reconnectTask = nil
         reconnectAttempt = 0
+        state.recordFailedAttempts(0)
         webSocket?.close()
         webSocket = nil
         startAfterConnect = false
@@ -112,17 +102,36 @@ final class TranscriptService {
         }
     }
 
-    // MARK: - Controller actions
+    func retryConnection() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttempt = 0
+        state.recordFailedAttempts(0)
+        if state.connectionStatus == .connecting {
+            state.connectionStatus = .idle
+        }
+        Task { await open() }
+    }
+
+    func probeRelayAvailability() async {
+        do {
+            let status = try await socketManager.getTranscriptSfuRelayStatus()
+            state.setRelay(status.available ? RelayAvailability.available : RelayAvailability.unavailable)
+        } catch {
+
+        }
+    }
 
     func startTranscription(options: TranscriptStartOptions = TranscriptStartOptions()) {
         let isTakeover = state.sessionStatus == "takeover_needed"
         guard isTakeover ? state.canTakeover : state.canStart else {
             state.errorMessage = "You do not have permission to control this transcript."
+            state.setIssue(.noPermission)
             return
         }
         state.errorMessage = nil
-        // Capture before overwriting the status: the send may be deferred
-        // until the socket opens, and "starting" would mask the takeover.
+        state.setIssue(.none)
+
         pendingStartIsTakeover = isTakeover
         activeStartOptions = options
         recoverSessionAfterReconnect = false
@@ -143,6 +152,7 @@ final class TranscriptService {
         guard state.canStop || state.isLive else { return }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return
         }
         state.sessionStatus = "stopping"
@@ -159,13 +169,16 @@ final class TranscriptService {
     func pauseTranscription() -> Bool {
         guard state.canPause else {
             state.errorMessage = "You do not have permission to pause this transcript."
+            state.setIssue(.noPermission)
             return false
         }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return false
         }
         state.errorMessage = nil
+        state.setIssue(.none)
         return sendJSON(["type": "session.pause"])
     }
 
@@ -173,13 +186,16 @@ final class TranscriptService {
     func resumeTranscription() -> Bool {
         guard state.canPause else {
             state.errorMessage = "You do not have permission to resume this transcript."
+            state.setIssue(.noPermission)
             return false
         }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return false
         }
         state.errorMessage = nil
+        state.setIssue(.none)
         return sendJSON(["type": "session.resume"])
     }
 
@@ -189,19 +205,24 @@ final class TranscriptService {
         guard !trimmed.isEmpty else { return false }
         guard state.canAsk else {
             state.errorMessage = "You do not have permission to ask about this transcript."
+            state.setIssue(.noPermission)
             return false
         }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return false
         }
 
         let id = "qa-\(Int(Date().timeIntervalSince1970 * 1000.0))-\(String(UUID().uuidString.prefix(6)).lowercased())"
         let now = Date().timeIntervalSince1970 * 1000.0
         state.errorMessage = nil
+        state.setIssue(.none)
         state.beginQuestion(id: id, question: trimmed, timestamp: now)
         let didSend = sendJSON(["type": "qa.ask", "id": id, "question": trimmed])
         if !didSend {
+
+            state.markQuestionNotSent(id: id)
             state.applyQuestionUpdate(
                 id: id,
                 question: trimmed,
@@ -218,17 +239,18 @@ final class TranscriptService {
     func refreshMinutes() -> Bool {
         guard state.canAsk else {
             state.errorMessage = "You do not have permission to refresh meeting minutes."
+            state.setIssue(.noPermission)
             return false
         }
         guard state.connectionStatus == .connected else {
             state.errorMessage = "Transcript controls are reconnecting. Try again in a moment."
+            state.setIssue(.controlsReconnecting)
             return false
         }
         state.errorMessage = nil
+        state.setIssue(.none)
         return sendJSON(["type": "minutes.refresh"])
     }
-
-    // MARK: - WebSocket callbacks
 
     private func handleOpen(generation: Int) {
         guard generation == openGeneration, !didRequestClose else { return }
@@ -258,6 +280,8 @@ final class TranscriptService {
         guard !didRequestClose, reconnectTask == nil else { return }
         let attempt = reconnectAttempt
         reconnectAttempt += 1
+
+        state.recordFailedAttempts(reconnectAttempt)
         let reconnectDelaysNanoseconds: [UInt64] = [
             UInt64(500_000_000),
             UInt64(1_000_000_000),
@@ -291,8 +315,7 @@ final class TranscriptService {
     private func sendSessionStart() {
         startedByThisClient = true
         pendingRelayStart = true
-        // When the previous controller stepped away the worker expects a
-        // takeover, not a fresh start (mirrors the web client).
+
         var payload: [String: Any] = [
             "type": pendingStartIsTakeover ? "session.takeover" : "session.start",
             "transportMode": "sfu",
@@ -309,8 +332,6 @@ final class TranscriptService {
         pendingStartIsTakeover = false
     }
 
-    // MARK: - Incoming messages
-
     private func handleMessage(_ text: String, generation: Int) {
         guard generation == openGeneration, !didRequestClose else { return }
         guard let data = text.data(using: .utf8),
@@ -319,12 +340,14 @@ final class TranscriptService {
             return
         }
         reconnectAttempt = 0
+        state.recordFailedAttempts(0)
         if state.errorMessage == "Reconnecting transcription automatically…" {
             state.errorMessage = nil
         }
 
         switch type {
         case "snapshot":
+            state.markSessionSnapshot()
             applyProviderKeyAvailability(envelope)
             if let session = envelope["session"] as? [String: Any] {
                 applySession(session)
@@ -378,8 +401,9 @@ final class TranscriptService {
         case "error":
             if let message = envelope["message"] as? String, !message.isEmpty {
                 state.errorMessage = message
+                state.setIssue(.server, serverText: message)
             }
-            // Don't leave the controls stuck in a busy state on a worker error.
+
             if state.sessionStatus == "starting" || state.sessionStatus == "stopping" {
                 state.sessionStatus = "error"
             }
@@ -413,6 +437,7 @@ final class TranscriptService {
             if response == nil || response?.success == false {
                 if !automatic {
                     self.state.errorMessage = response?.reason ?? "Transcription audio relay could not start."
+                    self.state.setIssue(.relayFailed)
                     self.sendJSON([
                         "type": "session.relayFailed",
                         "message": response?.reason ?? "Transcription audio relay could not start."
@@ -421,6 +446,9 @@ final class TranscriptService {
             } else {
                 self.state.errorMessage = TranscriptRecoveryErrorPolicy
                     .errorAfterSuccessfulRelayRecovery(self.state.errorMessage)
+                if self.state.issue == .relayFailed || self.state.issue == .controlsReconnecting {
+                    self.state.setIssue(.none)
+                }
             }
         }
     }
@@ -458,19 +486,36 @@ final class TranscriptService {
             state.sessionTransportMode = transportMode
         }
         let nextControllerName: String?
+        var nextControllerUserId = ""
         if let controller = session["controller"] as? [String: Any] {
             let trimmed = (controller["displayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             nextControllerName = trimmed?.isEmpty == false ? trimmed : nil
+
+            nextControllerUserId = ((controller["userId"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             nextControllerName = nil
         }
         if state.controllerName != nextControllerName {
             state.controllerName = nextControllerName
         }
+        if state.controllerUserId != nextControllerUserId {
+            state.controllerUserId = nextControllerUserId
+        }
         if session.keys.contains("error") {
             let rawError = (session["error"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             let nextError = rawError?.isEmpty == false ? rawError : nil
             if state.errorMessage != nextError { state.errorMessage = nextError }
+            if let text = nextError {
+                state.setIssue(.server, serverText: text)
+            } else if state.issue == .server {
+                state.setIssue(.none)
+            }
+        }
+
+        if let startedAt = Self.doubleValue(session["startedAt"]) {
+            state.applySessionStartedAt(startedAt)
+        } else if let status = session["status"] as? String, status == "idle" {
+            state.applySessionStartedAt(0.0)
         }
     }
 
@@ -508,8 +553,6 @@ final class TranscriptService {
         webSocket.send(text)
         return true
     }
-
-    // MARK: - Parsing helpers
 
     private static func parseSegment(_ dict: [String: Any]) -> TranscriptSegmentModel? {
         guard let itemId = dict["itemId"] as? String else { return nil }
@@ -589,8 +632,6 @@ final class TranscriptService {
         if let numberValue = value as? NSNumber { return numberValue.doubleValue != 0.0 }
         return nil
     }
-
-    // MARK: - URL
 
     static func workerWebSocketURL(token: TranscriptTokenResponse) -> String? {
         guard var components = URLComponents(string: token.workerUrl) else { return nil }

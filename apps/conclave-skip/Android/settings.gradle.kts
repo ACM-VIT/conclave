@@ -1,20 +1,23 @@
-// This gradle project is part of a conventional Skip app project.
-pluginManagement {
-    // Initialize the Skip plugin folder and perform a pre-build for non-Xcode builds
-    val pluginPath = File.createTempFile("skip-plugin-path", ".tmp")
 
-    // overriding outputs for an Android IDE can be done by un-commenting and setting the Xcode path:
-    //System.setProperty("BUILT_PRODUCTS_DIR", "${System.getProperty("user.home")}/Library/Developer/Xcode/DerivedData/MySkipProject-HASH/Build/Products/Debug-iphonesimulator")
+pluginManagement {
+
+    val pluginPath = File.createTempFile("skip-plugin-path", ".tmp")
 
     val packagePath = settings.rootDir.parentFile.absolutePath
     val indexBuildPath = settings.rootDir.parentFile.resolve(".build/index-build").absolutePath
+
+    val pinnedSkipBinDir = settings.rootDir.parentFile
+        .resolve(".build/artifacts/skip/skip/skip.artifactbundle/macos")
+        .absolutePath
+    val isXcodeDriven = !System.getenv("BUILT_PRODUCTS_DIR").isNullOrBlank()
+    val inheritedPath = "${System.getenv("PATH")}:/opt/homebrew/bin"
     val skipPluginResult = providers.exec {
         commandLine(
             "/bin/sh",
             "-c",
             "skip plugin --prebuild --package-path '${packagePath}' --plugin-ref '${pluginPath.absolutePath}' && /usr/bin/env -u SDKROOT -u SDK_NAME -u PLATFORM_NAME -u TARGET_DEVICE_PLATFORM_NAME swift build --package-path '${packagePath}' --scratch-path '${indexBuildPath}'"
         )
-        environment("PATH", "${System.getenv("PATH")}:/opt/homebrew/bin")
+        environment("PATH", if (isXcodeDriven) inheritedPath else "${pinnedSkipBinDir}:${inheritedPath}")
     }
     val skipPluginOutput = skipPluginResult.standardOutput.asText.get()
     print(skipPluginOutput)
@@ -26,10 +29,8 @@ pluginManagement {
         .resolve(".build/plugins/outputs/conclave-skip/Conclave/destination/skipstone/settings.gradle.kts")
     val indexBuildSkipstoneSettings = packageRoot
         .resolve(".build/index-build/plugins/outputs/conclave-skip/Conclave/destination/skipstone/settings.gradle.kts")
-    val skipSwiftUIProject = settings.rootDir.parentFile
-        .resolve(".build/plugins/outputs/skip-fuse-ui/SkipSwiftUI/destination/skipstone/SkipSwiftUI")
 
-    fun xcodeSkipstoneSettings(): File? {
+    fun xcodeSkipstoneSettings(): List<File> {
         val builtProductsBuildDir = System.getenv("BUILT_PRODUCTS_DIR")
             ?.takeIf { it.isNotBlank() }
             ?.let(::File)
@@ -46,11 +47,14 @@ pluginManagement {
             builtProductsBuildDir?.resolve("Intermediates.noindex"),
             buildDir?.resolve("Intermediates.noindex"),
             objRoot
-        ).firstOrNull { it.isDirectory } ?: return null
+        ).firstOrNull { it.isDirectory } ?: return emptyList()
 
-        return intermediatesDir.resolve(
-            "BuildToolPluginIntermediates/conclave-skip.output/Conclave/skipstone/settings.gradle.kts"
-        )
+        val skipstoneDir = intermediatesDir
+            .resolve("BuildToolPluginIntermediates/conclave-skip.output/Conclave/skipstone")
+        val variantDirs = skipstoneDir.listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith("xcode-") }
+            .orEmpty()
+        return (variantDirs + skipstoneDir).map { it.resolve("settings.gradle.kts") }
     }
 
     fun addJitPackRepository(settingsText: String): String {
@@ -96,8 +100,6 @@ pluginManagement {
             "SkipFoundation" to "skip-foundation",
             "SkipLib" to "skip-lib",
             "SkipUnit" to "skip-unit",
-            "SkipAndroidBridge" to "skip-android-bridge",
-            "SkipBridge" to "skip-bridge",
             "SkipKit" to "skip-kit"
         )
         dependencyProjects.forEach { (moduleName, outputName) ->
@@ -116,19 +118,10 @@ pluginManagement {
             }
         }
 
-        if (skipSwiftUIProject.isDirectory && !settingsText.contains("include(\":SkipSwiftUI\")")) {
-            settingsText +=
-                """
-
-include(":SkipSwiftUI")
-project(":SkipSwiftUI").projectDir = file("${skipSwiftUIProject.invariantSeparatorsPath}")
-""".trimIndent()
-        }
-
         writeIfChanged(skipstoneSettings, settingsText)
     }
     patchRepositoryOnly(indexBuildSkipstoneSettings)
-    xcodeSkipstoneSettings()?.let(::patchRepositoryOnly)
+    xcodeSkipstoneSettings().forEach(::patchRepositoryOnly)
 
     val rootLocalProperties = settings.rootDir.resolve("local.properties")
     val skipstoneLocalProperties = settings.rootDir.parentFile

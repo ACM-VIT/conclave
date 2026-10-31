@@ -1,8 +1,5 @@
 import Foundation
 import Observation
-#if !SKIP
-import SkipFuse
-#endif
 #if canImport(ReplayKit)
 import ReplayKit
 #endif
@@ -42,14 +39,6 @@ enum MeetingEntryOverlayPolicy {
         }
         return now.timeIntervalSince(startedAt) < safetyTimeoutSeconds
     }
-}
-
-struct ActiveAppBinaryMessage: Identifiable {
-    let id = UUID()
-    let appId: String
-    let data: Data
-    let clientId: Int?
-    let sequence: Int
 }
 
 struct MeetingGridSnapshot {
@@ -103,16 +92,43 @@ enum PendingUserRowsPolicy {
 @MainActor
 @Observable
 final class MeetingState {
-    // Connection State
+
+    @ObservationIgnored var onShellInputChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onStageInputChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onControlsInputChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onPeopleInputChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onHostInputChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onStageSpeakerChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onStageReactionsChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onStageGameChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onActivityInputChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onActivityGameChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onQaInputChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onChatInputChanged: ((ChatInputChange) -> Void)? = nil
+
+    @ObservationIgnored private(set) var chatRevision = 0
+
     var connectionState: ConnectionState = .disconnected {
         didSet {
             PerformanceDiagnostics.state("connectionState", old: "\(oldValue)", new: "\(connectionState)")
+            onShellInputChanged?()
+            onChatInputChanged?(ChatInputChange.gate)
+            onActivityInputChanged?()
+            onActivityGameChanged?()
         }
     }
-    /// True from the first established-call interruption until replacement
-    /// transports and media are ready. Unlike `connectionState`, this remains
-    /// true while a reconnect-driven join is in `.joining`, so the UI does not
-    /// lose its notice or disable local media intent halfway through recovery.
+
     var isRecoveringConnection: Bool = false {
         didSet {
             guard oldValue != isRecoveringConnection else { return }
@@ -121,158 +137,450 @@ final class MeetingState {
                 old: "\(oldValue)",
                 new: "\(isRecoveringConnection)"
             )
+            onShellInputChanged?()
+            onStageInputChanged?()
+            onChatInputChanged?(ChatInputChange.gate)
+            onActivityInputChanged?()
+            onActivityGameChanged?()
         }
     }
-    /// True while a connected call is moving through an expected app
-    /// background/foreground transition. Transport recovery may briefly run,
-    /// but it should not be presented as a user-facing outage.
-    var isResumingFromBackground: Bool = false
-    var errorMessage: String?
-    var joinFormErrorMessage: String?
-    var meetingEndedNoticeMessage: String?
-    var serverRestartNotice: String?
-    var adminNoticeMessage: String?
-    var adminNoticeLevel: AdminNoticeLevel = .info
-    var isNetworkOffline: Bool = false
-    var waitingMessage: String?
 
-    // Meeting-entry takeover: a branded Lottie overlay that covers connect →
-    // join → media-settle so the user never sees the raw join spinner or the
-    // post-join device-init hiccups. Set true on New/Join, cleared only once the
-    // meeting is fully ready (see MeetingViewModel.scheduleMeetingEntryReveal).
+    var isResumingFromBackground: Bool = false {
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
+    }
+    var errorMessage: String?
+    var joinFormErrorMessage: String? = nil {
+        didSet { onShellInputChanged?() }
+    }
+    var meetingEndedNoticeMessage: String? = nil {
+        didSet { onShellInputChanged?() }
+    }
+    var serverRestartNotice: String? = nil {
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
+    }
+    var adminNoticeMessage: String? {
+        didSet { onStageInputChanged?() }
+    }
+    var adminNoticeLevel: AdminNoticeLevel = .info {
+        didSet { onStageInputChanged?() }
+    }
+    var isNetworkOffline: Bool = false {
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate) }
+    }
+
+    var isCaptivePortal: Bool = false {
+        didSet { if oldValue != isCaptivePortal { onStageInputChanged?() } }
+    }
+    var waitingMessage: String? = nil {
+        didSet { onShellInputChanged?() }
+    }
+
+    var terminalOutcome: MeetingTerminalOutcome? = nil {
+        didSet { onShellInputChanged?() }
+    }
+
     var isEnteringMeeting: Bool = false {
         didSet {
             PerformanceDiagnostics.state("isEnteringMeeting", old: "\(oldValue)", new: "\(isEnteringMeeting)")
+            onShellInputChanged?()
         }
     }
-    var meetingEntryAction: MeetingEntryAction?
+    var meetingEntryAction: MeetingEntryAction? = nil {
+        didSet { onShellInputChanged?() }
+    }
     var meetingEntryStartedAt: Date?
     var meetingEntryGeneration: Int = 0
 
-    // Room State
-    var roomId: String = ""
-    var isRoomLocked: Bool = false
-    var isChatLocked: Bool = false
-    var isNoGuests: Bool = false
-    var isDmEnabled: Bool = true
-    var isImageAttachmentsEnabled: Bool = true
-    // True while a picked chat image is uploading to the asset store.
+    var roomId: String = "" {
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
+    }
+
+    var isRoomLocked: Bool = false {
+        didSet { onStageInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?(); onControlsInputChanged?() }
+    }
+    var isChatLocked: Bool = false {
+        didSet { onChatInputChanged?(ChatInputChange.policy); onHostInputChanged?() }
+    }
+    var isNoGuests: Bool = false {
+        didSet { onPeopleInputChanged?(); onHostInputChanged?() }
+    }
+
+    var isDmEnabled: Bool = true {
+        didSet { onChatInputChanged?(ChatInputChange.policy); onPeopleInputChanged?(); onHostInputChanged?() }
+    }
+    var isImageAttachmentsEnabled: Bool = true {
+        didSet { onChatInputChanged?(ChatInputChange.policy); onHostInputChanged?() }
+    }
+
+    var isParticipantUnmuteAllowed: Bool = true {
+        didSet { onControlsInputChanged?(); onHostInputChanged?() }
+    }
+    var isParticipantVideoAllowed: Bool = true {
+        didSet { onControlsInputChanged?(); onHostInputChanged?() }
+    }
+
     var isChatImageUploading: Bool = false
-    var isTtsDisabled: Bool = false
-    var isReactionsDisabled: Bool = false
-    var meetingRequiresInviteCode: Bool = false
-    var adminAllowedUserKeys: [String] = []
-    var adminLockedAllowedUserKeys: [String] = []
-    var adminBlockedUserKeys: [String] = []
-    var isAdminAccessListRefreshing: Bool = false
 
-    // Webinar State
-    var webinarRole: String?
-    var isWebinarEnabled: Bool = false
-    var isWebinarPublicAccess: Bool = false
-    var isWebinarLocked: Bool = false
-    var webinarRequiresInviteCode: Bool = false
-    var webinarAttendeeCount: Int = 0
-    var webinarMaxAttendees: Int = 500
-    var webinarLinkSlug: String?
-    var webinarLinkURL: String?
-    var webinarFeedMode: String = "active-speaker"
-    var webinarSpeakerUserId: String?
+    var chatAttachment: ChatAttachmentState = ChatAttachmentState.none {
+        didSet {
+            if oldValue != chatAttachment { onChatInputChanged?(ChatInputChange.attachment) }
+        }
+    }
+    var isTtsDisabled: Bool = false {
+        didSet { onChatInputChanged?(ChatInputChange.policy); onHostInputChanged?() }
+    }
+    var isReactionsDisabled: Bool = false {
+        didSet { onShellInputChanged?(); onChatInputChanged?(ChatInputChange.policy); onHostInputChanged?() }
+    }
+    var meetingRequiresInviteCode: Bool = false {
+        didSet { onStageInputChanged?(); onHostInputChanged?() }
+    }
+    var adminAllowedUserKeys: [String] = [] {
+        didSet { onHostInputChanged?() }
+    }
+    var adminLockedAllowedUserKeys: [String] = [] {
+        didSet { onHostInputChanged?() }
+    }
+    var adminBlockedUserKeys: [String] = [] {
+        didSet { onHostInputChanged?() }
+    }
+    var isAdminAccessListRefreshing: Bool = false {
+        didSet { onHostInputChanged?() }
+    }
 
-    // User State
-    var userId: String
-    var sfuUserId: String?
+    var webinarRole: String? = nil {
+        didSet {
+            onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate); onPeopleInputChanged?()
+            onQaInputChanged?()
+        }
+    }
+    var isWebinarEnabled: Bool = false {
+        didSet { onStageInputChanged?(); onControlsInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?(); onQaInputChanged?() }
+    }
+    var isWebinarPublicAccess: Bool = false {
+        didSet { onStageInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?() }
+    }
+    var isWebinarLocked: Bool = false {
+        didSet { onHostInputChanged?() }
+    }
+    var webinarRequiresInviteCode: Bool = false {
+        didSet { onHostInputChanged?() }
+    }
+    var webinarAttendeeCount: Int = 0 {
+        didSet { onStageInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?() }
+    }
+    var webinarMaxAttendees: Int = 500 {
+        didSet { onHostInputChanged?() }
+    }
+    var webinarLinkSlug: String? {
+        didSet { onHostInputChanged?() }
+    }
+    var webinarLinkURL: String? {
+        didSet { onStageInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?() }
+    }
+    var webinarFeedMode: String = "active-speaker" {
+        didSet { onStageInputChanged?() }
+    }
+
+    var isWebinarQaEnabled: Bool = false {
+        didSet {
+            onStageInputChanged?(); onControlsInputChanged?(); onPeopleInputChanged?(); onHostInputChanged?()
+            onQaInputChanged?()
+        }
+    }
+
+    var webinarHandQueue: [WebinarHandQueueEntry] = [] {
+        didSet { onPeopleInputChanged?() }
+    }
+    var webinarHandQueueReceived: Bool = false {
+        didSet { onPeopleInputChanged?() }
+    }
+
+    var webinarStageInvites: [String: String] = [:] {
+        didSet { onPeopleInputChanged?() }
+    }
+
+    var webinarQaEntries: [String: WebinarQaEntry] = [:] {
+        didSet { onQaInputChanged?() }
+    }
+    var isWebinarQaSnapshotReceived: Bool = false {
+        didSet { onQaInputChanged?() }
+    }
+    var webinarQaVotes: [String: Bool] = [:] {
+        didSet { onQaInputChanged?() }
+    }
+    var webinarQaUnseenAttendee: Int = 0 {
+        didSet { onQaInputChanged?(); onStageInputChanged?(); onControlsInputChanged?() }
+    }
+    var webinarQaUnseenHost: Int = 0 {
+        didSet { onQaInputChanged?(); onControlsInputChanged?() }
+    }
+    var webinarSpeakerUserId: String? {
+        didSet { onStageInputChanged?() }
+    }
+
+    var webinarTitle: String = "" {
+        didSet { onStageInputChanged?() }
+    }
+
+    var userId: String {
+        didSet { onStageInputChanged?(); onChatInputChanged?(ChatInputChange.roster); onPeopleInputChanged?() }
+    }
+    var sfuUserId: String? {
+        didSet { onStageInputChanged?(); onChatInputChanged?(ChatInputChange.roster); onPeopleInputChanged?() }
+    }
     var sessionId: String
-    var displayName: String = ""
-    var isAdmin: Bool = false
-    var hostUserId: String?
-    var hostUserIds: [String] = []
+    var displayName: String = "" {
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.roster); onPeopleInputChanged?() }
+    }
+    var isAdmin: Bool = false {
+        didSet {
+            onQaInputChanged?()
+            onShellInputChanged?(); onStageInputChanged?(); onChatInputChanged?(ChatInputChange.gate); onPeopleInputChanged?()
 
-    // Participants
+            onActivityInputChanged?(); onActivityGameChanged?()
+
+            if oldValue && !isAdmin { clearHostOnlyState() }
+        }
+    }
+
+    private func clearHostOnlyState() {
+        if !pendingUsers.isEmpty { pendingUsers = [:] }
+        if !adminAllowedUserKeys.isEmpty { adminAllowedUserKeys = [] }
+        if !adminLockedAllowedUserKeys.isEmpty { adminLockedAllowedUserKeys = [] }
+        if !adminBlockedUserKeys.isEmpty { adminBlockedUserKeys = [] }
+        if !webinarHandQueue.isEmpty { webinarHandQueue = [] }
+        if webinarHandQueueReceived { webinarHandQueueReceived = false }
+        if !webinarStageInvites.isEmpty { webinarStageInvites = [:] }
+        if webinarQaUnseenHost != 0 { webinarQaUnseenHost = 0 }
+    }
+
+    func resetWebinarInteractionState() {
+        if !webinarHandQueue.isEmpty { webinarHandQueue = [] }
+        if webinarHandQueueReceived { webinarHandQueueReceived = false }
+        if !webinarStageInvites.isEmpty { webinarStageInvites = [:] }
+        if !webinarQaEntries.isEmpty { webinarQaEntries = [:] }
+        if isWebinarQaSnapshotReceived { isWebinarQaSnapshotReceived = false }
+        if !webinarQaVotes.isEmpty { webinarQaVotes = [:] }
+        if webinarQaUnseenAttendee != 0 { webinarQaUnseenAttendee = 0 }
+        if webinarQaUnseenHost != 0 { webinarQaUnseenHost = 0 }
+    }
+    var hostUserId: String? {
+        didSet { onPeopleInputChanged?() }
+    }
+    var hostUserIds: [String] = [] {
+        didSet { onStageInputChanged?(); onPeopleInputChanged?() }
+    }
+
     var participants: [String: Participant] = [:] {
         didSet {
+
+            isUniqueRemoteCacheValid = false
             if oldValue.count != participants.count {
                 PerformanceDiagnostics.state("participants.count", old: "\(oldValue.count)", new: "\(participants.count)")
             }
+            onShellInputChanged?()
+            onStageInputChanged?()
+
+            onChatInputChanged?(ChatInputChange.roster)
+            onPeopleInputChanged?()
         }
     }
-    var displayNames: [String: String] = [:]
+
+    var participantJoinSerials: [String: Int] = [:]
+    private var nextParticipantJoinSerial = 0
+
+    func assignParticipantJoinSerial(_ canonicalId: String) {
+        guard !canonicalId.isEmpty, participantJoinSerials[canonicalId] == nil else { return }
+        nextParticipantJoinSerial += 1
+        participantJoinSerials[canonicalId] = nextParticipantJoinSerial
+    }
+
+    func resetParticipantJoinSerials() {
+        participantJoinSerials = [:]
+        nextParticipantJoinSerial = 0
+    }
+
+    var participantUserKeys: [String: String] = [:] {
+        didSet { onPeopleInputChanged?() }
+    }
+
+    var webinarAttendeeSnapshotUserIds: [String] = []
+
+    var raisedAtByUserId: [String: Double] = [:] {
+        didSet { onPeopleInputChanged?() }
+    }
+
+    func userKey(for id: String) -> String {
+        let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let known = participantUserKeys[normalized], !known.isEmpty { return known }
+        return Self.userKeyPart(for: normalized)
+    }
+    var displayNames: [String: String] = [:] {
+        didSet { onStageInputChanged?(); onChatInputChanged?(ChatInputChange.roster); onPeopleInputChanged?() }
+    }
     var pendingUsers: [String: String] = [:] {
         didSet {
             pendingUserRows = PendingUserRowsPolicy.sortedRows(from: pendingUsers)
+            onShellInputChanged?()
+            onStageInputChanged?()
+            onPeopleInputChanged?()
         }
     }
     private(set) var pendingUserRows: [PendingUserRow] = []
-    var hasInitialPresenceSnapshot: Bool = false
+    var hasInitialPresenceSnapshot: Bool = false {
+        didSet { onStageInputChanged?(); onPeopleInputChanged?() }
+    }
 
-    // Media State
-    var isMuted: Bool = true
-    var isCameraOff: Bool = true
-    var isAudioOnlyMode: Bool = false
-    var isScreenSharing: Bool = false
-    var isHandRaised: Bool = false
+    var isMuted: Bool = true {
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
+    }
+    var isCameraOff: Bool = true {
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
+    }
+
+    var localCameraFacing: LocalCameraFacing = .front {
+        didSet { onStageInputChanged?() }
+    }
+
+    var isLocalCameraPaused: Bool = false {
+        didSet { onStageInputChanged?() }
+    }
+
+    var pendingEntryMediaIntent: EntryMediaIntent? = nil
+    var isAudioOnlyMode: Bool = false {
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
+    }
+    var isScreenSharing: Bool = false {
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
+    }
+    var isHandRaised: Bool = false {
+        didSet { onShellInputChanged?(); onStageInputChanged?(); onPeopleInputChanged?() }
+    }
     var videoQuality: VideoQuality = .standard
-    var connectionQuality: ConnectionQuality = .unknown
-    // Selected audio routes (mic input / speaker output). nil = follow the
-    // platform default. Mirrors the web client's device pickers.
+    var connectionQuality: ConnectionQuality = .unknown {
+        didSet { onStageInputChanged?() }
+    }
+
     var selectedAudioInputId: String?
     var selectedAudioOutputId: String?
 
-    // Shared Browser
-    var isBrowserActive: Bool = false
-    var isBrowserLaunching: Bool = false
-    var hasBrowserAudio: Bool = false
-    var isBrowserAudioMuted: Bool = false
-    var browserURL: String?
-    var browserNoVncURL: String?
-    var browserControllerUserId: String?
-    var isBrowserNavigating: Bool = false
-    var browserProvider: String?
+    var prejoinAudioOutputKind = ""
+    var prejoinAudioInputId = ""
 
-    // Apps Runtime
-    var activeAppId: String?
-    var isAppsLocked: Bool = false
-    var isAppsActionInFlight: Bool = false
-    var latestAppYjsUpdate: ActiveAppBinaryMessage?
-    var latestAppAwarenessUpdate: ActiveAppBinaryMessage?
-    var appYjsUpdateSequence: Int = 0
-    var appAwarenessUpdateSequence: Int = 0
+    var isBrowserActive: Bool = false {
+        didSet { onStageInputChanged?(); onControlsInputChanged?(); onActivityInputChanged?() }
+    }
+    var isBrowserLaunching: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var hasBrowserAudio: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var isBrowserAudioMuted: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var browserURL: String? {
+        didSet { onActivityInputChanged?() }
+    }
 
-    // Games
-    var gameCatalog: [GameCatalogEntry] = []
-    var gamePublicState: GamePublicState?
-    var gamePlayerView: GamePlayerViewNotification?
-    var gameVote: GameVoteState?
+    var browserNoVncURL: String? {
+        didSet { onActivityInputChanged?() }
+    }
+
+    var isBrowserAvailable: Bool = false {
+        didSet {
+            if oldValue != isBrowserAvailable { onActivityInputChanged?() }
+        }
+    }
+    var browserControllerUserId: String? {
+        didSet { onActivityInputChanged?() }
+    }
+    var isBrowserNavigating: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var browserProvider: String? {
+        didSet { onActivityInputChanged?() }
+    }
+
+    var activeAppId: String? {
+        didSet { onStageInputChanged?(); onControlsInputChanged?(); onActivityInputChanged?() }
+    }
+    var isAppsLocked: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+    var isAppsActionInFlight: Bool = false {
+        didSet { onActivityInputChanged?() }
+    }
+
+    var activeAppHasRoomData: Bool = false
+
+    var gameCatalog: [GameCatalogEntry] = [] {
+        didSet { onActivityInputChanged?() }
+    }
+    var gamePublicState: GamePublicState? {
+        didSet { onStageGameChanged?() }
+    }
+    var gamePlayerView: GamePlayerViewNotification? {
+        didSet { onActivityGameChanged?() }
+    }
+    var gameVote: GameVoteState? {
+        didSet { onControlsInputChanged?(); onActivityInputChanged?() }
+    }
+
+    var gameSelfId: String? = nil {
+        didSet { onActivityGameChanged?() }
+    }
     var isGameActionInFlight: Bool = false
     var gameErrorMessage: String?
-    // End-game arming lives in meeting state, not view @State: the stage
-    // chrome can be rebuilt by game pushes mid-arm, which would silently
-    // swallow the confirmation tap.
+
     var isGameEndArmed: Bool = false
 
-    // Active States
-    var activeScreenShareUserId: String?
+    var activeScreenShareUserId: String? = nil {
+        didSet { onShellInputChanged?(); onStageInputChanged?() }
+    }
     var activeSpeakerId: String? {
         didSet {
             PerformanceDiagnostics.state("activeSpeakerId", old: oldValue ?? "nil", new: activeSpeakerId ?? "nil")
+            onStageSpeakerChanged?()
         }
     }
-    var ttsSpeakerId: String?
-    // Locally-pinned participant → spotlight stage (not synced; mirrors web's
-    // per-tile pin). nil = grid.
-    var pinnedUserId: String?
-    var viewMode: MeetingViewMode = .auto
-    var viewMaxTiles: Int = MeetingViewConstants.defaultMaxTiles
-    var hideTilesWithoutVideo: Bool = false
-    var selfViewMode: MeetingSelfViewMode = .auto
-    var selfViewCorner: MeetingSelfViewCorner = .bottomRight
+    var ttsSpeakerId: String? {
+        didSet { onStageSpeakerChanged?() }
+    }
 
-    // Chat
+    var activeTtsMessageId: String = "" {
+        didSet {
+            if oldValue != activeTtsMessageId { onChatInputChanged?(ChatInputChange.playback) }
+        }
+    }
+
+    var pinnedUserId: String? {
+        didSet { onStageInputChanged?(); onPeopleInputChanged?() }
+    }
+    var viewMode: MeetingViewMode = .auto {
+        didSet { onStageInputChanged?(); onControlsInputChanged?() }
+    }
+    var viewMaxTiles: Int = MeetingViewConstants.defaultMaxTiles {
+        didSet { onStageInputChanged?() }
+    }
+    var hideTilesWithoutVideo: Bool = false {
+        didSet { onStageInputChanged?() }
+    }
+    var selfViewMode: MeetingSelfViewMode = .auto {
+        didSet { onStageInputChanged?() }
+    }
+    var selfViewCorner: MeetingSelfViewCorner = .bottomRight {
+        didSet { onStageInputChanged?() }
+    }
+
     var chatMessages: [ChatMessage] = [] {
         didSet {
             if oldValue.count != chatMessages.count {
                 PerformanceDiagnostics.state("chatMessages.count", old: "\(oldValue.count)", new: "\(chatMessages.count)")
             }
+            chatRevision += 1
+            onChatInputChanged?(ChatInputChange.messages)
         }
     }
     var chatOverlayMessages: [ChatMessage] = [] {
@@ -287,12 +595,17 @@ final class MeetingState {
             if oldValue.count != systemMessages.count {
                 PerformanceDiagnostics.state("systemMessages.count", old: "\(oldValue.count)", new: "\(systemMessages.count)")
             }
+            chatRevision += 1
+            onChatInputChanged?(ChatInputChange.messages)
         }
     }
-    var unreadChatCount: Int = 0
+    var unreadChatCount: Int = 0 {
+        didSet { onShellInputChanged?() }
+    }
     var isChatOpen: Bool = false {
         didSet {
             PerformanceDiagnostics.state("isChatOpen", old: "\(oldValue)", new: "\(isChatOpen)")
+            onShellInputChanged?()
         }
     }
     var isTranscriptOpen: Bool = false {
@@ -301,12 +614,12 @@ final class MeetingState {
         }
     }
 
-    // Reactions
     var activeReactions: [Reaction] = [] {
         didSet {
             if oldValue.count != activeReactions.count {
                 PerformanceDiagnostics.state("activeReactions.count", old: "\(oldValue.count)", new: "\(activeReactions.count)")
             }
+            onStageReactionsChanged?()
         }
     }
 
@@ -422,17 +735,45 @@ final class MeetingState {
             }
     }
 
+    @ObservationIgnored private var uniqueRemoteCache: [Participant] = []
+
+    @ObservationIgnored private var uniqueRemoteIndexByKey: [String: [Int]] = [:]
+    @ObservationIgnored private var uniqueRemoteCacheUserId = ""
+    @ObservationIgnored private var uniqueRemoteCacheSfuUserId: String? = nil
+    @ObservationIgnored private var isUniqueRemoteCacheValid = false
+
     private var uniqueRemoteParticipants: [Participant] {
+        refreshUniqueRemoteCacheIfNeeded()
+        return uniqueRemoteCache
+    }
+
+    private func refreshUniqueRemoteCacheIfNeeded() {
+        let source = participants
+        let localUserId = userId
+        let localSfuUserId = sfuUserId
+        if isUniqueRemoteCacheValid && uniqueRemoteCacheUserId == localUserId
+            && uniqueRemoteCacheSfuUserId == localSfuUserId {
+            return
+        }
         var remotes: [Participant] = []
-        for participant in participants.values.sorted(by: { $0.id < $1.id })
+        var indexByKey: [String: [Int]] = [:]
+        for participant in source.values.sorted(by: { $0.id < $1.id })
             where isRemoteParticipantUserId(participant.id) {
-            guard let index = remotes.firstIndex(where: { Self.userIdsMatch($0.id, participant.id) }) else {
+
+            let key = Self.userKeyPart(for: participant.id)
+            let candidates = indexByKey[key] ?? []
+            guard let index = candidates.first(where: { Self.userIdsMatch(remotes[$0].id, participant.id) }) else {
+                indexByKey[key] = candidates + [remotes.count]
                 remotes.append(participant)
                 continue
             }
             remotes[index] = Self.mergedRemoteParticipant(remotes[index], participant)
         }
-        return remotes
+        uniqueRemoteCache = remotes
+        uniqueRemoteIndexByKey = indexByKey
+        uniqueRemoteCacheUserId = localUserId
+        uniqueRemoteCacheSfuUserId = localSfuUserId
+        isUniqueRemoteCacheValid = true
     }
 
     private nonisolated static func mergedRemoteParticipant(_ left: Participant, _ right: Participant) -> Participant {
@@ -625,8 +966,10 @@ final class MeetingState {
             return nil
         }
 
-        if let participant = uniqueRemoteParticipants.first(where: { Self.userIdsMatch($0.id, normalized) }) {
-            return participant
+        let remotes = uniqueRemoteParticipants
+        for index in uniqueRemoteIndexByKey[Self.userKeyPart(for: normalized)] ?? []
+            where Self.userIdsMatch(remotes[index].id, normalized) {
+            return remotes[index]
         }
         return participants[normalized]
     }
@@ -651,6 +994,18 @@ final class MeetingState {
         return participant.id
     }
 
+    func canonicalStageUserId(_ raw: String?) -> String? {
+        let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalized.isEmpty else { return nil }
+        if isLocalIdentityUserId(normalized) { return userId }
+        if let remote = presentRemoteParticipantId(for: normalized) { return remote }
+        if Self.hasSessionSuffix(normalized) {
+            let localKeys = [userId, sfuUserId].compactMap { $0 }.map { Self.userKeyPart(for: $0) }
+            if localKeys.contains(Self.userKeyPart(for: normalized)) { return userId }
+        }
+        return nil
+    }
+
     private func participant(_ participant: Participant, matches resolvedId: String?) -> Bool {
         guard let resolvedId else { return false }
         return Self.userIdsMatch(participant.id, resolvedId)
@@ -664,10 +1019,6 @@ final class MeetingState {
         visibleGridSnapshot().hiddenParticipantCount
     }
 
-    /// `forceSelfTile` folds the local user into the strip regardless of the
-    /// self-view mode. The game stage uses it so the self view never floats
-    /// over a game's controls - during a game you're a player in the strip
-    /// like everyone else.
     func tileStripSnapshot(forceSelfTile: Bool = false) -> MeetingTileStripSnapshot {
         let context = visibilityContext()
         let showSelfTile = context.shouldShowSelfTile || forceSelfTile
@@ -703,6 +1054,10 @@ final class MeetingState {
     var resolvedViewMode: MeetingResolvedViewMode {
         if isWebinarAttendee {
             return renderableStageUserId(webinarSpeakerUserId) == nil ? .tiled : .spotlight
+        }
+
+        if hasRenderablePinnedUser {
+            return .spotlight
         }
 
         switch viewMode {
@@ -755,7 +1110,7 @@ final class MeetingState {
         #if os(iOS) && canImport(ReplayKit) && !SKIP
         return RPScreenRecorder.shared().isAvailable
         #elseif SKIP
-        // Android: screen capture via MediaProjection (API 21+).
+
         return true
         #else
         return false
@@ -909,24 +1264,30 @@ final class MeetingState {
         return Self.userIdsMatch(pinnedUserId, normalized)
     }
 
+    var meetingClientId = ""
+
     var meetingLink: String {
-        Self.meetingLink(for: roomId)
+        Self.meetingLink(for: roomId, clientId: meetingClientId)
     }
 
     static func meetingLink(for roomId: String) -> String {
-        let trimmed = roomId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: meetingLinkPathAllowed) ?? trimmed
-        return "https://conclave.acmvit.in/\(encoded)"
+        MeetingLinkBuilder.url(roomCode: roomId, clientId: nil)
     }
 
-    private nonisolated static let meetingLinkPathAllowed: CharacterSet = {
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "/?#")
-        return allowed
-    }()
+    static func meetingLink(for roomId: String, clientId: String?) -> String {
+        MeetingLinkBuilder.url(roomCode: roomId, clientId: clientId)
+    }
 
     func displayName(for id: String) -> String {
         MeetingDisplayNamePresentation.formatted(rawDisplayName(for: id))
+    }
+
+    func chatDisplayName(for id: String) -> String {
+        rawDisplayName(for: id).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var mergedRemoteParticipants: [Participant] {
+        uniqueRemoteParticipants
     }
 
     private func rawDisplayName(for id: String) -> String {
@@ -1118,7 +1479,8 @@ final class MeetingState {
             return false
         }
         guard let participant = participant(for: normalized) else {
-            return true
+
+            return !webinarAttendeeSnapshotUserIds.contains { Self.userIdsMatch($0, normalized) }
         }
         return !participant.isWebinarAttendee
     }

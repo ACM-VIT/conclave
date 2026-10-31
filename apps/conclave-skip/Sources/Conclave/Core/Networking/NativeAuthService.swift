@@ -24,8 +24,39 @@ struct NativeGoogleIdentityToken {
     let email: String?
 }
 
+enum NativeAuthErrorKind: String, CaseIterable, Equatable {
+
+    case cancelled
+
+    case notConfigured
+
+    case unavailable
+
+    case inProgress
+    case timedOut
+
+    case network
+
+    case server
+
+    case rejected
+
+    case invalidResponse
+
+    case noCredential
+
+    case providerFailed
+    case unknown
+}
+
 struct NativeAuthError: LocalizedError {
     let message: String
+    let kind: NativeAuthErrorKind
+
+    init(message: String, kind: NativeAuthErrorKind = .unknown) {
+        self.message = message
+        self.kind = kind
+    }
 
     var errorDescription: String? {
         message
@@ -183,7 +214,7 @@ enum NativeAuthService {
     static func fetchEnabledProviders() async throws -> Set<NativeAuthProvider> {
         guard let baseURL = resolveAppBaseURL(),
               let url = authURL(path: "/api/auth/providers", baseURL: baseURL) else {
-            throw NativeAuthError(message: "Authentication server is not configured.")
+            throw NativeAuthError(message: "Authentication server is not configured.", kind: .notConfigured)
         }
 
         var request = URLRequest(url: url)
@@ -195,7 +226,8 @@ enum NativeAuthService {
         let data = result.data
 
         guard (200...299).contains(result.statusCode) else {
-            throw NativeAuthError(message: responseSummary(from: data) ?? "Couldn't load sign-in providers.")
+            throw NativeAuthError(message: responseSummary(from: data) ?? "Couldn't load sign-in providers.",
+                                  kind: statusKind(result.statusCode))
         }
 
         return try decodeEnabledProviders(from: data)
@@ -204,7 +236,7 @@ enum NativeAuthService {
     static func fetchCurrentSessionUser() async throws -> NativeAuthenticatedUser? {
         guard let baseURL = resolveAppBaseURL(),
               let url = authURL(path: "/api/auth/get-session", baseURL: baseURL) else {
-            throw NativeAuthError(message: "Authentication server is not configured.")
+            throw NativeAuthError(message: "Authentication server is not configured.", kind: .notConfigured)
         }
 
         var request = URLRequest(url: url)
@@ -221,7 +253,7 @@ enum NativeAuthService {
         }
 
         guard (200...299).contains(statusCode) else {
-            throw NativeAuthError(message: responseSummary(from: data) ?? "Session refresh failed.")
+            throw NativeAuthError(message: responseSummary(from: data) ?? "Session refresh failed.", kind: .server)
         }
 
         if data.isEmpty {
@@ -253,11 +285,11 @@ enum NativeAuthService {
     ) async throws -> NativeAuthenticatedUser {
         let trimmedToken = idToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedToken.isEmpty else {
-            throw NativeAuthError(message: "Missing identity token.")
+            throw NativeAuthError(message: "Missing identity token.", kind: .invalidResponse)
         }
         guard let baseURL = resolveAppBaseURL(),
               let url = authURL(path: "/api/auth/sign-in/social", baseURL: baseURL) else {
-            throw NativeAuthError(message: "Authentication server is not configured.")
+            throw NativeAuthError(message: "Authentication server is not configured.", kind: .notConfigured)
         }
 
         let requestBody = NativeSocialSignInRequest(
@@ -287,7 +319,7 @@ enum NativeAuthService {
 
         guard (200...299).contains(statusCode) else {
             let message = decoded?.error ?? decoded?.message ?? responseSummary(from: data) ?? "Sign-in failed."
-            throw NativeAuthError(message: message)
+            throw NativeAuthError(message: message, kind: statusKind(statusCode))
         }
 
         if let sessionUser = try? await fetchCurrentSessionUser(),
@@ -298,7 +330,7 @@ enum NativeAuthService {
         guard let user = decoded?.user ?? decoded?.session?.user,
               hasUsableIdentity(user) else {
             let message = decoded?.error ?? decoded?.message ?? "Sign-in completed, but no user was returned."
-            throw NativeAuthError(message: message)
+            throw NativeAuthError(message: message, kind: .invalidResponse)
         }
 
         return user
@@ -327,7 +359,7 @@ enum NativeAuthService {
     static func deleteCurrentUser() async throws {
         guard let baseURL = resolveAppBaseURL(),
               let url = authURL(path: "/api/auth/delete-user", baseURL: baseURL) else {
-            throw NativeAuthError(message: "Authentication server is not configured.")
+            throw NativeAuthError(message: "Authentication server is not configured.", kind: .notConfigured)
         }
 
         var request = URLRequest(url: url)
@@ -345,11 +377,11 @@ enum NativeAuthService {
 
         guard (200...299).contains(statusCode) else {
             let message = decoded?.error ?? decoded?.message ?? responseSummary(from: data) ?? "Unable to delete account."
-            throw NativeAuthError(message: message)
+            throw NativeAuthError(message: message, kind: statusKind(statusCode))
         }
 
         if decoded?.success == false {
-            throw NativeAuthError(message: decoded?.error ?? decoded?.message ?? "Unable to delete account.")
+            throw NativeAuthError(message: decoded?.error ?? decoded?.message ?? "Unable to delete account.", kind: .server)
         }
 
         clearStoredSessionCookies(matching: baseURL)
@@ -388,16 +420,24 @@ enum NativeAuthService {
     }
 
     private static func resolveDebugAppBaseURL() -> URL? {
+        #if DEBUG && targetEnvironment(simulator) && !SKIP
+        let allowProductionBundle = NativeRuntimeConfig.usesDebugViewerProfile
+        #else
+        let allowProductionBundle = true
+        #endif
         for key in appBaseURLConfigKeys {
-            if let value = ProcessInfo.processInfo.environment[key],
+            #if DEBUG && !SKIP
+
+            let launchValue = NativeRuntimeConfig.debugLaunchValue(forKey: key)
+            #else
+            let launchValue = ProcessInfo.processInfo.environment[key]
+            #endif
+            if let value = launchValue,
                let url = configuredBaseURL(from: value) {
                 return url
             }
             if let value = NativeRuntimeConfig.bundledString(forKey: key),
-               let url = configuredBaseURL(from: value) {
-                if shouldIgnoreBundledProductionBaseURL(url) {
-                    continue
-                }
+               let url = configuredDebugBundledBaseURL(from: value, allowProductionHost: allowProductionBundle) {
                 return url
             }
         }
@@ -445,17 +485,21 @@ enum NativeAuthService {
         #if SKIP
         try await withCheckedThrowingContinuation { continuation in
             var didResume = false
-            NativeGoogleSignInBridge.requestIdToken { token, name, email, errorMessage in
+            NativeGoogleSignInBridge.requestIdToken { token, name, email, errorCode, errorMessage in
                 guard !didResume else { return }
                 didResume = true
 
                 if let errorMessage = normalizedOptional(errorMessage) {
-                    continuation.resume(throwing: NativeAuthError(message: errorMessage))
+                    continuation.resume(throwing: NativeAuthError(
+                        message: errorMessage,
+                        kind: kind(forGoogleBridgeCode: normalizedOptional(errorCode) ?? "")
+                    ))
                     return
                 }
 
                 guard let token = normalizedOptional(token) else {
-                    continuation.resume(throwing: NativeAuthError(message: "Google Sign-In did not return an identity token."))
+                    continuation.resume(throwing: NativeAuthError(message: "Google Sign-In did not return an identity token.",
+                                                                  kind: .invalidResponse))
                     return
                 }
 
@@ -469,8 +513,45 @@ enum NativeAuthService {
         #elseif canImport(GoogleSignIn) && canImport(UIKit)
         try await NativeGoogleSignInBridgeIOS.requestIdToken()
         #else
-        throw NativeAuthError(message: "Google Sign-In is not available in this native build.")
+        throw NativeAuthError(message: "Google Sign-In is not available in this native build.", kind: .notConfigured)
         #endif
+    }
+
+    static func errorKind(_ error: Error) -> NativeAuthErrorKind {
+        if let authError = error as? NativeAuthError {
+            return authError.kind
+        }
+        #if !SKIP
+        if error is URLError {
+            return .network
+        }
+        #endif
+        return .unknown
+    }
+
+    static func kind(forGoogleBridgeCode code: String) -> NativeAuthErrorKind {
+        switch code {
+        case "cancelled":
+            return .cancelled
+        case "not_configured":
+            return .notConfigured
+        case "unavailable":
+            return .unavailable
+        case "in_progress":
+            return .inProgress
+        case "timed_out":
+            return .timedOut
+        case "no_credential":
+            return .noCredential
+        case "invalid_response":
+            return .invalidResponse
+        default:
+            return .providerFailed
+        }
+    }
+
+    private static func statusKind(_ statusCode: Int) -> NativeAuthErrorKind {
+        statusCode == 401 || statusCode == 403 ? NativeAuthErrorKind.rejected : NativeAuthErrorKind.server
     }
 
     static func handleOpenURL(_ url: URL) -> Bool {
@@ -524,15 +605,11 @@ enum NativeAuthService {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    private static func shouldIgnoreBundledProductionBaseURL(_ url: URL) -> Bool {
-        guard let host = url.host else { return false }
-        #if SKIP
-        return false
-        #elseif DEBUG && targetEnvironment(simulator)
-        return SfuJoinService.isProductionHost(host)
-        #else
-        return false
-        #endif
+    static func configuredDebugBundledBaseURL(from value: String, allowProductionHost: Bool) -> URL? {
+        guard let url = configuredBaseURL(from: value),
+              let host = url.host,
+              allowProductionHost || !SfuJoinService.isProductionHost(host) else { return nil }
+        return url
     }
 
     private static func baseURL(from url: URL) -> URL? {
@@ -615,12 +692,12 @@ enum NativeAuthService {
 
                 if let errorMessage,
                    !errorMessage.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
-                    continuation.resume(throwing: NativeAuthError(message: errorMessage))
+                    continuation.resume(throwing: NativeAuthError(message: errorMessage, kind: .network))
                     return
                 }
 
                 guard let response else {
-                    continuation.resume(throwing: NativeAuthError(message: "Authentication request failed."))
+                    continuation.resume(throwing: NativeAuthError(message: "Authentication request failed.", kind: .network))
                     return
                 }
 
@@ -759,13 +836,14 @@ private enum NativeGoogleSignInBridgeIOS {
     @MainActor
     static func requestIdToken() async throws -> NativeGoogleIdentityToken {
         guard let clientID = configuredClientID() else {
-            throw NativeAuthError(message: "Google Sign-In is not configured for this iOS build.")
+            throw NativeAuthError(message: "Google Sign-In is not configured for this iOS build.", kind: .notConfigured)
         }
         guard configuredReversedClientID() != nil else {
-            throw NativeAuthError(message: "Google Sign-In needs GOOGLE_IOS_REVERSED_CLIENT_ID in the iOS build settings.")
+            throw NativeAuthError(message: "Google Sign-In needs GOOGLE_IOS_REVERSED_CLIENT_ID in the iOS build settings.",
+                                  kind: .notConfigured)
         }
         guard let presentingViewController = topPresentingViewController() else {
-            throw NativeAuthError(message: "Google Sign-In needs an active app window.")
+            throw NativeAuthError(message: "Google Sign-In needs an active app window.", kind: .unavailable)
         }
 
         GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
@@ -773,17 +851,20 @@ private enum NativeGoogleSignInBridgeIOS {
         return try await withCheckedThrowingContinuation { continuation in
             GIDSignIn.sharedInstance.signIn(withPresenting: presentingViewController) { result, error in
                 if let error {
-                    continuation.resume(throwing: NativeAuthError(message: error.localizedDescription))
+                    continuation.resume(throwing: NativeAuthError(message: error.localizedDescription,
+                                                                  kind: isCancellation(error) ? .cancelled : .providerFailed))
                     return
                 }
 
                 guard let user = result?.user else {
-                    continuation.resume(throwing: NativeAuthError(message: "Google Sign-In did not return a user."))
+                    continuation.resume(throwing: NativeAuthError(message: "Google Sign-In did not return a user.",
+                                                                  kind: .invalidResponse))
                     return
                 }
 
                 guard let token = normalizedOptional(user.idToken?.tokenString) else {
-                    continuation.resume(throwing: NativeAuthError(message: "Google Sign-In did not return an identity token."))
+                    continuation.resume(throwing: NativeAuthError(message: "Google Sign-In did not return an identity token.",
+                                                                  kind: .invalidResponse))
                     return
                 }
 
@@ -799,6 +880,11 @@ private enum NativeGoogleSignInBridgeIOS {
 
     static func handleOpenURL(_ url: URL) -> Bool {
         GIDSignIn.sharedInstance.handle(url)
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == GIDSignInError.errorDomain && nsError.code == GIDSignInError.canceled.rawValue
     }
 
     private static func configuredClientID() -> String? {

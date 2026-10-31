@@ -1,0 +1,88 @@
+{
+  "id": "guide",
+  "kind": "mutable-snapshot",
+  "request_url": "https://developers.google.com/fonts/docs/material_symbols",
+  "request_method": "GET",
+  "request_headers": {
+    "Accept-Encoding": "identity",
+    "User-Agent": "Conclave-selected-input-recovery/1.0"
+  },
+  "started_at_utc": "2026-10-23T16:12:29.303400Z",
+  "source_revision": null,
+  "historical_status": "fresh_network_retrieval",
+  "body_file": "metadata/material-symbols-guide.html",
+  "receipt_file": "http/guide.json",
+  "redirect_policy": "record and reject; no substitutions",
+  "redirects": [],
+  "http_status": 200,
+  "final_url": "https://developers.google.com/fonts/docs/material_symbols",
+  "response_headers": [
+    [
+      "last-modified",
+      "Thu, 26 Sep 2024 17:09:09 GMT"
+    ],
+    [
+      "content-type",
+      "text/html; charset=utf-8"
+    ],
+    [
+      "content-security-policy",
+      "base-uri 'self'; object-src 'none'; script-src 'strict-dynamic' 'unsafe-inline' https: http: 'nonce-+Nv5EW/9vNnc8kvHrfrYoTrTHnklDt' 'unsafe-eval'; frame-ancestors 'self' https://codeassist.google.com https://code-assist-free-tier.corp.google.com; report-uri https://csp.withgoogle.com/csp/devsite/v2"
+    ],
+    [
+      "strict-transport-security",
+      "max-age=63072000; includeSubdomains; preload"
+    ],
+    [
+      "x-xss-protection",
+      "0"
+    ],
+    [
+      "x-content-type-options",
+      "nosniff"
+    ],
+    [
+      "cache-control",
+      "no-cache, must-revalidate"
+    ],
+    [
+      "expires",
+      "0"
+    ],
+    [
+      "pragma",
+      "no-cache"
+    ],
+    [
+      "x-cloud-trace-context",
+      "ab9ff91952aa52522fc8044794b63326"
+    ],
+    [
+      "date",
+      "Fri, 23 Oct 2026 16:12:30 GMT"
+    ],
+    [
+      "server",
+      "Google Frontend"
+    ],
+    [
+      "Content-Length",
+      "74679"
+    ],
+    [
+      "Alt-Svc",
+      "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+    ],
+    [
+      "Connection",
+      "close"
+    ]
+  ],
+  "bytes": 74679,
+  "sha256": "52aeb1b22d6353b602cfd9b2591e0bed023eab29640d0b9961681cc0589286b0",
+  "body_complete_within_limit": true,
+  "max_bytes": 2097152,
+  "errors": [],
+  "completed_at_utc": "2026-10-23T16:12:30.529450Z",
+  "retrieval_ok": true
+}

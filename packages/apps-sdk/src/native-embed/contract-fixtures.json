@@ -1,0 +1,337 @@
+{
+  "comment": "Shared contract fixtures for the native embed bridge v1. Read by packages/apps-sdk/scripts/native-embed-contract-test.mjs (protocol.ts) and apps/conclave-skip/Tests/ConclaveTests/ACT7AppHostTests.swift (AppBridgeCodec); T/Skip/ACT7AppHostBridgeTests.kt repeats a subset inline. Regenerate with HD/scratch/B7-T1/make_fixtures.py.",
+  "protocolVersion": 1,
+  "scope": {
+    "callSessionId": "call-7-3f2a9c1e",
+    "appSessionId": "app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70",
+    "appId": "whiteboard"
+  },
+  "expectedOrigin": "conclave-embed://app",
+  "embedToNative": [
+    {
+      "name": "ready",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"ready\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"bundleVersion\":\"1.0.0\",\"appId\":\"whiteboard\",\"stateVector\":\"AA==\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "ready from a newer protocol still decodes (the session shows the version mismatch)",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":2,\"type\":\"ready\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"bundleVersion\":\"2.0.0\",\"appId\":\"whiteboard\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "sync",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"sync\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-2\",\"payload\":{\"stateVector\":\"AA==\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "update",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-3\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "awareness",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"awareness\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-4\",\"payload\":{\"update\":\"AQID\",\"clientId\":42}}",
+      "expect": "none"
+    },
+    {
+      "name": "status",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-5\",\"payload\":{\"tool\":\"pen\",\"color\":\"#e3e3e8\",\"strokeWidth\":3,\"filled\":false,\"canUndo\":true,\"canRedo\":false,\"pageId\":\"page-1\",\"pageName\":\"Page 1\",\"pages\":[{\"id\":\"page-1\",\"name\":\"Page 1\"}],\"elementCount\":4,\"editorCount\":2}}",
+      "expect": "none"
+    },
+    {
+      "name": "ack with an export",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"ack\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"h-1\",\"payload\":{\"ok\":true,\"pngBase64\":\"iVBORw0KGgo=\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "resize",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"resize\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-6\",\"payload\":{\"width\":390,\"height\":280}}",
+      "expect": "none"
+    },
+    {
+      "name": "malformed JSON",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":",
+      "expect": "malformed"
+    },
+    {
+      "name": "not an object",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "[1,2,3]",
+      "expect": "malformed"
+    },
+    {
+      "name": "version as text",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":\"1\",\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "malformed"
+    },
+    {
+      "name": "missing type",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "malformed"
+    },
+    {
+      "name": "unknown type",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"evaluate\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"code\":\"fetch('/')\"}}",
+      "expect": "unknownType"
+    },
+    {
+      "name": "native method name as a type",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"openSettings\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{}}",
+      "expect": "unknownType"
+    },
+    {
+      "name": "another protocol version",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":2,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "versionMismatch"
+    },
+    {
+      "name": "wrong call session",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-6-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "wrongCallSession"
+    },
+    {
+      "name": "missing call session",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "wrongCallSession"
+    },
+    {
+      "name": "stale app session (replaced app)",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-00000000-0000-4000-8000-000000000000\",\"requestId\":\"e-1\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "staleAppSession"
+    },
+    {
+      "name": "request id with spaces",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e 1\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "badRequestId"
+    },
+    {
+      "name": "request id too long",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "badRequestId"
+    },
+    {
+      "name": "missing request id",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "badRequestId"
+    },
+    {
+      "name": "payload is an array",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":[1,2]}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "ready without a bundle version",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"ready\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"appId\":\"whiteboard\"}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "ready without an app id",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"ready\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"bundleVersion\":\"1.0.0\"}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "update that is not base64",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"update\":\"!!!!\"}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "update without bytes",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "awareness with a negative client id",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"awareness\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"update\":\"AQID\",\"clientId\":-1}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "status with an unknown tool",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"tool\":\"script\",\"color\":\"#e3e3e8\",\"strokeWidth\":3,\"filled\":false,\"canUndo\":true,\"canRedo\":false,\"pageId\":\"page-1\",\"pageName\":\"Page 1\",\"pages\":[{\"id\":\"page-1\",\"name\":\"Page 1\"}],\"elementCount\":4,\"editorCount\":2}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "status with a color that is not a hex color",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"tool\":\"pen\",\"color\":\"url(javascript:alert(1))\",\"strokeWidth\":3,\"filled\":false,\"canUndo\":true,\"canRedo\":false,\"pageId\":\"page-1\",\"pageName\":\"Page 1\",\"pages\":[{\"id\":\"page-1\",\"name\":\"Page 1\"}],\"elementCount\":4,\"editorCount\":2}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "status with a zero stroke width",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"tool\":\"pen\",\"color\":\"#e3e3e8\",\"strokeWidth\":0,\"filled\":false,\"canUndo\":true,\"canRedo\":false,\"pageId\":\"page-1\",\"pageName\":\"Page 1\",\"pages\":[{\"id\":\"page-1\",\"name\":\"Page 1\"}],\"elementCount\":4,\"editorCount\":2}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "status with a page id that is not an identifier",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"tool\":\"pen\",\"color\":\"#e3e3e8\",\"strokeWidth\":3,\"filled\":false,\"canUndo\":true,\"canRedo\":false,\"pageId\":\"page one\",\"pageName\":\"Page 1\",\"pages\":[{\"id\":\"page-1\",\"name\":\"Page 1\"}],\"elementCount\":4,\"editorCount\":2}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "resize with a negative width",
+      "origin": "conclave-embed://app",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"resize\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"width\":-1,\"height\":10}}",
+      "expect": "badPayload"
+    },
+    {
+      "name": "wrong origin",
+      "origin": "https://evil.example",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-3\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "wrongOrigin"
+    },
+    {
+      "name": "Android origin on iOS",
+      "origin": "https://appassets.androidplatform.net",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-3\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "wrongOrigin"
+    },
+    {
+      "name": "origin with a trailing slash",
+      "origin": "conclave-embed://app/",
+      "isMainFrame": true,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-3\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "subframe",
+      "origin": "conclave-embed://app",
+      "isMainFrame": false,
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-3\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "notMainFrame"
+    }
+  ],
+  "hostToEmbed": [
+    {
+      "name": "snapshot",
+      "raw": "{\"v\":1,\"type\":\"snapshot\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"e-1\",\"payload\":{\"syncMessage\":\"AAA=\",\"stateVector\":\"AA==\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "remote update",
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"n-1\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "host status",
+      "raw": "{\"v\":1,\"type\":\"status\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"n-2\",\"payload\":{\"readOnly\":false,\"connection\":\"live\",\"reduceMotion\":false,\"pencilOnly\":false,\"userId\":\"u1\",\"userName\":\"Ada\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "setTool",
+      "raw": "{\"v\":1,\"type\":\"setTool\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"h-1\",\"payload\":{\"tool\":\"eraser\"}}",
+      "expect": "none"
+    },
+    {
+      "name": "export",
+      "raw": "{\"v\":1,\"type\":\"export\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"h-2\",\"payload\":{}}",
+      "expect": "none"
+    },
+    {
+      "name": "close",
+      "raw": "{\"v\":1,\"type\":\"close\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"n-3\",\"payload\":{}}",
+      "expect": "none"
+    },
+    {
+      "name": "navigate is not a host command",
+      "raw": "{\"v\":1,\"type\":\"navigate\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"n-4\",\"payload\":{\"url\":\"https://evil.example\"}}",
+      "expect": "unknownType"
+    },
+    {
+      "name": "stale app session",
+      "raw": "{\"v\":1,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-00000000-0000-4000-8000-000000000000\",\"requestId\":\"n-5\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "staleAppSession"
+    },
+    {
+      "name": "another protocol version",
+      "raw": "{\"v\":2,\"type\":\"update\",\"callSessionId\":\"call-7-3f2a9c1e\",\"appSessionId\":\"app-5b1d7a2e-0c44-4e7b-9f3e-2a8d6c1b9e70\",\"requestId\":\"n-6\",\"payload\":{\"update\":\"AQID\"}}",
+      "expect": "versionMismatch"
+    }
+  ],
+  "generated": [
+    {
+      "name": "update one byte over the 256 KiB bound",
+      "type": "update",
+      "bytes": 262145,
+      "expect": "payloadTooLarge"
+    },
+    {
+      "name": "update at the 256 KiB bound",
+      "type": "update",
+      "bytes": 262144,
+      "expect": "none"
+    },
+    {
+      "name": "awareness one byte over the 64 KiB bound",
+      "type": "awareness",
+      "bytes": 65537,
+      "expect": "payloadTooLarge"
+    },
+    {
+      "name": "envelope over 1.5 MiB",
+      "type": "pad",
+      "characters": 1572865,
+      "expect": "oversized"
+    }
+  ]
+}

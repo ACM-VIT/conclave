@@ -1,9 +1,7 @@
 import type { DtlsParameters, WebRtcTransport } from "mediasoup/types";
 
 const pendingTransportConnects = new WeakMap<WebRtcTransport, Promise<void>>();
-
-const isAlreadyConnectingState = (state: WebRtcTransport["dtlsState"]): boolean =>
-  state === "connecting" || state === "connected";
+const completedTransportConnects = new WeakSet<WebRtcTransport>();
 
 const isTerminalConnectState = (state: WebRtcTransport["dtlsState"]): boolean =>
   state === "failed" || state === "closed";
@@ -25,11 +23,13 @@ export const connectWebRtcTransportOnce = async (
     return;
   }
 
-  if (isAlreadyConnectingState(transport.dtlsState)) {
-    return;
-  }
   if (isTerminalConnectState(transport.dtlsState)) {
     throw new Error(`Transport DTLS state is ${transport.dtlsState}`);
+  }
+  // ICE can start DTLS before the signaling request supplies the peer's
+  // fingerprint. "connecting" therefore does not prove connect() ran.
+  if (completedTransportConnects.has(transport) || transport.dtlsState === "connected") {
+    return;
   }
 
   const connectPromise = transport
@@ -37,6 +37,9 @@ export const connectWebRtcTransportOnce = async (
     .catch((error: unknown) => {
       if (isConnectAlreadyCalledError(error)) return;
       throw error;
+    })
+    .then(() => {
+      completedTransportConnects.add(transport);
     })
     .finally(() => {
       pendingTransportConnects.delete(transport);

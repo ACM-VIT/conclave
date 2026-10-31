@@ -10,8 +10,15 @@ private typealias AppDelegate = ConclaveAppDelegate
 
     var body: some Scene {
         WindowGroup {
+
             AppRootView()
+                .frame(minWidth: CGFloat(ConclaveWindowMetrics.minimumWidth), maxWidth: .infinity, maxHeight: .infinity)
         }
+        .windowResizability(.contentMinSize)
+        #if os(iOS)
+
+        .commands { ConclaveCallCommands() }
+        #endif
         .onChange(of: scenePhase) { oldPhase, newPhase in
             switch newPhase {
             case .active:

@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Resolves the in-app privacy policy URL, preferring the runtime-configured
-/// app host so dev builds point at the same backend the app is talking to.
 enum PrivacyPolicyDestination {
     static let fallbackURLString = "https://conclave.acmvit.in/privacy"
 
@@ -17,10 +15,6 @@ enum PrivacyPolicyDestination {
     }
 }
 
-/// Full-bleed privacy policy page. Callers supply the back action so this can
-/// slot into either the meeting sheet's page navigation or a standalone sheet
-/// from the join screen. The "Done" action dismisses the enclosing sheet via
-/// the environment, matching the other meeting-sheet pages.
 struct PrivacyPolicyPageView: View {
     var onBack: (() -> Void)? = nil
     var onDone: (() -> Void)? = nil

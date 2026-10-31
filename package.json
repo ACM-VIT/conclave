@@ -31,13 +31,19 @@
     "test:cloudflare-manifests": "node --test scripts/cloudflare-manifests.test.mjs",
     "build:conclave-skip:android": "bash scripts/build-conclave-skip-android-debug.sh",
     "build": "pnpm --filter conclave-web --filter @conclave/shared-browser run build",
-    "test": "pnpm run test:quality-harness && pnpm run test:deploy-preflight && pnpm run test:cloudflare-manifests && pnpm --filter conclave-web --filter @conclave/ai --filter @conclave/meeting-core --filter @conclave/sfu --filter @conclave/shared-browser run test",
-    "typecheck": "pnpm --filter conclave-web --filter @conclave/apps-sdk --filter @conclave/ai --filter @conclave/meeting-core --filter @conclave/sfu --filter @conclave/shared-browser run typecheck",
+    "test": "pnpm run test:quality-harness && pnpm run test:deploy-preflight && pnpm run test:cloudflare-manifests && pnpm --filter conclave-web --filter @conclave/meeting-core --filter @conclave/ai --filter @conclave/sfu --filter @conclave/shared-browser run test && pnpm run test:native-tokens && pnpm run test:native-icons && pnpm -C packages/apps-sdk run test:native-embed && pnpm -C packages/apps-sdk run test:native-embed-apps",
+    "typecheck": "pnpm --filter conclave-web --filter @conclave/apps-sdk --filter @conclave/meeting-core --filter @conclave/ai --filter @conclave/sfu --filter @conclave/shared-browser run typecheck",
     "konsistent": "konsistent",
     "lint:packages": "eslint packages",
     "lint:web": "pnpm -C apps/web run lint",
     "lint": "pnpm run lint:packages && pnpm run lint:web && pnpm run konsistent",
-    "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm -C packages/apps-sdk run check:apps && pnpm run check:video-effect-assets && pnpm run check:swift-events"
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm -C packages/apps-sdk run check:apps && pnpm run check:video-effect-assets && pnpm run check:swift-events && pnpm run check:native-tokens && pnpm run check:native-icons && pnpm run check:native-embed",
+    "check:native-embed": "pnpm -C packages/apps-sdk run check:native-embed",
+    "generate:native-icons": "python3 -B packages/ui-tokens/scripts/gen-native-icons.py",
+    "check:native-icons": "python3 -B packages/ui-tokens/scripts/gen-native-icons.py --check",
+    "test:native-icons": "python3 -B packages/ui-tokens/scripts/gen-native-icons.test.py",
+    "check:native-tokens": "node packages/ui-tokens/scripts/gen-native-tokens.mjs --check",
+    "test:native-tokens": "node --test packages/ui-tokens/scripts/gen-native-tokens.test.mjs"
   },
   "devDependencies": {
     "eslint": "^10.12.0",

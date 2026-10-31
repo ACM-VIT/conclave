@@ -7,9 +7,11 @@ import skip.ui.*
 
 import android.app.Application
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.Color as AndroidColor
 import android.os.Handler
 import android.os.Looper
+import android.view.KeyboardShortcutGroup
 import androidx.activity.compose.setContent
 import androidx.activity.compose.LocalActivity
 import androidx.activity.enableEdgeToEdge
@@ -21,6 +23,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,9 +48,7 @@ open class AndroidAppMain: Application {
         super.onCreate()
         ProcessInfo.launch(applicationContext)
         AppDelegate.shared.onInit()
-        // Prebuild the meeting icon vectors on a background thread now, so the
-        // first sheet/controls render reuses the cached vectors instead of
-        // building ~12 of them on the main thread mid-open (the sheet-content lag).
+
         warmMeetingIcons()
     }
 
@@ -55,21 +60,132 @@ open class MainActivity: AppCompatActivity {
     constructor() {
     }
 
+    private var fixtureSelectorRequested = false
+    private var hostingPreviewRequested = false
+    private var nativePremeetingRequested = false
+    private var productionWiringInstalled = false
+
+    private fun updateFixturePresentation() {
+        val wasFixture = NativeFixtureLaunch.suppressesProductionLifecycle
+        val fixturePresented = NativeFixtureLaunch.androidRootPresented(
+            selectorRequested = fixtureSelectorRequested,
+            hostingPreviewRequested = hostingPreviewRequested,
+            isInCall = PipController.isInCall,
+            debugEligible = BuildConfig.DEBUG,
+        )
+        NativeFixtureLaunch.configurePresentation(
+            selectorPresented = fixturePresented && fixtureSelectorRequested,
+            hostingPreviewPresented = fixturePresented && hostingPreviewRequested,
+            debugEligible = BuildConfig.DEBUG,
+        )
+        if (!fixturePresented && nativePremeetingRequested && !productionWiringInstalled) {
+
+            NativeRouteLaunch.installProductionWiring()
+            productionWiringInstalled = true
+        }
+        if (wasFixture && !fixturePresented) {
+            AppDelegate.shared.onFixturePresentationEnded()
+        }
+    }
+
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         UIApplication.launch(this)
-        // Register the MediaProjection consent launcher (must happen at onCreate
-        // before the Activity reaches STARTED) so screen-share can request it.
+
+        LocalNotifications.handleTap(intent)
+
         ScreenCaptureManager.register(this)
         enableEdgeToEdge()
 
+        val routesDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        NativeRouteLaunch.configure(
+            routes = intent?.getStringExtra(NativeRouteLaunch.ROUTES_EXTRA),
+            premeetingFixture = intent?.getStringExtra(NativeRouteLaunch.PREMEETING_FIXTURE_EXTRA),
+            debugEligible = BuildConfig.DEBUG && routesDebuggable,
+        )
+        val premeetingFixture = NativeRouteLaunch.premeetingFixture
+        val nativePremeeting = NativeRouteLaunch.usesNativePremeeting
+
+        val systemFixture = if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra("conclave.systemFixture") else null
+        val stageFixture = if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra("conclave.stageFixture") else null
+        val peopleFixture = if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra("conclave.peopleFixture") else null
+        hostingPreviewRequested = BuildConfig.DEBUG && intent?.getBooleanExtra("conclave.hostingPreview", false) == true
+        fixtureSelectorRequested = NativeFixtureLaunch.androidSelector(
+            system = systemFixture, stage = stageFixture, people = peopleFixture, premeeting = premeetingFixture,
+        )
+        nativePremeetingRequested = nativePremeeting
+        updateFixturePresentation()
+
         setContent {
+
+            var showsHostingPreview by remember {
+                mutableStateOf(hostingPreviewRequested)
+            }
+            val stageFixturePattern = remember { if (stageFixture != null) intent?.getStringExtra("conclave.stageFixturePattern") else null }
+            val stageForceScreenReader = remember {
+                stageFixture != null && intent?.getBooleanExtra("conclave.stageForceScreenReader", false) == true
+            }
+
+            val chatFixture = remember { if (stageFixture != null) intent?.getStringExtra("conclave.chatFixture") else null }
+
+            val transcriptFixture = remember { if (stageFixture != null) intent?.getStringExtra("conclave.transcriptFixture") else null }
+
+            val peopleFixturePattern = remember { if (peopleFixture != null) intent?.getStringExtra("conclave.stageFixturePattern") else null }
+            val peopleForceScreenReader = remember {
+                peopleFixture != null && intent?.getBooleanExtra("conclave.stageForceScreenReader", false) == true
+            }
             val saveableStateHolder = rememberSaveableStateHolder()
-            if (PipController.inPipMode && PipController.isInCall) {
-                PipContent()
-            } else {
+            val legacyRoot: @Composable () -> Unit = {
                 saveableStateHolder.SaveableStateProvider(FULL_ROOT_SAVEABLE_KEY) {
                     PresentationRootView(ComposeContext())
+
+                    SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }
+                }
+            }
+
+            val fixturePresented = NativeFixtureLaunch.androidRootPresented(
+                selectorRequested = fixtureSelectorRequested,
+                hostingPreviewRequested = showsHostingPreview,
+                isInCall = PipController.isInCall,
+                debugEligible = BuildConfig.DEBUG,
+            )
+            SideEffect { updateFixturePresentation() }
+            if (!fixturePresented) {
+                ConclaveRootFeedback()
+            }
+            if (nativePremeeting && !fixturePresented) {
+
+                NativePremeetingRootFeedback()
+            }
+
+            if (systemFixture != null && !PipController.isInCall) {
+                SystemFixtureRoot(systemFixture)
+            } else if (peopleFixture != null && !PipController.isInCall) {
+                PeopleFixtureRoot(peopleFixture, peopleFixturePattern, peopleForceScreenReader)
+            } else if (stageFixture != null && !PipController.isInCall) {
+
+                if (isControlsFixtureState(stageFixture)) {
+                    ControlsFixtureRoot(stageFixture)
+                } else {
+                    StageFixtureRoot(stageFixture, stageFixturePattern, stageForceScreenReader, chatFixture, transcriptFixture)
+                }
+            } else if (premeetingFixture.isNotEmpty() && !PipController.isInCall) {
+
+                PremeetingFixtureHost(premeetingFixture)
+            } else if (showsHostingPreview && !PipController.isInCall) {
+
+                NativeHostingPreviewRoot(fixtureEligible = BuildConfig.DEBUG, onClose = {
+                    showsHostingPreview = false
+                    hostingPreviewRequested = false
+                    updateFixturePresentation()
+                })
+            } else if (nativePremeeting) {
+
+                NativePremeetingHost(callContent = legacyRoot)
+            } else {
+                Box(Modifier.fillMaxSize()) {
+                    legacyRoot()
+                    NativeLegacyRootPipOverlay()
                 }
             }
         }
@@ -83,16 +199,21 @@ open class MainActivity: AppCompatActivity {
         if (android.os.Build.VERSION.SDK_INT >= 26) {
             PipManager.handleActivityResumed(this)
         }
+
+        AudioRouteOwnerBridge.applyVolumeControlStream(this)
+        updateFixturePresentation()
         AppDelegate.shared.onResume()
     }
 
     override fun onPause() {
         super.onPause()
+        updateFixturePresentation()
         AppDelegate.shared.onPause()
     }
 
     override fun onStop() {
         super.onStop()
+        updateFixturePresentation()
         AppDelegate.shared.onStop()
     }
 
@@ -101,9 +222,7 @@ open class MainActivity: AppCompatActivity {
         if (PipManager.consumeAutoEnterSuppression()) {
             return
         }
-        // Android 12+ can distinguish the Home gesture from an app-launched
-        // chooser itself. Let system auto-enter handle Home so share sheets,
-        // browsers, and permission activities never force a fake PiP state.
+
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
             PipManager.configureForActiveCall(PipController.isInCall, PipController.muted)
             return
@@ -136,6 +255,13 @@ open class MainActivity: AppCompatActivity {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.action == CallActionDispatcher.ACTION_RETURN_TO_CALL) {
+
+            CallActionDispatcher.returnToCall(intent.getIntExtra(CallActionDispatcher.EXTRA_PRESENCE_SESSION, -1))
+
+            LocalNotifications.handleTap(intent)
+            return
+        }
         handleIncomingDeepLink(intent)
     }
 
@@ -161,6 +287,20 @@ open class MainActivity: AppCompatActivity {
         if (isInPictureInPictureMode) {
             CallActionDispatcher.pictureInPictureEntered()
         }
+    }
+
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.S)
+    override fun onPictureInPictureUiStateChanged(pipState: android.app.PictureInPictureUiState) {
+        super.onPictureInPictureUiStateChanged(pipState)
+
+        val transitioning = android.os.Build.VERSION.SDK_INT >= 35 && pipState.isTransitioningToPip
+        PipManager.handlePictureInPictureUiStateChanged(stashed = pipState.isStashed, transitioningToPip = transitioning)
+    }
+
+    override fun onProvideKeyboardShortcuts(data: MutableList<KeyboardShortcutGroup>?, menu: android.view.Menu?, deviceId: Int) {
+        super.onProvideKeyboardShortcuts(data, menu, deviceId)
+        val group = nativeCallKeyboardShortcutGroup(this) ?: return
+        data?.add(group)
     }
 
     override fun onDestroy() {

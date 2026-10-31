@@ -1,0 +1,39 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Couldn’t start screen sharing. Try again." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t start screen sharing. Try again."
+          }
+        }
+      }
+    },
+    "Screen sharing stopped because Conclave lost the connection." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Screen sharing stopped because Conclave lost the connection."
+          }
+        }
+      }
+    },
+    "Screen sharing stopped." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Screen sharing stopped."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

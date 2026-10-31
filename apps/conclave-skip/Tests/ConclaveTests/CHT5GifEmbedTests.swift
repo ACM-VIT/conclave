@@ -1,0 +1,281 @@
+#if !SKIP
+import Foundation
+import Testing
+@testable import Conclave
+
+@MainActor
+struct CHT5GifEmbedTests {
+
+    @Test func embedURLsMatchTheWebRules() {
+        let urls = LinkEmbedPolicy.embedURLs
+        #expect(urls("see https://docs.example.com/agenda.", 2) == ["https://docs.example.com/agenda"])
+        #expect(urls("www.Example.com/Path", 2) == ["https://www.example.com/Path"])
+        #expect(urls("HTTPS://X.io", 2) == ["https://x.io/"])
+        #expect(urls("bare docs.example.com links but never embeds", 2) == [])
+        #expect(urls("quiet <https://docs.example.com/agenda> please", 2) == [])
+        #expect(urls("a https://a.example b https://b.example c https://c.example", 2) == ["https://a.example/", "https://b.example/"])
+        #expect(urls("https://a.example/x and again https://a.example/x", 2) == ["https://a.example/x"])
+        #expect(urls("https://user@host.example/secret", 2) == [])
+        #expect(urls("(see https://x.io/y)", 2) == ["https://x.io/y"])
+        #expect(urls("https:// nothing after the scheme", 2) == [])
+        #expect(urls("https://a.example", 0) == [])
+
+        #expect(urls("https://A.example/x?y=1&z=2#top", 2) == ["https://a.example/x?y=1&z=2#top"])
+        #expect(urls("https://a.example?q=1", 2) == ["https://a.example/?q=1"])
+        #expect(LinkEmbedPolicy.maxEmbedsPerMessage == 2)
+        #expect(LinkEmbedPolicy.firstEmbedURL("look https://a.example/x and https://b.example") == "https://a.example/x")
+        #expect(ChatComposerPolicy.linkPreviewURL(draft: "no links here") == "")
+    }
+
+    @Test func youTubeIdsFollowTheWebRules() {
+        let id = "dQw4w9WgXcQ"
+        #expect(LinkEmbedPolicy.youTubeVideoId("https://www.youtube.com/watch?v=" + id + "&t=4") == id)
+        #expect(LinkEmbedPolicy.youTubeVideoId("https://youtu.be/" + id) == id)
+        #expect(LinkEmbedPolicy.youTubeVideoId("https://m.youtube.com/shorts/" + id) == id)
+        #expect(LinkEmbedPolicy.youTubeVideoId("https://music.youtube.com/watch?v=" + id) == id)
+        #expect(LinkEmbedPolicy.youTubeVideoId("https://youtube.com/embed/" + id) == id)
+        #expect(LinkEmbedPolicy.youTubeVideoId("https://youtube.com/live/" + id) == id)
+        #expect(LinkEmbedPolicy.youTubeVideoId("https://youtube.com/watch?v=short") == "")
+        #expect(LinkEmbedPolicy.youTubeVideoId("https://vimeo.com/123") == "")
+        #expect(LinkEmbedPolicy.youTubeThumbnailURL(id) == "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg")
+        #expect(LinkEmbedPolicy.displayHost("https://www.docs.example.com/a") == "docs.example.com")
+    }
+
+    @Test func unfurlPayloadsMapToCards() throws {
+        let base = "https://conclave.acmvit.in"
+        let page = """
+        {"preview":{"url":"https://docs.example.com/agenda","kind":"page","siteName":"Docs","title":"Agenda","description":"Q4",
+        "imageUrl":"/api/unfurl/asset?url=https%3A%2F%2Fdocs.example.com%2Fa.png","faviconUrl":"https://docs.example.com/f.ico",
+        "imageLayout":"large"}}
+        """
+        let card = try #require(LinkEmbedService.decodeModel(Data(page.utf8), requestURL: "https://docs.example.com/agenda", baseURL: base + "/"))
+        #expect(card.kind == .page && card.isLargeImage && card.title == "Agenda" && card.summary == "Q4" && card.siteName == "Docs")
+        #expect(card.imageURL == base + "/api/unfurl/asset?url=https%3A%2F%2Fdocs.example.com%2Fa.png")
+        #expect(card.faviconURL == "https://docs.example.com/f.ico")
+        let thumb = """
+        {"preview":{"url":"https://x.example/","kind":"page","title":"Small","imageUrl":"/api/unfurl/asset?url=a","imageLayout":"thumb"}}
+        """
+        let small = try #require(LinkEmbedService.decodeModel(Data(thumb.utf8), requestURL: "https://x.example/", baseURL: base))
+        #expect(!small.isLargeImage && small.siteName == "x.example")
+        let tweet = """
+        {"preview":{"url":"https://x.com/c/status/1","kind":"tweet","siteName":"X","tweet":{"authorName":"Conclave",
+        "authorHandle":"conclave","text":"Hello","media":[{"kind":"photo","url":"/api/unfurl/asset?url=p","width":1200,"height":675},
+        {"kind":"video","url":"/api/unfurl/asset?url=v","videoUrl":"/api/unfurl/asset?url=m"}]}}}
+        """
+        let post = try #require(LinkEmbedService.decodeModel(Data(tweet.utf8), requestURL: "https://x.com/c/status/1", baseURL: base))
+        #expect(post.kind == .tweet && post.authorHandle == "conclave" && post.postText == "Hello")
+
+        try #require(post.media.count == 2)
+        #expect(post.media[0].aspect > 1.7 && post.media[1].videoURL == base + "/api/unfurl/asset?url=m")
+        #expect(LinkEmbedService.decodeModel(Data("{\"preview\":null}".utf8), requestURL: "https://a.example/", baseURL: base) == nil)
+        #expect(LinkEmbedService.decodeModel(nil, requestURL: "https://a.example/", baseURL: base) == nil)
+        let video = try #require(LinkEmbedService.decodeModel(nil, requestURL: "https://youtu.be/dQw4w9WgXcQ", baseURL: base))
+        #expect(video.kind == .youtube && video.youTubeId == "dQw4w9WgXcQ" && video.imageURL.hasPrefix("https://i.ytimg.com/"))
+        #expect(LinkEmbedPolicy.resolvedAssetURL("javascript:alert(1)", baseURL: base) == "")
+        #expect(LinkEmbedPolicy.resolvedAssetURL("//evil.example/x", baseURL: base) == "")
+    }
+
+    private func settle() async {
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+    }
+
+    private func text(_ id: String, _ content: String, at offset: Double, suppress: Bool = false) -> ChatMessageInput {
+        ChatMessageInput.make(id: id, senderId: ChatPoliciesTests.avery, senderName: "Avery Lee", content: content,
+                              timestampMillis: ChatPoliciesTests.base + offset, isHistory: true, suppressEmbeds: suppress)
+    }
+
+    @Test func embedsAreFetchedWhenTheRowIsBuiltAtMostTwoAndCachedIncludingNoCard() async {
+        var fetched: [String] = []
+        let chat = ChatPresenter()
+        chat.now = { ChatPoliciesTests.base + 600_000 }
+        chat.sleep = { _ in }
+        chat.embeds.fetcher = { url in
+            fetched.append(url)
+            return url.contains("a.example") ? ChatEmbedModel.make(url: url, kind: .page, title: "A") : nil
+        }
+        let first = text("s-1", "https://a.example/x https://b.example/y https://c.example/z", at: 0)
+        chat.apply(ChatPoliciesTests.inputs([first]), change: .messages)
+        #expect(chat.embeds.fetchCount == 2, "at most 2 per message")
+        #expect(ChatPoliciesTests.row(chat, "s-1").embedURLs.isEmpty, "nothing shows while loading")
+        await settle()
+        #expect(fetched.sorted() == ["https://a.example/x", "https://b.example/y"])
+        #expect(ChatPoliciesTests.row(chat, "s-1").embedURLs == ["https://a.example/x"], "only ready cards; a no-card URL never shows")
+        #expect(chat.embeds.entry(for: "https://b.example/y").phase == .none)
+
+        let second = text("s-2", "again https://b.example/y and https://a.example/x", at: 60_000)
+        chat.apply(ChatPoliciesTests.inputs([first, second]), change: .messages)
+        await settle()
+        #expect(chat.embeds.fetchCount == 2)
+        #expect(ChatPoliciesTests.row(chat, "s-2").embedURLs == ["https://a.example/x"], "a cached card shows from the first frame")
+
+        let suppressed = text("s-3", "https://d.example/q", at: 120_000, suppress: true)
+        let photo = ChatMessageInput.make(id: "s-4", senderId: ChatPoliciesTests.avery, senderName: "Avery Lee",
+                                          content: "https://e.example/p", timestampMillis: ChatPoliciesTests.base + 130_000,
+                                          imageURL: "file:///p.jpg", imageFileName: "p.jpg", isHistory: true)
+        let gif = ChatMessageInput.make(id: "s-5", senderId: ChatPoliciesTests.avery, senderName: "Avery Lee",
+                                        content: "https://f.example/g", timestampMillis: ChatPoliciesTests.base + 140_000,
+                                        gifURL: "https://f.example/g.gif", gifKind: "gif", gifTitle: "https://f.example/g",
+                                        isHistory: true)
+        chat.apply(ChatPoliciesTests.inputs([first, second, suppressed, photo, gif]), change: .messages)
+        await settle()
+        #expect(chat.embeds.fetchCount == 2)
+        #expect(ChatPoliciesTests.row(chat, "s-3").embedURLs.isEmpty && ChatPoliciesTests.row(chat, "s-4").embedURLs.isEmpty)
+
+        chat.reset()
+        #expect(chat.embeds.count == 0)
+    }
+
+    @Test func aRowChangesHeightAtMostOnceForItsCards() async {
+        let chat = ChatPresenter()
+        chat.now = { ChatPoliciesTests.base + 600_000 }
+        chat.sleep = { _ in }
+        chat.embeds.fetcher = { url in ChatEmbedModel.make(url: url, kind: .page, title: "T") }
+        let message = text("s-1", "https://a.example/x and https://b.example/y", at: 0)
+        chat.apply(ChatPoliciesTests.inputs([message]), change: .messages)
+        var seen: [[String]] = [ChatPoliciesTests.row(chat, "s-1").embedURLs]
+        for _ in 0..<20 {
+            await Task.yield()
+            seen.append(ChatPoliciesTests.row(chat, "s-1").embedURLs)
+        }
+        chat.apply(ChatPoliciesTests.inputs([message, text("s-2", "later", at: 60_000)]), change: .messages)
+        seen.append(ChatPoliciesTests.row(chat, "s-1").embedURLs)
+        var changes = 0
+        var index = 1
+        while index < seen.count {
+            if seen[index] != seen[index - 1] { changes += 1 }
+            index += 1
+        }
+        #expect(changes <= 1 && seen.last?.count == 2)
+    }
+
+    @Test func noFetchStartsWithoutTheInjectedFetcher() {
+        let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([text("s-1", "https://a.example/x", at: 0)]))
+        #expect(chat.embeds.fetchCount == 0 && chat.embeds.count == 0)
+        #expect(chat.requestLinkPreview(url: "https://a.example/x").phase == .none, "the placeholder until the core wires a fetcher")
+    }
+
+    @Test func suppressEmbedsTravelsWithTheSendWhenThePreviewWasRemoved() {
+        var log: [ChatCommandRequest] = []
+        let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([]))
+        chat.onCommand = { log.append($0) }
+        #expect(chat.send(text: "look https://a.example/x", suppressEmbedsFor: "https://a.example/x") == .dispatched)
+        #expect(log.last?.flag == true)
+        chat.send(text: "look https://b.example/y", suppressEmbedsFor: "https://a.example/x")
+        #expect(log.last?.flag == false, "a different first URL keeps its card")
+        chat.send(text: "look https://a.example/x")
+        #expect(log.last?.flag == false)
+        #expect(ChatComposerPolicy.suppressesEmbeds(draft: "x https://a.example/x", dismissedURL: "https://a.example/x"))
+        #expect(!ChatComposerPolicy.suppressesEmbeds(draft: "x https://a.example/x", dismissedURL: ""))
+    }
+
+    private func gif(_ id: String) -> ChatGifAttachment {
+        ChatGifAttachment(id: id, title: "Party " + id, url: "https://media.klipy.example/" + id + ".gif",
+                          previewUrl: "https://media.klipy.example/" + id + "-s.gif", pageUrl: nil, width: 200, height: 150,
+                          kind: "gif", videoUrl: nil, source: "klipy")
+    }
+
+    @Test func aGifSendsAtOnceWithTheReplyAndNeverInPrivateMode() {
+        var log: [ChatCommandRequest] = []
+        let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([ChatPoliciesTests.peer("s-1", "hi", at: 0)]))
+        chat.onCommand = { log.append($0) }
+        chat.beginReply(rowId: "s-1")
+        chat.sendGif(gif("g1"))
+        #expect(log.last?.kind == .sendGif && log.last?.text == "g1" && log.last?.messageId == "s-1")
+        #expect(log.last?.fileURL == "https://media.klipy.example/g1.gif" && log.last?.emoji == "gif")
+        #expect(chat.composer.reply == nil, "the GIF consumed the reply")
+        #expect(chat.takeSentGif(id: "g1")?.previewUrl == "https://media.klipy.example/g1-s.gif")
+        #expect(chat.takeSentGif(id: "g1") == nil, "taken once")
+        chat.setPrivateTo(userId: ChatPoliciesTests.avery)
+        let before = log.count
+        chat.sendGif(gif("g2"))
+        #expect(log.count == before && chat.composer.inlineNotice == .privateTextOnly)
+        let gated = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([], gate: .reconnecting))
+        gated.onCommand = { log.append($0) }
+        gated.sendGif(gif("g3"))
+        #expect(log.count == before)
+    }
+
+    @Test func gifSearchUsesTheInjectedClosureAndAFailedPageOtherwise() async {
+        let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([]))
+        let none = await chat.searchGifs(kind: .gif, query: "cat", page: 1)
+        #expect(none == ChatGifPage.failure)
+        var asked: [String] = []
+        chat.gifSearch = { kind, query, page in
+            asked.append(kind.rawValue + "|" + query + "|" + String(page))
+            return ChatGifPage(items: [], hasNext: false, failed: false)
+        }
+        let empty = await chat.searchGifs(kind: .sticker, query: "dog", page: 2)
+        #expect(!empty.failed && asked == ["sticker|dog|2"])
+    }
+
+    @Test func staleResponsesAreDroppedAndPagesMerge() {
+        let first = ChatGifPickerState.initial.starting(kind: .gif, query: "c")
+        let second = first.starting(kind: .gif, query: "ca")
+        let page = ChatGifPage(items: [gif("1"), gif("2")], hasNext: true, failed: false)
+        #expect(second.acceptingFirst(page, generation: first.generation) == second, "an older generation's page is dropped")
+        let shown = second.acceptingFirst(page, generation: second.generation)
+        #expect(shown.phase == .results && shown.items.count == 2 && shown.page == 1 && shown.canLoadMore)
+        let loading = shown.startingMore()
+        #expect(loading.isLoadingMore && !loading.canLoadMore)
+        let more = loading.acceptingMore(ChatGifPage(items: [gif("2"), gif("3")], hasNext: false, failed: false), generation: shown.generation)
+        #expect(more.items.count == 3 && more.page == 2 && !more.hasNext, "repeated ids are not duplicated")
+        let failedMore = shown.startingMore().acceptingMore(ChatGifPage.failure, generation: shown.generation)
+        #expect(failedMore.loadMoreFailed && failedMore.hasNext && failedMore.items.count == 2, "a failed page keeps hasNext for Retry")
+        let switched = shown.starting(kind: .sticker, query: "ca")
+        #expect(switched.acceptingMore(page, generation: shown.generation) == switched)
+        #expect(second.acceptingFirst(ChatGifPage.failure, generation: second.generation).phase == .error)
+        #expect(second.acceptingFirst(ChatGifPage(items: [], hasNext: false, failed: false), generation: second.generation).phase == .empty)
+        var many: [ChatGifAttachment] = []
+        for index in 0..<16 { many.append(gif(String(index))) }
+        let grid = second.acceptingFirst(ChatGifPage(items: many, hasNext: true, failed: false), generation: second.generation)
+        #expect(!grid.shouldLoadMore(afterShowing: 9) && grid.shouldLoadMore(afterShowing: 10))
+        #expect(ChatGifPickerState.debounceMillis == 250 && ChatGifPickerState.loadMoreThreshold == 6)
+    }
+
+    @Test func klipyPagesUseTheProxyWithTheKindMapping() throws {
+        let base = try #require(URL(string: "https://conclave.acmvit.in"))
+        let url = try #require(KlipyService.searchURL(kind: KlipyMediaKind.from(.sticker), query: " party ", page: 0, limit: 16, baseURL: base))
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        #expect(components.path == "/api/klipy/gifs")
+        let items = components.queryItems ?? []
+        #expect(items.contains(URLQueryItem(name: "media", value: "stickers")))
+        #expect(items.contains(URLQueryItem(name: "page", value: "1")) && items.contains(URLQueryItem(name: "limit", value: "16")))
+        #expect(items.contains(URLQueryItem(name: "q", value: "party")))
+        #expect(KlipyMediaKind.from(.gif) == .gifs && KlipyMediaKind.from(.clip) == .clips && KlipyService.defaultLimit == 16)
+        let unfurl = try #require(LinkEmbedService.unfurlURL(for: "https://a.example/x?y=1", baseURL: base))
+        #expect(unfurl.path == "/api/unfurl" && unfurl.absoluteString.contains("url="))
+
+        let video = try #require(LinkEmbedService.unfurlURL(for: "https://youtube.com/watch?v=dQw4w9WgXcQ&t=4#c", baseURL: base))
+        #expect(video.absoluteString == "https://conclave.acmvit.in/api/unfurl?url=https%3A%2F%2Fyoutube.com%2Fwatch%3Fv%3DdQw4w9WgXcQ%26t%3D4%23c")
+        let unfurlItems = URLComponents(url: video, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(unfurlItems.count == 1 && unfurlItems.first?.value == "https://youtube.com/watch?v=dQw4w9WgXcQ&t=4#c")
+    }
+
+    @Test func theFixtureServesCannedPagesAndCards() async {
+        let first = ChatFixtureScript.gifPage(kind: .clip, query: "", page: 1)
+        #expect(first.items.count == 16 && first.hasNext && first.items[0].kind == "clip" && first.items[0].videoUrl != nil)
+        #expect(!ChatFixtureScript.gifPage(kind: .gif, query: "", page: 2).hasNext)
+        #expect(ChatFixtureScript.gifPage(kind: .gif, query: "nothing", page: 1).items.isEmpty)
+        #expect(ChatFixtureScript.embed(for: "https://docs.example.com/agenda")?.isLargeImage == true)
+        #expect(ChatFixtureScript.embed(for: "https://www.youtube.com/watch?v=dQw4w9WgXcQ")?.kind == .youtube)
+        #expect(ChatFixtureScript.embed(for: "https://x.com/conclave/status/1234567890")?.kind == .tweet)
+        #expect(ChatFixtureScript.embed(for: "https://other.example/") == nil)
+        await ChatFixtureTestGate.acquire()
+        defer { ChatFixtureTestGate.release() }
+        let shell = MeetingShellPresenter()
+
+        let driver = ChatFixtureDriver.installOnStage(state: .busy, shell: shell)
+        await settle()
+        #expect(shell.chat.rows.entry(for: "s-11d").row.embedURLs.count == 2)
+        #expect(shell.chat.rows.entry(for: "s-y2").row.embedURLs == ["https://docs.example.com/agenda"])
+        #expect(shell.chat.rows.entry(for: "s-11e").row.embedURLs.isEmpty, "<url> is suppressed")
+        #expect(shell.chat.rows.entry(for: "c-11f").row.embedURLs.isEmpty, "suppressEmbeds")
+        #expect(shell.chat.rows.entry(for: "s-11b").row.gifKind == .sticker && shell.chat.rows.entry(for: "s-11c").row.gifKind == .clip)
+        let page = await shell.chat.searchGifs(kind: .gif, query: "", page: 1)
+        #expect(page.items.count == 16)
+        #expect(driver.chat === shell.chat, "the local keeps the driver alive through the search")
+    }
+}
+#endif

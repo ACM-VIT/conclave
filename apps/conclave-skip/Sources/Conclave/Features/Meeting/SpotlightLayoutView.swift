@@ -4,8 +4,6 @@ import Observation
 import UIKit
 #endif
 
-// MARK: - Spotlight Layout (pinned participant on stage + filmstrip)
-
 struct SpotlightLayoutView: View {
     @Bindable var viewModel: MeetingViewModel
     let isCompact: Bool

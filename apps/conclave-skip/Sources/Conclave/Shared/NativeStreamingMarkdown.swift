@@ -1,11 +1,6 @@
 import SwiftUI
 import Observation
 
-// MARK: - Streaming markdown model
-
-/// Block kinds intentionally cover the compact CommonMark subset produced by
-/// Conclave AI. The renderer stays native on both SwiftUI and Skip/Compose and
-/// avoids a WebView, HTML bridge, or a full-document parse on every token.
 enum StreamingMarkdownBlockKind: String, Equatable {
     case paragraph
     case heading
@@ -26,9 +21,6 @@ struct StreamingMarkdownBlock: Identifiable, Equatable {
     let isStreamingTail: Bool
 }
 
-/// Holds immutable completed blocks and reparses only the still-changing tail.
-/// AI responses append most of the time, so paragraphs separated by a blank
-/// line become permanently committed and never enter the parse path again.
 @Observable
 final class StreamingMarkdownRenderState {
     private(set) var blocks: [StreamingMarkdownBlock] = []
@@ -102,8 +94,24 @@ enum StreamingMarkdownParser {
             .replacingOccurrences(of: "\r", with: "\n")
     }
 
-    /// Returns the largest prefix ending at a blank line outside a code fence.
-    /// That prefix cannot be changed by later appended tokens and can be cached.
+    static func plainText(in source: String) -> String {
+        let parsed = blocks(in: normalized(source), startingAt: 0, isStreamingTail: false)
+        var lines: [String] = []
+        for block in parsed {
+            if block.kind == StreamingMarkdownBlockKind.rule { continue }
+            if block.kind == StreamingMarkdownBlockKind.codeFence {
+                lines.append(block.text)
+                continue
+            }
+            var line = ""
+            for run in StreamingMarkdownInlineParser.runs(in: block.text, isStreaming: false) {
+                line += run.text
+            }
+            lines.append(line.replacingOccurrences(of: "\n", with: " "))
+        }
+        return lines.joined(separator: "\n")
+    }
+
     static func safeCommittedPrefixLength(in source: String) -> Int {
         guard !source.isEmpty else { return 0 }
         let lines = source.components(separatedBy: "\n")
@@ -244,9 +252,7 @@ enum StreamingMarkdownParser {
     }
 
     private static func heading(in line: String) -> (level: Int, text: String)? {
-        // Markdown structure is ASCII, so scan UTF-8 bytes rather than
-        // materializing a Character array. This is cheaper and maps directly
-        // to Skip's UByte array on Android.
+
         let bytes = Array(line.utf8)
         var level = 0
         while level < min(6, bytes.count), bytes[level] == UInt8(35) {
@@ -308,8 +314,6 @@ enum StreamingMarkdownParser {
     }
 }
 
-// MARK: - Inline markdown
-
 struct StreamingMarkdownInlineStyle: Equatable {
     var isStrong = false
     var isEmphasized = false
@@ -355,8 +359,7 @@ enum StreamingMarkdownInlineParser {
         }
 
         while index < bytes.count {
-            // CommonMark escapes target ASCII punctuation. Keep non-ASCII
-            // bytes together so names and multilingual responses remain valid.
+
             if bytes[index] == UInt8(92),
                index + 1 < bytes.count,
                bytes[index + 1] < UInt8(128) {
@@ -503,8 +506,6 @@ enum StreamingMarkdownInlineParser {
         return decoded(slice)
     }
 }
-
-// MARK: - Native renderer
 
 struct NativeStreamingMarkdownView: View {
     let markdown: String
@@ -662,9 +663,7 @@ private struct StreamingMarkdownBlockView: View, Equatable {
 
     private func inlineText(_ content: String) -> Text {
         #if SKIP
-        // SkipUI turns AttributedString markdown into one Compose
-        // AnnotatedString, preserving native wrapping and tappable links. The
-        // surrounding equatable block means completed content is not reparsed.
+
         let rendered = content + (showsCursor ? " ▍" : "")
         if let attributed = try? AttributedString(markdown: rendered) {
             return Text(attributed)
@@ -712,8 +711,6 @@ private struct StreamingMarkdownBlockView: View, Equatable {
     }
 }
 
-// MARK: - Native shimmer
-
 enum NativeTextShimmerLayout {
     static func highlightWidth(textLength: Int, spread: CGFloat, containerWidth: CGFloat) -> CGFloat {
         let dynamicWidth = CGFloat(max(1, textLength)) * max(1.0, spread)
@@ -721,16 +718,13 @@ enum NativeTextShimmerLayout {
     }
 }
 
-/// Native reimplementation of the web `shimmer.tsx`: a faint text base with a
-/// single compositor-driven highlight band. One state transition starts the
-/// repeating animation; no timer or per-frame model mutation is involved.
 struct NativeTextShimmer: View {
     let text: String
     var font: Font = ACMFont.trial(12)
     var duration: Double = 2.0
     var spread: CGFloat = 2.0
     #if SKIP
-    // SkipUI does not currently expose this SwiftUI environment value.
+
     private let reduceMotion = false
     #else
     @Environment(\.accessibilityReduceMotion) private var reduceMotion: Bool

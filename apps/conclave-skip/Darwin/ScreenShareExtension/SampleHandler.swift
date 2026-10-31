@@ -1,14 +1,4 @@
-//
-//  SampleHandler.swift
-//  ScreenShareExtension
-//
-//  ReplayKit Broadcast Upload Extension. Captures the device screen, throttles
-//  frames, JPEG-encodes them, and streams the framed payload over the App Group
-//  AF_UNIX socket owned by the main app's ScreenShareSocketServer.
-//
-//  This target stays pure Swift + ReplayKit so it can run inside the broadcast
-//  extension without importing the Skip-transpiled Conclave module.
-//
+
 
 import CoreGraphics
 import CoreImage
@@ -61,7 +51,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
   private let lifecycleStateKey = "conclave.screenShare.lifecycle.state"
   private let lifecycleUpdatedAtKey = "conclave.screenShare.lifecycle.updatedAt"
   private let stopRequestedAtKey = "conclave.screenShare.lifecycle.stopRequestedAt"
+
+  private let stopReasonKey = "conclave.screenShare.lifecycle.stopReason"
+  private let attemptAtKey = "conclave.screenShare.lifecycle.attemptAt"
   private var broadcastStartedAt: TimeInterval = 0
+  private var attemptStartedAt: TimeInterval = 0
 
   private func log(_ message: String, _ metadata: [String: Any] = [:]) {
     if metadata.isEmpty {
@@ -88,6 +82,11 @@ final class SampleHandler: RPBroadcastSampleHandler {
     droppedFrameCount = 0
     lastFrameSentAt = 0
     broadcastStartedAt = Date().timeIntervalSince1970
+    attemptStartedAt = UserDefaults(suiteName: appGroupIdentifier)?.double(forKey: attemptAtKey) ?? 0
+    if wasStopRequestedByMainApp() {
+      finishBroadcast(stopReasonRequestedByMainApp())
+      return
+    }
     publishLifecycleState("starting")
     reloadPublishConfiguration()
     socketConnection = ScreenShareSocketConnection(appGroupIdentifier: appGroupIdentifier)
@@ -111,6 +110,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     didFinishBroadcast = true
     lastConnectionAttempt = 0
     broadcastStartedAt = 0
+    attemptStartedAt = 0
   }
 
   override func processSampleBuffer(
@@ -118,9 +118,10 @@ final class SampleHandler: RPBroadcastSampleHandler {
     with sampleBufferType: RPSampleBufferType
   ) {
     guard !didFinishBroadcast else { return }
+
     guard sampleBufferType == .video else { return }
     if wasStopRequestedByMainApp() {
-      finishDueToConnectionLoss(message: "Screen sharing stopped.", intentional: true)
+      finishBroadcast(stopReasonRequestedByMainApp())
       return
     }
     videoSampleCount += 1
@@ -171,11 +172,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
             "hasConnectedAtLeastOnce": hasConnectedAtLeastOnce,
             "videoSampleCount": videoSampleCount,
           ])
-          finishDueToConnectionLoss(
-            message: hasConnectedAtLeastOnce
-              ? "Screen sharing stopped."
-              : "Unable to start screen sharing. Please try again."
-          )
+          finishBroadcast(hasConnectedAtLeastOnce ? .connectionLost : .neverConnected)
           return
         }
       }
@@ -251,7 +248,18 @@ final class SampleHandler: RPBroadcastSampleHandler {
     }
   }
 
-  private func finishDueToConnectionLoss(message: String, intentional: Bool = false) {
+  private enum FinishReason {
+
+    case stoppedByApp
+
+    case startTimeout
+
+    case connectionLost
+
+    case neverConnected
+  }
+
+  private func finishBroadcast(_ reason: FinishReason) {
     if didFinishBroadcast { return }
     didFinishBroadcast = true
     socketConnection?.close()
@@ -259,19 +267,45 @@ final class SampleHandler: RPBroadcastSampleHandler {
     isConnected = false
     publishLifecycleState("stopped")
 
+    let intentional = reason == .stoppedByApp
     if intentional {
       log("Intentional stop - finishing broadcast gracefully")
     } else {
-      log("Connection loss - finishing broadcast with error")
+      log("Finishing broadcast with error", ["reason": String(describing: reason)])
     }
     let error = NSError(
       domain: "com.acmvit.conclave.screenshare",
       code: intentional ? 0 : -1,
-      userInfo: [NSLocalizedDescriptionKey: intentional ? "user stopped the screen share" : message]
+      userInfo: [NSLocalizedDescriptionKey: SampleHandler.alertMessage(for: reason)]
     )
     DispatchQueue.main.async { [weak self] in
       self?.finishBroadcastWithError(error)
     }
+  }
+
+  private static func alertMessage(for reason: FinishReason) -> String {
+    switch reason {
+    case .stoppedByApp:
+      return NSLocalizedString(
+        "Screen sharing stopped.",
+        comment: "System alert after the person stopped screen sharing from Conclave (S70 10 g)"
+      )
+    case .connectionLost:
+      return NSLocalizedString(
+        "Screen sharing stopped because Conclave lost the connection.",
+        comment: "System alert when the broadcast lost its connection to Conclave while sharing (S70 10 g)"
+      )
+    case .startTimeout, .neverConnected:
+      return NSLocalizedString(
+        "Couldn’t start screen sharing. Try again.",
+        comment: "System alert when a screen share broadcast never connected to Conclave (S70 10 g)"
+      )
+    }
+  }
+
+  private func stopReasonRequestedByMainApp() -> FinishReason {
+    let raw = UserDefaults(suiteName: appGroupIdentifier)?.string(forKey: stopReasonKey)
+    return raw == "startTimeout" ? .startTimeout : .stoppedByApp
   }
 
   private func reloadPublishConfiguration() {
@@ -303,7 +337,7 @@ final class SampleHandler: RPBroadcastSampleHandler {
     guard broadcastStartedAt > 0,
       let defaults = UserDefaults(suiteName: appGroupIdentifier)
     else { return false }
-    return defaults.double(forKey: stopRequestedAtKey) >= broadcastStartedAt
+    return defaults.double(forKey: stopRequestedAtKey) >= (attemptStartedAt > 0 ? attemptStartedAt : broadcastStartedAt)
   }
 
   private func publishLifecycleState(_ state: String) {

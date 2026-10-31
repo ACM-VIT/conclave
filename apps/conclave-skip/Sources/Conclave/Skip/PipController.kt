@@ -18,13 +18,6 @@ data class PipVideoState(
     val missingTrackSinceMs: Long = 0L
 )
 
-/**
- * Shared Android PiP state written by the transpiled MeetingViewModel and read
- * by MainActivity plus the minimal PiP Compose layout.
- *
- * `isInCall` gates PiP entry. `pipVideoState` carries the active speaker or
- * local fallback snapshot. `inPipMode` swaps the Activity into the PiP surface.
- */
 object PipController {
     private const val MISSING_TRACK_GRACE_MS = 900L
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -39,14 +32,62 @@ object PipController {
 
     var inPipMode by mutableStateOf(false)
 
-    // Current local mute state used to seed the PiP Mute/Unmute action.
     @Volatile var muted: Boolean = true
         private set
+
+    @set:JvmName("updateNativeRootComposed")
+    var nativeRootComposed by mutableStateOf(false)
+        private set
+
+    var isTransitioningToPip by mutableStateOf(false)
+        private set
+
+    var isStashed by mutableStateOf(false)
+        private set
+
+    var paramsReadout by mutableStateOf("aspect=16:9 rect=none autoEnter=0")
+        private set
+
+    var suppressionCount by mutableStateOf(0)
+        private set
+    var lastSuppressionReason by mutableStateOf("")
+        private set
+
+    fun pipAwaitsCallRoot(entrySettled: Boolean): Boolean =
+        inPipMode && isInCall && (!nativeRootComposed || !entrySettled)
+
+    val chromeHiddenForPip: Boolean
+        get() = inPipMode || isTransitioningToPip
+
+    val feedbackSuspended: Boolean
+        get() = PipLifetimePolicy.suspendsFeedback(isInPictureInPicture = inPipMode, isTransitioningToPip = isTransitioningToPip)
+
+    fun setNativeRootComposed(value: Boolean) {
+        if (nativeRootComposed != value) nativeRootComposed = value
+    }
+
+    fun setPictureInPictureUiState(stashed: Boolean, transitioningToPip: Boolean) {
+        if (isStashed != stashed) isStashed = stashed
+        if (isTransitioningToPip != transitioningToPip) isTransitioningToPip = transitioningToPip
+    }
+
+    internal fun recordParams(readout: String) {
+        if (paramsReadout != readout) paramsReadout = readout
+    }
+
+    internal fun recordSuppression(reason: String) {
+        suppressionCount += 1
+        lastSuppressionReason = reason
+    }
+
+    val suppressionReadout: String
+        get() = ExternalHandoffPolicy.readout(count = suppressionCount, lastReason = lastSuppressionReason)
 
     fun setInCall(active: Boolean) {
         isInCall = active
         if (!active) {
             inPipMode = false
+            isTransitioningToPip = false
             cancelMissingTrackClear()
             pipVideoState = PipVideoState(surfaceVersion = pipVideoState.surfaceVersion + 1)
         }

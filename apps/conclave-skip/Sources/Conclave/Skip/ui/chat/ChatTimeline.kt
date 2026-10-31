@@ -1,0 +1,248 @@
+package conclave.module
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+
+import androidx.compose.material3.Icon
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imeNestedScroll
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CollectionInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.collectionInfo
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ChatTimeline(
+    cache: ChatTimelineCache,
+    presenter: ChatPresenter,
+    actions: ChatRowActions,
+    sidePane: Boolean,
+    reservation: PaddingValues,
+) {
+    val reversed = cache.current()
+    ChatDiagnostics.counters?.bump("chat.recompose.list")
+    if (reversed.ids.isEmpty()) {
+        ChatEmptyState(presenter, actions)
+        return
+    }
+    val listState = rememberLazyListState()
+    val reduceMotion = rememberReduceMotion()
+    var unseen by remember { mutableIntStateOf(0) }
+    var highlightId by remember { mutableStateOf("") }
+    val atBottom by remember {
+        derivedStateOf { !listState.canScrollBackward ||
+            (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 48) }
+    }
+    var wasAtBottom by remember { mutableStateOf(true) }
+    var jumpRequests by remember { mutableIntStateOf(0) }
+    var initialPositioned by remember { mutableStateOf(false) }
+    val placement = remember { ChatTimelinePlacement() }
+    LaunchedEffect(atBottom) {
+        wasAtBottom = atBottom
+        if (atBottom) unseen = 0
+    }
+    val snapshot = reversed.snapshot
+    LaunchedEffect(Unit) {
+
+        placement.focusRequest = snapshot.focusRequest
+        placement.newestId = snapshot.newestId
+        val target = ChatTimelinePolicy.initialTarget(focusId = snapshot.focusId,
+            firstUnreadId = snapshot.firstUnreadId, newestId = snapshot.newestId)
+
+        val offset = if (target == "unread") {
+            val layout = snapshotFlow { listState.layoutInfo }
+                .first { it.viewportEndOffset > it.viewportStartOffset }
+            -(layout.viewportEndOffset - layout.viewportStartOffset) * 2 / 3
+        } else 0
+
+        val index = cache.current().ids.indexOf(target)
+        if (index >= 0) listState.scrollToItem(index, offset)
+        initialPositioned = true
+    }
+    LaunchedEffect(snapshot.newestId, initialPositioned) {
+        if (!initialPositioned || snapshot.newestId == placement.newestId) return@LaunchedEffect
+        placement.newestId = snapshot.newestId
+        if (snapshot.newestId.isEmpty()) return@LaunchedEffect
+        if (wasAtBottom || snapshot.newestIsOwn) {
+            if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
+        } else if (snapshot.newestIsRemoteMessage) {
+            unseen += 1
+        }
+    }
+    LaunchedEffect(snapshot.focusRequest, initialPositioned) {
+        val focus = snapshot.focusId
+        if (!initialPositioned || focus.isEmpty() || focus !in reversed.ids) return@LaunchedEffect
+
+        if (snapshot.focusRequest != placement.focusRequest) {
+            placement.focusRequest = snapshot.focusRequest
+            val index = reversed.ids.indexOf(focus)
+            if (reduceMotion) listState.scrollToItem(index) else listState.animateScrollToItem(index)
+        }
+        highlightId = focus
+        delay(900)
+        if (highlightId == focus) highlightId = ""
+    }
+
+    ChatComposerFocusFollow(listState, reduceMotion) { actions.composerFocusRevision }
+    Column(Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val maxBubble = maxWidth * ConclaveBubbleGeometry.maxWidthFraction.toFloat()
+            LazyColumn(
+                state = listState,
+                reverseLayout = true,
+                verticalArrangement = Arrangement.Top,
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp + reservation.calculateTopPadding(),
+                    bottom = 12.dp + reservation.calculateBottomPadding()),
+                modifier = Modifier.fillMaxSize().imeNestedScroll().testTag("chat.timeline")
+                    .semantics { collectionInfo = CollectionInfo(reversed.ids.size, 1) },
+            ) {
+                items(count = reversed.ids.size, key = { reversed.ids[it] }, contentType = { reversed.kinds[it] }) { index ->
+                    val rowId = reversed.ids[index]
+                    ChatRow(presenter.rows.entry(rowId), actions, sidePane, maxBubble, highlightId == rowId)
+                }
+            }
+        }
+        if (initialPositioned && ChatTimelinePolicy.showsJumpToLatest(isAtBottom = atBottom, unseenCount = unseen)) {
+            FilledTonalButton(
+                onClick = {
+                    unseen = 0
+                    jumpRequests += 1
+                },
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp).testTag("chat.jumpPill"),
+            ) {
+                val label = conclavePlural("chat_jump_new", unseen, unseen)
+                ConclaveText(label, line = "chat.jumpPill.label")
+            }
+        }
+    }
+
+    LaunchedEffect(jumpRequests) {
+        if (jumpRequests > 0) {
+            if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
+        }
+    }
+}
+
+private class ChatTimelinePlacement {
+    var newestId = ""
+    var focusRequest = 0
+}
+
+@Composable
+internal fun ChatComposerFocusFollow(listState: LazyListState, reduceMotion: Boolean, revision: () -> Int) {
+    val current = revision()
+    val initial = remember { current }
+    LaunchedEffect(current) {
+        if (current == initial) return@LaunchedEffect
+        ChatFocusFollow.follow(listState, reduceMotion)
+    }
+}
+
+internal object ChatFocusFollow {
+
+    fun newestVisible(listState: LazyListState): Boolean =
+        listState.layoutInfo.visibleItemsInfo.any { it.index == 0 }
+
+    suspend fun follow(listState: LazyListState, reduceMotion: Boolean): Boolean {
+        if (!newestVisible(listState)) return false
+        if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)
+        return true
+    }
+}
+
+@Composable
+private fun ChatEmptyState(presenter: ChatPresenter, actions: ChatRowActions) {
+    val showsAssistant = presenter.composer.assistant != AssistantAvailability.unavailable
+    Column(
+        Modifier.fillMaxSize().padding(24.dp).testTag("chat.empty"),
+        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        ChatGhostArt()
+        ConclaveText(conclaveString("chat_empty_title"), line = "chat.empty.title",
+            style = MaterialTheme.typography.titleMedium)
+        if (showsAssistant) {
+            FilledTonalButton(onClick = { actions.focusComposer("@Conclave ") }, modifier = Modifier.testTag("chat.askAssistant")) {
+                ConclaveText(conclaveString("chat_ask_assistant"), line = "chat.askAssistant.label")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatGhostArt() {
+    Column(Modifier.size(width = 160.dp, height = 88.dp).clearAndSetSemantics { },
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.align(Alignment.Start), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Box(Modifier.width(112.dp).height(26.dp)
+                .background(ConclaveBubbleColors.fill(ConclaveBubbleTone.peer), conclaveBubbleShape(false, false, true)))
+            Box(Modifier.width(80.dp).height(26.dp)
+                .background(ConclaveBubbleColors.fill(ConclaveBubbleTone.peer), conclaveBubbleShape(false, true, false)))
+        }
+        Box(Modifier.align(Alignment.End).width(64.dp).height(26.dp)
+            .background(ConclaveBubbleColors.fill(ConclaveBubbleTone.own), conclaveBubbleShape(true, false, false)))
+    }
+}
+
+@Composable
+internal fun ChatDayRow(row: ChatRowModel) {
+    val context = LocalContext.current
+    ConclaveText(
+        ChatCopyAndroid.day(context, row.timestampMillis), line = "chat.row.${row.id}",
+        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp).semantics { heading() },
+    )
+}
+
+@Composable
+internal fun ChatUnreadDivider() {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp).semantics(mergeDescendants = true) { heading() },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+        ConclaveText(conclaveString("chat_new_messages_divider"), line = "chat.unread",
+            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}

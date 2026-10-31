@@ -1,8 +1,5 @@
 import Foundation
 import Observation
-#if !SKIP
-import SkipFuse
-#endif
 
 @MainActor
 @Observable
@@ -12,14 +9,25 @@ final class AppState {
     static let shared = AppState()
 
     var isAuthenticated = false {
-        didSet { persistAuthState() }
+        didSet {
+            persistAuthState()
+            onIdentityChanged?()
+        }
     }
     var currentUser: User? {
-        didSet { persistAuthState() }
+        didSet {
+            persistAuthState()
+            onIdentityChanged?()
+        }
     }
     var authProvider: AuthProvider = .none {
-        didSet { persistAuthState() }
+        didSet {
+            persistAuthState()
+            onIdentityChanged?()
+        }
     }
+
+    @ObservationIgnored var onIdentityChanged: (() -> Void)? = nil
     var pendingJoinURLString: String?
     var pendingJoinRequestID = 0
 

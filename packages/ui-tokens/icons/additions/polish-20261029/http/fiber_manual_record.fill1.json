@@ -1,0 +1,115 @@
+{
+  "id": "fiber_manual_record.fill1",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "request_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/fiber_manual_record/materialsymbolsrounded/fiber_manual_record_fill1_24px.svg",
+  "final_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/fiber_manual_record/materialsymbolsrounded/fiber_manual_record_fill1_24px.svg",
+  "http_status": 200,
+  "headers": [
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Content-Length",
+      "216"
+    ],
+    [
+      "Cache-Control",
+      "max-age=300"
+    ],
+    [
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    ],
+    [
+      "Content-Type",
+      "image/svg+xml"
+    ],
+    [
+      "ETag",
+      "\"8a87d45929fa41294ebaa3eeec235e5a51c181a521e1715571993341fd9b90fe\""
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=31536000"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Frame-Options",
+      "deny"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-GitHub-Request-Id",
+      "AF70:4AB6F:467BDD:56660E:6AE24F97"
+    ],
+    [
+      "x-github-edge-region",
+      "centralindia"
+    ],
+    [
+      "Accept-Ranges",
+      "bytes"
+    ],
+    [
+      "Date",
+      "Wed, 28 Oct 2026 19:40:07 GMT"
+    ],
+    [
+      "Via",
+      "1.1 varnish"
+    ],
+    [
+      "X-Served-By",
+      "cache-maa10239-MAA"
+    ],
+    [
+      "X-Cache",
+      "MISS"
+    ],
+    [
+      "X-Cache-Hits",
+      "0"
+    ],
+    [
+      "X-Timer",
+      "S1793216407.091657,VS0,VE374"
+    ],
+    [
+      "Vary",
+      "Authorization,Accept-Encoding"
+    ],
+    [
+      "Access-Control-Allow-Origin",
+      "*"
+    ],
+    [
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    ],
+    [
+      "X-Fastly-Request-ID",
+      "1dceabc4d054f33629511d8efa2267e9574c940b"
+    ],
+    [
+      "Expires",
+      "Wed, 28 Oct 2026 19:45:07 GMT"
+    ],
+    [
+      "Source-Age",
+      "0"
+    ]
+  ],
+  "started_at": "2026-10-28T19:40:07.010953+00:00",
+  "completed_at": "2026-10-28T19:40:07.511637+00:00",
+  "sha256": "99aa0ade9db8de649913ec04b654720ee518766e0d8cb2eab16855bfc18841c7",
+  "bytes": 216,
+  "body_file": "assets/symbols/web/fiber_manual_record/materialsymbolsrounded/fiber_manual_record_fill1_24px.svg",
+  "historical_status": "fresh_pinned_acquisition"
+}

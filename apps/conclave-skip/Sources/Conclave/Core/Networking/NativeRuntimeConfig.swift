@@ -1,6 +1,78 @@
 import Foundation
 
 enum NativeRuntimeConfig {
+    static let debugViewerProfileKey = "CONCLAVE_DEBUG_VIEWER_PROFILE"
+
+    static var usesDebugViewerProfile: Bool {
+        #if SKIP
+        return isDebugViewerProfileEnabled(
+            configuredValue: bundledString(forKey: debugViewerProfileKey),
+            debugEligible: AndroidRuntimeConfig.isDebuggable()
+        )
+        #elseif DEBUG
+        return isDebugViewerProfileEnabled(
+            configuredValue: bundledString(forKey: debugViewerProfileKey),
+            debugEligible: true
+        )
+        #else
+        return false
+        #endif
+    }
+
+    static func isDebugViewerProfileEnabled(configuredValue: String?, debugEligible: Bool) -> Bool {
+        guard debugEligible, let value = configuredValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return value == "yes" || value == "true" || value == "1"
+    }
+
+    static func debugViewerRoutes(explicitValue: String?, premeetingFixture: String?, profileEnabled: Bool) -> String? {
+        if let explicitValue { return explicitValue }
+        guard profileEnabled,
+              (premeetingFixture ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return "premeeting,call"
+    }
+
+    #if DEBUG && !SKIP
+    private static let debugArgumentKeys = [
+        "CONCLAVE_NATIVE_ROUTES", "CONCLAVE_PREMEETING_FIXTURE", "SFU_JOIN_URL", "CONCLAVE_AUTH_BASE_URL",
+        "CONCLAVE_HOSTING_PREVIEW", "CONCLAVE_SYSTEM_FIXTURE", "CONCLAVE_SYSTEM_FIXTURE_PROVIDER",
+        "CONCLAVE_STAGE_FIXTURE", "CONCLAVE_STAGE_FIXTURE_PATTERN", "CONCLAVE_STAGE_FORCE_SCREEN_READER",
+        "CONCLAVE_PEOPLE_FIXTURE", "CONCLAVE_CHAT_FIXTURE", "CONCLAVE_TRANSCRIPT_FIXTURE"
+    ]
+
+    static func debugLaunchValue(
+        forKey key: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) -> String? {
+        if let value = environment[key] {
+            return value
+        }
+        guard debugArgumentKeys.contains(key) else { return nil }
+        let prefix = "--conclave-config=\(key)="
+        for argument in arguments.dropFirst() where argument.hasPrefix(prefix) {
+            if let value = normalizedString(String(argument.dropFirst(prefix.count))) {
+                return value
+            }
+        }
+        return nil
+    }
+
+    static func debugLaunchEnvironment(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) -> [String: String] {
+        var resolved = environment
+        for key in debugArgumentKeys where resolved[key] == nil {
+            if let value = debugLaunchValue(forKey: key, environment: environment, arguments: arguments) {
+                resolved[key] = value
+            }
+        }
+        return resolved
+    }
+    #endif
+
     static func isCurrentAppSuspendedBySystem() -> Bool {
         #if SKIP
         return AndroidRuntimeConfig.isCurrentPackageSuspended()

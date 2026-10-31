@@ -181,6 +181,8 @@ private struct AndroidSfuJoinHTTPResponse: Decodable {
     let statusCode: Int
     let body: String
     let setCookieHeaders: [String]
+
+    let retryAfter: String?
 }
 #endif
 
@@ -231,7 +233,13 @@ enum SfuJoinService {
 
         if !(200...299).contains(statusCode) {
             let errorResponse = try? JSONDecoder().decode(SfuJoinError.self, from: data)
-            throw SfuJoinErrorResponse(message: errorResponse?.error ?? "Join request failed")
+
+            let retryAfter = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After")
+            throw MeetingHTTPStatusError(
+                statusCode: statusCode,
+                retryAfterSeconds: MeetingErrorClassifier.retryAfterSeconds(header: retryAfter),
+                message: errorResponse?.error ?? "Join request failed"
+            )
         }
 
         return try JSONDecoder().decode(SfuJoinInfo.self, from: data)
@@ -295,7 +303,12 @@ enum SfuJoinService {
         let data = responseEnvelope.body.data(using: String.Encoding.utf8) ?? Data()
         if !(200...299).contains(responseEnvelope.statusCode) {
             let errorResponse = try? JSONDecoder().decode(SfuJoinError.self, from: data)
-            throw SfuJoinErrorResponse(message: errorResponse?.error ?? "Join request failed")
+
+            throw MeetingHTTPStatusError(
+                statusCode: responseEnvelope.statusCode,
+                retryAfterSeconds: MeetingErrorClassifier.retryAfterSeconds(header: responseEnvelope.retryAfter),
+                message: errorResponse?.error ?? "Join request failed"
+            )
         }
 
         return try JSONDecoder().decode(SfuJoinInfo.self, from: data)
@@ -336,24 +349,17 @@ enum SfuJoinService {
         return productionJoinURL()
         #else
         #if DEBUG
-        if let envUrl = ProcessInfo.processInfo.environment["SFU_JOIN_URL"],
-           let url = configuredJoinURL(from: envUrl, allowProductionHost: true) {
-            return url
-        }
-
         #if targetEnvironment(simulator)
-        if let bundledUrl = resolveBundledJoinURL(allowProductionHost: false) {
-            return bundledUrl
-        }
-
-        return URL(string: "http://127.0.0.1:3000/api/sfu/join")!
+        let isSimulator = true
         #else
-        if let bundledUrl = resolveBundledJoinURL(allowProductionHost: true) {
-            return bundledUrl
-        }
-
-        return productionJoinURL()
+        let isSimulator = false
         #endif
+        return resolveDebugJoinURL(
+            launchValue: NativeRuntimeConfig.debugLaunchValue(forKey: "SFU_JOIN_URL"),
+            bundledValue: NativeRuntimeConfig.bundledString(forKey: "SFU_JOIN_URL"),
+            isSimulator: isSimulator,
+            viewerProfileEnabled: NativeRuntimeConfig.usesDebugViewerProfile
+        )
         #else
         if let envUrl = ProcessInfo.processInfo.environment["SFU_JOIN_URL"],
            let url = configuredProductionJoinURL(from: envUrl) {
@@ -367,6 +373,26 @@ enum SfuJoinService {
         return productionJoinURL()
         #endif
         #endif
+    }
+
+    static func resolveDebugJoinURL(
+        launchValue: String?,
+        bundledValue: String?,
+        isSimulator: Bool,
+        viewerProfileEnabled: Bool
+    ) -> URL {
+        if let launchValue,
+           let url = configuredJoinURL(from: launchValue, allowProductionHost: true) {
+            return url
+        }
+        if let bundledValue,
+           let url = configuredJoinURL(from: bundledValue, allowProductionHost: !isSimulator || viewerProfileEnabled) {
+            return url
+        }
+        if isSimulator && !viewerProfileEnabled {
+            return URL(string: "http://127.0.0.1:3000/api/sfu/join")!
+        }
+        return productionJoinURL()
     }
 
     static func isAndroidDebugRuntime() -> Bool {

@@ -1,7 +1,5 @@
 import Foundation
 
-// MARK: - Outgoing Messages
-
 struct NativeWebcamCodecCapabilities: Codable {
     let negotiationVersion: Int
     let receive: [String]
@@ -19,10 +17,7 @@ struct JoinRoomRequest: Codable {
     let displayName: String?
     let webinarInviteCode: String?
     let meetingInviteCode: String?
-    // The active native wrappers can receive VP8 and constrained-baseline
-    // H264, but native publishing does not yet apply room codec-policy changes.
-    // Advertise VP8-only send support so a native publisher can never make the
-    // room select an H264/VP9 mode it has not explicitly configured.
+
     var mediaCapabilities = NativeClientMediaCapabilities(
         webcam: NativeWebcamCodecCapabilities(
             negotiationVersion: 3,
@@ -144,7 +139,7 @@ struct ConsumerTelemetryNotification: Codable {
 
 struct ResumeConsumerRequest: Codable {
     let consumerId: String
-    // Requests a fresh keyframe while resuming to recover a stalled decoder.
+
     let requestKeyFrame: Bool?
 }
 
@@ -161,37 +156,35 @@ struct SendChatRequest: Codable {
     let content: String
     let gif: ChatGifAttachment?
     let image: ChatImageAttachment?
-    // The SFU also resolves DMs from "/dm <name>" and "@<name>" content.
+
     let recipient: String?
     let replyTo: ChatReplyPreview?
+
+    let suppressEmbeds: Bool?
 
     init(
         content: String,
         gif: ChatGifAttachment? = nil,
         image: ChatImageAttachment? = nil,
         recipient: String? = nil,
-        replyTo: ChatReplyPreview? = nil
+        replyTo: ChatReplyPreview? = nil,
+        suppressEmbeds: Bool? = nil
     ) {
         self.content = content
         self.gif = gif
         self.image = image
         self.recipient = recipient
         self.replyTo = replyTo
+        self.suppressEmbeds = suppressEmbeds
     }
 }
 
-/// Ack payload of `chat:imageUploadAuthorize` (meeting-core): a short-lived
-/// bearer token plus the asset endpoint to POST the raw image bytes to.
 struct ChatImageUploadAuthorization: Codable {
     let token: String
     let uploadUrl: String
     let maxBytes: Int
 }
 
-/// Raw `chat:imageUploadAuthorize` ack. The server answers EITHER the grant
-/// fields or `{error}` (rate limit, host policy, watch-only); decoding through
-/// this and calling `authorization()` surfaces the server's message instead of
-/// a generic connection error.
 struct ChatImageUploadAuthorizationAck: Codable {
     let token: String?
     let uploadUrl: String?
@@ -230,6 +223,11 @@ struct ConclaveAssistantRelayPacket: Codable {
     let timestamp: Double
     let expiresAt: Double
     let signature: String
+
+    var reasoning: String? = nil
+    var reasoningDone: Bool? = nil
+    var tasks: [ConclaveAssistantRelayTask]? = nil
+    var errored: Bool? = nil
 }
 
 struct SendReactionRequest: Codable {
@@ -478,6 +476,11 @@ struct GameOptionChoice: Codable, Identifiable {
     var id: String { value }
 }
 
+struct GameOptionCondition: Codable, Equatable {
+    let id: String
+    let equals: [String]
+}
+
 struct GameOptionSpec: Codable, Identifiable {
     let id: String
     let type: String
@@ -491,6 +494,7 @@ struct GameOptionSpec: Codable, Identifiable {
     let choices: [GameOptionChoice]?
     let placeholder: String?
     let maxLength: Int?
+    let showWhen: GameOptionCondition?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -504,6 +508,7 @@ struct GameOptionSpec: Codable, Identifiable {
         case choices
         case placeholder
         case maxLength
+        case showWhen
     }
 
     init(
@@ -518,7 +523,8 @@ struct GameOptionSpec: Codable, Identifiable {
         suffix: String? = nil,
         choices: [GameOptionChoice]? = nil,
         placeholder: String? = nil,
-        maxLength: Int? = nil
+        maxLength: Int? = nil,
+        showWhen: GameOptionCondition? = nil
     ) {
         self.id = id
         self.type = type
@@ -532,6 +538,7 @@ struct GameOptionSpec: Codable, Identifiable {
         self.choices = choices
         self.placeholder = placeholder
         self.maxLength = maxLength
+        self.showWhen = showWhen
     }
 
     init(from decoder: Decoder) throws {
@@ -553,6 +560,7 @@ struct GameOptionSpec: Codable, Identifiable {
         choices = try container.decodeIfPresent([GameOptionChoice].self, forKey: .choices)
         placeholder = try container.decodeIfPresent(String.self, forKey: .placeholder)
         maxLength = try container.decodeIfPresent(Int.self, forKey: .maxLength)
+        showWhen = try container.decodeIfPresent(GameOptionCondition.self, forKey: .showWhen)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -572,6 +580,7 @@ struct GameOptionSpec: Codable, Identifiable {
         try container.encodeIfPresent(choices, forKey: .choices)
         try container.encodeIfPresent(placeholder, forKey: .placeholder)
         try container.encodeIfPresent(maxLength, forKey: .maxLength)
+        try container.encodeIfPresent(showWhen, forKey: .showWhen)
     }
 
     var defaultConfigValue: GameConfigValue {
@@ -609,9 +618,7 @@ struct GamePublicState: Codable {
     let finished: Bool
     let hasLeaderboard: Bool
     let roomId: String?
-    // Server also sends the sanitized start config (for rematch), players who
-    // asked for a seat at the next round boundary, and whether late join is
-    // currently possible. Optional so older SFU payloads still decode.
+
     let config: [String: GameConfigValue]?
     let pendingJoiners: [GamePlayer]?
     let canJoinLate: Bool?
@@ -637,11 +644,14 @@ struct GameStateResponse: Codable {
     let view: GameJSONValue?
     let vote: GameVoteState?
 
+    var selfId: String? = nil
+
     enum CodingKeys: String, CodingKey {
         case active
         case publicState = "public"
         case view
         case vote
+        case selfId
     }
 }
 
@@ -725,14 +735,11 @@ struct AdminNoticeRequest: Codable {
     let level: String
 }
 
-// MARK: - Incoming Messages / Responses
-
 struct JoinRoomResponse: Codable {
     let rtpCapabilities: RtpCapabilities
     let existingProducers: [ProducerInfo]
     let status: String?
-    // Mirrors the rest of meeting-core JoinRoomResponse (all optional so older
-    // servers / partial payloads still decode).
+
     let roomId: String?
     let hostUserId: String?
     let hostUserIds: [String]?
@@ -749,6 +756,8 @@ struct JoinRoomResponse: Codable {
     let webinarRequiresInviteCode: Bool?
     let webinarAttendeeCount: Int?
     let webinarMaxAttendees: Int?
+
+    let webinarQaEnabled: Bool?
     let displayNameSnapshot: [DisplayNameSnapshotUser]?
 
     enum CodingKeys: String, CodingKey {
@@ -771,6 +780,7 @@ struct JoinRoomResponse: Codable {
         case webinarRequiresInviteCode
         case webinarAttendeeCount
         case webinarMaxAttendees
+        case webinarQaEnabled
         case displayNameSnapshot
     }
 
@@ -794,6 +804,7 @@ struct JoinRoomResponse: Codable {
         webinarRequiresInviteCode: Bool? = nil,
         webinarAttendeeCount: Int? = nil,
         webinarMaxAttendees: Int? = nil,
+        webinarQaEnabled: Bool? = nil,
         displayNameSnapshot: [DisplayNameSnapshotUser]? = nil
     ) {
         self.rtpCapabilities = rtpCapabilities
@@ -815,6 +826,7 @@ struct JoinRoomResponse: Codable {
         self.webinarRequiresInviteCode = webinarRequiresInviteCode
         self.webinarAttendeeCount = webinarAttendeeCount
         self.webinarMaxAttendees = webinarMaxAttendees
+        self.webinarQaEnabled = webinarQaEnabled
         self.displayNameSnapshot = displayNameSnapshot
     }
 
@@ -846,6 +858,7 @@ struct JoinRoomResponse: Codable {
         self.webinarRequiresInviteCode = try container.decodeIfPresent(Bool.self, forKey: .webinarRequiresInviteCode)
         self.webinarAttendeeCount = try container.decodeIfPresent(Int.self, forKey: .webinarAttendeeCount)
         self.webinarMaxAttendees = try container.decodeIfPresent(Int.self, forKey: .webinarMaxAttendees)
+        self.webinarQaEnabled = try container.decodeIfPresent(Bool.self, forKey: .webinarQaEnabled)
         self.displayNameSnapshot = try container.decodeIfPresent([DisplayNameSnapshotUser].self, forKey: .displayNameSnapshot)
     }
 }
@@ -870,8 +883,7 @@ struct ConsumeResponse: Codable {
     let producerId: String
     let kind: String
     let rtpParameters: RtpParameters
-    // Optional for compatibility with older SFUs. When present, these values
-    // are the authoritative mediasoup Consumer state returned by `consume`.
+
     let consumerType: String?
     let paused: Bool?
     let producerPaused: Bool?
@@ -879,8 +891,7 @@ struct ConsumeResponse: Codable {
     let preferredLayers: ConsumerLayerPreferenceRequest?
     let currentLayers: ConsumerLayerPreferenceRequest?
     let priority: Int?
-    // Forward-compatible server hint. Current servers expose enough RTP
-    // metadata to derive this when the field is absent.
+
     let maxSpatialLayer: Int?
     let plannedConsumerHandoffRequestId: String?
 }
@@ -899,13 +910,9 @@ struct ProducerInfo: Codable {
     let roomId: String?
 }
 
-/// Ack response for the `getProducers` RPC - the room's current producer list,
-/// used by the periodic producer-sync safety net.
 struct GetProducersResponse: Codable {
     let producers: [ProducerInfo]
 }
-
-// MARK: - Notifications
 
 struct NewProducerNotification: Codable {
     let producerId: String
@@ -1223,12 +1230,18 @@ struct ChatMessageNotification: Codable {
     let timestamp: Double
     let gif: ChatGifAttachment?
     let image: ChatImageAttachment?
-    // DM fields (meeting-core ChatMessage) - present only on direct messages.
+
     let isDirect: Bool?
     let dmTargetUserId: String?
     let dmTargetDisplayName: String?
     let roomId: String?
     let replyTo: ChatReplyPreview?
+
+    var reactions: [ChatMessageReaction]? = nil
+
+    var ttsVoiceToken: String? = nil
+
+    var suppressEmbeds: Bool? = nil
 }
 
 struct ConclaveAssistantMessageNotification: Codable {
@@ -1237,6 +1250,11 @@ struct ConclaveAssistantMessageNotification: Codable {
     let done: Bool?
     let timestamp: Double?
     let roomId: String?
+
+    var reasoning: String? = nil
+    var reasoningDone: Bool? = nil
+    var tasks: [ConclaveAssistantRelayTask]? = nil
+    var errored: Bool? = nil
 }
 
 struct ChatHistorySnapshotNotification: Codable {
@@ -1253,6 +1271,16 @@ struct ChatReactionChangedNotification: Codable {
     let messageId: String
     let reactions: [ChatMessageReaction]
     let roomId: String
+}
+
+struct ChatReactRequest: Codable {
+    let messageId: String
+    let emoji: String
+}
+
+struct ChatReactResponse: Codable {
+    let success: Bool?
+    let reactions: [ChatMessageReaction]?
 }
 
 extension ChatMessageNotification {
@@ -1273,7 +1301,12 @@ extension ChatMessageNotification {
             dmTargetUserId: dmTargetUserId,
             dmTargetDisplayName: dmTargetDisplayName,
             roomId: roomId ?? taggedRoomId,
-            replyTo: replyTo
+            replyTo: replyTo,
+            clientId: nil,
+            sendStatus: nil,
+            reactions: reactions ?? [],
+            ttsVoiceToken: ttsVoiceToken,
+            suppressEmbeds: suppressEmbeds ?? false
         )
     }
 }
@@ -1363,6 +1396,24 @@ struct DmStateChangedNotification: Codable {
 struct ImageAttachmentsStateChangedNotification: Codable {
     let enabled: Bool
     let roomId: String?
+}
+
+struct ParticipantMediaPermissionsChangedNotification: Codable {
+    let unmuteAllowed: Bool
+    let videoAllowed: Bool
+    let roomId: String?
+}
+
+struct ParticipantMediaPermissionsRequest: Codable {
+    let unmuteAllowed: Bool?
+    let videoAllowed: Bool?
+}
+
+struct ParticipantMediaPermissionsResponse: Codable {
+    let success: Bool?
+    let error: String?
+    let unmuteAllowed: Bool?
+    let videoAllowed: Bool?
 }
 
 struct TtsDisabledChangedNotification: Codable {
@@ -1661,6 +1712,10 @@ struct AdminRoomPolicySnapshot: Codable {
     let dmEnabled: Bool?
     let reactionsDisabled: Bool?
     let requiresMeetingInviteCode: Bool?
+
+    let imageAttachmentsEnabled: Bool?
+    let participantUnmuteAllowed: Bool?
+    let participantVideoAllowed: Bool?
 }
 
 struct AdminRoomAppsStateSnapshot: Codable {
@@ -1770,6 +1825,8 @@ struct WebinarConfigSnapshot: Codable {
     let feedMode: String?
     let hasLinkSlug: Bool
 
+    let qaEnabled: Bool?
+
     init(
         roomId: String?,
         enabled: Bool?,
@@ -1780,7 +1837,8 @@ struct WebinarConfigSnapshot: Codable {
         requiresInviteCode: Bool?,
         linkSlug: String?,
         feedMode: String?,
-        hasLinkSlug: Bool? = nil
+        hasLinkSlug: Bool? = nil,
+        qaEnabled: Bool? = nil
     ) {
         self.roomId = roomId
         self.enabled = enabled
@@ -1792,6 +1850,7 @@ struct WebinarConfigSnapshot: Codable {
         self.linkSlug = linkSlug
         self.feedMode = feedMode
         self.hasLinkSlug = hasLinkSlug ?? (linkSlug != nil)
+        self.qaEnabled = qaEnabled
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1804,6 +1863,7 @@ struct WebinarConfigSnapshot: Codable {
         case requiresInviteCode
         case linkSlug
         case feedMode
+        case qaEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -1818,6 +1878,7 @@ struct WebinarConfigSnapshot: Codable {
         linkSlug = try container.decodeIfPresent(String.self, forKey: .linkSlug)
         feedMode = try container.decodeIfPresent(String.self, forKey: .feedMode)
         hasLinkSlug = container.contains(.linkSlug)
+        qaEnabled = try container.decodeIfPresent(Bool.self, forKey: .qaEnabled)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1837,6 +1898,7 @@ struct WebinarConfigSnapshot: Codable {
             }
         }
         try container.encodeIfPresent(feedMode, forKey: .feedMode)
+        try container.encodeIfPresent(qaEnabled, forKey: .qaEnabled)
     }
 }
 
@@ -1930,8 +1992,7 @@ struct WebinarQaSnapshot: Codable {
 
     enum CodingKeys: String, CodingKey {
         case roomId
-        // Avoid generating a Kotlin enum member named `entries`, which
-        // conflicts with Kotlin's built-in Enum.entries property.
+
         case qaEntries = "entries"
     }
 }
@@ -1962,6 +2023,40 @@ struct WebinarPromotedNotification: Codable {
 struct WebinarDemotedNotification: Codable {
     let roomId: String
     let webinarLinkSlug: String?
+}
+
+struct WebinarUserRequest: Codable {
+    let userId: String
+}
+
+struct WebinarHandRaisedResponse: Codable {
+    let success: Bool?
+    let raised: Bool?
+}
+
+struct WebinarQaSubmitRequest: Codable {
+    let question: String
+}
+
+struct WebinarQaSubmitResponse: Codable {
+    let success: Bool?
+    let id: String?
+}
+
+struct WebinarQaUpvoteRequest: Codable {
+    let id: String
+}
+
+struct WebinarQaUpvoteResponse: Codable {
+    let success: Bool?
+    let upvotes: Int?
+    let hasUpvoted: Bool?
+}
+
+struct WebinarQaModerateRequest: Codable {
+    let id: String
+    let action: String
+    let answerText: String?
 }
 
 struct WaitingRoomStatusNotification: Codable {
@@ -2090,8 +2185,6 @@ struct AppsAwarenessNotification {
     let roomId: String?
 }
 
-// MARK: - WebRTC Types (Simplified)
-
 struct RtpCapabilities: Codable {
     let codecs: [RtpCodecCapability]?
     let headerExtensions: [RtpHeaderExtension]?
@@ -2192,18 +2285,16 @@ struct DtlsFingerprint: Codable {
     let value: String
 }
 
-// MARK: - AnyCodable Helper
-
 #if SKIP
 typealias AnyCodable = String
 #else
 struct AnyCodable: Codable {
     let value: Any
-    
+
     init(_ value: Any) {
         self.value = value
     }
-    
+
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let intValue = try? container.decode(Int.self) {
@@ -2222,7 +2313,7 @@ struct AnyCodable: Codable {
             value = NSNull()
         }
     }
-    
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch value {

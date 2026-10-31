@@ -1,0 +1,115 @@
+{
+  "id": "link.fill0",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "request_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/link/materialsymbolsrounded/link_24px.svg",
+  "final_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/link/materialsymbolsrounded/link_24px.svg",
+  "http_status": 200,
+  "headers": [
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Content-Length",
+      "618"
+    ],
+    [
+      "Cache-Control",
+      "max-age=300"
+    ],
+    [
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    ],
+    [
+      "Content-Type",
+      "image/svg+xml"
+    ],
+    [
+      "ETag",
+      "\"5d1dc82493b161b286b3bc75316d3f943fc54560b0fe1ef67ca54c7b955976e0\""
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=31536000"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Frame-Options",
+      "deny"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-GitHub-Request-Id",
+      "CE70:4AB6F:467B2E:566508:6AE24F8C"
+    ],
+    [
+      "x-github-edge-region",
+      "centralindia"
+    ],
+    [
+      "Accept-Ranges",
+      "bytes"
+    ],
+    [
+      "Date",
+      "Wed, 28 Oct 2026 19:40:01 GMT"
+    ],
+    [
+      "Via",
+      "1.1 varnish"
+    ],
+    [
+      "X-Served-By",
+      "cache-maa10249-MAA"
+    ],
+    [
+      "X-Cache",
+      "MISS"
+    ],
+    [
+      "X-Cache-Hits",
+      "0"
+    ],
+    [
+      "X-Timer",
+      "S1793216401.159207,VS0,VE297"
+    ],
+    [
+      "Vary",
+      "Authorization,Accept-Encoding"
+    ],
+    [
+      "Access-Control-Allow-Origin",
+      "*"
+    ],
+    [
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    ],
+    [
+      "X-Fastly-Request-ID",
+      "4f27acdb586a4623d5a467fcc67273c69e874311"
+    ],
+    [
+      "Expires",
+      "Wed, 28 Oct 2026 19:45:01 GMT"
+    ],
+    [
+      "Source-Age",
+      "0"
+    ]
+  ],
+  "started_at": "2026-10-28T19:40:01.064588+00:00",
+  "completed_at": "2026-10-28T19:40:01.484074+00:00",
+  "sha256": "9c56fecf20eadbb91ff1cde7d8bf45030fc598d7c12824cfa67d5fd98d87fa9d",
+  "bytes": 618,
+  "body_file": "assets/symbols/web/link/materialsymbolsrounded/link_24px.svg",
+  "historical_status": "fresh_pinned_acquisition"
+}

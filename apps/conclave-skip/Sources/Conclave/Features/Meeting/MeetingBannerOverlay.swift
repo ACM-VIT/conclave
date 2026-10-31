@@ -1,6 +1,4 @@
-//  Transient meeting notices rendered above the stage. This view deliberately
-//  owns no in-flow spacer: banners must not move/recompose video tiles, and an
-//  empty banner state must not leave a dead strip below the meeting header.
+
 
 import SwiftUI
 import Observation
@@ -38,9 +36,6 @@ struct MeetingBannerOverlay: View {
     @Bindable var viewModel: MeetingViewModel
     let onShowParticipants: () -> Void
 
-    // Highest quality-degradation severity the user has dismissed. The banner
-    // only re-appears if the connection worsens beyond this, and it resets once
-    // the connection has genuinely recovered to good.
     @State private var dismissedQualitySeverity: Int = 0
 
     private var isRecovering: Bool {
@@ -63,8 +58,6 @@ struct MeetingBannerOverlay: View {
         MeetingQualityBannerPolicy.severity(viewModel.state.connectionQuality)
     }
 
-    // Offline/reconnecting banners take priority and already explain the outage,
-    // so quality warnings stay suppressed while either is showing.
     private var shouldShowQualityBanner: Bool {
         guard !isOffline, !isRecovering else { return false }
         guard viewModel.state.connectionState == .joined else { return false }

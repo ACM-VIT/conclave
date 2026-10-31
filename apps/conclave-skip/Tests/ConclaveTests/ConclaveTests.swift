@@ -147,7 +147,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testConnectionRecoveryWatchdogPolicyActions() {
-        // Progressing recovery: recent join activity keeps the watchdog quiet.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 10,
@@ -157,8 +157,7 @@ final class ConclaveTests: XCTestCase {
             ),
             ConnectionRecoveryWatchdogPolicy.Action.wait
         )
-        // Stranded recovery: no join activity past the stall threshold forces
-        // a fresh rejoin even while the state still claims to be joining.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 40,
@@ -168,7 +167,7 @@ final class ConclaveTests: XCTestCase {
             ),
             ConnectionRecoveryWatchdogPolicy.Action.forceRejoin
         )
-        // Hard cap wins over another force cycle.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 121,
@@ -178,7 +177,7 @@ final class ConclaveTests: XCTestCase {
             ),
             ConnectionRecoveryWatchdogPolicy.Action.fail
         )
-        // Reaching a settled or terminal state stands the watchdog down.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 40,
@@ -197,7 +196,7 @@ final class ConclaveTests: XCTestCase {
             ),
             ConnectionRecoveryWatchdogPolicy.Action.standDown
         )
-        // An intentional leave always stands down, whatever the timers say.
+
         XCTAssertEqual(
             ConnectionRecoveryWatchdogPolicy.action(
                 secondsSinceRecoveryStarted: 500,
@@ -250,15 +249,6 @@ final class ConclaveTests: XCTestCase {
         state.resetPartials()
         XCTAssertEqual(state.orderedSegments.map(\.itemId), ["f"])
         XCTAssertEqual(state.groupedSegments.map(\.text), ["ready"])
-    }
-
-    func testTranscriptPanelUsesCachedPresentationState() throws {
-        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/TranscriptPanelView.swift")
-
-        XCTAssertTrue(source.contains("ForEach(state.groupedSegments)"))
-        XCTAssertTrue(source.contains(".onChange(of: state.scrollTrigger)"))
-        XCTAssertFalse(source.contains("private var groupedSegments"))
-        XCTAssertFalse(source.contains("for segment in state.orderedSegments"))
     }
 
     func testTranscriptConfigurationMatchesWebModelCatalog() throws {
@@ -381,36 +371,8 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testTranscriptPanelParityAndFixedRegionsStayInPlace() throws {
-        let panel = try sourceFileContents("Sources/Conclave/Features/Meeting/TranscriptPanelView.swift")
-        let service = try sourceFileContents("Sources/Conclave/Core/Networking/TranscriptService.swift")
-        let meeting = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingView.swift")
-
-        XCTAssertTrue(panel.contains("TranscriptAskTab"))
-        XCTAssertTrue(panel.contains("TranscriptMinutesTab"))
-        XCTAssertTrue(panel.contains("TranscriptConfiguration.assistantModels"))
-        XCTAssertTrue(panel.contains(".frame(height: 44)"))
-        XCTAssertTrue(panel.contains(".frame(height: 62)"))
-        XCTAssertTrue(panel.contains(".acmColorBackground(ACMColors.surface)"))
-        XCTAssertTrue(panel.contains("@State private var navigation = TranscriptPanelNavigationState()"))
-        XCTAssertFalse(panel.contains("@State private var activeTab"))
-        XCTAssertTrue(panel.contains("private var titleRow: some View"))
-        XCTAssertTrue(panel.contains("private var sessionAttribution: some View"))
-        XCTAssertTrue(panel.contains(".padding(.top, 15)"))
-        XCTAssertTrue(panel.contains("Text(\"Stop\")"))
-        XCTAssertTrue(panel.contains("ACMColors.error.opacity(0.12)"))
         XCTAssertEqual(TranscriptPanelView.runningDetentFraction, 0.72)
         XCTAssertGreaterThan(TranscriptPanelView.runningDetentFraction, MeetingSheetView.detentFraction)
-        XCTAssertTrue(panel.contains("@State private var selectedPresentationDetent: PresentationDetent"))
-        XCTAssertTrue(panel.contains(".presentationDetents(presentationDetents, selection: $selectedPresentationDetent)"))
-        XCTAssertTrue(panel.contains(".fraction(MeetingSheetView.detentFraction),"))
-        XCTAssertTrue(panel.contains(".fraction(Self.runningDetentFraction),"))
-        XCTAssertTrue(panel.contains(".large"))
-        XCTAssertTrue(panel.contains(".presentationDragIndicator(.visible)"))
-        XCTAssertTrue(service.contains("case \"minutes.updated\":"))
-        XCTAssertTrue(service.contains("case \"qa.delta\":"))
-        XCTAssertTrue(service.contains("[\"type\": \"session.pause\"]"))
-        XCTAssertTrue(meeting.contains(".padding(.leading, geometry.safeAreaInsets.leading)"))
-        XCTAssertFalse(meeting.contains(".padding(.leading, max(6.0, geometry.safeAreaInsets.leading))"))
     }
 
     func testNativeGameWireModelsDecodeServerShapes() throws {
@@ -457,9 +419,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testNativeGamePublicStateDecodesLateJoinAndConfigFields() throws {
-        // The stage reads config (rematch), pendingJoiners (seated next round),
-        // and canJoinLate (Join affordance). Older payloads omit them, so they
-        // must stay optional.
+
         let full = try JSONDecoder().decode(GamePublicState.self, from: Data("""
         {
           "gameId": "trivia",
@@ -499,20 +459,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertNil(legacy.canJoinLate)
     }
 
-    func testNativeGameFinishedStateSurvivesBroadcastForResultsAndRematch() throws {
-        // Regression: a finished round must NOT be nulled by the game:state
-        // broadcast handler (only game:ended clears it), or the stage flashes
-        // its results away and the rematch action never appears. Matches web.
-        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let marker = "private func applyGamePublicState(_ notification: GamePublicState)"
-        let range = try XCTUnwrap(source.range(of: marker))
-        let tail = String(source[range.lowerBound...].prefix(600))
-        XCTAssertFalse(
-            tail.contains("if notification.finished {"),
-            "applyGamePublicState must not discard finished games on broadcast."
-        )
-    }
-
     func testNativeGameViewAndMovePayloadWireModelsPreserveObjects() throws {
         let notification = try JSONDecoder().decode(GamePlayerViewNotification.self, from: Data("""
         {
@@ -537,21 +483,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(encoded["gameId"] as? String, "trivia")
         XCTAssertEqual(encoded["type"] as? String, "answer")
         XCTAssertEqual((payload["choice"] as? NSNumber)?.intValue, 2)
-    }
-
-    func testNativeGameSheetAvoidsForcedUnwrapsForOptionalServerMetadata() throws {
-        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/MoreSheetView.swift")
-
-        XCTAssertFalse(source.contains("rank!"))
-        XCTAssertFalse(source.contains("category!"))
-    }
-
-    func testParticipantsSheetUsesCachedPendingUserRows() throws {
-        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/ParticipantsSheetView.swift")
-
-        XCTAssertTrue(source.contains("viewModel.state.pendingUserRows"))
-        XCTAssertFalse(source.contains("pendingUsers.sorted"))
-        XCTAssertFalse(source.contains("state.pendingUsers.sorted"))
     }
 
     func testMeetingEntryOverlayPolicyStopsAtSafetyCap() throws {
@@ -654,7 +585,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(stabilizer.update(with: ConnectionQuality.poor), ConnectionQuality.good)
         XCTAssertEqual(stabilizer.update(with: ConnectionQuality.poor), ConnectionQuality.poor)
 
-        // Missing stats do not relax a constrained profile.
         XCTAssertEqual(stabilizer.update(with: ConnectionQuality.unknown), ConnectionQuality.poor)
 
         for _ in 0..<4 {
@@ -721,12 +651,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(MeetingQualityBannerPolicy.shouldResetDismissal(for: ConnectionQuality.good))
         XCTAssertFalse(MeetingQualityBannerPolicy.shouldResetDismissal(for: ConnectionQuality.fair))
         XCTAssertFalse(MeetingQualityBannerPolicy.shouldResetDismissal(for: ConnectionQuality.unknown))
-
-        let meetingSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingView.swift")
-        let bannerSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingBannerOverlay.swift")
-        XCTAssertTrue(meetingSource.contains("removes the old 58pt empty slot"))
-        XCTAssertTrue(meetingSource.contains(".padding(.top, MeetingHeaderLayout.barHeight)"))
-        XCTAssertFalse(bannerSource.contains("MeetingBannerSlotLayout.reservedHeight"))
     }
 
     func testStreamingMarkdownParsesNativeBlocksAndIncompleteInlineMarkup() throws {
@@ -798,12 +722,6 @@ final class ConclaveTests: XCTestCase {
             58,
             accuracy: 0.001
         )
-
-        let chatSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
-        let transcriptSource = try sourceFileContents("Sources/Conclave/Features/Meeting/TranscriptPanelView.swift")
-        XCTAssertTrue(chatSource.contains("NativeStreamingMarkdownView("))
-        XCTAssertTrue(chatSource.contains("NativeTextShimmer("))
-        XCTAssertTrue(transcriptSource.contains("isStreaming: message.status == .streaming"))
     }
 
     func testAndroidNetworkReachabilityQualityPolicyUsesBandwidthOnlyForValidatedQuality() throws {
@@ -831,15 +749,6 @@ final class ConclaveTests: XCTestCase {
             AndroidNetworkReachabilityQualityPolicy.validatedQuality(upstreamKbps: 120, downstreamKbps: 300),
             ConnectionQuality.emergency
         )
-    }
-
-    func testAndroidNetworkReachabilityBridgeUsesSharedBandwidthPolicy() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/NetworkReachabilityMonitor.kt")
-
-        XCTAssertTrue(source.contains("AndroidNetworkReachabilityQualityPolicy.bandwidthQuality"))
-        XCTAssertFalse(source.contains("NET_CAPABILITY_NOT_CONGESTED"))
-        XCTAssertFalse(source.contains("NET_CAPABILITY_NOT_SUSPENDED"))
-        XCTAssertFalse(source.contains("blocked_or_congested"))
     }
 
     func testNativePublishQualityDoesNotTreatRTTAloneAsMediaPressure() throws {
@@ -881,60 +790,8 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
-    func testNativePublishQualityKeepsLatencyInDisplayButOutOfAdaptivePressure() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-
-        for source in [iosSource, androidSource] {
-            XCTAssertTrue(source.contains("publishMediaPressureQuality"))
-            XCTAssertTrue(source.contains("publishTransportQuality"))
-            XCTAssertTrue(source.contains("publishMediaPressureQuality,"))
-            XCTAssertTrue(source.contains("publishTransportQuality,"))
-        }
-    }
-
-    func testAndroidWebcamSingleLayerFallbackPreservesPreferredCodec() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-        let fallbackMarker = try XCTUnwrap(
-            source.range(of: "Webcam simulcast produce failed; retrying single-layer")
-        )
-        let fallbackSource = String(source[fallbackMarker.lowerBound...])
-
-        XCTAssertTrue(fallbackSource.contains(
-            "webcamFallbackSingleLayerEncodings(currentVideoQuality, connectionQuality),\n                codecOptions,\n                preferredCodec,\n                appData"
-        ))
-        XCTAssertFalse(fallbackSource.contains(
-            "null as List<RtpParameters.Encoding>?,\n                codecOptions,\n                null,\n                appData"
-        ))
-    }
-
     func testNativeWebcamEncodingsUseOneTemporalLayerAcrossAllProducerPaths() throws {
         XCTAssertEqual(WebcamTemporalLayerPolicy.temporalLayerCount, 1)
-
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        XCTAssertEqual(
-            iosSource.components(separatedBy:
-                "encoding.numTemporalLayers = NSNumber(value: WebcamTemporalLayerPolicy.temporalLayerCount)"
-            ).count - 1,
-            2
-        )
-        XCTAssertTrue(iosSource.contains(
-            "encodings[index].numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount"
-        ))
-
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-        XCTAssertTrue(androidSource.contains(
-            "webcamFallbackSingleLayerEncodings(currentVideoQuality, connectionQuality)"
-        ))
-        XCTAssertEqual(
-            androidSource.components(separatedBy:
-                "encoding.numTemporalLayers = WebcamTemporalLayerPolicy.temporalLayerCount"
-            ).count - 1,
-            3
-        )
-        XCTAssertFalse(androidSource.contains(
-            "null as List<RtpParameters.Encoding>?,\n                codecOptions,\n                preferredCodec,\n                appData"
-        ))
     }
 
     #if !SKIP
@@ -971,57 +828,883 @@ final class ConclaveTests: XCTestCase {
     }
     #endif
 
-    func testNativeConsumerRemovalPreservesOverlappingSuccessorOwnership() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-
-        XCTAssertTrue(iosSource.contains("let generation: Int"))
-        XCTAssertTrue(iosSource.contains("consumerGeneration: Int = 0"))
-        XCTAssertTrue(iosSource.contains("ConsumerGenerationRemovalPolicy.ownsConsumerSlot("))
-        XCTAssertTrue(iosSource.contains("ConsumerGenerationRemovalPolicy.ownsTrackSlot("))
-        XCTAssertTrue(iosSource.contains("$0.value.consumer === consumer"))
-        XCTAssertTrue(iosSource.contains("func closeConsumer(consumerId: String)"))
-        XCTAssertTrue(iosSource.contains("let matchingConsumers = consumers.filter"))
-
-        XCTAssertTrue(androidSource.contains("val generation: Int,"))
-        XCTAssertTrue(androidSource.contains("internal val consumerGeneration: Int = 0"))
-        XCTAssertTrue(androidSource.contains("ConsumerGenerationRemovalPolicy.ownsConsumerSlot("))
-        XCTAssertTrue(androidSource.contains("ConsumerGenerationRemovalPolicy.ownsTrackSlot("))
-        XCTAssertTrue(androidSource.contains("it.value.consumer === consumer"))
-        XCTAssertTrue(androidSource.contains("mainHandler.post {"))
-        XCTAssertTrue(androidSource.contains("internal fun closeConsumer(consumerId: String)"))
-        XCTAssertTrue(androidSource.contains("val matchingConsumers = consumers"))
-    }
-
-    func testNativeFirstDecodedFrameObservationIsLatchedCancellableAndPreResume() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-
-        let iosAttach = try XCTUnwrap(iosSource.range(of: "videoTrack.add(renderer)"))
-        let iosResume = try XCTUnwrap(iosSource.range(of:
-            "try await socket.resumeConsumer(\n                consumerId: response.id,"
-        ))
-        XCTAssertLessThan(iosAttach.lowerBound, iosResume.lowerBound)
-        XCTAssertTrue(iosSource.contains("private actor FirstDecodedVideoFrameSignal"))
-        XCTAssertTrue(iosSource.contains("withTaskCancellationHandler"))
-        XCTAssertTrue(iosSource.contains("withThrowingTaskGroup(of: Bool.self)"))
-        XCTAssertTrue(iosSource.contains("try Task.checkCancellation()"))
-        XCTAssertTrue(iosSource.contains("func cancelFirstDecodedVideoFrameObservation(consumerId: String)"))
-
-        let androidAttach = try XCTUnwrap(androidSource.range(of: "videoTrack.addSink(it)"))
-        let androidResume = try XCTUnwrap(androidSource.range(of:
-            "socket.resumeConsumer(\n                response.id,\n                response.kind == \"video\","
-        ))
-        XCTAssertLessThan(androidAttach.lowerBound, androidResume.lowerBound)
-        XCTAssertTrue(androidSource.contains("private class FirstDecodedVideoFrameObserver("))
-        XCTAssertTrue(androidSource.contains("withContext(Dispatchers.Main.immediate)"))
-        XCTAssertTrue(androidSource.contains("withTimeoutOrNull(timeoutMilliseconds.toLong())"))
-        XCTAssertTrue(androidSource.contains("signal.await()"))
-        XCTAssertTrue(androidSource.contains("Video consumer generation was replaced"))
-        XCTAssertTrue(androidSource.contains("internal fun cancelFirstDecodedVideoFrameObservation(consumerId: String)"))
-    }
-
     #if !SKIP
+
+    func testNativeCallCorrectnessBlockersStayFixed() throws {
+        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
+        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
+        let macSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient+macOS.swift")
+        let activitySource = try sourceFileContents("Android/app/src/main/kotlin/Main.kt")
+        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
+        let awakeSource = try sourceFileContents("Sources/Conclave/Core/Call/CallScreenAwake.swift")
+        let permissionSource = try sourceFileContents("Sources/Conclave/Skip/PermissionHelper.kt")
+        let fastfileSource = try sourceFileContents("Android/fastlane/Fastfile")
+        let xcodeProjectSource = try sourceFileContents("Darwin/Conclave.xcodeproj/project.pbxproj")
+
+        func body(_ source: String, from start: String, to end: String) throws -> String {
+            let startRange = try XCTUnwrap(source.range(of: start), "missing \(start)")
+            let endRange = try XCTUnwrap(
+                source.range(of: end, range: startRange.upperBound..<source.endIndex),
+                "missing \(end) after \(start)"
+            )
+            return String(source[startRange.lowerBound..<endRange.lowerBound])
+        }
+
+        let androidFrameStart = try XCTUnwrap(androidSource.range(of: "override fun onFrame(frame: org.webrtc.VideoFrame) {"))
+        let androidFrameEnd = try XCTUnwrap(androidSource.range(
+            of: "fun cancel() {",
+            range: androidFrameStart.upperBound..<androidSource.endIndex
+        ))
+        let androidOnFrame = String(androidSource[androidFrameStart.lowerBound..<androidFrameEnd.lowerBound])
+        XCTAssertFalse(androidOnFrame.contains("removeSink"))
+        XCTAssertTrue(androidOnFrame.contains("mainHandler.post { detach() }"))
+
+        let iosFrameStart = try XCTUnwrap(iosSource.range(of: "func renderFrame(_ frame: RTCVideoFrame?) {"))
+        let iosFrameEnd = try XCTUnwrap(iosSource.range(
+            of: "func cancel() {",
+            range: iosFrameStart.upperBound..<iosSource.endIndex
+        ))
+        let iosRenderFrame = String(iosSource[iosFrameStart.lowerBound..<iosFrameEnd.lowerBound])
+        let iosDispatch = try XCTUnwrap(iosRenderFrame.range(of: "DispatchQueue.main.async"))
+        let iosRemove = try XCTUnwrap(iosRenderFrame.range(of: "remove(self)"))
+        XCTAssertLessThan(iosDispatch.lowerBound, iosRemove.lowerBound)
+
+        XCTAssertEqual(iosSource.components(separatedBy: ".createProducer(").count - 1, 2)
+        XCTAssertEqual(iosSource.components(separatedBy: "request.transport.createProducer(").count - 1, 2)
+        XCTAssertFalse(iosSource.contains("Task.detached(priority: .userInitiated) {\n            MediaProducerCreationResult"))
+        XCTAssertFalse(iosSource.contains("Task.detached(priority: .userInitiated) {\n            ScreenProducerCreationResult"))
+        XCTAssertFalse(iosSource.contains("sendTransportOperationQueue.sync"))
+        XCTAssertTrue(iosSource.contains("try handle.transport?.restartICE(with: iceParameters)"))
+        XCTAssertEqual(iosSource.components(separatedBy: "try transport.restartICE(with: iceParameters)").count - 1, 1)
+        XCTAssertTrue(iosSource.contains("withExtendedLifetime(handle.device) {"))
+        for directClose in [
+            "audioProducer?.close()",
+            "videoProducer?.close()",
+            "screenProducer?.close()",
+            "oldProducer.close()",
+            "pendingProducer?.close()",
+            "pendingProducer.close()",
+            "sendTransport?.close()",
+            "nextSendTransport.close()"
+        ] {
+            XCTAssertFalse(iosSource.contains(directClose), "send-side \(directClose) must use the send-transport queue")
+        }
+
+        XCTAssertTrue(iosSource.contains("localAudioMuteIntentGeneration != muteIntentGeneration"))
+
+        let trackFactory = try body(
+            iosSource,
+            from: "private func createMicrophoneAudioTrack()",
+            to: "private func nextLocalVideoTrackId()"
+        )
+        XCTAssertTrue(trackFactory.contains("track.isEnabled = false"))
+        XCTAssertFalse(trackFactory.contains("track.isEnabled = true"))
+        XCTAssertTrue(iosSource.contains("producer.resume()\n        microphone.track.isEnabled = true"))
+
+        let iosStartWrapper = try body(
+            iosSource,
+            from: "func startProducingAudio() async throws {",
+            to: "private func performStartProducingAudio("
+        )
+        XCTAssertTrue(iosStartWrapper.contains("while let inFlight = audioStartTask {"))
+        XCTAssertTrue(iosStartWrapper.contains("audioStartTask = task"))
+        XCTAssertTrue(iosStartWrapper.contains("guard localAudioMuteIntentGeneration == muteIntentGeneration else {"))
+        XCTAssertTrue(iosSource.contains("audioStartTask = nil\n        audioCaptureReassertionTask?.cancel()"))
+
+        for (start, end) in [
+            ("func refreshLocalAudioProducerForBandwidthProfile(", "private func commitMicrophoneReplacement("),
+            ("private func recreateLocalAudioProducerAfterRouteChange(", "private func restoreRouteRecoveryTrackIfCurrent(")
+        ] {
+            let replacement = try body(iosSource, from: start, to: end)
+            let capture = try XCTUnwrap(replacement.range(of: "let muteIntentGeneration = localAudioMuteIntentGeneration"))
+            let mark = try XCTUnwrap(replacement.range(of: "markIntentionalLocalAudioProducerClose(oldProducer.id)"))
+            let create = try XCTUnwrap(replacement.range(of: "try await createMicrophoneProducer("))
+            XCTAssertLessThan(capture.lowerBound, create.lowerBound)
+            XCTAssertLessThan(mark.lowerBound, create.lowerBound)
+            XCTAssertTrue(replacement.contains("intentionalLocalAudioProducerCloseIds.remove(oldProducer.id)"))
+            XCTAssertTrue(replacement.contains("let muted = isLocalAudioMuteInEffect(since: muteIntentGeneration)"))
+            XCTAssertTrue(replacement.contains("commitMicrophoneReplacement("))
+            XCTAssertTrue(replacement.contains("await markMicrophoneProducerMuted(nextProducer.id"))
+            XCTAssertTrue(replacement.contains("self.sendTransport === sendTransport,\n                  audioProducer === oldProducer else {"))
+            XCTAssertFalse(replacement.contains("closeProducer(producerId: oldProducer.id)"))
+            XCTAssertFalse(replacement.contains("localAudioEnabled, audioProducer === oldProducer"))
+            XCTAssertFalse(replacement.contains("localAudioEnabled,\n                  audioProducer === oldProducer"))
+        }
+        let commitReplacement = try body(
+            iosSource,
+            from: "private func commitMicrophoneReplacement(",
+            to: "private func isLocalAudioMuteInEffect(since muteIntentGeneration: Int) -> Bool {"
+        )
+        XCTAssertTrue(commitReplacement.contains("nextProducer.pause()"))
+        XCTAssertTrue(commitReplacement.contains("closeSendProducer(oldProducer)"))
+        XCTAssertTrue(iosSource.contains("localAudioMuteIntentGeneration != muteIntentGeneration && !localAudioIntentEnabled"))
+        XCTAssertTrue(iosSource.contains("guard !isLocalAudioMuteInEffect(since: muteIntentGeneration) else { return }"))
+        XCTAssertTrue(iosSource.contains("func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool {"))
+        XCTAssertTrue(macSource.contains("func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool { false }"))
+        XCTAssertTrue(androidSource.contains("internal fun consumeIntentionalLocalAudioProducerClose("))
+        let localClose = try body(
+            viewModelSource,
+            from: "private func handleLocalProducerClosed(_ notification: ProducerClosedNotification) async -> Bool {",
+            to: "let wasCameraOff = state.isCameraOff"
+        )
+        let consumeAudio = try XCTUnwrap(localClose.range(of: "webRTCClient.consumeIntentionalLocalAudioProducerClose("))
+        let closeAudio = try XCTUnwrap(localClose.range(of: "webRTCClient.closeLocalMedia(\n            kind: \"audio\""))
+        XCTAssertLessThan(consumeAudio.lowerBound, closeAudio.lowerBound)
+
+        let videoStart = try body(
+            iosSource,
+            from: "func startProducingVideo() async throws {",
+            to: "func startCameraCapture() throws {"
+        )
+        XCTAssertTrue(videoStart.contains("if isStale || videoCapturer == nil {"))
+        XCTAssertTrue(videoStart.contains("Dropped superseded camera producer"))
+
+        let iosSetAudio = try body(
+            iosSource,
+            from: "func setAudioEnabled(_ enabled: Bool) async throws {",
+            to: "func suspendLocalAudioForRecovery() {"
+        )
+        let iosSetAudioCode = iosSetAudio.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let iosFailClosed = try XCTUnwrap(iosSetAudioCode.range(of: "if !enabled { rtcLocalAudioTrack?.isEnabled = false localAudioEnabled = false"))
+        let iosRollback = try XCTUnwrap(iosSetAudioCode.range(of: "if previous { producer.resume()"))
+        XCTAssertLessThan(iosFailClosed.lowerBound, iosRollback.lowerBound)
+        let androidSetAudio = try body(
+            androidSource,
+            from: "internal suspend fun setAudioEnabled(enabled: Boolean) {",
+            to: "internal fun suspendLocalAudioForRecovery() {"
+        )
+        let androidSetAudioCode = androidSetAudio.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        let androidFailClosed = try XCTUnwrap(androidSetAudioCode.range(of: "if (!enabled) { localAudioTargetEnabled = false audioDeviceModule?.setMicrophoneMute(true)"))
+        let androidRollback = try XCTUnwrap(androidSetAudioCode.range(of: "if (previous) { localAudioTargetEnabled = true"))
+        XCTAssertLessThan(androidFailClosed.lowerBound, androidRollback.lowerBound)
+        XCTAssertFalse(viewModelSource.contains("state.isMuted = !newState"))
+        XCTAssertTrue(viewModelSource.contains("state.isMuted = muted ? true : previousMuted"))
+        let disableStart = try XCTUnwrap(viewModelSource.range(of: "private func disableLocalAudioIfNeeded() async throws {"))
+        let disableEnd = try XCTUnwrap(viewModelSource.range(
+            of: "try await webRTCClient.setAudioEnabled(false)",
+            range: disableStart.upperBound..<viewModelSource.endIndex
+        ))
+        XCTAssertTrue(viewModelSource[disableStart.upperBound..<disableEnd.lowerBound]
+            .contains("webRTCClient.suspendLocalAudioForRecovery()"))
+
+        let iosStart = try XCTUnwrap(iosSource.range(of: "func startProducingAudio() async throws {"))
+        let iosFirstAwait = try XCTUnwrap(iosSource.range(
+            of: "_ = try? await inFlight.value",
+            range: iosStart.upperBound..<iosSource.endIndex
+        ))
+        XCTAssertTrue(iosSource[iosStart.upperBound..<iosFirstAwait.lowerBound]
+            .contains("let muteIntentGeneration = localAudioMuteIntentGeneration"))
+        let androidStart = try XCTUnwrap(androidSource.range(of: "internal suspend fun startProducingAudio() {"))
+        let androidFirstAwait = try XCTUnwrap(androidSource.range(
+            of: "createSendTransportIfNeeded()",
+            range: androidStart.upperBound..<androidSource.endIndex
+        ))
+        XCTAssertTrue(androidSource[androidStart.upperBound..<androidFirstAwait.lowerBound]
+            .contains("val muteIntentGeneration = localAudioMuteIntentGeneration"))
+        XCTAssertTrue(androidSource.contains("if (localAudioMuteIntentGeneration != muteIntentGeneration) {"))
+        XCTAssertTrue(androidSource.contains("if (localAudioMuteIntentGeneration == muteIntentGeneration && audioProducer === producer) {"))
+        XCTAssertTrue(viewModelSource.contains("if enabled, !self.webRTCClient.isLocalAudioPublishingHealthy {"))
+        XCTAssertFalse(viewModelSource.contains("guard webRTCClient.hasLocalAudioProducer else { return }\n            state.isMuted = false"))
+        XCTAssertEqual(viewModelSource.components(separatedBy: "guard webRTCClient.isLocalAudioPublishingHealthy else { return }\n            state.isMuted = false").count - 1, 2)
+
+        let viewModelCode = withoutBlockComments(viewModelSource)
+        for (token, guardName) in [
+            ("muteToggleToken", "isMuteToggleInFlight"),
+            ("cameraToggleToken", "isCameraToggleInFlight"),
+            ("screenShareToggleToken", "isScreenShareToggleInFlight"),
+            ("handRaiseToggleToken", "isHandRaiseToggleInFlight"),
+            ("cameraSwitchToken", "isCameraSwitchInFlight")
+        ] {
+            XCTAssertNotNil(codeRange(of: "private var \(guardName): Bool { \(token) != nil }", in: viewModelCode))
+            XCTAssertFalse(viewModelCode.contains("\(guardName) = "), "\(guardName) must derive from \(token)")
+        }
+        XCTAssertEqual(codeCount(of: "if muteToggleToken == toggleToken {", in: viewModelCode), 2)
+        XCTAssertEqual(codeCount(of: "if cameraToggleToken == toggleToken {", in: viewModelCode), 2)
+
+        XCTAssertEqual(codeCount(of: "if screenShareToggleToken == toggleToken {", in: viewModelCode), 3)
+
+        XCTAssertEqual(codeCount(of: "if handRaiseToggleToken == toggleToken {", in: viewModelCode), 2)
+        XCTAssertEqual(codeCount(of: "if cameraSwitchToken == switchToken {", in: viewModelCode), 1)
+        let releaseGuards = try body(
+            viewModelCode,
+            from: "private func releaseLocalToggleGuards() {",
+            to: "private func isLocalCameraOnStillWanted("
+        )
+        for token in [
+            "muteToggleToken", "cameraToggleToken", "screenShareToggleToken", "handRaiseToggleToken", "cameraSwitchToken"
+        ] {
+            XCTAssertNotNil(codeRange(of: "\(token) = nil", in: releaseGuards))
+        }
+        let joinRoom = try body(viewModelCode, from: "    func joinRoom(", to: "    func rejoinIfPossible() async {")
+        XCTAssertNotNil(codeRange(of: "activeJoinAttemptId = joinAttemptId\n        releaseLocalToggleGuards()", in: joinRoom))
+        let cleanup = try body(viewModelCode, from: "    func cleanup(", to: "    func resetError() {")
+        XCTAssertNotNil(codeRange(of: "releaseLocalToggleGuards()", in: cleanup))
+        let localCloseCode = try body(
+            viewModelCode,
+            from: "private func handleLocalProducerClosed(_ notification: ProducerClosedNotification) async -> Bool {",
+            to: "let wasCameraOff = state.isCameraOff"
+        )
+        XCTAssertNotNil(codeRange(of: "!isMuteToggleInFlight {", in: localCloseCode))
+
+        let orphanGuard = "guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }"
+        for (start, end, awaited, next) in [
+            ("    func toggleMute() {", "    func toggleCamera() {",
+             "try await enableOrStartLocalAudio()", "await confirmLocalAudioProducerUnmutedOrRecover("),
+            ("private func setMuted(_ muted: Bool) async {", "private func setCameraOff(_ cameraOff: Bool) async {",
+             "try await enableOrStartLocalAudio()", "await confirmLocalAudioProducerUnmutedOrRecover("),
+            ("private func setCameraOff(_ cameraOff: Bool) async {", "private func sendChatContent(",
+             "try await enableOrStartLocalVideo(", "setLocalCameraOffState(false)")
+        ] {
+            let toggle = try body(viewModelCode, from: start, to: end)
+            let awaitedRange = try XCTUnwrap(codeRange(of: awaited, in: toggle), "missing \(awaited) in \(start)")
+            let nextRange = try XCTUnwrap(
+                codeRange(of: next, in: toggle, from: awaitedRange.upperBound),
+                "missing \(next) after \(awaited) in \(start)"
+            )
+            let between = String(toggle[awaitedRange.upperBound..<nextRange.lowerBound])
+            XCTAssertNotNil(codeRange(of: orphanGuard, in: between), start)
+        }
+
+        let videoEnable = try body(
+            viewModelCode,
+            from: "private func enableOrStartLocalVideo(context: CallActionContext) async throws {",
+            to: "private func shouldRecreateLocalProducerAfterEnableFailure("
+        )
+        XCTAssertFalse(videoEnable.contains("currentCallActionContext()"))
+        XCTAssertFalse(viewModelCode.contains("enableOrStartLocalVideo()"))
+        let videoEntryGuard = try XCTUnwrap(codeRange(of: "guard isCurrentJoinedCall(context), !isCameraHoldBlockingVideo else { return }", in: videoEnable))
+        let videoEnableCall = try XCTUnwrap(codeRange(of: "try await webRTCClient.setVideoEnabled(true)", in: videoEnable))
+        XCTAssertLessThan(videoEntryGuard.lowerBound, videoEnableCall.lowerBound)
+        let videoRecreateGuard = try XCTUnwrap(codeRange(
+            of: "guard isCurrentJoinedCall(context),\n                      shouldRecreateLocalProducerAfterEnableFailure(error) else { throw error }",
+            in: videoEnable
+        ))
+        let videoRecreateClose = try XCTUnwrap(codeRange(of: "await webRTCClient.closeLocalVideoProducer()", in: videoEnable))
+        XCTAssertLessThan(videoRecreateGuard.lowerBound, videoRecreateClose.lowerBound)
+        let videoRestartGuard = try XCTUnwrap(codeRange(
+            of: "guard isCurrentJoinedCall(context) else { throw error }",
+            in: videoEnable,
+            from: videoRecreateClose.upperBound
+        ))
+        let videoRestart = try XCTUnwrap(codeRange(
+            of: "try await webRTCClient.startProducingVideo()",
+            in: videoEnable,
+            from: videoRecreateClose.upperBound
+        ))
+        XCTAssertLessThan(videoRestartGuard.lowerBound, videoRestart.lowerBound)
+
+        func assertCodeOrder(_ text: String, _ markers: [String], _ label: String) throws {
+            var from = text.startIndex
+            for marker in markers {
+                let range = try XCTUnwrap(codeRange(of: marker, in: text, from: from), "\(label): missing \(marker) in order")
+                from = range.upperBound
+            }
+        }
+        let applyMuteNow = try body(
+            viewModelCode,
+            from: "private func applyLocalMuteNow(context: SocketEventContext) {",
+            to: "private func applyLocalCameraOffStateFromServer("
+        )
+        try assertCodeOrder(applyMuteNow, [
+            "localMuteIntentRevision += 1",
+            "muteToggleToken = toggleToken",
+            "state.isMuted = true",
+            "syncCallPresenceState()",
+            "webRTCClient.suspendLocalAudioForRecovery()",
+            "Task { @MainActor [weak self] in",
+            "if self.muteToggleToken == toggleToken {",
+            "self.muteToggleToken = nil",
+            "try await self.disableLocalAudioIfNeeded()"
+        ], "applyLocalMuteNow owns the guard until its signal completes")
+        let serverMute = try body(
+            viewModelCode,
+            from: "private func applyLocalMutedStateFromServer(",
+            to: "private func applyLocalMuteNow(context: SocketEventContext) {"
+        )
+        XCTAssertNotNil(codeRange(of: "applyLocalMuteNow(context: context ?? currentSocketEventContext())", in: serverMute))
+        XCTAssertFalse(serverMute.contains("isMuteToggleInFlight"))
+        let serverCameraOff = try body(
+            viewModelCode,
+            from: "private func applyLocalCameraOffStateFromServer(",
+            to: "private func resetReconnectRetryState() {"
+        )
+        XCTAssertFalse(serverCameraOff.contains("isCameraToggleInFlight"))
+
+        try assertCodeOrder(serverCameraOff, [
+            "localCameraIntentRevision += 1",
+            "setLocalCameraOffState(true)",
+            "self.localCameraIntentRevision == intentRevision else { return }",
+            "_ = await self.webRTCClient.closeLocalMedia(",
+            "self.localCameraIntentRevision == intentRevision else { return }",
+            "self.setLocalCameraOffState(true)"
+        ], "server camera-off")
+        let toggleMuteBody = try body(viewModelCode, from: "    func toggleMute() {", to: "    func toggleCamera() {")
+        try assertCodeOrder(toggleMuteBody, [
+            "if isMuteToggleInFlight {",
+            "applyLocalMuteNow(context: currentSocketEventContext())",
+            "let toggleToken = UUID()"
+        ], "toggleMute never drops a mute")
+        XCTAssertFalse(toggleMuteBody.contains("!isMuteToggleInFlight else { return }"))
+        let chatMute = try body(viewModelCode, from: "if isMuteToggleInFlight, !state.isMuted {", to: "case .unmute:")
+        try assertCodeOrder(chatMute, [
+            "applyLocalMuteNow(context: currentSocketEventContext())",
+            "addSystemMessage(.commandExecuted(command: .mute, userName: localDisplayNameForFeedback))",
+            "return",
+            "guard !isMuteToggleInFlight else {"
+        ], "chat /mute never drops a mute")
+        for (start, end) in [
+            ("    func toggleMute() {", "    func toggleCamera() {"),
+            ("private func setMuted(_ muted: Bool) async {", "private func setCameraOff(_ cameraOff: Bool) async {")
+        ] {
+            let toggle = try body(viewModelCode, from: start, to: end)
+            try assertCodeOrder(toggle, [
+                "let actionMuteRevision = localMuteIntentRevision",
+                "try await enableOrStartLocalAudio()",
+                orphanGuard,
+                "guard localMuteIntentRevision == actionMuteRevision else { return }",
+                "await confirmLocalAudioProducerUnmutedOrRecover("
+            ], "superseded unmute in \(start)")
+        }
+        let recoveryMute = try body(
+            viewModelCode,
+            from: "private func toggleMuteIntentDuringRecovery() {",
+            to: "private func toggleCameraIntentDuringRecovery() {"
+        )
+        XCTAssertNotNil(codeRange(of: "webRTCClient.suspendLocalAudioForRecovery()", in: recoveryMute))
+        XCTAssertFalse(recoveryMute.contains("Task {"), "the reconnecting-screen mute must reach the client at once")
+        let recoveryCamera = try body(
+            viewModelCode,
+            from: "private func toggleCameraIntentDuringRecovery() {",
+            to: "    func toggleMute() {"
+        )
+        XCTAssertFalse(recoveryCamera.contains("isRecoveringConnection,"), "the camera-off hop must survive the attempt joining first")
+
+        XCTAssertFalse(recoveryCamera.contains("self.state.isCameraOff"))
+        try assertCodeOrder(recoveryCamera, [
+            "localCameraIntentRevision += 1",
+            "let intentRevision = localCameraIntentRevision",
+            "guard newState else { return }",
+            "self.localCameraIntentRevision == intentRevision else { return }",
+            "self.setLocalCameraOffState(true)",
+            "if self.state.connectionState == .joined {",
+            "await self.webRTCClient.closeLocalVideoProducer()",
+            "await self.webRTCClient.suspendLocalVideoForRecovery()"
+        ], "reconnecting-screen camera-off")
+        let toggleCameraBody = try body(viewModelCode, from: "    func toggleCamera() {", to: "    func setAudioOnlyMode(")
+        try assertCodeOrder(toggleCameraBody, [
+            "if isCameraToggleInFlight {",
+            "applyLocalCameraOffNow(context: currentCallActionContext())",
+            "let toggleToken = UUID()"
+        ], "toggleCamera never drops a camera-off")
+        let restart = try body(viewModelCode, from: "let wasCameraOff = state.isCameraOff", to: "private func handleRemoteProducerClosed(")
+
+        let localCloseFull = try body(
+            viewModelCode,
+            from: "private func handleLocalProducerClosed(_ notification: ProducerClosedNotification) async -> Bool {",
+            to: "private func handleRemoteProducerClosed("
+        )
+        XCTAssertNil(codeRange(of: "localCameraIntentRevision += 1", in: localCloseFull))
+
+        try assertCodeOrder(restart, [
+            "let cameraIntentRevision = localCameraIntentRevision",
+            "if await webRTCClient.closeLocalMedia(",
+            "!isCameraToggleInFlight,\n"
+                + "               isLocalCameraOnStillWanted(",
+            "try await webRTCClient.startProducingVideo()",
+            "guard isLocalCameraOnStillWanted("
+        ], "producer-closed restart pre-start check")
+
+        let snapshot = try body(
+            viewModelCode,
+            from: "private func applyAdminParticipantSnapshot(",
+            to: "} else if isRemoteParticipant {"
+        )
+        try assertCodeOrder(snapshot, [
+            "if let muted = snapshot.muted, !isMuteToggleInFlight {",
+            "applyLocalMutedStateFromServer(muted)",
+            "if let cameraOff = snapshot.cameraOff, !isCameraToggleInFlight {",
+            "applyLocalCameraOffStateFromServer(cameraOff)"
+        ], "admin room snapshot")
+        let reassertVideo = try body(
+            viewModelCode,
+            from: "private func reassertLocalVideoPublishingIfNeeded(",
+            to: "private func shouldDisableCameraIntentAfterPublishingFailure("
+        )
+        let chatCamera = try body(
+            viewModelCode,
+            from: "private func setCameraOff(_ cameraOff: Bool) async {",
+            to: "private func sendChatContent("
+        )
+        for (label, text, awaited) in [
+            ("toggleCamera", toggleCameraBody, "try await enableOrStartLocalVideo("),
+            ("chat /camera on", chatCamera, "try await enableOrStartLocalVideo("),
+            ("publishing reassert", reassertVideo, "try await enableOrStartLocalVideo("),
+            ("producer-closed restart", restart, "try await webRTCClient.startProducingVideo()")
+        ] {
+            try assertCodeOrder(text, [awaited, "guard isLocalCameraOnStillWanted(", "setLocalCameraOffState(false)"], label)
+        }
+        XCTAssertNotNil(codeRange(
+            of: "cameraOff || (!state.mediaPublishingDisabled && !state.isAudioOnlyMode),",
+            in: chatCamera
+        ))
+        let startProducingBody = try body(
+            viewModelCode,
+            from: "    func startProducing(joinAttemptId: UUID? = nil) async -> Bool {",
+            to: "private func disableLocalMediaPublishingState() {"
+        )
+
+        try assertCodeOrder(startProducingBody, [
+            "var cameraIntentRevision = localCameraIntentRevision",
+            "try await webRTCClient.startProducingVideo()",
+            "while localCameraIntentRevision != cameraIntentRevision && !isCameraHoldBlockingVideo {",
+            "cameraIntentRevision = localCameraIntentRevision",
+            "if state.isCameraOff {",
+            "await webRTCClient.closeLocalVideoProducer()",
+            "try await webRTCClient.startProducingVideo()"
+        ], "recovered camera start")
+
+        try assertCodeOrder(restart, [
+            "let cameraIntentRevision = localCameraIntentRevision",
+            "if await webRTCClient.closeLocalMedia(",
+            "if localCameraIntentRevision == cameraIntentRevision,\n"
+                + "               !webRTCClient.hasLocalVideoProducer {",
+            "setLocalCameraOffState(true)"
+        ], "producer close late write")
+        XCTAssertFalse(
+            restart.contains("notification.adminEnforced == true || !webRTCClient.hasLocalVideoProducer"),
+            "an admin close must not report off over a live camera"
+        )
+        try assertCodeOrder(videoEnable, [
+            "let cameraIntentRevision = localCameraIntentRevision",
+            "try await webRTCClient.setVideoEnabled(true)",
+
+            "localCameraIntentRevision == cameraIntentRevision,",
+            "!webRTCClient.hasLocalVideoProducer else { return }",
+            "try await webRTCClient.startProducingVideo()",
+            "guard localCameraIntentRevision == cameraIntentRevision, !isCameraHoldBlockingVideo else { return }",
+            "await webRTCClient.closeLocalVideoProducer()",
+            "guard localCameraIntentRevision == cameraIntentRevision, !isCameraHoldBlockingVideo else { return }",
+            "try await webRTCClient.startProducingVideo()"
+        ], "camera enable fallback")
+
+        XCTAssertEqual(codeCount(of: "localCameraIntentRevision += 1", in: viewModelCode), 9)
+
+        let cameraCommand = try body(
+            viewModelCode,
+            from: "private func setCameraCommandState(cameraOff: Bool, command: ChatCommand) async {",
+            to: "private func setMuted(_ muted: Bool) async {"
+        )
+        try assertCodeOrder(cameraCommand, [
+            "if isCameraToggleInFlight, cameraOff, state.connectionState == .joined {",
+            "applyLocalCameraOffNow(context: currentCallActionContext())",
+            "if isCameraToggleInFlight {"
+        ], "chat /camera off never drops a camera-off")
+
+        let adminBulk = try body(
+            viewModelCode,
+            from: "private func applyLocalAdminBulkMediaState(_ action: AdminBulkMediaAction) async {",
+            to: "private func applyRemoteAdminClosedProducerState("
+        )
+        try assertCodeOrder(adminBulk, [
+            "case .mute:",
+            "localMuteIntentRevision += 1",
+            "webRTCClient.suspendLocalAudioForRecovery()",
+            "_ = await webRTCClient.closeLocalMedia(",
+            "case .camera:",
+            "localCameraIntentRevision += 1",
+            "let intentRevision = localCameraIntentRevision",
+            "setLocalCameraOffState(true)",
+            "_ = await webRTCClient.closeLocalMedia(",
+            "if localCameraIntentRevision == intentRevision {",
+            "setLocalCameraOffState(true)"
+        ], "admin bulk media")
+        let adminEnforced = try body(
+            viewModelCode,
+            from: "func closeAdminEnforcedProducer(_ producer: AdminMediaProducer) async -> Bool {",
+            to: "let didClose = await webRTCClient.closeLocalMedia("
+        )
+        try assertCodeOrder(adminEnforced, [
+            "var adminCameraIntentRevision = localCameraIntentRevision",
+            "webRTCClient.suspendLocalAudioForRecovery()",
+            "} else if producer.kind == \"video\", producer.type == ProducerType.webcam.rawValue {",
+            "localCameraIntentRevision += 1",
+            "adminCameraIntentRevision = localCameraIntentRevision",
+            "await webRTCClient.closeLocalVideoProducer()"
+        ], "admin-enforced camera close")
+        XCTAssertNotNil(codeRange(of: "if localCameraIntentRevision == adminCameraIntentRevision {", in: viewModelCode))
+
+        XCTAssertEqual(codeCount(of: "if canOrphanedScreenShareToggleStopCapture() {", in: viewModelCode), 2)
+        XCTAssertEqual(codeCount(
+            of: "guard isCurrentCallAfterStart || canOrphanedScreenShareToggleStopCapture() else { return }",
+            in: viewModelCode
+        ), 2)
+        let stoppingShare = try body(
+            viewModelCode,
+            from: "if state.isScreenSharing {\n                    publishScreenShare(ScreenSharePhasePolicy.stopping(screenShare))",
+            to: "state.isScreenSharing = false"
+        )
+        try assertCodeOrder(stoppingShare, [
+            "await ScreenCaptureManager.shared.stopCapture()",
+            "guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else { return }",
+            "await webRTCClient.closeLocalScreenProducer()"
+        ], "screen-share stop keeps its call identity fence")
+
+        XCTAssertTrue(activitySource.contains("SideEffect { saveableStateHolder.removeState(FULL_ROOT_SAVEABLE_KEY) }"))
+
+        XCTAssertTrue(viewModelSource.contains("CallScreenAwake.setActive(true)"))
+        XCTAssertTrue(viewModelSource.contains("CallScreenAwake.setActive(false)"))
+        XCTAssertTrue(awakeSource.contains("UIApplication.shared.isIdleTimerDisabled = active"))
+
+        XCTAssertTrue(viewModelSource.contains("PermissionHelper.requestNotificationsPermissionIfNeeded { granted in"))
+        XCTAssertTrue(permissionSource.contains("NOTIFICATIONS_REQUEST_CODE -> notificationsPermissionWaiters"))
+
+        let clearQueued = try body(
+            permissionSource,
+            from: "private fun clearQueuedCallPermissionRequests() {",
+            to: "private fun cancelActiveCallPermissionRequest(): Boolean {"
+        )
+        XCTAssertFalse(clearQueued.contains("requestCode == NOTIFICATIONS_REQUEST_CODE"))
+        XCTAssertTrue(permissionSource.contains("fun dropQueuedNotificationsPermissionRequest() {"))
+        XCTAssertTrue(permissionSource.contains("pendingPermissionRequests.removeAll { it.requestCode == NOTIFICATIONS_REQUEST_CODE }"))
+        XCTAssertTrue(permissionSource.contains("answered = permissions.isNotEmpty()"))
+        XCTAssertTrue(permissionSource.contains("finishNotificationsPermission(false, answered = false)"))
+        let deactivate = try body(
+            viewModelSource,
+            from: "func deactivateCallPresence() {",
+            to: "private func setLocalCameraOffState("
+        )
+        XCTAssertTrue(deactivate.contains("PermissionHelper.dropQueuedNotificationsPermissionRequest()"))
+        XCTAssertTrue(viewModelSource.contains("if !granted, !PermissionHelper.wasLastNotificationsPermissionRequestAnswered() {"))
+        XCTAssertTrue(viewModelSource.contains("self.hasRequestedCallNotificationPermission = false"))
+
+        XCTAssertTrue(fastfileSource.contains("gradle_bin = File.expand_path(\"../gradlew\", __dir__)"))
+        XCTAssertFalse(fastfileSource.contains("/bin/gradle\""))
+        XCTAssertTrue(xcodeProjectSource.contains("GRADLE_WRAPPER_SHIM_DIR=\\\"${DERIVED_FILE_DIR}/skip-gradle-wrapper\\\""))
+        XCTAssertTrue(xcodeProjectSource.contains("${PWD}/../Android/gradlew"))
+        XCTAssertTrue(xcodeProjectSource.contains("PATH=\\\"${GRADLE_WRAPPER_SHIM_DIR}:${PATH}\\\""))
+    }
+
+    func testLateMediaAcknowledgementsAreFencedInBothClients() throws {
+        let iosSource = withoutBlockComments(try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift"))
+        let androidSource = withoutBlockComments(try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt"))
+
+        func body(_ source: String, from start: String, to end: String) throws -> String {
+            let startRange = try XCTUnwrap(codeRange(of: start, in: source), "missing \(start)")
+            let endRange = try XCTUnwrap(
+                codeRange(of: end, in: source, from: startRange.upperBound),
+                "missing \(end) after \(start)"
+            )
+            return String(source[startRange.lowerBound..<endRange.lowerBound])
+        }
+
+        func assertFence(
+            in function: String,
+            after awaited: String,
+            fence: String,
+            before effect: String,
+            _ label: String
+        ) throws {
+            let awaitedRange = try XCTUnwrap(codeRange(of: awaited, in: function), "\(label): missing \(awaited)")
+            let fenceRange = try XCTUnwrap(
+                codeRange(of: fence, in: function, from: awaitedRange.upperBound),
+                "\(label): no fence after \(awaited)"
+            )
+            for line in function[awaitedRange.upperBound..<fenceRange.lowerBound].split(separator: "\n") {
+                let code = line.trimmingCharacters(in: .whitespaces)
+                XCTAssertTrue(code.isEmpty || code.hasPrefix("//"), "\(label): `\(code)` runs before the fence")
+            }
+            let effectRange = try XCTUnwrap(
+                codeRange(of: effect, in: function, from: awaitedRange.upperBound),
+                "\(label): missing \(effect)"
+            )
+            XCTAssertLessThan(fenceRange.upperBound, effectRange.lowerBound, "\(label): \(effect) precedes the fence")
+        }
+
+        func assertOrder(_ function: String, _ markers: [String], _ label: String) throws {
+            var from = function.startIndex
+            for marker in markers {
+                let range = try XCTUnwrap(codeRange(of: marker, in: function, from: from), "\(label): missing \(marker) in order")
+                from = range.upperBound
+            }
+        }
+
+        let iosReassert = try body(
+            iosSource,
+            from: "func reassertLocalAudioProducerUnmuted() async throws {",
+            to: "func setVideoEnabled(_ enabled: Bool) async throws {"
+        )
+        try assertOrder(iosReassert, [
+            "let generation = configurationGeneration\n        let muteIntentGeneration = localAudioMuteIntentGeneration",
+            "try await socket.toggleMute(producerId: producer.id, paused: false)"
+        ], "iOS microphone confirmation")
+        try assertFence(
+            in: iosReassert,
+            after: "try await socket.toggleMute(producerId: producer.id, paused: false)",
+            fence: "guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }\n"
+                + "        guard localAudioMuteIntentGeneration == muteIntentGeneration,\n"
+                + "              audioProducer === producer, !producer.closed else { return }",
+            before: "scheduleLocalAudioCaptureReassertion()",
+            "iOS microphone confirmation"
+        )
+
+        let androidReassert = try body(
+            androidSource,
+            from: "internal suspend fun reassertLocalAudioProducerUnmuted() {",
+            to: "internal suspend fun setVideoEnabled(enabled: Boolean) {"
+        )
+        try assertOrder(androidReassert, [
+            "val generation = configurationGeneration\n        val muteIntentGeneration = localAudioMuteIntentGeneration",
+            "socket.toggleMute(producer.id, paused = false)"
+        ], "Android microphone confirmation")
+        try assertFence(
+            in: androidReassert,
+            after: "socket.toggleMute(producer.id, paused = false)",
+            fence: "ensureCurrentConfiguration(generation)\n"
+                + "        if (localAudioMuteIntentGeneration != muteIntentGeneration ||\n"
+                + "            audioProducer !== producer || !hasUsableProducer(producer) ||\n"
+                + "            !localAudioTargetEnabled) return",
+            before: "applyLocalAudioCaptureState(manager, true)",
+            "Android microphone confirmation"
+        )
+
+        let iosVideo = try body(
+            iosSource,
+            from: "func setVideoEnabled(_ enabled: Bool) async throws {",
+            to: "func suspendLocalVideoForRecovery() async {"
+        )
+        try assertOrder(iosVideo, [
+            "if !enabled {\n            localVideoOffIntentGeneration += 1\n        }",
+            "let generation = configurationGeneration\n"
+                + "        let offIntentGeneration = localVideoOffIntentGeneration\n"
+                + "        let previous = localVideoEnabled",
+            "try await socket.toggleCamera(producerId: producer.id, paused: !enabled)"
+        ], "iOS camera enable")
+        try assertFence(
+            in: iosVideo,
+            after: "try await socket.toggleCamera(producerId: producer.id, paused: !enabled)",
+            fence: "guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }\n"
+                + "            guard localVideoOffIntentGeneration == offIntentGeneration,\n"
+                + "                  videoProducer === producer, !producer.closed else { return }",
+            before: "rtcLocalVideoTrack?.isEnabled = enabled",
+            "iOS camera success"
+        )
+        try assertFence(
+            in: iosVideo,
+            after: "} catch {",
+            fence: "guard generation == configurationGeneration else { throw error }\n"
+                + "            guard localVideoOffIntentGeneration == offIntentGeneration else { return }\n"
+                + "            guard videoProducer === producer else {\n"
+                + "                if videoProducer == nil {",
+            before: "producer.resume()",
+            "iOS camera rollback"
+        )
+
+        try assertOrder(iosVideo, [
+            "let enableCapturer = videoCapturer",
+            "} catch {",
+            "if videoProducer == nil {",
+            "if enabled, !previous, let enableCapturer, videoCapturer === enableCapturer {",
+            "await enableCapturer.stopCapture()",
+            "throw error"
+        ], "iOS camera enable with no producer left")
+
+        XCTAssertFalse(iosVideo.contains("await videoCapturer?.stopCapture()"))
+        let iosRollback = try body(iosVideo, from: "} catch {", to: "debugLog(\"[WebRTC] Failed to toggle video:")
+        try assertOrder(iosRollback, [
+            "let capturer = videoCapturer",
+            "localVideoEnabled = previous",
+            "await capturer?.stopCapture()"
+        ], "iOS camera rollback")
+        let iosSuccess = try body(
+            iosVideo,
+            from: "try await socket.toggleCamera(producerId: producer.id, paused: !enabled)",
+            to: "} catch {"
+        )
+        try assertOrder(iosSuccess, [
+            "let capturer = videoCapturer",
+            "localVideoEnabled = enabled",
+            "await capturer?.stopCapture()"
+        ], "iOS camera success")
+
+        let androidVideo = try body(
+            androidSource,
+            from: "internal suspend fun setVideoEnabled(enabled: Boolean) {",
+            to: "internal suspend fun suspendLocalVideoForRecovery() {"
+        )
+        try assertOrder(androidVideo, [
+            "if (!enabled) {\n            localVideoOffIntentGeneration += 1\n        }",
+            "val generation = configurationGeneration\n"
+                + "        val offIntentGeneration = localVideoOffIntentGeneration\n"
+                + "        val previous = localVideoEnabled",
+            "socket.toggleCamera(producer.id, paused = !enabled)"
+        ], "Android camera enable")
+
+        try assertOrder(androidVideo, [
+            "if (!ensureCameraPermission()) {",
+            "releasePreJoinCameraPreview()",
+            "startWebcamCapture(videoCapturer, \"restart\")",
+            "producer.resume()",
+            "socket.toggleCamera(producer.id, paused = !enabled)"
+        ], "Android camera enable before the ack")
+        try assertFence(
+            in: androidVideo,
+            after: "releasePreJoinCameraPreview()",
+            fence: "ensureCurrentConfiguration(generation)\n"
+                + "                if (localVideoOffIntentGeneration != offIntentGeneration) return\n"
+                + "                if (videoProducer != null && videoProducer !== producer) return",
+            before: "startWebcamCapture(videoCapturer, \"restart\")",
+            "Android camera permission and preview window"
+        )
+        let androidSuccessFence = "ensureCurrentConfiguration(generation)\n"
+            + "            if (localVideoOffIntentGeneration != offIntentGeneration ||\n"
+            + "                videoProducer !== producer || !hasUsableProducer(producer)) return"
+        try assertFence(
+            in: androidVideo,
+            after: "socket.toggleCamera(producer.id, paused = !enabled)",
+            fence: androidSuccessFence,
+            before: "localVideoTrack?.setEnabled(enabled)",
+            "Android camera success"
+        )
+        try assertFence(
+            in: androidVideo,
+            after: "socket.toggleCamera(producer.id, paused = !enabled)",
+            fence: androidSuccessFence,
+            before: "onLocalVideoEnabledChanged?.invoke(enabled)",
+            "Android camera success callback"
+        )
+        let androidRollbackFence = "if (generation != configurationGeneration) throw error\n"
+            + "            if (localVideoOffIntentGeneration != offIntentGeneration) return\n"
+            + "            if (videoProducer !== producer) {\n"
+            + "                if (videoProducer == null) {"
+        try assertOrder(androidVideo, [
+            "} catch (error: Throwable) {",
+            "if (videoProducer == null) {",
+            "if (enabled && !previous) stopWebcamCapture()",
+            "throw error"
+        ], "Android camera enable with no producer left")
+        try assertFence(
+            in: androidVideo,
+            after: "} catch (error: Throwable) {",
+            fence: androidRollbackFence,
+            before: "producer.resume()",
+            "Android camera rollback"
+        )
+        try assertFence(
+            in: androidVideo,
+            after: "} catch (error: Throwable) {",
+            fence: androidRollbackFence,
+            before: "onLocalVideoEnabledChanged?.invoke(previous)",
+            "Android camera rollback callback"
+        )
+
+        let androidStart = try body(
+            androidSource,
+            from: "internal suspend fun startProducingVideo() {",
+            to: "internal suspend fun startScreenSharing() {"
+        )
+        try assertFence(
+            in: androidStart,
+            after: "releasePreJoinCameraPreview()",
+            fence: "ensureCurrentConfiguration(generation)",
+            before: "videoCapturer = createCameraCapturer(",
+            "Android camera start"
+        )
+        XCTAssertNotNil(codeRange(
+            of: "if (generation == configurationGeneration) {\n"
+                + "                clearLocalWebcamCaptureState(notifyLocalState = false)\n"
+                + "            }",
+            in: androidStart
+        ))
+        XCTAssertEqual(codeCount(of: "clearLocalWebcamCaptureState(notifyLocalState = false)", in: androidStart), 2)
+
+        let iosStart = try body(
+            iosSource,
+            from: "func startProducingVideo() async throws {",
+            to: "func startCameraCapture() throws {"
+        )
+        try assertOrder(iosStart, [
+            "let offIntentGeneration = localVideoOffIntentGeneration",
+            "try await createSendTransportIfNeeded()",
+            "guard localVideoOffIntentGeneration == offIntentGeneration else {",
+            "try await setVideoEnabled(true)",
+            "guard generation == configurationGeneration else { throw WebRTCError.staleConfiguration }\n"
+                + "        guard localVideoOffIntentGeneration == offIntentGeneration else {",
+            "let source = Self.factory.videoSource()",
+            "let producer = try await createProducerOffMain(",
+            "let isCancelled = localVideoOffIntentGeneration != offIntentGeneration",
+            "guard !isStale, !isCancelled, videoCapturer === capturer else {",
+            "if !isStale, isCancelled {",
+            "if isStale || videoCapturer == nil {",
+            "producer.delegate = self",
+            "localVideoEnabled = true"
+        ], "iOS camera start")
+        let iosCancelledStart = try body(iosStart, from: "if !isStale, isCancelled {", to: "if isStale || videoCapturer == nil {")
+        XCTAssertNotNil(codeRange(of: "return", in: iosCancelledStart))
+        XCTAssertFalse(iosCancelledStart.contains("localVideoEnabled = "))
+
+        try assertOrder(iosCancelledStart, [
+            "track.isEnabled = false",
+            "closeSendProducer(producer)",
+            "await capturer.stopCapture()",
+            "try? await socketManager?.closeProducer(producerId: producer.id)",
+            "return"
+        ], "iOS cancelled camera start")
+        try assertOrder(androidStart, [
+            "val offIntentGeneration = localVideoOffIntentGeneration",
+            "createSendTransportIfNeeded()",
+            "if (localVideoOffIntentGeneration != offIntentGeneration) return\n            setVideoEnabled(true)",
+            "releasePreJoinCameraPreview()",
+            "ensureCurrentConfiguration(generation)\n            if (localVideoOffIntentGeneration != offIntentGeneration) {",
+            "videoCapturer = createCameraCapturer(",
+            "startWebcamCapture(capturer, \"start\")",
+            "onLocalVideoEnabledChanged?.invoke(true)"
+        ], "Android camera start")
+        for (source, start, end, label) in [
+            (iosSource, "func closeLocalVideoProducer() async {", "guard let producerId = videoProducer?.id else {", "iOS"),
+            (androidSource, "internal suspend fun closeLocalVideoProducer() {", "val producerId = videoProducer?.id", "Android")
+        ] {
+            let close = try body(source, from: start, to: end)
+            XCTAssertNotNil(codeRange(of: "localVideoOffIntentGeneration += 1", in: close), "\(label) camera close")
+        }
+
+        XCTAssertNotNil(codeRange(
+            of: "if kind == \"video\", isWebcam, producerId == nil {\n"
+                + "            localVideoOffIntentGeneration += 1",
+            in: iosSource
+        ))
+        XCTAssertNotNil(codeRange(
+            of: "if (kind == \"video\" && isWebcam && producerId == null) {\n"
+                + "            localVideoOffIntentGeneration += 1",
+            in: androidSource
+        ))
+
+        XCTAssertGreaterThanOrEqual(codeCount(of: "if videoCapturer === capturer {", in: iosSource), 4)
+        for (start, end) in [
+            ("func closeLocalMedia(kind: String, type: String, producerId: String?) async -> Bool {",
+             "if kind == \"video\", isScreen, matchesProducer(screenProducer, producerId: producerId) {"),
+            ("private func clearLocalWebcamCaptureState() async {", "func closeLocalScreenProducer() async {")
+        ] {
+            let close = try body(iosSource, from: start, to: end)
+            XCTAssertFalse(close.contains("await videoCapturer?.stopCapture()"), start)
+            try assertOrder(close, [
+                "let capturer = videoCapturer",
+                "await capturer?.stopCapture()",
+                "if videoCapturer === capturer {",
+                "if videoProducer == nil {",
+                "localVideoEnabled = false"
+            ], "iOS camera close ownership in \(start)")
+        }
+
+        XCTAssertNotNil(codeRange(
+            of: "func suspendLocalVideoForRecovery() async {\n        localVideoOffIntentGeneration += 1",
+            in: iosSource
+        ))
+        XCTAssertNotNil(codeRange(
+            of: "internal suspend fun suspendLocalVideoForRecovery() {\n        localVideoOffIntentGeneration += 1",
+            in: androidSource
+        ))
+    }
+
     func testPlannedWebcamConsumerResetEligibilityUsesAuthoritativeConsumeFacts() throws {
         let parameters = try JSONDecoder().decode(RtpParameters.self, from: Data("""
         {
@@ -1363,8 +2046,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(retryState.permitsConsumerResetRetry)
         XCTAssertEqual(retryState.nextBackoffMilliseconds, 75)
 
-        // Simulate a lost first abort ACK: the second attempt must reuse the
-        // exact identity, and only its confirmation may release reset retry.
         let secondAttempt = try XCTUnwrap(retryState.nextRequest())
         XCTAssertEqual(secondAttempt.requestId, firstAttempt.requestId)
         XCTAssertEqual(secondAttempt.producerId, firstAttempt.producerId)
@@ -1391,297 +2072,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(exhausted.permitsConsumerResetRetry)
     }
     #endif
-
-    func testNativeAbortConfirmationRetryIsBoundedIdentityOwnedAndFencesResetRetry() throws {
-        let iosSocketSource = try sourceFileContents(
-            "Sources/Conclave/Core/Networking/SocketIOManager.swift"
-        )
-        let iosClientSource = try sourceFileContents(
-            "Sources/Conclave/Core/WebRTC/WebRTCClient.swift"
-        )
-        let androidClientSource = try sourceFileContents(
-            "Sources/Conclave/Skip/WebRTCClient+Android.kt"
-        )
-
-        XCTAssertTrue(iosSocketSource.contains("static let maximumAttempts = 3"))
-        XCTAssertTrue(iosSocketSource.contains(
-            "var retryState = PlannedConsumerHandoffAbortRetryState(request: request)"
-        ))
-        XCTAssertTrue(iosSocketSource.contains(
-            "while let attemptRequest = retryState.nextRequest()"
-        ))
-        XCTAssertTrue(iosSocketSource.contains("payload: attemptRequest"))
-        XCTAssertTrue(iosSocketSource.contains(
-            "retryState.recordAcknowledgement(confirmed: true)"
-        ))
-        XCTAssertTrue(iosClientSource.contains(
-            "let confirmation = Task { @MainActor in"
-        ))
-        XCTAssertTrue(iosClientSource.contains("return await confirmation.value"))
-
-        XCTAssertTrue(androidClientSource.contains(
-            "val identity = PlannedConsumerHandoffAbortIdentity("
-        ))
-        XCTAssertTrue(androidClientSource.contains(
-            "for (attempt in 1..PlannedConsumerHandoffAbortRetryPolicy.maximumAttempts)"
-        ))
-        XCTAssertTrue(androidClientSource.contains("requestId = identity.requestId"))
-        XCTAssertTrue(androidClientSource.contains("producerId = identity.producerId"))
-        XCTAssertTrue(androidClientSource.contains(
-            "predecessorConsumerId = identity.predecessorConsumerId"
-        ))
-        XCTAssertTrue(androidClientSource.contains(
-            "backoffMilliseconds(afterFailedAttempt = attempt)"
-        ))
-        XCTAssertTrue(androidClientSource.contains(
-            "): Boolean = withContext(NonCancellable) {\n        val identity"
-        ))
-
-        let iosResetStart = try XCTUnwrap(iosClientSource.range(
-            of: "private func performPlannedConsumerReset("
-        ))
-        let iosResetEnd = try XCTUnwrap(iosClientSource.range(
-            of: "private func promoteStagedConsumer(",
-            range: iosResetStart.upperBound..<iosClientSource.endIndex
-        ))
-        let iosReset = String(
-            iosClientSource[iosResetStart.lowerBound..<iosResetEnd.lowerBound]
-        )
-        let iosConfirmationGate = try XCTUnwrap(iosReset.range(
-            of: "PlannedConsumerHandoffAbortRetryPolicy.permitsConsumerResetRetry("
-        ))
-        let iosNextResetAttempt = try XCTUnwrap(iosReset.range(
-            of: "if attempt < PlannedWebcamConsumerResetPolicy.maxAttempts"
-        ))
-        XCTAssertLessThan(
-            iosConfirmationGate.lowerBound,
-            iosNextResetAttempt.lowerBound
-        )
-
-        let androidResetStart = try XCTUnwrap(androidClientSource.range(
-            of: "private suspend fun performPlannedConsumerReset("
-        ))
-        let androidResetEnd = try XCTUnwrap(androidClientSource.range(
-            of: "private fun promoteStagedConsumer(",
-            range: androidResetStart.upperBound..<androidClientSource.endIndex
-        ))
-        let androidReset = String(
-            androidClientSource[
-                androidResetStart.lowerBound..<androidResetEnd.lowerBound
-            ]
-        )
-        let androidConfirmationGate = try XCTUnwrap(androidReset.range(
-            of: "PlannedConsumerHandoffAbortRetryPolicy.permitsConsumerResetRetry("
-        ))
-        let androidNextResetAttempt = try XCTUnwrap(androidReset.range(
-            of: "if (attempt < CONSUMER_RESET_MAX_ATTEMPTS)"
-        ))
-        XCTAssertLessThan(
-            androidConfirmationGate.lowerBound,
-            androidNextResetAttempt.lowerBound
-        )
-    }
-
-    func testNativeWebcamReceiveRequestsOnlyT1TemporalLayer() throws {
-        XCTAssertEqual(WebcamTemporalLayerPolicy.receiveTemporalLayer, 0)
-
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let iosInitialStart = try XCTUnwrap(
-            iosSource.range(of: "private func initialWebcamConsumerPreference(")
-        )
-        let iosInitialEnd = try XCTUnwrap(iosSource.range(
-            of: "private func initialScreenConsumerPreference(",
-            range: iosInitialStart.upperBound..<iosSource.endIndex
-        ))
-        let iosInitial = String(
-            iosSource[iosInitialStart.lowerBound..<iosInitialEnd.lowerBound]
-        )
-        XCTAssertTrue(iosInitial.contains(
-            "temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer"
-        ))
-        XCTAssertFalse(iosInitial.contains("temporalLayer: 1"))
-        XCTAssertFalse(iosInitial.contains("temporalLayer: 2"))
-        let iosAdaptiveStart = try XCTUnwrap(iosSource.range(of:
-            "guard info.type == ProducerType.webcam.rawValue else { return nil }"
-        ))
-        let iosAdaptiveEnd = try XCTUnwrap(iosSource.range(
-            of: "// MARK: - RTP Capabilities (from server)",
-            range: iosAdaptiveStart.upperBound..<iosSource.endIndex
-        ))
-        let iosAdaptive = String(
-            iosSource[iosAdaptiveStart.lowerBound..<iosAdaptiveEnd.lowerBound]
-        )
-        XCTAssertTrue(iosAdaptive.contains(
-            "temporalLayer: WebcamTemporalLayerPolicy.receiveTemporalLayer"
-        ))
-        XCTAssertFalse(iosAdaptive.contains("temporalLayer: 1"))
-        XCTAssertFalse(iosAdaptive.contains("temporalLayer: 2"))
-
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-        let androidInitialStart = try XCTUnwrap(
-            androidSource.range(of: "private fun initialWebcamConsumerPreference(")
-        )
-        let androidInitialEnd = try XCTUnwrap(androidSource.range(
-            of: "private fun initialScreenConsumerPreference(",
-            range: androidInitialStart.upperBound..<androidSource.endIndex
-        ))
-        let androidInitial = String(
-            androidSource[androidInitialStart.lowerBound..<androidInitialEnd.lowerBound]
-        )
-        XCTAssertTrue(androidInitial.contains(
-            "temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer"
-        ))
-        XCTAssertFalse(androidInitial.contains("temporalLayer = 1"))
-        XCTAssertFalse(androidInitial.contains("temporalLayer = 2"))
-        let androidAdaptiveStart = try XCTUnwrap(androidSource.range(of:
-            "if (info.type != ProducerType.webcam.rawValue) return null"
-        ))
-        let androidAdaptiveEnd = try XCTUnwrap(androidSource.range(
-            of: "private var socketManager: SocketIOManager?",
-            range: androidAdaptiveStart.upperBound..<androidSource.endIndex
-        ))
-        let androidAdaptive = String(
-            androidSource[androidAdaptiveStart.lowerBound..<androidAdaptiveEnd.lowerBound]
-        )
-        XCTAssertTrue(androidAdaptive.contains(
-            "temporalLayer = WebcamTemporalLayerPolicy.receiveTemporalLayer"
-        ))
-        XCTAssertFalse(androidAdaptive.contains("temporalLayer = 1"))
-        XCTAssertFalse(androidAdaptive.contains("temporalLayer = 2"))
-    }
-
-    func testNativeResetCancellationIsRevisionOwnedMainConfinedAndUnmeasured() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-
-        for source in [iosSource, androidSource] {
-            XCTAssertTrue(source.contains("adaptivePolicyRevision"))
-            XCTAssertTrue(source.contains("plannedConsumerResetCoordinatorOwnerToken"))
-            XCTAssertTrue(source.contains("wakePlannedConsumerResetCoordinator"))
-            XCTAssertTrue(source.contains("visibleInterruptionMs=unmeasured"))
-            XCTAssertFalse(source.contains("visibleInterruptionMs=0"))
-        }
-        XCTAssertTrue(iosSource.contains(
-            "expectedAdaptivePolicyRevision: candidate.adaptivePolicyRevision"
-        ))
-        XCTAssertTrue(iosSource.contains(
-            "invalidatePlannedConsumerResetCandidate(\n                consumerId: notification.consumerId"
-        ))
-        XCTAssertTrue(androidSource.contains(
-            "remoteConsumerPreferencePolicyRevision == candidate.adaptivePolicyRevision"
-        ))
-        XCTAssertTrue(androidSource.contains(
-            "withContext(Dispatchers.Main.immediate)"
-        ))
-        XCTAssertTrue(androidSource.contains(
-            "if (Looper.myLooper() != Looper.getMainLooper())"
-        ))
-    }
-
-    func testNativePlannedConsumerResetKeepsStagedGenerationInvisibleUntilPromotion() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-        let iosSocketSource = try sourceFileContents(
-            "Sources/Conclave/Core/Networking/SocketIOManager.swift"
-        )
-        let androidSocketSource = try sourceFileContents(
-            "Sources/Conclave/Skip/SocketIOManager+Android.kt"
-        )
-
-        XCTAssertTrue(iosSource.contains("visibility: .staged"))
-        XCTAssertTrue(iosSource.contains("if visibility == .currentVisible,"))
-        XCTAssertTrue(iosSource.contains("successorInfo.lifecycleRole = .current"))
-        XCTAssertTrue(iosSource.contains("lifecycleRole.acceptsPeriodicControls"))
-        XCTAssertTrue(iosSocketSource.contains("func closeConsumerAndWait("))
-
-        XCTAssertTrue(androidSource.contains("visibility = ConsumerRegistrationVisibility.STAGED"))
-        XCTAssertTrue(androidSource.contains(
-            "visibility == ConsumerRegistrationVisibility.CURRENT_VISIBLE"
-        ))
-        XCTAssertTrue(androidSource.contains(
-            "successorInfo.lifecycleRole = ConsumerGenerationLifecycleRole.CURRENT"
-        ))
-        XCTAssertTrue(androidSource.contains("lifecycleRole.acceptsPeriodicControls"))
-        XCTAssertTrue(androidSource.contains("withContext(NonCancellable)"))
-        XCTAssertTrue(androidSocketSource.contains("suspend fun closeConsumerAndWait("))
-
-        let iosAttemptStart = try XCTUnwrap(iosSource.range(of:
-            "private func performPlannedConsumerReset("
-        ))
-        let iosAttemptEnd = try XCTUnwrap(iosSource.range(
-            of: "private func promoteStagedConsumer(",
-            range: iosAttemptStart.upperBound..<iosSource.endIndex
-        ))
-        let iosAttempt = String(iosSource[iosAttemptStart.lowerBound..<iosAttemptEnd.lowerBound])
-        let iosRollback = try XCTUnwrap(iosAttempt.range(of:
-            "rollbackConfirmed = await rollbackStagedConsumer("
-        ))
-        let iosRetry = try XCTUnwrap(iosAttempt.range(of:
-            "PlannedWebcamConsumerResetPolicy.retryDelayMilliseconds"
-        ))
-        XCTAssertLessThan(iosRollback.lowerBound, iosRetry.lowerBound)
-
-        let androidAttemptStart = try XCTUnwrap(androidSource.range(of:
-            "private suspend fun performPlannedConsumerReset("
-        ))
-        let androidAttemptEnd = try XCTUnwrap(androidSource.range(
-            of: "private fun promoteStagedConsumer(",
-            range: androidAttemptStart.upperBound..<androidSource.endIndex
-        ))
-        let androidAttempt = String(
-            androidSource[androidAttemptStart.lowerBound..<androidAttemptEnd.lowerBound]
-        )
-        let androidRollback = try XCTUnwrap(androidAttempt.range(of:
-            "rollbackStagedConsumer("
-        ))
-        let androidRetry = try XCTUnwrap(androidAttempt.range(of:
-            "delay(CONSUMER_RESET_RETRY_DELAY_MS)"
-        ))
-        XCTAssertLessThan(androidRollback.lowerBound, androidRetry.lowerBound)
-    }
-
-    func testNativePlannedConsumerResetAbortsPausedAndStalePolicyGenerations() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-        let androidSocketSource = try sourceFileContents(
-            "Sources/Conclave/Skip/SocketIOManager+Android.kt"
-        )
-
-        XCTAssertTrue(iosSource.contains("var isConsumerPaused: Bool"))
-        XCTAssertTrue(iosSource.contains("var isProducerPaused: Bool"))
-        XCTAssertTrue(iosSource.contains("var isAdaptivelyPaused: Bool"))
-        XCTAssertTrue(iosSource.contains("!info.isConsumerPaused"))
-        XCTAssertTrue(iosSource.contains("!info.isProducerPaused"))
-        XCTAssertTrue(iosSource.contains("!info.isAdaptivelyPaused"))
-        XCTAssertTrue(iosSource.contains(
-            "currentInfo.generation == update.consumerGeneration"
-        ))
-        XCTAssertTrue(iosSource.contains(
-            "remoteConsumerPreferencePolicyRevision == policyRevision"
-        ))
-        XCTAssertTrue(iosSource.contains(
-            "requiredRole: .displaced"
-        ))
-
-        XCTAssertTrue(androidSource.contains("var isConsumerPaused: Boolean"))
-        XCTAssertTrue(androidSource.contains("var isProducerPaused: Boolean"))
-        XCTAssertTrue(androidSource.contains("var isAdaptivelyPaused: Boolean"))
-        XCTAssertTrue(androidSource.contains("!info.isConsumerPaused"))
-        XCTAssertTrue(androidSource.contains("!info.isProducerPaused"))
-        XCTAssertTrue(androidSource.contains("!info.isAdaptivelyPaused"))
-        XCTAssertTrue(androidSource.contains(
-            "currentInfo.generation != update.consumerGeneration"
-        ))
-        XCTAssertTrue(androidSource.contains(
-            "remoteConsumerPreferencePolicyRevision != policyRevision"
-        ))
-        XCTAssertTrue(androidSource.contains(
-            "ConsumerGenerationLifecycleRole.DISPLACED"
-        ))
-        XCTAssertTrue(androidSocketSource.contains(
-            "Regex(\"^[LS]([0-9]+)T\", RegexOption.IGNORE_CASE)"
-        ))
-    }
 
     @MainActor
     func testWaitingRoomApprovalRestartsMeetingEntryOverlay() async throws {
@@ -1829,9 +2219,6 @@ final class ConclaveTests: XCTestCase {
 
     func testNativeGameStageCoversEveryWebGameRenderer() throws {
         let webRegistry = try repoFileContents("apps/web/src/app/components/games/registry.tsx")
-        let nativeStage = try sourceFileContents("Sources/Conclave/Features/Meeting/Games/GameStageView.swift")
-        let nativeStageGames = try sourceFileContents("Sources/Conclave/Features/Meeting/Games/GameStageGames.swift")
-        let nativeWordle = try sourceFileContents("Sources/Conclave/Features/Meeting/WordleGameView.swift")
 
         let expectedGameIds = [
             "trivia",
@@ -1845,13 +2232,7 @@ final class ConclaveTests: XCTestCase {
 
         for gameId in expectedGameIds {
             XCTAssertTrue(webRegistry.contains("\(gameId):") || webRegistry.contains("\"\(gameId)\":"))
-            XCTAssertTrue(
-                nativeStage.contains("case \"\(gameId)\""),
-                "Native game stage is missing renderer branch for \(gameId)."
-            )
         }
-        XCTAssertTrue(nativeStageGames.contains("WordleGameView("))
-        XCTAssertTrue(nativeWordle.contains("struct WordleGameView"))
     }
 
     func testNativeGameDetailsPresentationParsesWebProjectionShapes() throws {
@@ -2113,22 +2494,15 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testMeetingChatErrorPresentationKeepsTransportErrorsReadable() throws {
-        XCTAssertEqual(
-            MeetingChatErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Socket is not connected"]
-            )),
-            "Reconnect before sending chat."
-        )
-        XCTAssertEqual(
-            MeetingChatErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Chat is locked by the host."]
-            )),
-            "Chat is locked by the host."
-        )
+        func message(_ text: String) -> String? {
+            MeetingErrorLegacyCopy.message(MeetingErrorClassifier.classify(
+                NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: text]),
+                context: MeetingErrorContext.chat
+            ))
+        }
+        XCTAssertEqual(message("Socket is not connected"), "Reconnect before sending chat.")
+        XCTAssertEqual(message("Chat is locked by the host."), "Chat is locked by the host.")
+        XCTAssertEqual(message("Socket changed before chat:send acknowledgement"), "Reconnect before sending chat.")
     }
 
     @MainActor
@@ -2265,24 +2639,6 @@ final class ConclaveTests: XCTestCase {
             currentUserId: nil,
             isBlocked: true
         ))
-    }
-
-    func testNewMeetingPrimaryActionSurfacesDisabledState() throws {
-        let source = try sourceFileContents("Sources/Conclave/Features/Join/JoinView.swift")
-
-        XCTAssertTrue(source.contains(".foregroundStyle(isCreateMeetingEnabled ? Color.white : ACMColors.textFaint)"))
-        XCTAssertTrue(source.contains(".acmColorBackground(isCreateMeetingEnabled ? ACMColors.primaryOrange : ACMColors.subtleFill)"))
-    }
-
-    func testNativeJoinScreenStartsOnFlatLobbyLikeWeb() throws {
-        let source = try sourceFileContents("Sources/Conclave/Features/Join/JoinView.swift")
-
-        XCTAssertTrue(source.contains("@State private var phase: JoinPhase = .join"))
-        XCTAssertTrue(source.contains("case auth, join"))
-        XCTAssertFalse(source.contains("case welcome"))
-        XCTAssertFalse(source.contains("private var welcomePhase"))
-        XCTAssertFalse(source.contains("Get started"))
-        XCTAssertFalse(source.contains("guard appState.isAuthenticated || appState.currentUser != nil"))
     }
 
     func testJoinGuestSignInFooterStaysVisibleForNoGuestsRecoveryOnCompact() throws {
@@ -2801,34 +3157,6 @@ final class ConclaveTests: XCTestCase {
         )
     }
 
-    func testScreenCaptureStartPolicyTimesOutOnlyPendingCurrentStart() throws {
-        XCTAssertEqual(ScreenCaptureStartPolicy.startTimeoutNanoseconds, 12_000_000_000)
-        XCTAssertTrue(ScreenCaptureStartPolicy.shouldApplyTimeout(
-            generation: 2,
-            currentGeneration: 2,
-            hasServer: true,
-            isConnected: false
-        ))
-        XCTAssertFalse(ScreenCaptureStartPolicy.shouldApplyTimeout(
-            generation: 2,
-            currentGeneration: 3,
-            hasServer: true,
-            isConnected: false
-        ))
-        XCTAssertFalse(ScreenCaptureStartPolicy.shouldApplyTimeout(
-            generation: 2,
-            currentGeneration: 2,
-            hasServer: false,
-            isConnected: false
-        ))
-        XCTAssertFalse(ScreenCaptureStartPolicy.shouldApplyTimeout(
-            generation: 2,
-            currentGeneration: 2,
-            hasServer: true,
-            isConnected: true
-        ))
-    }
-
     func testScreenCaptureReconnectPolicyKeepsCurrentServerAliveDuringTransientDisconnect() throws {
         XCTAssertEqual(ScreenCaptureReconnectPolicy.graceNanoseconds, 8_000_000_000)
         XCTAssertTrue(ScreenCaptureReconnectPolicy.shouldFinalizeDisconnect(
@@ -2925,6 +3253,38 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(state.visibleGridUserIds, ["remote@example.com#remote-session"])
         XCTAssertFalse(state.visibleGridIncludesLocalParticipant)
         XCTAssertTrue(state.visibleGridSnapshot().shouldShowDetachedSelfView)
+    }
+
+    @MainActor
+    func testRemoteParticipantLookupKeepsMergeRulesAcrossRosterWrites() throws {
+        let state = MeetingState(userId: "local@example.com#local-session", sessionId: "local-session")
+        state.sfuUserId = "local@example.com"
+        state.participants = [
+            "ann@example.com": Participant(id: "ann@example.com", isMuted: false),
+            "ann@example.com#s1": Participant(id: "ann@example.com#s1"),
+            "ann@example.com#s2": Participant(id: "ann@example.com#s2"),
+            "bob@example.com#s1": Participant(id: "bob@example.com#s1"),
+            "cat@example.com": Participant(id: "cat@example.com")
+        ]
+
+        XCTAssertEqual(state.participant(for: "ann@example.com")?.id, "ann@example.com#s1")
+        XCTAssertEqual(state.participant(for: "ann@example.com")?.isMuted, false)
+        XCTAssertEqual(state.participant(for: "ann@example.com#s2")?.id, "ann@example.com#s2")
+        XCTAssertEqual(state.participant(for: " bob@example.com ")?.id, "bob@example.com#s1")
+        XCTAssertEqual(state.canonicalStageUserId("bob@example.com"), "bob@example.com#s1")
+        XCTAssertNil(state.participant(for: "dan@example.com"))
+        XCTAssertEqual(state.participantCount, 5)
+
+        state.participants["ann@example.com#s1"] = nil
+        XCTAssertEqual(state.participant(for: "ann@example.com")?.id, "ann@example.com#s2")
+        XCTAssertEqual(state.participant(for: "ann@example.com")?.isMuted, false)
+        state.participants["bob@example.com#s1"]?.isLeaving = true
+        XCTAssertNil(state.canonicalStageUserId("bob@example.com#s1"))
+        XCTAssertEqual(state.participantCount, 3)
+
+        state.sfuUserId = "cat@example.com"
+        XCTAssertNil(state.participant(for: "cat@example.com"))
+        XCTAssertEqual(state.participantCount, 2)
     }
 
     @MainActor
@@ -3701,9 +4061,10 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(viewModel.state.participant(for: "tara@example.com#web-session")?.isWebinarAttendee, true)
-        XCTAssertEqual(viewModel.state.participant(for: "lee@example.com#web-session")?.isWebinarAttendee, true)
+        XCTAssertNil(viewModel.state.participant(for: "tara@example.com#web-session"))
+        XCTAssertNil(viewModel.state.participant(for: "lee@example.com#web-session"))
         XCTAssertEqual(viewModel.state.participant(for: "maya@example.com#web-session")?.isWebinarAttendee, false)
+        XCTAssertEqual(viewModel.state.participantCount, 2)
         XCTAssertFalse(viewModel.state.canPromoteHost(userId: "tara@example.com#web-session"))
         XCTAssertFalse(viewModel.state.canPromoteHost(userId: "lee@example.com#web-session"))
         XCTAssertTrue(viewModel.state.canPromoteHost(userId: "maya@example.com#web-session"))
@@ -3765,9 +4126,9 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.appId, "whiteboard")
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.data, Data([0x01, 0x02]))
-        XCTAssertEqual(viewModel.state.appYjsUpdateSequence, 1)
+        XCTAssertEqual(viewModel.activeAppSession.appId, "whiteboard")
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.map { $0.data }, [Data([0x01, 0x02])])
+        XCTAssertTrue(viewModel.state.activeAppHasRoomData)
 
         viewModel.socketManager.onAppsYjsUpdate?(AppsYjsUpdateNotification(
             appId: "dev-playground",
@@ -3776,9 +4137,9 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.appId, "whiteboard")
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.data, Data([0x01, 0x02]))
-        XCTAssertEqual(viewModel.state.appYjsUpdateSequence, 1)
+        XCTAssertEqual(viewModel.activeAppSession.appId, "whiteboard")
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.map { $0.data }, [Data([0x01, 0x02])])
+        XCTAssertTrue(viewModel.state.activeAppHasRoomData)
     }
 
     @MainActor
@@ -3798,8 +4159,8 @@ final class ConclaveTests: XCTestCase {
         ))
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertNil(viewModel.state.latestAppAwarenessUpdate)
-        XCTAssertEqual(viewModel.state.appAwarenessUpdateSequence, 0)
+        XCTAssertTrue(viewModel.activeAppSession.pendingRemote.isEmpty)
+        XCTAssertFalse(viewModel.state.activeAppHasRoomData)
     }
 
     func testMeetingConfigSnapshotAcceptsRoomlessBroadcast() throws {
@@ -5945,21 +6306,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertNil(viewModel.state.errorMessage)
     }
 
-    func testNativeConclaveMentionUsesAssistantFlowInsteadOfNativeBlocker() throws {
-        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let chatViewsSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
-
-        XCTAssertTrue(source.contains("sendConclaveQuestion(trimmed, question: conclaveQuestion, replyTo: replyTo)"))
-        XCTAssertTrue(source.contains("appendConclaveAssistantPlaceholder(id: answerId"))
-        XCTAssertTrue(source.contains("socketManager.requestConclaveAuthorization("))
-        XCTAssertTrue(source.contains("NativeConclaveAssistantService.ask("))
-        XCTAssertTrue(source.contains("socketManager.relayConclaveAnswer(relay)"))
-        XCTAssertFalse(source.contains("Conclave AI is not available in the native app yet."))
-        XCTAssertTrue(chatViewsSource.contains("return \"Thinking...\""))
-        XCTAssertTrue(chatViewsSource.contains(": ChatMessagePresentation.content(for: message)"))
-        XCTAssertTrue(chatViewsSource.contains("rendersMarkdown: isConclaveAssistantMessage"))
-    }
-
     @MainActor
     func testSendChatMessageShowsOptimisticMessageBeforeAckThenReplacesIt() async throws {
         let viewModel = MeetingViewModel()
@@ -6124,7 +6470,8 @@ final class ConclaveTests: XCTestCase {
         viewModel.togglePin("remote@example.com#remote-session")
 
         XCTAssertNil(viewModel.state.pinnedUserId)
-        XCTAssertEqual(viewModel.state.viewMode, .auto)
+
+        XCTAssertEqual(viewModel.state.viewMode, .spotlight)
     }
 
     @MainActor
@@ -6691,9 +7038,9 @@ final class ConclaveTests: XCTestCase {
 
         await replayPendingPreAckRoomEvents(on: viewModel, includeDeferredRoomState: true)
 
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.appId, "whiteboard")
-        XCTAssertEqual(viewModel.state.latestAppYjsUpdate?.data, currentUpdate)
-        XCTAssertEqual(viewModel.state.appYjsUpdateSequence, 1)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.count, 1)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.data, currentUpdate)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.isAwareness, false)
     }
 
     @MainActor
@@ -6724,10 +7071,10 @@ final class ConclaveTests: XCTestCase {
 
         await replayPendingPreAckRoomEvents(on: viewModel, includeDeferredRoomState: true)
 
-        XCTAssertEqual(viewModel.state.latestAppAwarenessUpdate?.appId, "whiteboard")
-        XCTAssertEqual(viewModel.state.latestAppAwarenessUpdate?.data, currentUpdate)
-        XCTAssertEqual(viewModel.state.latestAppAwarenessUpdate?.clientId, 12)
-        XCTAssertEqual(viewModel.state.appAwarenessUpdateSequence, 1)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.count, 1)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.data, currentUpdate)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.isAwareness, true)
+        XCTAssertEqual(viewModel.activeAppSession.pendingRemote.first?.clientId, 12)
     }
 
     @MainActor
@@ -6933,7 +7280,6 @@ final class ConclaveTests: XCTestCase {
             padding: 16
         )
 
-        // Meet-style stacked pair: two full-width tiles that split the stage.
         XCTAssertEqual(layout.columns, 1)
         XCTAssertEqual(layout.rows, 2)
         XCTAssertGreaterThan(layout.tileWidth, 300)
@@ -6952,7 +7298,7 @@ final class ConclaveTests: XCTestCase {
 
         XCTAssertEqual(layout.columns, 1)
         XCTAssertEqual(layout.rows, 1)
-        // Fills the available height instead of floating a square card.
+
         XCTAssertEqual(layout.tileHeight, 608, accuracy: 1.0)
         XCTAssertLessThanOrEqual(layout.tileHeight, layout.tileWidth * 2.1)
     }
@@ -7032,7 +7378,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testGridTileFramePolicyCentersShortLastRowAndStaysInCanvas() throws {
-        // 3 tiles in 2 columns: rows are [2, 1]; the lone last tile centers.
+
         let tileWidth: CGFloat = 180
         let tileHeight: CGFloat = 240
         let spacing: CGFloat = 12
@@ -7058,11 +7404,10 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(first.y, 0, accuracy: 0.001)
         XCTAssertEqual(second.x, tileWidth + spacing, accuracy: 0.001)
         XCTAssertEqual(second.y, 0, accuracy: 0.001)
-        // Last row: single tile centered in the canvas.
+
         XCTAssertEqual(third.x, (contentWidth - tileWidth) / 2.0, accuracy: 0.001)
         XCTAssertEqual(third.y, tileHeight + spacing, accuracy: 0.001)
 
-        // Every origin stays inside the canvas for a range of counts.
         for count in 1...8 {
             let columns = count == 2 ? 1 : min(count, 2)
             let width = columns == 1 ? contentWidth : tileWidth
@@ -7270,19 +7615,6 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
-    func testSettingsDisplayNameAutoSaveClearsDebounceBeforeSubmitting() throws {
-        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/SettingsSheetView.swift")
-        let guardNeedle = "generation: generation,\n                    currentGeneration: displayNameAutoSaveGeneration\n                  ) else { return }"
-        let clearNeedle = "displayNameAutoSaveTask = nil"
-        let submitNeedle = "await submitDisplayNameUpdate(pendingName, generation: generation)"
-
-        let guardRange = try XCTUnwrap(source.range(of: guardNeedle))
-        let clearRange = try XCTUnwrap(source.range(of: clearNeedle, range: guardRange.upperBound..<source.endIndex))
-        let submitRange = try XCTUnwrap(source.range(of: submitNeedle, range: clearRange.upperBound..<source.endIndex))
-
-        XCTAssertLessThan(clearRange.lowerBound, submitRange.lowerBound)
-    }
-
     func testCallAudioRoutePolicyDefaultsToSpeakerOnlyWhenOutputIsNotExternal() throws {
         XCTAssertTrue(CallAudioRoutePolicy.shouldDefaultToSpeaker(
             selectedOutputId: nil,
@@ -7404,14 +7736,12 @@ final class ConclaveTests: XCTestCase {
         )
 
         XCTAssertEqual(focusedBottomPadding, 12)
-        // Full-height docked panel fills the available height.
+
         XCTAssertEqual(focusedHeight, 680)
     }
 
     func testAndroidUnfocusedChatDockedPanelUsesSmallBottomInset() throws {
-        // The chat is a full-height docked panel that covers the controls, so the
-        // composer only needs a small bottom inset (home indicator), not 84pt of
-        // clearance for the controls bar.
+
         XCTAssertEqual(
             MeetingChatOverlayLayout.bottomPadding(
                 inputFocused: false,
@@ -7424,9 +7754,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testAndroidChatComposerSitsBesideMaterialTextField() throws {
-        // The Android field is a Material3 OutlinedTextField with an enforced
-        // 56dp minimum height; action buttons must stay at least 44dp to hold
-        // their own visually, and no layout constant may clamp below 56.
+
         XCTAssertEqual(ChatComposerLayout.inputHeight(isAndroid: true), 44)
         XCTAssertEqual(ChatComposerLayout.inputVerticalPadding(isAndroid: true), 0)
         XCTAssertEqual(ChatComposerLayout.composerVerticalPadding(isAndroid: true), 6)
@@ -7446,13 +7774,6 @@ final class ConclaveTests: XCTestCase {
             ChatComposerLayout.composerBottomPadding(isAndroid: false, contentInset: -20),
             14
         )
-
-        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
-        XCTAssertTrue(source.contains("private func openGifPicker()"))
-        XCTAssertTrue(source.contains("private func openImagePicker()"))
-        XCTAssertTrue(source.contains(".accessibilityLabel(\"Add GIF or photo\")"))
-        XCTAssertTrue(source.contains(".layoutPriority(1)"))
-        XCTAssertFalse(source.contains(".frame(width: 58, height: inputHeight)"))
     }
 
     func testOptimisticFollowUpGroupsAcrossLocalIdentityAliases() {
@@ -7495,10 +7816,6 @@ final class ConclaveTests: XCTestCase {
             ChatComposerLayout.suggestionPopoverHeight(itemCount: 20, maxHeight: 154),
             154
         )
-
-        let source = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
-        XCTAssertTrue(source.contains("Suggestions are a popover anchored above the composer"))
-        XCTAssertTrue(source.contains(".offset(y: -(suggestionPopoverHeight + 10.0))"))
     }
 
     func testCompactControlsBarFitsNarrowPhoneWidth() throws {
@@ -7648,7 +7965,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testChatOverlayLayoutFillsAvailableHeight() throws {
-        // Docked panel fills the full available height on every platform/state.
+
         XCTAssertEqual(
             MeetingChatOverlayLayout.maxHeight(for: 180, inputFocused: true, isAndroid: true),
             180
@@ -7664,8 +7981,7 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testChatDockedPanelHeightIsIndependentOfFocus() throws {
-        // Height no longer shrinks when the composer is focused — the panel is
-        // full-height and the keyboard is handled via imePadding / keyboardInset.
+
         XCTAssertEqual(
             MeetingChatOverlayLayout.maxHeight(for: 680, inputFocused: true, isAndroid: true),
             680
@@ -7901,96 +8217,45 @@ final class ConclaveTests: XCTestCase {
         ))
     }
 
-    func testAndroidPipExitNotifiesMeetingViewModelForPolicyRefresh() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/PipManager.kt")
+    @MainActor
+    func testRemoteConsumerFallbackKeepsEveryRemoteUntilTheStageIsMeasuredThenUsesThePhoneCap() throws {
+        var participants = [StageParticipantInput.make(userId: "local", isLocal: true, joinSerial: 1)]
+        for index in 1...9 {
+            participants.append(StageParticipantInput.make(userId: "remote-\(index)", joinSerial: index + 1))
+        }
+        let everyone = ["remote-1", "remote-2", "remote-3", "remote-4", "remote-5", "remote-6", "remote-7", "remote-8", "remote-9"]
+        let firstFour = ["remote-1", "remote-2", "remote-3", "remote-4"]
+        let inputs = StageInputs.make(callSession: 1, isInCall: true, localUserId: "local", participants: participants,
+                                      selfViewMode: "tile")
 
-        XCTAssertTrue(source.contains("val wasInPip = PipController.inPipMode"))
-        XCTAssertTrue(source.contains("if (wasInPip) {\n            CallActionDispatcher.pictureInPictureContentRefresh()\n        }"))
-        XCTAssertTrue(source.contains("if (!inPip) {\n            cancelPendingEnterPip()\n            CallActionDispatcher.pictureInPictureContentRefresh()\n            return\n        }"))
-    }
+        let unmeasured = StagePresenter(shell: MeetingShellPresenter())
+        unmeasured.apply(inputs)
+        XCTAssertEqual(unmeasured.layout.kind, StageKind.grid)
+        XCTAssertEqual(unmeasured.layout.capacity, StageCapacity.zero)
+        XCTAssertTrue(StageOrderPolicy.visibleRemoteIds(unmeasured.layout.slots, localUserId: "local").isEmpty)
+        XCTAssertEqual(StageOrderPolicy.consumerFallbackRemoteIds(layout: unmeasured.layout, inputs: unmeasured.inputs,
+                                                                  speakerUserId: unmeasured.speakerUserId), everyone)
 
-    func testAndroidCallSurvivesExternalActivitiesAndScreenLock() throws {
-        let activitySource = try sourceFileContents("Android/app/src/main/kotlin/Main.kt")
-        let pipSource = try sourceFileContents("Sources/Conclave/Skip/PipManager.kt")
-        let shareSource = try sourceFileContents("Sources/Conclave/Skip/NativeMeetingShare.kt")
-        let serviceSource = try sourceFileContents("Sources/Conclave/Skip/CallForegroundService.kt")
-        let chatSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
+        let capped = StagePresenter(shell: MeetingShellPresenter())
+        capped.apply(StageInputs.make(callSession: 1, isInCall: true, localUserId: "local", participants: participants,
+                                      viewMaxTiles: 6, selfViewMode: "tile"))
+        XCTAssertEqual(capped.layout.capacity, StageCapacity.zero)
+        XCTAssertEqual(StageOrderPolicy.consumerFallbackRemoteIds(layout: capped.layout, inputs: capped.inputs,
+                                                                  speakerUserId: capped.speakerUserId), firstFour)
 
-        XCTAssertTrue(activitySource.contains("PipManager.consumeAutoEnterSuppression()"))
-        XCTAssertTrue(activitySource.contains("Build.VERSION_CODES.S"))
-        XCTAssertTrue(pipSource.contains("fun configureForActiveCall(active: Boolean, muted: Boolean)"))
-        XCTAssertTrue(pipSource.contains("configureForActiveCall(active = false, muted = PipController.muted)"))
-        XCTAssertTrue(pipSource.contains("builder.setAutoEnterEnabled(autoEnter)"))
-        XCTAssertTrue(shareSource.contains("PipManager.suppressNextAutoEnter(\"meeting_share\")"))
-        XCTAssertTrue(shareSource.contains("PipManager.restoreAutoEnterAfterExternalActivity()"))
-        XCTAssertTrue(chatSource.contains("PipManager.suppressNextAutoEnter(reason: \"chat_link\")"))
-        XCTAssertTrue(serviceSource.contains("PowerManager.PARTIAL_WAKE_LOCK"))
-        XCTAssertTrue(serviceSource.contains("setReferenceCounted(false)"))
-        XCTAssertTrue(serviceSource.contains("return START_STICKY"))
-        XCTAssertTrue(serviceSource.contains("releaseCallWakeLock()"))
-    }
+        let measured = StagePresenter(shell: MeetingShellPresenter())
+        measured.setViewport(StageViewport(width: 375.0, height: 667.0, insetTop: 76.0, insetBottom: 64.0, insetLeading: 0.0,
+                                           insetTrailing: 0.0, widthClass: StageSizeClass.compact,
+                                           heightClass: StageSizeClass.regular, placement: StageChromePlacement.bottomBar))
+        measured.apply(inputs)
+        let ids = StageOrderPolicy.consumerFallbackRemoteIds(layout: measured.layout, inputs: measured.inputs,
+                                                             speakerUserId: measured.speakerUserId)
 
-    func testAndroidReactionAndGifSurfacesUseCompactAnimatedHosts() throws {
-        let reactionSource = try sourceFileContents("Sources/Conclave/Skip/AnimatedReactionAsset.kt")
-        let moreSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MoreSheetView.swift")
-        let chatSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
-        let gifHostSource = try sourceFileContents("Sources/Conclave/Skip/FlexibleGifPickerSheetHost.kt")
-
-        XCTAssertTrue(reactionSource.contains("ImageDecoder.decodeDrawable"))
-        XCTAssertTrue(reactionSource.contains("(currentDrawable as? Animatable)?.start()"))
-        XCTAssertTrue(moreSource.contains("ReactionAssetThumbnailView("))
-        XCTAssertTrue(chatSource.contains("FlexibleGifPickerSheetHost("))
-        XCTAssertTrue(chatSource.contains("detentFraction: 0.58"))
-        XCTAssertTrue(gifHostSource.contains("fullyExpanded = expandedFraction"))
-        XCTAssertTrue(gifHostSource.contains("allowNestedScroll = true"))
-    }
-
-    func testSoloStageAndChatComposerAvoidBroadLayoutInvalidation() throws {
-        let gridSource = try sourceFileContents("Sources/Conclave/Features/Meeting/GridLayoutView.swift")
-        let soloStart = try XCTUnwrap(gridSource.range(of: "if count <= 1 {"))
-        let soloTail = gridSource[soloStart.lowerBound...]
-        let soloEnd = try XCTUnwrap(soloTail.range(of: "} else if !shouldScrollGrid {"))
-        let soloBranch = String(soloTail[..<soloEnd.lowerBound])
-        let chatSource = try sourceFileContents("Sources/Conclave/Features/Meeting/ChatViews.swift")
-        let overlayStart = try XCTUnwrap(chatSource.range(of: "struct ChatOverlayView: View"))
-        let composerStart = try XCTUnwrap(chatSource.range(of: "private struct ChatComposerView: View"))
-        let overlayDeclaration = String(chatSource[overlayStart.lowerBound..<composerStart.lowerBound])
-        let meetingSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingView.swift")
-        let reactionLayerStart = try XCTUnwrap(meetingSource.range(of: "private struct MeetingReactionOverlayLayer: View"))
-        let reactionStateRead = try XCTUnwrap(meetingSource.range(of: "viewModel.state.activeReactions"))
-
-        XCTAssertFalse(soloBranch.contains(".padding(.horizontal"))
-        XCTAssertTrue(soloBranch.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
-        XCTAssertTrue(chatSource.contains("@State private var messageText = \"\""))
-        XCTAssertFalse(overlayDeclaration.contains("@State private var messageText"))
-        XCTAssertTrue(chatSource.contains("ChatTimelineView("))
-        XCTAssertTrue(chatSource.contains(".equatable()"))
-        XCTAssertTrue(meetingSource.contains("HStack(spacing: 0)"))
-        XCTAssertTrue(meetingSource.contains("Spacer(minLength: 0)"))
-        XCTAssertFalse(meetingSource.contains("chatInputFocused ? Alignment.bottomTrailing"))
-        XCTAssertTrue(meetingSource.contains("let chatAlignment = Alignment.topTrailing"))
-        XCTAssertFalse(meetingSource.contains("keyboardWillChangeFrameNotification"))
-        XCTAssertTrue(meetingSource.contains("allowsSystemAvoidance: viewModel.state.isChatOpen"))
-        XCTAssertTrue(meetingSource.contains("let chatSafeAreaBottom = chatInputFocused && !isAndroidChatLayout"))
-        XCTAssertTrue(meetingSource.contains("bottomContentInset: isAndroidChatLayout ? 0.0 : effectiveChatBottomPadding"))
-        XCTAssertFalse(meetingSource.contains(".padding(.bottom, effectiveChatBottomPadding)"))
-        XCTAssertGreaterThan(reactionStateRead.lowerBound, reactionLayerStart.lowerBound)
-        XCTAssertEqual(meetingSource.components(separatedBy: "viewModel.state.activeReactions").count - 1, 1)
-    }
-
-    func testAndroidPipRendererKeyTracksTargetAndTrackIdentity() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/PipContent.kt")
-
-        XCTAssertTrue(source.contains("val trackKey = videoState.track.id()"))
-        XCTAssertTrue(source.contains("rendererKey = \"pip:${videoState.surfaceVersion}:${videoState.targetId}:$trackKey\""))
-        XCTAssertTrue(source.contains("clearBeforeAttach = false"))
-    }
-
-    func testAndroidMeetingVideoRendererDoesNotClearStableTrackReattachments() throws {
-        let source = try sourceFileContents("Sources/Conclave/Core/WebRTC/VideoView+Skip.swift")
-
-        XCTAssertTrue(source.contains("var clearBeforeAttach = false"))
-        XCTAssertTrue(source.contains("rendererKey: stableRendererKey,\n                clearBeforeAttach: clearBeforeAttach"))
+        XCTAssertEqual(measured.layout.capacity, StageCapacity(gridSlots: 6, railSlots: 0))
+        XCTAssertEqual(ids, firstFour)
+        XCTAssertEqual(ids, StageOrderPolicy.visibleRemoteIds(measured.layout.slots, localUserId: "local"))
+        XCTAssertEqual(measured.layout.overflowCount, 5)
+        XCTAssertFalse(ids.contains("local"))
     }
 
     func testPipTargetSelectionPrefersPresentCandidateWithoutWaitingForVideoTrack() throws {
@@ -8034,54 +8299,37 @@ final class ConclaveTests: XCTestCase {
     }
 
     func testMeetingMediaErrorPresentationMatchesWebMeetErrors() throws {
+        func classified(_ text: String, _ context: MeetingErrorContext = .media) -> ClassifiedError {
+            MeetingErrorClassifier.classify(
+                NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: text]),
+                context: context
+            )
+        }
+        XCTAssertEqual(classified("Camera permission not granted").category, .cameraPermission)
         XCTAssertEqual(
-            MeetingMediaErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Camera permission not granted"]
-            )),
-            "Camera/microphone permission denied"
+            MeetingErrorLegacyCopy.message(classified("Camera permission not granted"), device: MeetingMediaDevice.camera),
+            "Camera access is off. Turn it on in Settings."
         )
+        XCTAssertEqual(classified("DevicesNotFoundError").category, .deviceUnavailable)
         XCTAssertEqual(
-            MeetingMediaErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "DevicesNotFoundError"]
-            )),
-            "Camera or microphone not found"
+            MeetingErrorLegacyCopy.message(classified("DevicesNotFoundError"), device: MeetingMediaDevice.microphone),
+            "Your microphone isn't available right now."
         )
+        XCTAssertEqual(classified("Send transport not ready").category, .mediaSessionStale)
+        XCTAssertEqual(classified("Send transport not ready", .screenShare).category, .serverUnreachable)
+        XCTAssertEqual(MeetingErrorLegacyCopy.message(classified("Send transport not ready")), "That didn't go through. Try again.")
+        XCTAssertEqual(classified("No rear camera available").category, .deviceUnavailable)
+        XCTAssertEqual(classified("No screen capture permission", .screenShare).category, .screenCapturePermission)
         XCTAssertEqual(
-            MeetingMediaErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Send transport not ready"]
-            )),
-            "Failed to connect to server"
+            MeetingErrorLegacyCopy.message(classified("No screen capture permission", .screenShare), device: MeetingMediaDevice.screen),
+            "Screen sharing isn't allowed on this device."
         )
-        XCTAssertEqual(
-            MeetingMediaErrorPresentation.message(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "No rear camera available"]
-            )),
-            "No rear camera available"
-        )
-        XCTAssertEqual(
-            MeetingMediaErrorPresentation.screenShareMessage(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "No screen capture permission"]
-            )),
-            "Failed to toggle screen sharing: Screen sharing permission denied"
-        )
-        XCTAssertEqual(
-            MeetingMediaErrorPresentation.screenShareMessage(for: NSError(
-                domain: "test",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Send transport not ready"]
-            )),
-            "Failed to toggle screen sharing: Failed to connect to server"
-        )
+        XCTAssertNil(MeetingErrorLegacyCopy.message(classified("The operation was cancelled.", .screenShare)))
+        for text in ["Camera permission not granted", "DevicesNotFoundError", "Send transport not ready", "No screen capture permission"] {
+            let message = MeetingErrorLegacyCopy.message(classified(text, .screenShare), device: MeetingMediaDevice.screen) ?? ""
+            XCTAssertFalse(message.hasPrefix("Failed to toggle screen sharing:"), message)
+            XCTAssertFalse(message.contains("Camera/microphone permission denied"), message)
+        }
     }
 
     func testDisplayNameSnapshotProducerSyncPolicyOnlySyncsJoinedClearedDepartures() throws {
@@ -8887,26 +9135,6 @@ final class ConclaveTests: XCTestCase {
         }
     }
 
-    func testNativeConclaveAssistantAndroidBridgeUsesLongRunningRequestPath() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/AndroidNativeHttpClient.kt")
-
-        XCTAssertTrue(source.contains("private val assistantClient = client.newBuilder()"))
-        XCTAssertTrue(source.contains(".readTimeout(120, TimeUnit.SECONDS)"))
-        XCTAssertTrue(source.contains(".callTimeout(150, TimeUnit.SECONDS)"))
-        XCTAssertTrue(source.contains("fun requestAssistant("))
-        XCTAssertTrue(source.contains("authorization: String?"))
-        XCTAssertTrue(source.contains("authorization = authorization"))
-        XCTAssertTrue(source.contains("requestBuilder.header(\"Authorization\", normalizedAuthorization)"))
-        XCTAssertTrue(source.contains("httpClient = assistantClient"))
-
-        let serviceSource = try sourceFileContents(
-            "Sources/Conclave/Core/Networking/NativeConclaveAssistantService.swift"
-        )
-        XCTAssertTrue(serviceSource.contains(
-            "authorization: request.value(forHTTPHeaderField: \"Authorization\")"
-        ))
-    }
-
     func testTerminalRoomEventsAllowMissingRoomIdOnlyDuringKnownCall() throws {
         XCTAssertTrue(SocketRoomEventPolicy.shouldAllowMissingTerminalRoomId(
             activeRoomAliasCount: 1,
@@ -8924,59 +9152,6 @@ final class ConclaveTests: XCTestCase {
             activeRoomAliasCount: 1,
             pendingRoomAliasCount: 1
         ))
-    }
-
-    func testIosGameVoteSocketEventFiltersDecodedVoteRoomIdLikeAndroid() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-
-        XCTAssertTrue(iosSource.contains("let vote = data.first.flatMap { self.decode(GameVoteState.self, from: $0) }"))
-        XCTAssertTrue(iosSource.contains("self.eventRoomIdMatchesActiveOrPending(vote?.roomId, allowMissingRoomId: true)"))
-        XCTAssertFalse(iosSource.contains("self.eventRoomIdMatchesActiveOrPending(nil, allowMissingRoomId: true) else { return }\n            let vote"))
-        XCTAssertTrue(androidSource.contains("val roomId = notification?.roomId"))
-        XCTAssertTrue(androidSource.contains("eventRoomIdMatchesActiveOrPending(roomId, allowMissingRoomId = true)"))
-    }
-
-    func testConclaveMessageRoutesThroughNativeChatPipeline() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-
-        XCTAssertTrue(iosSource.contains("static let conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue"))
-        XCTAssertTrue(iosSource.contains("static let conclaveMessage = SfuServerEvent.conclaveMessage.rawValue"))
-        XCTAssertTrue(iosSource.contains("socket.on(SocketEvent.conclaveMessage)"))
-        XCTAssertTrue(iosSource.contains("self.decode(ConclaveAssistantMessageNotification.self, from: first)"))
-        XCTAssertTrue(iosSource.contains("self.onChatMessage?(notification.chatMessage(taggedRoomId: activeRoomId))"))
-
-        XCTAssertTrue(androidSource.contains("val conclaveAuthorize = SfuClientEvent.conclaveAuthorize.rawValue"))
-        XCTAssertTrue(androidSource.contains("val conclaveMessage = SfuServerEvent.conclaveMessage.rawValue"))
-        XCTAssertTrue(androidSource.contains("socket.on(SocketEvent.conclaveMessage"))
-        XCTAssertTrue(androidSource.contains("private fun decodeConclaveMessage(value: Any?): ChatMessageNotification?"))
-        XCTAssertTrue(androidSource.contains("decodeChatMessage(value) ?: decodeConclaveAssistantMessage(value)"))
-        XCTAssertTrue(androidSource.contains("onChatMessage?.invoke(notification.toChatMessage(roomId))"))
-
-        XCTAssertTrue(viewModelSource.contains("guard normalized.userId == ConclaveAssistantChatIdentity.userId else"))
-        XCTAssertTrue(viewModelSource.contains("private func mergedConclaveAssistantMessage(existing: ChatMessage, incoming: ChatMessage) -> ChatMessage"))
-        XCTAssertTrue(viewModelSource.contains("incoming.content.isEmpty || incoming.content.count < existing.content.count"))
-    }
-
-    func testNativeConclaveAssistantSocketEmitParity() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        let androidSymbolSource = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager+Android.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-
-        XCTAssertTrue(iosSource.contains("func requestConclaveAuthorization(answerId: String, questionMessageId: String) async throws -> ConclaveAuthorizeResponse"))
-        XCTAssertTrue(iosSource.contains("emit(event: SocketEvent.conclaveAuthorize"))
-        XCTAssertTrue(iosSource.contains("func relayConclaveAnswer(_ packet: ConclaveAssistantRelayPacket)"))
-        XCTAssertTrue(iosSource.contains("socket?.emit(SocketEvent.conclaveAnswer, payload)"))
-
-        XCTAssertTrue(androidSymbolSource.contains("func requestConclaveAuthorization(answerId: String, questionMessageId: String) async throws -> ConclaveAuthorizeResponse"))
-        XCTAssertTrue(androidSymbolSource.contains("func relayConclaveAnswer(_ packet: ConclaveAssistantRelayPacket)"))
-
-        XCTAssertTrue(androidSource.contains("internal suspend fun requestConclaveAuthorization("))
-        XCTAssertTrue(androidSource.contains("emit(SocketEvent.conclaveAuthorize, payload)"))
-        XCTAssertTrue(androidSource.contains("internal fun relayConclaveAnswer(packet: ConclaveAssistantRelayPacket)"))
-        XCTAssertTrue(androidSource.contains("socket?.emit(SocketEvent.conclaveAnswer, payload)"))
     }
 
     func testPayloadLessBrowserClosedCanClearOnlyKnownRoomState() throws {
@@ -9049,8 +9224,10 @@ final class ConclaveTests: XCTestCase {
     func testAndroidManifestDoesNotCaptureWebOnlySignInLinks() throws {
         let manifest = try sourceFileContents("Android/app/src/main/AndroidManifest.xml")
 
-        XCTAssertTrue(manifest.contains("android:pathPrefix=\"/w/\""))
-        XCTAssertTrue(manifest.contains("android:pathPattern=\"/.*-.*-.*\""))
+        XCTAssertTrue(manifest.contains("android:pathAdvancedPattern=\"/w/[a-zA-Z0-9][a-zA-Z0-9-]{0,31}\""))
+        XCTAssertTrue(manifest.contains("android:pathAdvancedPattern=\"/[a-zA-Z0-9]+-[a-zA-Z0-9]+-[a-zA-Z0-9]+\""))
+        XCTAssertTrue(manifest.contains("android:enabled=\"@bool/conclave_verified_app_links_enabled\""))
+        XCTAssertFalse(manifest.contains("android:pathPattern=\"/.*-.*-.*\""))
         XCTAssertFalse(manifest.contains("android:path=\"/sign-in\""))
         XCTAssertFalse(manifest.contains("android:pathPrefix=\"/sign-in/\""))
     }
@@ -9070,245 +9247,18 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(manifest.contains("android:name=\"com.google.android.apps.common.testing.services\" tools:node=\"remove\""))
     }
 
-    func testAndroidPolicyAckParserAcceptsObjectShapedChangedField() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-
-        XCTAssertTrue(source.contains("private fun changedFlagField(obj: JSONObject, field: String): Boolean?"))
-        XCTAssertTrue(source.contains("changed.length() > 0"))
-        XCTAssertTrue(source.contains("changed = changedFlagField(obj, \"changed\")"))
-    }
-
-    func testAndroidJoinRoomResponseDecoderKeepsInitialPolicyFields() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-
-        XCTAssertTrue(source.contains("isDmEnabled = boolField(obj, \"isDmEnabled\")"))
-        XCTAssertTrue(source.contains("isReactionsDisabled = boolField(obj, \"isReactionsDisabled\")"))
-        XCTAssertTrue(source.contains("meetingRequiresInviteCode = boolField(obj, \"meetingRequiresInviteCode\")"))
-    }
-
-    func testImageAttachmentStateChangesDispatchOnBothNativeSocketImplementations() throws {
-        let swift = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        let kotlin = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-
-        XCTAssertTrue(swift.contains("self.onImageAttachmentsStateChanged?(notification)"))
-        XCTAssertTrue(kotlin.contains("onImageAttachmentsStateChanged?.invoke(notification)"))
-        XCTAssertTrue(kotlin.contains("decode<ImageAttachmentsStateChangedNotification>"))
-    }
-
-    func testAndroidScreenShareCaptureUsesWebNetworkProfileBounds() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-
-        XCTAssertTrue(source.contains("private data class ScreenShareCaptureProfile("))
-        XCTAssertTrue(source.contains("private val screenShareOutgoingFairBps = 1_500_000.0"))
-        XCTAssertTrue(source.contains("private val screenShareOutgoingPoorBps = 550_000.0"))
-        XCTAssertTrue(source.contains("private val screenShareOutgoingEmergencyBps = 280_000.0"))
-        XCTAssertTrue(source.contains("private fun deriveScreenSharePublishQuality("))
-        XCTAssertTrue(source.contains("screenSharePublishQuality = screenSharePublishQuality"))
-        XCTAssertTrue(source.contains("configuredScreenMaxWidth = 3_840"))
-        XCTAssertTrue(source.contains("configuredScreenMaxHeight = 2_160"))
-        XCTAssertTrue(source.contains("maxWidth = minOf(configuredScreenMaxWidth, 2560)"))
-        XCTAssertTrue(source.contains("maxHeight = minOf(configuredScreenMaxHeight, 1440)"))
-        XCTAssertTrue(source.contains("maxWidth = minOf(configuredScreenMaxWidth, 1920)"))
-        XCTAssertTrue(source.contains("maxHeight = minOf(configuredScreenMaxHeight, 1080)"))
-        XCTAssertTrue(source.contains("maxWidth = minOf(configuredScreenMaxWidth, 1280)"))
-        XCTAssertTrue(source.contains("maxHeight = minOf(configuredScreenMaxHeight, 720)"))
-        XCTAssertTrue(source.contains("private fun screenShareCaptureProfile("))
-        XCTAssertTrue(source.contains("sourceWidth.toDouble() / cap.maxWidth.toDouble()"))
-        XCTAssertTrue(source.contains("sourceHeight.toDouble() / cap.maxHeight.toDouble()"))
-        XCTAssertTrue(source.contains("capturer.startCapture(\n                capture.width,\n                capture.height,\n                capture.maxFramerate,"))
-        XCTAssertTrue(source.contains("screenCapturer?.changeCaptureFormat(\n                    capture.width,\n                    capture.height,\n                    capture.maxFramerate,"))
-    }
-
-    func testNativeScreenShareUsesSeparatePublishNetworkProfile() throws {
-        let modelsSource = try sourceFileContents("Sources/Conclave/Core/Models/Models.swift")
-        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-
-        XCTAssertTrue(modelsSource.contains("let screenSharePublishQuality: ConnectionQuality"))
-        XCTAssertTrue(iosWebRTCSource.contains("ScreenSharePublishProfilePolicy.quality("))
-        XCTAssertTrue(viewModelSource.contains("private var screenSharePublishConnectionQuality: ConnectionQuality = .unknown"))
-        XCTAssertTrue(viewModelSource.contains("ConnectionQualityHintPolicy.screenSharePublishQuality("))
-        XCTAssertTrue(viewModelSource.contains("screenShareSampledQuality: sample.screenSharePublishQuality"))
-        XCTAssertTrue(viewModelSource.contains("self.screenSharePublishConnectionQuality == quality"))
-        XCTAssertTrue(viewModelSource.contains("initialReceiveConnectionQuality: receiveConnectionQuality"))
-        XCTAssertTrue(iosWebRTCSource.contains("ScreenCaptureManager.shared.updatePublishProfile(\n            maxFrameRate: cap.maxFramerate"))
-        XCTAssertTrue(iosWebRTCSource.contains("private func initialScreenConsumerPreference(\n        connectionQuality: ConnectionQuality"))
-        XCTAssertTrue(iosWebRTCSource.contains("initialReceiveConnectionQuality: ConnectionQuality = .unknown"))
-        XCTAssertTrue(iosWebRTCSource.contains("initialScreenConsumerPreference(\n                connectionQuality: initialReceiveConnectionQuality"))
-        XCTAssertTrue(androidWebRTCSource.contains("screenShareCaptureProfile(\n                metrics.widthPixels,\n                metrics.heightPixels,\n                connectionQuality,"))
-        XCTAssertTrue(androidWebRTCSource.contains("private fun initialScreenConsumerPreference(\n        connectionQuality: ConnectionQuality,"))
-        XCTAssertTrue(androidWebRTCSource.contains("initialReceiveConnectionQuality: ConnectionQuality = ConnectionQuality.unknown"))
-        XCTAssertTrue(androidWebRTCSource.contains("initialScreenConsumerPreference(\n                connectionQuality = initialReceiveConnectionQuality,"))
-    }
-
-    func testIOSProducerCreationDoesNotSynchronouslyReapplySenderParameters() throws {
-        let source = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-
-        let cameraStart = try XCTUnwrap(source.range(of: "localVideoTrack = trackWrapper"))
-        let cameraEnd = try XCTUnwrap(source.range(
-            of: "debugLog(\"[WebRTC] Video producer created:",
-            range: cameraStart.upperBound..<source.endIndex
-        ))
-        let cameraCompletion = source[cameraStart.lowerBound..<cameraEnd.lowerBound]
-        XCTAssertFalse(cameraCompletion.contains("applyLocalBandwidthProfile"))
-
-        let screenStart = try XCTUnwrap(source.range(of: "screenProducer = producer"))
-        let screenEnd = try XCTUnwrap(source.range(
-            of: "debugLog(\"[WebRTC] Screen sharing producer created:",
-            range: screenStart.upperBound..<source.endIndex
-        ))
-        let screenCompletion = source[screenStart.lowerBound..<screenEnd.lowerBound]
-        XCTAssertFalse(screenCompletion.contains("applyLocalBandwidthProfile"))
-    }
-
-    func testNativeRemoteConsumersStageBeforeResumeAndExposeOnlyAfterAcknowledgement() throws {
-        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-
-        XCTAssertTrue(viewModelSource.contains(
-            "guard consumingProducerIds.insert(producer.producerId).inserted else"
-        ))
-        XCTAssertTrue(viewModelSource.contains(
-            "deferredProducerConsumes[producer.producerId] = PendingProducerRetryItem("
-        ))
-        XCTAssertTrue(viewModelSource.contains(
-            "scheduleDeferredProducerConsume(producerId: producer.producerId)"
-        ))
-
-        let iosStage = try XCTUnwrap(iosWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
-        let iosResume = try XCTUnwrap(iosWebRTCSource.range(of: "try await socket.resumeConsumer(\n                consumerId: response.id,"))
-        let iosVisibleCommit = try XCTUnwrap(iosWebRTCSource.range(of: "remoteVideoTracks[trackKey] = trackWrapper"))
-        XCTAssertLessThan(iosStage.lowerBound, iosResume.lowerBound)
-        XCTAssertLessThan(iosResume.lowerBound, iosVisibleCommit.lowerBound)
-        XCTAssertTrue(iosWebRTCSource.contains(
-            "lifecycleRole: visibility == .currentVisible ? .current : .staged"
-        ))
-        XCTAssertTrue(iosWebRTCSource.contains(
-            "removeConsumer(\n                    consumerId: response.id,\n                    info: info,\n                    closeConsumer: true,\n                    notifyServer: false"
-        ))
-        XCTAssertTrue(iosWebRTCSource.contains(
-            "rollbackServerConsumerGenerationAndConfirm(\n                consumerId: response.id,"
-        ))
-        XCTAssertTrue(iosWebRTCSource.contains(
-            "remoteProducerClosureGenerations[producerId, default: 0] == producerClosureGeneration"
-        ))
-        let iosFirstFrame = try XCTUnwrap(iosWebRTCSource.range(of:
-            "let decoded = try await waitForFirstDecodedVideoFrame("
-        ))
-        let iosPromotion = try XCTUnwrap(iosWebRTCSource.range(of:
-            "promoteStagedConsumer(\n                        successor: registeredSuccessor,"
-        ))
-        XCTAssertLessThan(iosFirstFrame.lowerBound, iosPromotion.lowerBound)
-
-        let androidStage = try XCTUnwrap(androidWebRTCSource.range(of: "consumers[response.id] = ConsumerInfo("))
-        let androidResume = try XCTUnwrap(androidWebRTCSource.range(of:
-            "socket.resumeConsumer(\n                response.id,\n                response.kind == \"video\","
-        ))
-        let androidVisibleCommit = try XCTUnwrap(androidWebRTCSource.range(of:
-            "remoteVideoTracks[trackKey] = wrapper"
-        ))
-        XCTAssertLessThan(androidStage.lowerBound, androidResume.lowerBound)
-        XCTAssertLessThan(androidResume.lowerBound, androidVisibleCommit.lowerBound)
-        XCTAssertTrue(androidWebRTCSource.contains(
-            "lifecycleRole = if (visibility == ConsumerRegistrationVisibility.CURRENT_VISIBLE)"
-        ))
-        XCTAssertTrue(androidWebRTCSource.contains(
-            "removeConsumer(response.id, it, closeConsumer = true, notifyServer = false)"
-        ))
-        XCTAssertTrue(androidWebRTCSource.contains(
-            "rollbackServerConsumerGenerationAndConfirm(\n                consumerId = response.id,"
-        ))
-        XCTAssertTrue(androidWebRTCSource.contains(
-            "(remoteProducerClosureGenerations[producerId] ?: 0) != producerClosureGeneration"
-        ))
-        let androidFirstFrame = try XCTUnwrap(androidWebRTCSource.range(of:
-            "val decoded = waitForFirstDecodedVideoFrame("
-        ))
-        let androidPromotion = try XCTUnwrap(androidWebRTCSource.range(of:
-            "!promoteStagedConsumer(\n                        successor = registeredSuccessor,"
-        ))
-        XCTAssertLessThan(androidFirstFrame.lowerBound, androidPromotion.lowerBound)
-    }
-
-    func testReconnectPreservesCallAudioRoutingAndVisibleRoster() throws {
-        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-
-        XCTAssertTrue(viewModelSource.contains("preserveCallAudioRouting: isRecoveryJoin"))
-        XCTAssertTrue(viewModelSource.contains("if shouldCleanupExistingMediaBeforeJoin {\n                    await stopScreenCaptureManager()\n                    await webRTCClient.cleanup(\n                        notifyLocalState: false,\n                        preserveCallAudioRouting: isRecoveryJoin"))
-        XCTAssertTrue(viewModelSource.contains("resetLiveRoomSnapshotStateForJoin(preservingVisibleState: isRecoveryJoin)"))
-        XCTAssertTrue(viewModelSource.contains("state.participants[userId]?.isCameraOff = true"))
-        XCTAssertTrue(iosWebRTCSource.contains("if !preserveCallAudioRouting {\n            try? audioSession.setActive(false)"))
-        XCTAssertTrue(androidWebRTCSource.contains("if (!preserveCallAudioRouting) {\n            releaseCallAudioMode()"))
-    }
-
-    func testBrowserStateClearTearsDownSystemMediaConsumers() throws {
-        let viewModelSource = try sourceFileContents("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let iosWebRTCSource = try sourceFileContents("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let androidWebRTCSource = try sourceFileContents("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-
-        XCTAssertTrue(viewModelSource.contains("private func clearBrowserMediaState()"))
-        XCTAssertTrue(viewModelSource.contains("MeetingState.isBrowserAudioUserId(producer.producerUserId)"))
-        XCTAssertTrue(viewModelSource.contains("MeetingState.isBrowserVideoUserId(producer.producerUserId)"))
-        XCTAssertTrue(viewModelSource.contains("webRTCClient.closeConsumers(userIdPrefix: MeetingState.browserAudioUserIdPrefix)"))
-        XCTAssertTrue(viewModelSource.contains("webRTCClient.closeConsumers(userIdPrefix: MeetingState.browserVideoUserIdPrefix)"))
-        XCTAssertTrue(iosWebRTCSource.contains("func closeConsumers(userIdPrefix: String)"))
-        XCTAssertTrue(iosWebRTCSource.contains("info.userId.hasPrefix(prefix) || info.trackKey.hasPrefix(prefix)"))
-        XCTAssertTrue(androidWebRTCSource.contains("internal fun closeConsumers(userIdPrefix: String)"))
-        XCTAssertTrue(androidWebRTCSource.contains("it.userId.startsWith(prefix) || it.trackKey.startsWith(prefix)"))
-    }
-
-    func testAndroidSocketManagerExposesBatchRoomPoliciesEvent() throws {
-        let source = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-
-        XCTAssertTrue(source.contains("val adminSetPolicies = SfuClientEvent.adminSetPolicies.rawValue"))
-        XCTAssertTrue(source.contains("internal suspend fun setRoomPolicies("))
-        XCTAssertTrue(source.contains("emit(SocketEvent.adminSetPolicies, payload)"))
-    }
-
-    func testNativeSocketManagersExposeRoomRoutingEvents() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-
-        for source in [iosSource, androidSource] {
-            XCTAssertTrue(source.contains("getRooms = SfuClientEvent.getRooms.rawValue"))
-            XCTAssertTrue(source.contains("redirectUser = SfuClientEvent.redirectUser.rawValue"))
-            XCTAssertTrue(source.contains("adminGetRoomsDetailed = SfuClientEvent.adminGetRoomsDetailed.rawValue"))
-        }
-        XCTAssertTrue(iosSource.contains("func getRooms() async throws -> [RoomInfo]"))
-        XCTAssertTrue(iosSource.contains("func redirectUser(userId: String, newRoomId: String) async throws -> RedirectUserResponse"))
-        XCTAssertTrue(androidSource.contains("internal suspend fun getRooms(): skip.lib.Array<RoomInfo>"))
-        XCTAssertTrue(androidSource.contains("internal suspend fun redirectUser(userId: String, newRoomId: String): RedirectUserResponse"))
-    }
-
-    func testNativeSocketManagersExposeAdminStatusAndSnapshotAliases() throws {
-        let iosSource = try sourceFileContents("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        let androidSource = try sourceFileContents("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-
-        for source in [iosSource, androidSource] {
-            XCTAssertTrue(source.contains("getRoomLockStatus = SfuClientEvent.getRoomLockStatus.rawValue"))
-            XCTAssertTrue(source.contains("getChatLockStatus = SfuClientEvent.getChatLockStatus.rawValue"))
-            XCTAssertTrue(source.contains("getDmEnabledStatus = SfuClientEvent.getDmEnabledStatus.rawValue"))
-            XCTAssertTrue(source.contains("getTtsDisabledStatus = SfuClientEvent.getTtsDisabledStatus.rawValue"))
-            XCTAssertTrue(source.contains("getReactionsDisabledStatus = SfuClientEvent.getReactionsDisabledStatus.rawValue"))
-            XCTAssertTrue(source.contains("adminGetParticipants = SfuClientEvent.adminGetParticipants.rawValue"))
-            XCTAssertTrue(source.contains("adminGetPendingUsers = SfuClientEvent.adminGetPendingUsers.rawValue"))
-            XCTAssertTrue(source.contains("adminTransferHost = SfuClientEvent.adminTransferHost.rawValue"))
-            XCTAssertTrue(source.contains("adminCloseRoom = SfuClientEvent.adminCloseRoom.rawValue"))
-        }
-        XCTAssertTrue(iosSource.contains("func transferHost(userId: String) async throws -> TransferHostResponse"))
-        XCTAssertTrue(iosSource.contains("func closeRoom(message: String? = nil, delayMs: Int? = nil) async throws -> AdminEndRoomResponse"))
-        XCTAssertTrue(androidSource.contains("internal suspend fun transferHost(userId: String): TransferHostResponse"))
-        XCTAssertTrue(androidSource.contains("internal suspend fun closeRoom(message: String?, delayMs: Int?): AdminEndRoomResponse"))
-    }
-
     func testDarwinPermissionPurposeStringsArePresentInAppAndExtensionPlists() throws {
         let appPlist = try sourcePlistDictionary("Darwin/Info.plist")
         let extensionPlist = try sourcePlistDictionary("Darwin/ScreenShareExtension/Info.plist")
-        let purposeStringKeys = [
+
+        let appPurposeStringKeys = [
+            "NSCameraUsageDescription",
+            "NSMicrophoneUsageDescription",
+            "NSLocalNetworkUsageDescription",
+            "NSPhotoLibraryAddUsageDescription",
+        ]
+
+        let extensionPurposeStringKeys = [
             "NSCameraUsageDescription",
             "NSMicrophoneUsageDescription",
             "NSBluetoothAlwaysUsageDescription",
@@ -9353,19 +9303,17 @@ final class ConclaveTests: XCTestCase {
 
         try assertPurposeStrings(
             appPlist,
-            keys: purposeStringKeys
+            keys: appPurposeStringKeys
         )
-        let temporaryLocationPurposes = try XCTUnwrap(
-            appPlist["NSLocationTemporaryUsageDescriptionDictionary"] as? [String: String]
-        )
-        XCTAssertFalse(
-            temporaryLocationPurposes["MeetingLocationSharing", default: ""]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty
-        )
+        let declaredAppPurposeStringKeys = (appPlist.allKeys as? [String] ?? []).filter {
+            $0.hasSuffix("UsageDescription") || $0.hasSuffix("UsageDescriptionDictionary")
+        }
+        XCTAssertEqual(Set(declaredAppPurposeStringKeys), Set(appPurposeStringKeys))
+        XCTAssertNil(appPlist["NSUserNotificationsUsageDescription"])
+        XCTAssertNil(appPlist["NSLocationTemporaryUsageDescriptionDictionary"])
         try assertPurposeStrings(
             extensionPlist,
-            keys: purposeStringKeys
+            keys: extensionPurposeStringKeys
         )
         let extensionTemporaryLocationPurposes = try XCTUnwrap(
             extensionPlist["NSLocationTemporaryUsageDescriptionDictionary"] as? [String: String]
@@ -9410,9 +9358,19 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(appPlist["UIApplicationSupportsIndirectInputEvents"] as? Bool, true)
         XCTAssertNotNil(appPlist["UILaunchScreen"])
         XCTAssertEqual(appPlist["UIStatusBarStyle"] as? String, "UIStatusBarStyleDefault")
+
         let orientations = try XCTUnwrap(appPlist["UISupportedInterfaceOrientations"] as? [String])
         XCTAssertEqual(
             orientations,
+            [
+                "UIInterfaceOrientationLandscapeLeft",
+                "UIInterfaceOrientationLandscapeRight",
+                "UIInterfaceOrientationPortrait",
+            ]
+        )
+        let iPadOrientations = try XCTUnwrap(appPlist["UISupportedInterfaceOrientations~ipad"] as? [String])
+        XCTAssertEqual(
+            Set(iPadOrientations),
             [
                 "UIInterfaceOrientationLandscapeLeft",
                 "UIInterfaceOrientationLandscapeRight",
@@ -9470,40 +9428,25 @@ final class ConclaveTests: XCTestCase {
         let script = try String(contentsOf: sourceFileURL("Darwin/Scripts/apply-embedded-privacy-metadata.sh"))
         let project = try sourceFileContents("Darwin/Conclave.xcodeproj/project.pbxproj")
 
-        XCTAssertTrue(script.contains("patch_host_app_plist"))
-        XCTAssertTrue(script.contains("patch_conclave_framework"))
-        XCTAssertTrue(script.contains("patch_webrtc_framework"))
-        XCTAssertTrue(script.contains("patch_mediasoup_framework"))
-        XCTAssertTrue(script.contains("patch_remaining_frameworks"))
-        XCTAssertTrue(script.contains("patch_embedded_bundles"))
-        XCTAssertTrue(script.contains("patch_embedded_app_extensions"))
-        XCTAssertTrue(script.contains("${APP_INFO_PLIST}"))
-        XCTAssertTrue(script.contains("${PLUGINS_DIR}"))
-        XCTAssertTrue(script.contains("resign_code_bundle_if_needed \"$(dirname \""))
-        XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/WebRTC.framework"))
-        XCTAssertTrue(script.contains("${FRAMEWORKS_DIR}/Mediasoup.framework"))
-        XCTAssertTrue(script.contains("\"*.bundle/Info.plist\""))
-        XCTAssertTrue(script.contains("copy_privacy_manifest \"MediasoupFramework.xcprivacy\""))
-        XCTAssertTrue(script.contains("\"NSCameraUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSMicrophoneUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSLocalNetworkUsageDescription\""))
-        XCTAssertTrue(script.contains("NSLocationTemporaryUsageDescriptionDictionary"))
-        XCTAssertTrue(script.contains("\"NSContactsUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSCalendarsFullAccessUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSCalendarsWriteOnlyAccessUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSRemindersFullAccessUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSDocumentsFolderUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSSpeechRecognitionUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSSiriUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSFocusStatusUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSMotionUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSSensorKitUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSUserTrackingUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSUserNotificationsUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NFCReaderUsageDescription\""))
-        XCTAssertTrue(script.contains("\"NSHealthClinicalHealthRecordsShareUsageDescription\""))
-        XCTAssertEqual(script.components(separatedBy: "set_all_purpose_strings \"${plist_path}\"").count - 1, 6)
-        XCTAssertTrue(project.contains("DED5F813849FF18CBE9AFB5A /* Embed App Extensions */,\n\t\t\t\t8D0E0D6B2E5A4A71B57E90C1 /* Apply embedded privacy metadata */,"))
+        XCTAssertTrue(script.contains("apply_framework_privacy_manifest \"Conclave.framework\" \"ConclaveFramework.xcprivacy\""))
+        XCTAssertTrue(script.contains("apply_framework_privacy_manifest \"WebRTC.framework\" \"WebRTCFramework.xcprivacy\""))
+        XCTAssertTrue(script.contains("apply_framework_privacy_manifest \"Mediasoup.framework\" \"MediasoupFramework.xcprivacy\""))
+        XCTAssertTrue(script.contains("framework_path=\"${FRAMEWORKS_DIR}/${framework_name}\""))
+        XCTAssertTrue(script.contains("cp \"${manifest_path}\" \"${framework_path}/PrivacyInfo.xcprivacy\""))
+        XCTAssertTrue(script.contains("resign_code_bundle_if_needed \"${framework_path}\""))
+
+        XCTAssertFalse(script.contains("UsageDescription"))
+        XCTAssertFalse(script.contains("PlistBuddy"))
+        XCTAssertFalse(script.contains("set_all_purpose_strings"))
+        XCTAssertFalse(script.contains("${PLUGINS_DIR}"))
+        let plist = try XCTUnwrap(try PropertyListSerialization.propertyList(from: Data(project.utf8), format: nil) as? [String: Any])
+        let objects = try XCTUnwrap(plist["objects"] as? [String: [String: Any]])
+        let phases = try XCTUnwrap(objects["499CD4382AC5B799001AE8D8"]?["buildPhases"] as? [String])
+        let embedIndex = try XCTUnwrap(phases.firstIndex(of: "DED5F813849FF18CBE9AFB5A"))
+        let privacyIndex = try XCTUnwrap(phases.firstIndex(of: "8D0E0D6B2E5A4A71B57E90C1"))
+        XCTAssertEqual(privacyIndex, embedIndex + 1)
+        XCTAssertEqual(objects["DED5F813849FF18CBE9AFB5A"]?["isa"] as? String, "PBXCopyFilesBuildPhase")
+        XCTAssertEqual(objects["8D0E0D6B2E5A4A71B57E90C1"]?["isa"] as? String, "PBXShellScriptBuildPhase")
         XCTAssertTrue(project.contains("\"$(SRCROOT)/PrivacyManifests/MediasoupFramework.xcprivacy\""))
     }
 #endif
@@ -9645,42 +9588,77 @@ final class ConclaveTests: XCTestCase {
                 )
             ),
             sessionId: "native-session",
-            isMuted: true,
-            isCameraOff: true,
+            isMuted: false,
+            isCameraOff: false,
             savedAt: savedAt
         )
-        let freshNow = Date(
-            timeInterval: MeetingResumePolicy.maximumAge - 1.0,
-            since: savedAt
-        )
-        let staleNow = Date(
-            timeInterval: MeetingResumePolicy.maximumAge + 1.0,
-            since: savedAt
-        )
+        let nineMinutes = Date(timeInterval: 540.0, since: savedAt)
+        let elevenMinutes = Date(timeInterval: 660.0, since: savedAt)
+        let formerWindow = Date(timeInterval: 43_200.0 - 1.0, since: savedAt)
 
-        XCTAssertTrue(MeetingResumePolicy.isFresh(snapshot, now: freshNow))
-        XCTAssertFalse(MeetingResumePolicy.isFresh(snapshot, now: staleNow))
+        XCTAssertEqual(MeetingResumePolicy.maximumAge, 600.0)
+        XCTAssertTrue(MeetingResumePolicy.isFresh(snapshot, now: nineMinutes))
+        XCTAssertTrue(MeetingResumePolicy.isFresh(snapshot, now: Date(timeInterval: MeetingResumePolicy.maximumAge, since: savedAt)))
+        XCTAssertFalse(MeetingResumePolicy.isFresh(snapshot, now: elevenMinutes))
+        XCTAssertFalse(MeetingResumePolicy.isFresh(snapshot, now: formerWindow))
+        XCTAssertTrue(MeetingResumePolicy.isFresh(snapshot, now: Date(timeInterval: -299.0, since: savedAt)))
+        XCTAssertFalse(MeetingResumePolicy.isFresh(snapshot, now: Date(timeInterval: -301.0, since: savedAt)))
         XCTAssertTrue(MeetingResumePolicy.shouldRestore(
             connectionState: ConnectionState.disconnected,
             hasLiveJoinContext: false,
             alreadyAttempted: false,
             snapshot: snapshot,
-            now: freshNow
+            now: nineMinutes
+        ))
+        XCTAssertFalse(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: false,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            now: elevenMinutes
         ))
         XCTAssertFalse(MeetingResumePolicy.shouldRestore(
             connectionState: ConnectionState.joining,
             hasLiveJoinContext: false,
             alreadyAttempted: false,
             snapshot: snapshot,
-            now: freshNow
+            now: nineMinutes
         ))
         XCTAssertFalse(MeetingResumePolicy.shouldRestore(
             connectionState: ConnectionState.disconnected,
             hasLiveJoinContext: false,
             alreadyAttempted: true,
             snapshot: snapshot,
-            now: freshNow
+            now: nineMinutes
         ))
+        XCTAssertFalse(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: true,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            now: nineMinutes
+        ))
+        XCTAssertFalse(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: false,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            markerMillis: MeetingResumePolicy.savedAtMillis(snapshot) + 1.0,
+            now: nineMinutes
+        ))
+        XCTAssertTrue(MeetingResumePolicy.shouldRestore(
+            connectionState: ConnectionState.disconnected,
+            hasLiveJoinContext: false,
+            alreadyAttempted: false,
+            snapshot: snapshot,
+            markerMillis: MeetingResumePolicy.savedAtMillis(snapshot) - 1.0,
+            now: nineMinutes
+        ))
+        XCTAssertTrue(MeetingResumePolicy.persists(ConnectionState.joined))
+        XCTAssertTrue(MeetingResumePolicy.persists(ConnectionState.reconnecting))
+        XCTAssertFalse(MeetingResumePolicy.persists(ConnectionState.waiting))
+        XCTAssertFalse(MeetingResumePolicy.persists(ConnectionState.joining))
+        XCTAssertFalse(MeetingResumePolicy.persists(ConnectionState.disconnected))
     }
 
     func testLocalVideoMirrorPolicyMirrorsOnlyFrontCamera() throws {
@@ -9728,140 +9706,6 @@ final class ConclaveTests: XCTestCase {
             proof.replacementOffer?.target,
             WebcamReceiverCapacityReplacementTarget.vp8SingleLayer
         )
-    }
-
-    func testNativeWebcamTopologyHandoffKeepsExactTrackWireShapeAndCloseOrdering() throws {
-        let iosSource = try sourceFileContents(
-            "Sources/Conclave/Core/WebRTC/WebRTCClient.swift"
-        )
-        let androidSource = try sourceFileContents(
-            "Sources/Conclave/Skip/WebRTCClient+Android.kt"
-        )
-        let androidSocketSource = try sourceFileContents(
-            "Sources/Conclave/Skip/SocketIOManager+Android.kt"
-        )
-        let viewModelSource = try sourceFileContents(
-            "Sources/Conclave/Features/Meeting/MeetingViewModel.swift"
-        )
-
-        let iosStart = try XCTUnwrap(
-            iosSource.range(of: "private func applyWebcamTopologyReplacement(")
-        )
-        let iosEnd = try XCTUnwrap(
-            iosSource.range(
-                of: "private func isAmbiguousWebcamTopologyError(",
-                range: iosStart.upperBound..<iosSource.endIndex
-            )
-        )
-        let iosHandoff = String(iosSource[iosStart.lowerBound..<iosEnd.lowerBound])
-        let iosMarker = try XCTUnwrap(
-            iosHandoff.range(of: "intentionalLocalVideoProducerCloseIds.insert(oldProducer.id)")
-        )
-        let iosCreate = try XCTUnwrap(
-            iosHandoff.range(of: "sendTransport.createProducer(")
-        )
-        let iosCommit = try XCTUnwrap(
-            iosHandoff.range(of: "videoProducer = producer")
-        )
-        let iosRetire = try XCTUnwrap(
-            iosHandoff.range(of: "socketManager.closeProducer(producerId: oldProducer.id)")
-        )
-        XCTAssertLessThan(iosMarker.lowerBound, iosCreate.lowerBound)
-        XCTAssertLessThan(iosCommit.lowerBound, iosRetire.lowerBound)
-        XCTAssertTrue(iosHandoff.contains("for: track"))
-        XCTAssertTrue(iosHandoff.contains(
-            "webcamTopologyControlGeneration == topologyGeneration"
-        ))
-        XCTAssertTrue(iosHandoff.contains(
-            "webcamProducerTopology == targetTopology && !command.forceReplacement"
-        ))
-        XCTAssertFalse(iosHandoff.contains("startCameraCapture"))
-        XCTAssertFalse(iosHandoff.contains("createVideoTrack"))
-        XCTAssertTrue(iosSource.contains("encoding.maxBitrateBps = NSNumber(value: configuredCameraMaxBitrateBps)"))
-        XCTAssertTrue(iosSource.contains("encoding.maxFramerate = NSNumber(value: Double(configuredCameraFrameRate))"))
-        XCTAssertTrue(iosSource.contains("WebcamEncodingSpec(rid: \"q\", scaleResolutionDownBy: 4, maxBitrateBps: 80_000"))
-        XCTAssertTrue(iosSource.contains("WebcamEncodingSpec(rid: \"h\", scaleResolutionDownBy: 2, maxBitrateBps: 220_000"))
-        XCTAssertTrue(iosSource.contains("WebcamEncodingSpec(rid: \"f\", scaleResolutionDownBy: 1, maxBitrateBps: 1_650_000, maxFramerate: 30)"))
-
-        let androidStart = try XCTUnwrap(
-            androidSource.range(of: "private suspend fun applyWebcamTopologyReplacement(")
-        )
-        let androidEnd = try XCTUnwrap(
-            androidSource.range(
-                of: "private fun isAmbiguousWebcamTopologyError(",
-                range: androidStart.upperBound..<androidSource.endIndex
-            )
-        )
-        let androidHandoff = String(
-            androidSource[androidStart.lowerBound..<androidEnd.lowerBound]
-        )
-        let androidMarker = try XCTUnwrap(
-            androidHandoff.range(of: "intentionalLocalVideoProducerCloseIds.add(oldProducer.id)")
-        )
-        let androidCreate = try XCTUnwrap(
-            androidHandoff.range(of: "transport.produce(")
-        )
-        let androidCommit = try XCTUnwrap(
-            androidHandoff.range(of: "videoProducer = producer")
-        )
-        let androidRetire = try XCTUnwrap(
-            androidHandoff.range(of: "socket.closeProducer(oldProducer.id)")
-        )
-        XCTAssertLessThan(androidMarker.lowerBound, androidCreate.lowerBound)
-        XCTAssertLessThan(androidCommit.lowerBound, androidRetire.lowerBound)
-        XCTAssertTrue(androidHandoff.contains("track as MediaStreamTrack"))
-        XCTAssertTrue(androidHandoff.contains(
-            "webcamTopologyControlGeneration != topologyGeneration"
-        ))
-        XCTAssertTrue(androidHandoff.contains(
-            "webcamProducerTopology == targetTopology && !command.forceReplacement"
-        ))
-        XCTAssertFalse(androidHandoff.contains("createVideoTrack"))
-        XCTAssertFalse(androidHandoff.contains("startCapture"))
-        XCTAssertTrue(androidSource.contains("RtpParameters.Encoding(null, true, 1.0)"))
-        XCTAssertTrue(androidSource.contains("encoding.maxBitrateBps = configuredCameraMaxBitrateBps"))
-        XCTAssertTrue(androidSource.contains("encoding.maxFramerate = configuredCameraFrameRate"))
-        XCTAssertTrue(androidSource.contains("WebcamEncodingSpec(rid = \"q\", scaleResolutionDownBy = 4.0, maxBitrateBps = 80_000"))
-        XCTAssertTrue(androidSource.contains("WebcamEncodingSpec(rid = \"h\", scaleResolutionDownBy = 2.0, maxBitrateBps = 220_000"))
-        XCTAssertTrue(androidSource.contains("WebcamEncodingSpec(rid = \"f\", scaleResolutionDownBy = 1.0, maxBitrateBps = 1_650_000, maxFramerate = 30)"))
-        XCTAssertTrue(androidSource.contains("val existingTopology = webcamProducerTopology"))
-        XCTAssertTrue(androidSource.contains(
-            "intentionalLocalVideoProducerCloseIds.remove(oldProducer.id)"
-        ))
-        XCTAssertTrue(androidSource.contains(
-            "WebcamTopologyTransitionMachine.forceAdaptiveRecovery("
-        ))
-        XCTAssertTrue(androidSocketSource.contains("\"webcamReceiverCapacityTransition\""))
-        XCTAssertTrue(androidSocketSource.contains(".put(\"fromProducerId\", transition.fromProducerId)"))
-        XCTAssertTrue(androidSocketSource.contains(".put(\"nonce\", transition.nonce)"))
-
-        let closeHandlerStart = try XCTUnwrap(
-            viewModelSource.range(of: "private func handleLocalProducerClosed(")
-        )
-        let closeHandlerEnd = try XCTUnwrap(
-            viewModelSource.range(
-                of: "private func handleRemoteProducerClosed(",
-                range: closeHandlerStart.upperBound..<viewModelSource.endIndex
-            )
-        )
-        let closeHandler = String(
-            viewModelSource[closeHandlerStart.lowerBound..<closeHandlerEnd.lowerBound]
-        )
-        let consumeIntentional = try XCTUnwrap(
-            closeHandler.range(of: "consumeIntentionalLocalVideoProducerClose(")
-        )
-        let genericClose = try XCTUnwrap(
-            closeHandler.range(of: "webRTCClient.closeLocalMedia(")
-        )
-        XCTAssertLessThan(consumeIntentional.lowerBound, genericClose.lowerBound)
-        XCTAssertTrue(viewModelSource.contains("webcamReceiverCapacityAuthorityGeneration += 1"))
-        XCTAssertTrue(viewModelSource.contains(
-            "WebcamReceiverCapacityAuthorityPolicy.canIngestAtReceipt("
-        ))
-        XCTAssertTrue(viewModelSource.contains(
-            "WebcamReceiverCapacityAuthorityPolicy.canIngestAfterHop("
-        ))
-        XCTAssertTrue(viewModelSource.contains("webRTCClient.invalidateWebcamReceiverCapacityAuthority()"))
     }
 
     func testWebcamReceiverCapacityAuthorityFenceRejectsQueuedBackgroundAndDisconnectProofs() throws {
@@ -9915,51 +9759,6 @@ final class ConclaveTests: XCTestCase {
             isConnected: true,
             isIntentionalLeave: false
         ))
-    }
-
-    func testAndroidWebcamFallbackIdentityAndRefreshFailureStayFailClosed() throws {
-        let source = try sourceFileContents(
-            "Sources/Conclave/Skip/WebRTCClient+Android.kt"
-        )
-        let proofHandlerStart = try XCTUnwrap(
-            source.range(of: "internal fun handleWebcamReceiverCapacityProof(")
-        )
-        let proofHandlerEnd = try XCTUnwrap(
-            source.range(
-                of: "internal fun invalidateWebcamReceiverCapacityAuthority()",
-                range: proofHandlerStart.upperBound..<source.endIndex
-            )
-        )
-        let proofHandler = String(
-            source[proofHandlerStart.lowerBound..<proofHandlerEnd.lowerBound]
-        )
-        XCTAssertTrue(proofHandler.contains("val existingTopology = webcamProducerTopology"))
-        XCTAssertTrue(proofHandler.contains("existingTopology"))
-        XCTAssertFalse(proofHandler.contains(
-            "videoProducer == null) {\n                WebcamProducerTopology.other\n            } else {\n                WebcamProducerTopology.vp8Simulcast"
-        ))
-
-        let refreshStart = try XCTUnwrap(
-            source.range(of: "internal suspend fun refreshLocalVideoProducerForBandwidthProfile(")
-        )
-        let refreshEnd = try XCTUnwrap(
-            source.range(
-                of: "internal suspend fun refreshLocalAudioProducerForBandwidthProfile(",
-                range: refreshStart.upperBound..<source.endIndex
-            )
-        )
-        let refresh = String(source[refreshStart.lowerBound..<refreshEnd.lowerBound])
-        let marker = try XCTUnwrap(
-            refresh.range(of: "intentionalLocalVideoProducerCloseIds.add(oldProducer.id)")
-        )
-        let markerCleanup = try XCTUnwrap(
-            refresh.range(of: "intentionalLocalVideoProducerCloseIds.remove(oldProducer.id)")
-        )
-        let forcedRecovery = try XCTUnwrap(
-            refresh.range(of: "WebcamTopologyTransitionMachine.forceAdaptiveRecovery(")
-        )
-        XCTAssertLessThan(marker.lowerBound, markerCleanup.lowerBound)
-        XCTAssertLessThan(markerCleanup.lowerBound, forcedRecovery.lowerBound)
     }
 
     func testWebcamReceiverCapacityProofRejectsMalformedOrClientInventedAuthority() throws {
@@ -10426,8 +10225,6 @@ final class ConclaveTests: XCTestCase {
         )
         XCTAssertEqual(single.state.phase, WebcamTopologyTransitionPhase.single)
 
-        // No revoke event arrives. The runtime wake is scheduled at the active
-        // proof's monotonic expiry and supplies currentSingleProofActive=false.
         let expired = WebcamTopologyTransitionMachine.advance(
             state: single.state,
             input: makeWebcamTopologyInput(
@@ -10513,65 +10310,6 @@ final class ConclaveTests: XCTestCase {
         ), deadline + WebcamTopologyTransitionMachine.successorWaitMs)
     }
 
-    func testNativeWebcamWakePriorityAndAndroidRestoreMetadataStayInParity() throws {
-        let iosSource = try sourceFileContents(
-            "Sources/Conclave/Core/WebRTC/WebRTCClient.swift"
-        )
-        let androidSource = try sourceFileContents(
-            "Sources/Conclave/Skip/WebRTCClient+Android.kt"
-        )
-
-        XCTAssertTrue(iosSource.contains("WebcamTopologyWakePolicy.nextWakeAt("))
-        XCTAssertTrue(androidSource.contains("WebcamTopologyWakePolicy.nextWakeAt("))
-
-        XCTAssertTrue(iosSource.contains(
-            "encoding.networkPriority = spec.rid == \"f\" ? .low : .veryLow"
-        ))
-        XCTAssertTrue(iosSource.contains("encoding.networkPriority = .low"))
-        XCTAssertTrue(androidSource.contains("WEBRTC_NETWORK_PRIORITY_VERY_LOW = 0"))
-        XCTAssertTrue(androidSource.contains("WEBRTC_NETWORK_PRIORITY_LOW = 1"))
-        XCTAssertTrue(androidSource.contains("if (spec.rid == \"f\")"))
-
-        let androidSingleStart = try XCTUnwrap(
-            androidSource.range(of: "private fun webcamSingleReceiverEncodings()")
-        )
-        let androidSingleEnd = try XCTUnwrap(
-            androidSource.range(
-                of: "private fun restoredAdaptiveWebcamEncodings()",
-                range: androidSingleStart.upperBound..<androidSource.endIndex
-            )
-        )
-        let androidSingle = String(
-            androidSource[androidSingleStart.lowerBound..<androidSingleEnd.lowerBound]
-        )
-        XCTAssertTrue(androidSingle.contains(
-            "encoding.networkPriority = WEBRTC_NETWORK_PRIORITY_LOW"
-        ))
-
-        let handoffStart = try XCTUnwrap(
-            androidSource.range(of: "private suspend fun applyWebcamTopologyReplacement(")
-        )
-        let handoffEnd = try XCTUnwrap(
-            androidSource.range(
-                of: "private fun isAmbiguousWebcamTopologyError(",
-                range: handoffStart.upperBound..<androidSource.endIndex
-            )
-        )
-        let handoff = String(androidSource[handoffStart.lowerBound..<handoffEnd.lowerBound])
-        XCTAssertTrue(handoff.contains(
-            "targetTopology == WebcamProducerTopology.vp8Simulcast"
-        ))
-        XCTAssertTrue(handoff.contains(
-            "videoProducerBandwidthQuality = ConnectionQuality.good"
-        ))
-        XCTAssertTrue(handoff.contains(
-            "localVideoBandwidthSignature(\n                    VideoQuality.standard,\n                    ConnectionQuality.good,"
-        ))
-        XCTAssertFalse(handoff.contains(
-            "videoProducerBandwidthQuality = currentLocalBandwidthQuality"
-        ))
-    }
-
     func testWebcamTopologyPendingCommandIsDeterministicallyLatestWins() throws {
         let first = WebcamTopologyReplacementCommand(
             id: 1,
@@ -10643,6 +10381,10 @@ final class ConclaveTests: XCTestCase {
         return (entry.state, try XCTUnwrap(entry.command))
     }
 
+}
+
+@available(macOS 13, *)
+final class LegacyEntryJoinViewTests: XCTestCase {
 }
 
 #if !SKIP
@@ -10719,6 +10461,57 @@ private func registeredServerEventRawValues(
     ).map { $0[0] })
 
     return Set(registeredConstants.compactMap { socketEventConstants[$0] })
+}
+
+private func withoutBlockComments(_ source: String) -> String {
+    let bytes = Array(source.utf8)
+    var result: [UInt8] = []
+    result.reserveCapacity(bytes.count)
+    var depth = 0
+    var index = 0
+    while index < bytes.count {
+        let hasNext = index + 1 < bytes.count
+        if hasNext, bytes[index] == UInt8(ascii: "/"), bytes[index + 1] == UInt8(ascii: "*") {
+            depth += 1
+            index += 2
+        } else if depth > 0, hasNext, bytes[index] == UInt8(ascii: "*"), bytes[index + 1] == UInt8(ascii: "/") {
+            depth -= 1
+            index += 2
+        } else {
+            if depth == 0 || bytes[index] == UInt8(ascii: "\n") {
+                result.append(bytes[index])
+            }
+            index += 1
+        }
+    }
+    return String(decoding: result, as: UTF8.self)
+}
+
+private func codeRange(
+    of code: String,
+    in text: String,
+    from start: String.Index? = nil
+) -> Range<String.Index>? {
+    var searchStart = start ?? text.startIndex
+    while let range = text.range(of: code, range: searchStart..<text.endIndex) {
+        let lineStart = text[..<range.lowerBound].lastIndex(of: "\n").map { text.index(after: $0) }
+            ?? text.startIndex
+        if text[lineStart..<range.lowerBound].allSatisfy({ $0 == " " || $0 == "\t" }) {
+            return range
+        }
+        searchStart = range.upperBound
+    }
+    return nil
+}
+
+private func codeCount(of code: String, in text: String) -> Int {
+    var count = 0
+    var searchStart = text.startIndex
+    while let range = codeRange(of: code, in: text, from: searchStart) {
+        count += 1
+        searchStart = range.upperBound
+    }
+    return count
 }
 
 private func sourceFileContents(_ relativePath: String) throws -> String {

@@ -53,8 +53,7 @@ struct DetachedSelfViewOverlay: View {
                     #if SKIP
                     .gesture(dragGesture(in: geometry.size))
                     #else
-                    // High priority so a drag starting on the camera-flip
-                    // button still moves the tile; plain taps keep working.
+
                     .highPriorityGesture(dragGesture(in: geometry.size))
                     #endif
             }
@@ -149,6 +148,7 @@ struct DetachedSelfViewOverlay: View {
     private var selfCameraSwitchButton: some View {
         if !viewModel.state.isCameraOff && viewModel.canSwitchLocalCamera() {
             Button {
+                ConclaveHapticFeedback.gesture(FeedbackKind.selectionChanged)
                 viewModel.switchLocalCamera()
             } label: {
                 ACMSystemIcon.icon("arrow.triangle.2.circlepath.camera.fill", android: "camera.flip", size: 14, tint: "white")
@@ -185,8 +185,7 @@ struct DetachedSelfViewOverlay: View {
                     edgeInsets: edgeInsets
                 )
                 #if SKIP
-                // Animate the corner snap on Android too - a hard teleport to
-                // the corner is what made the drag feel broken.
+
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                     viewModel.setSelfViewCorner(targetCorner)
                     dragTranslation = .zero

@@ -63,7 +63,8 @@ final class WebRTCClient {
         visibleUserIds: Set<String>,
         connectionQuality: ConnectionQuality,
         videoQuality: VideoQuality,
-        receiveVideo: Bool
+        receiveVideo: Bool,
+        dataSaver: Bool = false
     ) async { fatalError() }
     func updateVideoQuality(_ quality: VideoQuality) { fatalError() }
     func updateMediaPublishConfiguration(
@@ -131,5 +132,14 @@ final class WebRTCClient {
     func selectAudioInput(_ deviceId: String) { fatalError() }
     func selectAudioOutput(_ deviceId: String) { fatalError() }
     func testSpeaker() { fatalError() }
+
+    var supportsLiveNoiseSuppressionChange: Bool { fatalError() }
+    func applyNoiseSuppression(_ enabled: Bool) async -> Bool { fatalError() }
+    func sampleLocalMicrophoneLevel() -> Double { fatalError() }
+    func playTestTone() { fatalError() }
+
+    var mirrorsLocalVideo: Bool { fatalError() }
+    func cameraCaptureCapability() -> CameraCaptureCapability { fatalError() }
+    func sampleConnectionStatsCounters() -> ConnectionStatsCounters? { fatalError() }
 }
 #endif

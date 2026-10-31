@@ -262,9 +262,8 @@ struct ActiveAppLayoutView: View {
     }
 
     private var hasActiveAppSyncSnapshot: Bool {
-        guard let activeAppId = viewModel.state.activeAppId else { return false }
-        return viewModel.state.latestAppYjsUpdate?.appId == activeAppId ||
-            viewModel.state.latestAppAwarenessUpdate?.appId == activeAppId
+
+        viewModel.state.activeAppId != nil && viewModel.state.activeAppHasRoomData
     }
 
     private var appIcon: (ios: String, android: String) {

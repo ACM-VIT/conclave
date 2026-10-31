@@ -1,0 +1,115 @@
+{
+  "id": "lightbulb.fill0",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "request_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/lightbulb/materialsymbolsrounded/lightbulb_24px.svg",
+  "final_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/lightbulb/materialsymbolsrounded/lightbulb_24px.svg",
+  "http_status": 200,
+  "headers": [
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Content-Length",
+      "487"
+    ],
+    [
+      "Cache-Control",
+      "max-age=300"
+    ],
+    [
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    ],
+    [
+      "Content-Type",
+      "image/svg+xml"
+    ],
+    [
+      "ETag",
+      "\"fa02bb8685e981ca7482d16ccac5c59c7b84e28e1cf754ae91c4e6ab8930944f\""
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=31536000"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Frame-Options",
+      "deny"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-GitHub-Request-Id",
+      "A5B4:16D793:45360F:551F74:6AE24F95"
+    ],
+    [
+      "x-github-edge-region",
+      "centralindia"
+    ],
+    [
+      "Accept-Ranges",
+      "bytes"
+    ],
+    [
+      "Date",
+      "Wed, 28 Oct 2026 19:40:06 GMT"
+    ],
+    [
+      "Via",
+      "1.1 varnish"
+    ],
+    [
+      "X-Served-By",
+      "cache-maa10250-MAA"
+    ],
+    [
+      "X-Cache",
+      "MISS"
+    ],
+    [
+      "X-Cache-Hits",
+      "0"
+    ],
+    [
+      "X-Timer",
+      "S1793216406.138628,VS0,VE303"
+    ],
+    [
+      "Vary",
+      "Authorization,Accept-Encoding"
+    ],
+    [
+      "Access-Control-Allow-Origin",
+      "*"
+    ],
+    [
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    ],
+    [
+      "X-Fastly-Request-ID",
+      "4ce0c84430b90eb1158b79cd5d3653fc4223dd7e"
+    ],
+    [
+      "Expires",
+      "Wed, 28 Oct 2026 19:45:06 GMT"
+    ],
+    [
+      "Source-Age",
+      "0"
+    ]
+  ],
+  "started_at": "2026-10-28T19:40:06.043942+00:00",
+  "completed_at": "2026-10-28T19:40:06.473164+00:00",
+  "sha256": "1aff3e2b989d4cdff56591e03cf3beff2a826051c91a3de3e72a87b7827db820",
+  "bytes": 487,
+  "body_file": "assets/symbols/web/lightbulb/materialsymbolsrounded/lightbulb_24px.svg",
+  "historical_status": "fresh_pinned_acquisition"
+}

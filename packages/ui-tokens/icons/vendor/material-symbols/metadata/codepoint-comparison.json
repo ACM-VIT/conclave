@@ -1,0 +1,740 @@
+{
+  "names": [
+    {
+      "name": "add_reaction",
+      "pinned_font": {
+        "line": 126,
+        "hex": "e1d3"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/210",
+          "hex": "e1d3",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "apps",
+      "pinned_font": {
+        "line": 261,
+        "hex": "e5c3"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/392",
+          "hex": "e5c3",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "arrow_back",
+      "pinned_font": {
+        "line": 273,
+        "hex": "e5c4"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/409",
+          "hex": "e5c4",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "bluetooth",
+      "pinned_font": {
+        "line": 537,
+        "hex": "e1a7"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/756",
+          "hex": "e1a7",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "call_end",
+      "pinned_font": {
+        "line": 674,
+        "hex": "f0bc"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/959",
+          "hex": "e0b1",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "cameraswitch",
+      "pinned_font": {
+        "line": 694,
+        "hex": "efeb"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/990",
+          "hex": "efeb",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "cancel_presentation",
+      "pinned_font": {
+        "line": 698,
+        "hex": "e0e9"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/997",
+          "hex": "e0e9",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "chat_bubble",
+      "pinned_font": {
+        "line": 772,
+        "hex": "e0cb"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/1099",
+          "hex": "e0ca",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "check",
+      "pinned_font": {
+        "line": 781,
+        "hex": "e668"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/1109",
+          "hex": "e5ca",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "close",
+      "pinned_font": {
+        "line": 851,
+        "hex": "e5cd"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/1195",
+          "hex": "e5cd",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "closed_caption",
+      "pinned_font": {
+        "line": 854,
+        "hex": "e996"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/1200",
+          "hex": "e01c",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "content_copy",
+      "pinned_font": {
+        "line": 928,
+        "hex": "e14d"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/1310",
+          "hex": "e14d",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "delete",
+      "pinned_font": {
+        "line": 1052,
+        "hex": "e92e"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/1496",
+          "hex": "e872",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "description",
+      "pinned_font": {
+        "line": 1072,
+        "hex": "e873"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/1523",
+          "hex": "e873",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "draw",
+      "pinned_font": {
+        "line": 1223,
+        "hex": "e746"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/1743",
+          "hex": "e746",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "error",
+      "pinned_font": {
+        "line": 1342,
+        "hex": "f8b6"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/1911",
+          "hex": "e000",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "featured_video",
+      "pinned_font": {
+        "line": 1436,
+        "hex": "e06e"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2044",
+          "hex": "e06e",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "front_hand",
+      "pinned_font": {
+        "line": 1670,
+        "hex": "e769"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2397",
+          "hex": "e769",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "gif_box",
+      "pinned_font": {
+        "line": 1732,
+        "hex": "e7a3"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2472",
+          "hex": "e7a3",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "graphic_eq",
+      "pinned_font": {
+        "line": 1771,
+        "hex": "e1b8"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2519",
+          "hex": "e1b8",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "group",
+      "pinned_font": {
+        "line": 1784,
+        "hex": "ea21"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2540",
+          "hex": "e7ef",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "headphones",
+      "pinned_font": {
+        "line": 1832,
+        "hex": "f01f"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2612",
+          "hex": "f01f",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "image",
+      "pinned_font": {
+        "line": 1964,
+        "hex": "e3f4"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2797",
+          "hex": "e3f4",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "info",
+      "pinned_font": {
+        "line": 1987,
+        "hex": "e88e"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2829",
+          "hex": "e88e",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "keep",
+      "pinned_font": {
+        "line": 2043,
+        "hex": "f027"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2905",
+          "hex": "e6aa",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "keep_off",
+      "pinned_font": {
+        "line": 2044,
+        "hex": "e6f9"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/2906",
+          "hex": "e6f9",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "lock",
+      "pinned_font": {
+        "line": 2234,
+        "hex": "e899"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/3182",
+          "hex": "e897",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "lock_open",
+      "pinned_font": {
+        "line": 2236,
+        "hex": "e898"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/3186",
+          "hex": "e898",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "mic",
+      "pinned_font": {
+        "line": 2351,
+        "hex": "e31d"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/3356",
+          "hex": "e029",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "mic_off",
+      "pinned_font": {
+        "line": 2358,
+        "hex": "e02b"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/3366",
+          "hex": "e02b",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "mood",
+      "pinned_font": {
+        "line": 2465,
+        "hex": "ea22"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/3494",
+          "hex": "e7f2",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "more_vert",
+      "pinned_font": {
+        "line": 2477,
+        "hex": "e5d4"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/3512",
+          "hex": "e5d4",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "person_remove",
+      "pinned_font": {
+        "line": 2845,
+        "hex": "ef66"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4017",
+          "hex": "ef66",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "phone_in_talk",
+      "pinned_font": {
+        "line": 2869,
+        "hex": "e61d"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4053",
+          "hex": "e61d",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "present_to_all",
+      "pinned_font": {
+        "line": 2988,
+        "hex": "e0df"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4221",
+          "hex": "e0df",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "public",
+      "pinned_font": {
+        "line": 3016,
+        "hex": "e80b"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4263",
+          "hex": "e80b",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "quiz",
+      "pinned_font": {
+        "line": 3043,
+        "hex": "f04c"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4301",
+          "hex": "f04c",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "search",
+      "pinned_font": {
+        "line": 3251,
+        "hex": "ef7a"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4618",
+          "hex": "e8b6",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "send",
+      "pinned_font": {
+        "line": 3284,
+        "hex": "e163"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4658",
+          "hex": "e163",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "settings",
+      "pinned_font": {
+        "line": 3314,
+        "hex": "e8b8"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4702",
+          "hex": "e8b8",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "share",
+      "pinned_font": {
+        "line": 3358,
+        "hex": "e80d"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4764",
+          "hex": "e80d",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "shield_person",
+      "pinned_font": {
+        "line": 3375,
+        "hex": "f650"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4786",
+          "hex": "f650",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "signal_wifi_bad",
+      "pinned_font": {
+        "line": 3432,
+        "hex": "f064"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/4880",
+          "hex": "f063",
+          "same_numeric_value": false
+        }
+      ]
+    },
+    {
+      "name": "sports_esports",
+      "pinned_font": {
+        "line": 3577,
+        "hex": "ea28"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/5093",
+          "hex": "ea28",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "videocam",
+      "pinned_font": {
+        "line": 4090,
+        "hex": "e04b"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/5816",
+          "hex": "e04b",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "videocam_off",
+      "pinned_font": {
+        "line": 4092,
+        "hex": "e04c"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/5819",
+          "hex": "e04c",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "volume_up",
+      "pinned_font": {
+        "line": 4142,
+        "hex": "e050"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/5901",
+          "hex": "e050",
+          "same_numeric_value": true
+        }
+      ]
+    },
+    {
+      "name": "warning",
+      "pinned_font": {
+        "line": 4163,
+        "hex": "f083"
+      },
+      "fresh_eligible_rows": [
+        {
+          "json_pointer": "/icons/5931",
+          "hex": "e002",
+          "same_numeric_value": false
+        }
+      ]
+    }
+  ],
+  "different_names": [
+    "call_end",
+    "chat_bubble",
+    "check",
+    "closed_caption",
+    "delete",
+    "error",
+    "group",
+    "keep",
+    "lock",
+    "mic",
+    "mood",
+    "search",
+    "signal_wifi_bad",
+    "warning"
+  ],
+  "pinned_font_index": {
+    "file": "upstream/rounded.codepoints",
+    "sha256": "0c9dae3ed678a81549c3be046bc8045335e5f57f2cbe2287360fbf0c2cc1355f",
+    "bytes": 79354
+  },
+  "fresh_metadata": {
+    "file": "metadata/material-symbols.raw",
+    "sha256": "1a36a710d57b32eef8f101980d87ae7dea560146157b3143ab115b791affa669",
+    "bytes": 5822254
+  },
+  "disposition": "Numeric differences are preserved, not treated as aliases or normalized away. The pinned updater selects SVGs by name/family/style/size, without consulting codepoints. Codepoints are separately enumerated from the font. These values are not used for SVG conversion; no font lookup is authorized.",
+  "source_evidence": [
+    {
+      "file": "upstream/update_symbols.py.txt",
+      "sha256": "7d62ec54ca9ce638104f8ed03d5c0d05ba8366459e722072cc1658e07e565e42",
+      "bytes": 8287,
+      "lines": [
+        52,
+        60
+      ],
+      "purpose": "SVG identity fields and name-based path template",
+      "text": "class Icon(NamedTuple):\n    name: str\n    version: int\n    stylistic_sets: Set[str]\n\n_ICON_ASSETS = (\n    Asset(\n        \"https://{host}/s/i/short-term/release/{stylistic_set_snake}/{icon.name}/{style}/{size_px}px.svg\",\n        \"symbols/web/{icon.name}/{stylistic_set_snake}/{icon.name}{style_suffix}_{size_px}px.svg\","
+    },
+    {
+      "file": "upstream/update_symbols.py.txt",
+      "sha256": "7d62ec54ca9ce638104f8ed03d5c0d05ba8366459e722072cc1658e07e565e42",
+      "bytes": 8287,
+      "lines": [
+        106,
+        114
+      ],
+      "purpose": "Family eligibility uses name and unsupported_families, not codepoint",
+      "text": "def _icons(metadata):\n    all_sets = _symbol_families(metadata)\n    for raw_icon in metadata[\"icons\"]:\n        unsupported = set(raw_icon[\"unsupported_families\"])\n        yield Icon(\n            raw_icon[\"name\"],\n            raw_icon[\"version\"],\n            all_sets - unsupported,\n        )"
+    },
+    {
+      "file": "upstream/update_symbols.py.txt",
+      "sha256": "7d62ec54ca9ce638104f8ed03d5c0d05ba8366459e722072cc1658e07e565e42",
+      "bytes": 8287,
+      "lines": [
+        154,
+        167
+      ],
+      "purpose": "Font codepoints are separately enumerated from a fetched/decompressed font; not metadata SVG selectors",
+      "text": "\ndef _fetch_fonts(css_files: Sequence[Path]):\n    for css_file in css_files:\n        css = css_file.read_text()\n        url = re.search(r\"src:\\s+url\\(([^)]+)\\)\", css).group(1)\n        assert url.endswith(\".woff2\")\n        woff2_file = css_file.parent / (css_file.stem + \".woff2\")\n        dest_file = css_file.parent / (css_file.stem + \".ttf\")\n        _do_fetch(url, woff2_file)\n        decompress(woff2_file, dest_file)\n        css_file.unlink()\n        with open(dest_file.with_suffix(\".codepoints\"), \"w\") as f:\n            for name, codepoint in sorted(icons.enumerate(dest_file)):\n                f.write(f\"{name} {codepoint:04x}\\n\")"
+    }
+  ],
+  "initial_check_preserved": "evidence/initial-audit/",
+  "disposition_file": "discrepancy-disposition.md"
+}

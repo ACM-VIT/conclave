@@ -7,13 +7,8 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
-/// OkHttp-backed WebSocket used by the transcript worker stream on Android.
-/// Mirrors the small surface the Swift `TranscriptWebSocket` expects: a single
-/// active connection driven by a `(event, payload)` callback where `event` is
-/// one of "open" / "message" / "closed" / "error".
 object TranscriptWebSocketBridge {
-    // No read timeout: the socket stays open for the life of the session. A ping
-    // keeps intermediaries from dropping an idle connection between captions.
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -25,16 +20,13 @@ object TranscriptWebSocketBridge {
     fun connect(url: String, onEvent: (String, String?) -> Unit) {
         close()
 
-        // OkHttp's HttpUrl only accepts http/https; it upgrades to the WebSocket
-        // protocol internally, so translate the ws/wss scheme up front.
         val httpUrl = url
             .replaceFirst("wss://", "https://")
             .replaceFirst("ws://", "http://")
 
         val request = Request.Builder().url(httpUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            // Ignore callbacks from a socket that is no longer the active one, so a
-            // stale close/error from a replaced connection can't disrupt the new one.
+
             private fun emit(ws: WebSocket, event: String, payload: String?) {
                 if (webSocket === ws) {
                     onEvent(event, payload)

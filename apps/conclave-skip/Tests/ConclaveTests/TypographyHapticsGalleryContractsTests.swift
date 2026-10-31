@@ -1,0 +1,914 @@
+#if !SKIP
+import Foundation
+import Testing
+@testable import Conclave
+
+struct TypographyHapticsGalleryContractsTests {
+
+    struct LegacyPair: Sendable, CustomTestStringConvertible {
+        let size: Double
+        let weight: ConclaveTextWeight
+        let style: ConclaveTextStyle
+        let sites: Int
+        var testDescription: String { "\(size) \(weight.rawValue)" }
+    }
+
+    static let legacyPairs: [LegacyPair] = [
+        LegacyPair(size: 30, weight: .bold, style: .title, sites: 2),
+        LegacyPair(size: 25, weight: .medium, style: .title, sites: 1),
+        LegacyPair(size: 24, weight: .bold, style: .title2, sites: 1),
+        LegacyPair(size: 22, weight: .bold, style: .title2, sites: 1),
+        LegacyPair(size: 21, weight: .semibold, style: .title2, sites: 2),
+        LegacyPair(size: 18, weight: .bold, style: .headline, sites: 3),
+        LegacyPair(size: 18, weight: .semibold, style: .headline, sites: 3),
+        LegacyPair(size: 16, weight: .bold, style: .callout, sites: 1),
+        LegacyPair(size: 16, weight: .medium, style: .callout, sites: 7),
+        LegacyPair(size: 16, weight: .regular, style: .callout, sites: 1),
+        LegacyPair(size: 16, weight: .semibold, style: .callout, sites: 4),
+        LegacyPair(size: 15, weight: .bold, style: .subheadline, sites: 2),
+        LegacyPair(size: 15, weight: .medium, style: .subheadline, sites: 26),
+        LegacyPair(size: 15, weight: .regular, style: .subheadline, sites: 15),
+        LegacyPair(size: 15, weight: .semibold, style: .subheadline, sites: 9),
+        LegacyPair(size: 14, weight: .bold, style: .subheadline, sites: 2),
+        LegacyPair(size: 14, weight: .medium, style: .subheadline, sites: 21),
+        LegacyPair(size: 14, weight: .regular, style: .subheadline, sites: 20),
+        LegacyPair(size: 14, weight: .semibold, style: .subheadline, sites: 6),
+        LegacyPair(size: 13.5, weight: .medium, style: .footnote, sites: 3),
+        LegacyPair(size: 13.5, weight: .regular, style: .footnote, sites: 5),
+        LegacyPair(size: 13.5, weight: .semibold, style: .footnote, sites: 1),
+        LegacyPair(size: 13, weight: .medium, style: .footnote, sites: 25),
+        LegacyPair(size: 13, weight: .regular, style: .footnote, sites: 13),
+        LegacyPair(size: 13, weight: .semibold, style: .footnote, sites: 7),
+        LegacyPair(size: 12.5, weight: .medium, style: .footnote, sites: 1),
+        LegacyPair(size: 12.5, weight: .regular, style: .footnote, sites: 10),
+        LegacyPair(size: 12.5, weight: .semibold, style: .footnote, sites: 1),
+        LegacyPair(size: 12, weight: .medium, style: .caption, sites: 20),
+        LegacyPair(size: 12, weight: .regular, style: .caption, sites: 32),
+        LegacyPair(size: 12, weight: .semibold, style: .caption, sites: 17),
+        LegacyPair(size: 11.5, weight: .regular, style: .caption, sites: 3),
+        LegacyPair(size: 11.5, weight: .semibold, style: .caption, sites: 6),
+        LegacyPair(size: 11, weight: .medium, style: .caption2, sites: 8),
+        LegacyPair(size: 11, weight: .regular, style: .caption2, sites: 7),
+        LegacyPair(size: 11, weight: .semibold, style: .caption2, sites: 2),
+        LegacyPair(size: 10.5, weight: .medium, style: .caption2, sites: 2),
+        LegacyPair(size: 10.5, weight: .regular, style: .caption2, sites: 1),
+        LegacyPair(size: 10, weight: .bold, style: .caption2, sites: 1),
+        LegacyPair(size: 10, weight: .medium, style: .caption2, sites: 1),
+        LegacyPair(size: 10, weight: .regular, style: .caption2, sites: 2),
+        LegacyPair(size: 9.5, weight: .semibold, style: .caption2, sites: 2),
+        LegacyPair(size: 9, weight: .semibold, style: .caption2, sites: 1),
+    ]
+
+    @Test(arguments: legacyPairs)
+    func legacyTypeMappingMatchesInventory(_ pair: LegacyPair) {
+        #expect(LegacyTypeMapping.style(size: pair.size, weight: pair.weight) == pair.style)
+        #expect(LegacyTypeMapping.spec(size: pair.size, weight: pair.weight) == ConclaveTypeSpec(style: pair.style, weight: pair.weight))
+    }
+
+    @Test func legacyInventoryIsTheAppendixTable() {
+        #expect(Self.legacyPairs.count == 43)
+        #expect(Set(Self.legacyPairs.map { "\($0.size) \($0.weight.rawValue)" }).count == 43)
+        #expect(Self.legacyPairs.reduce(0) { $0 + $1.sites } == 298)
+    }
+
+    @Test func legacyMappingIsMonotonicAndTiesRoundUp() {
+        for weight in ConclaveTextWeight.allCases {
+            var previous = 0.0
+            var size = 8.0
+            while size <= 40.0 {
+                let points = LegacyTypeMapping.style(size: size, weight: weight).iosDefaultPoints
+                #expect(points >= previous, "size \(size) \(weight.rawValue)")
+                previous = points
+                size += 0.5
+            }
+        }
+        #expect(LegacyTypeMapping.style(size: 25, weight: .regular) == .title)
+        #expect(LegacyTypeMapping.style(size: 21, weight: .regular) == .title2)
+        #expect(LegacyTypeMapping.style(size: 18.5, weight: .regular) == .title3)
+        #expect(LegacyTypeMapping.style(size: 16.5, weight: .regular) == .body)
+        #expect(LegacyTypeMapping.style(size: 16.5, weight: .semibold) == .headline)
+        #expect(LegacyTypeMapping.style(size: 15.5, weight: .regular) == .callout)
+        #expect(LegacyTypeMapping.style(size: 14, weight: .regular) == .subheadline)
+        #expect(LegacyTypeMapping.style(size: 12.5, weight: .regular) == .footnote)
+        #expect(LegacyTypeMapping.style(size: 11.5, weight: .regular) == .caption)
+        #expect(LegacyTypeMapping.style(size: 31, weight: .regular) == .largeTitle)
+        #expect(LegacyTypeMapping.style(size: 9, weight: .bold) == .caption2)
+    }
+
+    @Test func textStyleCatalogIsCompleteAndDashFree() {
+        let styles = ConclaveTextStyle.allCases
+        #expect(styles.count == 11)
+        #expect(Set(styles.map { $0.rawValue }).count == 11)
+        #expect(ConclaveTextWeight.allCases.map { $0.numericWeight } == [400, 500, 600, 700])
+        for style in styles {
+            for text in [style.iosName, style.androidRole] {
+                #expect(!text.isEmpty)
+                #expect(!containsDash(text), "\(style.rawValue): \(text)")
+            }
+            #expect(style.androidRoleSp > 0)
+            #expect([400, 500].contains(style.androidRoleWeight))
+        }
+        #expect(ConclaveTextStyle.headline.androidRole == "titleMedium" && ConclaveTextStyle.headline.androidRoleWeight == 500)
+        #expect(ConclaveTextStyle.caption2.androidRole == "labelSmall" && ConclaveTextStyle.caption2.androidRoleSp == 11)
+    }
+
+    @Test func typographySourcesUseSystemTextStylesOnly() throws {
+        let forbidden = ["ACMFont", "Font.custom", ".system(size:", "FontFamily("]
+        var scanned = 0
+        for file in try sourceFiles(under: "Sources/Conclave/DesignSystem", extensions: ["swift"])
+            where !file.hasSuffix("/DesignTokens.swift") {
+            let text = try source(file)
+            scanned += 1
+            for pattern in forbidden { #expect(!text.contains(pattern), "\(file) uses \(pattern)") }
+        }
+
+        let monospaceHelper = "internal fun TextStyle.monospaced(): TextStyle = copy(fontFamily = FontFamily.Monospace)"
+        for file in try sourceFiles(under: "Sources/Conclave/Skip/ui", extensions: ["kt"])
+            where !file.contains("/Skip/ui/icons/") {
+            var text = try source(file)
+            if file.hasSuffix("/Skip/ui/theme/ConclaveTypography.kt") {
+                #expect(text.components(separatedBy: monospaceHelper).count - 1 == 1, "the monospace helper is declared once")
+                text = text.replacingOccurrences(of: monospaceHelper, with: "")
+            }
+            scanned += 1
+            for pattern in forbidden + ["fontFamily ="] { #expect(!text.contains(pattern), "\(file) uses \(pattern)") }
+
+            if !file.hasSuffix("/NativeIconRasterFixture.kt") {
+                #expect(!text.contains("LocalDensity provides"), "\(file) overrides density")
+            }
+        }
+        #expect(scanned > 20)
+    }
+
+    @Test func feedbackHapticContractCoversEveryKindOnce() {
+        let rows = FeedbackHapticContract.rows
+        #expect(rows.count == 66)
+        #expect(rows.map { $0.kind } == FeedbackKind.allCases)
+        #expect(Set(rows.map { $0.kind.rawValue }).count == 66)
+        #expect(rows.filter { !$0.kind.isAsyncOutcome }.count == 21)
+        #expect(rows.filter { $0.kind.isAsyncOutcome }.count == 45)
+        let iosTokens: Set<String> = ["none", "success", "warning", "error", "selection", "alignment",
+                                      "impact.light", "impact.medium", "impact.heavy", "impact.soft"]
+        let androidTokens: Set<String> = ["none", "CONFIRM", "REJECT", "TOGGLE_ON", "TOGGLE_OFF", "CONTEXT_CLICK",
+                                          "SEGMENT_TICK", "CLOCK_TICK", "LONG_PRESS", "GESTURE_END",
+                                          "GESTURE_THRESHOLD_ACTIVATE", "VIRTUAL_KEY"]
+        for row in rows {
+            #expect(iosTokens.contains(row.ios), "\(row.kind.rawValue) iOS \(row.ios)")
+            for token in [row.android34, row.android30, row.android28] {
+                #expect(androidTokens.contains(token), "\(row.kind.rawValue) Android \(token)")
+            }
+        }
+
+        #expect(FeedbackHapticContract.ios(.shareStarted) == "impact.medium")
+        #expect(FeedbackHapticContract.ios(.transcriptionStarted) == "impact.medium")
+        #expect(FeedbackHapticContract.ios(.shareStopped) == "impact.light")
+        #expect(FeedbackHapticContract.ios(.transcriptionStopped) == "impact.light")
+        #expect(FeedbackHapticContract.ios(.becameHost) == "success")
+        #expect(FeedbackHapticContract.android(.becameHost, api: 36) == "none")
+
+        #expect(FeedbackHapticContract.android(.linkCopied, api: 32) == "CONFIRM")
+        #expect(FeedbackHapticContract.android(.linkCopied, api: 33) == "none")
+        #expect(FeedbackHapticContract.android(.linkCopied, api: 29) == "VIRTUAL_KEY")
+        #expect(FeedbackHapticContract.android(.selfViewSnapped, api: 29) == "none")
+        #expect(FeedbackHapticContract.android(.selfViewSnapped, api: 30) == "GESTURE_END")
+    }
+
+    @Test func iosSilentKindsMatchPlatformDocumentation() {
+        let silent = FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnIPhone($0) }
+        #expect(silent == [.none, .handLoweredByHost, .shareStoppedBySystem, .recapPostingStarted, .connectionRestored,
+                           .longPress, .hostDenied, .hostRemoved, .hostPolicyChanged, .lostHost])
+        #expect(FeedbackHapticContract.rows.allSatisfy { $0.ios != "start" && $0.ios != "stop" })
+        #expect(!FeedbackHapticContract.isSilentOnIPhone(.selfViewSnapped))
+        #expect(FeedbackHapticContract.iPhoneSilentTokens == ["none", "start", "stop"])
+
+        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 34) }.count == 16)
+        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 33) }.count == 16)
+        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 30) }.count == 15)
+        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 28) }.count == 16)
+    }
+
+    private func mapperMismatches(_ body: String) -> [String] {
+        let values = [".impact(weight: .light)": "impact.light", ".impact(weight: .medium)": "impact.medium",
+                      ".impact(weight: .heavy)": "impact.heavy", ".impact(flexibility: .soft)": "impact.soft",
+                      ".selection": "selection", ".alignment": "alignment", ".success": "success",
+                      ".error": "error", ".warning": "warning", ".start": "start", ".stop": "stop", "nil": "none"]
+        var problems: [String] = []
+        var mapped: [String: String] = [:]
+        for match in regexMatches(#"case ([^:]+):\s*return \("([^"]+)", ([^\n]+)\)\n"#, in: body) {
+            let token = match[1]
+            let value = values[match[2].trimmingCharacters(in: .whitespaces)] ?? "unknown value \(match[2])"
+            for name in match[0].components(separatedBy: ",") {
+                let kind = name.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ".", with: "")
+                if value != token { problems.append("\(kind): token \(token), value \(value)") }
+                if mapped[kind] != nil { problems.append("\(kind): mapped twice") }
+                mapped[kind] = token
+            }
+        }
+        for row in FeedbackHapticContract.rows {
+            guard let token = mapped[row.kind.rawValue] else {
+                problems.append("\(row.kind.rawValue): missing")
+                continue
+            }
+            if token != row.ios { problems.append("\(row.kind.rawValue): mapper \(token), contract \(row.ios)") }
+        }
+        if mapped.count != 66 { problems.append("\(mapped.count) kinds mapped") }
+        return problems
+    }
+
+    @Test func contrastRatioMatchesArchivedCalculations() {
+        func ratio(_ foreground: Int64, _ background: Int64) -> Double {
+            ContrastRatio.wcag(foreground: foreground, background: background)
+        }
+        #expect(abs(ratio(DesignTokens.ink, DesignTokens.coral) - 6.374) < 0.001)
+        #expect(abs(ratio(DesignTokens.neutralWhite, DesignTokens.coral) - 3.105) < 0.001)
+        #expect(abs(ratio(DesignTokens.coralBright, DesignTokens.neutralZinc700) - 4.166) < 0.001)
+        #expect(abs(ratio(DesignTokens.coralDeep, DesignTokens.neutralLight4) - 4.551) < 0.001)
+
+        #expect(abs(ratio(DesignTokens.iosInCallTextTertiary, DesignTokens.ink) - 6.279) < 0.001)
+
+        let dark = ratio(DesignTokens.neutralWhite, DesignTokens.coralBright)
+        let darkHigh = ratio(DesignTokens.neutralWhite, DesignTokens.coralBrightHighContrast)
+        #expect(abs(dark - 2.507) < 0.001 && abs(darkHigh - 2.268) < 0.001)
+        #expect(ContrastRatio.meets(dark, .forbiddenText) && !ContrastRatio.meets(dark, .nonText))
+        #expect(ContrastRatio.meets(darkHigh, .forbiddenText) && !ContrastRatio.meets(darkHigh, .nonText))
+
+        #expect(ratio(DesignTokens.coral, DesignTokens.ink) == ratio(DesignTokens.ink, DesignTokens.coral))
+        #expect(ContrastRatio.composite(DesignTokens.coral, over: DesignTokens.ink) == DesignTokens.coral)
+        #expect(ContrastRatio.composite(DesignTokens.neutralTransparent, over: DesignTokens.ink) == DesignTokens.ink)
+        #expect(abs(ratio(DesignTokens.neutralBlack, DesignTokens.neutralWhite) - 21.0) < 0.0001)
+        #expect(ratio(DesignTokens.coral, DesignTokens.coral) == 1.0)
+    }
+
+    @Test func galleryCatalogPairsMeetDeclaredClass() {
+        let pairs = ComponentGalleryCatalog.contrastPairs
+
+        #expect(pairs.count == 95)
+        for pair in pairs {
+            let ratio = pair.ratio
+            #expect(abs(ratio - pair.expectedRatio) < 0.001, "\(pair.id): \(ratio) against \(pair.expectedRatio)")
+            #expect(ContrastRatio.meets(ratio, pair.requirement), "\(pair.id) \(pair.requirement.rawValue): \(ratio)")
+            if pair.requirement == .forbiddenText { #expect(ratio < 4.5, "\(pair.id) is labeled not for text") }
+        }
+        let forbidden = pairs.filter { $0.requirement == .forbiddenText }.map { $0.id }
+        #expect(forbidden == ["contrast.coral.white", "contrast.accentDark.white", "contrast.accentDarkHighContrast.white",
+                              "contrast.coralBright.zinc700"])
+
+        #expect(pairs.filter { $0.requirement == .decorative }.map { $0.id } == ["contrast.inCallBorder.ink", "contrast.inCallBorderHighContrast.ink",
+                                                                                  "contrast.gameBoard.squares"])
+    }
+
+    @Test func notForTextPairsNeverReadAsPassing() throws {
+        for pair in ComponentGalleryCatalog.contrastPairs {
+            let verdict = ContrastRatio.verdict(pair.ratio, pair.requirement)
+            #expect(verdict == (pair.requirement == .forbiddenText ? .decorativeOnly : .passes), "\(pair.id): \(verdict)")
+        }
+        #expect(ContrastRatio.verdict(4.6, .forbiddenText) == .fails)
+        #expect(ContrastRatio.verdict(4.4, .text) == .fails)
+        #expect(ContrastRatio.verdict(1.2, .decorative) == .passes)
+    }
+
+    @Test func galleryCatalogKeysStableUniqueAndDashFree() {
+        let ids = ComponentGalleryCatalog.contrastPairs.map { $0.id }
+        #expect(Set(ids).count == ids.count)
+        #expect(ids.prefix(4) == ["contrast.onCoral.ink", "contrast.onCoral.black", "contrast.coral.white", "contrast.accentDark.white"])
+        #expect(ids.last == "contrast.gameBoard.coralPath")
+        #expect(ids.contains("contrast.lobbyCaption.android") && ids.contains("contrast.bubbleOwn.android"))
+        #expect(ids.contains("contrast.warningLight.groupedLight") && ids.contains("contrast.leaveHighContrast.white"))
+        #expect(ids.contains("contrast.inCallBorderHighContrast.ink"))
+        var specimens = ids + ComponentGalleryCatalog.systemProminentSpecimenIDs + [ComponentGalleryCatalog.galleryToggleID]
+        for style in ConclaveTextStyle.allCases {
+            for weight in ConclaveTextWeight.allCases { specimens.append(ComponentGalleryCatalog.typeSpecimenID(style, weight)) }
+        }
+        for kind in FeedbackKind.allCases { specimens.append(ComponentGalleryCatalog.hapticSpecimenID(kind)) }
+
+        specimens += ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true)
+        #expect(specimens.count == 95 + 5 + 1 + 44 + 66 + 46)
+        #expect(Set(specimens).count == specimens.count)
+        for id in specimens {
+            #expect(id.unicodeScalars.allSatisfy { ($0.value >= 0x30 && $0.value <= 0x39) || ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A) || $0 == "." }, "\(id) is not a plain ASCII key")
+        }
+        #expect(ComponentGalleryCatalog.typeSpecimenID(.caption2, .semibold) == "type.caption2.semibold")
+        #expect(ComponentGalleryCatalog.hapticSpecimenID(.micOn) == "haptic.micOn")
+        for pair in ComponentGalleryCatalog.contrastPairs { #expect(!containsDash(pair.caption), "\(pair.id)") }
+    }
+
+    @Test func scriptReadReadoutsUseAsciiDigits() throws {
+        let arabic = String(format: "%lld of %lld match", locale: Locale(identifier: "ar_EG"), 66, 66)
+        #expect(!arabic.unicodeScalars.allSatisfy { $0.isASCII })
+        #expect(String(format: "%lld of %lld match", locale: nil, 66, 66) == "66 of 66 match")
+
+        let resources = try androidStrings()
+        for name in ["native_gallery_clipped", "native_gallery_match", "native_gallery_taps"] {
+            let value = try #require(resources[name])
+            #expect(regexMatches(#"%[0-9]\$d"#, in: value).isEmpty && regexMatches(#"%[0-9]\$s"#, in: value).count == 3, "\(name): \(value)")
+        }
+
+        let bar = try #require(resources["native_gallery_bar_readout"])
+        #expect(regexMatches(#"%[0-9]\$d"#, in: bar).isEmpty && regexMatches(#"%[0-9]\$s"#, in: bar).count == 2, "\(bar)")
+
+    }
+
+    @Test func wp1SwiftSourcesUseOnlyTheApprovedGlassSurfaces() throws {
+        let glass = ["glassEffect", "GlassEffectContainer", "GlassStyle", "glassProminent", "ultraThinMaterial",
+                     "thinMaterial", "regularMaterial", "thickMaterial", "ultraThickMaterial"]
+        var files = try sourceFiles(under: "Sources/Conclave/DesignSystem", extensions: ["swift"])
+        files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Panels", extensions: ["swift"])
+        files += try sourceFiles(under: "Sources/Conclave/App/Hosting", extensions: ["swift"])
+
+        files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Chat", extensions: ["swift"])
+        files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Webinar", extensions: ["swift"])
+        files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Transcript", extensions: ["swift"])
+
+        files += try sourceFiles(under: "Sources/Conclave/Features/Lobby", extensions: ["swift"])
+        files.append("Sources/Conclave/App/PlatformRoot+iOS.swift")
+        let galleryFile = "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"
+
+        let entries = Self.sanctionedGlassFiles
+        #expect(entries == [Self.callControlFile, Self.composerGlassFile, Self.lobbyMediaToggleFile, Self.floatingActionBarFile])
+        for entry in entries { #expect(files.contains(entry), "\(entry) is outside the scanned scope") }
+        var glassFiles: [String] = []
+        for file in files where !entries.contains(file) {
+            var text = try source(file)
+            if file == galleryFile {
+
+                let begin = "private struct GlassProminentSpecimens: View {"
+                let end = "private struct ProminentSpecimen<Specimen: View>: View {"
+                #expect(text.components(separatedBy: begin).count == 2 && text.components(separatedBy: end).count == 2)
+                if let lower = text.range(of: begin), let upper = text.range(of: end), lower.upperBound < upper.lowerBound {
+                    let block = String(text[lower.lowerBound..<upper.lowerBound])
+                    #expect(block.contains(".buttonStyle(.glassProminent)"))
+                    #expect(block.contains("if #available(iOS 26.0, *)"))
+                    for pattern in glass where pattern != "glassProminent" { #expect(!block.contains(pattern), "\(pattern) in the specimen block") }
+                    text.removeSubrange(lower.lowerBound..<upper.lowerBound)
+                }
+            }
+            for pattern in glass where text.contains(pattern) {
+                if file == Self.toastFile && pattern == "regularMaterial" { continue }
+                glassFiles.append(file)
+                Issue.record("\(file) uses \(pattern)")
+            }
+        }
+        #expect(glassFiles.isEmpty)
+    }
+
+    @Test func labelCasingFollowsOwnerRule() throws {
+
+        let groups: [(name: String, pattern: String, minimum: Int)] = [
+            ("literal control labels", #"(?:Button|Toggle|Section|DisclosureGroup|NavigationLink|LabeledContent|Label|Picker|TextField|navigationTitle)\(\s*"([^"\\]+)""#, 15),
+
+            ("literal title choices", #"(?:Button|navigationTitle)\(\s*[A-Za-z.]+\s*\?\s*"([^"\\]+)"\s*:\s*"([^"\\]+)""#, 2),
+            ("action button labels", #"Button\(action:[^\n]*\)\s*\{\s*Text\(\s*"([^"\\]+)""#, 1),
+            ("label views", #"Label\s*\{\s*Text\(\s*"([^"\\]+)""#, 2),
+            ("catalog control labels", #"(?:Button|Toggle|Section|NavigationLink|LabeledContent|navigationTitle|readout)\(\s*ConclaveStrings\.text\(\s*"([^"\\]+)""#, 20),
+            ("catalog titles", #"title:\s*ConclaveStrings\.text\(\s*"([^"\\]+)""#, 8),
+            ("catalog title choices", #"title:\s*[A-Za-z]+\s*\?\s*ConclaveStrings\.text\(\s*"([^"\\]+)"\)\s*:\s*ConclaveStrings\.text\(\s*"([^"\\]+)"\)"#, 1),
+            ("label closures", #"label:\s*\{(?:\s*//[^\n]*)?\s*Text\(\s*(?:ConclaveStrings\.text\(\s*)?"([^"\\]+)""#, 4),
+        ]
+        let iosFiles = ["Sources/Conclave/DesignSystem/iOS/NativeIconGallery.swift", "Sources/Conclave/App/PlatformRoot+iOS.swift",
+                        "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"] + Self.iosComponentFiles
+        let texts = try iosFiles.map { try source($0) }
+        var iosLabels: [String] = []
+        for group in groups {
+            let found = texts.flatMap { regexMatches(group.pattern, in: $0) }.flatMap { $0 }.filter { !$0.isEmpty }
+            #expect(found.count >= group.minimum, "\(group.name): \(found.count) labels")
+            iosLabels += found
+        }
+        for expected in ["Icon Gallery", "Component Gallery", "In Call", "App", "Bordered Prominent, On Coral", "Glass Prominent, On Coral",
+                         "Simulate Background or PiP", "Participants", "Reset Selection", "Captions", "Sample Text",
+
+                         "Show Loading", "Force Opaque Controls", "Call Controls", "Status Views", "Microphone", "Use Audio Only",
+                         "Full Width Bar", "Moved to More", "Control Taps"] {
+            #expect(iosLabels.contains(expected), "scan missed \(expected)")
+        }
+        for label in iosLabels { #expect(isTitleCase(label), "iOS label is not title case: \(label)") }
+
+        var androidLabels = try androidStrings().values.map { xmlUnescaped($0) }
+        let root = try source("Sources/Conclave/Skip/ui/AppRoot.kt")
+
+        androidLabels += regexMatches(#"Text\(\s*"([^"\\$]+)""#, in: root).map { $0[0] }
+        #expect(androidLabels.count > 80)
+        for label in androidLabels { #expect(isSentenceCase(label), "Android label is not sentence case: \(label)") }
+        #expect(isTitleCase("Simulate Background or PiP") && !isTitleCase("Icon gallery"))
+        #expect(isSentenceCase("Simulate background or PiP") && !isSentenceCase("Show Details"))
+        #expect(isSentenceCase("left to right") && isSentenceCase("Appendix C %1$.3f") && !isSentenceCase("Live, In call"))
+
+        #expect(isSentenceCase("Round %1$d of %2$d \u{00B7} Guess the word") && !isSentenceCase("Round 1 \u{00B7} Guess The word"))
+        #expect(isSentenceCase("Allow access in Settings") && !isSentenceCase("Open Settings now") && !isSentenceCase("Tap to Mute"))
+        #expect(isSentenceCase("Only http and https URLs are supported.") && isSentenceCase("This Wi-Fi network needs you to sign in."))
+    }
+
+    @Test func galleryStringsAreInTheStringCatalog() throws {
+        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
+        let strings = try #require(catalog["strings"] as? [String: Any])
+        var keys = Set<String>()
+
+        for file in ["Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift", "Sources/Conclave/App/PlatformRoot+iOS.swift"] + Self.iosComponentFiles {
+            keys.formUnion(regexMatches(#"ConclaveStrings\.(?:text|format|machineReadable)\(\s*"((?:[^"\\]|\\.)*)""#, in: try source(file)).map { $0[0] })
+        }
+        #expect(keys.count > 60)
+        for key in ["Leave Call", "In Progress", "%lld unread", "Dismiss", "Try Again", "Loading", "Admit %@", "Deny %@", "Show Loading"] {
+            #expect(keys.contains(key), "scan missed \(key)")
+        }
+        for key in keys {
+            let entry = strings[key] as? [String: Any]
+            #expect(entry != nil, "missing String Catalog key: \(key)")
+            #expect(entry?["comment"] == nil, "unexpected translator prose: \(key)")
+            #expect(entry?["extractionState"] as? String == "manual", "looked up by key, so manual: \(key)")
+        }
+        for (key, value) in strings {
+            #expect(!containsDash(key), "\(key)")
+            let comment = (value as? [String: Any])?["comment"] as? String ?? ""
+            #expect(!containsDash(comment), "\(key) comment")
+        }
+
+        for file in ["Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"] + Self.iosComponentFiles {
+            let text = try source(file)
+            #expect(regexMatches(#"(?:Text|Button|Toggle|Section|LabeledContent|NavigationLink|navigationTitle|Label|ProgressView)\(\s*""#, in: text).isEmpty, "\(file) has a literal label")
+        }
+    }
+
+    @Test func androidGalleryStringsAreResources() throws {
+        let resources = try androidStrings()
+        var used = Set<String>()
+
+        for file in ["Sources/Conclave/Skip/ui/hosting/NativeComponentGallery.kt", "Sources/Conclave/Skip/ui/hosting/NativeSemanticsExport.kt",
+                     "Sources/Conclave/Skip/ui/AppRoot.kt", "Sources/Conclave/Skip/ui/call/panels/InCallPage.kt",
+                     "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt", "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt",
+
+                     "Sources/Conclave/Skip/ui/call/stage/CallRoot.kt", "Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt",
+                     "Sources/Conclave/Skip/ui/call/stage/SlotView.kt", "Sources/Conclave/Skip/ui/call/stage/StageChrome.kt",
+                     "Sources/Conclave/Skip/ui/call/stage/Reactions.kt",
+
+                     "Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt", "Sources/Conclave/Skip/ui/call/stage/CaptionsStrip.kt",
+
+                     "Sources/Conclave/Skip/ui/call/stage/TileMenu.kt",
+
+                     "Sources/Conclave/Skip/ui/call/stage/MeetingDetailsPage.kt", "Sources/Conclave/Skip/ui/call/stage/AttendeeViewer.kt",
+
+                     "Sources/Conclave/Skip/ui/call/stage/ShareZoom.kt",
+
+                     "Sources/Conclave/Skip/ui/call/stage/ChatPreviewSnackbar.kt",
+
+                     "Sources/Conclave/Skip/ui/people/PeopleActions.kt", "Sources/Conclave/Skip/ui/host/HostRows.kt",
+
+                     "Sources/Conclave/Skip/ui/people/PersonRow.kt", "Sources/Conclave/Skip/ui/qa/QuestionRow.kt"]
+            + Self.androidComponentFiles {
+            let text = try source(file)
+
+            used.formUnion(regexMatches(#""((?:native_(?:gallery|semantics|panel)|ds)_[a-z0-9_]+)""#, in: text).map { $0[0] })
+            if !file.hasSuffix("AppRoot.kt") {
+
+                #expect(regexMatches(#"Text\(\s*""#, in: text).isEmpty, "\(file) has a literal Text")
+            }
+        }
+        #expect(used.count > 60)
+
+        let plurals = try androidPlurals()
+        let usedPlurals = used.intersection(Set(plurals.keys))
+        used.subtract(usedPlurals)
+        #expect(usedPlurals == Set(plurals.keys.filter { $0.hasPrefix("ds_") }), "plurals: \(usedPlurals.symmetricDifference(Set(plurals.keys.filter { $0.hasPrefix("ds_") })).sorted())")
+        for (name, forms) in plurals {
+            #expect(forms["other"] != nil, "\(name) needs an other form")
+
+            for value in forms.values {
+                #expect(!containsDash(value) && regexMatches(#"%(?![0-9]\$)"#, in: value.replacingOccurrences(of: "%%", with: "")).isEmpty, "\(name)")
+            }
+        }
+
+        let appearanceNames: Set<String> = ["appearance_title", "appearance_system", "appearance_light", "appearance_dark"]
+        #expect(Set(resources.keys.filter { $0.hasPrefix("appearance_") }) == appearanceNames)
+        let galleryNames = Set(resources.keys.filter {
+            !$0.hasPrefix("sys_") && !$0.hasPrefix("ctl_") && !$0.hasPrefix("pm_") && !$0.hasPrefix("stg_")
+                && !$0.hasPrefix("ppl_") && !$0.hasPrefix("chat_") && !$0.hasPrefix("act_") && !$0.hasPrefix("gm_")
+                && !$0.hasPrefix("br_") && !$0.hasPrefix("app_") && !$0.hasPrefix("set_") && !$0.hasPrefix("hst_")
+                && !$0.hasPrefix("qa_") && !$0.hasPrefix("lay_") && !$0.hasPrefix("fx_") && !$0.hasPrefix("trn_")
+                && !appearanceNames.contains($0)
+        })
+        #expect(used == galleryNames, "unused or missing resources: \(used.symmetricDifference(galleryNames).sorted())")
+        for (name, value) in resources {
+            #expect(name.hasPrefix("native_gallery_") || name.hasPrefix("native_semantics_") || name.hasPrefix("native_panel_")
+                    || name.hasPrefix("ds_") || name.hasPrefix("sys_") || name.hasPrefix("ctl_") || name.hasPrefix("pm_")
+                    || name.hasPrefix("stg_") || name.hasPrefix("ppl_") || name.hasPrefix("chat_") || name.hasPrefix("act_")
+                    || name.hasPrefix("gm_") || name.hasPrefix("br_") || name.hasPrefix("app_") || name.hasPrefix("set_")
+                    || name.hasPrefix("hst_") || name.hasPrefix("qa_") || name.hasPrefix("lay_") || name.hasPrefix("fx_")
+                    || name.hasPrefix("trn_") || appearanceNames.contains(name), "\(name)")
+            #expect(!containsDash(value), "\(name)")
+            #expect(!value.contains("'"), "\(name) needs an escaped apostrophe")
+
+            #expect(regexMatches(#"%(?![0-9]\$)"#, in: value.replacingOccurrences(of: "%%", with: "")).isEmpty,
+                    "\(name) uses a non-positional argument")
+        }
+
+        #expect(resources["ds_leave_call"] == "Leave call")
+        #expect(resources["ds_offline_title"] == "You\u{2019}re offline")
+        #expect(resources["ds_more_options"] == "More options")
+    }
+
+    @Test func componentGalleryIdentifiersAreStable() {
+        #expect(GallerySection.allCases.map { ComponentGalleryCatalog.sectionID($0) } == [
+            "components.section.typography", "components.section.haptics", "components.section.contrast",
+            "components.section.systemProminent",
+
+            "components.section.buttons", "components.section.callControls", "components.section.rows",
+            "components.section.banners", "components.section.status",
+        ])
+        #expect(GallerySection.allCases.filter { $0.isInCallOnly } == [.callControls])
+        #expect(GallerySection.allCases.filter { $0.isIOSOnly } == [.systemProminent])
+        #expect(ComponentGalleryCatalog.systemProminentSpecimenIDs == [
+            "system.prominent.confirmationAction", "system.prominent.glass", "system.prominent.bordered",
+            "system.prominent.glass.onCoral", "system.prominent.bordered.onCoral",
+        ])
+        #expect(ComponentGalleryCatalog.columnID("system.prominent.glass", inCall: true) == "system.prominent.glass.inCall")
+        #expect(ComponentGalleryCatalog.columnID("system.prominent.glass", inCall: false) == "system.prominent.glass.app")
+        #expect(ComponentGalleryCatalog.liveContrastID("onCoral", inCall: false) == "contrast.live.onCoral.app")
+        #expect(ComponentGalleryCatalog.expanded("Long Text") == "Long Text Long Text")
+        let fixed = [ComponentGalleryCatalog.galleryToggleID, ComponentGalleryCatalog.environmentID, ComponentGalleryCatalog.overflowID,
+                     ComponentGalleryCatalog.longTextToggleID, ComponentGalleryCatalog.hapticVerifyID,
+                     ComponentGalleryCatalog.hapticResultID, ComponentGalleryCatalog.hapticRecordID, ComponentGalleryCatalog.prominentPageLinkID,
+                     ComponentGalleryCatalog.showLoadingToggleID, ComponentGalleryCatalog.forceOpaqueToggleID,
+                     ComponentGalleryCatalog.controlRecordID, ComponentGalleryCatalog.compactBarProbeID,
+                     ComponentGalleryCatalog.compactBarReadoutID, ComponentGalleryCatalog.compactBarMovedID,
+                     ComponentGalleryCatalog.bannerMotionID, ComponentGalleryCatalog.bannerMotionToggleID,
+                     ComponentGalleryCatalog.bannerAnnouncementID]
+        #expect(Set(fixed).count == fixed.count)
+        for id in fixed { #expect(id.unicodeScalars.allSatisfy { $0.isASCII && $0 != " " }, "\(id)") }
+
+        #expect(ComponentGalleryCatalog.specimenIDs(.buttons, showLoading: false) == ["button.primary", "button.tonal", "button.text", "button.destructive"])
+        #expect(ComponentGalleryCatalog.specimenIDs(.buttons, showLoading: true) == ["button.primary", "button.tonal", "button.text", "button.destructive", "button.primary.pending"])
+        #expect(ComponentGalleryCatalog.specimenIDs(.callControls, showLoading: true) == ["toggle.call", "button.leave", "badge.count", "control.bar.compact"])
+        #expect(ComponentGalleryCatalog.specimenIDs(.rows, showLoading: true) == ["row.value", "row.navigation", "row.destructive", "row.selectable", "toggle.row", "row.person", "row.person.waiting"])
+        #expect(ComponentGalleryCatalog.specimenIDs(.banners, showLoading: false) == ["banner.info", "banner.warning", "banner.error", "banner.success"])
+        #expect(ComponentGalleryCatalog.specimenIDs(.banners, showLoading: true) == ["banner.info", "banner.warning", "banner.error", "banner.success", "banner.reconnecting"])
+        #expect(ComponentGalleryCatalog.specimenIDs(.status, showLoading: false) == ["status.error", "status.empty", "status.offline"])
+        #expect(ComponentGalleryCatalog.specimenIDs(.status, showLoading: true) == ["status.loading", "status.error", "status.empty", "status.offline"])
+        for section in [GallerySection.typography, .haptics, .contrast, .systemProminent] {
+            #expect(ComponentGalleryCatalog.specimenIDs(section, showLoading: true).isEmpty)
+        }
+        let idle = ComponentGalleryCatalog.componentSpecimenIDs(showLoading: false)
+        let loading = ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true)
+        #expect(idle.count == 40 && loading.count == 46 && Set(loading).count == 46)
+
+        #expect(Set(loading).subtracting(idle) == ["button.primary.pending.app", "button.primary.pending.inCall", "banner.reconnecting.app",
+                                                   "banner.reconnecting.inCall", "status.loading.app", "status.loading.inCall"])
+
+        for id in loading where ["toggle.call", "button.leave", "badge.count", "control.bar.compact"].contains(where: { id.hasPrefix($0 + ".") }) {
+            #expect(id.hasSuffix(".inCall"), "\(id)")
+        }
+        #expect(loading.filter { $0.hasSuffix(".app") }.count == 21 && loading.filter { $0.hasSuffix(".inCall") }.count == 25)
+
+        #expect(!loading.contains(where: { $0.hasPrefix("banner.motion") }))
+        #expect(ComponentGalleryCatalog.compactBarControls == ["microphone", "camera", "shareScreen", "chat", "more"])
+        #expect(ComponentGalleryCatalog.compactBarMoveOrder == ["shareScreen"])
+    }
+
+    static let callControlFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveCallControl+iOS.swift"
+
+    static let composerGlassFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift"
+    static let lobbyMediaToggleFile = "Sources/Conclave/Features/Lobby/LobbyMediaToggle+iOS.swift"
+    static let floatingActionBarFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFloatingActionBar+iOS.swift"
+    static let toastFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveToast+iOS.swift"
+    static let sanctionedGlassFiles = [callControlFile, composerGlassFile, lobbyMediaToggleFile, floatingActionBarFile]
+    static let iosComponentFiles = [
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveButtons+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveRows+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveBanner+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveStatus+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveCallControl+iOS.swift",
+
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveAvatar+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveDialogs+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveStageChip+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveBadge+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveTileChrome+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveToast+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveMenus+iOS.swift",
+
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveComposerGlass+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveChatBubble+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveReactionChip+iOS.swift",
+        "Sources/Conclave/DesignSystem/iOS/Components/ConclaveTip+iOS.swift",
+    ]
+    static let androidComponentFiles = [
+        "Sources/Conclave/Skip/ui/components/ConclaveButtons.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveListRows.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveBanner.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveStatus.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveCallControl.kt",
+
+        "Sources/Conclave/Skip/ui/components/ConclaveAvatar.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveDialogs.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveFields.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveStageChrome.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveBadge.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveTileChrome.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveMenus.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt",
+        "Sources/Conclave/Skip/ui/components/AudioRouteList.kt",
+
+        "Sources/Conclave/Skip/ui/components/ConclaveChatBubble.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveReactionChip.kt",
+        "Sources/Conclave/Skip/ui/components/ConclaveTipCard.kt",
+    ]
+    static let glassBranchCondition = "if #available(iOS 26.0, *), !reduceTransparency, !forceOpaque {"
+
+    @Test func controlSurfaceFallbackUsesGeneratedToken() throws {
+        let standard = ConclaveControlSurfaceMapping.spec(.on, glassAvailable: false, reduceTransparency: false, forceOpaque: false,
+                                                          increasedContrast: false, isEnabled: true)
+        #expect(standard.fill == .fallback)
+        #expect(standard.fillToken == DesignTokens.iosInCallControlFallback)
+        #expect(standard.strokeToken == DesignTokens.iosInCallBorder)
+        #expect(standard.glyphToken == DesignTokens.iosInCallText)
+        let increased = ConclaveControlSurfaceMapping.spec(.on, glassAvailable: false, reduceTransparency: false, forceOpaque: false,
+                                                           increasedContrast: true, isEnabled: true)
+        #expect(increased.strokeToken == DesignTokens.iosInCallBorderHighContrast)
+
+        #expect(DesignTokens.iosInCallControlFallback == 0xFF232327)
+        #expect(DesignTokens.iosInCallBorder == 0x24FAFAFA && DesignTokens.iosInCallBorderHighContrast == 0x52FAFAFA)
+        #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosInCallText, background: DesignTokens.iosInCallControlFallback) - 15.001) < 0.001)
+        #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosInCallOnControlOff, background: DesignTokens.iosInCallControlOff) - 18.960) < 0.001)
+    }
+
+    @Test func controlSurfaceStateTableCoversBothBranches() throws {
+        func expected(_ state: ConclaveControlState, glass: Bool, increased: Bool, enabled: Bool) -> ConclaveControlSurfaceSpec {
+            let opacity = enabled ? 1.0 : 0.4
+            switch state {
+            case .off:
+                return ConclaveControlSurfaceSpec(fill: .paper, fillToken: 0xFFFAFAFA, glyph: .off, glyphToken: 0xFF0A0A0B,
+                                                  strokeToken: nil, isInteractive: false, opacity: opacity)
+            case .engaged:
+                return ConclaveControlSurfaceSpec(fill: .paper, fillToken: 0xFFFAFAFA, glyph: .engaged, glyphToken: 0xFF0A0A0B,
+                                                  strokeToken: nil, isInteractive: false, opacity: opacity)
+            case .on:
+                if glass {
+                    return ConclaveControlSurfaceSpec(fill: .glass, fillToken: nil, glyph: .on, glyphToken: 0xFFFAFAFA,
+                                                      strokeToken: increased ? 0x52FAFAFA : nil, isInteractive: enabled, opacity: opacity)
+                }
+                return ConclaveControlSurfaceSpec(fill: .fallback, fillToken: 0xFF232327, glyph: .on, glyphToken: 0xFFFAFAFA,
+                                                  strokeToken: increased ? 0x52FAFAFA : 0x24FAFAFA, isInteractive: false, opacity: opacity)
+            }
+        }
+        var rows = 0
+        for state in ConclaveControlState.allCases {
+            for glassAvailable in [false, true] {
+                for reduceTransparency in [false, true] {
+                    for forceOpaque in [false, true] {
+                        for increased in [false, true] {
+                            for enabled in [false, true] {
+                                let spec = ConclaveControlSurfaceMapping.spec(state, glassAvailable: glassAvailable,
+                                                                              reduceTransparency: reduceTransparency, forceOpaque: forceOpaque,
+                                                                              increasedContrast: increased, isEnabled: enabled)
+                                let glass = glassAvailable && !reduceTransparency && !forceOpaque
+                                #expect(spec == expected(state, glass: glass, increased: increased, enabled: enabled),
+                                        "\(state.rawValue) glass \(glassAvailable) RT \(reduceTransparency) force \(forceOpaque) HC \(increased) enabled \(enabled)")
+                                rows += 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #expect(rows == 96)
+        #expect(ConclaveControlState.allCases.map { $0.rawValue } == ["off", "on", "engaged"])
+        #expect(ConclaveControlSurfaceMapping.disabledOpacity == 0.4)
+        func onFill(glass: Bool, reduceTransparency: Bool, force: Bool) -> ConclaveControlFill {
+            ConclaveControlSurfaceMapping.spec(.on, glassAvailable: glass, reduceTransparency: reduceTransparency, forceOpaque: force,
+                                               increasedContrast: false, isEnabled: true).fill
+        }
+        #expect(onFill(glass: true, reduceTransparency: false, force: false) == .glass)
+        #expect(onFill(glass: true, reduceTransparency: true, force: false) == .fallback)
+        #expect(onFill(glass: true, reduceTransparency: false, force: true) == .fallback)
+        #expect(onFill(glass: false, reduceTransparency: false, force: false) == .fallback)
+    }
+
+    @Test func compactBarFitIsArithmeticOnStatedInputs() {
+        let divider = [CompactBarFit.androidDividerWidth]
+
+        #expect(!CompactBarFit.fits(targets: [48, 48, 48, 48, 48, 72], spacing: 8, padding: 8, available: 360, nonTargets: divider))
+        var legacy = ComponentGalleryCatalog.compactBarControls.map { CompactBarControl(id: $0, width: 48) }
+        legacy.append(CompactBarControl(id: CompactBarFit.leaveControlID, width: 72))
+        #expect(CompactBarFit.overflow(controls: legacy, moveOrder: ComponentGalleryCatalog.compactBarMoveOrder, spacing: 8, padding: 8,
+                                       available: 360, nonTargets: divider) == ["shareScreen"])
+
+        #expect(CompactBarFit.fits(targets: [48, 48, 48, 48, 72], spacing: 8, padding: 8, available: 360, nonTargets: divider))
+
+        let with = CompactBarFit.requiredWidth(targets: [48, 48, 48, 48, 72], spacing: 8, padding: 8, nonTargets: divider)
+        let without = CompactBarFit.requiredWidth(targets: [48, 48, 48, 48, 72], spacing: 8, padding: 8)
+        #expect(with - without == 1 + 8)
+        #expect(CompactBarFit.requiredWidth(targets: [], spacing: 8, padding: 8) == 16)
+
+        let toggles = ComponentGalleryCatalog.compactBarControls
+        let order = ComponentGalleryCatalog.compactBarMoveOrder
+        let narrow = CompactBarFit.androidPlan(toggleIDs: toggles, moveOrder: order, available: 360)
+        #expect(narrow.targetWidth == 48 && narrow.moved == ["shareScreen"] && narrow.fits && narrow.requiredWidth <= 360)
+        let phone = CompactBarFit.androidPlan(toggleIDs: toggles, moveOrder: order, available: 411)
+        #expect(phone.targetWidth == 56 && phone.moved == ["shareScreen"] && phone.fits && phone.requiredWidth <= 411)
+        let tablet = CompactBarFit.androidPlan(toggleIDs: toggles, moveOrder: order, available: 600)
+        #expect(tablet.targetWidth == 56 && tablet.moved.isEmpty && tablet.fits)
+        #expect(CompactBarFit.androidToggleWidth(available: 384.9) == 48 && CompactBarFit.androidToggleWidth(available: 385) == 56)
+
+        #expect(!CompactBarFit.fits(targets: Array(repeating: 44, count: 6), spacing: 12, padding: 12, available: 320))
+        #expect(!CompactBarFit.fits(targets: Array(repeating: 44, count: 6), spacing: 8, padding: 12, available: 320))
+        #expect(CompactBarFit.fits(targets: Array(repeating: 44, count: 5), spacing: 12, padding: 12, available: 320))
+        let ids = toggles + [CompactBarFit.leaveControlID]
+        let compact = CompactBarFit.iosPlan(controlIDs: ids, moveOrder: order, scaledDiameter: 52, available: 320)
+        #expect(compact.moved == ["shareScreen"] && compact.fits && compact.spacing == 12 && compact.requiredWidth <= 320)
+
+        let tight = CompactBarFit.iosPlan(controlIDs: ids, moveOrder: order, scaledDiameter: 52, available: 340)
+        #expect(tight.moved.isEmpty && tight.fits && tight.spacing == 8)
+
+        let roomy = CompactBarFit.iosPlan(controlIDs: ids, moveOrder: order, scaledDiameter: 70, available: 1000)
+        #expect(roomy.targetWidth == 60 && roomy.moved.isEmpty && roomy.spacing == 12)
+
+        var width = 200.0
+        while width <= 700 {
+            let ios = CompactBarFit.iosPlan(controlIDs: ids, moveOrder: order, scaledDiameter: 52, available: width)
+            #expect(ios.targetWidth >= CompactBarFit.iosMinimumTarget && ios.targetWidth <= CompactBarFit.iosMaximumDiameter, "\(width)")
+            #expect(!ios.fits || ios.requiredWidth <= width, "\(width)")
+            let android = CompactBarFit.androidPlan(toggleIDs: toggles, moveOrder: order, available: width)
+            #expect(android.targetWidth >= CompactBarFit.androidMinimumTarget, "\(width)")
+            #expect(!android.fits || android.requiredWidth <= width, "\(width)")
+            width += 10
+        }
+        #expect(CompactBarFit.iosMinimumTarget == 44 && CompactBarFit.androidMinimumTarget == 48)
+    }
+
+}
+
+private func containsDash(_ text: String) -> Bool {
+    text.contains("\u{2013}") || text.contains("\u{2014}")
+}
+
+private func withoutComments(_ text: String) -> String {
+    text.replacingOccurrences(of: #"//[^\n]*"#, with: "", options: .regularExpression)
+}
+
+private func normalized(_ text: String) -> String {
+    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+}
+
+private let minorWords: Set<String> = ["a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into", "nor",
+                                       "of", "on", "or", "per", "the", "to", "vs", "via", "with"]
+
+private func isTitleCase(_ label: String) -> Bool {
+    let words = label.components(separatedBy: CharacterSet(charactersIn: " ,:;()/")).filter { !$0.isEmpty }
+    for (index, word) in words.enumerated() {
+        guard let first = word.unicodeScalars.first else { continue }
+        if CharacterSet.uppercaseLetters.contains(first) || CharacterSet.decimalDigits.contains(first) { continue }
+        if index > 0 && minorWords.contains(word) { continue }
+        if word.unicodeScalars.dropFirst().contains(where: { CharacterSet.uppercaseLetters.contains($0) }) { continue }
+        return false
+    }
+    return true
+}
+
+private let properNouns: Set<String> = ["Android", "iOS", "PiP", "TalkBack", "JSON", "Material", "Roboto", "Conclave",
+                                        "SF", "Dynamic", "Type", "Appendix",
+
+                                        "Klipy", "YouTube", "GIFs", "WebP",
+
+                                        "GitHub", "Apple", "Google",
+
+                                        "OpenAI", "Sarvam", "Conclave\u{2019}s",
+
+                                        "White", "Black",
+
+                                        "Wi-Fi", "URLs"]
+
+private let quotedNames: [String] = ["in Settings", "Data Saver", "Sleep mode", "Mute and Hang up", "in Layout",
+                                     "Switch to Everyone", "Ask and Minutes"]
+
+private func isSentenceCase(_ label: String) -> Bool {
+    var text = label
+    for name in quotedNames {
+
+        let masked = name.components(separatedBy: " ").map { word -> String in
+            guard let initial = word.unicodeScalars.first, CharacterSet.uppercaseLetters.contains(initial) else { return word }
+            return word.uppercased()
+        }
+        text = text.replacingOccurrences(of: name, with: masked.joined(separator: " "))
+    }
+    text = text.replacingOccurrences(of: " \u{00B7} ", with: ". ")
+    for sentence in text.components(separatedBy: ". ") {
+        let words = sentence.components(separatedBy: CharacterSet(charactersIn: " ,:;()/")).filter { !$0.isEmpty }
+        guard let firstWord = words.first, let first = firstWord.unicodeScalars.first else { continue }
+        let fragment = words.allSatisfy { word in
+            guard let initial = word.unicodeScalars.first else { return true }
+            return !CharacterSet.uppercaseLetters.contains(initial) || isAcronymOrName(word)
+        }
+        let opensSentence = CharacterSet.uppercaseLetters.contains(first) || CharacterSet.decimalDigits.contains(first) || first == "%"
+        if !opensSentence && !fragment { return false }
+        for word in words.dropFirst() {
+            guard let initial = word.unicodeScalars.first, CharacterSet.uppercaseLetters.contains(initial) else { continue }
+            if !isAcronymOrName(word) { return false }
+        }
+    }
+    return true
+}
+
+private func isAcronymOrName(_ word: String) -> Bool {
+
+    let bare = word.trimmingCharacters(in: .punctuationCharacters)
+    return properNouns.contains(word) || properNouns.contains(bare)
+        || !word.unicodeScalars.contains { CharacterSet.lowercaseLetters.contains($0) }
+}
+
+private func androidPlurals() throws -> [String: [String: String]] {
+    let xml = try source("Android/app/src/main/res/values/strings.xml")
+    var result: [String: [String: String]] = [:]
+    for match in regexMatches(#"<plurals name="([a-z0-9_]+)"[^>]*>([\s\S]*?)</plurals>"#, in: xml) {
+        var forms: [String: String] = [:]
+        for item in regexMatches(#"<item quantity="([a-z]+)">([^<]*)</item>"#, in: match[1]) { forms[item[0]] = item[1] }
+        result[match[0]] = forms
+    }
+    return result
+}
+
+private func xmlUnescaped(_ value: String) -> String {
+    value.replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">")
+        .replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&apos;", with: "'")
+        .replacingOccurrences(of: "&amp;", with: "&")
+}
+
+private func androidStrings() throws -> [String: String] {
+    let xml = try source("Android/app/src/main/res/values/strings.xml")
+    var result: [String: String] = [:]
+    for match in regexMatches(#"<string name="([a-z0-9_]+)"[^>]*>([^<]*)</string>"#, in: xml) {
+        #expect(result[match[0]] == nil, "duplicate resource \(match[0])")
+        result[match[0]] = match[1]
+    }
+    return result
+}
+
+private func packageRoot() -> URL {
+    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+}
+
+private func source(_ packageRelativePath: String) throws -> String {
+    try String(contentsOf: packageRoot().appendingPathComponent(packageRelativePath), encoding: .utf8)
+}
+
+private func sourceFiles(under directory: String, extensions: Set<String>, recursive: Bool = true) throws -> [String] {
+    let root = packageRoot()
+    let base = root.appendingPathComponent(directory)
+    var result: [String] = []
+    if recursive {
+        let enumerator = FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil)
+        while let url = enumerator?.nextObject() as? URL {
+            if extensions.contains(url.pathExtension) { result.append(url.path) }
+        }
+    } else {
+        for url in try FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)
+            where extensions.contains(url.pathExtension) {
+            result.append(url.path)
+        }
+    }
+    let prefix = root.path + "/"
+    return result.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }.sorted()
+}
+
+private func bracedBlocks(after marker: String, in text: String) -> [Range<String.Index>] {
+    var result: [Range<String.Index>] = []
+    var start = text.startIndex
+    while let found = text.range(of: marker, range: start..<text.endIndex) {
+        var depth = 1
+        var index = found.upperBound
+        while index < text.endIndex && depth > 0 {
+            if text[index] == "{" { depth += 1 } else if text[index] == "}" { depth -= 1 }
+            index = text.index(after: index)
+        }
+        result.append(found.lowerBound..<index)
+        start = index
+    }
+    return result
+}
+
+private func withoutDebugBlocks(_ text: String) -> String {
+    var kept: [Substring] = []
+    var skipping = false
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed == "#if DEBUG" {
+            skipping = true
+            continue
+        }
+        if skipping && (trimmed == "#else" || trimmed == "#endif") {
+            skipping = false
+            continue
+        }
+        if !skipping { kept.append(line) }
+    }
+    return kept.joined(separator: "\n")
+}
+
+private func regexMatches(_ pattern: String, in text: String) -> [[String]] {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [["invalid pattern"]] }
+    let ns = text as NSString
+    return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { match in
+        (1..<match.numberOfRanges).map { index in
+            let range = match.range(at: index)
+            return range.location == NSNotFound ? "" : ns.substring(with: range)
+        }
+    }
+}
+#endif

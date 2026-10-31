@@ -1,0 +1,86 @@
+{
+  "project": "Tabler Icons",
+  "repository": "https://github.com/tabler/tabler-icons",
+  "commit": "ed177a085b652fe04ec4f37ced867c94621e7840",
+  "acquired_at": "2026-10-28T19:25:38.677979+00:00",
+  "license": {
+    "spdx": "MIT",
+    "path": "LICENSE",
+    "sha256": "b740a1d46122672da62833e97f7e7c8a13fa85cbc7445b584b297cc00dde93db",
+    "upstream_url": "https://raw.githubusercontent.com/tabler/tabler-icons/ed177a085b652fe04ec4f37ced867c94621e7840/LICENSE"
+  },
+  "view_box": [
+    0,
+    0,
+    24,
+    24
+  ],
+  "pieces": [
+    {
+      "kind": "king",
+      "path": "originals/chess-king.svg",
+      "sha256": "a193632d107195fa896141aa58fc08d3b36141d6e05e1c4166383293fcef99fe",
+      "upstream_url": "https://raw.githubusercontent.com/tabler/tabler-icons/ed177a085b652fe04ec4f37ced867c94621e7840/icons/filled/chess-king.svg",
+      "response": {
+        "status": 200,
+        "content_type": "image/svg+xml",
+        "etag": "\"6d5dc909daa613031aea877d8753ff0cba304ae7d384fa170afb4604fa68f0b4\""
+      }
+    },
+    {
+      "kind": "queen",
+      "path": "originals/chess-queen.svg",
+      "sha256": "c51704c232d60af679d113ab8bcb1e91377cd5aed3de89df433f263f87d564f0",
+      "upstream_url": "https://raw.githubusercontent.com/tabler/tabler-icons/ed177a085b652fe04ec4f37ced867c94621e7840/icons/filled/chess-queen.svg",
+      "response": {
+        "status": 200,
+        "content_type": "image/svg+xml",
+        "etag": "\"1dc184d130f0b024baa6e6d889ed4259ef39c5db4be862da67087a037e1b09ec\""
+      }
+    },
+    {
+      "kind": "rook",
+      "path": "originals/chess-rook.svg",
+      "sha256": "c1dfdaa2df515e48a77b417d8839d870e466f294d1b0b695bf199f82ce1433c6",
+      "upstream_url": "https://raw.githubusercontent.com/tabler/tabler-icons/ed177a085b652fe04ec4f37ced867c94621e7840/icons/filled/chess-rook.svg",
+      "response": {
+        "status": 200,
+        "content_type": "image/svg+xml",
+        "etag": "\"bd8a20c96225032d26abf1cd98c81ea376857a3896efbae4711a2aa9b89c2661\""
+      }
+    },
+    {
+      "kind": "bishop",
+      "path": "originals/chess-bishop.svg",
+      "sha256": "94fbb0ca374e9f31993c12028218f55071659efa2e3e9cca816a6d160c0741ec",
+      "upstream_url": "https://raw.githubusercontent.com/tabler/tabler-icons/ed177a085b652fe04ec4f37ced867c94621e7840/icons/filled/chess-bishop.svg",
+      "response": {
+        "status": 200,
+        "content_type": "image/svg+xml",
+        "etag": "\"adb143e55ef0a19db1404d542cc787a0a5730527bfb11e40a61c7ddcf3de114c\""
+      }
+    },
+    {
+      "kind": "knight",
+      "path": "originals/chess-knight.svg",
+      "sha256": "aa4b2acd235e178ad90b8a290320c51dea3fe245f32d4f3094998bff51dc2905",
+      "upstream_url": "https://raw.githubusercontent.com/tabler/tabler-icons/ed177a085b652fe04ec4f37ced867c94621e7840/icons/filled/chess-knight.svg",
+      "response": {
+        "status": 200,
+        "content_type": "image/svg+xml",
+        "etag": "\"5b11b693a2706998b4e97a50efacf38f4bb11feaf0fd6c12cb83b718c9f8c9f7\""
+      }
+    },
+    {
+      "kind": "pawn",
+      "path": "originals/chess.svg",
+      "sha256": "6f8893e4f74cc05b262259a676a372ac07b4dfc016a05acf6a9f179929318fb6",
+      "upstream_url": "https://raw.githubusercontent.com/tabler/tabler-icons/ed177a085b652fe04ec4f37ced867c94621e7840/icons/filled/chess.svg",
+      "response": {
+        "status": 200,
+        "content_type": "image/svg+xml",
+        "etag": "\"1944eb08dd94d00e125f4ae0abcd4710a8c66ce48f4a1ba45a82bd700a76ba6a\""
+      }
+    }
+  ]
+}

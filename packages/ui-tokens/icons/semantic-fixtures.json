@@ -1,0 +1,8 @@
+{
+  "fixtures": [
+    {"id":"opposite_winding","property":"OppositeWinding","path":"M160 -800H800V-160H160Z M320 -640V-320H640V-640Z"},
+    {"id":"same_winding","property":"SameWinding","path":"M160 -800H800V-160H160Z M320 -640H640V-320H320Z"},
+    {"id":"relative_after_close","property":"RelativeAfterClose","path":"M160 -800h160v160H160Z m320 320h160v160H480Z"},
+    {"id":"smooth_quadratic","property":"SmoothQuadratic","path":"M160 -480Q320 -800 480 -480T800 -480V-160H160Z"}
+  ]
+}

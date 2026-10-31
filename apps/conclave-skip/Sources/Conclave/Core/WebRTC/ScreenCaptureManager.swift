@@ -1,22 +1,17 @@
-//
-//  ScreenCaptureManager.swift
-//  Conclave
-//
-//  Coordinates whole-device screen sharing via a ReplayKit Broadcast Upload
-//  Extension (NOT in-app RPScreenRecorder, which can only capture this app's own
-//  window). Standing up an App-Group socket server, then presenting the system
-//  broadcast picker, lets the user share ANY app / their whole screen - the
-//  extension streams JPEG frames back over the socket, which we decode and feed
-//  into the WebRTC screen producer. Mirrors the working react-native-webrtc flow.
-//
+
 
 #if SKIP
+
 enum ScreenCaptureManager {
     static var onProjectionRevoked: (() -> Void)?
 
     static func requestCapture() async -> Bool { fatalError() }
     static func isCaptureActive() -> Bool { fatalError() }
     static func stopCapture() { fatalError() }
+
+    static func lastStartFailure() -> ScreenShareFailure { fatalError() }
+
+    static func canShareDeviceAudio() -> Bool { fatalError() }
 }
 #endif
 
@@ -26,14 +21,6 @@ import ReplayKit
 import WebRTC
 import Combine
 #endif
-
-enum ScreenCaptureStartPolicy {
-    static let startTimeoutNanoseconds = UInt64(12_000_000_000)
-
-    static func shouldApplyTimeout(generation: Int, currentGeneration: Int, hasServer: Bool, isConnected: Bool) -> Bool {
-        generation == currentGeneration && hasServer && !isConnected
-    }
-}
 
 enum ScreenShareBroadcastLifecycleState: String {
     case idle
@@ -47,11 +34,14 @@ enum ScreenShareLifecycleBusKeys {
     static let state = "conclave.screenShare.lifecycle.state"
     static let updatedAt = "conclave.screenShare.lifecycle.updatedAt"
     static let stopRequestedAt = "conclave.screenShare.lifecycle.stopRequestedAt"
+
+    static let stopReason = "conclave.screenShare.lifecycle.stopReason"
+
+    static let attemptAt = "conclave.screenShare.lifecycle.attemptAt"
 }
 
 enum ScreenCaptureReconnectPolicy {
-    // The extension retries for six seconds. Leave enough room for scheduling
-    // jitter when the main app transitions between foreground and background.
+
     static let graceNanoseconds = UInt64(8_000_000_000)
 
     static func shouldFinalizeDisconnect(
@@ -102,11 +92,6 @@ private final class ScreenShareFrameRateGate: @unchecked Sendable {
     }
 }
 
-/// Coalesces ReplayKit frames before they cross onto the main queue. JPEG
-/// decoding can outpace both the MainActor and WebRTC's encoder, especially
-/// for portrait device frames. Keeping only the newest pending frame prevents
-/// an unbounded queue of retained pixel buffers while preserving the freshest
-/// screen contents.
 private final class ScreenShareLatestFramePump: @unchecked Sendable {
     typealias Delivery = @MainActor @Sendable (ScreenFrameBox) -> Void
 
@@ -166,12 +151,10 @@ private final class ScreenShareLatestFramePump: @unchecked Sendable {
     }
 }
 
-/// Manages screen capture coordination between the broadcast extension and WebRTC.
 @MainActor
 final class ScreenCaptureManager: NSObject {
     static let shared = ScreenCaptureManager()
 
-    // MARK: - Configuration
     private let appGroupIdentifier = "group.com.acmvit.conclave.screenshare"
     private let broadcastExtensionBundleId = "com.acmvit.conclave.ScreenShareExtension"
     private let publishFrameRateKey = "conclave.screenShare.maxFrameRate"
@@ -180,23 +163,31 @@ final class ScreenCaptureManager: NSObject {
     private let publishMaxBitrateKey = "conclave.screenShare.maxBitrateBps"
     private let publishContentHintKey = "conclave.screenShare.contentHint"
 
-    // MARK: - Publishers
     let isCapturing = CurrentValueSubject<Bool, Never>(false)
     let captureError = PassthroughSubject<Error, Never>()
 
-    /// Invoked when the broadcast ends from OUTSIDE the app (Control Center /
-    /// status bar / the extension's own timeout) so the meeting can tear down
-    /// its producer and reset UI state. Set by MeetingViewModel.
     var onBroadcastStopped: (() -> Void)?
 
-    // MARK: - Properties
+    var onCapturePhaseChanged: ((ScreenSharePhase) -> Void)?
+
+    var canShareDeviceAudio: Bool {
+        ScreenShareCapabilityPolicy.current(platform: ScreenSharePlatform.ios, apiLevel: 0)
+    }
+
     private weak var webRTCClient: WebRTCClient?
     private var server: ScreenShareSocketServer?
     private var connected = false
     private var hasConnectedInCurrentCapture = false
     private var startGeneration = 0
     private var pendingStartContinuation: CheckedContinuation<Void, Error>?
-    private var startTimeoutTask: Task<Void, Never>?
+
+    private var startWindow = ScreenShareStartWindow.closed
+    private var startWindowTask: Task<Void, Never>?
+
+    private var presentedAtEpochSeconds: Double = 0
+    private var stopWrittenForCurrentAttempt = false
+
+    private var baselinePresentedController: ObjectIdentifier?
     private var reconnectGraceTask: Task<Void, Never>?
     private let frameGate = ScreenShareFrameRateGate()
     private let framePump = ScreenShareLatestFramePump()
@@ -205,8 +196,6 @@ final class ScreenCaptureManager: NSObject {
     private var publishMaxHeight = 2_160
     private var publishMaxBitrateBps = 2_500_000
     private var publishContentHint = NativeScreenShareContentHint.detail.rawValue
-
-    // MARK: - Public Methods
 
     var isCaptureActive: Bool {
         server != nil && (connected || reconnectGraceTask != nil)
@@ -246,14 +235,13 @@ final class ScreenCaptureManager: NSObject {
         }
     }
 
-    /// Stand up the socket server and present the system broadcast picker. The
-    /// share becomes live once the user confirms the picker and the extension
-    /// connects (frames then flow in via the server). Returns only after that
-    /// connection is established, so callers do not mark the meeting as
-    /// sharing when the user cancels the system sheet.
     func startCapture(webRTCClient: WebRTCClient) async throws {
         if server != nil {
             await stopCapture()
+        }
+
+        guard RPScreenRecorder.shared().isAvailable else {
+            throw ScreenShareStartError(failure: ScreenShareFailure.deniedBySystem)
         }
 
         framePump.reset()
@@ -294,6 +282,8 @@ final class ScreenCaptureManager: NSObject {
                     self.reconnectGraceTask = nil
                     self.connected = true
                     self.hasConnectedInCurrentCapture = true
+                    self.applyStartEvent(ScreenShareStartEvent.connected, nowMs: Self.nowMs())
+                    self.closeStartWindow()
                     self.isCapturing.send(true)
                     self.finishPendingStart(.success(()))
                 }
@@ -322,12 +312,12 @@ final class ScreenCaptureManager: NSObject {
                     return
                 }
 
-                presentBroadcastPicker()
+                guard presentBroadcastPicker() else {
+                    failPendingStart(generation: generation, failure: ScreenShareFailure.notConfigured, stopReason: nil)
+                    return
+                }
 
-                // If the extension never connects (the user cancelled or dismissed
-                // the system sheet), tear everything back down so the share button
-                // never flips to a dead producer.
-                scheduleStartTimeout(generation: generation)
+                openStartWindow(generation: generation)
             }
         } onCancel: { [weak self] in
             Task { @MainActor in
@@ -336,31 +326,12 @@ final class ScreenCaptureManager: NSObject {
         }
     }
 
-    /// Tear down from the app side (the in-app Share toggle). Closing the socket
-    /// makes the extension's next write fail, which finishes the broadcast
-    /// gracefully.
     func stopCapture() async {
-        requestBroadcastStop()
-        startGeneration &+= 1
-        startTimeoutTask?.cancel()
-        startTimeoutTask = nil
-        reconnectGraceTask?.cancel()
-        reconnectGraceTask = nil
-        connected = false
-        hasConnectedInCurrentCapture = false
-        frameGate.reset()
-        framePump.reset()
-        server?.stop()
-        server = nil
-        webRTCClient = nil
-        isCapturing.send(false)
+        requestBroadcastStop(reason: ScreenShareBroadcastStopReason.person)
+        tearDownCapture()
         finishPendingStart(.failure(ScreenCaptureError.cancelled))
     }
 
-    /// Reconcile the app's in-memory state with the extension-owned lifecycle
-    /// record whenever iOS moves the app between foreground and background.
-    /// Socket callbacks remain authoritative while connected; the shared record
-    /// covers extension termination while the app was suspended.
     func reconcileBroadcastLifecycle() {
         guard server != nil, pendingStartContinuation == nil else { return }
         switch persistedBroadcastState {
@@ -375,14 +346,24 @@ final class ScreenCaptureManager: NSObject {
         }
     }
 
-    // MARK: - Private
+    nonisolated static func failure(for error: Error) -> ScreenShareFailure {
+        if let startError = error as? ScreenShareStartError {
+            return startError.failure
+        }
+        if let captureError = error as? ScreenCaptureError {
+            switch captureError {
+            case .cancelled:
+                return ScreenShareFailure.cancelled
+            case .appGroupUnavailable, .socketUnavailable:
+                return ScreenShareFailure.notConfigured
+            }
+        }
+        return ScreenShareFailure.producerFailed
+    }
 
-    private func handleExternalStop() {
-        guard server != nil else { return }
-        let hadConnected = hasConnectedInCurrentCapture
+    private func tearDownCapture() {
         startGeneration &+= 1
-        startTimeoutTask?.cancel()
-        startTimeoutTask = nil
+        closeStartWindow()
         reconnectGraceTask?.cancel()
         reconnectGraceTask = nil
         connected = false
@@ -393,6 +374,12 @@ final class ScreenCaptureManager: NSObject {
         server = nil
         webRTCClient = nil
         isCapturing.send(false)
+    }
+
+    private func handleExternalStop() {
+        guard server != nil else { return }
+        let hadConnected = hasConnectedInCurrentCapture
+        tearDownCapture()
         finishPendingStart(.failure(ScreenCaptureError.cancelled))
         if hadConnected {
             onBroadcastStopped?()
@@ -402,28 +389,25 @@ final class ScreenCaptureManager: NSObject {
     private func cancelPendingStart(generation: Int) {
         guard startGeneration == generation,
               pendingStartContinuation != nil else { return }
-        startGeneration &+= 1
-        startTimeoutTask?.cancel()
-        startTimeoutTask = nil
-        reconnectGraceTask?.cancel()
-        reconnectGraceTask = nil
-        connected = false
-        hasConnectedInCurrentCapture = false
-        frameGate.reset()
-        framePump.reset()
-        server?.stop()
-        server = nil
-        webRTCClient = nil
-        isCapturing.send(false)
+        requestBroadcastStop(reason: ScreenShareBroadcastStopReason.person)
+        tearDownCapture()
         finishPendingStart(.failure(ScreenCaptureError.cancelled))
+    }
+
+    private func failPendingStart(generation: Int, failure: ScreenShareFailure,
+                                  stopReason: ScreenShareBroadcastStopReason?) {
+        guard startGeneration == generation,
+              pendingStartContinuation != nil else { return }
+        requestBroadcastStop(reason: stopReason ?? ScreenShareBroadcastStopReason.person)
+        tearDownCapture()
+        finishPendingStart(.failure(ScreenShareStartError(failure: failure)))
     }
 
     private func finishPendingStart(_ result: Result<Void, Error>) {
         guard let continuation = pendingStartContinuation else { return }
         pendingStartContinuation = nil
         if case .success = result {
-            startTimeoutTask?.cancel()
-            startTimeoutTask = nil
+            closeStartWindow()
         }
         switch result {
         case .success:
@@ -433,20 +417,94 @@ final class ScreenCaptureManager: NSObject {
         }
     }
 
-    private func scheduleStartTimeout(generation: Int) {
-        startTimeoutTask?.cancel()
-        startTimeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: ScreenCaptureStartPolicy.startTimeoutNanoseconds)
-            guard !Task.isCancelled,
-                  let self,
-                  ScreenCaptureStartPolicy.shouldApplyTimeout(
-                    generation: generation,
-                    currentGeneration: self.startGeneration,
-                    hasServer: self.server != nil,
-                    isConnected: self.connected
-                  ) else { return }
-            self.handleExternalStop()
+    private func openStartWindow(generation: Int) {
+        startWindowTask?.cancel()
+        presentedAtEpochSeconds = Date().timeIntervalSince1970
+        stopWrittenForCurrentAttempt = false
+        UserDefaults(suiteName: appGroupIdentifier)?.set(presentedAtEpochSeconds,
+                                                         forKey: ScreenShareLifecycleBusKeys.attemptAt)
+        startWindow = ScreenShareStartWindow.closed
+        applyStartEvent(ScreenShareStartEvent.presented, nowMs: Self.nowMs())
+        let pollNanoseconds = UInt64(ScreenShareStartPolicy.pollIntervalMs * 1_000_000.0)
+        startWindowTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: pollNanoseconds)
+                guard !Task.isCancelled, let self else { return }
+                guard self.startGeneration == generation,
+                      self.pendingStartContinuation != nil else { return }
+                if self.evaluateStartWindow(generation: generation) { return }
+            }
         }
+    }
+
+    private func closeStartWindow() {
+        startWindowTask?.cancel()
+        startWindowTask = nil
+        startWindow = ScreenShareStartWindow.closed
+        baselinePresentedController = nil
+    }
+
+    private func evaluateStartWindow(generation: Int) -> Bool {
+        let now = Self.nowMs()
+        readExtensionLifecycleBus(nowMs: now)
+        readSystemUIVisibility(nowMs: now)
+        switch ScreenShareStartPolicy.decision(startWindow, nowMs: now) {
+        case .wait:
+            return false
+        case .live:
+            return true
+        case .cancelSilently:
+
+            cancelPendingStart(generation: generation)
+            return true
+        case .extensionTimeout:
+            failPendingStart(generation: generation, failure: ScreenShareFailure.extensionTimeout,
+                             stopReason: ScreenShareBroadcastStopReason.startTimeout)
+            return true
+        }
+    }
+
+    private func applyStartEvent(_ event: ScreenShareStartEvent, nowMs: Double) {
+        let previousPhase = ScreenShareStartPolicy.phase(startWindow)
+        let next = ScreenShareStartPolicy.apply(event, to: startWindow, nowMs: nowMs)
+        guard next != startWindow else { return }
+        startWindow = next
+        let phase = ScreenShareStartPolicy.phase(next)
+        if phase != previousPhase && phase != ScreenSharePhase.idle {
+            onCapturePhaseChanged?(phase)
+        }
+    }
+
+    private func readExtensionLifecycleBus(nowMs: Double) {
+        guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
+        let updatedAt = defaults.double(forKey: ScreenShareLifecycleBusKeys.updatedAt)
+        guard ScreenShareStartPolicy.busRecordIsCurrent(updatedAtSeconds: updatedAt,
+                                                        presentedAtSeconds: presentedAtEpochSeconds),
+              let rawValue = defaults.string(forKey: ScreenShareLifecycleBusKeys.state),
+              let state = ScreenShareBroadcastLifecycleState(rawValue: rawValue) else { return }
+        switch state {
+        case .starting, .active, .reconnecting:
+            applyStartEvent(ScreenShareStartEvent.extensionStarting, nowMs: nowMs)
+        case .stopped:
+            applyStartEvent(ScreenShareStartEvent.extensionStopped, nowMs: nowMs)
+        case .idle:
+            break
+        }
+    }
+
+    private func readSystemUIVisibility(nowMs: Double) {
+        let sceneIsActive = UIApplication.shared.applicationState == .active
+        let presented = Self.topPresentedController().map { ObjectIdentifier($0) }
+        let hasNewPresentation = presented != nil && presented != baselinePresentedController
+        let visible = !sceneIsActive || hasNewPresentation
+        if visible != startWindow.isSystemUIVisible {
+            applyStartEvent(visible ? ScreenShareStartEvent.systemUIShown : ScreenShareStartEvent.systemUIHidden,
+                            nowMs: nowMs)
+        }
+    }
+
+    private static func nowMs() -> Double {
+        Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000.0
     }
 
     private func scheduleReconnectGrace(generation: Int) {
@@ -488,39 +546,57 @@ final class ScreenCaptureManager: NSObject {
         return state
     }
 
-    private func requestBroadcastStop() {
-        guard server != nil else { return }
-        UserDefaults(suiteName: appGroupIdentifier)?.set(
-            Date().timeIntervalSince1970,
-            forKey: ScreenShareLifecycleBusKeys.stopRequestedAt
-        )
+    private func requestBroadcastStop(reason: ScreenShareBroadcastStopReason) {
+        guard presentedAtEpochSeconds > 0,
+              !stopWrittenForCurrentAttempt,
+              let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
+
+        defaults.set(reason.rawValue, forKey: ScreenShareLifecycleBusKeys.stopReason)
+        defaults.set(Date().timeIntervalSince1970, forKey: ScreenShareLifecycleBusKeys.stopRequestedAt)
+        stopWrittenForCurrentAttempt = true
     }
 
-    private func presentBroadcastPicker() {
+    private func presentBroadcastPicker() -> Bool {
+        guard let window = Self.keyWindow else { return false }
         let picker = RPSystemBroadcastPickerView(
             frame: CGRect(x: 0, y: 0, width: 1, height: 1)
         )
         picker.preferredExtension = broadcastExtensionBundleId
         picker.showsMicrophoneButton = false
 
-        // The picker must be in the view hierarchy to present its system sheet.
-        if let window = Self.keyWindow {
-            window.addSubview(picker)
-        }
+        window.addSubview(picker)
 
-        // Programmatically tap the internal button to surface the system sheet.
-        for subview in picker.subviews {
-            if let button = subview as? UIButton {
-                button.sendActions(for: .touchUpInside)
-                break
-            }
+        guard let button = Self.firstButton(in: picker) else {
+            picker.removeFromSuperview()
+            return false
         }
+        baselinePresentedController = Self.topPresentedController().map { ObjectIdentifier($0) }
+        button.sendActions(for: .touchUpInside)
 
-        // Remove the throwaway picker shortly after; the system sheet is its own
-        // presentation and outlives this view.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             picker.removeFromSuperview()
         }
+        return true
+    }
+
+    private static func firstButton(in view: UIView) -> UIButton? {
+        for subview in view.subviews {
+            if let button = subview as? UIButton {
+                return button
+            }
+            if let nested = firstButton(in: subview) {
+                return nested
+            }
+        }
+        return nil
+    }
+
+    private static func topPresentedController() -> UIViewController? {
+        var controller = keyWindow?.rootViewController?.presentedViewController
+        while let next = controller?.presentedViewController {
+            controller = next
+        }
+        return controller
     }
 
     private static var keyWindow: UIWindow? {
@@ -535,7 +611,6 @@ final class ScreenCaptureManager: NSObject {
     }
 }
 
-// MARK: - Errors
 enum ScreenCaptureError: Error, LocalizedError, Equatable {
     case appGroupUnavailable
     case socketUnavailable

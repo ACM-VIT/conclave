@@ -1,0 +1,115 @@
+{
+  "id": "account_circle.fill0",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "request_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/account_circle/materialsymbolsrounded/account_circle_24px.svg",
+  "final_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/account_circle/materialsymbolsrounded/account_circle_24px.svg",
+  "http_status": 200,
+  "headers": [
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Content-Length",
+      "732"
+    ],
+    [
+      "Cache-Control",
+      "max-age=300"
+    ],
+    [
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    ],
+    [
+      "Content-Type",
+      "image/svg+xml"
+    ],
+    [
+      "ETag",
+      "\"820e5e1889e0b7c6a413c1c3b9f1130693cb4116ad73aa76081ea9ad65ab6abe\""
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=31536000"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Frame-Options",
+      "deny"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "X-GitHub-Request-Id",
+      "A8C2:A499C:44AAD2:54949D:6AE24F90"
+    ],
+    [
+      "x-github-edge-region",
+      "centralindia"
+    ],
+    [
+      "Accept-Ranges",
+      "bytes"
+    ],
+    [
+      "Date",
+      "Wed, 28 Oct 2026 19:40:00 GMT"
+    ],
+    [
+      "Via",
+      "1.1 varnish"
+    ],
+    [
+      "X-Served-By",
+      "cache-maa10243-MAA"
+    ],
+    [
+      "X-Cache",
+      "MISS"
+    ],
+    [
+      "X-Cache-Hits",
+      "0"
+    ],
+    [
+      "X-Timer",
+      "S1793216401.697273,VS0,VE297"
+    ],
+    [
+      "Vary",
+      "Authorization,Accept-Encoding"
+    ],
+    [
+      "Access-Control-Allow-Origin",
+      "*"
+    ],
+    [
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    ],
+    [
+      "X-Fastly-Request-ID",
+      "4bf9736c3be0baa07e37df90b10f7f7547c104f5"
+    ],
+    [
+      "Expires",
+      "Wed, 28 Oct 2026 19:45:00 GMT"
+    ],
+    [
+      "Source-Age",
+      "0"
+    ]
+  ],
+  "started_at": "2026-10-28T19:40:00.601195+00:00",
+  "completed_at": "2026-10-28T19:40:01.060740+00:00",
+  "sha256": "a00a7e524203f2196358884c04eda55fe5cfa461351b6401b92f4e0ecedb7595",
+  "bytes": 732,
+  "body_file": "assets/symbols/web/account_circle/materialsymbolsrounded/account_circle_24px.svg",
+  "historical_status": "fresh_pinned_acquisition"
+}

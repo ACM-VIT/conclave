@@ -1,10 +1,28 @@
 {
   "applinks": {
-    "apps": [],
     "details": [
       {
-        "appID": "RZGK9VX3KX.com.acmvit.conclave",
-        "paths": ["/w/*", "/*-*-*"]
+        "appIDs": ["RZGK9VX3KX.com.acmvit.conclave"],
+        "components": [
+          { "/": "/book/*", "exclude": true, "comment": "booking pages stay on the web" },
+          { "/": "/api/*", "exclude": true, "comment": "server routes" },
+          { "/": "/sign-in*", "exclude": true, "comment": "web sign-in" },
+          { "/": "/privacy*", "exclude": true, "comment": "privacy policy" },
+          { "/": "/delete-account*", "exclude": true, "comment": "account deletion" },
+          { "/": "/sfu-admin*", "exclude": true, "comment": "server admin" },
+          { "/": "/schedule*", "exclude": true, "comment": "scheduling stays on the web" },
+          { "/": "/chat-qa*", "exclude": true, "comment": "web-only path the native parser rejects" },
+          { "/": "/_next/*", "exclude": true, "comment": "web build assets" },
+          { "/": "/assets/*", "exclude": true, "comment": "static assets" },
+          { "/": "/effects/*", "exclude": true, "comment": "static assets" },
+          { "/": "/mediapipe/*", "exclude": true, "comment": "static assets" },
+          { "/": "/reactions/*", "exclude": true, "comment": "static assets" },
+          { "/": "/workers/*", "exclude": true, "comment": "static assets" },
+          { "/": "/*.*", "exclude": true, "comment": "files; meeting and webinar codes never contain a dot" },
+          { "/": "/w/*", "comment": "webinar attendee links" },
+          { "/": "/*-*-*", "comment": "three-word meeting codes" },
+          { "/": "/sched-*", "comment": "scheduled webinar host rooms" }
+        ]
       }
     ]
   }

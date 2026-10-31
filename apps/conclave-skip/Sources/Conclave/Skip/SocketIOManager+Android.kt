@@ -70,6 +70,7 @@ internal object SocketEvent {
     val setTtsDisabled = SfuClientEvent.setTtsDisabled.rawValue
     val setReactionsDisabled = SfuClientEvent.setReactionsDisabled.rawValue
     val setImageAttachmentsEnabled = SfuClientEvent.setImageAttachmentsEnabled.rawValue
+    val setParticipantMediaPermissions = SfuClientEvent.setParticipantMediaPermissions.rawValue
     val getRoomLockStatus = SfuClientEvent.getRoomLockStatus.rawValue
     val getChatLockStatus = SfuClientEvent.getChatLockStatus.rawValue
     val getDmEnabledStatus = SfuClientEvent.getDmEnabledStatus.rawValue
@@ -123,6 +124,8 @@ internal object SocketEvent {
     val browserNavigate = SfuClientEvent.browserNavigate.rawValue
     val browserClose = SfuClientEvent.browserClose.rawValue
     val browserGetState = SfuClientEvent.browserGetState.rawValue
+
+    val browserGetCapabilities = SfuClientEvent.browserGetCapabilities.rawValue
     val browserActivity = SfuClientEvent.browserActivity.rawValue
     val appsOpen = SfuClientEvent.appsOpen.rawValue
     val appsClose = SfuClientEvent.appsClose.rawValue
@@ -165,6 +168,7 @@ internal object SocketEvent {
     val noGuestsChanged = SfuServerEvent.noGuestsChanged.rawValue
     val dmStateChanged = SfuServerEvent.dmStateChanged.rawValue
     val imageAttachmentsStateChanged = SfuServerEvent.imageAttachmentsStateChanged.rawValue
+    val participantMediaPermissionsChanged = SfuServerEvent.participantMediaPermissionsChanged.rawValue
     val ttsDisabledChanged = SfuServerEvent.ttsDisabledChanged.rawValue
     val reactionsDisabledChanged = SfuServerEvent.reactionsDisabledChanged.rawValue
     val userRequestedJoin = SfuServerEvent.userRequestedJoin.rawValue
@@ -215,12 +219,6 @@ internal object SocketEvent {
     val gameVote = SfuServerEvent.gameVote.rawValue
 }
 
-/// Raw consume-response fields, carrying rtpParameters as the verbatim JSON
-/// string mediasoup gave us rather than a re-encoded Swift struct. Skip's
-/// JSONEncoder cannot encode the `[String: String]` codec `parameters` map
-/// (it throws "Tuple2 cannot be cast to Encodable"), so any round-trip of
-/// RtpParameters/RtpCapabilities through the Codable structs crashes on
-/// Android. We therefore keep these blobs as raw JSON end-to-end.
 internal class ConsumeRawResult(
     internal val id: String,
     internal val producerId: String,
@@ -245,9 +243,6 @@ internal class SocketIOManager {
     internal var connectionError: Error? = null
         private set
 
-    /// The router's RTP capabilities exactly as the server sent them in the
-    /// joinRoom ack. Passed verbatim to mediasoup `Device.load()` - see
-    /// ConsumeRawResult for why we avoid re-encoding the Codable struct.
     internal var routerRtpCapabilitiesJson: String? = null
         private set
 
@@ -308,6 +303,8 @@ internal class SocketIOManager {
     internal var onChatMessage: ((ChatMessage) -> Unit)? = null
     internal var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Unit)? = null
     internal var onChatReactionChanged: ((ChatReactionChangedNotification) -> Unit)? = null
+
+    internal var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Unit)? = null
     internal var onReaction: ((Reaction) -> Unit)? = null
 
     internal var onHandRaised: ((HandRaisedNotification) -> Unit)? = null
@@ -318,6 +315,8 @@ internal class SocketIOManager {
     internal var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Unit)? = null
     internal var onDmStateChanged: ((DmStateChangedNotification) -> Unit)? = null
     internal var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Unit)? = null
+
+    internal var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Unit)? = null
     internal var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Unit)? = null
     internal var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Unit)? = null
     internal var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Unit)? = null
@@ -604,9 +603,6 @@ internal class SocketIOManager {
                 throw ErrorException(errorMessage)
             }
 
-            // Stash the router rtpCapabilities verbatim BEFORE decoding - mediasoup
-            // Device.load() wants this JSON, and re-encoding the decoded struct
-            // crashes Skip's JSONEncoder (AnyCodable codec params -> Tuple2).
             extractRawObjectField(data, "rtpCapabilities")?.let { routerRtpCapabilitiesJson = it }
             val response = decodeJoinRoomResponse(data)
             val resolvedRoomId = response.roomId ?: requestedRoomId
@@ -631,11 +627,7 @@ internal class SocketIOManager {
     }
 
     internal suspend fun createProducerTransport(): TransportResponse {
-        // These two SFU handlers take ONLY an ack callback (no data arg):
-        //   socket.on("createProducerTransport", (callback) => …)
-        // Emitting an empty `{}` payload first would shift the args so the
-        // server binds `callback` to the object and respond() silently no-ops,
-        // hanging the client. Emit with the ack alone, matching the web client.
+
         val data = emitAckOnly(SocketEvent.createProducerTransport)
         return JSONDecoder().decode(TransportResponse::class, from = data)
     }
@@ -661,11 +653,6 @@ internal class SocketIOManager {
         return JSONDecoder().decode(RestartIceResponse::class, from = data)
     }
 
-    /// Send the producer's rtpParameters (the verbatim JSON mediasoup handed us
-    /// in the Transport's onProduce listener) without round-tripping it through
-    /// the RtpParameters Codable struct, which Skip's JSONEncoder cannot encode.
-    /// The request is assembled as a JSONObject so `toSocketPayload` passes it
-    /// through untouched.
     internal suspend fun produceRaw(
         transportId: String,
         kind: String,
@@ -695,9 +682,6 @@ internal class SocketIOManager {
         return response.producerId
     }
 
-    /// Consume using the router rtpCapabilities verbatim JSON, and return the
-    /// server's rtpParameters as raw JSON for mediasoup `RecvTransport.consume()`.
-    /// Same rationale as produceRaw: avoid the AnyCodable encode crash.
     internal suspend fun consumeRaw(
         producerId: String,
         rtpCapabilitiesJson: String,
@@ -872,8 +856,9 @@ internal class SocketIOManager {
                 timeoutMs = timeoutMilliseconds.coerceAtLeast(100).toLong(),
             )
         } catch (error: Throwable) {
-            val message = (error.message ?: error.toString()).lowercase()
-            if (message.contains("consumer not found") || message.contains("not_found")) {
+            val message = error.message ?: error.toString()
+            val classified = MeetingErrorClassifier.classify(serverMessage = message, context = MeetingErrorContext.media)
+            if (classified.category == MeetingErrorCategory.consumerNotFound) {
                 return
             }
             throw error
@@ -912,11 +897,6 @@ internal class SocketIOManager {
         emit(SocketEvent.setConsumerPreferences, payload)
     }
 
-    /// Snapshot the room's current producers (producer-sync safety net). The SFU
-    /// handler takes ONLY an ack callback - emit with no payload via emitAckOnly.
-    /// Returns the whole response object; the caller iterates `.producers` (a
-    /// bare list return trips Skip's Array/List bridging). Throws on failure;
-    /// the caller's do/catch swallows it.
     internal suspend fun getProducers(): GetProducersResponse {
         val data = emitAckOnly(SocketEvent.getProducers)
         return decodeGetProducersResponse(data)
@@ -946,19 +926,27 @@ internal class SocketIOManager {
         gif: ChatGifAttachment? = null,
         image: ChatImageAttachment? = null,
         recipient: String? = null,
-        replyTo: ChatReplyPreview? = null
+        replyTo: ChatReplyPreview? = null,
+        suppressEmbeds: Boolean = false
     ): ChatMessage {
-        val request = SendChatRequest(content = content, gif = gif, image = image, recipient = recipient, replyTo = replyTo)
+        val request = SendChatRequest(content = content, gif = gif, image = image, recipient = recipient, replyTo = replyTo,
+            suppressEmbeds = if (suppressEmbeds) true else null)
         val data = emit(SocketEvent.sendChat, request)
         val response = JSONDecoder().decode(SendChatResponse::class, from = data)
         val notification = response.message ?: throw ErrorException("Missing chat message acknowledgement.")
         return notification.toChatMessage(activeRoomId)
     }
 
+    internal suspend fun toggleChatReaction(messageId: String, emoji: String): skip.lib.Array<ChatMessageReaction> {
+        val payload = JSONObject()
+            .put("messageId", messageId)
+            .put("emoji", emoji)
+        val data = emit(SocketEvent.chatReact, payload)
+        return decodeChatReactionsArray(dataObject(data)?.optJSONArray("reactions"))
+    }
+
     internal suspend fun authorizeChatImageUpload(): ChatImageUploadAuthorization {
-        // The server handler is `(_data, callback)`: send an empty payload so
-        // the ack callback binds to the second slot (ack-only emits never get
-        // answered by this handler).
+
         val data = emit(SocketEvent.chatImageUploadAuthorize, JSONObject())
         return JSONDecoder().decode(ChatImageUploadAuthorizationAck::class, from = data).authorization()
     }
@@ -987,6 +975,22 @@ internal class SocketIOManager {
             .put("timestamp", packet.timestamp)
             .put("expiresAt", packet.expiresAt)
             .put("signature", packet.signature)
+
+        val reasoning = packet.reasoning
+        if (!reasoning.isNullOrEmpty()) payload.put("reasoning", reasoning)
+        if (packet.reasoningDone == true) payload.put("reasoningDone", true)
+        val tasks = packet.tasks
+        if (tasks != null && tasks.count > 0) {
+            val array = JSONArray()
+            for (task in tasks) {
+                val item = JSONObject().put("id", task.id).put("kind", task.kind).put("status", task.status)
+                val query = task.query
+                if (!query.isNullOrEmpty()) item.put("query", query)
+                array.put(item)
+            }
+            payload.put("tasks", array)
+        }
+        if (packet.errored == true) payload.put("errored", true)
         socket?.emit(SocketEvent.conclaveAnswer, payload)
     }
 
@@ -1032,6 +1036,25 @@ internal class SocketIOManager {
     internal suspend fun setReactionsDisabled(disabled: Boolean): RoomPolicyMutationResponse {
         val data = emit(SocketEvent.setReactionsDisabled, mapOf("disabled" to disabled))
         return decodeRoomPolicyMutationResponse(data)
+    }
+
+    internal suspend fun setImageAttachmentsEnabled(enabled: Boolean): RoomPolicyMutationResponse {
+        val data = emit(SocketEvent.setImageAttachmentsEnabled, mapOf("enabled" to enabled))
+        return decodeRoomPolicyMutationResponse(data)
+    }
+
+    internal suspend fun setParticipantMediaPermissions(unmuteAllowed: Boolean?, videoAllowed: Boolean?): ParticipantMediaPermissionsResponse {
+        val payload = mutableMapOf<String, Any>()
+        if (unmuteAllowed != null) payload["unmuteAllowed"] = unmuteAllowed
+        if (videoAllowed != null) payload["videoAllowed"] = videoAllowed
+        val data = emit(SocketEvent.setParticipantMediaPermissions, payload)
+        val obj = dataObject(data) ?: return JSONDecoder().decode(ParticipantMediaPermissionsResponse::class, from = data)
+        return ParticipantMediaPermissionsResponse(
+            success = boolField(obj, "success"),
+            error = stringField(obj, "error"),
+            unmuteAllowed = boolField(obj, "unmuteAllowed"),
+            videoAllowed = boolField(obj, "videoAllowed")
+        )
     }
 
     internal suspend fun setRoomPolicies(
@@ -1151,20 +1174,25 @@ internal class SocketIOManager {
         return JSONDecoder().decode(BrowserStateNotification::class, from = data)
     }
 
+    internal suspend fun getBrowserCapabilities(): BrowserCapabilitiesResponse {
+        val data = emitAckOnly(SocketEvent.browserGetCapabilities, timeoutMs = SharedBrowserTimeouts.capabilitiesAckMillis.toLong())
+        return JSONDecoder().decode(BrowserCapabilitiesResponse::class, from = data)
+    }
+
     internal suspend fun launchBrowser(url: String): LaunchBrowserResponse {
         val request = LaunchBrowserRequest(url = url)
-        val data = emit(SocketEvent.browserLaunch, request)
+        val data = emit(SocketEvent.browserLaunch, request, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())
         return JSONDecoder().decode(LaunchBrowserResponse::class, from = data)
     }
 
     internal suspend fun navigateBrowser(url: String): LaunchBrowserResponse {
         val request = NavigateBrowserRequest(url = url)
-        val data = emit(SocketEvent.browserNavigate, request)
+        val data = emit(SocketEvent.browserNavigate, request, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())
         return JSONDecoder().decode(LaunchBrowserResponse::class, from = data)
     }
 
     internal suspend fun closeBrowser() {
-        emitAckOnly(SocketEvent.browserClose)
+        emitAckOnly(SocketEvent.browserClose, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())
     }
 
     internal fun sendBrowserActivity() {
@@ -1337,6 +1365,50 @@ internal class SocketIOManager {
 
     private fun shouldEmitFireAndForget(): Boolean {
         return isConnected && socket != null && !activeRoomId.isNullOrBlank()
+    }
+
+    internal suspend fun updateWebinarQaEnabled(enabled: Boolean): WebinarConfigSnapshot {
+        return updateWebinarConfig(JSONObject().put("qaEnabled", enabled))
+    }
+
+    internal suspend fun promoteWebinarAttendee(userId: String) {
+        emit(SocketEvent.webinarPromoteAttendee, mapOf("userId" to userId))
+    }
+
+    internal suspend fun demoteWebinarParticipant(userId: String) {
+        emit(SocketEvent.webinarDemoteParticipant, mapOf("userId" to userId))
+    }
+
+    internal suspend fun setWebinarHandRaised(raised: Boolean): Boolean {
+        val data = emit(SocketEvent.webinarSetHandRaised, mapOf("raised" to raised))
+        val obj = dataObject(data) ?: return raised
+        return boolField(obj, "raised") ?: raised
+    }
+
+    internal suspend fun declineWebinarStage() {
+        emitAckOnly(SocketEvent.webinarDeclineStage)
+    }
+
+    internal suspend fun submitWebinarQuestion(question: String): String {
+        val data = emit(SocketEvent.webinarQaSubmit, mapOf("question" to question))
+        val obj = dataObject(data) ?: return ""
+        return stringField(obj, "id") ?: ""
+    }
+
+    internal suspend fun upvoteWebinarQuestion(id: String): WebinarQaUpvoteResponse {
+        val data = emit(SocketEvent.webinarQaUpvote, mapOf("id" to id))
+        val obj = dataObject(data) ?: return WebinarQaUpvoteResponse(success = true, upvotes = null, hasUpvoted = null)
+        return WebinarQaUpvoteResponse(
+            success = boolField(obj, "success"),
+            upvotes = intField(obj, "upvotes"),
+            hasUpvoted = boolField(obj, "hasUpvoted")
+        )
+    }
+
+    internal suspend fun moderateWebinarQuestion(id: String, action: String, answerText: String?) {
+        val payload = mutableMapOf<String, Any>("id" to id, "action" to action)
+        if (answerText != null) payload["answerText"] = answerText
+        emit(SocketEvent.webinarQaModerate, payload)
     }
 
     private suspend fun updateWebinarConfig(payload: JSONObject): WebinarConfigSnapshot {
@@ -1560,12 +1632,9 @@ internal class SocketIOManager {
         return array
     }
 
-    /// Emit an event whose SFU handler takes ONLY the ack callback (no data
-    /// argument). The socket.io Java client treats a trailing Ack as the ack and
-    /// sends zero data args, so the server's `(callback) => …` binds correctly.
-    private suspend fun emitAckOnly(event: String): Data {
+    private suspend fun emitAckOnly(event: String, timeoutMs: Long = ACK_TIMEOUT_MS): Data {
         val socket = socket ?: throw ErrorException("Socket not connected")
-        return withAckTimeout(event) {
+        return withAckTimeout(event, timeoutMs) {
             suspendCancellableCoroutine { cont ->
                 socket.emit(event, object : io.socket.client.Ack {
                     override fun call(vararg args: Any?) {
@@ -2090,6 +2159,11 @@ internal class SocketIOManager {
                 ?.let { decodeGameOptionChoiceObject(it) } ?: continue
             choices.add(choice)
         }
+        val showWhenObject = obj.optJSONObject("showWhen")
+        val showWhen = if (showWhenObject != null) {
+            val conditionId = stringField(showWhenObject, "id")
+            if (conditionId != null) GameOptionCondition(id = conditionId, equals = stringArrayField(showWhenObject, "equals") ?: skip.lib.Array()) else null
+        } else null
         return GameOptionSpec(
             id = stringField(obj, "id") ?: return null,
             type = type,
@@ -2102,7 +2176,8 @@ internal class SocketIOManager {
             suffix = stringField(obj, "suffix"),
             choices = skip.lib.Array(choices),
             placeholder = stringField(obj, "placeholder"),
-            maxLength = intField(obj, "maxLength")
+            maxLength = intField(obj, "maxLength"),
+            showWhen = showWhen
         )
     }
 
@@ -2213,7 +2288,8 @@ internal class SocketIOManager {
             active = boolField(obj, "active") ?: false,
             publicState = obj.optJSONObject("public")?.let { decodeGamePublicStateObject(it) },
             view = rawJsonField(obj, "view"),
-            vote = obj.optJSONObject("vote")?.let { decodeGameVoteStateObject(it) }
+            vote = obj.optJSONObject("vote")?.let { decodeGameVoteStateObject(it) },
+            selfId = stringField(obj, "selfId")
         )
     }
 
@@ -2317,9 +2393,6 @@ internal class SocketIOManager {
         return ""
     }
 
-    /// Pull a nested JSON object field out of an ack payload as its verbatim
-    /// JSON string (used to keep mediasoup capability/parameter blobs raw rather
-    /// than re-encoding the decoded Codable struct, which crashes Skip's encoder).
     private fun extractRawObjectField(data: Data, field: String): String? {
         return try {
             val obj = JSONObject(dataToString(data))
@@ -2543,6 +2616,8 @@ internal class SocketIOManager {
             webinarRequiresInviteCode = boolField(obj, "webinarRequiresInviteCode"),
             webinarAttendeeCount = intField(obj, "webinarAttendeeCount"),
             webinarMaxAttendees = intField(obj, "webinarMaxAttendees"),
+
+            webinarQaEnabled = boolField(obj, "webinarQaEnabled"),
             displayNameSnapshot = displayNameSnapshot
         )
     }
@@ -2670,7 +2745,37 @@ internal class SocketIOManager {
             dmTargetUserId = null,
             dmTargetDisplayName = null,
             roomId = stringField(obj, "roomId"),
-            replyTo = null
+            replyTo = null,
+            reactions = null,
+            ttsVoiceToken = null,
+            suppressEmbeds = null
+        )
+    }
+
+    private fun decodeConclaveAssistantPacket(value: Any?): ConclaveAssistantMessageNotification? {
+        val obj = jsonObject(value) ?: return null
+        val id = stringField(obj, "id") ?: return null
+        val rawTasks = obj.optJSONArray("tasks")
+        val tasks = mutableListOf<ConclaveAssistantRelayTask>()
+        if (rawTasks != null) {
+            for (index in 0 until rawTasks.length()) {
+                val entry = rawTasks.optJSONObject(index) ?: continue
+                val taskId = stringField(entry, "id") ?: continue
+                val kind = stringField(entry, "kind") ?: continue
+                val status = stringField(entry, "status") ?: continue
+                tasks.add(ConclaveAssistantRelayTask(id = taskId, kind = kind, status = status, query = stringField(entry, "query")))
+            }
+        }
+        return ConclaveAssistantMessageNotification(
+            id = id,
+            content = if (obj.has("content") && !obj.isNull("content")) obj.optString("content") else null,
+            done = boolField(obj, "done"),
+            timestamp = doubleField(obj, "timestamp"),
+            roomId = stringField(obj, "roomId"),
+            reasoning = if (obj.has("reasoning") && !obj.isNull("reasoning")) obj.optString("reasoning") else null,
+            reasoningDone = boolField(obj, "reasoningDone"),
+            tasks = if (rawTasks != null) skip.lib.Array(tasks) else null,
+            errored = boolField(obj, "errored")
         )
     }
 
@@ -2687,7 +2792,39 @@ internal class SocketIOManager {
             dmTargetUserId = stringField(obj, "dmTargetUserId"),
             dmTargetDisplayName = stringField(obj, "dmTargetDisplayName"),
             roomId = stringField(obj, "roomId"),
-            replyTo = obj.optJSONObject("replyTo")?.let { decodeChatReplyPreviewObject(it) }
+            replyTo = obj.optJSONObject("replyTo")?.let { decodeChatReplyPreviewObject(it) },
+            reactions = decodeChatReactionsArray(obj.optJSONArray("reactions")),
+            ttsVoiceToken = stringField(obj, "ttsVoiceToken"),
+            suppressEmbeds = boolField(obj, "suppressEmbeds")
+        )
+    }
+
+    private fun decodeChatReactionsArray(array: JSONArray?): skip.lib.Array<ChatMessageReaction> {
+        val reactions = mutableListOf<ChatMessageReaction>()
+        if (array == null) return skip.lib.Array(reactions)
+        for (index in 0 until array.length()) {
+            val entry = array.optJSONObject(index) ?: continue
+            val emoji = stringField(entry, "emoji") ?: continue
+            val ids = mutableListOf<String>()
+            val rawIds = entry.optJSONArray("userIds")
+            if (rawIds != null) {
+                for (idIndex in 0 until rawIds.length()) {
+                    val id = rawIds.optString(idIndex, "")
+                    if (id.isNotEmpty()) ids.add(id)
+                }
+            }
+            reactions.add(ChatMessageReaction(emoji = emoji, userIds = skip.lib.Array(ids)))
+        }
+        return skip.lib.Array(reactions)
+    }
+
+    private fun decodeChatReactionChanged(value: Any?): ChatReactionChangedNotification? {
+        val obj = jsonObject(value) ?: return decode<ChatReactionChangedNotification>(value)
+        val messageId = stringField(obj, "messageId") ?: return null
+        return ChatReactionChangedNotification(
+            messageId = messageId,
+            reactions = decodeChatReactionsArray(obj.optJSONArray("reactions")),
+            roomId = stringField(obj, "roomId") ?: ""
         )
     }
 
@@ -3010,7 +3147,10 @@ internal class SocketIOManager {
             ttsDisabled = boolField(obj, "ttsDisabled"),
             dmEnabled = boolField(obj, "dmEnabled"),
             reactionsDisabled = boolField(obj, "reactionsDisabled"),
-            requiresMeetingInviteCode = boolField(obj, "requiresMeetingInviteCode")
+            requiresMeetingInviteCode = boolField(obj, "requiresMeetingInviteCode"),
+            imageAttachmentsEnabled = boolField(obj, "imageAttachmentsEnabled"),
+            participantUnmuteAllowed = boolField(obj, "participantUnmuteAllowed"),
+            participantVideoAllowed = boolField(obj, "participantVideoAllowed")
         )
     }
 
@@ -3213,7 +3353,12 @@ internal class SocketIOManager {
             dmTargetUserId = dmTargetUserId,
             dmTargetDisplayName = dmTargetDisplayName,
             roomId = roomId ?: taggedRoomId,
-            replyTo = replyTo
+            replyTo = replyTo,
+            clientId = null,
+            sendStatus = null,
+            reactions = reactions ?: skip.lib.Array(),
+            ttsVoiceToken = ttsVoiceToken,
+            suppressEmbeds = suppressEmbeds ?: false
         )
     }
 
@@ -3313,6 +3458,12 @@ internal class SocketIOManager {
 
         socket.on(SocketEvent.conclaveMessage, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
+
+            decodeConclaveAssistantPacket(args.firstOrNull())?.let { packet ->
+                if (eventRoomIdMatchesActiveOrPending(packet.roomId, allowMissingRoomId = true)) {
+                    onConclaveAssistantPacket?.invoke(packet)
+                }
+            }
             val notification = decodeConclaveMessage(args.firstOrNull()) ?: return@Listener
             val roomId = activeRoomId ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId, allowMissingRoomId = true)) return@Listener
@@ -3328,7 +3479,7 @@ internal class SocketIOManager {
 
         socket.on(SocketEvent.chatReactionChanged, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
-            val notification = decode<ChatReactionChangedNotification>(args.firstOrNull()) ?: return@Listener
+            val notification = decodeChatReactionChanged(args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onChatReactionChanged?.invoke(notification)
         })
@@ -3410,6 +3561,13 @@ internal class SocketIOManager {
             val notification = decode<ImageAttachmentsStateChangedNotification>(args.firstOrNull()) ?: return@Listener
             if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
             onImageAttachmentsStateChanged?.invoke(notification)
+        })
+
+        socket.on(SocketEvent.participantMediaPermissionsChanged, Emitter.Listener { args ->
+            if (this.socket !== socket) return@Listener
+            val notification = decode<ParticipantMediaPermissionsChangedNotification>(args.firstOrNull()) ?: return@Listener
+            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
+            onParticipantMediaPermissionsChanged?.invoke(notification)
         })
 
         socket.on(SocketEvent.ttsDisabledChanged, Emitter.Listener { args ->

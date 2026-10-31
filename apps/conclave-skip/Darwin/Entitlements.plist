@@ -10,6 +10,8 @@
     <array>
         <string>applinks:conclave.acmvit.in</string>
         <string>applinks:www.conclave.acmvit.in</string>
+
+        <string>$(CONCLAVE_DEVELOPER_ASSOCIATED_DOMAIN)</string>
     </array>
     <key>com.apple.security.application-groups</key>
     <array>

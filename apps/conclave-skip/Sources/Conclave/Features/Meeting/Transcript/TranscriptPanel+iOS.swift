@@ -1,0 +1,1162 @@
+#if os(iOS) && !SKIP
+import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
+
+struct TranscriptPanel: View {
+    let transcript: TranscriptPresenter
+    let panels: PanelCoordinator
+    let presentation: NativePanelPresentation
+    let resolved: PanelPresentation
+    let onPromoteToLarge: () -> Void
+    @Environment(\.conclaveSystemColorScheme) private var systemScheme
+
+    var body: some View {
+        PanelShell(title: TranscriptCopy.title, presentation: resolved, hostStyle: resolved.style, systemScheme: systemScheme,
+                   onClose: { panels.dismiss(cancelPending: true) }, onPromoteToLarge: onPromoteToLarge) {
+            TranscriptPanelContent(transcript: transcript)
+        }
+        .task(id: presentation.id) {
+            transcript.panelDidOpen(destination: presentation.request.destination)
+        }
+        .onDisappear { transcript.panelDidClose() }
+        .onChange(of: panels.destinationRequest) { _, _ in
+
+            guard let request = panels.latestDestination(for: presentation.request.presentationID) else { return }
+            transcript.panelDidOpen(destination: request.destination)
+        }
+        .accessibilityIdentifier("transcript.panel")
+    }
+}
+
+private struct TranscriptPanelContent: View {
+    let transcript: TranscriptPresenter
+    @State private var copyCount = 0
+    @State private var showsCopied = false
+    @State private var copyTask: Task<Void, Never>?
+
+    var body: some View {
+        let snapshot = transcript.snapshot
+        TranscriptPanelBody(transcript: transcript, snapshot: snapshot, showsCopied: showsCopied)
+            .toolbar {
+                if TranscriptViewPolicy.menuEnabled(hasContent: snapshot.hasContent, canStop: snapshot.canStop,
+                                                    offersRecap: snapshot.offersRecapToChat) {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        TranscriptPanelMenu(transcript: transcript, snapshot: snapshot, onCopy: copy)
+                    }
+                }
+            }
+            .conclaveGestureFeedback(.linkCopied, trigger: copyCount)
+            .task(id: copyCount) {
+
+                guard copyCount > 0 else { return }
+                showsCopied = true
+                try? await Task.sleep(nanoseconds: 1_800_000_000)
+                if Task.isCancelled { return }
+                showsCopied = false
+            }
+            .confirmationDialog(TranscriptCopy.stopTitle,
+                                isPresented: Binding(get: { transcript.snapshot.stop == StopPhase.confirming },
+                                                     set: { shown in
+
+                                                         if shown { return }
+                                                         Task { @MainActor in transcript.cancelStop() }
+                                                     }),
+                                titleVisibility: .visible) {
+                Button(TranscriptCopy.stopConfirm, role: .destructive) { transcript.confirmStop() }
+                    .accessibilityIdentifier("transcript.stopDialog.confirm")
+                Button(TranscriptCopy.cancel, role: .cancel) { transcript.cancelStop() }
+                    .accessibilityIdentifier("transcript.stopDialog.cancel")
+            } message: {
+                Text(TranscriptCopy.stopMessage)
+            }
+            .modifier(TranscriptPanelAnnouncer(transcript: transcript))
+            .onDisappear { copyTask?.cancel() }
+    }
+
+    private func copy() {
+        copyTask?.cancel()
+        let callSession = transcript.inputs.callSession
+        let snapshot = transcript.exportSnapshot(labels: TranscriptCopy.exportLabels(roomId: transcript.inputs.roomId))
+        copyTask = Task { @MainActor in
+            let file = await Task.detached(priority: .userInitiated) {
+                snapshot.file(timeLabel: { TranscriptCopy.clock($0) })
+            }.value
+            guard !Task.isCancelled, transcript.inputs.callSession == callSession else { return }
+            UIPasteboard.general.string = file.content
+            transcript.noteCopied()
+            copyCount += 1
+        }
+    }
+
+}
+
+private struct TranscriptPanelBody: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+    let showsCopied: Bool
+
+    var body: some View {
+        switch snapshot.body {
+        case .loading:
+            ConclaveLoadingStatus(label: TranscriptCopy.loading, identifier: "transcript.loading")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .unavailable:
+            ConclaveErrorStatus(title: TranscriptCopy.unavailableTitle, message: TranscriptCopy.unavailableBody,
+                                systemImage: ConclaveSymbols.exclamationmarkTriangleFill, retryTitle: TranscriptCopy.tryAgain,
+                                identifier: "transcript.unavailable") {
+                transcript.retryConnection()
+            }
+        case .relayUnavailable:
+            ConclaveEmptyStatus(title: TranscriptCopy.relayUnavailableTitle, message: TranscriptCopy.relayUnavailableBody,
+                                systemImage: ConclaveSymbols.captionsBubble, identifier: "transcript.relayUnavailable")
+        case .startCard:
+            TranscriptPanelStartCard(transcript: transcript, snapshot: snapshot)
+        case .content:
+            TranscriptPanelSession(transcript: transcript, snapshot: snapshot, showsCopied: showsCopied)
+        }
+    }
+}
+
+private struct TranscriptPanelMenu: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+    let onCopy: () -> Void
+
+    var body: some View {
+        Menu {
+            if snapshot.hasContent {
+                ShareLink(item: TranscriptPanelExportItem(presenter: transcript),
+                          preview: SharePreview(TranscriptCopy.shareTitle)) {
+                    Label(TranscriptCopy.export, systemImage: ConclaveSymbols.squareAndArrowUp)
+                }
+                .accessibilityIdentifier("transcript.menu.export")
+                Button(action: onCopy) {
+                    Label(TranscriptCopy.copy, systemImage: ConclaveSymbols.docOnDoc)
+                }
+                .accessibilityIdentifier("transcript.menu.copy")
+            }
+            if snapshot.offersRecapToChat {
+                Button { transcript.postRecapToChat() } label: {
+                    Label(TranscriptCopy.postRecap, systemImage: ConclaveSymbols.sparkles)
+                }
+                    .disabled(snapshot.recap == RecapPhase.posting)
+                    .accessibilityIdentifier("transcript.menu.recap")
+            }
+            if snapshot.canStop {
+                Button(role: .destructive) { transcript.requestStop() } label: {
+                    Label(TranscriptCopy.stopMenu, systemImage: ConclaveSymbols.stopFill)
+                }
+                    .disabled(snapshot.controlsDisabled)
+                    .accessibilityIdentifier("transcript.menu.stop")
+            }
+        } label: {
+            Image(systemName: ConclaveSymbols.ellipsis)
+                .accessibilityLabel(TranscriptCopy.moreActions)
+        }
+        .disabled(!TranscriptViewPolicy.menuEnabled(hasContent: snapshot.hasContent, canStop: snapshot.canStop,
+                                                    offersRecap: snapshot.offersRecapToChat))
+        .accessibilityIdentifier("transcript.menu")
+    }
+}
+
+struct TranscriptPanelExportItem: Transferable {
+    let presenter: TranscriptPresenter
+    let expectedCallSession: Int
+    let fileName: String
+
+    @MainActor
+    init(presenter: TranscriptPresenter) {
+        self.presenter = presenter
+        expectedCallSession = presenter.inputs.callSession
+        fileName = TranscriptExportPolicy.fileName(roomId: presenter.inputs.roomId)
+    }
+
+    static let contentType: UTType = UTType(filenameExtension: "md", conformingTo: .plainText) ?? .plainText
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(exportedContentType: TranscriptPanelExportItem.contentType) { item in
+            let input = try await MainActor.run {
+                guard item.presenter.inputs.callSession == item.expectedCallSession else { throw CancellationError() }
+                return (item.presenter.exportSnapshot(labels: TranscriptCopy.exportLabels(roomId: item.presenter.inputs.roomId)),
+                 item.presenter.inputs.callSession)
+            }
+            let prepared = try await Task.detached(priority: .userInitiated) {
+                try Task.checkCancellation()
+                return input.0.data(timeLabel: { TranscriptCopy.clock($0) })
+            }.value
+            try Task.checkCancellation()
+            return try await MainActor.run {
+                try Task.checkCancellation()
+                guard item.presenter.inputs.callSession == input.1 else { throw CancellationError() }
+                item.presenter.recordExport(byteCount: prepared.count, callSession: input.1)
+                return prepared
+            }
+        }
+        .suggestedFileName { $0.fileName }
+    }
+}
+
+private struct TranscriptPanelStartCard: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+    @State private var provider = TranscriptProvider.openAI
+    @State private var assistantModel = TranscriptConfiguration.defaultAssistantModel
+    @State private var providerKey = ""
+    @State private var assistantKey = ""
+    @State private var optionsExpanded = false
+    @State private var didSeed = false
+
+    var body: some View {
+        if TranscriptViewPolicy.showsStartBar(body: snapshot.body, offersStart: snapshot.offersStart) {
+            form.conclaveFloatingActionBar { startBar }
+        } else {
+            form
+        }
+    }
+
+    private var coverage: KeyCoverage {
+        TranscriptKeyPolicy.coverage(provider: provider, keysKnown: snapshot.keysKnown, openAICovered: snapshot.openAICovered,
+                                     sarvamCovered: snapshot.sarvamCovered)
+    }
+
+    private var form: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(TranscriptCopy.startTitle(snapshot.startKind))
+                        .font(.title2.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    Text(TranscriptCopy.blurb(TranscriptViewPolicy.blurb(kind: snapshot.startKind, coverage: coverage,
+                                                                         isViewOnly: snapshot.isViewOnly)))
+                        .font(.subheadline)
+                        .foregroundStyle(HostingTheme.secondaryText)
+                    if snapshot.isViewOnly { TranscriptPanelTag(title: TranscriptCopy.viewOnly) }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("transcript.startCard.header")
+                if snapshot.offersStart {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Picker(TranscriptCopy.provider, selection: $provider) {
+                            ForEach(TranscriptConfiguration.providers) { option in
+                                Text(TranscriptCopy.providerName(option)).tag(option)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("transcript.options.provider")
+                        if TranscriptKeyPolicy.needsProviderKey(provider: provider, openAICovered: snapshot.openAICovered,
+                                                                sarvamCovered: snapshot.sarvamCovered) {
+                            SecureField(TranscriptCopy.providerKey(provider), text: $providerKey)
+                                .textContentType(.password)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .textFieldStyle(.roundedBorder)
+                                .controlSize(.large)
+                                .frame(minHeight: 44)
+                                .accessibilityIdentifier("transcript.options.providerKey")
+                        }
+                        if TranscriptKeyPolicy.needsAssistantKey(provider: provider, openAICovered: snapshot.openAICovered) {
+                            SecureField(TranscriptCopy.assistantKey, text: $assistantKey)
+                                .textContentType(.password)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .textFieldStyle(.roundedBorder)
+                                .controlSize(.large)
+                                .frame(minHeight: 44)
+                                .accessibilityIdentifier("transcript.options.assistantKey")
+                        }
+                        TranscriptPanelCoverageLine(coverage: coverage)
+                            .font(.caption)
+                            .foregroundStyle(HostingTheme.secondaryText)
+                        DisclosureGroup(TranscriptCopy.options, isExpanded: $optionsExpanded) {
+                            Picker(TranscriptCopy.assistant, selection: $assistantModel) {
+                                ForEach(TranscriptConfiguration.assistantModels) { model in
+                                    Text(verbatim: model.label).tag(model.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .padding(.top, 8)
+                            .accessibilityIdentifier("transcript.options.assistant")
+                        }
+                        .font(.subheadline)
+                        .accessibilityIdentifier("transcript.options")
+                    }
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .onAppear(perform: seed)
+        .onChange(of: provider) { _, value in transcript.drafts.provider = value }
+        .onChange(of: assistantModel) { _, value in transcript.drafts.assistantModel = value }
+        .onChange(of: providerKey) { _, value in transcript.drafts.providerKey = value }
+        .onChange(of: assistantKey) { _, value in transcript.drafts.assistantKey = value }
+        .onChange(of: optionsExpanded) { _, value in transcript.drafts.optionsExpanded = value }
+        .accessibilityIdentifier("transcript.startCard")
+    }
+
+    private var startBar: some View {
+        let ready = TranscriptKeyPolicy.hasRequiredKeys(provider: provider, keysKnown: snapshot.keysKnown,
+                                                        openAICovered: snapshot.openAICovered, sarvamCovered: snapshot.sarvamCovered,
+                                                        providerKey: providerKey, assistantKey: assistantKey)
+        return ConclaveFloatingActionButton(title: TranscriptCopy.startButton(snapshot.startKind), isEnabled: ready,
+                                            identifier: "transcript.start") {
+            let options = TranscriptKeyPolicy.options(provider: provider, assistantModel: assistantModel,
+                                                      openAICovered: snapshot.openAICovered, sarvamCovered: snapshot.sarvamCovered,
+                                                      providerKey: providerKey, assistantKey: assistantKey)
+            if transcript.start(options: options) {
+                providerKey = ""
+                assistantKey = ""
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, CGFloat(DesignTokens.space16))
+        .padding(.vertical, CGFloat(DesignTokens.space8))
+    }
+
+    private func seed() {
+        if didSeed { return }
+        didSeed = true
+        let drafts = transcript.drafts
+        provider = drafts.provider
+        assistantModel = drafts.assistantModel
+        providerKey = drafts.providerKey
+        assistantKey = drafts.assistantKey
+        optionsExpanded = drafts.optionsExpanded
+    }
+}
+
+private struct TranscriptPanelCoverageLine: View {
+    let coverage: KeyCoverage
+
+    var body: some View {
+        HStack(spacing: CGFloat(DesignTokens.space8)) {
+            if coverage == KeyCoverage.unknown {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: coverage == KeyCoverage.covered ? ConclaveSymbols.checkmark : ConclaveSymbols.infoCircle)
+                    .accessibilityHidden(true)
+            }
+            Text(TranscriptCopy.coverage(coverage))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("transcript.coverage")
+    }
+}
+
+private struct TranscriptPanelTag: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Color.primary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+    }
+}
+
+private struct TranscriptPanelSession: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+    let showsCopied: Bool
+
+    var body: some View {
+        TranscriptPanelTabContent(transcript: transcript, snapshot: snapshot)
+            .conclaveTopBar {
+                TranscriptPanelTopBar(transcript: transcript, snapshot: snapshot, showsCopied: showsCopied)
+            }
+    }
+}
+
+private struct TranscriptPanelTabContent: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+
+    var body: some View {
+        switch transcript.tab {
+        case .transcript:
+            TranscriptPanelFeedList(feed: transcript.feed)
+        case .ask:
+            TranscriptPanelAskView(transcript: transcript, snapshot: snapshot)
+        case .minutes:
+            TranscriptPanelMinutesList(transcript: transcript, snapshot: snapshot)
+        }
+    }
+}
+
+private struct TranscriptPanelTopBar: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+    let showsCopied: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if !snapshot.tabs.isEmpty {
+                ConclaveViewSwitch(TranscriptCopy.viewSwitchLabel, options: options,
+                                   selection: Binding(get: { transcript.tab.rawValue },
+                                                      set: { raw in transcript.select(TranscriptTab(rawValue: raw) ?? TranscriptTab.transcript) }),
+                                   identifier: "transcript.tabs")
+            }
+            TranscriptPanelStatusRow(transcript: transcript, snapshot: snapshot, showsCopied: showsCopied)
+            TranscriptPanelIssueBanner(transcript: transcript, snapshot: snapshot)
+            #if DEBUG
+            if TranscriptDiagnostics.driver != nil {
+                TranscriptPanelFixtureBar()
+            }
+            #endif
+        }
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    private var options: [ConclaveSegmentModel] {
+        var result: [ConclaveSegmentModel] = []
+        for tab in snapshot.tabs {
+            result.append(ConclaveSegmentModel(id: tab.rawValue, title: TranscriptCopy.tab(tab), isEnabled: true))
+        }
+        return result
+    }
+}
+
+private struct TranscriptPanelStatusRow: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+    let showsCopied: Bool
+
+    var body: some View {
+        HStack(spacing: CGFloat(DesignTokens.space8)) {
+            HStack(spacing: CGFloat(DesignTokens.space8)) {
+                TranscriptPanelStatusGlyph(status: snapshot.status)
+                Text(TranscriptCopy.status(snapshot.status))
+                    .font(.subheadline.weight(.semibold))
+                let detail = showsCopied ? TranscriptCopy.copied : TranscriptCopy.host(snapshot.host, name: snapshot.controllerName)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(HostingTheme.secondaryText)
+                        .lineLimit(2)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("transcript.status")
+            Spacer(minLength: CGFloat(DesignTokens.space8))
+            if snapshot.status == TranscriptStatusKind.ended && snapshot.offersStart {
+                ConclaveButton(TranscriptCopy.startButton(TranscriptStartKind.start), role: .primary,
+                               isEnabled: endedStartReady, identifier: "transcript.status.start") {
+                    transcript.start(options: endedStartOptions)
+                }
+            }
+            if snapshot.canPause {
+                Button(snapshot.phase == LiveNotesPhase.paused ? TranscriptCopy.resume : TranscriptCopy.pause) {
+                    if snapshot.phase == LiveNotesPhase.paused { transcript.resume() } else { transcript.pause() }
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.primary)
+                .disabled(snapshot.controlsDisabled)
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("transcript.status.pause")
+            }
+            if snapshot.canStop {
+                Button(TranscriptCopy.stop, role: .destructive) { transcript.requestStop() }
+                    .buttonStyle(.bordered)
+                    .disabled(snapshot.controlsDisabled)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel(TranscriptCopy.stopConfirm)
+                    .accessibilityIdentifier("transcript.status.stop")
+            }
+        }
+        .frame(minHeight: 44)
+        .padding(.horizontal, CGFloat(DesignTokens.space16))
+        .padding(.vertical, CGFloat(DesignTokens.space4))
+    }
+
+    private var endedStartOptions: TranscriptStartOptions {
+        let drafts = transcript.drafts
+        return TranscriptKeyPolicy.options(provider: drafts.provider, assistantModel: drafts.assistantModel,
+                                           openAICovered: snapshot.openAICovered, sarvamCovered: snapshot.sarvamCovered,
+                                           providerKey: drafts.providerKey, assistantKey: drafts.assistantKey)
+    }
+
+    private var endedStartReady: Bool {
+        let drafts = transcript.drafts
+        return TranscriptKeyPolicy.hasRequiredKeys(provider: drafts.provider, keysKnown: snapshot.keysKnown,
+                                                   openAICovered: snapshot.openAICovered, sarvamCovered: snapshot.sarvamCovered,
+                                                   providerKey: drafts.providerKey, assistantKey: drafts.assistantKey)
+    }
+}
+
+private struct TranscriptPanelStatusGlyph: View {
+    let status: TranscriptStatusKind
+
+    var body: some View {
+        switch status {
+        case .live:
+            Circle().fill(HostingTheme.statusLive).frame(width: 8, height: 8).accessibilityHidden(true)
+        case .paused:
+            Circle().fill(HostingTheme.statusWarning).frame(width: 8, height: 8).accessibilityHidden(true)
+        case .starting, .stopping, .reconnecting:
+            ProgressView().controlSize(.small).accessibilityHidden(true)
+        case .none, .ended:
+            EmptyView()
+        }
+    }
+}
+
+private struct TranscriptPanelIssueBanner: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+
+    var body: some View {
+        VStack(spacing: CGFloat(DesignTokens.space8)) {
+            if snapshot.stop == StopPhase.failed {
+                ConclaveBanner(kind: .error, text: TranscriptCopy.stopFailed, surface: .app,
+                               actions: [ConclaveBannerAction(title: TranscriptCopy.tryAgain, identifier: "transcript.stopFailed.retry",
+                                                              action: { transcript.confirmStop() })],
+                               identifier: "transcript.stopFailed")
+            } else if snapshot.issue != TranscriptIssue.none {
+                let text = TranscriptCopy.issue(snapshot.issue, serverText: snapshot.issueServerText)
+                if !text.isEmpty {
+                    ConclaveBanner(kind: snapshot.issue == TranscriptIssue.controlsReconnecting ? .reconnecting : .warning, text: text,
+                                   surface: .app, actions: actions, lineLimit: 4, identifier: "transcript.issue")
+                }
+            }
+        }
+        .padding(.horizontal, CGFloat(DesignTokens.space16))
+        .padding(.bottom, snapshot.issue != TranscriptIssue.none || snapshot.stop == StopPhase.failed ? CGFloat(DesignTokens.space8) : 0)
+    }
+
+    private var actions: [ConclaveBannerAction] {
+        if snapshot.issue != TranscriptIssue.relayFailed { return [] }
+        return [ConclaveBannerAction(title: TranscriptCopy.tryAgain, identifier: "transcript.issue.retry",
+                                     action: { transcript.retryConnection() })]
+    }
+}
+
+private final class TranscriptPanelBottomSentinel {
+    var isVisible = true
+}
+
+private struct TranscriptPanelFollowKey: Equatable {
+    let id: String
+    let revision: Int
+}
+
+private struct TranscriptPanelFeedList: View {
+    let feed: TranscriptFeed
+    @State private var isAtBottom = true
+    @State private var sentinel = TranscriptPanelBottomSentinel()
+
+    var body: some View {
+        let ids = feed.rowIds
+        if ids.isEmpty {
+            ConclaveEmptyStatus(title: TranscriptCopy.listeningTitle, message: TranscriptCopy.listeningBody,
+                                systemImage: ConclaveSymbols.captionsBubble, identifier: "transcript.listening")
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(ids, id: \.self) { id in
+                            TranscriptPanelRowView(row: feed.row(id))
+                                .id(id)
+                        }
+                        if !TranscriptPanelPlatform.usesScrollGeometry {
+                            Color.clear
+                                .frame(height: 1)
+                                .accessibilityHidden(true)
+                                .onAppear { setBottomVisible(true) }
+                                .onDisappear { setBottomVisible(false) }
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, CGFloat(DesignTokens.space16))
+                    .padding(.vertical, CGFloat(DesignTokens.space12))
+                }
+                .defaultScrollAnchor(.bottom)
+                .modifier(TranscriptPanelSizeChangeAnchor())
+                .modifier(TranscriptPanelBottomProximity(isAtBottom: $isAtBottom))
+                .background {
+                    TranscriptPanelFollowLeaf(feed: feed, proxy: proxy, isPinned: { pinned })
+                }
+                .overlay(alignment: .bottom) {
+
+                    TranscriptPanelJumpPill {
+                        jump(proxy, to: feed.newestId)
+                    }
+                    .padding(.bottom, CGFloat(DesignTokens.space8))
+                    .opacity(isAtBottom ? 0 : 1)
+                    .allowsHitTesting(!isAtBottom)
+                    .accessibilityHidden(isAtBottom)
+                    .animation(.easeOut(duration: 0.12), value: isAtBottom)
+                }
+                .scrollDismissesKeyboard(.interactively)
+            }
+            .accessibilityIdentifier("transcript.list")
+        }
+    }
+
+    private var pinned: Bool {
+        TranscriptPanelPlatform.usesScrollGeometry ? isAtBottom : sentinel.isVisible
+    }
+
+    private func setBottomVisible(_ visible: Bool) {
+        sentinel.isVisible = visible
+        if isAtBottom != visible { isAtBottom = visible }
+    }
+
+    private func jump(_ proxy: ScrollViewProxy, to id: String) {
+        guard !id.isEmpty else { return }
+        proxy.scrollTo(id, anchor: .bottom)
+        isAtBottom = true
+    }
+}
+
+private struct TranscriptPanelFollowLeaf: View {
+    let feed: TranscriptFeed
+    let proxy: ScrollViewProxy
+    let isPinned: () -> Bool
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onChange(of: TranscriptPanelFollowKey(id: feed.newestId, revision: feed.newestRevision)) { _, key in
+                guard isPinned(), !key.id.isEmpty else { return }
+                proxy.scrollTo(key.id, anchor: .bottom)
+            }
+    }
+}
+
+enum TranscriptPanelPlatform {
+    static var usesScrollGeometry: Bool {
+        if #available(iOS 18.0, *) { return true }
+        return false
+    }
+}
+
+private struct TranscriptPanelSizeChangeAnchor: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.defaultScrollAnchor(.bottom, for: .sizeChanges)
+        } else {
+            content
+        }
+    }
+}
+
+private struct TranscriptPanelBottomProximity: ViewModifier {
+    @Binding var isAtBottom: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 24
+            } action: { _, atBottom in
+                if isAtBottom != atBottom { isAtBottom = atBottom }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+private struct TranscriptPanelJumpPill: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label {
+                Text(TranscriptCopy.jumpToLatest)
+            } icon: {
+                Image(systemName: ConclaveSymbols.arrowDown).accessibilityHidden(true)
+            }
+        }
+        .buttonStyle(.bordered)
+        .tint(.primary)
+        .controlSize(.small)
+        .frame(minHeight: 44)
+        .background(Color(uiColor: .systemBackground), in: Capsule())
+        .accessibilityIdentifier("transcript.jumpPill")
+    }
+}
+
+private struct TranscriptPanelRowView: View {
+    let row: TranscriptRowModel
+
+    var body: some View {
+        #if DEBUG
+        let _ = TranscriptDiagnostics.counters?.bump("transcript.row." + row.id + ".recompose")
+        #endif
+        if row.isPauseMarker {
+            HStack(spacing: CGFloat(DesignTokens.space8)) {
+                Rectangle().fill(Color(uiColor: .separator)).frame(height: 1)
+                Text(TranscriptCopy.resumedAt(row.startMillis))
+                    .font(.caption)
+                    .foregroundStyle(HostingTheme.secondaryText)
+                    .layoutPriority(1)
+                Rectangle().fill(Color(uiColor: .separator)).frame(height: 1)
+            }
+            .padding(.vertical, CGFloat(DesignTokens.space12))
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("transcript.row." + row.id)
+        } else {
+            let name = TranscriptCopy.speaker(row.speakerName, isYou: row.isYou)
+            let time = TranscriptCopy.clock(row.startMillis)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(name)
+                        .font(.subheadline.weight(.semibold))
+                    Spacer(minLength: CGFloat(DesignTokens.space8))
+                    Text(time)
+                        .font(.caption)
+                        .foregroundStyle(HostingTheme.secondaryText)
+                        .monospacedDigit()
+                }
+                Text(row.text)
+                    .font(.body)
+                    .foregroundStyle(row.isFinal ? Color.primary : HostingTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, CGFloat(DesignTokens.space8))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(name + ", " + time + ", " + row.text)
+            .accessibilityValue(row.isFinal ? "" : TranscriptCopy.stillSpeaking)
+            .accessibilityIdentifier("transcript.row." + row.id)
+        }
+    }
+}
+
+private struct TranscriptPanelAskView: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+    @State private var draft = ""
+    @State private var didSeed = false
+
+    var body: some View {
+        let showsComposer = TranscriptViewPolicy.showsAskComposer(tab: TranscriptTab.ask, canAsk: snapshot.canAsk, phase: snapshot.phase)
+        Group {
+            if showsComposer {
+                TranscriptPanelAskList(transcript: transcript, onSuggestion: { draft = $0 })
+                    .conclaveComposerBar {
+                        TranscriptPanelAskComposer(transcript: transcript, snapshot: snapshot, draft: $draft)
+                    }
+            } else {
+                TranscriptPanelAskList(transcript: transcript, onSuggestion: { draft = $0 })
+            }
+        }
+        .onAppear {
+            if !didSeed {
+                didSeed = true
+                draft = transcript.drafts.ask
+            }
+        }
+        .onChange(of: draft) { _, value in transcript.drafts.ask = value }
+    }
+}
+
+private struct TranscriptPanelAskList: View {
+    let transcript: TranscriptPresenter
+    let onSuggestion: (String) -> Void
+    @State private var isAtBottom = true
+    @State private var sentinel = TranscriptPanelBottomSentinel()
+
+    var body: some View {
+        let thread = transcript.ask
+        let ids = thread.rowIds
+        if ids.isEmpty {
+            ContentUnavailableView {
+                Label(TranscriptCopy.askEmptyTitle, systemImage: ConclaveSymbols.sparkles)
+                    .accessibilityAddTraits(.isHeader)
+            } description: {
+                Text(TranscriptCopy.askEmptyBody)
+            } actions: {
+                VStack(spacing: CGFloat(DesignTokens.space8)) {
+                    ForEach(TranscriptCopy.askSuggestions, id: \.self) { suggestion in
+
+                        Button(suggestion) { onSuggestion(suggestion) }
+                            .buttonStyle(.bordered)
+                            .tint(.primary)
+                    }
+                }
+            }
+            .accessibilityIdentifier("transcript.ask.empty")
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: CGFloat(DesignTokens.space12)) {
+                        ForEach(ids, id: \.self) { id in
+                            TranscriptPanelAskRow(row: thread.row(id), onRetry: { transcript.retryAsk(rowId: id) })
+                                .id(id)
+                        }
+                        if !TranscriptPanelPlatform.usesScrollGeometry {
+                            Color.clear
+                                .frame(height: 1)
+                                .accessibilityHidden(true)
+                                .onAppear { setBottomVisible(true) }
+                                .onDisappear { setBottomVisible(false) }
+                        }
+                    }
+                    .scrollTargetLayout()
+                    .padding(.horizontal, CGFloat(DesignTokens.space16))
+                    .padding(.vertical, CGFloat(DesignTokens.space12))
+                }
+                .defaultScrollAnchor(.bottom)
+                .modifier(TranscriptPanelSizeChangeAnchor())
+                .modifier(TranscriptPanelBottomProximity(isAtBottom: $isAtBottom))
+                .background {
+                    TranscriptPanelAskFollowLeaf(thread: thread, proxy: proxy, isPinned: { pinned })
+                }
+                .scrollDismissesKeyboard(.interactively)
+            }
+            .accessibilityIdentifier("transcript.ask.list")
+        }
+    }
+
+    private var pinned: Bool {
+        TranscriptPanelPlatform.usesScrollGeometry ? isAtBottom : sentinel.isVisible
+    }
+
+    private func setBottomVisible(_ visible: Bool) {
+        sentinel.isVisible = visible
+        if isAtBottom != visible { isAtBottom = visible }
+    }
+}
+
+private struct TranscriptPanelAskFollowLeaf: View {
+    let thread: AskThread
+    let proxy: ScrollViewProxy
+    let isPinned: () -> Bool
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onChange(of: thread.rowIds) { _, ids in
+                if let last = ids.last { proxy.scrollTo(last, anchor: .bottom) }
+            }
+            .onChange(of: thread.tailGrowth) { _, _ in
+                guard isPinned(), let last = thread.rowIds.last else { return }
+                proxy.scrollTo(last, anchor: .bottom)
+            }
+    }
+}
+
+private struct TranscriptPanelAskRow: View {
+    let row: AskRow
+    let onRetry: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space8)) {
+            HStack {
+                Spacer(minLength: 48)
+                ConclaveChatBubble(tone: .own, identifier: "transcript.ask." + row.id + ".question") {
+                    Text(row.question)
+                        .font(.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(TranscriptCopy.youAsked + ", " + row.question)
+            }
+            HStack {
+                answer
+                Spacer(minLength: 48)
+            }
+        }
+        .accessibilityIdentifier("transcript.ask." + row.id)
+    }
+
+    @ViewBuilder
+    private var answer: some View {
+        switch row.state {
+        case .thinking:
+            ConclaveChatBubble(tone: .answer, identifier: "transcript.ask." + row.id + ".answer") {
+                HStack(spacing: CGFloat(DesignTokens.space8)) {
+                    ProgressView().controlSize(.small)
+                    Text(TranscriptCopy.thinking)
+                }
+            }
+            .accessibilityElement(children: .combine)
+        case .streaming, .done:
+            ConclaveChatBubble(tone: .answer, identifier: "transcript.ask." + row.id + ".answer") {
+                AssistantMarkdownView(blocks: row.blocks, identifier: "transcript.ask." + row.id + ".markdown")
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(TranscriptCopy.conclaveAnswered)
+            .contextMenu {
+                if row.state == AskRowState.done {
+                    Button {
+                        UIPasteboard.general.string = row.answerText
+                    } label: {
+                        Label(TranscriptCopy.copyAnswer, systemImage: ConclaveSymbols.docOnDoc)
+                    }
+                }
+            }
+        case .error, .notSent, .timedOut:
+            ConclaveChatBubble(tone: .answer, identifier: "transcript.ask." + row.id + ".answer") {
+                VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space8)) {
+                    Text(TranscriptCopy.askState(row.state, errorText: row.errorText))
+                        .font(.body)
+                        .lineLimit(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(TranscriptCopy.tryAgain, action: onRetry)
+                        .buttonStyle(.borderless)
+                        .tint(HostingTheme.coralText)
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("transcript.ask." + row.id + ".retry")
+                }
+            }
+        }
+    }
+}
+
+private struct TranscriptPanelAskComposer: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+    @Binding var draft: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let canSend = AskRowPolicy.canSend(draft, canAsk: snapshot.canAsk, phase: snapshot.phase, link: snapshot.link)
+        ConclaveComposerStack(identifier: "transcript.ask.composer") {
+            ConclaveComposerStatusLine(text: TranscriptCopy.askPrivate, identifier: "transcript.ask.private")
+        } field: {
+            ConclaveComposerField(identifier: "transcript.ask.composer.cluster") {
+                TextField(TranscriptCopy.askPlaceholder, text: $draft, axis: .vertical)
+                    .lineLimit(1...ConclaveComposerMetrics.maximumLines)
+                    .textInputAutocapitalization(.sentences)
+                    .focused($focused)
+                    .submitLabel(.send)
+                    .onSubmit(send)
+                    .accessibilityLabel(TranscriptCopy.askPlaceholder)
+                    .accessibilityIdentifier("transcript.ask.field")
+            } send: {
+                ConclaveComposerSendButton(title: TranscriptCopy.askSend, isEnabled: canSend,
+                                           identifier: "transcript.ask.send", action: send)
+            }
+        }
+    }
+
+    private func send() {
+        if transcript.askQuestion(draft) { draft = "" }
+    }
+}
+
+private struct TranscriptPanelMinutesList: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+
+    var body: some View {
+        let minutes = transcript.minutes
+        let empty = MinutesPolicy.emptyKind(phase: snapshot.phase, hasContent: minutes.hasContent)
+        List {
+            Section {
+                TranscriptPanelMinutesStatus(updating: snapshot.minutesUpdating, updatedAtMillis: snapshot.minutesUpdatedAtMillis)
+                if snapshot.canRefreshMinutes {
+                    Button(TranscriptCopy.refreshMinutes) { transcript.refreshMinutes() }
+                        .disabled(snapshot.minutesUpdating)
+                        .accessibilityIdentifier("transcript.minutes.refresh")
+                }
+                if snapshot.offersRecapToChat || snapshot.recap != RecapPhase.idle {
+                    TranscriptPanelRecapRow(transcript: transcript, recap: snapshot.recap, offersRecap: snapshot.offersRecapToChat)
+                }
+            }
+            if !minutes.summary.isEmpty {
+                Section {
+                    Text(minutes.summary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } header: {
+                    Text(TranscriptCopy.section(MinutesSection.summary))
+                        .accessibilityAddTraits(.isHeader)
+                }
+            }
+            ForEach(minutes.sections) { section in
+                Section {
+                    ForEach(section.entries) { entry in
+                        TranscriptPanelMinutesEntryRow(entry: entry)
+                    }
+                } header: {
+                    Text(TranscriptCopy.section(section.section))
+                        .accessibilityAddTraits(.isHeader)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .overlay {
+            if empty != MinutesEmptyKind.none {
+                ConclaveEmptyStatus(title: TranscriptCopy.emptyTitle(empty), message: TranscriptCopy.emptyBody(empty),
+                                    systemImage: ConclaveSymbols.listBulletClipboard, identifier: "transcript.minutes.empty")
+                    .padding(.top, 120)
+            }
+        }
+        .accessibilityIdentifier("transcript.minutes")
+    }
+}
+
+private struct TranscriptPanelMinutesStatus: View {
+    let updating: Bool
+    let updatedAtMillis: Double
+
+    var body: some View {
+        let kind = MinutesPolicy.statusKind(updating: updating, updatedAtMillis: updatedAtMillis)
+        HStack(spacing: CGFloat(DesignTokens.space8)) {
+            if kind == MinutesStatusKind.updating {
+                ProgressView().controlSize(.small)
+            }
+            if kind == MinutesStatusKind.updated {
+                TimelineView(.periodic(from: Date(), by: 60)) { context in
+                    Text(TranscriptCopy.minutesStatus(kind, updatedAtMillis: updatedAtMillis,
+                                                      nowMillis: context.date.timeIntervalSince1970 * 1000.0))
+                }
+            } else {
+                Text(TranscriptCopy.minutesStatus(kind, updatedAtMillis: updatedAtMillis, nowMillis: 0))
+            }
+        }
+        .foregroundStyle(HostingTheme.secondaryText)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("transcript.minutes.status")
+    }
+}
+
+private struct TranscriptPanelRecapRow: View {
+    let transcript: TranscriptPresenter
+    let recap: RecapPhase
+    let offersRecap: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space4)) {
+            Button {
+                transcript.postRecapToChat()
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(TranscriptCopy.postRecap)
+                        Text(TranscriptCopy.recapDetail)
+                            .font(.footnote)
+                            .foregroundStyle(HostingTheme.secondaryText)
+                    }
+                    Spacer(minLength: CGFloat(DesignTokens.space8))
+                    if recap == RecapPhase.posting {
+                        ProgressView().controlSize(.small)
+                    }
+                    if recap == RecapPhase.posting || recap == RecapPhase.posted {
+                        Text(TranscriptCopy.recapValue(recap))
+                            .foregroundStyle(HostingTheme.secondaryText)
+                    }
+                }
+            }
+            .disabled(!offersRecap || recap == RecapPhase.posting)
+            .accessibilityIdentifier("transcript.minutes.recap")
+            if recap == RecapPhase.failed {
+                Text(TranscriptCopy.recapValue(RecapPhase.failed))
+                    .font(.footnote)
+                    .foregroundStyle(Color(uiColor: .systemRed))
+                Button(TranscriptCopy.tryAgain) { transcript.postRecapToChat() }
+                    .buttonStyle(.borderless)
+                    .tint(HostingTheme.coralText)
+                    .disabled(!offersRecap)
+                    .accessibilityIdentifier("transcript.minutes.recap.retry")
+            }
+        }
+    }
+}
+
+private struct TranscriptPanelMinutesEntryRow: View {
+    let entry: MinutesEntryModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space4)) {
+            Text(entry.text)
+                .fixedSize(horizontal: false, vertical: true)
+            if !entry.owner.isEmpty {
+                Text(TranscriptCopy.owner(entry.owner))
+                    .font(.footnote)
+                    .foregroundStyle(HostingTheme.secondaryText)
+            }
+            if !entry.due.isEmpty {
+                Text(TranscriptCopy.due(entry.due))
+                    .font(.footnote)
+                    .foregroundStyle(HostingTheme.secondaryText)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct TranscriptPanelAnnouncer: ViewModifier {
+    let transcript: TranscriptPresenter
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: transcript.announcement) { _, announcement in
+                guard let announcement else { return }
+                AccessibilityNotification.Announcement(TranscriptCopy.announcement(announcement.kind)).post()
+            }
+            .background {
+                if voiceOverEnabled && transcript.tab == TranscriptTab.transcript {
+                    TranscriptPanelFinalizedAnnouncer(feed: transcript.feed)
+                }
+            }
+    }
+}
+
+private struct TranscriptPanelFinalizedAnnouncer: View {
+    let feed: TranscriptFeed
+    @State private var lastSpokenAt = Date.distantPast
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .task(id: feed.finalized.serial) {
+                let line = feed.finalized
+                guard line.serial > 0, !line.text.isEmpty else { return }
+                let wait = 2.0 - Date().timeIntervalSince(lastSpokenAt)
+                if wait > 0 {
+
+                    try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                    if Task.isCancelled { return }
+                }
+                lastSpokenAt = Date()
+                var text = AttributedString(TranscriptCopy.speaker(line.speakerName, isYou: false) + ": " + line.text)
+                text.accessibilitySpeechAnnouncementPriority = .low
+                AccessibilityNotification.Announcement(text).post()
+            }
+    }
+}
+
+#if DEBUG
+private struct TranscriptPanelFixtureBar: View {
+    @State private var refresh = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ScrollView(.horizontal) {
+                HStack(spacing: CGFloat(DesignTokens.space8)) {
+                    ForEach(TranscriptFixtureScriptName.allCases, id: \.self) { script in
+                        Button {
+                            TranscriptDiagnostics.driver?.run(script)
+                            refresh += 1
+                        } label: {
+                            Text(verbatim: script.rawValue)
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("transcript.fixture." + script.rawValue)
+                    }
+                }
+            }
+            Text(verbatim: TranscriptDiagnostics.readout() + (refresh >= 0 ? "" : ""))
+                .font(.caption2.monospaced())
+                .foregroundStyle(HostingTheme.secondaryText)
+                .accessibilityIdentifier("transcript.calls")
+        }
+        .padding(.horizontal, CGFloat(DesignTokens.space16))
+        .padding(.bottom, CGFloat(DesignTokens.space4))
+    }
+}
+#endif
+#endif

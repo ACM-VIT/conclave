@@ -16,7 +16,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import skip.ui.ComposeContext
 
-/** A deliberately compact GIF picker so the conversation remains visible. */
 @Composable
 internal fun FlexibleGifPickerSheetHost(
     context: ComposeContext,

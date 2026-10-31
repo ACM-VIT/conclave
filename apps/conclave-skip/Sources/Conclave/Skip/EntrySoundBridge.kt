@@ -4,8 +4,6 @@ import android.media.AudioAttributes
 import android.media.SoundPool
 import skip.foundation.ProcessInfo
 
-// Android side of EntrySound: plays the bundled `conclave-lock.mp3` (Android
-// assets/, merged from the app module) once via SoundPool. Best-effort.
 object NativeEntrySound {
     private var soundPool: SoundPool? = null
     private var soundId: Int = 0
