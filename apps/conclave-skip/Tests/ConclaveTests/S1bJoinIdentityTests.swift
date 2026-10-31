@@ -164,7 +164,8 @@ struct S1bJoinIdentityTests {
         #expect(flat.contains("private var rejoinSeed: String { JoinRoomIdentityPolicy.rejoinSeed(home: premeeting.home) }"))
 
         let slot = s1bjiFlat(try s1bjiSlice(ios, from: "private struct JoinRoomSlot: View {", to: "private struct JoinCodeFooter: View {"))
-        #expect(slot.contains("if seed.isEmpty { Image(systemName: ConclaveSymbols.link) .foregroundStyle(HostingTheme.secondaryText) .dynamicTypeSize(...DynamicTypeSize.xxxLarge) } else {"))
+        #expect(slot.contains("if seed.isEmpty { Image(systemName: ConclaveSymbols.link) .resizable() .scaledToFit() .frame(width: 17, height: 17) .foregroundStyle(HostingTheme.secondaryText) } else {"))
+        #expect(!slot.contains("dynamicTypeSize"), "the link glyph is fixed like the face: the xxxLarge cap did not hold at AX5 (ios-S1b-d2-D1)")
         #expect(slot.contains("} else { ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(seed), size: .mention, diameter: 28) .id(seed) .transition(.scale(0.85).combined(with: .opacity)) }"))
         #expect(slot.contains(".frame(width: 28, height: 28) .animation(ConclaveMotion.snap, value: seed) .accessibilityHidden(true)"))
         for fallback in ["reduceMotion", "HStack", "listRowSeparatorLeading", ".blurReplace", ".easeOut("] {

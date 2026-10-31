@@ -184,6 +184,96 @@ struct S1PeopleFocusTests {
         #expect(flat.contains(".onDisappear { placement.forget(sectionId) }"))
     }
 
+    @Test func aLeadTooTallToPlaceTheHeaderFallsBackToTheFirstRowAtTheBottom() throws {
+        let people = makePeople()
+        people.apply(PeopleFixtureScript.inputs(for: .hostWaiting3))
+        let sections = PeopleSearchPolicy.filter(people.snapshot.sections, query: "")
+        let waiting = try #require(sections.firstIndex(where: { $0.id == PeopleSectionID.waiting.rawValue }))
+        let hands = try #require(sections.firstIndex(where: { $0.id == PeopleSectionID.raisedHands.rawValue }))
+        #expect(waiting < hands, "the last Waiting row is the Raised Hands lead")
+        #expect(sections[waiting].rowIds.first != nil && sections[hands].rowIds.first != nil,
+                "both focus targets have a first row for the fallback")
+
+        for isMediumDetent in [false, true] {
+            for isPlaced in [false, true] {
+                for isLive in [false, true] {
+                    let fallsBack = isLive && !isPlaced && !isMediumDetent
+                    let promotes = isLive && PeopleFocusPolicy.promotesToLarge(isPlaced: isPlaced, isMediumDetent: isMediumDetent)
+                    #expect(!(fallsBack && promotes), "the fallback and the promotion never both run")
+                    #expect((isLive && !isPlaced) == (fallsBack || promotes), "a live header that is not placed gets exactly one remedy")
+                }
+            }
+        }
+
+        let flat = s1pfFlat(try s1pfSource("Sources/Conclave/Features/Meeting/People/ParticipantsPanel+iOS.swift"))
+        let task = try s1pfSlice(flat, from: "guard step == PeopleFocusStep.placeHeader else { return }", to: ".accessibilityRotor(")
+        let loop = try #require(task.range(of: "while isLive && !isPlaced && attempts < PeopleFocusTiming.scrollAttempts {"))
+        let lead = try #require(task.range(of: "proxy.scrollTo(lead, anchor: .top)", range: loop.upperBound..<task.endIndex))
+        let header = try #require(task.range(of: "proxy.scrollTo(target, anchor: .top)", range: lead.upperBound..<task.endIndex))
+        let loopEnd = try #require(task.range(of: "isPlaced = isLive && placement.isHeaderPlaced(request.sectionId) }",
+                                              range: header.upperBound..<task.endIndex))
+        let fallback = try #require(task.range(of: "if isLive && !isPlaced && !isMediumDetent", range: loopEnd.upperBound..<task.endIndex),
+                                    "the fallback runs after the lead loop")
+        let first = try #require(task.range(of: ", let first = PeopleSearchPolicy.filter(people.snapshot.sections, query: query) "
+                                             + ".first(where: { $0.id == request.sectionId })?.rowIds.first {",
+                                             range: fallback.upperBound..<task.endIndex))
+        let row = try #require(task.range(of: "let row = PeopleFocusTarget.row(request.sectionId, first)",
+                                          range: first.upperBound..<task.endIndex))
+        let bottom = try #require(task.range(of: "if reduceMotion { proxy.scrollTo(row, anchor: .bottom) } "
+                                              + "else { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }",
+                                              range: row.upperBound..<task.endIndex),
+                                  "the first row lands at the bottom so its header sits directly above it")
+        let settle = "try? await Task.sleep(for: .milliseconds(reduceMotion ? "
+            + "PeopleFocusTiming.reducedSettleMilliseconds : PeopleFocusTiming.settleMilliseconds)) guard !Task.isCancelled else { return }"
+        let reread = " isLive = PeopleSearchPolicy.filter(people.snapshot.sections, query: query).contains { $0.id == request.sectionId } "
+            + "isPlaced = isLive && placement.isHeaderPlaced(request.sectionId) "
+        let recheck = try #require(task.range(of: settle + reread, range: bottom.upperBound..<task.endIndex),
+                                   "the fallback settles, then reads the live section and the header placement again")
+        let leadReturn = "if isLive && !isPlaced, let lead = PeopleFocusTarget.lead(before: request.sectionId, "
+            + "in: PeopleSearchPolicy.filter(people.snapshot.sections, query: query), "
+            + "snapshot: people.snapshot, isSearching: PeopleSearchPolicy.isSearching(query)) { "
+        let leadScroll = "if reduceMotion { proxy.scrollTo(lead, anchor: .top) } else { withAnimation { proxy.scrollTo(lead, anchor: .top) } } "
+        let back = try #require(task.range(of: leadReturn + leadScroll + settle + " } }", range: recheck.upperBound..<task.endIndex),
+                                "a fallback that still misses the header returns the lead to the top, so the title stays in view")
+        #expect(back.lowerBound == recheck.upperBound, "the return to the lead follows the re-read directly")
+        let promote = try #require(task.range(of: "if isLive && PeopleFocusPolicy.promotesToLarge(", range: back.upperBound..<task.endIndex),
+                                   "the fallback and its return sit before the one promotion check")
+        _ = try #require(task.range(of: "people.focusRequestHandled(id: request.id)", range: promote.upperBound..<task.endIndex))
+        #expect(task.components(separatedBy: "proxy.scrollTo(row, anchor: .bottom)").count - 1 == 2)
+        #expect(task.components(separatedBy: "proxy.scrollTo(lead, anchor: .top)").count - 1 == 4,
+                "the lead loop and the one return after a missed fallback are the only lead scrolls")
+        #expect(task.components(separatedBy: "placement.isHeaderPlaced(request.sectionId)").count - 1 == 2)
+        #expect(task.components(separatedBy: "proxy.scrollTo(target,").count - 1 == 2,
+                "a missed placement never retries the header id, which lands its first row under the panel title")
+        #expect(!task.contains("proxy.scrollTo(target, anchor: .bottom)") && !task.contains("proxy.scrollTo(lead, anchor: .bottom)"))
+        #expect(task.components(separatedBy: "PeopleFocusPolicy.promotesToLarge(").count - 1 == 1)
+        #expect(task.components(separatedBy: "people.focusRequestHandled(").count - 1 == 1)
+    }
+
+    @Test func aFallbackThatCannotPlaceTheHeaderGivesWayToTheLead() {
+        func placed(top: Double, header: Double, viewport: Double) -> Bool {
+            PeopleFocusPolicy.isHeaderPlaced(headerTop: top, headerBottom: top + header, viewportTop: 0, viewportBottom: viewport)
+        }
+        func landing(viewport: Double, lead: Double, header: Double, row: Double) -> Double {
+            if placed(top: lead, header: header, viewport: viewport) { return lead }
+            let fallback = viewport - row - header
+            return placed(top: fallback, header: header, viewport: viewport) ? fallback : lead
+        }
+
+        let knockFallback = 200.0 - 172 - 120
+        #expect(!placed(top: 90, header: 120, viewport: 200) && !placed(top: knockFallback, header: 120, viewport: 200),
+                "AX5 Knock View: a first Waiting row taller than the lead leaves the fallback unable to place the header")
+        #expect(knockFallback < 0, "the fallback alone would cut the Waiting title")
+        #expect(landing(viewport: 200, lead: 90, header: 120, row: 172) == 90, "the lead returns and the title stays in view")
+        let tallRowFallback = 180.0 - 200 - 100
+        #expect(tallRowFallback + 100 <= 0, "a first row taller than the viewport would hide the header entirely")
+        #expect(landing(viewport: 180, lead: 100, header: 100, row: 200) == 100)
+        #expect(!placed(top: 172, header: 140, viewport: 300) && placed(top: 300 - 100 - 140, header: 140, viewport: 300),
+                "AX5 Hand View: a tall Waiting lead with a shorter first hand row")
+        #expect(landing(viewport: 300, lead: 172, header: 140, row: 100) == 60, "a fallback that places the header is kept")
+        #expect(landing(viewport: 480, lead: 60, header: 44, row: 64) == 60, "a lead that already places the header runs no fallback")
+    }
+
     @Test func aSectionThatVanishesDuringPlacementIsConsumedWithoutPromotion() throws {
         let people = makePeople()
         people.apply(PeopleFixtureScript.inputs(for: .host6))

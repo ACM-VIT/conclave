@@ -69,7 +69,7 @@ struct S1bStageMomentsTests {
         #expect(ios.contains("@State private var popScale: CGFloat") && ios.contains("@State private var drift: CGFloat = 0"))
         #expect(ios.contains("withAnimation(.smooth(duration: StageReactionPolicy.popMillis / 1000.0)) { popScale = 1 }"))
         #expect(count("popScale = 1 }", in: ios) == 1)
-        #expect(ios.contains(".scaleEffect(popScale) .offset(x: lane * CGFloat(StageReactionPolicy.laneOffset) + drift, y: -rise)"))
+        #expect(ios.contains(".scaleEffect(popScale) .offset(x: lane * CGFloat(reduceMotion ? StageReactionPolicy.reducedLaneOffset : StageReactionPolicy.laneOffset) + drift, y: -rise)"))
         #expect(ios.contains("guard !box.started else { return } box.started = true"))
         for pattern in [".linear(", ".spring(response:", ".bouncy", "keyframeAnimator", "extraBounce"] {
             #expect(!ios.contains(pattern), "the iOS bubble uses \(pattern)")
@@ -222,6 +222,198 @@ struct S1bStageMomentsTests {
         for pattern in ["Timer", "DispatchQueue", "asyncAfter", ".magic("] {
             #expect(!raw.contains(pattern), "Meeting Details uses \(pattern)")
         }
+    }
+
+    private func reactionEvent(_ id: Int) -> ReactionEvent {
+        ReactionEvent(id: id, senderName: "", isLocal: false, kind: "emoji", value: "x", label: "x")
+    }
+
+    private func reactionSnapshot(_ ids: [Int], renderLimit: Int = 20) -> StageReactionsSnapshot {
+        var events: [ReactionEvent] = []
+        for id in ids { events.append(reactionEvent(id)) }
+        return StageReactionsSnapshot(revision: 1, events: events, renderLimit: renderLimit)
+    }
+
+    @Test func reducedMotionShowsTheNewestReactionPerLaneInSlotsThatNeverOverlap() throws {
+        let burst = reactionSnapshot(Array(1...25))
+        let reduced = StageReactionPolicy.visibleEvents(burst, reduceMotion: true)
+        #expect(reduced.map(\.id) == [23, 24, 25])
+        #expect(reduced.map { StageReactionPolicy.lane(for: $0.id) } == [2, 0, 1])
+        #expect(StageReactionPolicy.visibleEvents(reactionSnapshot([1, 4, 7, 8]), reduceMotion: true).map(\.id) == [7, 8])
+        #expect(StageReactionPolicy.visibleEvents(reactionSnapshot([3, 1, 4, 6, 2]), reduceMotion: true).map(\.id) == [4, 6, 2])
+        #expect(StageReactionPolicy.visibleEvents(reactionSnapshot(Array(1...25), renderLimit: 2), reduceMotion: true).map(\.id) == [24, 25])
+        #expect(StageReactionPolicy.visibleEvents(reactionSnapshot([]), reduceMotion: true).isEmpty)
+
+        let moving = StageReactionPolicy.visibleEvents(burst, reduceMotion: false)
+        #expect(moving.count == 20 && moving.first?.id == 6 && moving.last?.id == 25)
+        #expect(moving == StageReactionPolicy.visibleEvents(burst))
+
+        #expect(StageReactionPolicy.reducedLaneOffset == 72.0)
+        #expect(StageReactionPolicy.reducedSlotWidth == 64.0)
+        #expect(StageReactionPolicy.reducedSlotWidth >= StageReactionPolicy.bubbleDiameter)
+        #expect(StageReactionPolicy.reducedLaneOffset == StageReactionPolicy.reducedSlotWidth + 8)
+        #expect((StageReactionPolicy.reducedSlotWidth - StageReactionPolicy.bubbleDiameter) / 2 == 8)
+        #expect(StageReactionPolicy.laneOffset == 20.0 && StageReactionPolicy.laneCount == 3)
+        let slotsEnd = StageReactionPolicy.leadingInset + Double(StageReactionPolicy.laneCount - 1) * StageReactionPolicy.reducedLaneOffset
+            + StageReactionPolicy.reducedSlotWidth
+        #expect(slotsEnd == 220 && slotsEnd <= 360)
+
+        for count in 0...25 {
+            for limit in [8, 12, 20] {
+                let snapshot = reactionSnapshot(Array(stride(from: 1, through: count, by: 1)), renderLimit: limit)
+                let limited = StageReactionPolicy.visibleEvents(snapshot).map(\.id)
+                let shown = StageReactionPolicy.visibleEvents(snapshot, reduceMotion: true).map(\.id)
+                let lanes = shown.map { StageReactionPolicy.lane(for: $0) }
+                #expect(shown.count <= StageReactionPolicy.laneCount, "\(count) \(limit)")
+                #expect(Set(lanes).count == lanes.count, "\(count) \(limit)")
+                #expect(Set(lanes) == Set(limited.map { StageReactionPolicy.lane(for: $0) }), "\(count) \(limit)")
+                #expect(shown == shown.sorted(), "\(count) \(limit)")
+                for id in shown {
+                    let newest = limited.last { StageReactionPolicy.lane(for: $0) == StageReactionPolicy.lane(for: id) }
+                    #expect(newest == id, "\(count) \(limit) \(id)")
+                }
+                for first in lanes {
+                    for second in lanes where first != second {
+                        let gap = abs(Double(first - second)) * StageReactionPolicy.reducedLaneOffset - StageReactionPolicy.reducedSlotWidth
+                        #expect(gap >= 8, "\(count) \(limit)")
+                    }
+                }
+            }
+        }
+
+        let policy = stageNormalized(try stageSource(Self.policyFile))
+        let reactions = try section(policy, from: "enum StageReactionPolicy {", to: "static func opacity(progress: Double) -> Double {")
+        #expect(reactions.contains("static let reducedLaneOffset = 72.0 static let reducedSlotWidth = 64.0 static let reducedPillMaxFontScale = 1.5"))
+        #expect(reactions.contains("static func visibleEvents(_ snapshot: StageReactionsSnapshot, reduceMotion: Bool) -> [ReactionEvent] { let limited = visibleEvents(snapshot) if !reduceMotion { return limited }"))
+        #expect(reactions.contains("while index >= 0 && picked.count < laneCount {"))
+
+        let ios = stageNormalized(try stageSource(Self.iosReactionsFile))
+        #expect(ios.contains("let events = StageReactionPolicy.visibleEvents(stage.reactions, reduceMotion: reduceMotion)"))
+        #expect(count("visibleEvents(", in: ios) == 1)
+        #expect(ios.contains("if reduceMotion { namePill .truncationMode(.tail) .frame(maxWidth: CGFloat(StageReactionPolicy.reducedSlotWidth)) .dynamicTypeSize(...DynamicTypeSize.xxxLarge) } else { namePill }"))
+        #expect(ios.contains("let label = Text(name) .font(.caption2) .lineLimit(1) .padding(.horizontal, 6)"))
+        #expect(count("reducedLaneOffset", in: ios) == 1)
+        #expect(count("reducedSlotWidth", in: ios) == 1)
+
+        let kotlin = stageNormalized(try stageSource(Self.androidReactionsFile))
+        #expect(kotlin.contains("val reduceMotion = rememberReduceMotion() val events = remember(snapshot, reduceMotion) { StageReactionPolicy.visibleEvents(snapshot, reduceMotion).toList() }"))
+        #expect(count("visibleEvents(", in: kotlin) == 1)
+        #expect(kotlin.contains(".offset(x = (lane * (if (reduceMotion) StageReactionPolicy.reducedLaneOffset else StageReactionPolicy.laneOffset)).dp) .then(if (reduceMotion) Modifier.width(StageReactionPolicy.reducedSlotWidth.dp) else Modifier).graphicsLayer {"))
+        #expect(count("reducedSlotWidth", in: kotlin) == 1)
+        #expect(kotlin.contains("import androidx.compose.foundation.layout.width "))
+        #expect(!kotlin.contains("pillWidth") && !kotlin.contains("widthIn"))
+        #expect(kotlin.contains("style = labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis"))
+    }
+
+    @Test func theReducedPillFitsSomeoneAtDefaultTextAndCapsLargeTextOnBothPlatforms() throws {
+        let pillPadding = 6.0
+        #expect(StageReactionPolicy.reducedSlotWidth - 2 * pillPadding >= 51)
+        #expect(StageReactionPolicy.reducedPillMaxFontScale == 1.5)
+
+        let ios = stageNormalized(try stageSource(Self.iosReactionsFile))
+        #expect(ios.contains("let label = Text(name) .font(.caption2) .lineLimit(1) .padding(.horizontal, 6) .padding(.vertical, 2)"))
+        #expect(count(".dynamicTypeSize(...DynamicTypeSize.xxxLarge)", in: ios) == 1)
+        let reducedPill = try section(ios, from: "if reduceMotion { namePill", to: "} else { namePill }")
+        #expect(reducedPill.contains(".dynamicTypeSize(...DynamicTypeSize.xxxLarge)"))
+
+        let kotlin = stageNormalized(try stageSource(Self.androidReactionsFile))
+        #expect(kotlin.contains("val fontScale = LocalDensity.current.fontScale val pillMaxFontScale = StageReactionPolicy.reducedPillMaxFontScale.toFloat() val labelBase = MaterialTheme.typography.labelSmall"))
+        #expect(kotlin.contains("val labelStyle = if (reduceMotion && fontScale > pillMaxFontScale) { val shrink = pillMaxFontScale / fontScale labelBase.copy(fontSize = labelBase.fontSize * shrink, lineHeight = labelBase.lineHeight * shrink, letterSpacing = labelBase.letterSpacing * shrink) } else { labelBase }"))
+        #expect(kotlin.contains("val label: @Composable () -> Unit = { ConclaveText(name, line = \"stage.reaction.${event.id}.name\", style = labelStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)) }"))
+        #expect(count("labelStyle", in: kotlin) == 2)
+        #expect(kotlin.contains("import androidx.compose.ui.platform.LocalDensity"))
+        #expect(!kotlin.contains("LocalDensity provides") && !kotlin.contains("CompositionLocalProvider"))
+        let androidLocal = try section(kotlin, from: "if (event.isLocal) {", to: "} else {")
+        #expect(androidLocal.contains("Surface(shape = CircleShape, color = scheme.surfaceContainerHigh, contentColor = scheme.primary, border = BorderStroke(1.dp, ext.border)) { label() }"))
+        let androidRemote = try tail(kotlin, after: "} else {", from: "if (event.isLocal) {")
+        #expect(androidRemote.contains("Surface(shape = CircleShape, color = ext.labelScrim, contentColor = scheme.onSurface) { label() }"))
+    }
+
+    @Test func theReactionLayerRisesWithTheTileLabelSoPillsNeverCoverItAtLargeText() throws {
+        let androidBar = 76.0
+        let iosBar = 64.0
+        let androidLine = 16.0
+        let iosDefaultLine = 15.5
+        #expect(StageReactionPolicy.layerLift == 64.0)
+        #expect(StageReactionPolicy.layerBottomInset(barReserve: androidBar, labelLineHeight: androidLine, defaultLabelLineHeight: androidLine) == 140)
+        #expect(StageReactionPolicy.layerBottomInset(barReserve: androidBar, labelLineHeight: androidLine * 1.5, defaultLabelLineHeight: androidLine) == 148)
+        #expect(StageReactionPolicy.layerBottomInset(barReserve: androidBar, labelLineHeight: androidLine * 2.0, defaultLabelLineHeight: androidLine) == 156)
+        #expect(StageReactionPolicy.layerBottomInset(barReserve: androidBar, labelLineHeight: androidLine * 0.85, defaultLabelLineHeight: androidLine) == 140)
+        #expect(StageReactionPolicy.layerBottomInset(barReserve: iosBar, labelLineHeight: iosDefaultLine, defaultLabelLineHeight: iosDefaultLine) == 128)
+        #expect(abs(StageReactionPolicy.layerBottomInset(barReserve: iosBar, labelLineHeight: 22.7, defaultLabelLineHeight: iosDefaultLine) - 135.2) < 0.0001)
+        #expect(StageReactionPolicy.layerBottomInset(barReserve: iosBar, labelLineHeight: 13.0, defaultLabelLineHeight: iosDefaultLine) == 128)
+
+        let labelInset = 8.0
+        let labelPadding = 4.0
+        let mutedIcon = 16.0
+        let paddings = [StageLayoutPolicy.compactPadding, StageLayoutPolicy.regularPadding, StageViewportPolicy.tileControlGap]
+        for scale in [0.85, 1.0, 1.15, 1.3, 1.5, 1.8, 2.0] {
+            let line = androidLine * scale
+            let layer = StageReactionPolicy.layerBottomInset(barReserve: androidBar, labelLineHeight: line, defaultLabelLineHeight: androidLine)
+            for padding in paddings {
+                let labelTop = androidBar + padding + labelInset + 2 * labelPadding + max(mutedIcon, line)
+                #expect(abs((layer - labelTop) - (32 - padding)) < 0.0001, "android \(scale) \(padding)")
+                #expect(layer - labelTop >= 16 - 0.0001, "android \(scale) \(padding)")
+            }
+        }
+        for growth in [-2.0, 0.0, 2.4, 4.8, 7.2] {
+            let line = iosDefaultLine + growth
+            let layer = StageReactionPolicy.layerBottomInset(barReserve: iosBar, labelLineHeight: line, defaultLabelLineHeight: iosDefaultLine)
+            for padding in paddings {
+                let labelTop = iosBar + padding + labelInset + 2 * labelPadding + line
+                #expect(layer - labelTop >= 16 - 0.0001, "ios \(growth) \(padding)")
+                if growth >= 0 {
+                    #expect(abs((layer - labelTop) - (32.5 - padding)) < 0.0001, "ios \(growth) \(padding)")
+                }
+            }
+        }
+
+        let policy = stageNormalized(try stageSource(Self.policyFile))
+        let reactions = try section(policy, from: "enum StageReactionPolicy {", to: "static func opacity(progress: Double) -> Double {")
+        #expect(reactions.contains("static let leadingInset = 12.0 static let layerLift = 64.0 static func layerBottomInset(barReserve: Double, labelLineHeight: Double, defaultLabelLineHeight: Double) -> Double { barReserve + layerLift + max(0.0, labelLineHeight - defaultLabelLineHeight) }"))
+
+        let kotlin = stageNormalized(try stageSource(Self.androidReactionsFile))
+        let burstLayer = try section(kotlin, from: "internal fun ReactionBurstLayer(", to: "private fun ReactionBubble(")
+        #expect(burstLayer.contains("val tileLabelLine = MaterialTheme.typography.labelMedium.lineHeight.value.toDouble() val bottomInset = StageReactionPolicy.layerBottomInset(barReserve = StageCanvasMetrics.BAR_RESERVE_DP, labelLineHeight = tileLabelLine * LocalDensity.current.fontScale, defaultLabelLineHeight = tileLabelLine)"))
+        #expect(burstLayer.contains("modifier.fillMaxSize().clearAndSetSemantics { } .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)) .padding(start = StageReactionPolicy.leadingInset.dp, bottom = bottomInset.dp),"))
+        #expect(count("layerBottomInset(", in: kotlin) == 1)
+        #expect(!kotlin.contains("+ 64"))
+        for name in ["WindowInsets", "WindowInsetsSides", "only", "safeDrawing", "windowInsetsPadding"] {
+            #expect(kotlin.contains("import androidx.compose.foundation.layout.\(name) "), "Reactions.kt lacks the \(name) import")
+        }
+
+        let ios = stageNormalized(try stageSource(Self.iosReactionsFile))
+        #expect(ios.hasPrefix("#if os(iOS) && !SKIP import SwiftUI import UIKit "))
+        #expect(ios.contains("@Environment(\\.dynamicTypeSize) private var dynamicTypeSize"))
+        #expect(ios.contains("ReactionBurstColumn(stage: stage, reduceMotion: reduceMotion, bottomInset: bottomInset)"))
+        #expect(ios.contains("let tileLabelSize = min(dynamicTypeSize, DynamicTypeSize.xxxLarge)"))
+        #expect(ios.contains("let tileLabel = UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(tileLabelSize)))"))
+        #expect(ios.contains("let defaultLabel = UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: UITraitCollection(preferredContentSizeCategory: .large))"))
+        #expect(ios.contains("return CGFloat(StageReactionPolicy.layerBottomInset(barReserve: Double(StageCanvasMetrics.barReserve), labelLineHeight: Double(tileLabel.lineHeight), defaultLabelLineHeight: Double(defaultLabel.lineHeight)))"))
+        #expect(ios.contains(".padding(.leading, CGFloat(StageReactionPolicy.leadingInset)) .padding(.bottom, bottomInset) .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)"))
+        #expect(count("layerBottomInset(", in: ios) == 1)
+        #expect(!ios.contains("+ 64"))
+
+        let androidCanvas = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt"))
+        #expect(androidCanvas.contains("const val BAR_RESERVE_DP = 76.0"))
+        #expect(androidCanvas.contains("val insets = WindowInsets.safeDrawing"))
+        #expect(androidCanvas.contains("bottom = insets.getBottom(density) / scale,"))
+        let iosCanvas = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/StageCanvas+iOS.swift"))
+        #expect(iosCanvas.contains("static let barReserve: CGFloat = 64"))
+
+        let androidTile = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/components/ConclaveTileChrome.kt"))
+        #expect(androidTile.contains("val inset = if (density == TileChromeDensity.dense) 4.dp else 8.dp"))
+        #expect(androidTile.contains("Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,"))
+        #expect(androidTile.contains("if (model.isMuted) Icon(ConclaveIcons.MicOffFill1, contentDescription = null, modifier = Modifier.size(16.dp), tint = scheme.onSurface)"))
+        #expect(androidTile.contains("style = if (density == TileChromeDensity.dense) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,"))
+        let iosTile = stageNormalized(try stageSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveTileChrome+iOS.swift"))
+        let overlays = try section(iosTile, from: "private struct TileOverlays<SelfViewAccessory: View>: View {", to: "private struct MutedBadge: View {")
+        #expect(overlays.contains("let inset: CGFloat = density == .dense ? 4 : 8"))
+        #expect(overlays.contains("TileNamePill(model: model, speaking: speaking, density: density) .padding(inset)"))
+        #expect(overlays.contains(".dynamicTypeSize(...DynamicTypeSize.xxxLarge)"))
+        let namePill = try section(iosTile, from: "private struct TileNamePill: View {", to: "private struct PillWaveform: View {")
+        #expect(namePill.contains(".font(density == .dense ? .caption2 : .footnote)"))
+        #expect(namePill.contains(".padding(.horizontal, 8) .padding(.vertical, 4)"))
     }
 }
 #endif

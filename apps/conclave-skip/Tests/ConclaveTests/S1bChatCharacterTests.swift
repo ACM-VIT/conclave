@@ -123,6 +123,8 @@ struct S1bChatCharacterTests {
         #expect(chip.contains("val initial = remember { initialIds ?: chips.map { it.id }.toSet() }"))
         #expect(flat.contains("key(chip.id) { if (chip.id in initial) { ConclaveReactionChip("))
         #expect(flat.contains("AnimatedVisibility( visibleState = remember { MutableTransitionState(false).apply { targetState = true } }, enter = scaleIn(ChipLandingSpec, initialScale = 0.5f) + fadeIn(ConclaveMotion.fast()), ) {"))
+        #expect(flat.contains("val scope = rememberCoroutineScope() FlowRow(modifier.testTag(identifier),"))
+        #expect(flat.contains("} else { val settled = remember { scope.coroutineContext[MotionDurationScale]?.scaleFactor == 0f } if (settled) { ConclaveReactionChip("))
 
         #expect(flat.contains("Row(Modifier.clearAndSetSemantics { }, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) { ConclaveText(chip.emoji, line = identifier, style = style) ConclaveReactionCount(count, \"$identifier.count\", style) }"))
         #expect(chip.components(separatedBy: "clearAndSetSemantics").count - 1 == 2, "one import and the wrapping row replace the per-text clear")

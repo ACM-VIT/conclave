@@ -212,6 +212,12 @@ struct CTL4MediaShortcutTests {
         #expect(menu.components(separatedBy: ".contextMenu {").count - 1 == 2)
         #expect(menu.components(separatedBy: "MediaShortcutPolicy.attachesMenu(items, isAccessibilityText: isAccessibilityText)").count - 1 == 2)
         #expect(menu.components(separatedBy: ".accessibilityActions {").count - 1 == 2)
+        #expect(menu.contains("let attachesMenu = hasShortcut && MediaShortcutPolicy.attachesMenu(items, isAccessibilityText: isAccessibilityText) withActions.contextMenu { if attachesMenu { ForEach(items) { item in"))
+        let cameraStart = try #require(menu.range(of: "private struct CameraShortcutModifier: ViewModifier {"))
+        let cameraEnd = try #require(menu.range(of: "enum MediaShortcutCopy {", range: cameraStart.upperBound..<menu.endIndex))
+        let camera = String(menu[cameraStart.upperBound..<cameraEnd.lowerBound])
+        #expect(camera.contains("withActions.contextMenu { if attachesMenu {"), "the camera keeps one menu so a camera toggle never rebuilds its button")
+        #expect(!camera.contains("} else { withActions }"))
 
         #expect(menu.contains("if #available(iOS 26.0, *) { let picker = AVInputPickerInteraction() view.addInteraction(picker)"))
         #expect(menu.contains("Picker(selection: Binding(get: { controls.route.currentInputId }, set: { id in _ = controls.requestInput(id: id) })) {"))

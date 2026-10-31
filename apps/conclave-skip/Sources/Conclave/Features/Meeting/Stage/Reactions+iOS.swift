@@ -1,24 +1,38 @@
 #if os(iOS) && !SKIP
 import SwiftUI
+import UIKit
 
 struct ReactionBurstLayer: View {
     let stage: StagePresenter
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         let kind = stage.kind
         if kind != .attendeeWaiting && kind != .attendeeLive {
-            ReactionBurstColumn(stage: stage, reduceMotion: reduceMotion)
+            ReactionBurstColumn(stage: stage, reduceMotion: reduceMotion, bottomInset: bottomInset)
         }
+    }
+
+    private var bottomInset: CGFloat {
+        let tileLabelSize = min(dynamicTypeSize, DynamicTypeSize.xxxLarge)
+        let tileLabel = UIFont.preferredFont(forTextStyle: .footnote,
+                                             compatibleWith: UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(tileLabelSize)))
+        let defaultLabel = UIFont.preferredFont(forTextStyle: .footnote,
+                                                compatibleWith: UITraitCollection(preferredContentSizeCategory: .large))
+        return CGFloat(StageReactionPolicy.layerBottomInset(barReserve: Double(StageCanvasMetrics.barReserve),
+                                                            labelLineHeight: Double(tileLabel.lineHeight),
+                                                            defaultLabelLineHeight: Double(defaultLabel.lineHeight)))
     }
 }
 
 private struct ReactionBurstColumn: View {
     let stage: StagePresenter
     let reduceMotion: Bool
+    let bottomInset: CGFloat
 
     var body: some View {
-        let events = StageReactionPolicy.visibleEvents(stage.reactions)
+        let events = StageReactionPolicy.visibleEvents(stage.reactions, reduceMotion: reduceMotion)
         ZStack(alignment: .bottomLeading) {
             ForEach(events) { event in
                 ReactionBubble(event: event, reduceMotion: reduceMotion)
@@ -27,7 +41,7 @@ private struct ReactionBurstColumn: View {
         }
         .padding(.leading, CGFloat(StageReactionPolicy.leadingInset))
 
-        .padding(.bottom, StageCanvasMetrics.barReserve + 64)
+        .padding(.bottom, bottomInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -70,10 +84,17 @@ private struct ReactionBubble: View {
                 .frame(width: diameter, height: diameter)
                 .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Circle())
                 .overlay { Circle().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
-            namePill
+            if reduceMotion {
+                namePill
+                    .truncationMode(.tail)
+                    .frame(maxWidth: CGFloat(StageReactionPolicy.reducedSlotWidth))
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            } else {
+                namePill
+            }
         }
         .scaleEffect(popScale)
-        .offset(x: lane * CGFloat(StageReactionPolicy.laneOffset) + drift, y: -rise)
+        .offset(x: lane * CGFloat(reduceMotion ? StageReactionPolicy.reducedLaneOffset : StageReactionPolicy.laneOffset) + drift, y: -rise)
         .opacity(appear * fade)
         .onAppear(perform: start)
     }

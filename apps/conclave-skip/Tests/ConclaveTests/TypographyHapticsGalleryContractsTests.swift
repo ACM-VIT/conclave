@@ -892,7 +892,8 @@ struct TypographyHapticsGalleryContractsTests {
         for pattern in glass { #expect(!outside.contains(pattern), "\(pattern) outside the iOS 26 branch") }
         let inside = branches.map { String(code[$0]) }.joined(separator: "\n")
         #expect(inside.components(separatedBy: ".glassEffect(").count - 1 == 1)
-        #expect(normalized(inside).contains(".glassEffect(.regular.interactive(spec.isInteractive), in: ConclaveControlOutline(shape: shape))"))
+        #expect(normalized(inside).contains(".glassEffect(glass ? .regular.interactive(spec.isInteractive) : .identity, in: ConclaveControlOutline(shape: shape))"))
+        #expect(!normalized(inside).contains("if spec.fill == .glass {"))
         #expect(inside.contains("GlassEffectContainer(spacing: spacing)"))
         for pattern in [".clear", ".tint(", "Glass.tint", "glassProminent", "Material", "symbolColorRenderingMode(.gradient"] {
             #expect(!code.contains(pattern), "the entry uses \(pattern)")
@@ -998,6 +999,34 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(!code.contains("Color(uiColor: .systemRed)"))
     }
 
+    @Test func controlSurfaceDimsInsideItsGlassEffect() throws {
+        let code = withoutComments(try source(Self.callControlFile))
+        let branch = try #require(bracedBlocks(after: Self.glassBranchCondition, in: code).first)
+        let surface = normalized(String(code[branch]))
+        #expect(surface.contains(".overlay { ConclaveControlStroke(token: glass ? nil : spec.strokeToken, shape: shape) } .opacity(glass ? 1 : dimming(spec)) .glassEffect(glass ? .regular.interactive(spec.isInteractive) : .identity, in: ConclaveControlOutline(shape: shape)) .overlay { ConclaveControlStroke(token: glass ? spec.strokeToken : nil, shape: shape) } .opacity(glass ? spec.opacity : 1)"),
+                "paper, fallback and scrim dim before the glass effect, where the bar's GlassEffectContainer still draws it")
+        let glassEffect = try #require(surface.range(of: ".glassEffect("))
+        let afterGlass = String(surface[glassEffect.upperBound...])
+        for pattern in ["isPressed", "dimming(", "ConclaveControlPress"] {
+            #expect(!afterGlass.contains(pattern), "\(pattern) after the glass effect")
+        }
+
+        let flat = normalized(code)
+        #expect(flat.contains("private func dimming(_ spec: ConclaveControlSurfaceSpec) -> Double { spec.opacity * (isPressed ? ConclaveControlPress.opacity : 1) }"))
+        #expect(flat.contains(".overlay { ConclaveControlStroke(token: spec.strokeToken, shape: shape) } .opacity(dimming(spec))"))
+        #expect(flat.contains("@Environment(\\.conclaveControlPressed) private var isPressed"))
+        #expect(flat.contains("fileprivate var conclaveControlPressed: Bool {"))
+        #expect(flat.contains("func conclaveControlPressed(_ isPressed: Bool) -> some View { environment(\\.conclaveControlPressed, isPressed) }"))
+        #expect(flat.components(separatedBy: ".conclaveControlPressed(configuration.isPressed)").count - 1 == 2)
+        #expect(!flat.contains("isPressed: false") && !flat.contains("isPressed: configuration.isPressed"))
+
+        let cell = normalized(withoutComments(try source("Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift")))
+        #expect(cell.contains(".conclaveControlSurface(state, isEnabled: !isBlocked, shape: .circle) .conclaveControlPressed(isPressed) }"))
+        for pattern in [".opacity(isPressed", "usesGlass", "ConclaveControlSurfaceMapping", "accessibilityReduceTransparency"] {
+            #expect(!cell.contains(pattern), "the cell dims outside the surface with \(pattern)")
+        }
+    }
+
     @Test func forceFallbackOverrideIsDebugOnly() throws {
         let key = "conclaveForceOpaqueControls"
         let galleryFile = "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"
@@ -1007,17 +1036,14 @@ struct TypographyHapticsGalleryContractsTests {
         }
 
         let cellFile = "Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift"
-        #expect(holders == [Self.callControlFile, Self.composerGlassFile, Self.floatingActionBarFile, galleryFile, cellFile].sorted())
+        #expect(holders == [Self.callControlFile, Self.composerGlassFile, Self.floatingActionBarFile, galleryFile].sorted())
         let floating = try source(Self.floatingActionBarFile)
         let floatingRelease = withoutDebugBlocks(floating)
         for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!floatingRelease.contains(name), "\(name) in the floating action Release") }
         #expect(normalized(floating).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 1)
         #expect(!floating.contains(".environment(\\.\(key)"))
         let cell = try source(cellFile)
-        let cellRelease = withoutDebugBlocks(cell)
-        for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!cellRelease.contains(name), "\(name) in the cell Release") }
-        #expect(normalized(cell).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 1)
-        #expect(!cell.contains(".environment(\\.\(key)"))
+        for name in ["forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!cell.contains(name), "the cell reads \(name)") }
 
         let text = try source(Self.callControlFile)
         let release = withoutDebugBlocks(text)

@@ -11,10 +11,16 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -25,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,11 +44,15 @@ internal fun ReactionBurstLayer(stage: StagePresenter, modifier: Modifier = Modi
     val kind = stage.kind
     if (kind == StageKind.attendeeWaiting || kind == StageKind.attendeeLive) return
     val snapshot = stage.reactions
-    val events = remember(snapshot) { StageReactionPolicy.visibleEvents(snapshot).toList() }
     val reduceMotion = rememberReduceMotion()
+    val events = remember(snapshot, reduceMotion) { StageReactionPolicy.visibleEvents(snapshot, reduceMotion).toList() }
+    val tileLabelLine = MaterialTheme.typography.labelMedium.lineHeight.value.toDouble()
+    val bottomInset = StageReactionPolicy.layerBottomInset(barReserve = StageCanvasMetrics.BAR_RESERVE_DP,
+        labelLineHeight = tileLabelLine * LocalDensity.current.fontScale, defaultLabelLineHeight = tileLabelLine)
     Box(
         modifier.fillMaxSize().clearAndSetSemantics { }
-            .padding(start = StageReactionPolicy.leadingInset.dp, bottom = (StageCanvasMetrics.BAR_RESERVE_DP + 64.0).dp),
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+            .padding(start = StageReactionPolicy.leadingInset.dp, bottom = bottomInset.dp),
         contentAlignment = Alignment.BottomStart,
     ) {
         for (event in events) {
@@ -89,7 +100,9 @@ private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean) {
         else -> event.senderName
     }
     Column(
-        Modifier.zIndex(if (event.isLocal) 1f else 0f).offset(x = (lane * StageReactionPolicy.laneOffset).dp).graphicsLayer {
+        Modifier.zIndex(if (event.isLocal) 1f else 0f)
+            .offset(x = (lane * (if (reduceMotion) StageReactionPolicy.reducedLaneOffset else StageReactionPolicy.laneOffset)).dp)
+            .then(if (reduceMotion) Modifier.width(StageReactionPolicy.reducedSlotWidth.dp) else Modifier).graphicsLayer {
             translationX = drift.value.dp.toPx()
             translationY = -rise.value.dp.toPx()
             scaleX = pop.value
@@ -110,8 +123,18 @@ private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean) {
                     style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Clip)
             }
         }
+        val fontScale = LocalDensity.current.fontScale
+        val pillMaxFontScale = StageReactionPolicy.reducedPillMaxFontScale.toFloat()
+        val labelBase = MaterialTheme.typography.labelSmall
+        val labelStyle = if (reduceMotion && fontScale > pillMaxFontScale) {
+            val shrink = pillMaxFontScale / fontScale
+            labelBase.copy(fontSize = labelBase.fontSize * shrink, lineHeight = labelBase.lineHeight * shrink,
+                letterSpacing = labelBase.letterSpacing * shrink)
+        } else {
+            labelBase
+        }
         val label: @Composable () -> Unit = {
-            ConclaveText(name, line = "stage.reaction.${event.id}.name", style = MaterialTheme.typography.labelSmall, maxLines = 1,
+            ConclaveText(name, line = "stage.reaction.${event.id}.name", style = labelStyle, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
         }
         if (event.isLocal) {

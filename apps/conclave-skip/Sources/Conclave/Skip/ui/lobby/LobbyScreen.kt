@@ -105,8 +105,8 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
                     horizontalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
                     Column(Modifier.weight(1f).widthIn(max = 560.dp).lobbyScroll(rememberScrollState(), actionClearance, imeVisible)) {
-                        LobbyCardSlot(premeeting, routeId, cache, wide = true, visibleHeight = visibleHeight,
-                            modifier = Modifier.padding(vertical = 12.dp))
+                        LobbyCardSlot(premeeting, routeId, cache, wide = true, visibleHeight = visibleHeight, bandCover = bandCover,
+                            modifier = Modifier.padding(vertical = lobbyWideCardInset))
                     }
                     Column(
                         modifier = Modifier.width(360.dp).lobbyScroll(rememberScrollState(), actionClearance, imeVisible),
@@ -140,7 +140,8 @@ private fun Modifier.lobbyScroll(state: ScrollState, actionClearance: Dp, imeVis
         .padding(bottom = if (imeVisible) 0.dp else actionClearance)
 
 @Composable
-private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache, wide: Boolean, visibleHeight: Dp, modifier: Modifier) {
+private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: LobbyUiCache, wide: Boolean, visibleHeight: Dp,
+                          bandCover: Dp? = null, modifier: Modifier) {
     val media = premeeting.lobbyMedia?.takeIf { it.routeId == routeId } ?: return
     val card = cache.card(media)
     val anchors = LocalEntryTransitionAnchors.current
@@ -151,6 +152,7 @@ private fun LobbyCardSlot(premeeting: PremeetingPresenter, routeId: Int, cache: 
             card = card,
             wide = wide,
             visibleHeight = visibleHeight,
+            bandCover = bandCover,
             onMic = { premeeting.setMicIntent(it) },
             onCamera = { premeeting.setCameraIntent(it) },
             onFlip = { premeeting.flipCamera() },

@@ -106,6 +106,17 @@ extension EnvironmentValues {
 }
 #endif
 
+private struct ConclaveControlPressedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    fileprivate var conclaveControlPressed: Bool {
+        get { self[ConclaveControlPressedKey.self] }
+        set { self[ConclaveControlPressedKey.self] = newValue }
+    }
+}
+
 enum ConclaveGestureRoute {
     case live
     case recordOnly((FeedbackKind) -> Void)
@@ -126,7 +137,11 @@ extension View {
     func conclaveControlSurface(_ state: ConclaveControlState, isEnabled: Bool,
                                 shape: ConclaveControlShape = .circle,
                                 context: ConclaveSurfaceContext = .stage) -> some View {
-        modifier(ConclaveControlSurface(state: state, isEnabled: isEnabled, shape: shape, context: context, isPressed: false))
+        modifier(ConclaveControlSurface(state: state, isEnabled: isEnabled, shape: shape, context: context))
+    }
+
+    func conclaveControlPressed(_ isPressed: Bool) -> some View {
+        environment(\.conclaveControlPressed, isPressed)
     }
 }
 
@@ -152,7 +167,7 @@ struct ConclaveControlSurface: ViewModifier {
     let isEnabled: Bool
     let shape: ConclaveControlShape
     var context: ConclaveSurfaceContext = .stage
-    let isPressed: Bool
+    @Environment(\.conclaveControlPressed) private var isPressed
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     #if DEBUG
@@ -173,15 +188,19 @@ struct ConclaveControlSurface: ViewModifier {
             let spec = ConclaveControlSurfaceMapping.spec(state, context: context, glassAvailable: true,
                                                           reduceTransparency: reduceTransparency, forceOpaque: forceOpaque,
                                                           increasedContrast: contrast == .increased, isEnabled: isEnabled)
-            if spec.fill == .glass {
-                content
-                    .foregroundStyle(HostingTheme.token(spec.glyphToken))
-                    .glassEffect(.regular.interactive(spec.isInteractive), in: ConclaveControlOutline(shape: shape))
-                    .overlay { ConclaveControlStroke(token: spec.strokeToken, shape: shape) }
-                    .opacity(spec.opacity)
-            } else {
-                opaque(content, spec)
-            }
+            let glass = spec.fill == .glass
+            content
+                .foregroundStyle(HostingTheme.token(spec.glyphToken))
+                .background {
+                    if !glass {
+                        ConclaveControlOutline(shape: shape).fill(HostingTheme.token(spec.fillToken ?? DesignTokens.iosInCallControlFallback))
+                    }
+                }
+                .overlay { ConclaveControlStroke(token: glass ? nil : spec.strokeToken, shape: shape) }
+                .opacity(glass ? 1 : dimming(spec))
+                .glassEffect(glass ? .regular.interactive(spec.isInteractive) : .identity, in: ConclaveControlOutline(shape: shape))
+                .overlay { ConclaveControlStroke(token: glass ? spec.strokeToken : nil, shape: shape) }
+                .opacity(glass ? spec.opacity : 1)
         } else {
             opaque(content, ConclaveControlSurfaceMapping.spec(state, context: context, glassAvailable: false,
                                                                reduceTransparency: reduceTransparency, forceOpaque: forceOpaque,
@@ -194,7 +213,11 @@ struct ConclaveControlSurface: ViewModifier {
             .foregroundStyle(HostingTheme.token(spec.glyphToken))
             .background(HostingTheme.token(spec.fillToken ?? DesignTokens.iosInCallControlFallback), in: ConclaveControlOutline(shape: shape))
             .overlay { ConclaveControlStroke(token: spec.strokeToken, shape: shape) }
-            .opacity(spec.opacity * (isPressed ? ConclaveControlPress.opacity : 1))
+            .opacity(dimming(spec))
+    }
+
+    private func dimming(_ spec: ConclaveControlSurfaceSpec) -> Double {
+        spec.opacity * (isPressed ? ConclaveControlPress.opacity : 1)
     }
 }
 
@@ -223,8 +246,8 @@ private struct ConclaveControlButtonStyle: ButtonStyle {
         configuration.label
             .frame(width: diameter, height: diameter)
             .contentShape(Circle())
-            .modifier(ConclaveControlSurface(state: state, isEnabled: isEnabled, shape: .circle, context: context,
-                                             isPressed: configuration.isPressed))
+            .modifier(ConclaveControlSurface(state: state, isEnabled: isEnabled, shape: .circle, context: context))
+            .conclaveControlPressed(configuration.isPressed)
     }
 }
 
@@ -696,8 +719,8 @@ private struct ConclaveChromeButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .modifier(ConclaveControlSurface(state: .on, isEnabled: true, shape: shape, context: context.surface,
-                                             isPressed: configuration.isPressed))
+            .modifier(ConclaveControlSurface(state: .on, isEnabled: true, shape: shape, context: context.surface))
+            .conclaveControlPressed(configuration.isPressed)
     }
 }
 
@@ -715,8 +738,7 @@ struct ConclaveRoutePickerButton: View {
     var body: some View {
         ConclaveRoutePickerView(onPresentingChange: onPresentingChange)
             .frame(width: ConclaveChromeMetrics.height, height: ConclaveChromeMetrics.height)
-            .modifier(ConclaveControlSurface(state: .on, isEnabled: true, shape: .circle, context: context.surface,
-                                             isPressed: false))
+            .modifier(ConclaveControlSurface(state: .on, isEnabled: true, shape: .circle, context: context.surface))
             .accessibilityIdentifier(identifier)
     }
 }

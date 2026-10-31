@@ -120,7 +120,15 @@ enum StageReactionPolicy {
     static let laneCount = 3
     static let laneOffset = 20.0
     static let bubbleDiameter = 48.0
+    static let reducedLaneOffset = 72.0
+    static let reducedSlotWidth = 64.0
+    static let reducedPillMaxFontScale = 1.5
     static let leadingInset = 12.0
+    static let layerLift = 64.0
+
+    static func layerBottomInset(barReserve: Double, labelLineHeight: Double, defaultLabelLineHeight: Double) -> Double {
+        barReserve + layerLift + max(0.0, labelLineHeight - defaultLabelLineHeight)
+    }
 
     static func renderLimit(participantCount: Int) -> Int {
         if participantCount >= 36 { return 8 }
@@ -137,6 +145,29 @@ enum StageReactionPolicy {
         while index < count {
             result.append(snapshot.events[index])
             index += 1
+        }
+        return result
+    }
+
+    static func visibleEvents(_ snapshot: StageReactionsSnapshot, reduceMotion: Bool) -> [ReactionEvent] {
+        let limited = visibleEvents(snapshot)
+        if !reduceMotion { return limited }
+        var takenLanes: [Int] = []
+        var picked: [Int] = []
+        var index = limited.count - 1
+        while index >= 0 && picked.count < laneCount {
+            let eventLane = lane(for: limited[index].id)
+            if !takenLanes.contains(eventLane) {
+                takenLanes.append(eventLane)
+                picked.append(index)
+            }
+            index -= 1
+        }
+        var result: [ReactionEvent] = []
+        var position = picked.count - 1
+        while position >= 0 {
+            result.append(limited[picked[position]])
+            position -= 1
         }
         return result
     }

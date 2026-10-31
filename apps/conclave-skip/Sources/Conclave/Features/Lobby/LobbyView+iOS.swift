@@ -7,6 +7,7 @@ struct LobbyView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var viewportSize = CGSize(width: 390, height: 667)
     @State private var visibleHeight: CGFloat = 0
     @State private var nameRevealed = false
@@ -14,6 +15,14 @@ struct LobbyView: View {
 
     private var isWide: Bool {
         viewportSize.width >= 640 && (horizontalSizeClass == .regular || verticalSizeClass == .compact)
+    }
+
+    private var revealsStatusReason: Bool {
+        guard let status = premeeting.lobbyStatus, status.routeId == route.id else { return false }
+        let refused = status.mode == .editing && [LobbyIssue.roomNotFound, .signInRequired, .failedServerText].contains(status.issue)
+        guard status.mode == .failed || refused else { return false }
+        let isSignedIn = premeeting.lobbyIdentity?.routeId == route.id && premeeting.lobbyIdentity?.isSignedIn == true
+        return LobbyStatusCopy.line(status: status, isSignedIn: isSignedIn) != nil
     }
 
     var body: some View {
@@ -50,6 +59,12 @@ struct LobbyView: View {
                     }
                 }
             }
+            .onChange(of: revealsStatusReason) { _, reveals in
+                guard reveals, dynamicTypeSize.isAccessibilitySize else { return }
+                withAnimation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion)) {
+                    proxy.scrollTo(LobbyScrollAnchor.status, anchor: .top)
+                }
+            }
         }
         .onChange(of: isNameFocused) {
             if !isNameFocused { nameRevealed = false }
@@ -68,6 +83,7 @@ struct LobbyView: View {
 
 private enum LobbyScrollAnchor {
     case name
+    case status
 
     static let nameReveal = UnitPoint(x: 0.5, y: 0.3)
 }
@@ -83,6 +99,7 @@ private struct LobbyControlsColumn: View {
                 LobbyStatusSection(premeeting: premeeting, nameFocused: nameFocus.wrappedValue)
                 LobbyAudioSection(premeeting: premeeting)
             }
+            .id(LobbyScrollAnchor.status)
             if !isPromotion {
                 LobbyIdentitySection(premeeting: premeeting, nameFocus: nameFocus)
                 AdmissionNotifySection(premeeting: premeeting)

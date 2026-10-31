@@ -104,6 +104,7 @@ fun NativeHostingPreviewRoot(fixtureEligible: Boolean = false, onClose: () -> Un
                 lifetime = lifetime,
                 focus = focus,
                 readout = readout,
+                inCallRoot = false,
                 systemBars = { inputs ->
 
                     ConclaveSystemBars(SystemBarPolicy.resolve(rootDark = systemDark, overlayVisible = inputs.overlayVisible,

@@ -182,29 +182,9 @@ struct CallControlSurfaceBody<Content: View>: View {
     let visual: CallControlVisual
     let isBlocked: Bool
     let diameter: CGFloat
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorSchemeContrast) private var contrast
-    #if DEBUG
-    @Environment(\.conclaveForceOpaqueControls) private var forceOpaqueSetting
-    #endif
 
     private var state: ConclaveControlState {
         ConclaveControlState(rawValue: visual.rawValue) ?? ConclaveControlState.on
-    }
-
-    private var forceOpaque: Bool {
-        #if DEBUG
-        return forceOpaqueSetting
-        #else
-        return false
-        #endif
-    }
-
-    private var usesGlass: Bool {
-        guard #available(iOS 26.0, *) else { return false }
-        return ConclaveControlSurfaceMapping.spec(state, glassAvailable: true, reduceTransparency: reduceTransparency,
-                                                  forceOpaque: forceOpaque, increasedContrast: contrast == .increased,
-                                                  isEnabled: !isBlocked).fill == ConclaveControlFill.glass
     }
 
     var body: some View {
@@ -212,7 +192,7 @@ struct CallControlSurfaceBody<Content: View>: View {
             .frame(width: diameter, height: diameter)
             .contentShape(Circle())
             .conclaveControlSurface(state, isEnabled: !isBlocked, shape: .circle)
-            .opacity(isPressed && !usesGlass ? CallControlsCopy.pressedOpacity : 1)
+            .conclaveControlPressed(isPressed)
     }
 }
 

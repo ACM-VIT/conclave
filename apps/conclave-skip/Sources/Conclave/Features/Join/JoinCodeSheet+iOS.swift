@@ -181,8 +181,10 @@ private struct JoinRoomSlot: View {
         ZStack {
             if seed.isEmpty {
                 Image(systemName: ConclaveSymbols.link)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 17, height: 17)
                     .foregroundStyle(HostingTheme.secondaryText)
-                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             } else {
                 ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(seed), size: .mention, diameter: 28)
                     .id(seed)

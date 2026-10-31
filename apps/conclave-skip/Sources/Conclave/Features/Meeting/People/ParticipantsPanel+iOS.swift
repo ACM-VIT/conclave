@@ -178,6 +178,34 @@ private struct ParticipantsList: View {
                     isLive = PeopleSearchPolicy.filter(people.snapshot.sections, query: query).contains { $0.id == request.sectionId }
                     isPlaced = isLive && placement.isHeaderPlaced(request.sectionId)
                 }
+                if isLive && !isPlaced && !isMediumDetent,
+                   let first = PeopleSearchPolicy.filter(people.snapshot.sections, query: query)
+                    .first(where: { $0.id == request.sectionId })?.rowIds.first {
+                    let row = PeopleFocusTarget.row(request.sectionId, first)
+                    if reduceMotion {
+                        proxy.scrollTo(row, anchor: .bottom)
+                    } else {
+                        withAnimation { proxy.scrollTo(row, anchor: .bottom) }
+                    }
+                    try? await Task.sleep(for: .milliseconds(reduceMotion ? PeopleFocusTiming.reducedSettleMilliseconds
+                                                                           : PeopleFocusTiming.settleMilliseconds))
+                    guard !Task.isCancelled else { return }
+                    isLive = PeopleSearchPolicy.filter(people.snapshot.sections, query: query).contains { $0.id == request.sectionId }
+                    isPlaced = isLive && placement.isHeaderPlaced(request.sectionId)
+                    if isLive && !isPlaced,
+                       let lead = PeopleFocusTarget.lead(before: request.sectionId,
+                                                         in: PeopleSearchPolicy.filter(people.snapshot.sections, query: query),
+                                                         snapshot: people.snapshot, isSearching: PeopleSearchPolicy.isSearching(query)) {
+                        if reduceMotion {
+                            proxy.scrollTo(lead, anchor: .top)
+                        } else {
+                            withAnimation { proxy.scrollTo(lead, anchor: .top) }
+                        }
+                        try? await Task.sleep(for: .milliseconds(reduceMotion ? PeopleFocusTiming.reducedSettleMilliseconds
+                                                                               : PeopleFocusTiming.settleMilliseconds))
+                        guard !Task.isCancelled else { return }
+                    }
+                }
                 if isLive && PeopleFocusPolicy.promotesToLarge(isPlaced: isPlaced, isMediumDetent: isMediumDetent) {
                     promoteToLarge()
                     try? await Task.sleep(for: .milliseconds(PeopleFocusTiming.settleMilliseconds))

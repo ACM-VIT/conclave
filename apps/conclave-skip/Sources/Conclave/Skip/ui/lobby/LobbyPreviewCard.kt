@@ -34,15 +34,30 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.min
 import androidx.compose.ui.viewinterop.AndroidView
 
 private val lobbyPreviewControlsClearance = 72.dp
+private val lobbyCompactFaceDiameter = 56.dp
+internal val lobbyWideCardInset = 12.dp
+internal val lobbyCompactVideoFloor = lobbyPreviewControlsClearance + lobbyCompactFaceDiameter + 12.dp
+
+internal fun lobbyVideoHeight(width: Dp, visibleHeight: Dp, compact: Boolean, bandCover: Dp?): Dp {
+    if (!compact) return width.coerceIn(280.dp, (visibleHeight * 0.58f).coerceIn(280.dp, 420.dp))
+    val natural = width * (9f / 16f)
+    if (bandCover == null) return natural.coerceIn(180.dp, (visibleHeight * 0.75f).coerceIn(180.dp, 320.dp))
+    val room = visibleHeight - bandCover - lobbyWideCardInset
+    val floor = room.coerceIn(lobbyCompactVideoFloor, 180.dp)
+    val upper = min(visibleHeight * 0.75f, room).coerceIn(floor, 320.dp)
+    return natural.coerceIn(floor, upper)
+}
 
 @Composable
 internal fun LobbyPreviewCard(
     card: LobbyCardUi,
     wide: Boolean,
     visibleHeight: Dp,
+    bandCover: Dp?,
     onMic: (Boolean) -> Unit,
     onCamera: (Boolean) -> Unit,
     onFlip: () -> Unit,
@@ -52,12 +67,8 @@ internal fun LobbyPreviewCard(
     val ext = LocalConclaveExtendedColors.current
     val shape = RoundedCornerShape(DesignTokens.radiusTile.dp)
     val compact = wide || LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val minimumVideoHeight = if (compact) 180.dp else 280.dp
-    val maximumVideoHeight = if (compact) 320.dp else 420.dp
     BoxWithConstraints(modifier.fillMaxWidth().testTag("lobby.card")) {
-        val natural = if (compact) maxWidth * (9f / 16f) else maxWidth
-        val upper = (visibleHeight * (if (compact) 0.75f else 0.58f)).coerceIn(minimumVideoHeight, maximumVideoHeight)
-        val videoHeight = natural.coerceIn(minimumVideoHeight, upper)
+        val videoHeight = lobbyVideoHeight(width = maxWidth, visibleHeight = visibleHeight, compact = compact, bandCover = bandCover)
         Box(Modifier.fillMaxWidth().height(videoHeight).clip(shape).border(1.dp, ext.border, shape)) {
             LobbyPreviewVideo(card, compact, onFlip, Modifier.fillMaxSize().background(ext.tile))
             Row(
@@ -126,7 +137,7 @@ private fun LobbyCameraOffContent(card: LobbyCardUi, compact: Boolean) {
     val content: @Composable () -> Unit = {
         ConclaveAvatar(
             identity = ConclaveAvatarIdentity.make(name = card.avatarName, id = if (card.avatarSeed.isEmpty()) null else card.avatarSeed),
-            diameter = if (compact) 56.dp else 76.dp,
+            diameter = if (compact) lobbyCompactFaceDiameter else 76.dp,
         )
         if (card.preview == PreviewState.starting) {
             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = scheme.onSurface)

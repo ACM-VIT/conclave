@@ -70,7 +70,7 @@ internal data class ConclaveSystemAccessibility(
             return from(
                 api = api,
                 touchExploration = manager?.isTouchExplorationEnabled == true,
-                anyServiceEnabled = manager != null && spokenFeedbackEnabled(manager),
+                anyServiceEnabled = manager != null && assistiveServiceEnabled(manager),
                 fontScale = configuration.fontScale,
                 fontWeightAdjustment = if (api >= 31) SystemAccessibilityApi31.fontWeightAdjustment(configuration) else 0,
                 animatorDurationScale = ConclaveMotion.animatorDurationScale(context),
@@ -79,9 +79,14 @@ internal data class ConclaveSystemAccessibility(
             )
         }
 
-        fun spokenFeedbackEnabled(manager: AccessibilityManager): Boolean =
-            manager.isEnabled && manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_SPOKEN)
-                .any { (it.feedbackType and AccessibilityServiceInfo.FEEDBACK_SPOKEN) != 0 }
+        fun assistiveServiceEnabled(manager: AccessibilityManager): Boolean =
+            manager.isEnabled && manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                .any { isAssistiveService(it) }
+
+        fun isAssistiveService(info: AccessibilityServiceInfo): Boolean =
+            (info.feedbackType and AccessibilityServiceInfo.FEEDBACK_SPOKEN) != 0 ||
+                (info.flags and AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS) != 0 ||
+                info.id?.lowercase()?.contains("switchaccess") == true
     }
 }
 
@@ -108,6 +113,9 @@ internal fun rememberSystemAccessibility(): ConclaveSystemAccessibility {
         val stopServiceList = if (Build.VERSION.SDK_INT >= 33 && manager != null) {
             SystemAccessibilityApi33.listen(context, manager) { refresh() }
         } else null
+        val stopServiceSettings = if (Build.VERSION.SDK_INT < 33) {
+            SystemAccessibilityServiceSettings.listen(context) { refresh() }
+        } else null
         context.contentResolver.registerContentObserver(
             Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, animator)
         val stopContrast = if (Build.VERSION.SDK_INT >= 34) SystemAccessibilityApi34.listen(context) { refresh() } else null
@@ -116,6 +124,7 @@ internal fun rememberSystemAccessibility(): ConclaveSystemAccessibility {
             lifecycle.removeObserver(resumed)
             stopContrast?.invoke()
             context.contentResolver.unregisterContentObserver(animator)
+            stopServiceSettings?.invoke()
             stopServiceList?.invoke()
             manager?.removeAccessibilityStateChangeListener(services)
             manager?.removeTouchExplorationStateChangeListener(touch)
@@ -125,6 +134,28 @@ internal fun rememberSystemAccessibility(): ConclaveSystemAccessibility {
     val fontWeight = if (Build.VERSION.SDK_INT >= 31) SystemAccessibilityApi31.fontWeightAdjustment(configuration) else 0
     val fontScale = configuration.fontScale
     return remember(listened, fontScale, fontWeight) { listened.copy(fontScale = fontScale, fontWeightAdjustment = fontWeight) }
+}
+
+internal object SystemAccessibilityServiceSettings {
+    val settleMillis: List<Long> = listOf(1_000L, 5_000L)
+
+    fun listen(context: Context, refresh: () -> Unit): () -> Unit {
+        val handler = Handler(Looper.getMainLooper())
+        val settle = Runnable { refresh() }
+        val observer = object : ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) {
+                handler.removeCallbacks(settle)
+                refresh()
+                for (millis in settleMillis) handler.postDelayed(settle, millis)
+            }
+        }
+        context.contentResolver.registerContentObserver(
+            Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES), false, observer)
+        return {
+            handler.removeCallbacks(settle)
+            context.contentResolver.unregisterContentObserver(observer)
+        }
+    }
 }
 
 @RequiresApi(29)

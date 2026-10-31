@@ -10,7 +10,7 @@ struct MessageMenu: View {
         if row.canReact {
             ControlGroup {
                 ForEach(paletteEmojis, id: \.self) { emoji in
-                    Toggle(isOn: Binding(get: { isMine(emoji) }, set: { _ in actions.toggle(row.id, emoji: emoji) })) {
+                    Toggle(isOn: Binding(get: { isMine(emoji) }, set: { _ in toggleAfterMenuDismiss(emoji) })) {
                         Text(emoji)
                     }
                     .accessibilityLabel(ConclaveStrings.format("React with %@", ChatCopy.emojiName(emoji)))
@@ -21,7 +21,7 @@ struct MessageMenu: View {
             if !moreEmojis.isEmpty {
                 Menu(ConclaveStrings.text("More Reactions")) {
                     ForEach(moreEmojis, id: \.self) { emoji in
-                        Toggle(isOn: Binding(get: { isMine(emoji) }, set: { _ in actions.toggle(row.id, emoji: emoji) })) {
+                        Toggle(isOn: Binding(get: { isMine(emoji) }, set: { _ in toggleAfterMenuDismiss(emoji) })) {
                             Text(emoji + " " + ChatCopy.emojiName(emoji))
                         }
                     }
@@ -67,6 +67,15 @@ struct MessageMenu: View {
         }
     }
 
+    private func toggleAfterMenuDismiss(_ emoji: String) {
+        let id = row.id
+        let actions = self.actions
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(MessageMenuTiming.dismissMillis) * 1_000_000)
+            actions.toggle(id, emoji: emoji)
+        }
+    }
+
     private func isMine(_ emoji: String) -> Bool {
         for chip in row.reactions where chip.emoji == emoji {
             return chip.isMine
@@ -96,6 +105,10 @@ struct MessageMenu: View {
         }
         return result
     }
+}
+
+private enum MessageMenuTiming {
+    static let dismissMillis = 250
 }
 
 struct AddReactionPage: View {

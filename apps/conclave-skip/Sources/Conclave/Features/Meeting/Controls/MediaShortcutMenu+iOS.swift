@@ -171,8 +171,9 @@ private struct CameraShortcutModifier: ViewModifier {
                 }
             }
         }
-        if hasShortcut && MediaShortcutPolicy.attachesMenu(items, isAccessibilityText: isAccessibilityText) {
-            withActions.contextMenu {
+        let attachesMenu = hasShortcut && MediaShortcutPolicy.attachesMenu(items, isAccessibilityText: isAccessibilityText)
+        withActions.contextMenu {
+            if attachesMenu {
                 ForEach(items) { item in
                     Button {
                         choose(item.kind)
@@ -185,8 +186,6 @@ private struct CameraShortcutModifier: ViewModifier {
                     .accessibilityIdentifier("control.camera.shortcut." + item.id)
                 }
             }
-        } else {
-            withActions
         }
     }
 
