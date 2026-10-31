@@ -252,33 +252,6 @@ struct ActivityProjectionTests {
         #expect(activities.snapshot.withRevision(0) == ActivitiesSnapshot.empty)
     }
 
-    @Test func everyActivitiesEnumCaseHasCopyOnBothPlatforms() throws {
-        let ios = try stageSource("Sources/Conclave/Features/Meeting/Activities/ActivitiesCopy+iOS.swift")
-        let kotlin = try stageSource("Sources/Conclave/Skip/ui/copy/ActivitiesCopy.kt")
-        for reason in ActivitiesReason.allCases {
-            #expect(ios.contains("case ." + reason.rawValue), "iOS copy misses \(reason.rawValue)")
-            #expect(kotlin.contains("ActivitiesReason." + reason.rawValue), "Kotlin copy misses \(reason.rawValue)")
-        }
-        for value in BrowserValidation.allCases {
-            #expect(ios.contains("case ." + value.rawValue) && kotlin.contains("BrowserValidation." + value.rawValue), "\(value)")
-        }
-        for value in BrowserFailure.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("BrowserFailure." + value.rawValue), "\(value)")
-        }
-        for value in BrowserPhase.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("BrowserPhase." + value.rawValue), "\(value)")
-        }
-        for value in SetupPhase.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("SetupPhase." + value.rawValue), "\(value)")
-        }
-        for value in ActivityCardPhase.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("ActivityCardPhase." + value.rawValue), "\(value)")
-        }
-        for appId in ActivitiesCatalogPolicy.defaultAppIds {
-            #expect(ios.contains("case \"" + appId + "\"") && kotlin.contains("\"" + appId + "\" ->"), "\(appId)")
-        }
-    }
-
     @Test func activityStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: activityPackageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
         let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])

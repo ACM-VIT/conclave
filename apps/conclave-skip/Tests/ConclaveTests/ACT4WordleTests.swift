@@ -358,101 +358,6 @@ struct ACT4WordleTests {
     private let iosPath = "Sources/Conclave/Features/Meeting/Games/Native/Boards/WordleBoard+iOS.swift"
     private let kotlinPath = "Sources/Conclave/Skip/ui/games/boards/WordleBoard.kt"
 
-    @Test func tilesAndKeysCarryTextAndGlyphTwinsAndNeverMirror() throws {
-        let ios = try stageSource(iosPath)
-        let kotlin = try stageSource(kotlinPath)
-        let flatIOS = stageNormalized(ios)
-        let flatKotlin = stageNormalized(kotlin)
-
-        #expect(flatIOS.contains(".accessibilityElement(children: .ignore) .accessibilityLabel(label)"))
-        #expect(flatIOS.contains("WordleRowView(row: row, label: WordleCopy.rowSummary(row))"))
-        #expect(flatIOS.contains(".accessibilityLabel(WordleCopy.keyLabel(key))"))
-        #expect(flatKotlin.contains("clearAndSetSemantics { contentDescription = label }"))
-        #expect(flatKotlin.contains(".semantics { contentDescription = label }"))
-
-        #expect(flatIOS.contains("Image(systemName: ConclaveSymbols.checkmark)") && flatIOS.contains("Circle() .fill(ink)"))
-        #expect(flatKotlin.contains("Icon(ConclaveIcons.CheckFill0, contentDescription = null, tint = ink") && flatKotlin.contains("background(ink, CircleShape)"))
-
-        for token in ["DesignTokens.iosInCallSuccess", "DesignTokens.iosInCallWarning", "DesignTokens.iosInCallSurfaceHigh",
-                      "HostingTheme.inCallBorderStrong", "DesignTokens.iosInCallOnControlOff"] {
-            #expect(ios.contains(token), "iOS board misses \(token)")
-        }
-        for token in ["ext.success", "ext.warning", "ext.onWarning", "scheme.surfaceContainerHighest", "scheme.outline"] {
-            #expect(kotlin.contains(token), "Android board misses \(token)")
-        }
-        for forbidden in ["coral", "Coral", "primaryContainer", "Color.white", "Color.White"] {
-            #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the board uses \(forbidden)")
-        }
-
-        #expect(flatIOS.contains(".dynamicTypeSize(...DynamicTypeSize.accessibility1)") && ios.contains(".accessibilityShowsLargeContentViewer"))
-        #expect(flatIOS.contains(".environment(\\.layoutDirection, .leftToRight)"))
-        #expect(flatKotlin.contains("CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr)"))
-        #expect(flatKotlin.contains("Modifier.size(WordleBoardPolicy.cellSize.dp)") && flatIOS.contains("CGFloat(WordleBoardPolicy.cellSize)"))
-        #expect(flatKotlin.contains("private val WordleKeyHeight = 48.dp") && flatIOS.contains("static let keyHeight: CGFloat = 44"))
-
-        #expect(flatIOS.contains("focusedRow = new - 1") && flatKotlin.contains("announcement = newest"))
-    }
-
-    @Test func textEntryFollowsTheScreenReaderAndHardwareKeysFeedTheSameDraft() throws {
-        let flatIOS = stageNormalized(try stageSource(iosPath))
-        let flatKotlin = stageNormalized(try stageSource(kotlinPath))
-
-        #expect(flatIOS.contains("@Environment(\\.accessibilityVoiceOverEnabled) private var voiceOver"))
-        #expect(flatIOS.contains("textEntry: prefersTextEntry ?? voiceOver"))
-        #expect(flatKotlin.contains("if (entryMode == 0) access.touchExploration else entryMode == 1"))
-
-        for fragment in [".textInputAutocapitalization(.characters)", ".autocorrectionDisabled()", ".submitLabel(.go)",
-                         ".keyboardType(.asciiCapable)", "SecureField(WordleCopy.secretField(), text: $text)",
-                         "games.setWordleDraft(letters)"] {
-            #expect(flatIOS.contains(fragment), "iOS misses \(fragment)")
-        }
-        for fragment in ["capitalization = KeyboardCapitalization.Characters", "autoCorrectEnabled = false", "keyboardType = KeyboardType.Ascii",
-                         "imeAction = ImeAction.Go", "visualTransformation = PasswordVisualTransformation()",
-                         "onValueChange = { games.setWordleDraft(it) }"] {
-            #expect(flatKotlin.contains(fragment), "Android misses \(fragment)")
-        }
-
-        #expect(flatIOS.contains(".onKeyPress(characters: .letters, phases: .down)") && flatIOS.contains(".onKeyPress(.delete)")
-            && flatIOS.contains(".onKeyPress(.return)") && flatIOS.contains(".focusable(canType)"))
-        #expect(flatKotlin.contains(".onPreviewKeyEvent { event ->") && flatKotlin.contains("event.key == Key.Backspace")
-            && flatKotlin.contains("event.key == Key.Enter || event.key == Key.NumPadEnter")
-            && flatKotlin.contains("wordleHardwareLetter(event.utf16CodePoint)"))
-
-        #expect(flatIOS.contains("games.typeWordleLetter(key.letter)") && flatIOS.contains("games.deleteWordleLetter()"))
-        #expect(flatKotlin.contains("games.typeWordleLetter(letterKey.letter)") && flatKotlin.contains("role = Role.Button"))
-    }
-
-    @Test func theTimerIsItsOwnLeafAndKeysPlayNoHaptics() throws {
-        let ios = try stageSource(iosPath)
-        let kotlin = try stageSource(kotlinPath)
-        let flatIOS = stageNormalized(ios)
-        let flatKotlin = stageNormalized(kotlin)
-        #expect(flatIOS.contains("TimelineView(.periodic(from: .now, by: 1))") && flatIOS.contains("if scenePhase == .active"))
-        #expect(flatIOS.contains("WordleBoardPolicy.announcedSeconds.contains(value)") && flatIOS.contains(".monospacedDigit()"))
-        #expect(flatIOS.contains("if let countdown = games.countdown { WordleTimerChip(model: countdown) }"))
-        #expect(flatKotlin.contains("lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED)") && flatKotlin.contains("LiveRegionMode.Polite"))
-        #expect(flatKotlin.contains("val countdown = games.countdown ?: return WordleTimerChip(countdown)"))
-        for forbidden in ["conclaveGestureFeedback", "haptics.gesture", "withAnimation", ".animation(", "animate", "GameJSONValue",
-                          "dictionaryValue", "MeetingState", "MeetingViewModel", "Font.system(size:", "onLongPressGesture", "confetti"] {
-            #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the board uses \(forbidden)")
-        }
-    }
-
-    @Test func everyWordleEnumCaseHasCopyOnBothPlatforms() throws {
-        let ios = try stageSource(iosPath)
-        let kotlin = try stageSource(kotlinPath)
-        for value in WordleCellState.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("WordleCellState." + value.rawValue), "\(value)") }
-        for value in WordleKeyState.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("WordleKeyState." + value.rawValue), "\(value)") }
-        for value in WordlePhase.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("WordlePhase." + value.rawValue), "\(value)") }
-        for value in WordleRole.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("WordleRole." + value.rawValue), "\(value)") }
-        for value in WordleOutcome.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("WordleOutcome." + value.rawValue), "\(value)") }
-        for value in WordleStandingStatus.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("WordleStandingStatus." + value.rawValue), "\(value)")
-        }
-
-        #expect(ios.contains("ConclaveStrings.format(\"%lld tries\", count)") && kotlin.contains("conclavePlural(\"gm_wordle_tries\", tries, tries)"))
-    }
-
     @Test func wordleStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
@@ -474,15 +379,6 @@ struct ACT4WordleTests {
         #expect(names.count > 30)
         for name in names { #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)") }
         #expect(xml.contains("<plurals name=\"gm_wordle_tries\">"))
-    }
-
-    @Test func theShellRoutesWordleAndPinsItsHostBar() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Games/Native/GameShell+iOS.swift"))
-        #expect(ios.contains("case GameSceneKind.wordle: WordleSceneBody(games: games)") && ios.contains("WordleHostBar(games: games)"))
-        let kotlin = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/games/GameShell.kt"))
-        #expect(kotlin.contains("GameSceneKind.wordle -> WordleSceneBody(games)") && kotlin.contains("WordleHostBar(games)"))
-        let models = try stageSource("Sources/Conclave/Features/Meeting/Activities/GameStageModels.swift")
-        #expect(models.contains("let wordle: WordleScene?"))
     }
 }
 #endif

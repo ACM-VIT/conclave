@@ -386,101 +386,6 @@ struct ACT6ZipTests {
     private let iosPath = "Sources/Conclave/Features/Meeting/Games/Native/Boards/ZipBoard+iOS.swift"
     private let kotlinPath = "Sources/Conclave/Skip/ui/games/boards/ZipBoard.kt"
 
-    @Test func oneCanvasDrawsTheBoardTokensAndTheCoralPathAndNeverMirrors() throws {
-        let ios = try stageSource(iosPath)
-        let kotlin = try stageSource(kotlinPath)
-        let flatIOS = stageNormalized(ios)
-        let flatKotlin = stageNormalized(kotlin)
-        #expect(flatIOS.contains("Canvas { context, _ in") && flatKotlin.contains("Canvas(Modifier.size(side.dp)) {"))
-
-        for token in ["DesignTokens.iosGameBoardLight", "DesignTokens.iosGameBoardDark", "HostingTheme.coralFill", "dash: [dash, dash]",
-                      "ZipPathPolicy.pathWidth"] {
-            #expect(ios.contains(token), "iOS board misses \(token)")
-        }
-        for token in ["ext.gameBoardLight", "ext.gameBoardDark", "scheme.primaryContainer",
-                      "PathEffect.dashPathEffect(floatArrayOf(dash, dash), 0f)", "ZipPathPolicy.pathWidth"] {
-            #expect(kotlin.contains(token), "Android board misses \(token)")
-        }
-
-        #expect(ios.components(separatedBy: "HostingTheme.coralFill").count == 2)
-        #expect(kotlin.components(separatedBy: "scheme.primaryContainer").count == 2)
-        #expect(flatKotlin.contains("ButtonDefaults.outlinedButtonColors(contentColor = scheme.onSurface)"))
-
-        #expect(flatIOS.contains(".environment(\\.layoutDirection, .leftToRight)"))
-        #expect(flatKotlin.contains("CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr)"))
-        for forbidden in ["GameJSONValue", "dictionaryValue", "MeetingState", "MeetingViewModel", "withAnimation", ".animation(", "animate",
-                          "Font.system(size:", "onLongPressGesture", "contextMenu", "confetti", "Color.white", "Color.White"] {
-            #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the board uses \(forbidden)")
-        }
-    }
-
-    @Test func dragTapAndArrowKeysDriveOneViewLocalDraftWithOneSendPerLift() throws {
-        let flatIOS = stageNormalized(try stageSource(iosPath))
-        let flatKotlin = stageNormalized(try stageSource(kotlinPath))
-
-        #expect(flatIOS.contains("DragGesture(minimumDistance: 0, coordinateSpace: .local)"))
-        #expect(flatIOS.contains("interaction?.touch(at: cell, scene: scene)") && flatIOS.contains("interaction?.lift(scene: scene, games: games)"))
-        #expect(flatKotlin.contains(".pointerInput(scene.size, scene.round) { detectTapGestures("))
-        #expect(flatKotlin.contains(".pointerInput(scene.size, scene.round) { detectDragGestures("))
-        #expect(flatKotlin.contains("val latestScene by rememberUpdatedState(scene)") && flatKotlin.contains("onDragEnd = { draft?.lift(latestScene, games) }"))
-
-        #expect(flatIOS.contains(".onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow], phases: .down)"))
-        #expect(flatIOS.contains(".onKeyPress(.return)") && flatIOS.contains(".focusable(interactive)"))
-        #expect(flatKotlin.contains(".onPreviewKeyEvent { event ->") && flatKotlin.contains("Key.DirectionUp -> ZipDirection.up"))
-        #expect(flatKotlin.contains("event.key == Key.Enter || event.key == Key.NumPadEnter"))
-
-        for fragment in ["games.send(ZipIntent.move(path))", "games.send(ZipIntent.reset())", "games.send(ZipIntent.hint())",
-                         "games.send(ZipIntent.nextRound())"] {
-            #expect(flatIOS.contains(fragment), "iOS misses \(fragment)")
-        }
-        for fragment in ["games.send(ZipIntent.move(path))", "games.send(ZipIntent.reset())", "games.send(ZipIntent.hint())",
-                         "games.send(ZipIntent.nextRound())"] {
-            #expect(flatKotlin.contains(fragment), "Android misses \(fragment)")
-        }
-
-        #expect(flatKotlin.contains("val path = draft?.display(scene.confirmedPath, showsSent) ?: readOnlyPath"))
-
-        #expect(flatIOS.contains(".conclaveGestureFeedback(.selectionChanged, trigger: interaction?.addedCells ?? 0)"))
-        #expect(flatKotlin.contains("haptics.gesture(FeedbackKind.selectionChanged)"))
-    }
-
-    @Test func everyCellIsAnElementAndTheStepChooserMakesDragOptional() throws {
-        let flatIOS = stageNormalized(try stageSource(iosPath))
-        let flatKotlin = stageNormalized(try stageSource(kotlinPath))
-
-        #expect(flatIOS.contains(".accessibilityChildren {") && flatIOS.contains("Grid(horizontalSpacing: 0, verticalSpacing: 0)"))
-        #expect(flatIOS.contains(".accessibilityLabel(ZipCopy.cellLabel(cell, showsProgress: interactive))"))
-        #expect(flatKotlin.contains(".absoluteOffset(x = (cell.column * cellSide).dp, y = (cell.row * cellSide).dp)"))
-        #expect(flatKotlin.contains(".clearAndSetSemantics { contentDescription = label if (steps) { role = Role.Button"))
-
-        #expect(flatIOS.contains("@Environment(\\.accessibilityVoiceOverEnabled) private var voiceOver"))
-        #expect(flatIOS.contains("let showsChooser = prefersChooser ?? voiceOver"))
-        #expect(flatKotlin.contains("if (chooserMode == 0) access.touchExploration else chooserMode == 1"))
-        #expect(flatIOS.contains(".frame(minWidth: 44, minHeight: 44)") && flatIOS.contains(".frame(minHeight: 44)"))
-        #expect(flatKotlin.contains("Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(\"game.zip.step.${cell.index}\")"))
-        #expect(flatIOS.contains("ZipPathPolicy.chooserCells(scene)") && flatKotlin.contains("ZipPathPolicy.chooserCells(scene)"))
-
-        #expect(flatIOS.contains("TimelineView(.periodic(from: .now, by: 1))") && flatIOS.contains("if scenePhase == .active"))
-        #expect(flatIOS.contains("TimelineView(.explicit(ZipCopy.cooldownDates("))
-        #expect(flatKotlin.contains("val countdown = games.countdown ?: return ZipTimerChip(countdown)"))
-        #expect(flatKotlin.contains("lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED)") && flatKotlin.contains("LiveRegionMode.Polite"))
-    }
-
-    @Test func everyZipEnumCaseHasCopyOnBothPlatforms() throws {
-        let ios = try stageSource(iosPath)
-        let kotlin = try stageSource(kotlinPath)
-        for value in ZipPhase.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ZipPhase." + value.rawValue), "\(value)") }
-        for value in ZipRole.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ZipRole." + value.rawValue), "\(value)") }
-        for value in ZipOutcome.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ZipOutcome." + value.rawValue), "\(value)") }
-        for value in ZipStandingStatus.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("ZipStandingStatus." + value.rawValue), "\(value)")
-        }
-        for value in ZipDirection.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ZipDirection." + value.rawValue), "\(value)") }
-
-        #expect(ios.contains("ConclaveStrings.format(\"%lld hints used\", count)") && kotlin.contains("conclavePlural(\"gm_zip_hints_used\""))
-        #expect(kotlin.contains("conclavePlural(\"gm_zip_cells\", total, filled, total)"))
-    }
-
     @Test func zipStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
@@ -504,18 +409,6 @@ struct ACT6ZipTests {
         for plural in ["gm_zip_cells", "gm_zip_hints_used", "gm_zip_hint_cost"] {
             #expect(xml.contains("<plurals name=\"" + plural + "\">"), "missing plural \(plural)")
         }
-    }
-
-    @Test func theShellRoutesZipAndPinsItsHostBar() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Games/Native/GameShell+iOS.swift"))
-        #expect(ios.contains("case GameSceneKind.zip: ZipSceneBody(games: games)") && ios.contains("ZipHostBar(games: games)"))
-        let kotlin = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/games/GameShell.kt"))
-        #expect(kotlin.contains("GameSceneKind.zip -> ZipSceneBody(games)") && kotlin.contains("ZipHostBar(games)"))
-        let models = try stageSource("Sources/Conclave/Features/Meeting/Activities/GameStageModels.swift")
-        #expect(models.contains("let zip: ZipScene?"))
-        let presenterSource = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Activities/GameStagePresenter.swift"))
-        #expect(presenterSource.contains("ZipSceneBuilder.scene(projected, context: context"))
-        #expect(presenterSource.contains("ZipOutcomePolicy.solved(previous: scene.zip, next: zip)"))
     }
 }
 #endif

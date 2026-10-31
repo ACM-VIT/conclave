@@ -100,8 +100,6 @@ struct STG8AttendeeViewerTests {
         #expect(!off.qaEnabled && off.webinarQaUnseen == 0)
 
         #expect(ControlBarPolicy.order(.attendee) == [.hand, .qa, .leave])
-        let controls = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Controls/ControlBarPolicy.swift"))
-        #expect(controls.contains("guard inputs.attendeeCanRaiseHand else { return nil }"))
     }
 
     @Test func theCapsuleReadsTheWebinarTitleAndLiveAndOpensWebinarDetails() throws {
@@ -167,22 +165,6 @@ struct STG8AttendeeViewerTests {
         let share = StageFixtureScript.copy(speaker, screenShareUserId: "r1")
         #expect(AttendeeViewerPolicy.feed(share) == AttendeeFeed(userId: "r1", isShare: true, insetUserId: ""))
         #expect(AttendeeViewerPolicy.kind(AttendeeFeed.none) == .attendeeWaiting)
-    }
-
-    @Test func attendeeViewerSourcesStayInTheInCallTheme() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/AttendeeViewer+iOS.swift"))
-        #expect(ios.contains("ContentUnavailableView {"))
-        #expect(ios.contains("ConclaveStrings.text(\"The Webinar Will Begin Soon\")"))
-        #expect(ios.contains("ConclaveStrings.format(\"Webinar Waiting Count %lld\", count)"))
-        #expect(ios.contains("ConclaveStrings.format(\"Shared Screen from %@\", name)"))
-        #expect(ios.contains("if let viewer = stage.attendee, !viewer.isLive {"))
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/AttendeeViewer.kt"))
-        #expect(android.contains("ConclaveEmptyStatus("))
-        #expect(android.contains("conclavePlural(\"stg_webinar_waiting_count\", count, count)"))
-        #expect(android.contains("conclaveString(\"stg_announce_webinar_live\")"))
-        #expect(!android.contains("Text(\""))
-        let callRoot = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt"))
-        #expect(callRoot.contains("AttendeeViewerPolicy.demotedAnnouncement, AttendeeViewerPolicy.webinarLiveAnnouncement ->"))
     }
 }
 #endif

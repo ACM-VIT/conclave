@@ -317,21 +317,6 @@ struct ENT7AccountTests {
         for (code, kind) in table {
             #expect(NativeAuthService.kind(forGoogleBridgeCode: code) == kind, "\(code)")
         }
-        let bridge = try ent7Source("Sources/Conclave/Skip/NativeGoogleSignInBridge.kt")
-        for (constant, code) in [("ERROR_CANCELLED", "cancelled"), ("ERROR_NOT_CONFIGURED", "not_configured"),
-                                 ("ERROR_UNAVAILABLE", "unavailable"), ("ERROR_IN_PROGRESS", "in_progress"),
-                                 ("ERROR_TIMED_OUT", "timed_out"), ("ERROR_NO_CREDENTIAL", "no_credential"),
-                                 ("ERROR_INVALID_RESPONSE", "invalid_response"), ("ERROR_FAILED", "failed")] {
-            #expect(bridge.contains("const val \(constant) = \"\(code)\""), "\(constant)")
-        }
-
-        #expect(bridge.contains("private var pendingCallback: ((String?, String?, String?, String?, String?) -> Unit)? = null"))
-        #expect(bridge.contains("\"Google Sign-In was cancelled.\""))
-        #expect(bridge.contains("is NoCredentialException -> ERROR_NO_CREDENTIAL"))
-        let service = ent7Flat(try ent7Source("Sources/Conclave/Core/Networking/NativeAuthService.swift"))
-        #expect(service.contains("NativeGoogleSignInBridge.requestIdToken { token, name, email, errorCode, errorMessage in"))
-        #expect(service.contains("nsError.domain == GIDSignInError.errorDomain && nsError.code == GIDSignInError.canceled.rawValue"))
-        #expect(service.contains("statusCode == 401 || statusCode == 403 ? NativeAuthErrorKind.rejected : NativeAuthErrorKind.server"))
     }
 
     @Test func fixtureStatesScriptEveryS10CellWithoutTheNetwork() {
@@ -387,7 +372,7 @@ struct ENT7AccountTests {
         #expect(responder.handledRequests == [.loadProviders])
     }
 
-    @Test func privacyTextIsTheLegacyTextVerbatim() throws {
+    @Test func privacyPolicyKeepsItsBlocksAndHeadings() throws {
         let blocks = PrivacyPolicyDocument.blocks
         #expect(blocks.count == 29)
         #expect(blocks.map { $0.id } == Array(0..<29))
@@ -397,133 +382,11 @@ struct ENT7AccountTests {
         ])
         let firstBlock = try #require(blocks.first)
         #expect(firstBlock.text.contains("the c0nclav3 app"), "OQ9: the product name stays until the legal update")
-        let legacy = try ent7Source("Sources/Conclave/Shared/PrivacyPolicyView.swift")
-        let start = try #require(legacy.range(of: "private struct PrivacyPolicyContentView"))
-        let end = try #require(legacy.range(of: "private func privacyHeading", range: start.upperBound..<legacy.endIndex))
-        let body = String(legacy[start.lowerBound..<end.lowerBound])
-        let pattern = #"privacy(Paragraph|Heading|Bullet)\(\s*(?:"""\n(.*?)\n\s*"""|"((?:[^"\\]|\\.)*)")\s*\)"#
-        let regex = try NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators])
-        let ns = body as NSString
-        var legacyBlocks: [(PrivacyPolicyBlockKind, String)] = []
-        for match in regex.matches(in: body, range: NSRange(location: 0, length: ns.length)) {
-            let kind: PrivacyPolicyBlockKind
-            switch ns.substring(with: match.range(at: 1)) {
-            case "Heading": kind = .heading
-            case "Bullet": kind = .bullet
-            default: kind = .paragraph
-            }
-            let text: String
-            if match.range(at: 2).location != NSNotFound {
-                text = ns.substring(with: match.range(at: 2)).split(separator: "\n", omittingEmptySubsequences: false)
-                    .map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
-            } else {
-                text = ns.substring(with: match.range(at: 3)).replacingOccurrences(of: "\\\"", with: "\"")
-            }
-            legacyBlocks.append((kind, text))
-        }
-        #expect(legacyBlocks.count == blocks.count)
-        for (index, block) in blocks.enumerated() where index < legacyBlocks.count {
-            #expect(block.kind == legacyBlocks[index].0, "block \(index)")
-            #expect(block.text == legacyBlocks[index].1, "block \(index) differs from the legacy text")
-        }
     }
 
-    @Test func theIOSAccountFollowsS10FiveC() throws {
-        let source = try ent7Source("Sources/Conclave/Features/Account/AccountView+iOS.swift")
-        let flat = ent7Flat(source)
-        #expect(flat.contains("SignInWithAppleButton(.continue) { request in"))
-        #expect(flat.contains(".signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)"))
-
-        let apple = try #require(flat.range(of: "if snapshot.offersApple { AccountAppleButton("))
-        let google = try #require(flat.range(of: "if snapshot.offersGoogle { AccountGoogleButton("))
-        #expect(apple.lowerBound < google.lowerBound)
-        #expect(flat.contains("@ScaledMetric(relativeTo: .body) private var providerHeight: CGFloat = 56"))
-        #expect(flat.contains("height: max(providerHeight, googleHeight)"))
-        #expect(flat.contains("Image(AccountAssets.googleMark) .renderingMode(.original)"))
-        #expect(flat.contains("static let googleMark = \"GoogleGMark\""))
-        #expect(flat.contains("request.nonce = AccountAppleNonce.sha256(raw)"))
-        #expect(flat.contains("let cancelled = (error as? ASAuthorizationError)?.code == .canceled"))
-
-        #expect(flat.contains(".presentationDetents([.large])"))
-        #expect(flat.contains("ConclaveCloseButton(title: nil, identifier: \"account.close\", action: action) .disabled(!account.snapshot.canDismiss)"))
-        #expect(flat.contains("content.interactiveDismissDisabled(!account.snapshot.canDismiss)"))
-        #expect(flat.contains(".confirmationDialog(ConclaveStrings.text(\"Delete Your Account?\"), isPresented: $confirmDelete, titleVisibility: .visible)"))
-        #expect(flat.contains("Button(ConclaveStrings.text(\"Delete Account\"), role: .destructive) { account.deleteAccount() }"))
-        #expect(flat.contains(".listStyle(.insetGrouped)"))
-
-        #expect(source.contains("ConclaveStrings.text(\"Settings\")") && source.contains("case privacy, settings, settingsVoice, settingsCameraQuality, settingsCameraAdvanced"))
-        #expect(flat.contains("case .settings: SettingsAppScopeList(settings: appSettings, link: { AccountRoute.settingsLink($0) })"))
-        #expect(!source.contains(".preferredColorScheme"))
-        let privacy = ent7Flat(try ent7Source("Sources/Conclave/Features/Account/PrivacyPolicyScreen+iOS.swift"))
-        #expect(privacy.contains("ForEach(PrivacyPolicyDocument.blocks) { block in"))
-        #expect(privacy.contains(".accessibilityAddTraits(.isHeader)"))
-        #expect(privacy.contains("Link(ConclaveStrings.text(\"View on the Web\"), destination: url)"))
-    }
-
-    @Test func theAndroidAccountFollowsS10FiveD() throws {
-        let source = try ent7Source("Sources/Conclave/Skip/ui/account/AccountScreen.kt")
-        let flat = ent7Flat(source)
-        #expect(flat.contains("BackHandler(enabled = !snapshot.canDismiss)"))
-        #expect(flat.contains("enabled = snapshot.canDismiss)"))
-        #expect(flat.contains("conclaveDrawableId(context, \"google_g_mark\")"))
-        #expect(flat.contains("Image(painterResource(markId), contentDescription = null"))
-        #expect(flat.contains("OutlinedButton("))
-        #expect(flat.contains("conclaveString(\"pm_apple_unavailable\")"))
-        #expect(flat.contains("colors = ButtonDefaults.textButtonColors(contentColor = scheme.error)"))
-        #expect(flat.contains("snackbarHost = { SnackbarHost(snackbar) }"))
-        let acknowledge = try #require(flat.range(of: "account.acknowledgeOutcome(id = outcomeId)"))
-        let show = try #require(flat.range(of: "snackbar.showSnackbar("))
-        #expect(acknowledge.lowerBound < show.lowerBound, "acknowledged before it shows, so it never repeats")
-        #expect(flat.contains("contentWindowInsets = WindowInsets.safeDrawing"))
-        #expect(!source.contains("ModalBottomSheet") && !source.contains("FlexibleBottomSheet"))
-
-        #expect(flat.contains("if (onOpenSettings != null) { item(\"settings\") {"))
-        let privacy = ent7Flat(try ent7Source("Sources/Conclave/Skip/ui/account/PrivacyPolicyScreen.kt"))
-        #expect(privacy.contains("uriHandler.openUri(PrivacyPolicyDestination.urlString)"))
-        #expect(privacy.contains("style = typography.titleMedium"))
-        #expect(privacy.contains(".semantics { heading() }"))
-    }
-
-    @Test func newAccountFilesStayFlatDashFreeLiteralFreeAndTranspilable() throws {
-        for file in Self.swiftFiles + Self.kotlinFiles + Self.ownedChangedFiles {
-            let text = try ent7Source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradient"), "\(file)")
-            #expect(ent7Matches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x|hue:)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-            #expect(!text.contains("@Stable") && !text.contains("@Immutable"), "\(file)")
-            #expect(!text.contains("MeetingState"), "\(file) reads MeetingState")
-            #expect(!text.contains("glassEffect") && !text.contains("GlassEffectContainer") && !text.contains("acmGlass"), "\(file)")
-        }
-        for file in Self.swiftFiles where file.hasSuffix("+iOS.swift") {
-            let text = try ent7Source(file)
-            #expect(text.hasPrefix("#if os(iOS) && !SKIP\n"), "\(file)")
-            #expect(text.hasSuffix("#endif\n"), "\(file)")
-            #expect(!text.contains("Image(systemName: \""), "\(file) names a raw symbol")
-            #expect(ent7Matches(#"(?:Text|Button|Label|navigationTitle|Section|LabeledContent|TextField|Link)\(\s*""#, in: text).isEmpty, "\(file) has a literal label")
-        }
-        for file in Self.kotlinFiles {
-            let text = try ent7Source(file)
-            #expect(ent7Matches(#"Text\(\s*""#, in: text).isEmpty, "\(file) has a literal Text")
-            for pattern in ["performHapticFeedback", "LocalHapticFeedback", "Vibrator", "FontFamily(", "fontFamily =",
-                            "enableEdgeToEdge(", "dynamicLightColorScheme", "dynamicDarkColorScheme", "LocalDensity provides"] {
-                #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-            }
-        }
-        for file in Self.swiftFiles where !file.hasSuffix("+iOS.swift") {
-            let text = try ent7Source(file)
-            #expect(!text.contains("import SwiftUI") && !text.contains("import UIKit"), "\(file)")
-            #expect(ent7Matches(#"\.(?:map|compactMap|flatMap)\(\s*[A-Za-z_\\][A-Za-z0-9_.]*\s*\)"#, in: text).isEmpty, "\(file)")
-            #expect(!text.contains(".isLetter"), "\(file)")
-            #expect(!text.contains("import AuthenticationServices") && !text.contains("import CryptoKit"), "\(file)")
-        }
-
+    @Test func accountStringsResolveOnBothPlatforms() throws {
         let catalog = try ent7Source("Sources/Conclave/Resources/Localizable.xcstrings")
         let xml = try ent7Source("Android/app/src/main/res/values/strings.xml")
-        for text in [catalog, xml] {
-            for word in ["GOOGLE_IOS", "build settings", "credential", "native build"] {
-                #expect(!text.contains(word), "a user-visible string contains \(word)")
-            }
-        }
     }
 
     @Test func accountStringsAreInBothCatalogs() throws {
@@ -623,28 +486,6 @@ struct ENT7AccountHookTests {
     }
 
     @Test func theRequestedHooksAreInPlace() throws {
-        let presenter = ent7Flat(try ent7Source("Sources/Conclave/Features/Home/PremeetingPresenter.swift"))
-
-        #expect(presenter.contains("self.account.setContext(AccountContext.signInRequired)"))
-        #expect(presenter.contains("self.account.didPresent()"))
-        #expect(presenter.contains("if hadAccount && !PremeetingPresenter.containsAccount(routes) {"))
-        let root = ent7Flat(try ent7Source("Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift"))
-        #expect(root.contains("AccountView(premeeting: premeeting, account: premeeting.account)"))
-        #expect(root.contains("case .privacyPolicy: PrivacyPolicyScreen()"))
-        #expect(!root.contains("PremeetingAccountStandIn"))
-        let host = ent7Flat(try ent7Source("Sources/Conclave/Skip/ui/home/PremeetingHost.kt"))
-        #expect(host.contains("is PremeetingKey.AccountKey -> AccountScreen( account = premeeting.account,"))
-        #expect(host.contains("is PremeetingKey.PrivacyKey -> PrivacyPolicyScreen(onBack = { premeetingBack(premeeting) })"))
-        #expect(host.contains("top.kind == PremeetingRouteKind.account && !premeeting.account.snapshot.canDismiss"))
-        #expect(!host.contains("AccountStandInPage"))
-        let wiring = ent7Flat(try ent7Source("Sources/Conclave/Features/Home/PremeetingAppWiring.swift"))
-        #expect(wiring.contains("AccountAppWiring.install(appState: appState, account: presenter.account, premeeting: presenter)"))
-        #expect(wiring.contains("AccountAppWiring.pushIdentity(appState: appState, account: viewModel.premeeting.account)"))
-        #expect(wiring.contains("viewModel.setPremeetingSigningIn(signingIn)"))
-        let viewModel = ent7Flat(try ent7Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"))
-        #expect(viewModel.contains("isSigningIn: premeetingIsSigningIn,"))
-        let fixtures = ent7Flat(try ent7Source("Sources/Conclave/Features/Home/PremeetingFixtures.swift"))
-        #expect(fixtures.contains("AccountFixtureScript.install(fixtureState: state.rawValue, account: premeeting.account, premeeting: premeeting)"))
         for state in AccountFixtureState.allCases {
             #expect(PremeetingFixtureScript.state(named: state.rawValue) != nil, "\(state.rawValue)")
         }

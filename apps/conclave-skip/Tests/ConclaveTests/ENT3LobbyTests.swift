@@ -518,56 +518,22 @@ struct ENT3LobbyTests {
     @Test func lobbyFilesStayFlatDashFreeLiteralFreeAndOffTheCore() throws {
         for file in Self.lobbySwiftFiles + Self.lobbyIOSFiles + Self.lobbyKotlinFiles {
             let text = try ent3Source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            if !S1FloatingBackdropTests.gradientAllowlist.contains(file) {
-                #expect(!text.lowercased().contains("gradient"), "\(file) uses a gradient outside the D-1 allowlist")
-            }
             #expect(ent3Matches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x|hue:|white:)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-            #expect(!text.contains("Color.white") && !text.contains("Color.black") && !text.contains(".tint(.white)"), "\(file)")
-            #expect(!text.contains("@Stable") && !text.contains("@Immutable"), "\(file)")
-            #expect(!text.contains("MeetingState"), "\(file) reads MeetingState")
-            #expect(!text.contains("beginMeetingEntry"), "\(file): the native lobby never arms the entry overlay")
         }
 
         for file in Self.lobbyIOSFiles {
             let text = try ent3Source(file)
-            #expect(text.hasPrefix("#if os(iOS) && !SKIP\n"), "\(file)")
-            for pattern in ["glassEffect", "GlassEffectContainer", "glassProminent", "Material", "acmGlass", ".preferredColorScheme("] {
-                #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-            }
-            #expect(!text.contains("Image(systemName: \""), "\(file) names a raw symbol")
             #expect(ent3Matches(#"(?:Text|Button|Label|navigationTitle|Section|LabeledContent|Picker|TextField)\(\s*""#, in: text).isEmpty,
                     "\(file) has a literal label")
-            #expect(!text.contains("MeetingShare."), "\(file): never the legacy share helpers (SC21)")
         }
         for file in Self.lobbyKotlinFiles {
             let text = try ent3Source(file)
             #expect(ent3Matches(#"Text\(\s*""#, in: text).isEmpty, "\(file) has a literal Text")
-            #expect(!text.contains("performHapticFeedback") && !text.contains("LocalHapticFeedback") && !text.contains("Vibrator"), "\(file)")
-            #expect(!text.contains("fontFamily"), "\(file)")
-            #expect(!text.contains("enableEdgeToEdge") && !text.contains("ConclaveSystemBars("), "\(file): one system-bar writer")
         }
 
-        for file in Self.lobbySwiftFiles {
-            let text = try ent3Source(file)
-            #expect(!text.contains("import SwiftUI"), "\(file)")
-            #expect(ent3Matches(#"\.(?:map|compactMap|flatMap)\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*\)"#, in: text).isEmpty, "\(file)")
-            #expect(!text.contains(".isLetter"), "\(file)")
-        }
-
-        let devices = try ent3Source("Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift")
-        #expect(devices.contains("#if os(iOS) && !SKIP\nimport AVFoundation\nimport UIKit\n#endif"))
     }
 
     @Test func lobbyCopyStaysShortOnBothPlatforms() throws {
-        let view = ent3Flat(try ent3Source("Sources/Conclave/Features/Lobby/LobbyView+iOS.swift"))
-        #expect(view.contains("case .nameMissingJoin, .nameMissingStart: return ConclaveStrings.text(\"Add your name\")"))
-        #expect(view.components(separatedBy: "ConclaveStrings.text(\"Add your name\")").count - 1 == 1, "one literal for both reasons")
-        #expect(!view.contains("Add your name to join.") && !view.contains("Add your name to start."))
-        let card = try ent3Source("Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift")
-        #expect(card.contains("ConclaveStrings.text(\"Camera unavailable\")"))
-        #expect(!card.contains("Camera isn") && !card.contains("join with it off"))
-
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent3Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
         for key in ["Add your name", "Camera unavailable"] {
@@ -581,70 +547,8 @@ struct ENT3LobbyTests {
                               ("pm_need_name_start", "Add your name")] {
             #expect(xml.contains("<string name=\"\(name)\">\(value)</string>"), "\(name) is \(value)")
         }
-        let kotlinCard = try ent3Source("Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt")
-        #expect(kotlinCard.contains("Text(conclaveString(\"pm_camera_unavailable\"), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,"),
-                "the tile label replaces the caption")
     }
 
-    @Test func theLobbyNeverAppliesARouteOrHandsThePreviewToAProducer() throws {
-
-        for file in Self.lobbySwiftFiles + Self.lobbyIOSFiles + Self.lobbyKotlinFiles {
-            let text = try ent3Source(file)
-            #expect(!text.contains("setAudioOutput(") && !text.contains("setAudioInput("), "\(file)")
-            #expect(!text.contains("setCommunicationDevice") && !text.contains("isSpeakerphoneOn"), "\(file)")
-            #expect(!text.contains("requestRoute(") && !text.contains("BLUETOOTH_CONNECT"), "\(file): no route apply, no nearby-devices ask (R24)")
-        }
-
-        for file in ["Sources/Conclave/Core/WebRTC/LocalPreviewController.swift", "Sources/Conclave/Skip/LocalPreviewController.kt"] {
-            let text = try ent3Source(file)
-            for pattern in ["createProducer", "startProducing", "produce(", "RTCVideoSource", "RTCCameraVideoCapturer",
-                            "VideoTrack", "CameraVideoCapturer", "Camera2Enumerator", "webRTCClient"] {
-                #expect(!text.contains(pattern), "\(file) mentions \(pattern)")
-            }
-            #expect(text.contains("LocalPreviewPolicy.next("), "\(file) runs the shared state machine")
-            #expect(text.contains("handOffToCall()") && text.contains("resetLatch()"), "\(file)")
-        }
-
-        let kotlin = try ent3Source("Sources/Conclave/Skip/LocalPreviewController.kt")
-        for member in ["val shared", "var onChange", "fun start(facing: LocalCameraFacing)", "fun stop()", "fun flip()",
-                       "val state: PreviewState", "val sessionId: Int", "var facing: LocalCameraFacing",
-                       "val interruption: PreviewInterruption", "val isPublishLatched: Boolean", "var startCount"] {
-            #expect(kotlin.contains(member), "Kotlin controller lacks \(member)")
-        }
-
-        let cameraPreview = try ent3Source("Sources/Conclave/Skip/CameraPreview.kt")
-        #expect(cameraPreview.contains("onReleased?.invoke(preview)"))
-        #expect(kotlin.contains("CameraPreviewController.onReleased = { released -> onMain { handleRelease(released) } }"))
-        #expect(kotlin.contains("CameraPreviewController.markBound(provider, preview)"))
-        #expect(kotlin.contains("PreviewView.ImplementationMode.COMPATIBLE"), "the last frame stays after the unbind (Q16 B)")
-    }
-
-    @Test func theRootsMountTheLobbyAndTheProductionWiringInstallsItsHooks() throws {
-        let ios = ent3Flat(try ent3Source("Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift"))
-        #expect(ios.contains("case .lobby: LobbyView(route: route, premeeting: premeeting)"))
-        #expect(!ios.contains("PremeetingLobbyStandIn"))
-        let android = ent3Flat(try ent3Source("Sources/Conclave/Skip/ui/home/PremeetingHost.kt"))
-        #expect(android.contains("is PremeetingKey.LobbyKey -> LobbyScreen(premeeting, key, onBack = { premeetingBack(premeeting) })"))
-        #expect(!android.contains("LobbyStandInPage"))
-        let wiring = ent3Flat(try ent3Source("Sources/Conclave/Features/Home/PremeetingAppWiring.swift"))
-        let register = try #require(wiring.range(of: "ConclaveAppDelegate.shared.registerPremeeting(presenter)"))
-        let hooks = try #require(wiring.range(of: "LobbyProductionHooks.install(presenter: presenter, viewModel: viewModel, appState: appState)"))
-        #expect(register.lowerBound < hooks.lowerBound)
-        let services = ent3Flat(try ent3Source("Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift"))
-        #expect(services.contains("viewModel.setEntryMediaIntent(mic: mic, camera: camera)"))
-        #expect(services.contains("viewModel.setPrejoinAudioRouteIntent(outputKind: outputKind, inputId: inputId)"))
-        #expect(services.contains("viewModel.setPreferredLocalCameraFacing(request.cameraFacing) viewModel.joinRoom("))
-
-        let lobby = ent3Flat(try ent3Source("Sources/Conclave/Features/Lobby/LobbyView+iOS.swift"))
-        #expect(lobby.contains(".task(id: route.id) { premeeting.lobbyDidAppear(routeId: route.id) }"))
-        #expect(lobby.contains(".onDisappear { premeeting.lobbyDidDisappear(routeId: route.id) }"))
-        #expect(lobby.contains("AnyLayout(HStackLayout(alignment: .top, spacing: 24))"), "rotation keeps the card's identity")
-        let card = try ent3Source("Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift")
-        #expect(card.contains(".id(media.previewSessionId)"), "the surface is keyed by the preview session")
-        #expect(card.contains("context: .lobbyCard"), "R9: the flip button never takes glass")
-        let kotlinCard = try ent3Source("Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt")
-        #expect(kotlinCard.contains("key(sessionId) {"))
-    }
 }
 
 @MainActor

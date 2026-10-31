@@ -191,43 +191,10 @@ struct EntryLobbyReadoutTests {
         premeeting.closePromotionLobby()
         premeeting.lobbyDidAppear(routeId: closed.id)
         #expect(premeeting.lobbyOpenTimingCount == 1, "a promotion lobby closed before its first frame never emits")
-        let close = elrFlat(try elrBlock(try elrSource(Self.presenterFile), from: "func closePromotionLobby() {",
-                                         to: "func cancelPromotion() {"))
-        #expect(close.contains("promotionRoute = nil publishCount += 1 if lobbyOpenRouteId == open.id { lobbyOpenRouteId = 0 } "
-                               + "removeTarget(routeId: open.id)"),
-                "closing the promotion lobby drops its unspent push")
     }
 
     @Test func lobbyOpenIsADiagnosticTimingAndNotAJoinMilestone() throws {
         #expect(DiagnosticsTimingBridge.milestone(forTiming: "lobby_open") == nil, "the bridge ignores the lobby timing")
-
-        let presenter = elrFlat(try elrSource(Self.presenterFile))
-        #expect(presenter.contains("PerformanceDiagnostics.timing(\"lobby_open\", startedAt: Date().addingTimeInterval(-elapsed / 1000.0), "
-                                   + "details: \"intent=\" + target.intent.rawValue)"))
-        #expect(presenter.components(separatedBy: "\"lobby_open\"").count - 1 == 1, "one emitter")
-        #expect(presenter.contains("func lobbyDidAppear(routeId: Int) { guard let target = topLobbyTarget(), target.routeId == routeId else { return } "
-                                   + "visibleLobbyRouteId = routeId recordLobbyOpen(target)"),
-                "the timing is taken before the device refresh and the lobby snapshot work")
-        #expect(presenter.contains("guard lobbyOpenRouteId != 0, lobbyOpenRouteId == target.routeId else { return } lobbyOpenRouteId = 0"),
-                "the push is spent by its first frame")
-        let setPath = elrFlat(try elrBlock(try elrSource(Self.presenterFile), from: "private func setPathValue(_ routes: [PremeetingRoute]) {",
-                                           to: "private static func containsAccount("))
-        #expect(setPath.contains("let previous = path path = routes publishCount += 1 noteLobbyPush(previous: previous)"),
-                "every path push goes through one stamp")
-        #expect(presenter.contains("promotionRoute = target.route stampLobbyOpen(routeId: target.routeId)"))
-        let diagnostics = try elrSource("Sources/Conclave/Core/Diagnostics/DiagnosticsPolicies.swift")
-        #expect(!diagnostics.contains("lobby_open"))
-    }
-
-    @Test func bothPlatformsTimeTheirFirstLobbyFrameThroughTheOneHook() throws {
-        let ios = elrFlat(try elrSource(Self.iosLobbyFile))
-        #expect(ios.contains(".task(id: route.id) { premeeting.lobbyDidAppear(routeId: route.id) }"), "iOS: the lobby view's first appear")
-        #expect(ios.components(separatedBy: "lobbyDidAppear(").count - 1 == 1)
-        let android = elrFlat(try elrSource(Self.androidLobbyFile))
-        #expect(android.contains("DisposableEffect(premeeting, routeId) { premeeting.lobbyDidAppear(routeId = routeId) "
-                                 + "onDispose { premeeting.lobbyDidDisappear(routeId = routeId) } }"),
-                "Android: LobbyScreen's first composition")
-        #expect(android.components(separatedBy: "lobbyDidAppear(").count - 1 == 1)
     }
 
     @Test func theFixtureReadoutAddsTheLastLobbyOpenTime() {
@@ -258,21 +225,6 @@ struct EntryLobbyReadoutTests {
             #expect(session.selfCheckReadout == "pending lobbyOpen=37ms", "\(state): one value per push")
             session.premeeting.lobbyDidDisappear(routeId: route.id)
         }
-    }
-
-    @Test func bothMountsReadTheReadoutValueUnchanged() throws {
-        let fixtures = elrFlat(try elrSource(Self.fixturesFile))
-        #expect(fixtures.contains("private(set) var selfCheckStatus = \"pending\""))
-        #expect(fixtures.contains("var selfCheckReadout: String { PremeetingFixtureScript.selfCheckReadout(check: selfCheckStatus, "
-                                  + "lobbyOpenMillis: premeeting.lastLobbyOpenMillis) }"))
-        #expect(fixtures.contains("if value != selfCheckStatus { selfCheckStatus = value }"))
-        let ios = elrFlat(try elrSource(Self.iosRootFile))
-        #expect(ios.contains(".accessibilityLabel(Text(verbatim: session.state.rawValue + \" \" + session.selfCheckReadout)) "
-                             + ".accessibilityIdentifier(PremeetingFixtureScript.selfCheckKey)"),
-                "the iOS readout mount is verbatim and needs no string")
-        let android = elrFlat(try elrSource(Self.androidHostFile))
-        #expect(android.contains("state.rawValue + \" \" + session.selfCheckReadout"), "the Android mount reads the same value")
-        #expect(android.contains("testTag(PremeetingFixtureScript.selfCheckKey)"))
     }
 }
 

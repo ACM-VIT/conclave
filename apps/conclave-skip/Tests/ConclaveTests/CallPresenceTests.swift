@@ -443,68 +443,6 @@ struct CallPresenceTests {
         #expect(SystemFixtureScript.state(named: "missing") == nil)
     }
 
-    @Test func iosCallKitAdapterKeepsItsBookkeeping() throws {
-        let adapter = try callPresenceSource("Sources/Conclave/Core/Call/CallKitPresenceAdapter+iOS.swift")
-        #expect(adapter.hasPrefix("#if os(iOS) && !SKIP\n"))
-        #expect(adapter.contains("pendingLocalEndUUID"))
-        #expect(adapter.contains("reportedMuted = muted"))
-        #expect(adapter.contains("return result.fulfillsSystemAction"))
-        #expect(adapter.contains("CallKitReportPolicy.reports(old: old, new: new, hasReportedConnected: hasReportedConnected)"))
-        let manager = try callPresenceSource("Sources/Conclave/Core/Call/CallKitManager.swift")
-        #expect(manager.contains("configuration.includesCallsInRecents = false"))
-        #expect(manager.contains("configuration.iconTemplateImageData = template"))
-        #expect(manager.contains("update.supportsHolding = true"))
-        #expect(manager.contains("reason: failed ? .failed : .remoteEnded"))
-        #expect(manager.contains("if self.actionHandler?.providerSetMuted(uuid: uuid, muted: muted) == true {"))
-        #expect(manager.contains("action.fail()"))
-    }
-
-    @Test func systemSurfacesNeverPlayHaptics() throws {
-
-        let files = [
-            "Sources/Conclave/Core/Call/CallPresenceState.swift", "Sources/Conclave/Core/Call/CallPresenceSync.swift",
-            "Sources/Conclave/Core/Call/CallKitPresenceAdapter+iOS.swift", "Sources/Conclave/Core/Call/CallKitManager.swift",
-            "Sources/Conclave/Core/Call/CallSessionCoordinator.swift", "Sources/Conclave/Core/Call/SystemFixtures.swift",
-            "Sources/Conclave/Skip/CallForegroundService.kt", "Sources/Conclave/Skip/CallNotificationBuilder.kt",
-            "Sources/Conclave/Skip/CallNotificationBridge.kt", "Sources/Conclave/Skip/CallActionDispatcher.kt",
-        ]
-        for file in files {
-            let text = try callPresenceSource(file)
-            for pattern in ["conclaveGestureFeedback(", "HapticManager", "ConclaveHapticFeedback", "performHapticFeedback", "FeedbackToken("] {
-                #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-            }
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has a dash")
-        }
-    }
-
-    @Test func androidCallServiceFollowsTheSystemRules() throws {
-        let service = try callPresenceSource("Sources/Conclave/Skip/CallForegroundService.kt")
-        #expect(service.contains("override fun onTaskRemoved(rootIntent: Intent?) {"))
-        #expect(service.contains("CallActionDispatcher.handleCurrentNow(SystemCallCommandKind.leave, SystemCallSource.system)"))
-        #expect(service.contains("if (isGranted(android.Manifest.permission.RECORD_AUDIO)) {"))
-        #expect(service.contains("CallActionDispatcher.reportForegroundServiceTypes(microphone = microphone, camera = camera)"))
-        #expect(!service.contains("CALL_TOGGLE_MUTE -> CallActionDispatcher.toggleMute()"))
-        let builder = try callPresenceSource("Sources/Conclave/Skip/CallNotificationBuilder.kt")
-        #expect(builder.contains("NotificationCompat.CallStyle.forOngoingCall(person, hangUp)"))
-        #expect(builder.contains("PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE"))
-        #expect(builder.contains("putExtra(CallNotificationModel.EXTRA_PRESENCE_SESSION, presenceSession)"))
-        #expect(!builder.contains("setColorized"))
-        #expect(builder.contains("setSound(null, null)"))
-        #expect(builder.contains("NotificationManager.IMPORTANCE_DEFAULT"))
-    }
-
-    @Test func viewModelRoutesSystemCommandsThroughThePresence() throws {
-        let viewModel = try callPresenceSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(!viewModel.contains("CallKitManager.shared"))
-        #expect(!viewModel.contains("CallNotificationBridge.startCall("))
-        #expect(!viewModel.contains("CallNotificationBridge.updateCallState("))
-        #expect(viewModel.contains("callPresence.apply(makeCallPresenceInputs())"))
-        #expect(viewModel.contains("callPresence.onCommand = { [weak self] command in"))
-        let coordinator = try callPresenceSource("Sources/Conclave/Core/Call/CallSessionCoordinator.swift")
-        #expect(coordinator.contains("presence.handle(muted ? .mute : .unmute, source: .callKit"))
-        #expect(!coordinator.contains("callTitle") && !coordinator.contains("activeSpeakerUserId"))
-    }
-
     @Test func sysStringResourcesExistForEveryNameTheBuilderAsks() throws {
 
         let xml = try callPresenceSource("Android/app/src/main/res/values/strings.xml")

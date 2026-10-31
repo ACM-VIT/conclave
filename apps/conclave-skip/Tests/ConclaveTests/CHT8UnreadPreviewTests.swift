@@ -303,43 +303,6 @@ struct CHT8UnreadPreviewTests {
         #expect(plain.stage.toast?.senderCount == 3 && plain.unreadChatCount == 3)
     }
 
-    @Test func previewSourcesFollowTheStageRules() throws {
-        let ios = try stageSource("Sources/Conclave/Features/Meeting/Stage/ChatPreviewToast+iOS.swift")
-        #expect(ios.hasPrefix("#if os(iOS) && !SKIP\n"))
-        let flat = stageNormalized(ios)
-        #expect(flat.contains(".accessibilityAction(.escape) { onDismiss() }"))
-        #expect(flat.contains("DragGesture(minimumDistance: ChatPreviewToastMetrics.dragMinimumDistance)"))
-        #expect(flat.contains(".accessibilityIdentifier(\"chat.preview.toast\")"))
-        #expect(flat.contains(".dynamicTypeSize(...DynamicTypeSize.xxxLarge)") && flat.contains(".accessibilityShowsLargeContentViewer"))
-        #expect(flat.contains(".conclaveLanePresence(from: .bottom)"))
-        #expect(flat.contains("HostingTheme.token(DesignTokens.iosInCallSurfaceRaised)") && flat.contains("HostingTheme.inCallBorder"))
-        #expect(flat.contains("text.accessibilitySpeechAnnouncementPriority = .low"))
-        #expect(flat.contains("count: notice.count, screenReader: screenReader"), "an in-place update restarts the time")
-        #expect(!ios.contains("Image(systemName: \""), "raw symbol literal")
-        #expect(!ios.contains("sensoryFeedback") && !ios.contains("conclaveGestureFeedback"), "no haptic (S20 10 h)")
-        let kotlin = try stageSource("Sources/Conclave/Skip/ui/call/stage/ChatPreviewSnackbar.kt")
-        let flatKotlin = stageNormalized(kotlin)
-        #expect(flatKotlin.contains("enableDismissFromStartToEnd = true, enableDismissFromEndToStart = true"))
-        #expect(flatKotlin.contains("containerColor = scheme.surfaceContainerHigh") && flatKotlin.contains(".border(1.dp, ext.border, shape)"))
-        #expect(flatKotlin.contains("testTag(\"chat.preview.toast\")") && flatKotlin.contains("testTag(\"chat.preview.view\")"))
-        #expect(flatKotlin.contains("conclaveString(\"ds_view\")"))
-        #expect(flatKotlin.contains("duration = SnackbarDuration.Indefinite"))
-        #expect(flatKotlin.contains("LaunchedEffect(preview?.id, preview?.count)"), "an in-place update restarts the time")
-        #expect(!kotlin.contains("stageLane = false") && !kotlin.contains("inverseSurface"), "dark in call, never the light inverse (R1)")
-        #expect(stageMatches(#"Text\(\s*""#, in: kotlin).isEmpty, "no literal Text")
-        #expect(!kotlin.contains("haptics") && !kotlin.contains("Color(0x"))
-        let icons = kotlin.components(separatedBy: "Icon(").dropFirst()
-        for call in icons {
-            let head = call.prefix(while: { $0 != "\n" })
-            #expect(head.contains("tint ="), "Icon without tint: \(head)")
-        }
-        for text in [ios, kotlin] {
-            #expect(!text.lowercased().contains("gradient") && !chatHasDash(text))
-        }
-        let shared = try stageSource("Sources/Conclave/Features/Meeting/Stage/MeetingNoticePolicy.swift")
-        #expect(shared.contains("enum ChatPreviewPolicy") && !shared.contains("#if"))
-    }
-
     @Test func previewStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(
             with: Data(chatSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
@@ -350,32 +313,15 @@ struct CHT8UnreadPreviewTests {
             #expect(keys[key] != nil, "missing iOS key \(key)")
         }
         let xml = try chatSource("Android/app/src/main/res/values/strings.xml")
-        let kotlin = try stageSource("Sources/Conclave/Skip/ui/call/stage/ChatPreviewSnackbar.kt")
         for name in ["chat_preview_private", "chat_preview_photo", "chat_preview_photo_caption", "chat_preview_gif",
                      "chat_preview_sticker", "chat_preview_clip", "chat_preview_voice", "chat_preview_label",
                      "chat_preview_open", "chat_preview_dismiss", "chat_reply_gif", "chat_sticker", "chat_clip", "chat_ax_voice",
                      "ds_view"] {
-            #expect(kotlin.contains("\"" + name + "\""), "ChatPreviewSnackbar.kt names \(name)")
             #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)")
         }
         for plural in ["chat_preview_new_count", "ds_name_and_others"] {
-            #expect(kotlin.contains("conclavePlural(\"" + plural + "\""), "\(plural) resolves as a plural")
             #expect(xml.contains("<plurals name=\"" + plural + "\""), "missing Android plurals \(plural)")
         }
-    }
-
-    @Test func theCoreAndTheLanesUseThePreviewPolicy() throws {
-        let vm = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"))
-        #expect(vm.contains("ChatPreviewPolicy.event(message:"), "the core posts the R40-4 event through the policy")
-        #expect(vm.contains("ChatPreviewPolicy.countsUnread("), "the badge follows CH12")
-        #expect(vm.contains("stage.clearChatPreviews()"), "/clear drops the previews")
-        #expect(vm.contains("stage.dropChatPreviews(fromUserId:"), "hiding a sender drops their previews")
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/NoticeLanes+iOS.swift"))
-        #expect(ios.contains("ChatPreviewToastHost(stage: stage, screenReader: screenReader)"))
-        #expect(ios.contains("ChatPreviewPolicy.isChatPreview(current) ? nil"))
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt"))
-        #expect(android.contains("ChatPreviewSnackbarHost(stage)"))
-        #expect(android.contains("ChatPreviewPolicy.isChatPreview(notice)"))
     }
 }
 #endif

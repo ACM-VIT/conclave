@@ -139,58 +139,6 @@ struct SET2AudioPagesTests {
         #expect(app.requestRoute(id: "receiver") == .ignored)
     }
 
-    @Test func iosClientReplacesTheMicTrackOnTheSendQueueAndPlaysOneTone() throws {
-        let client = try Self.source("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        #expect(client.contains("func applyNoiseSuppression(_ enabled: Bool) async -> Bool"))
-        #expect(client.contains("try handle.producer.replaceTrack(handle.track)"))
-        #expect(client.contains("let queue = sendProducerOperationQueues[ObjectIdentifier(producer)]"))
-        #expect(client.contains("microphone.track.isEnabled = localAudioIntentEnabled && localAudioEnabled"))
-        #expect(client.contains("\"googNoiseSuppression\": noiseSuppression ? \"true\" : \"false\""))
-        #expect(client.contains("createMicrophoneAudioTrack(noiseSuppression: SettingsPreferences.noiseSuppression())"))
-        #expect(client.contains("private func createMicrophoneAudioTrack() -> (source: RTCAudioSource, track: RTCAudioTrack)"))
-        #expect(client.contains("func sampleLocalMicrophoneLevel() -> Double"))
-        #expect(client.contains("AVAudioPlayer(data: Self.testToneWAVData())"))
-        #expect(!client.contains("AudioServicesPlaySystemSound(SystemSoundID(1057))"))
-
-        #expect(client.contains("track.isEnabled = false\n        return (source, track)"))
-    }
-
-    @Test func androidClientReplacesTheMicTrackAndPlaysOneVoiceRouteTone() throws {
-        let client = try Self.source("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-        #expect(client.contains("internal suspend fun applyNoiseSuppression(enabled: Boolean): Boolean"))
-        #expect(client.contains("producer.replaceTrack(track)"))
-        #expect(client.contains("track.setEnabled(localAudioTargetEnabled && localAudioEnabled)"))
-        #expect(client.contains("noiseSuppression: Boolean = SettingsPreferences.noiseSuppression()"))
-        #expect(client.contains(".setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)"))
-        #expect(client.contains("internal fun playTestTone()"))
-        #expect(client.contains("internal fun sampleLocalMicrophoneLevel(): Double"))
-        #expect(!client.contains("ToneGenerator(AudioManager.STREAM_VOICE_CALL"))
-        let symbols = try Self.source("Sources/Conclave/Core/WebRTC/WebRTCClient+Android.swift")
-        let host = try Self.source("Sources/Conclave/Core/WebRTC/WebRTCClient+macOS.swift")
-        for text in [symbols, host] {
-            #expect(text.contains("func applyNoiseSuppression(_ enabled: Bool) async -> Bool"))
-            #expect(text.contains("func sampleLocalMicrophoneLevel() -> Double"))
-            #expect(text.contains("func playTestTone()"))
-            #expect(text.contains("var supportsLiveNoiseSuppressionChange: Bool"))
-        }
-    }
-
-    @Test func audioPagesRunTheTestForThePageLifetimeOnly() throws {
-        let ios = try Self.source("Sources/Conclave/Features/Meeting/Settings/AudioPages+iOS.swift")
-        #expect(ios.contains("await settings.runMicTest()"))
-        #expect(ios.contains("SettingsMicLevelRow(meter: settings.micLevel)"))
-        #expect(ios.contains("if audio.canRecordMicTest"))
-        let android = try Self.source("Sources/Conclave/Skip/ui/settings/AudioPages.kt")
-        #expect(android.contains("settings.startMicTest()") && android.contains("onDispose { settings.stopMicTest() }"))
-        #expect(android.contains("if (audio.canRecordMicTest)"))
-        #expect(android.contains("AudioRouteList(rows = rows"))
-        #expect(android.contains("haptics.gesture(FeedbackKind.selectionChanged)"))
-
-        #expect(android.components(separatedBy: "meter.segments").count - 1 == 1)
-        let rows = try Self.source("Sources/Conclave/Features/Meeting/Settings/SettingsRows+iOS.swift")
-        #expect(rows.components(separatedBy: "meter.segments").count - 1 == 1)
-    }
-
     static func make(_ state: SettingsFixtureState, defaults: UserDefaults = SET2AudioPagesTests.freshDefaults())
         -> (SettingsPresenter, SettingsRecordingCore) {
         let presenter = SettingsPresenter(scope: .call, platform: .ios, defaults: defaults)

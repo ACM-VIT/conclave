@@ -313,9 +313,6 @@ struct ACT5ChessTests {
             #expect(GameMoveAdapter.payloadJSON(ChessIntent.action(action)).isEmpty, "\(action.rawValue) carries a payload")
         }
         #expect(module.contains("export const CHESS_BOT_ID = \"" + ChessSceneBuilder.botId + "\";"))
-
-        let vm = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"))
-        #expect(vm.contains("sendGameMove(type: command.type, payloadJSON: command.payloadJSON, requestId: command.requestId)"))
     }
 
     @Test func drawAndTakebackAreEligibilityGated() throws {
@@ -495,77 +492,7 @@ struct ACT5ChessTests {
     private let iosPath = "Sources/Conclave/Features/Meeting/Games/Native/Boards/ChessBoard+iOS.swift"
     private let kotlinPath = "Sources/Conclave/Skip/ui/games/boards/ChessBoard.kt"
 
-    @Test func theBoardIsOneCanvasWithSquareSemanticsOnBothPlatforms() throws {
-        let ios = try stageSource(iosPath)
-        let kotlin = try stageSource(kotlinPath)
-        let flatIOS = stageNormalized(ios)
-        let flatKotlin = stageNormalized(kotlin)
-        for fragment in ["Canvas { context, _ in", "SpatialTapGesture(coordinateSpace: .local)", ".accessibilityChildren {",
-                         "Grid(horizontalSpacing: 0, verticalSpacing: 0)", ".accessibilityAddTraits(square.id == selected ? .isSelected : [])",
-                         "ChessCopy.squareLabel(square,", ".accessibilityIdentifier(\"game.chess.square.\" + square.id)",
-                         ".environment(\\.layoutDirection, .leftToRight)", "DesignTokens.iosGameBoardLight", "DesignTokens.iosGameBoardDark",
-                         "HostingTheme.inCallLeave", "DesignTokens.ink", ".font(.caption2)", "ChessBoardPolicy.displayedSquares(scene, orientation: orientation)",
-                         "let pending = games.chessPendingMove"] {
-            #expect(flatIOS.contains(fragment), "iOS board misses \(fragment)")
-        }
-        for fragment in ["Canvas(", ".pointerInput(orientation, sidePx)", "detectTapGestures { offset ->", "rememberUpdatedState(onTap)",
-                         "Layout(", "clearAndSetSemantics {", "this.selected = square.id == selected", "onClick(label = actionLabel)",
-                         "ext.gameBoardLight", "ext.gameBoardDark", "scheme.error", "MaterialTheme.typography.labelSmall",
-                         "CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr)", "testTag(\"game.chess.square.${square.id}\")",
-                         "val pending = games.chessPendingMove"] {
-            #expect(flatKotlin.contains(fragment), "Android board misses \(fragment)")
-        }
-        for forbidden in ["coral", "Coral", "primaryContainer", "Color.white", "Color.White", ".shadow(", "Shadow("] {
-            #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the board uses \(forbidden)")
-        }
-    }
-
-    @Test func promotionOffersFourPiecesAndCancelOnBothPlatforms() throws {
-        let flatIOS = stageNormalized(try stageSource(iosPath))
-        let flatKotlin = stageNormalized(try stageSource(kotlinPath))
-        #expect(flatIOS.contains(".confirmationDialog(ChessCopy.promoteTo(), isPresented: promotionShown, titleVisibility: .visible,"))
-        #expect(flatIOS.contains("ForEach(ChessPromotion.allCases, id: \\.self)") && flatIOS.contains("Button(ConclaveStrings.text(\"Cancel\"), role: .cancel) {}"))
-        #expect(flatKotlin.contains("AlertDialog(") && flatKotlin.contains("RadioButton(selected = false, onClick = null)"))
-        #expect(flatKotlin.contains("role = Role.RadioButton") && flatKotlin.contains("for (piece in ChessPromotion.allCases)"))
-        #expect(flatKotlin.contains("conclaveString(\"gm_chess_promote\")") && flatKotlin.contains("conclaveString(\"ds_cancel\")"))
-
-        let shared = try stageSource("Sources/Conclave/Features/Meeting/Activities/GameStagePresenter.swift")
-        #expect(!shared.contains("promotion: \"q\"") && !flatIOS.contains("promotion: \"q\"") && !flatKotlin.contains("send(promotionFrom, promotionTo, \"q\")"))
-    }
-
-    @Test func theChooserIsTheCompleteNonVisualPath() throws {
-        let flatIOS = stageNormalized(try stageSource(iosPath))
-        let flatKotlin = stageNormalized(try stageSource(kotlinPath))
-        for fragment in ["@Environment(\\.accessibilityVoiceOverEnabled) private var voiceOver", "if scene.canMove && voiceOver && !chooserOpen",
-                         "scene.movablePieces()", "scene.destinations(from: pieceId)", "minHeight: 44", "ChessCopy.pieceOn(square)",
-                         "ChessCopy.destination(move)"] {
-            #expect(flatIOS.contains(fragment), "iOS chooser misses \(fragment)")
-        }
-        for fragment in ["access.touchExploration", "private val ChessChooserRowHeight = 48.dp", "heightIn(min = ChessChooserRowHeight)",
-                         "scene.movablePieces()", "scene.destinations(pieceId)", "chessPieceOn(square)", "chessDestinationText(move)"] {
-            #expect(flatKotlin.contains(fragment), "Android chooser misses \(fragment)")
-        }
-    }
-
-    @Test func clocksAreOneLeafMovesPlayPieceMovedAndNothingAnimates() throws {
-        let ios = try stageSource(iosPath)
-        let kotlin = try stageSource(kotlinPath)
-        let flatIOS = stageNormalized(ios)
-        let flatKotlin = stageNormalized(kotlin)
-        #expect(flatIOS.contains("TimelineView(.periodic(from: .now, by: 1))") && flatIOS.contains("scenePhase == .active"))
-        #expect(flatIOS.contains(".monospacedDigit()") && flatIOS.contains("ChessClockModel.wholeSeconds("))
-        #expect(flatKotlin.contains("lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED)") && flatKotlin.contains("rememberTabular("))
-        #expect(flatIOS.contains(".conclaveGestureFeedback(.pieceMoved, trigger: movedCount)"))
-        #expect(flatKotlin.contains("haptics.gesture(FeedbackKind.pieceMoved)"))
-        for forbidden in ["withAnimation", ".animation(", "AnimatedContent(", "animateFloat", "GameJSONValue", "dictionaryValue",
-                          "MeetingState", "MeetingViewModel", "Font.system(size:", "fontFamily =", "confetti"] {
-            #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the board uses \(forbidden)")
-        }
-    }
-
     @Test func licensedPieceArtworkCoversEveryKindOnBothPlatforms() throws {
-        let ios = try stageSource(iosPath)
-        let kotlin = try stageSource(kotlinPath)
         func pathValues(_ attribute: String, in text: String) throws -> [String] {
             let regex = try NSRegularExpression(pattern: "\\b" + attribute + "=\"([^\"]*)\"")
             return regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text)).compactMap {
@@ -589,7 +516,6 @@ struct ACT5ChessTests {
             #expect(contents.contains("\"preserves-vector-representation\": true"))
             #expect(vector.contains("android:autoMirrored=\"false\""))
             #expect(vector.contains("android:viewportWidth=\"24\" android:viewportHeight=\"24\""))
-            #expect(ios.contains("\"ChessPiece\(title)\"") && kotlin.contains("\"chess_piece_\(kind)\""))
             #if os(iOS)
             for side in ["w", "b"] {
                 #expect(ChessPieceArt.assetName(side + code) == "ChessPiece" + title)
@@ -598,43 +524,12 @@ struct ACT5ChessTests {
             _ = code
             #endif
         }
-        #expect(ios.contains("Image(name, bundle: .main)"))
-        #expect(!ios.contains("usesGlyphs") && !kotlin.contains("isDebuggableApp(context)"))
         let license = try stageSource("artwork/chess-tabler/LICENSE")
         #expect(license.contains("MIT License") && license.contains("Paweł Kuna"))
         for root in ["Sources/Conclave/Resources", "Android/app/src/main/assets"] {
             #expect(try stageSource("\(root)/TablerChess-LICENSE.txt") == license)
             let attribution = try stageSource("\(root)/TablerChess-ATTRIBUTION.txt")
             #expect(attribution.contains("ed177a085b652fe04ec4f37ced867c94621e7840"))
-        }
-    }
-
-    @Test func everyChessEnumCaseHasCopyOnBothPlatforms() throws {
-        let ios = try stageSource(iosPath)
-        let kotlin = try stageSource(kotlinPath)
-        for value in ChessStatus.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessStatus." + value.rawValue), "\(value)") }
-        for value in ChessRole.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessRole." + value.rawValue), "\(value)") }
-        for value in ChessMode.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessMode." + value.rawValue), "\(value)") }
-        for value in ChessSide.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessSide." + value.rawValue), "\(value)") }
-        for value in ChessResultReason.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessResultReason." + value.rawValue), "\(value)")
-        }
-        for value in ChessPromotion.allCases {
-            #expect(ios.contains("case ." + String(describing: value)) && kotlin.contains("ChessPromotion." + String(describing: value)), "\(value)")
-        }
-        for value in ChessPieceKind.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessPieceKind." + value.rawValue), "\(value)") }
-        for value in ChessAction.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessAction." + value.rawValue), "\(value)") }
-        for value in ChessTakebackReason.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessTakebackReason." + value.rawValue), "\(value)")
-        }
-        for value in ChessDestinationKind.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessDestinationKind." + value.rawValue), "\(value)")
-        }
-        for value in ChessTapAction.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ChessTapAction." + value.rawValue), "\(value)") }
-
-        for key in ["White wins by checkmate", "Black wins on time", "White wins by resignation", "Draw by stalemate", "Draw by threefold repetition",
-                    "Draw by insufficient material", "Draw by the fifty-move rule", "Draw by agreement"] {
-            #expect(ios.contains("ConclaveStrings.text(\"" + key + "\")"), "iOS misses \(key)")
         }
     }
 
@@ -656,18 +551,6 @@ struct ACT5ChessTests {
         for match in stageMatches(#""(?:gm|ds|act)_[a-z0-9_]+""#, in: kotlin) { names.insert(String(match.dropFirst().dropLast())) }
         #expect(names.count > 80)
         for name in names { #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)") }
-    }
-
-    @Test func theShellRoutesChessAndTheProjectionCarriesItsFields() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Games/Native/GameShell+iOS.swift"))
-        #expect(ios.contains("case GameSceneKind.chess: ChessSceneBody(games: games)"))
-        let kotlin = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/games/GameShell.kt"))
-        #expect(kotlin.contains("GameSceneKind.chess -> ChessSceneBody(games)"))
-        let models = try stageSource("Sources/Conclave/Features/Meeting/Activities/GameStageModels.swift")
-        #expect(models.contains("let chess: ChessScene?"))
-        let projections = try stageSource("Sources/Conclave/Features/Meeting/Activities/GameProjections.swift")
-        #expect(projections.contains("let turnStartedAtMillis: Double") && projections.contains("let isAuto: Bool")
-            && projections.contains("let byName: String"))
     }
 }
 

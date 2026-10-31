@@ -64,56 +64,6 @@ struct ENT8MeetingLinkBuilderTests {
         #expect(!promotion.canShare)
     }
 
-    @Test func theIOSShareAndCopyUseTheF00PayloadAndOneGesture() throws {
-        let row = try ent8Source("Sources/Conclave/Features/Lobby/MeetingLinkRow+iOS.swift")
-        let flat = ent8Flat(row)
-        #expect(flat.contains("ShareLink(item: url, subject: Text(ConclaveStrings.text(\"Join My Conclave Meeting\")), message: Text(ConclaveStrings.text(\"Join me in this Conclave meeting.\")), preview: SharePreview(link.roomLabel))"))
-        #expect(row.contains("UIPasteboard.general.url = url"))
-        #expect(row.contains(".conclaveGestureFeedback(.linkCopied, trigger: copyCount)"))
-        #expect(row.contains("static let confirmationSeconds = 1.8"))
-        #expect(row.contains(".accessibilityLabel(copied ? ConclaveStrings.text(\"Copied\") : ConclaveStrings.text(\"Copy Link\"))"))
-        #expect(!row.contains("HapticManager") && !row.contains("MeetingShare."), "no legacy haptic or helper (SC21)")
-        let home = ent8Flat(try ent8Source("Sources/Conclave/Features/Home/HomeView+iOS.swift"))
-        #expect(home.contains("MeetingLinkBuilder.url(roomCode: row.roomId, clientId: nil)"))
-        #expect(home.contains("preview: SharePreview(row.title)"))
-        let legacy = try ent8Source("Sources/Conclave/Shared/MeetingShare.swift")
-        #expect(legacy.contains("ConclaveStrings.text(\"Join me in this Conclave meeting.\") + \"\\n\" + link"))
-        #expect(!legacy.contains("Join me in this Conclave room."))
-    }
-
-    @Test func theAndroidShareSetsTheTitleAndNoChooserTitle() throws {
-        let share = try ent8Source("Sources/Conclave/Skip/NativeMeetingShare.kt")
-        #expect(share.contains("fun shareMeetingLink(link: String, subject: String, text: String, title: String): Boolean"))
-        #expect(share.contains("putExtra(Intent.EXTRA_TITLE, title)"))
-        #expect(share.contains("Intent.createChooser(buildShareIntent(subject = subject, text = text, title = title), null)"))
-        #expect(share.contains("PipManager.suppressNextAutoEnter(\"meeting_share\")"))
-        #expect(share.contains("conclaveStringOf(context, \"ds_share_subject\")"))
-        #expect(share.contains("conclaveStringOf(context, \"ds_share_text\", link)"))
-        #expect(!share.contains("EXTRA_IS_SENSITIVE"))
-        #expect(!share.contains("Join me in this Conclave room."), "the hard-coded English is gone (SC21)")
-        let row = try ent8Source("Sources/Conclave/Skip/ui/lobby/MeetingLinkRow.kt")
-        #expect(row.contains("haptics.gesture(FeedbackKind.linkCopied)"))
-        #expect(row.contains("internal fun lobbyShowsCopySnackbar(sdk: Int = Build.VERSION.SDK_INT): Boolean = sdk in 28..32"))
-        #expect(row.contains("NativeMeetingShare.shareMeetingLink(link = url, subject = subject, text = text, title = title)"))
-        #expect(row.contains("conclaveString(\"ds_share_text\", link.meetingLink)"))
-        let home = try ent8Source("Sources/Conclave/Skip/ui/home/HomeScreen.kt")
-        #expect(home.contains("MeetingLinkBuilder.url(roomCode = row.roomId, clientId = null)"))
-        #expect(home.contains("NativeMeetingShare.shareMeetingLink(link = link, subject = shareSubject, text = shareText, title = row.title)"))
-    }
-
-    @Test func noSurfaceClaimsAnInviteWasSent() throws {
-        for file in ["Sources/Conclave/Features/Lobby/MeetingLinkRow+iOS.swift", "Sources/Conclave/Features/Lobby/LobbyView+iOS.swift",
-                     "Sources/Conclave/Skip/ui/lobby/MeetingLinkRow.kt", "Sources/Conclave/Skip/ui/lobby/LobbyScreen.kt",
-                     "Sources/Conclave/Core/Networking/MeetingLinkBuilder.swift"] {
-            let text = try ent8Source(file)
-            #expect(!text.contains("Invite sent") && !text.contains("pm_share_"), "\(file)")
-        }
-
-        let builder = try ent8Source("Sources/Conclave/Core/Networking/MeetingLinkBuilder.swift")
-        #expect(!builder.contains("import SwiftUI") && !builder.contains("import UIKit"))
-        #expect(!builder.contains("MeetingState"))
-    }
-
     @Test func linkStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent8Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])

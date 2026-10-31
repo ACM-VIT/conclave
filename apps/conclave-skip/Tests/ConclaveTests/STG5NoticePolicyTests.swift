@@ -490,35 +490,6 @@ struct STG5NoticePolicyTests {
         #expect(stage.banner == nil)
     }
 
-    @Test func laneSourcesUseTheFoundationComponentsAndStaySilentInFixtures() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/NoticeLanes+iOS.swift"))
-        #expect(ios.hasPrefix("#if os(iOS) && !SKIP"))
-        #expect(ios.contains("ConclaveBannerLane(noticeID: stage.banner?.id, identifier: \"stage.banner\")"))
-        #expect(ios.contains("ConclaveToastHost(item: item, isScreenReaderRunning: screenReader"))
-        #expect(ios.contains("onDismiss: { id in stage.dismissNotice(id: id) }"))
-        #expect(ios.contains("if installsSound { stage.sounds.output = { kind in NoticeSoundOutput.play(kind) } }"))
-        #expect(!ios.contains("setCategory"), "the chime never changes the call's audio session")
-        let root = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/CallRoot+iOS.swift"))
-        #expect(root.contains("NoticeLanesLayer(stage: stage, forceScreenReader: forceScreenReader, installsSound: !renderers.usesProbes)"))
-        #expect(root.contains("MeetingNoticePolicy.suspendsToastLane(style: presentation.style)"))
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt"))
-        #expect(android.contains("ConclaveToastHost( item = item, identifier = \"stage.toast\""))
-        #expect(!android.contains("stageLane = false"), "the stage lane keeps the dark snackbar slot (R1)")
-        #expect(!android.contains("showSnackbar"), "only the toast host shows snackbars")
-        #expect(android.contains("if (installsSound) { stage.sounds.output = { kind -> NativeNoticeSound.play(kind) } }"))
-        let callRoot = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt"))
-        #expect(callRoot.contains("NoticeLanes(stage, forceScreenReader, installsSound = !renderers.usesProbes)"))
-        #expect(callRoot.contains("val suspended = coverage == PanelStageCoverage.full"))
-        let player = try stageSource("Sources/Conclave/Skip/NativeNoticeSound.kt")
-        #expect(player.contains("AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING"))
-        #expect(player.contains("conclave/module/Resources/$name.mp3"))
-        #expect(!player.contains("Vibrat"))
-        let shared = try stageSource("Sources/Conclave/Features/Meeting/Stage/NoticeSoundPlayer.swift")
-        #expect(!shared.contains("AVAudio") && !shared.contains("SoundPool"))
-        let fixtures = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/StageFixtures.swift"))
-        #expect(fixtures.contains("stage.sounds.output = { kind in counters.recordChime(kind) }"))
-    }
-
     @Test func chimeAssetsAreBundledOnBothPlatformsAndIdentical() throws {
         for name in ["notice_knock", "notice_hand"] {
             let module = try Data(contentsOf: stagePackageURL("Sources/Conclave/Resources/" + name + ".mp3"))

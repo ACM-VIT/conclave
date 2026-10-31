@@ -1,6 +1,5 @@
 package conclave.module
 
-import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,49 +41,5 @@ class EntryFirstScreenBridgeTests {
         assertTrue(NativeRouteLaunch.usesNativePremeeting)
         assertTrue(NativeRouteFlags.shared.isEnabled(NativeRouteKey.call))
         assertFalse(NativeFixtureLaunch.androidSelector(system = null, stage = null, people = null, premeeting = NativeRouteLaunch.premeetingFixture))
-    }
-
-    @Test
-    fun mainSelectsTheNativePremeetingHostWhenDebugIsNotEligible() {
-        val main = source("Android/app/src/main/kotlin/Main.kt")
-        assertTrue(main.contains("debugEligible = BuildConfig.DEBUG && routesDebuggable,"))
-        assertTrue(main.contains("routes = intent?.getStringExtra(NativeRouteLaunch.ROUTES_EXTRA),"))
-        assertTrue(main.contains("premeetingFixture = intent?.getStringExtra(NativeRouteLaunch.PREMEETING_FIXTURE_EXTRA),"))
-        assertTrue(main.contains("val premeetingFixture = NativeRouteLaunch.premeetingFixture"))
-        assertTrue(main.contains("val nativePremeeting = NativeRouteLaunch.usesNativePremeeting"))
-        for (extra in listOf("conclave.systemFixture", "conclave.stageFixture", "conclave.peopleFixture")) {
-            assertTrue(extra, main.contains("if (BuildConfig.DEBUG && routesDebuggable) intent?.getStringExtra(\"$extra\") else null"))
-        }
-        assertTrue(main.contains("hostingPreviewRequested = BuildConfig.DEBUG && intent?.getBooleanExtra(\"conclave.hostingPreview\", false) == true"))
-
-        val nativeBranch = main.indexOf("} else if (nativePremeeting) {")
-        val host = main.indexOf("NativePremeetingHost(callContent = legacyRoot)")
-        val premeetingFixtureBranch = main.indexOf("} else if (premeetingFixture.isNotEmpty()")
-        val hostingBranch = main.indexOf("} else if (showsHostingPreview")
-        assertTrue(nativeBranch > 0)
-        assertTrue(host > nativeBranch)
-        assertTrue(premeetingFixtureBranch in 1 until nativeBranch)
-        assertTrue(hostingBranch in 1 until nativeBranch)
-        assertFalse(main.contains("showsLegacy" + "PipContent"))
-        assertFalse(Regex("(?<![A-Za-z])PipContent\\(\\)").containsMatchIn(main))
-
-        val premeetingHost = source("Sources/Conclave/Skip/ui/home/PremeetingHost.kt")
-        assertTrue(premeetingHost.contains("get() = premeetingFixture.isEmpty() && NativeRouteFlags.shared.isEnabled(NativeRouteKey.premeeting)"))
-        assertTrue(premeetingHost.contains("return if (PremeetingFixtureScript.state(named = name) != null) name else \"\""))
-
-        val flags = source("Sources/Conclave/App/NativeRouteFlags.swift")
-        assertTrue(flags.contains("guard debugEligible else {\n            reset()\n            return\n        }"))
-        assertTrue(flags.contains("#if os(iOS) || SKIP\n        return true"))
-    }
-
-    private fun source(relative: String): String = File(packageRoot(), relative).readText()
-
-    private fun packageRoot(): File {
-        for (directory in generateSequence(File(System.getProperty("user.dir")).canonicalFile) { it.parentFile }) {
-            for (candidate in listOf(directory, File(directory, "apps/conclave-skip"))) {
-                if (File(candidate, "Android/app/src/main/AndroidManifest.xml").isFile) return candidate
-            }
-        }
-        error("Cannot locate Conclave package from test working directory")
     }
 }

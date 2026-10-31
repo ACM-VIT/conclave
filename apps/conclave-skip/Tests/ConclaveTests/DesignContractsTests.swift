@@ -794,7 +794,6 @@ struct DesignContractsTests {
     }
 
     @Test func panelPolicyStageInteractionAndTextFocus() throws {
-
         for panel in MeetingPanel.allCases {
             let sheet = PanelPresentationPolicy.resolve(request(panel), window: Self.phonePortrait, platform: .iOS)
             let composer = PanelPresentationPolicy.hasBottomComposer(panel)
@@ -812,9 +811,6 @@ struct DesignContractsTests {
             adapter.promoteToLarge()
             #expect(adapter.detent == .large, "\(panel)")
         }
-
-        let policy = try panelSource("Sources/Conclave/Features/Meeting/Panels/PanelPresentationPolicy.swift")
-        #expect(!policy.contains("func detentAfterTextFocus"))
     }
 
     @Test func wp13cBottomSheetRowsForLayoutAndEffects() {
@@ -975,304 +971,6 @@ struct DesignContractsTests {
         #expect(owner.renderers.summary() == "stage c=3 r=0 l=3 lost=0 back=0 | mini c=0 r=0 l=0 lost=0 back=0 | avery#1 robin#2 taylor#3")
     }
 
-    @Test func panelShellKeepsCloseTrailingAndScopesItsAppearance() throws {
-        let shell = try panelSource("Sources/Conclave/Features/Meeting/Panels/PanelShell+iOS.swift")
-        let flat = panelNormalized(panelCode(shell))
-        #expect(shell.hasPrefix("#if os(iOS) && !SKIP\n"))
-
-        #expect(flat.contains("ToolbarItem(placement: PanelShellToolbar.closePlacement) { PanelCloseButton(title: title, action: onClose) }"))
-
-        #expect(flat.contains("if #available(iOS 27.0, *) { return .topBarPinnedTrailing } return .topBarTrailing"))
-        #expect(!panelCode(shell).contains(".confirmationAction"))
-        #expect(flat.components(separatedBy: ".keyboardShortcut(.cancelAction)").count - 1 == 2)
-        #expect(flat.components(separatedBy: ".accessibilityIdentifier(\"panel.close\")").count - 1 == 2)
-
-        #expect(flat.contains("if #available(iOS 26.0, *) { Button(role: .close, action: action)"))
-        #expect(flat.contains("Image(systemName: ConclaveSymbols.xmark) .accessibilityHidden(true)"))
-
-        #expect(flat.components(separatedBy: ".accessibilityLabel(ConclaveStrings.format(\"Close %@\", title))").count - 1 == 2)
-        #expect(flat.contains("Button(role: .close, action: action) .keyboardShortcut(.cancelAction) .accessibilityLabel(ConclaveStrings.format(\"Close %@\", title))"))
-
-        #expect(flat.contains(".navigationTitle(title) .navigationBarTitleDisplayMode(.inline) .modifier(PanelBarMinimization())"))
-        #expect(flat.contains("if #available(iOS 27.0, *) { content.toolbarMinimizationBehavior(.never, for: .navigationBar) } else { content }"))
-        #expect(flat.contains(".environment(\\.panelPromoteToLargeDetent, PanelPromoteToLargeDetentAction(action: onPromoteToLarge))"))
-
-        #expect(flat.contains("if hostStyle == .inspector { content.environment(\\.colorScheme, scheme) } else { content .environment(\\.colorScheme, scheme) .preferredColorScheme(scheme) }"))
-        #expect(flat.contains("presentation.appearance == .inCall ? .dark : AppearancePreference.shared.mode.colorScheme ?? systemScheme"))
-
-        #expect(flat.contains("if hostStyle == .inspector { ToolbarItem(placement: .principal) { Text(title) .font(.headline) .accessibilityAddTraits(.isHeader) .accessibilityFocused($headingFocused) } }"))
-        #expect(flat.contains(".accessibilityAction(.escape) { onClose() }"))
-        #expect(flat.contains("guard hostStyle == .inspector else { return }"))
-        #expect(flat.contains("headingFocused = true"))
-
-        let root = panelCode(try panelSource("Sources/Conclave/App/PlatformRoot+iOS.swift"))
-        #expect(!root.contains("toolbarMinimizationBehavior") && !root.contains("HostingSamplePanelBarMinimization"))
-    }
-
-    @Test func iosSheetHostFollowsThePolicyAndNeverCoversTheWindow() throws {
-        let host = try panelSource("Sources/Conclave/Features/Meeting/Panels/NativePanelSheet+iOS.swift")
-        let flat = panelNormalized(host)
-        #expect(host.hasPrefix("#if os(iOS) && !SKIP\n"))
-
-        #expect(flat.components(separatedBy: ".onChange(of: coordinator.snapshot, initial: true) { _, _ in adapter.synchronize(coordinator, style: style, isAccessibilitySize: accessibilitySize) }").count - 1 == 2)
-        #expect(flat.components(separatedBy: ".onChange(of: style) { _, newStyle in adapter.synchronize(coordinator, style: newStyle, isAccessibilitySize: accessibilitySize) }").count - 1 == 2)
-        #expect(flat.components(separatedBy: "let accessibilitySize = dynamicTypeSize.isAccessibilitySize").count - 1 == 2)
-        #expect(flat.contains(".sheet(item: Binding(get: { style == .sheet ? adapter.sheetItem : nil }, set: { [captured] value in"))
-        #expect(flat.contains("if value == nil { adapter.sheetBindingLost(captured, coordinator: coordinator) }"))
-        #expect(flat.contains("adapter.sheetDidDismiss(captured, coordinator: coordinator)"))
-        #expect(flat.components(separatedBy: "PanelPresentationPolicy.resolve(presentation.request, window: window, platform: .iOS, isAccessibilitySize: accessibilitySize)").count - 1 == 2)
-        #expect(flat.contains(".presentationDetents(Set(resolved.detents.map { Self.systemDetent($0, shortHeight: shortHeight, activities: activities) }), selection: Binding("))
-        #expect(flat.contains("set: { adapter.selectDetent(Self.panelDetent($0, shortHeight: shortHeight, activities: activities)) }"))
-
-        #expect(flat.contains("case .short: return .height(CGFloat(shortHeight))"))
-        #expect(flat.contains(".environment(\\.panelReportShortDetentHeight, PanelShortDetentHeightAction(action: { adapter.setShortDetentHeight($0) }))"))
-
-        #expect(flat.contains(".modifier(PanelStageInteraction(upThrough: PanelPresentationPolicy.stageInteractiveDetent(resolved) .map { Self.systemDetent($0, shortHeight: shortHeight, activities: activities) }))"))
-        #expect(flat.contains("content.presentationBackgroundInteraction(upThrough.map { .enabled(upThrough: $0) } ?? .disabled)"))
-
-        #expect(flat.contains(".modifier(PanelCompactHeightRule(keepsSheet: PanelPresentationPolicy.keepsSheetInCompactHeight(resolved)))"))
-        #expect(flat.contains("content.presentationCompactAdaptation(horizontal: .automatic, vertical: .sheet)"))
-
-        var files = try panelSourceFiles(under: "Sources/Conclave/Features/Meeting/Panels")
-        files.append("Sources/Conclave/App/PlatformRoot+iOS.swift")
-        for file in files {
-            let text = panelCode(try panelSource(file))
-            for pattern in [".fullScreenCover", "presentationCornerRadius", "presentationBackground(", "UIScreen.main"] {
-                #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-            }
-        }
-
-        let adapter = try panelSource("Sources/Conclave/Features/Meeting/Panels/PanelHostAdapter.swift")
-        #expect(adapter.hasPrefix("#if !SKIP\n") && !adapter.contains("import SwiftUI"))
-        #expect(!host.contains("final class"))
-    }
-
-    @Test func iosInspectorHostFollowsTheStyleAndNeverRethemesTheWindow() throws {
-        let host = try panelSource("Sources/Conclave/Features/Meeting/Panels/NativePanelSheet+iOS.swift")
-        let flat = panelNormalized(panelCode(host))
-
-        #expect(flat.contains("PanelPresentationPolicy.style(window: window, platform: .iOS, panel: coordinator.snapshot.current?.panel ?? .participants)"))
-        #expect(flat.components(separatedBy: "let style = nativePanelHostStyle(coordinator, window: window)").count - 1 == 2)
-        #expect(flat.contains(".inspector(isPresented: Binding(get: { style == .inspector && adapter.inspectorItem != nil }, set: { presented in if !presented { adapter.inspectorClosedByUser(coordinator) } }))"))
-        #expect(flat.contains("panelContent(presentation, resolved) .id(presentation.id) .inspectorColumnWidth(min: 320, ideal: CGFloat(PanelPresentationPolicy.paneWidth), max: 440)"))
-
-        #expect(!flat.contains("preferredColorScheme") && !flat.contains(".fullScreenCover"))
-
-        let root = try panelSource("Sources/Conclave/App/PlatformRoot+iOS.swift")
-        let rootFlat = panelNormalized(panelCode(root))
-        #expect(root.hasPrefix("#if DEBUG && os(iOS) && !SKIP\n"))
-        #expect(rootFlat.contains("horizontalRegular: !compactOverride && horizontalSizeClass == .regular,"))
-        #expect(rootFlat.contains("compactOverride ? .compact : horizontalSizeClass"))
-        #expect(rootFlat.contains(".environment(\\.horizontalSizeClass, contentHorizontalSizeClass)"))
-        #expect(rootFlat.contains("Toggle(ConclaveStrings.text(\"Compact Width Override\"), isOn: $compactOverride) .accessibilityIdentifier(\"panel.compactOverride\")"))
-
-        #expect(rootFlat.contains(".onChange(of: panelHost.inspectorItem == nil) { _, closed in guard closed, panelHost.sheetItem == nil, presenter.panels.snapshot.current == nil, let lastInvoker else { return } focusedInvoker = lastInvoker }"))
-        for invoker in ["participants", "settings", "layout", "rapid"] {
-            #expect(rootFlat.contains("lastInvoker = .\(invoker)"), "\(invoker)")
-            #expect(rootFlat.contains(".accessibilityFocused($focusedInvoker, equals: .\(invoker))"), "\(invoker)")
-        }
-
-        #expect(rootFlat.contains("guard let item = adapter.inspectorItem ?? adapter.sheetItem else"))
-        #expect(rootFlat.contains("let detent = resolved.style == .sheet ? adapter.detent.rawValue : \"none\""))
-    }
-
-    @Test func rendererProbeIsDebugOnlyInertAndNeverInverted() throws {
-        let probe = try panelSource("Sources/Conclave/App/Hosting/RendererProbe+iOS.swift")
-        let flat = panelNormalized(probe)
-        #expect(probe.hasPrefix("#if DEBUG && os(iOS) && !SKIP\n"))
-        #expect(flat.contains("serial = ledger.created(key: key, slot: slot)"))
-        #expect(flat.contains("static func dismantleUIView(_ uiView: RendererProbeView, coordinator: ()) { uiView.release() }"))
-        #expect(flat.contains("func updateUIView(_ uiView: RendererProbeView, context: Context) {}"))
-        #expect(flat.contains("ledger.surfaceLost(key: key, serial: serial, slot: slot)"))
-        #expect(flat.contains("ledger.surfaceRestored(key: key, serial: serial, slot: slot)"))
-        #expect(flat.contains("#if canImport(WebRTC) let surface = RTCMTLVideoView(frame: .zero)"))
-        #expect(flat.contains(".accessibilityHidden(true) .accessibilityIgnoresInvertColors()"))
-        for pattern in ["RTCVideoTrack", "AVCapture", "AVAudioSession", "addRenderer", "MeetingViewModel", "Timer", "URLSession"] {
-            #expect(!probe.contains(pattern), "probe uses \(pattern)")
-        }
-    }
-
-    @Test func iosFixtureRootKeepsTheStageSiblingIdentifiersAndReadouts() throws {
-        let root = try panelSource("Sources/Conclave/App/PlatformRoot+iOS.swift")
-        let flat = panelNormalized(root)
-
-        #expect(flat.contains("VStack(spacing: 0) { HostingStageStrip(lifetime: stageLifetime, presenter: presenter) .fixedSize(horizontal: false, vertical: true) List {"))
-
-        #expect(flat.contains(".listStyle(.insetGrouped) } .modifier(NativePanelInspectorHost"))
-        #expect(flat.contains(".modifier(NativePanelInspectorHost(coordinator: presenter.panels, adapter: panelHost, window: window) { presentation, resolved in HostingPanelContent(presenter: presenter, feedback: feedback, adapter: panelHost, presentation: presentation, resolved: resolved, systemScheme: systemScheme) }) .navigationTitle(\"Hosting Preview\")"))
-        for pattern in ["safeAreaInset", ".overlay(alignment: .bottom", "ZStack {"] {
-            #expect(!panelCode(root).contains(pattern), "the stage must stay a sibling: \(pattern)")
-        }
-
-        #expect(flat.contains(".background(HostingTheme.token(DesignTokens.iosInCallStage), ignoresSafeAreaEdges: .horizontal) .accessibilityIgnoresInvertColors() .environment(\\.colorScheme, .dark)"))
-
-        #expect(flat.contains("Text(row.name) .font(.subheadline.weight(.semibold)) .dynamicTypeSize(...DynamicTypeSize.accessibility1) .padding(8) .frame(maxWidth: .infinity, minHeight: 96, alignment: .bottomLeading) .overlay(alignment: .topTrailing) { if row.isSelected {"))
-        #expect(flat.contains(".background { RendererProbe(key: row.id, slot: .stage, ledger: ledger) }"))
-        #expect(flat.contains(".accessibilityShowsLargeContentViewer()"))
-        #expect(!flat.contains(".frame(height: 96)"))
-
-        #expect(flat.contains("let coverage = PanelPresentationPolicy.coverage(resolved, detent: adapter.detent)"))
-        #expect(flat.components(separatedBy: "HostingPanelReadouts(presenter: presenter, feedback: feedback, adapter: adapter, resolved: resolved)").count - 1 == 2)
-        for id in ["panel.readout.style", "panel.readout.renderers", "panel.readout.feedback", "panel.readout.refresh"] {
-            #expect(root.contains(".accessibilityIdentifier(\"\(id)\")"), "missing panel readout \(id)")
-        }
-
-        for key in ["Layout Panel", "Stage Readouts", "Refresh Readouts"] {
-            #expect(root.contains("ConclaveStrings.text(\"\(key)\")"), "\(key)")
-            #expect(!root.contains("Button(\"\(key)\")") && !root.contains("Section(\"\(key)\")"), "\(key)")
-        }
-
-        #expect(flat.contains("private func rapidPanels(_ presenter: NativeHostingPresenter) { let now = hostingUptime() presenter.presentPanel(.participants, from: .call, at: now) presenter.presentPanel(.settings, from: .settings, at: now) presenter.presentPanel(.participants, from: .more, at: now) }"))
-
-        #expect(flat.contains("ForEach(presenter.rowsState.rows) { row in HostingStageTile(row: row, ledger: presenter.renderers) }"))
-        #expect(flat.contains("RendererProbe(key: row.id, slot: .stage, ledger: ledger)"))
-        #expect(flat.contains(".accessibilityIdentifier(\"stage.tile.\\(row.id)\") .accessibilityIgnoresInvertColors()"))
-        #expect(flat.contains(".environment(\\.colorScheme, .dark)"))
-        #expect(!root.contains("preferredColorScheme(.dark)"))
-        #expect(flat.contains("Text(\"Inert stage \\(identity ?? \"attaching\"); instances \\(lifetime.creations)\") .accessibilityIdentifier(\"fixture.stage\")"))
-
-        #expect(flat.contains("Text(verbatim: presenter.renderers.summary())"))
-        #expect(flat.contains("Button(ConclaveStrings.text(\"Refresh Readouts\")) { refresh += 1 } .accessibilityIdentifier(\"stage.renderers.refresh\")"))
-        #expect(flat.contains("NativePanelSheetHost(coordinator: presenter.panels, adapter: panelHost, window: window)"))
-        #expect(flat.contains("presenter.openTimer.firstFrame(presentationID: presentation.request.presentationID, at: hostingUptime())"))
-        #expect(flat.contains("Button(ConclaveStrings.text(\"Layout Panel\")) { lastInvoker = .layout presenter.presentPanel(.layout, from: .call, at: hostingUptime()) }"))
-        #expect(flat.contains(".pickerStyle(.inline)"))
-        #expect(flat.contains("get: { adapter.draft(for: presentationID) }, set: { adapter.setDraft($0, for: presentationID) }"))
-        #expect(flat.contains(".onChange(of: focused) { _, isFocused in if isFocused { promoteToLarge() } }"))
-
-        for id in ["panel.open.participants", "panel.open.settings", "panel.rapid", "panel.replace", "panel.cancelPending",
-                   "panel.resetDuringDismissal", "panel.identity", "panel.selectedCount", "panel.input", "feedback.status",
-                   "feedback.complete", "feedback.duplicate", "feedback.gesture", "feedback.preference", "feedback.suspend",
-                   "feedback.coalesced", "feedback.remount", "fixture.resetSession", "hosting.details", "hosting.selectedCount",
-                   "hosting.reset", "hosting.close", "fixture.stage", "panel.open.layout", "stage.renderers",
-                   "stage.renderers.refresh", "panel.style", "panel.openLatency", "panel.compactOverride"] {
-            #expect(root.contains("\"\(id)\""), "missing identifier \(id)")
-        }
-
-        #expect(flat.contains("ToolbarItem(placement: .topBarTrailing) { Button(\"Done\", action: onClose)"))
-        #expect(flat.contains(".modifier(ConclaveFeedbackConsumer(delivery: feedback, mount: consumerMount))"))
-        #expect(!panelCode(root).contains(".confirmationAction"))
-    }
-
-    @Test func componentGalleryRefilesMeasurementsAfterALongTextSwitch() throws {
-
-        let flat = panelNormalized(try panelSource("Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"))
-        #expect(flat.contains(".onChange(of: key) { _, newKey in ledger.refile(id: id, to: newKey) }"))
-        #expect(flat.contains("func refile(id: String, to key: String) { if shown[key] == nil, let height = latestShown[id] { shown[key] = height } if ideal[key] == nil, let height = latestIdeal[id] { ideal[key] = height } update(key) }"))
-        #expect(flat.contains("action: { ledger.reportShown(key, id: id, $0) }"))
-        #expect(flat.contains("action: { ledger.reportIdeal(key, id: id, $0) }"))
-        #expect(flat.contains("latestShown[id] = height") && flat.contains("latestIdeal[id] = height"))
-    }
-
-    @Test func androidStageIsAFixedSiblingAndTheHostOwnsPanels() throws {
-        let root = try panelSource("Sources/Conclave/Skip/ui/AppRoot.kt")
-        let flat = panelNormalized(root)
-
-        #expect(!root.contains("item(key = \"stage\")"))
-        #expect(flat.contains("NativeHostingStageStrip(rows, lifetime) Spacer("))
-        #expect(flat.contains("Spacer(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface) .windowInsetsBottomHeight(WindowInsets.navigationBars))"))
-        #expect(flat.contains("contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)"))
-        #expect(flat.contains("Box(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }) { NativePanelHost("))
-        #expect(flat.contains("CompositionLocalProvider(LocalRendererLedger provides presenter.renderers)"))
-        #expect(flat.contains("BackHandler(enabled = panelState.current == null)"))
-        #expect(flat.contains("NativeIconRasterBinding(icons, fixtureEligible && panelState.current == null)"))
-        #expect(flat.contains("bottomStripInCall = NATIVE_HOSTING_STRIP_REACHES_BOTTOM_EDGE"))
-        #expect(flat.contains("private const val NATIVE_HOSTING_STRIP_REACHES_BOTTOM_EDGE = false"))
-
-        #expect(flat.contains("key(row.id) { NativeHostingStageTile(row, Modifier.weight(1f)) }"))
-        #expect(flat.contains("RendererProbe(key = row.id, slot = RendererSlot.stage, modifier = Modifier.fillMaxSize())"))
-        #expect(flat.contains("RendererProbe(key = \"mini:$session:${request.presentationID}\", slot = RendererSlot.miniTile,"))
-
-        for tag in ["panel.open.participants", "panel.open.settings", "panel.open.layout", "panel.rapid"] {
-            #expect(flat.contains("focus.invoked(\"\(tag)\")") && flat.contains(".panelInvoker(focus, \"\(tag)\"))"), "\(tag)")
-        }
-        #expect(!root.contains("focusRequester(focus.requester("))
-        for tag in ["panel.style", "stage.renderers", "stage.compositions", "panel.mounts", "panel.openLatency", "stage.renderers.refresh",
-                    "stage.tile.${row.id}", "fixture.stage", "panel.layout.$option", "panel.readout.style", "panel.readout.renderers",
-                    "panel.readout.compositions", "panel.readout.feedback", "panel.readout.refresh"] {
-            #expect(root.contains("testTag(\"\(tag)\")"), "missing tag \(tag)")
-        }
-
-        #expect(flat.contains("Box( Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface) .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)) ) { HostingTheme(inCall = true) { Column( Modifier.fillMaxWidth().background(Color(DesignTokens.androidExtendedStage)) .padding(horizontal = 16.dp, vertical = 12.dp),"))
-        #expect(root.components(separatedBy: ".windowInsetsPadding(").count - 1 == 1)
-
-        #expect(flat.contains("NativeHostingPanelReadouts(presenter, delivery, readout) } }"))
-        #expect(root.components(separatedBy: "presenter.renderers.compositionSummary()").count - 1 == 2)
-
-        #expect(flat.contains("Text(conclaveString(\"native_panel_open_layout\"))"))
-        #expect(root.components(separatedBy: "Text(conclaveString(\"native_panel_refresh_readouts\"))").count - 1 == 2)
-        #expect(!root.contains("Text(\"Layout panel\")") && !root.contains("Text(\"Refresh readouts\")"))
-
-        #expect(flat.contains("private fun rapidPanels(presenter: NativeHostingPresenter) { val now = hostingUptime() presenter.presentPanel(MeetingPanel.participants, from = PanelInvoker.call, at = now) presenter.presentPanel(MeetingPanel.settings, from = PanelInvoker.settings, at = now) presenter.presentPanel(MeetingPanel.participants, from = PanelInvoker.more, at = now) }"))
-        let host = panelNormalized(try panelSource("Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt"))
-
-        #expect(host.contains("Row(Modifier.fillMaxSize()) {"))
-        #expect(host.contains(".semantics { if (covered) hideFromAccessibility() } .focusProperties { onEnter = { if (covered) cancelFocusChange() } } .focusGroup() ) { stage(coverage) }"))
-
-        #expect(host.contains("if (!state.isDismissing) { key(state.session, request.presentationID) { movablePanel(InCallPageVariant.Overlay, decision) } }"))
-        #expect(host.contains("if (!state.isDismissing) { key(state.session, request.presentationID) { movablePanel(InCallPageVariant.SidePane, decision) } }"))
-
-        #expect(host.contains("val movablePanel = remember(state.session, request?.presentationID) { val session = state.session val shown = request if (shown == null) null else movableContentOf { variant: InCallPageVariant, current: PanelHostDecision -> CompositionLocalProvider(LocalPanelPageStack provides pages) {"))
-        #expect(host.contains("val pages = remember(state.session, request?.presentationID) { PanelPageStack() }"))
-        #expect(host.contains("Box(Modifier.fillMaxSize().graphicsLayer { translationX = pages.backProgress.pageTranslationDp * 1.dp.toPx() }) { latestPanel(session, shown, current, variant) }"))
-        #expect(host.contains("val latestPanel by rememberUpdatedState(panel)"))
-
-        #expect(host.contains("stage(coverage) } if (sidePane && request != null && decision != null && movablePanel != null) { PanelSidePane(decision, back, rightToLeft) {"))
-        #expect(host.contains("Modifier.width(decision.paneWidthDp.dp).fillMaxHeight().focusGroup()"))
-        #expect(host.contains("SideEffect { readout.update(decision, overlay || sidePane || bottomSheet) }"))
-        #expect(host.contains("val panelVisible = overlay || sidePane || bottomSheet LaunchedEffect(panelVisible) { val target = focus.tracker.update(panelVisible) ?: return@LaunchedEffect"))
-
-        #expect(host.contains("val bottomSheet = decision != null && decision.style == PanelHostStyle.bottomSheet && request != null"))
-        #expect(host.contains("val coverage = if ((overlay || bottomSheet) && decision != null) decision.coverage else PanelStageCoverage.none"))
-        #expect(host.contains("key(state.session, request.presentationID) { val session = state.session LayoutSheetHost( dismissing = state.isDismissing, skipPartiallyExpanded = decision.skipsPartialSheet, inCallAppearance = decision.inCallAppearance, onDismissRequest = { panels.dismiss(cancelPending = false) }, ) {"))
-        let sheetHost = panelNormalized(try panelSource("Sources/Conclave/Skip/ui/call/panels/LayoutSheetHost.kt"))
-        #expect(sheetHost.contains("@OptIn(ExperimentalMaterial3Api::class) @Composable internal fun LayoutSheetHost("))
-        #expect(sheetHost.contains("semantics { testTagsAsResourceId = true }"))
-        #expect(sheetHost.contains("properties = ModalBottomSheetProperties(isAppearanceLightStatusBars = lightBars, isAppearanceLightNavigationBars = lightBars),"))
-        #expect(host.components(separatedBy: "panel(state.session, request, decision,").count - 1 == 0)
-        #expect(host.contains("SideEffect { lifetime.acknowledgeAbsent() }"))
-        #expect(host.contains("PredictiveBackHandler(enabled = request != null && !state.isDismissing)"))
-
-        #expect(host.contains("val action = panelBackAction(pages) val progress = if (action == PanelBackAction.PopPage) pages.backProgress else back"))
-        #expect(host.contains("if (progress.commit()) performPanelBack(action, pages, panels)"))
-        #expect(host.contains("progress.cancel() throw cancelled"))
-        #expect(host.contains("PanelBackAction.ClosePanel -> panels.dismiss(cancelPending = true)"))
-        #expect(host.contains(".focusProperties { onExit = { cancelFocusChange() } }"))
-
-        #expect(host.contains("fun restore(tag: String): Boolean = requesters[tag]?.requestFocusOrFalse() ?: false"))
-        #expect(host.contains("internal fun FocusRequester.requestFocusOrFalse(): Boolean = runCatching { requestFocus() }.getOrDefault(false)"))
-        #expect(host.contains("requestPanelFocus(PANEL_FOCUS_ATTEMPTS, awaitFrame = { withFrameNanos { } }) { focus.restore(target) }"))
-        #expect(host.contains("this.focusRequester(focus.requester(tag)).focusProperties { canFocus = true }"))
-        #expect(!host.contains(".isSuccess"))
-        let page = panelNormalized(try panelSource("Sources/Conclave/Skip/ui/call/panels/InCallPage.kt"))
-        #expect(page.contains(".semantics { paneTitle = title; isTraversalGroup = true }"))
-        #expect(page.contains("Modifier.testTag(\"panel.title\").focusRequester(titleFocus).focusable()"))
-        #expect(page.contains("requestPanelFocus(PANEL_FOCUS_ATTEMPTS, awaitFrame = { withFrameNanos { } }) { titleFocus.requestFocusOrFalse() }"))
-
-        #expect(page.contains("LaunchedEffect(Unit) { if (variant != InCallPageVariant.Sheet) {"))
-        #expect(!page.contains("if (variant == InCallPageVariant.Overlay) { LaunchedEffect(Unit)"))
-        #expect(page.contains("contentWindowInsets = if (sidePane) WindowInsets.safeDrawing.only(sidePaneSides) else WindowInsets.safeDrawing,"))
-        #expect(page.contains("val sidePaneSides = WindowInsetsSides.Top + WindowInsetsSides.End + WindowInsetsSides.Bottom"))
-        #expect(!page.contains("runCatching"))
-        #expect(page.contains("Icon(ConclaveIcons.ArrowBackFill0, contentDescription = conclaveString(\"native_panel_back_to_call\"))"))
-        #expect(page.contains("Icon(ConclaveIcons.CloseFill0, contentDescription = conclaveString(\"native_panel_close\", title))"))
-        #expect(page.contains("HostingTheme(inCall = appearance == PanelAppearance.inCall)"))
-        #expect(!page.contains("160.dp"))
-        let tile = panelNormalized(try panelSource("Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt"))
-        #expect(tile.contains(".border(callMiniTileBorderWidthDp(model.speaking).dp, borderColor, shape)"))
-        #expect(tile.contains("if (model.speaking) stateDescription = speakingLabel"))
-        #expect(tile.contains(".clickable(onClickLabel = returnLabel, role = Role.Button, onClick = onReturnToCall)"))
-        #expect(tile.contains(".testTag(\"call.miniTile\")"))
-        let rows = panelNormalized(try panelSource("Sources/Conclave/Skip/ui/hosting/NativeHostingRows.kt"))
-        #expect(rows.contains("return NativeHostingRows(state, previous).also { cached = it }"))
-        #expect(rows.contains("private val people: List<NativeHostingPerson> = buildList {"))
-        #expect(!rows.contains("@Stable") && !rows.contains("@Immutable"))
-        let probe = panelNormalized(try panelSource("Sources/Conclave/Skip/ui/hosting/RendererProbe.kt"))
-        #expect(probe.contains("isOpaque = true setLayerType(LAYER_TYPE_HARDWARE, null)"))
-        #expect(probe.contains("staticCompositionLocalOf<RendererIdentityLedger?> { null }"))
-        #expect(probe.contains("check(Looper.myLooper() == Looper.getMainLooper())"))
-    }
-
     @Test func wp1PanelSourcesStayFlatDashFreeAndLocalized() throws {
         let touched = [
             "Sources/Conclave/Features/Meeting/Panels/MeetingPanel.swift",
@@ -1300,18 +998,7 @@ struct DesignContractsTests {
         ]
         for file in touched {
             let text = try panelSource(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) contains an en or em dash")
-            #expect(!text.lowercased().contains("gradient"), "\(file) mentions a gradient")
-            for pattern in ["FloatingToolbar", "ButtonGroup", "dynamicLightColorScheme", "dynamicDarkColorScheme", "@Stable", "@Immutable"] {
-                #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-            }
 
-            if !file.hasSuffix("NativeComponentGallery.swift") {
-                for pattern in ["glassEffect", "GlassEffectContainer", "GlassStyle", "glassProminent", "ultraThinMaterial", "thinMaterial",
-                                "regularMaterial", "thickMaterial", "ultraThickMaterial"] {
-                    #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-                }
-            }
             #expect(panelMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
         }
 
@@ -1339,10 +1026,6 @@ struct DesignContractsTests {
         let defined = Set(panelMatches(#"<string name="(native_panel_[a-z0-9_]+)""#, in: xml).map { $0[0] })
 
         #expect(used.count == 14 && used == defined, "\(used.symmetricDifference(defined).sorted())")
-        for file in ["Sources/Conclave/Skip/ui/call/panels/InCallPage.kt", "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt",
-                     "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt", "Sources/Conclave/Skip/ui/call/panels/LayoutSheetHost.kt"] {
-            #expect(panelMatches(#"Text\(\s*""#, in: try panelSource(file)).isEmpty, "\(file) has a literal Text")
-        }
     }
 
     @Test func pseudolocalesAreEnabledOnTheDebugBuildTypeOnly() throws {

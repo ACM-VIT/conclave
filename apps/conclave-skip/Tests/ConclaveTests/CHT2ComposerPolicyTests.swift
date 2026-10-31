@@ -166,39 +166,5 @@ struct CHT2ComposerPolicyTests {
         #expect(chat.drafts.count == 0)
     }
 
-    @Test func theComposerUsesTheSharedComponentAndPlaysNoSendHaptic() throws {
-        let ios = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatComposer+iOS.swift")
-        #expect(ios.contains("ConclaveComposerField(identifier: \"chat.composer.cluster\")"))
-        #expect(ios.contains("ConclaveComposerStack(identifier: \"chat.composer\")"))
-        #expect(ios.contains("chat.send(text: text)"))
-        #expect(ios.contains("GCKeyboard.coalesced != nil"))
-        let panel = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatPanel+iOS.swift")
-        #expect(panel.contains(".conclaveComposerBar {"))
-        let kotlin = try chatSource("Sources/Conclave/Skip/ui/chat/ChatComposer.kt")
-        #expect(kotlin.contains("ConclaveComposerField(") && kotlin.contains("presenter.send(text, \"\")"))
-        for text in [ios, kotlin] {
-            for forbidden in ["sensoryFeedback", "conclaveGestureFeedback", "haptics.gesture", "performHapticFeedback", "glassEffect"] {
-                #expect(!text.contains(forbidden), "composer uses \(forbidden)")
-            }
-        }
-    }
-
-    @Test func nativeCommandsKeepTheirGuardedDirectionalBranches() throws {
-        let vm = try chatSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-
-        guard let start = vm.range(of: "private func sendNativeChat("),
-              let end = vm.range(of: "private func sendRetainedChat(", range: start.upperBound..<vm.endIndex) else {
-            Issue.record("sendNativeChat not found")
-            return
-        }
-        let body = String(vm[start.lowerBound..<end.lowerBound])
-        #expect(body.contains("if let parsed = ChatCommandParser.parse(trimmed) {\n                executeChatCommand(parsed)"))
-        for forbidden in ["toggleMute()", "toggleCamera()", "toggleHandRaise", "shell.", "state.errorMessage"] {
-            #expect(!body.contains(forbidden), "sendNativeChat uses \(forbidden)")
-        }
-        let flat = vm.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        #expect(flat.contains("if isMuteToggleInFlight, !state.isMuted { applyLocalMuteNow(context: currentSocketEventContext())"))
-        #expect(vm.contains("applyLocalCameraOffNow(context: currentCallActionContext())"))
-    }
 }
 #endif

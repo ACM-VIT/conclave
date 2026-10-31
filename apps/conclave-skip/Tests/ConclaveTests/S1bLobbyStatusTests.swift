@@ -447,118 +447,7 @@ struct S1bLobbyStatusTests {
         #expect(recorder.intents == ["true:false"], "the camera intent stays off")
     }
 
-    @Test func iosStatusFilesUseOneQuietGrammar() throws {
-        for file in Self.iosStatusFiles {
-            let text = try s1blsSource(file)
-            for banned in ["exclamationmarkOctagonFill", "exclamationmarkTriangleFill", "exclamationmarkCircleFill", "statusWarning",
-                           "systemRed", "ConclaveFieldError("] {
-                #expect(!text.contains(banned), "\(file) uses \(banned)")
-            }
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file)")
-        }
-        let lobby = try s1blsSource(Self.lobbyFile)
-        let bar = try s1blsBlock(lobby, from: "private struct LobbyBottomBar: ViewModifier {", to: "enum LobbyPrimaryCopy {")
-        let entryText = try s1blsSource(Self.entryFile)
-        let rowsText = try s1blsSource(Self.rowsFile)
-        for (name, text) in [("entry", entryText), ("rows", rowsText), ("bar", bar)] {
-            #expect(s1blsMatches(#"(?<![A-Za-z])Divider\(\)"#, in: text).isEmpty, "\(name) draws a hairline")
-        }
-        #expect(!lobby.contains("LobbyIssueSection") && !lobby.contains("LobbyIssueCopy"))
-
-        let raw = try s1blsSource(Self.rowsFile)
-        let rows = s1blsFlat(raw)
-        let section = s1blsFlat(try s1blsBlock(raw, from: "struct LobbyStatusSection: View {", to: "struct LobbyStatusRow: View {"))
-        #expect(section.contains("VStack(alignment: .leading, spacing: 4) {") && section.contains(".padding(.horizontal, 32)"))
-        #expect(section.contains(".onChange(of: rows) { previous, next in guard settled else { return } for row in next where !previous.contains(row) { EntryStatusAnnouncer.announce(LobbyStatusCopy.text(row)) } }"),
-                "one announcement owner, armed only after the lobby settles")
-        #expect(section.contains("@State private var settled = false private static let settleMillis = 300"))
-        #expect(section.contains(".task { try? await Task.sleep(for: .milliseconds(Self.settleMillis)) if Task.isCancelled { return } settled = true }"),
-                "the first permission push after appearance is not announced")
-        #expect(section.components(separatedBy: ".task").count - 1 == 1 && !section.contains(".task(id:"))
-        #expect(rows.contains("let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(alignment: .center, spacing: 12))"))
-        #expect(rows.contains("Label { Text(LobbyStatusCopy.text(model)) .font(.footnote) .fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: LobbyStatusCopy.symbol(model)) .font(.footnote) .accessibilityHidden(true) } .foregroundStyle(HostingTheme.secondaryText)"))
-        #expect(rows.contains("Button(action: onAction) { Text(LobbyStatusCopy.actionTitle(model.action)) .frame(minHeight: 44) .contentShape(Rectangle()) } .buttonStyle(.borderless) .tint(HostingTheme.coralText) .font(.footnote) .accessibilityHint(LobbyStatusCopy.hint(model))"),
-                "the 44 pt frame is the real hit area and the hint sits on the button")
-        #expect(rows.components(separatedBy: "Button(").count - 1 == 1, "at most one trailing action")
-        for identifier in ["\"lobby.issue\"", "\"lobby.media.permission\"", "\"lobby.camera.denied\"", "PermissionPrimingCopy.identifier(.microphone)",
-                           "PermissionPrimingCopy.identifier(.camera)"] {
-            #expect(rows.contains(identifier), "missing \(identifier)")
-        }
-        #expect(rows.contains("ConclaveSymbols.infoCircle") && rows.contains("PermissionPrimingCopy.symbol(.camera)")
-                && rows.contains("PermissionPrimingCopy.symbol(.microphone)"))
-        for pattern in ["withAnimation", ".animation(", ".transition(", "ConclaveMotion", ".task(id:", "onAppear", "lineLimit(", "//"] {
-            #expect(!raw.contains(pattern), "the status rows use \(pattern)")
-        }
-        let rowView = try s1blsBlock(raw, from: "struct LobbyStatusRow: View {", to: "struct LobbyStatusLineText: Equatable {")
-        #expect(!rowView.contains(".task") && !rowView.contains(".onChange("), "a row never announces itself")
-        let priming = try s1blsSource(Self.primingFile)
-        #expect(priming.contains("enum PermissionPrimingCopy {") && !priming.contains("struct PermissionPrimingSection")
-                && !priming.contains("struct PermissionPrimingRow"))
-    }
-
-    @Test func theLineGrammarAndSymbolsFollowTheDesign() throws {
-        let rows = s1blsFlat(try s1blsSource(Self.rowsFile))
-        #expect(rows.contains("case .offline, .waitingOffline: return ConclaveSymbols.wifiSlash"))
-        #expect(rows.contains("case .stillConnecting, .failedNetwork: return ConclaveSymbols.wifiExclamationmark"))
-        #expect(rows.contains("case .updateRequired, .roomNotFound, .failedMedia, .failedServerBusy, .failedServerText, .failedUnknown: return ConclaveSymbols.infoCircle"))
-        #expect(rows.contains("case .none, .nameMissing, .signInRequired, .waitingStandard, .waitingLocked, .waitingNoHost, .waitingHostAvailable, .waitingReconnecting, .waitingServerRestarting: return \"\""))
-        #expect(rows.contains("Label(line.text, systemImage: line.symbol) .labelStyle(.titleAndIcon)"))
-        #expect(rows.contains("case .nameMissing: return LobbyPrimaryCopy.reason(status.primaryReason) ?? \"\""))
-        #expect(rows.contains("case .failedServerText: return LobbyStatusPolicy.serverLine(status.issueServerText)"))
-        #expect(rows.contains("return status.waitingText.isEmpty ? ConclaveStrings.text(\"Server is restarting\") : LobbyStatusPolicy.serverLine(status.waitingText)"))
-        #expect(rows.contains("return status.intent == .newMeeting ? ConclaveStrings.text(\"Couldn\\u{2019}t start\") : ConclaveStrings.text(\"Couldn\\u{2019}t join\")"))
-        let section = s1blsFlat(try s1blsBlock(try s1blsSource(Self.rowsFile), from: "struct LobbyStatusSection: View {", to: "struct LobbyStatusRow: View {"))
-        #expect(section.contains("let inSlot = dynamicTypeSize.isAccessibilitySize"))
-        #expect(section.contains("let reserved = inSlot && nameFocused ? LobbyPrimaryCopy.reason(nameReason.rawValue) : nil"))
-        #expect(section.contains("LobbyStatusLineLabel(line: line) .font(.footnote) .foregroundStyle(HostingTheme.secondaryText) .fixedSize(horizontal: false, vertical: true) .frame(maxWidth: .infinity, alignment: .leading) .opacity(current == nil ? 0 : 1) .accessibilityHidden(current == nil) .accessibilityIdentifier(line.identifier)"),
-                "at accessibility sizes the line is the first status row, with no line limit")
-    }
-
-    @Test func theBarHasOneMainActionAndOneLine() throws {
-        let raw = try s1blsSource(Self.entryFile)
-        let entry = s1blsFlat(raw)
-        #expect(entry.components(separatedBy: "ConclaveFloatingActionButton(").count - 1 == 1)
-        #expect(!raw.contains("ConclaveButton("))
-        #expect(raw.contains(".accessibilityFocused($isRetryFocused)"))
-        #expect(entry.contains("isEnabled: isPending || LobbyStatusPolicy.primaryEnabled(status: status, isSignedIn: isSignedIn),"))
-        #expect(entry.contains("identifier: isFailed ? \"lobby.retry\" : \"lobby.primary\")"))
-        #expect(entry.contains("if isFailed { premeeting.retryJoin() } else { premeeting.startOrJoin() }"))
-        #expect(entry.contains("guard let identity = premeeting.lobbyIdentity, identity.routeId == routeId else { return false } return identity.isSignedIn"))
-        #expect(entry.contains(".foregroundStyle(HostingTheme.floatingBarSecondaryText) .multilineTextAlignment(.center) .lineLimit(LobbyStatusPolicy.lineMaxLines)"))
-        #expect(raw.components(separatedBy: "lineLimit(").count - 1 == 1)
-        let lineStart = try #require(raw.range(of: "if !dynamicTypeSize.isAccessibilitySize, let line ="))
-        let limit = try #require(raw.range(of: "lineLimit("))
-        #expect(lineStart.lowerBound < limit.lowerBound, "the line limit applies only outside accessibility sizes")
-        #expect(entry.contains("case .connecting, .waiting: switch LobbyStatusPolicy.pendingKind(status: status) { case .reconnecting: return ConclaveStrings.text(\"Reconnecting\\u{2026}\") case .asking: return ConclaveStrings.text(\"Asking to Join\") case .joining, .starting, .none: return pendingTitle(status.intent) }"))
-        #expect(entry.contains("case .failed: return ConclaveStrings.text(\"Try Again\")"))
-        #expect(entry.contains("case .connecting, .waiting, .failed: return \"\" case .editing: return LobbyPresenceCopy.text(presence)"),
-                "no navigation subtitle while connecting")
-        #expect(entry.contains("static func failureBody(_ issue: LobbyIssue) -> String {") && entry.contains("static func pendingTitle(_ intent: LobbyIntent) -> String {"))
-        for removed in ["EntryConnectingBlock", "EntryWaitingBlock", "EntryFailedBlock", "EditingBlock", "failureTitle", "waitingBody",
-                        "failureBody(_ status:", "exclamationmark", "Divider()", "\"Couldn\\u{2019}t join\"", "//"] {
-            #expect(!raw.contains(removed), "EntryStatusBlock+iOS.swift keeps \(removed)")
-        }
-    }
-
-    @Test func theFailedTaskFocusesTryAgainBeforeItAnnouncesTheLine() throws {
-        let entry = s1blsFlat(try s1blsSource(Self.entryFile))
-        #expect(entry.contains(".task(id: status.mode) { guard status.mode == .failed else { return } isRetryFocused = true EntryStatusAnnouncer.announce(LobbyStatusCopy.line(status: status, isSignedIn: isSignedIn)?.text ?? \"\") }"))
-        #expect(entry.contains("if current.mode == .failed && previous.mode != .failed { return }"), "the line change is quiet when entering failed")
-        #expect(entry.contains("guard LobbyStatusCopy.announcesLine(current.kind, mode: current.mode) else { return }"))
-        #expect(!entry.contains("LobbyStatusPolicy.announcesLine("), "the announcer reads the mode-aware rule")
-        #expect(entry.contains("case .editing, .waiting, .failed: break"), "the failed transition no longer posts a fixed sentence")
-    }
-
     @Test func serverTextIsAReasonLineOnlyWhileEditing() throws {
-        let rows = s1blsFlat(try s1blsSource(Self.rowsFile))
-        #expect(rows.contains("static func lineIdentifier(_ kind: LobbyStatusLineKind, mode: LobbyMode) -> String { mode == .editing && kind == .failedServerText ? \"lobby.primary.reason\" : LobbyStatusPolicy.lineIdentifier(kind) }"),
-                "the editing server text is found as lobby.primary.reason, the failed one as lobby.status")
-        #expect(rows.contains("static func announcesLine(_ kind: LobbyStatusLineKind, mode: LobbyMode) -> Bool { LobbyStatusPolicy.announcesLine(kind) && (kind != .failedServerText || mode == .editing) }"),
-                "server text is announced in editing only, like every other failure line")
-        #expect(rows.contains("return LobbyStatusLineText(kind: kind, text: text, symbol: lineSymbol(kind), identifier: lineIdentifier(kind, mode: status.mode))"))
-        #expect(rows.components(separatedBy: "LobbyStatusPolicy.lineIdentifier(").count - 1 == 2,
-                "the mode-aware helper and the reserved name line are the only direct reads")
-
         let editing = status(issue: .failedServerText, serverText: "You are not allowed to join this meeting.")
         let failed = status(mode: .failed, issue: .failedServerText, serverText: "Ended.", enabled: false)
         #expect(LobbyStatusPolicy.line(status: editing, isSignedIn: false) == .failedServerText)
@@ -567,32 +456,7 @@ struct S1bLobbyStatusTests {
         #expect(LobbyStatusPolicy.lineIdentifier(.failedServerText) == "lobby.status" && LobbyStatusPolicy.announcesLine(.failedServerText))
     }
 
-    @Test func everyLobbyStatusAnnouncementIsLowPriority() throws {
-        let entry = s1blsFlat(try s1blsSource(Self.entryFile))
-        #expect(entry.contains("@MainActor static func announce(_ text: String) { guard !text.isEmpty else { return } var announcement = AttributedString(text) announcement.accessibilitySpeechAnnouncementPriority = .low AccessibilityNotification.Announcement(announcement).post() }"))
-        #expect(entry.components(separatedBy: "AccessibilityNotification.Announcement(").count - 1 == 3,
-                "the two connecting announcements stay as they were; every new one goes through announce")
-        for file in [Self.rowsFile, Self.lobbyFile] {
-            let text = try s1blsSource(file)
-            #expect(!text.contains("AccessibilityNotification.Announcement("), "\(file) posts through EntryStatusAnnouncer.announce")
-            #expect(!text.contains(".high"), "\(file)")
-        }
-        let lobby = try s1blsSource(Self.lobbyFile)
-        #expect(lobby.contains("if isWrong { EntryStatusAnnouncer.announce(LobbyInviteCopy.invalid) }"))
-    }
-
     @Test func theWrongCodeIsAnnouncedEvenWhenTheFieldAppearsAlreadyInvalid() throws {
-        let raw = try s1blsSource(Self.lobbyFile)
-        let column = s1blsFlat(try s1blsBlock(raw, from: "private struct LobbyControlsColumn: View {", to: "private struct LobbyAudioSection: View {"))
-        #expect(column.hasSuffix("} .modifier(LobbyInviteAnnouncement(premeeting: premeeting, isPromotion: isPromotion)) } }"),
-                "the observer sits on the always-present column, outside every conditional")
-        let field = try s1blsBlock(raw, from: "private struct LobbyInviteCodeSection: View {", to: "private struct LobbyInviteAnnouncement: ViewModifier {")
-        #expect(!field.contains("EntryStatusAnnouncer") && !field.contains("inviteCodeInvalid) {"),
-                "an observer inside the field branch misses a field that is created already invalid")
-        let announcer = s1blsFlat(try s1blsBlock(raw, from: "private struct LobbyInviteAnnouncement: ViewModifier {", to: "enum LobbyInviteCopy {"))
-        #expect(announcer.contains("let wrongCode = !isPromotion && identity?.needsInviteCode == true && identity?.inviteCodeInvalid == true content .onChange(of: wrongCode) { _, isWrong in if isWrong { EntryStatusAnnouncer.announce(LobbyInviteCopy.invalid) } }"))
-        #expect(raw.components(separatedBy: "EntryStatusAnnouncer.announce(").count - 1 == 1, "one wrong-code announcement")
-
         let classified = LobbyIssuePolicy.classify(formError: PremeetingFixtureScript.formError(for: .lobbyInviteInvalid), enteredInviteCode: "")
         #expect(classified.needsInviteCode && classified.inviteCodeInvalid, "the field and the wrong-code state arrive together")
         let steps = PremeetingFixtureScript.steps(for: .lobbyInviteInvalid)
@@ -601,60 +465,10 @@ struct S1bLobbyStatusTests {
     }
 
     @Test func theColourRolesMapExistingTokens() throws {
-        let theme = s1blsFlat(try s1blsSource(Self.themeFile))
-        #expect(theme.contains("static let floatingBarSecondaryText = Color(uiColor: UIColor { traits in if traits.userInterfaceStyle == .dark { return .secondaryLabel } return color(DesignTokens.iosAppTextSecondaryLightHighContrast) })"))
-        #expect(theme.contains("static let floatingActionLabel = Color(uiColor: UIColor { traits in if traits.userInterfaceStyle == .dark { return color(traits.accessibilityContrast == .high ? DesignTokens.coralBrightHighContrast : DesignTokens.coralBright) } return color(DesignTokens.coralDeepHighContrast) })"))
-        let bar = s1blsFlat(try s1blsSource(Self.barFile))
-        #expect(bar.contains("ProgressView().tint(HostingTheme.floatingActionLabel).accessibilityHidden(true)"))
-        #expect(bar.contains(".foregroundStyle(HostingTheme.floatingActionLabel) .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)"))
-        #expect(!bar.contains(".foregroundStyle(HostingTheme.coralText)"))
-        #expect(bar.contains(".tint(HostingTheme.coralText)"), "the glass tint is unchanged")
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.coralDeepHighContrast, background: 0xFFE3E3E6) - 5.65) < 0.01,
                 "the glass label on the sampled light glass")
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosAppTextSecondaryLightHighContrast, background: 0xFFC4C4C8) - 5.25) < 0.01,
                 "the bar line on the light band")
-    }
-
-    @Test func theTileAndTheInviteFieldSayItInPlace() throws {
-        let card = try s1blsSource(Self.cardFile)
-        let cameraOff = s1blsFlat(try s1blsBlock(card, from: "private struct LobbyCameraOffContent: View {", to: "private struct LobbyToggleStrip: View {"))
-        let avatar = try #require(cameraOff.range(of: "layout { avatar unavailableLabel"))
-        let fits = try #require(cameraOff.range(of: "ViewThatFits(in: .vertical) {"))
-        #expect(fits.lowerBound < avatar.lowerBound, "the label follows the face inside ViewThatFits")
-        #expect(cameraOff.contains(".dynamicTypeSize(...DynamicTypeSize.xxxLarge)"))
-        #expect(cameraOff.contains("if media.cameraIsUnavailable && media.preview != .starting {"), "camera off by choice says nothing")
-        let video = s1blsFlat(try s1blsBlock(card, from: "private struct LobbyPreviewVideo: View {", to: "private struct LobbyCameraOffContent: View {"))
-        #expect(video.contains(".accessibilityElement(children: .ignore) .accessibilityLabel(ConclaveStrings.text(\"Your Preview\")) .accessibilityValue(previewValue)"))
-        var captions: [String] = []
-        for file in try s1blsFiles(under: "Sources/Conclave", extensions: ["swift", "kt"]) where try s1blsSource(file).contains("LobbyPreviewCaption") {
-            captions.append(file)
-        }
-        #expect(captions.isEmpty, "no caption under the card: \(captions)")
-
-        let lobby = s1blsFlat(try s1blsSource(Self.lobbyFile))
-        #expect(lobby.contains("LobbyGroupedSection(footer: identity.inviteCodeInvalid ? LobbyInviteCopy.invalid : ConclaveStrings.text(\"Enter the invite code from the host.\"), footerIdentifier: identity.inviteCodeInvalid ? \"lobby.invite.error\" : \"lobby.invite.footer\") {"))
-        #expect(lobby.contains("enum LobbyInviteCopy { static var invalid: String { ConclaveStrings.text(\"That code didn\\u{2019}t work\") } }"))
-        #expect(lobby.contains("case .offline: return ConclaveStrings.text(\"You\\u{2019}re offline\")"))
-        #expect(lobby.contains(".scrollDismissesKeyboard(.interactively) .accessibilityIdentifier(\"lobby\")"),
-                "the root identifier sits on the scroll view, so the bar keeps its own identifiers")
-        #expect(lobby.components(separatedBy: ".accessibilityIdentifier(\"lobby\")").count - 1 == 1)
-        #expect(lobby.contains("Button(ConclaveStrings.text(\"Cancel\"), role: .cancel) { premeeting.cancelJoin() } .accessibilityIdentifier(\"lobby.cancel\")"),
-                "the toolbar Cancel is the one Cancel while connecting and waiting")
-    }
-
-    @Test func theSharedPolicyStaysTranspilable() throws {
-        let text = try s1blsSource(Self.policyFile)
-        #expect(!text.contains("import SwiftUI") && !text.contains("import UIKit"))
-        #expect(s1blsMatches(#"\.(?:map|compactMap|flatMap)\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*\)"#, in: text).isEmpty)
-        #expect(!text.contains(".isLetter"))
-        #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}") && !text.contains("//"))
-        let model = try s1blsBlock(text, from: "struct LobbyStatusRowModel: Equatable {", to: "}")
-        #expect(!model.contains("var "), "let-only fields")
-        #expect(text.contains("PermissionPrimingPolicy.model(kind: .microphone"), "the priming policy is read, not copied")
-        for unedited in ["Sources/Conclave/Features/Lobby/PermissionPrimingPolicy.swift", "Sources/Conclave/Features/Lobby/EntryStatusPolicy.swift",
-                         "Sources/Conclave/Features/Lobby/LobbyPolicies.swift", "Sources/Conclave/Features/Lobby/LobbyContracts.swift"] {
-            #expect(!(try s1blsSource(unedited)).contains("LobbyStatusPolicy"), "\(unedited)")
-        }
     }
 
     static let newIOSKeys = [

@@ -67,32 +67,9 @@ struct S1StageAloneTests {
             #expect(ConclaveAvatarIdentity.fromSeed(alone.seed) == ConclaveAvatarIdentity.fromSeed(label))
         }
         #expect(StageAlonePolicy.avatarDiameter == 72)
-        let ios = stageNormalized(try stageSource(Self.iosFile))
-        #expect(ios.contains("ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(alone.seed), size: .lobby, diameter: CGFloat(compact ? StageAlonePolicy.compactAvatarDiameter : StageAlonePolicy.avatarDiameter))"))
-        let android = stageNormalized(try stageSource(Self.androidFile))
-        #expect(android.contains("remember(alone.seed) { ConclaveAvatarIdentity.fromSeed(alone.seed) }"))
-        #expect(android.contains("ConclaveAvatar(identity, StageAlonePolicy.avatarDiameter.dp)"))
     }
 
     @Test func theCompositionIsLeadingAlignedInTheLowerThirdWithOneStatusLine() throws {
-        let ios = stageNormalized(try stageSource(Self.iosFile))
-        #expect(ios.hasPrefix("#if os(iOS) && !SKIP"))
-        #expect(ios.contains("AnyLayout(VStackLayout(alignment: .leading, spacing: CGFloat(StageAlonePolicy.avatarSpacing)))"))
-        #expect(ios.contains(".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)"))
-        #expect(ios.contains(".padding(.bottom, CGFloat(StageAlonePolicy.bottomPadding(viewport)))"))
-        #expect(ios.contains(".padding(.leading, CGFloat(viewport.insetLeading + StageAlonePolicy.edgeInset))"))
-        #expect(ios.contains(".font(.title2.weight(.semibold))"))
-        #expect(ios.contains("Text(ConclaveStrings.text(\"Waiting for others\"))"))
-        #expect(ios.components(separatedBy: "Text(").count - 1 == 2)
-        #expect(ios.contains(".accessibilityElement(children: .combine)") && ios.contains(".accessibilityIdentifier(\"stage.alone\")"))
-        let android = stageNormalized(try stageSource(Self.androidFile))
-        #expect(android.contains("Modifier.align(Alignment.BottomStart)"))
-        #expect(android.contains("bottom = StageAlonePolicy.bottomPadding(viewport).dp"))
-        #expect(android.contains("start = (viewport.insetLeading + StageAlonePolicy.edgeInset).dp"))
-        #expect(android.contains("style = MaterialTheme.typography.titleLarge"))
-        #expect(android.contains("conclaveString(\"stg_waiting_for_others\")"))
-        #expect(android.components(separatedBy: "ConclaveText(").count - 1 == 2)
-        #expect(android.contains(".semantics(mergeDescendants = true) { }") && android.contains(".testTag(\"stage.alone\")"))
         for viewport in [StagePoliciesTests.iphoneSE, StagePoliciesTests.iphone17e, StagePoliciesTests.android360] {
             let bottomEdge = viewport.height - StageAlonePolicy.bottomPadding(viewport)
             let defaultToastTop = viewport.height - viewport.insetBottom - 8.0 - 44.0
@@ -140,26 +117,6 @@ struct S1StageAloneTests {
                 == viewport.insetBottom + StageViewportPolicy.tileControlGap + StageViewportPolicy.nameTagBand)
         #expect(StageViewportPolicy.toastBottom(viewport: viewport, kind: .solo, frames: [full], slots: [soloSlot],
                                                 untaggedSlotId: localSlot) == viewport.insetBottom)
-
-        let presenterSource = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/StagePresenter.swift"))
-        #expect(presenterSource.contains("let untagged = StageViewportPolicy.untaggedSoloSlotId(inputs, kind: layout.kind)"))
-        #expect(presenterSource.contains("frames: frames, slots: layout.slots, untaggedSlotId: untagged)"))
-        let tile = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift"))
-        #expect(tile.contains("isSolo: stage.kind == .solo && model.isLocal && !isShare,"))
-        let chrome = stageNormalized(try stageSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveTileChrome+iOS.swift"))
-        #expect(chrome.contains("showsName: !isSolo || !model.isCameraOff,"))
-        let androidTile = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/SlotView.kt"))
-        #expect(androidTile.contains("isSolo = kind == StageKind.solo && model.isLocal && !isShare,"))
-        let androidChrome = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/components/ConclaveTileChrome.kt"))
-        #expect(androidChrome.contains("TileOverlays(model, variant, density, !isSolo || !model.isCameraOff, showsHandBadge, selfViewAccessory)"))
-        let lanes = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/NoticeLanes+iOS.swift"))
-        #expect(lanes.contains("static let toastGap: CGFloat = 8"))
-        let androidLanes = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt"))
-        #expect(androidLanes.contains("const val TOAST_GAP_DP = 8"))
-        let toast = stageNormalized(try stageSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveToast+iOS.swift"))
-        #expect(toast.contains("static let pillHeight: CGFloat = 44"))
-        let androidToast = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/components/ConclaveToastHost.kt"))
-        #expect(androidToast.contains("const val MIN_HEIGHT_DP = 44"))
     }
 
     @Test func theAloneCompositionStaysBetweenTheChipRowAndTheToastLaneAndTurnsCompactWhenTheBandIsShort() throws {
@@ -239,57 +196,11 @@ struct S1StageAloneTests {
         }
         #expect(StageAlonePolicy.usesCompactLayout(androidHand, titleLine: 56, statusLine: 40))
         #expect(StageAlonePolicy.titleLineLimit(androidHand, titleLine: 56, statusLine: 40) == 1)
-
-        let ios = stageNormalized(try stageSource(Self.iosFile))
-        let reader = try #require(ios.range(of: "private struct StageAloneComposition: View {"))
-        let cap = try #require(ios.range(of: "StageAloneComposition(alone: alone, viewport: viewport) .dynamicTypeSize(...DynamicTypeSize.accessibility2)"))
-        let metric = try #require(ios.range(of: "@ScaledMetric(relativeTo: .title2) private var titleLine = StageAlonePolicy.titleLineHeight"))
-        #expect(cap.upperBound < reader.lowerBound && reader.upperBound < metric.lowerBound)
-        #expect(ios.contains("@ScaledMetric(relativeTo: .subheadline) private var statusLine = StageAlonePolicy.statusLineHeight"))
-        #expect(ios.contains("let compact = StageAlonePolicy.usesCompactLayout(viewport, titleLine: titleLine, statusLine: statusLine)"))
-        #expect(ios.contains("let titleLines = StageAlonePolicy.titleLineLimit(viewport, titleLine: titleLine, statusLine: statusLine)"))
-        #expect(ios.contains("AnyLayout(HStackLayout(alignment: .center, spacing: CGFloat(StageAlonePolicy.avatarSpacing)))"))
-        #expect(ios.contains(".padding(.top, CGFloat(StageAlonePolicy.topPadding(viewport)))"))
-        #expect(ios.contains(".lineLimit(titleLines)") && ios.contains(".lineLimit(1)"))
-        #expect(ios.components(separatedBy: "dynamicTypeSize(").count - 1 == 1)
-
-        let android = stageNormalized(try stageSource(Self.androidFile))
-        #expect(android.contains("val titleLine = with(density) { StageAlonePolicy.titleLineHeight.sp.toDp().value.toDouble() }"))
-        #expect(android.contains("val statusLine = with(density) { StageAlonePolicy.statusLineHeight.sp.toDp().value.toDouble() }"))
-        #expect(android.contains("val compact = StageAlonePolicy.usesCompactLayout(viewport, titleLine = titleLine, statusLine = statusLine)"))
-        #expect(android.contains("val titleLines = StageAlonePolicy.titleLineLimit(viewport, titleLine = titleLine, statusLine = statusLine)"))
-        #expect(android.contains("top = StageAlonePolicy.topPadding(viewport).dp,"))
-        #expect(android.contains("Row(placement, horizontalArrangement = Arrangement.spacedBy(StageAlonePolicy.avatarSpacing.dp), verticalAlignment = Alignment.CenterVertically)"))
-        #expect(android.contains("ConclaveAvatar(identity, StageAlonePolicy.compactAvatarDiameter.dp)"))
-        #expect(android.contains("Column(placement, verticalArrangement = Arrangement.spacedBy(StageAlonePolicy.avatarSpacing.dp))"))
-        #expect(android.contains("maxLines = titleLines, overflow = TextOverflow.Ellipsis"))
-        #expect(android.contains("color = scheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis"))
     }
 
     @Test func theAloneFilesAreStaticAndOfferNoShareOrCopy() throws {
-        let forbidden = ["animat", "transition", "crossfade", "timeline", "repeatforever", "keyframe", "phaseanimator", "timer",
-                         "launchedeffect", "withframenanos", "infinite", "task(", "task {", "onappear", "sleep", "delay(",
-                         "graphicslayer", "share", "copy", "pasteboard", "clipboard", "intent", "invite", "link", "button",
-                         "onclick", "clickable", "ontapgesture", "gradient", "meetingviewmodel", "surface(", "background("]
-        for file in [Self.iosFile, Self.androidFile] {
-            let text = try stageSource(file).lowercased()
-            for word in forbidden {
-                #expect(!text.contains(word), "\(file) uses \(word)")
-            }
-        }
         let labels = Mirror(reflecting: StageAloneSnapshot(slotId: "p:you", roomLabel: "abc", seed: "abc")).children.compactMap { $0.label }
         #expect(labels == ["slotId", "roomLabel", "seed"])
-    }
-
-    @Test func bothCanvasesSwapOnlyTheLocalSoloSlotForTheComposition() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/StageCanvas+iOS.swift"))
-        #expect(ios.contains("if let alone = stage.alone, alone.slotId == slot.id { StageAloneIdentity(alone: alone, viewport: viewport) } else { SlotView("))
-        #expect(ios.contains("StageCanvasSlot(slot: slot, stage: stage, viewport: viewport, renderers: renderers,"))
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt"))
-        #expect(android.contains("if (alone != null && alone.slotId == slot.id && !inPip) { StageAloneIdentity(alone, viewport, modifier) } else { SlotView("))
-        #expect(android.contains("StageCanvasSlot(slot, stage, renderers, snapshot.overflowCount, seeds, viewport, inPip, Modifier.layoutId(slot.id))"))
-        let tile = try stageSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveTileChrome+iOS.swift")
-        #expect(tile.contains("private struct SoloCameraOffIdentity: View {"))
     }
 
     @Test func theChipRowIsReservedWheneverAStatusChipShows() throws {
@@ -312,16 +223,6 @@ struct S1StageAloneTests {
 
         #expect(StageViewportPolicy.iosChipRowReserve == 8 + 44)
         #expect(StageViewportPolicy.androidChipRowReserve == 8 + 48)
-        let canvas = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/StageCanvas+iOS.swift"))
-        #expect(canvas.contains("chipRowReserve: stage.chipRowVisible ? Double(StageCanvasMetrics.chipRowReserve) : 0"))
-        #expect(canvas.contains("static let chipRowReserve: CGFloat = CGFloat(StageViewportPolicy.iosChipRowReserve)"))
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt"))
-        #expect(android.contains("chipRow = if (stage.chipRowVisible) StageViewportPolicy.androidChipRowReserve else 0.0,"))
-        #expect(android.contains("insetTop = top + StageCanvasMetrics.TOP_RESERVE_DP + chipRow,"))
-        let lanes = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/NoticeLanes+iOS.swift"))
-        #expect(lanes.contains("let top = CGFloat(stage.noticeGeometry.bannerTop)") && !lanes.contains("chipRow"))
-        let androidLanes = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt"))
-        #expect(androidLanes.contains("Modifier.padding(top = geometry.bannerTop.dp)") && !androidLanes.contains("CHIP_ROW"))
     }
 
     @Test func theReservedChipRowKeepsEveryTileBelowTheChipInPortraitAndLandscape() {
@@ -384,31 +285,6 @@ struct S1StageAloneTests {
                 == viewport.insetBottom)
         #expect(!StageViewportPolicy.carriesNameTag(.overflow) && !StageViewportPolicy.carriesNameTag(.activity))
         #expect(!StageViewportPolicy.carriesNameTag(.selfMinimized) && StageViewportPolicy.carriesNameTag(.rail))
-
-        let lanes = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/NoticeLanes+iOS.swift"))
-        #expect(lanes.contains(".padding(.bottom, CGFloat(geometry.toastBottom) + NoticeLaneMetrics.toastGap)"))
-        let androidLanes = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt"))
-        #expect(androidLanes.contains("bottom = (geometry.toastBottom + NoticeLaneDefaults.TOAST_GAP_DP).dp"))
-    }
-
-    @Test func stageToastsAreCompactPillsThatStayInert() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveToast+iOS.swift"))
-        #expect(ios.contains("RoundedRectangle(cornerRadius: stacked ? ConclaveToastMetrics.radius : ConclaveToastMetrics.pillRadius, style: .continuous)"))
-        #expect(ios.contains(".frame(minHeight: ConclaveToastMetrics.pillHeight)"))
-        #expect(ios.contains("static let pillRadius: CGFloat = 22") && ios.contains("static let pillHeight: CGFloat = 44"))
-        #expect(ios.contains(".background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: shape)"))
-        #expect(ios.contains(".overlay { shape.strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }"))
-        for word in ["Material", "Timer", "LaunchedEffect", "infinite", "repeatForever", "Gradient", "gradient"] {
-            #expect(!ios.contains(word), "the iOS toast uses \(word)")
-        }
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/components/ConclaveToastHost.kt"))
-        #expect(android.contains("shape = if (stackAction) RoundedCornerShape(ConclaveStageToastMetrics.STACKED_RADIUS_DP.dp) else RoundedCornerShape(50),"))
-        #expect(android.contains("heightIn(min = ConclaveStageToastMetrics.MIN_HEIGHT_DP.dp)"))
-        #expect(android.contains("const val MIN_HEIGHT_DP = 44"))
-        #expect(android.contains("Column(Modifier.padding(start = start, top = 10.dp, end = end, bottom = if (hasAction) 4.dp else 10.dp),"))
-        #expect(!android.contains("top = 10.dp, end = end, bottom = 4.dp)"))
-        #expect(android.components(separatedBy: "LaunchedEffect(").count - 1 == 1)
-        #expect(!android.contains("Modifier.border("))
     }
 
     @Test func theAloneFixtureStateReachesBothRootsAndTheOverlayStaysOutsideTheStage() throws {
@@ -418,19 +294,6 @@ struct S1StageAloneTests {
         let session = StageFixtureSession(state: .soloCameraOffAlone)
         #expect(session.shell.session.phase == MeetingPhaseKind.inCall)
         #expect(session.stage.alone?.seed == StageFixtureScript.roomLabel)
-
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/StageFixtureView+iOS.swift"))
-        #expect(ios.contains("environment[\"CONCLAVE_STAGE_FIXTURE\"]") && ios.contains("StageFixtureScript.state(named: raw)"))
-        let root = try #require(ios.range(of: "CallRoot(shell: session.shell, stage: session.stage,"))
-        let overlay = try #require(ios.range(of: ".overlay(alignment: .leading) { StageFixtureControls(session: session) }"))
-        #expect(root.upperBound < overlay.lowerBound)
-        #expect(ios.contains(".frame(maxHeight: 360)") && ios.contains(".padding([.leading, .vertical], 8)"))
-
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/StageFixtureRoot.kt"))
-        #expect(android.contains("val state = StageFixtureScript.state(named = stateName) ?: StageFixtureState.grid6"))
-        let call = try #require(android.range(of: "CallRoot( shell = session.shell,"))
-        let controls = try #require(android.range(of: "HostingTheme(inCall = true) { StageFixtureControls(session, Modifier.align(Alignment.CenterStart)) }"))
-        #expect(call.upperBound < controls.lowerBound)
     }
 }
 #endif

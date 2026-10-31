@@ -433,103 +433,6 @@ struct STG3ShareSelfViewTests {
         #expect(camera.facing == .back && changes == 5)
     }
 
-    @Test func iosSlotViewDragsSnapsAndKeepsItsConstantStructure() throws {
-        let slot = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift"))
-        for pin in ["ShareZoomContainer(zoom: zoom, isZoomable: zoomable, slotId: slot.id, stage: stage) {",
-                    ".opacity(slot.role == .selfMinimized ? 0 : 1)",
-                    ".overlay { SharePlaceholder(model: model, binding: binding, isShare: isShare) }",
-                    ".modifier(SelfViewDragModifier(slot: slot, stage: stage))",
-                    ".gesture(drag, including: movable ? .all : .subviews)",
-                    "DragGesture(minimumDistance: CGFloat(SelfViewSnapPolicy.dragMinimumDistance), coordinateSpace: .global)",
-                    "value.predictedEndTranslation", "stage.moveSelfView(toCorner: target)",
-                    ".conclaveGestureFeedback(.selfViewSnapped, trigger: snaps)", "withAnimation(ConclaveMotion.snap)",
-                    "ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion)",
-                    "if StageCameraFlip.perform(stage) {", ".disabled(chrome.isFlipInFlight)", ".accessibilityHidden(isShare)",
-                    "TileMenuModel.make(slot: slot, model: model, stage: stage, people: extraSections)",
-
-                    "let extraSections = SelfViewMoveText.sections(slot: slot, model: model, layoutDirection: layoutDirection)",
-                    ".modifier(ShareStripFade(stage: stage, role: slot.role))", "ConclaveStrings.text(\"Camera paused\")",
-                    "ConclaveStrings.text(\"Move to Top Left\")"] {
-            #expect(slot.contains(pin), "SlotView+iOS.swift lacks \(pin)")
-        }
-
-        #expect(!slot.contains("highPriorityGesture"))
-        #expect(slot.components(separatedBy: "ConclaveTileChrome(").count - 1 == 1)
-
-        #expect(slot.contains("FloatingSelfFlipControl(slot: slot, entry: entry, stage: stage)"))
-        #expect(!slot.contains("selfViewAccessory: { SelfViewFlipButton"))
-    }
-
-    @Test func iosShareZoomRunsTransformsWhileFingersMoveAndResizesOnSettle() throws {
-        let zoom = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/ShareZoom+iOS.swift"))
-        for pin in ["MagnifyGesture(minimumScaleDelta: 0.01)", "SpatialTapGesture(count: 2)", ".exclusively(before: TapGesture(count: 1)",
-                    ".accessibilityZoomAction", "withAnimation(ConclaveMotion.zoomSnap, completionCriteria: .removed)",
-                    ".scaleEffect(CGFloat(live.scale) / layoutScale)", ".offset(x: CGFloat(live.panX), y: CGFloat(live.panY))",
-                    ".frame(width: proxy.size.width * layoutScale, height: proxy.size.height * layoutScale)", ".clipped()",
-                    "ShareZoomPolicy.layoutScale(", "ConclaveSymbols.rectangleInsetFilledOnRectangle",
-                    "HostingTheme.token(DesignTokens.iosInCallSurface)", "ConclaveStrings.format(\"Shared Screen from %@\"",
-                    "ConclaveStrings.text(\"Reset Zoom\")", "ConclaveStrings.format(\"Zoom %@x\"",
-                    ".environment(\\.layoutDirection, .leftToRight)", "chrome?.send(ChromeVisibilityEvent.tap)",
-                    "if zoom.slotSizeChanged(size) { renderTargetResize?() }"] {
-            #expect(zoom.contains(pin), "ShareZoom+iOS.swift lacks \(pin)")
-        }
-
-        for forbidden in ["onCommand", "moveSelfView", "MeetingViewModel", "setViewport", "glassEffect", "Material"] {
-            #expect(!zoom.contains(forbidden), "ShareZoom+iOS.swift uses \(forbidden)")
-        }
-    }
-
-    @Test func androidSelfViewDragsInTheDrawPhaseAndTheShareZoomsOnALayer() throws {
-        let slot = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/SlotView.kt"))
-        for pin in ["detectDragGestures(", "drag.velocity.addPosition(change.uptimeMillis, change.position)",
-                    "val offset = drag.offset.value", "translationX = offset.x", "stage.moveSelfView(toCorner = target)",
-                    "haptics.gesture(FeedbackKind.selfViewSnapped)", "Modifier.systemGestureExclusion()",
-                    "drag.offset.animateTo(Offset.Zero, ConclaveMotion.spatialDefault())",
-                    "ShareZoomBox(zoom, zoomable, slot.id, stage, Modifier.fillMaxSize().graphicsLayer { alpha = if (minimized) 0f else 1f })",
-                    "SharePlaceholder(model, binding, isShare, Modifier.fillMaxSize())", "customActions = actions.map",
-                    "stateDescription = value", "conclaveString(\"stg_move_top_left\")", "conclaveString(\"stg_camera_paused\")",
-                    "SelfViewSnapPolicy.moveSections(", "LocalStageChromeVisibility", "LocalStageViewport"] {
-            #expect(slot.contains(pin), "SlotView.kt lacks \(pin)")
-        }
-
-        #expect(slot.components(separatedBy: "haptics.gesture(FeedbackKind.longPress)").count - 1 == 1)
-        #expect(slot.contains("modifier = Modifier.fillMaxSize().tileLongPress(menu.hasItems) { at ->"))
-        let zoom = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/ShareZoom.kt"))
-        for pin in ["event.calculateZoom()", "event.calculatePan()", "detectTapGestures(", "onDoubleTap = { at ->", ".clipToBounds()",
-                    "Constraints.fixed(laidWidth, laidHeight)", "placeable.place((width - laidWidth) / 2, (height - laidHeight) / 2)",
-                    "scaleX = scale", "translationX = live.panX.toFloat()", "ShareZoomPolicy.layoutScale(",
-                    "progress.animateTo(1f, ConclaveMotion.zoomSnap())", "ConclaveIcons.PresentToAllFill1",
-                    "conclaveString(\"stg_reset_zoom\")", "conclaveString(\"stg_zoom_in\")", "conclaveString(\"stg_zoom_out\")",
-                    "conclaveString(\"stg_shared_screen_from\", model.displayName)", "chrome?.send(ChromeVisibilityEvent.tap)"] {
-            #expect(zoom.contains(pin), "ShareZoom.kt lacks \(pin)")
-        }
-        for forbidden in ["MeetingViewModel", "onCommand", "moveSelfView", "detectTransformGestures(", "Text(\""] {
-            #expect(!zoom.contains(forbidden), "ShareZoom.kt uses \(forbidden)")
-        }
-    }
-
-    @Test func bothCameraOwnersExposeTheSameCallCameraMembers() throws {
-        let swift = try stageSource("Sources/Conclave/Core/WebRTC/LocalPreviewController.swift")
-        let kotlin = try stageSource("Sources/Conclave/Skip/LocalPreviewController.kt")
-        for member in ["var onCallCameraChange: (() -> Void)?", "func adoptCallFacing(_ reported: LocalCameraFacing) -> Bool",
-                       "func noteCallCameraInterruption(_ reason: PreviewInterruption)", "func noteCallCameraResumed()",
-                       "func resetCallCamera()", "private(set) var callCameraInterruption: PreviewInterruption",
-                       "var isCallCameraPaused: Bool", "AVCaptureSession.wasInterruptedNotification,"] {
-            #expect(swift.contains(member), "Swift controller lacks \(member)")
-        }
-        for member in ["var onCallCameraChange: (() -> Unit)?", "fun adoptCallFacing(reported: LocalCameraFacing): Boolean",
-                       "fun noteCallCameraInterruption(reason: PreviewInterruption)", "fun noteCallCameraResumed()",
-                       "fun resetCallCamera()", "var callCameraInterruption: PreviewInterruption", "val isCallCameraPaused: Boolean"] {
-            #expect(kotlin.contains(member), "Kotlin controller lacks \(member)")
-        }
-
-        for text in [swift, kotlin] {
-            for pattern in ["createProducer", "RTCCameraVideoCapturer", "CameraVideoCapturer", "VideoTrack", "webRTCClient"] {
-                #expect(!text.contains(pattern))
-            }
-        }
-    }
-
     @Test func stg3SourcesStayDashFreeFlatAndLocalized() throws {
         let files = ["Sources/Conclave/Features/Meeting/Stage/ShareZoom+iOS.swift", "Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift",
                      "Sources/Conclave/Skip/ui/call/stage/ShareZoom.kt", "Sources/Conclave/Skip/ui/call/stage/SlotView.kt",
@@ -537,9 +440,6 @@ struct STG3ShareSelfViewTests {
                      "Sources/Conclave/Skip/LocalPreviewController.kt"]
         for file in files {
             let text = try stageSource(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradient"), "\(file) mentions a gradient")
-            #expect(!text.contains("HapticManager") && !text.contains("@Stable"), "\(file)")
             #expect(stageMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
         }
 

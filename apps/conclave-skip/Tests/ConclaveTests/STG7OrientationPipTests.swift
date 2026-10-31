@@ -139,42 +139,7 @@ struct STG7OrientationPipTests {
     }
 
     @Test func theAppSceneStopsShrinkingAtTheCompactBarMinimum() throws {
-        let main = stg7Normalized(try stg7Source("Darwin/Sources/Main.swift"))
-        #expect(main.contains(".frame(minWidth: CGFloat(ConclaveWindowMetrics.minimumWidth), maxWidth: .infinity, maxHeight: .infinity)"))
-        #expect(main.contains(".windowResizability(.contentMinSize)"))
         #expect(ConclaveWindowMetrics.minimumWidth == 276)
-    }
-
-    @Test func theAnchorIsOneStableViewAndRenderersReportOffTheFrameCallback() throws {
-        let anchor = stg7Normalized(try stg7Source("Sources/Conclave/Features/Meeting/Stage/PipAnchor+iOS.swift"))
-        #expect(anchor.hasPrefix("#if os(iOS) && !SKIP"))
-        #expect(anchor.contains("struct StagePipAnchorView: UIViewRepresentable {"))
-        #expect(anchor.contains("func updateUIView(_ uiView: UIView, context: Context) {}"))
-        #expect(anchor.contains("view.isUserInteractionEnabled = false") && anchor.contains("view.isAccessibilityElement = false"))
-        #expect(anchor.contains(".allowsHitTesting(false) .accessibilityHidden(true)"))
-        #expect(anchor.contains("let choice = stage.pipTarget"))
-        let video = stg7Normalized(try stg7Source("Sources/Conclave/Core/WebRTC/VideoView.swift"))
-        #expect(video.contains("final class RendererFrameSizeObserver: NSObject, RTCVideoViewDelegate {"))
-        #expect(video.contains("func videoView(_ videoView: RTCVideoRenderer, didChangeVideoSize size: CGSize) {"))
-        let observer = try #require(video.range(of: "final class RendererFrameSizeObserver"))
-        let observerEnd = try #require(video.range(of: "struct VideoGridItem: View {", range: observer.upperBound..<video.endIndex))
-        let observerBody = String(video[observer.upperBound..<observerEnd.lowerBound])
-        #expect(!observerBody.contains("addSink") && !observerBody.contains(".add(") && !observerBody.contains(".remove(view"))
-        let renderer = stg7Normalized(try stg7Source("Sources/Conclave/Skip/VideoRenderer.kt"))
-        #expect(renderer.contains("internal val LocalRendererFrameSizes = staticCompositionLocalOf<RendererFrameSizeStore?> { null }"))
-        #expect(renderer.contains("post { updateLayoutAspectRatio() reportFrameSize() }"))
-        #expect(renderer.contains("val frameSlotId = RendererFrameSizeStore.slotId(rendererKey = rendererLifecycleKey.toString())"))
-        let onFrame = try #require(renderer.range(of: "override fun onFrame(frame: VideoFrame) {"))
-        let onFrameEnd = try #require(renderer.range(of: "override fun onSurfaceTextureAvailable", range: onFrame.upperBound..<renderer.endIndex))
-        let frameBody = String(renderer[onFrame.upperBound..<onFrameEnd.lowerBound])
-        #expect(!frameBody.contains("removeSink") && !frameBody.contains("addSink") && !frameBody.contains("ledger"))
-
-        let post = try #require(frameBody.range(of: "post {"))
-        let report = try #require(frameBody.range(of: "reportFrameSize()"))
-        #expect(post.lowerBound < report.lowerBound)
-
-        let policy = try stg7Source("Sources/Conclave/Features/Meeting/Stage/PipTargetPolicy.swift")
-        #expect(!policy.contains("#if") && !policy.contains("\u{2014}") && !policy.contains("\u{2013}"))
     }
 }
 

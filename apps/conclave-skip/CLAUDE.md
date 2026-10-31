@@ -169,6 +169,24 @@ Prod rate-limits rapid room creation per client: after ~a dozen creates in
 one session the app path returns "Join request failed" for a while. Space out
 sim smoke runs or reuse one room instead of creating fresh rooms per test.
 
+## Test Rules
+
+A test runs code and checks what it returns or does: policies, presenters,
+view models, parsers, Robolectric bridge tests. Do not add tests that read a
+`.swift` or `.kt` file and assert it contains, lacks or orders code text, or
+that a constant equals its own literal. They break on every refactor and prove
+nothing at runtime; about 460 of them were removed on 2026-11-01.
+
+File-reading tests are kept only for:
+
+- string catalog and resource integrity (every key the code uses exists on
+  both platforms);
+- the gradient allowlist (`S1FloatingBackdropTests`), the en/em dash rule
+  (`RepoRulesTests`), system fonts and glass surfaces
+  (`TypographyHapticsGalleryContractsTests`) and the trial font check
+  (`S1ChatPhotosTests`);
+- the two media invariant guards named under Media Threading below.
+
 ## Performance Learnings
 
 The app felt sluggish mostly because of over-broad recomposition, not because

@@ -128,66 +128,6 @@ struct SYS10ScreenShareTests {
 
     @Test func theAppGivesUpBeforeTheExtensionDoes() throws {
         #expect(ScreenShareStartPolicy.connectGraceMs < 12_000)
-        let handler = try sys10Source("Darwin/ScreenShareExtension/SampleHandler.swift")
-        #expect(handler.contains("initialConnectionTimeout: TimeInterval = 12"))
-    }
-
-    @Test func everyAbandonmentWritesTheStopBeforeTeardown() throws {
-        let manager = try sys10Source("Sources/Conclave/Core/WebRTC/ScreenCaptureManager.swift")
-        for signature in [
-            "private func cancelPendingStart(generation: Int) {",
-            "private func failPendingStart(generation: Int, failure: ScreenShareFailure,",
-            "func stopCapture() async {",
-        ] {
-            let body = sys10Body(signature, in: manager, closing: "\n    }\n")
-            let stop = try #require(body.range(of: "requestBroadcastStop("), "\(signature)")
-            let teardown = try #require(body.range(of: "tearDownCapture()"), "\(signature)")
-            #expect(stop.lowerBound < teardown.lowerBound, "\(signature)")
-        }
-        let failBody = sys10Body("private func failPendingStart(generation: Int, failure: ScreenShareFailure,", in: manager, closing: "\n    }\n")
-        #expect(failBody.contains("requestBroadcastStop(reason: stopReason ?? ScreenShareBroadcastStopReason.person)"))
-
-        let stopBody = sys10Body("private func requestBroadcastStop(reason: ScreenShareBroadcastStopReason) {", in: manager, closing: "\n    }\n")
-        #expect(!stopBody.isEmpty)
-        #expect(!stopBody.contains("server != nil"))
-        #expect(stopBody.contains("presentedAtEpochSeconds > 0"))
-        #expect(stopBody.contains("!stopWrittenForCurrentAttempt"))
-        #expect(stopBody.contains("stopWrittenForCurrentAttempt = true"))
-        let reason = try #require(stopBody.range(of: "forKey: ScreenShareLifecycleBusKeys.stopReason)"))
-        let requestedAt = try #require(stopBody.range(of: "forKey: ScreenShareLifecycleBusKeys.stopRequestedAt)"))
-        #expect(reason.lowerBound < requestedAt.lowerBound)
-
-        let openBody = sys10Body("private func openStartWindow(generation: Int) {", in: manager, closing: "\n    }\n")
-        #expect(openBody.contains("ScreenShareLifecycleBusKeys.attemptAt"))
-        #expect(openBody.contains("stopWrittenForCurrentAttempt = false"))
-        #expect(manager.contains("private var stopWrittenForCurrentAttempt = false"))
-        #expect(ScreenShareLifecycleBusKeys.attemptAt == "conclave.screenShare.lifecycle.attemptAt")
-    }
-
-    @Test func theExtensionHonoursAStopForItsAttempt() throws {
-        let handler = try sys10Source("Darwin/ScreenShareExtension/SampleHandler.swift")
-        #expect(handler.contains("private let attemptAtKey = \"\(ScreenShareLifecycleBusKeys.attemptAt)\""))
-        #expect(handler.contains("private let stopRequestedAtKey = \"\(ScreenShareLifecycleBusKeys.stopRequestedAt)\""))
-
-        let started = sys10Body("override func broadcastStarted(withSetupInfo setupInfo: [String: NSObject]?) {", in: handler, closing: "\n  }\n")
-        let startedAt = try #require(started.range(of: "broadcastStartedAt = Date().timeIntervalSince1970"))
-        let attempt = try #require(started.range(of: "attemptStartedAt = UserDefaults(suiteName: appGroupIdentifier)?.double(forKey: attemptAtKey) ?? 0"))
-        let check = try #require(started.range(of: "if wasStopRequestedByMainApp() {\n      finishBroadcast(stopReasonRequestedByMainApp())\n      return\n    }"))
-        let starting = try #require(started.range(of: "publishLifecycleState(\"starting\")"))
-        #expect(startedAt.lowerBound < attempt.lowerBound)
-        #expect(attempt.lowerBound < check.lowerBound)
-        #expect(check.lowerBound < starting.lowerBound)
-        let socket = try #require(started.range(of: "ScreenShareSocketConnection(appGroupIdentifier: appGroupIdentifier)"))
-        #expect(check.lowerBound < socket.lowerBound)
-
-        let wasStopped = sys10Body("private func wasStopRequestedByMainApp() -> Bool {", in: handler, closing: "\n  }\n")
-        #expect(wasStopped.contains("defaults.double(forKey: stopRequestedAtKey) >= (attemptStartedAt > 0 ? attemptStartedAt : broadcastStartedAt)"))
-
-        let finished = sys10Body("override func broadcastFinished() {", in: handler, closing: "\n  }\n")
-        #expect(finished.contains("attemptStartedAt = 0"))
-
-        let samples = sys10Body("override func processSampleBuffer(", in: handler, closing: "\n  }\n")
-        #expect(samples.contains("if wasStopRequestedByMainApp() {\n      finishBroadcast(stopReasonRequestedByMainApp())\n      return\n    }"))
     }
 
     @Test func startingThenStoppedBeforeAConnectIsASilentCancel() {
@@ -333,36 +273,6 @@ struct SYS10ScreenShareTests {
         #expect(ScreenSharePipPolicy.consentHoldCapMs == 120_000)
     }
 
-    @Test func theAndroidBridgesSuppressOnEveryApiLevelAndHoldUntilTheResult() throws {
-        let capture = try sys10Source("Sources/Conclave/Skip/ScreenCaptureManager.kt")
-
-        let suppress = "PipManager.suppressForExternalHandoff(ExternalHandoffKind.mediaProjectionConsent)\n            launcher.launch(pm.createScreenCaptureIntent())"
-        #expect(capture.contains(suppress))
-        #expect(!sys10Line(containing: "suppressForExternalHandoff", in: capture).contains("SDK_INT"))
-        let flat = capture.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        #expect(flat.contains("awaitingConsent = false } PipManager.restoreAutoEnterAfterExternalActivity() if (result.resultCode == Activity.RESULT_OK && result.data != null) {"))
-        #expect(capture.contains("fun isAwaitingConsent(): Boolean"))
-        #expect(capture.contains("fun lastStartFailure(): ScreenShareFailure"))
-        #expect(capture.contains("ScreenShareCapabilityPolicy.current(platform = ScreenSharePlatform.android, apiLevel = Build.VERSION.SDK_INT)"))
-        #expect(capture.contains("policy.getScreenCaptureDisabled(null)"))
-        #expect(capture.contains("AudioPlaybackCaptureConfiguration.Builder(projection)"))
-        #expect(capture.contains("for (usage in ScreenShareCapabilityPolicy.playbackCaptureUsages)"))
-        #expect(!capture.contains("USAGE_VOICE_COMMUNICATION)"), "the call voice stream is never a matching usage")
-
-        #expect(capture.components(separatedBy: "consentGranted = true, serviceRefused = true").count - 1 == 2)
-        let pip = try sys10Source("Sources/Conclave/Skip/PipManager.kt")
-        #expect(pip.contains("if (ScreenSharePipPolicy.holdsSuppressionUntilResult(kind)) {\n            holdSuppressionUntilResult()\n        }"))
-        #expect(pip.contains("isSuppressed = suppressNextAutoEnter || consentHold,"))
-        #expect(pip.contains("if (consentHold) return true"))
-        #expect(pip.contains("mainHandler.postDelayed(cap, ScreenSharePipPolicy.consentHoldCapMs.toLong())"))
-        #expect(pip.contains("if (consentHold && !ScreenCaptureManager.isAwaitingConsent()) {"))
-
-        #expect(pip.contains("if (!ExternalHandoffPolicy.suppressesAutoEnter(kind)) return"))
-        #expect(pip.contains("PipController.recordSuppression(reason)"))
-        #expect(pip.contains("val wasInPip = PipController.inPipMode"))
-        #expect(pip.contains("configureForActiveCall(active = false, muted = PipController.muted)"))
-    }
-
     @Test func theFallbackNotificationUsesSentenceCaseResourcesByName() throws {
         #expect(ScreenShareNotificationPolicy.channelId == "conclave_screen_capture_channel")
         #expect(ScreenShareNotificationPolicy.channelNameResource == "sys_channel_share")
@@ -372,25 +282,6 @@ struct SYS10ScreenShareTests {
         #expect(ScreenShareNotificationPolicy.stopActionDrawable == "conclave_cancel_presentation_fill1")
         #expect(ScreenShareNotificationPolicy.smallIconDrawable == "conclave_ic_stat")
         #expect(ScreenShareNotificationPolicy.accentColor == "sys_notification_accent")
-        let service = try sys10Source("Sources/Conclave/Skip/ScreenCaptureService.kt")
-        for pattern in [
-            "res.string(ScreenShareNotificationPolicy.channelNameResource)",
-            "res.string(ScreenShareNotificationPolicy.channelDescriptionResource)",
-            "res.string(ScreenShareNotificationPolicy.titleResource)",
-            "res.string(ScreenShareNotificationPolicy.stopActionResource)",
-            "res.drawable(ScreenShareNotificationPolicy.stopActionDrawable)",
-            "res.drawable(ScreenShareNotificationPolicy.smallIconDrawable)",
-            ".setCategory(NotificationCompat.CATEGORY_SERVICE)",
-            ".setVisibility(NotificationCompat.VISIBILITY_PUBLIC)",
-            "ScreenCaptureManager.onServiceForegroundFailed()",
-            "ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION",
-        ] {
-            #expect(service.contains(pattern), "\(pattern)")
-        }
-
-        for legacy in ["\"Screen Sharing\"", "\"Stop Sharing\"", "\"Sharing your screen\"", "\"Conclave\"", "Shows when you're sharing"] {
-            #expect(!service.contains(legacy), "\(legacy)")
-        }
 
         for drawable in [ScreenShareNotificationPolicy.stopActionDrawable, ScreenShareNotificationPolicy.smallIconDrawable] {
             #expect(FileManager.default.fileExists(atPath: sys10PackagePath("Android/app/src/main/res/drawable/\(drawable).xml")), "\(drawable)")
@@ -401,110 +292,12 @@ struct SYS10ScreenShareTests {
     }
 
     @Test func theIOSAdapterRunsTheLifecycleBoundWindow() throws {
-        let manager = try sys10Source("Sources/Conclave/Core/WebRTC/ScreenCaptureManager.swift")
-
-        for removed in ["ScreenCaptureStartPolicy", "12_000_000_000", "startTimeoutTask", "scheduleStartTimeout"] {
-            #expect(!manager.contains(removed), "\(removed)")
-        }
-        for pattern in [
-            "switch ScreenShareStartPolicy.decision(startWindow, nowMs: now) {",
-            "ScreenShareStartPolicy.busRecordIsCurrent(updatedAtSeconds: updatedAt,",
-            "applyStartEvent(ScreenShareStartEvent.extensionStarting, nowMs: nowMs)",
-            "applyStartEvent(ScreenShareStartEvent.connected, nowMs: Self.nowMs())",
-            "UIApplication.shared.applicationState == .active",
-            "failPendingStart(generation: generation, failure: ScreenShareFailure.extensionTimeout,\n                             stopReason: ScreenShareBroadcastStopReason.startTimeout)",
-
-            "guard let button = Self.firstButton(in: picker) else {",
-            "failPendingStart(generation: generation, failure: ScreenShareFailure.notConfigured, stopReason: nil)",
-            "guard RPScreenRecorder.shared().isAvailable else {",
-            "picker.showsMicrophoneButton = false",
-            "requestBroadcastStop(reason: ScreenShareBroadcastStopReason.person)",
-            "onCapturePhaseChanged?(phase)",
-        ] {
-            #expect(manager.contains(pattern), "\(pattern)")
-        }
-
-        #expect(manager.contains("static func lastStartFailure() -> ScreenShareFailure { fatalError() }"))
-        #expect(manager.contains("static func canShareDeviceAudio() -> Bool { fatalError() }"))
         #expect(ScreenShareLifecycleBusKeys.stopReason == "conclave.screenShare.lifecycle.stopReason")
         #expect(ScreenShareBroadcastStopReason.startTimeout.rawValue == "startTimeout")
         #expect(ScreenShareBroadcastStopReason.person.rawValue == "person")
     }
 
-    @Test func theExtensionFinishesWithFriendlyLocalizedSentences() throws {
-        let handler = try sys10Source("Darwin/ScreenShareExtension/SampleHandler.swift")
-        #expect(!handler.contains("user stopped the screen share"), "the lowercase stop message is gone (CE P13)")
-        #expect(!handler.contains("Unable to start screen sharing"))
-        for key in [
-            "NSLocalizedString(\n        \"Screen sharing stopped.\"",
-            "NSLocalizedString(\n        \"Screen sharing stopped because Conclave lost the connection.\"",
-            "NSLocalizedString(\n        \"Couldn’t start screen sharing. Try again.\"",
-        ] {
-            #expect(handler.contains(key), "\(key)")
-        }
-
-        #expect(handler.contains("private let stopReasonKey = \"\(ScreenShareLifecycleBusKeys.stopReason)\""))
-        #expect(handler.contains("raw == \"\(ScreenShareBroadcastStopReason.startTimeout.rawValue)\" ? .startTimeout : .stoppedByApp"))
-
-        #expect(handler.contains("guard sampleBufferType == .video else { return }"))
-        #expect(!handler.contains(".audioApp {") && !handler.contains("case .audioApp"))
-
-        #expect(!handler.contains("import Conclave"))
-    }
-
-    @Test func sys10FilesAreFlatDashFreeAndHapticFree() throws {
-        let files = [
-            "Sources/Conclave/Core/Call/ScreenShareStartPolicy.swift",
-            "Sources/Conclave/Core/WebRTC/ScreenCaptureManager.swift",
-            "Sources/Conclave/Skip/ScreenCaptureManager.kt",
-            "Sources/Conclave/Skip/ScreenCaptureService.kt",
-            "Sources/Conclave/Skip/PipManager.kt",
-            "Darwin/ScreenShareExtension/SampleHandler.swift",
-            "Darwin/ScreenShareExtension/ScreenShareSocketConnection.swift",
-        ]
-        for file in files + ["Tests/ConclaveTests/SYS10ScreenShareTests.swift"] {
-            let text = try sys10Source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has a dash")
-        }
-
-        for file in files {
-            let text = try sys10Source(file)
-            for pattern in ["Gradient", "HapticManager", "performHapticFeedback", "conclaveGestureFeedback("] {
-                #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-            }
-        }
-
-        let policy = try sys10Source("Sources/Conclave/Core/Call/ScreenShareStartPolicy.swift")
-        for pattern in ["#if", "import UIKit", "import ReplayKit", "import AVFoundation", "protocol ", "inout "] {
-            #expect(!policy.contains(pattern), "\(pattern)")
-        }
-    }
-
     @Test func requestedHooksAreWired() throws {
-        let vm = try sys10Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        for pattern in [
-            "private(set) var screenShare = ScreenShareSnapshot.idle",
-            "publishScreenShare(ScreenSharePhasePolicy.began(screenShare))",
-            "ScreenCaptureManager.shared.onCapturePhaseChanged = { [weak self] phase in",
-            "let failure = ScreenCaptureManager.failure(for: error)",
-            "let consentFailure = granted ? ScreenShareFailure.none : ScreenCaptureManager.lastStartFailure()",
-            "reportScreenShareFailure(consentFailure)",
-            "stage.postLocal(ScreenShareFailurePolicy.notice(failure))",
-            "private func stopScreenCaptureManager(source: ScreenShareStopSource) async {",
-            "stopSource: ScreenShareStopSource.system))",
-            "settleScreenSharePhase()",
-        ] {
-            #expect(vm.contains(pattern), "R1: \(pattern)")
-        }
-        #expect(!vm.contains("await stopScreenCaptureManager()\n"), "R1 k: every stop names its source")
-        let classifier = try sys10Source("Sources/Conclave/Core/Session/MeetingErrorClassifier.swift")
-        #expect(classifier.contains("if let shareError = error as? ScreenShareStartError {"), "R2")
-        let iosLanes = try sys10Source("Sources/Conclave/Features/Meeting/Stage/NoticeLanes+iOS.swift")
-        #expect(iosLanes.contains("ScreenShareFailurePolicy.iosCopyKey(detail: notice.detail)"), "R3 a")
-        let androidLanes = try sys10Source("Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt")
-        #expect(androidLanes.contains("ScreenShareFailurePolicy.androidResourceName(detail = notice.detail)"), "R3 b")
-        let core = try sys10Source("Tests/ConclaveTests/ConclaveTests.swift")
-        #expect(!core.contains("ScreenCaptureStartPolicy"), "R4")
         #expect(FileManager.default.fileExists(atPath: sys10PackagePath("Darwin/ScreenShareExtension/Localizable.xcstrings")), "R5 a")
         let project = try sys10Source("Darwin/Conclave.xcodeproj/project.pbxproj")
         let plist = try #require(try PropertyListSerialization.propertyList(from: Data(project.utf8), format: nil) as? [String: Any])

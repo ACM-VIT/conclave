@@ -63,36 +63,6 @@ struct WP1H1bHapticDeliveryTests {
         }
     }
 
-    @Test func iosPlayerGatesOnPreferenceAndActiveAppAndUsesTheMapper() throws {
-        let player = try h1bSource("Sources/Conclave/DesignSystem/iOS/ConclaveFeedbackPlayer+iOS.swift")
-        #expect(player.hasPrefix("#if os(iOS) && !SKIP\n"))
-        #expect(player.contains("ConclaveFeedback.isEnabled(in: defaults)"))
-        #expect(player.contains("UIApplication.shared.applicationState == .active"))
-        #expect(player.contains("ConclaveHapticFeedback.iosLegacyHaptic(kind)"))
-        #expect(player.contains("if #available(iOS 17.5, *), let view = attachedView"))
-        #expect(player.contains("UIImpactFeedbackGenerator(style: style, view: view)"))
-        #expect(!player.contains("SensoryFeedback"))
-    }
-
-    @Test func facadeDispatchesOncePerPlatform() throws {
-        let facade = try h1bSource("Sources/Conclave/DesignSystem/ConclaveHapticFeedback.swift")
-        #expect(facade.contains("#if SKIP\n        ConclaveHaptics.performFromActivity(kind)\n        #elseif os(iOS)\n        ConclaveFeedbackPlayer.shared.play(kind)\n        #endif"))
-        #expect(facade.contains("guard accepts(kind, route: .gesture) else { return }"))
-        #expect(facade.contains("guard accepts(kind, route: .legacyOutcome) else { return }"))
-    }
-
-    @Test func androidActivityRouteRespectsSystemSettings() throws {
-        let haptics = try h1bSource("Sources/Conclave/Skip/ui/theme/ConclaveHaptics.kt")
-        #expect(haptics.contains("internal var legacyHapticView: () -> View? = {"))
-        #expect(haptics.contains("isAtLeast(Lifecycle.State.RESUMED)"))
-        #expect(haptics.contains("activity.hasWindowFocus()"))
-        #expect(haptics.contains("fun performFromActivity(kind: FeedbackKind) {"))
-        #expect(haptics.contains("val view = legacyHapticView() ?: return\n        perform(view, kind)"))
-        #expect(haptics.components(separatedBy: "performHapticFeedback(").count - 1 == 1)
-        for pattern in ["FLAG_IGNORE", "Vibrator", "LocalHapticFeedback", "isHapticFeedbackEnabled"] {
-            #expect(!haptics.contains(pattern), "\(pattern)")
-        }
-    }
 }
 
 private func h1bSource(_ packageRelativePath: String) throws -> String {

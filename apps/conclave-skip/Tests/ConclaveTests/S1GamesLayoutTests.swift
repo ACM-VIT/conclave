@@ -143,71 +143,6 @@ struct S1GamesLayoutTests {
         #expect(GameNoticeRevealPolicy.failureScrollTarget(scrollOffset: 30, viewportHeight: 0, noticeTop: 88, noticeHeight: 172, leading: 16) == 30)
     }
 
-    @Test func androidPinsGameNoticesAboveTheScrollAndRestoresTheBoardOffset() throws {
-        let shell = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/games/GameShell.kt"))
-        #expect(shell.contains("GameShellScrollColumn(games, Modifier.weight(1f).fillMaxWidth(), bounds) { GameShellScene(games, storeURL, onShowVideo) }"))
-        #expect(shell.contains("GameNoticeRevealPolicy.hasNotices(isReconnecting = chrome.isReconnecting, failure = failure,"))
-        #expect(shell.contains("GameNoticeRevealPolicy.pinnedMaxHeight(bodyHeight = maxHeight.value.toDouble())"))
-        #expect(shell.contains("GameNoticeRevealPolicy.scrollTarget(scrollOffset = offset.toDouble(),"))
-        #expect(shell.contains("if (target != offset) scope.launch { scroll.scrollTo(target) }"))
-        #expect(shell.contains("if (showsNotices) { Box(Modifier.padding(start = 16.dp, top = noticeLead, end = 16.dp)) { GameShellNotices(games, Modifier.onGloballyPositioned { anchors.failure = it }) } }"))
-        #expect(shell.contains(".verticalScroll(scroll)"))
-        let scrollColumn = try #require(shell.range(of: "internal fun GameShellScrollColumn("))
-        let probe = try #require(shell.range(of: "internal class GameShellBoundsProbe"))
-        let body = String(shell[scrollColumn.upperBound..<probe.lowerBound])
-        #expect(body.components(separatedBy: "GameShellNotices(games").count == 2)
-        #expect(!body.contains("animateScrollTo"))
-        #expect(body.contains("val noticeScroll = rememberScrollState()"))
-        #expect(body.contains(".onGloballyPositioned { anchors.viewport = it }.verticalScroll(noticeScroll).testTag(\"game.notices\")"))
-        #expect(body.contains("LaunchedEffect(failure, failureText) { if (failure == GameFailure.none) return@LaunchedEffect withFrameNanos { }"))
-        #expect(body.contains("GameNoticeRevealPolicy.failureScrollTarget(scrollOffset = offset.toDouble(),"))
-        #expect(body.contains("leading = noticeLeadPx.toDouble()).toInt() if (target != offset) noticeScroll.scrollTo(target)"))
-        #expect(shell.contains("internal fun GameShellNotices(games: GameStagePresenter, failureModifier: Modifier = Modifier)"))
-        #expect(shell.contains("Box(failureModifier) { GameKitNotice(GameKitNoticeKind.failure, failure, conclaveString(\"ds_dismiss\")"))
-        let chess = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/games/boards/ChessBoard.kt"))
-        #expect(chess.contains("GameShellScrollColumn(games, Modifier.weight(1f).fillMaxWidth(), bounds) { stackedScene() }"))
-        let zip = try stageSource("Sources/Conclave/Skip/ui/games/boards/ZipBoard.kt")
-        #expect(zip.contains("testTag(\"game.zip.rejected\")") && zip.contains("conclaveString(\"gm_zip_rejected\")"))
-        #expect(!zip.contains("LiveRegionMode.Assertive"))
-    }
-
-    @Test func boundsReadoutsAreDebugOnlyOnBothPlatforms() throws {
-        let shell = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/games/GameShell.kt"))
-        #expect(shell.contains("remember { if (AndroidRuntimeConfig.isDebuggable()) GameShellBoundsProbe() else null }"))
-        #expect(shell.contains("if (probe == null) this else onGloballyPositioned { coordinates ->"))
-        #expect(shell.contains("Box(modifier.size(1.dp).testTag(\"game.bounds\").semantics { contentDescription = text })"))
-        #expect(shell.contains("GameShellInsetPolicy.readout("))
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Games/Native/GameShell+iOS.swift"))
-        #expect(ios.contains("#if DEBUG content.onGeometryChange(for: CGRect.self) { proxy in proxy.frame(in: .global) } action: { frame in probe.record(part, frame) } #else content #endif"))
-        #expect(ios.contains(".accessibilityIdentifier(\"game.bounds\")") && ios.contains("GameShellInsetPolicy.readout("))
-        #expect(ios.contains("struct GameShellBoundsReadout: View { let probe: GameShellBoundsProbe var body: some View { #if DEBUG Color.clear .frame(width: 1, height: 1) .allowsHitTesting(false) .accessibilityElement() .accessibilityLabel(Text(verbatim: probe.readout)) .accessibilityIdentifier(\"game.bounds\") #else EmptyView() #endif } }"))
-        #expect(ios.components(separatedBy: ".accessibilityIdentifier(\"game.bounds\")").count == 2)
-        #expect(ios.contains(".safeAreaInset(edge: .bottom, spacing: 0) { GameShellBottomBar(games: games)"))
-        for part in [".content))", ".viewport))", ".bar))", ".body))"] {
-            #expect(ios.contains("GameShellBoundsMeasure(probe: bounds, part: " + part), "iOS shell misses \(part)")
-        }
-        let chess = try stageSource("Sources/Conclave/Features/Meeting/Games/Native/Boards/ChessBoard+iOS.swift")
-        #expect(chess.contains("GameShellBoundsReadout(probe: bounds)") && chess.contains(".onAppear { bounds.clearBar() }"))
-    }
-
-    @Test func androidFloatingActivityActionsSitOnTheSharedScrim() throws {
-        let page = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/activities/ActivitiesPage.kt"))
-        #expect(page.components(separatedBy: "ConclaveFloatingActionScrim(").count - 1 == 2)
-        #expect(page.components(separatedBy: "ConclaveFloatingActionScrim(Modifier.matchParentSize())").count - 1 == 2)
-        #expect(page.contains("Box(modifier.fillMaxWidth().testTag(\"activities.setup.bar\")) { ConclaveFloatingActionScrim(Modifier.matchParentSize())"))
-        #expect(page.contains(".testTag(\"activities.browser.bar\")) { ConclaveFloatingActionScrim(Modifier.matchParentSize())"))
-        #expect(page.contains("SetupStartBar(activities, setup, modifier = Modifier.align(Alignment.BottomCenter) .padding(bottom = reservation.calculateBottomPadding()).onSizeChanged { size ->"))
-        #expect(!page.contains("bottomPadding ="), "the veil fades out under the action instead of running through the mini-tile reservation")
-        #expect(page.contains("bottom = reservation.calculateBottomPadding() + primaryClearance + 8.dp,"))
-        #expect(page.contains(".testTag(\"activities.browser.primary\")"))
-        for forbidden in ["Brush", "verticalGradient", "background(", "scheme.surface.copy"] {
-            #expect(!page.contains(forbidden), "ActivitiesPage.kt draws its own veil with \(forbidden)")
-        }
-        let ios = try stageSource("Sources/Conclave/Features/Meeting/Activities/ActivitiesPanel+iOS.swift")
-        #expect(ios.components(separatedBy: ".conclaveFloatingActionBar {").count == 3)
-        #expect(!ios.contains("conclaveFloatingActionBar(shaded: false)"))
-    }
-
     @Test func numberTextKeepsEpochMillisecondsExact() throws {
         #expect(GameProjectionJSON.numberText(1761700000123) == "1761700000123")
         #expect(GameProjectionJSON.numberText(-1761700000123) == "-1761700000123")
@@ -219,8 +154,6 @@ struct S1GamesLayoutTests {
         #expect(GameProjectionJSON.string(dict, "at") == "1761700000123")
         #expect(GameProjectionJSON.string(dict, "half") == "3.5")
         #expect(GameProjectionJSON.string(dict, "round") == "2")
-        let source = try stageSource("Sources/Conclave/Features/Meeting/Activities/GameProjections.swift")
-        #expect(source.contains("return String(Int64(rounded))") && !source.contains("String(Int(rounded))"))
     }
 }
 #endif

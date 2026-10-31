@@ -452,35 +452,6 @@ struct ACT8WheelWatchTests {
         #expect(Set(AppPageFixtureState.allCases.map { $0.rawValue }).isDisjoint(with: Set(AppHostFixtureState.allCases.map { $0.rawValue })))
     }
 
-    @Test func cardControlsAndPagesFollowThePlatformRules() throws {
-        let ios = try act8Source("Sources/Conclave/Features/Meeting/Activities/NativeAppHost+iOS.swift")
-        let pages = try act8Source("Sources/Conclave/Skip/ui/apps/AppPages.kt")
-        let kotlin = try act8Source("Sources/Conclave/Skip/ui/apps/NativeAppHost.kt")
-        let copy = try act8Source("Sources/Conclave/Skip/ui/apps/AppHostCopy.kt")
-        let registry = try act8Source("Sources/Conclave/Skip/ui/apps/ActivityWebViewRegistry.kt")
-        let presenter = try act8Source("Sources/Conclave/Features/Meeting/Activities/AppHostPresenter.swift")
-        #expect(ios.contains(".searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always)"))
-        #expect(ios.contains(".onSubmit(of: .search)") && ios.contains(".onMove(perform:") && ios.contains(".onDelete(perform:"))
-        #expect(ios.contains("AccessibilityNotification.Announcement(ConclaveStrings.format(\"Winner: %@\""))
-        #expect(ios.contains("struct WheelCardBar") && ios.contains(".tint(HostingTheme.coralFill)") && ios.contains("HostingTheme.inCallOnCoral"))
-        #expect(ios.contains("struct AppWatchQueueButton") && ios.contains("struct AppWheelPage") && ios.contains("struct AppWatchPage"))
-        #expect(pages.contains("ConclaveSearchField(") && !pages.contains("SearchBar("), "the C20 field, never the experimental SearchBar")
-        #expect(pages.contains("SwipeToDismissBox(") && pages.contains("CustomAccessibilityAction(") && pages.contains("KeyboardCapitalization.Words"))
-        #expect(pages.contains("internal fun AppWheelPage(") && pages.contains("internal fun AppWatchPage("))
-        #expect(kotlin.contains("view.announceForAccessibility(winnerText)") && kotlin.contains("AppWatchQueueButton(host)"))
-        #expect(registry.contains("AppEmbedFramePolicy.allowsNetworkSubresource(") && registry.contains("AppEmbedFramePolicy.allowsSubframe("))
-        #expect(registry.contains("mediaPlaybackRequiresUserGesture = !AppEmbedFramePolicy.playsMediaWithoutTap(appId = appId)"))
-        #expect(!presenter.contains("#if os(iOS)") && !presenter.contains("import WebKit"))
-        for (name, text) in [("ios", ios), ("pages", pages), ("kotlin", kotlin), ("copy", copy), ("registry", registry), ("presenter", presenter)] {
-            #expect(!text.lowercased().contains("gradient"), "\(name) mentions a gradient")
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(name) has an en or em dash")
-            #expect(!text.contains("Image(systemName: \""), "\(name) names a raw symbol")
-            #expect(!text.contains("Color(0x") && !text.contains("Color(red:"), "\(name) has a color literal")
-            #expect(!text.contains("MeetingViewModel"), "\(name) reaches into the view model")
-        }
-        #expect(!pages.contains("Text(\"") && !kotlin.contains("Text(\""), "Android copy resolves resources by name")
-    }
-
     @Test func theEmbedsStayIsolatedAndFlat() throws {
         let root = act8RepoRoot().appendingPathComponent("packages/apps-sdk/src/native-embed")
         for path in ["wheel/NativeWheelEmbed.tsx", "watch/NativeWatchEmbed.tsx", "watch/youtubeFrame.ts", "wheel/embed.css", "watch/embed.css"] {
@@ -497,21 +468,6 @@ struct ACT8WheelWatchTests {
 
     @Test func requestedHooksAreWired() throws {
         #expect(ActivitiesDestinationPolicy.isRenderable(.wheel) && ActivitiesDestinationPolicy.isRenderable(.watch))
-        let session = try act8Source("Sources/Conclave/Features/Meeting/Activities/ActivitySession.swift")
-        #expect(session.contains("appHost.onOpenPage = { [weak self] appId in"))
-        let viewModel = try act8Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(viewModel.contains("WatchSearchService.search(query: query)") && viewModel.contains("activitySession.appHost.rosterNames ="))
-        let iosRegistry = try act8Source("Sources/Conclave/Features/Meeting/Activities/ActivityWebViewRegistry+iOS.swift")
-        #expect(iosRegistry.contains("AppEmbedFramePolicy.allowsSubframe(") && iosRegistry.contains("AppEmbedFramePolicy.frameSource("))
-        #expect(iosRegistry.contains("allowsInlineMediaPlayback = true") && iosRegistry.contains("AppEmbedFramePolicy.playsMediaWithoutTap("))
-        let iosPanel = try act8Source("Sources/Conclave/Features/Meeting/Activities/ActivitiesPanel+iOS.swift")
-        #expect(iosPanel.contains("AppWheelPage(host: session.appHost)") && iosPanel.contains("AppWatchPage(host: session.appHost)"))
-        let androidPage = try act8Source("Sources/Conclave/Skip/ui/activities/ActivitiesPage.kt")
-        #expect(androidPage.contains("AppWheelPage(session.appHost, reservation)") && androidPage.contains("AppWatchPage(session.appHost, reservation)"))
-        let fixtures = try act8Source("Sources/Conclave/Features/Meeting/Activities/ActivityFixtures.swift")
-        #expect(fixtures.contains("AppHostFixtures.appId(named: raw)"))
-        let stageFixtures = try act8Source("Sources/Conclave/Features/Meeting/Stage/StageFixtures.swift")
-        for state in AppPageFixtureState.allCases { #expect(stageFixtures.contains("\"" + state.rawValue + "\""), "\(state.rawValue)") }
     }
 
     @Test func pageStringsAreInBothCatalogs() throws {

@@ -55,80 +55,6 @@ struct FND3ContentComponentsTests {
         }
     }
 
-    @Test func composerGlassStaysInsideItsBranch() throws {
-        let text = try fnd3Source(Self.composerGlassFile)
-        #expect(text.hasPrefix("#if os(iOS) && !SKIP\n"))
-        let code = fnd3WithoutComments(text)
-        let branches = fnd3BracedBlocks(after: Self.composerBranchCondition, in: code)
-        #expect(branches.count == 1)
-        guard let branch = branches.first else { return }
-        let inside = String(code[branch])
-        var outside = code
-        outside.removeSubrange(branch)
-        for pattern in ["glassEffect", "GlassEffectContainer", "GlassStyle", "glassProminent"] {
-            #expect(!outside.contains(pattern), "\(pattern) outside the iOS 26 branch")
-        }
-        let flat = fnd3Normalized(inside)
-        #expect(inside.components(separatedBy: "GlassEffectContainer(").count - 1 == 1)
-        #expect(flat.contains("GlassEffectContainer(spacing: CGFloat(ConclaveComposerMetrics.clusterSpacing))"))
-        #expect(inside.components(separatedBy: ".glassEffect(").count - 1 == 2)
-        #expect(flat.contains(".glassEffect(.regular.interactive(), in: .circle)"))
-        #expect(flat.contains(".glassEffect(.regular, in: RoundedRectangle(cornerRadius: CGFloat(ConclaveComposerMetrics.glassCornerRadius), style: .continuous))"))
-
-        #expect(inside.components(separatedBy: ".interactive(").count - 1 == 1)
-        let materials = ["ultraThinMaterial", "thinMaterial", "regularMaterial", "thickMaterial", "ultraThickMaterial", "barMaterial"]
-        for pattern in [".clear", "Glass.tint", ".tint(", "glassProminent", "symbolColorRenderingMode(.gradient"] + materials {
-            #expect(!code.contains(pattern), "the composer uses \(pattern)")
-        }
-        #expect(!code.contains("#available(iOS 26.0, *) &&"))
-
-        #expect(inside.components(separatedBy: "ConclaveComposerContrastStroke(").count - 1 == 2)
-        #expect(fnd3Normalized(code).contains("if isIncreased { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 1) }"))
-        let opaque = fnd3Normalized(outside)
-        #expect(opaque.contains(".background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: CGFloat(ConclaveComposerMetrics.opaqueCornerRadius), style: .continuous))"))
-        #expect(opaque.contains(".strokeBorder(Color(uiColor: .separator), lineWidth: 1)"))
-
-        #expect(fnd3Normalized(code).contains("HStack(alignment: .bottom, spacing: 0) { field .padding(.vertical, CGFloat(ConclaveComposerMetrics.fieldVerticalPadding)) .frame(maxWidth: .infinity, minHeight: CGFloat(ConclaveComposerMetrics.minimumFieldHeight), alignment: .leading) .padding(.leading, CGFloat(ConclaveComposerMetrics.fieldHorizontalPadding)) .padding(.trailing, CGFloat(ConclaveComposerMetrics.fieldTrailingGap)) send } .frame(minHeight: CGFloat(ConclaveComposerMetrics.minimumFieldHeight))"))
-        #expect(code.components(separatedBy: "fieldContainer").count - 1 >= 3)
-
-        #expect(code.contains("@Environment(\\.systemPrefersReducedResourceUsage) private var prefersReducedResourceUsage"))
-        #expect(code.contains("if #available(iOS 27.0, *) {"))
-        #expect(code.contains("@available(iOS 27.0, *)"))
-        #expect(code.contains("@Environment(\\.accessibilityReduceTransparency) private var reduceTransparency"))
-        #expect(code.contains("@Environment(\\.conclaveForceOpaqueControls) private var forceOpaqueSetting"))
-
-        for file in ["Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift",
-                     "Sources/Conclave/DesignSystem/iOS/Components/ConclaveChatBubble+iOS.swift",
-                     "Sources/Conclave/DesignSystem/iOS/Components/ConclaveReactionChip+iOS.swift",
-                     "Sources/Conclave/DesignSystem/iOS/Components/ConclaveTip+iOS.swift"] {
-            let other = try fnd3Source(file)
-            for pattern in ["glassEffect", "GlassEffectContainer", "glassProminent"] + materials {
-                #expect(!other.contains(pattern), "\(file) uses \(pattern)")
-            }
-        }
-    }
-
-    @Test func composerBarsAndPartsKeepThePlatformInsets() throws {
-        let ios = fnd3Normalized(try fnd3Source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift"))
-        #expect(ios.contains("if #available(iOS 26.0, *) { content.safeAreaBar(edge: .bottom) { bar } } else { content.safeAreaInset(edge: .bottom, spacing: 0) { VStack(spacing: 0) { Divider() bar } .background(Color(uiColor: .systemBackground)) } }"))
-        #expect(ios.contains("if #available(iOS 26.0, *) { content.safeAreaBar(edge: .top) { bar } } else { content.safeAreaInset(edge: .top, spacing: 0) {"))
-        #expect(ios.contains("struct ConclaveComposerStack<Accessories: View, FieldRow: View, Footer: View>: View {"))
-        #expect(ios.contains("VStack(alignment: .leading, spacing: CGFloat(ConclaveComposerMetrics.stackSpacing)) { accessories fieldRow footer"))
-        #expect(ios.contains(".fill(HostingTheme.coralText) .frame(width: CGFloat(ConclaveComposerMetrics.replyBarWidth))"))
-
-        #expect(ios.contains(".accessibilityLabel(ConclaveStrings.text(\"Send\"))"))
-        #expect(ios.contains(".accessibilityLabel(title) .accessibilityValue(isEnabled ? \"\" : disabledReason)"))
-        #expect(!ios.contains(".tint("), "segments keep the system thumb, Send keeps its glyph color")
-        let android = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/components/ConclaveFields.kt"))
-        #expect(android.contains("shape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp),"))
-        #expect(android.contains("focusedContainerColor = scheme.surfaceContainerHighest,"))
-        #expect(android.contains("focusedIndicatorColor = Color.Transparent,"))
-        #expect(android.contains("scheme.onSurface.copy(alpha = ConclaveDisabledOpacity.android.toFloat())"))
-        #expect(android.contains("Icon(ConclaveIcons.SendFill1, contentDescription = sendLabel, tint = tint)"))
-        #expect(android.contains("liveRegion = LiveRegionMode.Polite"))
-        #expect(!android.contains("primaryContainer"), "no coral in fields, search or segments")
-    }
-
     @Test func searchFiltersTheSnapshotInPlace() throws {
         let items = [ConclaveSearchItem(id: "a", text: "Avery Lee"), ConclaveSearchItem(id: "b", text: "Sam Ortiz"),
                      ConclaveSearchItem(id: "c", text: "Lee Chen")]
@@ -141,17 +67,6 @@ struct FND3ContentComponentsTests {
         #expect(ConclaveSearchPolicy.matches("Avery Lee", query: "ver"))
         #expect(!ConclaveSearchPolicy.isSearching(" \n") && ConclaveSearchPolicy.isSearching(" a"))
         #expect(ConclaveSearchPolicy.announcementDelayMillis == 1000)
-        let ios = fnd3Normalized(try fnd3Source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift"))
-        #expect(ios.contains("searchable(text: text, placement: .navigationBarDrawer(displayMode: .automatic), prompt: Text(prompt ?? ConclaveStrings.text(\"Search\")))"))
-        #expect(ios.contains("content.task(id: ConclaveSearchAnnouncementKey(query: query, resultCount: resultCount)) {"))
-        #expect(ios.contains("text.accessibilitySpeechAnnouncementPriority = .low"))
-        #expect(ios.contains("ContentUnavailableView.search(text: query)"))
-        let android = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/components/ConclaveFields.kt"))
-        #expect(android.contains("leadingIcon = { Icon(ConclaveIcons.SearchFill0, contentDescription = null) },"))
-        #expect(android.contains("Icon(ConclaveIcons.CloseFill0, contentDescription = conclaveString(\"ds_clear_search\"))"))
-        #expect(android.contains("shape = CircleShape, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),"))
-        #expect(android.contains("conclavePlural(\"ds_result_count\", resultCount, resultCount)"))
-        for word in ["SearchBar(", "DockedSearchBar", "ExpandedFullScreenSearchBar"] { #expect(!android.contains(word), "\(word)") }
     }
 
     @Test func segmentedControlFallsBackWithoutClipping() throws {
@@ -162,20 +77,6 @@ struct FND3ContentComponentsTests {
         #expect(ConclaveSegmentedPolicy.androidUsesFallback(fontScale: 1.5, segmentCount: 3))
         #expect(ConclaveSegmentedPolicy.androidUsesFallback(fontScale: 1.0, segmentCount: 5))
         #expect(ConclaveSegmentedFallback.allCases.map { $0.rawValue } == ["rows", "menu"])
-        let ios = fnd3Normalized(try fnd3Source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift"))
-        #expect(ios.contains(".pickerStyle(.segmented) .labelsHidden()"))
-        #expect(ios.contains("ViewThatFits(in: .horizontal) { segmented menu }"))
-        #expect(ios.contains(".pickerStyle(.menu)"))
-        #expect(ios.contains("ConclaveSelectableRow(title: option.title, isSelected: option.id == selection,"))
-        #expect(ios.contains("ConclaveSegmentedPicker(title, options: options, selection: $selection, fallback: .menu, identifier: identifier)"))
-        let android = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/components/ConclaveFields.kt"))
-        #expect(android.contains("SingleChoiceSegmentedButtonRow(modifier.fillMaxWidth().testTag(identifier)) {"))
-        #expect(android.contains("shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),"))
-        #expect(android.contains("onGesture(FeedbackKind.selectionChanged, haptics.gesture(FeedbackKind.selectionChanged))"))
-        #expect(android.contains("val fontScale = LocalDensity.current.fontScale"))
-        #expect(android.contains("ConclaveSelectableRows(options.map { ConclaveSelectableOption(it.id, it.title) }"))
-        #expect(android.contains("PrimaryTabRow(selectedTabIndex = index"))
-        #expect(!android.contains("FilterChip"))
     }
 
     @Test func bubbleGeometryGroupsOnTheSenderSide() throws {
@@ -205,18 +106,6 @@ struct FND3ContentComponentsTests {
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosAppOnCoral, background: DesignTokens.iosAppCoralFill) - 6.374) < 0.001)
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosAppOnCoralHighContrast, background: DesignTokens.iosAppCoralFill) - 6.764) < 0.001)
         #expect(DesignTokens.androidLightPrimaryContainer == DesignTokens.coral && DesignTokens.androidDarkPrimaryContainer == DesignTokens.coral)
-        let ios = fnd3Normalized(try fnd3Source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveChatBubble+iOS.swift"))
-        #expect(ios.contains("let shape = RoundedRectangle(cornerRadius: CGFloat(ConclaveBubbleGeometry.iosCornerRadius), style: .continuous)"))
-        #expect(ios.contains("tone.usesCoralFill ? HostingTheme.coralFill : Color(uiColor: .secondarySystemBackground)"))
-        #expect(ios.contains("tone.usesCoralFill ? HostingTheme.onCoral : Color.primary"))
-        #expect(ios.contains("if tone.hasBorder { shape.strokeBorder(Color(uiColor: .separator), lineWidth: 1) }"))
-        #expect(ios.contains("tone.usesCoralFill ? HostingTheme.onCoral : HostingTheme.coralText"), "never coralText on coral")
-        let android = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/components/ConclaveChatBubble.kt"))
-        #expect(android.contains("ConclaveBubbleTone.own -> scheme.primaryContainer"))
-        #expect(android.contains("ConclaveBubbleTone.own -> scheme.onPrimaryContainer"))
-        #expect(android.contains("border = if (tone.hasBorder) BorderStroke(1.dp, scheme.outlineVariant) else null,"))
-        #expect(android.contains("tonalElevation = 0.dp, shadowElevation = 0.dp,"))
-        #expect(android.contains("ConclaveBubbleGeometry.androidCorners(isOwn = isOwn, isFollowUp = isFollowUp, hasFollower = hasFollower)"))
     }
 
     @Test func reactionChipPlaysOnlyWhenItAdds() throws {
@@ -230,23 +119,6 @@ struct FND3ContentComponentsTests {
         #expect(ConclaveReactionChipPolicy.iosVisualHeight == 28 && ConclaveReactionChipPolicy.iosTarget == 44)
         #expect(ConclaveReactionChipPolicy.androidVisualHeight == 32 && ConclaveReactionChipPolicy.androidTarget == 48)
         #expect(ConclaveReactionChipPolicy.spacing == 4)
-        let ios = fnd3Normalized(try fnd3Source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveReactionChip+iOS.swift"))
-        #expect(ios.contains("if ConclaveReactionChipPolicy.tapAdds(chip) {"))
-        #expect(ios.contains("content.conclaveGestureFeedback(.reactionSent, trigger: trigger)"))
-        #expect(ios.contains("Capsule().strokeBorder(HostingTheme.coralText, lineWidth: 1)"))
-        #expect(ios.contains(".background(Color(uiColor: .tertiarySystemFill), in: Capsule())"))
-        #expect(ios.contains(".accessibilityAddTraits(chip.isMine ? [.isSelected] : [])"))
-        #expect(ios.contains(".font(.footnote.monospacedDigit())"))
-        #expect(!ios.contains("coralFill"), "chips are never coral-filled")
-        let android = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/components/ConclaveReactionChip.kt"))
-        #expect(android.contains("role = Role.Checkbox,"))
-        #expect(android.contains("onLongClickLabel = longPressLabel,"))
-        #expect(android.contains("hapticFeedbackEnabled = false,"))
-        #expect(android.contains("if (chip.canToggle) toggleableState = ToggleableState(chip.isMine)"))
-        #expect(android.contains("color = if (chip.isMine) scheme.secondaryContainer else scheme.surfaceContainerHighest,"))
-        #expect(android.contains("modifier.minimumInteractiveComponentSize()"))
-        #expect(android.contains("FlowRow(modifier.testTag(identifier), horizontalArrangement = Arrangement.spacedBy(ConclaveReactionChipPolicy.spacing.dp)) {"))
-        for word in ["FilterChip(", "primaryContainer", "Experimental"] { #expect(!android.contains(word), "\(word)") }
     }
 
     @Test func tipShowsOncePerIdInsidePanelsOnly() throws {
@@ -259,25 +131,6 @@ struct FND3ContentComponentsTests {
         for state in [OneTimeTipContentState.loading, .empty, .error] {
             #expect(!OneTimeTipPolicy.isEligible(isDismissed: false, isPanelPresented: true, isOtherTipShown: false, contentState: state))
         }
-        let ios = fnd3Normalized(try fnd3Source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveTip+iOS.swift"))
-        #expect(ios.contains("import TipKit"))
-        #expect(ios.contains("struct ConclaveOneTimeTip: Tip {"))
-        #expect(ios.contains("var id: String { OneTimeTipPolicy.storeKey(tipID.rawValue) }"))
-        #expect(ios.contains("TipView<ConclaveOneTimeTip>(tip)"))
-        let android = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/components/ConclaveTipCard.kt"))
-        #expect(android.contains("const val PREFERENCES = \"conclave.tips\""))
-        #expect(android.contains(".getBoolean(OneTimeTipPolicy.storeKey(id), false)"))
-        #expect(android.contains(".putBoolean(OneTimeTipPolicy.storeKey(id), true).apply()"))
-        #expect(android.contains("color = scheme.surfaceContainerHigh, border = BorderStroke(1.dp, scheme.outlineVariant),"))
-        #expect(android.contains("Icon(ConclaveIcons.CloseFill0, contentDescription = conclaveString(\"ds_dismiss_tip\"))"))
-        #expect(android.contains("if (!visible) return"))
-        for word in ["Popup(", "TooltipBox", "LaunchedEffect", "PlainTooltip", "RichTooltip"] { #expect(!android.contains(word), "\(word)") }
-
-        for file in try fnd3Files(under: "Sources/Conclave", extensions: ["swift"]) {
-            #expect(!(try fnd3Source(file)).contains(".popoverTip"), "\(file)")
-        }
-        let app = try fnd3Source("Sources/Conclave/ConclaveApp.swift")
-        #expect(app.contains("try? Tips.configure([.datastoreLocation(.applicationDefault)])"), "B3-T3 request R2 applied")
     }
 
     @Test func textEntryDialogCapsAndConfirmsOnlyRealText() throws {
@@ -292,40 +145,6 @@ struct FND3ContentComponentsTests {
         #expect(!ConclaveTextEntryPolicy.showsCounter(count: 29, model: name))
         #expect(ConclaveTextEntryPolicy.showsCounter(count: 30, model: name))
         #expect(ConclaveTextEntryPolicy.multilineMinLines == 4 && ConclaveTextEntryPolicy.multilineMaxLines == 8)
-        let ios = fnd3Normalized(try fnd3Source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveDialogs+iOS.swift"))
-        #expect(ios.contains(".alert(model.title, isPresented: $isPresented) { TextField(model.fieldLabel, text: $text)"))
-        #expect(ios.contains(".disabled(!ConclaveTextEntryPolicy.canConfirm(text, isPending: false))"))
-        #expect(ios.contains("let capped = ConclaveTextEntryPolicy.capped(value, limit: model.limit)"))
-
-        #expect(ios.components(separatedBy: "role: model.confirmRole == .destructive ? .destructive : nil").count - 1 == 2)
-        let android = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/components/ConclaveDialogs.kt"))
-        #expect(android.contains("onDismissRequest = { if (!pending) onDismiss() },"))
-        #expect(android.contains("onValueChange = { onValueChange(ConclaveTextEntryPolicy.capped(it, limit = model.limit)) },"))
-        #expect(android.contains("minLines = if (multiline) ConclaveTextEntryPolicy.multilineMinLines else 1,"))
-        #expect(android.contains("CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)"))
-        #expect(!android.contains("primaryContainer"))
-    }
-
-    @Test func exporterReadsActionsAndPopupRoots() throws {
-        let exporter = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/hosting/NativeSemanticsExport.kt"))
-        #expect(exporter.contains("val customActions: List<String> = emptyList(),"))
-        #expect(exporter.contains("val onLongClickLabel: String? = null,"))
-        #expect(exporter.contains("\"customActions\" to strings(n.customActions), \"onLongClickLabel\" to string(n.onLongClickLabel),"))
-        #expect(exporter.contains("customActions = config.getOrNull(SemanticsActions.CustomActions)?.map { it.label } ?: emptyList(),"))
-        #expect(exporter.contains("onLongClickLabel = config.getOrNull(SemanticsActions.OnLongClick)?.label,"))
-        #expect(exporter.contains("internal object NativeSemanticsPopupRoots {"))
-        #expect(exporter.contains("val registered = isDebuggableApp(context) if (registered) NativeSemanticsPopupRoots.register(view, name)"))
-        #expect(exporter.contains("listOf(\"merged\" to merged, \"unmerged\" to unmerged) + popups"))
-
-        let roots: [(String, Int)] = [("Sources/Conclave/Skip/ui/components/ConclaveDialogs.kt", 2),
-                                      ("Sources/Conclave/Skip/ui/components/ConclaveMenus.kt", 1),
-                                      ("Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt", 1),
-                                      ("Sources/Conclave/Skip/ui/components/ConclaveFields.kt", 1)]
-        for (file, count) in roots {
-            let text = try fnd3Source(file)
-            #expect(text.components(separatedBy: "NativeSemanticsPopupRoot(").count - 1 == count, "\(file)")
-            #expect(text.components(separatedBy: "testTagsAsResourceId = true").count - 1 == count, "\(file)")
-        }
     }
 
     @Test func boardTokensComeFromTheZincRamp() throws {
@@ -341,10 +160,6 @@ struct FND3ContentComponentsTests {
         let generator = try fnd3Source("../../packages/ui-tokens/scripts/gen-native-tokens.mjs")
         #expect(generator.contains("const iosGameKeys = [\"boardLight\", \"boardDark\"];"))
         #expect(generator.contains("\"gameBoardLight\", \"gameBoardDark\"];"))
-
-        let ext = fnd3Normalized(try fnd3Source("Sources/Conclave/Skip/ui/theme/ConclaveExtendedColors.kt"))
-        #expect(ext.contains("gameBoardLight = Color(DesignTokens.androidExtendedGameBoardLight),"), "B3-T3 request R3 applied")
-        #expect(ext.contains("gameBoardDark = Color(DesignTokens.androidExtendedGameBoardDark),"), "B3-T3 request R3 applied")
     }
 
     @Test func contentSpecimenIDsAndPairsAreStable() {
@@ -378,22 +193,9 @@ struct FND3ContentComponentsTests {
         #expect(Array(ComponentGalleryCatalog.contrastPairs.suffix(14).map { $0.id }) == expected.map { $0.0 })
     }
 
-    @Test func sharedContentModelsStayInsideSkipLite() throws {
-        let text = try fnd3Source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveContentModels.swift")
-        #expect(!text.contains("#if"))
-        #expect(fnd3Matches(#"case [a-z][A-Za-z]*\("#, in: text).isEmpty, "no associated values")
-        #expect(fnd3Matches(#"-> \("#, in: text).isEmpty, "no tuples")
-        #expect(fnd3Matches(#"\.map\([A-Za-z.]+\)"#, in: text).isEmpty && !text.contains("compactMap"))
-        for word in ["SwiftUI", "UIKit", "MeetingViewModel", "isLetter", "enumerated()"] { #expect(!text.contains(word), "\(word)") }
-    }
-
     @Test func fnd3SourcesAreDashFreeAndFlat() throws {
         for file in Self.fnd3CheckedFiles {
             let text = try fnd3Source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) contains an en or em dash")
-            for word in ["Gradient", "gradient", "dynamicLightColorScheme", "dynamicDarkColorScheme", ".shadow(", "Icons.Default"] {
-                #expect(!text.contains(word), "\(file) uses \(word)")
-            }
             #expect(fnd3Matches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
         }
     }

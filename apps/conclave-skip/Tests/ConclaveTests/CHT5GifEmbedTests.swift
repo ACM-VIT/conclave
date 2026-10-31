@@ -253,38 +253,6 @@ struct CHT5GifEmbedTests {
         #expect(unfurlItems.count == 1 && unfurlItems.first?.value == "https://youtube.com/watch?v=dQw4w9WgXcQ&t=4#c")
     }
 
-    @Test func chatViewsNeverFetchAndTheNativePathDropsTheLegacySheetHost() throws {
-        var files = try chatFiles(under: "Sources/Conclave/Features/Meeting/Chat", extensions: ["swift"]).filter { $0.hasSuffix("+iOS.swift") }
-        files += try chatFiles(under: "Sources/Conclave/Skip/ui/chat", extensions: ["kt"])
-        #expect(files.count >= 16)
-        for file in files {
-            let source = try chatSource(file)
-            #expect(!source.contains("LinkEmbedService"), "\(file) reaches the unfurl client")
-            #expect(!source.contains("KlipyService"), "\(file) reaches Klipy directly")
-            #expect(!source.contains("FlexibleGifPickerSheetHost"), "\(file) uses the legacy GIF sheet host")
-            #expect(!source.contains("embeds.request("), "\(file) starts a fetch")
-        }
-        let page = try chatSource("Sources/Conclave/Features/Meeting/Chat/GifPicker+iOS.swift")
-        #expect(page.contains("placement: .navigationBarDrawer(displayMode: .always)") && page.contains("\"Powered by Klipy\""))
-        #expect(page.contains("ConclaveTipView(tip: ConclaveOneTimeTip(tipID: OneTimeTipID.gifPicker"))
-        #expect(page.contains("state.acceptingFirst(page, generation: generation)") && page.contains("chat.sendGif(gif)"))
-        #expect(page.contains("box.inFlightGeneration"), "load-more uses a reference box, never observed state, from appearance")
-        let sheet = try chatSource("Sources/Conclave/Skip/ui/chat/GifPicker.kt")
-        #expect(sheet.contains("rememberModalBottomSheetState(skipPartiallyExpanded = true)") && sheet.contains("GridCells.Adaptive(104.dp)"))
-        #expect(sheet.contains("NativeSemanticsPopupRoot(\"chat.gifs\")") && sheet.contains("navigation.calculateBottomPadding()"))
-        #expect(sheet.contains("ConclaveSegmentedRow(") && sheet.contains("chat_gif_attribution"))
-        let panel = try chatSource("Sources/Conclave/Skip/ui/chat/ChatPanel.kt")
-        #expect(panel.contains("GifPickerSheet(presenter") && panel.contains("val gifsInPane = sidePane && actions.showsGifs"))
-        let links = try chatSource("Sources/Conclave/Skip/ui/chat/ChatSnapshots.kt")
-        #expect(links.contains("CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(activity, Uri.parse(url))"))
-        #expect(links.contains("PipManager.suppressNextAutoEnter(\"chat_link\")"))
-        let skip = try chatSource("Sources/Conclave/Skip/skip.yml")
-        #expect(skip.contains("'implementation(\"androidx.browser:browser:1.10.0\")'"))
-        let card = try chatSource("Sources/Conclave/Features/Meeting/Chat/LinkEmbedCard+iOS.swift")
-        #expect(card.contains("chat.requestLinkPreview(url: url)") && card.contains("ChatComposerLinkPreview.debounceMillis * 1_000_000"))
-        #expect(card.contains("static let cardWidth: CGFloat = 240"))
-    }
-
     @Test func theFixtureServesCannedPagesAndCards() async {
         let first = ChatFixtureScript.gifPage(kind: .clip, query: "", page: 1)
         #expect(first.items.count == 16 && first.hasNext && first.items[0].kind == "clip" && first.items[0].videoUrl != nil)
@@ -308,29 +276,6 @@ struct CHT5GifEmbedTests {
         let page = await shell.chat.searchGifs(kind: .gif, query: "", page: 1)
         #expect(page.items.count == 16)
         #expect(driver.chat === shell.chat, "the local keeps the driver alive through the search")
-    }
-
-    @Test func theCoreCarriesSuppressEmbedsAndWiresTheChatClosures() throws {
-        let models = try chatSource("Sources/Conclave/Core/Models/Models.swift")
-        #expect(models.contains("let suppressEmbeds: Bool\n") && models.contains("self.suppressEmbeds = suppressEmbeds"))
-        let messages = try chatSource("Sources/Conclave/Core/Models/SocketMessages.swift")
-        #expect(messages.contains("let suppressEmbeds: Bool?") && messages.contains("var suppressEmbeds: Bool? = nil"))
-        #expect(messages.contains("suppressEmbeds: suppressEmbeds ?? false"))
-        let socket = try chatSource("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        #expect(socket.contains("suppressEmbeds: suppressEmbeds ? true : nil"))
-        let kotlin = try chatSource("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-        #expect(kotlin.contains("suppressEmbeds = boolField(obj, \"suppressEmbeds\")"))
-        #expect(kotlin.contains("suppressEmbeds = suppressEmbeds ?: false") && kotlin.contains("suppressEmbeds = if (suppressEmbeds) true else null"))
-        let vm = try chatSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-
-        #expect(vm.components(separatedBy: "suppressEmbeds: message.suppressEmbeds").count - 1 >= 5)
-        #expect(vm.contains("suppressEmbeds: incoming.suppressEmbeds || existing.suppressEmbeds"))
-        #expect(vm.contains("await KlipyService.searchPage(kind: kind, query: query, page: page)"))
-        #expect(vm.contains("await LinkEmbedService.fetchPreview(url: url)"))
-        #expect(vm.contains("chat.takeSentGif(id: request.text)") && vm.contains("ChatPhotoPreparer.prepare(fileURL: fileURL"))
-        #expect(vm.contains("attachment: state.chatAttachment") && vm.contains("photoFileURL: request.fileURL, suppressEmbeds: request.flag"))
-        let state = try chatSource("Sources/Conclave/Core/State/MeetingState.swift")
-        #expect(state.contains("var chatAttachment: ChatAttachmentState = ChatAttachmentState.none"))
     }
 }
 #endif

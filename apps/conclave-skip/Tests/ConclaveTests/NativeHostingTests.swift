@@ -130,25 +130,6 @@ struct NativeHostingTests {
             _ = presenter.openTimer.firstFrame(presentationID: 9, at: 2)
         }
         #expect(presenter.renderers.serial(for: "taylor") == 3)
-
-        let ios = hostingFlat(try hostingSource("Sources/Conclave/App/PlatformRoot+iOS.swift"))
-        #expect(ios.contains("ForEach(presenter.rowsState.rows) { row in HostingStageTile(row: row, ledger: presenter.renderers) }"))
-        let iosTile = try #require(hostingSection(ios, from: "private struct HostingStageTile: View {", to: "private struct HostingPanelStyleReadout: View {"))
-        #expect(iosTile.contains("let row: NativeHostingRow let ledger: RendererIdentityLedger var body: some View { Text(row.name)"))
-        #expect(iosTile.contains("if row.isSelected { Image(systemName: ConclaveSymbols.checkmark)"))
-        #expect(iosTile.contains(".accessibilityLabel(row.name) .accessibilityValue(row.isSelected ? \"Selected\" : \"Not selected\")"))
-        #expect(iosTile.contains(".accessibilityIdentifier(\"stage.tile.\\(row.id)\")"))
-        #expect(!iosTile.contains("@State") && !iosTile.contains("@Environment") && !iosTile.contains("presenter"))
-        let android = hostingFlat(try hostingSource("Sources/Conclave/Skip/ui/AppRoot.kt"))
-        #expect(android.contains("val rows = cache.current()"))
-        #expect(android.contains("NativeHostingStageStrip(rows, lifetime)"))
-        #expect(android.contains("for (index in 0 until rows.size) { val row = rows[index] key(row.id) { NativeHostingStageTile(row, Modifier.weight(1f)) } }"))
-        let androidTile = try #require(hostingSection(android, from: "private fun NativeHostingStageTile(", to: "private fun NativeHostingReadouts("))
-        #expect(androidTile.contains("row: NativeHostingPerson, modifier: Modifier = Modifier) {"))
-        #expect(androidTile.contains(".testTag(\"stage.tile.${row.id}\")"))
-        #expect(androidTile.contains("stateDescription = if (row.isSelected) \"Selected\" else \"Not selected\""))
-        #expect(androidTile.contains("Text(row.name,") && androidTile.contains("if (row.isSelected) {"))
-        #expect(!androidTile.contains("remember") && !androidTile.contains("presenter"))
     }
 
     @Test
@@ -214,30 +195,6 @@ struct NativeHostingTests {
         timer.discardStarts(keeping: [2, 7])
         #expect(timer.startCount == 1)
         #expect(timer.firstFrame(presentationID: 1, at: 1) == -1 && timer.firstFrame(presentationID: 2, at: 1) == 1000)
-    }
-
-    @Test
-    func sessionReadoutShowsEveryKeyOnBothPlatforms() throws {
-        let ios = try hostingSource("Sources/Conclave/App/Hosting/SessionReadout+iOS.swift")
-        let android = try hostingSource("Sources/Conclave/Skip/ui/hosting/SessionReadout.kt")
-        #expect(ios.hasPrefix("#if os(iOS) && !SKIP\n"))
-        for key in ["identityKey", "phaseKey", "outcomeKey", "controlsKey", "ledgerKey", "feedbackKey", "feedbackRecordsKey"] {
-            #expect(ios.contains("key: MeetingSessionReadout.\(key))"), "iOS misses \(key)")
-            #expect(android.contains("SessionReadoutLine(MeetingSessionReadout.\(key))"), "Android misses \(key)")
-        }
-        #expect(ios.contains("LabeledContent(ConclaveStrings.text(labelKey), value: value())\n            .accessibilityIdentifier(key)"))
-        #expect(android.contains("modifier = Modifier.testTag(key),"))
-        #expect(ios.contains("Section(ConclaveStrings.text(\"Session Readout\"))"))
-        #expect(android.contains("conclaveString(\"sys_session_readout_title\")"))
-        #expect(ios.contains("records.reset()"))
-        #expect(android.contains("LaunchedEffect(records) { records.reset() }"))
-        for text in [ios, android] {
-            for pattern in ["Color(red", "Color(0x", "UIColor(", ".white", ".black", "gradient", "Gradient", "\u{2013}", "\u{2014}"] {
-                #expect(!text.contains(pattern), "\(pattern)")
-            }
-        }
-
-        #expect(!ios.contains("ConclaveStrings.format(") && !android.contains("String.format("))
     }
 
     @Test

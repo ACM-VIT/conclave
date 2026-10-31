@@ -39,7 +39,6 @@ struct SYS14LocalizationInfraTests {
         if let localizations = plist["CFBundleLocalizations"] as? [String] {
             #expect(localizations == ["en"])
         }
-        #expect(try sys14Source("Package.swift").contains("defaultLocalization: \"en\""))
     }
 
     @Test func infoPlistCatalogLocalizesEveryPurposeStringAndTheDisplayName() throws {

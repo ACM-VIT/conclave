@@ -146,49 +146,6 @@ struct CTL6ReactionsHandTests {
         #expect(MoreMenuPolicy.handState(nil) == .lowered)
     }
 
-    @Test func iosTrayStaysOpenAcrossSendsAndNeverDoublesInVideo() throws {
-        let tray = ctl6Normalized(try ctl6Source("Sources/Conclave/Features/Meeting/Controls/ReactionsTray+iOS.swift"))
-        #expect(tray.hasPrefix("#if os(iOS) && !SKIP"))
-
-        #expect(tray.contains(".popover(isPresented: $isPresented, arrowEdge: .bottom)"))
-        #expect(tray.contains(".presentationDetents([.height(trayHeight)])"))
-        #expect(tray.contains(".presentationBackgroundInteraction(.enabled(upThrough: .height(trayHeight)))"))
-        #expect(tray.contains("controls.stage.setTransientChrome(id: ChromeAutoHidePolicy.reactionsTray, open: open)"))
-        #expect(tray.contains("if controls.sendReaction(id: id) == ControlTapResult.dispatched { sendCounter += 1 onSent() }"))
-        #expect(tray.contains(".conclaveGestureFeedback(.reactionSent, trigger: sendCounter)"))
-        #expect(tray.contains(".frame(minWidth: 44, minHeight: 44)") && tray.contains(".accessibilityLabel(MoreCopy.reactionLabel(option))"))
-
-        #expect(!tray.contains("performEffect(") && !tray.contains("glassEffect") && !tray.contains("sensoryFeedback("))
-        let menu = ctl6Normalized(try ctl6Source("Sources/Conclave/Features/Meeting/Controls/MoreMenu+iOS.swift"))
-        #expect(menu.contains(".reactionsTray(isPresented: $showsTray, controls: controls, onSent: { reactionCounter += 1 })"))
-        #expect(menu.contains("ConclaveStrings.format(\"React with %@\", reactionName(option.nameKey))"))
-
-        for title in ["Raising Hand…", "Lowering Hand…", "Lower Hand", "Raise Hand"] {
-            #expect(menu.contains("ConclaveStrings.text(\"" + title + "\")"), "\(title)")
-        }
-    }
-
-    @Test func androidPaletteAndHandTilePlayOnlyWhenDispatched() throws {
-        let component = ctl6Normalized(try ctl6Source("Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt"))
-        let sheet = ctl6Normalized(try ctl6Source("Sources/Conclave/Skip/ui/call/controls/MoreSheet.kt"))
-        #expect(component.contains("if (onReaction(option)) haptics.gesture(FeedbackKind.reactionSent)"))
-        #expect(component.contains("if (onRaiseHand(raised)) haptics.gesture(kind)"))
-        #expect(component.contains("CircularProgressIndicator(Modifier.size(20.dp), color = LocalContentColor.current, strokeWidth = 2.dp)"))
-
-        #expect(component.contains("FlowRow(modifier.fillMaxWidth().testTag(identifier), horizontalArrangement = Arrangement.SpaceEvenly)"))
-        #expect(component.contains("Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)"))
-        #expect(component.contains(".toggleable(value = raised, enabled = enabled, role = Role.Switch, onValueChange = onToggle)"))
-        #expect(component.contains("haptics.gesture(FeedbackKind.reactionSent)") && component.contains("this.paneTitle = paneTitle"))
-        #expect(sheet.contains("onReaction = { option -> controls.sendReaction(id = option.id) == ControlTapResult.dispatched },"))
-        #expect(sheet.contains("onRaiseHand = { _ -> controls.select(MoreItemID.hand) == ControlTapResult.dispatched },"))
-        #expect(sheet.contains("handPending = hand?.isPending ?: false,"))
-        for name in ["ctl_raising_hand", "ctl_lowering_hand", "ctl_react_with", "ctl_reaction_thumbs_up", "ctl_reaction_wow"] {
-            #expect(sheet.contains("\"" + name + "\""), "\(name)")
-        }
-
-        #expect(!sheet.contains("painterResource"))
-    }
-
     @Test func noReactionArtShipsYet() throws {
 
         let root = ctl6PackageRoot()
@@ -201,18 +158,6 @@ struct CTL6ReactionsHandTests {
             }
         }
         #expect(found.isEmpty, "reaction art: \(found)")
-    }
-
-    @Test func ctl6SourcesStayFlatAndDashFree() throws {
-        for file in ["Sources/Conclave/Features/Meeting/Controls/ReactionPalettePolicy.swift",
-                     "Sources/Conclave/Features/Meeting/Controls/ReactionsTray+iOS.swift",
-                     "Tests/ConclaveTests/CTL6ReactionsHandTests.swift"] {
-            let text = try ctl6Source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradi" + "ent"), "\(file) mentions a forbidden fill")
-        }
-        let policy = try ctl6Source("Sources/Conclave/Features/Meeting/Controls/ReactionPalettePolicy.swift")
-        #expect(!policy.contains("#if") && !policy.contains("protocol ") && policy.range(of: #"case\s+\w+\("#, options: .regularExpression) == nil)
     }
 }
 

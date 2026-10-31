@@ -130,11 +130,6 @@ struct T3BorrowPresenterTests {
         #expect(ChatGateLinePolicy.isImmediate(.locked) && ChatGateLinePolicy.isImmediate(.attendee))
         #expect(!ChatGateLinePolicy.isImmediate(.reconnecting) && !ChatGateLinePolicy.isImmediate(.offline))
         #expect(ChatGateLinePolicy.statusValue(.allowed) == "" && ChatGateLinePolicy.statusValue(.offline) == "offline")
-
-        let android = try chatSource("Sources/Conclave/Skip/ui/chat/ChatSnapshots.kt")
-        #expect(android.contains("ChatSendGate.reconnecting -> conclaveString(\"chat_gate_reconnecting\")"))
-        #expect(android.contains("ChatSendGate.offline -> conclaveString(\"chat_gate_offline\")"))
-        #expect(android.contains("ChatSendGate.notJoined -> conclaveString(\"chat_gate_not_joined\")"))
     }
 
     @Test func theFirstApplyIsImmediateAndTheLineStartsEqualToTheGate() {
@@ -399,76 +394,5 @@ struct T3BorrowPresenterTests {
         #expect(long.gateLineReadout == "gateLine=open gate=open shows=1")
     }
 
-    @Test func theFixtureBarsShowTheGateLineReadout() throws {
-        let ios = try chatSource("Sources/Conclave/Features/Meeting/Chat/Debug/ChatFixtureView+iOS.swift")
-        #expect(ios.contains(".accessibilityIdentifier(\"chat.composer.gateLine\")") && ios.contains("driver.gateLineReadout"))
-        let kotlin = try chatSource("Sources/Conclave/Skip/ui/chat/debug/ChatFixtureControls.kt")
-        #expect(kotlin.contains("testTag(\"chat.composer.gateLine\")") && kotlin.contains("driver.gateLineReadout"))
-    }
-
-    @Test func theTimelineFollowsComposerFocusOnlyWhenTheNewestRowIsVisible() throws {
-        let timeline = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatTimeline+iOS.swift")
-        #expect(timeline.components(separatedBy: ".onChange(of: actions.composerFocusRevision)").count - 1 == 1)
-        #expect(timeline.contains("let follows = visibility.isVisible(newest)") && timeline.contains("guard follows else { return }"))
-        #expect(timeline.contains("onScrollVisibilityChange(threshold: ChatRowVisibilityBox.partlyVisibleThreshold)"))
-        #expect(timeline.contains(".onAppear { box.setVisible(rowId, true) }") && timeline.contains(".onDisappear { box.setVisible(rowId, false) }"))
-        #expect(timeline.contains(".modifier(ChatRowVisibilityProbe(rowId: rowId, box: visibility))"))
-        #expect(timeline.contains("withAnimation(.snappy) { proxy.scrollTo(newest, anchor: .bottom) }"))
-        #expect(timeline.contains("if reduceMotion {\n            proxy.scrollTo(newest, anchor: .bottom)"))
-
-        #expect(timeline.contains("visibility.repinsAfterKeyboard = follows && !ChatTimelinePlatform.usesScrollGeometry"))
-        #expect(timeline.contains("UIResponder.keyboardDidShowNotification") && timeline.contains("UIResponder.keyboardWillHideNotification"))
-
-        #expect(timeline.contains("private final class ChatRowVisibilityBox {") && !timeline.contains("@Observable"))
-
-        #expect(timeline.contains("ChatStreamingFollow17(chat: chat, proxy: proxy, isAtBottom: isAtBottom)"))
-        #expect(timeline.contains(".defaultScrollAnchor(.bottom)") && timeline.contains(".scrollDismissesKeyboard(.interactively)"))
-        let panel = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatPanel+iOS.swift")
-        #expect(panel.contains("private(set) var composerFocusRevision = 0"))
-        #expect(panel.contains("func composerDidFocus() {\n        composerFocusRevision += 1"))
-        let kotlinTimeline = try chatSource("Sources/Conclave/Skip/ui/chat/ChatTimeline.kt")
-        #expect(kotlinTimeline.contains("ChatComposerFocusFollow(listState, reduceMotion) { actions.composerFocusRevision }"))
-        #expect(kotlinTimeline.contains("listState.layoutInfo.visibleItemsInfo.any { it.index == 0 }"))
-        #expect(kotlinTimeline.contains("if (reduceMotion) listState.scrollToItem(0) else listState.animateScrollToItem(0)"))
-        #expect(kotlinTimeline.contains("reverseLayout = true") && kotlinTimeline.contains("imeNestedScroll()"))
-        let snapshots = try chatSource("Sources/Conclave/Skip/ui/chat/ChatSnapshots.kt")
-        #expect(snapshots.contains("var composerFocusRevision by mutableIntStateOf(0)\n        private set"))
-        #expect(snapshots.contains("fun composerDidFocus() {\n        composerFocusRevision += 1"))
-    }
-
-    @Test func theT3BorrowSourcesStayInsideTheRules() throws {
-        let files = [
-            "Sources/Conclave/Features/Meeting/Chat/ChatDelayedGate.swift",
-            "Sources/Conclave/Features/Meeting/Chat/ChatPresenter.swift",
-            "Sources/Conclave/Features/Meeting/Chat/ChatModels.swift",
-            "Sources/Conclave/Features/Meeting/Chat/ChatTimeline+iOS.swift",
-            "Sources/Conclave/Features/Meeting/Chat/ChatPanel+iOS.swift",
-            "Sources/Conclave/Features/Meeting/Chat/Debug/ChatFixtures.swift",
-            "Sources/Conclave/Features/Meeting/Chat/Debug/ChatFixtureView+iOS.swift",
-            "Sources/Conclave/Skip/ui/chat/ChatTimeline.kt",
-            "Sources/Conclave/Skip/ui/chat/ChatSnapshots.kt",
-            "Sources/Conclave/Skip/ui/chat/debug/ChatFixtureControls.kt",
-        ]
-        for file in files {
-            let text = try chatSource(file)
-            #expect(!chatHasDash(text), "\(file) contains an en or em dash")
-            for forbidden in ["Gradient", "gradient", "sensoryFeedback", "performHapticFeedback", "conclaveGestureFeedback",
-                              "glassEffect", "UIImpactFeedbackGenerator"] {
-                #expect(!text.contains(forbidden), "\(file) uses \(forbidden)")
-            }
-        }
-
-        let policy = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatDelayedGate.swift")
-        #expect(policy.contains("enum DelayedStatusPhase: String, CaseIterable {"))
-        #expect(policy.contains("struct DelayedStatus: Equatable {") && policy.contains("enum DelayedStatusPolicy {"))
-        #expect(!policy.contains("-> (") && !policy.contains("Task") && !policy.contains("Timer") && !policy.contains("import SwiftUI"))
-
-        let presenter = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatPresenter.swift")
-        #expect(presenter.components(separatedBy: "gateLineTask = Task {").count - 1 == 1)
-        #expect(presenter.contains("let wait = sleep\n        let delay = max(0.0, wake - time)"))
-        #expect(presenter.contains("gateLine: currentGateLine,") && presenter.contains("current.gateLine == next.gateLine"))
-        let flat = presenter.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        #expect(flat.contains("gateLineTask?.cancel() gateLineTask = nil gateLineTaskDeadline = -1.0 gateLineStatus = ChatPresenter.initialGateLineStatus gateLineIsFirstApply = true"))
-    }
 }
 #endif

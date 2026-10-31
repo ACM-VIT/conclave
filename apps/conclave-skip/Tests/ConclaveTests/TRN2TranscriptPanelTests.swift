@@ -481,106 +481,12 @@ struct TRN2TranscriptPanelTests {
                 && KeyCoverage.allCases.count == 4 && AskRowState.allCases.count == 6 && MinutesSection.allCases.count == 6)
     }
 
-    @Test func everyEnumCaseHasCopyOnBothPlatforms() throws {
-        let ios = try stageSource("Sources/Conclave/Features/Meeting/Transcript/TranscriptCopy+iOS.swift")
-        let kotlin = try stageSource("Sources/Conclave/Skip/ui/copy/TranscriptCopy.kt")
-        func cases<T: RawRepresentable & CaseIterable>(_ type: T.Type) -> [String] where T.RawValue == String {
-            var names: [String] = []
-            for value in T.allCases { names.append(value.rawValue) }
-            return names
-        }
-        let enums: [(String, [String])] = [
-            ("TranscriptTab", cases(TranscriptTab.self)), ("TranscriptStartKind", cases(TranscriptStartKind.self)),
-            ("TranscriptBlurb", cases(TranscriptBlurb.self)), ("KeyCoverage", cases(KeyCoverage.self)),
-            ("TranscriptStatusKind", cases(TranscriptStatusKind.self)), ("TranscriptHostKind", cases(TranscriptHostKind.self)),
-            ("TranscriptIssue", cases(TranscriptIssue.self)), ("AskRowState", cases(AskRowState.self)),
-            ("MinutesSection", cases(MinutesSection.self)), ("MinutesEmptyKind", cases(MinutesEmptyKind.self)),
-            ("MinutesStatusKind", cases(MinutesStatusKind.self)), ("RecapPhase", cases(RecapPhase.self)),
-            ("TranscriptAnnouncementKind", cases(TranscriptAnnouncementKind.self))
-        ]
-        for (type, names) in enums {
-            for name in names {
-                #expect(ios.contains("case ." + name) || ios.contains(", ." + name), "iOS copy misses \(type).\(name)")
-                #expect(kotlin.contains(type + "." + name + " ->") || kotlin.contains(type + "." + name + ","),
-                        "Android copy misses \(type).\(name)")
-            }
-        }
-
-        let catalog = try stageSource("Sources/Conclave/Resources/Localizable.xcstrings")
-        let fragment = (try? String(contentsOfFile: "/Users/ishaan/Documents/conclave-overhaul-recovery-20261023/heads-down/strings/B7-T5.json",
-                                    encoding: .utf8)) ?? ""
-        let pattern = try NSRegularExpression(pattern: #"ConclaveStrings\.(?:text|format)\("([^"]+)""#)
-        let range = NSRange(ios.startIndex..<ios.endIndex, in: ios)
-        for match in pattern.matches(in: ios, range: range) {
-            guard let keyRange = Range(match.range(at: 1), in: ios) else { continue }
-            let key = String(ios[keyRange]).replacingOccurrences(of: "\\u{2026}", with: "\u{2026}")
-                .replacingOccurrences(of: "\\u{2019}", with: "\u{2019}")
-            let json = key.replacingOccurrences(of: "\"", with: "\\\"")
-            #expect(catalog.contains("\"" + json + "\"") || fragment.contains("\"" + json + "\""), "missing iOS key \(key)")
-        }
-        let strings = try stageSource("Android/app/src/main/res/values/strings.xml")
-        let names = try NSRegularExpression(pattern: #""((?:trn|ctl)_[a-z_]+)""#)
-        let kotlinRange = NSRange(kotlin.startIndex..<kotlin.endIndex, in: kotlin)
-        for match in names.matches(in: kotlin, range: kotlinRange) {
-            guard let nameRange = Range(match.range(at: 1), in: kotlin) else { continue }
-            let name = String(kotlin[nameRange])
-            #expect(strings.contains("name=\"" + name + "\"") || fragment.contains("\"" + name + "\""), "missing Android name \(name)")
-        }
-    }
-
     @Test func transcriptSourcesStayFlatDashFreeAndOnTheSharedComponents() throws {
-        let files = try stageFiles(under: "Sources/Conclave/Features/Meeting/Transcript", extensions: ["swift"])
-            + stageFiles(under: "Sources/Conclave/Skip/ui/transcript", extensions: ["kt"])
-            + ["Sources/Conclave/Skip/ui/copy/TranscriptCopy.kt", "Sources/Conclave/Core/State/TranscriptState.swift",
-               "Sources/Conclave/Core/Networking/TranscriptService.swift",
-               "Sources/Conclave/Features/Meeting/Controls/CallControlsPresenter.swift"]
-        #expect(files.count >= 13)
-        for file in files {
-            let text = try stageSource(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradient"), "\(file) mentions a gradient")
-            #expect(!text.contains("Image(systemName: \""), "\(file) names a raw symbol")
-            for pattern in ["glassEffect", "GlassEffectContainer", "ultraThinMaterial", "regularMaterial", "NativeTextShimmer",
-                            "Color(red:", "Color(0x", "announceForAccessibility"] {
-                #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-            }
-        }
-        let panel = try stageSource("Sources/Conclave/Features/Meeting/Transcript/TranscriptPanel+iOS.swift")
-        for required in ["PanelShell(title: TranscriptCopy.title", "ConclaveComposerField(identifier: \"transcript.ask.composer.cluster\")",
-                         "ShareLink(item: TranscriptPanelExportItem(presenter: transcript)", ".conclaveGestureFeedback(.linkCopied, trigger: copyCount)",
-                         ".confirmationDialog(TranscriptCopy.stopTitle", ".defaultScrollAnchor(.bottom)", "AssistantMarkdownView(blocks: row.blocks",
-                         ".conclaveTopBar {", "ConclaveViewSwitch(TranscriptCopy.viewSwitchLabel", "TimelineView(.periodic(from: Date(), by: 60))",
-                         "accessibilitySpeechAnnouncementPriority = .low"] {
-            #expect(panel.contains(required), "iOS panel misses \(required)")
-        }
-        #expect(!panel.contains(".sheet("), "the panel is the PanelShell content, never its own sheet")
-        let page = try stageSource("Sources/Conclave/Skip/ui/transcript/TranscriptPage.kt")
-        for required in ["InCallPage(", "contentMode = InCallPageContent.lazyList", "hasComposer = true", "ConclaveTabSwitch(",
-                         "DropdownMenu(", "liveRegion = LiveRegionMode.Polite", "SnackbarHost(snackbars)"] {
-            #expect(page.contains(required), "Android page misses \(required)")
-        }
-        let lists = try stageSource("Sources/Conclave/Skip/ui/transcript/TranscriptLists.kt")
-        #expect(lists.contains("reverseLayout = true") && lists.contains("LaunchedEffect(newestId, newestRevision)"))
-        #expect(lists.contains("AssistantMarkdown(blocks = row.blocks.toList()"))
-        let export = try stageSource("Sources/Conclave/Skip/ui/transcript/TranscriptExport.kt")
-        for required in ["FileProvider.getUriForFile(context, authority(context), file)", "putExtra(Intent.EXTRA_STREAM, uri)",
-                         "addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)", "File(context.cacheDir, \"exports\")",
-                         "PipManager.suppressNextAutoEnter(\"transcript_export\")", "Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU"] {
-            #expect(export.contains(required), "export misses \(required)")
-        }
         let paths = try stageSource("Android/app/src/main/res/xml/conclave_file_paths.xml")
         #expect(paths.contains("<cache-path name=\"exports\" path=\"exports/\" />"))
         let manifest = try stageSource("Android/app/src/main/AndroidManifest.xml")
         #expect(manifest.contains("android:authorities=\"${applicationId}.fileprovider\""))
         #expect(manifest.contains("android:resource=\"@xml/conclave_file_paths\""))
-    }
-
-    @Test func theCallRootRegistersTheTranscriptPanel() throws {
-
-        let ios = try stageSource("Sources/Conclave/Features/Meeting/Stage/CallRoot+iOS.swift")
-        #expect(ios.contains("TranscriptPanel(transcript: shell.transcript"))
-        let android = try stageSource("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt")
-        #expect(android.contains("TranscriptPage("))
     }
 }
 #endif

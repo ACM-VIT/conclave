@@ -213,32 +213,6 @@ struct MeetingErrorClassifierTests {
         #expect(MeetingErrorLegacyCopy.message(media) == MeetingErrorLegacyCopy.genericFailure)
     }
 
-    @Test func theClassifierReplacedThePresentationEnums() throws {
-        let vm = try classifierSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        for gone in ["enum MeetingMediaErrorPresentation", "enum MeetingChatErrorPresentation",
-                     "MeetingMediaErrorPresentation.", "MeetingChatErrorPresentation.",
-                     "state.errorMessage = error.localizedDescription"] {
-            #expect(!vm.contains(gone), "\(gone) is still in the view model")
-        }
-
-        #expect(vm.contains("await self.finishServerDisconnect()"))
-        #expect(vm.contains("recordTerminalOutcome(.serverDisconnected, serverText: \"\")\n        state.connectionState = ConnectionState.disconnected"))
-        #expect(vm.contains("if classified.category == .roomEnded {"))
-        #expect(vm.contains("outcome: .endedByHost\n                        )"))
-
-        let classifier = try classifierSource("Sources/Conclave/Core/Session/MeetingErrorClassifier.swift")
-        for pattern in ["ConclaveStrings", "NSLocalizedString", "URLSession", "Task {", "\u{2013}", "\u{2014}"] {
-            #expect(!classifier.contains(pattern), "\(pattern)")
-        }
-        #expect(classifier.contains("#if os(iOS) && !SKIP && canImport(SocketIO)\n        if let socketError = error as? SocketError {"))
-        #expect(classifier.contains("#if os(iOS) && !SKIP && canImport(WebRTC)\n        if let mediaError = error as? WebRTCError {"))
-        #expect(classifier.contains("#if canImport(UIKit) && !SKIP\n        if let captureError = error as? ScreenCaptureError {"))
-        #expect(classifier.contains("let androidCategory = MeetingAndroidErrorTypes.categoryName(error, isNetworkOffline)"))
-        let android = try classifierSource("Sources/Conclave/Skip/ui/session/MeetingAndroidErrorTypes.kt")
-        #expect(android.contains("if (sdkInt >= 31 && className == FOREGROUND_SERVICE_NOT_ALLOWED) \"platformRefused\" else \"\""))
-        #expect(!android.contains("import android.app.ForegroundServiceStartNotAllowedException"))
-    }
-
     @Test func recoveryCategoriesAreAddedWithoutRenamingAnyPersistedRawValue() {
         let persisted = [
             "offline", "serverUnreachable", "timedOut", "serverBusy", "serverRestarting", "sessionExpired", "notJoined",
@@ -285,49 +259,6 @@ struct MeetingErrorClassifierTests {
         #expect(MeetingErrorClassifier.classify(socket, context: .media).category == .serverUnreachable)
         let cancelled = NSError(domain: "test", code: 0, userInfo: [NSLocalizedDescriptionKey: "StandaloneCoroutine was cancelled"])
         #expect(MeetingErrorClassifier.classify(cancelled, context: .media).category == .cancelled)
-    }
-
-    @Test func recoveryDecisionsReadCategoriesNotWording() throws {
-        let vm = try classifierSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let rejoin = try classifierBody(vm, from: "private func shouldForceRejoinAfterAudioPublishingFailure(_ error: Error) -> Bool {",
-                                        to: "private func toggleMuteIntentDuringRecovery() {")
-        #expect(rejoin.contains("MeetingErrorClassifier.classify(error, context: .media, isNetworkOffline: state.isNetworkOffline)"))
-        #expect(rejoin.contains("return classified.category == .mediaSessionStale"))
-        let waiting = try classifierBody(vm, from: "private func removeStalePendingUserIfNeeded(",
-                                         to: "private func ensureParticipantPresent(")
-        #expect(waiting.contains("MeetingErrorClassifier.classify(error, context: .hostAction, isNetworkOffline: state.isNetworkOffline)"))
-        #expect(waiting.contains("guard classified.category == .pendingUserNotFound else {"))
-        for site in [rejoin, waiting] {
-            #expect(!site.contains(".contains("))
-            #expect(!site.contains("localizedDescription"))
-            #expect(!site.contains("lowercased()"))
-            #expect(!site.contains("\""))
-        }
-        for gone in ["\"not found in waiting room\"", "\"stale configuration\"", "\"socket not configured\"", "transportFailures"] {
-            #expect(!vm.contains(gone), "\(gone) is still in the view model")
-        }
-
-        let ios = try classifierSource("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        let iosClose = try classifierBody(ios, from: "func closeConsumerAndWait(", to: "func setConsumerPreferences(")
-        #expect(iosClose.contains("if MeetingErrorClassifier.classify(error, context: .media).category == .consumerNotFound {"))
-        let android = try classifierSource("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-        let androidClose = try classifierBody(android, from: "internal suspend fun closeConsumerAndWait(",
-                                              to: "internal suspend fun setConsumerPreferences(")
-        #expect(androidClose.contains("MeetingErrorClassifier.classify(serverMessage = message, context = MeetingErrorContext.media)"))
-        #expect(androidClose.contains("if (classified.category == MeetingErrorCategory.consumerNotFound) {"))
-        for site in [iosClose, androidClose] {
-            #expect(!site.contains("not found"))
-            #expect(!site.contains("not_found"))
-            #expect(!site.contains(".contains("))
-            #expect(!site.contains("lowercase"))
-        }
-
-        let classifier = try classifierSource("Sources/Conclave/Core/Session/MeetingErrorClassifier.swift")
-        for fragment in ["\"not configured\"", "\"transport not created\"", "\"send transport\"", "\"stale configuration\"",
-                         "\"session was replaced\"", "\"socket not configured\"", "\"consumer not found\"", "\"not_found\"",
-                         "\"not found in waiting room\""] {
-            #expect(classifier.contains(fragment), "\(fragment) left the classifier table")
-        }
     }
 }
 

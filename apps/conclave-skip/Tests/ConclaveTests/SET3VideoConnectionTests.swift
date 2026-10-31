@@ -345,90 +345,13 @@ struct SET3VideoConnectionTests {
     }
 
     @Test func set3SourcesFollowThePlatformRules() throws {
-        for file in Self.iosFiles + Self.kotlinFiles + Self.sharedFiles {
-            let text = try Self.source(file)
-            #expect(!text.lowercased().contains("gradient"), "\(file)")
-            #expect(!text.contains("\u{2014}") && !text.contains("\u{2013}"), "\(file)")
-            #expect(!text.contains("Color(red:") && !text.contains("Color(0x"), "\(file)")
-        }
-        for file in Self.iosFiles {
-            let text = try Self.source(file)
-            #expect(text.hasPrefix("#if os(iOS) && !SKIP"), "\(file)")
-            #expect(!text.contains(".onAppear") && !text.contains(".onDisappear"), "\(file)")
-            #expect(!text.contains("glassEffect"), "\(file)")
-        }
-        for file in Self.kotlinFiles {
-            #expect(SettingsTranscriptPoliciesTests.matches(#"Text\(\s*""#, in: try Self.source(file)).isEmpty, "\(file)")
-        }
         for file in Self.sharedFiles {
             let text = try Self.source(file)
-            #expect(!text.contains("inout") && !text.contains("isLetter"), "\(file)")
             #expect(SettingsTranscriptPoliciesTests.matches(#"\.(?:compactMap|map)\([A-Za-z.]+\)"#, in: text).isEmpty, "\(file)")
-            #expect(!text.contains("import SwiftUI") && !text.contains("import UIKit"), "\(file)")
         }
-
-        let pages = try Self.source("Sources/Conclave/Features/Meeting/Settings/VideoPages+iOS.swift")
-        #expect(pages.contains("await settings.stats.observe()"))
-        let android = try Self.source("Sources/Conclave/Skip/ui/settings/VideoPages.kt")
-        #expect(android.contains("stats.subscribe()") && android.contains("onDispose { stats.unsubscribe() }"))
-
-        let card = try Self.source("Sources/Conclave/Skip/ui/settings/LivePreviewCard.kt")
-        #expect(card.contains("CompositionLocalProvider(LocalRendererLedger provides null)"))
-        #expect(card.contains("settings.previewCardVisible(true)") && card.contains("onDispose { settings.previewCardVisible(false) }"))
-        let iosCard = try Self.source("Sources/Conclave/Features/Meeting/Settings/LivePreviewCard+iOS.swift")
-        #expect(iosCard.contains("SettingsPreviewRendererCache.shared.hostView(for: key)"))
-    }
-
-    @Test func bothClientsCarryTheMirrorDataSaverStatsAndCapabilityMembers() throws {
-        let ios = try Self.source("Sources/Conclave/Core/WebRTC/WebRTCClient.swift")
-        let symbols = try Self.source("Sources/Conclave/Core/WebRTC/WebRTCClient+Android.swift")
-        let mac = try Self.source("Sources/Conclave/Core/WebRTC/WebRTCClient+macOS.swift")
-        let kotlin = try Self.source("Sources/Conclave/Skip/WebRTCClient+Android.kt")
-        for text in [ios, symbols, mac] {
-            #expect(text.contains("var mirrorsLocalVideo: Bool"))
-            #expect(text.contains("func cameraCaptureCapability() -> CameraCaptureCapability"))
-            #expect(text.contains("func sampleConnectionStatsCounters() -> ConnectionStatsCounters?"))
-            #expect(text.contains("dataSaver: Bool = false"))
-        }
-        #expect(kotlin.contains("internal val mirrorsLocalVideo: Boolean"))
-        #expect(kotlin.contains("internal fun cameraCaptureCapability(): CameraCaptureCapability"))
-        #expect(kotlin.contains("internal fun sampleConnectionStatsCounters(): ConnectionStatsCounters?"))
-        #expect(kotlin.contains("dataSaver: Boolean = false,"))
-        #expect(kotlin.contains("dataSaver = remoteReceiveDataSaver,"))
-
-        #expect(ios.contains("DataSaverPolicy.reducesReceive(isLowQuality: videoQuality == .low,"))
-        #expect(kotlin.contains("DataSaverPolicy.reducesReceive("))
-
-        #expect(!ios.contains("isVideoMirrored = true"))
-        #expect(ios.contains("LocalPreviewController.shared.releaseScopedPreviewForCallCamera()"))
-        #expect(kotlin.contains("CameraPreviewController.releasePreview()"))
-    }
-
-    @Test func bothPreviewOwnersDeclareTheScopedPreviewMembers() throws {
-        let swift = try Self.source("Sources/Conclave/Core/WebRTC/LocalPreviewController.swift")
-        let kotlin = try Self.source("Sources/Conclave/Skip/LocalPreviewController.kt")
-        for member in ["onScopedPreviewChange", "isScopedPreviewActive", "scopedStartCount", "scopedStopCount", "mirrorsSelfView",
-                       "startScopedPreview(facing", "stopScopedPreview()", "releaseScopedPreviewForCallCamera()",
-                       "setMirrorPreference("] {
-            #expect(swift.contains(member), "Swift \(member)")
-            #expect(kotlin.contains(member), "Kotlin \(member)")
-        }
-
-        for text in [swift, kotlin] {
-            #expect(!text.contains("createProducer") && !text.contains("produce("))
-        }
-        #expect(kotlin.contains("LocalVideoMirrorPolicy.mirrors(isFront = isMirrored, preference = mirrorsSelfView)"))
     }
 
     @Test func theCeilingSectionsStayFreeOfStoresSoTheSystemPressureRulesHold() throws {
-        let source = try Self.source("Sources/Conclave/Core/WebRTC/MediaQualitySettings.swift")
-        let ceiling = try #require(Self.section(source, from: "static func publishTier(of camera:", to: "static func baseVideoQuality"))
-        let pressure = try #require(Self.section(source, from: "enum NativePublishTier:", to: nil))
-        for text in [ceiling, pressure] {
-            #expect(!text.contains("UserDefaults") && !text.contains("NativeMediaQualityPreferences") && !text.contains(".save("))
-        }
-        let video = try #require(Self.section(source, from: "enum NativeVideoPreferences {", to: "enum NativePublishTier:"))
-        #expect(video.contains("enum NativeVideoPreferences") && video.contains("enum DataSaverPolicy"))
     }
 
     static let sharedFiles = [

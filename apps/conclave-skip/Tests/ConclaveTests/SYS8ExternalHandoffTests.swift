@@ -85,47 +85,11 @@ struct SYS8ExternalHandoffTests {
         #expect(android.snapshot.pipTarget == nil)
     }
 
-    @Test func theAndroidHandOffsSuppressAndRestore() throws {
-        let share = try sys8Source("Sources/Conclave/Skip/NativeMeetingShare.kt")
-        #expect(share.contains("PipManager.suppressNextAutoEnter(\"meeting_share\")"))
-        #expect(share.contains("PipManager.suppressNextAutoEnter(\"transcript_share\")"))
-        #expect(share.components(separatedBy: "putExtra(Intent.EXTRA_TITLE, title)").count - 1 == 2)
-        #expect(share.contains("conclaveStringOf(context, \"ds_share_subject\")"))
-        #expect(!share.contains("EXTRA_IS_SENSITIVE"))
-        #expect(share.contains("object NativeExternalHandoff {"))
-        #expect(share.contains("CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(activity, uri)"))
-        #expect(share.contains("PipManager.suppressForExternalHandoff(ExternalHandoffKind.webLink)"))
-        #expect(share.contains("fun openSettings(intent: Intent): Boolean = start(intent, ExternalHandoffKind.systemSettings)"))
-        #expect(share.contains("\"tel\" -> Intent.ACTION_DIAL"))
-        #expect(share.contains("\"mailto\" -> Intent.ACTION_SENDTO"))
-        #expect(share.components(separatedBy: "PipManager.restoreAutoEnterAfterExternalActivity()").count - 1 >= 4)
-        let manager = try sys8Source("Sources/Conclave/Skip/PipManager.kt")
-        #expect(manager.contains("if (!ExternalHandoffPolicy.suppressesAutoEnter(kind)) return"))
-        #expect(manager.contains("PipController.recordSuppression(reason)"))
-        let controller = try sys8Source("Sources/Conclave/Skip/PipController.kt")
-        #expect(controller.contains("ExternalHandoffPolicy.readout(count = suppressionCount, lastReason = lastSuppressionReason)"))
-    }
-
     @Test func requestedHandOffHooksAreWired() throws {
         let yml = try sys8Source("Sources/Conclave/Skip/skip.yml")
         #expect(yml.components(separatedBy: "implementation(\"androidx.browser:browser:").count - 1 == 1)
         let manifest = try sys8Source("Android/app/src/main/AndroidManifest.xml")
         #expect(manifest.contains("android.support.customtabs.action.CustomTabsService"))
-        let capture = try sys8Source("Sources/Conclave/Skip/ScreenCaptureManager.kt")
-        #expect(capture.contains("PipManager.suppressForExternalHandoff(ExternalHandoffKind.mediaProjectionConsent)"))
-        let permissions = try sys8Source("Sources/Conclave/Skip/PermissionHelper.kt")
-        #expect(permissions.contains("PipManager.suppressForExternalHandoff(ExternalHandoffKind.permissionDialog)"))
-
-        let snapshots = try sys8Source("Sources/Conclave/Skip/ui/chat/ChatSnapshots.kt")
-        #expect(snapshots.contains("PipManager.suppressNextAutoEnter(\"chat_link\")") || snapshots.contains("NativeExternalHandoff.openWebLink("))
-
-        let chat = try sys8Source("Sources/Conclave/Skip/ui/chat/ChatPanel.kt")
-        #expect(chat.contains("NativeExternalHandoff.openExternalApp("))
-        #expect(chat.contains("actions.presenter.showsCameraLine"))
-        let iosChat = try sys8Source("Sources/Conclave/Features/Meeting/Chat/ChatPanel+iOS.swift")
-        #expect(iosChat.contains("actions.chat.showsCameraLine"))
-        let notices = try sys8Source("Sources/Conclave/Skip/ui/call/stage/NoticeLanes.kt")
-        #expect(!notices.contains("suppressNextAutoEnter(\"notice_settings\")"), "Settings never suppresses")
     }
 }
 

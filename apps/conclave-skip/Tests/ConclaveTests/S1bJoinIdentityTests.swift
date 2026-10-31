@@ -144,75 +144,6 @@ struct S1bJoinIdentityTests {
         #expect(face.paletteIndex == 4 && face.faceIndex == 0 && face.mouthIndex == 1)
     }
 
-    @Test func thePolicyStaysTranspilable() throws {
-        let policy = try s1bjiSource("Sources/Conclave/Features/Join/JoinRoomIdentityPolicy.swift")
-        #expect(policy.hasPrefix("import Foundation\n"))
-        #expect(!policy.contains("import SwiftUI") && !policy.contains("#if"))
-        #expect(policy.contains("home.recents.map { $0.roomId }"))
-        #expect(s1bjiMatches(#"\.(?:map|compactMap|flatMap|filter|first)\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*\)"#, in: policy).isEmpty)
-        #expect(!policy.contains(".isLetter"))
-        #expect(!policy.contains("//"))
-    }
-
-    @Test func theIOSFieldLeadsWithAFixedSlotAndTheSeparatorStartsUnderTheTextAtEverySize() throws {
-        let ios = try s1bjiSource("Sources/Conclave/Features/Join/JoinCodeSheet+iOS.swift")
-        let flat = s1bjiFlat(ios)
-        #expect(flat.contains("Section { HStack(spacing: 12) { JoinRoomSlot(seed: seed) TextField(text: inputBinding, prompt: Text(ConclaveStrings.text(\"Code or Link\"))) { Text(ConclaveStrings.text(\"Meeting Code or Link\")) } .keyboardType(.URL) .textContentType(.URL) .textInputAutocapitalization(.never) .autocorrectionDisabled() .submitLabel(.join) .onSubmit(submit) .focused($isFocused) .accessibilityIdentifier(\"join.field\") .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] } } PasteButton("))
-        #expect(!flat.contains("Label { TextField("), "AX5 device cell: the Form icon column grew and pushed the field to mid-row")
-        #expect(ios.components(separatedBy: "listRowSeparatorLeading").count == 2, "one separator guide, on the field")
-        #expect(flat.contains("private var seed: String { JoinRoomIdentityPolicy.seed(input: input, knownRoomIds: JoinRoomIdentityPolicy.knownRoomIds(home: premeeting.home)) }"))
-        #expect(flat.contains("private var rejoinSeed: String { JoinRoomIdentityPolicy.rejoinSeed(home: premeeting.home) }"))
-
-        let slot = s1bjiFlat(try s1bjiSlice(ios, from: "private struct JoinRoomSlot: View {", to: "private struct JoinCodeFooter: View {"))
-        #expect(slot.contains("if seed.isEmpty { Image(systemName: ConclaveSymbols.link) .resizable() .scaledToFit() .frame(width: 17, height: 17) .foregroundStyle(HostingTheme.secondaryText) } else {"))
-        #expect(!slot.contains("dynamicTypeSize"), "the link glyph is fixed like the face: the xxxLarge cap did not hold at AX5 (ios-S1b-d2-D1)")
-        #expect(slot.contains("} else { ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(seed), size: .mention, diameter: 28) .id(seed) .transition(.scale(0.85).combined(with: .opacity)) }"))
-        #expect(slot.contains(".frame(width: 28, height: 28) .animation(ConclaveMotion.snap, value: seed) .accessibilityHidden(true)"))
-        for fallback in ["reduceMotion", "HStack", "listRowSeparatorLeading", ".blurReplace", ".easeOut("] {
-            #expect(!slot.contains(fallback), "no unrecorded fallback or hand-tuned motion: \(fallback)")
-        }
-        #expect(!ios.contains(".opacity("), "ENT2: never an opacity modifier")
-    }
-
-    @Test func theIOSRejoinRowLeadsWithItsRoomFaceAndTheHelpLineIsGone() throws {
-        let ios = try s1bjiSource("Sources/Conclave/Features/Join/JoinCodeSheet+iOS.swift")
-        let flat = s1bjiFlat(ios)
-        #expect(flat.contains("Label { Text(ConclaveStrings.format(\"Rejoin %@\", suggestion)) } icon: { if rejoinSeed.isEmpty { Image(systemName: ConclaveSymbols.arrowClockwise).accessibilityHidden(true) } else { ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(rejoinSeed), size: .mention, diameter: 24) .accessibilityHidden(true) } }"))
-        #expect(flat.contains(".accessibilityIdentifier(\"join.rejoinSuggestion\") .id(JoinCodeSheetAnchor.rejoin)"))
-
-        let footer = s1bjiFlat(try s1bjiSlice(ios, from: "private struct JoinCodeFooter: View {", to: "private struct JoinConfirmButton: View {"))
-        #expect(footer.contains("var body: some View { if showsInvalid { Label(ConclaveStrings.text(\"This isn\\u{2019}t a Conclave code or link.\"), systemImage: PremeetingSymbols.error)"))
-        #expect(!footer.contains("else"))
-        #expect(!ios.contains("Enter the code from your invite, or paste the link."))
-        #expect(!ios.contains("join.help"))
-    }
-
-    @Test func theAndroidFieldSwapsTheGlyphForTheFaceWithStockMotion() throws {
-        let android = try s1bjiSource("Sources/Conclave/Skip/ui/join/JoinCodeSheet.kt")
-        let flat = s1bjiFlat(android)
-        #expect(flat.contains("val seed = remember(text, premeeting.home.revision) { JoinRoomIdentityPolicy.seed(input = text, knownRoomIds = JoinRoomIdentityPolicy.knownRoomIds(home = premeeting.home)) }"))
-        #expect(flat.contains("leadingIcon = { AnimatedContent( targetState = seed, modifier = Modifier.size(28.dp).clearAndSetSemantics { },"))
-        #expect(android.contains("scaleIn(ConclaveMotion.spatialDefault(), initialScale = 0.85f)"))
-        #expect(flat.contains("transitionSpec = { (scaleIn(ConclaveMotion.spatialDefault(), initialScale = 0.85f) + fadeIn(ConclaveMotion.fast())) togetherWith fadeOut(ConclaveMotion.fast()) },"))
-        #expect(flat.contains("{ s -> if (s.isEmpty()) { Icon(ConclaveIcons.LinkFill0, null) } else { ConclaveAvatar(remember(s) { ConclaveAvatarIdentity.fromSeed(s) }, 28.dp) } }"))
-        #expect(s1bjiMatches(#"Icon\(\s*ConclaveIcons\.LinkFill0[^)]*tint\s*="#, in: android).isEmpty, "the link glyph takes the stock leading-icon colours")
-        #expect(!android.contains("rememberReduceMotion"))
-        #expect(!android.contains("tween(0)") && !android.contains("tween("))
-        #expect(flat.contains("supportingText = if (showsInvalid) { { Text(conclaveString(\"pm_code_invalid\")) } } else { null },"))
-        #expect(!android.contains("pm_code_help"))
-    }
-
-    @Test func theAndroidRejoinChipLeadsWithItsRoomFace() throws {
-        let android = try s1bjiSource("Sources/Conclave/Skip/ui/join/JoinCodeSheet.kt")
-        let flat = s1bjiFlat(android)
-        #expect(flat.contains("val rejoinSeed = remember(premeeting.home.revision) { JoinRoomIdentityPolicy.rejoinSeed(home = premeeting.home) }"))
-        #expect(flat.contains("val rejoinIdentity = remember(rejoinSeed) { ConclaveAvatarIdentity.fromSeed(rejoinSeed) }"))
-        let chip = s1bjiFlat(try s1bjiSlice(android, from: "SuggestionChip(", to: "if (compactHeight)"))
-        #expect(chip.contains("icon = if (rejoinSeed.isEmpty()) { null } else { { ConclaveAvatar(rejoinIdentity, 18.dp) } },"))
-        #expect(chip.contains("modifier = Modifier.testTag(\"join.rejoinSuggestion\"),"))
-        #expect(!android.contains("InputChip("))
-    }
-
     @Test func theRemovedHelpLineLeavesBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(s1bjiSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
@@ -221,15 +152,6 @@ struct S1bJoinIdentityTests {
         let xml = try s1bjiSource("Android/app/src/main/res/values/strings.xml")
         #expect(!xml.contains("<string name=\"pm_code_help\">"))
         #expect(xml.contains("<string name=\"pm_code_invalid\">"))
-    }
-
-    @Test func theTouchedFilesStayDashFreeAndFlat() throws {
-        for file in ["Sources/Conclave/Features/Join/JoinRoomIdentityPolicy.swift", "Sources/Conclave/Features/Join/JoinCodeSheet+iOS.swift",
-                     "Sources/Conclave/Skip/ui/join/JoinCodeSheet.kt"] {
-            let text = try s1bjiSource(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file)")
-            #expect(!text.lowercased().contains("gradient"), "\(file)")
-        }
     }
 }
 

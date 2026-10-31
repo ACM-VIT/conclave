@@ -105,54 +105,12 @@ struct ACT9BrowserStageTests {
     }
 
     @Test func theProbeIsAckOnlyWithNoPayloadOnBothClients() throws {
-        let ios = act9Normalized(try act9Source("Sources/Conclave/Core/Networking/SocketIOManager.swift"))
-        let kotlin = act9Normalized(try act9Source("Sources/Conclave/Skip/SocketIOManager+Android.kt"))
-        let android = try act9Source("Sources/Conclave/Core/Networking/SocketIOManager+Android.swift")
-        let mac = try act9Source("Sources/Conclave/Core/Networking/SocketIOManager+macOS.swift")
-        #expect(ios.contains("emitAckOnly(event: SocketEvent.browserGetCapabilities, timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.capabilitiesAckMillis))"))
-        #expect(!ios.contains("emit(event: SocketEvent.browserGetCapabilities"))
-        #expect(ios.contains("func emitAckOnly(event: String, timeoutSeconds: TimeInterval = 30)"))
-        #expect(ios.contains("socket.emitWithAck(event).timingOut(after: timeoutSeconds)"))
-        #expect(kotlin.contains("emitAckOnly(SocketEvent.browserGetCapabilities, timeoutMs = SharedBrowserTimeouts.capabilitiesAckMillis.toLong())"))
-        #expect(!kotlin.contains("emit(SocketEvent.browserGetCapabilities"))
-        #expect(kotlin.contains("private suspend fun emitAckOnly(event: String, timeoutMs: Long = ACK_TIMEOUT_MS): Data"))
-        #expect(kotlin.contains("withAckTimeout(event, timeoutMs)"))
-
-        for event in ["browserLaunch", "browserNavigate"] {
-            #expect(ios.contains("emit(event: SocketEvent.\(event), payload: request, timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.commandAckMillis))"))
-            #expect(kotlin.contains("emit(SocketEvent.\(event), request, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())"))
-        }
-        #expect(ios.contains("emitAckOnly(event: SocketEvent.browserClose, timeoutSeconds: SharedBrowserTimeouts.seconds(SharedBrowserTimeouts.commandAckMillis))"))
-        #expect(kotlin.contains("emitAckOnly(SocketEvent.browserClose, timeoutMs = SharedBrowserTimeouts.commandAckMillis.toLong())"))
-        #expect(android.contains("func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse"))
-        #expect(mac.contains("func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse"))
-
         let sfu = act9Normalized(try act9Repo("packages/sfu/server/socket/handlers/sharedBrowserHandlers.ts"))
         #expect(sfu.contains("\"browser:getCapabilities\", async ( callback: ("))
         let web = act9Normalized(try act9Repo("apps/web/src/app/hooks/useSharedBrowser.ts"))
         #expect(web.contains("browser:getCapabilities"))
 
         #expect(SfuClientEvent.browserGetCapabilities.rawValue == "browser:getCapabilities")
-    }
-
-    @Test func theViewModelProbesHostsAndSendsHeartbeatsFromAdminsOnly() throws {
-        let viewModel = act9Normalized(try act9Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"))
-        let state = act9Normalized(try act9Source("Sources/Conclave/Core/State/MeetingState.swift"))
-        #expect(viewModel.contains("isBrowserAvailable: state.isBrowserAvailable,"))
-        #expect(!viewModel.contains("isBrowserAvailable: true,"))
-        #expect(viewModel.contains("BrowserCapabilityPolicy.shouldProbe(isJoined: state.connectionState == .joined, isHost: state.isAdmin, isAttendee: state.isWebinarAttendee)"))
-        #expect(viewModel.contains("try await socketManager.getBrowserCapabilities()"))
-        #expect(viewModel.components(separatedBy: "startBrowserCapabilityLoop()").count >= 3, "probe after join and after recovery")
-        #expect(viewModel.contains("stopBrowserCapabilityLoop() isBrowserCapabilityProbeInFlight = false state.isBrowserAvailable = false"))
-        #expect(viewModel.contains("BrowserHeartbeatPolicy.shouldSend(isActive: self.state.isBrowserActive"))
-        #expect(viewModel.contains("activitySession.browser.onCommand = { [weak self] command in"))
-        #expect(viewModel.contains("activitySession.browser.apply(makeBrowserStageInputs())"))
-        #expect(viewModel.contains("activitySession.browser.navigateFailed()"))
-        #expect(viewModel.contains("activitySession.browser.closeFailed()"))
-        #expect(viewModel.contains("activitySession.browser.commandRejected(BrowserStageCommandKind.navigate)"))
-        #expect(viewModel.contains("webRTCClient.remoteVideoTrack(forUserId: producer.producerUserId + \"-screen\")"))
-        #expect(state.contains("var isBrowserAvailable: Bool = false {"))
-        #expect(state.contains("var browserNoVncURL: String? { didSet { onActivityInputChanged?() } }"))
     }
 
     @Test func theControllerGetsTheInputLayerOverTheVideo() {
@@ -447,76 +405,6 @@ struct ACT9BrowserStageTests {
         #expect(stage.isBrowserActive && stage.isRecovering && stage.activeAppId.isEmpty && !stage.isGameActive)
         #expect(BrowserStageFixtures.isFixture("browser-kitesurf") && !BrowserStageFixtures.isFixture("app-opening"))
         #expect(!BrowserFixturePage.html.contains("http") && !BrowserFixturePage.html.contains("<script"))
-    }
-
-    @Test func iosSurfaceKeepsTheInputLayerContract() throws {
-        let ios = try act9Source("Sources/Conclave/Features/Meeting/Activities/BrowserSurface+iOS.swift")
-        let flat = act9Normalized(ios)
-        #expect(ios.hasPrefix("#if os(iOS) && !SKIP\n") && ios.hasSuffix("#endif\n"))
-        for needle in ["WKWebsiteDataStore.nonPersistent()", "webViewWebContentProcessDidTerminate", "didFailProvisionalNavigation",
-                       "decidePolicyFor navigationResponse", "BrowserLoadIssuePolicy.errorIssue(domain: nsError.domain, code: nsError.code)",
-                       "BrowserLoadIssuePolicy.httpIssue(response.statusCode)", "webView.isOpaque = false", "webView.alpha = 1",
-                       "webView.backgroundColor = .clear", "WKUserScript(source: BrowserInputScripts.installHiddenCanvas",
-                       "evaluateJavaScript(BrowserInputScripts.focusKeyboard", ".keyboardType(.URL)", ".textInputAutocapitalization(.never)",
-                       ".autocorrectionDisabled()", ".submitLabel(.go)", ".onSubmit(go)", "StageVideoSurface(", "contentMode: .fit",
-                       "slotId: BrowserStagePresenter.videoSlotId", "presenter.onSessionEnded = { [weak self] endedId in",
-                       "accessibilityElementsHidden = true", "UIAccessibility.post(notification: .announcement"] {
-            #expect(flat.contains(act9Normalized(needle)), "BrowserSurface+iOS.swift lacks \(needle)")
-        }
-        for forbidden in ["NativeWebView", "MeetingViewModel", "Image(systemName: \"", "print(", "debugLog(", "NSLog(", "callAsyncJavaScript(",
-                          "addScriptMessageHandler", "userContentController.add(", "\u{2013}", "\u{2014}"] {
-            #expect(!ios.contains(forbidden), "BrowserSurface+iOS.swift uses \(forbidden)")
-        }
-        #expect(!ios.lowercased().contains("gradient"))
-        let stage = act9Normalized(try act9Source("Sources/Conclave/Features/Meeting/Stage/ActivityStage+iOS.swift"))
-        #expect(stage.contains("BrowserStageBody(browser: session.browser, stage: stage, onShowVideo: { stage.setShowsVideoOverActivity(true) })"))
-        #expect(stage.contains("BrowserStageMenu(browser: session.browser)"))
-        #expect(stage.contains("status: BrowserCopy.headerStatus(session.browser.model)"))
-    }
-
-    @Test func androidSurfaceKeepsTheLoadStateContract() throws {
-        let surface = try act9Source("Sources/Conclave/Skip/ui/browser/BrowserSurface.kt")
-        let registry = try act9Source("Sources/Conclave/Skip/ui/browser/BrowserWebViewRegistry.kt")
-        let copy = try act9Source("Sources/Conclave/Skip/ui/browser/BrowserCopy.kt")
-        let flat = act9Normalized(surface + registry)
-        for needle in ["KeyboardType.Uri", "capitalization = KeyboardCapitalization.None", "autoCorrectEnabled = false", "imeAction = ImeAction.Go",
-                       "override fun onRenderProcessGone", "return true", "override fun onReceivedSslError", "handler?.cancel()",
-                       "BrowserLoadIssue.sslFailed", "override fun onReceivedHttpError", "BrowserLoadIssuePolicy.httpIssue(errorResponse.statusCode)",
-                       "BrowserLoadIssuePolicy.androidErrorIssue(error.errorCode)", "request?.isForMainFrame != true",
-                       "android.graphics.Color.TRANSPARENT", "BrowserInputScripts.installHiddenCanvas", "allowFileAccess = false",
-                       "allowContentAccess = false", "setSupportMultipleWindows(false)", "AndroidView(", "onRelease",
-                       "rendererKey = \"stage:\" + BrowserStagePresenter.videoSlotId", "Modifier.aspectRatio(ratio)",
-                       "presenter.onSessionEnded = { endedId -> release(endedId) }", "IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS",
-                       "liveRegion = LiveRegionMode.Polite", "role = Role.Switch"] {
-            #expect(flat.contains(act9Normalized(needle)), "the Android browser surface lacks \(needle)")
-        }
-        for (name, text) in [("surface", surface), ("registry", registry), ("copy", copy)] {
-            for forbidden in ["SharedBrowserWebView", "NativePerformanceDiagnostics", "android.util.Log", "Log.d(", "Log.i(", "Log.w(",
-                              "Log.e(", "println(", "MeetingViewModel", "addJavascriptInterface(",
-                              "Text(\"", "Color(0x", "\u{2013}", "\u{2014}"] {
-                #expect(!text.contains(forbidden), "\(name) uses \(forbidden)")
-            }
-            #expect(!text.lowercased().contains("gradient"), "\(name) mentions a gradient")
-        }
-        let stage = act9Normalized(try act9Source("Sources/Conclave/Skip/ui/call/stage/ActivityStage.kt"))
-        #expect(stage.contains("BrowserStageBody(session.browser, stage, onShowVideo = { stage.setShowsVideoOverActivity(true) })"))
-        #expect(stage.contains("BrowserStageMenu(session.browser)"))
-        #expect(stage.contains("browserHeaderStatus(session.browser.model)"))
-    }
-
-    @Test func legacyWebViewsStayOffTheNativePath() throws {
-        let root = act9PackageRoot().appendingPathComponent("Sources/Conclave")
-        let enumerator = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
-        var nativeWebViewUsers: [String] = []
-        var sharedBrowserWebViewUsers: [String] = []
-        for case let url as URL in enumerator where url.pathExtension == "swift" || url.pathExtension == "kt" {
-            let text = try String(contentsOf: url, encoding: .utf8)
-            let name = url.lastPathComponent
-            if text.contains("NativeWebView(") && name != "NativeWebView.swift" { nativeWebViewUsers.append(name) }
-            if text.contains("SharedBrowserWebView(") && name != "SharedBrowserWebView.kt" { sharedBrowserWebViewUsers.append(name) }
-        }
-        #expect(nativeWebViewUsers == ["SharedBrowserLayoutView.swift"])
-        #expect(sharedBrowserWebViewUsers == ["NativeWebView.swift"])
     }
 
     @Test func browserStringsAreInBothCatalogs() throws {

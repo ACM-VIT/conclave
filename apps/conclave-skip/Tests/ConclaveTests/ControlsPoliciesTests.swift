@@ -261,7 +261,6 @@ struct ControlsPoliciesTests {
     }
 
     @Test func explanationsReachTheStageToastLaneAsLocalNotices() throws {
-
         let explanation = ControlExplanation(id: 7, kind: .screenShare, reason: .remoteShareActive, reasonName: "Avery", actionId: "")
         let notice = ControlBarPolicy.explanationNotice(explanation)
         #expect(notice.kind == NoticeKind.blockedExplanation && notice.lane == .toast && notice.expiresAtMillis == 0)
@@ -273,8 +272,6 @@ struct ControlsPoliciesTests {
         #expect(audioOnly.actions.map { $0.id } == [NoticeAction.turnOffAudioOnly])
         #expect(ControlBarPolicy.explanation(fromNotice: audioOnly)?.actionId == NoticeAction.turnOffAudioOnly)
         #expect(ControlBarPolicy.explanation(fromNotice: MeetingNotice.make(kind: NoticeKind.linkCopied)) == nil)
-        let presenter = controlsNormalized(try controlsSource("Sources/Conclave/Features/Meeting/Controls/CallControlsPresenter.swift"))
-        #expect(presenter.contains("stage.postLocal(ControlBarPolicy.explanationNotice(next))"))
     }
 
     @Test func permissionsAndSystemPausedAudio() {
@@ -474,92 +471,6 @@ struct ControlsPoliciesTests {
         #expect(wide.counters.panelPresent == 1 && wide.panelReadout().hasPrefix("panel=participants invoker=call"))
     }
 
-    @Test func iosBarStaysHitTestableUsesTheSingleGlassEntryAndPlaysOnlyOnDispatch() throws {
-        let cell = controlsNormalized(try controlsSource("Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift"))
-        let bar = controlsNormalized(try controlsSource("Sources/Conclave/Features/Meeting/Controls/CallControlBar+iOS.swift"))
-        let chrome = controlsNormalized(try controlsSource("Sources/Conclave/Features/Meeting/Stage/StageChrome+iOS.swift"))
-        for text in [cell, bar] { #expect(text.hasPrefix("#if os(iOS) && !SKIP")) }
-
-        #expect(cell.contains(".disabled(model.reason == ControlBlockedReason.leaving)"))
-        #expect(!cell.contains(".disabled(model.isBlocked)") && !cell.contains(".disabled(!"))
-        #expect(cell.contains(".conclaveControlSurface(state, isEnabled: !isBlocked, shape: .circle)"))
-
-        #expect(cell.contains("let kind = ControlBarPolicy.gestureKind(model) if controls.tap(model.kind) == ControlTapResult.dispatched, let kind {"))
-        #expect(cell.contains(".conclaveGestureFeedback(feedbackKind, trigger: feedbackCount)"))
-
-        #expect(cell.contains(".accessibilityAddTraits(.isToggle)") && cell.contains(".accessibilityShowsLargeContentViewer"))
-        #expect(cell.contains(".help(") && cell.contains(".task(id: model.isPending)"))
-        #expect(cell.contains("static let spinnerDelayMillis = 600"))
-
-        #expect(bar.contains("let bar = controls.bar"))
-        #expect(bar.contains("private struct CallControlsAlertHost: View"))
-        #expect(bar.contains("isPhone: UIDevice.current.userInterfaceIdiom == .phone"))
-
-        #expect(chrome.contains("@Environment(CallControlsPresenter.self) private var controls: CallControlsPresenter?"))
-        #expect(chrome.contains("CallControlBar(controls: controls, available: available)"))
-        #expect(chrome.components(separatedBy: ".accessibilityHidden(hidden)").count - 1 == 1)
-        #expect(chrome.components(separatedBy: ".accessibilityHidden(controlsHidden)").count - 1 == 1)
-        #expect(chrome.contains(".opacity(controlsHidden ? 0 : 1) .allowsHitTesting(!controlsHidden) .accessibilityHidden(controlsHidden)"))
-        for text in [cell, bar] {
-            for pattern in ["glassEffect", "GlassEffectContainer", "Material", "HapticManager", "MeetingViewModel", "UIScreen.main"] {
-                #expect(!text.contains(pattern), "uses \(pattern)")
-            }
-        }
-    }
-
-    @Test func androidBarUsesCallToggleStaysClickableAndPlaysOnlyOnDispatch() throws {
-        let toggle = controlsNormalized(try controlsSource("Sources/Conclave/Skip/ui/call/controls/CallToggle.kt"))
-        let bar = controlsNormalized(try controlsSource("Sources/Conclave/Skip/ui/call/controls/CallControlBar.kt"))
-        let caches = controlsNormalized(try controlsSource("Sources/Conclave/Skip/ui/call/controls/ControlsCaches.kt"))
-        let chrome = controlsNormalized(try controlsSource("Sources/Conclave/Skip/ui/call/stage/StageChrome.kt"))
-
-        #expect(toggle.contains("enabled = !control.isLeaving, role = Role.Switch,"))
-        #expect(toggle.contains("hapticFeedbackEnabled = false,"))
-        #expect(toggle.contains("toggleableState = ToggleableState(control.isOn)"))
-        #expect(toggle.contains(".alpha(if (control.isBlocked) CONCLAVE_CALL_DISABLED_ALPHA else 1f)"))
-        #expect(!toggle.contains("enabled = !control.isBlocked") && !toggle.contains("FilledIconToggleButton"))
-
-        #expect(bar.contains("val kind = control.gesture if (controls.tap(control.kind) == ControlTapResult.dispatched && kind != null) haptics.gesture(kind)"))
-        #expect(bar.contains("LaunchedEffect(control.isPending) { slowAck = false if (control.isPending) { delay(CALL_CONTROL_SPINNER_DELAY_MS) slowAck = true } }"))
-        #expect(bar.contains("internal val LocalCallControls = staticCompositionLocalOf<CallControlsPresenter?> { null }"))
-        #expect(bar.contains("Modifier.widthIn(max = ControlBarPolicy.androidMaxToolbarWidth.dp)"))
-
-        #expect(caches.contains("val state = presenter.bar val previous = cached"))
-
-        #expect(chrome.contains("val controls = LocalCallControls.current"))
-        #expect(chrome.contains("WindowInsets.systemBars.union(WindowInsets.displayCutout) .only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)"))
-        for text in [toggle, bar, caches] {
-            for pattern in ["@Stable", "@Immutable", "LocalHapticFeedback", "Vibrator", "MeetingViewModel", "FloatingToolbar", "ButtonGroup",
-                            "dynamicDarkColorScheme", "Color(0x", "fontFamily ="] {
-                #expect(!text.contains(pattern), "uses \(pattern)")
-            }
-        }
-    }
-
-    @Test func controlsSourcesStayFlatDashFreeAndSkipLite() throws {
-        var files = try controlsFiles(under: "Sources/Conclave/Features/Meeting/Controls", extensions: ["swift"])
-        files += try controlsFiles(under: "Sources/Conclave/Skip/ui/call/controls", extensions: ["kt"])
-        #expect(files.count >= 11)
-        for file in files {
-            let text = try controlsSource(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradient"), "\(file) mentions a gradient")
-            #expect(controlsMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-            #expect(!text.contains("MeetingViewModel.shared"), "\(file) reads the view model")
-        }
-        for file in try controlsFiles(under: "Sources/Conclave/Features/Meeting/Controls", extensions: ["swift"]) where !file.contains("+iOS") {
-            let text = try controlsSource(file)
-            #expect(!text.contains("#if"), "\(file) is shared and must not branch by platform")
-            #expect(controlsMatches(#"\bprotocol\s"#, in: text).isEmpty, "\(file) declares a protocol")
-            #expect(controlsMatches(#"case\s+\w+\("#, in: text).isEmpty, "\(file) has an associated value")
-            #expect(controlsMatches(#"\.(map|compactMap|flatMap)\(\w+(\.init)?\)"#, in: text).isEmpty, "\(file) maps with a function reference")
-            #expect(!text.contains("inout ") && !text.contains("isLetter"), "\(file)")
-        }
-
-        let coordinator = controlsNormalized(try controlsSource("Sources/Conclave/Features/Meeting/Panels/PanelCoordinator.swift"))
-        #expect(coordinator.contains("func toggle(_ panel: MeetingPanel, from invoker: PanelInvoker) {"))
-        #expect(coordinator.contains("var currentPanelName: String { snapshot.current?.panel.rawValue ?? \"\" }"))
-    }
 }
 
 #if os(macOS)

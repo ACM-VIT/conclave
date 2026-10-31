@@ -256,29 +256,6 @@ struct SYS15DiagnosticsTests {
         #expect(diagnostics.rejectedCount == 0)
     }
 
-    @Test func theTransportMilestoneIsWiredOncePerCallAndTheFrameMilestonesWaitForS6b() throws {
-        let viewModel = try sys15Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let handler = try sys15Body(viewModel, from: "private func handleTransportConnectionStateChanged(transportKind: String, stateName: String) async {",
-                                    to: "case \"disconnected\":")
-        #expect(handler.contains("case \"connected\", \"completed\", \"new\":"))
-        #expect(handler.contains("recordTransportConnectedMilestoneIfNeeded(stateName: stateName)"))
-        let record = try sys15Body(viewModel, from: "private func recordTransportConnectedMilestoneIfNeeded(stateName: String) {",
-                                   to: "private func reconnectDelayNanoseconds()")
-        #expect(record.contains("DiagnosticsTransportMilestonePolicy.shouldRecord("))
-        #expect(record.contains("callSession: callSessionSerial,"))
-        #expect(record.contains("recordedCallSession: transportConnectedMilestoneCallSession"))
-        #expect(record.contains("transportConnectedMilestoneCallSession = callSessionSerial"))
-        #expect(record.contains("PerformanceDiagnostics.timing(\n            DiagnosticsTransportMilestonePolicy.timingName,"))
-        #expect(!record.contains("transportKind"))
-        #expect(viewModel.contains("transportConnectedTimingStartedAt = configureStartedAt"))
-        #expect(viewModel.components(separatedBy: "recordTransportConnectedMilestoneIfNeeded(stateName:").count - 1 == 2)
-
-        let policies = try sys15Source("Sources/Conclave/Core/Diagnostics/DiagnosticsPolicies.swift")
-        let bridge = try sys15Body(policies, from: "enum DiagnosticsTimingBridge {", to: "enum DiagnosticsTransportMilestonePolicy {")
-        #expect(bridge.contains("case \"join_transport_connected\":\n            return DiagnosticsMilestone.transportConnected"))
-        #expect(!bridge.contains("firstDecodedFrame") && !bridge.contains("firstDisplayedFrame"))
-    }
-
     @Test func presenceDrivesJoinRecoveryPipAndCleanupSpans() {
         let recording = RecordingHooks()
         let diagnostics = CallDiagnostics(store: temporaryStore(), hooks: recording.make())
@@ -607,151 +584,11 @@ struct SYS15DiagnosticsTests {
         #expect(DiagnosticsReadout.listenersKey == "sys.diagListeners" && DiagnosticsReadout.bufferKey == "sys.diagBuffer")
     }
 
-    @Test func theIOSPartsUseSignpostsLoggerCategoriesMetricKitAndTheBackgroundFlush() throws {
-        let platform = try sys15Source("Sources/Conclave/Core/Diagnostics/CallDiagnostics+iOS.swift")
-        #expect(platform.hasPrefix("#if os(iOS) && !SKIP"))
-        #expect(platform.contains("OSSignposter(subsystem: CallDiagnosticsIOS.subsystem, category: \"call\")"))
-        #expect(platform.contains("signposter.makeSignpostID()"))
-        for kind in DiagnosticsSpanKind.allCases {
-            #expect(platform.contains("signposter.beginInterval(\"\(kind.rawValue)\", id: id)"), "\(kind)")
-            #expect(platform.contains("signposter.endInterval(\"\(kind.rawValue)\", state)"), "\(kind)")
-        }
-        for milestone in DiagnosticsMilestone.allCases {
-            #expect(platform.contains("signposter.emitEvent(\"\(milestone.rawValue)\", id: id)"), "\(milestone)")
-        }
-        for category in DiagnosticsLogCategory.allCases {
-            #expect(platform.contains("Logger(subsystem: CallDiagnosticsIOS.subsystem, category: \"\(category.rawValue)\")"))
-        }
-        #expect(platform.contains("static let subsystem = \"com.acmvit.conclave\""))
-        #expect(platform.contains("\"\\(code, privacy: .public) phase=\\(phase, privacy: .public)\""))
-        #expect(platform.components(separatedBy: "privacy: .public").count == 3, "only the code and the phase are public")
-        #expect(platform.contains("MXMetricManager.shared.add(subscriber)"))
-        #expect(platform.contains("guard installed == nil else { return }"))
-        for field in ["crashDiagnostics", "hangDiagnostics", "cpuExceptionDiagnostics", "diskWriteExceptionDiagnostics",
-                      "appLaunchDiagnostics"] {
-            #expect(platform.contains("payload.\(field)"), "\(field)")
-        }
-
-        for forbidden in [".composedMessage", ".arguments", ".regionFormat", ".deviceType", "jsonRepresentation() ?? payload",
-                          "payload.jsonRepresentation()"] {
-            #expect(!platform.contains(forbidden), "\(forbidden)")
-        }
-        #expect(platform.contains("UIApplication.didEnterBackgroundNotification"))
-        #expect(platform.contains("beginBackgroundTask(withName: \"ConclaveDiagnosticsFlush\")"))
-        #expect(platform.contains("CallDiagnostics.shared.applicationDidEnterBackground"))
-    }
-
-    @Test func theIOSRowIsAPlainButtonWithItsFooterAsTheHintAndAnInlineFailure() throws {
-        let row = try sys15Source("Sources/Conclave/Core/Diagnostics/DiagnosticsExportRow+iOS.swift")
-        #expect(row.hasPrefix("#if os(iOS) && !SKIP"))
-        #expect(row.contains("Button {") && !row.contains("NavigationLink") && !row.contains("chevron"))
-        #expect(row.contains(".accessibilityHint(Text(DiagnosticsCopy.footer))"))
-        #expect(row.contains("UIAccessibility.post(notification: .announcement, argument: DiagnosticsCopy.failure)"))
-        #expect(row.contains("presenter.takePendingFailure()") && row.contains("presenter.takePendingShare()"))
-        #expect(row.contains("Button(DiagnosticsCopy.tryAgain)"))
-        #expect(row.contains("UIActivityViewController(activityItems: [item], applicationActivities: nil)"))
-        #expect(row.contains("popover.sourceView = anchor"))
-        #expect(row.contains("metadata.title = title"))
-        for key in ["Export Diagnostics", "Creates a file without names, messages or meeting codes that you can send to support.",
-                    "Conclave diagnostics", "Couldn\\u{2019}t create the diagnostics file.", "Try Again"] {
-            #expect(row.contains("ConclaveStrings.text(\"\(key)\")"), "\(key)")
-        }
-        for forbidden in ["sensoryFeedback", "Haptic", "glassEffect", "StageEvent", "Color(", ".foregroundStyle(.red"] {
-            #expect(!row.contains(forbidden), "\(forbidden)")
-        }
-    }
-
-    @Test func theAndroidPartsTraceReadExitReasonsAndShareThroughTheFileProvider() throws {
-        let kotlin = try sys15Source("Sources/Conclave/Skip/NativePerformanceDiagnostics.kt")
-        #expect(kotlin.contains("Trace.beginAsyncSection(traceSectionName(name), cookie)"))
-        #expect(kotlin.contains("Trace.endAsyncSection(traceSectionName(name), cookie)"))
-        #expect(kotlin.contains("Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q"))
-        #expect(kotlin.contains("manager.getHistoricalProcessExitReasons(context.packageName, 0, 5)"))
-        #expect(kotlin.contains("manager.setProcessStateSummary(processStateSummary(callSession, phase))"))
-        #expect(kotlin.contains("info.reason == ApplicationExitInfo.REASON_ANR"))
-        #expect(kotlin.contains("ByteArray(DiagnosticsLimits.anrTraceBytes)"))
-        #expect(kotlin.contains("DiagnosticsPayloadFactory.exitRecord("))
-
-        let install = try sys15Body(kotlin, from: "fun installDiagnosticsListeners(store: DiagnosticsFileStore) {",
-                                    to: "private fun enableDebugStrictMode()")
-        #expect(install.contains("if (diagnosticsListenersInstalled) return"))
-        #expect(install.contains("Thread {\n                collectExitReasons(context, store)"))
-        #expect(install.contains("if (AndroidRuntimeConfig.isDebuggable()) {\n                enableDebugStrictMode()"))
-        #expect(install.contains("ProcessLifecycleOwner.get().lifecycle.addObserver(backgroundObserver)"))
-        #expect(kotlin.contains("Lifecycle.Event.ON_STOP") && kotlin.contains("CallDiagnostics.shared.applicationDidEnterBackground()"))
-        #expect(kotlin.contains("StrictMode.ThreadPolicy.Builder().detectAll().penaltyLog().build()"))
-        #expect(kotlin.contains("StrictMode.VmPolicy.Builder().detectAll().penaltyLog().build()"))
-
-        #expect(kotlin.contains("if (verboseLogsEnabled()) {\n            startSlowFrameMonitor()\n        }"))
-        #expect(kotlin.contains("verySlowFrames.incrementAndGet() else slowFrames.incrementAndGet()"))
-
-        #expect(kotlin.contains("FileProvider.getUriForFile(context, context.packageName + FILE_PROVIDER_SUFFIX, file)"))
-        #expect(kotlin.contains("type = \"application/json\"") && kotlin.contains("addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)"))
-        #expect(kotlin.contains("Intent.createChooser(buildDiagnosticsSendIntent(uri, title), title)"))
-        #expect(kotlin.contains("PipManager.suppressNextAutoEnter(\"diagnostics_share\")"))
-
-        let item = try sys15Body(kotlin, from: "internal fun DiagnosticsExportItem(", to: "internal fun DiagnosticsExportEffects(")
-        #expect(item.contains("clickable(enabled = !exporting, role = Role.Button)"))
-        #expect(item.contains("conclaveString(\"sys_diag_export\")") && item.contains("conclaveString(\"sys_diag_footer\")"))
-        #expect(!item.contains("trailingContent"))
-        let effects = try sys15Body(kotlin, from: "internal fun DiagnosticsExportEffects(", to: "\n}\n")
-        #expect(effects.contains("conclaveString(\"sys_diag_failed\")") && effects.contains("conclaveString(\"ds_retry\")"))
-        #expect(effects.contains("conclaveString(\"sys_diag_share_title\")"))
-        #expect(effects.contains("snackbar.showSnackbar(message = failure, actionLabel = retry"))
-
-        #expect(kotlin.contains("if (!verboseLogsEnabled()) return\n        Log.i(DIAG_TAG, \"$category $code phase=$phase\")"))
-    }
-
     @Test func theExportFolderIsInsideTheFileProviderExportsPath() throws {
         let paths = try sys15Source("Android/app/src/main/res/xml/conclave_file_paths.xml")
         #expect(paths.contains("<cache-path name=\"exports\" path=\"exports/\" />"))
-        let store = try sys15Source("Sources/Conclave/Core/Diagnostics/DiagnosticsFileStore.swift")
-        #expect(store.contains("URL.cachesDirectory\n            .appendingPathComponent(\"exports\", isDirectory: true)"))
         let manifest = try sys15Source("Android/app/src/main/AndroidManifest.xml")
         #expect(manifest.contains("android:authorities=\"${applicationId}.fileprovider\""))
-    }
-
-    @Test func ownedFilesKeepTheTranspileDesignAndPrivacyRules() throws {
-        let shared = [
-            "Sources/Conclave/Core/Diagnostics/DiagnosticsModels.swift",
-            "Sources/Conclave/Core/Diagnostics/DiagnosticsPolicies.swift",
-            "Sources/Conclave/Core/Diagnostics/DiagnosticsFileStore.swift",
-            "Sources/Conclave/Core/Diagnostics/CallDiagnostics.swift",
-            "Sources/Conclave/Core/Diagnostics/DiagnosticsExportPresenter.swift",
-        ]
-        let sources = shared + [
-            "Sources/Conclave/Core/Diagnostics/CallDiagnostics+iOS.swift",
-            "Sources/Conclave/Core/Diagnostics/DiagnosticsExportRow+iOS.swift",
-            "Sources/Conclave/Shared/PerformanceDiagnostics.swift",
-            "Sources/Conclave/Skip/NativePerformanceDiagnostics.kt",
-        ]
-        let tests = ["Tests/ConclaveTests/SYS15DiagnosticsTests.swift", "Tests/ConclaveTests/Skip/SYS15DiagnosticsBridgeTests.kt"]
-        for file in sources + tests {
-            let text = try sys15Source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has a dash")
-        }
-        for file in sources {
-            let text = try sys15Source(file)
-            #expect(!text.contains("Gradient") && !text.contains("Color(0x"), "\(file)")
-        }
-        for file in shared {
-            let text = try sys15Source(file)
-
-            for forbidden in ["import UIKit", "import SwiftUI", "inout ", ".map(String.init)", "compactMap(", "isLetter",
-                              "indirect ", "URLSession", "URLRequest", "OkHttp"] {
-                #expect(!text.contains(forbidden), "\(file) uses \(forbidden)")
-            }
-        }
-
-        let kotlin = try sys15Source("Sources/Conclave/Skip/NativePerformanceDiagnostics.kt")
-        for forbidden in ["OkHttp", "HttpURLConnection", "URL(\"http", "PostHog", "posthog"] {
-            #expect(!kotlin.contains(forbidden), "\(forbidden)")
-        }
-
-        let perf = try sys15Source("Sources/Conclave/Shared/PerformanceDiagnostics.swift")
-        #expect(perf.contains("\\(details, privacy: .private)") && !perf.contains("\\(details, privacy: .public)"))
-        #expect(perf.contains("CallDiagnostics.shared.install()"))
-        #expect(perf.contains("DiagnosticsTimingBridge.milestone(forTiming: name)"))
     }
 
     @Test func diagnosticsStringsAreInBothCatalogs() throws {
@@ -764,23 +601,6 @@ struct SYS15DiagnosticsTests {
         for name in ["sys_diag_export", "sys_diag_footer", "sys_diag_share_title", "sys_diag_failed", "ds_retry"] {
             #expect(strings.contains("<string name=\"\(name)\">"), "\(name)")
         }
-    }
-
-    @Test func requestedHooksAreWired() throws {
-        let viewModel = try sys15Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(viewModel.contains("CallDiagnostics.shared.makePresenceAdapter()"))
-        #expect(viewModel.contains("CallDiagnostics.shared.sensitiveValues = {"))
-        #expect(viewModel.contains("canExportDiagnostics: DiagnosticsExportPolicy.isOffered"))
-        #expect(viewModel.contains("CallDiagnostics.shared.recordFailure(classified)"))
-        let settingsIOS = try sys15Source("Sources/Conclave/Features/Meeting/Settings/SettingsPanel+iOS.swift")
-        #expect(settingsIOS.contains("DiagnosticsExportRow(presenter: DiagnosticsExportPresenter.shared)"))
-        let rows = try sys15Source("Sources/Conclave/Skip/ui/settings/SettingsRows.kt")
-        #expect(rows.contains("SettingsRowID.exportDiagnostics -> DiagnosticsExportItem(DiagnosticsExportPresenter.shared, tag)"))
-        #expect(rows.contains("DiagnosticsExportEffects(DiagnosticsExportPresenter.shared, snackbar)"))
-        let appScope = try sys15Source("Sources/Conclave/Skip/ui/settings/SettingsPanel.kt")
-        #expect(appScope.contains("canExportDiagnostics = DiagnosticsExportPolicy.isOffered"))
-        let account = try sys15Source("Sources/Conclave/Features/Account/AccountView+iOS.swift")
-        #expect(account.contains("canExportDiagnostics: DiagnosticsExportPolicy.isOffered"))
     }
 }
 

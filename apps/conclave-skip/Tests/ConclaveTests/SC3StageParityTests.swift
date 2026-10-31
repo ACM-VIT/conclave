@@ -859,18 +859,6 @@ struct SC3StageParityTests {
                 == [p(0), p(1), p(2), p(3)])
     }
 
-    @Test func theViewModelFallbackReadsTheStagePoliciesNotTheLegacySnapshots() throws {
-        let source = try stageSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let start = try #require(source.range(of: "private func remoteVisibleConsumerUserIds() -> Set<String> {"))
-        let end = try #require(source.range(of: "private func insertPresentRemoteConsumerUserId", range: start.upperBound..<source.endIndex))
-        let body = stageNormalized(String(source[start.upperBound..<end.lowerBound]))
-        #expect(body.contains("StageOrderPolicy.consumerFallbackRemoteIds(layout: stage.layout, inputs: stage.inputs, speakerUserId: stage.speakerUserId)"))
-        #expect(body.contains("insertPresentRemoteConsumerUserId(state.presentationScreenShareUserId, into: &ids)"))
-        for legacy in ["visibleGridUserIds", "visibleGridSnapshot(", "tileStripSnapshot(", "spotlightSnapshot(", "spotlightUserId"] {
-            #expect(!body.contains(legacy), "the consumer fallback still reads \(legacy)")
-        }
-    }
-
     @Test func thePresenterPlansWhatTheParityCompositionPlans() {
         for fixture in SC3Parity.sweep() {
             let state = SC3Parity.state(fixture)

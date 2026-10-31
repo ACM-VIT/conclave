@@ -330,50 +330,5 @@ struct ACT2GameShellTests {
         #expect(GameMoveAdapter.payloadJSON(GameMoveIntent.start()).isEmpty && GameMoveAdapter.payloadJSON(GameMoveIntent.tap()).isEmpty)
         #expect(GameMoveAdapter.quoted("a\\b\nc") == #""a\\b\nc""#)
     }
-
-    @Test func everyGameEnumCaseHasCopyOnBothPlatforms() throws {
-        let ios = try stageSource("Sources/Conclave/Features/Meeting/Activities/GameCopy+iOS.swift")
-        let kotlin = try stageSource("Sources/Conclave/Skip/ui/copy/GameCopy.kt")
-        for value in GameFailure.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("GameFailure." + value.rawValue), "\(value)") }
-        for value in SeatState.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("SeatState." + value.rawValue), "\(value)") }
-        for value in GameLobbyReason.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("GameLobbyReason." + value.rawValue), "\(value)") }
-        for value in GameKitNoticeKind.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("GameKitNoticeKind." + value.rawValue), "\(value)") }
-        for value in GameChromePhase.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("GameChromePhase." + value.rawValue), "\(value)") }
-    }
-
-    @Test func kitK1ToK13ExistOnBothPlatformsWithTheirPlatformRules() throws {
-        var ios = ""
-        for file in try stageFiles(under: "Sources/Conclave/Features/Meeting/Games/Native", extensions: ["swift"]) { ios += try stageSource(file) }
-        var kotlin = ""
-        for file in try stageFiles(under: "Sources/Conclave/Skip/ui/games", extensions: ["kt"]) { kotlin += try stageSource(file) }
-        let kit = ["GameKitPrompt", "GameKitCountdown", "GameKitChoiceList", "GameKitBinaryChoice", "GameKitSplitResult",
-                   "GameKitPlayerChips", "GameKitHostBar", "GameKitScoreboard", "GameKitRoundResults", "GameKitTextEntry",
-                   "GameKitSecretCard", "GameKitSeatControl", "GameKitNotice"]
-        #expect(kit.count == 13)
-        for name in kit {
-            #expect(ios.contains("struct " + name + ": View"), "iOS kit misses \(name)")
-            #expect(kotlin.contains("internal fun " + name + "("), "Android kit misses \(name)")
-        }
-        let flatIOS = stageNormalized(ios)
-        let flatKotlin = stageNormalized(kotlin)
-
-        #expect(flatIOS.contains("TimelineView(.periodic(from: .now, by: 1))") && flatIOS.contains("if scenePhase == .active"))
-        #expect(flatKotlin.contains("lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED)"))
-        #expect(flatKotlin.contains("LinearProgressIndicator( progress = { fraction }"))
-
-        #expect(flatIOS.contains("DragGesture(minimumDistance: 0).updating($isHeld)") && !ios.contains("onLongPressGesture"))
-        #expect(flatIOS.contains(".accessibilityAction(named: Text(ConclaveStrings.text(\"Reveal Word\")))"))
-        #expect(flatKotlin.contains(".pointerInput(enabled)") && flatKotlin.contains("tryAwaitRelease()"))
-        #expect(flatKotlin.contains("CustomAccessibilityAction(revealLabel)") && !kotlin.contains("FLAG_SECURE"))
-
-        #expect(flatIOS.contains("ConclaveStrings.text(\"Your answer\")") && flatIOS.contains("ConclaveStrings.text(\"Correct\")"))
-        #expect(flatKotlin.contains("role = Role.RadioButton") && flatKotlin.contains("conclaveString(\"gm_your_answer\")"))
-
-        #expect(flatIOS.contains(".modifier(GameShellEndDialog(games: games, name: chrome.name, isPresented: $endPrompt))"))
-        #expect(flatIOS.contains(".safeAreaInset(edge: .bottom, spacing: 0)"))
-        for forbidden in ["GameJSONValue", "dictionaryValue", "Font.system(size:", "confetti", "shimmer", "MeetingState"] {
-            #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the shell uses \(forbidden)")
-        }
-    }
 }
 #endif

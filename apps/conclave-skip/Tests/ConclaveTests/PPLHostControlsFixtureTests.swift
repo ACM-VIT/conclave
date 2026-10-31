@@ -379,27 +379,6 @@ struct PPLHostControlsFixtureTests {
         #expect(PeopleFixtureScript.adding(["a", "b"], "a") == ["b", "a"])
         #expect(PeopleFixtureScript.removing(["a", "b"], "c") == ["a", "b"])
     }
-
-    @Test func bothRootsOpenOnLaunchAndOfferTheVerbatimHostControlsButton() throws {
-        let ios = pplHostNormalized(try pplHostSource("Sources/Conclave/Features/Meeting/People/Debug/PeopleFixtureView+iOS.swift"))
-        #expect(ios.contains("session.openOnLaunch()"))
-        #expect(!ios.contains("session.open(destination: PeopleFixtureScript.openDestination(for: session.state))"))
-        #expect(ios.contains("if PeopleFixtureScript.opensHostControls(session.state) { fixtureButton(\"Host Controls\", identifier: \"people.fixture.hostControls\")"))
-        #expect(ios.contains("readout(session.hostReadout(), identifier: \"host.controls\")"))
-        #expect(ios.contains("Text(verbatim: title)") && !ios.contains("ConclaveStrings"))
-        let android = pplHostNormalized(try pplHostSource("Sources/Conclave/Skip/ui/people/debug/PeopleFixtureRoot.kt"))
-        #expect(android.contains("session.openOnLaunch()"))
-        #expect(android.contains("if (PeopleFixtureScript.opensHostControls(session.state)) { FixtureButton(\"Host controls\", \"people.fixture.hostControls\")"))
-        #expect(android.contains("FixtureReadout(session.hostReadout(), \"host.controls\", tick)"))
-        #expect(!android.contains("conclaveString("))
-        for path in ["Sources/Conclave/Features/Meeting/People/Debug/PeopleFixtures.swift",
-                     "Sources/Conclave/Features/Meeting/People/Debug/PeopleFixtureView+iOS.swift",
-                     "Sources/Conclave/Skip/ui/people/debug/PeopleFixtureRoot.kt"] {
-            let source = try pplHostSource(path)
-            #expect(!source.contains("\u{2014}") && !source.contains("\u{2013}"), "\(path) has a long dash")
-            #expect(!source.lowercased().contains("gradient"), "\(path) mentions a gradient")
-        }
-    }
 }
 
 private func pplHostSource(_ packageRelativePath: String) throws -> String {

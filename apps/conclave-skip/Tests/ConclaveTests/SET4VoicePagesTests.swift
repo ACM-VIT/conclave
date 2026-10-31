@@ -150,30 +150,6 @@ struct SET4VoicePagesTests {
         #expect(TtsSpeaker.standardVoiceOptions().isEmpty)
     }
 
-    @Test func voiceSourcesLoadTheListOncePerPageAndPreviewOnTapOnly() throws {
-        let ios = try Self.source("Sources/Conclave/Features/Meeting/Settings/VoicePages+iOS.swift")
-        #expect(ios.contains(".task {\n            settings.setStandardVoices(TtsSpeaker.standardVoiceOptions())"))
-        #expect(ios.contains("if chat.canUsePersonalVoice"))
-        #expect(ios.contains(".pickerStyle(.navigationLink)"))
-        let android = try Self.source("Sources/Conclave/Skip/ui/settings/VoicePages.kt")
-        #expect(android.contains("TtsSpeaker.loadStandardVoices(Locale.getDefault().toLanguageTag())"))
-        #expect(android.contains("if (chat.canUsePersonalVoice)"))
-        #expect(android.contains("Intent(\"com.android.settings.TTS_SETTINGS\")"))
-        let speakerSwift = try Self.source("Sources/Conclave/Core/Audio/TtsSpeaker.swift")
-        #expect(speakerSwift.components(separatedBy: "func togglePreview(sentence: String, start: Bool)").count - 1 == 2)
-        #expect(speakerSwift.contains("AVSpeechSynthesisVoice.speechVoices()"))
-        let speakerKotlin = try Self.source("Sources/Conclave/Skip/TtsSpeaker.kt")
-        #expect(speakerKotlin.contains("internal fun togglePreview(sentence: String, start: Boolean)"))
-        #expect(speakerKotlin.contains("internal fun loadStandardVoices(languageTag: String, onLoaded: (List<VoiceOptionModel>) -> Unit)"))
-
-        #expect(speakerKotlin.contains("var probe: TextToSpeech? = null"))
-        let recorderIOS = try Self.source("Sources/Conclave/Features/Meeting/Settings/VoiceSampleRecorder+iOS.swift")
-        #expect(recorderIOS.contains("confirmationDialog(ConclaveStrings.text(\"Discard Recording?\")"))
-        let recorderKotlin = try Self.source("Sources/Conclave/Skip/ui/settings/VoiceSampleRecorder.kt")
-        #expect(recorderKotlin.contains("BackHandler(enabled = midTake)"))
-        #expect(recorderKotlin.contains("settings.discardVoiceSample()"))
-    }
-
     static func make(_ state: SettingsFixtureState, defaults: UserDefaults = SET4VoicePagesTests.freshDefaults())
         -> (SettingsPresenter, SettingsRecordingCore) {
         let presenter = SettingsPresenter(scope: .call, platform: .ios, defaults: defaults)

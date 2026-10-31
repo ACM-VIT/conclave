@@ -246,43 +246,6 @@ struct PPL6QaPolicyTests {
         #expect(!QaComposerPolicy.canPostAnswer(String(repeating: "a", count: 1001), isPending: false))
         #expect(QaComposerPolicy.showsQuestionCounter(450) && !QaComposerPolicy.showsQuestionCounter(449))
     }
-
-    @Test func thePlatformPanelsFollowTheSpec() throws {
-        let panel = try ppl6Source("Sources/Conclave/Features/Meeting/Webinar/QaPanel+iOS.swift")
-        #expect(panel.contains("ConclaveComposerField(identifier: \"qa.composer.cluster\")"), "OQ2: the one composer glass file")
-        #expect(panel.contains(".navigationDestination(for: QaRoute.self)"))
-        #expect(panel.contains("people.qa.panelDidOpen(presentationID: presentation.request.presentationID)"))
-        #expect(panel.contains("if dynamicTypeSize.isAccessibilitySize {\n                    sortPicker.pickerStyle(.menu)\n                } else {\n                    sortPicker.pickerStyle(.segmented)"))
-        let answer = try ppl6Source("Sources/Conclave/Features/Meeting/Webinar/QaAnswerPage+iOS.swift")
-        #expect(answer.contains(".lineLimit(4...12)") && answer.contains("ToolbarItem(placement: .confirmationAction)"))
-        let row = try ppl6Source("Sources/Conclave/Features/Meeting/Webinar/QuestionRow+iOS.swift")
-        #expect(row.contains(".accessibilityAddTraits(model.hasUpvoted ? .isSelected : [])"))
-        #expect(row.contains(".conclaveGestureFeedback(.upvoteChanged, trigger: upvoteTicks)"))
-        let page = try ppl6Source("Sources/Conclave/Skip/ui/qa/QaPage.kt")
-        #expect(page.contains("contentMode = InCallPageContent.lazyList"))
-        #expect(page.contains("ConclaveTextEntryKind.multiline"))
-        let kotlinRow = try ppl6Source("Sources/Conclave/Skip/ui/qa/QuestionRow.kt")
-        #expect(kotlinRow.contains("haptics.gesture(FeedbackKind.upvoteChanged)"))
-        #expect(kotlinRow.contains("FilterChip("))
-        let vm = try ppl6Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(vm.contains("self.syncWebinarQaPanelOpenState()"))
-        #expect(vm.contains("socketManager.onWebinarQaChanged = {"))
-        for path in ["Sources/Conclave/Features/Meeting/Webinar/WebinarQAModels.swift",
-                     "Sources/Conclave/Features/Meeting/Webinar/WebinarQAPresenter.swift",
-                     "Sources/Conclave/Features/Meeting/Webinar/QaOrderingPolicy.swift",
-                     "Sources/Conclave/Features/Meeting/Webinar/QaUnseenPolicy.swift",
-                     "Sources/Conclave/Features/Meeting/Webinar/QaPanel+iOS.swift",
-                     "Sources/Conclave/Features/Meeting/Webinar/QuestionRow+iOS.swift",
-                     "Sources/Conclave/Features/Meeting/Webinar/QaAnswerPage+iOS.swift",
-                     "Sources/Conclave/Skip/ui/qa/QaPage.kt",
-                     "Sources/Conclave/Skip/ui/qa/QuestionRow.kt"] {
-            let source = try ppl6Source(path)
-            #expect(!source.lowercased().contains("gradient"), "\(path) draws a gradient")
-            #expect(!source.contains("\u{2014}") && !source.contains("\u{2013}"), "\(path) has a long dash")
-            #expect(!source.contains("Color(red:") && !source.contains("Color(0x"), "\(path) has a color literal")
-            #expect(!source.contains("Image(systemName: \""), "\(path) names a raw symbol")
-        }
-    }
 }
 
 private func ppl6Source(_ packageRelativePath: String) throws -> String {

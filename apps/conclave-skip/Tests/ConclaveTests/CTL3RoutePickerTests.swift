@@ -213,53 +213,6 @@ struct CTL3RoutePickerTests {
         #expect(ControlsFixtureSession(state: .guest).controls.routeOwner !== AudioRouteOwner.shared)
     }
 
-    @Test func iosUsesTheSystemRouteListAndReportsThroughThePresenter() throws {
-        let button = ctl3Normalized(try ctl3Source("Sources/Conclave/Features/Meeting/Controls/RoutePickerButton+iOS.swift"))
-        let chrome = ctl3Normalized(try ctl3Source("Sources/Conclave/Features/Meeting/Stage/StageChrome+iOS.swift"))
-        #expect(button.hasPrefix("#if os(iOS) && !SKIP"))
-        #expect(button.contains("ConclaveRoutePickerButton(identifier: \"stage.route\", onPresentingChange: { open in controls.setRoutePickerOpen(open) })"))
-
-        for pattern in ["AudioRouteList", "route.options", "conclaveGestureFeedback", "sensoryFeedback", "HapticManager"] {
-            #expect(!button.contains(pattern), "the iOS route button uses \(pattern)")
-        }
-
-        #expect(chrome.contains("@Environment(CallControlsPresenter.self) private var routeControls: CallControlsPresenter?"))
-        #expect(chrome.contains("if let routeControls { CallRoutePickerButton(controls: routeControls) } else {"))
-        #expect(chrome.contains("ConclaveRoutePickerButton(identifier: \"stage.route\", onPresentingChange: { open in stage.setTransientChrome(id: ChromeAutoHidePolicy.routePicker, open: open) })"))
-    }
-
-    @Test func androidRouteSheetIsTheDarkM3SheetOverTheSharedList() throws {
-        let sheet = ctl3Normalized(try ctl3Source("Sources/Conclave/Skip/ui/call/controls/AudioRouteSheet.kt"))
-        let chrome = ctl3Normalized(try ctl3Source("Sources/Conclave/Skip/ui/call/stage/StageChrome.kt"))
-        let bar = ctl3Normalized(try ctl3Source("Sources/Conclave/Skip/ui/call/controls/CallControlBar.kt"))
-        let caches = ctl3Normalized(try ctl3Source("Sources/Conclave/Skip/ui/call/controls/ControlsCaches.kt"))
-        #expect(sheet.contains("HostingTheme(inCall = true) {"))
-        #expect(sheet.contains("rememberModalBottomSheetState(skipPartiallyExpanded = true)"))
-        #expect(sheet.contains("ModalBottomSheetProperties(isAppearanceLightStatusBars = false, isAppearanceLightNavigationBars = false)"))
-        #expect(sheet.contains("containerColor = MaterialTheme.colorScheme.surfaceContainerLow,"))
-        #expect(sheet.contains("stage.setTransientChrome(id = ChromeAutoHidePolicy.routeSheet, open = true)"))
-        #expect(sheet.contains("onDispose { stage.setTransientChrome(id = ChromeAutoHidePolicy.routeSheet, open = false) }"))
-        #expect(sheet.contains(".semantics { heading() }") && sheet.contains("AudioRouteList(rows = rows,"))
-
-        #expect(sheet.contains("if (controls.requestRoute(id = id) == ControlTapResult.dispatched) {"))
-        #expect(sheet.contains("if (!RoutePickerPolicy.isAccessRow(id)) haptics.gesture(FeedbackKind.selectionChanged)"))
-        #expect(sheet.components(separatedBy: "haptics.gesture(").count - 1 == 1)
-
-        #expect(sheet.contains("RoutePickerPolicy.dismissesAfter(requestedId = requestedId, route = route.snapshot)"))
-        #expect(sheet.contains("onDismiss() controls.openAudioSettings()"))
-
-        for pattern in ["BLUETOOTH_CONNECT", "PermissionHelper", "requestPermissions", "rememberLauncherForActivityResult",
-                        "LocalHapticFeedback", "Color(0x", "@Stable", "@Immutable", "MeetingViewModel"] {
-            #expect(!sheet.contains(pattern), "the route sheet uses \(pattern)")
-        }
-
-        #expect(caches.contains("val state = presenter.route val previous = cached"))
-
-        #expect(chrome.contains("AudioRouteSheet(controls, stage, onDismiss = { routeSheetOpen = false })"))
-        #expect(chrome.contains("StageTopRow(stage, capsuleMax, onMinimize, routeAction)"))
-        #expect(bar.contains("AudioRouteSheet(controls, controls.stage, onDismiss = { routeSheetOpen = false })"))
-    }
-
     @Test func routeStringsResolveInBothCatalogs() throws {
 
         let strings = try ctl3Source("Android/app/src/main/res/values/strings.xml")
@@ -272,21 +225,6 @@ struct CTL3RoutePickerTests {
         for key in ["Couldn\u{2019}t switch audio. Try again.", "Speaker"] {
             #expect(catalog.contains("\"" + key + "\""), "missing \(key)")
         }
-    }
-
-    @Test func ctl3SourcesStayFlatDashFreeAndSkipLite() throws {
-        let files = ["Sources/Conclave/Features/Meeting/Controls/RoutePickerPolicy.swift",
-                     "Sources/Conclave/Features/Meeting/Controls/RoutePickerButton+iOS.swift",
-                     "Sources/Conclave/Skip/ui/call/controls/AudioRouteSheet.kt",
-                     "Tests/ConclaveTests/CTL3RoutePickerTests.swift"]
-        for file in files {
-            let text = try ctl3Source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradi" + "ent"), "\(file) mentions a forbidden fill")
-        }
-        let policy = try ctl3Source("Sources/Conclave/Features/Meeting/Controls/RoutePickerPolicy.swift")
-        #expect(!policy.contains("#if") && !policy.contains("protocol ") && !policy.contains("inout "))
-        #expect(policy.range(of: #"case\s+\w+\("#, options: .regularExpression) == nil)
     }
 }
 

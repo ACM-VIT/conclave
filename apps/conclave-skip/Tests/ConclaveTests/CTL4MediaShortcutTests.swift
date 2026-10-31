@@ -204,77 +204,6 @@ struct CTL4MediaShortcutTests {
         #expect(ControlsFixtureSession(state: .recovering).shortcutsReadout() == "mic=1 camera=0 items=flipCamera(reconnecting)")
     }
 
-    @Test func iosMenusAttachBelowAccessibilitySizesAndEveryItemIsAnAction() throws {
-        let menu = ctl4Normalized(try ctl4Source("Sources/Conclave/Features/Meeting/Controls/MediaShortcutMenu+iOS.swift"))
-        let cell = ctl4Normalized(try ctl4Source("Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift"))
-        #expect(menu.hasPrefix("#if os(iOS) && !SKIP"))
-
-        #expect(menu.components(separatedBy: ".contextMenu {").count - 1 == 2)
-        #expect(menu.components(separatedBy: "MediaShortcutPolicy.attachesMenu(items, isAccessibilityText: isAccessibilityText)").count - 1 == 2)
-        #expect(menu.components(separatedBy: ".accessibilityActions {").count - 1 == 2)
-        #expect(menu.contains("let attachesMenu = hasShortcut && MediaShortcutPolicy.attachesMenu(items, isAccessibilityText: isAccessibilityText) withActions.contextMenu { if attachesMenu { ForEach(items) { item in"))
-        let cameraStart = try #require(menu.range(of: "private struct CameraShortcutModifier: ViewModifier {"))
-        let cameraEnd = try #require(menu.range(of: "enum MediaShortcutCopy {", range: cameraStart.upperBound..<menu.endIndex))
-        let camera = String(menu[cameraStart.upperBound..<cameraEnd.lowerBound])
-        #expect(camera.contains("withActions.contextMenu { if attachesMenu {"), "the camera keeps one menu so a camera toggle never rebuilds its button")
-        #expect(!camera.contains("} else { withActions }"))
-
-        #expect(menu.contains("if #available(iOS 26.0, *) { let picker = AVInputPickerInteraction() view.addInteraction(picker)"))
-        #expect(menu.contains("Picker(selection: Binding(get: { controls.route.currentInputId }, set: { id in _ = controls.requestInput(id: id) })) {"))
-        #expect(menu.contains(".pickerStyle(.menu)"))
-
-        #expect(menu.contains("Toggle(isOn: Binding(get: { controls.route.isSpeakerOn }, set: { on in _ = controls.setSpeaker(on) })) {"))
-        for pattern in ["preview:", "sensoryFeedback", "HapticManager", "conclaveGestureFeedback", "Image(systemName: \""] {
-            #expect(!menu.contains(pattern), "the shortcut menu uses \(pattern)")
-        }
-
-        #expect(menu.contains("if MediaShortcutPolicy.gestureKind(kind, result: result) != nil { onFlip() }"))
-        #expect(cell.contains(".modifier(MediaShortcutModifier(model: model, controls: controls, isAccessibilityText: isAccessibilityText, onFlip: { flipCounter += 1 }))"))
-        #expect(cell.contains(".conclaveGestureFeedback(.selectionChanged, trigger: flipCounter)"))
-
-        #expect(cell.contains("let kind = ControlBarPolicy.gestureKind(model) if controls.tap(model.kind) == ControlTapResult.dispatched, let kind {"))
-        #expect(cell.contains(".conclaveGestureFeedback(feedbackKind, trigger: feedbackCount)"))
-    }
-
-    @Test func iosSystemModulesOpenControlCenterThroughTheCaptureOwner() throws {
-        let effects = ctl4Normalized(try ctl4Source("Sources/Conclave/Core/WebRTC/SystemCameraEffects+iOS.swift"))
-        #expect(effects.hasPrefix("#if os(iOS) && !SKIP"))
-        #expect(effects.contains("AVCaptureDevice.showSystemUserInterface(.videoEffects)"))
-        #expect(effects.contains("AVCaptureDevice.showSystemUserInterface(.microphoneModes)"))
-        #expect(effects.contains("static func canShowSystemVideoEffects(isCaptureRunning: Bool) -> Bool"))
-
-        #expect(effects.contains("centerStageControlMode"))
-    }
-
-    @Test func androidLongPressOpensTheSheetOrTheMenuAndOffersCustomActions() throws {
-        let toggle = ctl4Normalized(try ctl4Source("Sources/Conclave/Skip/ui/call/controls/CallToggle.kt"))
-        let bar = ctl4Normalized(try ctl4Source("Sources/Conclave/Skip/ui/call/controls/CallControlBar.kt"))
-        let menu = ctl4Normalized(try ctl4Source("Sources/Conclave/Skip/ui/call/controls/MediaShortcutMenu.kt"))
-
-        #expect(toggle.contains("onLongClickLabel = onLongClickLabel, onLongClick = onLongClick, hapticFeedbackEnabled = false,"))
-        #expect(toggle.contains("customActions: List<CustomAccessibilityAction> = emptyList(),"))
-        #expect(toggle.contains("if (customActions.isNotEmpty()) this.customActions = customActions"))
-
-        #expect(bar.contains("val longPress: (() -> Unit)? = if (opens != null) { { haptics.gesture(FeedbackKind.longPress) opens() } } else { null }"))
-        #expect(bar.components(separatedBy: "FeedbackKind.longPress").count - 1 == 1)
-        #expect(bar.contains("onLongClick = longPress, onLongClickLabel = shortcut.longClickLabel, customActions = shortcut.actions)"))
-        #expect(bar.contains("if (longPress != null) toggle() else CallControlTooltip(label) { toggle() }"))
-        #expect(bar.contains("val chooseOutput = conclaveString(\"ctl_choose_audio_output\")"))
-        #expect(bar.contains("val opens = if (control.hasShortcut && items.hasEnabledCameraItem) onCameraMenu else null"))
-
-        #expect(bar.contains("val kind = control.gesture if (controls.tap(control.kind) == ControlTapResult.dispatched && kind != null) haptics.gesture(kind)"))
-
-        #expect(menu.contains("ConclaveDropdownMenu("))
-        #expect(menu.contains("MediaShortcutPolicy.cameraMenuSections(shortcuts.snapshot.camera, titles = titles).toList()"))
-        #expect(menu.contains("stage.setTransientChrome(id = ChromeAutoHidePolicy.cameraMenu, open = true)"))
-        #expect(menu.contains("val feedback = MediaShortcutPolicy.gestureKind(kind, result = result) if (feedback != null) haptics.gesture(feedback)"))
-        for text in [toggle, bar, menu] {
-            for pattern in ["@Stable", "@Immutable", "LocalHapticFeedback", "Vibrator", "MeetingViewModel", "Color(0x", "fontFamily ="] {
-                #expect(!text.contains(pattern), "uses \(pattern)")
-            }
-        }
-    }
-
     @Test func shortcutStringsResolveInBothCatalogs() throws {
 
         let catalog = try ctl4Source("Sources/Conclave/Resources/Localizable.xcstrings")
@@ -286,24 +215,6 @@ struct CTL4MediaShortcutTests {
         for name in ["ds_flip_camera", "ctl_effects", "ctl_choose_audio_output", "ctl_reason_reconnecting", "ctl_reason_offline"] {
             #expect(strings.contains("name=\"" + name + "\""), "missing \(name)")
         }
-    }
-
-    @Test func ctl4SourcesStayFlatDashFreeAndSkipLite() throws {
-        let files = ["Sources/Conclave/Features/Meeting/Controls/MediaShortcutPolicy.swift",
-                     "Sources/Conclave/Features/Meeting/Controls/MediaShortcutMenu+iOS.swift",
-                     "Sources/Conclave/Core/WebRTC/SystemCameraEffects+iOS.swift",
-                     "Sources/Conclave/Skip/ui/call/controls/MediaShortcutMenu.kt",
-                     "Sources/Conclave/Skip/ui/call/controls/CallToggle.kt",
-                     "Tests/ConclaveTests/CTL4MediaShortcutTests.swift"]
-        for file in files {
-            let text = try ctl4Source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradi" + "ent"), "\(file) mentions a forbidden fill")
-        }
-        let policy = try ctl4Source("Sources/Conclave/Features/Meeting/Controls/MediaShortcutPolicy.swift")
-        #expect(!policy.contains("#if") && !policy.contains("protocol ") && !policy.contains("inout "))
-        #expect(policy.range(of: #"case\s+\w+\("#, options: .regularExpression) == nil)
-        #expect(policy.range(of: #"\.(map|compactMap|flatMap)\(\w+(\.init)?\)"#, options: .regularExpression) == nil)
     }
 }
 

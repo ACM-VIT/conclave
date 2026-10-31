@@ -452,16 +452,6 @@ struct StagePoliciesTests {
         let shellKinds: [FeedbackKind] = [.joined, .admitted, .connectionLost, .joinFailed, .denied, .removed, .connectionRestored, .actionRejected]
         #expect(Set(stageKinds).isDisjoint(with: Set(shellKinds)))
         for kind in stageKinds { #expect(kind.isAsyncOutcome) }
-        for file in ["Sources/Conclave/Core/Session/MeetingShellPresenter.swift", "Sources/Conclave/Core/Session/MeetingSessionPolicies.swift"] {
-            let text = try stageSource(file)
-            for kind in stageKinds {
-                #expect(!text.contains("." + kind.rawValue + ")") && !text.contains("." + kind.rawValue + "\n"), "\(file) publishes \(kind)")
-            }
-        }
-        let presenterSource = try stageSource("Sources/Conclave/Features/Meeting/Stage/StagePresenter.swift")
-        for kind in shellKinds {
-            #expect(!presenterSource.contains("FeedbackKind." + kind.rawValue), "the stage publishes the shell kind \(kind)")
-        }
     }
 
     @Test func reactionsKeepStableIdsAndFollowTheRenderLimits() {
@@ -546,14 +536,6 @@ struct StagePoliciesTests {
         #expect(StageConsumerVisibilityPolicy.visibleVideoUserIds(report).contains("r2"))
     }
 
-    @Test func bothMediaClientsLimitTheVisibilityPolicyToWebcamVideo() throws {
-
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Core/WebRTC/WebRTCClient.swift"))
-        #expect(ios.contains("guard var info = consumers[consumerId], info.kind == \"video\", info.type == ProducerType.webcam.rawValue else { continue }"))
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/WebRTCClient+Android.kt"))
-        #expect(android.contains("if (info.kind != \"video\" || info.type != ProducerType.webcam.rawValue) continue"))
-    }
-
     @Test func everyFixtureStateBuildsAndMagicTapCountsOnce() {
         for state in StageFixtureState.allCases {
             let session = StageFixtureSession(state: state)
@@ -594,118 +576,8 @@ struct StagePoliciesTests {
         #expect(ledger.serial(for: "p:r1") == keep)
     }
 
-    @Test func stageSourcesStayFlatDashFreeAndOffTheCore() throws {
-        let files = try stageFiles(under: "Sources/Conclave/Features/Meeting/Stage", extensions: ["swift"])
-            + stageFiles(under: "Sources/Conclave/Skip/ui/call/stage", extensions: ["kt"])
-            + ["Sources/Conclave/App/Hosting/RendererProbe+iOS.swift", "Sources/Conclave/Skip/ui/hosting/RendererProbe.kt",
-               "Sources/Conclave/Skip/VideoRenderer.kt"]
-        #expect(files.count >= 20)
-        for file in files {
-            let text = try stageSource(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradient"), "\(file) mentions a gradient")
-            for pattern in ["glassEffect", "GlassEffectContainer(", "ultraThinMaterial", "regularMaterial", "preferredColorScheme(.dark)",
-                            "announceForAccessibility", "@Stable", "@Immutable", "FloatingToolbar", "ButtonGroup",
-                            "dynamicLightColorScheme", "dynamicDarkColorScheme", "LazyVGrid", "LazyVerticalGrid", "ScrollView",
-                            "HapticManager", "MeetingShare."] {
-                if pattern == "ScrollView" && file.hasSuffix(Self.debugFixtureName) { continue }
-                #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-            }
-            #expect(stageMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-            #expect(stageMatches(#"Color\(0x"#, in: text).isEmpty, "\(file) builds a color from a literal")
-
-            if !file.hasSuffix("StageLiveRenderers+iOS.swift") && !file.hasSuffix("SlotView.kt") {
-                #expect(!text.contains("MeetingViewModel.shared"), "\(file) reads the view model")
-            }
-        }
-
-        for file in try stageFiles(under: "Sources/Conclave/Features/Meeting/Stage", extensions: ["swift"]) where !file.contains("+iOS") {
-            let text = try stageSource(file)
-            #expect(!text.contains("#if"), "\(file) is shared and must not branch by platform")
-            #expect(stageMatches(#"\bprotocol\s"#, in: text).isEmpty, "\(file) declares a protocol")
-            #expect(stageMatches(#"case\s+\w+\("#, in: text).isEmpty, "\(file) has an associated value")
-            #expect(stageMatches(#"\.(map|compactMap|flatMap)\(\w+(\.init)?\)"#, in: text).isEmpty, "\(file) maps with a function reference")
-            #expect(!text.contains("inout "), "\(file) uses inout")
-            #expect(!text.contains("isLetter"), "\(file) uses Character.isLetter")
-        }
-
-        let fixture = try stageSource("Sources/Conclave/Features/Meeting/Stage/" + Self.debugFixtureName)
-        #expect(fixture.hasPrefix("#if DEBUG && os(iOS) && !SKIP\n"), "the scrolling fixture panel is Debug only")
-        let fixtureBody = stageNormalized(fixture)
-        #expect(fixtureBody.components(separatedBy: "ScrollView {").count - 1 == 1)
-        #expect(fixtureBody.contains(".frame(maxHeight: 360)"))
-        #expect(fixtureBody.contains(".overlay(alignment: .leading) { StageFixtureControls(session: session) }"))
-    }
-
     static let debugFixtureName = "StageFixtureView+iOS.swift"
 
-    @Test func iosCallRootIsOneContainerWithMagicTapAndSiblingLayers() throws {
-        let root = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/CallRoot+iOS.swift"))
-        #expect(root.contains(".accessibilityAction(.magicTap) { shell.toggleMicrophone() }"))
-        #expect(root.contains(".accessibilityElement(children: .contain)"))
-        #expect(root.contains("ZStack { StageCanvas(stage: stage, renderers: renderers, chrome: chromeVisibility)"))
-        #expect(root.contains(".conclaveCallAppearance()") && root.contains(".environment(\\.colorScheme, .dark)"))
-        #expect(root.contains("NativePanelInspectorHost(coordinator: shell.panels") && root.contains("NativePanelSheetHost(coordinator: shell.panels"))
-
-        let body = try #require(root.range(of: "var body: some View {"))
-        let end = try #require(root.range(of: "struct CallPanelContent: View {", range: body.upperBound..<root.endIndex))
-        let rootBody = String(root[body.upperBound..<end.lowerBound])
-        for read in ["stage.layout", "stage.kind", "chromeVisibility.state", "stage.capsule", "stage.autoHideBlocker"] {
-            #expect(!rootBody.contains(read), "the root body reads \(read)")
-        }
-        let canvas = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/StageCanvas+iOS.swift"))
-        #expect(canvas.contains("struct StageSlotLayout: Layout"))
-        #expect(canvas.contains(".layoutValue(key: StageSlotIdKey.self, value: slot.id)"))
-        #expect(canvas.contains("stage.setViewport(next)") && canvas.contains("StageViewportPolicy.iOS("))
-        #expect(canvas.contains(".frame(width: CGFloat(viewport.width), height: CGFloat(viewport.height))"))
-        #expect(canvas.contains(".accessibilityRotor(Text(ConclaveStrings.text(\"Raised Hands\")))"))
-        #expect(canvas.contains(".accessibilityRotor(Text(ConclaveStrings.text(\"Speaking\")))"))
-        let slot = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift"))
-
-        #expect(slot.components(separatedBy: "ConclaveTileChrome(").count - 1 == 1)
-        #expect(slot.contains(".transaction { transaction in transaction.animation = nil } .accessibilityHidden(true) .accessibilityIgnoresInvertColors()"))
-        #expect(slot.contains(".opacity(slot.role == .selfMinimized ? 0 : 1)"))
-        #expect(!slot.contains("StageSoloCard") && !slot.contains("stage.solo.share") && !slot.contains("stage.solo.copy"))
-    }
-
-    @Test func androidCallRootKeysRenderersAndMinimizesOnBack() throws {
-        let root = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt"))
-        #expect(root.contains("HostingTheme(inCall = true) {"))
-        #expect(root.contains("BackHandler(enabled = panels.current == null) { onMinimize() }"))
-        #expect(root.contains("NativePanelHost( panels = shell.panels,"))
-        #expect(root.contains("liveRegion = LiveRegionMode.Polite"))
-        #expect(root.contains("if (covered) hideFromAccessibility()"))
-        let canvas = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/StageCanvas.kt"))
-        #expect(canvas.contains("key(slot.id) {") && canvas.contains("placeRelative(x, y)"))
-
-        #expect(canvas.contains("SideEffect { if (!inPip) stage.setViewport(viewport) }"))
-        let slot = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/SlotView.kt"))
-        #expect(slot.contains("rendererKey = \"stage:$slotId\", clearBeforeAttach = false"))
-        #expect(slot.contains("graphicsLayer { alpha = if (minimized) 0f else 1f }"))
-        #expect(slot.contains("putExtra(Intent.EXTRA_TITLE, roomLabel)") && slot.contains("Intent.createChooser(intent, null)"))
-        let renderer = stageNormalized(try stageSource("Sources/Conclave/Skip/VideoRenderer.kt"))
-
-        #expect(renderer.contains("val ledger = LocalRendererLedger.current"))
-        #expect(renderer.contains("attachIdentity(ledger, rendererLifecycleKey.toString())"))
-        #expect(renderer.contains("renderer.releaseIdentity()"))
-        let onFrame = try #require(renderer.range(of: "override fun onFrame(frame: VideoFrame) {"))
-        let onFrameEnd = try #require(renderer.range(of: "override fun onSurfaceTextureAvailable", range: onFrame.upperBound..<renderer.endIndex))
-        let frameBody = String(renderer[onFrame.upperBound..<onFrameEnd.lowerBound])
-        #expect(!frameBody.contains("removeSink") && !frameBody.contains("addSink") && !frameBody.contains("ledger"))
-    }
-
-    @Test func rendererProbesDrawFlatPatternsAndStayCounted() throws {
-        let ios = try stageSource("Sources/Conclave/App/Hosting/RendererProbe+iOS.swift")
-        #expect(ios.hasPrefix("#if DEBUG && os(iOS) && !SKIP\n"))
-        #expect(ios.contains("CADisplayLink") && ios.contains("DesignTokens.avatarPalette"))
-        #expect(ios.contains("func updateUIView(_ uiView: RendererProbeView, context: Context) {}"))
-        #expect(!ios.contains("Timer") && !ios.contains("RTCVideoTrack"))
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/hosting/RendererProbe.kt"))
-        #expect(android.contains("val canvas = lockCanvas() ?: return"))
-        #expect(android.contains("RendererProbePattern.staticPattern -> drawPattern()"))
-        #expect(android.contains("mainHandler.removeCallbacks(liveStep)"))
-        #expect(android.contains("isOpaque = true setLayerType(LAYER_TYPE_HARDWARE, null)"))
-    }
 }
 
 #if os(macOS)

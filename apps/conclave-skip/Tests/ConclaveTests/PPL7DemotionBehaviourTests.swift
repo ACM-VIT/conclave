@@ -132,18 +132,5 @@ struct PPL7DemotionBehaviourTests {
         #expect(call.viewModel.premeeting.home.noticeKind == HomeNoticeKind.none)
         await call.finish()
     }
-
-    @Test func theViewModelStillWiresTheHandoffTheWayThisTestDrivesIt() throws {
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let vm = try String(contentsOf: root.appendingPathComponent("Sources/Conclave/Features/Meeting/MeetingViewModel.swift"),
-                            encoding: .utf8)
-        #expect(vm.contains("socketManager.onWebinarDemoted = { [weak self] notification in"))
-        #expect(vm.contains("self.beginDemotionHandoff(notification)"))
-        #expect(vm.contains("socketManager.onDisconnected = { [weak self] reason in"))
-        #expect(vm.contains("if reason == \"io server disconnect\" {"))
-        let harness = try String(contentsOf: root.appendingPathComponent("Tests/ConclaveTests/RejoinTestHarness.swift"), encoding: .utf8)
-        #expect(harness.contains("viewModel.socketManager.onWebinarDemoted?(WebinarDemotedNotification(roomId: \"room-a\", webinarLinkSlug: slug))"))
-        #expect(harness.contains("viewModel.socketManager.onDisconnected?(\"io server disconnect\")"))
-    }
 }
 #endif

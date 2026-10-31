@@ -96,18 +96,6 @@ struct STG6MeetingDetailsTests {
         #expect(session.stage.meetingInfo?.webinarLink == StageFixtureScript.webinarLink)
         let second = await session.ensureWebinarLink()
         #expect(second == StageFixtureScript.webinarLink && session.counters.generateWebinarLink == 1)
-
-        let presenter = try stageSource("Sources/Conclave/Features/Meeting/Stage/StagePresenter.swift")
-        #expect(!presenter.contains("func ensureWebinarLink") && !presenter.contains("copyableWebinarLink"))
-        let ios = try stageSource("Sources/Conclave/Features/Meeting/Stage/MeetingDetailsPanel+iOS.swift")
-        let android = try stageSource("Sources/Conclave/Skip/ui/call/stage/MeetingDetailsPage.kt")
-        for source in [ios, android] {
-            #expect(!source.contains("generateWebinarLink") && !source.contains("copyableWebinarLink"))
-        }
-        let iosRoot = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/CallRoot+iOS.swift"))
-        #expect(iosRoot.contains("return { await people.host.ensureWebinarLink() }"))
-        let androidRoot = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt"))
-        #expect(androidRoot.contains("return suspend { owner.host.ensureWebinarLink() }"))
     }
 
     @Test func aScriptedLockWhileOpenUpdatesMeetingLockedAndRosterChurnChangesNothing() throws {
@@ -209,53 +197,6 @@ struct STG6MeetingDetailsTests {
         #expect(names == ["stg_off", "stg_state_starting", "stg_on", "stg_state_paused", "stg_state_needs_attention"])
     }
 
-    @Test func iosMeetingDetailsCopiesInlineAndPushesInsideThePanel() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/MeetingDetailsPanel+iOS.swift"))
-        #expect(ios.contains("PanelShell(title: isAttendee ? ConclaveStrings.text(\"Webinar Details\") : ConclaveStrings.text(\"Meeting Details\")"))
-        #expect(ios.contains("path: $path"))
-        #expect(ios.contains(".navigationDestination(for: MeetingInfoRoute.self)"))
-        #expect(ios.contains("if next > previous { adapter.promoteToLarge() }"), "a push promotes a medium sheet to large (R34)")
-        #expect(ios.contains(".conclaveGestureFeedback(.linkCopied, trigger: copies)"))
-        #expect(ios.contains("UIPasteboard.general.url = url") && ios.contains("UIPasteboard.general.string = value"))
-        #expect(ios.contains("try? await Task.sleep(for: .milliseconds(Int(MeetingInfoPolicy.copiedMillis)))"))
-        #expect(ios.contains("ShareLink(item: url, subject: Text(ConclaveStrings.text(\"Join My Conclave Meeting\"))"))
-        #expect(ios.contains("NavigationLink(value: MeetingInfoRoute.host(PeopleRoute.hostControls))"))
-
-        #expect(ios.contains("HostPageView(people: people, page: route, link: { MeetingInfoRoute.host($0) })"))
-        #expect(ios.contains("Text(ConclaveStrings.text(\"Unavailable while reconnecting\"))"))
-        #expect(ios.contains(".listStyle(.insetGrouped)"))
-
-        #expect(!ios.contains("postLocal") && !ios.contains("HapticManager") && !ios.contains("MeetingShare."))
-    }
-
-    @Test func androidMeetingDetailsUsesThePageStackAndTheOldApiSnackbar() throws {
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/MeetingDetailsPage.kt"))
-        #expect(android.contains("val pages = LocalPanelPageStack.current"))
-        #expect(android.contains("contentMode = InCallPageContent.lazyList"))
-        #expect(android.contains("isNested = pages?.isNested == true"))
-        #expect(android.contains("onBack = { pages?.pop() }"))
-        #expect(android.contains("items(entries, key = { it.key }, contentType = { it.kind })"))
-        #expect(android.contains("if (MeetingInfoPolicy.showsCopySnackbar(sdkInt = Build.VERSION.SDK_INT))"))
-        #expect(android.contains("haptics.gesture(FeedbackKind.linkCopied)"))
-        #expect(android.contains("putExtra(Intent.EXTRA_TITLE, title)") && android.contains("Intent.createChooser(intent, null)"))
-        #expect(android.contains("PipManager.suppressNextAutoEnter(\"meeting_share\")"))
-        #expect(android.contains("conclaveString(\"ds_unavailable_reconnecting\")"))
-
-        #expect(android.contains("HostPageContent(people, route, reservation, snackbar, onPush)"))
-        #expect(android.contains("if (!keepsHostPages && meetingDetailsIsHostPage(pages?.top)) pages?.popToRoot()"))
-        #expect(!android.contains("MeetingShare.") && !android.contains("Text(\""))
-    }
-
-    @Test func callRootsMountMeetingDetailsAndTheAttendeeLayer() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/CallRoot+iOS.swift"))
-        #expect(ios.contains("if presentation.request.panel == .meetingInfo, let stage { "))
-        #expect(ios.contains("MeetingDetailsPanel(stage: stage, shell: shell, people: people, adapter: adapter"))
-        #expect(ios.contains("AttendeeWaitingLayer(stage: stage) .accessibilitySortPriority(3)"))
-        let android = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt"))
-        #expect(android.contains("if (request.panel == MeetingPanel.meetingInfo) {"))
-        #expect(android.contains("MeetingDetailsPage( stage = stage,"))
-        #expect(android.contains("AttendeeWaitingLayer(stage, Modifier.attendeeLayer())"))
-    }
 }
 
 private extension MeetingInfoSnapshot {

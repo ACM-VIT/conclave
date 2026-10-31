@@ -438,52 +438,6 @@ struct STG2TileTests {
         #expect(sharePinned.layout.kind == .spotlight && sharePinned.layout.presenterUserId == "r1")
     }
 
-    @Test func iosTileMenuIsAContextMenuWithAChromeOnlyPreview() throws {
-        let menu = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/TileMenu+iOS.swift"))
-        #expect(menu.contains("content.contextMenu {") && menu.contains("} preview: { TileMenuPreview(model: model, speaking: speaking) }"))
-        #expect(menu.contains("ConclaveMenuContent(sections: menu.contextSections"))
-        #expect(menu.contains("var contextSections: [MenuSectionModel] { TileMenuPolicy.contextMenuSections(sections) }"))
-
-        #expect(menu.contains("HostingTheme.token(DesignTokens.iosInCallTile)"))
-        for renderer in ["RendererSlotView", "StageLiveVideo", "RendererProbe(", "RTCMTLVideoView"] {
-            #expect(!menu.contains(renderer), "the tile menu preview creates \(renderer)")
-        }
-        #expect(menu.contains("TileMenuDispatcher.perform(item.id, context: menu.context, stage: stage)"))
-        let slot = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift"))
-        #expect(slot.components(separatedBy: "ConclaveTileChrome(").count - 1 == 1)
-        #expect(slot.contains("actions: menu.accessibilityActions(stage: stage, onDispatched: noteDispatch)"))
-        #expect(slot.contains(".stageTileMenu(menu, model: model, speaking: speaking, stage: stage, onDispatched: noteDispatch)"))
-        #expect(slot.contains(".conclaveGestureFeedback(.selectionChanged, trigger: menuFlips)"))
-        #expect(slot.contains("@Environment(StageChromeVisibility.self) private var chrome: StageChromeVisibility?"))
-        #expect(slot.contains(".accessibilityLabel(ConclaveStrings.format(\"Unpin %@\", model.displayName))"))
-        #expect(slot.contains("ConclaveStrings.text(\"Camera off\")") && slot.contains("ConclaveStrings.text(\"Back Online\")"))
-
-        #expect(slot.components(separatedBy: ".allowsHitTesting(false)").count - 1 >= 2)
-
-        #expect(slot.components(separatedBy: ".modifier(StageChromeFade())").count - 1 == 2)
-    }
-
-    @Test func androidTileMenuAnchorsAtThePressPointWithOneHaptic() throws {
-        let menu = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/TileMenu.kt"))
-        #expect(menu.contains("val down = awaitFirstDown(requireUnconsumed = false)"))
-        #expect(menu.contains("val longPress = awaitLongPressOrCancellation(down.id)"))
-        #expect(menu.contains("for (change in event.changes) change.consume()"))
-        #expect(!menu.contains("combinedClickable(") && !menu.contains("detectTapGestures("))
-        #expect(menu.contains("Box(modifier.absoluteOffset { IntOffset(state.anchor.x.roundToInt(), state.anchor.y.roundToInt()) }.size(0.dp)) {"))
-        #expect(menu.contains("ConclaveDropdownMenu( expanded = open,"))
-        #expect(menu.contains("stage.setTransientChrome(id = TileMenuPolicy.menuTransientId, open = true)"))
-        #expect(menu.contains("conclaveString(\"ppl_pin\")") && menu.contains("conclaveString(\"ppl_unpin\")"))
-        #expect(!menu.contains("MeetingViewModel"))
-        let slot = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/call/stage/SlotView.kt"))
-        #expect(slot.components(separatedBy: "haptics.gesture(FeedbackKind.longPress)").count - 1 == 1)
-        #expect(slot.contains("modifier = Modifier.fillMaxSize().tileLongPress(menu.hasItems) { at ->"))
-        #expect(slot.contains("actions = actions,") && slot.contains("accessibilityLongPressLabel = if (menu.hasItems) actionsLabel else null,"))
-        #expect(slot.contains("clearAndSetSemantics { contentDescription = label; this.role = Role.Button }"))
-        #expect(slot.contains("liveRegion = LiveRegionMode.Polite"))
-
-        #expect(slot.contains("graphicsLayer { alpha = if (minimized) 0f else 1f }"))
-    }
-
     @Test func stg2SourcesStayDashFreeFlatAndLocalized() throws {
         let files = ["Sources/Conclave/Features/Meeting/Stage/TileFeaturePolicy.swift",
                      "Sources/Conclave/Features/Meeting/Stage/TileMenu+iOS.swift",
@@ -493,21 +447,11 @@ struct STG2TileTests {
                      "Tests/ConclaveTests/Skip/STG2TileBridgeTests.kt"]
         for file in files {
             let text = try stageSource(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradient"), "\(file) mentions a gradient")
-            #expect(!text.contains("HapticManager") && !text.contains("@Stable") && !text.contains("ScrollView"), "\(file)")
             #expect(stageMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
         }
 
         let catalog = try stageSource("Sources/Conclave/Resources/Localizable.xcstrings")
         let catalogKeys = try #require(try JSONSerialization.jsonObject(with: Data(catalog.utf8)) as? [String: Any])["strings"] as? [String: Any]
-        for file in ["Sources/Conclave/Features/Meeting/Stage/TileMenu+iOS.swift", "Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift"] {
-            let text = try stageSource(file)
-            for match in stageMatches(#"ConclaveStrings\.(text|format)\("[^"]+""#, in: text) {
-                let key = String(match.drop { $0 != "\"" }.dropFirst().dropLast())
-                #expect(catalogKeys?[key] != nil, "\(file): missing catalog key \(key)")
-            }
-        }
         let resources = try stageSource("Android/app/src/main/res/values/strings.xml")
         for file in ["Sources/Conclave/Skip/ui/call/stage/TileMenu.kt", "Sources/Conclave/Skip/ui/call/stage/SlotView.kt"] {
             let text = try stageSource(file)

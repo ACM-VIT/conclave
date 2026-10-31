@@ -138,14 +138,6 @@ struct TypographyHapticsGalleryContractsTests {
             }
         }
         #expect(scanned > 20)
-        let ios = try source("Sources/Conclave/DesignSystem/iOS/ConclaveTypography+iOS.swift")
-        #expect(ios.hasPrefix("#if os(iOS) && !SKIP\n"))
-        #expect(ios.contains("Font.system(textStyle, design: .default, weight: weight.fontWeight)"))
-        let kotlin = try source("Sources/Conclave/Skip/ui/theme/ConclaveTypography.kt")
-        #expect(kotlin.contains("internal val ConclaveTypography = Typography()"))
-        let theme = try source("Sources/Conclave/Skip/ui/theme/HostingTheme.kt")
-        #expect(theme.contains("typography = ConclaveTypography,"))
-        #expect(!theme.contains("Typography()"))
     }
 
     @Test func feedbackHapticContractCoversEveryKindOnce() {
@@ -182,7 +174,6 @@ struct TypographyHapticsGalleryContractsTests {
     }
 
     @Test func iosSilentKindsMatchPlatformDocumentation() {
-
         let silent = FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnIPhone($0) }
         #expect(silent == [.none, .handLoweredByHost, .shareStoppedBySystem, .recapPostingStarted, .connectionRestored,
                            .longPress, .hostDenied, .hostRemoved, .hostPolicyChanged, .lostHost])
@@ -194,24 +185,6 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 33) }.count == 16)
         #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 30) }.count == 15)
         #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 28) }.count == 16)
-        let gallery = try? source("Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift")
-        #expect(gallery?.contains("FeedbackHapticContract.isSilentOnIPhone(") == true)
-    }
-
-    @Test func iosMapperSourceMatchesContractTable() throws {
-        let text = try source("Sources/Conclave/DesignSystem/iOS/ConclaveFeedback+iOS.swift")
-        let start = try #require(text.range(of: "static func sensoryMapping(_ kind: FeedbackKind) -> (token: String, feedback: SensoryFeedback?) {"))
-        let end = try #require(text.range(of: "@MainActor", range: start.upperBound..<text.endIndex))
-        let body = String(text[start.upperBound..<end.lowerBound])
-        #expect(normalized(text).contains("static func sensory(_ kind: FeedbackKind) -> SensoryFeedback? { sensoryMapping(kind).feedback }"))
-        #expect(mapperMismatches(body).isEmpty, "\(mapperMismatches(body))")
-
-        let heavy = "return (\"impact.heavy\", .impact(weight: .heavy))"
-        #expect(body.components(separatedBy: heavy).count == 2)
-        let wrongValue = body.replacingOccurrences(of: heavy, with: "return (\"impact.heavy\", .impact(weight: .light))")
-        #expect(mapperMismatches(wrongValue) == ["tapValid: token impact.heavy, value impact.light"])
-        let wrongWeight = body.replacingOccurrences(of: heavy, with: "return (\"impact.light\", .impact(weight: .light))")
-        #expect(mapperMismatches(wrongWeight) == ["tapValid: mapper impact.light, contract impact.heavy"])
     }
 
     private func mapperMismatches(_ body: String) -> [String] {
@@ -240,40 +213,6 @@ struct TypographyHapticsGalleryContractsTests {
         }
         if mapped.count != 66 { problems.append("\(mapped.count) kinds mapped") }
         return problems
-    }
-
-    @Test func galleryHapticSelfCheckComparesMapperTokens() throws {
-        let gallery = try source("Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift")
-        #expect(!withoutComments(gallery).contains("SensoryFeedback"))
-        #expect(!gallery.contains("ConclaveFeedback.sensory("))
-        #expect(normalized(gallery).contains(
-            "FeedbackHapticContract.rows.filter { ConclaveFeedback.sensoryMapping($0.kind).token == $0.ios }.count"))
-        #expect(normalized(gallery).contains(
-            "\"Mapper %@, contract %@\", ConclaveFeedback.sensoryMapping(kind).token, FeedbackHapticContract.ios(kind)"))
-    }
-
-    @Test func hapticSourcesRespectSystemSettings() throws {
-        var kotlin = try sourceFiles(under: "Sources/Conclave/Skip/ui", extensions: ["kt"])
-        kotlin += try sourceFiles(under: "Sources/Conclave/Skip", extensions: ["kt"], recursive: false)
-        #expect(kotlin.count > 30)
-        for file in kotlin {
-            let text = try source(file)
-            for pattern in ["FLAG_IGNORE", "LocalHapticFeedback", "Vibrator", "VibratorManager"] {
-                #expect(!text.contains(pattern), "\(file) uses \(pattern)")
-            }
-        }
-        let haptics = try source("Sources/Conclave/Skip/ui/theme/ConclaveHaptics.kt")
-        let calls = regexMatches(#"performHapticFeedback\(([^)]*)\)"#, in: haptics)
-        #expect(calls.count == 1)
-        #expect(calls.allSatisfy { !$0[0].contains(",") })
-        let gesture = try source("Sources/Conclave/Skip/ui/theme/ConclaveGestureHaptics.kt")
-        #expect(gesture.contains("ConclaveHaptics.perform(view, kind)"))
-        #expect(!gesture.contains("performHapticFeedback("))
-        let modifier = try source("Sources/Conclave/DesignSystem/iOS/ConclaveGestureFeedback+iOS.swift")
-        #expect(modifier.hasPrefix("#if os(iOS) && !SKIP\n"))
-        #expect(modifier.contains("ConclaveFeedback.isEnabled"))
-        #expect(modifier.contains("applicationState"))
-        #expect(modifier.contains("guard !kind.isAsyncOutcome"))
     }
 
     @Test func contrastRatioMatchesArchivedCalculations() {
@@ -326,14 +265,6 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(ContrastRatio.verdict(4.6, .forbiddenText) == .fails)
         #expect(ContrastRatio.verdict(4.4, .text) == .fails)
         #expect(ContrastRatio.verdict(1.2, .decorative) == .passes)
-        let ios = normalized(try source("Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"))
-        #expect(ios.contains("switch ContrastRatio.verdict(ratio, requirement) {"))
-        #expect(ios.contains("case .decorativeOnly: verdict = ConclaveStrings.text(\"Decorative Only\")"))
-        let android = normalized(try source("Sources/Conclave/Skip/ui/hosting/NativeComponentGallery.kt"))
-        #expect(android.contains("when (ContrastRatio.verdict(ratio, requirement)) {"))
-        #expect(android.contains("ContrastVerdict.decorativeOnly -> conclaveString(\"native_gallery_decorative_only\")"))
-        for text in [ios, android] { #expect(!text.contains("ContrastRatio.meets("), "verdict words come from ContrastRatio.verdict") }
-        #expect(try androidStrings()["native_gallery_decorative_only"] == "decorative only")
     }
 
     @Test func galleryCatalogKeysStableUniqueAndDashFree() {
@@ -361,95 +292,10 @@ struct TypographyHapticsGalleryContractsTests {
         for pair in ComponentGalleryCatalog.contrastPairs { #expect(!containsDash(pair.caption), "\(pair.id)") }
     }
 
-    @Test func gallerySourcesAreInert() throws {
-        let files = ["Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift",
-                     "Sources/Conclave/Skip/ui/hosting/NativeComponentGallery.kt"]
-        let forbidden = ["MeetingViewModel", "WebRTC", "SocketIO", "AVAudioSession", "UIPasteboard", "Clipboard",
-                         "Vibrator", "performHapticFeedback", "sensoryFeedback(", "Gradient", "gradient",
-                         "Timer", "LaunchedEffect", "repeatOnLifecycle", "withFrameNanos", "infinite",
-                         "URLSession", "Socket(", "AVCapture", "requestPermission"]
-        for file in files {
-            let text = try source(file)
-            for pattern in forbidden { #expect(!text.contains(pattern), "\(file) uses \(pattern)") }
-            #expect(!containsDash(text), "\(file) contains an en or em dash")
-        }
-        let ios = try source(files[0])
-        #expect(ios.hasPrefix("#if DEBUG && os(iOS) && !SKIP\n"))
-
-        #expect(ios.contains("ConclaveGestureFeedback.decision("))
-        #expect(!ios.contains("conclaveGestureFeedback("))
-
-        for pattern in [".lineLimit(", ".truncationMode(", ".minimumScaleFactor(", "frame(height:", "maxHeight:"] {
-            #expect(!ios.contains(pattern), "iOS gallery caps text with \(pattern)")
-        }
-        #expect(ios.contains("TruncationProbe(id:"))
-        let android = try source(files[1])
-        #expect(android.contains("ConclaveGestureHaptics(view = null,"))
-        #expect(!android.contains("rememberConclaveHaptics("))
-        for pattern in ["maxLines", "TextOverflow.Ellipsis", "LazyColumn(", ".height(", ".size("] {
-            #expect(!android.contains(pattern), "Android gallery caps text or nests a list with \(pattern)")
-        }
-        #expect(android.contains("hasVisualOverflow"))
-    }
-
-    @Test func iosTruncationProbeCoversEverySpecimen() throws {
-        let gallery = try source("Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift")
-
-        let stacks = [
-            ("struct TypeSpecimenRow: View {", ".font(style.font(weight)) .layoutPriority(1)"),
-            ("struct LiveContrastRow: View {", "Text(galleryText(caption, longText: longText)) .layoutPriority(1)"),
-            ("struct TokenContrastRow: View {", "Text(galleryText(pair.caption, longText: longText)) .layoutPriority(1)"),
-            ("struct HapticSpecimenRow: View {", "Text(verbatim: kind.rawValue) .layoutPriority(1)"),
-            ("struct ProminentSpecimen<Specimen: View>: View {", "specimen() .accessibilityIdentifier(columnID) .layoutPriority(1)"),
-
-            ("struct ComponentSpecimen<Specimen: View>: View {", "specimen() .layoutPriority(1)"),
-            ("struct RowSpecimen<Row: View>: View {", "row() .layoutPriority(1)"),
-        ]
-        for (header, firstLine) in stacks {
-            let start = try #require(gallery.range(of: header), "\(header)")
-            let end = gallery.range(of: "\n}\n", range: start.upperBound..<gallery.endIndex)?.lowerBound ?? gallery.endIndex
-            let body = String(gallery[start.upperBound..<end])
-            #expect(body.components(separatedBy: ".modifier(TruncationProbe(id:").count - 1 == 1, "\(header) probe")
-            #expect(body.components(separatedBy: ".layoutPriority(1)\n").count - 1 == 1, "\(header) priority count")
-            #expect(normalized(body).contains(firstLine), "\(header) first line")
-        }
-
-        #expect(gallery.components(separatedBy: ".modifier(TruncationProbe(id:").count - 1 == stacks.count)
-        #expect(gallery.components(separatedBy: ".layoutPriority(1)\n").count - 1 == stacks.count)
-        let flat = normalized(gallery)
-        #expect(flat.contains("for kind in FeedbackKind.allCases { ids.insert(ComponentGalleryCatalog.hapticSpecimenID(kind)) }"))
-        #expect(flat.contains("if #available(iOS 26.0, *) { prominent += [ComponentGalleryCatalog.prominentGlassID, ComponentGalleryCatalog.prominentGlassOnCoralID] }"))
-        #expect(flat.contains("for id in prominent { ids.insert(ComponentGalleryCatalog.columnID(id, inCall: inCall)) }"))
-
-        #expect(flat.contains("@MainActor private static let idle = base.union(ComponentGalleryCatalog.componentSpecimenIDs(showLoading: false))"))
-        #expect(flat.contains("@MainActor private static let withLoading = base.union(ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true))"))
-        #expect(flat.contains("GalleryEnvironmentReadout(probe: probe, specimenCount: GallerySpecimens.ids(showLoading: showLoading).count)"))
-        #expect(flat.contains("longText ? \"long\" : \"short\", showLoading ? \"loading\" : \"idle\","))
-
-        for (section, stack) in [("buttons", "ComponentSpecimen"), ("rows", "RowSpecimen"), ("banners", "ComponentSpecimen"), ("status", "ComponentSpecimen")] {
-            let loading = section == "rows" ? "false" : "showLoading"
-            #expect(flat.contains("ForEach(ComponentGalleryCatalog.specimenIDs(.\(section), showLoading: \(loading)), id: \\.self) { base in let id = ComponentGalleryCatalog.columnID(base, inCall: inCall) \(stack)(id: id, probe: probe) {"), "\(section)")
-        }
-        for base in ["toggleCallID", "leaveID", "badgeCountID", "compactBarID"] {
-            #expect(flat.contains("let id = ComponentGalleryCatalog.columnID(ComponentGalleryCatalog.\(base), inCall: true) return ComponentSpecimen(id: id, probe: probe) {"), "\(base)")
-        }
-
-        let motion = try #require(gallery.range(of: "ConclaveBannerPresence(isPresented: showsBanner) {"))
-        #expect(!gallery[motion.lowerBound...].prefix(400).contains("TruncationProbe"))
-    }
-
     @Test func scriptReadReadoutsUseAsciiDigits() throws {
-
         let arabic = String(format: "%lld of %lld match", locale: Locale(identifier: "ar_EG"), 66, 66)
         #expect(!arabic.unicodeScalars.allSatisfy { $0.isASCII })
         #expect(String(format: "%lld of %lld match", locale: nil, 66, 66) == "66 of 66 match")
-        let helper = normalized(try source("Sources/Conclave/DesignSystem/iOS/ConclaveStrings+iOS.swift"))
-        #expect(helper.contains("static func machineReadable(_ key: String, _ arguments: CVarArg...) -> String { String(format: text(key), locale: nil, arguments: arguments) }"))
-        let gallery = normalized(try source("Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"))
-        for key in ["%lld truncated, %lld of %lld specimens measured", "%lld of %lld match",
-                    "Recorded %lld, suppressed %lld, outcome route %lld, silent %lld", "Bar %.1f pt of %.1f pt"] {
-            #expect(gallery.contains("ConclaveStrings.machineReadable( \"\(key)\"") || gallery.contains("ConclaveStrings.machineReadable(\"\(key)\""), "\(key)")
-        }
 
         let resources = try androidStrings()
         for name in ["native_gallery_clipped", "native_gallery_match", "native_gallery_taps"] {
@@ -459,43 +305,7 @@ struct TypographyHapticsGalleryContractsTests {
 
         let bar = try #require(resources["native_gallery_bar_readout"])
         #expect(regexMatches(#"%[0-9]\$d"#, in: bar).isEmpty && regexMatches(#"%[0-9]\$s"#, in: bar).count == 2, "\(bar)")
-        let android = normalized(try source("Sources/Conclave/Skip/ui/hosting/NativeComponentGallery.kt"))
 
-        #expect(android.contains("val specimens = rows.specimens(state.showLoading)"))
-        #expect(android.contains("conclaveString(\"native_gallery_clipped\", asciiCount(state.overflow.count(configuration, specimens)), asciiCount(state.overflow.measuredCount(configuration, specimens)), asciiCount(specimens.size))"))
-        #expect(android.contains("conclaveString(\"native_gallery_bar_readout\", asciiDp(barWidthPx / density.density), asciiDp(available))"))
-        #expect(android.contains("internal fun asciiDp(value: Float): String = String.format(Locale.ROOT, \"%.1f\", value)"))
-        #expect(android.contains("conclaveString(\"native_gallery_taps\", asciiCount(state.controlRecorded), asciiCount(state.controlOutcomeRoute), asciiCount(state.controlSilent))"))
-        #expect(android.contains("conclaveString(\"native_gallery_match\", asciiCount(verified), asciiCount(rows.haptics.size), asciiCount(rows.api))"))
-        #expect(android.contains("conclaveString(\"native_gallery_taps\", asciiCount(state.recorded), asciiCount(state.outcomeRoute), asciiCount(state.silent))"))
-    }
-
-    @Test func liveGroupedRowNamesTheSystemBackground() throws {
-        let gallery = normalized(try source("Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"))
-        #expect(gallery.contains("caption: ConclaveStrings.text(\"Secondary text on the system grouped background\"), foreground: HostingTheme.secondaryText, background: Color(uiColor: .systemGroupedBackground)"))
-        #expect(!gallery.contains("\"Secondary text on the grouped background\""))
-        let catalog = try source("Sources/Conclave/DesignSystem/ComponentGalleryCatalog.swift")
-        #expect(normalized(catalog).contains("pair(\"contrast.iosSecondaryTextHighContrast.groupedLight\", \"iOS secondary text, increased contrast, on grouped background\", DesignTokens.iosAppTextSecondaryLightHighContrast, DesignTokens.iosAppLaunchBackgroundLight, .text, 8.177)"))
-    }
-
-    @Test func wp1SourcesForbidDynamicColorAndColorLiterals() throws {
-        for file in try sourceFiles(under: "Sources/Conclave/Skip", extensions: ["kt"]) {
-            let text = try source(file)
-            #expect(!text.contains("dynamicLightColorScheme") && !text.contains("dynamicDarkColorScheme"), "\(file)")
-        }
-
-        let adapters = ["/DesignSystem/DesignTokens.swift", "/DesignSystem/iOS/HostingTheme+iOS.swift"]
-        var files = try sourceFiles(under: "Sources/Conclave/DesignSystem", extensions: ["swift"])
-        files += try sourceFiles(under: "Sources/Conclave/App/Hosting", extensions: ["swift"])
-        files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Panels", extensions: ["swift"])
-        files += try sourceFiles(under: "Sources/Conclave/Skip/ui", extensions: ["kt"])
-        var scanned = 0
-        for file in files where !adapters.contains(where: { file.hasSuffix($0) }) {
-            scanned += 1
-            let text = try source(file)
-            #expect(regexMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-        }
-        #expect(scanned > 25)
     }
 
     @Test func wp1SwiftSourcesUseOnlyTheApprovedGlassSurfaces() throws {
@@ -539,35 +349,6 @@ struct TypographyHapticsGalleryContractsTests {
             }
         }
         #expect(glassFiles.isEmpty)
-
-        for entry in entries {
-            let expectedSurface = entry == Self.floatingActionBarFile ? ".buttonStyle(.glass)" : ".glassEffect("
-            #expect(try source(entry).contains(expectedSurface), "\(entry)")
-        }
-        let lobby = normalized(try source(Self.lobbyMediaToggleFile))
-        #expect(lobby.contains("if #available(iOS 26.0, *), allowsGlass {"))
-        #expect(lobby.contains("ConclaveGlassAvailabilityReader { allowsGlass in"))
-        #expect(lobby.components(separatedBy: ".glassEffect(").count - 1 == 1)
-        #expect(lobby.contains("} else { ConclaveCallToggle(title: title, value: value, systemImage: systemImage, state: state,"))
-        #expect(lobby.contains(".accessibilityLabel(title)") && lobby.contains(".accessibilityValue(value)"))
-        #expect(lobby.contains(".accessibilityAddTraits(.isToggle)") && lobby.contains(".disabled(!isEnabled)"))
-        let floating = normalized(try source(Self.floatingActionBarFile))
-        #expect(floating.contains("return !reduceTransparency && contrast != .increased && !forceOpaque"))
-        #expect(floating.contains("if #available(iOS 27.0, *)") && floating.contains("@available(iOS 27.0, *)"))
-        #expect(floating.contains("content(allowsGlass && !prefersReducedResourceUsage)"))
-        #expect(floating.contains("if #available(iOS 26.0, *), allowsGlass {"))
-        #expect(floating.contains(".disabled(!isEnabled || isPending)"))
-        #expect(floating.contains("ConclaveButton(title, role: .primary, isEnabled: isEnabled, isPending: isPending, identifier: identifier, action: action)"))
-        #expect(floating.contains("reduceTransparency || contrast == .increased"))
-        #expect(floating.contains(".scrollEdgeEffectStyle(.soft, for: .bottom) .safeAreaBar(edge: .bottom, spacing: 0)"))
-        #expect(floating.contains("content.safeAreaInset(edge: .bottom, spacing: 0)"))
-        #expect(floating.contains("if needsOpaqueSurface { Color(uiColor: .systemBackground) } else if shaded { shadedBackdrop } else { Rectangle().fill(.ultraThinMaterial)"))
-        #expect(floating.contains("if needsOpaqueSurface { Color(uiColor: .systemBackground).ignoresSafeArea(edges: .bottom) } else if shaded { shadedBackdrop }"))
-        #expect(floating.contains("func conclaveFloatingActionBar<Bar: View>(shaded: Bool = true, @ViewBuilder _ bar: () -> Bar) -> some View {"),
-                "every floating action gets the backdrop by default (D-1)")
-        #expect(floating.contains("private var veil: Color { HostingTheme.token(DesignTokens.neutralStage) }"))
-        #expect(floating.contains(".fill(veil.opacity(veilOpacity))"))
-        #expect(!floating.contains("Color.black") && !floating.contains(".overlay(Color"), "the veil is tinted from the stage token, not black")
     }
 
     @Test func labelCasingFollowsOwnerRule() throws {
@@ -617,7 +398,6 @@ struct TypographyHapticsGalleryContractsTests {
     }
 
     @Test func galleryStringsAreInTheStringCatalog() throws {
-
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
         var keys = Set<String>()
@@ -645,12 +425,9 @@ struct TypographyHapticsGalleryContractsTests {
             let text = try source(file)
             #expect(regexMatches(#"(?:Text|Button|Toggle|Section|LabeledContent|NavigationLink|navigationTitle|Label|ProgressView)\(\s*""#, in: text).isEmpty, "\(file) has a literal label")
         }
-        let helper = try source("Sources/Conclave/DesignSystem/iOS/ConclaveStrings+iOS.swift")
-        #expect(helper.contains("Bundle.module.localizedString(forKey: key, value: nil, table: nil)"))
     }
 
     @Test func androidGalleryStringsAreResources() throws {
-
         let resources = try androidStrings()
         var used = Set<String>()
 
@@ -721,40 +498,10 @@ struct TypographyHapticsGalleryContractsTests {
             #expect(regexMatches(#"%(?![0-9]\$)"#, in: value.replacingOccurrences(of: "%%", with: "")).isEmpty,
                     "\(name) uses a non-positional argument")
         }
-        let helper = try source("Sources/Conclave/Skip/ui/theme/ConclaveStrings.kt")
-        #expect(helper.contains("getIdentifier(name, \"string\", context.packageName)"))
 
         #expect(resources["ds_leave_call"] == "Leave call")
         #expect(resources["ds_offline_title"] == "You\u{2019}re offline")
         #expect(resources["ds_more_options"] == "More options")
-    }
-
-    @Test func systemBarsHaveOneNativeOwner() throws {
-        var callers: [String] = []
-        for file in try sourceFiles(under: "Sources/Conclave/Skip", extensions: ["kt"]) where try source(file).contains("enableEdgeToEdge(") {
-            callers.append(file)
-        }
-        #expect(callers == ["Sources/Conclave/Skip/ui/theme/ConclaveSystemBars.kt"])
-        let theme = try source("Sources/Conclave/Skip/ui/theme/HostingTheme.kt")
-        #expect(!theme.contains("SystemBarStyle") && !theme.contains("DisposableEffect"))
-        let root = try source("Sources/Conclave/Skip/ui/AppRoot.kt")
-        #expect(root.components(separatedBy: "ConclaveSystemBars(").count - 1 == 1)
-        #expect(root.contains("SystemBarPolicy.resolve("))
-    }
-
-    @Test func iconGalleryDispositionsHold() throws {
-
-        let gallery = normalized(try source("Sources/Conclave/DesignSystem/iOS/NativeIconGallery.swift"))
-
-        #expect(gallery.components(separatedBy: "accessibilityIdentifier(\"icons.gallery.toggle\")").count - 1 == 1)
-        let label = try #require(gallery.range(of: "} label: {"))
-        #expect(gallery[label.upperBound...].prefix { $0 != "}" }.contains("Text(\"Icon Gallery\") .accessibilityIdentifier(\"icons.gallery.toggle\")"))
-        #expect(!gallery.contains("DisclosureGroup(\"Icon gallery\""))
-
-        #expect(gallery.contains("Text(specimen.detail) .font(.caption) .foregroundStyle(.secondary) .accessibilityHidden(true)"))
-        let components = normalized(try source("Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"))
-        #expect(components.components(separatedBy: "accessibilityIdentifier(ComponentGalleryCatalog.galleryToggleID)").count - 1 == 1)
-        #expect(components.contains("} label: { Text(ConclaveStrings.text(\"Component Gallery\")) .accessibilityIdentifier(ComponentGalleryCatalog.galleryToggleID) }"))
     }
 
     @Test func componentGalleryIdentifiersAreStable() {
@@ -865,52 +612,6 @@ struct TypographyHapticsGalleryContractsTests {
     ]
     static let glassBranchCondition = "if #available(iOS 26.0, *), !reduceTransparency, !forceOpaque {"
 
-    @Test func controlSurfaceShimKeepsItsGlassBranchesGuarded() throws {
-        let glass = ["glassEffect", "GlassEffectContainer", "GlassStyle", "glassProminent", "ultraThinMaterial",
-                     "thinMaterial", "regularMaterial", "thickMaterial", "ultraThickMaterial"]
-        let galleryFile = "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"
-        var files = try sourceFiles(under: "Sources/Conclave/DesignSystem", extensions: ["swift"])
-        files += try sourceFiles(under: "Sources/Conclave/Features/Meeting/Panels", extensions: ["swift"])
-        files += try sourceFiles(under: "Sources/Conclave/App/Hosting", extensions: ["swift"])
-        files.append("Sources/Conclave/App/PlatformRoot+iOS.swift")
-        #expect(files.contains(Self.callControlFile) && files.contains(galleryFile))
-        var entries: [String] = []
-
-        for file in files where !Self.sanctionedGlassFiles.contains(file) && file != galleryFile {
-            let text = try source(file)
-            if glass.contains(where: { text.contains($0) && !(file == Self.toastFile && $0 == "regularMaterial") }) { entries.append(file) }
-        }
-        #expect(entries.isEmpty, "glass outside the entry: \(entries)")
-
-        let text = try source(Self.callControlFile)
-        let code = withoutComments(text)
-
-        let branches = bracedBlocks(after: Self.glassBranchCondition, in: code)
-        #expect(branches.count == 3)
-        var outside = code
-        for range in branches.reversed() { outside.removeSubrange(range) }
-        for pattern in glass { #expect(!outside.contains(pattern), "\(pattern) outside the iOS 26 branch") }
-        let inside = branches.map { String(code[$0]) }.joined(separator: "\n")
-        #expect(inside.components(separatedBy: ".glassEffect(").count - 1 == 1)
-        #expect(normalized(inside).contains(".glassEffect(glass ? .regular.interactive(spec.isInteractive) : .identity, in: ConclaveControlOutline(shape: shape))"))
-        #expect(!normalized(inside).contains("if spec.fill == .glass {"))
-        #expect(inside.contains("GlassEffectContainer(spacing: spacing)"))
-        for pattern in [".clear", ".tint(", "Glass.tint", "glassProminent", "Material", "symbolColorRenderingMode(.gradient"] {
-            #expect(!code.contains(pattern), "the entry uses \(pattern)")
-        }
-
-        #expect(!code.contains("#available(iOS 26.0, *) &&"))
-        #expect(code.contains(".symbolColorRenderingMode(.flat)"))
-
-        let host = try #require(text.range(of: "#if !SKIP\n"))
-        let ios = try #require(text.range(of: "#if os(iOS) && !SKIP\n"))
-        try #require(host.upperBound < ios.lowerBound)
-        let mapping = withoutComments(String(text[host.upperBound..<ios.lowerBound]))
-        #expect(mapping.contains("enum ConclaveControlState: String, CaseIterable {"))
-        #expect(mapping.contains("enum ConclaveControlSurfaceMapping {"))
-        for framework in ["SwiftUI", "UIKit", "Color", "CGFloat", "View"] { #expect(!mapping.contains(framework), "\(framework) in the host section") }
-    }
-
     @Test func controlSurfaceFallbackUsesGeneratedToken() throws {
         let standard = ConclaveControlSurfaceMapping.spec(.on, glassAvailable: false, reduceTransparency: false, forceOpaque: false,
                                                           increasedContrast: false, isEnabled: true)
@@ -926,16 +627,6 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(DesignTokens.iosInCallBorder == 0x24FAFAFA && DesignTokens.iosInCallBorderHighContrast == 0x52FAFAFA)
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosInCallText, background: DesignTokens.iosInCallControlFallback) - 15.001) < 0.001)
         #expect(abs(ContrastRatio.wcag(foreground: DesignTokens.iosInCallOnControlOff, background: DesignTokens.iosInCallControlOff) - 18.960) < 0.001)
-
-        let code = normalized(withoutComments(try source(Self.callControlFile)))
-        #expect(code.contains(".background(HostingTheme.token(spec.fillToken ?? DesignTokens.iosInCallControlFallback), in: ConclaveControlOutline(shape: shape))"))
-        #expect(code.contains("ConclaveControlOutline(shape: shape).strokeBorder(HostingTheme.token(token), lineWidth: 1)"))
-        #expect(code.components(separatedBy: ".foregroundStyle(HostingTheme.token(spec.glyphToken))").count - 1 == 2)
-
-        let adapter = normalized(try source("Sources/Conclave/DesignSystem/iOS/HostingTheme+iOS.swift"))
-        #expect(adapter.contains("static let inCallLeave = Color(uiColor: UIColor { traits in"))
-        #expect(adapter.contains("if traits.accessibilityContrast == .high { return color(DesignTokens.iosInCallLeaveHighContrast) }"))
-        #expect(adapter.contains("static let statusWarning = appearancePair(light: DesignTokens.warningLight, dark: DesignTokens.warningDark)"))
     }
 
     @Test func controlSurfaceStateTableCoversBothBranches() throws {
@@ -988,81 +679,6 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(onFill(glass: true, reduceTransparency: true, force: false) == .fallback)
         #expect(onFill(glass: true, reduceTransparency: false, force: true) == .fallback)
         #expect(onFill(glass: false, reduceTransparency: false, force: false) == .fallback)
-
-        let code = withoutComments(try source(Self.callControlFile))
-        let surface = try #require(bracedBlocks(after: Self.glassBranchCondition, in: code).first)
-        #expect(normalized(String(code[surface])).contains("let spec = ConclaveControlSurfaceMapping.spec(state, context: context, glassAvailable: true,"))
-        #expect(code.components(separatedBy: "glassAvailable: true").count - 1 == 1)
-        #expect(normalized(code).contains("opaque(content, ConclaveControlSurfaceMapping.spec(state, context: context, glassAvailable: false,"))
-
-        #expect(normalized(code).contains(".background(HostingTheme.inCallLeave, in: Circle())"))
-        #expect(!code.contains("Color(uiColor: .systemRed)"))
-    }
-
-    @Test func controlSurfaceDimsInsideItsGlassEffect() throws {
-        let code = withoutComments(try source(Self.callControlFile))
-        let branch = try #require(bracedBlocks(after: Self.glassBranchCondition, in: code).first)
-        let surface = normalized(String(code[branch]))
-        #expect(surface.contains(".overlay { ConclaveControlStroke(token: glass ? nil : spec.strokeToken, shape: shape) } .opacity(glass ? 1 : dimming(spec)) .glassEffect(glass ? .regular.interactive(spec.isInteractive) : .identity, in: ConclaveControlOutline(shape: shape)) .overlay { ConclaveControlStroke(token: glass ? spec.strokeToken : nil, shape: shape) } .opacity(glass ? spec.opacity : 1)"),
-                "paper, fallback and scrim dim before the glass effect, where the bar's GlassEffectContainer still draws it")
-        let glassEffect = try #require(surface.range(of: ".glassEffect("))
-        let afterGlass = String(surface[glassEffect.upperBound...])
-        for pattern in ["isPressed", "dimming(", "ConclaveControlPress"] {
-            #expect(!afterGlass.contains(pattern), "\(pattern) after the glass effect")
-        }
-
-        let flat = normalized(code)
-        #expect(flat.contains("private func dimming(_ spec: ConclaveControlSurfaceSpec) -> Double { spec.opacity * (isPressed ? ConclaveControlPress.opacity : 1) }"))
-        #expect(flat.contains(".overlay { ConclaveControlStroke(token: spec.strokeToken, shape: shape) } .opacity(dimming(spec))"))
-        #expect(flat.contains("@Environment(\\.conclaveControlPressed) private var isPressed"))
-        #expect(flat.contains("fileprivate var conclaveControlPressed: Bool {"))
-        #expect(flat.contains("func conclaveControlPressed(_ isPressed: Bool) -> some View { environment(\\.conclaveControlPressed, isPressed) }"))
-        #expect(flat.components(separatedBy: ".conclaveControlPressed(configuration.isPressed)").count - 1 == 2)
-        #expect(!flat.contains("isPressed: false") && !flat.contains("isPressed: configuration.isPressed"))
-
-        let cell = normalized(withoutComments(try source("Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift")))
-        #expect(cell.contains(".conclaveControlSurface(state, isEnabled: !isBlocked, shape: .circle) .conclaveControlPressed(isPressed) }"))
-        for pattern in [".opacity(isPressed", "usesGlass", "ConclaveControlSurfaceMapping", "accessibilityReduceTransparency"] {
-            #expect(!cell.contains(pattern), "the cell dims outside the surface with \(pattern)")
-        }
-    }
-
-    @Test func forceFallbackOverrideIsDebugOnly() throws {
-        let key = "conclaveForceOpaqueControls"
-        let galleryFile = "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift"
-        var holders: [String] = []
-        for file in try sourceFiles(under: "Sources/Conclave", extensions: ["swift"]) where try source(file).contains(key) {
-            holders.append(file)
-        }
-
-        let cellFile = "Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift"
-        #expect(holders == [Self.callControlFile, Self.composerGlassFile, Self.floatingActionBarFile, galleryFile].sorted())
-        let floating = try source(Self.floatingActionBarFile)
-        let floatingRelease = withoutDebugBlocks(floating)
-        for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!floatingRelease.contains(name), "\(name) in the floating action Release") }
-        #expect(normalized(floating).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 1)
-        #expect(!floating.contains(".environment(\\.\(key)"))
-        let cell = try source(cellFile)
-        for name in ["forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!cell.contains(name), "the cell reads \(name)") }
-
-        let text = try source(Self.callControlFile)
-        let release = withoutDebugBlocks(text)
-        for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!release.contains(name), "\(name) in Release") }
-        let composer = try source(Self.composerGlassFile)
-        let composerRelease = withoutDebugBlocks(composer)
-        for name in [key, "forceOpaqueSetting", "ConclaveForceOpaqueControlsKey"] { #expect(!composerRelease.contains(name), "\(name) in the composer Release") }
-        #expect(normalized(composer).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 1)
-        #expect(!composer.contains("ConclaveForceOpaqueControlsKey"), "the key is declared once, in the call control file")
-        #expect(!composer.contains(".environment(\\.\(key)"))
-
-        #expect(normalized(text).components(separatedBy: "#if DEBUG return forceOpaqueSetting #else return false #endif").count - 1 == 3)
-        #expect(!text.contains(".environment(\\.\(key)"))
-
-        let gallery = try source(galleryFile)
-        #expect(gallery.hasPrefix("#if DEBUG && os(iOS) && !SKIP\n"))
-        let uses = gallery.components(separatedBy: key).count - 1
-        let setters = gallery.components(separatedBy: ".environment(\\.\(key), forceOpaque)").count - 1
-        #expect(setters == 2 && uses == setters)
     }
 
     @Test func compactBarFitIsArithmeticOnStatedInputs() {
@@ -1117,114 +733,6 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(CompactBarFit.iosMinimumTarget == 44 && CompactBarFit.androidMinimumTarget == 48)
     }
 
-    @Test func componentSourcesAreInert() throws {
-        let forbidden = ["MeetingViewModel", "MeetingState", "WebRTC", "SocketIO", "AVAudioSession", "AVCapture", "URLSession",
-                         "Socket(", "Timer", "LaunchedEffect", "repeatOnLifecycle", "withFrameNanos", "infinite", "requestPermission",
-                         "Gradient", "gradient", "performHapticFeedback", "UIPasteboard", "Clipboard", "Vibrator", "Icons.Default",
-                         "@Stable", "@Immutable", "FloatingToolbar", "ButtonGroup", "LoadingIndicator", "TooltipBox"]
-        for file in Self.iosComponentFiles + Self.androidComponentFiles {
-            let text = try source(file)
-            for pattern in forbidden { #expect(!text.contains(pattern), "\(file) uses \(pattern)") }
-            #expect(!containsDash(text), "\(file) contains an en or em dash")
-        }
-        for file in Self.iosComponentFiles where file != Self.callControlFile {
-            #expect(try source(file).hasPrefix("#if os(iOS) && !SKIP\n"), "\(file)")
-        }
-        for file in Self.iosComponentFiles {
-            let code = withoutComments(try source(file))
-
-            #expect(!code.contains("sensoryFeedback("), "\(file)")
-            #expect(!code.contains("glassProminent"), "\(file)")
-            #expect(!code.contains("Image(systemName: \""), "\(file) names a raw symbol")
-        }
-
-        let buttons = withoutComments(try source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveButtons+iOS.swift"))
-        let prominent = buttons.components(separatedBy: ".buttonStyle(.borderedProminent)")
-        #expect(prominent.count - 1 == 1)
-        if prominent.count == 2 {
-            #expect(normalized(String(prominent[0].suffix(300))).contains("spinnerTint: HostingTheme.onCoral) .foregroundStyle(HostingTheme.onCoral) }"))
-
-            #expect(normalized(String(prominent[1].prefix(200))).hasPrefix(".tint(HostingTheme.coralFill) .controlSize(.large) .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)"))
-        }
-        #expect(normalized(buttons).contains("content.accessibilityValue(ConclaveStrings.text(\"In Progress\"))"))
-
-        let rows = withoutComments(try source("Sources/Conclave/DesignSystem/iOS/Components/ConclaveRows+iOS.swift"))
-        #expect(normalized(rows).contains("Toggle(title, isOn: $isOn) .accessibilityIdentifier(identifier)"))
-
-        let control = try source(Self.callControlFile)
-        for (start, end) in [("struct ConclaveCallInvoker: View {", "struct ConclaveLeaveButton: View {"), ("struct ConclaveLeaveButton: View {", "struct ConclaveControlBar<Content: View>: View {")] {
-            let lower = try #require(control.range(of: start))
-            let upper = try #require(control.range(of: end, range: lower.upperBound..<control.endIndex))
-            let body = withoutComments(String(control[lower.lowerBound..<upper.lowerBound]))
-            for name in ["gestureRoute", "conclaveGestureFeedback", "FeedbackKind", "ConclaveGestureRoute"] { #expect(!body.contains(name), "\(start) uses \(name)") }
-        }
-        #expect(withoutComments(control).components(separatedBy: "conclaveGestureFeedback(").count - 1 == 1)
-        #expect(normalized(control).contains(".accessibilityLabel(ConclaveStrings.text(\"Leave Call\"))"))
-        #expect(normalized(control).contains(".accessibilityAddTraits(.isToggle)"))
-        let kotlinControl = withoutComments(try source("Sources/Conclave/Skip/ui/components/ConclaveCallControl.kt"))
-        for (start, end) in [("internal fun ConclaveCallInvoker(", "internal fun conclaveBadgeLabel("), ("internal fun ConclaveLeaveButton(", "internal fun ConclaveCallControlBar(")] {
-            let lower = try #require(kotlinControl.range(of: start))
-            let upper = try #require(kotlinControl.range(of: end, range: lower.upperBound..<kotlinControl.endIndex))
-            let body = String(kotlinControl[lower.lowerBound..<upper.lowerBound])
-            for name in ["haptics", "FeedbackKind", "onGesture"] { #expect(!body.contains(name), "\(start) uses \(name)") }
-        }
-        let flatControl = normalized(kotlinControl)
-        #expect(flatControl.contains("if (feedback != null) onGesture(feedback, haptics.gesture(feedback))"))
-        #expect(flatControl.contains(".toggleable(value = checked, enabled = enabled, role = Role.Switch,"))
-        #expect(flatControl.contains(".semantics { contentDescription = label; stateDescription = stateText }"))
-        #expect(flatControl.contains("if (engaged) selected = true"))
-        #expect(flatControl.contains(".semantics { isTraversalGroup = true }"))
-        #expect(flatControl.contains("val description = conclaveString(\"ds_leave_call\")"))
-
-        let kotlinRows = normalized(withoutComments(try source("Sources/Conclave/Skip/ui/components/ConclaveListRows.kt")))
-        #expect(kotlinRows.contains("Column(modifier.testTag(identifier).selectableGroup())"))
-        #expect(kotlinRows.contains(".selectable(selected = selected, role = Role.RadioButton,"))
-        #expect(kotlinRows.contains(".toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)"))
-        #expect(normalized(try source("Sources/Conclave/Skip/ui/components/ConclaveBanner.kt")).contains("if (announces) liveRegion = if (isAssertive) LiveRegionMode.Assertive else LiveRegionMode.Polite"))
-
-        for file in Self.androidComponentFiles {
-            let calls = regexMatches(#"(?<![A-Za-z])Text\("#, in: withoutComments(try source(file))).count
-            #expect(calls == (file.hasSuffix("/ConclaveButtons.kt") ? 1 : 0), "\(file) calls Text directly")
-        }
-        let kotlinButtons = normalized(try source("Sources/Conclave/Skip/ui/components/ConclaveButtons.kt"))
-        #expect(kotlinButtons.contains("onTextLayout = { reporter?.report(line, it.hasVisualOverflow) })"))
-        #expect(kotlinButtons.contains("internal val LocalConclaveTextReporter = staticCompositionLocalOf<ConclaveTextReporter?> { null }"))
-
-        let gallery = normalized(try source("Sources/Conclave/Skip/ui/hosting/NativeComponentGallery.kt"))
-        #expect(gallery.contains("ConclaveTextReporter { line, overflow -> state.overflow.report(configuration, row.id, line, overflow) }"))
-        #expect(gallery.components(separatedBy: "CompositionLocalProvider(LocalConclaveTextReporter provides reporter)").count - 1 == 2)
-        #expect(gallery.contains("ConclaveGestureHaptics(view = null, debuggable = isDebuggableApp(context))"))
-        #expect(!gallery.contains("rememberConclaveHaptics("))
-    }
-
-    @Test func hostingThemeOnlyChangedTypographyAndBars() throws {
-        let theme = try source("Sources/Conclave/Skip/ui/theme/HostingTheme.kt")
-
-        #expect(regexMatches(#"= Color\(DesignTokens\.android(?:Light|Dark|InCall)[A-Za-z]+\),"#, in: theme).count == 144)
-        #expect(theme.contains("typography = ConclaveTypography,"))
-        #expect(!theme.contains("enableEdgeToEdge") && !theme.contains("LocalActivity"))
-
-        let bars = normalized(try source("Sources/Conclave/Skip/ui/theme/ConclaveSystemBars.kt"))
-        #expect(bars.contains("DisposableEffect(activity) { onDispose { activity?.enableEdgeToEdge() } }"))
-        #expect(bars.contains("statusBarStyle = SystemBarPolicy.style(appearance.statusDark)"))
-        #expect(bars.contains("navigationBarStyle = SystemBarPolicy.style(appearance.navigationDark)"))
-    }
-
-    @Test func semanticsExporterIsDebugOnlyAndBounded() throws {
-
-        let exporter = normalized(try source("Sources/Conclave/Skip/ui/hosting/NativeSemanticsExport.kt"))
-        #expect(exporter.contains("(view as? ViewRootForTest)?.semanticsOwner"))
-        #expect(exporter.contains("if (!isDebuggableApp(context)) return null"))
-        #expect(exporter.contains("if (!isDebuggableApp(app)) return"))
-        #expect(exporter.contains("Manifest.permission.DUMP, null, ContextCompat.RECEIVER_EXPORTED)"))
-        #expect(exporter.contains("val receiver = registerNativeSemanticsExportReceiver(context) { exporter.export(view, activity, \"broadcast\") } onDispose { if (receiver != null) context.unregisterReceiver(receiver) }"))
-        #expect(exporter.contains("toByteArray(Charsets.US_ASCII)"))
-        #expect(exporter.contains("\"fontScale\" to NativeSemanticsJson.scale(configuration.fontScale)"))
-        #expect(!exporter.contains("String.format(\"") && !exporter.contains(".format(Locale.getDefault()"))
-        let root = try source("Sources/Conclave/Skip/ui/AppRoot.kt")
-        #expect(root.contains("NativeSemanticsExportReceiver(exporter)"))
-        #expect(root.components(separatedBy: "NativeSemanticsExportReceiver(").count - 1 == 1)
-    }
 }
 
 private func containsDash(_ text: String) -> Bool {

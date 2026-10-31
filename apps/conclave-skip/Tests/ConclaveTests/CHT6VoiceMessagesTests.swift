@@ -320,71 +320,6 @@ struct CHT6VoiceMessagesTests {
     }
     #endif
 
-    @Test func bothSpeakersExposeTheSameMembersAndRouteThroughTheCallAudioOwner() throws {
-        let ios = try chatSource("Sources/Conclave/Core/Audio/TtsSpeaker.swift")
-        let kotlin = try chatSource("Sources/Conclave/Skip/TtsSpeaker.kt")
-        for member in ["func enqueue(messageId: String, userId: String, displayName: String, text: String, voiceToken: String, isOwn: Bool)",
-                       "func replay(messageId: String, userId: String, displayName: String, text: String, voiceToken: String)",
-                       "func stop()", "func reset()", "func speak(text: String, userId: String, displayName: String)",
-                       "var onPlaybackChanged: ((String, String) -> Void)?", "var activeMessageId: String"] {
-            #expect(ios.components(separatedBy: member).count - 1 == 2, "iOS and host speakers declare \(member)")
-        }
-        for member in ["fun enqueue(messageId: String, userId: String, displayName: String, text: String, voiceToken: String, isOwn: Boolean)",
-                       "fun replay(messageId: String, userId: String, displayName: String, text: String, voiceToken: String)",
-                       "fun stop()", "fun reset()", "fun speak(text: String, userId: String, displayName: String)",
-                       "var onPlaybackChanged: ((String, String) -> Unit)?", "val activeMessageId: String"] {
-            #expect(kotlin.contains(member), "Kotlin speaker declares \(member)")
-        }
-
-        #expect(ios.contains("usesApplicationAudioSession = true") && ios.contains("mixToTelephonyUplink = false"))
-        #expect(!ios.contains("setCategory") && !ios.contains("setActive(") && !ios.contains("overrideOutputAudioPort"))
-        #expect(kotlin.contains("USAGE_VOICE_COMMUNICATION") && kotlin.contains("CONTENT_TYPE_SPEECH"))
-        #expect(!kotlin.contains("requestAudioFocus") && !kotlin.contains(".mode =") && !kotlin.contains("setMode("))
-        for text in [ios, kotlin] {
-            #expect(text.contains("VoiceMessagePolicy.blocksPlayback(AudioRouteOwner.shared.interruption)"))
-            #expect(text.contains("VoiceMessagePolicy.defaultSpeechEndpoint()"))
-            #expect(!chatHasDash(text))
-        }
-
-        for shared in ["class TtsPlaybackQueue", "struct TtsQueueItem", "enum VoicePreferences", "enum VoiceMessagePolicy"] {
-            #expect(!ios.contains(shared))
-        }
-        #expect(kotlin.contains("QUEUE_FLUSH") && !kotlin.contains("QUEUE_ADD"))
-    }
-
-    @Test func sharedVoiceCodeStaysTranspilable() throws {
-        let shared = try chatSource("Sources/Conclave/Core/Audio/VoicePreferences.swift")
-        #expect(!shared.contains("#if"))
-        #expect(!shared.contains("isLetter"))
-        #expect(!shared.contains(".map(") && !shared.contains(".compactMap("))
-        #expect(!shared.contains("withObservationTracking"))
-        #expect(!chatHasDash(shared))
-        #expect(shared.contains("static let maxQueued = 6") && shared.contains("static let advanceGapMillis = 250.0"))
-    }
-
-    @Test func voiceBubbleSourcesFollowTheChatRules() throws {
-        let ios = try chatSource("Sources/Conclave/Features/Meeting/Chat/VoiceBubble+iOS.swift")
-        #expect(ios.hasPrefix("#if os(iOS) && !SKIP\n"))
-        #expect(!ios.contains("Image(systemName: \""), "raw symbol literal")
-        #expect(!ios.contains("sensoryFeedback") && !ios.contains("conclaveGestureFeedback"), "no voice haptic (D6)")
-        #expect(!ios.contains("repeatForever") && !ios.contains("symbolEffect"), "static glyph, no equalizer (R13)")
-
-        #expect(ios.components(separatedBy: "chat.playback.activeVoiceRowId").count - 1 == 2)
-        #expect(ios.contains(".accessibilityHint(isPlaying ? \"\" : VoiceCopy.playHint)"))
-        let kotlin = try chatSource("Sources/Conclave/Skip/ui/chat/VoiceBubble.kt")
-        #expect(!kotlin.contains("haptics") && !kotlin.contains("infiniteRepeatable") && !kotlin.contains("Color(0x"))
-        #expect(kotlin.components(separatedBy: "presenter.playback.activeVoiceRowId").count - 1 == 2)
-
-        let icons = kotlin.components(separatedBy: "Icon(").dropFirst()
-        for call in icons where !call.hasPrefix("Button") {
-            let head = call.prefix(while: { $0 != "\n" })
-            #expect(head.contains("tint ="), "Icon without tint: \(head)")
-        }
-        for text in [ios, kotlin] {
-            #expect(!text.lowercased().contains("gradient") && !chatHasDash(text))
-        }
-    }
-
     @Test func voiceStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(
             with: Data(chatSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
@@ -396,12 +331,10 @@ struct CHT6VoiceMessagesTests {
             #expect(keys[key] != nil, "missing iOS key \(key)")
         }
         let xml = try chatSource("Android/app/src/main/res/values/strings.xml")
-        let kotlin = try chatSource("Sources/Conclave/Skip/ui/chat/VoiceBubble.kt")
         for name in ["chat_voice", "chat_voice_speaking", "chat_voice_play", "chat_voice_play_hint", "chat_voice_stop",
                      "chat_voice_line", "chat_voice_hint", "chat_voice_system", "chat_voice_personal", "chat_voice_exit",
                      "chat_placeholder_voice", "chat_send_voice", "chat_ax_voice", "chat_attach_voice",
                      "chat_reason_private_text", "chat_reason_voice_off"] {
-            #expect(kotlin.contains("\"" + name + "\""), "VoiceBubble.kt names \(name)")
             #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)")
         }
     }
@@ -484,11 +417,6 @@ struct CHT6VoiceMessagesTests {
         let json = #"{"id":"s-1","userId":"u","content":"/tts hi","timestamp":1,"ttsVoiceToken":"abc.def"}"#
         let notification = try JSONDecoder().decode(ChatMessageNotification.self, from: Data(json.utf8))
         #expect(notification.chatMessage(taggedRoomId: nil).ttsVoiceToken == "abc.def")
-        let vm = try chatSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(vm.contains("ttsSpeaker.enqueue(messageId:") && vm.contains("ttsSpeaker.onPlaybackChanged"))
-        #expect(vm.contains("case .playVoice:") && vm.contains("case .stopVoice:"))
-        #expect(!vm.contains("ttsHighlightTask"))
-        #expect(vm.contains("VoiceMessageText.fullText(from:"))
     }
     #endif
 

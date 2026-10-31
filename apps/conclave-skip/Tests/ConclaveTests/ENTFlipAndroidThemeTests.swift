@@ -122,32 +122,8 @@ struct ENTFlipAndroidThemeTests {
         #expect(!FileManager.default.fileExists(atPath: entFlipPackagePath("\(Self.res)/values-night/themes.xml")))
     }
 
-    @Test func predictiveBackNeedsNoLegacyBackOverride() throws {
+    @Test func theManifestOptsIntoPredictiveBack() throws {
         #expect(try entFlipSource(Self.manifest).contains("android:enableOnBackInvokedCallback=\"true\""))
-        var sources = ["Android/app/src/main/kotlin/Main.kt"]
-        let skip = entFlipPackagePath("Sources/Conclave/Skip")
-        let enumerator = try #require(FileManager.default.enumerator(atPath: skip))
-        while let file = enumerator.nextObject() as? String {
-            guard file.hasSuffix(".kt") else { continue }
-            sources.append("Sources/Conclave/Skip/\(file)")
-        }
-        #expect(sources.count > 100)
-        for file in sources {
-            let text = try entFlipSource(file)
-            #expect(!text.contains("override fun onBackPressed"), "\(file) overrides onBackPressed")
-            #expect(!text.contains("KEYCODE_BACK"), "\(file) intercepts the back key")
-        }
-    }
-
-    @Test func themeResourcesStayFlatAndDashFree() throws {
-        var files = try entFlipValuesFiles().filter { $0.hasSuffix("/themes.xml") || $0.hasSuffix("/colors.xml") }
-        #expect(files.count >= 5)
-        files += [Self.manifest, "Tests/ConclaveTests/ENTFlipAndroidThemeTests.swift"]
-        for file in files {
-            let text = try entFlipSource(file)
-            #expect(!text.lowercased().contains("gradi" + "ent"), "\(file) mentions a forbidden fill")
-            #expect(!text.unicodeScalars.contains { $0.value == 0x2013 || $0.value == 0x2014 }, "\(file) has an en or em dash")
-        }
     }
 }
 

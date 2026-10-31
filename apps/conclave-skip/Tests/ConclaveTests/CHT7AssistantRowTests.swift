@@ -379,55 +379,6 @@ struct CHT7AssistantRowTests {
         #expect(ChatFixtureScriptName(rawValue: "stream:3tasks") == .stream3tasks)
     }
 
-    @Test func theRowsStayStaticAndTheRendererStandsAlone() throws {
-        let iosRow = try chatSource("Sources/Conclave/Features/Meeting/Chat/AssistantRow+iOS.swift")
-        let iosMarkdown = try chatSource("Sources/Conclave/Features/Meeting/Chat/AssistantMarkdown+iOS.swift")
-        let kotlinRow = try chatSource("Sources/Conclave/Skip/ui/chat/AssistantRow.kt")
-        let kotlinMarkdown = try chatSource("Sources/Conclave/Skip/ui/chat/AssistantMarkdown.kt")
-        for text in [iosRow, iosMarkdown, kotlinRow, kotlinMarkdown] {
-            for forbidden in ["NativeTextShimmer", "NativeStreamingMarkdownView", "repeatForever", "symbolEffect", "infiniteRepeatable",
-                              "rememberInfiniteTransition", "Gradient", "haptics.gesture(FeedbackKind.reactionSent)"] {
-                #expect(!text.contains(forbidden), "R13: no shimmer, pulse or loop (\(forbidden))")
-            }
-            #expect(!chatHasDash(text))
-        }
-        #expect(iosRow.contains("ProgressView()") && iosRow.contains("DisclosureGroup(isExpanded:"))
-        #expect(iosRow.contains("actions.openAssistantLink(url)") && iosRow.contains("actions.retryAssistant(row.id)"))
-        #expect(kotlinRow.contains("CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp"))
-        #expect(kotlinRow.contains("AnimatedVisibility(visible = expanded, enter = expandVertically()"))
-        #expect(kotlinRow.contains("if (reduceMotion)") && kotlinRow.contains("role = Role.Button"))
-
-        for text in [iosMarkdown, kotlinMarkdown] {
-            #expect(!text.contains("ChatPresenter") && !text.contains("ChatRowActions"))
-        }
-        #expect(iosMarkdown.contains("struct AssistantMarkdownView: View") && iosMarkdown.contains(".accessibilityAddTraits(.isHeader)"))
-        #expect(kotlinMarkdown.contains("internal fun AssistantMarkdown(") && kotlinMarkdown.contains("LinkAnnotation.Url(url"))
-        #expect(kotlinMarkdown.contains("semantics { heading() }") && kotlinMarkdown.contains("horizontalScroll(rememberScrollState())"))
-        let row = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatRow+iOS.swift")
-        #expect(row.contains("AssistantRowView(entry: entry, actions: actions"))
-        let kotlinChatRow = try chatSource("Sources/Conclave/Skip/ui/chat/ChatRow.kt")
-        #expect(kotlinChatRow.contains("ChatRowKind.assistant -> ChatSwipeToReply(row, actions) { AssistantRow(entry, actions, sidePane, maxBubble) }"))
-        let panel = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatPanel+iOS.swift")
-        #expect(panel.contains("This link opens a website outside Conclave. Only open links you trust."))
-        let timeline = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatTimeline+iOS.swift")
-        #expect(timeline.contains("ChatStreamingFollow17(chat: chat, proxy: proxy, isAtBottom: isAtBottom)"))
-    }
-
-    @Test func bothPlatformsReadTheStreamAsItArrives() throws {
-        let service = try chatSource("Sources/Conclave/Core/Networking/NativeConclaveAssistantService.swift")
-        #expect(service.contains("URLSession.shared.bytes(for: request)"))
-        #expect(service.contains("AndroidNativeHttpClient.requestAssistantStream("))
-        #expect(service.contains("withTaskCancellationHandler(operation:") && service.contains("AndroidNativeHttpClient.cancelAssistantStream("))
-        #expect(service.contains("typealias NativeConclaveAssistantEventHandler = @MainActor (NativeConclaveAssistantStreamEvent) -> Void"))
-        #expect(service.contains("onEvent: @escaping NativeConclaveAssistantEventHandler"))
-        let client = try chatSource("Sources/Conclave/Skip/AndroidNativeHttpClient.kt")
-        #expect(client.contains("fun requestAssistantStream(") && client.contains("onChunk: (String) -> Unit"))
-        #expect(client.contains("onDone: (String?, String?) -> Unit") && client.contains("fun cancelAssistantStream(requestId: String)"))
-        #expect(client.contains("source.readUtf8Line()") && client.contains("fun requestAssistant("))
-        let shimmerHost = try chatSource("Sources/Conclave/Shared/NativeStreamingMarkdown.swift")
-        #expect(shimmerHost.contains("struct NativeTextShimmer: View"), "the legacy screens keep their shimmer")
-    }
-
     @Test func assistantStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(
             with: Data(chatSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
@@ -465,26 +416,6 @@ struct CHT7AssistantRowTests {
         #expect(object["reasoning"] as? String == "Hmm" && object["reasoningDone"] as? Bool == true)
         let tasks = try #require(object["tasks"] as? [[String: Any]])
         #expect(tasks.count == 1 && tasks[0]["kind"] as? String == "web_search" && tasks[0]["query"] == nil)
-    }
-
-    @Test func theCoreStreamsRelaysAndRetriesTheAnswer() throws {
-        let viewModel = try chatSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(viewModel.contains("NativeConclaveAssistantService.ask("))
-        #expect(viewModel.contains("conclaveAssistant.handle(event, answerId: answerId)"))
-        #expect(viewModel.contains("socketManager.relayConclaveAnswer(relay)"))
-        #expect(viewModel.contains("ConclaveAssistantHistoryPolicy.items(messages: state.chatMessages"))
-        #expect(viewModel.contains("ConclaveAssistantTranscriptPolicy.context("))
-        #expect(viewModel.contains("conclaveAssistant.fail(answerId: answerId, kind: ConclaveAssistantFailurePolicy.kind(for: error))"))
-        #expect(viewModel.contains("case .retryAssistant:") && viewModel.contains("socketManager.onConclaveAssistantPacket"))
-        #expect(viewModel.contains("assistant: isAssistant ? conclaveAssistant.input(forMessageId: message.id) : nil"))
-        #expect(viewModel.contains("cancelConclaveAssistantRequests()"))
-        let messages = try chatSource("Sources/Conclave/Core/Models/SocketMessages.swift")
-        #expect(messages.contains("var tasks: [ConclaveAssistantRelayTask]? = nil"))
-        let ios = try chatSource("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        #expect(ios.contains("self.onConclaveAssistantPacket?(packet)"))
-        let kotlin = try chatSource("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-        #expect(kotlin.contains("decodeConclaveAssistantPacket(args.firstOrNull())"))
-        #expect(kotlin.contains("payload.put(\"reasoningDone\", true)") && kotlin.contains("payload.put(\"tasks\", array)"))
     }
 
     static func event(_ kind: NativeConclaveAssistantStreamEventKind, delta: String = "", error: String = "",

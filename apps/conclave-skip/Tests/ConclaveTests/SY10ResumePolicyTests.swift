@@ -324,48 +324,6 @@ struct SY10ResumePolicyTests {
         #expect(!viewModel.makePremeetingInputs().resumeInFlight)
         #expect(viewModel.makePremeetingInputs().resumeRoomId == "")
     }
-
-    @Test func theTerminationAndTaskRemovalHooksWriteTheMarkerFirst() throws {
-        let app = try sy10Source("Sources/Conclave/ConclaveApp.swift")
-        let destroy = try sy10Slice(app, from: "public func onDestroy() {", to: "public func onLowMemory() {")
-        #expect(destroy.contains("#if !SKIP"), "Android activity destroy must not end a live call")
-        let write = try #require(destroy.range(of: "MeetingResumeMarker.write()"))
-        let hop = try #require(destroy.range(of: "MainActor.assumeIsolated {"))
-        #expect(write.lowerBound < hop.lowerBound)
-        #expect(destroy.contains("MeetingViewModel.shared.handleAppWillTerminate()"))
-        #expect(!destroy.contains("Task {") && !destroy.contains("Task("))
-
-        let service = try sy10Source("Sources/Conclave/Skip/CallForegroundService.kt")
-        let removed = try sy10Slice(service, from: "override fun onTaskRemoved(rootIntent: Intent?) {", to: "super.onTaskRemoved(rootIntent)")
-        let marker = try #require(removed.range(of: "ProcessExitReasonBridge.writeTaskRemovedMarker(this)"))
-        let leave = try #require(removed.range(of: "CallActionDispatcher.handleCurrentNow(SystemCallCommandKind.leave, SystemCallSource.system)"))
-        #expect(marker.lowerBound < leave.lowerBound)
-
-        let bridge = try sy10Source("Sources/Conclave/Skip/ProcessExitReasonBridge.kt")
-        #expect(bridge.contains("internal const val PREFERENCES_NAME = \"defaults\""))
-        #expect(bridge.contains(".putString(MeetingResumeMarker.key, millis.toString())\n                .commit()"))
-        #expect(!bridge.contains(".apply()"))
-        #expect(bridge.contains("if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false"))
-        #expect(bridge.contains("getHistoricalProcessExitReasons(context.packageName, 0, 5)"))
-        #expect(bridge.contains(".mapNotNull { userRequestedMarkerMillis(it.reason, it.timestamp, snapshotSavedAtMillis) }\n            .maxOrNull() ?: return false"))
-        #expect(!bridge.contains("firstOrNull()"))
-        #expect(bridge.contains("if (reason != ApplicationExitInfo.REASON_USER_REQUESTED) return null"))
-
-        let vm = try sy10Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(vm.contains("#if SKIP\n        ProcessExitReasonBridge.recordUserRequestedExit(snapshotSavedAtMillis: MeetingResumePolicy.savedAtMillis(snapshot))\n        #endif"))
-        #expect(vm.contains("state.connectionState = ConnectionState.joined\n            persistMeetingResumeSnapshot()\n            clearMeetingResumeMarker()\n            endResumeInFlight()"))
-        #expect(vm.contains("state.connectionState = ConnectionState.waiting\n                    clearMeetingResumeSnapshot()\n                    endResumeInFlight()"))
-        #expect(vm.contains("resumeInFlight: resumeInFlight,\n            resumeRoomId: resumeRoomId,"))
-        #expect(!vm.contains("struct MeetingResumeSnapshot") && !vm.contains("enum MeetingResumeStore"))
-
-        let core = try sy10Source("Sources/Conclave/Core/Session/MeetingResumePolicy.swift")
-        #expect(!core.contains("#if") && !core.contains("import SwiftUI") && !core.contains("import UIKit"))
-        for file in ["Sources/Conclave/Core/Session/MeetingResumePolicy.swift", "Sources/Conclave/Skip/ProcessExitReasonBridge.kt"] {
-            let text = try sy10Source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has a dash")
-            #expect(!text.contains("//"), "\(file) has a comment")
-        }
-    }
 }
 
 private struct SY10JoinFailure: LocalizedError {

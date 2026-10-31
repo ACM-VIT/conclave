@@ -346,51 +346,6 @@ struct PPL2PeopleActionTests {
         #expect(third.kind == .completed)
     }
 
-    @Test func confirmationsAreSystemDialogsOnBothPlatforms() throws {
-        let ios = try ppl2Source("Sources/Conclave/Features/Meeting/People/PeopleActions+iOS.swift")
-        #expect(ios.contains(".confirmationDialog("))
-        #expect(ios.contains("PeopleRowAccessibilityActions"))
-        #expect(ios.contains("swipeActions(edge: .trailing, allowsFullSwipe: false)"))
-        let kotlin = try ppl2Source("Sources/Conclave/Skip/ui/people/PeopleActions.kt")
-        #expect(kotlin.contains("AlertDialog("))
-        #expect(kotlin.contains("role = Role.Checkbox"))
-        #expect(kotlin.contains("HostingTheme(inCall = true)"))
-        let tile = try ppl2Source("Sources/Conclave/Skip/ui/call/stage/TileMenu.kt")
-        #expect(tile.contains("PeopleActionPolicy.tileActions"))
-        #expect(tile.contains("PeopleActionSource.tileMenu"))
-        let tileIOS = try ppl2Source("Sources/Conclave/Features/Meeting/Stage/TileMenu+iOS.swift")
-        #expect(tileIOS.contains("PeopleActionPolicy.tileActions"))
-    }
-
-    @Test func transferHostWritesNoRoleBeforeTheServer() throws {
-        let vm = try ppl2Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let start = try #require(vm.range(of: "func transferHost(userId: String, onResult:"))
-        let end = try #require(vm.range(of: "func setParticipantMediaPermissions(", range: start.upperBound..<vm.endIndex))
-        let body = String(vm[start.lowerBound..<end.lowerBound])
-        #expect(body.contains("socketManager.transferHost(userId: userId)"))
-        #expect(!body.contains("hostUserId ="))
-        #expect(!body.contains("applyHostSnapshot("))
-
-        #expect(vm.contains("func performPeopleCommand(_ command: PeopleCommand, _ ticket: HostActionTicket)"))
-        #expect(vm.contains("_ = self?.people.finish(ticket, result)"))
-    }
-
-    @Test func newPeopleSourcesStayFlatAndDashFree() throws {
-        let paths = ["Sources/Conclave/Features/Meeting/People/PeopleActions+iOS.swift",
-                     "Sources/Conclave/Features/Meeting/People/PeopleActionPolicy.swift",
-                     "Sources/Conclave/Features/Meeting/People/PeopleActionModels.swift",
-                     "Sources/Conclave/Features/Meeting/People/PeopleFailurePlacementPolicy.swift",
-                     "Sources/Conclave/Features/Meeting/People/HostActionLedger.swift",
-                     "Sources/Conclave/Core/Session/HostActionFailurePolicy.swift",
-                     "Sources/Conclave/Core/Session/DisplayNameEditor.swift",
-                     "Sources/Conclave/Skip/ui/people/PeopleActions.kt"]
-        for path in paths {
-            let source = try ppl2Source(path)
-            #expect(!source.contains("Gradient"), "\(path) draws a gradient")
-            #expect(!source.contains("\u{2014}") && !source.contains("\u{2013}"), "\(path) has a long dash")
-            #expect(!source.contains("Color(red:") && !source.contains("Color(0x"), "\(path) has a color literal")
-        }
-    }
 }
 
 private func ppl2Source(_ packageRelativePath: String) throws -> String {

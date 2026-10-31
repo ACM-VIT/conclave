@@ -18,59 +18,8 @@ struct FND1FoundationPackTests {
     }
 
     @Test func iosAdapterResolvesContrastAndAppearanceTraits() throws {
-        let adapter = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/HostingTheme+iOS.swift"))
-        let pairs: [(String, String, String)] = [
-            ("inCallTextSecondary", "iosInCallTextSecondary", "iosInCallTextSecondaryHighContrast"),
-            ("inCallTextTertiary", "iosInCallTextTertiary", "iosInCallTextTertiaryHighContrast"),
-            ("inCallBorder", "iosInCallBorder", "iosInCallBorderHighContrast"),
-            ("inCallBorderStrong", "iosInCallBorderStrong", "iosInCallBorderStrongHighContrast"),
-            ("inCallLabelScrim", "iosInCallLabelScrim", "iosInCallLabelScrimHighContrast"),
-            ("inCallOnCoral", "iosInCallOnCoral", "iosInCallOnCoralHighContrast"),
-            ("inCallCoralText", "iosInCallCoralText", "iosInCallCoralTextHighContrast"),
-        ]
-        for (member, standard, high) in pairs {
-            #expect(adapter.contains("static let \(member) = contrastPair(DesignTokens.\(standard), DesignTokens.\(high))"), "\(member)")
-        }
-        #expect(adapter.contains("color(traits.accessibilityContrast == .high ? highContrast : standard)"))
-
-        #expect(adapter.contains("if traits.accessibilityContrast == .high { return color(DesignTokens.iosInCallLeaveHighContrast) }"))
-        #expect(adapter.contains("return UIColor.systemRed.resolvedColor(with: traits)"))
-
-        for (member, light, dark) in [("statusSuccess", "successLight", "successDark"), ("statusWarning", "warningLight", "warningDark"),
-                                      ("statusLive", "liveLight", "liveDark")] {
-            #expect(adapter.contains("static let \(member) = appearancePair(light: DesignTokens.\(light), dark: DesignTokens.\(dark))"), "\(member)")
-        }
-
-        #expect(adapter.contains("static let disabledOpacity = ConclaveDisabledOpacity.ios"))
         #expect(ConclaveDisabledOpacity.ios == 0.4 && ConclaveDisabledOpacity.android == 0.38)
         #expect(ConclaveControlSurfaceMapping.disabledOpacity == ConclaveDisabledOpacity.ios)
-    }
-
-    @Test func androidExtendedColorsComeFromTheTheme() throws {
-        let colors = try fndSource("Sources/Conclave/Skip/ui/theme/ConclaveExtendedColors.kt")
-        #expect(colors.contains("internal val LocalConclaveExtendedColors = staticCompositionLocalOf { ConclaveExtendedColorsLight }"))
-        #expect(fndMatches(#"Color\(\s*0x"#, in: colors).isEmpty)
-        for role in ["success", "warning", "live", "onWarning", "onLive", "handRaised", "speaking", "callEnd", "onCallEnd", "stage",
-                     "tile", "labelScrim", "toolbar", "toggleOnContainer", "onToggleOn", "toggleOffContainer", "onToggleOff",
-                     "toggleEngagedContainer", "onToggleEngaged", "border"] {
-            #expect(colors.contains("val \(role): Color,"), "\(role)")
-        }
-        let theme = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/theme/HostingTheme.kt"))
-        #expect(theme.contains("CompositionLocalProvider(LocalConclaveExtendedColors provides if (dark) ConclaveExtendedColorsDark else ConclaveExtendedColorsLight)"))
-    }
-
-    @Test func callAppearanceOwnsTheDarkRootAndPublishesTheSystemScheme() throws {
-        let text = try fndSource("Sources/Conclave/DesignSystem/iOS/CallAppearance+iOS.swift")
-        #expect(text.hasPrefix("#if os(iOS) && !SKIP\n"))
-        let flat = normalizedFND(text)
-        #expect(flat.contains(".environment(\\.conclaveInCallRoot, true) .preferredColorScheme(.dark)"))
-        #expect(!flat.contains("toolbarColorScheme") && !flat.contains("#available(iOS 27.0"), "the call root rethemes its window dark on every iOS version")
-        #expect(flat.contains(".environment(\\.conclaveSystemColorScheme, AppearancePreference.shared.mode.colorScheme ?? sceneScheme ?? inheritedScheme)"))
-        #expect(flat.contains(".environment(\\.colorScheme, .dark)"))
-        #expect(flat.contains("case .system: return nil case .light: return .light case .dark: return .dark"))
-        #expect(flat.contains("scene.registerForTraitChanges([UITraitUserInterfaceStyle.self], target: self,"))
-
-        #expect(flat.contains("func conclaveInCallRegion() -> some View { environment(\\.colorScheme, .dark) }"))
     }
 
     @Test func motionDurationsAreTheNamedSpecValues() throws {
@@ -80,19 +29,7 @@ struct FND1FoundationPackTests {
         #expect(ConclaveMotionDurations.stageSwapMillis == 200 && ConclaveMotionDurations.tileReflowMillis == 220)
         #expect(ConclaveMotionDurations.zoomSnapMillis == 250 && ConclaveMotionDurations.entryExpandResponseSeconds == 0.38)
         #expect(ConclaveMotionDurations.spatialDampingRatio == 0.9 && ConclaveMotionDurations.spatialStiffness == 700)
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/ConclaveMotion+iOS.swift"))
-        for name in ["fast", "chromeFade", "snap", "entryExpand", "crossFade", "tileReflow", "stageSwap", "zoomSnap"] {
-            #expect(ios.contains("static let \(name) = "), "\(name)")
-        }
-        #expect(ios.contains("if reduceMotion { return .opacity }"))
-        let kotlin = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/theme/ConclaveMotion.kt"))
-        for name in ["fast", "chromeFade", "spatialDefault", "crossFade", "tileReflow", "stageSwap", "zoomSnap"] {
-            #expect(kotlin.contains("fun <T> \(name)()"), "\(name)")
-        }
-        #expect(kotlin.contains("easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)"))
 
-        #expect(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveBanner+iOS.swift").contains("ConclaveMotionDurations.fastMillis"))
-        #expect(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveBanner.kt").contains("ConclaveMotionDurations.fastMillis"))
     }
 
     @Test func iosReaderMappingCoversEverySetting() {
@@ -143,26 +80,6 @@ struct FND1FoundationPackTests {
         #expect(SystemAccessibilityMapping.androidIncreasedContrast(contrastLevel: 1))
     }
 
-    @Test func readersAreLiveAndOnePerSetting() throws {
-        let ios = try fndSource("Sources/Conclave/DesignSystem/iOS/SystemAccessibility+iOS.swift")
-        #expect(ios.hasPrefix("#if os(iOS) && !SKIP\n"))
-        for key in ["accessibilityVoiceOverEnabled", "accessibilitySwitchControlEnabled", "accessibilityReduceMotion",
-                    "accessibilityDifferentiateWithoutColor", "accessibilityAssistiveAccessEnabled", "accessibilityReduceTransparency",
-                    "colorSchemeContrast", "legibilityWeight", "accessibilityDimFlashingLights", "accessibilityPlayAnimatedImages"] {
-            #expect(ios.contains("@Environment(\\.\(key))"), "\(key)")
-        }
-        #expect(ios.contains("UIAccessibility.prefersCrossFadeTransitionsStatusDidChange"))
-        #expect(normalizedFND(ios).contains("if #available(iOS 18.0, *) { content.modifier(AssistiveAccessProbe(isRunning: $isRunning)) } else { content }"))
-        let android = try fndSource("Sources/Conclave/Skip/ui/theme/SystemAccessibility.kt")
-        for call in ["addTouchExplorationStateChangeListener", "addAccessibilityStateChangeListener", "ANIMATOR_DURATION_SCALE",
-                     "getRecommendedTimeoutMillis(base, CONCLAVE_TIMEOUT_FLAGS)", "configuration.fontWeightAdjustment",
-                     "addContrastChangeListener", "Lifecycle.Event.ON_RESUME"] {
-            #expect(android.contains(call), "\(call)")
-        }
-
-        for gate in ["@RequiresApi(29)", "@RequiresApi(31)", "@RequiresApi(34)"] { #expect(android.contains(gate), "\(gate)") }
-    }
-
     @Test func toastTimingPersistsActionToastsUnderAScreenReader() {
         #expect(ConclaveToastTiming.durationMillis(hasAction: false, isScreenReaderRunning: false) == 4000)
         #expect(ConclaveToastTiming.durationMillis(hasAction: true, isScreenReaderRunning: false) == 8000)
@@ -176,21 +93,6 @@ struct FND1FoundationPackTests {
                 #expect(ConclaveToastTiming.durationMillis(hasAction: hasAction, isScreenReaderRunning: screenReader,
                                                            isProgress: true) == 0)
             }
-        }
-    }
-
-    @Test func pluralsAndTabularDigitsHaveOneHelperEach() throws {
-        let strings = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/theme/ConclaveStrings.kt"))
-        #expect(strings.contains("internal fun conclavePlural(name: String, count: Int, vararg formatArgs: Any): String"))
-        #expect(strings.contains("internal fun conclavePluralOf(context: Context, name: String, count: Int, vararg formatArgs: Any): String"))
-        #expect(strings.contains("context.resources.getIdentifier(name, \"plurals\", context.packageName)"))
-        #expect(strings.contains("pluralStringResource(id, count, *formatArgs)"))
-        let typography = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/theme/ConclaveTypography.kt"))
-        #expect(typography.contains("internal fun TextStyle.tabular(): TextStyle = copy(fontFeatureSettings = \"tnum\")"))
-        #expect(typography.contains("internal fun rememberTabular(style: TextStyle): TextStyle = remember(style) { style.tabular() }"))
-
-        for file in try fndFiles(under: "Sources/Conclave/Skip/ui", extensions: ["kt"]) where !file.hasSuffix("/ConclaveTypography.kt") {
-            #expect(!(try fndSource(file)).contains("fontFeatureSettings"), "\(file)")
         }
     }
 
@@ -218,66 +120,9 @@ struct FND1FoundationPackTests {
         #expect(ConclaveAvatarSize.allCases.filter { $0.scalesWithText } == [.mention, .chat, .row])
     }
 
-    @Test func avatarSourcesStayFlatAndDecorative() throws {
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveAvatar+iOS.swift"))
-        #expect(ios.contains(".fill(HostingTheme.token(identity.fill))"))
-        #expect(ios.contains("Circle().strokeBorder(HostingTheme.token(DesignTokens.avatarRing), lineWidth: 1)"))
-        #expect(ios.contains(".fill(HostingTheme.token(DesignTokens.avatarTongue))"))
-        #expect(ios.contains(".accessibilityIgnoresInvertColors()"))
-        #expect(!ios.contains("FacehashPresentation.color(") && !ios.contains("FacehashPresentation.tongue"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveAvatar.kt"))
-        #expect(android.contains("val identity = remember(name, id) { ConclaveAvatarIdentity.make(name = name, id = id) }"))
-        #expect(android.contains("Modifier.semantics { hideFromAccessibility() }"))
-        #expect(android.contains("drawWithCache"))
-        for word in ["Brush", "blink", "infinite", "LaunchedEffect"] { #expect(!android.contains(word), "\(word)") }
-    }
-
-    @Test func closeAndBackFollowThePlatform() throws {
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveButtons+iOS.swift"))
-        #expect(ios.contains("if #available(iOS 26.0, *) { Button(role: .close, action: action) } else { Button(action: action) { Image(systemName: ConclaveSymbols.xmark) .accessibilityHidden(true) } }"))
-        #expect(ios.contains(".keyboardShortcut(.cancelAction) .accessibilityLabel(label)"))
-        #expect(ios.contains("if let title { return ConclaveStrings.format(\"Close %@\", title) } return ConclaveStrings.text(\"Close\")"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveButtons.kt"))
-        #expect(android.contains("if (title != null) conclaveString(\"ds_close_title\", title) else conclaveString(\"ds_close\")"))
-        #expect(android.contains("if (toCall) conclaveString(\"ds_back_to_call\") else conclaveString(\"ds_back\")"))
-        #expect(android.contains("ConclaveIconButton(description, ConclaveIcons.ArrowBackFill0, identifier, onClick, modifier)"))
-    }
-
-    @Test func sectionHeadersAreHeadingsWithTheirCount() throws {
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveRows+iOS.swift"))
-        #expect(ios.contains("Text(count, format: .number) .monospacedDigit()"))
-        #expect(ios.contains(".accessibilityElement(children: .combine) .accessibilityAddTraits(.isHeader)"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveListRows.kt"))
-        #expect(android.contains(".semantics(mergeDescendants = true) { heading() }"))
-        #expect(android.contains("style = rememberTabular(style)"))
-    }
-
     @Test func dialogsKeepOneConfirmAndNoCoral() throws {
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveDialogs+iOS.swift"))
-        #expect(ios.components(separatedBy: "role: model.confirmRole == .destructive ? .destructive : nil").count - 1 == 2)
-        #expect(ios.contains("content.confirmationDialog(model.title, isPresented: $isPresented, titleVisibility: .visible)"))
-        #expect(ios.contains("Button(ConclaveStrings.text(\"Cancel\"), role: .cancel, action: onCancel)"))
-        #expect(ios.contains("Button(ConclaveStrings.text(\"Not Now\"), role: .cancel, action: onCancel)"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveDialogs.kt"))
-        #expect(android.contains("if (destructive) ButtonDefaults.textButtonColors(contentColor = scheme.error) else ButtonDefaults.textButtonColors()"))
-        #expect(!android.contains("primaryContainer"))
         let model = ConclaveDialogModel(kind: .confirmation, title: "End", message: "", confirmTitle: "End", confirmRole: .destructive)
         #expect(model.kind == .confirmation && model.confirmRole == .destructive)
-    }
-
-    @Test func fieldsKeepTextLocalAndSendLabelled() throws {
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift"))
-        #expect(ios.contains("TextField(prompt, text: $text, axis: .vertical) .lineLimit(1...6)"))
-        #expect(ios.contains(".accessibilityLabel(ConclaveStrings.text(\"Send\"))"))
-        #expect(ios.contains(".accessibilityLabel(ConclaveStrings.format(\"%lld of %lld Characters\", count, limit))"))
-        #expect(!ios.contains("glassEffect") && !ios.contains("GlassEffectContainer"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveFields.kt"))
-        #expect(android.contains("Icon(ConclaveIcons.SendFill1, contentDescription = conclaveString(\"ds_send\"),"))
-        #expect(android.contains("event.key == Key.Enter && !event.isShiftPressed"))
-        #expect(android.contains("maxLines = 6"))
-        for file in ["Sources/Conclave/DesignSystem/iOS/Components/ConclaveFields+iOS.swift", "Sources/Conclave/Skip/ui/components/ConclaveFields.kt"] {
-            #expect(!(try fndSource(file)).contains("MeetingViewModel"), "\(file)")
-        }
     }
 
     @Test func labelledToggleNeverTakesGlassOnALobbySurface() throws {
@@ -289,22 +134,6 @@ struct FND1FoundationPackTests {
             }
         }
         #expect(!ConclaveSurfaceContext.overVideo.allowsGlass && !ConclaveSurfaceContext.onSurface.allowsGlass && ConclaveSurfaceContext.stage.allowsGlass)
-        let control = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveCallControl+iOS.swift"))
-        #expect(control.contains("self.context = context == .stage ? .onSurface : context"))
-        #expect(control.contains("struct ConclaveLabelledCallToggle: View {"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveCallControl.kt"))
-        #expect(android.contains("internal fun ConclaveLabelledCallToggle("))
-        #expect(android.contains("val caption = Modifier.clearAndSetSemantics { }"))
-    }
-
-    @Test func stageLifetimeProbesAreExposed() throws {
-        let ios = try fndSource("Sources/Conclave/App/PlatformRoot+iOS.swift")
-        #expect(ios.contains("\nfinal class HostingStageLifetime {\n"))
-        #expect(!ios.contains("private final class HostingStageLifetime"))
-        #expect(ios.contains("private(set) var creations = 0"))
-        let android = try fndSource("Sources/Conclave/Skip/ui/AppRoot.kt")
-        #expect(android.contains("\ninternal class NativeHostingStageLifetime {\n"))
-        #expect(!android.contains("private class NativeHostingStageLifetime"))
     }
 
     @Test func foundationSpecimenIDsAreStable() {
@@ -318,17 +147,6 @@ struct FND1FoundationPackTests {
 
         #expect(Set(all).isDisjoint(with: Set(ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true).map { $0.replacingOccurrences(of: ".inCall", with: "").replacingOccurrences(of: ".app", with: "") })))
         for id in all { #expect(id.unicodeScalars.allSatisfy { $0.isASCII && $0 != " " }, "\(id)") }
-    }
-
-    @Test func sharedModelsStayInsideSkipLite() throws {
-        let text = try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveComponentModels.swift")
-        #expect(!text.contains("#if"))
-
-        #expect(fndMatches(#"case [a-z][A-Za-z]*\("#, in: text).isEmpty)
-        #expect(fndMatches(#"-> \("#, in: text).isEmpty)
-        #expect(fndMatches(#"\.map\([A-Za-z.]+\)"#, in: text).isEmpty && !text.contains("compactMap"))
-        for word in ["Gradient", "gradient", "SwiftUI", "UIKit", "MeetingViewModel"] { #expect(!text.contains(word), "\(word)") }
-        #expect(!fndContainsDash(text))
     }
 }
 

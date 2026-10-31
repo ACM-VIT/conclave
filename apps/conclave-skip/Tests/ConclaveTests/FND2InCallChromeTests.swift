@@ -47,27 +47,6 @@ struct FND2InCallChromeTests {
         #expect(!state.isSpeaking)
     }
 
-    @Test func tileChromeKeepsTheRendererBelowAndTheSpeakerInALeaf() throws {
-        let ios = try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveTileChrome+iOS.swift")
-        let flat = normalizedFND(ios)
-
-        #expect(flat.contains("ZStack { renderer() .accessibilityIgnoresInvertColors()"))
-
-        #expect(ios.components(separatedBy: ".isSpeaking").count - 1 == 4)
-        #expect(flat.contains(".strokeBorder(HostingTheme.coralFill, lineWidth: 2) .opacity(state.isSpeaking ? 1 : 0)"))
-        #expect(flat.contains(".accessibilityElement(children: .ignore)"))
-        #expect(flat.contains(".background(HostingTheme.inCallLabelScrim, in: Capsule())"))
-        #expect(!ios.contains("glassEffect") && !ios.contains("conclaveControlSurface"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveTileChrome.kt"))
-        #expect(android.contains("Box(Modifier.fillMaxSize()) { renderer() }"))
-        #expect(android.contains("private fun SpeakingStroke(speaking: TileSpeakingState, cornerRadius: Dp) { if (speaking.isSpeaking) {"))
-        #expect(android.contains("Modifier.combinedClickable(hapticFeedbackEnabled = false,"))
-        #expect(android.contains("haptics.gesture(FeedbackKind.longPress)"))
-        #expect(android.contains("contentDescription = name stateDescription = states if (custom.isNotEmpty()) customActions = custom"))
-
-        #expect(!android.contains("LazyRow") && !android.contains("LazyColumn") && !android.contains("LazyVerticalGrid"))
-    }
-
     @Test func surfaceContextsSelectTheRightFill() {
         for glass in [false, true] {
             for contrast in [false, true] {
@@ -95,73 +74,21 @@ struct FND2InCallChromeTests {
         }
     }
 
-    @Test func chromeSitsInTheGlassEntryAndChipsNeverTakeGlass() throws {
-        let control = try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveCallControl+iOS.swift")
-        let flat = normalizedFND(control)
-        for name in ["struct ConclaveMeetingCapsule: View {", "struct ConclaveChromeButton: View {", "struct ConclaveRoutePickerButton: View {",
-                     "struct ConclaveTopChromeCluster<Content: View>: View {"] {
-            #expect(control.contains(name), "\(name)")
-        }
-        #expect(flat.contains(".buttonStyle(ConclaveChromeButtonStyle(shape: .capsule, context: context))"))
-        #expect(flat.contains("view.prioritizesVideoDevices = false"))
-        #expect(flat.contains("func routePickerViewWillBeginPresentingRoutes(_ routePickerView: AVRoutePickerView) { onPresentingChange(true) }"))
-        #expect(flat.contains(".lineLimit(1) .truncationMode(.middle)"))
-        #expect(flat.contains("var surface: ConclaveSurfaceContext { self == .stage ? .stage : .overVideo }"))
-        let chip = try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveStageChip+iOS.swift")
-        for glass in ["glassEffect", "GlassEffectContainer", "conclaveControlSurface", "Material"] { #expect(!chip.contains(glass), "\(glass)") }
-        let chipFlat = normalizedFND(chip)
-        #expect(chipFlat.contains(".background(HostingTheme.inCallLabelScrim, in: Capsule()) .overlay { Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveStageChrome.kt"))
-        #expect(android.components(separatedBy: "color = ext.labelScrim,").count - 1 == 3)
-        #expect(android.components(separatedBy: "border = BorderStroke(1.dp, ext.border),").count - 1 == 3)
-        #expect(android.contains("\"usb\" -> ConclaveIcons.UsbFill0"))
-        #expect(android.contains("\"hearingAid\" -> ConclaveIcons.HearingFill0"))
-        #expect(android.contains("ConclaveChromeButton(conclaveString(\"ds_minimize_call\"), ConclaveIcons.ArrowBackFill0,"))
-    }
-
     @Test func badgeRulesAndTagsHoldOnBothPlatforms() throws {
         #expect(!ConclaveBadgeCount.isVisible(0) && ConclaveBadgeCount.isVisible(1))
         #expect(ConclaveBadgeCount.displayed(99) == 99 && !ConclaveBadgeCount.isCapped(99))
         #expect(ConclaveBadgeCount.displayed(120) == 99 && ConclaveBadgeCount.isCapped(120))
         #expect(ConclavePersonTag.allCases.map { $0.rawValue } == ["host", "cohost", "you"])
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveBadge+iOS.swift"))
-        #expect(ios.contains(".foregroundStyle(HostingTheme.onCoral)"))
-        #expect(ios.contains("case .cohost: return ConclaveStrings.text(\"Co-Host\")"))
-        #expect(ios.contains(".background(Color(uiColor: .tertiarySystemFill), in: Capsule())"))
-
-        let control = try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveCallControl+iOS.swift")
-        #expect(!control.contains("private struct ConclaveCountBadge"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveBadge.kt"))
-        #expect(android.contains("Badge(modifier = modifier.clearAndSetSemantics { }, containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer)"))
-        #expect(android.contains("ConclavePersonTag.cohost -> conclaveString(\"ds_tag_cohost\")"))
     }
 
     @Test func darkSnackbarSlotUsesTheInCallRoles() throws {
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveToastHost.kt"))
-        #expect(android.contains("color = scheme.surfaceContainerHigh, contentColor = scheme.onSurface,"))
-        #expect(android.contains("ConclaveText(toast.actionTitle, line = \"$identifier.action\", color = MaterialTheme.colorScheme.primary)"))
-        #expect(!android.contains("Modifier.border("), "the elevated stage toast has no enclosing outline")
-        #expect(android.contains("Snackbar(data, shape = MaterialTheme.shapes.small)"), "in-page snackbars stay stock")
-        #expect(!android.contains("textAllCaps") && !android.contains("uppercase"))
-
         let pairs = Dictionary(ComponentGalleryCatalog.contrastPairs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         #expect(abs((pairs["contrast.snackbar.text"]?.ratio ?? 0) - 15.001) < 0.001)
         #expect(abs((pairs["contrast.snackbar.action"]?.ratio ?? 0) - 6.246) < 0.001)
         #expect(DesignTokens.androidInCallSurfaceContainerHigh == 0xFF232327)
     }
 
-    @Test func toastHostTimesOneToastAtATime() throws {
-        let android = try fndSource("Sources/Conclave/Skip/ui/components/ConclaveToastHost.kt")
-        #expect(android.components(separatedBy: "LaunchedEffect(").count - 1 == 1)
-        #expect(android.contains("LaunchedEffect(item?.id) {"))
-        for word in ["while", "delay(", "repeat(", "Timer", "infinite", "withFrameNanos"] { #expect(!android.contains(word), "\(word)") }
-        #expect(!fndContainsDash(android))
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveToast+iOS.swift"))
-        #expect(ios.contains(".task(id: item.id) {"))
-        #expect(ios.contains("ConclaveToastTiming.durationMillis(hasAction: item.hasAction, isScreenReaderRunning: isScreenReaderRunning, isProgress: item.isProgress)"))
-        #expect(ios.contains("text.accessibilitySpeechAnnouncementPriority = item.isFailure ? .high : .low"))
-        #expect(ios.contains(".accessibilityAction(.escape) { onDismiss(item.id) }"))
-        #expect(ios.contains(".tint(HostingTheme.inCallCoralText)"))
+    @Test func toastItemReportsItsActionAndAvatar() throws {
         let item = ConclaveToastItem(id: "t1", message: "Avery raised a hand", actionTitle: "View", actionId: "view", avatarName: "Avery",
                                      avatarId: "", isFailure: false)
         #expect(item.hasAction && item.hasAvatar)
@@ -178,49 +105,6 @@ struct FND2InCallChromeTests {
         let bad = [MenuSectionModel(id: "s1", items: [item("remove", role: .destructive), item("pin")])]
         #expect(ConclaveMenuPolicy.destructiveItemsAreLast(good))
         #expect(!ConclaveMenuPolicy.destructiveItemsAreLast(bad))
-    }
-
-    @Test func menusActionSheetAndPaletteKeepTheirRoles() throws {
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveMenus+iOS.swift"))
-        #expect(ios.contains(".menuOrder(order == .fromBar ? .priority : .fixed)"))
-        #expect(ios.contains("Toggle(isOn: Binding(get: { item.isOn }, set: { _ in onSelect(item) }))"))
-        #expect(ios.contains("Button(role: .destructive) { onSelect(item) } label: { label }"))
-        #expect(ios.contains("if !item.isEnabled && !item.disabledReason.isEmpty { Text(item.disabledReason) }"))
-        #expect(ios.contains(".controlGroupStyle(.palette)"))
-        let menus = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveMenus.kt"))
-        #expect(menus.contains("tonalElevation = 0.dp, shadowElevation = conclaveMenuShadowElevation(), border = BorderStroke(1.dp, scheme.outlineVariant),"))
-        #expect(menus.contains("MenuItemRole.toggle -> ConclaveMenuRole.Toggle(item.isOn)") && menus.contains("this.role = Role.Checkbox toggleableState = ToggleableState(toggle.on)"))
-        #expect(menus.contains("MenuDefaults.itemColors(textColor = scheme.error, leadingIconColor = scheme.error)"))
-        let sheet = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveActionSheet.kt"))
-        #expect(sheet.contains("HostingTheme(inCall = true) {"))
-        #expect(sheet.contains("rememberModalBottomSheetState(skipPartiallyExpanded = false)"))
-
-        #expect(sheet.contains("scope.launch { sheetState.hide() }.invokeOnCompletion { if (!sheetState.isVisible) { onDismiss() onTile(tile) } }"))
-        #expect(sheet.contains(".toggleable(value = raised, enabled = enabled, role = Role.Switch, onValueChange = onToggle)"))
-        #expect(sheet.contains("haptics.gesture(FeedbackKind.reactionSent)"))
-        #expect(sheet.contains("this.paneTitle = paneTitle"))
-        #expect(!sheet.contains("LazyVerticalGrid") && !sheet.contains("LazyColumn"))
-    }
-
-    @Test func audioRouteListIsOneRadioGroup() throws {
-        let list = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/AudioRouteList.kt"))
-        #expect(list.contains("Column(modifier.testTag(identifier).selectableGroup())"))
-        #expect(list.contains(".selectable(selected = row.selected, enabled = row.enabled, role = Role.RadioButton, onClick = { onSelect(row.id) })"))
-        #expect(list.contains("key(row.id) {"))
-        #expect(list.contains("if (row.pending) stateDescription = switchingDescription"))
-        #expect(!list.contains("haptics"), "the caller plays selectionChanged; automatic changes never reach the list")
-    }
-
-    @Test func bannerLaneStaysOneBannerWideAndOutsideTiles() throws {
-        let ios = normalizedFND(try fndSource("Sources/Conclave/DesignSystem/iOS/Components/ConclaveBanner+iOS.swift"))
-        #expect(ios.contains("static let maxWidth: CGFloat = 560"))
-        #expect(ios.contains("ConclaveBannerPresence(isPresented: noticeID != nil) {"))
-        #expect(ios.contains("return surface == .inCall ? HostingTheme.token(DesignTokens.iosInCallWarning) : HostingTheme.statusWarning"))
-        #expect(!ios.contains("DesignTokens.warningDark") && !ios.contains("DesignTokens.successLight"))
-        let android = normalizedFND(try fndSource("Sources/Conclave/Skip/ui/components/ConclaveBanner.kt"))
-        #expect(android.contains("const val MAX_WIDTH_DP = 560"))
-        #expect(android.contains("val ext = if (inCall) ConclaveExtendedColorsDark else LocalConclaveExtendedColors.current"))
-        #expect(!android.contains("isSystemInDarkTheme"))
     }
 
     @Test func inCallChromeSpecimenIDsAndPairsAreStable() {
@@ -243,25 +127,6 @@ struct FND2InCallChromeTests {
             #expect(pair != nil, "\(id)")
             #expect(abs((pair?.ratio ?? 0) - ratio) < 0.001, "\(id)")
             #expect(abs((pair?.expectedRatio ?? 0) - ratio) < 0.001, "\(id)")
-        }
-    }
-
-    @Test func fndComponentSourcesAreDashFreeAndFlat() throws {
-        var files = try fndFiles(under: "Sources/Conclave/DesignSystem/iOS/Components", extensions: ["swift"])
-        files += try fndFiles(under: "Sources/Conclave/Skip/ui/components", extensions: ["kt"])
-        files += ["Sources/Conclave/DesignSystem/iOS/HostingTheme+iOS.swift", "Sources/Conclave/DesignSystem/iOS/ConclaveMotion+iOS.swift",
-                  "Sources/Conclave/DesignSystem/iOS/CallAppearance+iOS.swift", "Sources/Conclave/DesignSystem/iOS/SystemAccessibility+iOS.swift",
-                  "Sources/Conclave/Skip/ui/theme/ConclaveExtendedColors.kt", "Sources/Conclave/Skip/ui/theme/SystemAccessibility.kt"]
-        #expect(files.count >= 30)
-        for file in files {
-            let text = try fndSource(file)
-            #expect(!fndContainsDash(text), "\(file)")
-            for word in ["dynamicLightColorScheme", "dynamicDarkColorScheme", ".shadow("] {
-                #expect(!text.contains(word), "\(file) uses \(word)")
-            }
-            if !S1FloatingBackdropTests.gradientAllowlist.contains(file) {
-                #expect(!text.contains("Gradient") && !text.contains("gradient"), "\(file) uses a gradient outside the D-1 allowlist")
-            }
         }
     }
 }

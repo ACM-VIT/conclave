@@ -143,45 +143,6 @@ struct S1PeopleFocusTests {
         #expect(PanelPresentationPolicy.initialSheetDetent(.participants) == .medium)
         #expect(PanelPresentationPolicy.initialSheetDetent(.participants, isAccessibilitySize: true) == .medium)
         #expect(PanelPresentationPolicy.sheetDetents(.participants) == [.medium, .large])
-        let panel = try s1pfSource("Sources/Conclave/Features/Meeting/People/ParticipantsPanel+iOS.swift")
-        let open = try s1pfSlice(panel, from: ".task(id: presentation.request.presentationID) {", to: ".onChange(of: route.count)")
-        #expect(!open.contains("promoteToLarge"), "opening People keeps the medium detent")
-        let flat = s1pfFlat(panel)
-        #expect(flat.components(separatedBy: "promoteToLarge()").count - 1 == 4,
-                "the shell action, a pushed host page, search and a hidden focus header are the only promotions")
-        #expect(flat.contains("onPromoteToLarge: { adapter.promoteToLarge() }"))
-        #expect(flat.contains("if count > 0 { adapter.promoteToLarge() }"))
-        #expect(flat.contains("if on { promoteToLarge() }"))
-        let focus = try s1pfSlice(flat, from: "if isLive && PeopleFocusPolicy.promotesToLarge(", to: "people.focusRequestHandled(id: request.id) }")
-        #expect(focus.contains("isMediumDetent: isMediumDetent) { promoteToLarge()"))
-    }
-
-    @Test func iosScrollsToADedicatedHeaderTargetAndConsumesAfterPlacement() throws {
-        let panel = try s1pfSource("Sources/Conclave/Features/Meeting/People/ParticipantsPanel+iOS.swift")
-        let flat = s1pfFlat(panel)
-        #expect(flat.contains(".modifier(PeopleFocusHeaderTarget(sectionId: section.id, placement: placement))"))
-        #expect(flat.contains(".id(PeopleFocusTarget.header(sectionId))"))
-        #expect(flat.contains("\"people.header.\" + sectionId"))
-        #expect(!panel.contains(".id(section.id)"), "the whole Section is no longer the scroll target")
-        #expect(flat.contains("isMediumDetent: resolved.style == PanelHostStyle.sheet && adapter.detent == PanelDetent.medium"))
-        #expect(flat.contains(".task(id: PeopleFocusKey(id: focusId, isMediumDetent: focusId != 0 && isMediumDetent))"))
-        #expect(flat.contains("people.focusStep(id: request.id, isShown: isShown, isSearching: searching, revision: snapshot.revision)"))
-        #expect(flat.contains("if step == PeopleFocusStep.consumeNow || step == PeopleFocusStep.awaitSection { "
-                              + "people.focusRequestHandled(id: request.id) return }"))
-        let task = try s1pfSlice(flat, from: "guard step == PeopleFocusStep.placeHeader else { return }", to: ".accessibilityRotor(")
-        let scroll = try #require(task.range(of: "proxy.scrollTo(target, anchor: .top)"))
-        let settle = try #require(task.range(of: "try? await Task.sleep(", range: scroll.upperBound..<task.endIndex))
-        let live = try #require(task.range(of: "isLive = PeopleSearchPolicy.filter(people.snapshot.sections, query: query)",
-                                           range: settle.upperBound..<task.endIndex))
-        let placed = try #require(task.range(of: "placement.isHeaderPlaced(request.sectionId)", range: live.upperBound..<task.endIndex))
-        _ = try #require(task.range(of: "people.focusRequestHandled(id: request.id)", range: placed.upperBound..<task.endIndex))
-        #expect(task.components(separatedBy: "people.focusRequestHandled(").count - 1 == 1)
-        #expect(task.contains("while isLive && !isPlaced && attempts < PeopleFocusTiming.scrollAttempts {"),
-                "a header that is not placed yet gets one more scroll before the detent changes")
-        #expect(task.contains("if isLive && PeopleFocusPolicy.promotesToLarge(isPlaced: isPlaced, isMediumDetent: isMediumDetent) {"))
-        #expect(flat.contains("static let scrollAttempts = 2"))
-        #expect(flat.contains("geometry.frame(in: .global)") && flat.contains("geometry.safeAreaInsets"))
-        #expect(flat.contains(".onDisappear { placement.forget(sectionId) }"))
     }
 
     @Test func aLeadTooTallToPlaceTheHeaderFallsBackToTheFirstRowAtTheBottom() throws {
@@ -204,50 +165,6 @@ struct S1PeopleFocusTests {
                 }
             }
         }
-
-        let flat = s1pfFlat(try s1pfSource("Sources/Conclave/Features/Meeting/People/ParticipantsPanel+iOS.swift"))
-        let task = try s1pfSlice(flat, from: "guard step == PeopleFocusStep.placeHeader else { return }", to: ".accessibilityRotor(")
-        let loop = try #require(task.range(of: "while isLive && !isPlaced && attempts < PeopleFocusTiming.scrollAttempts {"))
-        let lead = try #require(task.range(of: "proxy.scrollTo(lead, anchor: .top)", range: loop.upperBound..<task.endIndex))
-        let header = try #require(task.range(of: "proxy.scrollTo(target, anchor: .top)", range: lead.upperBound..<task.endIndex))
-        let loopEnd = try #require(task.range(of: "isPlaced = isLive && placement.isHeaderPlaced(request.sectionId) }",
-                                              range: header.upperBound..<task.endIndex))
-        let fallback = try #require(task.range(of: "if isLive && !isPlaced && !isMediumDetent", range: loopEnd.upperBound..<task.endIndex),
-                                    "the fallback runs after the lead loop")
-        let first = try #require(task.range(of: ", let first = PeopleSearchPolicy.filter(people.snapshot.sections, query: query) "
-                                             + ".first(where: { $0.id == request.sectionId })?.rowIds.first {",
-                                             range: fallback.upperBound..<task.endIndex))
-        let row = try #require(task.range(of: "let row = PeopleFocusTarget.row(request.sectionId, first)",
-                                          range: first.upperBound..<task.endIndex))
-        let bottom = try #require(task.range(of: "if reduceMotion { proxy.scrollTo(row, anchor: .bottom) } "
-                                              + "else { withAnimation { proxy.scrollTo(row, anchor: .bottom) } }",
-                                              range: row.upperBound..<task.endIndex),
-                                  "the first row lands at the bottom so its header sits directly above it")
-        let settle = "try? await Task.sleep(for: .milliseconds(reduceMotion ? "
-            + "PeopleFocusTiming.reducedSettleMilliseconds : PeopleFocusTiming.settleMilliseconds)) guard !Task.isCancelled else { return }"
-        let reread = " isLive = PeopleSearchPolicy.filter(people.snapshot.sections, query: query).contains { $0.id == request.sectionId } "
-            + "isPlaced = isLive && placement.isHeaderPlaced(request.sectionId) "
-        let recheck = try #require(task.range(of: settle + reread, range: bottom.upperBound..<task.endIndex),
-                                   "the fallback settles, then reads the live section and the header placement again")
-        let leadReturn = "if isLive && !isPlaced, let lead = PeopleFocusTarget.lead(before: request.sectionId, "
-            + "in: PeopleSearchPolicy.filter(people.snapshot.sections, query: query), "
-            + "snapshot: people.snapshot, isSearching: PeopleSearchPolicy.isSearching(query)) { "
-        let leadScroll = "if reduceMotion { proxy.scrollTo(lead, anchor: .top) } else { withAnimation { proxy.scrollTo(lead, anchor: .top) } } "
-        let back = try #require(task.range(of: leadReturn + leadScroll + settle + " } }", range: recheck.upperBound..<task.endIndex),
-                                "a fallback that still misses the header returns the lead to the top, so the title stays in view")
-        #expect(back.lowerBound == recheck.upperBound, "the return to the lead follows the re-read directly")
-        let promote = try #require(task.range(of: "if isLive && PeopleFocusPolicy.promotesToLarge(", range: back.upperBound..<task.endIndex),
-                                   "the fallback and its return sit before the one promotion check")
-        _ = try #require(task.range(of: "people.focusRequestHandled(id: request.id)", range: promote.upperBound..<task.endIndex))
-        #expect(task.components(separatedBy: "proxy.scrollTo(row, anchor: .bottom)").count - 1 == 2)
-        #expect(task.components(separatedBy: "proxy.scrollTo(lead, anchor: .top)").count - 1 == 4,
-                "the lead loop and the one return after a missed fallback are the only lead scrolls")
-        #expect(task.components(separatedBy: "placement.isHeaderPlaced(request.sectionId)").count - 1 == 2)
-        #expect(task.components(separatedBy: "proxy.scrollTo(target,").count - 1 == 2,
-                "a missed placement never retries the header id, which lands its first row under the panel title")
-        #expect(!task.contains("proxy.scrollTo(target, anchor: .bottom)") && !task.contains("proxy.scrollTo(lead, anchor: .bottom)"))
-        #expect(task.components(separatedBy: "PeopleFocusPolicy.promotesToLarge(").count - 1 == 1)
-        #expect(task.components(separatedBy: "people.focusRequestHandled(").count - 1 == 1)
     }
 
     @Test func aFallbackThatCannotPlaceTheHeaderGivesWayToTheLead() {
@@ -289,18 +206,6 @@ struct S1PeopleFocusTests {
                 "a section that is gone never promotes the sheet to large")
         people.focusRequestHandled(id: request.id)
         #expect(people.focusRequest == nil && people.focusReadout() == "destination=peopleRaisedHands scrolls=1")
-
-        let flat = s1pfFlat(try s1pfSource("Sources/Conclave/Features/Meeting/People/ParticipantsPanel+iOS.swift"))
-        let task = try s1pfSlice(flat, from: "guard step == PeopleFocusStep.placeHeader else { return }", to: ".accessibilityRotor(")
-        #expect(task.contains("var isLive = true var isPlaced = false var attempts = 0"))
-        #expect(task.contains("isLive = PeopleSearchPolicy.filter(people.snapshot.sections, query: query).contains { $0.id == request.sectionId }"),
-                "the live section is read after each settle, not the list captured when the task started")
-        #expect(task.contains("isPlaced = isLive && placement.isHeaderPlaced(request.sectionId)"))
-        #expect(task.contains("if isLive && PeopleFocusPolicy.promotesToLarge(isPlaced: isPlaced, isMediumDetent: isMediumDetent) {"),
-                "the promotion condition includes the live check")
-        #expect(!task.contains("if PeopleFocusPolicy.promotesToLarge("))
-        #expect(task.components(separatedBy: "people.focusRequestHandled(").count - 1 == 1,
-                "a section that is gone is consumed by the one closing call, after no promotion")
     }
 
     @Test func iosConsumesAnAbsentSectionAtOnceAndNeverJumpsLater() throws {
@@ -316,37 +221,6 @@ struct S1PeopleFocusTests {
         #expect(shows(people, .waiting))
         #expect(people.focusRequest == nil && step(people, request) == .idle,
                 "a Waiting section that arrives later never pulls the list on iOS")
-
-        let panel = s1pfFlat(try s1pfSource("Sources/Conclave/Features/Meeting/People/ParticipantsPanel+iOS.swift"))
-        #expect(panel.contains("private struct PeopleFocusKey: Equatable { let id: Int let isMediumDetent: Bool }"),
-                "roster changes during placement never restart the iOS focus task")
-        #expect(!panel.contains("focusId == 0 ? 0 : snapshot.revision"))
-        #expect(panel.contains("if step == PeopleFocusStep.consumeNow || step == PeopleFocusStep.awaitSection {"))
-    }
-
-    @Test func androidWaitsForTheRevisionThatCarriesTheSection() throws {
-        let page = s1pfFlat(try s1pfSource("Sources/Conclave/Skip/ui/people/ParticipantsPage.kt"))
-        #expect(page.contains("internal fun peopleFocusWaitRevision(request: PeopleFocusRequest?, entries: List<PeopleListItem>, "
-                              + "revision: Int): Int = if (request == null || entries.any { it.key == peopleHeaderKey(request.sectionId) }) "
-                              + "-1 else revision"), "the effect key carries the revision only while the section is absent")
-        #expect(page.contains("val focusWaitRevision = peopleFocusWaitRevision(focus, entries, snapshot.revision)"))
-        #expect(page.contains("LaunchedEffect(focus?.id, focusWaitRevision) {"))
-        #expect(!page.contains("LaunchedEffect(focus?.id) {"))
-        #expect(!page.contains("if (focus == null) 0 else snapshot.revision"), "roster changes during placement never restart the scroll")
-        #expect(page.contains("val currentEntries by rememberUpdatedState(entries)"))
-        #expect(page.contains("import androidx.compose.runtime.rememberUpdatedState"))
-        #expect(page.contains("placePeopleFocus(people, request, entries, snapshot.revision, searching, "
-                              + "latestEntries = { currentEntries }, snap = { listState.scrollToItem(it) }) { index ->"),
-                "a header that moved during the animation is snapped to its current index without animation")
-        #expect(page.contains("PeopleFocusStep.placeHeader -> { try { scroll(index) "
-                              + "val moved = latestEntries().indexOfFirst { it.key == peopleHeaderKey(request.sectionId) } "
-                              + "if (moved >= 0 && moved != index) snap(moved) } "
-                              + "finally { people.focusRequestHandled(id = request.id) } }"),
-                "a drag that interrupts the scroll still consumes the request, so a later recomposition never replays it")
-        #expect(page.contains("PeopleFocusStep.consumeNow -> people.focusRequestHandled(id = request.id)"))
-        #expect(page.contains("PeopleFocusStep.awaitSection, PeopleFocusStep.idle -> Unit"))
-        #expect(page.contains("val index = entries.indexOfFirst { it.key == peopleHeaderKey(request.sectionId) }"))
-        #expect(!page.contains("stickyHeader"), "section headers scroll with the list below the page title, never pinned over it")
     }
 }
 

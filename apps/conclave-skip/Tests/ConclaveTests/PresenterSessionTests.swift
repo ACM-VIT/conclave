@@ -483,24 +483,11 @@ struct PresenterSessionTests {
             ("S1-ROW-04", "oneRowUpdates", "#expect(shell.controls.revision == revision)", "assertEquals(revision, shell.controls.revision)"),
         ]
         #expect(cases.count == 19 && Set(cases.map { $0.id }).count == 19)
-        let kotlin = try presenterSessionSource("Tests/ConclaveTests/Skip/PresenterSessionBridgeTests.kt")
-        let swift = try presenterSessionSource("Tests/ConclaveTests/PresenterSessionTests.swift")
         func fixture(_ source: String, declaration: String) throws -> String {
             let start = try #require(source.range(of: declaration))
             let end = try #require(source.range(of: "\n    @Test", range: start.upperBound..<source.endIndex))
             return source[start.lowerBound..<end.lowerBound].split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         }
-        for item in cases {
-            let swiftBody = try fixture(swift, declaration: "\n    @Test func \(item.test)(")
-            let kotlinBody = try fixture(kotlin, declaration: "\n    @Test\n    fun \(item.test)(")
-            #expect(swiftBody.contains(item.swift), "Swift misses \(item.id) in \(item.test)")
-            #expect(kotlinBody.contains(item.kotlin), "Kotlin misses \(item.id) in \(item.test)")
-        }
-        let staleKick = try fixture(swift, declaration: "\n    @Test func staleOldRoomKickIsIgnoredByShell(")
-        #expect(staleKick.contains("viewModel.socketManager.onKicked?(KickedNotification(reason: \"Bye\", roomId: \"old-room\"))"))
-        #expect(staleKick.components(separatedBy: "#expect(viewModel.shell.session.phase == .inCall)").count - 1 == 2)
-        #expect(staleKick.contains("#expect(viewModel.state.terminalOutcome == nil)"))
-        #expect(!kotlin.contains("\n    fun staleOldRoomKickIsIgnoredByShell("))
     }
 
     @Test func phaseTableCoversTheS2aRows() {
@@ -837,8 +824,6 @@ struct PresenterSessionViewModelTests {
         #expect(!ended)
         let result = await viewModel.endMeetingForEveryoneResult()
         #expect(result == MeetingActionResult.failed(.notJoined))
-        let source = try presenterSessionSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(source.contains("let result = await endMeetingForEveryoneResult(message: message)\n        return result.kind == .completed"))
     }
 
     @Test func audioInterruptionAndHoldReachTheMicrophoneRow() {
@@ -855,51 +840,6 @@ struct PresenterSessionViewModelTests {
         #expect(viewModel.makeShellInputs().cameraPermission == .granted)
     }
 
-    @Test func redirectContinuationIsAnInputOnlyForALiveCall() throws {
-        let source = try presenterSessionSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(source.contains("isRedirectContinuation: redirectContinuationPending && presenceJoinedAtMillis > 0,"))
-        #expect(source.contains("audioInterruption: callPresence.snapshot.interruption"))
-
-        let start = try #require(source.range(of: "    private func performSystemCallCommand(_ command: SystemCallCommand) {"))
-        let end = try #require(source.range(of: "    func reportAudioInterruption(", range: start.upperBound..<source.endIndex))
-        let body = String(source[start.upperBound..<end.lowerBound])
-        #expect(body.components(separatedBy: "requestShellRefresh()").count - 1 == 2)
-    }
-
-    @Test func joinRoomChangesTheIdentityInOneRefreshBatch() throws {
-
-        let source = try presenterSessionSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        let start = try #require(source.range(of: "    func joinRoom("))
-        let end = try #require(source.range(of: "    func rejoinIfPossible() async {", range: start.upperBound..<source.endIndex))
-        let joinRoom = String(source[start.lowerBound..<end.lowerBound])
-        let markers = ["beginShellRefreshBatch()", "callSessionSerial += 1", "meetingLifecycleGeneration += 1",
-                       "activeJoinAttemptId = joinAttemptId\n        releaseLocalToggleGuards()", "endShellRefreshBatch()",
-                       "self.state.roomId = roomId"]
-        var cursor = joinRoom.startIndex
-        var batch: Range<String.Index>? = nil
-        for marker in markers {
-            let range = try #require(joinRoom.range(of: marker, range: cursor..<joinRoom.endIndex), "missing \(marker) in order")
-            if marker == "beginShellRefreshBatch()" { batch = range }
-            if marker == "endShellRefreshBatch()", let begin = batch {
-                #expect(!joinRoom[begin.upperBound..<range.lowerBound].contains("return"))
-            }
-            cursor = range.upperBound
-        }
-    }
-
-    @Test func terminalSitesRecordTypedOutcomesBeforeThePhaseWrite() throws {
-        let source = try presenterSessionSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(source.contains("finishTerminalRoomError(\"The host has denied your request to join.\", outcome: .denied)"))
-        #expect(source.contains("outcome: .removed)"))
-        #expect(source.contains("outcome: .roomClosed)"))
-        #expect(source.contains("recordTerminalOutcome(outcome, serverText: message)\n        state.connectionState = ConnectionState.error"))
-
-        #expect(source.contains("recordTerminalOutcome(outcome, serverText: classification.serverText, joinContext: preservedJoinContext)\n        state.connectionState = ConnectionState.error"))
-        #expect(source.contains("recordTerminalOutcome(.left, serverText: \"\")"))
-
-        #expect(source.contains("state.isMuted = muted ? true : previousMuted"))
-        #expect(!source.contains("state.isMuted = !newState"))
-    }
 }
 
 @MainActor

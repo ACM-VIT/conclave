@@ -228,49 +228,6 @@ struct CHT4PhotoTests {
         #expect(ChatMediaGeometry.stickerWidth(aspect: 0.5) == 80 && ChatMediaGeometry.stickerHeight(aspect: 0.5) == 160)
     }
 
-    @Test func theViewerIsAPushOrAPageSheetAndNeverAFullScreenCover() throws {
-        let viewer = try chatSource("Sources/Conclave/Features/Meeting/Chat/ImageViewer+iOS.swift")
-        #expect(!viewer.contains(".fullScreenCover") && viewer.contains(".navigationTransition(.zoom(sourceID: rowId, in: namespace))"))
-        #expect(viewer.contains("presentationSizing(.page)") && viewer.contains("maximumZoomScale = 4"))
-        #expect(viewer.contains("CGImageSourceCreateThumbnailAtIndex") && viewer.contains("CGAnimateImageDataWithBlock"))
-        #expect(viewer.contains("accessibilityPlayAnimatedImages") && viewer.contains("ShareLink(item: shareURL"))
-        let panel = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatPanel+iOS.swift")
-        #expect(panel.contains("push(.photo(rowId: rowId))") && panel.contains("photoSheetRowId = rowId"))
-        #expect(panel.contains("ChatPhotoViewerPage(entry: chat.rows.entry(for: rowId))"))
-        let row = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatRow+iOS.swift")
-        #expect(row.contains("matchedTransitionSource(id: rowId, in: namespace)"))
-        #expect(row.contains("CGFloat(ChatMediaGeometry.photoWidth)") && row.contains("ChatMediaCopy.photoLoadFailed"))
-        let kotlin = try chatSource("Sources/Conclave/Skip/ui/chat/ImageViewer.kt")
-        #expect(kotlin.contains("DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)"))
-        #expect(kotlin.contains("detectTransformGestures") && kotlin.contains("coerceIn(1f, 4f)"))
-        #expect(kotlin.contains(".size(maxOf(1, widthPx), maxOf(1, heightPx))") && kotlin.contains("BitmapFactoryDecoder.Factory()"))
-        #expect(kotlin.contains("FileProvider.getUriForFile") && kotlin.contains("PipManager.suppressNextAutoEnter(\"photo_share\")"))
-        #expect(kotlin.contains("ImageDecoder.decodeBitmap") && kotlin.contains("Bitmap.CompressFormat.JPEG"))
-        let androidRow = try chatSource("Sources/Conclave/Skip/ui/chat/ChatRow.kt")
-        #expect(androidRow.contains("ChatMediaGeometry.photoWidth.dp") && androidRow.contains("chat_photo_failed"))
-    }
-
-    @Test func everyPhotoReachesThePresenterAsAFile() throws {
-        let composer = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatComposer+iOS.swift")
-        #expect(composer.contains("FileRepresentation(importedContentType: UTType.image)"))
-        #expect(composer.contains("preferredItemEncoding: .current") && composer.contains("UIPasteboard.general.hasImages"))
-        #expect(!composer.contains("loadTransferable(type: Data.self)") && !composer.contains("UIImage("))
-        var cursor = composer.startIndex
-        while let range = composer.range(of: "chat.attachPhoto(", range: cursor..<composer.endIndex) {
-            let line = composer[range.upperBound...].prefix(80)
-            #expect(line.hasPrefix("fileURL: file.url.absoluteString"), "attachPhoto gets a file URL")
-            cursor = range.upperBound
-        }
-        let kotlin = try chatSource("Sources/Conclave/Skip/ui/chat/ChatComposer.kt")
-        #expect(kotlin.contains("ActivityResultContracts.PickVisualMedia()") && kotlin.contains("ChatPhotoFiles.copyToCache(context, uri)"))
-        #expect(kotlin.contains("PipManager.suppressForExternalHandoff(ExternalHandoffKind.photoPicker)") && !kotlin.contains("readBytes"))
-        let files = try chatSource("Sources/Conclave/Skip/ui/chat/ImageViewer.kt")
-        #expect(files.contains("withContext(Dispatchers.IO)") && files.contains("OpenableColumns.SIZE"))
-        let preparer = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatPhotoPreparer.swift")
-        #expect(preparer.contains("Task.detached(priority: TaskPriority.userInitiated)"))
-        #expect(preparer.contains("#if SKIP\n        return ChatPhotoCodec.transcodeToJpeg("))
-    }
-
     @Test func buildFilesDeclareCoilTheFileProviderAndThePickerBackport() throws {
         let skip = try chatSource("Sources/Conclave/Skip/skip.yml")
         #expect(skip.contains("'implementation(\"io.coil-kt.coil3:coil-compose:3.4.0\")'"))

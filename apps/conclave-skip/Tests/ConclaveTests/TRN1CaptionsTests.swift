@@ -106,10 +106,6 @@ struct TRN1CaptionsTests {
         let state = TranscriptState()
         state.setRelay(.unavailable)
         #expect(state.relay == .unavailable)
-
-        let service = try? stageSource("Sources/Conclave/Core/Networking/TranscriptService.swift")
-        #expect(service?.contains("try await socketManager.getTranscriptSfuRelayStatus()") == true)
-        #expect(service?.contains("state.setRelay(status.available ? RelayAvailability.available : RelayAvailability.unavailable)") == true)
     }
 
     @Test func theCaptionLineKeepsTheNewestWordsOfALongMonologue() {
@@ -193,16 +189,6 @@ struct TRN1CaptionsTests {
         #expect(!feed.line.isVisible)
         feed.reset()
         #expect(feed.line == CaptionLine.empty && !feed.hasLiveTimers)
-
-        let ios = try stageSource("Sources/Conclave/Features/Meeting/Stage/CaptionsStrip+iOS.swift")
-        #expect(ios.contains("line.isFinal ? ink : (appearance.foreground ?? HostingTheme.inCallTextSecondary)"))
-        #expect(ios.contains(".accessibilityLabel(ConclaveStrings.text(\"Open Transcript\"))"))
-        #expect(!ios.contains("AccessibilityNotification"), "captions are never announced")
-        let android = try stageSource("Sources/Conclave/Skip/ui/call/stage/CaptionsStrip.kt")
-        #expect(android.contains("if (line.isFinal) ink else secondary"))
-        #expect(android.contains("scheme.onSurfaceVariant"))
-        #expect(!android.contains("liveRegion"), "the strip is not a live region")
-        #expect(android.contains("conclaveString(\"stg_open_transcript\")"))
     }
 
     @Test func theStripMountsOnlyForLiveCaptionsOutsideTheAudience() {

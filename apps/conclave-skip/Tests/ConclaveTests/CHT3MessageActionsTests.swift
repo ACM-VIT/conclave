@@ -129,76 +129,7 @@ struct CHT3MessageActionsTests {
     @Test func reportStaysHiddenUntilTheWp10Backend() throws {
         let chat = ChatPoliciesTests.presenter(ChatPoliciesTests.inputs([ChatPoliciesTests.peer("s-1", "hi", at: 0)]))
         #expect(!ChatPoliciesTests.row(chat, "s-1").canReport)
-        let ios = try chatSource("Sources/Conclave/Features/Meeting/Chat/MessageActions+iOS.swift")
-        #expect(!ios.contains("Report"))
-        let sheet = try chatSource("Sources/Conclave/Skip/ui/chat/MessageActionsSheet.kt")
-        #expect(!sheet.contains("chat_action_report"))
     }
 
-    @Test func theIosMenuAndActionsFollowTheMenuOrder() throws {
-        let menu = try chatSource("Sources/Conclave/Features/Meeting/Chat/MessageActions+iOS.swift")
-        #expect(menu.contains(".controlGroupStyle(.palette)"))
-        #expect(menu.contains("ChatReactionRules.quickEmojis") && menu.contains("Menu(ConclaveStrings.text(\"More Reactions\"))"))
-        #expect(menu.contains("Button(ConclaveStrings.text(\"Delete\"), role: .destructive)"))
-        let order = ["\"Reply\"", "\"Send Private Message\"", "\"Copy\"", "\"Copy Link\"", "\"View Reactions\"", "\"Hide Messages from %@\""]
-        var cursor = menu.startIndex
-        for label in order {
-            guard let range = menu.range(of: label, range: cursor..<menu.endIndex) else {
-                Issue.record("menu misses \(label) in order")
-                return
-            }
-            cursor = range.upperBound
-        }
-        let row = try chatSource("Sources/Conclave/Features/Meeting/Chat/ChatRow+iOS.swift")
-        let actionOrder = ["\"Reply\"", "\"Add Reaction\"", "\"Send Private Message\"", "\"Copy\"", "\"Copy Link\"",
-                           "\"View Reactions\"", "\"Hide Messages from %@\"", "\"Try Again\"", "\"Delete\"", "\"Go to Original Message\""]
-        guard let start = row.range(of: "struct ChatRowAccessibilityActions") else {
-            Issue.record("no accessibility actions")
-            return
-        }
-        cursor = start.upperBound
-        for label in actionOrder {
-            guard let range = row.range(of: label, range: cursor..<row.endIndex) else {
-                Issue.record("accessibility actions miss \(label) in order")
-                return
-            }
-            cursor = range.upperBound
-        }
-        #expect(row.contains(".contextMenu {\n            MessageMenu(row: row, actions: actions)\n        } preview: {"))
-        #expect(row.contains(".swipeActions(edge: .leading, allowsFullSwipe: true)"))
-        let viewer = try chatSource("Sources/Conclave/Features/Meeting/Chat/ReactionsViewer+iOS.swift")
-        #expect(viewer.contains(".listStyle(.insetGrouped)") && viewer.contains("chat.reactors(rowId: rowId, emoji: chip.emoji)"))
-    }
-
-    @Test func theAndroidSheetMenuAndViewerFollowTheirContainers() throws {
-        let sheet = try chatSource("Sources/Conclave/Skip/ui/chat/MessageActionsSheet.kt")
-        #expect(sheet.contains("rememberModalBottomSheetState(skipPartiallyExpanded = true)"))
-        #expect(sheet.contains("NativeSemanticsPopupRoot(\"chat.actions.sheet\")") && sheet.contains("identifier = \"chat.actions.menu\""))
-        #expect(sheet.contains("testTagsAsResourceId = true") && sheet.contains("maxItemsInEachRow = 8"))
-        #expect(sheet.contains("haptics.gesture(FeedbackKind.reactionSent)"))
-        let row = try chatSource("Sources/Conclave/Skip/ui/chat/ChatRow.kt")
-        #expect(row.contains("haptics.gesture(FeedbackKind.longPress)") && row.contains("FeedbackKind.swipeThresholdCrossed"))
-        #expect(row.contains("enableDismissFromEndToStart = false") && row.contains("scope.launch { state.reset() }"))
-        #expect(row.contains("onLongPress = { _ -> actions.openViewer(row.id) }"))
-        let viewer = try chatSource("Sources/Conclave/Skip/ui/chat/ReactionsViewer.kt")
-        #expect(viewer.contains("PrimaryScrollableTabRow") && viewer.contains("presenter.reactors(rowId, chip.emoji)"))
-        let panel = try chatSource("Sources/Conclave/Skip/ui/chat/ChatPanel.kt")
-        #expect(panel.contains("if (!sidePane && actions.menuRowId.isNotEmpty())"))
-        #expect(panel.contains("isNested = viewerInPane"))
-    }
-
-    @Test func theReactionWireIsConnectedOnEveryPlatform() throws {
-        let ios = try chatSource("Sources/Conclave/Core/Networking/SocketIOManager.swift")
-        #expect(ios.contains("func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction]"))
-        #expect(ios.contains("emit(event: SocketEvent.chatReact, payload: request)"))
-        let symbol = try chatSource("Sources/Conclave/Core/Networking/SocketIOManager+Android.swift")
-        #expect(symbol.contains("var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?"))
-        #expect(symbol.contains("func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction] { fatalError() }"))
-        let kotlin = try chatSource("Sources/Conclave/Skip/SocketIOManager+Android.kt")
-        #expect(kotlin.contains("emit(SocketEvent.chatReact, payload)"))
-        let vm = try chatSource("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-        #expect(vm.contains("socketManager.onChatReactionChanged = { [weak self] notification in"))
-        #expect(vm.contains("socketManager.toggleChatReaction(messageId: messageId, emoji: emoji)"))
-    }
 }
 #endif

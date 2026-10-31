@@ -233,34 +233,6 @@ struct PPL7RolePolicyTests {
         #expect(commands.count == 2, "Cancel after the close sends nothing")
     }
 
-    @Test func theViewModelHandsOffDemotionAndPromotionQuietly() throws {
-        let vm = try ppl7Source("Sources/Conclave/Features/Meeting/MeetingViewModel.swift")
-
-        #expect(vm.contains("self.beginDemotionHandoff(notification)\n            Task { @MainActor in"))
-        #expect(vm.contains("premeeting.showHomeNotice(HomeNoticeKind.movedToAudience)"))
-        #expect(vm.contains("joinMode: JoinMode.webinarAttendee,"))
-        #expect(vm.contains("people.presentStageInvitation(promotedByName: notification.promotedByName ?? \"\","))
-        #expect(vm.contains("case .joinAsSpeaker:") && vm.contains("case .cancelPromotion:"))
-        #expect(vm.contains("stage.announce(kind: AttendeeViewerPolicy.demotedAnnouncement, name: \"\")"))
-        let sheet = try ppl7Source("Sources/Conclave/Features/Lobby/PromotionLobby+iOS.swift")
-        #expect(sheet.contains(".presentationDetents([.large])") && !sheet.contains("fullScreenCover(isPresented"))
-        let overlay = try ppl7Source("Sources/Conclave/Skip/ui/lobby/PromotionLobbyOverlay.kt")
-        #expect(overlay.contains("BackHandler(enabled = true) { premeeting.cancelPromotion() }"))
-        let iosViewer = try ppl7Source("Sources/Conclave/Features/Meeting/Stage/AttendeeViewer+iOS.swift")
-        #expect(iosViewer.contains(".alert(ConclaveStrings.text(\"You\\u{2019}re Invited on Stage\")"))
-        let kotlinViewer = try ppl7Source("Sources/Conclave/Skip/ui/call/stage/AttendeeViewer.kt")
-        #expect(kotlinViewer.contains("DialogProperties(dismissOnClickOutside = false, dismissOnBackPress = true)"))
-        #expect(kotlinViewer.contains("onDismissRequest = { people.declineStageInvitation(id = invitation.id) }"))
-        for path in ["Sources/Conclave/Features/Meeting/People/PeopleRolePolicy.swift",
-                     "Sources/Conclave/Features/Lobby/PromotionLobby+iOS.swift",
-                     "Sources/Conclave/Skip/ui/lobby/PromotionLobbyOverlay.kt",
-                     "Sources/Conclave/Features/Meeting/People/Debug/PeopleWebinarFixtures.swift"] {
-            let source = try ppl7Source(path)
-            #expect(!source.lowercased().contains("gradient"), "\(path) draws a gradient")
-            #expect(!source.contains("\u{2014}") && !source.contains("\u{2013}"), "\(path) has a long dash")
-        }
-    }
-
     @Test func theWebinarFixturesBuildOnTheSharedScripts() {
         for state in PeopleWebinarFixtureState.allCases {
             let session = PeopleWebinarFixtureSession(state: state)

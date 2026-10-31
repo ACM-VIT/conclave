@@ -72,59 +72,6 @@ struct WP2S2bFeedbackRoomSwitchTests {
         #expect(MeetingSessionReadout.feedbackRecords(count: 3, lastKind: "joined") == "3 last=joined")
     }
 
-    @Test func productionSinksFollowTheF1Rules() throws {
-
-        let root = try s2bSource("Sources/Conclave/Core/Session/ConclaveRootFeedback+iOS.swift")
-        #expect(root.hasPrefix("#if os(iOS) && !SKIP\n"))
-        #expect(root.contains("deliversKind: { DeliveredTokenKinds.delivers($0) }"))
-        #expect(root.contains("records: FeedbackDeliveryRecords.shared"))
-        #expect(root.contains("recordOnly: false"))
-        #expect(root.contains("content.modifier(ConclaveFeedbackConsumer(delivery: shellDelivery, mount: 1))"))
-        #expect(root.contains("FeedbackSourceState(session: shell.feedbackState.session, token: shell.feedbackState.token)"))
-        let delivery = try s2bSource("Sources/Conclave/DesignSystem/iOS/ConclaveFeedback+iOS.swift")
-        #expect(delivery.contains("guard deliversKind(kind), let feedback = ConclaveFeedback.sensory(kind) else { return nil }"))
-        #expect(delivery.contains("guard let kind = cursor.take(delivery, session: source().session, eligible: eligible) else { return nil }"))
-        #expect(delivery.contains("private var eligible: Bool { attached && active && !suspended && ConclaveFeedback.isEnabled(in: defaults) }"))
-        #expect(delivery.contains(".onChange(of: delivery.sourceState) { _, _ in delivery.observe(mount: mount) }"))
-        #expect(delivery.contains("UIApplication.willResignActiveNotification"))
-
-        #expect(delivery.contains("recordOnly: true,\n            deliversKind: { _ in true },"))
-        #expect(!delivery.contains("DeliveredTokenKinds"), "the silent adapter probe compiles this file without LegacyHapticRoutes.swift")
-        #expect(!delivery.contains("MeetingShellPresenter"))
-
-        let android = try s2bSource("Sources/Conclave/Skip/ui/theme/NativeFeedbackDelivery.kt")
-        #expect(android.contains("\n@Composable\nfun ConclaveRootFeedback() {"))
-        #expect(android.contains("sink = { ConclaveHaptics.perform(view, it) },"))
-        #expect(android.contains("deliversKind = { DeliveredTokenKinds.delivers(it) },"))
-        #expect(android.contains("records = FeedbackDeliveryRecords.shared,"))
-        #expect(android.contains("delivery.setActive(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))"))
-        #expect(android.contains("if (!deliversKind(kind)) return"))
-        for pattern in ["performHapticFeedback(", "FLAG_IGNORE", "Vibrator", "LocalHapticFeedback"] {
-            #expect(!android.contains(pattern), "\(pattern)")
-        }
-        for text in [root, delivery, android] {
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"))
-            #expect(!text.lowercased().contains("gradient"))
-        }
-    }
-
-    @Test func productionRootsAndTheReadoutAreMountedOnce() throws {
-
-        let app = try s2bSource("Sources/Conclave/ConclaveApp.swift")
-        #expect(app.components(separatedBy: ".conclaveRootFeedback(shell: MeetingViewModel.shared.shell)").count - 1 == 1)
-        let main = try s2bSource("Android/app/src/main/kotlin/Main.kt")
-        #expect(main.components(separatedBy: "ConclaveRootFeedback()").count - 1 == 1)
-        let rootCall = try #require(main.range(of: "ConclaveRootFeedback()"))
-        let rootSwitch = try #require(main.range(of: "if (systemFixture != null && !PipController.isInCall) {"))
-        #expect(rootCall.lowerBound < rootSwitch.lowerBound, "the consumer must sit outside the root switch that hosts the PiP overlay")
-        let host = try s2bSource("Sources/Conclave/Skip/ui/home/PremeetingHost.kt")
-        #expect(!host.contains("ConclaveRootFeedback()"), "the PiP overlay never remounts the root consumer")
-        let iosPreview = try s2bSource("Sources/Conclave/App/PlatformRoot+iOS.swift")
-        #expect(iosPreview.contains("SessionReadoutSection(shell: MeetingViewModel.shared.shell, records: FeedbackDeliveryRecords.shared)"))
-        let androidPreview = try s2bSource("Sources/Conclave/Skip/ui/AppRoot.kt")
-        #expect(androidPreview.contains("SessionReadoutSection(MeetingViewModel.shared.shell, FeedbackDeliveryRecords.shared)"))
-    }
-
     @Test func roomSwitchPolicyMatchesTheS10Table() {
         func decide(
             _ phase: MeetingPhaseKind,

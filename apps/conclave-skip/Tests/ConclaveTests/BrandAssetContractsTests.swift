@@ -82,7 +82,6 @@ struct BrandAssetContractsTests {
         let settings = try brandSource("Darwin/Conclave.xcconfig")
         #expect(settings.contains("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n"))
         #expect(settings.contains("IPHONEOS_DEPLOYMENT_TARGET = 17.0\n"))
-        #expect(try brandSource("Package.swift").contains(".iOS(.v17)"))
     }
 
     @Test func androidAdaptiveIconIsVectorLayersWithASinglePathMonochrome() throws {
@@ -153,9 +152,6 @@ struct BrandAssetContractsTests {
         #expect(brandAttribute("android:viewportWidth", in: xml) == "480")
         #expect(brandAttribute("android:translateX", in: xml) == "40")
         #expect(brandAttribute("android:fillColor", in: xml) == brandARGB(DesignTokens.neutralWhite))
-        let resolver = try brandSource("Sources/Conclave/Skip/ui/theme/ConclaveResources.kt")
-        #expect(resolver.contains("internal fun conclaveDrawableId(context: Context, name: String): Int"))
-        #expect(resolver.contains("internal fun conclaveColorId(context: Context, name: String): Int"))
     }
 
     @Test func callKitTemplateIsLetterlessSingleColorWithAlpha() throws {
@@ -275,23 +271,6 @@ struct BrandAssetContractsTests {
                 let exists = kind == "Drawable" ? drawables.contains(name) : colors[name] != nil
                 #expect(exists, "\(file) looks up a missing app \(kind.lowercased()) \(name)")
             }
-        }
-    }
-
-    @Test func brandAssetsAreFlatAndDashFree() throws {
-        let files = ["Darwin/AppIcon.icon/icon.json", "Darwin/AppIcon.icon/Assets/conclave-mark.svg", "Darwin/AppIcon.icon/Assets/acm-letters.svg",
-                     "Darwin/Assets.xcassets/CallKitIcon.imageset/Contents.json", "Darwin/Assets.xcassets/CallKitIcon.imageset/CallKitIcon.svg",
-                     "Darwin/Assets.xcassets/GoogleGMark.imageset/Contents.json",
-                     "Android/app/src/main/res/mipmap-anydpi/ic_launcher.xml", "Android/app/src/main/res/values/themes.xml",
-                     "Android/app/src/main/res/values-v31/themes.xml", "Android/app/src/main/res/values-night-v31/themes.xml",
-                     "Android/app/src/main/res/values/colors.xml", "Android/app/src/main/res/values-night/colors.xml",
-                     "Sources/Conclave/Skip/ui/theme/ConclaveResources.kt"]
-        let drawables = try FileManager.default.contentsOfDirectory(atPath: brandPackagePath("Android/app/src/main/res/drawable"))
-            .filter { $0.hasSuffix(".xml") }.map { "Android/app/src/main/res/drawable/\($0)" }
-        for file in files + drawables {
-            let text = try brandSource(file)
-            #expect(!text.lowercased().contains("gradient"), "\(file)")
-            #expect(!text.unicodeScalars.contains { $0.value == 0x2013 || $0.value == 0x2014 }, "\(file) has an en or em dash")
         }
     }
 }

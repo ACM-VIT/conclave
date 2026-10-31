@@ -17,11 +17,6 @@ struct S1PostRotationHangTests {
                                                  chipsVisible: false)
     }
 
-    @Test func theNoticeLayerTakesItsProposalSoTheToastPaddingsNeverResizeTheCallRoot() throws {
-        let lanes = stageNormalized(try stageSource(Self.lanesFile))
-        #expect(lanes.contains("NoticeBottomLanes(stage: stage, forceScreenReader: forceScreenReader) .accessibilitySortPriority(0.4) } .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity) .ignoresSafeArea() .environment(\\.colorScheme, .dark)"))
-    }
-
     @Test func theRotationTransientToastPaddingsOverflowTheSafeAreaProposal() {
         let proposal = 390.0 - 47.0 - 47.0
         let wide = rotationTransient(insetLeading: 47, insetTrailing: 111, selfX: 157.8)

@@ -165,75 +165,11 @@ struct SET5LayoutPanelTests {
         #expect(MeetingNoticePolicy.suspendsToastLane(style: .bottomSheet))
     }
 
-    @Test func iosLayoutPanelIsDarkThroughTheShellWithSystemControls() throws {
-        let ios = try Self.source("Sources/Conclave/Features/Meeting/Settings/LayoutPanel+iOS.swift")
-        let flat = stageNormalized(ios)
-        #expect(ios.hasPrefix("#if os(iOS) && !SKIP"))
-        #expect(flat.contains("PanelShell(title: LayoutCopy.title(), presentation: resolved, hostStyle: resolved.style, systemScheme: systemScheme,"))
-        #expect(!ios.contains("preferredColorScheme") && !ios.contains("colorScheme, .dark"), "PanelShell scopes the scheme (3 c)")
-        #expect(flat.contains("Stepper(value: Binding(get: { snapshot.maxTiles }, set: { layout.setMaxTiles($0) }), in: LayoutPanelPolicy.minimumTiles...LayoutPanelPolicy.maximumTiles) {"))
-        #expect(ios.components(separatedBy: ".pickerStyle(.inline)").count - 1 == 2)
-        #expect(flat.contains("if snapshot.showsPosition {"))
-        #expect(!ios.contains(".onAppear") && !ios.contains("conclaveGestureFeedback"), "iOS plays no haptic here (3 h)")
-        let root = stageNormalized(try Self.source("Sources/Conclave/Features/Meeting/Stage/CallRoot+iOS.swift"))
-        #expect(root.contains("LayoutPanel(layout: stage.layoutPanel, shell: shell, adapter: adapter, presentation: presentation, resolved: resolved)"))
-    }
-
-    @Test func androidLayoutSheetFollowsTheWp13cRules() throws {
-        let host = stageNormalized(try Self.source("Sources/Conclave/Skip/ui/call/panels/LayoutSheetHost.kt"))
-        #expect(host.contains("@OptIn(ExperimentalMaterial3Api::class) @Composable internal fun LayoutSheetHost("))
-        #expect(host.contains("val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = skipPartiallyExpanded)"))
-        #expect(host.contains("if (dismissing && phase.dismissRequested()) { try { sheetState.hide() } finally { phase.hideCompleted() } }"))
-        #expect(host.contains("if (!phase.composed) return"))
-        #expect(host.contains("Modifier.fillMaxWidth().testTag(\"panel.sheet\").semantics { testTagsAsResourceId = true }"))
-        #expect(host.contains("sheetMaxWidth = PanelPresentationPolicy.bottomSheetMaxWidth.dp,"))
-        #expect(host.contains("dragHandle = { CompactDragHandle() },"))
-        #expect(host.contains("Box(Modifier.fillMaxWidth().height(36.dp), contentAlignment = Alignment.Center)"))
-        let panelHost = stageNormalized(try Self.source("Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt"))
-        #expect(panelHost.contains("onDismissRequest = { panels.dismiss(cancelPending = false) },"))
-        #expect(panelHost.contains("latestPanel(session, request, decision, InCallPageVariant.Sheet)"))
-        let page = stageNormalized(try Self.source("Sources/Conclave/Skip/ui/settings/LayoutPanel.kt"))
-        #expect(page.contains("steps = LayoutPanelPolicy.sliderSteps,"))
-        #expect(page.contains("valueRange = LayoutPanelPolicy.minimumTiles.toFloat()..LayoutPanelPolicy.maximumTiles.toFloat(),"))
-        #expect(page.contains("if (next != value) layout.setMaxTiles(next)"))
-        #expect(page.contains(".selectableGroup()") && page.contains("role = Role.RadioButton"))
-        #expect(page.contains("if (layout.setViewMode(id) == ControlTapResult.dispatched) haptics.gesture(FeedbackKind.selectionChanged)"))
-        #expect(stageMatches(#"Text\(\s*""#, in: page).isEmpty)
-        let root = stageNormalized(try Self.source("Sources/Conclave/Skip/ui/call/stage/CallRoot.kt"))
-        #expect(root.contains("LayoutPage( layout = stage.layoutPanel,"))
-
-        for file in ["Sources/Conclave/Skip/ui/settings/LayoutPanel.kt", "Sources/Conclave/Skip/ui/effects/EffectsPanel.kt",
-                     "Sources/Conclave/Skip/ui/effects/EffectTile.kt", "Sources/Conclave/Skip/ui/effects/EffectsCopy.kt",
-                     "Sources/Conclave/Skip/ui/effects/EffectsPhotoStore.kt"] {
-            let text = try Self.source(file)
-            #expect(!text.contains("ExperimentalMaterial3Api") && !text.contains("ModalBottomSheet("), "\(file)")
-        }
-    }
-
-    @Test func slicesSourcesStayFlatDashFreeAndSkipLite() throws {
-        let files = ["Sources/Conclave/Features/Meeting/Panels/LayoutPanelPresenter.swift",
-                     "Sources/Conclave/Features/Meeting/Panels/PanelPresentationPolicy.swift",
-                     "Sources/Conclave/Features/Meeting/Settings/LayoutPanel+iOS.swift",
-                     "Sources/Conclave/Skip/ui/settings/LayoutPanel.kt", "Sources/Conclave/Skip/ui/call/panels/LayoutSheetHost.kt",
-                     "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt"]
-        for file in files {
-            let text = try Self.source(file)
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(file) has an en or em dash")
-            #expect(!text.lowercased().contains("gradient"), "\(file) mentions a gradient")
-            #expect(stageMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-        }
-        let shared = try Self.source("Sources/Conclave/Features/Meeting/Panels/LayoutPanelPresenter.swift")
-        #expect(!shared.contains("#if") && stageMatches(#"\bprotocol\s"#, in: shared).isEmpty)
-        #expect(stageMatches(#"case\s+\w+\("#, in: shared).isEmpty, "associated value")
-        #expect(stageMatches(#"\.(map|compactMap|flatMap)\(\w+(\.init)?\)"#, in: shared).isEmpty, "function-reference map")
-    }
-
     @Test func layoutStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(Self.source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
         let ios = try Self.source("Sources/Conclave/Features/Meeting/Settings/LayoutPanel+iOS.swift")
         let keys = set5Captures(#"ConclaveStrings\.(?:text|format)\(\s*"((?:[^"\\]|\\.)*)""#, in: ios)
-        #expect(keys.count >= 20)
         for key in keys {
             #expect(strings[key] != nil, "missing iOS key: \(key)")
         }

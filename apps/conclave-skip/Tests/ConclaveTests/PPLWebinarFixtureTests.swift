@@ -35,16 +35,6 @@ struct PPLWebinarFixtureTests {
         #expect(NativeFixtureLaunch.iOSPeopleQaState("people-host-6") == nil)
         #expect(NativeFixtureLaunch.iOSPeopleQaState("webinar-unknown") == nil)
         #expect(NativeFixtureLaunch.iOSPeopleQaState(nil) == nil)
-
-        let android = pplWebinarNormalized(try pplWebinarSource("Sources/Conclave/Skip/ui/people/debug/PeopleFixtureRoot.kt"))
-        #expect(android.contains("val qaState = PeopleWebinarFixtureScript.state(named = stateName) val qaSession"))
-        #expect(!android.contains("takeIf"), "Android launches every webinar state, like iOS")
-        let main = try pplWebinarSource("Android/app/src/main/kotlin/Main.kt")
-        #expect(main.contains("getStringExtra(\"conclave.peopleFixture\")"))
-        #expect(main.contains("PeopleFixtureRoot(peopleFixture"))
-        let ios = try pplWebinarSource("Sources/Conclave/Features/Meeting/People/Debug/PeopleFixtureView+iOS.swift")
-        #expect(ios.contains("NativeFixtureLaunch.iOSPeopleState(environment[\"CONCLAVE_PEOPLE_FIXTURE\"])"))
-        #expect(ios.contains("NativeFixtureLaunch.iOSPeopleQaState(environment[\"CONCLAVE_PEOPLE_FIXTURE\"])"))
     }
 
     @Test func eachStateHasOneLaunchScriptOnBothRoots() {
@@ -329,10 +319,6 @@ struct PPLWebinarFixtureTests {
             #expect(session.people.inputs == before, "\(state.rawValue)")
             #expect(session.people.snapshot.webinarEnabled, "\(state.rawValue)")
         }
-        let ios = pplWebinarNormalized(try pplWebinarSource("Sources/Conclave/Features/Meeting/People/Debug/PeopleFixtureView+iOS.swift"))
-        #expect(ios.contains("if webinar == nil { fixtureButton(\"Mute Row\", identifier: \"people.fixture.mute\") { session.scriptedMute(); refresh += 1 } fixtureButton(\"Lose Host\", identifier: \"people.fixture.loseHost\") { session.loseHost(); refresh += 1 } }"))
-        let android = pplWebinarNormalized(try pplWebinarSource("Sources/Conclave/Skip/ui/people/debug/PeopleFixtureRoot.kt"))
-        #expect(android.contains("if (webinar == null) { FixtureButton(\"Mute row\", \"people.fixture.mute\") { session.scriptedMute(); refresh++ } FixtureButton(\"Lose host\", \"people.fixture.loseHost\") { session.loseHost(); refresh++ } }"))
     }
 
     @Test func aSpeakerLandingThatOutlivesItsSessionIsDropped() async throws {
@@ -352,26 +338,6 @@ struct PPLWebinarFixtureTests {
         session.turnQaOff()
         #expect(session.people.qa.snapshot.composerReason == QaComposerReason.qaOff)
         #expect(!session.people.qa.snapshot.composerEnabled)
-    }
-
-    @Test func bothRootsScriptTheWebinarLaunchTheSameWay() throws {
-        let ios = pplWebinarNormalized(try pplWebinarSource("Sources/Conclave/Features/Meeting/People/Debug/PeopleFixtureView+iOS.swift"))
-        let android = pplWebinarNormalized(try pplWebinarSource("Sources/Conclave/Skip/ui/people/debug/PeopleFixtureRoot.kt"))
-        for needle in ["PeopleWebinarFixtureScript.opensParticipants(webinar)", "PeopleWebinarFixtureScript.opensQuestionsAndAnswers(webinar)",
-                       "PeopleWebinarFixtureScript.turnsQaOff(webinar)", "PeopleWebinarFixtureScript.deliversPromotion(webinar)",
-                       "qaSession.turnQaOff()", "qaSession.deliverPromotion()", "qaSession.openQuestionsAndAnswers()"] {
-            #expect(ios.contains(needle), "iOS: \(needle)")
-            #expect(android.contains(needle), "Android: \(needle)")
-        }
-        #expect(ios.contains("try? await Task.sleep(for: .milliseconds(Int(PeopleWebinarFixtureScript.promotionDelayMillis))) if Task.isCancelled { return }"))
-        #expect(android.contains("delay(PeopleWebinarFixtureScript.promotionDelayMillis.toLong())"))
-        #expect(ios.contains("fixtureButton(\"Promote\", identifier: \"people.fixture.promote\")"))
-        #expect(android.contains("FixtureButton(\"Promote\", \"people.fixture.promote\")"))
-        #expect(ios.contains("readout(webinar.countersReadout(), identifier: \"people.webinar\")"))
-        #expect(android.contains("FixtureReadout(webinar.countersReadout(), \"people.webinar\", tick)"))
-        let shared = try pplWebinarSource("Sources/Conclave/Features/Meeting/People/Debug/PeopleWebinarFixtures.swift")
-        #expect(!shared.contains("\u{2014}") && !shared.contains("\u{2013}"))
-        #expect(!shared.lowercased().contains("gradient"))
     }
 }
 

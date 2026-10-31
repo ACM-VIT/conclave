@@ -337,72 +337,6 @@ struct ACT3PromptGamesTests {
         return text
     }
 
-    @Test func theReactionPadSendsOneTapAndChangesInOneFrame() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Games/Native/Boards/ReactionPad+iOS.swift"))
-        #expect(ios.contains("DragGesture(minimumDistance: 0).onChanged { _ in fire() }"))
-        #expect(ios.contains(".accessibilityAction { fire() }") && ios.contains(".onKeyPress(.space)") && ios.contains(".onKeyPress(.return)"))
-        #expect(ios.contains("DesignTokens.iosInCallSuccess") && ios.contains("DesignTokens.iosInCallOnControlOff"))
-        #expect(ios.contains(".onChange(of: scene.phaseKey) { sent = false }") && ios.contains("urgent: true"))
-        #expect(ios.contains(".conclaveGestureFeedback(.tapValid, trigger: validTaps)") && ios.contains("if showedGo { validTaps += 1 }"))
-        let kotlin = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/games/boards/ReactionPad.kt"))
-        #expect(kotlin.contains("awaitEachGesture { awaitFirstDown(requireUnconsumed = false) latestFire() }"))
-        #expect(kotlin.contains("onClick(label = tapLabel)") && kotlin.contains("Key.Spacebar") && kotlin.contains("Key.Enter"))
-        #expect(kotlin.contains("remember(scene.phaseKey)") && kotlin.contains("assertive = true") && kotlin.contains("ext.onWarning"))
-        #expect(kotlin.contains("if (showedGo) haptics.gesture(FeedbackKind.tapValid)"))
-        for forbidden in ["withAnimation", ".animation(", "onLongPressGesture", "animate", "Color.white", "Color.White"] {
-            #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "the pad uses \(forbidden)")
-        }
-        let shared = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/games/scenes/PromptGameScene.kt"))
-        #expect(shared.contains("liveRegion = if (assertive) LiveRegionMode.Assertive else LiveRegionMode.Polite"))
-    }
-
-    @Test func scenesKeepTheDraftTheWordAndCorrectnessTwins() throws {
-        let ios = try sources("Sources/Conclave/Features/Meeting/Games/Native/Scenes", "swift")
-        let kotlin = try sources("Sources/Conclave/Skip/ui/games/scenes", "kt")
-        let flatIOS = stageNormalized(ios)
-        let flatKotlin = stageNormalized(kotlin)
-
-        #expect(flatIOS.contains("@State private var draft = \"\"") && flatIOS.contains(".onChange(of: scene.round) { draft = \"\" }"))
-        #expect(flatIOS.contains("scene.isPlayer && (scene.canSubmit || pending)"))
-        #expect(flatKotlin.contains("rememberSaveable(scene.round)") && flatKotlin.contains("scene.isPlayer && (scene.canSubmit || pending)"))
-
-        #expect(flatIOS.contains("secret: PromptGameCopy.secret(scene)") && flatKotlin.contains("secret = imposterSecret(scene)"))
-        for leak in ["Text(scene.secretWord", "Text(imposter.secretWord", "accessibilityLabel(scene.secretWord", "contentDescription = scene.secretWord"] {
-            #expect(!ios.contains(leak) && !kotlin.contains(leak), "the word leaks through \(leak)")
-        }
-
-        #expect(flatIOS.contains("markText: option.isTruth ? PromptGameCopy.truth() : \"\"") && flatIOS.contains("emphasis: option.isTruth ? .success"))
-        #expect(flatIOS.contains("markText: candidate.isWinner ? PromptGameCopy.mostVotes() : \"\"") && flatIOS.contains("emphasis: candidate.isWinner ? .success"))
-        #expect(flatIOS.contains("Label(markText, systemImage: ConclaveSymbols.checkmark)"))
-        #expect(flatKotlin.contains("markText = if (option.isTruth) truth else \"\"") && flatKotlin.contains("option.isTruth -> PromptRowEmphasis.Success"))
-        #expect(flatKotlin.contains("markText = if (candidate.isWinner) mostVotes else \"\"") && flatKotlin.contains("candidate.isWinner -> PromptRowEmphasis.Success"))
-        #expect(flatKotlin.contains("Icon(ConclaveIcons.CheckFill0, contentDescription = null"))
-
-        for kind in ["answerLocked", "bluffSubmitted", "voteCast", "revealHeld"] {
-            #expect(ios.contains(".conclaveGestureFeedback(." + kind) && kotlin.contains("haptics.gesture(FeedbackKind." + kind + ")"), "\(kind)")
-        }
-
-        for forbidden in ["GameJSONValue", "dictionaryValue", "MeetingState", "MeetingViewModel", "confetti", "withAnimation", ".animation(",
-                          "Font.system(size:", "onLongPressGesture"] {
-            #expect(!ios.contains(forbidden) && !kotlin.contains(forbidden), "a scene uses \(forbidden)")
-        }
-    }
-
-    @Test func everyPromptEnumCaseHasCopyOnBothPlatforms() throws {
-        let ios = try stageSource("Sources/Conclave/Features/Meeting/Games/Native/Scenes/PromptGameCopy+iOS.swift")
-        let kotlin = try stageSource("Sources/Conclave/Skip/ui/games/scenes/PromptGameCopy.kt")
-        for value in TriviaOutcome.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("TriviaOutcome." + value.rawValue), "\(value)") }
-        for value in ReactionPadState.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ReactionPadState." + value.rawValue), "\(value)") }
-        for value in ReactionResultOutcome.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("ReactionResultOutcome." + value.rawValue), "\(value)")
-        }
-        for value in ImposterRole.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("ImposterRole." + value.rawValue), "\(value)") }
-        for value in ImposterResultKind.allCases {
-            #expect(ios.contains("." + value.rawValue) && kotlin.contains("ImposterResultKind." + value.rawValue), "\(value)")
-        }
-        for value in PromptHostAction.allCases { #expect(ios.contains("." + value.rawValue) && kotlin.contains("PromptHostAction." + value.rawValue), "\(value)") }
-    }
-
     @Test func promptStringsAreInBothCatalogs() throws {
         let catalogData = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
@@ -423,13 +357,6 @@ struct ACT3PromptGamesTests {
         for match in stageMatches(#""(?:act|gm|ds)_[a-z0-9_]+""#, in: kotlin) { names.insert(String(match.dropFirst().dropLast())) }
         #expect(names.count > 60)
         for name in names { #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)") }
-    }
-
-    @Test func theShellRoutesThePromptGamesAndPinsTheirHostBar() throws {
-        let ios = stageNormalized(try stageSource("Sources/Conclave/Features/Meeting/Games/Native/GameShell+iOS.swift"))
-        #expect(ios.contains("PromptGameSceneBody(games: games)") && ios.contains("PromptGameHostBar(games: games)"))
-        let kotlin = stageNormalized(try stageSource("Sources/Conclave/Skip/ui/games/GameShell.kt"))
-        #expect(kotlin.contains("PromptGameSceneBody(games)") && kotlin.contains("PromptGameHostBar(games)"))
     }
 }
 #endif
