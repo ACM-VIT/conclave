@@ -97,18 +97,7 @@ private struct WordleTimerFace: View {
         let seconds = model.secondsLeft(nowMillis: nowMillis)
         let warning = seconds <= WordleBoardPolicy.warningSeconds
         let clock = WordleCopy.clock(seconds)
-        let ink = warning ? HostingTheme.token(DesignTokens.iosInCallWarning) : HostingTheme.token(DesignTokens.iosInCallText)
-        Label {
-            Text(warning ? WordleCopy.timeLeft(clock) : clock)
-        } icon: {
-            Image(systemName: ConclaveSymbols.timer).accessibilityHidden(true)
-        }
-            .font(.subheadline.weight(.semibold))
-            .monospacedDigit()
-            .foregroundStyle(ink)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .overlay { Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
+        GameKitTimerCapsule(text: clock, isWarning: warning)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(WordleCopy.timeLeft(WordleCopy.spokenDuration(seconds)))
             .accessibilityIdentifier("game.wordle.timer")
@@ -501,7 +490,7 @@ struct WordleTextEntry: View {
         let interaction = games.interaction
         let draft = games.wordleDraft
         let pending = interaction.isPending && interaction.pendingType == WordleIntent.guessType
-        VStack(alignment: .leading, spacing: 8) {
+        GameKitFieldFrame {
             TextField(WordleCopy.guessField(), text: $text)
                 .textInputAutocapitalization(.characters)
                 .autocorrectionDisabled()
@@ -511,20 +500,12 @@ struct WordleTextEntry: View {
                 .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
                 .focused($focused)
                 .onSubmit { submit() }
-                .padding(.horizontal, 12)
-                .frame(minHeight: 44)
-                .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
-                            in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous)
-                        .strokeBorder(HostingTheme.inCallBorderStrong, lineWidth: 1)
-                }
                 .disabled(!scene.canGuess || interaction.isPending)
                 .accessibilityIdentifier("game.wordle.field")
-            GameKitHostBar(primaryTitle: WordleCopy.enterGuess(),
-                           primaryEnabled: !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft: draft),
-                           primaryPending: pending, onPrimary: submit)
-                .accessibilityIdentifier("game.wordle.enterGuess")
+        } trailing: {
+            GameKitSubmitButton(title: WordleCopy.enterGuess(),
+                                isEnabled: !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft: draft),
+                                isPending: pending, identifier: "game.wordle.enterGuess", action: submit)
         }
         .onAppear {
             text = draft
@@ -555,7 +536,7 @@ struct WordleSecretEntry: View {
         let interaction = games.interaction
         let draft = games.wordleDraft
         let pending = interaction.isPending && interaction.pendingType == WordleIntent.setWordType
-        VStack(alignment: .leading, spacing: 8) {
+        GameKitFieldFrame {
             SecureField(WordleCopy.secretField(), text: $text)
                 .textInputAutocapitalization(.characters)
                 .autocorrectionDisabled()
@@ -564,20 +545,12 @@ struct WordleSecretEntry: View {
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
                 .onSubmit { submit() }
-                .padding(.horizontal, 12)
-                .frame(minHeight: 44)
-                .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
-                            in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous)
-                        .strokeBorder(HostingTheme.inCallBorderStrong, lineWidth: 1)
-                }
                 .disabled(!scene.canSetWord || interaction.isPending)
                 .accessibilityIdentifier("game.wordle.secret")
-            GameKitHostBar(primaryTitle: WordleCopy.setWord(),
-                           primaryEnabled: !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft: draft),
-                           primaryPending: pending, onPrimary: submit)
-                .accessibilityIdentifier("game.wordle.setWord")
+        } trailing: {
+            GameKitSubmitButton(title: WordleCopy.setWord(),
+                                isEnabled: !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft: draft),
+                                isPending: pending, identifier: "game.wordle.setWord", action: submit)
         }
         .onAppear {
             text = draft
@@ -772,16 +745,13 @@ enum WordleStyle {
 
 enum WordleCopy {
     static func title(_ scene: WordleScene, isFinished: Bool) -> String {
-        let rounds = scene.roundTotal > 1 && scene.round > 0
         switch scene.phase {
         case .lobby:
             return ""
         case .setWord:
-            return rounds ? ConclaveStrings.format("Round %lld of %lld · Set the Word", scene.round, scene.roundTotal)
-                : ConclaveStrings.text("Set the Word")
+            return ConclaveStrings.text("Set the Word")
         case .playing:
-            return rounds ? ConclaveStrings.format("Round %lld of %lld · Guess the Word", scene.round, scene.roundTotal)
-                : ConclaveStrings.text("Guess the Word")
+            return ConclaveStrings.text("Guess the Word")
         case .results:
             return isFinished || scene.isFinalRound ? ConclaveStrings.text("Final Results")
                 : ConclaveStrings.format("Round %lld Results", scene.round)

@@ -1,6 +1,5 @@
 package conclave.module
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -96,8 +94,6 @@ internal fun PromptHeadline(text: String, modifier: Modifier = Modifier) {
     Text(text, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, modifier = modifier)
 }
 
-internal enum class PromptRowEmphasis { None, Success, Selected }
-
 @Composable
 internal fun PromptResultRow(
     id: String,
@@ -105,37 +101,25 @@ internal fun PromptResultRow(
     markText: String = "",
     lines: List<String> = emptyList(),
     count: Int = -1,
-    emphasis: PromptRowEmphasis = PromptRowEmphasis.None,
+    mark: GameKitMark = GameKitMark.none,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
-    val border = when (emphasis) {
-        PromptRowEmphasis.None -> BorderStroke(1.dp, ext.border)
-        PromptRowEmphasis.Success -> BorderStroke(2.dp, ext.success)
-        PromptRowEmphasis.Selected -> BorderStroke(2.dp, scheme.primaryContainer)
-    }
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = scheme.surfaceContainerHigh,
-        border = border,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("game.result.$id").semantics(mergeDescendants = true) {},
+        border = gameKitRowBorder(mark),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("game.result.$id").semantics(mergeDescendants = true) {},
     ) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(text, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurface)
-                if (markText.isNotEmpty()) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Icon(ConclaveIcons.CheckFill0, contentDescription = null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                        Text(markText, style = MaterialTheme.typography.labelLarge, color = scheme.onSurfaceVariant)
-                    }
-                }
+                if (markText.isNotEmpty()) Text(markText, style = MaterialTheme.typography.labelLarge, color = gameKitMarkTint(mark))
                 for (line in lines) {
                     Text(line, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
                 }
             }
-            if (count >= 0) {
-                Text(count.toString(), style = rememberTabular(MaterialTheme.typography.bodyLarge), color = scheme.onSurface)
-            }
+            GameKitRowTrailing(count, mark)
         }
     }
 }

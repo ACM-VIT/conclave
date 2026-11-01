@@ -15,11 +15,6 @@ enum PromptGameCopy {
         }
     }
 
-    static func round(_ number: Int, of total: Int) -> String {
-        if total <= 0 || number <= 0 { return "" }
-        return ConclaveStrings.format("Round %lld of %lld", number, total)
-    }
-
     static func twoFacts(_ first: String, _ second: String) -> String {
         if first.isEmpty { return second }
         if second.isEmpty { return first }
@@ -32,11 +27,7 @@ enum PromptGameCopy {
     static func departed(_ name: String) -> String { ConclaveStrings.format("%@ left. Vote again.", name) }
     static func wrapTitle() -> String { ConclaveStrings.text("That’s a Wrap") }
 
-    static func triviaKicker(_ scene: TriviaScene) -> String {
-        let label = scene.category.isEmpty ? ConclaveStrings.text("Question") : scene.category
-        if scene.questionTotal <= 0 { return label }
-        return twoFacts(label, ConclaveStrings.format("%lld of %lld", scene.questionNumber, scene.questionTotal))
-    }
+    static func triviaKicker(_ scene: TriviaScene) -> String { scene.category }
 
     static func triviaWaiting() -> String { ConclaveStrings.text("Waiting for the question.") }
 
@@ -66,7 +57,7 @@ enum PromptGameCopy {
         switch scene.phase {
         case "write": return ConclaveStrings.text("Write a Convincing Lie")
         case "choose": return ConclaveStrings.text("Which One Is the Truth?")
-        default: return round(scene.round, of: scene.roundTotal)
+        default: return ""
         }
     }
 
@@ -105,7 +96,9 @@ enum PromptGameCopy {
     static func nobodyPicked() -> String { ConclaveStrings.text("Nobody picked this") }
     static func wyrWrapBody() -> String { ConclaveStrings.text("Nice picks. Run it back any time.") }
 
-    static func mostLikelyTitle(_ prompt: String) -> String { ConclaveStrings.format("Who Is Most Likely %@", prompt) }
+    static func mostLikelyTitle(_ prompt: String) -> String {
+        GameKitTextPolicy.question(ConclaveStrings.format("Who’s most likely %@", prompt))
+    }
     static func mostVotes() -> String { ConclaveStrings.text("Most votes") }
 
     static func tied(_ names: [String]) -> String {
@@ -183,8 +176,16 @@ enum PromptGameCopy {
         }
     }
 
-    static func imposterWas(_ name: String) -> String { ConclaveStrings.format("The imposter was %@", name) }
-    static func wordWas(_ word: String) -> String { ConclaveStrings.format("The secret word was %@", word) }
+    static func imposterFacts(_ scene: ImposterScene) -> [GameKitFact] {
+        var facts: [GameKitFact] = []
+        if !scene.imposterName.isEmpty {
+            facts.append(GameKitFact(id: "imposter", label: ConclaveStrings.text("Imposter"), value: scene.imposterName))
+        }
+        if !scene.revealedWord.isEmpty {
+            facts.append(GameKitFact(id: "word", label: ConclaveStrings.text("Secret Word"), value: scene.revealedWord))
+        }
+        return facts
+    }
 
     static func award(kind: String) -> String {
         switch kind {

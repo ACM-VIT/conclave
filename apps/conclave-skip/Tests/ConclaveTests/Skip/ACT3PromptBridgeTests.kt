@@ -62,6 +62,23 @@ class ACT3PromptBridgeTests {
         assertEquals(listOf("Nobody picked this"), wyr.split("Nobody picked this").namesB.toList())
     }
 
+    @Test fun theTranspiledGamePoliciesDriveTheBarSplitAndTitles() {
+        val trivia = presenter(PromptGameFixtureState.triviaAnswered)
+        assertEquals(GameShellBarContent.promptHost,
+            GameShellBarPolicy.content(chrome = trivia.chrome, scene = trivia.scene, results = trivia.results))
+        val idle = GameStagePresenter()
+        assertEquals(GameShellBarContent.none, GameShellBarPolicy.content(chrome = idle.chrome, scene = idle.scene, results = idle.results))
+        val split = presenter(PromptGameFixtureState.wyrReveal).scene.wouldYouRather!!.split("Nobody picked this")
+        assertEquals(1.0, split.fractionOfTotalA, 0.0001)
+        assertEquals(0.0, split.fractionOfTotalB, 0.0001)
+        assertTrue(split.leadsA)
+        assertFalse(split.leadsB)
+        assertEquals("Who’s most likely to win?", GameKitTextPolicy.question("Who’s most likely to win"))
+        val locked = GameKitChoice.make(id = "a", text = "Saturn", isDisabled = true)
+        assertTrue(GameKitChoicePolicy.isMuted(locked, isInteractive = false))
+        assertFalse(GameKitEntryPolicy.canSubmit(text = "   ", isEnabled = true, isPending = false))
+    }
+
     @Test fun reactionEarlyTapIsOneTokenAndOneTap() {
         val sent = mutableListOf<GameStageCommand>()
         val games = presenter(PromptGameFixtureState.reactionArming, sent)

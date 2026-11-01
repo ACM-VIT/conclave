@@ -1603,7 +1603,6 @@
 
     <string name="gm_reveal_now">Reveal now</string>
     <string name="gm_next">Next</string>
-    <string name="gm_trivia_question">Question</string>
     <string name="gm_trivia_waiting">Waiting for the question.</string>
     <string name="gm_trivia_locked">Answer locked in</string>
     <string name="gm_trivia_answered">%1$d of %2$d answered</string>
@@ -1642,7 +1641,7 @@
     <string name="gm_wyr_nobody">Nobody picked this</string>
     <string name="gm_wrap_title">That’s a wrap</string>
     <string name="gm_wyr_wrap_body">Nice picks. Run it back any time.</string>
-    <string name="gm_mlt_title">Who is most likely %1$s</string>
+    <string name="gm_mlt_title">Who’s most likely %1$s</string>
     <string name="gm_mlt_most_votes">Most votes</string>
     <string name="gm_mlt_most_votes_announce">Most votes: %1$s</string>
     <string name="gm_mlt_tied">Tied: %1$s and %2$s</string>
@@ -1669,17 +1668,15 @@
     <string name="gm_imp_starts">%1$s starts</string>
     <string name="gm_imp_vote_title">Who’s the imposter?</string>
     <string name="gm_imp_abstained">You didn’t vote.</string>
+    <string name="gm_imp_fact_imposter">Imposter</string>
+    <string name="gm_imp_fact_word">Secret word</string>
     <string name="gm_imp_crew_wins">Crew wins, imposter caught</string>
     <string name="gm_imp_escapes">The imposter escapes</string>
     <string name="gm_imp_tie">Tie, the imposter survives</string>
-    <string name="gm_imp_was">The imposter was %1$s</string>
-    <string name="gm_imp_word_was">The secret word was %1$s</string>
     <string name="gm_imp_call_vote">Call the vote</string>
     <string name="gm_imp_end_vote">End vote</string>
 
-    <string name="gm_wordle_set_round">Round %1$d of %2$d · Set the word</string>
     <string name="gm_wordle_set">Set the word</string>
-    <string name="gm_wordle_guess_round">Round %1$d of %2$d · Guess the word</string>
     <string name="gm_wordle_guess">Guess the word</string>
     <string name="gm_wordle_round_results">Round %1$d results</string>
     <string name="gm_wordle_final">Final results</string>

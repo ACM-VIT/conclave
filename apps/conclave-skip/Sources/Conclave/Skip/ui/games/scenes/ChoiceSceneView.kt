@@ -15,7 +15,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun ChoiceSceneView(scene: ChoiceScene, games: GameStagePresenter) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.wouldYouRather"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        GameKitPrompt(kicker = promptRound(scene.index, scene.total), title = conclaveString("gm_wyr_title"))
+        GameKitPrompt(kicker = "", title = conclaveString("gm_wyr_title"))
         if (scene.isReveal) {
             val nobody = conclaveString("gm_wyr_nobody")
             val split = remember(scene, nobody) { scene.split(nobody) }

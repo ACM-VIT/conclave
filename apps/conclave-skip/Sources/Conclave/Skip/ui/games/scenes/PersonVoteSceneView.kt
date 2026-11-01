@@ -15,7 +15,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun PersonVoteSceneView(scene: PersonVoteScene, games: GameStagePresenter) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.mostLikelyTo"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        GameKitPrompt(kicker = promptRound(scene.index, scene.total), title = conclaveString("gm_mlt_title", scene.prompt))
+        GameKitPrompt(kicker = "", title = GameKitTextPolicy.question(conclaveString("gm_mlt_title", scene.prompt)))
         if (scene.isReveal) {
             if (scene.isTie) PromptHeadline(promptTied(scene.tiedNames))
             val you = conclaveString("ds_you")
@@ -26,13 +26,13 @@ internal fun PersonVoteSceneView(scene: PersonVoteScene, games: GameStagePresent
                     PromptResultRow(
                         id = candidate.id,
                         text = if (candidate.isYou) you else candidate.name,
-                        markText = if (candidate.isWinner) mostVotes else "",
-                        lines = if (candidate.isMine) listOf(yourAnswer) else emptyList(),
+                        markText = if (candidate.isWinner) mostVotes else if (candidate.isMine) yourAnswer else "",
+                        lines = if (candidate.isMine && candidate.isWinner) listOf(yourAnswer) else emptyList(),
                         count = maxOf(0, candidate.votes),
-                        emphasis = when {
-                            candidate.isWinner -> PromptRowEmphasis.Success
-                            candidate.isMine -> PromptRowEmphasis.Selected
-                            else -> PromptRowEmphasis.None
+                        mark = when {
+                            candidate.isWinner -> GameKitMark.correct
+                            candidate.isMine -> GameKitMark.selected
+                            else -> GameKitMark.none
                         },
                     )
                 }

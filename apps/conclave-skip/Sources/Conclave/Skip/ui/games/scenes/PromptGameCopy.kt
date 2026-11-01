@@ -60,10 +60,6 @@ internal fun promptHostAction(action: PromptHostAction): String {
 }
 
 @Composable
-internal fun promptRound(number: Int, total: Int): String =
-    if (number <= 0 || total <= 0) "" else conclaveString("act_round_of", number, total)
-
-@Composable
 internal fun promptTwoFacts(first: String, second: String): String = when {
     first.isEmpty() -> second
     second.isEmpty() -> first
@@ -77,11 +73,7 @@ internal fun promptVoted(done: Int, total: Int): String = activitiesVoteCount(do
 internal fun promptDeparted(name: String): String = conclaveString("gm_vote_left", name)
 
 @Composable
-internal fun triviaKicker(scene: TriviaScene): String {
-    val label = if (scene.category.isEmpty()) conclaveString("gm_trivia_question") else scene.category
-    if (scene.questionTotal <= 0) return label
-    return promptTwoFacts(label, gameProgress(scene.questionNumber, scene.questionTotal))
-}
+internal fun triviaKicker(scene: TriviaScene): String = scene.category
 
 @Composable
 internal fun triviaProgress(scene: TriviaScene): String {
@@ -105,7 +97,7 @@ internal fun triviaStanding(scene: TriviaScene): String? {
 internal fun bluffKicker(scene: BluffScene): String = when (scene.phase) {
     "write" -> conclaveString("gm_bluff_write")
     "choose" -> conclaveString("gm_bluff_choose")
-    else -> promptRound(scene.round, scene.roundTotal)
+    else -> ""
 }
 
 @Composable
@@ -168,4 +160,12 @@ internal fun imposterDiscussKicker(scene: ImposterScene): String {
 internal fun imposterResult(kind: ImposterResultKind): String {
     val name = imposterResultResource(kind) ?: return ""
     return conclaveString(name)
+}
+
+@Composable
+internal fun imposterFacts(scene: ImposterScene): List<GameKitFactRow> {
+    val facts = mutableListOf<GameKitFactRow>()
+    if (scene.imposterName.isNotEmpty()) facts.add(GameKitFactRow("imposter", conclaveString("gm_imp_fact_imposter"), scene.imposterName))
+    if (scene.revealedWord.isNotEmpty()) facts.add(GameKitFactRow("word", conclaveString("gm_imp_fact_word"), scene.revealedWord))
+    return facts
 }

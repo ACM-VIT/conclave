@@ -92,10 +92,10 @@ private fun BluffReveal(scene: BluffScene) {
                 text = option.text,
                 markText = if (option.isTruth) truth else "",
                 lines = bluffRevealLines(option),
-                emphasis = when {
-                    option.isTruth -> PromptRowEmphasis.Success
-                    option.isMine -> PromptRowEmphasis.Selected
-                    else -> PromptRowEmphasis.None
+                mark = when {
+                    option.isTruth -> GameKitMark.correct
+                    option.isMine -> GameKitMark.selected
+                    else -> GameKitMark.none
                 },
             )
         }

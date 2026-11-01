@@ -95,7 +95,7 @@ struct BluffReveal: View {
             ForEach(scene.options) { option in
                 PromptResultRow(id: option.id, text: option.text, markText: option.isTruth ? PromptGameCopy.truth() : "",
                                 lines: PromptGameCopy.bluffRevealLines(option), count: -1,
-                                emphasis: option.isTruth ? .success : (option.isMine ? .selected : .none))
+                                mark: option.isTruth ? .correct : (option.isMine ? .selected : .none))
             }
             if !scene.roundPoints.isEmpty {
                 GameKitRoundResults(rows: BluffReveal.pointRows(scene.roundPoints))

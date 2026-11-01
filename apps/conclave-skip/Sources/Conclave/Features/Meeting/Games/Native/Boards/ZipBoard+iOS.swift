@@ -97,14 +97,7 @@ private struct ZipTimerFace: View {
     var body: some View {
         let seconds = model.secondsLeft(nowMillis: nowMillis)
         let warning = seconds <= ZipTimePolicy.warningSeconds
-        let ink = warning ? HostingTheme.token(DesignTokens.iosInCallWarning) : HostingTheme.token(DesignTokens.iosInCallText)
-        Text(ZipCopy.remaining(ZipCopy.clock(seconds)))
-            .font(.subheadline.weight(.semibold))
-            .monospacedDigit()
-            .foregroundStyle(ink)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .overlay { Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
+        GameKitTimerCapsule(text: ZipCopy.clock(seconds), isWarning: warning)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(ZipCopy.remaining(ZipCopy.spokenDuration(seconds)))
             .accessibilityIdentifier("game.zip.timer")
@@ -745,10 +738,8 @@ enum ZipCopy {
     }
 
     static func meta(_ scene: ZipScene) -> String {
-        let round = scene.roundTotal > 1 && scene.round > 0 ? ConclaveStrings.format("Round %lld of %lld", scene.round, scene.roundTotal) : ""
-        if scene.role == .spectator { return round }
-        let cells = ConclaveStrings.format("%lld of %lld cells", scene.visitedCount, scene.totalCells)
-        return round.isEmpty ? cells : twoFacts(round, cells)
+        if scene.role == .spectator { return "" }
+        return ConclaveStrings.format("%lld of %lld cells", scene.visitedCount, scene.totalCells)
     }
 
     static func remaining(_ value: String) -> String { ConclaveStrings.format("Remaining %@", value) }

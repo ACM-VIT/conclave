@@ -7,8 +7,9 @@ struct ReactionSceneView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            GameKitPrompt(kicker: PromptGameCopy.round(scene.round, of: scene.roundTotal),
-                          title: scene.phase == "reveal" ? PromptGameCopy.fastest(scene.fastestName) : "")
+            if scene.phase == "reveal" {
+                GameKitPrompt(kicker: "", title: PromptGameCopy.fastest(scene.fastestName))
+            }
             if scene.isPadPhase {
                 ReactionPad(scene: scene, games: games)
                 PromptLine(text: PromptGameCopy.tapped(scene.tappedCount, scene.totalPlayers))

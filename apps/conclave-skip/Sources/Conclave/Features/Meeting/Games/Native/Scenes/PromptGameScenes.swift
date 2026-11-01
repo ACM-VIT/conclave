@@ -205,7 +205,7 @@ struct ChoiceScene: Equatable {
 
     func split(nobodyLabel: String) -> GameKitSplit {
         GameKitSplit(labelA: optionA, labelB: optionB, countA: countA, countB: countB,
-                     namesA: countA <= 0 ? [nobodyLabel] : namesA, namesB: countB <= 0 ? [nobodyLabel] : namesB)
+                     namesA: countA <= 0 ? [nobodyLabel] : namesA, namesB: countB <= 0 ? [nobodyLabel] : namesB, picked: myChoice)
     }
 }
 
@@ -321,7 +321,7 @@ struct ImposterScene: Equatable {
     func kitChoices(youLabel: String) -> [GameKitChoice] {
         var result: [GameKitChoice] = []
         for candidate in candidates {
-            result.append(GameKitChoice(id: candidate.id, text: candidate.name, detail: candidate.isYou ? youLabel : "", count: -1,
+            result.append(GameKitChoice(id: candidate.id, text: candidate.isYou ? youLabel : candidate.name, detail: "", count: -1,
                                         isSelected: candidate.isMine, isCorrect: false, isWrongPick: false,
                                         isDisabled: !canVote || !candidate.isEligible))
         }

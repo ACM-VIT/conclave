@@ -67,13 +67,11 @@ struct ImposterResultView: View {
     let scene: ImposterScene
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             GameKitPrompt(kicker: ConclaveStrings.text("Results"), title: PromptGameCopy.result(scene.resultKind))
-            if !scene.imposterName.isEmpty {
-                PromptHeadline(text: PromptGameCopy.imposterWas(scene.imposterName))
-            }
-            if !scene.revealedWord.isEmpty {
-                PromptHeadline(text: PromptGameCopy.wordWas(scene.revealedWord))
+            let facts = PromptGameCopy.imposterFacts(scene)
+            if !facts.isEmpty {
+                GameKitFactList(facts: facts)
             }
             if scene.abstained {
                 PromptLine(text: PromptGameCopy.abstained())

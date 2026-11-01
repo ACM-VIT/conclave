@@ -262,8 +262,8 @@ struct ACT3PromptGamesTests {
         #expect(vote.isVoting && vote.canVote && vote.canTally && vote.hostAction == PromptHostAction.endVote)
         #expect(vote.candidates.first { $0.isYou }?.isEligible == false && vote.votedCount == 2)
         #expect(vote.candidates.allSatisfy { $0.votes == -1 })
-        let rows = vote.kitChoices(youLabel: "You")
-        #expect(rows.first { $0.id == "you" }?.isDisabled == true && rows.first { $0.id == "you" }?.detail == "You")
+        let rows = vote.kitChoices(youLabel: "Me")
+        #expect(rows.first { $0.id == "you" }?.isDisabled == true && rows.first { $0.id == "you" }?.text == "Me")
 
         let resultGames = presenter(.imposterResult)
         let result = try #require(resultGames.scene.imposter)

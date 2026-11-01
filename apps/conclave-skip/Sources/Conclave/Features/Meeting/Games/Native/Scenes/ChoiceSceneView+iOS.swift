@@ -7,7 +7,7 @@ struct ChoiceSceneView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            GameKitPrompt(kicker: PromptGameCopy.round(scene.index, of: scene.total), title: PromptGameCopy.wouldYouRather())
+            GameKitPrompt(kicker: "", title: PromptGameCopy.wouldYouRather())
             if scene.isReveal {
                 GameKitSplitResult(split: scene.split(nobodyLabel: PromptGameCopy.nobodyPicked()))
                 if scene.hostAction == .none {

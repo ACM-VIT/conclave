@@ -62,10 +62,10 @@ private fun ImposterVoteChoices(scene: ImposterScene, games: GameStagePresenter)
 
 @Composable
 internal fun ImposterResultView(scene: ImposterScene) {
-    Column(Modifier.fillMaxWidth().testTag("game.scene.imposter.result"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth().testTag("game.scene.imposter.result"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         GameKitPrompt(kicker = conclaveString("gm_results"), title = imposterResult(scene.resultKind))
-        if (scene.imposterName.isNotEmpty()) PromptHeadline(conclaveString("gm_imp_was", scene.imposterName))
-        if (scene.revealedWord.isNotEmpty()) PromptHeadline(conclaveString("gm_imp_word_was", scene.revealedWord))
+        val facts = imposterFacts(scene)
+        if (facts.isNotEmpty()) GameKitFactList(facts)
         if (scene.abstained) PromptLine(conclaveString("gm_imp_abstained"))
     }
 }

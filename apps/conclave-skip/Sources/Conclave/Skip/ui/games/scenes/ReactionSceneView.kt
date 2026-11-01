@@ -11,10 +11,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun ReactionSceneView(scene: ReactionScene, games: GameStagePresenter) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.reaction"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        GameKitPrompt(
-            kicker = promptRound(scene.round, scene.roundTotal),
-            title = if (scene.phase == "reveal") reactionFastest(scene.fastestName) else "",
-        )
+        if (scene.phase == "reveal") GameKitPrompt(kicker = "", title = reactionFastest(scene.fastestName))
         if (scene.isPadPhase) {
             ReactionPad(scene, games)
             PromptLine(conclaveString("gm_reaction_tapped", scene.tappedCount, scene.totalPlayers))

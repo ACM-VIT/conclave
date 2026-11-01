@@ -167,24 +167,14 @@ private fun ZipTimerChip(model: CountdownModel) {
     }
     val seconds = model.secondsLeft(nowMillis = nowMillis)
     val warning = seconds <= ZipTimePolicy.warningSeconds
-    val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
-    val shown = conclaveString("gm_zip_remaining", wordleClock(seconds))
     val spoken = conclaveString("gm_zip_remaining", wordleSpokenDuration(seconds))
     val announcedText = if (ZipTimePolicy.announcedSeconds.contains(seconds)) spoken else ""
     LaunchedEffect(announcedText) {
         if (announcedText.isNotEmpty()) announcement = announcedText
     }
     Box {
-        Surface(
-            shape = CircleShape,
-            color = scheme.surfaceContainer,
-            border = BorderStroke(1.dp, ext.border),
-            modifier = Modifier.testTag("game.zip.timer").clearAndSetSemantics { contentDescription = spoken },
-        ) {
-            Text(shown, style = rememberTabular(MaterialTheme.typography.labelLarge), color = if (warning) ext.warning else scheme.onSurface,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
-        }
+        GameKitTimerCapsule(wordleClock(seconds), warning,
+            Modifier.testTag("game.zip.timer").clearAndSetSemantics { contentDescription = spoken })
 
         Box(Modifier.size(1.dp).semantics {
             liveRegion = LiveRegionMode.Polite
@@ -771,17 +761,6 @@ internal fun zipCappedFontSize(size: TextUnit, fontScale: Float): TextUnit =
 
 internal fun zipHeaderStacks(fontScale: Float): Boolean = fontScale >= ZipStackedFontScale
 
-internal fun zipGluedFacts(joined: String, first: String, second: String): String {
-    val start = if (first.isEmpty() || second.isEmpty()) -1 else joined.indexOf(first)
-    if (start < 0) return joined
-    val firstEnd = start + first.length
-    val secondStart = joined.indexOf(second, firstEnd)
-    if (secondStart < 0) return joined
-    val separator = joined.substring(firstEnd, secondStart).trimStart()
-    if (separator.isEmpty() || separator.length == secondStart - firstEnd) return joined
-    return joined.substring(0, firstEnd) + "\u00A0" + separator + joined.substring(secondStart)
-}
-
 internal fun zipTitleResource(phase: ZipPhase, isFinal: Boolean): String = when (phase) {
     ZipPhase.lobby, ZipPhase.playing -> "gm_zip_title"
     ZipPhase.results -> if (isFinal) "gm_zip_final" else "gm_zip_round_results"
@@ -812,10 +791,8 @@ private fun zipTitle(scene: ZipScene, isFinished: Boolean): String {
 
 @Composable
 private fun zipMeta(scene: ZipScene): String {
-    val round = if (scene.roundTotal > 1 && scene.round > 0) conclaveString("act_round_of", scene.round, scene.roundTotal) else ""
-    if (scene.role == ZipRole.spectator) return round
-    val cells = zipCells(scene.visitedCount, scene.totalCells)
-    return zipGluedFacts(promptTwoFacts(round, cells), round, cells)
+    if (scene.role == ZipRole.spectator) return ""
+    return zipCells(scene.visitedCount, scene.totalCells)
 }
 
 @Composable

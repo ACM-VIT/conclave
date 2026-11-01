@@ -147,29 +147,14 @@ private fun WordleTimerChip(model: CountdownModel) {
     }
     val seconds = model.secondsLeft(nowMillis = nowMillis)
     val warning = seconds <= WordleBoardPolicy.warningSeconds
-    val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
     val clock = wordleClock(seconds)
     val spoken = conclaveString("gm_wordle_time_left", wordleSpokenDuration(seconds))
-    val shown = if (warning) conclaveString("gm_wordle_time_left", clock) else clock
     val announcedText = if (WordleBoardPolicy.announcedSeconds.contains(seconds)) spoken else ""
     LaunchedEffect(announcedText) {
         if (announcedText.isNotEmpty()) announcement = announcedText
     }
     Box {
-        Surface(
-            shape = CircleShape,
-            color = scheme.surfaceContainer,
-            border = BorderStroke(1.dp, ext.border),
-            modifier = Modifier.testTag("game.wordle.timer").clearAndSetSemantics { contentDescription = spoken },
-        ) {
-            Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(ConclaveIcons.TimerFill0, contentDescription = null, tint = if (warning) ext.warning else scheme.onSurface,
-                    modifier = Modifier.size(16.dp))
-                Text(shown, style = rememberTabular(MaterialTheme.typography.labelLarge), color = if (warning) ext.warning else scheme.onSurface)
-            }
-        }
+        GameKitTimerCapsule(clock, warning, Modifier.testTag("game.wordle.timer").clearAndSetSemantics { contentDescription = spoken })
 
         Box(Modifier.size(1.dp).semantics {
             liveRegion = LiveRegionMode.Polite
@@ -543,32 +528,26 @@ private fun WordleTextEntry(scene: WordleScene, games: GameStagePresenter, autoF
     val submit: () -> Unit = {
         if (!games.interaction.isPending && WordleBoardPolicy.canSubmit(scene, games.wordleDraft)) games.submitWordle()
     }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { games.setWordleDraft(it) },
-            label = { Text(conclaveString("gm_wordle_field")) },
-            enabled = scene.canGuess && !interaction.isPending,
-            singleLine = true,
-            textStyle = MaterialTheme.typography.titleMedium,
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Characters,
-                autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Ascii,
-                imeAction = ImeAction.Go,
-            ),
-            keyboardActions = KeyboardActions(onGo = { submit() }),
-            modifier = Modifier.fillMaxWidth().focusRequester(focus).testTag("game.wordle.field"),
-        )
-        Box(Modifier.testTag("game.wordle.enterGuess")) {
-            GameKitHostBar(
-                primaryTitle = conclaveString("gm_wordle_enter_guess"),
-                onPrimary = submit,
-                primaryEnabled = !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft),
-                primaryPending = pending,
-            )
-        }
-    }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = { games.setWordleDraft(it) },
+        label = { Text(conclaveString("gm_wordle_field")) },
+        enabled = scene.canGuess && !interaction.isPending,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.titleMedium,
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.Characters,
+            autoCorrectEnabled = false,
+            keyboardType = KeyboardType.Ascii,
+            imeAction = ImeAction.Go,
+        ),
+        keyboardActions = KeyboardActions(onGo = { submit() }),
+        trailingIcon = {
+            GameKitSubmitButton(conclaveString("gm_wordle_enter_guess"),
+                !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft), pending, "game.wordle.enterGuess", submit)
+        },
+        modifier = Modifier.fillMaxWidth().focusRequester(focus).testTag("game.wordle.field"),
+    )
     LaunchedEffect(autoFocus) {
         if (autoFocus && scene.canGuess) runCatching { focus.requestFocus() }
     }
@@ -582,33 +561,27 @@ private fun WordleSecretEntry(scene: WordleScene, games: GameStagePresenter) {
     val submit: () -> Unit = {
         if (!games.interaction.isPending && WordleBoardPolicy.canSubmit(scene, games.wordleDraft)) games.submitWordle()
     }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = draft,
-            onValueChange = { games.setWordleDraft(it) },
-            label = { Text(conclaveString("gm_wordle_secret")) },
-            enabled = scene.canSetWord && !interaction.isPending,
-            singleLine = true,
-            textStyle = MaterialTheme.typography.titleMedium,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Characters,
-                autoCorrectEnabled = false,
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Done,
-            ),
-            keyboardActions = KeyboardActions(onDone = { submit() }),
-            modifier = Modifier.fillMaxWidth().testTag("game.wordle.secret"),
-        )
-        Box(Modifier.testTag("game.wordle.setWord")) {
-            GameKitHostBar(
-                primaryTitle = conclaveString("gm_wordle_set_word"),
-                onPrimary = submit,
-                primaryEnabled = !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft),
-                primaryPending = pending,
-            )
-        }
-    }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = { games.setWordleDraft(it) },
+        label = { Text(conclaveString("gm_wordle_secret")) },
+        enabled = scene.canSetWord && !interaction.isPending,
+        singleLine = true,
+        textStyle = MaterialTheme.typography.titleMedium,
+        visualTransformation = PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.Characters,
+            autoCorrectEnabled = false,
+            keyboardType = KeyboardType.Password,
+            imeAction = ImeAction.Done,
+        ),
+        keyboardActions = KeyboardActions(onDone = { submit() }),
+        trailingIcon = {
+            GameKitSubmitButton(conclaveString("gm_wordle_set_word"),
+                !interaction.isPending && WordleBoardPolicy.canSubmit(scene, draft), pending, "game.wordle.setWord", submit)
+        },
+        modifier = Modifier.fillMaxWidth().testTag("game.wordle.secret"),
+    )
 }
 
 internal object WordleIcons {
@@ -697,10 +670,10 @@ internal fun wordleStatusResource(status: WordleStandingStatus, tries: Int): Str
     WordleStandingStatus.playing -> if (tries > 0) "gm_wordle_tries" else "gm_wordle_playing"
 }
 
-internal fun wordleTitleResource(phase: WordlePhase, hasRounds: Boolean, isFinal: Boolean): String = when (phase) {
+internal fun wordleTitleResource(phase: WordlePhase, isFinal: Boolean): String = when (phase) {
     WordlePhase.lobby -> ""
-    WordlePhase.setWord -> if (hasRounds) "gm_wordle_set_round" else "gm_wordle_set"
-    WordlePhase.playing -> if (hasRounds) "gm_wordle_guess_round" else "gm_wordle_guess"
+    WordlePhase.setWord -> "gm_wordle_set"
+    WordlePhase.playing -> "gm_wordle_guess"
     WordlePhase.results -> if (isFinal) "gm_wordle_final" else "gm_wordle_round_results"
 }
 
@@ -712,11 +685,9 @@ internal fun wordleRoleNoteResource(role: WordleRole): String? = when (role) {
 
 @Composable
 private fun wordleTitle(scene: WordleScene, isFinished: Boolean): String {
-    val hasRounds = scene.roundTotal > 1 && scene.round > 0
-    val name = wordleTitleResource(scene.phase, hasRounds, isFinished || scene.isFinalRound)
+    val name = wordleTitleResource(scene.phase, isFinished || scene.isFinalRound)
     return when {
         name.isEmpty() -> ""
-        name == "gm_wordle_set_round" || name == "gm_wordle_guess_round" -> conclaveString(name, scene.round, scene.roundTotal)
         name == "gm_wordle_round_results" -> conclaveString(name, scene.round)
         else -> conclaveString(name)
     }

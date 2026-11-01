@@ -131,11 +131,11 @@ class ACT4WordleBridgeTests {
         assertEquals("gm_wordle_playing", wordleStatusResource(WordleStandingStatus.playing, 0))
         assertEquals("gm_wordle_tries", wordleStatusResource(WordleStandingStatus.playing, 2))
         for (value in WordlePhase.entries) {
-            val name = wordleTitleResource(value, true, false)
+            val name = wordleTitleResource(value, false)
             if (value == WordlePhase.lobby) assertEquals("", name) else assertTrue(name.startsWith("gm_wordle_"))
         }
-        assertEquals("gm_wordle_final", wordleTitleResource(WordlePhase.results, true, true))
-        assertEquals("gm_wordle_guess", wordleTitleResource(WordlePhase.playing, false, false))
+        assertEquals("gm_wordle_final", wordleTitleResource(WordlePhase.results, true))
+        assertEquals("gm_wordle_guess", wordleTitleResource(WordlePhase.playing, false))
         for (value in WordleRole.entries) {
             val name = wordleRoleNoteResource(value)
             if (value == WordleRole.guesser) assertNull(name) else assertNotNull(name)

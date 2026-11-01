@@ -88,20 +88,16 @@ struct PromptHeadline: View {
     }
 }
 
-enum PromptRowEmphasis: Equatable {
-    case none, success, selected
-}
-
 struct PromptResultRow: View {
     let id: String
     let text: String
     var markText: String = ""
     var lines: [String] = []
     var count: Int = -1
-    var emphasis: PromptRowEmphasis = .none
+    var mark: GameKitMark = .none
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(text)
                     .font(.body)
@@ -109,9 +105,9 @@ struct PromptResultRow: View {
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                 if !markText.isEmpty {
-                    Label(markText, systemImage: ConclaveSymbols.checkmark)
+                    Text(markText)
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(HostingTheme.inCallTextSecondary)
+                        .foregroundStyle(GameKitChoiceRow.tint(mark))
                 }
                 ForEach(lines.indices, id: \.self) { index in
                     Text(lines[index])
@@ -121,32 +117,11 @@ struct PromptResultRow: View {
                 }
             }
             Spacer(minLength: 8)
-            if count >= 0 {
-                Text(count.formatted(.number))
-                    .font(.body.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-            }
+            GameKitRowTrailing(count: count, mark: mark)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
-                    in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous)
-                .strokeBorder(border, lineWidth: emphasis == .none ? 1 : 2)
-        }
+        .modifier(GameKitRowSurface(mark: mark))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("game.result." + id)
-    }
-
-    private var border: Color {
-        switch emphasis {
-        case .none: return HostingTheme.inCallBorder
-        case .success: return HostingTheme.token(DesignTokens.iosInCallSuccess)
-        case .selected: return HostingTheme.coralFill
-        }
     }
 }
 

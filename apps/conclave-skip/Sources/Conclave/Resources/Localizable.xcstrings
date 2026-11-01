@@ -2689,6 +2689,9 @@
     "Image effects aren’t available right now." : {
       "extractionState" : "manual"
     },
+    "Imposter" : {
+      "extractionState" : "manual"
+    },
     "In Call" : {
       "extractionState" : "manual"
     },
@@ -4629,12 +4632,6 @@
     "Round %lld of %lld" : {
       "extractionState" : "manual"
     },
-    "Round %lld of %lld · Guess the Word" : {
-      "extractionState" : "manual"
-    },
-    "Round %lld of %lld · Set the Word" : {
-      "extractionState" : "manual"
-    },
     "Row %lld, column %lld" : {
       "extractionState" : "manual"
     },
@@ -5386,9 +5383,6 @@
     "The host turned off microphones for participants." : {
       "extractionState" : "manual"
     },
-    "The imposter was %@" : {
-      "extractionState" : "manual"
-    },
     "The last host stepped away. Bring your key to keep the room transcribed." : {
       "extractionState" : "manual"
     },
@@ -5434,9 +5428,6 @@
       "extractionState" : "manual"
     },
     "The room vs the computer" : {
-      "extractionState" : "manual"
-    },
-    "The secret word was %@" : {
       "extractionState" : "manual"
     },
     "The shared browser couldn’t load." : {
@@ -6393,7 +6384,7 @@
     "Whiteboard open" : {
       "extractionState" : "manual"
     },
-    "Who Is Most Likely %@" : {
+    "Who’s most likely %@" : {
       "extractionState" : "manual"
     },
     "Who’s the Imposter?" : {

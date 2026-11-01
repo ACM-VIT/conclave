@@ -7,7 +7,7 @@ struct PersonVoteSceneView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            GameKitPrompt(kicker: PromptGameCopy.round(scene.index, of: scene.total), title: PromptGameCopy.mostLikelyTitle(scene.prompt))
+            GameKitPrompt(kicker: "", title: PromptGameCopy.mostLikelyTitle(scene.prompt))
             if scene.isReveal {
                 if scene.isTie {
                     PromptHeadline(text: PromptGameCopy.tied(scene.tiedNames))
@@ -15,10 +15,10 @@ struct PersonVoteSceneView: View {
                 VStack(spacing: 8) {
                     ForEach(scene.candidates) { candidate in
                         PromptResultRow(id: candidate.id, text: candidate.isYou ? ConclaveStrings.text("You") : candidate.name,
-                                        markText: candidate.isWinner ? PromptGameCopy.mostVotes() : "",
-                                        lines: candidate.isMine ? [ConclaveStrings.text("Your answer")] : [],
+                                        markText: candidate.isWinner ? PromptGameCopy.mostVotes() : (candidate.isMine ? ConclaveStrings.text("Your answer") : ""),
+                                        lines: candidate.isMine && candidate.isWinner ? [ConclaveStrings.text("Your answer")] : [],
                                         count: max(0, candidate.votes),
-                                        emphasis: candidate.isWinner ? .success : (candidate.isMine ? .selected : .none))
+                                        mark: candidate.isWinner ? .correct : (candidate.isMine ? .selected : .none))
                     }
                 }
                 if scene.hostAction == .none {
