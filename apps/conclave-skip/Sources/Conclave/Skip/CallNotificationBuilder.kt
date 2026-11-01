@@ -110,6 +110,7 @@ internal data class CallNotificationModel(
 internal object CallNotificationBuilder {
     const val ACTION_MUTE = "conclave.app.action.CALL_MUTE"
     const val ACTION_UNMUTE = "conclave.app.action.CALL_UNMUTE"
+    const val ACTION_STOP_SHARING = "conclave.app.action.CALL_STOP_SHARING"
     const val ACTION_HANG_UP = "conclave.app.action.CALL_HANG_UP"
     const val ACTION_RETURN_TO_CALL = "conclave.app.action.RETURN_TO_CALL"
     const val MAIN_ACTIVITY_CLASS = "conclave.module.MainActivity"
@@ -118,10 +119,11 @@ internal object CallNotificationBuilder {
     private const val REQUEST_MUTE = 11
     private const val REQUEST_UNMUTE = 12
     private const val REQUEST_HANG_UP = 13
+    private const val REQUEST_STOP_SHARING = 14
 
     private const val PENDING_FLAGS = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
 
-    fun build(context: Context, channelId: String, model: CallNotificationModel, res: ConclaveResourceResolver): Notification {
+    fun build(context: Context, channelId: String, model: CallNotificationModel, res: ConclaveResourceResolver, showsStopSharing: Boolean = false): Notification {
         val name = model.title.ifEmpty { res.string("sys_call_fallback_title") }
         val person = Person.Builder().setName(name).setImportant(true).build()
         val hangUp = actionIntent(context, ACTION_HANG_UP, REQUEST_HANG_UP, model.presenceSession)
@@ -156,6 +158,17 @@ internal object CallNotificationBuilder {
                     if (icon != 0) icon else android.R.drawable.ic_lock_silent_mode,
                     res.string(NotificationPostPolicy.actionResourceName(action)),
                     actionIntent(context, intentAction, requestCode, model.presenceSession),
+                ).build()
+            )
+        }
+
+        if (showsStopSharing) {
+            val stopIcon = res.drawable(ScreenShareNotificationPolicy.stopActionDrawable)
+            builder.addAction(
+                NotificationCompat.Action.Builder(
+                    if (stopIcon != 0) stopIcon else android.R.drawable.ic_menu_close_clear_cancel,
+                    res.string(ScreenShareNotificationPolicy.stopActionResource),
+                    actionIntent(context, ACTION_STOP_SHARING, REQUEST_STOP_SHARING, model.presenceSession),
                 ).build()
             )
         }

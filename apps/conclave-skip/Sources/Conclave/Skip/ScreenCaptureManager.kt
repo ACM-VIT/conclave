@@ -31,6 +31,8 @@ internal object ScreenShareAndroidLog {
 object ScreenCaptureManager {
     private var captureLauncher: ActivityResultLauncher<Intent>? = null
     private var resultIntent: Intent? = null
+    private var host: ScreenShareServiceHost = ScreenShareServiceHost.none
+    internal var startServiceForTesting: ((Intent, Boolean) -> Unit)? = null
     private val stateLock = Any()
     private val waiters = mutableListOf<CancellableContinuation<Boolean>>()
     private var requestInFlight = false
@@ -47,53 +49,103 @@ object ScreenCaptureManager {
     fun register(activity: ComponentActivity) {
         captureLauncher = activity.registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
-        ) { result ->
-            synchronized(stateLock) {
-                awaitingConsent = false
-            }
+        ) { result -> onConsentResult(result.resultCode, result.data) }
+    }
 
-            PipManager.restoreAutoEnterAfterExternalActivity()
-            if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-                val shouldStart = synchronized(stateLock) {
-                    requestInFlight && waiters.isNotEmpty()
-                }
-                if (!shouldStart) {
-                    synchronized(stateLock) {
-                        resultIntent = null
-                    }
-                    return@registerForActivityResult
-                }
-                synchronized(stateLock) {
-                    resultIntent = result.data
-                }
-
-                val ctx = ProcessInfo.processInfo.androidContext
-                val intent = Intent(ctx, ScreenCaptureService::class.java).apply {
-                    action = ScreenCaptureService.ACTION_START
-                }
-                try {
-                    ContextCompat.startForegroundService(ctx, intent)
-                } catch (t: Throwable) {
-                    ScreenShareAndroidLog.warn("serviceRefused", t)
-                    debugLog("[ScreenShare] Failed to start screen capture service: ${t}")
-                    synchronized(stateLock) {
-                        resultIntent = null
-                        lastFailure = ScreenShareFailurePolicy.androidFailure(
-                            blockedByPolicy = false, launchFailed = false, consentGranted = true, serviceRefused = true,
-                        )
-                    }
-                    resumeAll(false)
-                }
-            } else {
-
-                synchronized(stateLock) {
+    internal fun onConsentResult(resultCode: Int, data: Intent?) {
+        synchronized(stateLock) {
+            awaitingConsent = false
+        }
+        PipManager.restoreAutoEnterAfterExternalActivity()
+        if (resultCode == Activity.RESULT_OK && data != null) {
+            val selectedHost = synchronized(stateLock) {
+                if (!requestInFlight) {
                     resultIntent = null
-                    lastFailure = ScreenShareFailurePolicy.androidFailure(
-                        blockedByPolicy = false, launchFailed = false, consentGranted = false, serviceRefused = false,
-                    )
+                    return
                 }
-                resumeAll(false)
+                resultIntent = data
+                host = ScreenShareServiceHostPolicy.host(
+                    callServiceRunning = CallForegroundService.isRunning,
+                    callServiceFixtureOnly = CallForegroundService.isFixtureOnly,
+                )
+                host
             }
+            if (selectedHost == ScreenShareServiceHost.callService) startCallHost() else startCaptureService()
+        } else {
+            synchronized(stateLock) {
+                resultIntent = null
+                lastFailure = ScreenShareFailurePolicy.androidFailure(
+                    blockedByPolicy = false, launchFailed = false, consentGranted = false, serviceRefused = false,
+                )
+            }
+            resumeAll(false)
+        }
+    }
+
+    internal fun armRequestForTesting() {
+        synchronized(stateLock) {
+            requestInFlight = true
+            resultIntent = null
+            host = ScreenShareServiceHost.none
+            serviceForegrounded = false
+            suppressNextServiceDestroyCallback = false
+            projectionRevokedNotified = false
+            awaitingConsent = false
+            lastFailure = ScreenShareFailure.none
+        }
+    }
+
+    internal fun callServiceHostsProjection(): Boolean = synchronized(stateLock) {
+        host == ScreenShareServiceHost.callService && resultIntent != null
+    }
+
+    internal fun onCallHostRefused() {
+        val fallBack = synchronized(stateLock) {
+            if (resultIntent == null || host != ScreenShareServiceHost.callService) {
+                false
+            } else {
+                host = ScreenShareServiceHostPolicy.fallback(refused = host)
+                host == ScreenShareServiceHost.captureService
+            }
+        }
+        if (fallBack) startCaptureService()
+    }
+
+    private fun startCallHost() {
+        val ctx = ProcessInfo.processInfo.androidContext
+        val intent = Intent(ctx, CallForegroundService::class.java).apply {
+            action = CallForegroundService.ACTION_SHARE_START
+        }
+        try {
+            send(ctx, intent, foreground = false)
+        } catch (t: Throwable) {
+            ScreenShareAndroidLog.warn("callHostUnavailable", t)
+            onCallHostRefused()
+        }
+    }
+
+    private fun startCaptureService() {
+        val ctx = ProcessInfo.processInfo.androidContext
+        val intent = Intent(ctx, ScreenCaptureService::class.java).apply {
+            action = ScreenCaptureService.ACTION_START
+        }
+        try {
+            send(ctx, intent, foreground = true)
+        } catch (t: Throwable) {
+            ScreenShareAndroidLog.warn("serviceRefused", t)
+            debugLog("[ScreenShare] Failed to start screen capture service: ${t}")
+            onServiceForegroundFailed()
+        }
+    }
+
+    private fun send(ctx: Context, intent: Intent, foreground: Boolean) {
+        val sender = startServiceForTesting
+        if (sender != null) {
+            sender(intent, foreground)
+        } else if (foreground) {
+            ContextCompat.startForegroundService(ctx, intent)
+        } else {
+            ctx.startService(intent)
         }
     }
 
@@ -114,6 +166,7 @@ object ScreenCaptureManager {
                 return@suspendCancellableCoroutine
             }
             requestInFlight = true
+            host = ScreenShareServiceHost.none
             serviceForegrounded = false
             suppressNextServiceDestroyCallback = false
             projectionRevokedNotified = false
@@ -248,8 +301,9 @@ object ScreenCaptureManager {
         resumeAll(false)
     }
 
-    fun onMediaProjectionStopped() {
+    internal fun onHostStopped(stopped: ScreenShareServiceHost) {
         val callback = synchronized(stateLock) {
+            if (!ScreenShareServiceHostPolicy.acceptsStop(stopped = stopped, current = host)) return
             resultIntent = null
             serviceForegrounded = false
             if (suppressNextServiceDestroyCallback) {
@@ -265,7 +319,11 @@ object ScreenCaptureManager {
         callback?.invoke()
     }
 
-    fun onProjectionStoppedExternally() {
+    fun stopFromNotification() = endExternally(userInitiated = true)
+
+    fun onProjectionStoppedExternally() = endExternally(userInitiated = false)
+
+    private fun endExternally(userInitiated: Boolean) {
         val callback = synchronized(stateLock) {
             resultIntent = null
             serviceForegrounded = false
@@ -277,7 +335,7 @@ object ScreenCaptureManager {
                 onProjectionRevoked
             }
         }
-        requestServiceStop()
+        requestServiceStop(userInitiated)
         callback?.invoke()
     }
 
@@ -313,13 +371,28 @@ object ScreenCaptureManager {
         }
     }
 
-    private fun requestServiceStop() {
+    private fun requestServiceStop(userInitiated: Boolean = false) {
         val ctx = ProcessInfo.processInfo.androidContext
+        val currentHost = synchronized(stateLock) { host }
+        if (currentHost == ScreenShareServiceHost.callService) {
+            if (CallForegroundService.isRunning) {
+                val intent = Intent(ctx, CallForegroundService::class.java).apply {
+                    action = CallForegroundService.ACTION_SHARE_STOP
+                    putExtra(CallForegroundService.EXTRA_USER_INITIATED, userInitiated)
+                }
+                try {
+                    send(ctx, intent, foreground = false)
+                } catch (t: Throwable) {
+                    ScreenShareAndroidLog.warn("callHostStop", t)
+                }
+            }
+            return
+        }
         val intent = Intent(ctx, ScreenCaptureService::class.java).apply {
             action = ScreenCaptureService.ACTION_STOP
         }
         try {
-            ctx.startService(intent)
+            send(ctx, intent, foreground = false)
         } catch (_: Throwable) {
             try {
                 ctx.stopService(Intent(ctx, ScreenCaptureService::class.java))

@@ -71,7 +71,7 @@ class ScreenCaptureService : Service() {
     override fun onDestroy() {
         super.onDestroy()
 
-        ScreenCaptureManager.onMediaProjectionStopped()
+        ScreenCaptureManager.onHostStopped(ScreenShareServiceHost.captureService)
     }
 
     private fun stopForegroundCompat() {

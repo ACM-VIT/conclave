@@ -110,7 +110,7 @@
 
         <service
             android:name="conclave.module.CallForegroundService"
-            android:foregroundServiceType="microphone|camera|mediaPlayback"
+            android:foregroundServiceType="microphone|camera|mediaPlayback|mediaProjection"
             android:exported="false" />
 
         <service
