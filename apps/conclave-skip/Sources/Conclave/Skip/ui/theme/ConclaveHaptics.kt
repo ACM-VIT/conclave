@@ -9,8 +9,8 @@ import skip.ui.UIApplication
 
 internal object ConclaveHaptics {
     fun constant(kind: FeedbackKind, api: Int = Build.VERSION.SDK_INT): Int? = when (kind) {
-            FeedbackKind.micOn, FeedbackKind.cameraOn -> toggleOn(api)
-            FeedbackKind.micOff, FeedbackKind.cameraOff, FeedbackKind.handLowered -> toggleOff(api)
+            FeedbackKind.micOn, FeedbackKind.cameraOn, FeedbackKind.switchedOn -> toggleOn(api)
+            FeedbackKind.micOff, FeedbackKind.cameraOff, FeedbackKind.handLowered, FeedbackKind.switchedOff -> toggleOff(api)
             FeedbackKind.handRaised, FeedbackKind.reactionSent, FeedbackKind.joined,
             FeedbackKind.admitted, FeedbackKind.shareStarted, FeedbackKind.transcriptionStarted,
             FeedbackKind.gameCorrect -> confirm(api)
@@ -32,12 +32,16 @@ internal object ConclaveHaptics {
             FeedbackKind.answerLocked, FeedbackKind.voteCast, FeedbackKind.bluffSubmitted ->
                 if (api >= 34) HapticFeedbackConstants.SEGMENT_TICK else HapticFeedbackConstants.CLOCK_TICK
             FeedbackKind.revealHeld -> HapticFeedbackConstants.LONG_PRESS
+            FeedbackKind.primaryActionPressed, FeedbackKind.messageSent -> HapticFeedbackConstants.VIRTUAL_KEY
+            FeedbackKind.leftCall -> confirm(api)
             FeedbackKind.none, FeedbackKind.sessionExpired, FeedbackKind.stillConnecting,
             FeedbackKind.handLoweredByHost, FeedbackKind.shareStoppedBySystem,
             FeedbackKind.recapPostingStarted, FeedbackKind.connectionRestored,
             FeedbackKind.endForEveryonePrompted, FeedbackKind.shareStopped,
             FeedbackKind.transcriptionStopped, FeedbackKind.hostDenied, FeedbackKind.hostRemoved, FeedbackKind.hostPolicyChanged, FeedbackKind.becameHost, FeedbackKind.lostHost -> null
     }
+
+    internal val gesturePacer = HapticPacer()
 
     fun perform(view: View, kind: FeedbackKind) {
         val constant = constant(kind) ?: return

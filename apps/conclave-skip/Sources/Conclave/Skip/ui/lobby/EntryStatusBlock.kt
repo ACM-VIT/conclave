@@ -162,9 +162,13 @@ internal fun EntryPrimaryButton(
 ) {
     val scheme = MaterialTheme.colorScheme
     val inProgress = conclaveString("ds_in_progress")
+    val haptics = rememberConclaveHaptics()
     val colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer)
     Button(
-        onClick = onClick,
+        onClick = {
+            haptics.gesture(FeedbackKind.primaryActionPressed)
+            onClick()
+        },
         enabled = enabled && !pending,
         colors = if (pending) colors.copy(disabledContainerColor = colors.containerColor, disabledContentColor = colors.contentColor)
             else colors.copy(disabledContainerColor = colors.disabledContainerColor.compositeOver(scheme.surface)),

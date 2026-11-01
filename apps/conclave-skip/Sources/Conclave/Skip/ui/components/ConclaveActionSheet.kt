@@ -234,7 +234,7 @@ private fun HostRow(host: ConclaveActionHostRow, identifier: String, onAction: (
     val base = Modifier.clip(MaterialTheme.shapes.medium).testTag(identifier)
         .alpha(if (host.enabled) 1f else CONCLAVE_CALL_DISABLED_ALPHA)
     val rowModifier = if (host.kind == ConclaveActionRowKind.Switch) {
-        base.toggleable(value = host.checked, enabled = host.enabled, role = Role.Switch, onValueChange = { checked -> onAction(checked) })
+        base.conclaveSwitch(value = host.checked, enabled = host.enabled, onValueChange = { checked -> onAction(checked) })
     } else {
         base.clickable(enabled = host.enabled, role = Role.Button) { onAction(true) }
     }
@@ -293,7 +293,7 @@ private fun ActionTile(
     val spoken = tile.description ?: tile.label
     val switchOn = tile.switchOn
     val interaction = if (switchOn != null) {
-        Modifier.toggleable(value = switchOn, enabled = tile.enabled, role = Role.Switch, onValueChange = { onClick() })
+        Modifier.conclaveSwitch(value = switchOn, enabled = tile.enabled, onValueChange = { onClick() })
     } else {
         Modifier.clickable(enabled = tile.enabled, role = Role.Button, onClick = onClick)
     }

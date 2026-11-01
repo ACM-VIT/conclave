@@ -79,7 +79,7 @@ class FeedbackPanelBridgeTests {
     }
 
     @Test fun realGeneratedVocabularyAndAllPlatformFallbacks() {
-        assertEquals(66, FeedbackKind.values().size)
+        assertEquals(71, FeedbackKind.values().size)
         assertEquals(10, MeetingPanel.values().size)
         for (api in listOf(28, 29, 30, 32, 33, 34, 36)) {
             val expected = mutableMapOf<FeedbackKind, Int?>()
@@ -91,9 +91,11 @@ class FeedbackPanelBridgeTests {
             }
             val confirm = if (api >= 30) H.CONFIRM else H.VIRTUAL_KEY
             val reject = if (api >= 30) H.REJECT else H.LONG_PRESS
-            group(if (api >= 34) H.TOGGLE_ON else H.CONTEXT_CLICK, FeedbackKind.micOn, FeedbackKind.cameraOn)
-            group(if (api >= 34) H.TOGGLE_OFF else H.CONTEXT_CLICK, FeedbackKind.micOff, FeedbackKind.cameraOff, FeedbackKind.handLowered)
-            group(confirm, FeedbackKind.handRaised, FeedbackKind.reactionSent, FeedbackKind.joined,
+            group(if (api >= 34) H.TOGGLE_ON else H.CONTEXT_CLICK, FeedbackKind.micOn, FeedbackKind.cameraOn, FeedbackKind.switchedOn)
+            group(if (api >= 34) H.TOGGLE_OFF else H.CONTEXT_CLICK, FeedbackKind.micOff, FeedbackKind.cameraOff, FeedbackKind.handLowered,
+                FeedbackKind.switchedOff)
+            group(H.VIRTUAL_KEY, FeedbackKind.primaryActionPressed, FeedbackKind.messageSent)
+            group(confirm, FeedbackKind.leftCall, FeedbackKind.handRaised, FeedbackKind.reactionSent, FeedbackKind.joined,
                 FeedbackKind.admitted, FeedbackKind.shareStarted, FeedbackKind.transcriptionStarted,
                 FeedbackKind.gameCorrect, FeedbackKind.signInSucceeded, FeedbackKind.meetingOpened,
                 FeedbackKind.wordSolved, FeedbackKind.gameStarted, FeedbackKind.tapValid, FeedbackKind.pieceMoved,

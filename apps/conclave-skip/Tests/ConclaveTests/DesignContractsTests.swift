@@ -7,8 +7,8 @@ import Testing
 @MainActor
 struct DesignContractsTests {
     @Test func vocabularyAndInitialState() {
-        #expect(FeedbackKind.allCases.count == 66)
-        #expect(Set(FeedbackKind.allCases.map { $0.rawValue }).count == 66)
+        #expect(FeedbackKind.allCases.count == 71)
+        #expect(Set(FeedbackKind.allCases.map { $0.rawValue }).count == 71)
         #expect(MeetingPanel.allCases.map { $0.rawValue } == ["chat", "participants", "transcript", "activities", "effects", "hostControls", "settings", "webinarQA", "meetingInfo", "layout"])
         #expect(NativeHostingPresenter().feedbackState.token == FeedbackToken(sequence: 0, kind: .none))
     }

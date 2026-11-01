@@ -31,6 +31,7 @@ private struct EntryStatusContent: View {
     let reservesNameReason: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AccessibilityFocusState private var isRetryFocused: Bool
+    @State private var primaryPresses = 0
 
     var body: some View {
         let isFailed = status.mode == .failed
@@ -42,6 +43,7 @@ private struct EntryStatusContent: View {
             ConclaveFloatingActionButton(title: EntryStatusCopy.primaryTitle(status),
                                          isEnabled: isPending || LobbyStatusPolicy.primaryEnabled(status: status, isSignedIn: isSignedIn),
                                          isPending: isPending, identifier: isFailed ? "lobby.retry" : "lobby.primary") {
+                primaryPresses += 1
                 if isFailed {
                     premeeting.retryJoin()
                 } else {
@@ -50,6 +52,7 @@ private struct EntryStatusContent: View {
             }
             .frame(maxWidth: .infinity)
             .accessibilityFocused($isRetryFocused)
+            .conclaveGestureFeedback(.primaryActionPressed, trigger: primaryPresses)
             if !dynamicTypeSize.isAccessibilitySize, let line = current ?? LobbyStatusCopy.reservedLine(reserved) {
                 LobbyStatusLineLabel(line: line)
                     .font(.footnote)

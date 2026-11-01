@@ -55,13 +55,22 @@ internal fun ConclaveNavigationRow(title: String, identifier: String, onClick: (
 }
 
 @Composable
+internal fun Modifier.conclaveSwitch(value: Boolean, enabled: Boolean = true, onValueChange: (Boolean) -> Unit): Modifier {
+    val haptics = rememberConclaveHaptics()
+    return toggleable(value = value, enabled = enabled, role = Role.Switch) { on ->
+        haptics.gesture(if (on) FeedbackKind.switchedOn else FeedbackKind.switchedOff)
+        onValueChange(on)
+    }
+}
+
+@Composable
 internal fun ConclaveToggleRow(
     title: String, checked: Boolean, identifier: String, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier,
 ) {
     ListItem(
         headlineContent = { ConclaveText(title, line = "$identifier.title") },
         trailingContent = { Switch(checked = checked, onCheckedChange = null) },
-        modifier = modifier.testTag(identifier).toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
+        modifier = modifier.testTag(identifier).conclaveSwitch(value = checked, onValueChange = onCheckedChange),
     )
 }
 

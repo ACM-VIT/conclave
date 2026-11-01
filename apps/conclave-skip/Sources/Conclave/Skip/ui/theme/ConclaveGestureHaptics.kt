@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -38,7 +39,10 @@ internal class ConclaveGestureHaptics(private val view: View?, private val debug
         }
         val decision = decide(kind)
         val view = view ?: return decision
-        if (decision == GestureHapticDecision.Played) ConclaveHaptics.perform(view, kind)
+        if (decision == GestureHapticDecision.Played &&
+            ConclaveHaptics.gesturePacer.admits(kind, SystemClock.uptimeMillis())) {
+            ConclaveHaptics.perform(view, kind)
+        }
         return decision
     }
 }

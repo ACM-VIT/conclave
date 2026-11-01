@@ -142,13 +142,13 @@ struct TypographyHapticsGalleryContractsTests {
 
     @Test func feedbackHapticContractCoversEveryKindOnce() {
         let rows = FeedbackHapticContract.rows
-        #expect(rows.count == 66)
+        #expect(rows.count == 71)
         #expect(rows.map { $0.kind } == FeedbackKind.allCases)
-        #expect(Set(rows.map { $0.kind.rawValue }).count == 66)
-        #expect(rows.filter { !$0.kind.isAsyncOutcome }.count == 21)
+        #expect(Set(rows.map { $0.kind.rawValue }).count == 71)
+        #expect(rows.filter { !$0.kind.isAsyncOutcome }.count == 26)
         #expect(rows.filter { $0.kind.isAsyncOutcome }.count == 45)
         let iosTokens: Set<String> = ["none", "success", "warning", "error", "selection", "alignment",
-                                      "impact.light", "impact.medium", "impact.heavy", "impact.soft"]
+                                      "impact.light", "impact.medium", "impact.heavy", "impact.soft", "impact.rigid"]
         let androidTokens: Set<String> = ["none", "CONFIRM", "REJECT", "TOGGLE_ON", "TOGGLE_OFF", "CONTEXT_CLICK",
                                           "SEGMENT_TICK", "CLOCK_TICK", "LONG_PRESS", "GESTURE_END",
                                           "GESTURE_THRESHOLD_ACTIVATE", "VIRTUAL_KEY"]
@@ -161,8 +161,8 @@ struct TypographyHapticsGalleryContractsTests {
 
         #expect(FeedbackHapticContract.ios(.shareStarted) == "impact.medium")
         #expect(FeedbackHapticContract.ios(.transcriptionStarted) == "impact.medium")
-        #expect(FeedbackHapticContract.ios(.shareStopped) == "impact.light")
-        #expect(FeedbackHapticContract.ios(.transcriptionStopped) == "impact.light")
+        #expect(FeedbackHapticContract.ios(.shareStopped) == "impact.soft")
+        #expect(FeedbackHapticContract.ios(.transcriptionStopped) == "impact.soft")
         #expect(FeedbackHapticContract.ios(.becameHost) == "success")
         #expect(FeedbackHapticContract.android(.becameHost, api: 36) == "none")
 
@@ -176,7 +176,7 @@ struct TypographyHapticsGalleryContractsTests {
     @Test func iosSilentKindsMatchPlatformDocumentation() {
         let silent = FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnIPhone($0) }
         #expect(silent == [.none, .handLoweredByHost, .shareStoppedBySystem, .recapPostingStarted, .connectionRestored,
-                           .longPress, .hostDenied, .hostRemoved, .hostPolicyChanged, .lostHost])
+                           .longPress, .hostDenied, .hostRemoved, .hostPolicyChanged, .lostHost, .switchedOn, .switchedOff])
         #expect(FeedbackHapticContract.rows.allSatisfy { $0.ios != "start" && $0.ios != "stop" })
         #expect(!FeedbackHapticContract.isSilentOnIPhone(.selfViewSnapped))
         #expect(FeedbackHapticContract.iPhoneSilentTokens == ["none", "start", "stop"])
@@ -189,7 +189,7 @@ struct TypographyHapticsGalleryContractsTests {
 
     private func mapperMismatches(_ body: String) -> [String] {
         let values = [".impact(weight: .light)": "impact.light", ".impact(weight: .medium)": "impact.medium",
-                      ".impact(weight: .heavy)": "impact.heavy", ".impact(flexibility: .soft)": "impact.soft",
+                      ".impact(weight: .heavy)": "impact.heavy", ".impact(flexibility: .soft)": "impact.soft", ".impact(flexibility: .rigid)": "impact.rigid",
                       ".selection": "selection", ".alignment": "alignment", ".success": "success",
                       ".error": "error", ".warning": "warning", ".start": "start", ".stop": "stop", "nil": "none"]
         var problems: [String] = []
@@ -211,7 +211,7 @@ struct TypographyHapticsGalleryContractsTests {
             }
             if token != row.ios { problems.append("\(row.kind.rawValue): mapper \(token), contract \(row.ios)") }
         }
-        if mapped.count != 66 { problems.append("\(mapped.count) kinds mapped") }
+        if mapped.count != 71 { problems.append("\(mapped.count) kinds mapped") }
         return problems
     }
 
@@ -282,7 +282,7 @@ struct TypographyHapticsGalleryContractsTests {
         for kind in FeedbackKind.allCases { specimens.append(ComponentGalleryCatalog.hapticSpecimenID(kind)) }
 
         specimens += ComponentGalleryCatalog.componentSpecimenIDs(showLoading: true)
-        #expect(specimens.count == 95 + 5 + 1 + 44 + 66 + 46)
+        #expect(specimens.count == 95 + 5 + 1 + 44 + 71 + 46)
         #expect(Set(specimens).count == specimens.count)
         for id in specimens {
             #expect(id.unicodeScalars.allSatisfy { ($0.value >= 0x30 && $0.value <= 0x39) || ($0.value >= 0x41 && $0.value <= 0x5A) || ($0.value >= 0x61 && $0.value <= 0x7A) || $0 == "." }, "\(id) is not a plain ASCII key")

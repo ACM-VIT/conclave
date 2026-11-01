@@ -21,7 +21,6 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -367,7 +366,7 @@ private fun EffectsAppearanceRows(effects: EffectsPresenter, snapshot: EffectsSn
                     trailingContent = { Switch(checked = item.isSelected, onCheckedChange = null, enabled = snapshot.tilesEnabled) },
                     colors = ListItemDefaults.colors(containerColor = containerColor),
                     modifier = Modifier.heightIn(min = 56.dp).testTag("effects.appearance.${item.id}")
-                        .toggleable(value = item.isSelected, enabled = snapshot.tilesEnabled, role = Role.Switch,
+                        .conclaveSwitch(value = item.isSelected, enabled = snapshot.tilesEnabled,
                             onValueChange = { on -> effects.setAppearance(id = item.id, isOn = on) }),
                 )
             }

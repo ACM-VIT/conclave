@@ -13,13 +13,15 @@ enum FeedbackKind: String, CaseIterable, Equatable {
     case pieceMoved, moveRejected, gameStarted, bluffSubmitted, revealHeld
     case hostAdmitted, hostAdmittedAll, hostDenied, hostRemoved, hostMadeHost, hostBulkApplied
     case hostPolicyChanged, hostActionFailed, hostInvitedToStage, hostMovedToAudience, questionSent, questionFailed, upvoteChanged, becameHost, lostHost
+    case primaryActionPressed, leftCall, messageSent, switchedOn, switchedOff
 
     var isAsyncOutcome: Bool {
         switch self {
         case .none, .micOn, .micOff, .cameraOn, .cameraOff, .handRaised, .handLowered,
              .reactionSent, .selectionChanged, .longPress, .selfViewSnapped, .swipeThresholdCrossed,
              .linkCopied, .endForEveryonePrompted, .answerLocked, .voteCast, .tapValid,
-             .pieceMoved, .bluffSubmitted, .revealHeld, .upvoteChanged:
+             .pieceMoved, .bluffSubmitted, .revealHeld, .upvoteChanged,
+             .primaryActionPressed, .leftCall, .messageSent, .switchedOn, .switchedOff:
             return false
         case .signInSucceeded, .validationFailed, .sessionExpired, .stillConnecting, .meetingOpened,
              .cameraOffByHost, .handLoweredByHost, .actionRejected, .routeSwitchFailed,

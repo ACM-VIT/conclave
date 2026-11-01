@@ -200,11 +200,13 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
     val canSend = block == ChatSendBlock.none
     val sendReason = chatSendBlockReason(block, count - limit, composer.attachment)
 
+    val haptics = rememberConclaveHaptics()
     val dispatch: () -> ChatSendResult = {
         val text = draftState.text.toString()
         val dismissed = dismissedPreviewUrl
         val result = if (dismissed.isEmpty()) presenter.send(text, "") else presenter.send(text, dismissed)
         if (result == ChatSendResult.dispatched) {
+            haptics.gesture(FeedbackKind.messageSent)
             draftState.clearText()
             dismissedPreviewUrl = ""
             presenter.drafts.setText("", loadedKey)

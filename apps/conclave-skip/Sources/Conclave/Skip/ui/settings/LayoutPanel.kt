@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -209,7 +208,7 @@ private fun LayoutSwitchItem(
         trailingContent = { Switch(checked = checked, onCheckedChange = null) },
         colors = ListItemDefaults.colors(containerColor = containerColor),
         modifier = Modifier.heightIn(min = 56.dp).testTag(identifier)
-            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange),
+            .conclaveSwitch(value = checked, onValueChange = onChange),
     )
 }
 

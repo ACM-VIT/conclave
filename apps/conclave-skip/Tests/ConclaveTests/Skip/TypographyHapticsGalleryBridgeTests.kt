@@ -82,13 +82,13 @@ class TypographyHapticsGalleryBridgeTests {
     }
 
     @Test fun androidMapperMatchesContractTable() {
-        assertEquals(66, FeedbackHapticContract.rows.count)
+        assertEquals(71, FeedbackHapticContract.rows.count)
         for (api in listOf(28, 29, 30, 32, 33, 34, 36)) {
             for (kind in FeedbackKind.values()) {
                 assertEquals("${kind.rawValue} at API $api", FeedbackHapticContract.android(kind, api),
                     hapticConstantName(ConclaveHaptics.constant(kind, api)))
             }
-            assertEquals(66, NativeComponentGalleryRows(api).hapticMatches())
+            assertEquals(71, NativeComponentGalleryRows(api).hapticMatches())
         }
 
         fun silent(api: Int) = FeedbackKind.values().count { FeedbackHapticContract.isSilentOnAndroid(it, api) }
@@ -105,15 +105,15 @@ class TypographyHapticsGalleryBridgeTests {
 
     @Test fun gesturePartitionMatchesSwift() {
         val gestures = FeedbackKind.values().filter { !it.isAsyncOutcome }
-        assertEquals(21, gestures.size)
+        assertEquals(26, gestures.size)
         assertEquals(45, FeedbackKind.values().size - gestures.size)
         val contractKinds = mutableListOf<FeedbackKind>()
         for (row in FeedbackHapticContract.rows) contractKinds += row.kind
         assertEquals(FeedbackKind.values().toList(), contractKinds)
         val rows = NativeComponentGalleryRows(api = 28)
-        assertEquals(21, rows.gestureCount)
-        assertEquals(gestures, rows.haptics.take(21).map { it.kind })
-        assertTrue(rows.haptics.drop(21).none { it.gesture })
+        assertEquals(26, rows.gestureCount)
+        assertEquals(gestures, rows.haptics.take(26).map { it.kind })
+        assertTrue(rows.haptics.drop(26).none { it.gesture })
     }
 
     @Test fun gestureRouteUsesSingleArgumentCallAndRefusesOutcomes() {
@@ -190,7 +190,7 @@ class TypographyHapticsGalleryBridgeTests {
         assertSame(first.specimenIDs, cache.current().specimenIDs)
         assertNotSame(first, NativeComponentGalleryRowsCache(api = 34).current())
         assertEquals(44, first.type.size)
-        assertEquals(66, first.haptics.size)
+        assertEquals(71, first.haptics.size)
         assertEquals(95, first.contrast.size)
         assertEquals(40, first.components.size)
         assertEquals(46, first.componentsWithLoading.size)
@@ -244,12 +244,12 @@ class TypographyHapticsGalleryBridgeTests {
         state.hapticsExpanded = true
         state.contrastExpanded = true
         val twoA = RecordingListScope().apply { nativeComponentGalleryItems(expanded = true, state = state) }
-        assertEquals(6 + 44 + 1 + 66 + 2 + 95 + 5, twoA.keys.size)
+        assertEquals(6 + 44 + 1 + 71 + 2 + 95 + 5, twoA.keys.size)
         for (section in nativeGalleryComponentSections) state.toggle(section)
         val open = RecordingListScope().apply { nativeComponentGalleryItems(expanded = true, state = state) }
 
         val components = (2 + 8) + (1 + 1 + 4) + (2 + 14) + (2 + 8 + 2) + (2 + 6)
-        assertEquals(6 + 44 + 1 + 66 + 2 + 95 + 5 + components, open.keys.size)
+        assertEquals(6 + 44 + 1 + 71 + 2 + 95 + 5 + components, open.keys.size)
         assertTrue(open.keys.contains(ComponentGalleryCatalog.controlRecordID))
         assertTrue(open.keys.contains(ComponentGalleryCatalog.bannerMotionID))
         assertFalse(open.keys.contains("button.primary.pending.app"))
@@ -294,7 +294,7 @@ class TypographyHapticsGalleryBridgeTests {
         assertEquals(2, overflow.measuredCount(standard, specimens))
         val rows = NativeComponentGalleryRows(api = 36)
 
-        assertEquals(44 + 66 + 95 + 2 * nativeGalleryLiveRoles.size + 40, rows.specimenIDs.size)
+        assertEquals(44 + 71 + 95 + 2 * nativeGalleryLiveRoles.size + 40, rows.specimenIDs.size)
         assertEquals(rows.specimenIDs.size + 6, rows.specimens(showLoading = true).size)
         assertSame(rows.specimenIDs, rows.specimens(showLoading = false))
         assertEquals(7, nativeGalleryLiveRoles.size)

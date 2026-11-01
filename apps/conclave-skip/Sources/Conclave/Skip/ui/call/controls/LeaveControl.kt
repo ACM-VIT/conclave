@@ -53,6 +53,12 @@ internal fun LeaveControl(controls: CallControlsPresenter, modifier: Modifier = 
     LaunchedEffect(showsMenu) {
         if (!showsMenu) menuOpen = false
     }
+    val leaving = leave.isLeaving
+    var lastLeaving by remember { mutableStateOf(leaving) }
+    LaunchedEffect(leaving) {
+        if (leaving && !lastLeaving) haptics.gesture(FeedbackKind.leftCall)
+        lastLeaving = leaving
+    }
     val openMenu: (() -> Unit)? = if (showsMenu) {
         {
             haptics.gesture(FeedbackKind.longPress)

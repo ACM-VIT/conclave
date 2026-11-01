@@ -40,6 +40,8 @@ final class ConclaveFeedbackPlayer {
             impact(.heavy).impactOccurred()
         case .impactSoft:
             impact(.soft).impactOccurred()
+        case .impactRigid:
+            impact(.rigid).impactOccurred()
         case .none:
             return
         }

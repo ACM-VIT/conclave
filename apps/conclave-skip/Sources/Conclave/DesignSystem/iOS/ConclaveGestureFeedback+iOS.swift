@@ -35,11 +35,13 @@ extension View {
     func conclaveGestureFeedback<Trigger: Equatable>(_ kind: FeedbackKind, trigger: Trigger) -> some View {
         assert(!kind.isAsyncOutcome, "\(kind.rawValue) is an async outcome; deliver it through the session token")
         return sensoryFeedback(trigger: trigger) { _, _ in
-            ConclaveGestureFeedback.feedback(
+            guard let effect = ConclaveGestureFeedback.feedback(
                 for: kind,
                 enabled: ConclaveFeedback.isEnabled(),
                 active: UIApplication.shared.applicationState == .active
-            )
+            ) else { return nil }
+            let now = ConclaveHapticFeedback.uptimeMilliseconds()
+            return ConclaveHapticFeedback.gesturePacer.admits(kind, atMilliseconds: now) ? effect : nil
         }
     }
 }

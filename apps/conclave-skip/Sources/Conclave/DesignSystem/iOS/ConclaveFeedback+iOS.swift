@@ -16,14 +16,15 @@ enum ConclaveFeedback {
 
     static func sensoryMapping(_ kind: FeedbackKind) -> (token: String, feedback: SensoryFeedback?) {
         switch kind {
-        case .micOn, .micOff, .cameraOn, .cameraOff, .handLowered, .pieceMoved, .revealHeld,
-             .shareStopped, .transcriptionStopped:
+        case .revealHeld, .messageSent:
             return ("impact.light", .impact(weight: .light))
-        case .handRaised, .swipeThresholdCrossed, .shareStarted, .transcriptionStarted:
+        case .micOn, .cameraOn, .pieceMoved:
+            return ("impact.rigid", .impact(flexibility: .rigid))
+        case .handRaised, .swipeThresholdCrossed, .shareStarted, .transcriptionStarted, .primaryActionPressed, .leftCall:
             return ("impact.medium", .impact(weight: .medium))
         case .tapValid:
             return ("impact.heavy", .impact(weight: .heavy))
-        case .reactionSent:
+        case .reactionSent, .micOff, .cameraOff, .handLowered, .shareStopped, .transcriptionStopped:
             return ("impact.soft", .impact(flexibility: .soft))
         case .selectionChanged, .upvoteChanged, .answerLocked, .voteCast, .bluffSubmitted:
             return ("selection", .selection)
@@ -40,7 +41,7 @@ enum ConclaveFeedback {
         case .cameraOffByHost, .hostMutedYou, .sessionExpired, .stillConnecting, .endForEveryonePrompted:
             return ("warning", .warning)
         case .none, .longPress, .handLoweredByHost, .shareStoppedBySystem, .recapPostingStarted,
-             .connectionRestored, .hostDenied, .hostRemoved, .hostPolicyChanged, .lostHost:
+             .connectionRestored, .hostDenied, .hostRemoved, .hostPolicyChanged, .lostHost, .switchedOn, .switchedOff:
             return ("none", nil)
         }
     }

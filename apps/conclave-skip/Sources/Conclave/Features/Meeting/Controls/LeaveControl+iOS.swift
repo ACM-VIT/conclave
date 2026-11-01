@@ -10,6 +10,7 @@ struct LeaveControl: View {
     @State private var lastPromptedId = 0
 
     @State private var closedConfirmationId = 0
+    @State private var leaveCommits = 0
 
     var body: some View {
         let leave = controls.leaveState
@@ -108,6 +109,10 @@ struct LeaveControl: View {
             lastPromptedId = current.confirmationId
         }
         .conclaveGestureFeedback(.endForEveryonePrompted, trigger: promptCounter)
+        .onChange(of: isLeaving) { _, leaving in
+            if leaving { leaveCommits += 1 }
+        }
+        .conclaveGestureFeedback(.leftCall, trigger: leaveCommits)
     }
 }
 

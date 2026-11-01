@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -85,7 +84,7 @@ internal fun HostPolicySwitchRow(people: PeoplePresenter, policy: HostPolicyID) 
         },
         colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier.heightIn(min = 56.dp).testTag(identifier)
-            .toggleable(value = shown, enabled = enabled, role = Role.Switch) { people.host.setPolicy(policy, on = it) }
+            .conclaveSwitch(value = shown, enabled = enabled) { people.host.setPolicy(policy, on = it) }
             .semantics { if (row.isPending) stateDescription = updating },
     )
 }

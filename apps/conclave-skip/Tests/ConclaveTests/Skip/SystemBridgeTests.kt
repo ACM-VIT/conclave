@@ -327,6 +327,6 @@ class SystemBridgeTests {
         assertFalse(ConclaveHapticFeedback.accepts(FeedbackKind.hostMutedYou, route = ConclaveHapticRoute.legacyOutcome))
         assertTrue(DeliveredTokenKinds.delivers(FeedbackKind.joined))
         assertEquals(LegacyIOSHaptic.impactMedium, ConclaveHapticFeedback.iosLegacyHaptic(FeedbackKind.shareStarted))
-        assertEquals(LegacyIOSHaptic.impactLight, ConclaveHapticFeedback.iosLegacyHaptic(FeedbackKind.transcriptionStopped))
+        assertEquals(LegacyIOSHaptic.impactSoft, ConclaveHapticFeedback.iosLegacyHaptic(FeedbackKind.transcriptionStopped))
     }
 }

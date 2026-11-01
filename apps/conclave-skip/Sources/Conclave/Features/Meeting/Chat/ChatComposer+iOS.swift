@@ -26,6 +26,7 @@ struct ChatComposer: View {
     @State private var dismissedSuggestionKey = ""
 
     @State private var photoIntakeInFlight = false
+    @State private var sentMessages = 0
 
     @State private var focusMemo = ChatComposerFocusMemo()
 
@@ -135,6 +136,7 @@ struct ChatComposer: View {
                 .accessibilityIdentifier("chat.photos.inline")
             }
         }
+        .conclaveGestureFeedback(.messageSent, trigger: sentMessages)
         .task(id: composer.draftKey) {
             switchDraft(to: composer.draftKey)
         }
@@ -326,6 +328,7 @@ struct ChatComposer: View {
         let result = dismissedPreviewURL.isEmpty ? chat.send(text: text)
             : chat.send(text: text, suppressEmbedsFor: dismissedPreviewURL)
         if result == ChatSendResult.dispatched {
+            sentMessages += 1
             text = ""
             dismissedPreviewURL = ""
             chat.drafts.setText("", for: loadedKey)
