@@ -111,17 +111,15 @@ struct NativeAppHostMenu: View {
                     .disabled(model.closePending)
                 }
             } label: {
-                Group {
+                ActivityHeaderCircle {
                     if model.closePending || model.lockPending {
-                        ProgressView().tint(HostingTheme.token(DesignTokens.iosInCallText))
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(HostingTheme.token(DesignTokens.iosInCallText))
                     } else {
                         Image(systemName: ConclaveSymbols.ellipsis)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
                     }
                 }
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
             }
             .accessibilityLabel(ConclaveStrings.format("More %@ Actions", name))
             .accessibilityIdentifier("app.host.menu")
@@ -151,7 +149,7 @@ struct AppHostCanvas: View {
 
     var body: some View {
         AppHostWebViewRepresentable(host: host, model: model, onPencil: onPencil)
-            .background(HostingTheme.token(DesignTokens.iosInCallSurface))
+            .background(HostingTheme.token(DesignTokens.iosInCallTile))
             .accessibilityElement(children: .contain)
             .accessibilityLabel(AppHostCopy.canvasLabel(model.appId))
             .accessibilityHint(model.canEdit && model.appId == "whiteboard"
@@ -719,13 +717,7 @@ struct AppWatchQueueButton: View {
         Button {
             _ = host.openPage()
         } label: {
-            Text(ConclaveStrings.text("Queue"))
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .padding(.horizontal, 10)
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
+            ActivityHeaderCapsuleLabel(title: ConclaveStrings.text("Queue"))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("app.watch.queue")

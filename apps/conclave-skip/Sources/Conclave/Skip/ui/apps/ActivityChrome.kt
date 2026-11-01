@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,7 +44,10 @@ import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonColors
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -105,7 +109,7 @@ internal fun whiteboardCommandIcon(kind: AppHostCommandKind): ImageVector = when
 internal fun ActivityLoadingBlock(title: String, identifier: String, modifier: Modifier = Modifier) {
     val scheme = MaterialTheme.colorScheme
     Column(
-        modifier.fillMaxSize().background(scheme.surfaceContainer).padding(24.dp).testTag(identifier)
+        modifier.fillMaxSize().background(LocalConclaveExtendedColors.current.tile).padding(24.dp).testTag(identifier)
             .semantics(mergeDescendants = true) {},
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -130,7 +134,7 @@ internal fun ActivityFailureBlock(
 ) {
     val scheme = MaterialTheme.colorScheme
     val stacked = LocalDensity.current.fontScale >= 1.5f
-    Box(modifier.fillMaxSize().background(scheme.surfaceContainer).testTag(identifier), contentAlignment = Alignment.Center) {
+    Box(modifier.fillMaxSize().background(LocalConclaveExtendedColors.current.tile).testTag(identifier), contentAlignment = Alignment.Center) {
         Column(
             Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -224,4 +228,39 @@ internal fun ActivityToolGlyph(icon: ImageVector, pending: Boolean, enabled: Boo
 internal fun ActivityToolDivider() {
     val ext = LocalConclaveExtendedColors.current
     Box(Modifier.padding(horizontal = 4.dp).width(1.dp).height(24.dp).background(ext.border))
+}
+
+@Composable
+internal fun activityHeaderIconColors(): IconButtonColors = IconButtonDefaults.filledTonalIconButtonColors(
+    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    contentColor = MaterialTheme.colorScheme.onSurface,
+)
+
+@Composable
+internal fun ActivityHeaderCapsuleButton(
+    title: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    pending: Boolean = false,
+    destructive: Boolean = false,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val ink = if (destructive) scheme.error else scheme.onSurface
+    FilledTonalButton(
+        onClick = onClick,
+        enabled = enabled && !pending,
+        modifier = modifier.heightIn(min = 40.dp),
+        colors = ButtonDefaults.filledTonalButtonColors(
+            containerColor = scheme.surfaceContainerHigh, contentColor = ink,
+            disabledContainerColor = scheme.surfaceContainerHigh, disabledContentColor = ink,
+        ),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+    ) {
+        if (pending) {
+            CircularProgressIndicator(Modifier.size(18.dp), color = ink, strokeWidth = 2.dp)
+        } else {
+            Text(title, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        }
+    }
 }

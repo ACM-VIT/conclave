@@ -39,18 +39,13 @@ struct ActivityStageCard: View {
             } else {
                 VStack(spacing: 0) {
                     ActivityStageHeader(kind: kind, stage: stage, session: session)
-                    Rectangle()
-                        .fill(HostingTheme.inCallBorder)
-                        .frame(height: 1)
-                        .accessibilityHidden(true)
                     ActivityStageBody(kind: kind, stage: stage, session: session)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .modifier(KeyboardOverlapAvoidance(keyboardTopY: keyboard.keyboardTopY))
                 }
             }
         }
-        .background(HostingTheme.token(DesignTokens.iosInCallSurface), in: shape)
-        .overlay { shape.strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
+        .background(HostingTheme.token(DesignTokens.iosInCallTile), in: shape)
         .clipShape(shape)
         .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .contain)
@@ -59,7 +54,7 @@ struct ActivityStageCard: View {
 }
 
 enum ActivityStageMetrics {
-    static let cornerRadius: CGFloat = 16
+    static let cornerRadius = CGFloat(DesignTokens.radiusTile)
 }
 
 enum ActivityStageCopy {
@@ -104,7 +99,7 @@ struct ActivityStageHeader: View {
                     }
                 }
             } else {
-                HStack(alignment: .center, spacing: 10) {
+                HStack(alignment: .center, spacing: 4) {
                     ActivityStageIdentity(kind: kind, session: session)
                     Spacer(minLength: 4)
                     ActivityShowVideoButton(stage: stage)
@@ -112,8 +107,9 @@ struct ActivityStageHeader: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .padding(.vertical, 6)
     }
 }
 
@@ -125,8 +121,11 @@ struct ActivityStageIdentity: View {
         let parts = ActivityStageIdentity.parts(kind: kind, session: session)
         HStack(spacing: 10) {
             Image(systemName: ActivityStageCopy.symbol(kind: kind, appId: parts.appId))
-                .font(.headline)
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                .frame(width: ActivityHeaderMetrics.face, height: ActivityHeaderMetrics.face)
+                .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
+                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(parts.name)
@@ -180,11 +179,9 @@ struct ActivityShowVideoButton: View {
         Button {
             stage.setShowsVideoOverActivity(true)
         } label: {
-            Image(systemName: ConclaveSymbols.videoFill)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
+            ActivityHeaderCircle {
+                Image(systemName: ConclaveSymbols.videoFill)
+            }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(ConclaveStrings.text("Show Video"))
@@ -225,15 +222,9 @@ struct ActivityCloseButton: View {
             Button(role: .destructive) {
                 prompt = true
             } label: {
-                if item.endPending {
-                    ProgressView().tint(HostingTheme.inCallLeave)
-                } else {
-                    Text(ConclaveStrings.text("Close"))
-                }
+                ActivityHeaderCapsuleLabel(title: ConclaveStrings.text("Close"), isPending: item.endPending, isDestructive: true)
             }
-            .buttonStyle(.bordered)
-            .tint(HostingTheme.inCallLeave)
-            .frame(minHeight: 44)
+            .buttonStyle(.plain)
             .disabled(item.endPending)
             .accessibilityIdentifier("stage.activity.close")
             .confirmationDialog(ActivitiesCopy.endDialogTitle(item), isPresented: $prompt, titleVisibility: .visible) {

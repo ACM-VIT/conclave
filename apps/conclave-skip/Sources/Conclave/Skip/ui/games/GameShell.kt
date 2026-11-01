@@ -2,6 +2,7 @@ package conclave.module
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,7 +18,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -35,6 +35,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -57,18 +58,13 @@ internal fun GameShellHeaderActions(games: GameStagePresenter) {
         GameKitSeatControl(chrome.seat, onJoin = { games.join() })
         if (chrome.canEnd || chrome.endPending) {
             val label = conclaveString("gm_end_game_everyone")
-            TextButton(
+            ActivityHeaderCapsuleButton(
+                title = conclaveString("gm_end"),
                 onClick = { prompt = true },
-                enabled = !chrome.endPending,
-                colors = ButtonDefaults.textButtonColors(contentColor = scheme.error),
-                modifier = Modifier.heightIn(min = 48.dp).testTag("game.end").semantics { contentDescription = label },
-            ) {
-                if (chrome.endPending) {
-                    CircularProgressIndicator(Modifier.size(18.dp), color = scheme.error, strokeWidth = 2.dp)
-                } else {
-                    Text(conclaveString("gm_end"))
-                }
-            }
+                pending = chrome.endPending,
+                destructive = true,
+                modifier = Modifier.testTag("game.end").semantics { contentDescription = label },
+            )
         }
     }
     if (prompt) GameShellEndDialog(games, chrome.name, onDismiss = { prompt = false })
@@ -92,12 +88,14 @@ internal fun GameShellEndDialog(games: GameStagePresenter, name: String, onDismi
 @Composable
 internal fun GameShellBody(games: GameStagePresenter, storeURL: String, onShowVideo: () -> Unit) {
     val bounds = rememberGameShellBounds()
+    val scroll = rememberScrollState()
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().gameShellBounds(bounds) { probe, rect -> probe.body = rect }.testTag("game.body")) {
-            GameShellScrollColumn(games, Modifier.weight(1f).fillMaxWidth(), bounds) {
+            GameShellScrollColumn(games, Modifier.weight(1f).fillMaxWidth(), bounds, scroll) {
                 GameShellScene(games, storeURL, onShowVideo)
             }
-            GameShellBottomBar(games, Modifier.gameShellBounds(bounds) { probe, rect -> probe.bar = rect })
+            GameShellBottomBar(games, Modifier.gameShellBounds(bounds) { probe, rect -> probe.bar = rect },
+                showsEdge = scroll.canScrollForward)
         }
         if (bounds != null) GameShellBoundsReadout(bounds, Modifier.align(Alignment.TopStart))
     }
@@ -108,6 +106,7 @@ internal fun GameShellScrollColumn(
     games: GameStagePresenter,
     modifier: Modifier,
     bounds: GameShellBoundsProbe?,
+    scroll: ScrollState = rememberScrollState(),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val chrome = games.chrome
@@ -115,7 +114,6 @@ internal fun GameShellScrollColumn(
     val failureText = games.interaction.failureServerText
     val showsNotices = GameNoticeRevealPolicy.hasNotices(isReconnecting = chrome.isReconnecting, failure = failure,
         endFailed = chrome.endFailed)
-    val scroll = rememberScrollState()
     val noticeScroll = rememberScrollState()
     val anchors = remember { GameNoticeAnchors() }
     val noticeLead = 16.dp
@@ -310,7 +308,7 @@ private fun GameResultsBody(games: GameStagePresenter) {
 }
 
 @Composable
-internal fun GameShellBottomBar(games: GameStagePresenter, modifier: Modifier = Modifier) {
+internal fun GameShellBottomBar(games: GameStagePresenter, modifier: Modifier = Modifier, showsEdge: Boolean = false) {
     val chrome = games.chrome
     val scene = games.scene
     val results = games.results
@@ -321,7 +319,7 @@ internal fun GameShellBottomBar(games: GameStagePresenter, modifier: Modifier = 
         return
     }
     Column(modifier.fillMaxWidth().testTag("game.bar")) {
-        HorizontalDivider(color = LocalConclaveExtendedColors.current.border)
+        HorizontalDivider(color = if (showsEdge) LocalConclaveExtendedColors.current.border else Color.Transparent)
         Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 12.dp)) {
             when (content) {
                 GameShellBarContent.join -> GameKitHostBar(primaryTitle = conclaveString("gm_join"), onPrimary = { games.join() })

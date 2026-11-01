@@ -63,7 +63,7 @@ struct ActivityLoadingBlock: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HostingTheme.token(DesignTokens.iosInCallSurface))
+        .background(HostingTheme.token(DesignTokens.iosInCallTile))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(identifier)
     }
@@ -85,7 +85,7 @@ struct ActivityFailureBlock: View {
             ScrollView { content }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HostingTheme.token(DesignTokens.iosInCallSurface))
+        .background(HostingTheme.token(DesignTokens.iosInCallTile))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
     }
@@ -220,5 +220,51 @@ struct ActivityToolDivider: View {
 
 enum ActivityToolMetrics {
     static let side: CGFloat = 44
+}
+
+enum ActivityHeaderMetrics {
+    static let face: CGFloat = 36
+    static let target: CGFloat = 44
+}
+
+struct ActivityHeaderCircle<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+            .frame(width: ActivityHeaderMetrics.face, height: ActivityHeaderMetrics.face)
+            .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Circle())
+            .frame(minWidth: ActivityHeaderMetrics.target, minHeight: ActivityHeaderMetrics.target)
+            .contentShape(Rectangle())
+    }
+}
+
+struct ActivityHeaderCapsuleLabel: View {
+    let title: String
+    var isPending = false
+    var isDestructive = false
+
+    var body: some View {
+        let ink = isDestructive ? HostingTheme.inCallLeave : HostingTheme.token(DesignTokens.iosInCallText)
+        Group {
+            if isPending {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(ink)
+            } else {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(ink)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: ActivityHeaderMetrics.face)
+        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Capsule())
+        .frame(minHeight: ActivityHeaderMetrics.target)
+        .contentShape(Rectangle())
+    }
 }
 #endif

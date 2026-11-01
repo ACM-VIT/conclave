@@ -344,17 +344,15 @@ struct BrowserStageMenu: View {
                 }
                 .disabled(model.closePending)
             } label: {
-                Group {
+                ActivityHeaderCircle {
                     if model.closePending {
-                        ProgressView().tint(HostingTheme.token(DesignTokens.iosInCallText))
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(HostingTheme.token(DesignTokens.iosInCallText))
                     } else {
                         Image(systemName: ConclaveSymbols.ellipsis)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
                     }
                 }
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
             }
             .accessibilityLabel(ConclaveStrings.text("More Shared Browser Actions"))
             .accessibilityIdentifier("browser.menu")

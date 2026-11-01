@@ -17,15 +17,9 @@ struct GameShellHeaderActions: View {
                 Button(role: .destructive) {
                     endPrompt = true
                 } label: {
-                    if chrome.endPending {
-                        ProgressView().tint(HostingTheme.inCallLeave)
-                    } else {
-                        Text(ConclaveStrings.text("End"))
-                    }
+                    ActivityHeaderCapsuleLabel(title: ConclaveStrings.text("End"), isPending: chrome.endPending, isDestructive: true)
                 }
-                .buttonStyle(.bordered)
-                .tint(HostingTheme.inCallLeave)
-                .frame(minHeight: 44)
+                .buttonStyle(.plain)
                 .disabled(chrome.endPending)
                 .accessibilityLabel(ConclaveStrings.text("End Game for Everyone"))
                 .accessibilityIdentifier("game.end")
@@ -70,7 +64,7 @@ struct GameShellBody: View {
         .modifier(GameShellBoundsMeasure(probe: bounds, part: .viewport))
         .scrollDismissesKeyboard(.interactively)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            GameShellBottomBar(games: games)
+            GameShellBottomBar(games: games, showsEdge: bounds.barShowsEdge)
                 .modifier(GameShellBoundsMeasure(probe: bounds, part: .bar))
         }
         .modifier(GameShellBoundsMeasure(probe: bounds, part: .body))
@@ -92,6 +86,10 @@ final class GameShellBoundsProbe {
     private(set) var viewportRect = GameShellRect.zero
     private(set) var contentRect = GameShellRect.zero
     private(set) var barRect = GameShellRect.zero
+
+    var barShowsEdge: Bool {
+        GameShellInsetPolicy.barShowsEdge(viewport: viewportRect, content: contentRect, bar: barRect)
+    }
 
     var readout: String {
         GameShellInsetPolicy.readout(body: bodyRect, viewport: viewportRect, content: contentRect, bar: barRect)
@@ -296,6 +294,7 @@ struct GameResultsBody: View {
 
 struct GameShellBottomBar: View {
     let games: GameStagePresenter
+    var showsEdge = false
 
     var body: some View {
         let content = GameShellBarPolicy.content(chrome: games.chrome, scene: games.scene, results: games.results)
@@ -305,11 +304,12 @@ struct GameShellBottomBar: View {
                 .padding(.top, 10)
                 .padding(.bottom, 12)
                 .frame(maxWidth: .infinity)
-                .background(HostingTheme.token(DesignTokens.iosInCallSurface))
+                .background(HostingTheme.token(DesignTokens.iosInCallTile))
                 .overlay(alignment: .top) {
                     Rectangle()
-                        .fill(HostingTheme.inCallBorder)
+                        .fill(showsEdge ? HostingTheme.inCallBorder : Color.clear)
                         .frame(height: 1)
+                        .accessibilityHidden(true)
                 }
                 .accessibilityIdentifier("game.bar")
         } else {

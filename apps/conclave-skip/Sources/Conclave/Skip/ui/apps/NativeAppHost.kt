@@ -7,7 +7,6 @@ import android.widget.FrameLayout
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -30,9 +29,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -141,9 +140,8 @@ private fun WheelCardBar(host: AppHostPresenter) {
 
 @Composable
 private fun AppWatchQueueButton(host: AppHostPresenter) {
-    TextButton(onClick = { host.openPage() }, modifier = Modifier.heightIn(min = 48.dp).testTag("app.watch.queue")) {
-        Text(conclaveString("app_watch_queue"), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-    }
+    ActivityHeaderCapsuleButton(title = conclaveString("app_watch_queue"), onClick = { host.openPage() },
+        modifier = Modifier.testTag("app.watch.queue"))
 }
 
 @Composable
@@ -174,7 +172,7 @@ internal fun NativeAppHostMenu(host: AppHostPresenter) {
     val scheme = MaterialTheme.colorScheme
     val name = appHostName(model.appId)
     Box {
-        IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("app.host.menu")) {
+        FilledTonalIconButton(onClick = { expanded = true }, colors = activityHeaderIconColors(), modifier = Modifier.testTag("app.host.menu")) {
             if (model.closePending || model.lockPending) {
                 CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onSurface, strokeWidth = 2.dp)
             } else {
@@ -230,7 +228,7 @@ internal fun nativeAppHostStatus(host: AppHostPresenter): String = appHostStatus
 
 @Composable
 private fun AppHostCanvas(host: AppHostPresenter, model: AppHostModel) {
-    val background = MaterialTheme.colorScheme.surfaceContainer.toArgb()
+    val background = LocalConclaveExtendedColors.current.tile.toArgb()
     val label = if (model.appId == "whiteboard") conclaveString("app_wb_canvas") else appHostName(model.appId)
     val hint = if (model.canEdit && model.appId == "whiteboard") conclaveString("app_wb_canvas_hint") else ""
     AndroidView(

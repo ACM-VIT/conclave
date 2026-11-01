@@ -33,6 +33,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
@@ -305,7 +306,7 @@ internal fun BrowserStageMenu(browser: BrowserStagePresenter) {
     var sessionInfo by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     Box {
-        IconButton(onClick = { expanded = true }, modifier = Modifier.testTag("browser.menu")) {
+        FilledTonalIconButton(onClick = { expanded = true }, colors = activityHeaderIconColors(), modifier = Modifier.testTag("browser.menu")) {
             if (model.closePending) {
                 CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onSurface, strokeWidth = 2.dp)
             } else {

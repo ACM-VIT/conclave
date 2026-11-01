@@ -70,6 +70,11 @@ enum GameShellInsetPolicy {
         return max(0.0, contentHeight - endOffset - visibleHeight)
     }
 
+    static func barShowsEdge(viewport: GameShellRect, content: GameShellRect, bar: GameShellRect) -> Bool {
+        guard viewport.height > 0, content.height > 0 else { return false }
+        return content.height > viewport.height - requiredBottomInset(viewport: viewport, bar: bar) + 0.5
+    }
+
     static func whole(_ value: Double) -> String {
         if !value.isFinite { return "0" }
         return String(Int(value.rounded()))

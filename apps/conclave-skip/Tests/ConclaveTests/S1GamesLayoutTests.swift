@@ -58,6 +58,18 @@ struct S1GamesLayoutTests {
         #expect(GameShellInsetPolicy.hiddenTail(viewport: viewport, content: rect(0, 100, 390, 300), bar: bar) == 0)
     }
 
+    @Test func theBarDrawsItsEdgeOnlyWhileContentRunsUnderIt() {
+        let viewport = rect(0, 100, 390, 400)
+        let overlay = rect(0, 440, 390, 60)
+        #expect(!GameShellInsetPolicy.barShowsEdge(viewport: viewport, content: rect(0, 100, 390, 340), bar: overlay))
+        #expect(GameShellInsetPolicy.barShowsEdge(viewport: viewport, content: rect(0, 100, 390, 341), bar: overlay))
+        #expect(GameShellInsetPolicy.barShowsEdge(viewport: viewport, content: rect(0, -400, 390, 900), bar: overlay))
+        let sibling = rect(0, 500, 390, 68)
+        #expect(!GameShellInsetPolicy.barShowsEdge(viewport: viewport, content: rect(0, 100, 390, 400), bar: sibling))
+        #expect(GameShellInsetPolicy.barShowsEdge(viewport: viewport, content: rect(0, 100, 390, 401), bar: sibling))
+        #expect(!GameShellInsetPolicy.barShowsEdge(viewport: GameShellRect.zero, content: rect(0, 0, 390, 900), bar: overlay))
+    }
+
     @Test func aSiblingBarBelowTheViewportNeedsNoInset() {
         let viewport = rect(0, 100, 390, 400)
         let bar = rect(0, 500, 390, 68)
