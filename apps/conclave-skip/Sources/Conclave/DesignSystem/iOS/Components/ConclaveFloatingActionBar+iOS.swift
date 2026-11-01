@@ -12,9 +12,7 @@ extension View {
 }
 
 private enum ConclaveFloatingActionVeil {
-    static let fadeHeight: CGFloat = 32
-    static let lightOpacity = 0.2
-    static let darkOpacity = 1.0
+    static let fadeHeight: CGFloat = 24
 }
 
 private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
@@ -23,16 +21,9 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
     var surface: Color? = nil
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.colorScheme) private var colorScheme
 
     private var needsOpaqueSurface: Bool { reduceTransparency || contrast == .increased }
-    private var veil: Color { HostingTheme.token(DesignTokens.neutralStage) }
-    private var veilOpacity: Double {
-        colorScheme == .dark ? ConclaveFloatingActionVeil.darkOpacity : ConclaveFloatingActionVeil.lightOpacity
-    }
-    private var veilClearance: CGFloat {
-        shaded && !needsOpaqueSurface ? ConclaveFloatingActionVeil.fadeHeight : 0
-    }
+    private var ground: Color { surface ?? Color(uiColor: .systemBackground) }
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -42,53 +33,39 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
                 .safeAreaBar(edge: .bottom, spacing: 0) {
                     bar.background {
                         if needsOpaqueSurface {
-                            Color(uiColor: .systemBackground).ignoresSafeArea(edges: .bottom)
-                        } else if shaded {
-                            shadedBackdrop
+                            ground.ignoresSafeArea(edges: .bottom)
                         }
                     }
-                    .padding(.top, veilClearance)
                 }
         } else {
             content.safeAreaInset(edge: .bottom, spacing: 0) {
                 bar.background {
                     if needsOpaqueSurface {
-                        Color(uiColor: .systemBackground)
+                        ground.ignoresSafeArea(edges: .bottom)
                     } else if shaded {
-                        shadedBackdrop
+                        fadedGround
                     } else {
                         Rectangle().fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom)
                     }
                 }
-                .padding(.top, veilClearance)
+                .padding(.top, shaded && !needsOpaqueSurface ? ConclaveFloatingActionVeil.fadeHeight : 0)
             }
         }
     }
 
-    private var shadedBackdrop: some View {
-        shadedFill
+    private var fadedGround: some View {
+        ground
             .mask {
                 VStack(spacing: 0) {
-                    LinearGradient(colors: [veil.opacity(0), veil], startPoint: .top, endPoint: .bottom)
+                    LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom)
                         .frame(height: ConclaveFloatingActionVeil.fadeHeight)
-                    veil
+                    Color.black
                 }
             }
             .padding(.top, -ConclaveFloatingActionVeil.fadeHeight)
             .ignoresSafeArea(edges: .bottom)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
-    }
-
-    @ViewBuilder
-    private var shadedFill: some View {
-        if let surface {
-            Rectangle().fill(veil.opacity(veilOpacity)).background(surface)
-        } else if #available(iOS 26.0, *) {
-            Rectangle().fill(veil.opacity(veilOpacity))
-        } else {
-            Rectangle().fill(veil.opacity(veilOpacity)).background(.ultraThinMaterial)
-        }
     }
 }
 
