@@ -472,6 +472,7 @@ struct ACT7AppHostTests {
         let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
         let ios = try act7Source("Sources/Conclave/Features/Meeting/Activities/NativeAppHost+iOS.swift")
+            + act7Source("Sources/Conclave/Features/Meeting/Activities/ActivityChrome+iOS.swift")
         let pattern = try NSRegularExpression(pattern: #"ConclaveStrings\.(?:text|format)\("((?:[^"\\]|\\.)+)""#)
         var keys = Set<String>()
         for match in pattern.matches(in: ios, range: NSRange(ios.startIndex..., in: ios)) {
@@ -481,6 +482,7 @@ struct ACT7AppHostTests {
         for key in keys { #expect(strings[key] != nil, "missing iOS key \(key)") }
         let xml = try String(contentsOf: act7PackageRoot().appendingPathComponent("Android/app/src/main/res/values/strings.xml"), encoding: .utf8)
         let copy = try act7Source("Sources/Conclave/Skip/ui/apps/AppHostCopy.kt") + act7Source("Sources/Conclave/Skip/ui/apps/NativeAppHost.kt")
+            + act7Source("Sources/Conclave/Skip/ui/apps/ActivityChrome.kt")
         let names = try NSRegularExpression(pattern: #""((?:app|act|stg|ds)_[a-z0-9_]+)""#)
         for match in names.matches(in: copy, range: NSRange(copy.startIndex..., in: copy)) {
             guard let range = Range(match.range(at: 1), in: copy) else { continue }

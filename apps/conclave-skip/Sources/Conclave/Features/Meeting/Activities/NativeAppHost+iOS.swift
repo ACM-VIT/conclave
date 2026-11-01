@@ -12,10 +12,10 @@ struct NativeAppHostBody: View {
 
     var body: some View {
         let model = host.model
+        let block = AppHostChromePolicy.statusBlock(model)
+        let chip = AppHostChromePolicy.chip(model)
+        let bar = AppHostChromePolicy.bar(model)
         VStack(spacing: 0) {
-            if model.tag != AppHostTag.none && model.phase != AppHostPhase.failed && model.phase != AppHostPhase.versionMismatch {
-                AppHostTagRow(tag: model.tag)
-            }
             ZStack {
                 if model.wantsWebView {
                     AppHostCanvas(host: host, model: model, onPencil: handlePencil)
@@ -27,33 +27,31 @@ struct NativeAppHostBody: View {
                                 .environment(\.colorScheme, .dark)
                         }
                 }
-                switch model.phase {
-                case .opening:
-                    AppHostOpening(appId: model.appId)
-                case .failed, .versionMismatch:
-                    AppHostFailure(host: host, model: model, onShowVideo: onShowVideo)
-                case .ready, .readOnly, .closing:
-                    if model.appId == "whiteboard" && model.canEdit {
-                        AppBoardEmptyHint(host: host)
+                AppHostStatusLayer(host: host, model: model, block: block, onShowVideo: onShowVideo)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: block.kind)
+                if bar == AppHostBar.whiteboard {
+                    AppBoardEmptyHint(host: host)
+                }
+                ZStack {
+                    if chip != AppHostTag.none {
+                        ActivityStatusChip(title: AppHostCopy.tag(chip), showsLock: AppHostChromePolicy.chipShowsLock(chip),
+                                           identifier: "app.tag." + chip.rawValue)
+                            .transition(.opacity)
                     }
                 }
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: chip)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if model.appId == "whiteboard" && model.canEdit
-                && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.closing) {
+            if bar != AppHostBar.none {
                 Rectangle()
                     .fill(HostingTheme.inCallBorder)
                     .frame(height: 1)
                     .accessibilityHidden(true)
-                WhiteboardToolbar(host: host, onPalette: { pencilPalette = $0 })
-            }
-            if model.appId == "wheel" && model.canEdit
-                && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.closing) {
-                Rectangle()
-                    .fill(HostingTheme.inCallBorder)
-                    .frame(height: 1)
-                    .accessibilityHidden(true)
-                WheelCardBar(host: host)
+                if bar == AppHostBar.whiteboard {
+                    WhiteboardToolbar(host: host, onPalette: { pencilPalette = $0 })
+                } else {
+                    WheelCardBar(host: host)
+                }
             }
             if host.showsDebugReadouts {
                 AppHostReadouts(host: host, registry: ActivityWebViewRegistry.shared)
@@ -227,95 +225,26 @@ final class AppHostPencilCoordinator: NSObject, UIPencilInteractionDelegate {
     }
 }
 
-struct AppHostTagRow: View {
-    let tag: AppHostTag
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if tag == AppHostTag.viewOnly || tag == AppHostTag.lockedForOthers {
-                Image(systemName: ConclaveSymbols.lockFill)
-                    .font(.caption)
-                    .accessibilityHidden(true)
-            }
-            Text(AppHostCopy.tag(tag))
-                .font(.footnote.weight(.semibold))
-                .lineLimit(1)
-        }
-        .foregroundStyle(HostingTheme.inCallTextSecondary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .overlay { Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("app.tag." + tag.rawValue)
-    }
-}
-
-struct AppHostOpening: View {
-    let appId: String
-
-    var body: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .tint(HostingTheme.token(DesignTokens.iosInCallText))
-            Text(ActivitiesCopy.opening(AppHostCopy.name(appId)))
-                .font(.subheadline)
-                .foregroundStyle(HostingTheme.inCallTextSecondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HostingTheme.token(DesignTokens.iosInCallSurface))
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("app.opening")
-    }
-}
-
-struct AppHostFailure: View {
+struct AppHostStatusLayer: View {
     let host: AppHostPresenter
     let model: AppHostModel
+    let block: ActivityStatusBlock
     let onShowVideo: () -> Void
 
     var body: some View {
-        let name = AppHostCopy.name(model.appId)
-        VStack(spacing: 12) {
-            Text(ActivitiesCopy.couldNotOpen(name))
-                .font(.headline)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .multilineTextAlignment(.center)
-            if let detail = AppHostCopy.failureDetail(model) {
-                Text(detail)
-                    .font(.subheadline)
-                    .foregroundStyle(HostingTheme.inCallTextSecondary)
-                    .multilineTextAlignment(.center)
-            }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { buttons }
-                VStack(spacing: 8) { buttons }
-            }
+        switch block.kind {
+        case .none:
+            EmptyView()
+        case .loading:
+            ActivityLoadingBlock(title: ActivitiesCopy.opening(AppHostCopy.name(model.appId)), identifier: "app.opening")
+                .transition(.opacity)
+        case .failure:
+            ActivityFailureBlock(title: ActivitiesCopy.couldNotOpen(AppHostCopy.name(model.appId)),
+                                 detail: AppHostCopy.failureDetail(model), showsRetry: block.showsRetry,
+                                 identifier: "app.failed." + model.issue.rawValue, retryIdentifier: "app.retry",
+                                 showVideoIdentifier: "app.failedShowVideo", onRetry: { host.retry() }, onShowVideo: onShowVideo)
+                .transition(.opacity)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HostingTheme.token(DesignTokens.iosInCallSurface))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("app.failed." + model.issue.rawValue)
-    }
-
-    @ViewBuilder private var buttons: some View {
-        if model.hasEmbed && model.phase == AppHostPhase.failed {
-            Button(ConclaveStrings.text("Try Again")) { host.retry() }
-                .buttonStyle(.bordered)
-                .tint(HostingTheme.token(DesignTokens.iosInCallText))
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("app.retry")
-        }
-        Button(ConclaveStrings.text("Show Video")) { onShowVideo() }
-            .buttonStyle(.bordered)
-            .tint(HostingTheme.token(DesignTokens.iosInCallText))
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("app.failedShowVideo")
     }
 }
 
@@ -323,16 +252,19 @@ struct AppBoardEmptyHint: View {
     let host: AppHostPresenter
 
     var body: some View {
-        if host.toolbar.elementCount == 0 && !host.toolbar.pageId.isEmpty {
+        let toolbar = host.toolbar
+        if AppHostChromePolicy.showsBoardHint(host.model, elementCount: toolbar.elementCount, pageId: toolbar.pageId) {
             VStack(spacing: 6) {
                 Text(ConclaveStrings.text("A Blank Board"))
                     .font(.headline)
                     .foregroundStyle(HostingTheme.inCallTextSecondary)
                 Text(ConclaveStrings.text("Sketch, drop sticky notes, or point things out with the laser. Everyone in the call sees it live."))
-                    .font(.footnote)
+                    .font(.subheadline)
                     .foregroundStyle(HostingTheme.inCallTextTertiary)
                     .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: 320)
             .padding(24)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
@@ -349,51 +281,46 @@ struct WhiteboardToolbar: View {
 
     var body: some View {
         let toolbar = host.toolbar
-        VStack(alignment: .leading, spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    toolButton(AppWhiteboardTool.select, toolbar: toolbar)
-                    toolButton(AppWhiteboardTool.pan, toolbar: toolbar)
-                    toolButton(AppWhiteboardTool.pen, toolbar: toolbar)
-                    toolButton(AppWhiteboardTool.highlighter, toolbar: toolbar)
-                    toolButton(AppWhiteboardTool.eraser, toolbar: toolbar)
-                    shapeMenu(toolbar)
-                    toolButton(AppWhiteboardTool.text, toolbar: toolbar)
-                    toolButton(AppWhiteboardTool.sticky, toolbar: toolbar)
-                    toolButton(AppWhiteboardTool.laser, toolbar: toolbar)
-                    colorMenu(toolbar)
-                    widthMenu(toolbar)
-                    AppToolButton(title: AppHostCopy.command(AppHostCommandKind.undo), isSelected: false,
-                                  isPending: toolbar.isPending(AppHostCommandKind.undo), isEnabled: toolbar.canUndo) {
-                        _ = host.perform(AppHostCommandKind.undo)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 2) {
+                        ForEach(WhiteboardToolbarPolicy.drawingTools, id: \.self) { tool in
+                            toolButton(tool, toolbar: toolbar)
+                        }
+                        shapeMenu(toolbar)
+                        ForEach(WhiteboardToolbarPolicy.markupTools, id: \.self) { tool in
+                            toolButton(tool, toolbar: toolbar)
+                        }
+                        ActivityToolDivider()
+                        colorMenu(toolbar)
+                        widthMenu(toolbar)
                     }
-                    .keyboardShortcut("z", modifiers: .command)
-                    AppToolButton(title: AppHostCopy.command(AppHostCommandKind.redo), isSelected: false,
-                                  isPending: toolbar.isPending(AppHostCommandKind.redo), isEnabled: toolbar.canRedo) {
-                        _ = host.perform(AppHostCommandKind.redo)
-                    }
-                    .keyboardShortcut("z", modifiers: [.command, .shift])
-                    pageMenu(toolbar)
-                    AppToolButton(title: AppHostCopy.command(AppHostCommandKind.zoomToFit), isSelected: false,
-                                  isPending: toolbar.isPending(AppHostCommandKind.zoomToFit), isEnabled: true) {
-                        _ = host.perform(AppHostCommandKind.zoomToFit)
-                    }
-                    AppToolButton(title: AppHostCopy.command(AppHostCommandKind.export), isSelected: false,
-                                  isPending: toolbar.isPending(AppHostCommandKind.export), isEnabled: true) {
-                        _ = host.perform(AppHostCommandKind.export)
-                    }
+                    .padding(.horizontal, 8)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                ActivityToolDivider()
+                HStack(spacing: 2) {
+                    commandButton(AppHostCommandKind.undo, toolbar: toolbar, isEnabled: toolbar.canUndo)
+                        .keyboardShortcut("z", modifiers: .command)
+                    commandButton(AppHostCommandKind.redo, toolbar: toolbar, isEnabled: toolbar.canRedo)
+                        .keyboardShortcut("z", modifiers: [.command, .shift])
+                    moreMenu(toolbar)
+                }
+                .padding(.trailing, 8)
             }
+            .padding(.vertical, 4)
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
             if toolbar.exportFailed {
                 Text(ConclaveStrings.text("Couldn’t export the board. Try again."))
                     .font(.footnote)
                     .foregroundStyle(HostingTheme.inCallTextSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 6)
             }
         }
+        .conclaveGestureFeedback(.selectionChanged, trigger: toolbar.tool)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(ConclaveStrings.text("Whiteboard Tools"))
         .accessibilityIdentifier("app.whiteboard.toolbar")
@@ -423,158 +350,166 @@ struct WhiteboardToolbar: View {
     }
 
     private func toolButton(_ tool: AppWhiteboardTool, toolbar: AppToolbarModel) -> some View {
-        AppToolButton(title: AppHostCopy.toolName(tool), isSelected: toolbar.tool == tool.rawValue,
-                      isPending: toolbar.isPending(AppHostCommandKind.setTool), isEnabled: true) {
+        ActivityToolButton(title: AppHostCopy.toolName(tool), systemImage: ActivityChromeSymbols.tool(tool),
+                           isSelected: WhiteboardToolbarPolicy.isSelected(tool, current: toolbar.tool),
+                           isPending: toolbar.isPending(AppHostCommandKind.setTool), isEnabled: true,
+                           identifier: "app.wb.tool." + tool.rawValue) {
             _ = host.perform(AppHostCommandKind.setTool, value: tool.rawValue)
         }
     }
 
-    private func shapeMenu(_ toolbar: AppToolbarModel) -> some View {
-        let isShape = AppWhiteboardTool(rawValue: toolbar.tool)?.isShape ?? false
-        return Menu {
-            ForEach([AppWhiteboardTool.rect, AppWhiteboardTool.ellipse, AppWhiteboardTool.line, AppWhiteboardTool.arrow], id: \.self) { tool in
-                Button {
-                    _ = host.perform(AppHostCommandKind.setTool, value: tool.rawValue)
-                } label: {
-                    checkedLabel(AppHostCopy.toolName(tool), checked: toolbar.tool == tool.rawValue)
-                }
-            }
-            Divider()
-            ForEach(AppShapeFill.allCases, id: \.self) { fill in
-                Button {
-                    _ = host.perform(AppHostCommandKind.setFill, value: fill.rawValue)
-                } label: {
-                    checkedLabel(AppHostCopy.fillName(fill), checked: toolbar.filled == (fill == AppShapeFill.filled))
-                }
-            }
-        } label: {
-            AppToolLabel(title: ConclaveStrings.text("Whiteboard Tool Shape"), isSelected: isShape,
-                         isPending: toolbar.isPending(AppHostCommandKind.setTool) || toolbar.isPending(AppHostCommandKind.setFill))
+    private func commandButton(_ kind: AppHostCommandKind, toolbar: AppToolbarModel, isEnabled: Bool) -> some View {
+        ActivityToolButton(title: AppHostCopy.command(kind), systemImage: ActivityChromeSymbols.command(kind), isSelected: false,
+                           isPending: toolbar.isPending(kind), isEnabled: isEnabled, identifier: "app.wb." + kind.rawValue) {
+            _ = host.perform(kind)
         }
+    }
+
+    private func shapeMenu(_ toolbar: AppToolbarModel) -> some View {
+        let isShape = WhiteboardToolbarPolicy.isShapeSelected(current: toolbar.tool)
+        let glyph = WhiteboardToolbarPolicy.shapeGlyph(current: toolbar.tool)
+        let title = ConclaveStrings.text("Whiteboard Tool Shape")
+        return Menu {
+            Picker(title, selection: Binding(get: { host.toolbar.tool },
+                                             set: { _ = host.perform(AppHostCommandKind.setTool, value: $0) })) {
+                ForEach(WhiteboardToolbarPolicy.shapeTools, id: \.self) { tool in
+                    Label(AppHostCopy.toolName(tool), systemImage: ActivityChromeSymbols.tool(tool)).tag(tool.rawValue)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+            Picker(ConclaveStrings.text("Whiteboard Shape Filled"),
+                   selection: Binding(get: { host.toolbar.filled ? AppShapeFill.filled.rawValue : AppShapeFill.outline.rawValue },
+                                      set: { _ = host.perform(AppHostCommandKind.setFill, value: $0) })) {
+                ForEach(AppShapeFill.allCases, id: \.self) { fill in
+                    Text(AppHostCopy.fillName(fill)).tag(fill.rawValue)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            ActivityToolGlyph(systemImage: ActivityChromeSymbols.tool(glyph), isSelected: isShape,
+                              isPending: WhiteboardToolbarPolicy.isPending(WhiteboardToolbarPolicy.shapeCommands, toolbar: toolbar))
+        }
+        .menuIndicator(.hidden)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityValue(AppHostCopy.toolName(glyph))
         .accessibilityAddTraits(isShape ? [.isSelected] : [])
+        .accessibilityIdentifier("app.wb.shape")
     }
 
     private func colorMenu(_ toolbar: AppToolbarModel) -> some View {
-        Menu {
-            ForEach(AppInkColor.allCases, id: \.self) { color in
-                Button {
-                    _ = host.perform(AppHostCommandKind.setColor, value: color.rawValue)
-                } label: {
-                    checkedLabel(AppHostCopy.colorName(color), checked: toolbar.color == color.rawValue)
+        let title = ConclaveStrings.text("Whiteboard Tool Color")
+        let value = AppInkColor(rawValue: toolbar.color).map { AppHostCopy.colorName($0) } ?? ""
+        return Menu {
+            Picker(title, selection: Binding(get: { host.toolbar.color },
+                                             set: { _ = host.perform(AppHostCommandKind.setColor, value: $0) })) {
+                ForEach(AppInkColor.allCases, id: \.self) { color in
+                    Text(AppHostCopy.colorName(color)).tag(color.rawValue)
                 }
             }
+            .pickerStyle(.inline)
+            .labelsHidden()
         } label: {
-            HStack(spacing: 6) {
+            ZStack {
                 Circle()
                     .fill(AppInkSwatch.color(toolbar.color))
                     .overlay { Circle().strokeBorder(HostingTheme.inCallBorderStrong, lineWidth: 1) }
-                    .frame(width: 16, height: 16)
-                    .accessibilityHidden(true)
-                AppToolLabel(title: ConclaveStrings.text("Whiteboard Tool Color"), isSelected: false,
-                             isPending: toolbar.isPending(AppHostCommandKind.setColor))
+                    .frame(width: 22, height: 22)
+                if toolbar.isPending(AppHostCommandKind.setColor) {
+                    ProgressView().controlSize(.small).tint(HostingTheme.token(DesignTokens.iosInCallText))
+                }
             }
+            .frame(width: ActivityToolMetrics.side, height: ActivityToolMetrics.side)
+            .contentShape(Rectangle())
         }
-        .accessibilityValue(AppInkColor(rawValue: toolbar.color).map { AppHostCopy.colorName($0) } ?? "")
+        .menuIndicator(.hidden)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
+        .accessibilityIdentifier("app.wb.color")
     }
 
     private func widthMenu(_ toolbar: AppToolbarModel) -> some View {
-        Menu {
-            ForEach(AppStrokeWidths.steps, id: \.self) { width in
-                Button {
-                    _ = host.perform(AppHostCommandKind.setStrokeWidth, value: String(width))
-                } label: {
-                    checkedLabel(AppHostCopy.widthName(width), checked: toolbar.strokeWidth == width)
+        let title = ConclaveStrings.text("Whiteboard Tool Stroke Width")
+        return Menu {
+            Picker(title, selection: Binding(get: { host.toolbar.strokeWidth },
+                                             set: { _ = host.perform(AppHostCommandKind.setStrokeWidth, value: String($0)) })) {
+                ForEach(AppStrokeWidths.steps, id: \.self) { width in
+                    Text(AppHostCopy.widthName(width)).tag(width)
                 }
             }
+            .pickerStyle(.inline)
+            .labelsHidden()
         } label: {
-            AppToolLabel(title: ConclaveStrings.text("Whiteboard Tool Stroke Width"), isSelected: false,
-                         isPending: toolbar.isPending(AppHostCommandKind.setStrokeWidth))
+            ActivityToolGlyph(systemImage: ActivityChromeSymbols.command(AppHostCommandKind.setStrokeWidth), isSelected: false,
+                              isPending: toolbar.isPending(AppHostCommandKind.setStrokeWidth))
         }
+        .menuIndicator(.hidden)
+        .help(title)
+        .accessibilityLabel(title)
         .accessibilityValue(AppHostCopy.widthName(toolbar.strokeWidth))
+        .accessibilityIdentifier("app.wb.width")
     }
 
-    private func pageMenu(_ toolbar: AppToolbarModel) -> some View {
-        Menu {
-            ForEach(toolbar.pages) { page in
-                Button {
-                    _ = host.perform(AppHostCommandKind.setPage, value: page.id)
-                } label: {
-                    if page.isCurrent {
-                        Label { Text(verbatim: page.name) } icon: { Image(systemName: ConclaveSymbols.checkmark) }
-                    } else {
-                        Text(verbatim: page.name)
+    private func moreMenu(_ toolbar: AppToolbarModel) -> some View {
+        let title = ConclaveStrings.text("More Board Options")
+        return Menu {
+            Section(ConclaveStrings.text("Pages")) {
+                Picker(ConclaveStrings.text("Whiteboard Tool Page"),
+                       selection: Binding(get: { host.toolbar.pageId },
+                                          set: { _ = host.perform(AppHostCommandKind.setPage, value: $0) })) {
+                    ForEach(toolbar.pages) { page in
+                        Text(verbatim: page.name).tag(page.id)
                     }
                 }
+                .pickerStyle(.inline)
+                .labelsHidden()
+                Button {
+                    _ = host.perform(AppHostCommandKind.addPage)
+                } label: {
+                    Label(AppHostCopy.command(AppHostCommandKind.addPage), systemImage: ActivityChromeSymbols.command(AppHostCommandKind.addPage))
+                }
+                Button {
+                    renameDraft = host.toolbar.pageName
+                    renaming = true
+                } label: {
+                    Label(AppHostCopy.command(AppHostCommandKind.renamePage),
+                          systemImage: ActivityChromeSymbols.command(AppHostCommandKind.renamePage))
+                }
+                .disabled(!WhiteboardToolbarPolicy.canRenamePage(toolbar))
+                Button(role: .destructive) {
+                    deleting = true
+                } label: {
+                    Label(AppHostCopy.command(AppHostCommandKind.deletePage),
+                          systemImage: ActivityChromeSymbols.command(AppHostCommandKind.deletePage))
+                }
+                .disabled(!WhiteboardToolbarPolicy.canDeletePage(toolbar))
             }
-            Divider()
-            Button(ConclaveStrings.text("New Page")) { _ = host.perform(AppHostCommandKind.addPage) }
-            Button(ConclaveStrings.text("Rename Page…")) {
-                renameDraft = host.toolbar.pageName
-                renaming = true
+            Section {
+                Button {
+                    _ = host.perform(AppHostCommandKind.zoomToFit)
+                } label: {
+                    Label(AppHostCopy.command(AppHostCommandKind.zoomToFit),
+                          systemImage: ActivityChromeSymbols.command(AppHostCommandKind.zoomToFit))
+                }
+                Button {
+                    _ = host.perform(AppHostCommandKind.export)
+                } label: {
+                    Label(AppHostCopy.command(AppHostCommandKind.export),
+                          systemImage: ActivityChromeSymbols.command(AppHostCommandKind.export))
+                }
             }
-            .disabled(toolbar.pageId.isEmpty)
-            Button(ConclaveStrings.text("Delete Page…"), role: .destructive) { deleting = true }
-                .disabled(toolbar.pages.count < 2)
         } label: {
-            AppToolLabel(title: ConclaveStrings.text("Whiteboard Tool Page"), isSelected: false,
-                         isPending: toolbar.isPending(AppHostCommandKind.setPage) || toolbar.isPending(AppHostCommandKind.addPage)
-                            || toolbar.isPending(AppHostCommandKind.renamePage) || toolbar.isPending(AppHostCommandKind.deletePage))
+            ActivityToolGlyph(systemImage: ConclaveSymbols.ellipsis, isSelected: false,
+                              isPending: WhiteboardToolbarPolicy.isPending(WhiteboardToolbarPolicy.moreCommands, toolbar: toolbar))
         }
+        .menuIndicator(.hidden)
+        .help(title)
+        .accessibilityLabel(title)
         .accessibilityValue(toolbar.pageName)
-    }
-
-    @ViewBuilder private func checkedLabel(_ title: String, checked: Bool) -> some View {
-        if checked {
-            Label(title, systemImage: ConclaveSymbols.checkmark)
-        } else {
-            Text(title)
-        }
-    }
-}
-
-struct AppToolButton: View {
-    let title: String
-    let isSelected: Bool
-    let isPending: Bool
-    let isEnabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            AppToolLabel(title: title, isSelected: isSelected, isPending: isPending)
-        }
-        .buttonStyle(.plain)
-        .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : HostingTheme.disabledOpacity)
-        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-    }
-}
-
-struct AppToolLabel: View {
-    let title: String
-    let isSelected: Bool
-    let isPending: Bool
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        ZStack {
-            Text(title)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .opacity(isPending ? 0.35 : 1)
-            if isPending {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(HostingTheme.token(DesignTokens.iosInCallText))
-            }
-        }
-        .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-        .padding(.horizontal, 12)
-        .frame(minWidth: 44, minHeight: 44)
-        .background(HostingTheme.token(isSelected ? DesignTokens.iosInCallSurfaceHigh : DesignTokens.iosInCallSurfaceRaised), in: shape)
-        .overlay { shape.strokeBorder(isSelected ? HostingTheme.inCallBorderStrong : HostingTheme.inCallBorder, lineWidth: 1) }
-        .contentShape(shape)
-        .accessibilityValue(isPending ? ConclaveStrings.text("In Progress") : "")
+        .accessibilityIdentifier("app.wb.more")
     }
 }
 
@@ -1293,18 +1228,15 @@ enum AppHostCopy {
     }
 
     static func status(_ model: AppHostModel) -> String {
-        if model.appId.isEmpty { return "" }
-        if model.appId == "wheel" && model.nameCount > 0 {
-            return ConclaveStrings.format("App Names %lld", model.nameCount)
+        switch AppHostChromePolicy.statusLine(model) {
+        case .none: return ""
+        case .opening: return ConclaveStrings.text("Opening…")
+        case .unavailable: return ConclaveStrings.text("Unavailable")
+        case .names: return ConclaveStrings.format("App Names %lld", model.nameCount)
+        case .playback: return playback(model.playback)
+        case .locked: return ConclaveStrings.text("Editing locked")
+        case .editors: return ConclaveStrings.format("App Editors %lld", model.editorCount)
         }
-        if model.appId == "watch" && model.playback != "none" {
-            return playback(model.playback)
-        }
-        if model.isLocked { return ConclaveStrings.text("Editing locked") }
-        if model.appId == "whiteboard" && model.editorCount > 0 {
-            return ConclaveStrings.format("App Editors %lld", model.editorCount)
-        }
-        return ""
     }
 
     static func playback(_ state: String) -> String {

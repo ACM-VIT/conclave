@@ -4,6 +4,9 @@ import android.content.Context
 import android.net.Uri
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +53,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
@@ -69,26 +74,34 @@ internal fun NativeAppHostBody(host: AppHostPresenter, onShowVideo: () -> Unit, 
 
         if (!model.wantsWebView && model.appSessionId.isNotEmpty()) ActivityWebViewRegistry.release(model.appSessionId)
     }
+    val block = AppHostChromePolicy.statusBlock(model)
+    val chip = AppHostChromePolicy.chip(model)
+    val bar = AppHostChromePolicy.bar(model)
+    val removeAnimations = accessibility.removeAnimations
+    val lastChip = remember { mutableStateOf(AppHostTag.none) }
+    SideEffect { if (chip != AppHostTag.none) lastChip.value = chip }
+    val shownChip = if (chip != AppHostTag.none) chip else lastChip.value
     Column(modifier.fillMaxSize().testTag("app.host.${model.phase.rawValue}").semantics { isTraversalGroup = true }) {
-        val failed = model.phase == AppHostPhase.failed || model.phase == AppHostPhase.versionMismatch
-        if (model.tag != AppHostTag.none && !failed) AppHostTagRow(model.tag)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (model.wantsWebView) AppHostCanvas(host, model)
-            when (model.phase) {
-                AppHostPhase.opening -> AppHostOpening(model.appId)
-                AppHostPhase.failed, AppHostPhase.versionMismatch -> AppHostFailure(host, model, onShowVideo)
-                AppHostPhase.ready, AppHostPhase.readOnly, AppHostPhase.closing -> {
-                    if (model.appId == "whiteboard" && model.canEdit) AppBoardEmptyHint(host, Modifier.align(Alignment.Center))
+            Crossfade(targetState = block.kind, animationSpec = if (removeAnimations) snap() else tween(200), label = "app.status") { kind ->
+                when (kind) {
+                    ActivityStatusBlockKind.loading -> ActivityLoadingBlock(conclaveString("stg_activity_opening", appHostName(model.appId)), "app.opening")
+                    ActivityStatusBlockKind.failure -> ActivityFailureBlock(
+                        title = appHostFailureTitle(model), detail = appHostFailureDetail(model), showsRetry = block.showsRetry,
+                        identifier = "app.failed.${model.issue.rawValue}", retryIdentifier = "app.retry",
+                        showVideoIdentifier = "app.failedShowVideo", onRetry = { host.retry() }, onShowVideo = onShowVideo,
+                    )
+                    ActivityStatusBlockKind.none -> Box(Modifier.fillMaxSize())
                 }
             }
+            if (bar == AppHostBar.whiteboard) AppBoardEmptyHint(host, Modifier.align(Alignment.Center))
+            ActivityStatusChip(appHostTag(shownChip), AppHostChromePolicy.chipShowsLock(shownChip), "app.tag.${shownChip.rawValue}",
+                visible = chip != AppHostTag.none, reduceMotion = removeAnimations)
         }
-        if (model.appId == "whiteboard" && model.canEdit && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.closing)) {
+        if (bar != AppHostBar.none) {
             HorizontalDivider(color = LocalConclaveExtendedColors.current.border)
-            WhiteboardToolbar(host)
-        }
-        if (model.appId == "wheel" && model.canEdit && (model.phase == AppHostPhase.ready || model.phase == AppHostPhase.closing)) {
-            HorizontalDivider(color = LocalConclaveExtendedColors.current.border)
-            WheelCardBar(host)
+            if (bar == AppHostBar.whiteboard) WhiteboardToolbar(host) else WheelCardBar(host)
         }
         if (host.showsDebugReadouts) AppHostReadouts(host)
     }
@@ -243,75 +256,15 @@ private fun AppHostCanvas(host: AppHostPresenter, model: AppHostModel) {
 }
 
 @Composable
-private fun AppHostTagRow(tag: AppHostTag) {
-    val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
-    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).testTag("app.tag.${tag.rawValue}")) {
-        Row(
-            Modifier.border(BorderStroke(1.dp, ext.border), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            if (tag == AppHostTag.viewOnly || tag == AppHostTag.lockedForOthers) {
-                Icon(ConclaveIcons.LockFill1, contentDescription = null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-            }
-            Text(appHostTag(tag), style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant, maxLines = 1)
-        }
-    }
-}
-
-@Composable
-private fun AppHostOpening(appId: String) {
-    val scheme = MaterialTheme.colorScheme
-    Column(
-        Modifier.fillMaxSize().background(scheme.surfaceContainer).padding(16.dp).testTag("app.opening"),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        CircularProgressIndicator(color = scheme.onSurface)
-        Spacer(Modifier.size(12.dp))
-        Text(conclaveString("stg_activity_opening", appHostName(appId)), style = MaterialTheme.typography.bodyMedium,
-            color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)
-    }
-}
-
-@Composable
-private fun AppHostFailure(host: AppHostPresenter, model: AppHostModel, onShowVideo: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    Column(
-        Modifier.fillMaxSize().background(scheme.surfaceContainer).padding(16.dp).testTag("app.failed.${model.issue.rawValue}"),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(appHostFailureTitle(model), style = MaterialTheme.typography.titleMedium, color = scheme.onSurface, textAlign = TextAlign.Center)
-        val detail = appHostFailureDetail(model)
-        if (detail != null) {
-            Spacer(Modifier.size(6.dp))
-            Text(detail, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)
-        }
-        Spacer(Modifier.size(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (model.hasEmbed && model.phase == AppHostPhase.failed) {
-                OutlinedButton(onClick = { host.retry() }, modifier = Modifier.heightIn(min = 48.dp).testTag("app.retry")) {
-                    Text(conclaveString("ds_try_again"))
-                }
-            }
-            OutlinedButton(onClick = onShowVideo, modifier = Modifier.heightIn(min = 48.dp).testTag("app.failedShowVideo")) {
-                Text(conclaveString("stg_show_video"))
-            }
-        }
-    }
-}
-
-@Composable
 private fun AppBoardEmptyHint(host: AppHostPresenter, modifier: Modifier) {
     val toolbar = host.toolbar
-    if (toolbar.elementCount != 0 || toolbar.pageId.isEmpty()) return
+    if (!AppHostChromePolicy.showsBoardHint(host.model, elementCount = toolbar.elementCount, pageId = toolbar.pageId)) return
     val scheme = MaterialTheme.colorScheme
-    Column(modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(conclaveString("app_wb_empty_title"), style = MaterialTheme.typography.titleMedium, color = scheme.onSurfaceVariant)
+    Column(modifier.widthIn(max = 360.dp).padding(24.dp).clearAndSetSemantics {}, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(conclaveString("app_wb_empty_title"), style = MaterialTheme.typography.titleMedium, color = scheme.onSurfaceVariant,
+            textAlign = TextAlign.Center)
         Spacer(Modifier.size(6.dp))
-        Text(conclaveString("app_wb_empty_body"), style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant,
+        Text(conclaveString("app_wb_empty_body"), style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant,
             textAlign = TextAlign.Center)
     }
 }
@@ -333,42 +286,37 @@ private fun WhiteboardToolbar(host: AppHostPresenter) {
             ConclaveHaptics.perform(view, FeedbackKind.selectionChanged)
         }
     }
-    Column(Modifier.fillMaxWidth().testTag("app.whiteboard.toolbar")) {
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            val plain = listOf(AppWhiteboardTool.select, AppWhiteboardTool.pan, AppWhiteboardTool.pen, AppWhiteboardTool.highlighter,
-                AppWhiteboardTool.eraser)
-            for (tool in plain) {
-                item(key = tool.rawValue) { ToolToggle(host, tool, selectTool) }
-            }
-            item(key = "shape") { ShapeMenu(host, selectTool) }
-            for (tool in listOf(AppWhiteboardTool.text, AppWhiteboardTool.sticky, AppWhiteboardTool.laser)) {
-                item(key = tool.rawValue) { ToolToggle(host, tool, selectTool) }
-            }
-            item(key = "color") { ColorMenu(host) }
-            item(key = "width") { WidthMenu(host) }
-            item(key = "undo") {
-                AppToolChip(appHostCommand(AppHostCommandKind.undo), selected = false, pending = toolbar.isPending(AppHostCommandKind.undo),
-                    enabled = toolbar.canUndo, identifier = "app.wb.undo") { host.perform(AppHostCommandKind.undo) }
-            }
-            item(key = "redo") {
-                AppToolChip(appHostCommand(AppHostCommandKind.redo), selected = false, pending = toolbar.isPending(AppHostCommandKind.redo),
-                    enabled = toolbar.canRedo, identifier = "app.wb.redo") { host.perform(AppHostCommandKind.redo) }
-            }
-            item(key = "page") { PageMenu(host, onRename = { renaming = true }, onDelete = { deleting = true }) }
-            item(key = "fit") {
-                AppToolChip(appHostCommand(AppHostCommandKind.zoomToFit), selected = false,
-                    pending = toolbar.isPending(AppHostCommandKind.zoomToFit), enabled = true, identifier = "app.wb.fit") {
-                    host.perform(AppHostCommandKind.zoomToFit)
+    val toolsLabel = conclaveString("app_wb_tools")
+    Column(Modifier.fillMaxWidth().testTag("app.whiteboard.toolbar").semantics { contentDescription = toolsLabel }) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (tool in WhiteboardToolbarPolicy.drawingTools) {
+                    item(key = tool.rawValue) { ToolToggle(host, tool, selectTool) }
                 }
-            }
-            item(key = "export") {
-                AppToolChip(appHostCommand(AppHostCommandKind.export), selected = false,
-                    pending = toolbar.isPending(AppHostCommandKind.export), enabled = true, identifier = "app.wb.export") {
-                    host.perform(AppHostCommandKind.export)
+                item(key = "shape") { ShapeMenu(host, selectTool) }
+                for (tool in WhiteboardToolbarPolicy.markupTools) {
+                    item(key = tool.rawValue) { ToolToggle(host, tool, selectTool) }
                 }
+                item(key = "divider") { ActivityToolDivider() }
+                item(key = "color") { ColorMenu(host) }
+                item(key = "width") { WidthMenu(host) }
+            }
+            ActivityToolDivider()
+            Row(Modifier.padding(end = 8.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                ActivityToolButton(appHostCommand(AppHostCommandKind.undo), whiteboardCommandIcon(AppHostCommandKind.undo), selected = false,
+                    pending = toolbar.isPending(AppHostCommandKind.undo), enabled = toolbar.canUndo, identifier = "app.wb.undo") {
+                    host.perform(AppHostCommandKind.undo)
+                }
+                ActivityToolButton(appHostCommand(AppHostCommandKind.redo), whiteboardCommandIcon(AppHostCommandKind.redo), selected = false,
+                    pending = toolbar.isPending(AppHostCommandKind.redo), enabled = toolbar.canRedo, identifier = "app.wb.redo") {
+                    host.perform(AppHostCommandKind.redo)
+                }
+                MoreMenu(host, onRename = { renaming = true }, onDelete = { deleting = true })
             }
         }
         if (toolbar.exportFailed) {
@@ -383,23 +331,24 @@ private fun WhiteboardToolbar(host: AppHostPresenter) {
 @Composable
 private fun ToolToggle(host: AppHostPresenter, tool: AppWhiteboardTool, onSelect: (AppWhiteboardTool) -> Unit) {
     val toolbar = host.toolbar
-    AppToolChip(appHostTool(tool), selected = toolbar.tool == tool.rawValue, pending = toolbar.isPending(AppHostCommandKind.setTool),
-        enabled = true, identifier = "app.wb.tool.${tool.rawValue}") { onSelect(tool) }
+    ActivityToolButton(appHostTool(tool), whiteboardToolIcon(tool), selected = WhiteboardToolbarPolicy.isSelected(tool, current = toolbar.tool),
+        pending = toolbar.isPending(AppHostCommandKind.setTool), enabled = true, identifier = "app.wb.tool.${tool.rawValue}") { onSelect(tool) }
 }
 
 @Composable
 private fun ShapeMenu(host: AppHostPresenter, onSelect: (AppWhiteboardTool) -> Unit) {
     val toolbar = host.toolbar
     var expanded by remember { mutableStateOf(false) }
-    val current = AppWhiteboardTool.init(rawValue = toolbar.tool)
-    val isShape = current?.isShape ?: false
+    val glyph = WhiteboardToolbarPolicy.shapeGlyph(current = toolbar.tool)
     Box {
-        AppToolChip(appHostCommand(AppHostCommandKind.setFill), selected = isShape,
-            pending = toolbar.isPending(AppHostCommandKind.setTool) || toolbar.isPending(AppHostCommandKind.setFill),
-            enabled = true, identifier = "app.wb.shape") { expanded = true }
+        ActivityToolButton(appHostCommand(AppHostCommandKind.setFill), whiteboardToolIcon(glyph),
+            selected = WhiteboardToolbarPolicy.isShapeSelected(current = toolbar.tool),
+            pending = WhiteboardToolbarPolicy.isPending(WhiteboardToolbarPolicy.shapeCommands, toolbar = toolbar),
+            enabled = true, identifier = "app.wb.shape", stateText = appHostTool(glyph)) { expanded = true }
         ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.wb.shape.menu") {
-            for (tool in listOf(AppWhiteboardTool.rect, AppWhiteboardTool.ellipse, AppWhiteboardTool.line, AppWhiteboardTool.arrow)) {
-                WhiteboardChoiceItem(appHostTool(tool), "app.wb.shape.${tool.rawValue}", checked = toolbar.tool == tool.rawValue) {
+            for (tool in WhiteboardToolbarPolicy.shapeTools) {
+                WhiteboardChoiceItem(appHostTool(tool), "app.wb.shape.${tool.rawValue}", checked = toolbar.tool == tool.rawValue,
+                    leadingContent = { Icon(whiteboardToolIcon(tool), contentDescription = null) }) {
                     expanded = false
                     onSelect(tool)
                 }
@@ -421,13 +370,22 @@ private fun ColorMenu(host: AppHostPresenter) {
     var expanded by remember { mutableStateOf(false) }
     val currentName = AppInkColor.init(rawValue = toolbar.color)?.let { appHostColor(it) } ?: ""
     Box {
-        AppToolChip(appHostCommand(AppHostCommandKind.setColor), selected = false, pending = toolbar.isPending(AppHostCommandKind.setColor),
-            enabled = true, identifier = "app.wb.color", stateText = currentName,
-            leading = { InkSwatch(toolbar.color) }) { expanded = true }
+        val label = appHostCommand(AppHostCommandKind.setColor)
+        val pending = toolbar.isPending(AppHostCommandKind.setColor)
+        val pendingText = conclaveString("ds_in_progress")
+        CallControlTooltip(label) {
+            Surface(onClick = { expanded = true }, shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.size(48.dp).testTag("app.wb.color").semantics {
+                    contentDescription = label
+                    stateDescription = if (pending) pendingText else currentName
+                }) {
+                ActivityToolGlyph(ConclaveIcons.MoreVertFill0, pending) { InkSwatch(toolbar.color, 22) }
+            }
+        }
         ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.wb.color.menu") {
             for (color in AppInkColor.allCases) {
                 WhiteboardChoiceItem(appHostColor(color), "app.wb.color.${color.rawValue.removePrefix("#")}", checked = toolbar.color == color.rawValue,
-                    leadingContent = { Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { InkSwatch(color.rawValue) } }) {
+                    leadingContent = { Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { InkSwatch(color.rawValue, 16) } }) {
                     expanded = false
                     host.perform(AppHostCommandKind.setColor, value = color.rawValue)
                 }
@@ -441,8 +399,8 @@ private fun WidthMenu(host: AppHostPresenter) {
     val toolbar = host.toolbar
     var expanded by remember { mutableStateOf(false) }
     Box {
-        AppToolChip(appHostCommand(AppHostCommandKind.setStrokeWidth), selected = false,
-            pending = toolbar.isPending(AppHostCommandKind.setStrokeWidth), enabled = true, identifier = "app.wb.width",
+        ActivityToolButton(appHostCommand(AppHostCommandKind.setStrokeWidth), whiteboardCommandIcon(AppHostCommandKind.setStrokeWidth),
+            selected = false, pending = toolbar.isPending(AppHostCommandKind.setStrokeWidth), enabled = true, identifier = "app.wb.width",
             stateText = appHostWidth(toolbar.strokeWidth)) { expanded = true }
         ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.wb.width.menu") {
             for (width in AppStrokeWidths.steps) {
@@ -456,35 +414,48 @@ private fun WidthMenu(host: AppHostPresenter) {
 }
 
 @Composable
-private fun PageMenu(host: AppHostPresenter, onRename: () -> Unit, onDelete: () -> Unit) {
+private fun MoreMenu(host: AppHostPresenter, onRename: () -> Unit, onDelete: () -> Unit) {
     val toolbar = host.toolbar
     var expanded by remember { mutableStateOf(false) }
-    val pending = toolbar.isPending(AppHostCommandKind.setPage) || toolbar.isPending(AppHostCommandKind.addPage) ||
-        toolbar.isPending(AppHostCommandKind.renamePage) || toolbar.isPending(AppHostCommandKind.deletePage)
     Box {
-        AppToolChip(appHostCommand(AppHostCommandKind.setPage), selected = false, pending = pending, enabled = true,
-            identifier = "app.wb.page", stateText = toolbar.pageName) { expanded = true }
-        ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.wb.page.menu") {
+        ActivityToolButton(conclaveString("app_wb_more"), ConclaveIcons.MoreVertFill0, selected = false,
+            pending = WhiteboardToolbarPolicy.isPending(WhiteboardToolbarPolicy.moreCommands, toolbar = toolbar), enabled = true,
+            identifier = "app.wb.more", stateText = toolbar.pageName) { expanded = true }
+        ConclaveDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, identifier = "app.wb.more.menu") {
+            ConclaveMenuHeader(conclaveString("app_wb_pages"), "app.wb.pages.header")
             for (page in toolbar.pages) {
                 WhiteboardChoiceItem(page.name, "app.wb.page.select.${page.id}", checked = page.isCurrent) {
                     expanded = false
                     host.perform(AppHostCommandKind.setPage, value = page.id)
                 }
             }
-            ConclaveMenuDivider()
-            ConclaveMenuItem(title = appHostCommand(AppHostCommandKind.addPage), identifier = "app.wb.page.add", onClick = {
-                expanded = false
-                host.perform(AppHostCommandKind.addPage)
-            })
+            ConclaveMenuItem(title = appHostCommand(AppHostCommandKind.addPage), identifier = "app.wb.page.add",
+                leadingIcon = whiteboardCommandIcon(AppHostCommandKind.addPage), onClick = {
+                    expanded = false
+                    host.perform(AppHostCommandKind.addPage)
+                })
             ConclaveMenuItem(title = appHostCommand(AppHostCommandKind.renamePage), identifier = "app.wb.page.rename",
-                enabled = toolbar.pageId.isNotEmpty(), onClick = {
+                leadingIcon = whiteboardCommandIcon(AppHostCommandKind.renamePage),
+                enabled = WhiteboardToolbarPolicy.canRenamePage(toolbar), onClick = {
                     expanded = false
                     onRename()
                 })
             ConclaveMenuItem(title = appHostCommand(AppHostCommandKind.deletePage), identifier = "app.wb.page.delete",
-                role = ConclaveMenuRole.Destructive, enabled = toolbar.pages.count >= 2, onClick = {
+                leadingIcon = whiteboardCommandIcon(AppHostCommandKind.deletePage), role = ConclaveMenuRole.Destructive,
+                enabled = WhiteboardToolbarPolicy.canDeletePage(toolbar), onClick = {
                     expanded = false
                     onDelete()
+                })
+            ConclaveMenuDivider()
+            ConclaveMenuItem(title = appHostCommand(AppHostCommandKind.zoomToFit), identifier = "app.wb.fit",
+                leadingIcon = whiteboardCommandIcon(AppHostCommandKind.zoomToFit), onClick = {
+                    expanded = false
+                    host.perform(AppHostCommandKind.zoomToFit)
+                })
+            ConclaveMenuItem(title = appHostCommand(AppHostCommandKind.export), identifier = "app.wb.export",
+                leadingIcon = whiteboardCommandIcon(AppHostCommandKind.export), onClick = {
+                    expanded = false
+                    host.perform(AppHostCommandKind.export)
                 })
         }
     }
@@ -502,52 +473,10 @@ private fun WhiteboardChoiceItem(
 }
 
 @Composable
-private fun AppToolChip(
-    label: String,
-    selected: Boolean,
-    pending: Boolean,
-    enabled: Boolean,
-    identifier: String,
-    stateText: String = "",
-    leading: (@Composable () -> Unit)? = null,
-    onClick: () -> Unit,
-) {
-    val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
-    val container = if (selected) ext.toggleEngagedContainer else scheme.surfaceContainerHigh
-    val content = if (selected) ext.onToggleEngaged else scheme.onSurface
-    val pendingText = conclaveString("ds_in_progress")
-    CallControlTooltip(label) {
-        Surface(
-            selected = selected,
-            onClick = onClick,
-            enabled = enabled,
-            shape = RoundedCornerShape(10.dp),
-            color = container,
-            contentColor = content,
-            border = BorderStroke(1.dp, ext.border),
-            modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp).testTag(identifier).semantics {
-                if (pending) stateDescription = pendingText else if (stateText.isNotEmpty()) stateDescription = stateText
-            },
-        ) {
-            Row(
-                Modifier.heightIn(min = 48.dp).padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                leading?.invoke()
-                if (pending) CircularProgressIndicator(Modifier.size(16.dp), color = content, strokeWidth = 2.dp)
-                Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
-            }
-        }
-    }
-}
-
-@Composable
-private fun InkSwatch(hex: String) {
+private fun InkSwatch(hex: String, sizeDp: Int) {
     val ext = LocalConclaveExtendedColors.current
     val fill = inkSwatchColor(hex) ?: MaterialTheme.colorScheme.onSurface
-    Box(Modifier.size(16.dp).background(fill, CircleShape).border(1.dp, ext.border, CircleShape))
+    Box(Modifier.size(sizeDp.dp).background(fill, CircleShape).border(1.dp, ext.border, CircleShape))
 }
 
 internal fun inkSwatchColor(hex: String): Color? =

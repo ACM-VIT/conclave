@@ -96,7 +96,8 @@ internal val appHostStringResources: List<String> = buildList {
     addAll(listOf("app_view_only", "app_locked_others", "app_more_actions", "app_lock_editing", "app_update_needed",
         "app_wb_canvas", "app_wb_canvas_hint", "app_wb_empty_title", "app_wb_empty_body", "app_wb_rename_title",
         "app_wb_page_name", "app_wb_rename", "app_wb_delete_title", "app_wb_delete_message", "app_wb_delete",
-        "app_wb_width_value", "app_wb_export_failed", "app_open_link_title"))
+        "app_wb_width_value", "app_wb_export_failed", "app_open_link_title", "app_status_opening", "app_status_unavailable",
+        "app_wb_more", "app_wb_pages"))
     addAll(appPageStringResources)
     for (tool in AppWhiteboardTool.allCases) add(appHostToolResource(tool))
     for (fill in AppShapeFill.allCases) add(appHostFillResource(fill))
@@ -107,18 +108,14 @@ internal val appHostStringResources: List<String> = buildList {
 internal val appHostPluralResources: List<String> = listOf("app_editing", "app_names", "app_wheel_missing")
 
 @Composable
-internal fun appHostStatus(model: AppHostModel): String {
-    if (model.appId.isEmpty()) return ""
-    if (model.appId == "wheel" && model.nameCount > 0) return conclavePlural("app_names", model.nameCount, model.nameCount)
-    if (model.appId == "watch") {
-        val playback = appWatchPlaybackResource(model.playback)
-        if (playback != null) return conclaveString(playback)
-    }
-    if (model.isLocked) return conclaveString("act_editing_locked")
-    if (model.appId == "whiteboard" && model.editorCount > 0) {
-        return conclavePlural("app_editing", model.editorCount, model.editorCount)
-    }
-    return ""
+internal fun appHostStatus(model: AppHostModel): String = when (AppHostChromePolicy.statusLine(model)) {
+    AppHostStatusLine.none -> ""
+    AppHostStatusLine.opening -> conclaveString("app_status_opening")
+    AppHostStatusLine.unavailable -> conclaveString("app_status_unavailable")
+    AppHostStatusLine.names -> conclavePlural("app_names", model.nameCount, model.nameCount)
+    AppHostStatusLine.playback -> appWatchPlayback(model.playback)
+    AppHostStatusLine.locked -> conclaveString("act_editing_locked")
+    AppHostStatusLine.editors -> conclavePlural("app_editing", model.editorCount, model.editorCount)
 }
 
 @Composable
