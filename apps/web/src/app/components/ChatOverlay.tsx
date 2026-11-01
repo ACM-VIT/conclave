@@ -26,7 +26,7 @@ function ChatOverlay({ messages, onDismiss }: ChatOverlayProps) {
         return (
           <div
             key={message.id}
-            className="animate-in slide-in-from-left-full fade-in flex items-start gap-2.5 rounded-2xl border p-2.5 backdrop-blur-md duration-300"
+            className="flex items-start gap-2.5 rounded-2xl border p-2.5 backdrop-blur-md"
             style={{
               backgroundColor: "rgba(24, 24, 27, 0.94)",
               borderColor: color.border,

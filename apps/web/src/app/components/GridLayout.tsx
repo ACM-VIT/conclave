@@ -287,7 +287,8 @@ const ROOM_TILING_PROMOTE_DELAY_MS = 1200;
 const ROOM_TILING_MIN_SWITCH_INTERVAL_MS = 8000;
 const FLIP_DURATION_MS = 220;
 // Discrete side-panel reflow glides over the SAME duration/easing as the panel
-// slide (meet-panel-in) so the stage and the panel move together.
+// slide (`--animate-panel-in` in globals.css) so the stage and the panel move
+// together. Change both together.
 const REFLOW_DURATION_MS = 280;
 const FLIP_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const FONT_SANS = "'PolySans Trial', system-ui, sans-serif";

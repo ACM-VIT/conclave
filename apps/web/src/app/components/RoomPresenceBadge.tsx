@@ -46,10 +46,6 @@ export default function RoomPresenceBadge({
       {hasPeople ? (
         <span className="relative flex h-1.5 w-1.5 shrink-0" aria-hidden>
           <span
-            className="absolute inline-flex h-full w-full animate-ping rounded-full"
-            style={{ backgroundColor: color.accent, opacity: 0.5 }}
-          />
-          <span
             className="relative inline-flex h-1.5 w-1.5 rounded-full"
             style={{ backgroundColor: color.accent }}
           />

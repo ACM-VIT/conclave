@@ -783,7 +783,7 @@ function ChatPanel({
 
   return (
     <div
-      className="safe-area-pt safe-area-pb fixed right-0 top-0 bottom-0 z-40 flex w-full sm:w-[360px] flex-col border-l border-white/10 bg-[#18181b] animate-[meet-panel-in_280ms_cubic-bezier(0.22,1,0.36,1)]"
+      className="safe-area-pt safe-area-pb fixed right-0 top-0 bottom-0 z-40 flex w-full sm:w-[360px] flex-col border-l border-white/10 bg-[#18181b] animate-panel-in"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
       <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
@@ -1494,8 +1494,10 @@ function ChatPanel({
               {isImageUploading ? (
                 <div className="h-0.5 bg-white/[0.06]">
                   <div
-                    className="h-full bg-[#F95F4A] transition-[width] duration-150"
-                    style={{ width: `${Math.max(2, imageUploadProgress)}%` }}
+                    className="h-full w-full origin-left bg-[#F95F4A] transition-transform duration-150"
+                    style={{
+                      transform: `scaleX(${Math.max(2, imageUploadProgress) / 100})`,
+                    }}
                   />
                 </div>
               ) : null}

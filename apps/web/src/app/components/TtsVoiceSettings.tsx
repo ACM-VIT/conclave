@@ -800,8 +800,8 @@ export default function TtsVoiceSettings({
               </button>
               <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
                 <div
-                  className="h-full bg-[#F95F4A] transition-[width] duration-150"
-                  style={{ width: `${reviewProgress * 100}%` }}
+                  className="h-full w-full origin-left bg-[#F95F4A] transition-transform duration-150"
+                  style={{ transform: `scaleX(${reviewProgress})` }}
                 />
               </div>
               <span
@@ -881,8 +881,8 @@ export default function TtsVoiceSettings({
                 <LiveWaveform stream={recordingStream} />
                 <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/10">
                   <div
-                    className="h-full bg-[#F95F4A] transition-[width] duration-100"
-                    style={{ width: `${recordingProgress}%` }}
+                    className="h-full w-full origin-left bg-[#F95F4A] transition-transform duration-100"
+                    style={{ transform: `scaleX(${recordingProgress / 100})` }}
                   />
                 </div>
               </div>

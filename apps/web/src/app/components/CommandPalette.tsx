@@ -318,7 +318,7 @@ export default function CommandPalette({
         role="dialog"
         aria-modal="true"
         aria-label="Quick actions"
-        className="flex w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border shadow-[0_24px_80px_rgba(0,0,0,0.55)] origin-top will-change-transform animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]"
+        className="flex w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
         style={{
           backgroundColor: color.surfaceRaised,
           borderColor: color.border,

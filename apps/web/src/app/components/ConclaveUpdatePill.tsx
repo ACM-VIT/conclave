@@ -134,7 +134,7 @@ function ConclaveUpdatePill({
         >
           <RefreshCw
             aria-hidden="true"
-            className={`h-3.5 w-3.5 transition-transform duration-500 ease-out group-hover:rotate-180 ${isRefreshing ? "animate-spin" : ""}`}
+            className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin" : ""}`}
           />
           <span>{isRefreshing ? "Refreshing" : "Refresh"}</span>
         </button>

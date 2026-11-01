@@ -135,7 +135,7 @@ export default function MeetViewPanel({
   return (
     <aside
       data-testid="meet-view-panel"
-      className="fixed right-0 top-0 bottom-0 z-40 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden border-l border-white/10 bg-[#18181b] text-[#fafafa] animate-[meet-panel-in_120ms_cubic-bezier(0.22,1,0.36,1)]"
+      className="fixed right-0 top-0 bottom-0 z-40 flex w-[360px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden border-l border-white/10 bg-[#18181b] text-[#fafafa] animate-panel-in"
       aria-label="Adjust view"
     >
       <header className="flex items-center justify-between border-b border-white/10 px-4 py-4">

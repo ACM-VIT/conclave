@@ -155,7 +155,7 @@ function WebinarViewerChrome({
           {hasLiveStage ? (
             <div className="mt-1 flex items-center gap-2.5 text-[11.5px] text-[#fafafa]/64">
               <span className="inline-flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#F95F4A] animate-pulse" />
+                <span className="h-1.5 w-1.5 rounded-full bg-[#F95F4A]" />
                 Live
               </span>
               {liveSince ? (
