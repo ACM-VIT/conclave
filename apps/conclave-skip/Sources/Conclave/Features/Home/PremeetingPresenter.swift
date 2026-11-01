@@ -350,6 +350,10 @@ final class PremeetingPresenter {
         }
     }
 
+    var isSessionBusy: Bool {
+        MeetingRoomSwitchPolicy.isBusy(phase: inputs.phase, lobby: .none)
+    }
+
     func newMeeting() {
         guard !blockedByUpdate() else { return }
         let code = generateRoomCode()

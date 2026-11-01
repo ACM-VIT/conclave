@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -53,6 +55,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal object PremeetingIcons {
     val NewMeeting: ImageVector get() = ConclaveIcons.VideoCallFill0
@@ -70,6 +74,11 @@ internal fun HomeScreen(premeeting: PremeetingPresenter, modifier: Modifier = Mo
     val home = premeeting.home
     val cache = remember { HomeRowsCache() }
     val rows = cache.rows(home)
+    val appContext = LocalContext.current.applicationContext
+    val shortcutEntries = RecentShortcuts.entries(home)
+    LaunchedEffect(shortcutEntries) {
+        withContext(Dispatchers.IO) { RecentShortcuts.publish(appContext, shortcutEntries) }
+    }
     val scheme = MaterialTheme.colorScheme
     val direction = LocalLayoutDirection.current
     Scaffold(

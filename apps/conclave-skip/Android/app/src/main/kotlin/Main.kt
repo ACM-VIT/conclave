@@ -192,6 +192,7 @@ open class MainActivity: AppCompatActivity {
 
         AppDelegate.shared.onLaunch()
         handleIncomingDeepLink(intent)
+        if (savedInstanceState == null) handleConclaveShortcutIntent(this, intent)
     }
 
     override fun onResume() {
@@ -262,6 +263,7 @@ open class MainActivity: AppCompatActivity {
             LocalNotifications.handleTap(intent)
             return
         }
+        if (handleConclaveShortcutIntent(this, intent)) return
         handleIncomingDeepLink(intent)
     }
 
@@ -299,8 +301,13 @@ open class MainActivity: AppCompatActivity {
 
     override fun onProvideKeyboardShortcuts(data: MutableList<KeyboardShortcutGroup>?, menu: android.view.Menu?, deviceId: Int) {
         super.onProvideKeyboardShortcuts(data, menu, deviceId)
-        val group = nativeCallKeyboardShortcutGroup(this) ?: return
+        val group = nativeCallKeyboardShortcutGroup(this) ?: conclaveHomeKeyboardShortcutGroup(this) ?: return
         data?.add(group)
+    }
+
+    override fun onKeyShortcut(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if (handleConclaveHomeKeyShortcut(keyCode, event)) return true
+        return super.onKeyShortcut(keyCode, event)
     }
 
     override fun onDestroy() {

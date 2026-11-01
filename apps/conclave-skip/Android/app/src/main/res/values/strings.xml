@@ -420,6 +420,12 @@
     <string name="pm_connection_lost_at">Connection lost at %1$s</string>
     <string name="pm_rejoin">Rejoin</string>
     <string name="pm_rejoin_named">Rejoin %1$s</string>
+    <string name="pm_shortcut_new_meeting">New meeting</string>
+    <string name="pm_shortcut_new_meeting_long">Start a new meeting</string>
+    <string name="pm_shortcut_join_code">Join</string>
+    <string name="pm_shortcut_join_code_long">Join with a code</string>
+    <string name="pm_shortcut_disabled">Not available right now</string>
+    <string name="pm_kb_group">Home</string>
     <string name="pm_tag_webinar">Webinar</string>
     <string name="pm_copy_link">Copy link</string>
     <string name="pm_share_invite">Share invite</string>

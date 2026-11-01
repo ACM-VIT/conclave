@@ -1,6 +1,7 @@
 #if !SKIP
 import Foundation
 import Testing
+@testable import Conclave
 
 struct SYS14LocalizationInfraTests {
 
@@ -49,6 +50,12 @@ struct SYS14LocalizationInfraTests {
         let strings = try #require(catalog["strings"] as? [String: Any])
         var expected = Set(Self.purposeStrings.keys)
         expected.insert("CFBundleDisplayName")
+        let shortcutItems = plist["UIApplicationShortcutItems"] as? [[String: Any]] ?? []
+        let shortcutTitles = shortcutItems.compactMap { $0["UIApplicationShortcutItemTitle"] as? String }
+        #expect(shortcutTitles == ["New Meeting", "Join Meeting"])
+        #expect(shortcutItems.compactMap { $0["UIApplicationShortcutItemType"] as? String }.compactMap { ConclaveShortcut.from(type: $0) }
+                == [.newMeeting, .joinCode])
+        expected.formUnion(shortcutTitles)
         #expect(Set(strings.keys) == expected, "\(Set(strings.keys).symmetricDifference(expected).sorted())")
         for key in expected.sorted() {
             let entry = try #require(strings[key] as? [String: Any], "missing \(key)")
@@ -60,7 +67,8 @@ struct SYS14LocalizationInfraTests {
             let unit = (localizations["en"] as? [String: Any])?["stringUnit"] as? [String: Any]
             #expect(unit?["state"] as? String == "translated", "\(key)")
 
-            #expect(unit?["value"] as? String == plist[key] as? String, "\(key) differs from Darwin/Info.plist")
+            let source = shortcutTitles.contains(key) ? key : plist[key] as? String
+            #expect(unit?["value"] as? String == source, "\(key) differs from Darwin/Info.plist")
         }
     }
 

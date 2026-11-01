@@ -271,8 +271,15 @@ public final class ConclaveAppDelegate: Sendable {
     }
 
     @MainActor
+    @discardableResult
+    public func onShortcut(type: String, payload: String) -> Bool {
+        ShortcutIntake.shared.handle(type: type, payload: payload)
+    }
+
+    @MainActor
     func registerPremeeting(_ presenter: PremeetingPresenter?) {
         premeetingLinkTarget = presenter
+        ShortcutIntake.shared.attach(presenter)
         guard let presenter, !pendingNativeLink.isEmpty else { return }
         let link = pendingNativeLink
         pendingNativeLink = ""

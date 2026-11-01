@@ -78,6 +78,15 @@ typealias AppType = NSApplication
         AppDelegate.shared.onLowMemory()
     }
 
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        if let item = options.shortcutItem {
+            AppDelegate.shared.onShortcut(type: item.type, payload: "")
+        }
+        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = AppMainSceneDelegate.self
+        return configuration
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         NotificationCenter.default.post(name: NSNotification.Name("didRegisterForRemoteNotificationsWithDeviceToken"), object: application, userInfo: ["deviceToken": deviceToken])
     }
@@ -100,3 +109,59 @@ typealias AppType = NSApplication
     #endif
 
 }
+
+#if canImport(UIKit)
+@MainActor final class AppMainSceneDelegate: NSObject, UIWindowSceneDelegate {
+    func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem, completionHandler: @escaping (Bool) -> Void) {
+        completionHandler(AppDelegate.shared.onShortcut(type: shortcutItem.type, payload: ""))
+    }
+}
+#endif
+
+#if os(iOS)
+import AppIntents
+
+struct NewMeetingIntent: AppIntent {
+    static let title: LocalizedStringResource = "New Meeting"
+    static let description = IntentDescription("Opens the lobby for a new Conclave meeting.")
+    static let openAppWhenRun = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        AppDelegate.shared.onShortcut(type: "new_meeting", payload: "")
+        return .result()
+    }
+}
+
+struct JoinMeetingIntent: AppIntent {
+    static let title: LocalizedStringResource = "Join Meeting"
+    static let description = IntentDescription("Joins a Conclave meeting with its code, or opens the Join sheet.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Meeting Code")
+    var code: String?
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        AppDelegate.shared.onShortcut(type: "join_code", payload: code ?? "")
+        return .result()
+    }
+}
+
+struct ConclaveAppShortcuts: AppShortcutsProvider {
+    static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: NewMeetingIntent(),
+            phrases: ["Start a meeting in \(.applicationName)", "New \(.applicationName) meeting"],
+            shortTitle: "New Meeting",
+            systemImageName: "video.badge.plus"
+        )
+        AppShortcut(
+            intent: JoinMeetingIntent(),
+            phrases: ["Join a meeting in \(.applicationName)"],
+            shortTitle: "Join Meeting",
+            systemImageName: "keyboard"
+        )
+    }
+}
+#endif

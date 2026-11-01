@@ -73,6 +73,25 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>video.badge.plus</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>New Meeting</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.acmvit.conclave.new_meeting</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>keyboard</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Join Meeting</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.acmvit.conclave.join_code</string>
+		</dict>
+	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIBackgroundModes</key>
