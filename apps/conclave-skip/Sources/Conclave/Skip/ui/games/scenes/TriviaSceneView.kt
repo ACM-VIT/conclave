@@ -15,16 +15,17 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun TriviaSceneView(scene: TriviaScene, games: GameStagePresenter) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.trivia"), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        if (!scene.isReveal) PromptStatusSlot(games, scene.answeredCount, scene.totalPlayers)
-        GameKitPrompt(kicker = triviaKicker(scene),
-            title = if (scene.isWaitingForQuestion) conclaveString("gm_trivia_waiting") else scene.prompt)
-        if (!scene.isWaitingForQuestion) {
-            TriviaChoices(scene, games)
-            val outcome = if (scene.isReveal) triviaOutcome(scene) else null
+        if (!scene.isReveal) {
+            PromptStatusSlot(games, scene.answeredCount, scene.totalPlayers)
+        } else {
+            val outcome = if (scene.isWaitingForQuestion) null else triviaOutcome(scene)
             if (outcome != null) {
                 PromptOutcomeBadge(outcome, GameKitOutcomePolicy.tone(scene.outcome), Modifier.testTag("game.trivia.outcome"))
             }
         }
+        GameKitPrompt(kicker = triviaKicker(scene),
+            title = if (scene.isWaitingForQuestion) conclaveString("gm_trivia_waiting") else scene.prompt)
+        if (!scene.isWaitingForQuestion) TriviaChoices(scene, games)
         if (!scene.isPlayer) PromptSpectatorNotice(games)
         PromptAnnouncement(games, PromptScenePolicy.triviaRevealKey(scene), conclaveString("gm_trivia_correct_answer", scene.correctText))
     }

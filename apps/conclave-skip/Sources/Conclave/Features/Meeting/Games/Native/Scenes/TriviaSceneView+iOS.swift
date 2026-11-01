@@ -9,15 +9,14 @@ struct TriviaSceneView: View {
         VStack(alignment: .leading, spacing: 14) {
             if !scene.isReveal {
                 PromptStatusSlot(games: games, acted: scene.answeredCount, total: scene.totalPlayers)
+            } else if !scene.isWaitingForQuestion, let outcome = PromptGameCopy.triviaOutcome(scene) {
+                PromptOutcomeBadge(text: outcome, tone: PromptGameCopy.triviaTone(scene))
+                    .accessibilityIdentifier("game.trivia.outcome")
             }
             GameKitPrompt(kicker: PromptGameCopy.triviaKicker(scene),
                           title: scene.isWaitingForQuestion ? PromptGameCopy.triviaWaiting() : scene.prompt)
             if !scene.isWaitingForQuestion {
                 TriviaChoices(scene: scene, games: games)
-                if scene.isReveal, let outcome = PromptGameCopy.triviaOutcome(scene) {
-                    PromptOutcomeBadge(text: outcome, tone: PromptGameCopy.triviaTone(scene))
-                        .accessibilityIdentifier("game.trivia.outcome")
-                }
             }
             if !scene.isPlayer {
                 PromptSpectatorNotice(games: games)

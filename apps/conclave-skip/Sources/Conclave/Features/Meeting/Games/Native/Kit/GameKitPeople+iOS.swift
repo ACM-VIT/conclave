@@ -29,7 +29,8 @@ struct GameKitHostBar: View {
             .accessibilityIdentifier("game.bar.secondary")
         }
         if !primaryTitle.isEmpty {
-            let ink = primaryProminent ? HostingTheme.inCallOnCoral : HostingTheme.token(DesignTokens.iosInCallText)
+            let ink = !primaryEnabled ? HostingTheme.inCallTextSecondary
+                : primaryProminent ? HostingTheme.inCallOnCoral : HostingTheme.token(DesignTokens.iosInCallText)
             Button(action: onPrimary) {
                 HStack(spacing: 8) {
                     if primaryPending {
@@ -42,7 +43,6 @@ struct GameKitHostBar: View {
             }
             .modifier(GameKitPrimaryStyle(isProminent: primaryProminent))
             .disabled(!primaryEnabled || primaryPending)
-            .opacity(primaryEnabled ? 1 : HostingTheme.disabledOpacity)
             .accessibilityValue(primaryPending ? ConclaveStrings.text("In Progress") : "")
             .accessibilityIdentifier("game.bar.primary")
         }
