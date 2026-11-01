@@ -85,7 +85,7 @@ private struct ActivitiesRootList: View {
             if s.isVoteOpen {
                 VoteSection(snapshot: s, activities: session.activities, voteCount: $voteCount)
             }
-            if s.role == .host || !s.isVoteOpen {
+            if !s.isVoteOpen {
                 GamesSection(snapshot: s, activities: session.activities)
             }
             if s.role == .host || !s.isVoteOpen {
@@ -211,6 +211,10 @@ private struct VoteSection: View {
                         Text(candidate.count.formatted(.number)).monospacedDigit()
                     } label: {
                         HStack(spacing: 8) {
+                            Image(systemName: GameGlyphSymbols.name(gameId: candidate.id))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 24)
+                                .accessibilityHidden(true)
                             Text(candidate.name)
                             if candidate.isMine {
                                 Image(systemName: ConclaveSymbols.checkmark)
@@ -254,8 +258,6 @@ private struct VoteSection: View {
                 Spacer()
                 Text(ActivitiesCopy.voteCount(cast: snapshot.voteCast, players: snapshot.votePlayers)).monospacedDigit()
             }
-        } footer: {
-            Text(snapshot.role == .host ? ConclaveStrings.text("Vote too, then start the winner.") : ConclaveStrings.text("Tap the game you want."))
         }
     }
 }
@@ -277,12 +279,16 @@ private struct GamesSection: View {
                 }
                 ForEach(snapshot.games) { row in
                     NavigationLink(value: ActivitiesPage(route: .setup, id: row.id)) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(row.name)
-                            Text(row.detail).font(.subheadline).foregroundStyle(.secondary)
-                            Text(ActivitiesCopy.playerRange(row.minPlayers, row.maxPlayers))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(row.name)
+                                Text(row.isPlayable ? row.detail : (ActivitiesCopy.reason(row.reason) ?? row.detail))
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        } icon: {
+                            Image(systemName: GameGlyphSymbols.name(gameId: row.id))
                         }
                     }
                     .disabled(!row.isPlayable)
@@ -301,8 +307,6 @@ private struct GamesSection: View {
         } footer: {
             if let reason = ActivitiesCopy.reason(snapshot.catalogReason) {
                 Text(reason)
-            } else if snapshot.role == .host {
-                Text(ConclaveStrings.text("Pick a game, or let the room vote."))
             }
         }
     }
@@ -328,15 +332,17 @@ private struct AppsSection: View {
         } header: {
             Text(ConclaveStrings.text("Apps"))
         } footer: {
-            Text(appsFooter)
+            if !appsFooter.isEmpty {
+                Text(appsFooter)
+            }
         }
     }
 
     private var appsFooter: String {
         switch snapshot.appsReason {
         case .hostOnly: return ConclaveStrings.text("Only hosts can open apps.")
-        case .noAppOpen: return ConclaveStrings.text("Open an app to lock editing.")
-        default: return ConclaveStrings.text("Participants watch only.")
+        case .noAppOpen: return snapshot.canLockApps ? ConclaveStrings.text("Open an app to lock editing.") : ""
+        default: return ""
         }
     }
 }

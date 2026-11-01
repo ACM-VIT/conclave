@@ -717,9 +717,13 @@ struct AppWatchQueueButton: View {
         Button {
             _ = host.openPage()
         } label: {
-            ActivityHeaderCapsuleLabel(title: ConclaveStrings.text("Queue"))
+            ActivityHeaderCircle {
+                Image(systemName: ConclaveSymbols.listBullet)
+            }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(ConclaveStrings.text("Queue"))
+        .help(ConclaveStrings.text("Queue"))
         .accessibilityIdentifier("app.watch.queue")
     }
 }

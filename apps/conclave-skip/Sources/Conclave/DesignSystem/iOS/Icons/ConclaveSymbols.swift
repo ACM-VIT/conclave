@@ -92,6 +92,7 @@ enum ConclaveSymbols {
     static let line3Horizontal: String = "line.3.horizontal"
     static let line3HorizontalDecreaseCircle: String = "line.3.horizontal.decrease.circle"
     static let link: String = "link"
+    static let listBullet: String = "list.bullet"
     static let listBulletClipboard: String = "list.bullet.clipboard"
     static let megaphone: String = "megaphone"
     static let nosign: String = "nosign"

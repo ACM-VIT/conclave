@@ -209,12 +209,8 @@ private fun ActivitiesRoot(session: ActivitySession, reservation: PaddingValues,
             if (s.role == ActivityRole.host) {
                 item(key = "vote.host") { VoteHostActions(s, activities) }
             }
-            item(key = "f:vote") {
-                ConclaveSectionFooter(if (s.role == ActivityRole.host) conclaveString("act_vote_host_footer")
-                    else conclaveString("act_vote_participant_footer"), "activities.footer.vote")
-            }
         }
-        if (showsSections) {
+        if (showsSections && !s.isVoteOpen) {
             item(key = "h:games") { ConclaveSectionHeader(conclaveString("act_games"), "activities.header.games") }
             if (s.role == ActivityRole.host) {
                 if (s.catalogLoading) item(key = "games.loading") { LoadingRow() }
@@ -235,9 +231,10 @@ private fun ActivitiesRoot(session: ActivitySession, reservation: PaddingValues,
             }
             item(key = "f:games") {
                 val reason = activitiesReason(s.catalogReason)
-                val footer = reason ?: if (s.role == ActivityRole.host) conclaveString("act_pick_or_vote") else null
-                if (footer != null) ConclaveSectionFooter(footer, "activities.footer.games")
+                if (reason != null) ConclaveSectionFooter(reason, "activities.footer.games")
             }
+        }
+        if (showsSections) {
             item(key = "h:apps") { ConclaveSectionHeader(conclaveString("act_apps"), "activities.header.apps") }
             items(s.apps.toList(), key = { "a:" + it.id }) { app ->
                 AppItem(app) {
@@ -258,10 +255,10 @@ private fun ActivitiesRoot(session: ActivitySession, reservation: PaddingValues,
             item(key = "f:apps") {
                 val footer = when (s.appsReason) {
                     ActivitiesReason.hostOnly -> conclaveString("act_host_only_apps")
-                    ActivitiesReason.noAppOpen -> conclaveString("act_no_app_open")
-                    else -> conclaveString("act_apps_watch_only")
+                    ActivitiesReason.noAppOpen -> if (s.canLockApps) conclaveString("act_no_app_open") else null
+                    else -> null
                 }
-                ConclaveSectionFooter(footer, "activities.footer.apps")
+                if (footer != null) ConclaveSectionFooter(footer, "activities.footer.apps")
             }
             if (ActivitiesSectionPolicy.showsBrowserSection(s)) {
                 item(key = "h:browser") { ConclaveSectionHeader(conclaveString("act_browser"), "activities.header.browser") }
@@ -386,10 +383,11 @@ private fun VoteHostActions(s: ActivitiesSnapshot, activities: ActivitiesPresent
 
 @Composable
 private fun GameRow(row: GameCatalogRow, onOpen: () -> Unit) {
+    val supporting = if (row.isPlayable) row.detail else (activitiesReason(row.reason) ?: row.detail)
     ListItem(
+        leadingContent = { Icon(gameGlyphIcon(row.id), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
         headlineContent = { Text(row.name) },
-        supportingContent = { Text(row.detail) },
-        trailingContent = { Text(activitiesPlayerRange(row.minPlayers, row.maxPlayers), style = MaterialTheme.typography.bodySmall) },
+        supportingContent = { Text(supporting, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         modifier = Modifier.testTag("activities.game.${row.id}").clickable(enabled = row.isPlayable, role = Role.Button, onClick = onOpen),
     )
 }

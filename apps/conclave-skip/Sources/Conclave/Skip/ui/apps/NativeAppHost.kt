@@ -25,6 +25,8 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -140,8 +142,11 @@ private fun WheelCardBar(host: AppHostPresenter) {
 
 @Composable
 private fun AppWatchQueueButton(host: AppHostPresenter) {
-    ActivityHeaderCapsuleButton(title = conclaveString("app_watch_queue"), onClick = { host.openPage() },
-        modifier = Modifier.testTag("app.watch.queue"))
+    val label = conclaveString("app_watch_queue")
+    FilledTonalIconButton(onClick = { host.openPage() }, colors = activityHeaderIconColors(),
+        modifier = Modifier.testTag("app.watch.queue")) {
+        Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = label, modifier = Modifier.size(20.dp))
+    }
 }
 
 @Composable
