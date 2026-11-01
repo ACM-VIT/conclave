@@ -82,5 +82,29 @@ struct S6BReviewRegressionTests {
         #expect(queue.canStartPlayback(token: queue.activeToken))
     }
 
+    @Test func delayedAppUnmuteEchoCannotDispatchOverANewerMuteButSystemActionsStillDispatch() {
+        let router = CallKitMuteActionRouter()
+        let callId = UUID()
+        let unmuteId = UUID()
+        let muteId = UUID()
+        let presence = CallPresence()
+        presence.apply(CallPresenceInputs.make(callSession: 1, sessionPhase: .inCall, isMuted: true))
+        var commands: [SystemCallCommandKind] = []
+        presence.onCommand = { commands.append($0.kind) }
+        router.register(actionId: unmuteId, callId: callId, muted: false)
+        router.register(actionId: muteId, callId: callId, muted: true)
+        let dispatch: (UUID, Bool) -> Bool = { _, muted in
+            presence.handle(muted ? .mute : .unmute, source: .callKit,
+                            presenceSession: presence.snapshot.presenceSession).fulfillsSystemAction
+        }
+        #expect(router.handle(actionId: muteId, callId: callId, muted: true, dispatch: dispatch))
+        #expect(router.handle(actionId: unmuteId, callId: callId, muted: false, dispatch: dispatch))
+        #expect(commands.isEmpty)
+        #expect(router.desiredMute(callId: callId) == true)
+        #expect(router.handle(actionId: UUID(), callId: callId, muted: false, dispatch: dispatch))
+        #expect(commands == [.unmute])
+        router.reset()
+    }
+
 }
 #endif

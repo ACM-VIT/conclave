@@ -12,6 +12,7 @@ final class CallKitManager: NSObject, CallProviding {
 
     private let provider: CXProvider
     private let callController = CXCallController()
+    private let muteActions = CallKitMuteActionRouter()
     weak var actionHandler: CallProviderActionHandler?
 
     private override init() {
@@ -65,11 +66,16 @@ final class CallKitManager: NSObject, CallProviding {
 
     func requestSetMuted(uuid: UUID, muted: Bool, completion: @escaping (Bool) -> Void) {
         let muteAction = CXSetMutedCallAction(call: uuid, muted: muted)
+        let actionId = muteAction.uuid
+        muteActions.register(actionId: actionId, callId: uuid, muted: muted)
         callController.request(CXTransaction(action: muteAction)) { error in
             if let error = error {
                 debugLog("[CallKit] setMuted request failed: \(error.localizedDescription)")
             }
-            Task { @MainActor in completion(error == nil) }
+            Task { @MainActor in
+                if error != nil { self.muteActions.discard(actionId: actionId) }
+                completion(error == nil)
+            }
         }
     }
 
@@ -84,6 +90,7 @@ final class CallKitManager: NSObject, CallProviding {
     }
 
     func requestEnd(uuid: UUID, completion: @escaping (Bool) -> Void) {
+        muteActions.end(callId: uuid)
         callController.request(CXTransaction(action: CXEndCallAction(call: uuid))) { error in
             if let error = error {
                 debugLog("[CallKit] endCall request failed: \(error.localizedDescription)")
@@ -93,6 +100,7 @@ final class CallKitManager: NSObject, CallProviding {
     }
 
     func reportEnded(uuid: UUID, failed: Bool) {
+        muteActions.end(callId: uuid)
         provider.reportCall(with: uuid, endedAt: Date(), reason: failed ? .failed : .remoteEnded)
     }
 }
@@ -100,6 +108,7 @@ final class CallKitManager: NSObject, CallProviding {
 extension CallKitManager: CXProviderDelegate {
     nonisolated func providerDidReset(_ provider: CXProvider) {
         Task { @MainActor in
+            self.muteActions.reset()
             self.actionHandler?.providerDidReset()
         }
     }
@@ -114,6 +123,7 @@ extension CallKitManager: CXProviderDelegate {
         let uuid = action.callUUID
         Task { @MainActor in
 
+            self.muteActions.end(callId: uuid)
             _ = self.actionHandler?.providerEnd(uuid: uuid)
             action.fulfill()
         }
@@ -122,10 +132,16 @@ extension CallKitManager: CXProviderDelegate {
     nonisolated func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
         let uuid = action.callUUID
         let muted = action.isMuted
+        let actionId = action.uuid
         Task { @MainActor in
-
-            if self.actionHandler?.providerSetMuted(uuid: uuid, muted: muted) == true {
+            let fulfilled = self.muteActions.handle(actionId: actionId, callId: uuid, muted: muted) { callId, value in
+                self.actionHandler?.providerSetMuted(uuid: callId, muted: value) ?? false
+            }
+            if fulfilled {
                 action.fulfill()
+                if let desired = self.muteActions.desiredMute(callId: uuid), desired != muted {
+                    self.requestSetMuted(uuid: uuid, muted: desired) { _ in }
+                }
             } else {
                 action.fail()
             }
