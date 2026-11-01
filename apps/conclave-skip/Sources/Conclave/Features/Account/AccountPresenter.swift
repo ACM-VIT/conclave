@@ -44,6 +44,7 @@ final class AccountPresenter {
     var sentRequestCount: Int { requestCount }
 
     var isBusy: Bool { !pendingProvider.isEmpty || isSigningOut || isDeleting }
+    var authenticationGeneration: Int { authGeneration }
 
     func isCurrent(generation: Int) -> Bool {
         generation == authGeneration

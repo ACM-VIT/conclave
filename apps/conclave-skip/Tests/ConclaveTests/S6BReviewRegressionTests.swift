@@ -126,5 +126,62 @@ struct S6BReviewRegressionTests {
         #expect(!malformedField.state.updateRequired)
     }
 
+    @Test(arguments: [false, true])
+    func refreshBeforeSignOutCannotOverwriteANewSameAccountSession(_ expired: Bool) async throws {
+        let key = "conclave.auth.user"
+        let defaults = UserDefaults.standard
+        let saved = defaults.string(forKey: key)
+        let storage = HTTPCookieStorage.shared
+        let cookies = storage.cookies ?? []
+        let baseURL = try #require(NativeAuthService.resolveAppBaseURL())
+        let cookieHost = try #require(baseURL.host)
+        let cookie = try #require(HTTPCookie(properties: [
+            .domain: cookieHost, .path: "/", .name: "s6b-auth-session", .value: "fresh",
+        ]))
+        defer {
+            storage.deleteCookie(cookie)
+            for cookie in cookies { storage.setCookie(cookie) }
+            if let saved { defaults.set(saved, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+        let app = AppState()
+        let account = AccountPresenter()
+        app.setAuthenticatedUser(AppState.User(id: "same-id", name: "Old", provider: .google))
+        account.apply(AccountPresenterInputs.make(isSignedIn: true, userId: "same-id", name: "Old", provider: "google"))
+        var requests: [AccountRequest] = []
+        account.onRequest = { requests.append($0) }
+        let coordinator = AccountAuthCoordinator(appState: app, account: account, premeeting: nil)
+        var pending: CheckedContinuation<NativeAuthenticatedUser?, Never>?
+        var fetchFinished = false
+        coordinator.fetchSessionUser = {
+            let user = await withCheckedContinuation { pending = $0 }
+            fetchFinished = true
+            return user
+        }
+        coordinator.refreshSession(force: true)
+        for _ in 0..<100 where pending == nil { await Task.yield() }
+        let response = try #require(pending)
+        account.signOut()
+        let signOutGeneration = try #require(requests.last).generation
+        app.clearAuthentication(signOutRemote: false)
+        account.apply(AccountPresenterInputs.make())
+        account.finishSignOut(generation: signOutGeneration)
+        account.didPresent()
+        account.providersLoaded(generation: try #require(requests.last).generation, listsApple: true, listsGoogle: true)
+        account.signInWithGoogle()
+        let signInGeneration = try #require(requests.last).generation
+        app.setAuthenticatedUser(AppState.User(id: "same-id", name: "Fresh", provider: .google))
+        account.apply(AccountPresenterInputs.make(isSignedIn: true, userId: "same-id", name: "Fresh", provider: "google"))
+        account.finishSignIn(generation: signInGeneration, outcome: .succeeded)
+        #expect(!account.isBusy)
+        storage.setCookie(cookie)
+        #expect(storage.cookies(for: baseURL)?.contains { $0.name == cookie.name } == true)
+        response.resume(returning: expired ? nil : NativeAuthenticatedUser(id: "same-id", email: nil, name: "Stale"))
+        for _ in 0..<100 where !fetchFinished { await Task.yield() }
+        #expect(fetchFinished)
+        #expect(app.currentUser?.name == "Fresh")
+        #expect(app.isAuthenticated)
+        #expect(storage.cookies(for: baseURL)?.contains { $0.name == cookie.name && $0.value == "fresh" } == true)
+        #expect(account.snapshot.context != .sessionExpired)
+    }
 }
 #endif

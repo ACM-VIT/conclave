@@ -9,6 +9,9 @@ final class AccountAuthCoordinator {
     private weak var account: AccountPresenter?
     private weak var premeeting: PremeetingPresenter?
     var nowMillis: () -> Double = { Date().timeIntervalSince1970 * 1000.0 }
+    var fetchSessionUser: @MainActor () async throws -> NativeAuthenticatedUser? = {
+        try await NativeAuthService.fetchCurrentSessionUser()
+    }
     private var refreshGeneration = 0
     private var lastRefreshMillis = -1.0
 
@@ -19,6 +22,13 @@ final class AccountAuthCoordinator {
     }
 
     func perform(_ request: AccountRequest) {
+        switch request.kind {
+        case .signInWithGoogle, .signInWithApple, .cancelSignIn, .signOut, .deleteAccount:
+            refreshGeneration += 1
+            lastRefreshMillis = -1.0
+        default:
+            break
+        }
         switch request.kind {
         case .loadProviders:
             loadProviders(generation: request.generation)
@@ -178,15 +188,18 @@ final class AccountAuthCoordinator {
         lastRefreshMillis = now
         refreshGeneration += 1
         let generation = refreshGeneration
+        let authenticationGeneration = presenter.authenticationGeneration
+        let fetch = fetchSessionUser
         let storedId = stored.id
         let storedName = stored.name
         let storedEmail = stored.email
         let storedProvider = stored.provider
         Task { @MainActor [weak self] in
             do {
-                let sessionUser = try await NativeAuthService.fetchCurrentSessionUser()
+                let sessionUser = try await fetch()
                 guard let current = self, current.refreshGeneration == generation,
-                      current.appState.currentUser?.id == storedId else { return }
+                      current.appState.currentUser?.id == storedId,
+                      current.account?.isCurrent(generation: authenticationGeneration) == true else { return }
                 guard let user = sessionUser else {
                     current.appState.clearAuthentication(signOutRemote: false)
                     current.account?.sessionDidExpire()
