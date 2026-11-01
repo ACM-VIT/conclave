@@ -73,6 +73,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
+import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import coil3.decode.BitmapFactoryDecoder
@@ -84,6 +85,7 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import skip.foundation.ProcessInfo
 import skip.ui.UIApplication
 
 internal object ChatPhotoCodec {
@@ -187,6 +189,15 @@ internal object ChatPhotoFiles {
         } catch (failure: Throwable) {
             PipManager.restoreAutoEnterAfterExternalActivity()
             false
+        }
+    }
+}
+
+internal object ChatImageMemory {
+    fun clear() {
+        try {
+            SingletonImageLoader.get(ProcessInfo.processInfo.androidContext).memoryCache?.clear()
+        } catch (_: Throwable) {
         }
     }
 }

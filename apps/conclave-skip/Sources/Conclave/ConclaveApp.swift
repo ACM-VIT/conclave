@@ -146,6 +146,7 @@ public final class ConclaveAppDelegate: Sendable {
     public func onInit() {
         NativeRouteFlags.shared.configureFromLaunchEnvironment()
         PerformanceDiagnostics.install()
+        Task { @MainActor in MemoryPressureHooks.install() }
         #if os(iOS) && !SKIP
 
         LocalNotificationDelegate.install()
@@ -263,6 +264,7 @@ public final class ConclaveAppDelegate: Sendable {
     }
 
     public func onLowMemory() {
+        Task { @MainActor in MemoryPressure.shared.signal() }
     }
 
     @MainActor

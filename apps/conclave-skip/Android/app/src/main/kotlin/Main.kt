@@ -323,6 +323,13 @@ open class MainActivity: AppCompatActivity {
         AppDelegate.shared.onLowMemory()
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (conclaveShouldReleaseMemory(level)) {
+            AppDelegate.shared.onLowMemory()
+        }
+    }
+
     override fun onSaveInstanceState(outState: android.os.Bundle): Unit = super.onSaveInstanceState(outState)
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: kotlin.Array<String>, grantResults: IntArray) {

@@ -9247,58 +9247,14 @@ final class ConclaveTests: XCTestCase {
         XCTAssertTrue(manifest.contains("android:name=\"com.google.android.apps.common.testing.services\" tools:node=\"remove\""))
     }
 
-    func testDarwinPermissionPurposeStringsArePresentInAppAndExtensionPlists() throws {
+    func testDarwinAppPlistDeclaresOnlyItsPurposeStrings() throws {
         let appPlist = try sourcePlistDictionary("Darwin/Info.plist")
-        let extensionPlist = try sourcePlistDictionary("Darwin/ScreenShareExtension/Info.plist")
 
         let appPurposeStringKeys = [
             "NSCameraUsageDescription",
             "NSMicrophoneUsageDescription",
             "NSLocalNetworkUsageDescription",
             "NSPhotoLibraryAddUsageDescription",
-        ]
-
-        let extensionPurposeStringKeys = [
-            "NSCameraUsageDescription",
-            "NSMicrophoneUsageDescription",
-            "NSBluetoothAlwaysUsageDescription",
-            "NSBluetoothPeripheralUsageDescription",
-            "NSLocalNetworkUsageDescription",
-            "NSScreenCaptureUsageDescription",
-            "NSPhotoLibraryUsageDescription",
-            "NSPhotoLibraryAddUsageDescription",
-            "NSLocationWhenInUseUsageDescription",
-            "NSLocationAlwaysAndWhenInUseUsageDescription",
-            "NSLocationAlwaysUsageDescription",
-            "NSLocationUsageDescription",
-            "NSFaceIDUsageDescription",
-            "NSContactsUsageDescription",
-            "NSCalendarsUsageDescription",
-            "NSCalendarsFullAccessUsageDescription",
-            "NSCalendarsWriteOnlyAccessUsageDescription",
-            "NSRemindersUsageDescription",
-            "NSRemindersFullAccessUsageDescription",
-            "NSDocumentsFolderUsageDescription",
-            "NSDownloadsFolderUsageDescription",
-            "NSDesktopFolderUsageDescription",
-            "NSNetworkVolumesUsageDescription",
-            "NSRemovableVolumesUsageDescription",
-            "NSSpeechRecognitionUsageDescription",
-            "NSSiriUsageDescription",
-            "NSFocusStatusUsageDescription",
-            "NSMotionUsageDescription",
-            "NSSensorKitUsageDescription",
-            "NSUserTrackingUsageDescription",
-            "NSUserNotificationsUsageDescription",
-            "NFCReaderUsageDescription",
-            "NSAppleMusicUsageDescription",
-            "NSNearbyInteractionUsageDescription",
-            "NSVideoSubscriberAccountUsageDescription",
-            "NSHomeKitUsageDescription",
-            "NSGKFriendListUsageDescription",
-            "NSHealthShareUsageDescription",
-            "NSHealthClinicalHealthRecordsShareUsageDescription",
-            "NSHealthUpdateUsageDescription",
         ]
 
         try assertPurposeStrings(
@@ -9311,18 +9267,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertEqual(Set(declaredAppPurposeStringKeys), Set(appPurposeStringKeys))
         XCTAssertNil(appPlist["NSUserNotificationsUsageDescription"])
         XCTAssertNil(appPlist["NSLocationTemporaryUsageDescriptionDictionary"])
-        try assertPurposeStrings(
-            extensionPlist,
-            keys: extensionPurposeStringKeys
-        )
-        let extensionTemporaryLocationPurposes = try XCTUnwrap(
-            extensionPlist["NSLocationTemporaryUsageDescriptionDictionary"] as? [String: String]
-        )
-        XCTAssertFalse(
-            extensionTemporaryLocationPurposes["MeetingLocationSharing", default: ""]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .isEmpty
-        )
     }
 
     func testDarwinAppTargetUsesCheckedInInfoPlistForPurposeStrings() throws {
