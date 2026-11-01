@@ -171,13 +171,15 @@ struct ACT3PromptGamesTests {
         #expect(choose.hostAction == PromptHostAction.revealNow)
         #expect(ChoiceScene.option(forChoice: ChoiceScene.secondId) == 1 && ChoiceScene.option(forChoice: "x") == -1)
         let reveal = try #require(presenter(.wyrReveal).scene.wouldYouRather)
-        let split = reveal.split(nobodyLabel: "Nobody picked this")
-        #expect(split.namesB == ["Nobody picked this"] && split.countB == 0 && split.fractionA == 1.0)
+        let split = reveal.split()
+        #expect(split.votersB.isEmpty && split.countB == 0 && split.fractionA == 1.0)
+        #expect(split.votersA.map(\.id) == ["you", "r1", "r2", "r3", "r4", "r5"])
         #expect(reveal.hostAction == PromptHostAction.next)
         let tie = PromptSceneBuilder.wouldYouRather(try #require(projection("would-you-rather", "reveal",
             #"{"phase":"reveal","index":0,"total":6,"optionA":"A","optionB":"B","counts":[2,2],"namesA":["A1","A2"],"namesB":["B1","B2"],"answeredCount":4,"totalPlayers":4}"#,
             "").wouldYouRather), context: context(isPlayer: false, isHost: false))
-        #expect(tie.split(nobodyLabel: "x").fractionA == 0.5 && tie.split(nobodyLabel: "x").namesA == ["A1", "A2"])
+        #expect(tie.split().fractionA == 0.5 && tie.split().votersA.map(\.name) == ["A1", "A2"])
+        #expect(tie.split().votersA.map(\.id) == ["A1", "A2"])
         #expect(tie.hostAction == PromptHostAction.none && tie.myChoice == -1 && !tie.canChoose)
     }
 

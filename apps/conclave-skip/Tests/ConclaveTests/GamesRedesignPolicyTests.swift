@@ -71,6 +71,15 @@ struct GamesRedesignPolicyTests {
         #expect(GameKitNameStackPolicy.overflow(8) == 3)
     }
 
+    @Test func votersBorrowRosterIdsAndFallBackToTheNameWhenAmbiguous() {
+        let context = PromptSceneContext.make(players: [GamePlayerInput(id: "p1", name: "Avery"), GamePlayerInput(id: "p2", name: "Sam"),
+                                                        GamePlayerInput(id: "p3", name: "Sam")],
+                                              knownPlayers: [GameNamedPlayer(id: "p9", name: "Departed")])
+        let voters = context.voters([" Avery ", "", "Sam", "Departed", "Stranger"])
+        #expect(voters.map(\.name) == ["Avery", "Sam", "Departed", "Stranger"])
+        #expect(voters.map(\.id) == ["p1", "Sam", "p9", "Stranger"])
+    }
+
     @Test func triviaOutcomeToneMatchesTheRowMarks() {
         #expect(GameKitOutcomePolicy.tone(.correct) == .correct)
         #expect(GameKitOutcomePolicy.tone(.wrong) == .wrongPick)

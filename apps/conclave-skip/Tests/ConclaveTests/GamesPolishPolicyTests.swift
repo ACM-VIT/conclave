@@ -87,14 +87,14 @@ struct GamesPolishPolicyTests {
 
     @Test func wouldYouRatherSplitCarriesYourPickAndRelativeFill() throws {
         let reveal = try #require(presenter(PromptGameFixtures.pushes(.wyrReveal)).scene.wouldYouRather)
-        let split = reveal.split(nobodyLabel: "Nobody picked this")
+        let split = reveal.split()
         #expect(split.picked == reveal.myChoice)
         #expect(split.fractionOfTotalA == 1.0 && split.fractionOfTotalB == 0)
         #expect(split.leadsA && !split.leadsB)
 
-        let even = GameKitSplit(labelA: "A", labelB: "B", countA: 2, countB: 2, namesA: [], namesB: [], picked: -1)
+        let even = GameKitSplit(labelA: "A", labelB: "B", countA: 2, countB: 2, votersA: [], votersB: [], picked: -1)
         #expect(even.leadsA && even.leadsB && even.fractionOfTotalA == 0.5)
-        let empty = GameKitSplit(labelA: "A", labelB: "B", countA: 0, countB: 0, namesA: [], namesB: [], picked: -1)
+        let empty = GameKitSplit(labelA: "A", labelB: "B", countA: 0, countB: 0, votersA: [], votersB: [], picked: -1)
         #expect(!empty.leadsA && !empty.leadsB && empty.fractionOfTotalA == 0 && empty.fractionOfTotalB == 0)
     }
 

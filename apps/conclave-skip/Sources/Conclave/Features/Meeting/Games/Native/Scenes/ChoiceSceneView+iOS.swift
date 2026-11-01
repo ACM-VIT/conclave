@@ -8,7 +8,7 @@ struct ChoiceSceneView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if scene.isReveal {
-                GameKitSplitResult(split: scene.split(nobodyLabel: ""))
+                GameKitSplitResult(split: scene.split())
             } else {
                 PromptStatusSlot(games: games, acted: scene.answeredCount, total: scene.totalPlayers)
                 ChoiceButtons(scene: scene, games: games)

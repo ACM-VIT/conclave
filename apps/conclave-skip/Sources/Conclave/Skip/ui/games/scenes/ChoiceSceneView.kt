@@ -16,7 +16,7 @@ import androidx.compose.ui.unit.dp
 internal fun ChoiceSceneView(scene: ChoiceScene, games: GameStagePresenter) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.wouldYouRather"), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (scene.isReveal) {
-            val split = remember(scene) { scene.split("") }
+            val split = remember(scene) { scene.split() }
             GameKitSplitResult(split)
         } else {
             PromptStatusSlot(games, scene.answeredCount, scene.totalPlayers)

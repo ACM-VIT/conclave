@@ -9,7 +9,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -138,13 +137,13 @@ internal fun GameKitBinaryChoice(first: GameKitChoice, second: GameKitChoice, pe
 @Composable
 internal fun GameKitSplitResult(split: GameKitSplit) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        GameKitSplitSide(split.labelA, split.countA, split.total, split.fractionOfTotalA.toFloat(), split.namesA, split.leadsA, split.picked == 0)
-        GameKitSplitSide(split.labelB, split.countB, split.total, split.fractionOfTotalB.toFloat(), split.namesB, split.leadsB, split.picked == 1)
+        GameKitSplitSide(split.labelA, split.countA, split.total, split.fractionOfTotalA.toFloat(), split.votersA, split.leadsA, split.picked == 0)
+        GameKitSplitSide(split.labelB, split.countB, split.total, split.fractionOfTotalB.toFloat(), split.votersB, split.leadsB, split.picked == 1)
     }
 }
 
 @Composable
-private fun GameKitSplitSide(label: String, count: Int, total: Int, fraction: Float, names: Iterable<String>, leads: Boolean, picked: Boolean) {
+private fun GameKitSplitSide(label: String, count: Int, total: Int, fraction: Float, voters: Iterable<GameNamedPlayer>, leads: Boolean, picked: Boolean) {
     val scheme = MaterialTheme.colorScheme
     val summary = gameProgress(count, total) + ", " + label + if (picked) ", " + conclaveString("gm_your_answer") else ""
     val mark = if (picked) GameKitMark.selected else GameKitMark.none
@@ -156,12 +155,13 @@ private fun GameKitSplitSide(label: String, count: Int, total: Int, fraction: Fl
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(label, style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (leads) FontWeight.SemiBold else FontWeight.Normal,
-                    color = scheme.onSurface, modifier = Modifier.weight(1f, fill = false))
-                if (picked) Icon(ConclaveIcons.CheckCircleFill1, contentDescription = null, tint = scheme.primaryContainer,
-                    modifier = Modifier.size(18.dp))
-                Spacer(Modifier.weight(1f))
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = if (leads) FontWeight.SemiBold else FontWeight.Normal,
+                        color = scheme.onSurface, modifier = Modifier.weight(1f, fill = false))
+                    if (picked) Icon(ConclaveIcons.CheckCircleFill1, contentDescription = null, tint = scheme.primaryContainer,
+                        modifier = Modifier.size(18.dp))
+                }
                 Text(count.toString(), style = rememberTabular(MaterialTheme.typography.bodyLarge), fontWeight = FontWeight.SemiBold,
                     color = scheme.onSurface)
             }
@@ -172,7 +172,7 @@ private fun GameKitSplitSide(label: String, count: Int, total: Int, fraction: Fl
                 trackColor = scheme.outlineVariant,
                 drawStopIndicator = {},
             )
-            if (names.iterator().hasNext()) GameKitNameStack(names)
+            if (voters.iterator().hasNext()) GameKitNameStack(voters)
         }
     }
 }

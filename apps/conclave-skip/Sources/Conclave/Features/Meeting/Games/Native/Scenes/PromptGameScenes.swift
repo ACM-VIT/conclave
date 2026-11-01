@@ -180,6 +180,8 @@ struct ChoiceScene: Equatable {
     let countB: Int
     let namesA: [String]
     let namesB: [String]
+    let votersA: [GameNamedPlayer]
+    let votersB: [GameNamedPlayer]
     let answeredCount: Int
     let totalPlayers: Int
 
@@ -210,9 +212,9 @@ struct ChoiceScene: Equatable {
                       isWrongPick: false, isDisabled: !canChoose)
     }
 
-    func split(nobodyLabel: String) -> GameKitSplit {
+    func split() -> GameKitSplit {
         GameKitSplit(labelA: optionA, labelB: optionB, countA: countA, countB: countB,
-                     namesA: countA <= 0 ? [nobodyLabel] : namesA, namesB: countB <= 0 ? [nobodyLabel] : namesB, picked: myChoice)
+                     votersA: countA <= 0 ? [] : votersA, votersB: countB <= 0 ? [] : votersB, picked: myChoice)
     }
 }
 
@@ -360,6 +362,29 @@ struct PromptSceneContext: Equatable {
         }
         return ""
     }
+
+    func voters(_ names: [String]) -> [GameNamedPlayer] {
+        var result: [GameNamedPlayer] = []
+        for raw in names {
+            let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty { continue }
+            result.append(GameNamedPlayer(id: playerId(named: name), name: name))
+        }
+        return result
+    }
+
+    func playerId(named name: String) -> String {
+        var found = ""
+        for player in players where player.name == name && !player.id.isEmpty {
+            if !found.isEmpty && found != player.id { return name }
+            found = player.id
+        }
+        for player in knownPlayers where player.name == name && !player.id.isEmpty {
+            if !found.isEmpty && found != player.id { return name }
+            found = player.id
+        }
+        return found.isEmpty ? name : found
+    }
 }
 
 enum PromptSceneBuilder {
@@ -464,7 +489,8 @@ enum PromptSceneBuilder {
         let isPlayer = context.isPlayer
         return ChoiceScene(phase: phase, index: projection.index + 1, total: projection.total, optionA: projection.optionA,
                            optionB: projection.optionB, countA: projection.countA, countB: projection.countB, namesA: projection.namesA,
-                           namesB: projection.namesB, answeredCount: projection.answeredCount, totalPlayers: projection.totalPlayers,
+                           namesB: projection.namesB, votersA: context.voters(projection.namesA),
+                           votersB: context.voters(projection.namesB), answeredCount: projection.answeredCount, totalPlayers: projection.totalPlayers,
                            myChoice: isPlayer ? projection.myChoice : -1,
                            canChoose: isPlayer && phase == "choose" && !context.isRecovering, isPlayer: isPlayer,
                            hostAction: hostAction(kind: GameSceneKind.wouldYouRather, phase: phase, context: context))

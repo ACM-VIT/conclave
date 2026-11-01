@@ -33,8 +33,8 @@ struct GameKitSplit: Equatable {
     let labelB: String
     let countA: Int
     let countB: Int
-    let namesA: [String]
-    let namesB: [String]
+    let votersA: [GameNamedPlayer]
+    let votersB: [GameNamedPlayer]
     let picked: Int
 
     var total: Int { countA + countB }

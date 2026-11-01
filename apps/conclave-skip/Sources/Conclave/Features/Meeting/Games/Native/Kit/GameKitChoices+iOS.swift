@@ -168,9 +168,9 @@ struct GameKitSplitResult: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             GameKitSplitSide(label: split.labelA, count: split.countA, total: split.total, fraction: split.fractionOfTotalA,
-                             names: split.namesA, leads: split.leadsA, picked: split.picked == 0)
+                             voters: split.votersA, leads: split.leadsA, picked: split.picked == 0)
             GameKitSplitSide(label: split.labelB, count: split.countB, total: split.total, fraction: split.fractionOfTotalB,
-                             names: split.namesB, leads: split.leadsB, picked: split.picked == 1)
+                             voters: split.votersB, leads: split.leadsB, picked: split.picked == 1)
         }
     }
 }
@@ -180,7 +180,7 @@ struct GameKitSplitSide: View {
     let count: Int
     let total: Int
     let fraction: Double
-    let names: [String]
+    let voters: [GameNamedPlayer]
     let leads: Bool
     let picked: Bool
 
@@ -208,8 +208,8 @@ struct GameKitSplitSide: View {
                 .tint(picked ? HostingTheme.coralFill
                       : (leads ? HostingTheme.token(DesignTokens.iosInCallText) : HostingTheme.inCallTextSecondary))
                 .accessibilityHidden(true)
-            if !names.isEmpty {
-                GameKitNameStack(names: names)
+            if !voters.isEmpty {
+                GameKitNameStack(voters: voters)
             }
         }
         .modifier(GameKitRowSurface(mark: mark))
@@ -220,14 +220,14 @@ struct GameKitSplitSide: View {
 }
 
 struct GameKitNameStack: View {
-    let names: [String]
+    let voters: [GameNamedPlayer]
 
     var body: some View {
-        let shown = Array(names.prefix(GameKitNameStackPolicy.visible))
-        let extra = GameKitNameStackPolicy.overflow(names.count)
+        let shown = Array(voters.prefix(GameKitNameStackPolicy.visible))
+        let extra = GameKitNameStackPolicy.overflow(voters.count)
         HStack(spacing: -6) {
-            ForEach(Array(shown.enumerated()), id: \.offset) { _, name in
-                ConclaveAvatar(name: name, id: name, size: .mention)
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, voter in
+                ConclaveAvatar(name: voter.name, id: voter.id, size: .mention)
                     .overlay { Circle().strokeBorder(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), lineWidth: 2) }
             }
             if extra > 0 {
@@ -238,7 +238,7 @@ struct GameKitNameStack: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(names.joined(separator: ", "))
+        .accessibilityLabel(voters.map(\.name).joined(separator: ", "))
     }
 }
 #endif

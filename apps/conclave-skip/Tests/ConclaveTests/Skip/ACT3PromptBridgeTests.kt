@@ -59,7 +59,8 @@ class ACT3PromptBridgeTests {
         val tie = presenter(PromptGameFixtureState.mltRevealTie).scene.mostLikelyTo!!
         assertEquals(listOf("Avery", "Ben"), tie.tiedNames.toList())
         val wyr = presenter(PromptGameFixtureState.wyrReveal).scene.wouldYouRather!!
-        assertEquals(listOf("Nobody picked this"), wyr.split("Nobody picked this").namesB.toList())
+        assertTrue(wyr.split().votersB.toList().isEmpty())
+        assertEquals(listOf("you", "r1", "r2", "r3", "r4", "r5"), wyr.split().votersA.toList().map { it.id })
     }
 
     @Test fun theTranspiledGamePoliciesDriveTheBarSplitAndTitles() {
@@ -68,7 +69,7 @@ class ACT3PromptBridgeTests {
             GameShellBarPolicy.content(chrome = trivia.chrome, scene = trivia.scene, results = trivia.results))
         val idle = GameStagePresenter()
         assertEquals(GameShellBarContent.none, GameShellBarPolicy.content(chrome = idle.chrome, scene = idle.scene, results = idle.results))
-        val split = presenter(PromptGameFixtureState.wyrReveal).scene.wouldYouRather!!.split("Nobody picked this")
+        val split = presenter(PromptGameFixtureState.wyrReveal).scene.wouldYouRather!!.split()
         assertEquals(1.0, split.fractionOfTotalA, 0.0001)
         assertEquals(0.0, split.fractionOfTotalB, 0.0001)
         assertTrue(split.leadsA)

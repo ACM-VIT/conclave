@@ -254,16 +254,16 @@ internal fun GameKitOptionPills(options: Iterable<GameOptionSummaryModel>) {
 }
 
 @Composable
-internal fun GameKitNameStack(names: Iterable<String>) {
-    val list = names.toList()
+internal fun GameKitNameStack(voters: Iterable<GameNamedPlayer>) {
+    val list = voters.toList()
     val shown = list.take(GameKitNameStackPolicy.visible)
     val extra = GameKitNameStackPolicy.overflow(list.size)
-    val label = list.joinToString(", ")
+    val label = list.joinToString(", ") { it.name }
     val ext = LocalConclaveExtendedColors.current
     Row(Modifier.clearAndSetSemantics { contentDescription = label }, verticalAlignment = Alignment.CenterVertically) {
-        shown.forEachIndexed { index, name ->
+        shown.forEachIndexed { index, voter ->
             Box(Modifier.offset(x = (-6 * index).dp).border(2.dp, ext.tile, CircleShape)) {
-                ConclaveAvatar(name = name, id = name, size = ConclaveAvatarSize.mention)
+                ConclaveAvatar(name = voter.name, id = voter.id, size = ConclaveAvatarSize.mention)
             }
         }
         if (extra > 0) {
