@@ -9,6 +9,8 @@ import androidx.core.content.FileProvider
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import skip.ui.UIApplication
 
 internal object TranscriptExport {
@@ -35,12 +37,17 @@ internal object TranscriptExport {
     fun build(context: Context, presenter: TranscriptPresenter): TranscriptExportFile =
         presenter.exportFile(labels = labels(context, presenter.inputs.roomId), timeLabel = { millis -> clock(context, millis) })
 
-    suspend fun write(context: Context, file: TranscriptExportFile): File? = withContext(Dispatchers.IO) {
-        runCatching {
-            val target = File(directory(context), file.fileName)
-            target.writeText(file.content, Charsets.UTF_8)
-            target
-        }.getOrNull()
+    suspend fun write(context: Context, file: TranscriptExportFile): File? {
+        var prepared: File? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                runCatching {
+                    NativeExportFiles.write(context, "transcript", file.fileName, file.content.toByteArray(Charsets.UTF_8)).also { prepared = it }
+                }.getOrNull()
+            }
+        } finally {
+            if (!currentCoroutineContext().isActive) prepared?.let { NativeExportFiles.discard(it) }
+        }
     }
 
     fun share(context: Context, file: File, subject: String): Boolean {
@@ -64,6 +71,7 @@ internal object TranscriptExport {
             }
             true
         } catch (failure: Throwable) {
+            NativeExportFiles.discard(file)
             PipManager.restoreAutoEnterAfterExternalActivity()
             false
         }

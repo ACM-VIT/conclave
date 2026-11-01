@@ -57,9 +57,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.File
 
 @Composable
 internal fun NativeAppHostBody(host: AppHostPresenter, onShowVideo: () -> Unit, modifier: Modifier = Modifier) {
@@ -635,12 +632,5 @@ private fun AppHostReadouts(host: AppHostPresenter) {
 }
 
 private suspend fun shareWhiteboardExport(context: Context, pngBase64: String, title: String) {
-    val file = withContext(Dispatchers.IO) {
-        runCatching {
-            val bytes = android.util.Base64.decode(pngBase64, android.util.Base64.DEFAULT)
-            val folder = File(context.cacheDir, "exports").apply { mkdirs() }
-            File(folder, "whiteboard-" + System.currentTimeMillis() + ".png").apply { writeBytes(bytes) }
-        }.getOrNull()
-    } ?: return
-    ChatPhotoFiles.share(context, file, title)
+    WhiteboardExport.share(context, pngBase64) { file -> ChatPhotoFiles.share(context, file, title) }
 }
