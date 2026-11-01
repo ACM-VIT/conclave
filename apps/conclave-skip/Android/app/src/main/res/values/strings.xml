@@ -1194,6 +1194,10 @@
     <string name="app_locked_others">Locked for others</string>
     <string name="app_more_actions">More %1$s actions</string>
     <string name="app_open_link_title">Open this link?</string>
+    <string name="app_status_opening">Opening…</string>
+    <string name="app_status_unavailable">Unavailable</string>
+    <string name="app_wb_more">More board options</string>
+    <string name="app_wb_pages">Pages</string>
     <string name="app_update_needed">Update Conclave to use %1$s.</string>
     <string name="app_view_only">View only</string>
     <string name="app_wb_canvas">Whiteboard canvas</string>

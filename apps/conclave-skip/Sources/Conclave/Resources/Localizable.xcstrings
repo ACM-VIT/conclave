@@ -3452,6 +3452,9 @@
     "More %@ Actions" : {
       "extractionState" : "manual"
     },
+    "More Board Options" : {
+      "extractionState" : "manual"
+    },
     "More Reactions" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -3858,6 +3861,9 @@
     "Opening %@" : {
       "extractionState" : "manual"
     },
+    "Opening…" : {
+      "extractionState" : "manual"
+    },
     "Opens chat" : {
       "extractionState" : "manual"
     },
@@ -3917,6 +3923,9 @@
       "extractionState" : "manual"
     },
     "Page Name" : {
+      "extractionState" : "manual"
+    },
+    "Pages" : {
       "extractionState" : "manual"
     },
     "Panelists" : {
