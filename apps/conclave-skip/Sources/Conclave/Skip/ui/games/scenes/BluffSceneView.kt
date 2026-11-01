@@ -1,6 +1,7 @@
 package conclave.module
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
@@ -11,23 +12,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun BluffSceneView(scene: BluffScene, games: GameStagePresenter) {
     var draft by rememberSaveable(scene.round) { mutableStateOf("") }
-    Column(Modifier.fillMaxWidth().testTag("game.scene.bluff"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxWidth().testTag("game.scene.bluff"), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (scene.phase == "write") PromptStatusSlot(games, scene.submittedCount, scene.totalPlayers)
+        if (scene.phase == "choose") PromptStatusSlot(games, scene.chosenCount, scene.totalPlayers)
         GameKitPrompt(kicker = bluffKicker(scene), title = scene.question)
         when (scene.phase) {
-            "write" -> {
-                PromptCountdownSlot(games)
-                BluffComposer(scene, games, draft, onDraftChange = { draft = it })
-            }
-            "choose" -> {
-                PromptCountdownSlot(games)
-                BluffChoices(scene, games)
-                PromptLine(conclavePlural("gm_wyr_chose", scene.chosenCount, scene.chosenCount, scene.totalPlayers))
-            }
+            "write" -> BluffComposer(scene, games, draft, onDraftChange = { draft = it })
+            "choose" -> BluffChoices(scene, games)
             "reveal" -> BluffReveal(scene)
         }
         if (!scene.isPlayer) PromptSpectatorNotice(games)
@@ -60,9 +58,11 @@ private fun BluffComposer(scene: BluffScene, games: GameStagePresenter, draft: S
                 },
             )
         } else if (scene.hasSubmitted) {
-            PromptHeadline(conclaveString("gm_bluff_submitted", scene.myBluff), Modifier.testTag("game.bluff.submitted"))
+            val label = conclaveString("gm_bluff_submitted", scene.myBluff)
+            Box(Modifier.testTag("game.bluff.submitted").semantics(mergeDescendants = true) { contentDescription = label }) {
+                PromptResultRow(id = "mine", text = scene.myBluff, mark = GameKitMark.selected)
+            }
         }
-        PromptLine(conclavePlural("gm_bluff_count", scene.submittedCount, scene.submittedCount, scene.totalPlayers))
     }
 }
 
@@ -84,14 +84,16 @@ private fun BluffChoices(scene: BluffScene, games: GameStagePresenter) {
 
 @Composable
 private fun BluffReveal(scene: BluffScene) {
-    val truth = conclaveString("gm_bluff_truth")
+    val you = conclaveString("ds_you")
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (option in scene.options) {
             PromptResultRow(
                 id = option.id,
                 text = option.text,
-                markText = if (option.isTruth) truth else "",
-                lines = bluffRevealLines(option),
+                owner = if (option.isOwn) you else option.ownerName,
+                isTruth = option.isTruth,
+                note = bluffRevealLines(option).joinToString(", "),
+                count = maxOf(0, option.votes),
                 mark = when {
                     option.isTruth -> GameKitMark.correct
                     option.isMine -> GameKitMark.selected

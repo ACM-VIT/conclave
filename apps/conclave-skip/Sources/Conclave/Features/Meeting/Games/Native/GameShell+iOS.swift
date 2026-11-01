@@ -11,8 +11,11 @@ struct GameShellHeaderActions: View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
             : AnyLayout(HStackLayout(spacing: 8))
+        let barContent = GameShellBarPolicy.content(chrome: chrome, scene: games.scene, results: games.results)
         layout {
-            GameKitSeatControl(seat: chrome.seat, onJoin: { games.join() })
+            if GameShellHeaderPolicy.showsSeatControl(chrome: chrome, sceneKind: games.scene.kind, barContent: barContent) {
+                GameKitSeatControl(seat: chrome.seat, onJoin: { games.join() })
+            }
             if chrome.canEnd || chrome.endPending {
                 Button(role: .destructive) {
                     endPrompt = true
@@ -220,15 +223,47 @@ struct GameLobbyBody: View {
     let chrome: GameChromeModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GameKitPrompt(kicker: ConclaveStrings.text("Lobby"), title: ConclaveStrings.text("Waiting to Start"),
-                          subtitle: GameShellText.optionSummary(scene.options))
+        let caption = GameLobbyPolicy.caption(reason: scene.lobby.reason, isHost: chrome.isHost)
+        VStack(spacing: 20) {
+            VStack(spacing: 12) {
+                GameKitGlyphTile(gameId: chrome.gameId)
+                if !scene.options.isEmpty {
+                    GameKitOptionPills(options: scene.options)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
             GameKitPlayerChips(players: scene.players, pending: scene.pendingJoiners)
-            Text(GameCopy.lobbyLine(scene.lobby, gameName: chrome.name, isHost: chrome.isHost))
-                .font(.subheadline)
-                .foregroundStyle(HostingTheme.inCallTextSecondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if caption != .none {
+                GameKitWaitingLine(text: GameCopy.lobbyCaption(caption, minPlayers: scene.lobby.minPlayers),
+                                   showsSpinner: GameLobbyPolicy.showsSpinner(caption))
+                    .accessibilityIdentifier("game.lobby.caption")
+            }
         }
+    }
+}
+
+struct GameKitOptionPills: View {
+    let options: [GameOptionSummaryModel]
+
+    var body: some View {
+        ConclaveFlowLayout(spacing: 6) {
+            ForEach(options) { option in
+                HStack(spacing: 4) {
+                    Text(option.value)
+                        .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    Text(option.label)
+                        .foregroundStyle(HostingTheme.inCallTextSecondary)
+                }
+                .font(.footnote.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 26)
+                .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Capsule())
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .accessibilityIdentifier("game.lobby.options")
     }
 }
 
@@ -240,22 +275,10 @@ struct GameGenericSceneBody: View {
     var body: some View {
         let common = scene.projection.common
         VStack(alignment: .leading, spacing: 12) {
-            GameKitPrompt(kicker: GameCopy.phaseLabel(chrome), title: GameShellText.promptTitle(scene.projection))
-            GameShellCountdownSlot(games: games)
-            if common.totalPlayers > 0 {
-                Text(GameCopy.progress(common.actedCount, common.totalPlayers))
-                    .font(.footnote)
-                    .monospacedDigit()
-                    .foregroundStyle(HostingTheme.inCallTextSecondary)
-            }
+            GameKitStatusRow(acted: common.actedCount, total: common.totalPlayers, countdown: games.countdown)
+            GameKitPrompt(kicker: "", title: GameShellText.promptTitle(scene.projection))
             if chrome.seat != .player {
-                if scene.kind == GameSceneKind.imposter {
-                    GameKitNotice(kind: .spectator, message: GameCopy.rolesSecret())
-                } else {
-                    GameKitNotice(kind: .spectator, message: GameCopy.spectatorBody(),
-                                  buttonTitle: chrome.seat == .canJoin ? ConclaveStrings.text("Join") : "",
-                                  onButton: chrome.seat == .canJoin ? { games.join() } : nil)
-                }
+                GameKitWatching(canJoin: chrome.seat == .canJoin && scene.kind != GameSceneKind.imposter, onJoin: { games.join() })
             }
             GameKitPlayerChips(players: scene.players, pending: scene.pendingJoiners)
             if !common.scoreboard.isEmpty {
@@ -280,15 +303,13 @@ struct GameResultsBody: View {
 
     var body: some View {
         let results = games.results
-        VStack(alignment: .leading, spacing: 12) {
-            GameKitPrompt(kicker: ConclaveStrings.text("Results"), title: GameCopy.winnerLine(results) ?? "")
-            GameKitScoreboard(rows: results.scoreboard)
+        VStack(spacing: 16) {
+            GameKitPodium(rows: results.scoreboard)
             if !games.chrome.isHost {
-                Text(ConclaveStrings.text("Waiting for the host"))
-                    .font(.subheadline)
-                    .foregroundStyle(HostingTheme.inCallTextSecondary)
+                GameKitWaitingLine(text: ConclaveStrings.text("Waiting for the host"))
             }
         }
+        .padding(.top, 8)
     }
 }
 

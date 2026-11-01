@@ -6,31 +6,25 @@ struct PersonVoteSceneView: View {
     let games: GameStagePresenter
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
+            if !scene.isReveal {
+                PromptStatusSlot(games: games, acted: scene.votedCount, total: scene.totalPlayers)
+            }
             GameKitPrompt(kicker: "", title: PromptGameCopy.mostLikelyTitle(scene.prompt))
             if scene.isReveal {
-                if scene.isTie {
-                    PromptHeadline(text: PromptGameCopy.tied(scene.tiedNames))
-                }
                 VStack(spacing: 8) {
                     ForEach(scene.candidates) { candidate in
                         PromptResultRow(id: candidate.id, text: candidate.isYou ? ConclaveStrings.text("You") : candidate.name,
-                                        markText: candidate.isWinner ? PromptGameCopy.mostVotes() : (candidate.isMine ? ConclaveStrings.text("Your answer") : ""),
-                                        lines: candidate.isMine && candidate.isWinner ? [ConclaveStrings.text("Your answer")] : [],
+                                        accessibilityNote: PromptGameCopy.candidateNote(candidate),
                                         count: max(0, candidate.votes),
                                         mark: candidate.isWinner ? .correct : (candidate.isMine ? .selected : .none))
                     }
                 }
-                if scene.hostAction == .none {
-                    PromptLine(text: PromptGameCopy.waitingForHost())
-                }
             } else {
-                PromptCountdownSlot(games: games)
                 if !scene.departedName.isEmpty {
                     GameKitNotice(kind: .info, message: PromptGameCopy.departed(scene.departedName))
                 }
                 PersonVoteChoices(scene: scene, games: games)
-                PromptLine(text: PromptGameCopy.voted(scene.votedCount, scene.totalPlayers))
             }
             if !scene.isPlayer {
                 PromptSpectatorNotice(games: games)

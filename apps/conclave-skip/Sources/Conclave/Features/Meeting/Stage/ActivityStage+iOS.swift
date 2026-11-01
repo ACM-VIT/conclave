@@ -120,7 +120,7 @@ struct ActivityStageIdentity: View {
     var body: some View {
         let parts = ActivityStageIdentity.parts(kind: kind, session: session)
         HStack(spacing: 10) {
-            Image(systemName: ActivityStageCopy.symbol(kind: kind, appId: parts.appId))
+            Image(systemName: parts.symbol.isEmpty ? ActivityStageCopy.symbol(kind: kind, appId: parts.appId) : parts.symbol)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
                 .frame(width: ActivityHeaderMetrics.face, height: ActivityHeaderMetrics.face)
@@ -147,6 +147,11 @@ struct ActivityStageIdentity: View {
         let name: String
         let status: String
         let appId: String
+        var gameId = ""
+
+        var symbol: String {
+            gameId.isEmpty ? "" : GameGlyphSymbols.name(gameId: gameId)
+        }
     }
 
     static func parts(kind raw: String, session: ActivitySession?) -> Parts {
@@ -156,7 +161,8 @@ struct ActivityStageIdentity: View {
         let kind = ActivityStageCopy.kind(raw)
         if kind == .game {
             let chrome = session.games.chrome
-            return Parts(name: ActivityStageCopy.displayName(kind: raw, name: chrome.name), status: GameCopy.headerStatus(chrome), appId: "")
+            return Parts(name: ActivityStageCopy.displayName(kind: raw, name: chrome.name), status: GameCopy.headerStatus(chrome),
+                         appId: "", gameId: chrome.gameId)
         }
         if kind == .browser && session.browser.model.isActive {
 

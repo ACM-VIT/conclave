@@ -14,10 +14,10 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun PersonVoteSceneView(scene: PersonVoteScene, games: GameStagePresenter) {
-    Column(Modifier.fillMaxWidth().testTag("game.scene.mostLikelyTo"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxWidth().testTag("game.scene.mostLikelyTo"), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (!scene.isReveal) PromptStatusSlot(games, scene.votedCount, scene.totalPlayers)
         GameKitPrompt(kicker = "", title = GameKitTextPolicy.question(conclaveString("gm_mlt_title", scene.prompt)))
         if (scene.isReveal) {
-            if (scene.isTie) PromptHeadline(promptTied(scene.tiedNames))
             val you = conclaveString("ds_you")
             val mostVotes = conclaveString("gm_mlt_most_votes")
             val yourAnswer = conclaveString("gm_your_answer")
@@ -26,8 +26,8 @@ internal fun PersonVoteSceneView(scene: PersonVoteScene, games: GameStagePresent
                     PromptResultRow(
                         id = candidate.id,
                         text = if (candidate.isYou) you else candidate.name,
-                        markText = if (candidate.isWinner) mostVotes else if (candidate.isMine) yourAnswer else "",
-                        lines = if (candidate.isMine && candidate.isWinner) listOf(yourAnswer) else emptyList(),
+                        note = listOfNotNull(if (candidate.isWinner) mostVotes else null, if (candidate.isMine) yourAnswer else null)
+                            .joinToString(", "),
                         count = maxOf(0, candidate.votes),
                         mark = when {
                             candidate.isWinner -> GameKitMark.correct
@@ -37,12 +37,9 @@ internal fun PersonVoteSceneView(scene: PersonVoteScene, games: GameStagePresent
                     )
                 }
             }
-            if (scene.hostAction == PromptHostAction.none) PromptLine(conclaveString("gm_waiting_host"))
         } else {
-            PromptCountdownSlot(games)
             if (scene.departedName.isNotEmpty()) GameKitNotice(GameKitNoticeKind.info, promptDeparted(scene.departedName))
             PersonVoteChoices(scene, games)
-            PromptLine(promptVoted(scene.votedCount, scene.totalPlayers))
         }
         if (!scene.isPlayer) PromptSpectatorNotice(games)
         PromptAnnouncement(games, PromptScenePolicy.voteRevealKey(scene), promptVoteResult(scene))

@@ -9,11 +9,14 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -64,9 +67,9 @@ internal fun gameKitMarkTint(mark: GameKitMark): Color {
 }
 
 @Composable
-internal fun gameKitRowBorder(mark: GameKitMark): BorderStroke {
-    val ext = LocalConclaveExtendedColors.current
-    return BorderStroke(1.dp, if (mark == GameKitMark.none) ext.border else gameKitMarkTint(mark))
+internal fun gameKitRowBorder(mark: GameKitMark): BorderStroke? {
+    if (mark == GameKitMark.none) return null
+    return BorderStroke(1.5.dp, gameKitMarkTint(mark))
 }
 
 @Composable
@@ -84,7 +87,7 @@ internal fun GameKitChoiceRow(choice: GameKitChoice, isPending: Boolean, enabled
         shape = MaterialTheme.shapes.medium,
         color = scheme.surfaceContainerHigh,
         border = gameKitRowBorder(mark),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("game.choice.${choice.id}").semantics {
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("game.choice.${choice.id}").semantics {
             role = Role.RadioButton
             if (state.isNotEmpty()) stateDescription = state
         },
@@ -93,9 +96,7 @@ internal fun GameKitChoiceRow(choice: GameKitChoice, isPending: Boolean, enabled
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(choice.text, style = MaterialTheme.typography.bodyLarge, color = if (muted) scheme.onSurfaceVariant else scheme.onSurface)
-                if (markText != null) {
-                    Text(markText, style = MaterialTheme.typography.labelLarge, color = gameKitMarkTint(mark))
-                } else if (choice.detail.isNotEmpty()) {
+                if (choice.detail.isNotEmpty()) {
                     Text(choice.detail, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
                 }
             }
@@ -114,7 +115,7 @@ internal fun GameKitRowTrailing(count: Int, mark: GameKitMark, isPending: Boolea
         } else {
             AnimatedVisibility(visible = mark != GameKitMark.none, enter = fadeIn() + scaleIn(initialScale = 0.6f),
                 exit = fadeOut() + scaleOut(targetScale = 0.6f)) {
-                Icon(if (mark == GameKitMark.wrongPick) ConclaveIcons.CancelFill0 else ConclaveIcons.CheckCircleFill1,
+                Icon(if (mark == GameKitMark.wrongPick) Icons.Rounded.Cancel else ConclaveIcons.CheckCircleFill1,
                     contentDescription = null, tint = gameKitMarkTint(mark), modifier = Modifier.size(22.dp))
             }
         }
@@ -145,7 +146,7 @@ internal fun GameKitSplitResult(split: GameKitSplit) {
 @Composable
 private fun GameKitSplitSide(label: String, count: Int, total: Int, fraction: Float, names: Iterable<String>, leads: Boolean, picked: Boolean) {
     val scheme = MaterialTheme.colorScheme
-    val summary = gameProgress(count, total) + ", " + label
+    val summary = gameProgress(count, total) + ", " + label + if (picked) ", " + conclaveString("gm_your_answer") else ""
     val mark = if (picked) GameKitMark.selected else GameKitMark.none
     Surface(
         shape = MaterialTheme.shapes.medium,
@@ -154,10 +155,13 @@ private fun GameKitSplitSide(label: String, count: Int, total: Int, fraction: Fl
         modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) { contentDescription = summary },
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(label, style = MaterialTheme.typography.bodyLarge,
                     fontWeight = if (leads) FontWeight.SemiBold else FontWeight.Normal,
-                    color = scheme.onSurface, modifier = Modifier.weight(1f))
+                    color = scheme.onSurface, modifier = Modifier.weight(1f, fill = false))
+                if (picked) Icon(ConclaveIcons.CheckCircleFill1, contentDescription = null, tint = scheme.primaryContainer,
+                    modifier = Modifier.size(18.dp))
+                Spacer(Modifier.weight(1f))
                 Text(count.toString(), style = rememberTabular(MaterialTheme.typography.bodyLarge), fontWeight = FontWeight.SemiBold,
                     color = scheme.onSurface)
             }
@@ -168,9 +172,7 @@ private fun GameKitSplitSide(label: String, count: Int, total: Int, fraction: Fl
                 trackColor = scheme.outlineVariant,
                 drawStopIndicator = {},
             )
-            if (picked) Text(conclaveString("gm_your_answer"), style = MaterialTheme.typography.labelLarge, color = scheme.primaryContainer)
-            val joined = names.joinToString(", ")
-            if (joined.isNotEmpty()) Text(joined, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+            if (names.iterator().hasNext()) GameKitNameStack(names)
         }
     }
 }

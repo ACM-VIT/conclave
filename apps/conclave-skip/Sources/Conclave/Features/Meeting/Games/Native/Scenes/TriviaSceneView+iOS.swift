@@ -6,24 +6,17 @@ struct TriviaSceneView: View {
     let games: GameStagePresenter
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if scene.isWaitingForQuestion {
-                GameKitPrompt(kicker: PromptGameCopy.triviaKicker(scene), title: PromptGameCopy.triviaWaiting())
-                PromptCountdownSlot(games: games)
-            } else {
-                GameKitPrompt(kicker: PromptGameCopy.triviaKicker(scene), title: scene.prompt)
-                PromptCountdownSlot(games: games)
+        VStack(alignment: .leading, spacing: 14) {
+            if !scene.isReveal {
+                PromptStatusSlot(games: games, acted: scene.answeredCount, total: scene.totalPlayers)
+            }
+            GameKitPrompt(kicker: PromptGameCopy.triviaKicker(scene),
+                          title: scene.isWaitingForQuestion ? PromptGameCopy.triviaWaiting() : scene.prompt)
+            if !scene.isWaitingForQuestion {
                 TriviaChoices(scene: scene, games: games)
-                if scene.isReveal {
-                    if let outcome = PromptGameCopy.triviaOutcome(scene) {
-                        PromptHeadline(text: outcome)
-                            .accessibilityIdentifier("game.trivia.outcome")
-                    }
-                    if let standing = PromptGameCopy.triviaStanding(scene) {
-                        PromptLine(text: standing)
-                    }
-                } else {
-                    PromptLine(text: PromptGameCopy.triviaProgress(scene))
+                if scene.isReveal, let outcome = PromptGameCopy.triviaOutcome(scene) {
+                    PromptOutcomeBadge(text: outcome, tone: PromptGameCopy.triviaTone(scene))
+                        .accessibilityIdentifier("game.trivia.outcome")
                 }
             }
             if !scene.isPlayer {

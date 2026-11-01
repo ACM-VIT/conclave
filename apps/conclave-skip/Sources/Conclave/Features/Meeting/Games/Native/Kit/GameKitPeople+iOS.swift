@@ -1,62 +1,11 @@
 #if os(iOS) && !SKIP
 import SwiftUI
 
-struct GameKitPlayerChips: View {
-    let players: [GamePlayerModel]
-    let pending: [GamePlayerModel]
-
-    var body: some View {
-        ConclaveFlowLayout(spacing: 8) {
-            ForEach(players) { player in
-                GameKitPlayerChip(player: player)
-            }
-            ForEach(pending) { player in
-                GameKitPlayerChip(player: player)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(ActivitiesCopy.players(players.count))
-        .accessibilityIdentifier("game.players")
-    }
-}
-
-struct GameKitPlayerChip: View {
-    let player: GamePlayerModel
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ConclaveAvatar(name: player.name, id: player.id, size: .mention)
-            Text(player.isYou ? ConclaveStrings.text("You") : player.name)
-                .font(.subheadline)
-                .lineLimit(1)
-                .foregroundStyle(player.isPending ? HostingTheme.inCallTextSecondary : HostingTheme.token(DesignTokens.iosInCallText))
-            if player.isPending {
-                Text(ConclaveStrings.text("next round"))
-                    .font(.caption)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .foregroundStyle(HostingTheme.inCallTextSecondary)
-            } else if player.hasActed {
-                Image(systemName: ConclaveSymbols.checkmark)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallSuccess))
-                    .accessibilityHidden(true)
-            }
-        }
-        .padding(.leading, 4)
-        .padding(.trailing, 10)
-        .padding(.vertical, 4)
-        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Capsule())
-        .overlay { Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
-        .accessibilityElement(children: .combine)
-    }
-}
-
 struct GameKitHostBar: View {
     let primaryTitle: String
     var primaryEnabled: Bool = true
     var primaryPending: Bool = false
+    var primaryProminent: Bool = true
     let onPrimary: () -> Void
     var secondaryTitle: String = ""
     var secondaryRole: ButtonRole? = nil
@@ -80,22 +29,38 @@ struct GameKitHostBar: View {
             .accessibilityIdentifier("game.bar.secondary")
         }
         if !primaryTitle.isEmpty {
+            let ink = primaryProminent ? HostingTheme.inCallOnCoral : HostingTheme.token(DesignTokens.iosInCallText)
             Button(action: onPrimary) {
                 HStack(spacing: 8) {
                     if primaryPending {
-                        ProgressView().tint(HostingTheme.inCallOnCoral)
+                        ProgressView().tint(ink)
                     }
                     Text(primaryTitle)
                 }
-                .foregroundStyle(HostingTheme.inCallOnCoral)
+                .foregroundStyle(ink)
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(HostingTheme.coralFill)
+            .modifier(GameKitPrimaryStyle(isProminent: primaryProminent))
             .disabled(!primaryEnabled || primaryPending)
             .opacity(primaryEnabled ? 1 : HostingTheme.disabledOpacity)
             .accessibilityValue(primaryPending ? ConclaveStrings.text("In Progress") : "")
             .accessibilityIdentifier("game.bar.primary")
+        }
+    }
+}
+
+struct GameKitPrimaryStyle: ViewModifier {
+    let isProminent: Bool
+
+    func body(content: Content) -> some View {
+        if isProminent {
+            content
+                .buttonStyle(.borderedProminent)
+                .tint(HostingTheme.coralFill)
+        } else {
+            content
+                .buttonStyle(.bordered)
+                .tint(HostingTheme.token(DesignTokens.iosInCallText))
         }
     }
 }

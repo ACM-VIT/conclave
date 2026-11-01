@@ -36,11 +36,7 @@ struct GameKitChoiceRow: View {
                         .foregroundStyle(muted ? HostingTheme.inCallTextSecondary : HostingTheme.token(DesignTokens.iosInCallText))
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
-                    if let markText = GameKitChoiceRow.markText(choice.mark) {
-                        Text(markText)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(GameKitChoiceRow.tint(choice.mark))
-                    } else if !choice.detail.isEmpty {
+                    if !choice.detail.isEmpty {
                         Text(choice.detail)
                             .font(.footnote)
                             .foregroundStyle(HostingTheme.inCallTextSecondary)
@@ -76,7 +72,7 @@ struct GameKitChoiceRow: View {
     }
 
     static func border(_ mark: GameKitMark) -> Color {
-        mark == .none ? HostingTheme.inCallBorder : tint(mark)
+        mark == .none ? Color.clear : tint(mark)
     }
 
     static func accessibilityValue(_ choice: GameKitChoice) -> String {
@@ -105,7 +101,7 @@ struct GameKitRowTrailing: View {
                 ProgressView()
                     .tint(HostingTheme.token(DesignTokens.iosInCallText))
             } else if mark != .none {
-                Image(systemName: mark == .wrongPick ? ConclaveSymbols.xmarkCircle : ConclaveSymbols.checkmarkCircleFill)
+                Image(systemName: mark == .wrongPick ? ConclaveSymbols.xmarkCircleFill : ConclaveSymbols.checkmarkCircleFill)
                     .font(.title3)
                     .foregroundStyle(GameKitChoiceRow.tint(mark))
                     .transition(.scale(scale: 0.6).combined(with: .opacity))
@@ -133,10 +129,10 @@ struct GameKitRowSurface: ViewModifier {
         content
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
             .background(isPressed ? HostingTheme.token(DesignTokens.iosInCallSurfaceHigh)
                         : HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: shape)
-            .overlay { shape.strokeBorder(GameKitChoiceRow.border(mark), lineWidth: 1) }
+            .overlay { shape.strokeBorder(GameKitChoiceRow.border(mark), lineWidth: mark == .none ? 0 : 1.5) }
             .contentShape(shape)
     }
 }
@@ -196,6 +192,12 @@ struct GameKitSplitSide: View {
                     .font(leads ? .body.weight(.semibold) : .body)
                     .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
                     .fixedSize(horizontal: false, vertical: true)
+                if picked {
+                    Image(systemName: ConclaveSymbols.checkmarkCircleFill)
+                        .font(.subheadline)
+                        .foregroundStyle(HostingTheme.coralFill)
+                        .accessibilityHidden(true)
+                }
                 Spacer(minLength: 8)
                 Text(count.formatted(.number))
                     .font(.body.weight(.semibold))
@@ -206,21 +208,37 @@ struct GameKitSplitSide: View {
                 .tint(picked ? HostingTheme.coralFill
                       : (leads ? HostingTheme.token(DesignTokens.iosInCallText) : HostingTheme.inCallTextSecondary))
                 .accessibilityHidden(true)
-            if picked {
-                Text(ConclaveStrings.text("Your answer"))
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(HostingTheme.coralFill)
-            }
             if !names.isEmpty {
-                Text(names.joined(separator: ", "))
-                    .font(.footnote)
-                    .foregroundStyle(HostingTheme.inCallTextSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                GameKitNameStack(names: names)
             }
         }
         .modifier(GameKitRowSurface(mark: mark))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(GameCopy.progress(count, total) + ", " + label)
+        .accessibilityValue(picked ? ConclaveStrings.text("Your answer") : "")
+    }
+}
+
+struct GameKitNameStack: View {
+    let names: [String]
+
+    var body: some View {
+        let shown = Array(names.prefix(GameKitNameStackPolicy.visible))
+        let extra = GameKitNameStackPolicy.overflow(names.count)
+        HStack(spacing: -6) {
+            ForEach(Array(shown.enumerated()), id: \.offset) { _, name in
+                ConclaveAvatar(name: name, id: name, size: .mention)
+                    .overlay { Circle().strokeBorder(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), lineWidth: 2) }
+            }
+            if extra > 0 {
+                Text("+" + extra.formatted(.number))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(HostingTheme.inCallTextSecondary)
+                    .padding(.leading, 10)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(names.joined(separator: ", "))
     }
 }
 #endif

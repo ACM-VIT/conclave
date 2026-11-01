@@ -7,16 +7,18 @@ struct BluffSceneView: View {
     @State private var draft = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
+            if scene.phase == "write" {
+                PromptStatusSlot(games: games, acted: scene.submittedCount, total: scene.totalPlayers)
+            } else if scene.phase == "choose" {
+                PromptStatusSlot(games: games, acted: scene.chosenCount, total: scene.totalPlayers)
+            }
             GameKitPrompt(kicker: PromptGameCopy.bluffKicker(scene), title: scene.question)
             switch scene.phase {
             case "write":
-                PromptCountdownSlot(games: games)
                 BluffComposer(scene: scene, games: games, draft: $draft)
             case "choose":
-                PromptCountdownSlot(games: games)
                 BluffChoices(scene: scene, games: games)
-                PromptLine(text: PromptGameCopy.bluffChosenCount(scene))
             case "reveal":
                 BluffReveal(scene: scene)
             default:
@@ -50,10 +52,10 @@ struct BluffComposer: View {
                                  maxLength: BluffScene.maxBluffLength, text: $draft, submitTitle: PromptGameCopy.bluffSubmit(),
                                  isPending: pending, isEnabled: scene.canSubmit && !interaction.isPending, onSubmit: submit)
             } else if scene.hasSubmitted {
-                PromptHeadline(text: PromptGameCopy.bluffSubmitted(scene.myBluff))
+                PromptResultRow(id: "mine", text: scene.myBluff, mark: .selected)
+                    .accessibilityLabel(PromptGameCopy.bluffSubmitted(scene.myBluff))
                     .accessibilityIdentifier("game.bluff.submitted")
             }
-            PromptLine(text: PromptGameCopy.bluffSubmittedCount(scene))
         }
         .conclaveGestureFeedback(.bluffSubmitted, trigger: submittedCount)
     }
@@ -93,8 +95,9 @@ struct BluffReveal: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(scene.options) { option in
-                PromptResultRow(id: option.id, text: option.text, markText: option.isTruth ? PromptGameCopy.truth() : "",
-                                lines: PromptGameCopy.bluffRevealLines(option), count: -1,
+                PromptResultRow(id: option.id, text: option.text, owner: option.isOwn ? ConclaveStrings.text("You") : option.ownerName,
+                                isTruth: option.isTruth, accessibilityNote: PromptGameCopy.bluffRevealLines(option).joined(separator: ", "),
+                                count: max(0, option.votes),
                                 mark: option.isTruth ? .correct : (option.isMine ? .selected : .none))
             }
             if !scene.roundPoints.isEmpty {

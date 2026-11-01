@@ -14,21 +14,15 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun TriviaSceneView(scene: TriviaScene, games: GameStagePresenter) {
-    Column(Modifier.fillMaxWidth().testTag("game.scene.trivia"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (scene.isWaitingForQuestion) {
-            GameKitPrompt(kicker = triviaKicker(scene), title = conclaveString("gm_trivia_waiting"))
-            PromptCountdownSlot(games)
-        } else {
-            GameKitPrompt(kicker = triviaKicker(scene), title = scene.prompt)
-            PromptCountdownSlot(games)
+    Column(Modifier.fillMaxWidth().testTag("game.scene.trivia"), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (!scene.isReveal) PromptStatusSlot(games, scene.answeredCount, scene.totalPlayers)
+        GameKitPrompt(kicker = triviaKicker(scene),
+            title = if (scene.isWaitingForQuestion) conclaveString("gm_trivia_waiting") else scene.prompt)
+        if (!scene.isWaitingForQuestion) {
             TriviaChoices(scene, games)
-            if (scene.isReveal) {
-                val outcome = triviaOutcome(scene)
-                if (outcome != null) PromptHeadline(outcome, Modifier.testTag("game.trivia.outcome"))
-                val standing = triviaStanding(scene)
-                if (standing != null) PromptLine(standing)
-            } else {
-                PromptLine(triviaProgress(scene))
+            val outcome = if (scene.isReveal) triviaOutcome(scene) else null
+            if (outcome != null) {
+                PromptOutcomeBadge(outcome, GameKitOutcomePolicy.tone(scene.outcome), Modifier.testTag("game.trivia.outcome"))
             }
         }
         if (!scene.isPlayer) PromptSpectatorNotice(games)

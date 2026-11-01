@@ -101,6 +101,15 @@ enum PromptGameCopy {
     }
     static func mostVotes() -> String { ConclaveStrings.text("Most votes") }
 
+    static func triviaTone(_ scene: TriviaScene) -> GameKitMark { GameKitOutcomePolicy.tone(scene.outcome) }
+
+    static func candidateNote(_ candidate: PersonCandidateModel) -> String {
+        var parts: [String] = []
+        if candidate.isWinner { parts.append(mostVotes()) }
+        if candidate.isMine { parts.append(ConclaveStrings.text("Your answer")) }
+        return parts.joined(separator: ", ")
+    }
+
     static func tied(_ names: [String]) -> String {
         if names.count < 2 { return names.first ?? "" }
         let head = names.dropLast().joined(separator: ", ")

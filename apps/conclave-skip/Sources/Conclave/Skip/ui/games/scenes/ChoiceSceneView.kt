@@ -14,17 +14,13 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun ChoiceSceneView(scene: ChoiceScene, games: GameStagePresenter) {
-    Column(Modifier.fillMaxWidth().testTag("game.scene.wouldYouRather"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        GameKitPrompt(kicker = "", title = conclaveString("gm_wyr_title"))
+    Column(Modifier.fillMaxWidth().testTag("game.scene.wouldYouRather"), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (scene.isReveal) {
-            val nobody = conclaveString("gm_wyr_nobody")
-            val split = remember(scene, nobody) { scene.split(nobody) }
+            val split = remember(scene) { scene.split("") }
             GameKitSplitResult(split)
-            if (scene.hostAction == PromptHostAction.none) PromptLine(conclaveString("gm_waiting_host"))
         } else {
-            PromptCountdownSlot(games)
+            PromptStatusSlot(games, scene.answeredCount, scene.totalPlayers)
             ChoiceButtons(scene, games)
-            PromptLine(conclavePlural("gm_wyr_chose", scene.answeredCount, scene.answeredCount, scene.totalPlayers))
         }
         if (!scene.isPlayer) PromptSpectatorNotice(games)
     }

@@ -34,12 +34,11 @@ enum GameCopy {
         return line
     }
 
-    static func lobbyLine(_ lobby: GameLobbyModel, gameName: String, isHost: Bool) -> String {
-        switch lobby.reason {
-        case .none: return ConclaveStrings.text("Start when everyone is in.")
-        case .needsPlayers: return ConclaveStrings.format("%@ needs at least %lld players.", gameName, lobby.minPlayers)
-        case .joinToStart: return ConclaveStrings.text("Join the game to start it.")
-        case .hostStarts: return ConclaveStrings.text("The host starts the game.")
+    static func lobbyCaption(_ caption: GameLobbyCaption, minPlayers: Int) -> String {
+        switch caption {
+        case .none: return ""
+        case .waitingForHost: return ConclaveStrings.text("Waiting for the host")
+        case .needsPlayers: return ConclaveStrings.format("Needs %lld players", minPlayers)
         case .reconnecting: return ConclaveStrings.text("Reconnecting")
         }
     }

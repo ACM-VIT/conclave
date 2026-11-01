@@ -1,5 +1,6 @@
 package conclave.module
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,6 +9,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Cancel
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -22,8 +27,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -61,25 +68,61 @@ internal fun PromptGameHostBar(games: GameStagePresenter) {
             onPrimary = { games.send(action.intent()) },
             primaryEnabled = !interaction.isPending || pending,
             primaryPending = pending,
+            primaryProminent = !action.isOverride,
         )
     }
 }
 
 @Composable
-internal fun PromptCountdownSlot(games: GameStagePresenter) {
-    val countdown = games.countdown ?: return
-    GameKitCountdown(countdown)
+internal fun PromptStatusSlot(games: GameStagePresenter, acted: Int = 0, total: Int = 0) {
+    GameKitStatusRow(acted, total, games.countdown)
 }
 
 @Composable
-internal fun PromptSpectatorNotice(games: GameStagePresenter, message: String = "") {
-    val canJoin = games.chrome.seat == SeatState.canJoin
-    GameKitNotice(
-        GameKitNoticeKind.spectator,
-        if (message.isEmpty()) conclaveString("gm_err_not_seated") else message,
-        buttonTitle = if (canJoin) conclaveString("gm_join") else "",
-        onButton = if (canJoin) ({ games.join() }) else null,
+internal fun PromptSpectatorNotice(games: GameStagePresenter, allowsJoin: Boolean = true) {
+    val seat = games.chrome.seat
+    val tag = gameSeatTagResource(seat)
+    GameKitWatching(
+        canJoin = allowsJoin && seat == SeatState.canJoin,
+        onJoin = { games.join() },
+        title = if (tag != null) conclaveString(tag) else conclaveString("gm_watching"),
     )
+}
+
+@Composable
+internal fun PromptOwnerLine(name: String, isTruth: Boolean) {
+    val scheme = MaterialTheme.colorScheme
+    val ext = LocalConclaveExtendedColors.current
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (isTruth) {
+            Icon(ConclaveIcons.CheckCircleFill1, contentDescription = null, tint = ext.success, modifier = Modifier.size(16.dp))
+            Text(conclaveString("gm_bluff_truth"), style = MaterialTheme.typography.labelLarge, color = ext.success)
+        } else if (name.isNotEmpty()) {
+            ConclaveAvatar(name = name, id = name, size = ConclaveAvatarSize.mention)
+            Text(name, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+internal fun PromptOutcomeBadge(text: String, tone: GameKitMark, modifier: Modifier = Modifier) {
+    val ink = gameKitMarkTint(tone)
+    Row(
+        modifier.heightIn(min = 40.dp).background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape).padding(horizontal = 14.dp)
+            .semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            when (tone) {
+                GameKitMark.wrongPick -> Icons.Rounded.Cancel
+                GameKitMark.correct -> ConclaveIcons.CheckCircleFill1
+                else -> ConclaveIcons.TimerFill0
+            },
+            contentDescription = null, tint = ink, modifier = Modifier.size(20.dp),
+        )
+        Text(text, style = MaterialTheme.typography.titleMedium, color = ink)
+    }
 }
 
 @Composable
@@ -98,8 +141,9 @@ internal fun PromptHeadline(text: String, modifier: Modifier = Modifier) {
 internal fun PromptResultRow(
     id: String,
     text: String,
-    markText: String = "",
-    lines: List<String> = emptyList(),
+    owner: String = "",
+    isTruth: Boolean = false,
+    note: String = "",
     count: Int = -1,
     mark: GameKitMark = GameKitMark.none,
 ) {
@@ -108,18 +152,17 @@ internal fun PromptResultRow(
         shape = MaterialTheme.shapes.medium,
         color = scheme.surfaceContainerHigh,
         border = gameKitRowBorder(mark),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("game.result.$id").semantics(mergeDescendants = true) {},
+        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag("game.result.$id").semantics(mergeDescendants = true) {
+            if (note.isNotEmpty()) stateDescription = note
+        },
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(text, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurface)
-                if (markText.isNotEmpty()) Text(markText, style = MaterialTheme.typography.labelLarge, color = gameKitMarkTint(mark))
-                for (line in lines) {
-                    Text(line, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
-                }
+                if (isTruth || owner.isNotEmpty()) PromptOwnerLine(owner, isTruth)
             }
-            GameKitRowTrailing(count, mark)
+            GameKitRowTrailing(count, if (isTruth) GameKitMark.none else mark)
         }
     }
 }
@@ -143,21 +186,22 @@ internal fun PromptResultsBody(games: GameStagePresenter, scene: GameScene) {
     Column(Modifier.fillMaxWidth().testTag("game.scene.results"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         when {
             imposter != null -> ImposterResultView(imposter)
-            scene.wouldYouRather != null -> GameKitPrompt(kicker = conclaveString("gm_results"), title = conclaveString("gm_wrap_title"),
-                subtitle = conclaveString("gm_wyr_wrap_body"))
-            scene.mostLikelyTo != null -> GameKitPrompt(kicker = conclaveString("gm_results"), title = conclaveString("gm_wrap_title"),
-                subtitle = conclaveString("gm_mlt_wrap_body"))
+            scene.wouldYouRather != null || scene.mostLikelyTo != null -> Column(
+                Modifier.fillMaxWidth().padding(top = 12.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                GameKitGlyphTile(games.chrome.gameId)
+                Text(conclaveString("gm_wrap_title"), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.semantics { heading() })
+            }
             else -> PromptScoredResults(games, scene.kind)
         }
-        if (!isHost) PromptLine(conclaveString("gm_waiting_host"))
+        if (!isHost) GameKitWaitingLine(conclaveString("gm_waiting_host"))
     }
 }
 
 @Composable
 internal fun PromptScoredResults(games: GameStagePresenter, kind: String) {
     val results = games.results
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        GameKitPrompt(kicker = conclaveString(promptAwardResource(kind)), title = gameWinnerLine(results) ?: "")
-        GameKitScoreboard(results.scoreboard)
-    }
+    Box(Modifier.padding(top = 8.dp)) { GameKitPodium(results.scoreboard) }
 }

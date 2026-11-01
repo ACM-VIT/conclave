@@ -6,17 +6,12 @@ struct ChoiceSceneView: View {
     let games: GameStagePresenter
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GameKitPrompt(kicker: "", title: PromptGameCopy.wouldYouRather())
+        VStack(alignment: .leading, spacing: 14) {
             if scene.isReveal {
-                GameKitSplitResult(split: scene.split(nobodyLabel: PromptGameCopy.nobodyPicked()))
-                if scene.hostAction == .none {
-                    PromptLine(text: PromptGameCopy.waitingForHost())
-                }
+                GameKitSplitResult(split: scene.split(nobodyLabel: ""))
             } else {
-                PromptCountdownSlot(games: games)
+                PromptStatusSlot(games: games, acted: scene.answeredCount, total: scene.totalPlayers)
                 ChoiceButtons(scene: scene, games: games)
-                PromptLine(text: PromptGameCopy.chose(scene.answeredCount, scene.totalPlayers))
             }
             if !scene.isPlayer {
                 PromptSpectatorNotice(games: games)

@@ -95,7 +95,7 @@ internal fun activityStageAnnouncement(kind: String, name: String): String? {
     }
 }
 
-private data class ActivityStageIdentityParts(val name: String, val status: String, val appId: String)
+private data class ActivityStageIdentityParts(val name: String, val status: String, val appId: String, val gameId: String = "")
 
 @Composable
 private fun activityStageIdentity(kind: String, session: ActivitySession?): ActivityStageIdentityParts {
@@ -103,7 +103,7 @@ private fun activityStageIdentity(kind: String, session: ActivitySession?): Acti
     val activityKind = activityStageKind(kind)
     if (activityKind == ActivityKind.game) {
         val chrome = session.games.chrome
-        return ActivityStageIdentityParts(activityStageDisplayName(kind, chrome.name), gameHeaderStatus(chrome), "")
+        return ActivityStageIdentityParts(activityStageDisplayName(kind, chrome.name), gameHeaderStatus(chrome), "", chrome.gameId)
     }
     if (activityKind == ActivityKind.browser && session.browser.model.isActive) {
 
@@ -139,7 +139,8 @@ private fun ActivityStageHeaderIdentity(kind: String, parts: ActivityStageIdenti
     val scheme = MaterialTheme.colorScheme
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(Modifier.size(36.dp).background(scheme.surfaceContainerHigh, RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-            Icon(activityStageIcon(kind, parts.appId), contentDescription = null, tint = scheme.onSurface, modifier = Modifier.size(20.dp))
+            Icon(if (parts.gameId.isNotEmpty()) gameGlyphIcon(parts.gameId) else activityStageIcon(kind, parts.appId), contentDescription = null,
+                tint = scheme.onSurface, modifier = Modifier.size(20.dp))
         }
         Column(Modifier.weight(1f)) {
             Text(parts.name, style = MaterialTheme.typography.titleMedium, color = scheme.onSurface, maxLines = 1,

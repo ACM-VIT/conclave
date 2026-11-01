@@ -34,30 +34,74 @@ struct PromptGameHostBar: View {
             let interaction = games.interaction
             let pending = interaction.isPending && interaction.pendingType == action.moveType
             GameKitHostBar(primaryTitle: PromptGameCopy.hostAction(action), primaryEnabled: !interaction.isPending || pending,
-                           primaryPending: pending, onPrimary: { _ = games.send(action.intent()) })
+                           primaryPending: pending, primaryProminent: !action.isOverride,
+                           onPrimary: { _ = games.send(action.intent()) })
                 .accessibilityIdentifier("game.host." + action.rawValue)
         }
     }
 }
 
-struct PromptCountdownSlot: View {
+struct PromptStatusSlot: View {
     let games: GameStagePresenter
+    var acted = 0
+    var total = 0
 
     var body: some View {
-        if let countdown = games.countdown {
-            GameKitCountdown(model: countdown)
-        }
+        GameKitStatusRow(acted: acted, total: total, countdown: games.countdown)
     }
 }
 
 struct PromptSpectatorNotice: View {
     let games: GameStagePresenter
-    var message: String = GameCopy.spectatorBody()
+    var allowsJoin = true
 
     var body: some View {
-        let canJoin = games.chrome.seat == .canJoin
-        GameKitNotice(kind: .spectator, message: message, buttonTitle: canJoin ? ConclaveStrings.text("Join") : "",
-                      onButton: canJoin ? { games.join() } : nil)
+        GameKitWatching(title: GameCopy.seatTag(games.chrome.seat) ?? ConclaveStrings.text("Watching"),
+                        canJoin: allowsJoin && games.chrome.seat == .canJoin, onJoin: { games.join() })
+    }
+}
+
+struct PromptOwnerLine: View {
+    let name: String
+    let isTruth: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if isTruth {
+                Image(systemName: ConclaveSymbols.checkmarkCircleFill)
+                    .font(.footnote)
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallSuccess))
+                Text(PromptGameCopy.truth())
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallSuccess))
+            } else if !name.isEmpty {
+                ConclaveAvatar(name: name, id: name, size: .mention)
+                Text(name)
+                    .font(.footnote)
+                    .foregroundStyle(HostingTheme.inCallTextSecondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
+struct PromptOutcomeBadge: View {
+    let text: String
+    let tone: GameKitMark
+
+    var body: some View {
+        let ink = GameKitChoiceRow.tint(tone)
+        HStack(spacing: 8) {
+            Image(systemName: tone == .wrongPick ? ConclaveSymbols.xmarkCircleFill
+                  : (tone == .correct ? ConclaveSymbols.checkmarkCircleFill : ConclaveSymbols.timer))
+            Text(text)
+        }
+        .font(.headline)
+        .foregroundStyle(ink)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 40)
+        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Capsule())
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -91,36 +135,30 @@ struct PromptHeadline: View {
 struct PromptResultRow: View {
     let id: String
     let text: String
-    var markText: String = ""
-    var lines: [String] = []
+    var owner: String = ""
+    var isTruth = false
+    var accessibilityNote: String = ""
     var count: Int = -1
     var mark: GameKitMark = .none
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(text)
                     .font(.body)
                     .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
-                if !markText.isEmpty {
-                    Text(markText)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(GameKitChoiceRow.tint(mark))
-                }
-                ForEach(lines.indices, id: \.self) { index in
-                    Text(lines[index])
-                        .font(.footnote)
-                        .foregroundStyle(HostingTheme.inCallTextSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                if isTruth || !owner.isEmpty {
+                    PromptOwnerLine(name: owner, isTruth: isTruth)
                 }
             }
             Spacer(minLength: 8)
-            GameKitRowTrailing(count: count, mark: mark)
+            GameKitRowTrailing(count: count, mark: isTruth ? .none : mark)
         }
         .modifier(GameKitRowSurface(mark: mark))
         .accessibilityElement(children: .combine)
+        .accessibilityValue(accessibilityNote)
         .accessibilityIdentifier("game.result." + id)
     }
 }
@@ -151,17 +189,21 @@ struct PromptResultsBody: View {
         VStack(alignment: .leading, spacing: 12) {
             if let imposter = scene.imposter {
                 ImposterResultView(scene: imposter)
-            } else if scene.wouldYouRather != nil {
-                GameKitPrompt(kicker: ConclaveStrings.text("Results"), title: PromptGameCopy.wrapTitle(),
-                              subtitle: PromptGameCopy.wyrWrapBody())
-            } else if scene.mostLikelyTo != nil {
-                GameKitPrompt(kicker: ConclaveStrings.text("Results"), title: PromptGameCopy.wrapTitle(),
-                              subtitle: PromptGameCopy.mltWrapBody())
+            } else if scene.wouldYouRather != nil || scene.mostLikelyTo != nil {
+                VStack(spacing: 12) {
+                    GameKitGlyphTile(gameId: games.chrome.gameId)
+                    Text(PromptGameCopy.wrapTitle())
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                        .accessibilityAddTraits(.isHeader)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 12)
             } else {
                 PromptScoredResults(games: games, kind: scene.kind)
             }
             if !isHost {
-                PromptLine(text: PromptGameCopy.waitingForHost())
+                GameKitWaitingLine(text: PromptGameCopy.waitingForHost())
             }
         }
         .accessibilityIdentifier("game.scene.results")
@@ -174,10 +216,8 @@ struct PromptScoredResults: View {
 
     var body: some View {
         let results = games.results
-        VStack(alignment: .leading, spacing: 12) {
-            GameKitPrompt(kicker: PromptGameCopy.award(kind: kind), title: GameCopy.winnerLine(results) ?? "")
-            GameKitScoreboard(rows: results.scoreboard)
-        }
+        GameKitPodium(rows: results.scoreboard)
+            .padding(.top, 8)
     }
 }
 #endif

@@ -10,11 +10,10 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun ReactionSceneView(scene: ReactionScene, games: GameStagePresenter) {
-    Column(Modifier.fillMaxWidth().testTag("game.scene.reaction"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (scene.phase == "reveal") GameKitPrompt(kicker = "", title = reactionFastest(scene.fastestName))
+    Column(Modifier.fillMaxWidth().testTag("game.scene.reaction"), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (scene.isPadPhase) {
+            PromptStatusSlot(games, scene.tappedCount, scene.totalPlayers)
             ReactionPad(scene, games)
-            PromptLine(conclaveString("gm_reaction_tapped", scene.tappedCount, scene.totalPlayers))
         } else if (scene.phase == "reveal") {
             val rows = mutableListOf<GameKitRoundRow>()
             for (result in scene.results) {

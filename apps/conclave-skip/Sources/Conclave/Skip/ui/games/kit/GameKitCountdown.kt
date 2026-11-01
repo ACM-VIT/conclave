@@ -4,13 +4,11 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -24,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -61,30 +60,35 @@ internal fun GameKitCountdown(model: CountdownModel, modifier: Modifier = Modifi
     LaunchedEffect(announcedText) {
         if (announcedText.isNotEmpty()) announcement = announcedText
     }
-    Row(
-        modifier.fillMaxWidth().testTag("game.countdown").clearAndSetSemantics { contentDescription = label },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    Box(modifier.testTag("game.countdown").clearAndSetSemantics { contentDescription = label }) {
         if (model.durationMillis > 0) {
-            val fraction = model.fractionLeft(nowMillis = nowMillis).toFloat()
-            LinearProgressIndicator(
-                progress = { fraction },
-                modifier = Modifier.weight(1f),
-                color = color,
-                trackColor = scheme.outlineVariant,
-                drawStopIndicator = {},
-            )
+            GameKitTimerRing(model.fractionLeft(nowMillis = nowMillis).toFloat(), seconds, color)
         } else {
-            Spacer(Modifier.weight(1f))
+            GameKitTimerCapsule(gameSeconds(seconds), warning)
         }
-        GameKitTimerCapsule(gameSeconds(seconds), warning)
     }
 
     Box(Modifier.size(1.dp).semantics {
         liveRegion = LiveRegionMode.Polite
         contentDescription = announcement
     })
+}
+
+@Composable
+internal fun GameKitTimerRing(fraction: Float, seconds: Int, color: Color) {
+    val scheme = MaterialTheme.colorScheme
+    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(
+            progress = { fraction.coerceIn(0f, 1f) },
+            modifier = Modifier.size(40.dp),
+            color = color,
+            trackColor = scheme.surfaceContainerHighest,
+            strokeWidth = 3.dp,
+            strokeCap = StrokeCap.Round,
+            gapSize = 0.dp,
+        )
+        Text(seconds.toString(), style = rememberTabular(MaterialTheme.typography.labelLarge), color = color, maxLines = 1)
+    }
 }
 
 @Composable

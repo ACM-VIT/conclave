@@ -164,7 +164,7 @@ class ActivityBridgeTests {
             val name = gameFailureResource(value)
             if (value == GameFailure.none) assertNull(name) else resources.add(name!!)
         }
-        for (value in GameLobbyReason.entries) resources.add(gameLobbyLineResource(value))
+        for (value in GameLobbyCaption.entries) gameLobbyCaptionResource(value)?.let { resources.add(it) }
         for (value in SeatState.entries) gameSeatTagResource(value)?.let { resources.add(it) }
         for (value in GameKitNoticeKind.entries) gameNoticeTitleResource(value)?.let { resources.add(it) }
         for (appId in ActivitiesCatalogPolicy.defaultAppIds) {

@@ -32,18 +32,18 @@ internal fun gameHeaderStatus(chrome: GameChromeModel): String {
     return line
 }
 
-internal fun gameLobbyLineResource(reason: GameLobbyReason): String = when (reason) {
-    GameLobbyReason.none -> "gm_host_start_hint"
-    GameLobbyReason.needsPlayers -> "gm_needs_players"
-    GameLobbyReason.joinToStart -> "gm_join_to_start"
-    GameLobbyReason.hostStarts -> "gm_participant_start_hint"
-    GameLobbyReason.reconnecting -> "gm_reconnecting"
+internal fun gameLobbyCaptionResource(caption: GameLobbyCaption): String? = when (caption) {
+    GameLobbyCaption.none -> null
+    GameLobbyCaption.waitingForHost -> "gm_waiting_host"
+    GameLobbyCaption.needsPlayers -> "gm_needs_count"
+    GameLobbyCaption.reconnecting -> "gm_reconnecting"
 }
 
 @Composable
-internal fun gameLobbyLine(lobby: GameLobbyModel, gameName: String): String =
-    if (lobby.reason == GameLobbyReason.needsPlayers) conclaveString("gm_needs_players", gameName, lobby.minPlayers)
-    else conclaveString(gameLobbyLineResource(lobby.reason))
+internal fun gameLobbyCaption(caption: GameLobbyCaption, minPlayers: Int): String {
+    val name = gameLobbyCaptionResource(caption) ?: return ""
+    return if (caption == GameLobbyCaption.needsPlayers) conclaveString(name, minPlayers) else conclaveString(name)
+}
 
 internal fun gameFailureResource(failure: GameFailure): String? = when (failure) {
     GameFailure.none -> null

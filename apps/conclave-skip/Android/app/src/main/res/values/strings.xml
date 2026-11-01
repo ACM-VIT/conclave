@@ -1361,6 +1361,7 @@
     <string name="gm_joining_next">Joining next round</string>
     <string name="gm_lobby">Lobby</string>
     <string name="gm_needs_players">%1$s needs at least %2$d players.</string>
+    <string name="gm_needs_count">Needs %1$d players</string>
     <string name="gm_next_round_suffix">next round</string>
     <string name="gm_option_summary">%1$s: %2$s</string>
     <string name="gm_or">or</string>

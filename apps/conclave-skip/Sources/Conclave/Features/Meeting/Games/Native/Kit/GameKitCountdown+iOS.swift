@@ -24,15 +24,12 @@ private struct GameKitCountdownFace: View {
     var body: some View {
         let seconds = model.secondsLeft(nowMillis: nowMillis)
         let warning = seconds <= CountdownModel.warningSeconds
-        HStack(spacing: 12) {
+        Group {
             if model.durationMillis > 0 {
-                ProgressView(value: model.fractionLeft(nowMillis: nowMillis))
-                    .tint(warning ? HostingTheme.token(DesignTokens.iosInCallWarning) : HostingTheme.token(DesignTokens.iosInCallText))
-                    .animation(nil, value: seconds)
+                GameKitTimerRing(fraction: model.fractionLeft(nowMillis: nowMillis), seconds: seconds, isWarning: warning)
             } else {
-                Spacer(minLength: 0)
+                GameKitTimerCapsule(text: GameCopy.seconds(seconds), isWarning: warning)
             }
-            GameKitTimerCapsule(text: GameCopy.seconds(seconds), isWarning: warning)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(GameCopy.secondsLeft(seconds))
@@ -42,6 +39,34 @@ private struct GameKitCountdownFace: View {
                 AccessibilityNotification.Announcement(GameCopy.secondsLeft(value)).post()
             }
         }
+    }
+}
+
+struct GameKitTimerRing: View {
+    let fraction: Double
+    let seconds: Int
+    let isWarning: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let ink = isWarning ? HostingTheme.token(DesignTokens.iosInCallWarning) : HostingTheme.token(DesignTokens.iosInCallText)
+        ZStack {
+            Circle()
+                .stroke(HostingTheme.token(DesignTokens.iosInCallSurfaceHigh), lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: max(0, min(1, fraction)))
+                .stroke(ink, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(reduceMotion ? nil : .linear(duration: 1), value: fraction)
+            Text(seconds.formatted(.number))
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(ink)
+                .contentTransition(.numericText(countsDown: true))
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+        }
+        .frame(width: 40, height: 40)
     }
 }
 

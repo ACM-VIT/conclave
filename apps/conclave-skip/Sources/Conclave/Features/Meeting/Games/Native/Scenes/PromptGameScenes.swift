@@ -33,6 +33,13 @@ enum PromptHostAction: String, CaseIterable, Equatable {
         }
     }
 
+    var isOverride: Bool {
+        switch self {
+        case .skipQuestion, .skipWriting, .revealNow, .endVote: return true
+        case .none, .next, .callVote: return false
+        }
+    }
+
     func intent() -> GameMoveIntent {
         switch self {
         case .none, .skipQuestion, .skipWriting, .revealNow: return GameMoveIntent.skip()

@@ -6,26 +6,51 @@ struct ImposterSceneView: View {
     let games: GameStagePresenter
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             if scene.isVoting {
+                PromptStatusSlot(games: games, acted: scene.votedCount, total: scene.totalPlayers)
                 GameKitPrompt(kicker: scene.category, title: PromptGameCopy.voteTitle())
                 if !scene.departedName.isEmpty {
                     GameKitNotice(kind: .info, message: PromptGameCopy.departed(scene.departedName))
                 }
                 ImposterVoteChoices(scene: scene, games: games)
-                PromptLine(text: PromptGameCopy.voted(scene.votedCount, scene.totalPlayers))
             } else {
-                GameKitPrompt(kicker: PromptGameCopy.discussKicker(scene), title: PromptGameCopy.discussBody())
-                PromptCountdownSlot(games: games)
+                PromptStatusSlot(games: games)
+                ImposterDiscussHeader(scene: scene)
                 if scene.showsSecretCard {
                     ImposterSecretCard(scene: scene)
                 }
             }
             if !scene.isPlayer {
-                GameKitNotice(kind: .spectator, message: GameCopy.rolesSecret())
+                PromptSpectatorNotice(games: games, allowsJoin: false)
             }
         }
         .accessibilityIdentifier("game.scene.imposter")
+    }
+}
+
+struct ImposterDiscussHeader: View {
+    let scene: ImposterScene
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !scene.category.isEmpty {
+                Text(scene.category)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    .accessibilityAddTraits(.isHeader)
+            }
+            if !scene.starterName.isEmpty {
+                HStack(spacing: 8) {
+                    ConclaveAvatar(name: scene.starterName, id: scene.starterName, size: .mention)
+                    Text(ConclaveStrings.format("%@ starts", scene.starterName))
+                        .font(.subheadline)
+                        .foregroundStyle(HostingTheme.inCallTextSecondary)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -68,14 +93,12 @@ struct ImposterResultView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            GameKitPrompt(kicker: ConclaveStrings.text("Results"), title: PromptGameCopy.result(scene.resultKind))
+            GameKitPrompt(kicker: "", title: PromptGameCopy.result(scene.resultKind))
             let facts = PromptGameCopy.imposterFacts(scene)
             if !facts.isEmpty {
                 GameKitFactList(facts: facts)
             }
-            if scene.abstained {
-                PromptLine(text: PromptGameCopy.abstained())
-            }
+
         }
         .accessibilityIdentifier("game.scene.imposter.result")
     }

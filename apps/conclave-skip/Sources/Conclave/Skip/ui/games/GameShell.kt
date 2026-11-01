@@ -54,8 +54,11 @@ internal fun GameShellHeaderActions(games: GameStagePresenter) {
     val chrome = games.chrome
     var prompt by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
+    val barContent = GameShellBarPolicy.content(chrome = chrome, scene = games.scene, results = games.results)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        GameKitSeatControl(chrome.seat, onJoin = { games.join() })
+        if (GameShellHeaderPolicy.showsSeatControl(chrome = chrome, sceneKind = games.scene.kind, barContent = barContent)) {
+            GameKitSeatControl(chrome.seat, onJoin = { games.join() })
+        }
         if (chrome.canEnd || chrome.endPending) {
             val label = conclaveString("gm_end_game_everyone")
             ActivityHeaderCapsuleButton(
@@ -254,12 +257,18 @@ private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVi
 
 @Composable
 private fun GameLobbyBody(scene: GameScene, chrome: GameChromeModel) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        GameKitPrompt(kicker = conclaveString("gm_lobby"), title = conclaveString("gm_waiting_to_start"),
-            subtitle = gameOptionSummary(scene.options))
+    val caption = GameLobbyPolicy.caption(reason = scene.lobby.reason, isHost = chrome.isHost)
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            GameKitGlyphTile(chrome.gameId)
+            if (scene.options.count > 0) GameKitOptionPills(scene.options)
+        }
         GameKitPlayerChips(scene.players, scene.pendingJoiners, scene.players.count)
-        Text(gameLobbyLine(scene.lobby, chrome.name), style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (caption != GameLobbyCaption.none) {
+            GameKitWaitingLine(gameLobbyCaption(caption, scene.lobby.minPlayers), GameLobbyPolicy.showsSpinner(caption),
+                Modifier.testTag("game.lobby.caption"))
+        }
     }
 }
 
@@ -267,21 +276,10 @@ private fun GameLobbyBody(scene: GameScene, chrome: GameChromeModel) {
 private fun GameGenericSceneBody(scene: GameScene, chrome: GameChromeModel, games: GameStagePresenter) {
     val common = scene.projection.common
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        GameKitPrompt(kicker = gamePhaseLabel(chrome), title = gameShellPromptTitle(scene.projection))
-        GameShellCountdownSlot(games)
-        if (common.totalPlayers > 0) {
-            Text(gameProgress(common.actedCount, common.totalPlayers), style = rememberTabular(MaterialTheme.typography.bodySmall),
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        GameKitStatusRow(common.actedCount, common.totalPlayers, games.countdown)
+        GameKitPrompt(kicker = "", title = gameShellPromptTitle(scene.projection))
         if (chrome.seat != SeatState.player) {
-            if (scene.kind == GameSceneKind.imposter) {
-                GameKitNotice(GameKitNoticeKind.spectator, conclaveString("gm_roles_secret"))
-            } else {
-                val canJoin = chrome.seat == SeatState.canJoin
-                GameKitNotice(GameKitNoticeKind.spectator, conclaveString("gm_err_not_seated"),
-                    buttonTitle = if (canJoin) conclaveString("gm_join") else "",
-                    onButton = if (canJoin) ({ games.join() }) else null)
-            }
+            GameKitWatching(canJoin = chrome.seat == SeatState.canJoin && scene.kind != GameSceneKind.imposter, onJoin = { games.join() })
         }
         GameKitPlayerChips(scene.players, scene.pendingJoiners, scene.players.count)
         if (common.scoreboard.count > 0) GameKitScoreboard(games.results.scoreboard)
@@ -289,21 +287,11 @@ private fun GameGenericSceneBody(scene: GameScene, chrome: GameChromeModel, game
 }
 
 @Composable
-private fun GameShellCountdownSlot(games: GameStagePresenter) {
-    val countdown = games.countdown ?: return
-    GameKitCountdown(countdown)
-}
-
-@Composable
 private fun GameResultsBody(games: GameStagePresenter) {
     val results = games.results
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        GameKitPrompt(kicker = conclaveString("gm_results"), title = gameWinnerLine(results) ?: "")
-        GameKitScoreboard(results.scoreboard)
-        if (!games.chrome.isHost) {
-            Text(conclaveString("gm_waiting_host"), style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+    Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        GameKitPodium(results.scoreboard)
+        if (!games.chrome.isHost) GameKitWaitingLine(conclaveString("gm_waiting_host"))
     }
 }
 

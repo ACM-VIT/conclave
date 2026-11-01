@@ -5,8 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,7 +36,6 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -128,48 +125,13 @@ internal fun GameKitNotice(kind: GameKitNoticeKind, message: String, buttonTitle
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-internal fun GameKitPlayerChips(players: Iterable<GamePlayerModel>, pending: Iterable<GamePlayerModel>, count: Int) {
-    val label = activitiesPlayers(count)
-    FlowRow(
-        Modifier.fillMaxWidth().testTag("game.players").semantics { contentDescription = label },
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        for (player in players) GameKitPlayerChip(player)
-        for (player in pending) GameKitPlayerChip(player)
-    }
-}
-
-@Composable
-private fun GameKitPlayerChip(player: GamePlayerModel) {
-    val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
-    val name = if (player.isYou) conclaveString("ds_you") else player.name
-    Surface(shape = CircleShape, color = scheme.surfaceContainerHigh, border = BorderStroke(1.dp, ext.border),
-        modifier = Modifier.semantics(mergeDescendants = true) {}) {
-        Row(Modifier.padding(start = 4.dp, end = 10.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ConclaveAvatar(name = player.name, id = player.id, size = ConclaveAvatarSize.mention)
-            Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                color = if (player.isPending) scheme.onSurfaceVariant else scheme.onSurface, modifier = Modifier.weight(1f, fill = false))
-            if (player.isPending) {
-                Text(conclaveString("gm_next_round_suffix"), style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant,
-                    maxLines = 1, softWrap = false)
-            } else if (player.hasActed) {
-                Icon(ConclaveIcons.CheckFill0, contentDescription = null, tint = ext.success, modifier = Modifier.size(16.dp))
-            }
-        }
-    }
-}
-
 @Composable
 internal fun GameKitHostBar(
     primaryTitle: String,
     onPrimary: () -> Unit,
     primaryEnabled: Boolean = true,
     primaryPending: Boolean = false,
+    primaryProminent: Boolean = true,
     secondaryTitle: String = "",
     secondaryDestructive: Boolean = false,
     onSecondary: (() -> Unit)? = null,
@@ -180,11 +142,16 @@ internal fun GameKitHostBar(
         Button(
             onClick = onPrimary,
             enabled = primaryEnabled && !primaryPending,
-            colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
+            colors = if (primaryProminent) {
+                ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer)
+            } else {
+                ButtonDefaults.buttonColors(containerColor = scheme.surfaceContainerHigh, contentColor = scheme.onSurface)
+            },
             modifier = modifier.heightIn(min = 48.dp).testTag("game.bar.primary").semantics { if (primaryPending) stateDescription = inProgress },
         ) {
             if (primaryPending) {
-                CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onPrimaryContainer, strokeWidth = 2.dp)
+                CircularProgressIndicator(Modifier.size(18.dp),
+                    color = if (primaryProminent) scheme.onPrimaryContainer else scheme.onSurface, strokeWidth = 2.dp)
                 Spacer(Modifier.size(8.dp))
             }
             Text(primaryTitle)

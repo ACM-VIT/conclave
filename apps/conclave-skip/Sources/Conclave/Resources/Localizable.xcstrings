@@ -3570,6 +3570,9 @@
     "Navigating" : {
       "extractionState" : "manual"
     },
+    "Needs %lld players" : {
+      "extractionState" : "manual"
+    },
     "Needs Attention" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
