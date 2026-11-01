@@ -276,7 +276,22 @@ private struct MoreMenuReactions: View {
 
     var body: some View {
         let reactions = controls.reactions
-        if reactions.isAvailable {
+        if reactions.isAvailable && ProcessInfo.processInfo.isiOSAppOnMac {
+            Menu {
+                ForEach(reactions.emoji) { option in
+                    Button {
+                        actions.sendReaction(option.id, controls: controls)
+                    } label: {
+                        Text(verbatim: option.id + "  " + MoreCopy.reactionName(option.nameKey))
+                    }
+                    .accessibilityLabel(MoreCopy.reactionLabel(option))
+                    .accessibilityIdentifier("control.more.reactions." + option.id)
+                }
+            } label: {
+                Label(ConclaveStrings.text("Reactions"), systemImage: ConclaveSymbols.faceSmiling)
+            }
+            .accessibilityIdentifier("control.more.reactions")
+        } else if reactions.isAvailable {
             ConclaveReactionPalette(options: MoreCopy.paletteOptions(reactions), identifier: "control.more.reactions") { option in
                 actions.sendReaction(option.id, controls: controls)
             }
