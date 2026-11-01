@@ -266,6 +266,53 @@ enum AskRowPolicy {
     }
 }
 
+enum TranscriptFollowPolicy {
+    static let latestSlop = 32.0
+    static let farFromLatest = 1_000_000.0
+
+    static func distanceFromLatest(offset: Double, viewport: Double, content: Double, leadingInset: Double,
+                                   trailingInset: Double) -> Double {
+        let minOffset = -leadingInset
+        let maxOffset = content + trailingInset - viewport
+        if maxOffset <= minOffset { return 0.0 }
+        return max(0.0, maxOffset - offset)
+    }
+
+    static func isAtLatest(distanceFromLatest: Double) -> Bool {
+        distanceFromLatest <= latestSlop
+    }
+
+    static func showsJumpToLatest(rowCount: Int, distanceFromLatest: Double) -> Bool {
+        rowCount > 0 && !isAtLatest(distanceFromLatest: distanceFromLatest)
+    }
+
+    static func reversedListDistance(firstVisibleIndex: Int, firstVisibleOffset: Double) -> Double {
+        if firstVisibleIndex > 0 { return farFromLatest }
+        return max(0.0, firstVisibleOffset)
+    }
+}
+
+enum MinutesAgeKind: String, CaseIterable, Equatable {
+    case justNow, minutes, hours
+}
+
+struct MinutesAge: Equatable {
+    let kind: MinutesAgeKind
+    let count: Int
+}
+
+enum MinutesAgePolicy {
+    static let tickMillis = 15_000.0
+
+    static func age(updatedAtMillis: Double, nowMillis: Double) -> MinutesAge {
+        let elapsed = max(0.0, nowMillis - updatedAtMillis)
+        let minutes = Int(elapsed / 60_000.0)
+        if minutes < 1 { return MinutesAge(kind: MinutesAgeKind.justNow, count: 0) }
+        if minutes < 60 { return MinutesAge(kind: MinutesAgeKind.minutes, count: minutes) }
+        return MinutesAge(kind: MinutesAgeKind.hours, count: minutes / 60)
+    }
+}
+
 enum MinutesPolicy {
     static func emptyKind(phase: LiveNotesPhase, hasContent: Bool) -> MinutesEmptyKind {
         if hasContent { return MinutesEmptyKind.none }
@@ -276,6 +323,10 @@ enum MinutesPolicy {
     static func statusKind(updating: Bool, updatedAtMillis: Double) -> MinutesStatusKind {
         if updating { return MinutesStatusKind.updating }
         return updatedAtMillis > 0 ? MinutesStatusKind.updated : MinutesStatusKind.automatic
+    }
+
+    static func showsStatusText(_ kind: MinutesStatusKind, hasContent: Bool) -> Bool {
+        kind != MinutesStatusKind.automatic || hasContent
     }
 
     static func canRefresh(canAsk: Bool, phase: LiveNotesPhase) -> Bool {

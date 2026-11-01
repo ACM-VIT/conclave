@@ -14,6 +14,8 @@ enum TranscriptFixtureState: String, CaseIterable, Equatable {
 
     case long = "transcript-long"
 
+    case short = "transcript-short"
+
     case ask = "transcript-ask"
 
     case minutes = "transcript-minutes"
@@ -375,6 +377,8 @@ final class TranscriptFixtureDriver {
             state.markSessionSnapshot()
         case .long:
             seedLive(controller: TranscriptFixtureScript.localUserId, count: 2_000)
+        case .short:
+            seedLive(controller: TranscriptFixtureScript.localUserId, count: 1)
         }
         if fixture == TranscriptFixtureState.minutes {
             state.applyMinutes(TranscriptFixtureScript.minutes())
