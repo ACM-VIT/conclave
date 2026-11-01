@@ -240,6 +240,9 @@ final class CallPresence {
         snapshot = stored
         fanOutCount += 1
         isFanningOut = true
+        if stored.interruption != current.interruption {
+            VoicePlaybackQueues.interruptionChanged(stored.interruption)
+        }
         adapters.presenceDidChange(from: current, to: stored)
         isFanningOut = false
     }

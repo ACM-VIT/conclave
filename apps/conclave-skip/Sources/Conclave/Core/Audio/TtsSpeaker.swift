@@ -32,6 +32,7 @@ final class TtsSpeaker {
 
         let queue = queue ?? TtsPlaybackQueue()
         self.queue = queue
+        VoicePlaybackQueues.register(queue)
         queue.onStart = { [weak self] item, token in
             self?.start(item, token: token)
         }
@@ -210,12 +211,7 @@ final class TtsSpeaker {
     }
 
     func canStartPlayback(token: Int) -> Bool {
-        guard token != 0, queue.activeToken == token else { return false }
-        guard !queue.isOutputBlocked() else {
-            queue.finished(token: token)
-            return false
-        }
-        return true
+        queue.canStartPlayback(token: token)
     }
 
     private func cancelPlayback() {
@@ -284,6 +280,7 @@ final class TtsSpeaker {
     init(queue: TtsPlaybackQueue? = nil) {
         let queue = queue ?? TtsPlaybackQueue()
         self.queue = queue
+        VoicePlaybackQueues.register(queue)
         queue.onStart = { [weak queue] _, token in
             queue?.finished(token: token)
         }

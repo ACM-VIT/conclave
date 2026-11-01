@@ -418,6 +418,7 @@ final class AudioRouteOwner {
         let current = presence?.snapshot.interruption ?? lastInterruption
         let next = AudioInterruptionPolicy.next(current: current, event: event)
         lastInterruption = next
+        VoicePlaybackQueues.interruptionChanged(next)
         if let report = onInterruption {
             report(next)
         } else {

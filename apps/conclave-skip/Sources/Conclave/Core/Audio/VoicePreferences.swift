@@ -232,6 +232,7 @@ struct TtsQueueItem: Equatable {
     let voiceId: String
 
     let appliesVoice: Bool
+    var requiresPlaybackPreference = false
 
     static func make(messageId: String, userId: String, displayName: String, text: String,
                      voiceToken: String = "") -> TtsQueueItem {
@@ -241,8 +242,39 @@ struct TtsQueueItem: Equatable {
     }
 
     func starting(voiceId: String, appliesVoice: Bool) -> TtsQueueItem {
-        TtsQueueItem(messageId: messageId, userId: userId, displayName: displayName, text: text, voiceToken: voiceToken,
-                     voiceId: voiceId, appliesVoice: appliesVoice)
+        var item = TtsQueueItem(messageId: messageId, userId: userId, displayName: displayName, text: text, voiceToken: voiceToken,
+                                voiceId: voiceId, appliesVoice: appliesVoice)
+        item.requiresPlaybackPreference = requiresPlaybackPreference
+        return item
+    }
+}
+
+#if !SKIP
+@MainActor
+private final class WeakPlaybackQueue {
+    weak var queue: TtsPlaybackQueue?
+
+    init(_ queue: TtsPlaybackQueue) {
+        self.queue = queue
+    }
+}
+#endif
+
+@MainActor
+enum VoicePlaybackQueues {
+    private static var queues: [WeakPlaybackQueue] = []
+
+    static func register(_ queue: TtsPlaybackQueue) {
+        queues.removeAll { $0.queue == nil }
+        queues.append(WeakPlaybackQueue(queue))
+    }
+
+    static func interruptionChanged(_ interruption: AudioInterruptionKind) {
+        guard VoiceMessagePolicy.blocksPlayback(interruption) else { return }
+        queues.removeAll { $0.queue == nil }
+        for entry in queues {
+            entry.queue?.stop()
+        }
     }
 }
 
@@ -282,6 +314,7 @@ final class TtsPlaybackQueue {
     static let recentMessageIdLimit = 64
     static let startedLogLimit = 50
 
+    private var activeRequiresPlaybackPreference = false
     private var tokenCounter = 0
     private var recentMessageIds: [String] = []
     private var hasAppliedVoice = false
@@ -296,7 +329,9 @@ final class TtsPlaybackQueue {
         activeToken == 0 && queued.isEmpty && !isAdvancePending
     }
 
-    func enqueue(_ item: TtsQueueItem, isOwn: Bool) {
+    func enqueue(_ incoming: TtsQueueItem, isOwn: Bool) {
+        var item = incoming
+        item.requiresPlaybackPreference = !isOwn
         if item.text.isEmpty { return }
         if !isOwn && !preferences().playsVoiceMessages {
             skippedByPreferenceCount += 1
@@ -320,7 +355,9 @@ final class TtsPlaybackQueue {
         start(item)
     }
 
-    func replay(_ item: TtsQueueItem) {
+    func replay(_ incoming: TtsQueueItem) {
+        var item = incoming
+        item.requiresPlaybackPreference = false
         if item.text.isEmpty { return }
         if !item.messageId.isEmpty && !recentMessageIds.contains(item.messageId) {
             remember(item.messageId)
@@ -379,6 +416,11 @@ final class TtsPlaybackQueue {
 
     @discardableResult
     private func start(_ item: TtsQueueItem) -> Bool {
+        if item.requiresPlaybackPreference && !preferences().playsVoiceMessages {
+            skippedByPreferenceCount += 1
+            scheduleAdvanceIfNeeded()
+            return false
+        }
         if isOutputBlocked() {
             blockedCount += 1
             scheduleAdvanceIfNeeded()
@@ -394,6 +436,7 @@ final class TtsPlaybackQueue {
             voiceApplyCount += 1
         }
         activeToken = token
+        activeRequiresPlaybackPreference = item.requiresPlaybackPreference
         activeMessageId = item.messageId
         activeUserId = item.userId
         startedMessageIds.append(item.messageId)
@@ -406,6 +449,15 @@ final class TtsPlaybackQueue {
             : VoiceMessagePolicy.personalVoiceTimeoutMillis + VoiceMessagePolicy.estimateSpeechMillis(item.text)
         armFailsafe(token: token, millis: budget)
         onStart?(item.starting(voiceId: voiceId, appliesVoice: applies), token)
+        return true
+    }
+
+    func canStartPlayback(token: Int) -> Bool {
+        guard token != 0, activeToken == token else { return false }
+        if isOutputBlocked() || (activeRequiresPlaybackPreference && !preferences().playsVoiceMessages) {
+            finished(token: token)
+            return false
+        }
         return true
     }
 

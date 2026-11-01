@@ -18,6 +18,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import skip.foundation.ProcessInfo
 
+internal class WeakPlaybackQueue(queue: TtsPlaybackQueue) {
+    private val reference = java.lang.ref.WeakReference(queue)
+    internal val queue: TtsPlaybackQueue?
+        get() = reference.get()
+}
+
 internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueue()) {
     private var engine: TextToSpeech? = null
     private var isReady = false
@@ -39,6 +45,7 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
         get() = queue.activeMessageId
 
     init {
+        VoicePlaybackQueues.register(queue)
         queue.onStart = { item, token -> start(item, token) }
         queue.onCancel = { cancelPlayback() }
         queue.isOutputBlocked = { VoiceMessagePolicy.blocksPlayback(AudioRouteOwner.shared.interruption) }
@@ -250,12 +257,7 @@ internal class TtsSpeaker(internal val queue: TtsPlaybackQueue = TtsPlaybackQueu
     }
 
     internal fun canStartPlayback(token: Int): Boolean {
-        if (token == 0 || queue.activeToken != token) return false
-        if (queue.isOutputBlocked()) {
-            queue.finished(token)
-            return false
-        }
-        return true
+        return queue.canStartPlayback(token = token)
     }
 
     private fun cancelPlayback() {
