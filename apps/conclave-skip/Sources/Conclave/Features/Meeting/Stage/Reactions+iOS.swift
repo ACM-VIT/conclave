@@ -81,7 +81,8 @@ private struct ReactionBurstColumn: View {
         let placement = reduceMotion ? reducedPlacement : StageReactionSlotPlacement(bottomInset: Double(bottomInset), shape: .row)
         ZStack(alignment: .bottomLeading) {
             ForEach(events) { event in
-                ReactionBubble(event: event, reduceMotion: reduceMotion, slotShape: placement.shape, slotHeight: slots.slotHeight)
+                ReactionBubble(event: event, reduceMotion: reduceMotion, slotShape: placement.shape, slotHeight: slots.slotHeight,
+                               layerWidth: StageReactionPolicy.spreadLayerWidth(slots.viewport))
                     .zIndex(event.isLocal ? 1 : 0)
             }
         }
@@ -114,6 +115,7 @@ private struct ReactionBubble: View {
     let reduceMotion: Bool
     let slotShape: StageReactionSlotShape
     let slotHeight: Double
+    let layerWidth: Double
     @State private var rise: CGFloat = 0
     @State private var drift: CGFloat = 0
     @State private var popScale: CGFloat
@@ -121,11 +123,12 @@ private struct ReactionBubble: View {
     @State private var fade: Double = 1
     @State private var box = ReactionStartBox()
 
-    init(event: ReactionEvent, reduceMotion: Bool, slotShape: StageReactionSlotShape, slotHeight: Double) {
+    init(event: ReactionEvent, reduceMotion: Bool, slotShape: StageReactionSlotShape, slotHeight: Double, layerWidth: Double) {
         self.event = event
         self.reduceMotion = reduceMotion
         self.slotShape = slotShape
         self.slotHeight = slotHeight
+        self.layerWidth = layerWidth
         _popScale = State(initialValue: reduceMotion ? 1 : CGFloat(StageReactionPolicy.popFromScale))
     }
 
@@ -136,7 +139,9 @@ private struct ReactionBubble: View {
 
     var body: some View {
         let lane = StageReactionPolicy.lane(for: event.id)
-        let slotX = CGFloat(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: reduceMotion, shape: slotShape))
+        let slotX = CGFloat(reduceMotion ? StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: true, shape: slotShape)
+                            : StageReactionPolicy.spreadOffsetX(eventId: event.id, layerWidth: layerWidth,
+                                                                itemWidth: StageReactionPolicy.bubbleDiameter))
         let slotY = CGFloat(StageReactionPolicy.slotOffsetY(lane: lane, shape: slotShape, slotHeight: slotHeight))
         let diameter = CGFloat(StageReactionPolicy.bubbleDiameter)
         VStack(spacing: 4) {

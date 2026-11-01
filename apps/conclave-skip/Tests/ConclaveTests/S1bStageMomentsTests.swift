@@ -29,6 +29,23 @@ struct S1bStageMomentsTests {
         text.components(separatedBy: needle).count - 1
     }
 
+    @Test func reactionsSpreadAcrossTheStageWidthLikeTheWeb() {
+        let fractions = (0..<34).map { StageReactionPolicy.spreadFraction(for: $0) }
+        #expect(fractions.allSatisfy { $0 >= StageReactionPolicy.spreadMin && $0 <= StageReactionPolicy.spreadMax })
+        #expect(Set(fractions).count == StageReactionPolicy.spreadSteps)
+        #expect(StageReactionPolicy.spreadFraction(for: -5) == StageReactionPolicy.spreadFraction(for: 12))
+        #expect(abs(StageReactionPolicy.spreadFraction(for: 1) - StageReactionPolicy.spreadFraction(for: 0)) > 0.2)
+        let width = 360.0
+        let offsets = (0..<20).map { StageReactionPolicy.spreadOffsetX(eventId: $0, layerWidth: width, itemWidth: 48) }
+        #expect(offsets.allSatisfy { $0 >= 0 && $0 <= width - 48 })
+        #expect(offsets.max()! - offsets.min()! > width * 0.6)
+        #expect(StageReactionPolicy.spreadOffsetX(eventId: 3, layerWidth: 20, itemWidth: 48) == 0)
+        let viewport = StageViewport(width: 400, height: 800, insetTop: 0, insetBottom: 0, insetLeading: 10, insetTrailing: 30,
+                                     widthClass: StageSizeClass.compact, heightClass: StageSizeClass.regular,
+                                     placement: StageChromePlacement.bottomBar)
+        #expect(StageReactionPolicy.spreadLayerWidth(viewport) == 400 - 10 - 30 - StageReactionPolicy.leadingInset * 2)
+    }
+
     @Test func driftDirectionIsDeterministicByEventIdLikeTheLane() {
         let vectors: [(Int, Double)] = [(-1, 1.0), (0, -1.0), (1, -0.5), (2, 0.5), (3, 1.0), (1000, -1.0)]
         for (id, expected) in vectors {
@@ -78,7 +95,7 @@ struct S1bStageMomentsTests {
         #expect(StageReactionPolicy.reducedSlotWidth >= StageReactionPolicy.bubbleDiameter)
         #expect(StageReactionPolicy.reducedLaneOffset == StageReactionPolicy.reducedSlotWidth + 8)
         #expect((StageReactionPolicy.reducedSlotWidth - StageReactionPolicy.bubbleDiameter) / 2 == 8)
-        #expect(StageReactionPolicy.laneOffset == 20.0 && StageReactionPolicy.laneCount == 3)
+        #expect(StageReactionPolicy.laneCount == 3)
         let slotsEnd = StageReactionPolicy.leadingInset + Double(StageReactionPolicy.laneCount - 1) * StageReactionPolicy.reducedLaneOffset
             + StageReactionPolicy.reducedSlotWidth
         #expect(slotsEnd == 220 && slotsEnd <= 360)
@@ -413,7 +430,7 @@ struct S1bStageMomentsTests {
         let blockY: [Double] = [0, 0, 80]
         for lane in 0..<StageReactionPolicy.laneCount {
             for shape in StageReactionSlotShape.allCases {
-                #expect(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: false, shape: shape) == Double(lane) * StageReactionPolicy.laneOffset)
+                #expect(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: false, shape: shape) == 0)
             }
             #expect(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: true, shape: .row) == Double(lane) * StageReactionPolicy.reducedLaneOffset)
             #expect(StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: true, shape: .column) == 0)

@@ -136,7 +136,6 @@ enum StageReactionPolicy {
     static let driftDistance = 10.0
 
     static let laneCount = 3
-    static let laneOffset = 20.0
     static let bubbleDiameter = 48.0
     static let reducedLaneOffset = 72.0
     static let reducedSlotWidth = 64.0
@@ -167,8 +166,29 @@ enum StageReactionPolicy {
     static let reducedShapes: [StageReactionSlotShape] = [StageReactionSlotShape.row, StageReactionSlotShape.column,
                                                           StageReactionSlotShape.block]
 
+    static let spreadMin = 0.12
+    static let spreadMax = 0.88
+    static let spreadSteps = 17
+
+    static func spreadFraction(for eventId: Int) -> Double {
+        var step = eventId % spreadSteps
+        if step < 0 { step += spreadSteps }
+        let mixed = (step * 7) % spreadSteps
+        return spreadMin + (spreadMax - spreadMin) * Double(mixed) / Double(spreadSteps - 1)
+    }
+
+    static func spreadOffsetX(eventId: Int, layerWidth: Double, itemWidth: Double) -> Double {
+        let room = max(0.0, layerWidth - itemWidth)
+        let start = spreadFraction(for: eventId) * layerWidth - itemWidth / 2
+        return min(room, max(0.0, start))
+    }
+
+    static func spreadLayerWidth(_ viewport: StageViewport) -> Double {
+        max(0.0, viewport.width - viewport.insetLeading - viewport.insetTrailing - leadingInset * 2)
+    }
+
     static func slotOffsetX(lane: Int, reduceMotion: Bool, shape: StageReactionSlotShape) -> Double {
-        if !reduceMotion { return Double(lane) * laneOffset }
+        if !reduceMotion { return 0.0 }
         switch shape {
         case .row:
             return Double(lane) * reducedLaneOffset
