@@ -96,7 +96,7 @@ export default function ShortcutsHelpDialog() {
         aria-modal="true"
         aria-label="Keyboard shortcuts"
         tabIndex={-1}
-        className="flex w-full max-w-[480px] flex-col overflow-hidden rounded-2xl border shadow-[0_24px_80px_rgba(0,0,0,0.55)] origin-top outline-none will-change-transform animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]"
+        className="flex w-full max-w-[480px] flex-col overflow-hidden rounded-2xl border shadow-[0_24px_80px_rgba(0,0,0,0.55)] outline-none"
         style={{
           backgroundColor: color.surfaceRaised,
           borderColor: color.border,

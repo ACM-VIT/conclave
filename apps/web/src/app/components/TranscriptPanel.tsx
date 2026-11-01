@@ -362,7 +362,7 @@ function StartStage({
       <div
         aria-hidden="true"
         data-notes-spotlight={provider}
-        className="pointer-events-none absolute left-1/2 top-[6%] h-72 w-72 -translate-x-1/2 rounded-full opacity-20 blur-[72px] transition-all duration-500"
+        className="pointer-events-none absolute left-1/2 top-[6%] h-72 w-72 -translate-x-1/2 rounded-full opacity-20 blur-[72px]"
         style={{ background: isSarvam ? "linear-gradient(90deg, #FF9933 0%, #FFFFFF 50%, #138808 100%)" : START_ACCENT }}
       />
       <div className="relative z-10 mx-auto flex min-h-full w-full max-w-[300px] flex-col items-center justify-center text-center">
@@ -1033,7 +1033,7 @@ export default function TranscriptPanel({
 
   return (
     <div
-      className="safe-area-pt safe-area-pb fixed right-0 top-0 bottom-0 z-40 flex w-full flex-col border-l border-white/10 bg-[#18181b] animate-[meet-panel-in_280ms_cubic-bezier(0.22,1,0.36,1)] sm:w-[360px]"
+      className="safe-area-pt safe-area-pb fixed right-0 top-0 bottom-0 z-40 flex w-full flex-col border-l border-white/10 bg-[#18181b] animate-panel-in sm:w-[360px]"
       style={{ fontFamily: "'PolySans Trial', sans-serif" }}
     >
       <div className="shrink-0 border-b border-white/10 px-4 py-3">

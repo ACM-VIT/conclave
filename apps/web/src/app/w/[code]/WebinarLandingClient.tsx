@@ -129,7 +129,7 @@ const buildGoogleCalendarUrl = (webinar: PublicScheduledWebinar): string => {
 
 const PageShell = ({ children }: { children: React.ReactNode }) => (
   <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
-    <div className="animate-fade-in w-full max-w-lg">{children}</div>
+    <div className="w-full max-w-lg">{children}</div>
   </main>
 );
 

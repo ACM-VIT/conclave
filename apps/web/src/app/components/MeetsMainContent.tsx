@@ -1872,7 +1872,7 @@ export default function MeetsMainContent({
           aria-label="Reconnecting to the meeting"
         >
           <section
-            className="w-full max-w-[400px] animate-scale-in rounded-2xl border border-[#fafafa]/12 bg-[#131316]/95 px-7 py-8 text-center shadow-2xl"
+            className="w-full max-w-[400px] rounded-2xl border border-[#fafafa]/12 bg-[#131316]/95 px-7 py-8 text-center shadow-2xl"
             style={{ fontFamily: "'PolySans Trial', sans-serif" }}
             role="dialog"
             aria-modal="true"
@@ -1918,7 +1918,7 @@ export default function MeetsMainContent({
                     }
                     void joinRoomById(roomId);
                   }}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-all hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:border-[#fafafa]/12 disabled:bg-[#fafafa]/8 disabled:text-[#fafafa]/42"
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35 disabled:cursor-not-allowed disabled:border-[#fafafa]/12 disabled:bg-[#fafafa]/8 disabled:text-[#fafafa]/42"
                 >
                   <RefreshCw
                     size={14}
@@ -1936,7 +1936,7 @@ export default function MeetsMainContent({
                 <button
                   type="button"
                   onClick={onStartNewMeeting}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-all hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
+                  className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#F95F4A]/45 bg-[#F95F4A]/20 px-4 text-[12.5px] font-medium text-[#fafafa] transition-colors hover:border-[#F95F4A]/70 hover:bg-[#F95F4A]/35"
                 >
                   <Plus size={14} strokeWidth={1.8} />
                   New Meeting
@@ -1945,7 +1945,7 @@ export default function MeetsMainContent({
               <button
                 type="button"
                 onClick={isTerminalMeetingError ? (onGoHome ?? leaveRoom) : leaveRoom}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-all hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-[#fafafa]/15 px-4 text-[12.5px] font-medium text-[#fafafa]/76 transition-colors hover:border-[#fafafa]/35 hover:bg-[#fafafa]/10 hover:text-[#fafafa]"
               >
                 {isTerminalMeetingError ? (
                   <Home size={14} strokeWidth={1.8} />
@@ -2092,7 +2092,7 @@ export default function MeetsMainContent({
                     : "almost there";
             return (
               <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-6 py-10 text-[#fafafa]">
-                <div className="animate-fade-in w-full max-w-md text-center">
+                <div className="w-full max-w-md text-center">
                   {!hasEnded && !isFatal && !isWaitingForHost ? (
                     <div className="relative mx-auto mb-5 h-9 w-9">
                       <div className="absolute inset-0 rounded-full border-2 border-[#fafafa]/10" />

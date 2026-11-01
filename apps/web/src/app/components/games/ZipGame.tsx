@@ -955,11 +955,12 @@ export default function ZipGame({
           overflow: "hidden",
         }}>
           <div style={{
-            width: `${(localPath.length / totalCells) * 100}%`,
+            width: "100%",
             height: "100%",
-            borderRadius: 2,
+            transform: `scaleX(${totalCells > 0 ? Math.min(1, localPath.length / totalCells) : 0})`,
+            transformOrigin: "left",
             background: `linear-gradient(90deg, ${ZIP_GOLD}, ${ZIP_VIOLET})`,
-            transition: "width 120ms ease",
+            transition: "transform 120ms ease",
           }} />
         </div>
         <span style={{ fontSize: 11, color: color.textFaint, fontFamily: HEAD_FONT, whiteSpace: "nowrap" }}>

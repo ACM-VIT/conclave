@@ -107,7 +107,7 @@ function YouTubeEmbed({
               />
             ) : null}
             <span className="absolute inset-0 flex items-center justify-center">
-              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F95F4A] text-white transition-transform group-hover/play:scale-105">
+              <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F95F4A] text-white">
                 <Play size={18} strokeWidth={2} fill="currentColor" />
               </span>
             </span>
@@ -228,7 +228,7 @@ function TweetVideoView({
             />
           ) : null}
           <span className="absolute inset-0 flex items-center justify-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F95F4A] text-white transition-transform group-hover/play:scale-105">
+            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#F95F4A] text-white">
               <Play size={18} strokeWidth={2} fill="currentColor" />
             </span>
           </span>

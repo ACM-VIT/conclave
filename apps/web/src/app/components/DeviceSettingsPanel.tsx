@@ -825,7 +825,7 @@ export default function DeviceSettingsPanel({
     <aside
       data-testid="device-settings-panel"
       aria-label="Settings"
-      className="safe-area-pt safe-area-pb fixed bottom-0 right-0 top-0 z-40 flex w-full flex-col overflow-hidden border-l text-[#fafafa] animate-[meet-panel-in_120ms_cubic-bezier(0.22,1,0.36,1)] sm:w-[380px]"
+      className="safe-area-pt safe-area-pb fixed bottom-0 right-0 top-0 z-40 flex w-full flex-col overflow-hidden border-l text-[#fafafa] animate-panel-in sm:w-[380px]"
       style={{
         backgroundColor: color.surface,
         borderColor: color.border,

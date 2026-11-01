@@ -186,7 +186,7 @@ export default function SignInClient({ next }: SignInClientProps) {
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
-      <section className="animate-fade-in w-full max-w-[420px] rounded-2xl border border-white/10 bg-[#0e0e10] p-5 sm:p-6">
+      <section className="w-full max-w-[420px] rounded-2xl border border-white/10 bg-[#0e0e10] p-5 sm:p-6">
         <a
           href={safeNext}
           className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 text-[12px] text-[#fafafa]/65 transition-colors hover:bg-white/5 hover:text-[#fafafa]"

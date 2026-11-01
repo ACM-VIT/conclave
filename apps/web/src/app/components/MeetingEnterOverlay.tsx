@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
 import type { MeetError } from "../lib/types";
 import { playConclaveLock } from "../lib/conclaveSound";
 import ConclaveLottie from "./ConclaveLottie";
@@ -101,6 +102,16 @@ export default function MeetingEnterOverlay({
     if (show) playConclaveLock();
   }, [show]);
 
+  // Motion's JS animations ignore the global CSS reduced-motion reset, so pin
+  // transforms here. Full transform strings (not scale/y shorthands) keep the
+  // motion hardware-accelerated while the meeting mounts underneath. Reduced
+  // motion swaps in the same-shaped identity transform (never "none", which
+  // Motion can't interpolate against a real value), and the hook follows the
+  // OS setting live rather than sampling it once on mount.
+  const reduceMotion = usePrefersReducedMotion();
+  const scale = (value: number) => `scale(${reduceMotion ? 1 : value})`;
+  const rise = (px: number) => `translateY(${reduceMotion ? 0 : px}px)`;
+
   const caption =
     shownAction === "new" ? "Starting your meeting" : "Joining the meeting";
   const errored = Boolean(error);
@@ -125,9 +136,9 @@ export default function MeetingEnterOverlay({
         >
           <motion.div
             className="absolute inset-0"
-            initial={{ scale: 1.04 }}
-            animate={{ scale: 1 }}
-            exit={{ scale: 1.015 }}
+            initial={{ transform: scale(1.04) }}
+            animate={{ transform: scale(1) }}
+            exit={{ transform: scale(1.015) }}
             transition={{ duration: 0.6, ease: EASE }}
           >
             <ConclaveLottie />
@@ -141,9 +152,9 @@ export default function MeetingEnterOverlay({
                 <motion.div
                   key="error"
                   className="flex w-full justify-center"
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -6 }}
+                  initial={{ opacity: 0, transform: rise(8) }}
+                  animate={{ opacity: 1, transform: rise(0) }}
+                  exit={{ opacity: 0, transform: rise(-6) }}
                   transition={{ duration: 0.38, ease: EASE }}
                 >
                   <BrandMessage
@@ -180,8 +191,8 @@ export default function MeetingEnterOverlay({
                 <motion.div
                   key="loading"
                   className="pointer-events-none"
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
+                  initial={{ opacity: 0, transform: rise(6) }}
+                  animate={{ opacity: 1, transform: rise(0) }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.45, ease: "easeOut" }}
                 >

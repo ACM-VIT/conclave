@@ -368,10 +368,10 @@ function ActivityDock({
                 className="relative inline-flex h-10 w-10 items-center justify-center rounded-full transition-[background-color,color] duration-[120ms] hover:bg-white/[0.08] hover:!text-[#fafafa]"
                 style={{ color: faceActive ? color.accent : color.textMuted }}
               >
-                {/* Keyed so a promotion change pops the new face in. */}
+                {/* Keyed so a promotion change fades the new face in. */}
                 <span
                   key={face?.d.id ?? "activities"}
-                  className="inline-flex animate-[acm-pop-in_150ms_cubic-bezier(0.22,1,0.36,1)_both]"
+                  className="inline-flex animate-[acm-fade-in_150ms_ease-out_both]"
                 >
                   <FaceIcon size={ICON} strokeWidth={STROKE} />
                 </span>
@@ -384,7 +384,7 @@ function ActivityDock({
                   <div
                     id={trayId}
                     data-tray
-                    className={popoverPanelClass + " w-44"}
+                    className={flyoutPanelClass + " w-44"}
                     style={{
                       backgroundColor: color.surfaceRaised,
                       borderColor: color.border,
@@ -513,8 +513,8 @@ function WatchTogetherTip({
               style={{ backgroundColor: "#26262d" }}
             >
               <span
-                className="block h-full animate-[acm-watch-reel_6400ms_cubic-bezier(0.4,0.1,0.4,0.9)_infinite] motion-reduce:animate-none"
-                style={{ backgroundColor: "#F95F4A", width: "6%" }}
+                className="block h-full w-full origin-left animate-[acm-watch-reel_6400ms_cubic-bezier(0.4,0.1,0.4,0.9)_infinite] motion-reduce:animate-none"
+                style={{ backgroundColor: "#F95F4A", transform: "scaleX(0.06)" }}
               />
             </span>
           </div>
@@ -527,6 +527,10 @@ const popoverWrapClass = "absolute bottom-full mb-3 z-50";
 const popoverPanelClass =
   "rounded-2xl border p-1.5 origin-bottom will-change-transform " +
   "animate-[meet-popover-in_150ms_cubic-bezier(0.22,1,0.36,1)]";
+// The activities flyout opens on hover, so the cursor crossing the dock
+// triggers it often: opacity only, no lift or scale.
+const flyoutPanelClass =
+  "rounded-2xl border p-1.5 animate-[acm-fade-in_150ms_ease-out]";
 
 function useClickOutside(
   open: boolean,

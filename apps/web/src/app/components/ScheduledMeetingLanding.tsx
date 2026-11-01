@@ -113,7 +113,7 @@ export default function ScheduledMeetingLanding({
   if (meeting.status === "cancelled") {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
-        <section className="animate-fade-in w-full max-w-lg rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
+        <section className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
           <p className="text-[11.5px] font-semibold uppercase tracking-[0.07em] text-[#fafafa]/40">
             Scheduled meeting
           </p>
@@ -134,7 +134,7 @@ export default function ScheduledMeetingLanding({
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-[#0a0a0b] px-4 py-10 text-[#fafafa]">
-      <section className="animate-fade-in w-full max-w-lg rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
+      <section className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0e0e10] p-6 sm:p-8 text-center">
         <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[12px] text-[#fafafa]/55">
           <CalendarClock className="h-3.5 w-3.5" />
           Scheduled meeting

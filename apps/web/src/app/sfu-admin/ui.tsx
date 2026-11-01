@@ -91,8 +91,8 @@ export function Toggle({
         }}
       >
         <span
-          className="absolute h-[13px] w-[13px] rounded-full bg-white transition-[left] duration-[120ms]"
-          style={{ left: checked ? 16 : 3 }}
+          className="absolute left-[3px] h-[13px] w-[13px] rounded-full bg-white transition-transform duration-[120ms]"
+          style={{ transform: checked ? "translateX(13px)" : "none" }}
         />
       </span>
     </button>

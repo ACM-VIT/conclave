@@ -78,9 +78,11 @@ function Row({
             position: "absolute",
             insetBlock: 0,
             left: 0,
-            width: `${Math.max(0, Math.min(1, fillRatio)) * 100}%`,
+            right: 0,
+            transform: `scaleX(${Math.max(0, Math.min(1, fillRatio))})`,
+            transformOrigin: "left",
             background: color.accentSoft,
-            transition: "width 220ms ease",
+            transition: "transform 220ms ease",
           }}
         />
       ) : null}

@@ -724,11 +724,13 @@ function PlayerBar({
           style={{
             position: "absolute",
             left: 0,
+            right: 0,
             bottom: 0,
             height: 2,
-            width: `${rapidFireRatio * 100}%`,
+            transform: `scaleX(${rapidFireRatio})`,
+            transformOrigin: "left",
             background: moveRemainingMs <= 3_000 ? color.danger : color.accent,
-            transition: "width 200ms linear",
+            transition: "transform 200ms linear",
             pointerEvents: "none",
           }}
         />

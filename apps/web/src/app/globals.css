@@ -91,50 +91,6 @@ select:focus {
   outline: none;
 }
 
-@keyframes blink {
-
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0;
-  }
-}
-
-@keyframes meets-participant-join {
-  0% {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes meets-participant-leave {
-  0% {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  100% {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-}
-
-.animate-participant-join {
-  animation: meets-participant-join 120ms ease-out;
-}
-
-.animate-participant-leave {
-  animation: meets-participant-leave 120ms ease-in;
-}
-
 .animate-reaction-float {
   animation: reaction-float 2.8s ease-out forwards;
 }
@@ -186,6 +142,33 @@ select:focus {
   .animate-reaction-float {
     animation: reaction-float-mobile 2.4s cubic-bezier(0.2, 0.7, 0.2, 1)
       forwards;
+  }
+}
+
+/* Reduced motion: no float, no scale. Fade in, hold in place, fade out. The
+   class selector + !important out-ranks the universal 0.01ms reset below, so
+   the reaction stays readable and animationend still removes it on time. */
+@keyframes reaction-hold {
+  0% {
+    opacity: 0;
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  80% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-reaction-float {
+    animation: reaction-hold 2s ease-out forwards !important;
   }
 }
 .acm-video-tile {
@@ -272,15 +255,12 @@ select:focus {
   --vao-cloud-deep: rgba(20, 78, 200, 0.9);
   --vao-cloud-light: rgba(255, 255, 255, 0.92);
   --vao-blur: 9px;
-  /* Live loudness 0–1, written by the orb's analyser; 0 when not reactive. */
-  --vao-level: 0;
   position: relative;
   display: grid;
   place-items: center;
-  /* Reactive swell lives on the root so the core is free to breathe + hue-shift
-     without transform fighting the loudness scale. */
-  transform: scale(calc(1 + var(--vao-level) * 0.09));
-  transition: transform 90ms ease-out;
+  /* The loudness swell is written straight to this element's transform by
+     VoiceAgentOrb.tsx (only when the level changes), so the core is free to
+     breathe + hue-shift without transform fighting the loudness scale. */
 }
 .voice-agent-orb--regular {
   width: 96px;
@@ -322,15 +302,15 @@ select:focus {
   opacity: 0.75;
   animation: vao-drift-b 15s ease-in-out infinite alternate;
 }
-/* Reactive core glow: intensifies with the agent's live loudness. */
-.voice-agent-orb-core::after {
-  content: "";
+/* Reactive core glow: intensifies with the agent's live loudness. Its opacity
+   is written directly by VoiceAgentOrb.tsx; this is the resting value. */
+.voice-agent-orb-glow {
   position: absolute;
   inset: 22% 22% 28% 22%;
   border-radius: 9999px;
   background: radial-gradient(closest-side, #ffffff, transparent 70%);
   filter: blur(var(--vao-blur));
-  opacity: calc(0.08 + var(--vao-level) * 0.6);
+  opacity: 0.08;
   pointer-events: none;
 }
 
@@ -484,13 +464,6 @@ select:focus {
   display: none;
 }
 
-@media (hover: none) and (pointer: coarse) {
-  .touch-feedback:active {
-    transform: scale(0.97);
-    opacity: 0.8;
-  }
-}
-
 @keyframes acm-fade-in {
   from {
     opacity: 0;
@@ -538,88 +511,37 @@ select:focus {
   }
 }
 
+/* Playhead fill: scaleX on a full-width bar (transform-origin: left), not
+   width, so the loop never re-runs layout. */
 @keyframes acm-watch-reel {
   0% {
-    width: 6%;
+    transform: scaleX(0.06);
     opacity: 1;
   }
 
   76% {
-    width: 97%;
+    transform: scaleX(0.97);
     opacity: 1;
   }
 
   84% {
-    width: 100%;
+    transform: scaleX(1);
     opacity: 0;
   }
 
   90% {
-    width: 6%;
+    transform: scaleX(0.06);
     opacity: 0;
   }
 
   100% {
-    width: 6%;
+    transform: scaleX(0.06);
     opacity: 1;
-  }
-}
-
-@keyframes acm-scale-in {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-
-  to {
-    opacity: 1;
-    transform: scale(1);
   }
 }
 
 .animate-fade-in {
-  animation: acm-fade-in 0.4s ease-out forwards;
-}
-
-.animate-scale-in {
-  opacity: 0;
-  animation: acm-scale-in 0.4s ease-out forwards;
-}
-
-@keyframes web-chat-pop-peer {
-  from {
-    opacity: 0;
-    transform: translate3d(-4px, 4px, 0) scale(0.99);
-  }
-
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-}
-
-@keyframes web-chat-pop-self {
-  from {
-    opacity: 0;
-    transform: translate3d(4px, 4px, 0) scale(0.99);
-  }
-
-  to {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-}
-
-@keyframes web-chat-action-fade {
-  from {
-    opacity: 0;
-    transform: translateY(2px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  animation: acm-fade-in 0.2s ease-out forwards;
 }
 
 @keyframes web-chat-send-tap {
@@ -636,18 +558,14 @@ select:focus {
   }
 }
 
-.web-chat-message-new-peer {
-  animation: web-chat-pop-peer 0.11s cubic-bezier(0.2, 0.75, 0.15, 1) both;
-  will-change: transform, opacity;
-}
-
+/* Messages arrive tens of times a call: opacity only, no slide or scale. */
+.web-chat-message-new-peer,
 .web-chat-message-new-self {
-  animation: web-chat-pop-self 0.11s cubic-bezier(0.2, 0.75, 0.15, 1) both;
-  will-change: transform, opacity;
+  animation: acm-fade-in 0.11s cubic-bezier(0.2, 0.75, 0.15, 1) both;
 }
 
 .web-chat-action-new {
-  animation: web-chat-action-fade 0.11s ease-out both;
+  animation: acm-fade-in 0.11s ease-out both;
 }
 
 .web-chat-send-active {
@@ -953,6 +871,12 @@ select:focus {
 
 #noVNC_status_bar {
   display: none;
+}
+
+/* Docked-panel slide. Must match REFLOW_DURATION_MS + FLIP_EASING in
+   components/GridLayout.tsx so the panel and the stage reflow move together. */
+@theme {
+  --animate-panel-in: meet-panel-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes meet-panel-in {
