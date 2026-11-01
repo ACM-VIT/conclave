@@ -2052,6 +2052,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     var videoSource: RTCVideoSource?
     var audioSource: RTCAudioSource?
     var videoCapturer: RTCCameraVideoCapturer?
+    private var cameraFrameAdapter: MacCameraFrameAdapter?
     var rtcLocalVideoTrack: RTCVideoTrack?
     var rtcLocalAudioTrack: RTCAudioTrack?
 
@@ -2679,7 +2680,15 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
 
         let source = Self.factory.videoSource()
-        let capturer = RTCCameraVideoCapturer(delegate: source)
+        let capturer: RTCCameraVideoCapturer
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            let adapter = MacCameraFrameAdapter(source: source)
+            cameraFrameAdapter = adapter
+            capturer = RTCCameraVideoCapturer(delegate: adapter)
+        } else {
+            cameraFrameAdapter = nil
+            capturer = RTCCameraVideoCapturer(delegate: source)
+        }
         videoSource = source
         videoCapturer = capturer
 
@@ -2793,13 +2802,14 @@ final class WebRTCClient: NSObject, ObservableObject {
         )
         let format = try selectFormat(for: camera, targetWidth: profile.width, targetHeight: profile.height)
         let fps = try selectFPS(for: format, targetFPS: profile.fps)
+        let captureFps = CameraFrameRatePolicy.captureFps(fps, ranges: Self.frameRateRanges(format))
 
         let session = capturer.captureSession
         if !session.isRunning && session.isMultitaskingCameraAccessSupported && !session.isMultitaskingCameraAccessEnabled {
             session.isMultitaskingCameraAccessEnabled = true
         }
         isMultitaskingCameraAccessEnabled = session.isMultitaskingCameraAccessEnabled
-        capturer.startCapture(with: camera, format: format, fps: Int(fps))
+        capturer.startCapture(with: camera, format: format, fps: captureFps)
     }
 
     private func webcamCaptureProfile(
@@ -3224,43 +3234,31 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func getCameraDevice(position: AVCaptureDevice.Position) -> AVCaptureDevice? {
-        let discoverySession = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInWideAngleCamera, .builtInDualCamera, .builtInTrueDepthCamera],
-            mediaType: .video,
-            position: position
-        )
-        return discoverySession.devices.first
+        CameraDeviceLookup.device(position: position)
     }
 
     func selectFormat(for device: AVCaptureDevice, targetWidth: Int32, targetHeight: Int32) throws -> AVCaptureDevice.Format {
         let formats = RTCCameraVideoCapturer.supportedFormats(for: device)
-        guard var selectedFormat = formats.first else {
+        let candidates = formats.map { format in
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            return CameraFormatCandidate(width: Int(dimensions.width), height: Int(dimensions.height))
+        }
+        guard let index = CameraFormatSelectionPolicy.selectIndex(candidates, targetWidth: Int(targetWidth),
+                                                                  targetHeight: Int(targetHeight)) else {
             throw WebRTCError.noCameraAvailable
         }
+        return formats[index]
+    }
 
-        var minDiff = Int32.max
-
-        for format in formats {
-            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-            let diff = abs(dimensions.width - targetWidth) + abs(dimensions.height - targetHeight)
-            if diff < minDiff {
-                minDiff = diff
-                selectedFormat = format
-            }
-        }
-
-        return selectedFormat
+    static func frameRateRanges(_ format: AVCaptureDevice.Format) -> [CameraFrameRateRange] {
+        format.videoSupportedFrameRateRanges.map { CameraFrameRateRange(minimum: $0.minFrameRate, maximum: $0.maxFrameRate) }
     }
 
     func selectFPS(for format: AVCaptureDevice.Format, targetFPS: Float64) throws -> Float64 {
-        var maxFrameRate: Float64 = 0
-        for range in format.videoSupportedFrameRateRanges {
-            maxFrameRate = max(maxFrameRate, range.maxFrameRate)
-        }
-        guard maxFrameRate >= 1 else {
+        guard let fps = CameraFrameRatePolicy.select(target: targetFPS, ranges: Self.frameRateRanges(format)) else {
             throw WebRTCError.noCameraAvailable
         }
-        return max(1, min(targetFPS, maxFrameRate))
+        return fps
     }
 
     private enum ConsumerRegistrationVisibility {
@@ -4936,7 +4934,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     func canSwitchCamera() -> Bool {
-        getCameraDevice(position: .front) != nil && getCameraDevice(position: .back) != nil
+        CameraDeviceLookup.canSwitch()
     }
 
     func setPreferredCameraFacing(_ facing: LocalCameraFacing) {
@@ -5740,7 +5738,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         let session = AVCaptureSession()
         session.sessionPreset = .medium
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
+        guard let device = CameraDeviceLookup.device(position: .front) else {
             return
         }
 
@@ -6846,6 +6844,20 @@ enum WebRTCError: LocalizedError {
         case .connectionFailed(let reason):
             return "Connection failed: \(reason)"
         }
+    }
+}
+
+final class MacCameraFrameAdapter: NSObject, RTCVideoCapturerDelegate {
+    private weak var source: RTCVideoSource?
+
+    init(source: RTCVideoSource) {
+        self.source = source
+    }
+
+    func capturer(_ capturer: RTCVideoCapturer, didCapture frame: RTCVideoFrame) {
+        guard let source else { return }
+        let upright = RTCVideoFrame(buffer: frame.buffer.toI420(), rotation: ._0, timeStampNs: frame.timeStampNs)
+        source.capturer(capturer, didCapture: upright)
     }
 }
 #endif

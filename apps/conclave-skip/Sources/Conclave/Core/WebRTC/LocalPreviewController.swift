@@ -212,8 +212,7 @@ final class LocalPreviewController {
         let position: AVCaptureDevice.Position = facing == .front ? .front : .back
         let fallback: AVCaptureDevice.Position = facing == .front ? .back : .front
         sessionQueue.async { [weak self] in
-            let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
-                ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: fallback)
+            let device = CameraDeviceLookup.device(position: position) ?? CameraDeviceLookup.device(position: fallback)
             var bound = false
             if let device, let input = try? AVCaptureDeviceInput(device: device) {
                 session.beginConfiguration()

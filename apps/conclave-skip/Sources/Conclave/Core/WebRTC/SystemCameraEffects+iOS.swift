@@ -24,7 +24,7 @@ final class SystemCameraEffectsOwner {
 
     func attach(facing: LocalCameraFacing) {
         let position: AVCaptureDevice.Position = facing == .front ? .front : .back
-        attach(device: AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position))
+        attach(device: CameraDeviceLookup.device(position: position))
     }
 
     func attach(device next: AVCaptureDevice?) {
