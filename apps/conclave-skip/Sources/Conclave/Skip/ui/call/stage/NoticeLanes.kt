@@ -71,12 +71,20 @@ private fun NoticeBannerLane(stage: StagePresenter) {
 private fun NoticeBanner(stage: StagePresenter, notice: MeetingNotice) {
     val context = LocalContext.current
     var expanded by remember(notice.id) { mutableStateOf(false) }
-    val actions = mutableListOf<ConclaveBannerAction>()
+    val actions = mutableListOf<NoticeCardAction>()
+    var hasPrimary = false
     for (action in notice.actions) {
         if (action.id == NoticeAction.catchUp) continue
-        val title = noticeActionTitle(action.id, notice, expanded)
-        actions.add(ConclaveBannerAction(title, "stage.banner.${notice.kind}.${action.id}", action.isEnabled,
-            if (action.id == NoticeAction.retryRecovery) conclaveString("sys_retrying_now") else "") {
+        val style = when {
+            action.id == NoticeAction.expand -> NoticeCardActionStyle.Quiet
+            !hasPrimary -> {
+                hasPrimary = true
+                NoticeCardActionStyle.Primary
+            }
+            else -> NoticeCardActionStyle.Secondary
+        }
+        actions.add(NoticeCardAction(noticeActionTitle(action.id, notice, expanded), "stage.banner.${notice.kind}.${action.id}", style,
+            action.isEnabled, if (action.id == NoticeAction.retryRecovery) conclaveString("sys_retrying_now") else "") {
             when (action.id) {
                 NoticeAction.expand -> expanded = !expanded
                 NoticeAction.openSettings -> openNoticeSettings(context, notice)
@@ -84,23 +92,25 @@ private fun NoticeBanner(stage: StagePresenter, notice: MeetingNotice) {
             }
         })
     }
-    val catchUpLabel = noticeBannerText(notice)
+    val announcement = noticeBannerText(notice)
     val modifier = if (notice.hasAction(NoticeAction.catchUp)) {
-        Modifier.clickable(onClickLabel = catchUpLabel, role = Role.Button) {
+        Modifier.clickable(onClickLabel = announcement, role = Role.Button) {
             stage.performNoticeAction(noticeId = notice.id, actionId = NoticeAction.catchUp)
         }
     } else Modifier
-    ConclaveBanner(
+    val title = if (notice.kind == NoticeKind.hostNotice) notice.name else ""
+    NoticeCard(
         kind = noticeBannerKind(notice),
-        text = noticeBannerText(notice),
+        title = title,
+        text = if (title.isNotEmpty()) notice.serverText else announcement,
+        announcement = announcement,
         identifier = "stage.banner.${notice.kind}",
-        inCall = true,
-        modifier = modifier,
         actions = actions,
         onDismiss = if (notice.isDismissible) ({ stage.dismissNotice(id = notice.id) }) else null,
         maxLines = if (expanded) Int.MAX_VALUE else ConclaveBannerLaneMetrics.LINE_LIMIT,
         announces = notice.announcement != NoticeAnnouncement.none,
         isAssertive = notice.announcement == NoticeAnnouncement.assertiveOnce,
+        modifier = modifier,
     )
 }
 

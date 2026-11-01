@@ -57,35 +57,44 @@ struct NoticeBannerView: View {
 
     var body: some View {
         if let notice = stage.banner {
-            let banner = ConclaveBanner(kind: NoticeCopy.bannerKind(notice), text: NoticeCopy.bannerText(notice), surface: .inCall,
-                                        actions: actions(notice),
-                                        onDismiss: notice.isDismissible ? { stage.dismissNotice(id: notice.id) } : nil,
-                                        announces: notice.announcement != NoticeAnnouncement.none,
-                                        isAssertive: notice.announcement == NoticeAnnouncement.assertiveOnce,
-                                        lineLimit: expanded ? nil : ConclaveBannerLaneMetrics.lineLimit,
-                                        identifier: "stage.banner." + notice.kind)
+            let card = NoticeCard(kind: NoticeCopy.bannerKind(notice), title: NoticeCopy.bannerTitle(notice),
+                                  text: NoticeCopy.bannerBody(notice), announcement: NoticeCopy.bannerText(notice),
+                                  actions: actions(notice),
+                                  onDismiss: notice.isDismissible ? { stage.dismissNotice(id: notice.id) } : nil,
+                                  announces: notice.announcement != NoticeAnnouncement.none,
+                                  isAssertive: notice.announcement == NoticeAnnouncement.assertiveOnce,
+                                  lineLimit: expanded ? nil : ConclaveBannerLaneMetrics.lineLimit,
+                                  identifier: "stage.banner." + notice.kind)
             if notice.hasAction(NoticeAction.catchUp) {
-                banner
-                    .contentShape(Rectangle())
+                card
                     .onTapGesture { stage.performNoticeAction(noticeId: notice.id, actionId: NoticeAction.catchUp) }
                     .accessibilityAddTraits(.isButton)
                     .accessibilityAction { stage.performNoticeAction(noticeId: notice.id, actionId: NoticeAction.catchUp) }
             } else {
-                banner
+                card
             }
         }
     }
 
-    private func actions(_ notice: MeetingNotice) -> [ConclaveBannerAction] {
-        var result: [ConclaveBannerAction] = []
+    private func actions(_ notice: MeetingNotice) -> [NoticeCardAction] {
+        var result: [NoticeCardAction] = []
+        var hasPrimary = false
         for action in notice.actions {
             if action.id == NoticeAction.catchUp { continue }
-            let title = NoticeCopy.actionTitle(action.id, expanded: expanded)
-            let identifier = "stage.banner." + notice.kind + "." + action.id
-            result.append(ConclaveBannerAction(title: title, identifier: identifier, action: {
-                perform(action.id, notice: notice)
-            }, isEnabled: action.isEnabled,
-               disabledHint: action.id == NoticeAction.retryRecovery ? ConclaveStrings.text("Retrying now") : ""))
+            let style: NoticeCardActionStyle
+            if action.id == NoticeAction.expand {
+                style = .quiet
+            } else if !hasPrimary {
+                style = .primary
+                hasPrimary = true
+            } else {
+                style = .secondary
+            }
+            result.append(NoticeCardAction(title: NoticeCopy.actionTitle(action.id, expanded: expanded),
+                                           identifier: "stage.banner." + notice.kind + "." + action.id, style: style,
+                                           isEnabled: action.isEnabled,
+                                           disabledHint: action.id == NoticeAction.retryRecovery ? ConclaveStrings.text("Retrying now") : "",
+                                           action: { perform(action.id, notice: notice) }))
         }
         return result
     }
@@ -149,6 +158,14 @@ enum NoticeCopy {
         case .success: return .success
         case .info: return .info
         }
+    }
+
+    static func bannerTitle(_ notice: MeetingNotice) -> String {
+        notice.kind == NoticeKind.hostNotice ? notice.name : ""
+    }
+
+    static func bannerBody(_ notice: MeetingNotice) -> String {
+        notice.kind == NoticeKind.hostNotice && !notice.name.isEmpty ? notice.serverText : bannerText(notice)
     }
 
     static func bannerText(_ notice: MeetingNotice) -> String {
