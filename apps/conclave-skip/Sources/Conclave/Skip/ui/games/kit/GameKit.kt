@@ -37,6 +37,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -150,10 +152,11 @@ private fun GameKitPlayerChip(player: GamePlayerModel) {
         Row(Modifier.padding(start = 4.dp, end = 10.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ConclaveAvatar(name = player.name, id = player.id, size = ConclaveAvatarSize.mention)
-            Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
-                color = if (player.isPending) scheme.onSurfaceVariant else scheme.onSurface)
+            Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (player.isPending) scheme.onSurfaceVariant else scheme.onSurface, modifier = Modifier.weight(1f, fill = false))
             if (player.isPending) {
-                Text(conclaveString("gm_next_round_suffix"), style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
+                Text(conclaveString("gm_next_round_suffix"), style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant,
+                    maxLines = 1, softWrap = false)
             } else if (player.hasActed) {
                 Icon(ConclaveIcons.CheckFill0, contentDescription = null, tint = ext.success, modifier = Modifier.size(16.dp))
             }
@@ -295,7 +298,8 @@ internal fun GameKitFactList(facts: List<GameKitFactRow>) {
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(fact.label, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                    Text(fact.value, style = MaterialTheme.typography.titleSmall, color = scheme.onSurface)
+                    Text(fact.value, style = MaterialTheme.typography.titleSmall, color = scheme.onSurface, textAlign = TextAlign.End,
+                        modifier = Modifier.weight(1.4f, fill = false).padding(vertical = 12.dp))
                 }
                 if (index < facts.size - 1) HorizontalDivider(Modifier.padding(start = 14.dp), color = ext.border)
             }

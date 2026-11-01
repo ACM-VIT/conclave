@@ -149,7 +149,7 @@ struct ConclaveFlowLayout: Layout {
         var lineHeight: CGFloat = 0
         var widest: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = fittedSize(of: subview, maxWidth: maxWidth)
             if x > 0 && x + size.width > maxWidth {
                 y += lineHeight + spacing
                 x = 0
@@ -168,7 +168,7 @@ struct ConclaveFlowLayout: Layout {
         var y = bounds.minY
         var lineHeight: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = fittedSize(of: subview, maxWidth: bounds.width)
             if x > bounds.minX && x + size.width > bounds.maxX {
                 y += lineHeight + spacing
                 x = bounds.minX
@@ -178,6 +178,13 @@ struct ConclaveFlowLayout: Layout {
             x += size.width + spacing
             lineHeight = max(lineHeight, size.height)
         }
+    }
+
+    private func fittedSize(of subview: LayoutSubview, maxWidth: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        guard ideal.width > maxWidth else { return ideal }
+        let fitted = subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
+        return CGSize(width: min(fitted.width, maxWidth), height: fitted.height)
     }
 }
 #endif

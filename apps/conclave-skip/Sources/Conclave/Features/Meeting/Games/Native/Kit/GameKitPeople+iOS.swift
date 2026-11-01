@@ -34,6 +34,8 @@ struct GameKitPlayerChip: View {
             if player.isPending {
                 Text(ConclaveStrings.text("next round"))
                     .font(.caption)
+                    .lineLimit(1)
+                    .fixedSize()
                     .foregroundStyle(HostingTheme.inCallTextSecondary)
             } else if player.hasActed {
                 Image(systemName: ConclaveSymbols.checkmark)
