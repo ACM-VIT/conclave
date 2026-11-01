@@ -49,15 +49,23 @@ describe("connectWebRtcTransportOnce", () => {
     expect(transport.connectCalls).toBe(1);
   });
 
-  it("treats connecting and connected transports as already connected", async () => {
+  it("supplies remote DTLS parameters when ICE started the handshake first", async () => {
     const transport = new FakeWebRtcTransport();
     transport.dtlsState = "connecting";
 
     await expect(
       connectWebRtcTransportOnce(asTransport(transport), dtlsParameters),
     ).resolves.toBeUndefined();
-    expect(transport.connectCalls).toBe(0);
+    expect(transport.connectCalls).toBe(1);
 
+    // The handshake may remain in progress after connect() accepts the
+    // fingerprint. Repeated signaling must not connect the transport again.
+    await connectWebRtcTransportOnce(asTransport(transport), dtlsParameters);
+    expect(transport.connectCalls).toBe(1);
+  });
+
+  it("treats connected transports as already connected", async () => {
+    const transport = new FakeWebRtcTransport();
     transport.dtlsState = "connected";
     await expect(
       connectWebRtcTransportOnce(asTransport(transport), dtlsParameters),
@@ -87,5 +95,29 @@ describe("connectWebRtcTransportOnce", () => {
       connectWebRtcTransportOnce(asTransport(transport), dtlsParameters),
     ).rejects.toThrow("Transport DTLS state is failed");
     expect(transport.connectCalls).toBe(0);
+  });
+
+  it("allows retry after a rejected connect attempt", async () => {
+    const transport = new FakeWebRtcTransport();
+    transport.dtlsState = "connecting";
+    transport.connectImplementation = async () => {
+      throw new Error("rejected parameters");
+    };
+    await expect(
+      connectWebRtcTransportOnce(asTransport(transport), dtlsParameters),
+    ).rejects.toThrow("rejected parameters");
+    transport.connectImplementation = async () => {};
+    await connectWebRtcTransportOnce(asTransport(transport), dtlsParameters);
+    expect(transport.connectCalls).toBe(2);
+  });
+
+  it("rejects a transport that failed after accepting connect parameters", async () => {
+    const transport = new FakeWebRtcTransport();
+    await connectWebRtcTransportOnce(asTransport(transport), dtlsParameters);
+    transport.dtlsState = "failed";
+    await expect(
+      connectWebRtcTransportOnce(asTransport(transport), dtlsParameters),
+    ).rejects.toThrow("Transport DTLS state is failed");
+    expect(transport.connectCalls).toBe(1);
   });
 });
