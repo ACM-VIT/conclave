@@ -25,6 +25,14 @@ object AndroidNativeHttpClient {
         .callTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    internal val authClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .cookieJar(okhttp3.CookieJar.NO_COOKIES)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+    }
+
     private val assistantClient = client.newBuilder()
         .readTimeout(120, TimeUnit.SECONDS)
         .callTimeout(150, TimeUnit.SECONDS)

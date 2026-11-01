@@ -26,6 +26,7 @@ final class AccountAuthCoordinator {
         case .signInWithGoogle, .signInWithApple, .cancelSignIn, .signOut, .deleteAccount:
             refreshGeneration += 1
             lastRefreshMillis = -1.0
+            NativeAuthService.beginAuthentication()
         default:
             break
         }
@@ -68,6 +69,7 @@ final class AccountAuthCoordinator {
     }
 
     private func signInWithGoogle(generation: Int) {
+        let epoch = NativeAuthService.authenticationEpoch
         Task { @MainActor [weak self] in
             do {
                 let identity = try await NativeAuthService.requestNativeGoogleIdentityToken()
@@ -77,7 +79,8 @@ final class AccountAuthCoordinator {
                     provider: .google,
                     idToken: identity.token,
                     userName: identity.name,
-                    userEmail: identity.email
+                    userEmail: identity.email,
+                    authenticationEpoch: epoch
                 )
                 current.completeSignIn(user, kind: AuthProviderKind.google, fallbackName: identity.name,
                                        fallbackEmail: identity.email, generation: generation)
@@ -89,6 +92,7 @@ final class AccountAuthCoordinator {
 
     private func signInWithApple(_ request: AccountRequest) {
         let generation = request.generation
+        let epoch = NativeAuthService.authenticationEpoch
         let fullName = request.fullName.isEmpty ? nil : request.fullName
         let email = request.email.isEmpty ? nil : request.email
         let nonce = request.nonce.isEmpty ? nil : request.nonce
@@ -100,7 +104,8 @@ final class AccountAuthCoordinator {
                     idToken: token,
                     nonce: nonce,
                     userName: fullName,
-                    userEmail: email
+                    userEmail: email,
+                    authenticationEpoch: epoch
                 )
                 self?.completeSignIn(user, kind: AuthProviderKind.apple, fallbackName: fullName, fallbackEmail: email,
                                      generation: generation)

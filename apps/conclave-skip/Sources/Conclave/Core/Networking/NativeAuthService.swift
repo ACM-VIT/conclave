@@ -197,9 +197,54 @@ enum NativeAuthCookiePolicy {
     }
 }
 
-private struct NativeAuthHTTPResult {
+struct NativeAuthHTTPResult {
     let data: Data
     let statusCode: Int
+    let setCookieHeaders: [String]
+
+    init(data: Data, statusCode: Int, setCookieHeaders: [String] = []) {
+        self.data = data
+        self.statusCode = statusCode
+        self.setCookieHeaders = setCookieHeaders
+    }
+}
+
+@MainActor
+final class NativeAuthCookieTransaction {
+    let epoch: Int
+    private var batches: [(URL, [String])] = []
+
+    init(epoch: Int) {
+        self.epoch = epoch
+    }
+
+    func stage(_ result: NativeAuthHTTPResult, url: URL) {
+        batches.append((url, result.setCookieHeaders))
+    }
+
+    func cookieHeader(for url: URL) -> String? {
+        #if SKIP
+        return NativeAuthSessionBridge.pendingCookieHeader(
+            setCookieHeaders: batches.flatMap { $0.1 }, forURL: url.absoluteString)
+        #else
+        var cookies: [String: HTTPCookie] = [:]
+        for batch in batches {
+            for header in batch.1 {
+                for cookie in HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": header], for: batch.0) {
+                    cookies[cookie.name] = cookie
+                }
+            }
+        }
+        return HTTPCookie.requestHeaderFields(with: Array(cookies.values))["Cookie"]
+        #endif
+    }
+
+    func commit() throws {
+        try NativeAuthService.requireAuthenticationEpoch(epoch)
+        for batch in batches {
+            NativeAuthService.commitCookieHeaders(batch.1, url: batch.0)
+        }
+    }
 }
 
 #if SKIP
@@ -211,6 +256,26 @@ private struct AndroidNativeHTTPResponse: Decodable {
 #endif
 
 enum NativeAuthService {
+    @MainActor private(set) static var authenticationEpoch = 0
+    #if os(macOS) && !SKIP
+    @MainActor static var testAuthRequest: ((URLRequest) async throws -> NativeAuthHTTPResult)? = nil
+    #endif
+
+    @MainActor
+    @discardableResult
+    static func beginAuthentication() -> Int {
+        authenticationEpoch += 1
+        return authenticationEpoch
+    }
+
+    @MainActor
+    static func requireAuthenticationEpoch(_ epoch: Int) throws {
+        guard epoch == authenticationEpoch, !Task.isCancelled else {
+            throw NativeAuthError(message: "Sign-in cancelled.", kind: .cancelled)
+        }
+    }
+
+    @MainActor
     static func fetchEnabledProviders() async throws -> Set<NativeAuthProvider> {
         guard let baseURL = resolveAppBaseURL(),
               let url = authURL(path: "/api/auth/providers", baseURL: baseURL) else {
@@ -233,7 +298,8 @@ enum NativeAuthService {
         return try decodeEnabledProviders(from: data)
     }
 
-    static func fetchCurrentSessionUser() async throws -> NativeAuthenticatedUser? {
+    @MainActor
+    static func fetchCurrentSessionUser(transaction: NativeAuthCookieTransaction? = nil) async throws -> NativeAuthenticatedUser? {
         guard let baseURL = resolveAppBaseURL(),
               let url = authURL(path: "/api/auth/get-session", baseURL: baseURL) else {
             throw NativeAuthError(message: "Authentication server is not configured.", kind: .notConfigured)
@@ -244,7 +310,7 @@ enum NativeAuthService {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         prepareAuthRequest(&request, url: url)
 
-        let result = try await performAuthRequest(request, url: url)
+        let result = try await performAuthRequest(request, url: url, transaction: transaction)
         let data = result.data
         let statusCode = result.statusCode
 
@@ -275,14 +341,19 @@ enum NativeAuthService {
         return user
     }
 
+    @MainActor
     static func signInWithSocialToken(
         provider: NativeAuthProvider,
         idToken: String,
         nonce: String? = nil,
         accessToken: String? = nil,
         userName: String? = nil,
-        userEmail: String? = nil
+        userEmail: String? = nil,
+        authenticationEpoch: Int? = nil
     ) async throws -> NativeAuthenticatedUser {
+        let epoch = authenticationEpoch ?? beginAuthentication()
+        try requireAuthenticationEpoch(epoch)
+        let transaction = NativeAuthCookieTransaction(epoch: epoch)
         let trimmedToken = idToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedToken.isEmpty else {
             throw NativeAuthError(message: "Missing identity token.", kind: .invalidResponse)
@@ -312,7 +383,7 @@ enum NativeAuthService {
         request.httpBody = try JSONEncoder().encode(requestBody)
         prepareAuthRequest(&request, url: url)
 
-        let result = try await performAuthRequest(request, url: url)
+        let result = try await performAuthRequest(request, url: url, transaction: transaction)
         let data = result.data
         let statusCode = result.statusCode
         let decoded = try? JSONDecoder().decode(NativeSocialSignInResponse.self, from: data)
@@ -322,21 +393,26 @@ enum NativeAuthService {
             throw NativeAuthError(message: message, kind: statusKind(statusCode))
         }
 
-        if let sessionUser = try? await fetchCurrentSessionUser(),
+        if let sessionUser = try? await fetchCurrentSessionUser(transaction: transaction),
            hasUsableIdentity(sessionUser) {
+            try transaction.commit()
             return sessionUser
         }
 
+        try requireAuthenticationEpoch(epoch)
         guard let user = decoded?.user ?? decoded?.session?.user,
               hasUsableIdentity(user) else {
             let message = decoded?.error ?? decoded?.message ?? "Sign-in completed, but no user was returned."
             throw NativeAuthError(message: message, kind: .invalidResponse)
         }
 
+        try transaction.commit()
         return user
     }
 
+    @MainActor
     static func signOut() async {
+        let epoch = beginAuthentication()
         #if SKIP
         NativeGoogleSignInBridge.clearCredentialState()
         #endif
@@ -353,10 +429,13 @@ enum NativeAuthService {
         prepareAuthRequest(&request, url: url)
 
         _ = try? await performAuthRequest(request, url: url)
+        guard epoch == authenticationEpoch else { return }
         clearStoredSessionCookies(matching: baseURL)
     }
 
+    @MainActor
     static func deleteCurrentUser() async throws {
+        beginAuthentication()
         guard let baseURL = resolveAppBaseURL(),
               let url = authURL(path: "/api/auth/delete-user", baseURL: baseURL) else {
             throw NativeAuthError(message: "Authentication server is not configured.", kind: .notConfigured)
@@ -387,7 +466,9 @@ enum NativeAuthService {
         clearStoredSessionCookies(matching: baseURL)
     }
 
+    @MainActor
     static func clearStoredSessionCookies() {
+        beginAuthentication()
         clearStoredSessionCookies(matching: resolveAppBaseURL())
     }
 
@@ -562,7 +643,9 @@ enum NativeAuthService {
         #endif
     }
 
+    @MainActor
     static func cancelNativeGoogleSignIn() {
+        beginAuthentication()
         #if SKIP
         NativeGoogleSignInBridge.cancel()
         #endif
@@ -666,73 +749,85 @@ enum NativeAuthService {
     }
 
     private static func prepareAuthRequest(_ request: inout URLRequest, url: URL) {
-        request.httpShouldHandleCookies = true
-        NativeCookieSupport.attachCookies(to: &request)
-        _ = url
-    }
-
-    private static func performAuthRequest(_ request: URLRequest, url: URL) async throws -> NativeAuthHTTPResult {
+        request.httpShouldHandleCookies = false
         #if SKIP
-        let bodyString = request.httpBody.flatMap { String(data: $0, encoding: .utf8) }
-        let cookieHeader = request.value(forHTTPHeaderField: "Cookie")
-        let rawResponse: String = try await withCheckedThrowingContinuation { continuation in
-            var didResume = false
-            AndroidNativeHttpClient.requestJson(
-                method: request.httpMethod ?? "GET",
-                url: url.absoluteString,
-                body: bodyString,
-                accept: request.value(forHTTPHeaderField: "Accept"),
-                contentType: request.value(forHTTPHeaderField: "Content-Type"),
-                origin: request.value(forHTTPHeaderField: "Origin"),
-                clientId: nil,
-                cookieHeader: cookieHeader
-            ) { response, errorMessage in
-                guard !didResume else { return }
-                didResume = true
-
-                if let errorMessage,
-                   !errorMessage.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
-                    continuation.resume(throwing: NativeAuthError(message: errorMessage, kind: .network))
-                    return
-                }
-
-                guard let response else {
-                    continuation.resume(throwing: NativeAuthError(message: "Authentication request failed.", kind: .network))
-                    return
-                }
-
-                continuation.resume(returning: response)
-            }
-        }
-
-        let responseEnvelope = try JSONDecoder().decode(
-            AndroidNativeHTTPResponse.self,
-            from: Data(rawResponse.utf8)
-        )
-
-        for setCookieHeader in responseEnvelope.setCookieHeaders {
-            NativeAuthSessionBridge.storeSetCookieHeader(
-                setCookieHeader: setCookieHeader,
-                forURL: url.absoluteString
-            )
-        }
-
-        return NativeAuthHTTPResult(
-            data: responseEnvelope.body.data(using: String.Encoding.utf8) ?? Data(),
-            statusCode: responseEnvelope.statusCode
-        )
+        request.setValue(NativeAuthSessionBridge.cookieHeader(forURL: url.absoluteString), forHTTPHeaderField: "Cookie")
         #else
-        let (data, response) = try await URLSession.shared.data(for: request)
-        storeAuthCookies(from: response, url: url)
-        return NativeAuthHTTPResult(
-            data: data,
-            statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0
-        )
+        NativeCookieSupport.attachCookies(to: &request)
         #endif
     }
 
-    private static func storeAuthCookies(from response: URLResponse, url: URL) {
-        NativeCookieSupport.storeCookies(from: response, url: url)
+    @MainActor
+    private static func performAuthRequest(_ original: URLRequest, url: URL,
+                                           transaction: NativeAuthCookieTransaction? = nil) async throws -> NativeAuthHTTPResult {
+        let epoch = transaction?.epoch ?? authenticationEpoch
+        try requireAuthenticationEpoch(epoch)
+        var request = original
+        request.httpShouldHandleCookies = false
+        if let transaction {
+            request.setValue(transaction.cookieHeader(for: url), forHTTPHeaderField: "Cookie")
+        }
+        let result: NativeAuthHTTPResult
+        #if os(macOS) && !SKIP
+        if let transport = testAuthRequest {
+            result = try await transport(request)
+        } else {
+            result = try await isolatedAuthRequest(request, url: url)
+        }
+        #else
+        result = try await isolatedAuthRequest(request, url: url)
+        #endif
+        try requireAuthenticationEpoch(epoch)
+        if let transaction {
+            transaction.stage(result, url: url)
+        } else {
+            commitCookieHeaders(result.setCookieHeaders, url: url)
+        }
+        return result
+    }
+
+    private static func isolatedAuthRequest(_ request: URLRequest, url: URL) async throws -> NativeAuthHTTPResult {
+        #if SKIP
+        let bodyString = request.httpBody.flatMap { String(data: $0, encoding: .utf8) }
+        let rawResponse: String = try await withCheckedThrowingContinuation { continuation in
+            NativeAuthSessionBridge.requestAuthJson(
+                method: request.httpMethod ?? "GET", url: url.absoluteString, body: bodyString,
+                cookieHeader: request.value(forHTTPHeaderField: "Cookie"),
+                origin: request.value(forHTTPHeaderField: "Origin")
+            ) { response, errorMessage in
+                if let response {
+                    continuation.resume(returning: response)
+                } else {
+                    continuation.resume(throwing: NativeAuthError(message: errorMessage ?? "Authentication request failed.", kind: .network))
+                }
+            }
+        }
+        let envelope = try JSONDecoder().decode(AndroidNativeHTTPResponse.self, from: Data(rawResponse.utf8))
+        return NativeAuthHTTPResult(data: Data(envelope.body.utf8), statusCode: envelope.statusCode,
+                                    setCookieHeaders: envelope.setCookieHeaders)
+        #else
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        let session = URLSession(configuration: configuration)
+        defer { session.finishTasksAndInvalidate() }
+        let (data, response) = try await session.data(for: request)
+        let http = response as? HTTPURLResponse
+        let headers = http?.value(forHTTPHeaderField: "Set-Cookie").map { [$0] } ?? []
+        return NativeAuthHTTPResult(data: data, statusCode: http?.statusCode ?? 0, setCookieHeaders: headers)
+        #endif
+    }
+
+    @MainActor
+    static func commitCookieHeaders(_ headers: [String], url: URL) {
+        for header in headers {
+            #if SKIP
+            NativeAuthSessionBridge.storeSetCookieHeader(setCookieHeader: header, forURL: url.absoluteString)
+            #else
+            let cookies = HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": header], for: url)
+            HTTPCookieStorage.shared.setCookies(cookies, for: url, mainDocumentURL: nil)
+            #endif
+        }
     }
 
     private static func normalizedOptional(_ value: String?) -> String? {
