@@ -375,6 +375,16 @@ enum StageAlonePolicy {
     static let titleLineHeight = 28.0
     static let statusLineHeight = 20.0
     static let maxTitleLines = 2
+    static let centeredAvatarDiameter = 96.0
+    static let centeredMinWidth = 600.0
+    static let centeredMinBandHeight = 300.0
+    static let centeredMaxWidth = 460.0
+    static let centeredSpacing = 20.0
+
+    static func usesCenteredLayout(_ viewport: StageViewport) -> Bool {
+        let usableWidth = viewport.width - viewport.insetLeading - viewport.insetTrailing
+        return usableWidth >= centeredMinWidth && bandHeight(viewport) >= centeredMinBandHeight
+    }
 
     static func bottomPadding(_ viewport: StageViewport) -> Double {
         viewport.insetBottom + toastClearance + edgeInset

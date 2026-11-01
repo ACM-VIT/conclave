@@ -36,6 +36,7 @@ enum ControlsFixtureState: String, CaseIterable, Equatable {
     case twoInputs = "controls-two-inputs"
     case cameraEffects = "controls-camera-effects"
     case systemEffects = "controls-system-effects"
+    case alone = "controls-alone"
 }
 
 enum ControlsFixtureScript {
@@ -219,7 +220,8 @@ enum ControlsFixtureScript {
                                                  isCameraOff: isCameraOff, isHandRaised: isHandRaised, joinSerial: 0,
                                                  videoKey: isCameraOff ? "" : "probe:" + localUserId))
         var index = 0
-        while index < remoteNames.count {
+        let remoteCount = state == .alone ? 0 : remoteNames.count
+        while index < remoteCount {
             let id = "r" + String(index + 1)
             let sharing = state == .remoteShare && index == 0
             roster.append(StageParticipantInput.make(userId: id, displayName: remoteNames[index], isMuted: index == 1,
@@ -230,7 +232,8 @@ enum ControlsFixtureScript {
         return StageInputs.make(callSession: 1, isInCall: true, localUserId: localUserId, roomLabel: roomLabel,
                                 meetingLink: meetingLink, participants: roster,
                                 screenShareUserId: state == .remoteShare ? "r1" : "",
-                                isWebinarAttendee: isAttendee(state), canFlipCamera: true, routeKind: routeKind,
+                                isWebinarAttendee: isAttendee(state), isAloneConfirmed: state == .alone,
+                                canFlipCamera: true, routeKind: routeKind,
                                 routeName: routeName, isHandRaised: isHandRaised, handToggleInFlight: handPending,
                                 isRecovering: recovering, joinedAtMillis: joinedAtMillis)
     }
@@ -363,6 +366,7 @@ final class ControlsFixtureSession {
         isMuted = state == .slowAck || state == .hostDisabledMedia
 
         isCameraOff = state == .audioOnly || state == .cameraDenied || state == .hostDisabledMedia || state == .cameraEffects
+            || state == .alone
         local = local.withCamera(!isCameraOff)
         handInFlight = state == .handRaising || state == .moreHandRaising
         if ControlsFixtureScript.forcesWide(state) {

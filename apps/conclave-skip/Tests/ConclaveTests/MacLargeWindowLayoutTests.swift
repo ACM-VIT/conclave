@@ -4,6 +4,36 @@ import Testing
 
 @MainActor
 struct MacLargeWindowLayoutTests {
+    private let macWindow = StageViewport(width: 1980, height: 1300, insetTop: 80, insetBottom: 84, insetLeading: 0, insetTrailing: 0,
+                                          widthClass: StageSizeClass.regular, heightClass: StageSizeClass.regular, placement: .bottomBar)
+
+    private var iphoneLandscape: StageViewport {
+        StageViewportPolicy.iOS(contentWidth: 844, contentHeight: 390,
+                                safeArea: StageChromeInsets(top: 0, bottom: 21, leading: 47, trailing: 47),
+                                regularWidth: false, compactHeight: true, topReserve: 56, barReserve: 64, trailingReserve: 64)
+    }
+
+    @Test func phonesKeepTheLowerLeadingAloneComposition() {
+        for viewport in [StagePoliciesTests.iphoneSE, StagePoliciesTests.iphone17e, iphoneLandscape] {
+            #expect(!StageAlonePolicy.usesCenteredLayout(viewport), "\(viewport.width)x\(viewport.height)")
+        }
+    }
+
+    @Test func largeWindowsCenterTheAloneCompositionWithRoomForTheInviteRow() {
+        for viewport in [macWindow, StagePoliciesTests.ipadPortrait, StagePoliciesTests.ipadLandscape] {
+            #expect(StageAlonePolicy.usesCenteredLayout(viewport), "\(viewport.width)x\(viewport.height)")
+            let text = StageAlonePolicy.titleLineHeight * 2 + StageAlonePolicy.lineSpacing + StageAlonePolicy.statusLineHeight
+            let composition = StageAlonePolicy.centeredAvatarDiameter + StageAlonePolicy.centeredSpacing * 2 + text + 44 + 4
+            #expect(composition <= StageAlonePolicy.bandHeight(viewport))
+        }
+        let short = StageViewport(width: 1200, height: 420, insetTop: 80, insetBottom: 84, insetLeading: 0, insetTrailing: 0,
+                                  widthClass: StageSizeClass.regular, heightClass: StageSizeClass.compact, placement: .bottomBar)
+        #expect(!StageAlonePolicy.usesCenteredLayout(short))
+        let narrow = StageViewport(width: 640, height: 1000, insetTop: 80, insetBottom: 84, insetLeading: 48, insetTrailing: 0,
+                                   widthClass: StageSizeClass.regular, heightClass: StageSizeClass.regular, placement: .bottomBar)
+        #expect(!StageAlonePolicy.usesCenteredLayout(narrow))
+    }
+
     @Test func premeetingCentersOnlyForRegularWideWindows() {
         #expect(PremeetingLayoutPolicy.usesCenteredLayout(width: 1980, horizontalRegular: true, verticalRegular: true))
         #expect(PremeetingLayoutPolicy.usesCenteredLayout(width: 1032, horizontalRegular: true, verticalRegular: true))
