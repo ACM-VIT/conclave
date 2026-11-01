@@ -1,3 +1,45 @@
+#if !SKIP
+import Foundation
+
+@MainActor
+final class ConclaveToastDeadline {
+    struct Key: Equatable {
+        let id: String
+        let durationMillis: Double
+    }
+
+    var sleep: (Double) async throws -> Void = { millis in
+        try await Task.sleep(nanoseconds: UInt64(millis * 1_000_000))
+    }
+    private var key: Key?
+    private var task: Task<Void, Never>?
+
+    static func key(item: ConclaveToastItem?, isScreenReaderRunning: Bool) -> Key? {
+        guard let item else { return nil }
+        return Key(id: item.id, durationMillis: ConclaveToastTiming.durationMillis(hasAction: item.hasAction,
+                   isScreenReaderRunning: isScreenReaderRunning, isProgress: item.isProgress))
+    }
+
+    func update(_ next: Key?, onDismiss: @escaping (String) -> Void) {
+        if key == next { return }
+        cancel()
+        key = next
+        guard let next, next.durationMillis > 0 else { return }
+        let delay = sleep
+        task = Task { @MainActor [weak self] in
+            do { try await delay(next.durationMillis) } catch { return }
+            if !Task.isCancelled && self?.key == next { onDismiss(next.id) }
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+        key = nil
+    }
+}
+#endif
+
 #if os(iOS) && !SKIP
 import Accessibility
 import SwiftUI
@@ -10,6 +52,7 @@ struct ConclaveToastHost: View {
     let onDismiss: (String) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var announced = ToastAnnouncementLatch()
+    @State private var deadline = ConclaveToastDeadline()
 
     init(item: ConclaveToastItem?, isScreenReaderRunning: Bool, identifier: String,
          onAction: @escaping (ConclaveToastItem) -> Void, onDismiss: @escaping (String) -> Void) {
@@ -28,15 +71,12 @@ struct ConclaveToastHost: View {
                     .conclaveLanePresence(from: .bottom)
                     .accessibilityAction(.escape) { onDismiss(item.id) }
                     .onAppear { announce(item) }
-                    .task(id: item.id) {
-                        let millis = ConclaveToastTiming.durationMillis(hasAction: item.hasAction,
-                                                                        isScreenReaderRunning: isScreenReaderRunning, isProgress: item.isProgress)
-                        guard millis > 0 else { return }
-                        try? await Task.sleep(for: .milliseconds(Int(millis)))
-                        if !Task.isCancelled { onDismiss(item.id) }
-                    }
             }
         }
+        .onChange(of: ConclaveToastDeadline.key(item: item, isScreenReaderRunning: isScreenReaderRunning), initial: true) { _, key in
+            deadline.update(key, onDismiss: onDismiss)
+        }
+        .onDisappear { deadline.cancel() }
         .animation(ConclaveMotion.fast, value: item?.id)
         .environment(\.colorScheme, .dark)
         .accessibilityIdentifier(identifier)
