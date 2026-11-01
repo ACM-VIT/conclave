@@ -225,7 +225,8 @@ private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVi
     val chrome = games.chrome
     val context = LocalContext.current
     when (scene.kind) {
-        GameSceneKind.lobby -> GameLobbyBody(scene, chrome)
+        GameSceneKind.lobby -> GameLobbyBody(scene, chrome,
+            GameShellBarPolicy.content(chrome = chrome, scene = scene, results = games.results))
         GameSceneKind.privateView -> GameKitNotice(GameKitNoticeKind.privateView, conclaveString("gm_private_loading_body"))
 
         GameSceneKind.trivia, GameSceneKind.bluff, GameSceneKind.wouldYouRather, GameSceneKind.mostLikelyTo,
@@ -256,8 +257,9 @@ private fun GameShellScene(games: GameStagePresenter, storeURL: String, onShowVi
 }
 
 @Composable
-private fun GameLobbyBody(scene: GameScene, chrome: GameChromeModel) {
-    val caption = GameLobbyPolicy.caption(reason = scene.lobby.reason, isHost = chrome.isHost)
+private fun GameLobbyBody(scene: GameScene, chrome: GameChromeModel, barContent: GameShellBarContent) {
+    val caption = GameLobbyPolicy.bodyCaption(GameLobbyPolicy.caption(reason = scene.lobby.reason, isHost = chrome.isHost),
+        barContent = barContent)
     Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
         Column(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -291,7 +293,6 @@ private fun GameResultsBody(games: GameStagePresenter) {
     val results = games.results
     Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         GameKitPodium(results.scoreboard)
-        if (!games.chrome.isHost) GameKitWaitingLine(conclaveString("gm_waiting_host"))
     }
 }
 
@@ -328,6 +329,8 @@ internal fun GameShellBottomBar(games: GameStagePresenter, modifier: Modifier = 
                 GameShellBarContent.promptHost -> PromptGameHostBar(games)
                 GameShellBarContent.wordleNextRound -> WordleHostBar(games)
                 GameShellBarContent.zipNextRound -> ZipHostBar(games)
+                GameShellBarContent.waitingForHost -> GameKitWaitingBar(
+                    if (chrome.phase == GameChromePhase.lobby) conclaveString("gm_waiting_host_start") else conclaveString("gm_waiting_host"))
                 else -> {}
             }
         }

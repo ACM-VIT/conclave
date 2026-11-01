@@ -81,10 +81,7 @@ internal fun GameKitSeatControl(seat: SeatState, onJoin: () -> Unit) {
                 modifier = Modifier.heightIn(min = 48.dp).testTag("game.seat.join").semantics { contentDescription = label },
             ) { Text(conclaveString("gm_join")) }
         }
-        SeatState.joiningNextRound, SeatState.watching -> {
-            val name = gameSeatTagResource(seat)
-            if (name != null) GameKitTag(conclaveString(name), Modifier.testTag("game.seat.tag"))
-        }
+        SeatState.joiningNextRound, SeatState.watching -> GameKitSeatChip(seat)
         SeatState.player -> {}
     }
 }

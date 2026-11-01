@@ -1380,6 +1380,8 @@
     <string name="gm_unsupported">This game needs a newer version of Conclave</string>
     <string name="gm_update_app">Update app</string>
     <string name="gm_waiting_host">Waiting for the host</string>
+    <string name="gm_waiting_host_start">Waiting for the host to start</string>
+    <string name="gm_play_next_round">You’ll play next round</string>
     <string name="gm_waiting_to_start">Waiting to start</string>
     <string name="gm_warning">5 s left</string>
     <string name="gm_watching">Watching</string>

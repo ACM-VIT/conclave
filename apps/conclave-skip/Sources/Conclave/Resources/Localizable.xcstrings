@@ -6680,6 +6680,9 @@
     "You’ll join as an attendee. Your camera and mic stay off." : {
       "extractionState" : "manual"
     },
+    "You’ll play next round" : {
+      "extractionState" : "manual"
+    },
     "You’ll stay in this call as a guest and lose host controls." : {
       "extractionState" : "manual"
     },
