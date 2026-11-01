@@ -1,5 +1,5 @@
 import Foundation
-#if os(macOS) || os(Linux) // Skip transpiled tests only run on supported hosts
+#if os(macOS) || os(Linux)
 import SkipTest
 
 @available(macOS 13, macCatalyst 16, *)

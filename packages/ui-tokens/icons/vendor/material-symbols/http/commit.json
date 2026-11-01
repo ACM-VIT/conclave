@@ -1,0 +1,114 @@
+{
+  "id": "commit",
+  "kind": "git-metadata",
+  "request_url": "https://api.github.com/repos/google/material-design-icons/git/commits/49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "request_method": "GET",
+  "request_headers": {
+    "Accept-Encoding": "identity",
+    "User-Agent": "Conclave-selected-input-recovery/1.0"
+  },
+  "started_at_utc": "2026-10-23T16:12:29.106841Z",
+  "source_revision": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "historical_status": "fresh_network_retrieval",
+  "body_file": "upstream/commit.json",
+  "receipt_file": "http/commit.json",
+  "redirect_policy": "record and reject; no substitutions",
+  "redirects": [],
+  "http_status": 403,
+  "final_url": "https://api.github.com/repos/google/material-design-icons/git/commits/49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "response_headers": [
+    [
+      "Date",
+      "Fri, 23 Oct 2026 16:12:29 GMT"
+    ],
+    [
+      "Server",
+      "Varnish"
+    ],
+    [
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubdomains; preload"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "X-Frame-Options",
+      "deny"
+    ],
+    [
+      "X-XSS-Protection",
+      "1; mode=block"
+    ],
+    [
+      "Content-Security-Policy",
+      "default-src 'none'; style-src 'unsafe-inline'"
+    ],
+    [
+      "Access-Control-Allow-Origin",
+      "*"
+    ],
+    [
+      "Access-Control-Expose-Headers",
+      "ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset, X-RateLimit-Used, X-RateLimit-Resource, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, Deprecation, Sunset"
+    ],
+    [
+      "Content-Type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "Referrer-Policy",
+      "origin-when-cross-origin, strict-origin-when-cross-origin"
+    ],
+    [
+      "X-GitHub-Media-Type",
+      "github.v3; format=json"
+    ],
+    [
+      "X-RateLimit-Limit",
+      "60"
+    ],
+    [
+      "X-RateLimit-Remaining",
+      "0"
+    ],
+    [
+      "X-RateLimit-Used",
+      "60"
+    ],
+    [
+      "X-RateLimit-Resource",
+      "core"
+    ],
+    [
+      "X-RateLimit-Reset",
+      "1792773597"
+    ],
+    [
+      "Content-Length",
+      "280"
+    ],
+    [
+      "X-GitHub-Request-Id",
+      "D930:205896:5D7A84:8869BD:6ADB876D"
+    ],
+    [
+      "x-github-edge-region",
+      "centralindia"
+    ],
+    [
+      "connection",
+      "close"
+    ]
+  ],
+  "bytes": 280,
+  "sha256": "652247c739a084b9a03d284491854a36ee3983ba24aafacbc63eea1b4ecda55d",
+  "body_complete_within_limit": true,
+  "max_bytes": 131072,
+  "errors": [
+    "HTTP status is not 200"
+  ],
+  "completed_at_utc": "2026-10-23T16:12:29.303061Z",
+  "retrieval_ok": false
+}

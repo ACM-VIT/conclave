@@ -1,13 +1,6 @@
 import SwiftUI
 import Observation
 
-// Per-game surfaces for the on-stage runtime. Each view parses the same
-// server projection the web client consumes and drives moves through the
-// view model. Layout contract: scrollable content on top, pinned action bar
-// at the bottom of the stage card.
-
-// MARK: - Trivia
-
 struct TriviaStageView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
@@ -102,8 +95,6 @@ struct TriviaStageView: View {
     }
 }
 
-// MARK: - Reaction
-
 struct ReactionStageView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
@@ -124,7 +115,7 @@ struct ReactionStageView: View {
 
         VStack(spacing: 0) {
             if (phase == "arming" || phase == "go") && canPlay {
-                // The pad is the whole stage: nothing to read, one thing to do.
+
                 reactionTapPad(
                     phase: phase,
                     tapped: tapped,
@@ -134,7 +125,7 @@ struct ReactionStageView: View {
                 )
                 .padding(ACMSpacing.md)
             } else if (phase == "arming" || phase == "go") && !canPlay {
-                // Spectators do not get a tap pad; just show what is happening.
+
                 GameStageNotice(
                     icon: "bolt.fill",
                     androidIcon: "warning",
@@ -248,8 +239,6 @@ struct ReactionStageView: View {
     }
 }
 
-// MARK: - Most likely to
-
 struct MostLikelyStageView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
@@ -338,8 +327,6 @@ struct MostLikelyStageView: View {
         return nil
     }
 }
-
-// MARK: - Would you rather
 
 struct WouldYouRatherStageView: View {
     @Bindable var viewModel: MeetingViewModel
@@ -465,8 +452,6 @@ struct WouldYouRatherStageView: View {
     }
 }
 
-// MARK: - Bluff
-
 struct BluffStageView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
@@ -578,8 +563,7 @@ struct BluffStageView: View {
                 bluffHostBar(phase: phase)
             }
         }
-        // New round means the previous bluff is stale; drop the draft. The
-        // zero-parameter onChange is Android-safe.
+
         .onChange(of: phase) {
             bluffAnswerInput = ""
         }
@@ -657,8 +641,6 @@ struct BluffStageView: View {
     }
 }
 
-// MARK: - Imposter
-
 struct ImposterStageView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
@@ -723,8 +705,6 @@ struct ImposterStageView: View {
         }
     }
 
-    /// Your secret, styled so a shoulder-surfer reads it less easily than a
-    /// plain headline. Imposters get the warning tone instead of a word.
     private func imposterRoleCard(isImposter: Bool) -> some View {
         HStack(spacing: ACMSpacing.sm) {
             ACMSystemIcon.icon(
@@ -803,8 +783,6 @@ struct ImposterStageView: View {
         }
     }
 }
-
-// MARK: - Chess
 
 struct ChessStageSquare: Identifiable {
     let square: String
@@ -1040,9 +1018,7 @@ struct ChessStageView: View {
     }
 
     static func boardSquares(from fen: String, side: String?) -> [ChessStageSquare] {
-        // Explicit closures, not String.init references: Skip transpiles a
-        // function reference here to Kotlin's `String.Companion`, which fails
-        // to compile (see CLAUDE.md transpile gotchas).
+
         let placement = fen.split(separator: " ").first.map { String($0) } ?? ""
         let rows = placement.split(separator: "/").map { String($0) }
         let files = ["a", "b", "c", "d", "e", "f", "g", "h"]
@@ -1111,10 +1087,6 @@ struct ChessStageView: View {
     }
 }
 
-// MARK: - Wordle
-
-/// Wordle already has a full native round UI; the stage wraps it in the
-/// scroll frame it expects.
 struct WordleStageView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState

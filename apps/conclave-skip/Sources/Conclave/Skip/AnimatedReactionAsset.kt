@@ -33,12 +33,6 @@ import okhttp3.Request
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * Animated GIF surface for the custom meeting reactions. SkipUI's generic
- * AsyncImage currently decodes these URLs as a static bitmap on Android, and
- * the old Swift branch replaced them with text entirely. ImageDecoder keeps
- * the GIF animated on Android 9+; older supported devices get its first frame.
- */
 @Composable
 internal fun AnimatedReactionAsset(
     urlString: String,

@@ -1,0 +1,30 @@
+{
+  "profile_id": "recovered-bounded-svg-input-v1",
+  "scope": "Input XML/lexical integrity only; no geometric interpretation, normalization or rendering.",
+  "encoding": "UTF-8",
+  "max_svg_bytes": 131072,
+  "max_numeric_token_characters": 128,
+  "max_expanded_segments": 10000,
+  "namespace": "http://www.w3.org/2000/svg",
+  "root_attributes": {
+    "width": "24",
+    "height": "24",
+    "viewBox": "0 -960 960 960"
+  },
+  "children": "Exactly one direct path with only d; whitespace-only character data allowed.",
+  "reject": "DTD, entities (including references), comments, CDATA, processing instructions, extra namespaces/elements/attributes/text, paint/stroke/style/transform/resources/network references.",
+  "path_commands_and_arities": {
+    "M": 2,
+    "L": 2,
+    "H": 1,
+    "V": 1,
+    "Q": 4,
+    "T": 2,
+    "Z": 0
+  },
+  "both_cases_supported": true,
+  "path_numbers": "Full signed decimal/integer/leading-dot/exponent lexical grammar with finite Decimal parsing; proper comma/whitespace and adjacent sign/decimal handling; no leftovers.",
+  "path_rules": "Starts with M/m; nonempty complete operand groups; implicit repeated groups counted; no operands after Z/z. Values are not converted into coordinates.",
+  "numeric_evaluation": "Exact Decimal finiteness only; no Float/native range certification.",
+  "selection_translation": "Carried as [0,960] declaration only; never applied in this lane."
+}

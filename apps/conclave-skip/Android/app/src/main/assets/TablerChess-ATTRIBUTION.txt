@@ -1,0 +1,7 @@
+Conclave chess artwork: Tabler Icons (filled chess set)
+Copyright (c) 2020-2026 Paweł Kuna. Licensed under the MIT License.
+Upstream: https://github.com/tabler/tabler-icons/tree/ed177a085b652fe04ec4f37ced867c94621e7840/icons/filled
+The pawn uses chess.svg; the other pieces use chess-{kind}.svg.
+Original path geometry is unchanged. Conclave converts the SVGs to native templates,
+applies its paper/ink colors and draws a contrasting outline for each side.
+Full license: TablerChess-LICENSE.txt

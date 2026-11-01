@@ -3,9 +3,6 @@ import Foundation
 import AVFoundation
 #endif
 
-/// One-shot "lock" sound for the meeting-entry takeover (mirrors the web's
-/// `playConclaveLock`). Best-effort - never blocks the flow or disturbs the
-/// call audio session.
 @MainActor
 enum EntrySound {
     #if !SKIP && canImport(AVFoundation)
@@ -26,7 +23,7 @@ enum EntrySound {
             audioPlayer.play()
             player = audioPlayer
         } catch {
-            // Ignore - the sound is a nice-to-have.
+
         }
         #endif
     }

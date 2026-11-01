@@ -2,8 +2,7 @@ import Foundation
 
 enum WebcamReceiverCapacityProofPolicy {
     static let maximumValidityMs: Int = 5_000
-    // Skip's shared Int is a Kotlin Int on Android. Keep the wire value inside
-    // the exact range accepted on both native targets.
+
     static let maximumRevision: Int = 2_147_483_647
 
     static func isBoundedIdentifier(_ value: String) -> Bool {
@@ -98,8 +97,6 @@ struct WebcamReceiverCapacityReplacementOffer: Codable, Equatable {
     }
 }
 
-/// Strict server-authored lease. Decoding fails closed for malformed, long-lived,
-/// internally inconsistent, or client-invented transition shapes.
 struct WebcamReceiverCapacityProofNotification: Codable, Equatable {
     let roomId: String
     let producerId: String
@@ -513,11 +510,6 @@ struct WebcamTopologyTransitionStep {
     let command: WebcamTopologyReplacementCommand?
 }
 
-/// Pure scheduling policy shared by the Darwin and Android runtimes. Runtime
-/// callers invoke this only after advancing the transition machine, so an
-/// already-due deadline has been observed for the current state/command
-/// generation. Scheduling it again would create a 1ms wake loop while an entry
-/// replacement command is still in flight.
 enum WebcamTopologyWakePolicy {
     static func nextWakeAt(
         state: WebcamTopologyTransitionState,

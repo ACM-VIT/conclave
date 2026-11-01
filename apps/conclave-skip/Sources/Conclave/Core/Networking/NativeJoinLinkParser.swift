@@ -41,6 +41,19 @@ struct NativeJoinLinkTarget: Equatable {
     )
 }
 
+enum NativeJoinLinkKind: String, CaseIterable, Equatable {
+
+    case meeting
+
+    case webinar
+
+    case webOnly
+
+    case invalidConclave
+
+    case notConclave
+}
+
 enum NativeJoinLinkParser {
     static func parse(_ input: String, allowRoomCreationForURLs: Bool = false) -> NativeJoinLinkTarget {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -109,6 +122,36 @@ enum NativeJoinLinkParser {
             clientId: clientIdValue(from: queryItems),
             allowRoomCreation: false
         )
+    }
+
+    static func classify(_ input: String) -> NativeJoinLinkKind {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .notConclave }
+        let target = parse(trimmed, allowRoomCreationForURLs: true)
+        let normalizedURLInput = normalizeJoinURLString(trimmed)
+        guard hasURLScheme(normalizedURLInput) else {
+
+            guard !target.roomId.isEmpty else { return .notConclave }
+            return target.joinMode == JoinMode.webinarAttendee ? NativeJoinLinkKind.webinar : NativeJoinLinkKind.meeting
+        }
+        let lowercased = normalizedURLInput.lowercased()
+        guard let components = URLComponents(string: normalizedURLInput) else {
+            return lowercased.hasPrefix("conclave:") ? NativeJoinLinkKind.invalidConclave : NativeJoinLinkKind.notConclave
+        }
+        let scheme = components.scheme?.lowercased() ?? ""
+        let isConclaveScheme = scheme == "conclave"
+        let isConclaveWeb = (scheme == "http" || scheme == "https") && isConclaveWebHost(components.host)
+        guard isConclaveScheme || isConclaveWeb else { return .notConclave }
+        if !target.roomId.isEmpty {
+            return target.joinMode == JoinMode.webinarAttendee ? NativeJoinLinkKind.webinar : NativeJoinLinkKind.meeting
+        }
+        if isConclaveWeb {
+            let segments = joinPathSegments(from: components)
+            if !segments.isEmpty && isWebOnlyConclavePath(components: components, segments: segments) {
+                return .webOnly
+            }
+        }
+        return .invalidConclave
     }
 
     private static func redirectedJoinTarget(
@@ -452,7 +495,9 @@ enum NativeJoinLinkParser {
         "delete-account",
         "privacy",
         "sfu-admin",
-        "sign-in"
+        "sign-in",
+
+        "schedule"
     ]
     private static let localConclaveWebHosts: Set<String> = {
         var hosts: Set<String> = [

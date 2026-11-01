@@ -1,10 +1,5 @@
 import SwiftUI
 
-// Shared building blocks for the on-stage game surface. Big, tappable, flat:
-// solid surfaces, 1 px borders, coral accent only.
-
-/// Kicker + headline + optional support line, the standard top block of a
-/// game phase.
 struct GameStagePrompt: View {
     var kicker: String? = nil
     let title: String
@@ -39,8 +34,6 @@ struct GameStagePrompt: View {
     }
 }
 
-/// A large answer/vote card. Selection is coral, reveal states go green/red,
-/// and an optional fill ratio paints a flat result bar behind the label.
 struct GameStageChoiceCard: View {
     let title: String
     var subtitle: String? = nil
@@ -127,7 +120,6 @@ struct GameStageChoiceCard: View {
     }
 }
 
-/// Full-width primary/secondary action used in the pinned bottom bar.
 struct GameStageActionButton: View {
     let title: String
     var isPrimary: Bool = true
@@ -161,7 +153,6 @@ struct GameStageActionButton: View {
     }
 }
 
-/// Ranked scores; the leader carries the coral accent.
 struct GameStageScoreboard: View {
     let rows: [GameScoreRow]
 
@@ -235,7 +226,6 @@ struct GameStageMetaLine: View {
     }
 }
 
-/// Centered standalone note for waiting/blocked states.
 struct GameStageNotice: View {
     let icon: String
     let androidIcon: String
@@ -282,8 +272,6 @@ enum GameStageCountdownPolicy {
     }
 }
 
-/// Server-clock countdown: a flat draining bar plus a seconds label. Only this
-/// small view re-renders on the tick.
 struct GameStageCountdown: View {
     let deadline: Double
     let serverNow: Double
@@ -361,7 +349,6 @@ struct GameStageCountdown: View {
     }
 }
 
-/// One player identity chip for lobbies: avatar dot + name.
 struct GameStagePlayerChip: View {
     let id: String
     let name: String

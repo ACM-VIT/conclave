@@ -85,6 +85,7 @@ export const SFU_EVENTS = {
     browserNavigate: "browser:navigate",
     browserClose: "browser:close",
     browserGetState: "browser:getState",
+    browserGetCapabilities: "browser:getCapabilities",
     browserActivity: "browser:activity",
 
     // Apps SDK / collaborative docs
@@ -152,6 +153,7 @@ export const SFU_EVENTS = {
     adminUnblockUsers: "admin:unblockUsers",
     adminRevokeAllowedUsers: "admin:revokeAllowedUsers",
     adminSetPolicies: "admin:setPolicies",
+    setParticipantMediaPermissions: "setParticipantMediaPermissions",
     adminCloseRoom: "admin:closeRoom",
     adminEndRoom: "admin:endRoom",
   },
@@ -205,6 +207,7 @@ export const SFU_EVENTS = {
     imageAttachmentsStateChanged: "imageAttachmentsStateChanged",
     ttsDisabledChanged: "ttsDisabledChanged",
     reactionsDisabledChanged: "reactionsDisabledChanged",
+    participantMediaPermissionsChanged: "participantMediaPermissionsChanged",
 
     // Session lifecycle / disruptive
     kicked: "kicked",

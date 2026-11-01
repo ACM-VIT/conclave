@@ -442,7 +442,6 @@ struct MeetingSheetView: View {
     }
 }
 
-/// Shared pinned header for in-sheet pages.
 struct MeetingSheetHeader: View {
     let title: String
     var onBack: (() -> Void)? = nil

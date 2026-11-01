@@ -1,0 +1,54 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "solid": "srgb:0.03922,0.03922,0.04314,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "srgb:0.03922,0.03922,0.04314,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "layers": [
+        {
+          "fill": {
+            "solid": "srgb:0.03922,0.03922,0.04314,1.00000"
+          },
+          "glass": false,
+          "hidden-specializations": [
+            {
+              "appearance": "tinted",
+              "value": true
+            }
+          ],
+          "image-name": "acm-letters.svg",
+          "name": "Letters"
+        },
+        {
+          "fill": {
+            "solid": "srgb:0.97647,0.37255,0.29020,1.00000"
+          },
+          "glass": false,
+          "image-name": "conclave-mark.svg",
+          "name": "Mark"
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

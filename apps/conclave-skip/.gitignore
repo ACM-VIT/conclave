@@ -1,13 +1,9 @@
-## User settings
 
-# vi
 .*.swp
 .*.swo
 
-# macOS
 .DS_Store
 
-# gradle properties
 local.properties
 .gradle/
 .android/
@@ -23,8 +19,6 @@ default.profraw
 *.p12
 *.p12.password
 
-# Xcode automatically generates this directory with a .xcworkspacedata file and xcuserdata
-# hence it is not needed unless you have added a package configuration file to your project
 .swiftpm
 .build/
 build/
@@ -46,7 +40,6 @@ xcodebuild*.log
 *.md
 *.xccheckout
 
-## Obj-C/Swift specific
 *.hmap
 *.d
 *.dia
@@ -55,25 +48,18 @@ xcodebuild*.log
 *.swiftsourceinfo
 *.swiftdeps
 
-## App packaging
 *.ipa
 *.dSYM.zip
 *.dSYM
 
-## Playgrounds
 timeline.xctimeline
 playground.xcworkspace
 
-# Swift Package Manager
-#
-# Add this line if you want to avoid checking in source code from Swift Package Manager dependencies.
 Packages/
 Package.pins
-#*.xcodeproj
 
 Carthage/Build/
 
-# fastlane
 
 **/fastlane/apikey.json
 **/fastlane/report.xml

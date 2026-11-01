@@ -1,15 +1,19 @@
-# This file contains the fastlane.tools configuration
-# for the Android release build.
-# You can find the documentation at https://docs.fastlane.tools
 
-# Load the shared native app properties.
+
+
+
+
 require('dotenv')
 Dotenv.load '../../Skip.env'
 
 default_platform(:android)
 
-# Use the Homebrew gradle rather than expecting a local gradlew.
-gradle_bin = (ENV['HOMEBREW_PREFIX'] ? ENV['HOMEBREW_PREFIX'] : "/opt/homebrew") + "/bin/gradle"
+
+
+
+gradle_bin = File.expand_path("../gradlew", __dir__)
+jdk21_home = (ENV['HOMEBREW_PREFIX'] ? ENV['HOMEBREW_PREFIX'] : "/opt/homebrew") + "/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+ENV['JAVA_HOME'] ||= jdk21_home if File.directory?(jdk21_home)
 
 desc "Build Conclave Android app"
 lane :build do |options|

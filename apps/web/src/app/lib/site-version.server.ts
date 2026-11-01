@@ -3,6 +3,7 @@ import {
   type ConclaveSiteVersion,
   type ConclaveSiteVersionResponse,
   normalizeConclaveSiteVersion,
+  resolveConclaveMinNativeVersion,
 } from "./site-version";
 
 type VersionedCloudflareEnv = {
@@ -45,5 +46,6 @@ export const getConclaveVersionResponse =
     return {
       serviceVersion: normalizeConclaveSiteVersion(metadata, clientVersion.id),
       clientVersion,
+      minNativeVersion: resolveConclaveMinNativeVersion(process.env),
     };
   };

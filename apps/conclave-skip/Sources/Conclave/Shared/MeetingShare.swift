@@ -17,9 +17,9 @@ enum MeetingShare {
             return true
         }
 
-        let message = "Join me in this Conclave room.\n\(link)"
+        let message = ConclaveStrings.text("Join me in this Conclave meeting.") + "\n" + link
         let controller = UIActivityViewController(activityItems: [message], applicationActivities: nil)
-        controller.title = "Conclave meeting"
+        controller.title = ConclaveStrings.text("Join My Conclave Meeting")
         controller.popoverPresentationController?.sourceView = presenterView
         controller.popoverPresentationController?.sourceRect = CGRect(
             x: presenterView.bounds.midX,

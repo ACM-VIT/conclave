@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -22,6 +23,8 @@ import java.util.concurrent.Executors
 internal object VideoRendererShared {
     val eglBase: EglBase = EglBase.create()
 }
+
+internal val LocalRendererFrameSizes = staticCompositionLocalOf<RendererFrameSizeStore?> { null }
 
 private object VideoRendererReleaseDispatcher {
     private val executor = Executors.newSingleThreadExecutor { runnable ->
@@ -61,9 +64,12 @@ private fun TextureVideoTrackView(
     val context = LocalContext.current
     val eglBase = VideoRendererShared.eglBase
     val rendererLifecycleKey = rendererKey ?: track?.id() ?: "floating"
+
+    val ledger = LocalRendererLedger.current
     val renderer = remember(context, rendererLifecycleKey) {
         TextureEglVideoRenderer(context).apply {
             init(eglBase.eglBaseContext)
+            attachIdentity(ledger, rendererLifecycleKey.toString())
         }
     }
 
@@ -79,9 +85,17 @@ private fun TextureVideoTrackView(
 
     DisposableEffect(renderer) {
         onDispose {
+            renderer.releaseIdentity()
             renderer.clearImage()
             renderer.release()
         }
+    }
+
+    val frameSizes = LocalRendererFrameSizes.current
+    val frameSlotId = RendererFrameSizeStore.slotId(rendererKey = rendererLifecycleKey.toString())
+    DisposableEffect(renderer, frameSizes, frameSlotId) {
+        renderer.attachFrameSizes(frameSizes, frameSlotId)
+        onDispose { renderer.detachFrameSizes() }
     }
 
     key(renderer) {
@@ -117,6 +131,13 @@ private class TextureEglVideoRenderer(
     private var surfaceReleaseInFlight = false
     private var pendingSurfaceTexture: SurfaceTexture? = null
     private val textureTransform = Matrix()
+    private var identityLedger: RendererIdentityLedger? = null
+    private var identityKey = ""
+    private var identitySerial = 0
+    private var identitySlot = RendererSlot.stage
+    private var identitySurfaceLost = false
+    private var frameSizeStore: RendererFrameSizeStore? = null
+    private var frameSizeSlotId = ""
 
     init {
         isOpaque = true
@@ -130,6 +151,41 @@ private class TextureEglVideoRenderer(
         eglRenderer.init(sharedContext, EglBase.CONFIG_PLAIN, GlRectDrawer())
         surfaceTexture?.let { createEglSurfaceIfNeeded(it) }
         updateLayoutAspectRatio()
+    }
+
+    fun attachIdentity(ledger: RendererIdentityLedger?, key: String) {
+        if (ledger == null || identityLedger != null) return
+        identityLedger = ledger
+        identityKey = key
+        identitySlot = if (key.startsWith("pip:")) RendererSlot.pip else RendererSlot.stage
+        identitySerial = ledger.created(key = key, slot = identitySlot)
+    }
+
+    fun releaseIdentity() {
+        identityLedger?.released(key = identityKey, serial = identitySerial, slot = identitySlot)
+        identityLedger = null
+    }
+
+    fun attachFrameSizes(store: RendererFrameSizeStore?, slotId: String) {
+        if (store === frameSizeStore && slotId == frameSizeSlotId) return
+        detachFrameSizes()
+        if (store == null || slotId.isEmpty()) return
+        frameSizeStore = store
+        frameSizeSlotId = slotId
+        reportFrameSize()
+    }
+
+    fun detachFrameSizes() {
+        val store = frameSizeStore
+        if (store != null && frameSizeSlotId.isNotEmpty()) store.remove(slotId = frameSizeSlotId)
+        frameSizeStore = null
+        frameSizeSlotId = ""
+    }
+
+    private fun reportFrameSize() {
+        val store = frameSizeStore ?: return
+        if (frameSizeSlotId.isEmpty() || frameWidth <= 0 || frameHeight <= 0) return
+        store.report(slotId = frameSizeSlotId, width = frameWidth, height = frameHeight)
     }
 
     fun release() {
@@ -168,12 +224,19 @@ private class TextureEglVideoRenderer(
             frameWidth = rotatedWidth
             frameHeight = rotatedHeight
             frameRotation = frame.rotation
-            post { updateLayoutAspectRatio() }
+            post {
+                updateLayoutAspectRatio()
+                reportFrameSize()
+            }
         }
         eglRenderer.onFrame(frame)
     }
 
     override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+        if (identitySurfaceLost) {
+            identitySurfaceLost = false
+            identityLedger?.surfaceRestored(key = identityKey, serial = identitySerial, slot = identitySlot)
+        }
         if (released || !initialized) return
         createEglSurfaceIfNeeded(surface)
         updateLayoutAspectRatio(width, height)
@@ -184,6 +247,10 @@ private class TextureEglVideoRenderer(
     }
 
     override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+        if (!identitySurfaceLost && identityLedger != null) {
+            identitySurfaceLost = true
+            identityLedger?.surfaceLost(key = identityKey, serial = identitySerial, slot = identitySlot)
+        }
         if (pendingSurfaceTexture === surface) {
             pendingSurfaceTexture = null
             return true
@@ -191,7 +258,7 @@ private class TextureEglVideoRenderer(
         if (initialized && !released && hasEglSurface) {
             hasEglSurface = false
             surfaceReleaseInFlight = true
-            // Avoid blocking the UI thread while WebRTC tears down EGL during PiP/self-view churn.
+
             eglRenderer.releaseEglSurface {
                 surface.release()
                 post {

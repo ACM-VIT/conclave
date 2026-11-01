@@ -1,0 +1,2547 @@
+{
+  "artifact_kind": "reconstructed_selection_only_not_original_provenance_manifest",
+  "schema_version": 1,
+  "historical_selected_manifest_sha256": "1085ff0bd09fa2e0d22962cab3e4032c97b83e330f6c0e43ff2a912bed2714d5",
+  "historical_accepted_input_index_sha256": "df8acf940afbce0e6ea4311016b9e0587b1e1f0e106bb0a0a963e6b44e8c4f53",
+  "counts": {
+    "concepts": 36,
+    "material_names": 48,
+    "android_variants": 54,
+    "android_bindings": 58,
+    "sf_literals": 50
+  },
+  "counts_checked_by": "structural document inspection only; no historical verifier or native tests run",
+  "selection_status": "Parent accepted D01-D10 historically; no new implementation or source-freeze release",
+  "input_state": "All artwork bytes absent. Complete historical asset records survive for only a prefix of the 96-pair index.",
+  "missing_original_manifest_fields": "Complete asset hashes/provenance pointers, per-binding fill_basis/decision/references/accessibility objects, and document/evidence digests are not restored as an executable original manifest. Consult archived construction and patch text.",
+  "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "quarantined_name": "bluetooth_audio",
+  "source_archives": [
+    "manifest-activity-0-47",
+    "manifest-activity-0-49",
+    "manifest-activity-0-59",
+    "manifest-activity-0-83",
+    "parent-icon-selection-activity-1670"
+  ],
+  "artwork": [
+    {
+      "id": "add_reaction.fill0",
+      "name": "add_reaction",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "AddReactionFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": {
+        "name": "add_reaction",
+        "fill": 0,
+        "family": "Material Symbols Rounded",
+        "weight": 400,
+        "grade": 0,
+        "optical_size": 24,
+        "local_path": "../inputs/assets/symbols/web/add_reaction/materialsymbolsrounded/add_reaction_24px.svg",
+        "bytes": 1000,
+        "sha256": "22f2f8040a258b8a34daaa0287686bf1fa67699de5cab2fd71fe32c60ef5d96e",
+        "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/add_reaction/materialsymbolsrounded/add_reaction_24px.svg",
+        "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+        "upstream_path": "symbols/web/add_reaction/materialsymbolsrounded/add_reaction_24px.svg",
+        "eligible_as_artwork_input": true,
+        "license": "Apache-2.0",
+        "license_file": "../inputs/upstream/LICENSE",
+        "provenance_record": {
+          "file": "../inputs/provenance-manifest.json",
+          "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+          "json_pointer": "/assets/0",
+          "record_canonical_json_sha256": "3a3b3d77c1914cdb54cadb39d980d38934bab8c4b5344c5ef295e3cd9a31713d"
+        },
+        "eligible_metadata_row_pointers": [
+          "/icons/210"
+        ],
+        "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+      },
+      "input_bytes_present": false
+    },
+    {
+      "id": "apps.fill0",
+      "name": "apps",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "AppsFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": {
+        "name": "apps",
+        "fill": 0,
+        "family": "Material Symbols Rounded",
+        "weight": 400,
+        "grade": 0,
+        "optical_size": 24,
+        "local_path": "../inputs/assets/symbols/web/apps/materialsymbolsrounded/apps_24px.svg",
+        "bytes": 1012,
+        "sha256": "c11e79be76394ee701595f8978628e80d6cc11a2af408596548a706b04331cb4",
+        "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/apps/materialsymbolsrounded/apps_24px.svg",
+        "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+        "upstream_path": "symbols/web/apps/materialsymbolsrounded/apps_24px.svg",
+        "eligible_as_artwork_input": true,
+        "license": "Apache-2.0",
+        "license_file": "../inputs/upstream/LICENSE",
+        "provenance_record": {
+          "file": "../inputs/provenance-manifest.json",
+          "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+          "json_pointer": "/assets/2",
+          "record_canonical_json_sha256": "3bb7ef531a7e5b58f81d32f09ec32fe3a5c548160c342dcec2207be76f872887"
+        },
+        "eligible_metadata_row_pointers": [
+          "/icons/392"
+        ],
+        "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+      },
+      "input_bytes_present": false
+    },
+    {
+      "id": "arrow_back.fill0",
+      "name": "arrow_back",
+      "fill": 0,
+      "autoMirror": true,
+      "kotlin_property": "ArrowBackFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": {
+        "name": "arrow_back",
+        "fill": 0,
+        "family": "Material Symbols Rounded",
+        "weight": 400,
+        "grade": 0,
+        "optical_size": 24,
+        "local_path": "../inputs/assets/symbols/web/arrow_back/materialsymbolsrounded/arrow_back_24px.svg",
+        "bytes": 328,
+        "sha256": "b9b58d54e13e0e3693a10d997c1001ec270c12eaa935f993cee1d8c916236ceb",
+        "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/arrow_back/materialsymbolsrounded/arrow_back_24px.svg",
+        "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+        "upstream_path": "symbols/web/arrow_back/materialsymbolsrounded/arrow_back_24px.svg",
+        "eligible_as_artwork_input": true,
+        "license": "Apache-2.0",
+        "license_file": "../inputs/upstream/LICENSE",
+        "provenance_record": {
+          "file": "../inputs/provenance-manifest.json",
+          "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+          "json_pointer": "/assets/4",
+          "record_canonical_json_sha256": "ca691cd1466a0833c0bb35320d17f1f6d283d0b7e1ed04ac7d09f8f4d39f6f78"
+        },
+        "eligible_metadata_row_pointers": [
+          "/icons/409"
+        ],
+        "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+      },
+      "input_bytes_present": false
+    },
+    {
+      "id": "bluetooth.fill0",
+      "name": "bluetooth",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "BluetoothFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": {
+        "name": "bluetooth",
+        "fill": 0,
+        "family": "Material Symbols Rounded",
+        "weight": 400,
+        "grade": 0,
+        "optical_size": 24,
+        "local_path": "bluetooth_24px.svg",
+        "bytes": 459,
+        "sha256": "3736a6c4fb26629b36b2ca6e2f28e5a61a72a4419c1ad18bfcf66bac4490e2de",
+        "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/bluetooth/materialsymbolsrounded/bluetooth_24px.svg",
+        "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+        "upstream_path": "symbols/web/bluetooth/materialsymbolsrounded/bluetooth_24px.svg",
+        "eligible_as_artwork_input": true,
+        "license": "Apache-2.0",
+        "license_file": "LICENSE",
+        "provenance_record": {
+          "file": "provenance.json",
+          "sha256": "cf37d97e72c97797e57f4d15998ec6d8a046b6bed55d5cf51c1d7abe04c87111",
+          "json_pointer": "/assets/0",
+          "record_canonical_json_sha256": "9897932aa08ab055200c0c962467822ac4a1b814a16399148251edabb18753a4"
+        },
+        "eligible_metadata_row_pointers": [
+          "/icons/756"
+        ],
+        "axis_evidence_reference": "evidence-audit.json#/axes"
+      },
+      "input_bytes_present": false
+    },
+    {
+      "id": "call_end.fill1",
+      "name": "call_end",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "CallEndFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": {
+        "name": "call_end",
+        "fill": 1,
+        "family": "Material Symbols Rounded",
+        "weight": 400,
+        "grade": 0,
+        "optical_size": 24,
+        "local_path": "../inputs/assets/symbols/web/call_end/materialsymbolsrounded/call_end_fill1_24px.svg",
+        "bytes": 356,
+        "sha256": "5fc45d8e866d3cb0fe58846ef63cb4bf274fdba56b011ad5b58bc64710ace287",
+        "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/call_end/materialsymbolsrounded/call_end_fill1_24px.svg",
+        "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+        "upstream_path": "symbols/web/call_end/materialsymbolsrounded/call_end_fill1_24px.svg",
+        "eligible_as_artwork_input": true,
+        "license": "Apache-2.0",
+        "license_file": "../inputs/upstream/LICENSE",
+        "provenance_record": {
+          "file": "../inputs/provenance-manifest.json",
+          "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+          "json_pointer": "/assets/7",
+          "record_canonical_json_sha256": "86a52bdfcbc9fae4e2c64d669138e52be4ec0eef068594627573cafa5b674990"
+        },
+        "eligible_metadata_row_pointers": [
+          "/icons/959"
+        ],
+        "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+      },
+      "input_bytes_present": false
+    },
+    {
+      "id": "cameraswitch.fill0",
+      "name": "cameraswitch",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "CameraswitchFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "cancel_presentation.fill1",
+      "name": "cancel_presentation",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "CancelPresentationFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "chat_bubble.fill0",
+      "name": "chat_bubble",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ChatBubbleFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "chat_bubble.fill1",
+      "name": "chat_bubble",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "ChatBubbleFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "check.fill0",
+      "name": "check",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "CheckFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "close.fill0",
+      "name": "close",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "CloseFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "closed_caption.fill0",
+      "name": "closed_caption",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ClosedCaptionFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "closed_caption.fill1",
+      "name": "closed_caption",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "ClosedCaptionFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "content_copy.fill0",
+      "name": "content_copy",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ContentCopyFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "delete.fill0",
+      "name": "delete",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "DeleteFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "description.fill0",
+      "name": "description",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "DescriptionFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "draw.fill0",
+      "name": "draw",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "DrawFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "error.fill1",
+      "name": "error",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "ErrorFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "featured_video.fill0",
+      "name": "featured_video",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "FeaturedVideoFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "front_hand.fill0",
+      "name": "front_hand",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "FrontHandFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "front_hand.fill1",
+      "name": "front_hand",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "FrontHandFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "gif_box.fill0",
+      "name": "gif_box",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "GifBoxFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "graphic_eq.fill0",
+      "name": "graphic_eq",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "GraphicEqFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "group.fill0",
+      "name": "group",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "GroupFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "group.fill1",
+      "name": "group",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "GroupFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "headphones.fill0",
+      "name": "headphones",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "HeadphonesFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "image.fill0",
+      "name": "image",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ImageFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "info.fill0",
+      "name": "info",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "InfoFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "keep.fill0",
+      "name": "keep",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "KeepFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "keep.fill1",
+      "name": "keep",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "KeepFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "keep_off.fill0",
+      "name": "keep_off",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "KeepOffFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "lock.fill1",
+      "name": "lock",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "LockFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "lock_open.fill0",
+      "name": "lock_open",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "LockOpenFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "mic.fill1",
+      "name": "mic",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "MicFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "mic_off.fill1",
+      "name": "mic_off",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "MicOffFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "mood.fill1",
+      "name": "mood",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "MoodFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "more_vert.fill0",
+      "name": "more_vert",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "MoreVertFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "person_remove.fill0",
+      "name": "person_remove",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "PersonRemoveFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "phone_in_talk.fill0",
+      "name": "phone_in_talk",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "PhoneInTalkFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "present_to_all.fill0",
+      "name": "present_to_all",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "PresentToAllFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "present_to_all.fill1",
+      "name": "present_to_all",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "PresentToAllFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "public.fill0",
+      "name": "public",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "PublicFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "quiz.fill0",
+      "name": "quiz",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "QuizFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "search.fill0",
+      "name": "search",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "SearchFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "send.fill1",
+      "name": "send",
+      "fill": 1,
+      "autoMirror": true,
+      "kotlin_property": "SendFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "settings.fill0",
+      "name": "settings",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "SettingsFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "share.fill0",
+      "name": "share",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ShareFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "shield_person.fill0",
+      "name": "shield_person",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "ShieldPersonFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "signal_wifi_bad.fill0",
+      "name": "signal_wifi_bad",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "SignalWifiBadFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "sports_esports.fill0",
+      "name": "sports_esports",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "SportsEsportsFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "videocam.fill1",
+      "name": "videocam",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "VideocamFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "videocam_off.fill1",
+      "name": "videocam_off",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "VideocamOffFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "volume_up.fill0",
+      "name": "volume_up",
+      "fill": 0,
+      "autoMirror": false,
+      "kotlin_property": "VolumeUpFill0",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    },
+    {
+      "id": "warning.fill1",
+      "name": "warning",
+      "fill": 1,
+      "autoMirror": false,
+      "kotlin_property": "WarningFill1",
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "default_size_dp": [
+        24,
+        24
+      ],
+      "viewport": [
+        960,
+        960
+      ],
+      "translation": [
+        0,
+        960
+      ],
+      "recovered_historical_input_record": null,
+      "input_bytes_present": false
+    }
+  ],
+  "concepts": [
+    {
+      "id": "microphone",
+      "concept": "Microphone",
+      "canonical_sf_cell": "`mic.fill` (on), `mic.slash.fill` (muted)",
+      "canonical_material_cell": "`mic` (1), `mic_off` (1)",
+      "canonical_label_cell": "\"Microphone\"",
+      "canonical_line_at_recovery": 864,
+      "sf_literals": [
+        "mic.fill",
+        "mic.slash.fill",
+        "mic.slash"
+      ],
+      "android_bindings": [
+        {
+          "state": "on",
+          "artwork_id": "mic.fill1"
+        },
+        {
+          "state": "muted",
+          "artwork_id": "mic_off.fill1"
+        }
+      ]
+    },
+    {
+      "id": "camera",
+      "concept": "Camera",
+      "canonical_sf_cell": "`video.fill`, `video.slash.fill`",
+      "canonical_material_cell": "`videocam` (1), `videocam_off` (1)",
+      "canonical_label_cell": "\"Camera\"",
+      "canonical_line_at_recovery": 865,
+      "sf_literals": [
+        "video.fill",
+        "video.slash.fill",
+        "video.slash"
+      ],
+      "android_bindings": [
+        {
+          "state": "on",
+          "artwork_id": "videocam.fill1"
+        },
+        {
+          "state": "off",
+          "artwork_id": "videocam_off.fill1"
+        }
+      ]
+    },
+    {
+      "id": "leave",
+      "concept": "Leave",
+      "canonical_sf_cell": "`phone.down.fill`",
+      "canonical_material_cell": "`call_end` (1)",
+      "canonical_label_cell": "\"Leave call\"",
+      "canonical_line_at_recovery": 866,
+      "sf_literals": [
+        "phone.down.fill"
+      ],
+      "android_bindings": [
+        {
+          "state": "action",
+          "artwork_id": "call_end.fill1"
+        }
+      ]
+    },
+    {
+      "id": "more",
+      "concept": "More",
+      "canonical_sf_cell": "`ellipsis`",
+      "canonical_material_cell": "`more_vert`",
+      "canonical_label_cell": "\"More options\"",
+      "canonical_line_at_recovery": 867,
+      "sf_literals": [
+        "ellipsis"
+      ],
+      "android_bindings": [
+        {
+          "state": "closed_or_open",
+          "artwork_id": "more_vert.fill0"
+        }
+      ]
+    },
+    {
+      "id": "chat",
+      "concept": "Chat",
+      "canonical_sf_cell": "`message.fill` (bar), `message` (lists)",
+      "canonical_material_cell": "`chat_bubble` (0 idle, 1 open)",
+      "canonical_label_cell": "\"Chat\"",
+      "canonical_line_at_recovery": 868,
+      "sf_literals": [
+        "message.fill",
+        "message"
+      ],
+      "android_bindings": [
+        {
+          "state": "closed",
+          "artwork_id": "chat_bubble.fill0"
+        },
+        {
+          "state": "open",
+          "artwork_id": "chat_bubble.fill1"
+        }
+      ]
+    },
+    {
+      "id": "participants",
+      "concept": "Participants",
+      "canonical_sf_cell": "`person.2.fill` / `person.2`",
+      "canonical_material_cell": "`group`",
+      "canonical_label_cell": "\"Participants\"",
+      "canonical_line_at_recovery": 869,
+      "sf_literals": [
+        "person.2.fill",
+        "person.2"
+      ],
+      "android_bindings": [
+        {
+          "state": "closed",
+          "artwork_id": "group.fill0"
+        },
+        {
+          "state": "open",
+          "artwork_id": "group.fill1"
+        }
+      ]
+    },
+    {
+      "id": "raise_hand",
+      "concept": "Raise hand",
+      "canonical_sf_cell": "`hand.raised` / `hand.raised.fill`",
+      "canonical_material_cell": "`front_hand` (0 / 1)",
+      "canonical_label_cell": "\"Raise hand\"",
+      "canonical_line_at_recovery": 870,
+      "sf_literals": [
+        "hand.raised",
+        "hand.raised.fill"
+      ],
+      "android_bindings": [
+        {
+          "state": "lowered",
+          "artwork_id": "front_hand.fill0"
+        },
+        {
+          "state": "raised",
+          "artwork_id": "front_hand.fill1"
+        }
+      ]
+    },
+    {
+      "id": "share_screen",
+      "concept": "Share screen",
+      "canonical_sf_cell": "`rectangle.on.rectangle` / `rectangle.on.rectangle.slash`",
+      "canonical_material_cell": "`present_to_all` / `cancel_presentation`",
+      "canonical_label_cell": "\"Share screen\" / \"Stop sharing\"",
+      "canonical_line_at_recovery": 871,
+      "sf_literals": [
+        "rectangle.on.rectangle",
+        "rectangle.on.rectangle.slash",
+        "rectangle.inset.filled.on.rectangle"
+      ],
+      "android_bindings": [
+        {
+          "state": "idle",
+          "artwork_id": "present_to_all.fill0"
+        },
+        {
+          "state": "sharing_toggle",
+          "artwork_id": "cancel_presentation.fill1"
+        },
+        {
+          "state": "presenting_badge",
+          "artwork_id": "present_to_all.fill1"
+        },
+        {
+          "state": "stop_sharing_action",
+          "artwork_id": "cancel_presentation.fill1"
+        }
+      ]
+    },
+    {
+      "id": "reactions",
+      "concept": "Reactions",
+      "canonical_sf_cell": "`face.smiling`",
+      "canonical_material_cell": "`add_reaction` (0), `mood` (1 when open)",
+      "canonical_label_cell": "\"Reactions\"",
+      "canonical_line_at_recovery": 872,
+      "sf_literals": [
+        "face.smiling"
+      ],
+      "android_bindings": [
+        {
+          "state": "closed",
+          "artwork_id": "add_reaction.fill0"
+        },
+        {
+          "state": "open",
+          "artwork_id": "mood.fill1"
+        }
+      ]
+    },
+    {
+      "id": "flip_camera",
+      "concept": "Flip camera",
+      "canonical_sf_cell": "`arrow.triangle.2.circlepath.camera`",
+      "canonical_material_cell": "`cameraswitch`",
+      "canonical_label_cell": "\"Flip camera\"",
+      "canonical_line_at_recovery": 873,
+      "sf_literals": [
+        "arrow.triangle.2.circlepath.camera"
+      ],
+      "android_bindings": [
+        {
+          "state": "front_or_back",
+          "artwork_id": "cameraswitch.fill0"
+        }
+      ]
+    },
+    {
+      "id": "audio_output",
+      "concept": "Audio output",
+      "canonical_sf_cell": "system `AVRoutePickerView` glyphs",
+      "canonical_material_cell": "`volume_up`, `phone_in_talk`, `bluetooth`, `headphones`",
+      "canonical_label_cell": "\"Audio output\"",
+      "canonical_line_at_recovery": 874,
+      "sf_literals": [],
+      "android_bindings": [
+        {
+          "state": "speaker_or_unknown",
+          "artwork_id": "volume_up.fill0"
+        },
+        {
+          "state": "earpiece",
+          "artwork_id": "phone_in_talk.fill0"
+        },
+        {
+          "state": "bluetooth",
+          "artwork_id": "bluetooth.fill0"
+        },
+        {
+          "state": "wired_headset",
+          "artwork_id": "headphones.fill0"
+        }
+      ]
+    },
+    {
+      "id": "captions",
+      "concept": "Captions",
+      "canonical_sf_cell": "`captions.bubble` / `captions.bubble.fill`",
+      "canonical_material_cell": "`closed_caption` (0 / 1)",
+      "canonical_label_cell": "\"Captions\"",
+      "canonical_line_at_recovery": 875,
+      "sf_literals": [
+        "captions.bubble",
+        "captions.bubble.fill"
+      ],
+      "android_bindings": [
+        {
+          "state": "off",
+          "artwork_id": "closed_caption.fill0"
+        },
+        {
+          "state": "on",
+          "artwork_id": "closed_caption.fill1"
+        }
+      ]
+    },
+    {
+      "id": "transcript",
+      "concept": "Transcript",
+      "canonical_sf_cell": "`text.quote`",
+      "canonical_material_cell": "`description`",
+      "canonical_label_cell": "\"Transcript\"",
+      "canonical_line_at_recovery": 876,
+      "sf_literals": [
+        "text.quote"
+      ],
+      "android_bindings": [
+        {
+          "state": "open_action",
+          "artwork_id": "description.fill0"
+        }
+      ]
+    },
+    {
+      "id": "settings",
+      "concept": "Settings",
+      "canonical_sf_cell": "`gearshape`",
+      "canonical_material_cell": "`settings`",
+      "canonical_label_cell": "\"Settings\"",
+      "canonical_line_at_recovery": 877,
+      "sf_literals": [
+        "gearshape"
+      ],
+      "android_bindings": [
+        {
+          "state": "open_action",
+          "artwork_id": "settings.fill0"
+        }
+      ]
+    },
+    {
+      "id": "pin",
+      "concept": "Pin",
+      "canonical_sf_cell": "`pin` / `pin.slash`",
+      "canonical_material_cell": "`keep` / `keep_off`",
+      "canonical_label_cell": "\"Pin\" / \"Unpin\"",
+      "canonical_line_at_recovery": 878,
+      "sf_literals": [
+        "pin",
+        "pin.slash",
+        "pin.fill"
+      ],
+      "android_bindings": [
+        {
+          "state": "pin_action",
+          "artwork_id": "keep.fill0"
+        },
+        {
+          "state": "unpin_action",
+          "artwork_id": "keep_off.fill0"
+        },
+        {
+          "state": "pinned_badge",
+          "artwork_id": "keep.fill1"
+        }
+      ]
+    },
+    {
+      "id": "spotlight",
+      "concept": "Spotlight",
+      "canonical_sf_cell": "`rectangle.inset.filled`",
+      "canonical_material_cell": "`featured_video`",
+      "canonical_label_cell": "\"Spotlight\"",
+      "canonical_line_at_recovery": 879,
+      "sf_literals": [
+        "rectangle.inset.filled"
+      ],
+      "android_bindings": [
+        {
+          "state": "action_or_layout_option",
+          "artwork_id": "featured_video.fill0"
+        }
+      ]
+    },
+    {
+      "id": "lock_meeting",
+      "concept": "Lock meeting",
+      "canonical_sf_cell": "`lock.fill` / `lock.open`",
+      "canonical_material_cell": "`lock` / `lock_open`",
+      "canonical_label_cell": "\"Lock meeting\"",
+      "canonical_line_at_recovery": 880,
+      "sf_literals": [
+        "lock.fill",
+        "lock.open"
+      ],
+      "android_bindings": [
+        {
+          "state": "locked",
+          "artwork_id": "lock.fill1"
+        },
+        {
+          "state": "unlocked",
+          "artwork_id": "lock_open.fill0"
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "concept": "Host",
+      "canonical_sf_cell": "`crown.fill`",
+      "canonical_material_cell": "`shield_person`",
+      "canonical_label_cell": "\"Host\"",
+      "canonical_line_at_recovery": 881,
+      "sf_literals": [
+        "crown.fill"
+      ],
+      "android_bindings": [
+        {
+          "state": "host_badge",
+          "artwork_id": "shield_person.fill0"
+        },
+        {
+          "state": "host_controls_action",
+          "artwork_id": "shield_person.fill0"
+        }
+      ]
+    },
+    {
+      "id": "admit",
+      "concept": "Admit",
+      "canonical_sf_cell": "`checkmark`",
+      "canonical_material_cell": "`check`",
+      "canonical_label_cell": "\"Admit\"",
+      "canonical_line_at_recovery": 882,
+      "sf_literals": [
+        "checkmark"
+      ],
+      "android_bindings": [
+        {
+          "state": "action",
+          "artwork_id": "check.fill0"
+        }
+      ]
+    },
+    {
+      "id": "remove_person",
+      "concept": "Remove person",
+      "canonical_sf_cell": "`person.fill.xmark`",
+      "canonical_material_cell": "`person_remove`",
+      "canonical_label_cell": "\"Remove\"",
+      "canonical_line_at_recovery": 883,
+      "sf_literals": [
+        "person.fill.xmark"
+      ],
+      "android_bindings": [
+        {
+          "state": "action",
+          "artwork_id": "person_remove.fill0"
+        }
+      ]
+    },
+    {
+      "id": "invite",
+      "concept": "Invite / share link",
+      "canonical_sf_cell": "`square.and.arrow.up`",
+      "canonical_material_cell": "`share`",
+      "canonical_label_cell": "\"Share invite\"",
+      "canonical_line_at_recovery": 884,
+      "sf_literals": [
+        "square.and.arrow.up"
+      ],
+      "android_bindings": [
+        {
+          "state": "action",
+          "artwork_id": "share.fill0"
+        }
+      ]
+    },
+    {
+      "id": "copy_link",
+      "concept": "Copy link",
+      "canonical_sf_cell": "`doc.on.doc`",
+      "canonical_material_cell": "`content_copy`",
+      "canonical_label_cell": "\"Copy link\"",
+      "canonical_line_at_recovery": 885,
+      "sf_literals": [
+        "doc.on.doc",
+        "checkmark"
+      ],
+      "android_bindings": [
+        {
+          "state": "ready",
+          "artwork_id": "content_copy.fill0"
+        },
+        {
+          "state": "copied",
+          "artwork_id": "check.fill0"
+        }
+      ]
+    },
+    {
+      "id": "send",
+      "concept": "Send",
+      "canonical_sf_cell": "`arrow.up.circle.fill`",
+      "canonical_material_cell": "`send` (1)",
+      "canonical_label_cell": "\"Send\"",
+      "canonical_line_at_recovery": 886,
+      "sf_literals": [
+        "arrow.up.circle.fill"
+      ],
+      "android_bindings": [
+        {
+          "state": "ready_or_disabled",
+          "artwork_id": "send.fill1"
+        }
+      ]
+    },
+    {
+      "id": "close",
+      "concept": "Close",
+      "canonical_sf_cell": "system close role (`Button(role: .close)` on 26), `xmark`",
+      "canonical_material_cell": "`close`",
+      "canonical_label_cell": "\"Close\"",
+      "canonical_line_at_recovery": 887,
+      "sf_literals": [
+        "xmark"
+      ],
+      "android_bindings": [
+        {
+          "state": "action",
+          "artwork_id": "close.fill0"
+        }
+      ]
+    },
+    {
+      "id": "back",
+      "concept": "Back",
+      "canonical_sf_cell": "system",
+      "canonical_material_cell": "`arrow_back` (auto-mirrored)",
+      "canonical_label_cell": "\"Back\"",
+      "canonical_line_at_recovery": 888,
+      "sf_literals": [],
+      "android_bindings": [
+        {
+          "state": "navigate_back",
+          "artwork_id": "arrow_back.fill0"
+        }
+      ]
+    },
+    {
+      "id": "activities_games",
+      "concept": "Activities, games",
+      "canonical_sf_cell": "`square.grid.2x2`, `gamecontroller.fill`",
+      "canonical_material_cell": "`apps`, `sports_esports`",
+      "canonical_label_cell": "\"Activities\"",
+      "canonical_line_at_recovery": 889,
+      "sf_literals": [
+        "square.grid.2x2",
+        "gamecontroller.fill"
+      ],
+      "android_bindings": [
+        {
+          "state": "activities",
+          "artwork_id": "apps.fill0"
+        },
+        {
+          "state": "games",
+          "artwork_id": "sports_esports.fill0"
+        }
+      ]
+    },
+    {
+      "id": "whiteboard",
+      "concept": "Whiteboard",
+      "canonical_sf_cell": "`pencil.and.scribble`",
+      "canonical_material_cell": "`draw`",
+      "canonical_label_cell": "\"Whiteboard\"",
+      "canonical_line_at_recovery": 890,
+      "sf_literals": [
+        "pencil.and.scribble"
+      ],
+      "android_bindings": [
+        {
+          "state": "open_action",
+          "artwork_id": "draw.fill0"
+        }
+      ]
+    },
+    {
+      "id": "shared_browser",
+      "concept": "Shared browser",
+      "canonical_sf_cell": "`globe`",
+      "canonical_material_cell": "`public`",
+      "canonical_label_cell": "\"Shared browser\"",
+      "canonical_line_at_recovery": 891,
+      "sf_literals": [
+        "globe"
+      ],
+      "android_bindings": [
+        {
+          "state": "open_action",
+          "artwork_id": "public.fill0"
+        }
+      ]
+    },
+    {
+      "id": "qa",
+      "concept": "Q&A",
+      "canonical_sf_cell": "`questionmark.bubble`",
+      "canonical_material_cell": "`quiz`",
+      "canonical_label_cell": "\"Questions and answers\"",
+      "canonical_line_at_recovery": 892,
+      "sf_literals": [
+        "questionmark.bubble"
+      ],
+      "android_bindings": [
+        {
+          "state": "open_action",
+          "artwork_id": "quiz.fill0"
+        }
+      ]
+    },
+    {
+      "id": "gif",
+      "concept": "GIF",
+      "canonical_sf_cell": "`photo.on.rectangle`",
+      "canonical_material_cell": "`gif_box`",
+      "canonical_label_cell": "\"GIF\"",
+      "canonical_line_at_recovery": 893,
+      "sf_literals": [
+        "photo.on.rectangle"
+      ],
+      "android_bindings": [
+        {
+          "state": "open_action",
+          "artwork_id": "gif_box.fill0"
+        }
+      ]
+    },
+    {
+      "id": "photo",
+      "concept": "Photo",
+      "canonical_sf_cell": "`photo`",
+      "canonical_material_cell": "`image`",
+      "canonical_label_cell": "\"Photo\"",
+      "canonical_line_at_recovery": 894,
+      "sf_literals": [
+        "photo"
+      ],
+      "android_bindings": [
+        {
+          "state": "open_action",
+          "artwork_id": "image.fill0"
+        }
+      ]
+    },
+    {
+      "id": "delete",
+      "concept": "Delete",
+      "canonical_sf_cell": "`trash`",
+      "canonical_material_cell": "`delete`",
+      "canonical_label_cell": "\"Delete\"",
+      "canonical_line_at_recovery": 895,
+      "sf_literals": [
+        "trash"
+      ],
+      "android_bindings": [
+        {
+          "state": "action",
+          "artwork_id": "delete.fill0"
+        }
+      ]
+    },
+    {
+      "id": "search",
+      "concept": "Search",
+      "canonical_sf_cell": "`magnifyingglass`",
+      "canonical_material_cell": "`search`",
+      "canonical_label_cell": "\"Search\"",
+      "canonical_line_at_recovery": 896,
+      "sf_literals": [
+        "magnifyingglass"
+      ],
+      "android_bindings": [
+        {
+          "state": "decorative_field_leading",
+          "artwork_id": "search.fill0"
+        },
+        {
+          "state": "search_action",
+          "artwork_id": "search.fill0"
+        }
+      ]
+    },
+    {
+      "id": "speaking",
+      "concept": "Speaking",
+      "canonical_sf_cell": "`waveform`",
+      "canonical_material_cell": "`graphic_eq`",
+      "canonical_label_cell": "(state, not a control)",
+      "canonical_line_at_recovery": 897,
+      "sf_literals": [
+        "waveform"
+      ],
+      "android_bindings": [
+        {
+          "state": "active_status",
+          "artwork_id": "graphic_eq.fill0"
+        }
+      ]
+    },
+    {
+      "id": "weak_connection",
+      "concept": "Weak connection",
+      "canonical_sf_cell": "`wifi.exclamationmark`",
+      "canonical_material_cell": "`signal_wifi_bad`",
+      "canonical_label_cell": "(state)",
+      "canonical_line_at_recovery": 898,
+      "sf_literals": [
+        "wifi.exclamationmark"
+      ],
+      "android_bindings": [
+        {
+          "state": "active_status",
+          "artwork_id": "signal_wifi_bad.fill0"
+        }
+      ]
+    },
+    {
+      "id": "warning_error_info",
+      "concept": "Warning, error, info",
+      "canonical_sf_cell": "`exclamationmark.triangle.fill`, `exclamationmark.octagon.fill`, `info.circle`",
+      "canonical_material_cell": "`warning`, `error`, `info`",
+      "canonical_label_cell": "decorative next to text",
+      "canonical_line_at_recovery": 899,
+      "sf_literals": [
+        "exclamationmark.triangle.fill",
+        "exclamationmark.octagon.fill",
+        "info.circle"
+      ],
+      "android_bindings": [
+        {
+          "state": "warning",
+          "artwork_id": "warning.fill1"
+        },
+        {
+          "state": "error",
+          "artwork_id": "error.fill1"
+        },
+        {
+          "state": "info",
+          "artwork_id": "info.fill0"
+        }
+      ]
+    }
+  ],
+  "sf_literals": [
+    "arrow.triangle.2.circlepath.camera",
+    "arrow.up.circle.fill",
+    "captions.bubble",
+    "captions.bubble.fill",
+    "checkmark",
+    "crown.fill",
+    "doc.on.doc",
+    "ellipsis",
+    "exclamationmark.octagon.fill",
+    "exclamationmark.triangle.fill",
+    "face.smiling",
+    "gamecontroller.fill",
+    "gearshape",
+    "globe",
+    "hand.raised",
+    "hand.raised.fill",
+    "info.circle",
+    "lock.fill",
+    "lock.open",
+    "magnifyingglass",
+    "message",
+    "message.fill",
+    "mic.fill",
+    "mic.slash",
+    "mic.slash.fill",
+    "pencil.and.scribble",
+    "person.2",
+    "person.2.fill",
+    "person.fill.xmark",
+    "phone.down.fill",
+    "photo",
+    "photo.on.rectangle",
+    "pin",
+    "pin.fill",
+    "pin.slash",
+    "questionmark.bubble",
+    "rectangle.inset.filled",
+    "rectangle.inset.filled.on.rectangle",
+    "rectangle.on.rectangle",
+    "rectangle.on.rectangle.slash",
+    "square.and.arrow.up",
+    "square.grid.2x2",
+    "text.quote",
+    "trash",
+    "video.fill",
+    "video.slash",
+    "video.slash.fill",
+    "waveform",
+    "wifi.exclamationmark",
+    "xmark"
+  ],
+  "historical_complete_input_records_recovered": [
+    {
+      "name": "add_reaction",
+      "fill": 0,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "../inputs/assets/symbols/web/add_reaction/materialsymbolsrounded/add_reaction_24px.svg",
+      "bytes": 1000,
+      "sha256": "22f2f8040a258b8a34daaa0287686bf1fa67699de5cab2fd71fe32c60ef5d96e",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/add_reaction/materialsymbolsrounded/add_reaction_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/add_reaction/materialsymbolsrounded/add_reaction_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "../inputs/upstream/LICENSE",
+      "provenance_record": {
+        "file": "../inputs/provenance-manifest.json",
+        "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+        "json_pointer": "/assets/0",
+        "record_canonical_json_sha256": "3a3b3d77c1914cdb54cadb39d980d38934bab8c4b5344c5ef295e3cd9a31713d"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/210"
+      ],
+      "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+    },
+    {
+      "name": "add_reaction",
+      "fill": 1,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "../inputs/assets/symbols/web/add_reaction/materialsymbolsrounded/add_reaction_fill1_24px.svg",
+      "bytes": 886,
+      "sha256": "fffa7f2ee14903b160900b0d936b8bc5aabbb431e1c3f04baa2d91a9720796e0",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/add_reaction/materialsymbolsrounded/add_reaction_fill1_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/add_reaction/materialsymbolsrounded/add_reaction_fill1_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "../inputs/upstream/LICENSE",
+      "provenance_record": {
+        "file": "../inputs/provenance-manifest.json",
+        "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+        "json_pointer": "/assets/1",
+        "record_canonical_json_sha256": "8d0a076cdd7604b5e3d47e14564334303ec1ec7f5a95f3e95f4b106bd8314197"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/210"
+      ],
+      "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+    },
+    {
+      "name": "apps",
+      "fill": 0,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "../inputs/assets/symbols/web/apps/materialsymbolsrounded/apps_24px.svg",
+      "bytes": 1012,
+      "sha256": "c11e79be76394ee701595f8978628e80d6cc11a2af408596548a706b04331cb4",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/apps/materialsymbolsrounded/apps_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/apps/materialsymbolsrounded/apps_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "../inputs/upstream/LICENSE",
+      "provenance_record": {
+        "file": "../inputs/provenance-manifest.json",
+        "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+        "json_pointer": "/assets/2",
+        "record_canonical_json_sha256": "3bb7ef531a7e5b58f81d32f09ec32fe3a5c548160c342dcec2207be76f872887"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/392"
+      ],
+      "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+    },
+    {
+      "name": "apps",
+      "fill": 1,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "../inputs/assets/symbols/web/apps/materialsymbolsrounded/apps_fill1_24px.svg",
+      "bytes": 1012,
+      "sha256": "c11e79be76394ee701595f8978628e80d6cc11a2af408596548a706b04331cb4",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/apps/materialsymbolsrounded/apps_fill1_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/apps/materialsymbolsrounded/apps_fill1_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "../inputs/upstream/LICENSE",
+      "provenance_record": {
+        "file": "../inputs/provenance-manifest.json",
+        "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+        "json_pointer": "/assets/3",
+        "record_canonical_json_sha256": "5ea87ed03ce93debf279eb7f62cf3d03efc1f89cd469dafb9adb3157887da33b"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/392"
+      ],
+      "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+    },
+    {
+      "name": "arrow_back",
+      "fill": 0,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "../inputs/assets/symbols/web/arrow_back/materialsymbolsrounded/arrow_back_24px.svg",
+      "bytes": 328,
+      "sha256": "b9b58d54e13e0e3693a10d997c1001ec270c12eaa935f993cee1d8c916236ceb",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/arrow_back/materialsymbolsrounded/arrow_back_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/arrow_back/materialsymbolsrounded/arrow_back_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "../inputs/upstream/LICENSE",
+      "provenance_record": {
+        "file": "../inputs/provenance-manifest.json",
+        "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+        "json_pointer": "/assets/4",
+        "record_canonical_json_sha256": "ca691cd1466a0833c0bb35320d17f1f6d283d0b7e1ed04ac7d09f8f4d39f6f78"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/409"
+      ],
+      "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+    },
+    {
+      "name": "arrow_back",
+      "fill": 1,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "../inputs/assets/symbols/web/arrow_back/materialsymbolsrounded/arrow_back_fill1_24px.svg",
+      "bytes": 328,
+      "sha256": "b9b58d54e13e0e3693a10d997c1001ec270c12eaa935f993cee1d8c916236ceb",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/arrow_back/materialsymbolsrounded/arrow_back_fill1_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/arrow_back/materialsymbolsrounded/arrow_back_fill1_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "../inputs/upstream/LICENSE",
+      "provenance_record": {
+        "file": "../inputs/provenance-manifest.json",
+        "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+        "json_pointer": "/assets/5",
+        "record_canonical_json_sha256": "9d31de0fa35c4316235276b10a841307ce0aff004a34bd5417103c46bd00f649"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/409"
+      ],
+      "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+    },
+    {
+      "name": "bluetooth",
+      "fill": 0,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "bluetooth_24px.svg",
+      "bytes": 459,
+      "sha256": "3736a6c4fb26629b36b2ca6e2f28e5a61a72a4419c1ad18bfcf66bac4490e2de",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/bluetooth/materialsymbolsrounded/bluetooth_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/bluetooth/materialsymbolsrounded/bluetooth_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "LICENSE",
+      "provenance_record": {
+        "file": "provenance.json",
+        "sha256": "cf37d97e72c97797e57f4d15998ec6d8a046b6bed55d5cf51c1d7abe04c87111",
+        "json_pointer": "/assets/0",
+        "record_canonical_json_sha256": "9897932aa08ab055200c0c962467822ac4a1b814a16399148251edabb18753a4"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/756"
+      ],
+      "axis_evidence_reference": "evidence-audit.json#/axes"
+    },
+    {
+      "name": "bluetooth",
+      "fill": 1,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "bluetooth_fill1_24px.svg",
+      "bytes": 459,
+      "sha256": "3736a6c4fb26629b36b2ca6e2f28e5a61a72a4419c1ad18bfcf66bac4490e2de",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/bluetooth/materialsymbolsrounded/bluetooth_fill1_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/bluetooth/materialsymbolsrounded/bluetooth_fill1_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "LICENSE",
+      "provenance_record": {
+        "file": "provenance.json",
+        "sha256": "cf37d97e72c97797e57f4d15998ec6d8a046b6bed55d5cf51c1d7abe04c87111",
+        "json_pointer": "/assets/1",
+        "record_canonical_json_sha256": "e61ba2412ee08420beb20167f7aedef22f62b0f62861d0f24cf861a9d89ebd12"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/756"
+      ],
+      "axis_evidence_reference": "evidence-audit.json#/axes"
+    },
+    {
+      "name": "call_end",
+      "fill": 0,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "../inputs/assets/symbols/web/call_end/materialsymbolsrounded/call_end_24px.svg",
+      "bytes": 460,
+      "sha256": "98cafeb4ade02bcebae06af72a83439294cebe059adda12c874a7cc043aae919",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/call_end/materialsymbolsrounded/call_end_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/call_end/materialsymbolsrounded/call_end_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "../inputs/upstream/LICENSE",
+      "provenance_record": {
+        "file": "../inputs/provenance-manifest.json",
+        "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+        "json_pointer": "/assets/6",
+        "record_canonical_json_sha256": "881dd79e6d6d064b5d8a5334da25823293e7baa8c74daf9ece23b9d1ba8a37af"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/959"
+      ],
+      "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+    },
+    {
+      "name": "call_end",
+      "fill": 1,
+      "family": "Material Symbols Rounded",
+      "weight": 400,
+      "grade": 0,
+      "optical_size": 24,
+      "local_path": "../inputs/assets/symbols/web/call_end/materialsymbolsrounded/call_end_fill1_24px.svg",
+      "bytes": 356,
+      "sha256": "5fc45d8e866d3cb0fe58846ef63cb4bf274fdba56b011ad5b58bc64710ace287",
+      "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/symbols/web/call_end/materialsymbolsrounded/call_end_fill1_24px.svg",
+      "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+      "upstream_path": "symbols/web/call_end/materialsymbolsrounded/call_end_fill1_24px.svg",
+      "eligible_as_artwork_input": true,
+      "license": "Apache-2.0",
+      "license_file": "../inputs/upstream/LICENSE",
+      "provenance_record": {
+        "file": "../inputs/provenance-manifest.json",
+        "sha256": "a176e5c6c9a5d25f6570090e63572d982667f8a4ba6a410001ae1920fec98e9a",
+        "json_pointer": "/assets/7",
+        "record_canonical_json_sha256": "86a52bdfcbc9fae4e2c64d669138e52be4ec0eef068594627573cafa5b674990"
+      },
+      "eligible_metadata_row_pointers": [
+        "/icons/959"
+      ],
+      "axis_evidence_reference": "../inputs/provenance-manifest.json#/axis_evidence"
+    }
+  ]
+}

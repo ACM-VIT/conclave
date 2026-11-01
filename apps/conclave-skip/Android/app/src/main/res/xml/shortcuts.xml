@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_meeting"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_new_meeting"
+        android:shortcutShortLabel="@string/pm_shortcut_new_meeting"
+        android:shortcutLongLabel="@string/pm_shortcut_new_meeting_long"
+        android:shortcutDisabledMessage="@string/pm_shortcut_disabled">
+        <intent
+            android:action="com.acmvit.conclave.action.NEW_MEETING"
+            android:targetPackage="com.acmvit.conclave"
+            android:targetClass="conclave.module.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="join_code"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_join"
+        android:shortcutShortLabel="@string/pm_shortcut_join_code"
+        android:shortcutLongLabel="@string/pm_shortcut_join_code_long"
+        android:shortcutDisabledMessage="@string/pm_shortcut_disabled">
+        <intent
+            android:action="com.acmvit.conclave.action.JOIN_WITH_CODE"
+            android:targetPackage="com.acmvit.conclave"
+            android:targetClass="conclave.module.MainActivity" />
+    </shortcut>
+</shortcuts>

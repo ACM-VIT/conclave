@@ -4,8 +4,6 @@ import Observation
 import UIKit
 #endif
 
-// MARK: - Tile Layout Algorithm
-
 struct TileLayout {
     let columns: Int
     let rows: Int
@@ -61,7 +59,6 @@ func computeOptimalTileLayout(
     let availH = MeetingGridSizing.availableLength(containerHeight, padding: padding)
     let count = max(1, participantCount)
 
-    // Landscape / tablet: the shared Meet packer balances wide containers well.
     if availW >= availH {
         let result = computeGridLayout(
             count: count,
@@ -82,11 +79,6 @@ func computeOptimalTileLayout(
         )
     }
 
-    // Phone portrait: fill the stage like Meet/Zoom instead of floating small
-    // cards in black. Two-person calls stack full-width; everything else packs
-    // two columns and stretches rows to consume the available height (capped so
-    // tiles never become degenerate towers). Overflowing counts fall back to
-    // square tiles and the scrolling path.
     let cols = count == 2 ? 1 : min(count, 2)
     let rows = Int(ceil(Double(count) / Double(cols)))
     let tileWidth = floor((availW - CGFloat(cols - 1) * spacing) / CGFloat(cols))
@@ -95,7 +87,7 @@ func computeOptimalTileLayout(
     if fitHeight >= tileWidth {
         tileHeight = min(fitHeight, floor(tileWidth * 2.1))
     } else if cols == 1 {
-        // Stacked pair: wide cinematic tiles are correct, never overflow.
+
         tileHeight = max(120.0, fitHeight)
     }
     return TileLayout(
@@ -106,9 +98,6 @@ func computeOptimalTileLayout(
     )
 }
 
-/// Where a tile sits inside the packed grid canvas. Short rows (the last row
-/// of an odd count) are centered, matching the old HStack behavior and the web
-/// grid packer.
 enum GridTileFramePolicy {
     static func origin(
         index: Int,
@@ -132,15 +121,13 @@ enum GridTileFramePolicy {
     }
 }
 
-// MARK: - Grid Layout
-
 struct GridLayoutView: View {
     @Bindable var viewModel: MeetingViewModel
     let isCompact: Bool
 
     private let spacing: CGFloat = 12
     private let padding: CGFloat = 16
-    // Small gap above the in-flow controls bar.
+
     private let controlsOverlap: CGFloat = 8
     private var detachedSelfEdgeInsets: EdgeInsets {
         MeetingDetachedSelfLayout.edgeInsets(isCompact: isCompact, top: padding, horizontal: padding)
@@ -176,9 +163,6 @@ struct GridLayoutView: View {
             let shouldScrollGrid = count > scrollThreshold ||
                 (isCompact && packedContentHeight > visibleHeight)
 
-            // Fade between the grid's own display modes (solo full-stage,
-            // packed grid, scrolling grid) - these are branch swaps that
-            // otherwise cut with a blank frame between them.
             let gridMode = count <= 1 ? "solo" : (shouldScrollGrid ? "scroll" : "packed")
 
             Group {
@@ -208,10 +192,7 @@ struct GridLayoutView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // The meeting column already owns the phone safe-area
-                    // inset. A second 16pt grid inset left a conspicuous black
-                    // gutter around the solo tile, so let the tile consume the
-                    // full stage and reserve only the controls separation.
+
                     .padding(.bottom, controlsOverlap)
                     .transition(.opacity)
                 } else if !shouldScrollGrid {
@@ -248,11 +229,7 @@ struct GridLayoutView: View {
 
     @ViewBuilder
     func nonScrollingGrid(layout: TileLayout, ids: [String], hiddenParticipantCount: Int) -> some View {
-        // Absolute placement in a fixed canvas, keyed by userId: when the grid
-        // reflows (join, leave, reorder, stage resize) every tile GLIDES to its
-        // new frame like the web app's FLIP system, instead of rows rebuilding
-        // and tiles teleporting. The signature only changes on layout-affecting
-        // facts, so speaking/mute churn never re-triggers the animation.
+
         let contentWidth = CGFloat(layout.columns) * layout.tileWidth +
             CGFloat(max(0, layout.columns - 1)) * spacing
         let contentHeight = CGFloat(layout.rows) * layout.tileHeight +

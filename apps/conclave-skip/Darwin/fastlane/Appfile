@@ -1,5 +1,5 @@
-# For more information about the Appfile, see:
-#     https://docs.fastlane.tools/advanced/#appfile
+
+
 
 require('dotenv')
 Dotenv.load '../../Skip.env'
@@ -8,5 +8,3 @@ ios_bundle_identifier = ENV['PRODUCT_BUNDLE_IDENTIFIER'].to_s.strip
 raise "PRODUCT_BUNDLE_IDENTIFIER must be set" if ios_bundle_identifier.empty?
 
 app_identifier(ios_bundle_identifier)
-
-# apple_id("my@email")

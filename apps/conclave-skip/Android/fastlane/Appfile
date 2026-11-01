@@ -1,8 +1,8 @@
-# This file contains the app distribution configuration
-# for the Android release build.
-# You can find the documentation at https://docs.fastlane.tools
 
-# Load the shared native app properties.
+
+
+
+
 require('dotenv')
 Dotenv.load('../../Skip.env')
 
@@ -13,5 +13,5 @@ raise "ANDROID_APPLICATION_ID or PRODUCT_BUNDLE_IDENTIFIER must be set" if andro
 
 package_name(android_package_name.tr("-", "_"))
 
-# Path to the Google Play service-account JSON.
+
 json_key_file("fastlane/apikey.json")

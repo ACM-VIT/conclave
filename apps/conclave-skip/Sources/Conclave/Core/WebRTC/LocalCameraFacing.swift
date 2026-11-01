@@ -8,6 +8,14 @@ enum LocalCameraFacing: String, Equatable {
         rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "back" ? .back : .front
     }
 
+    static func from(isFront: Bool) -> LocalCameraFacing {
+        isFront ? .front : .back
+    }
+
+    var isFront: Bool {
+        self == .front
+    }
+
     var shouldMirrorLocalVideo: Bool {
         self == .front
     }
@@ -28,5 +36,20 @@ enum LocalCameraFacing: String, Equatable {
         case .back:
             return .front
         }
+    }
+}
+
+enum LocalCameraPublication {
+
+    static func publishes(current: LocalCameraFacing, reported: LocalCameraFacing) -> Bool {
+        current != reported
+    }
+
+    static func isPaused(_ interruption: PreviewInterruption) -> Bool {
+        interruption != PreviewInterruption.none
+    }
+
+    static func showsPaused(interruption: PreviewInterruption, isCameraOff: Bool) -> Bool {
+        !isCameraOff && isPaused(interruption)
     }
 }

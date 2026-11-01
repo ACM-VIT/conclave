@@ -4,10 +4,42 @@ export interface ConclaveSiteVersion {
   timestamp: string | null;
 }
 
+export interface ConclaveMinNativeVersion {
+  ios: string;
+  android: string;
+}
+
 export interface ConclaveSiteVersionResponse {
   serviceVersion: ConclaveSiteVersion;
   clientVersion?: ConclaveSiteVersion;
+  minNativeVersion?: ConclaveMinNativeVersion;
 }
+
+export const DEFAULT_CONCLAVE_MIN_NATIVE_VERSION: ConclaveMinNativeVersion = {
+  ios: "2.0.0",
+  android: "2.0.0",
+};
+
+const NATIVE_VERSION_PATTERN = /^\d{1,4}(\.\d{1,4}){0,3}$/;
+
+const nativeVersionOrFallback = (value: unknown, fallback: string): string => {
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim();
+  return NATIVE_VERSION_PATTERN.test(normalized) ? normalized : fallback;
+};
+
+export const resolveConclaveMinNativeVersion = (
+  env: Record<string, string | undefined>,
+): ConclaveMinNativeVersion => ({
+  ios: nativeVersionOrFallback(
+    env.CONCLAVE_MIN_NATIVE_VERSION_IOS,
+    DEFAULT_CONCLAVE_MIN_NATIVE_VERSION.ios,
+  ),
+  android: nativeVersionOrFallback(
+    env.CONCLAVE_MIN_NATIVE_VERSION_ANDROID,
+    DEFAULT_CONCLAVE_MIN_NATIVE_VERSION.android,
+  ),
+});
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;

@@ -86,11 +86,10 @@ struct VideoGridItem: View {
     let isHandRaised: Bool
     let isSpeaking: Bool
     let isLocal: Bool
-    // Stable identity for the facehash avatar (falls back to the remote
-    // track's user id, then to the name alone).
+
     var identityId: String? = nil
     var connectionStatus: ParticipantConnectionStatus? = nil
-    // Expands camera-off avatars on stage while leaving video aspect handling to the renderer.
+
     var fillStage: Bool = false
     var isThumbnail: Bool = false
     var avatarSizeOverride: CGFloat? = nil
@@ -128,8 +127,7 @@ struct VideoGridItem: View {
 
     @ViewBuilder
     var aspectAdjustedContent: some View {
-        // Fill the frame the parent assigns (grid cell / stage / thumbnail).
-        // Video crops to fill; the avatar centres. No 16:9 letterbox gaps.
+
         ZStack { videoContent; overlays }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -259,8 +257,7 @@ struct VideoGridItem: View {
             Spacer()
 
             HStack {
-                // Web-style nameplate: a dark pill chip instead of a text
-                // shadow, so it stays readable over video without any glow.
+
                 HStack(spacing: 5) {
                     if isMuted {
                         ACMSystemIcon.icon("mic.slash.fill", android: "mic.off", size: isThumbnail ? 9.0 : 10.0)

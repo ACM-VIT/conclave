@@ -64,3 +64,6 @@
 
 /roblox-logo.png
   Cache-Control: public, max-age=31536000, immutable
+
+/.well-known/apple-app-site-association
+  Content-Type: application/json

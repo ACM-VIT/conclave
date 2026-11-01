@@ -1,10 +1,6 @@
 import SwiftUI
 import Observation
 
-// The active game owns the meeting stage: a full game surface framed like the
-// shared-app stage, with the room kept visible in a thumbnail strip. The games
-// sheet only launches games; play happens here.
-
 struct GameStageLayoutView: View {
     @Bindable var viewModel: MeetingViewModel
     let isCompact: Bool
@@ -12,10 +8,7 @@ struct GameStageLayoutView: View {
     private let controlsOverlap: CGFloat = 8
 
     var body: some View {
-        // This body intentionally reads no high-frequency state: the game card
-        // and the tile strip each observe their own slice, so a game move does
-        // not recompute the strip and an active-speaker tick does not rebuild
-        // the game body.
+
         GeometryReader { geo in
             if isCompact {
                 let availableHeight = MeetingStageLayout.visibleHeight(
@@ -46,17 +39,13 @@ struct GameStageLayoutView: View {
     }
 }
 
-/// The framed game surface. Observes only game state (+ the detached-self flag),
-/// so it rebuilds on moves and phase changes, not on tile churn.
 struct GameStageCardView: View {
     @Bindable var viewModel: MeetingViewModel
     let isCompact: Bool
 
 #if !SKIP
 #if canImport(UIKit)
-    // The meeting column ignores the keyboard (a call never compresses); the
-    // card instead pads its scrollable body by the actual keyboard overlap so
-    // game inputs (Wordle guess, bluff answers) stay reachable while typing.
+
     @StateObject private var keyboardObserver = KeyboardFrameObserver()
 #endif
 #endif
@@ -93,14 +82,10 @@ struct GameStageCardView: View {
                 .strokeBorder(lineWidth: 1)
                 .foregroundStyle(ACMColors.border)
         }
-        // No floating self view over a game: the tile strip force-includes the
-        // local user (see tileStripSnapshot(forceSelfTile:)), so game controls
-        // are never obscured and self-presence has a stable, predictable home.
+
     }
 }
 
-/// The room-presence strip beside/under the game. Observes only tile state, so
-/// speaking/mute changes never touch the game body.
 struct GameStageTileStrip: View {
     @Bindable var viewModel: MeetingViewModel
     let axis: Axis
@@ -176,10 +161,6 @@ struct GameStageTileStrip: View {
     }
 }
 
-// MARK: - Chrome
-
-/// Compact top bar of the stage: identity, live status, seat state, and the
-/// host's end control (armed, so one stray tap cannot kill the round).
 struct GameStageChromeView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
@@ -321,10 +302,6 @@ struct GameStageErrorLine: View {
     }
 }
 
-// MARK: - Body dispatch
-
-/// Picks the right surface for the current game and phase. Kept narrow so a
-/// phase change only rebuilds the game area, never the whole stage frame.
 struct GameStageBodyView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
@@ -354,7 +331,7 @@ struct GameStageBodyView: View {
         if activeGame.phase == "lobby" {
             GameStageLobbyView(viewModel: viewModel, activeGame: activeGame, canManage: canManage)
         } else if !isPlayer && activeGame.view == nil {
-            // This game keeps its state secret from spectators (imposter).
+
             GameStageNotice(
                 icon: "eye.slash",
                 androidIcon: "ghost",
@@ -386,8 +363,6 @@ struct GameStageBodyView: View {
         }
     }
 }
-
-// MARK: - Lobby
 
 struct GameStageLobbyView: View {
     @Bindable var viewModel: MeetingViewModel
@@ -451,8 +426,6 @@ struct GameStageLobbyView: View {
     }
 }
 
-// MARK: - Generic fallback
-
 struct GenericGameStageView: View {
     @Bindable var viewModel: MeetingViewModel
     let activeGame: GamePublicState
@@ -477,9 +450,6 @@ struct GenericGameStageView: View {
     }
 }
 
-// MARK: - Shared bars
-
-/// Pinned bottom action area of the stage card.
 struct GameStageBottomBar<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -496,7 +466,6 @@ struct GameStageBottomBar<Content: View>: View {
     }
 }
 
-/// Standard host controls for question/vote/choose/reveal round flows.
 struct GameStageHostRoundBar: View {
     @Bindable var viewModel: MeetingViewModel
     let phase: String
@@ -530,7 +499,6 @@ struct GameStageHostRoundBar: View {
     }
 }
 
-/// Results bar: the host can run it back or close it out.
 struct GameStageResultsBar: View {
     @Bindable var viewModel: MeetingViewModel
     let canManage: Bool

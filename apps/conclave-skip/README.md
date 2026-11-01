@@ -21,20 +21,35 @@ swift build
 swift test -q
 ```
 
-Android compile check:
+Both work on the default Swift 6.4 build engine. The app is Skip Lite only
+(transpiled); do not add `skip-fuse` back.
+
+Android uses the checked-in Gradle wrapper (Gradle 9.7.1) and is verified with
+JDK 21, so pin `JAVA_HOME`:
 
 ```sh
 cd Android
-gradle --no-daemon --max-workers=1 -Dorg.gradle.jvmargs='-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8' :Conclave:compileDebugKotlin --console=plain
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+./gradlew :Conclave:compileDebugKotlin --console=plain
+ALLOW_DEBUG_RELEASE_SIGNING=true ./gradlew :app:assembleRelease --console=plain
 ```
 
-iOS simulator build:
+The release APK is written to
+`.build/Android/app/outputs/apk/release/app-release.apk`.
+`ALLOW_DEBUG_RELEASE_SIGNING=true` signs it with the debug key when
+`Android/app/keystore.properties` is absent; use that only for local
+throwaway artifacts. On a fresh clone run `swift build` first so the Gradle
+prebuild can use the package-pinned skip CLI from `.build/artifacts`.
+
+iOS builds (`SKIP_ACTION=none` stops the "Run skip gradle" phase from
+launching Gradle):
 
 ```sh
-xcodebuild -skipPackagePluginValidation -project Darwin/Conclave.xcodeproj -scheme "Conclave App" -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO build
+xcodebuild -project Darwin/Conclave.xcodeproj -scheme "Conclave App" -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 17' -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO build SKIP_ZERO=1 SKIP_ACTION=none
+xcodebuild -project Darwin/Conclave.xcodeproj -scheme "Conclave App" -configuration Release -destination generic/platform=iOS -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO build SKIP_ZERO=1 SKIP_ACTION=none
 ```
 
-Use `Darwin/fastlane` and `Android/fastlane` for release automation. Release builds should use the production Conclave host from `Skip.env`, not emulator loopback URLs.
+Use `Darwin/fastlane` and `Android/fastlane` for release automation. Release builds should use the production Conclave host from `Skip.env`, not emulator loopback URLs. `Android/fastlane` and the Xcode "Run skip gradle" phase (a normal Xcode Run) build through the checked-in Gradle wrapper and default `JAVA_HOME` to the Homebrew JDK 21, so no Homebrew Gradle is needed.
 
 ## Runtime Notes
 
