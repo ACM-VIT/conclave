@@ -89,15 +89,12 @@ enum VersionGatePolicy {
     }
 
     static func compare(_ lhs: [Int], _ rhs: [Int]) -> Int {
-        let count = max(lhs.count, rhs.count)
-        var index = 0
-        while index < count {
+        for index in 0..<max(lhs.count, rhs.count) {
             let left = index < lhs.count ? lhs[index] : 0
             let right = index < rhs.count ? rhs[index] : 0
             if left != right {
                 return left < right ? -1 : 1
             }
-            index += 1
         }
         return 0
     }

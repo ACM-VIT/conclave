@@ -3,6 +3,14 @@ import Foundation
 import Testing
 @testable import Conclave
 
+struct VersionVector: Sendable, CustomTestStringConvertible {
+    let current: String
+    let minimum: String
+    let gated: Bool
+
+    var testDescription: String { "\(current) vs \(minimum)" }
+}
+
 @MainActor
 struct SYS16VersionGateTests {
     private func defaults() -> UserDefaults {
@@ -19,21 +27,26 @@ struct SYS16VersionGateTests {
         return viewModel
     }
 
-    @Test func dottedVersionsCompareNumericallyAndEqualVersionsDoNotGate() {
-        #expect(VersionGatePolicy.requiresUpdate(currentVersion: "1.2.0", minimum: "1.10.0"))
-        #expect(VersionGatePolicy.requiresUpdate(currentVersion: "1.0.11", minimum: "2.0.0"))
-        #expect(!VersionGatePolicy.requiresUpdate(currentVersion: "2.0.0", minimum: "2.0.0"))
-        #expect(!VersionGatePolicy.requiresUpdate(currentVersion: "2.0", minimum: "2.0.0"))
-        #expect(!VersionGatePolicy.requiresUpdate(currentVersion: "2.0.1", minimum: "2.0.0"))
-        #expect(VersionGatePolicy.requiresUpdate(currentVersion: "2.0.0", minimum: "2.0.0.1"))
+    @Test(arguments: [
+        VersionVector(current: "1.2.0", minimum: "1.10.0", gated: true),
+        VersionVector(current: "1.0.11", minimum: "2.0.0", gated: true),
+        VersionVector(current: "2.0.0", minimum: "2.0.0", gated: false),
+        VersionVector(current: "2.0", minimum: "2.0.0", gated: false),
+        VersionVector(current: "2.0.1", minimum: "2.0.0", gated: false),
+        VersionVector(current: "2.0.0", minimum: "2.0.0.1", gated: true),
+    ])
+    func dottedVersionsCompareNumerically(_ vector: VersionVector) {
+        #expect(VersionGatePolicy.requiresUpdate(currentVersion: vector.current, minimum: vector.minimum) == vector.gated)
     }
 
-    @Test func malformedVersionsNeverGate() {
-        for value in ["", "  ", "v2", "2.0.0-beta", "1..2", "1.2.3.4.5", "99999", "2.x", "+2"] {
-            #expect(VersionGatePolicy.components(value) == nil, "\(value) is not a dotted numeric version")
-            #expect(!VersionGatePolicy.requiresUpdate(currentVersion: "1.0.0", minimum: value))
-            #expect(!VersionGatePolicy.requiresUpdate(currentVersion: value, minimum: "9.0.0"))
-        }
+    @Test(arguments: ["", "  ", "v2", "2.0.0-beta", "1..2", "1.2.3.4.5", "99999", "2.x", "+2"])
+    func malformedVersionsNeverGate(_ value: String) {
+        #expect(VersionGatePolicy.components(value) == nil)
+        #expect(!VersionGatePolicy.requiresUpdate(currentVersion: "1.0.0", minimum: value))
+        #expect(!VersionGatePolicy.requiresUpdate(currentVersion: value, minimum: "9.0.0"))
+    }
+
+    @Test func surroundingWhitespaceIsTrimmed() {
         #expect(VersionGatePolicy.components(" 2.10.3 ") == [2, 10, 3])
     }
 
@@ -47,17 +60,15 @@ struct SYS16VersionGateTests {
                                                  cache: .store("2.0.0"), invalidField: false))
     }
 
-    @Test func aMissingEmptyOrMalformedFieldOpensTheGateClearsTheCacheAndIsReported() {
-        let answers: [MinNativeVersionPayload?] = [
-            nil,
-            MinNativeVersionPayload(ios: nil, android: "2.0.0"),
-            MinNativeVersionPayload(ios: "", android: nil),
-            MinNativeVersionPayload(ios: "latest", android: nil),
-        ]
-        for payload in answers {
-            let resolution = VersionGatePolicy.resolve(fetch: .payload(payload), platform: "ios", currentVersion: "1.0.0", cachedMinimum: "9.0.0")
-            #expect(resolution == VersionGateResolution(state: .open, cache: .clear, invalidField: true))
-        }
+    @Test(arguments: [
+        nil,
+        MinNativeVersionPayload(ios: nil, android: "2.0.0"),
+        MinNativeVersionPayload(ios: "", android: nil),
+        MinNativeVersionPayload(ios: "latest", android: nil),
+    ] as [MinNativeVersionPayload?])
+    func aMissingEmptyOrMalformedFieldOpensTheGateClearsTheCacheAndIsReported(_ payload: MinNativeVersionPayload?) {
+        let resolution = VersionGatePolicy.resolve(fetch: .payload(payload), platform: "ios", currentVersion: "1.0.0", cachedMinimum: "9.0.0")
+        #expect(resolution == VersionGateResolution(state: .open, cache: .clear, invalidField: true))
     }
 
     @Test func offlineUsesTheLastGoodValue() {
@@ -74,28 +85,32 @@ struct SYS16VersionGateTests {
             == .payload(MinNativeVersionPayload(ios: "2.0.0", android: "2.0.1")))
         #expect(VersionGateService.decode(statusCode: 200, json: #"{"minNativeVersion":{"ios":2,"android":"2.0.1"}}"#)
             == .payload(MinNativeVersionPayload(ios: nil, android: "2.0.1")))
-        for field in ["true", #"{"major":9}"#, "[9]", "9"] {
-            let fetch = VersionGateService.decode(statusCode: 200, json: #"{"minNativeVersion":{"ios":"# + field + "}}")
-            let resolution = VersionGatePolicy.resolve(fetch: fetch, platform: "ios", currentVersion: "1.0.0", cachedMinimum: nil)
-            #expect(!resolution.state.updateRequired, "\(field) never gates")
-            #expect(resolution.invalidField)
-        }
         #expect(VersionGateService.decode(statusCode: 200, json: #"{"minNativeVersion":"2.0.0"}"#) == .payload(nil))
         #expect(VersionGateService.decode(statusCode: 200, json: #"{"serviceVersion":{"id":"x"}}"#) == .payload(nil))
         #expect(VersionGateService.decode(statusCode: 200, json: "<html>captive portal</html>") == .unavailable)
         #expect(VersionGateService.decode(statusCode: 503, json: #"{"minNativeVersion":{"ios":"9.0.0"}}"#) == .unavailable)
     }
 
-    @Test func aMalformedJoinFieldNeverBreaksTheJoinResponse() throws {
+    @Test(arguments: ["true", #"{"major":9}"#, "[9]", "9"])
+    func aNonStringVersionFieldNeverGates(_ field: String) {
+        let fetch = VersionGateService.decode(statusCode: 200, json: #"{"minNativeVersion":{"ios":"# + field + "}}")
+        let resolution = VersionGatePolicy.resolve(fetch: fetch, platform: "ios", currentVersion: "1.0.0", cachedMinimum: nil)
+        #expect(!resolution.state.updateRequired)
+        #expect(resolution.invalidField)
+    }
+
+    @Test(arguments: ["[1]", #""2.0.0""#, #"{"ios":["9"],"android":9}"#])
+    func aMalformedJoinFieldNeverBreaksTheJoinResponse(_ field: String) throws {
+        let malformed = try SfuJoinInfo.decode(Data((#"{"token":"t","sfuUrl":"wss://s","minNativeVersion":"# + field + "}").utf8))
+        #expect(malformed.token == "t")
+        #expect(malformed.minNativeVersion?.ios == nil)
+        #expect(malformed.minNativeVersion?.android == nil)
+    }
+
+    @Test func aWellFormedOrAbsentJoinFieldDecodes() throws {
         let good = try SfuJoinInfo.decode(Data(#"{"token":"t","sfuUrl":"wss://s","minNativeVersion":{"ios":"2.0.0","android":"2.0.0"}}"#.utf8))
         #expect(good.minNativeVersion == MinNativeVersionPayload(ios: "2.0.0", android: "2.0.0"))
         #expect(good.token == "t")
-        for field in ["[1]", #""2.0.0""#, #"{"ios":["9"],"android":9}"#] {
-            let malformed = try SfuJoinInfo.decode(Data((#"{"token":"t","sfuUrl":"wss://s","minNativeVersion":"# + field + "}").utf8))
-            #expect(malformed.token == "t")
-            #expect(malformed.minNativeVersion?.ios == nil)
-            #expect(malformed.minNativeVersion?.android == nil)
-        }
         let legacy = try SfuJoinInfo.decode(Data(#"{"token":"t","sfuUrl":"wss://s"}"#.utf8))
         #expect(legacy.minNativeVersion == nil)
     }

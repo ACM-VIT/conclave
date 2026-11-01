@@ -9788,13 +9788,15 @@ final class MeetingViewModel {
         return gated && !isRecoveryJoin
     }
 
-    func setPipStashed(_ stashed: Bool) {
-        guard stashed != isPipStashed else { return }
+    @discardableResult
+    func setPipStashed(_ stashed: Bool) -> Bool {
+        guard stashed != isPipStashed else { return false }
         isPipStashed = stashed
-        guard state.connectionState == .joined else { return }
+        guard state.connectionState == .joined else { return false }
         Task { @MainActor [weak self] in
             await self?.applyRemoteConsumerBandwidthPolicy()
         }
+        return true
     }
 
     func setPremeetingIdentity(isSignedIn: Bool, accountName: String, accountSeed: String) {

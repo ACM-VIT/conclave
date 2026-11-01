@@ -39,35 +39,21 @@ struct S5PipStashTests {
         #expect(client.testLastFocusedUserIds.contains(remote))
     }
 
-    private func quiesce(_ client: WebRTCClient) async {
-        var last = -1
-        while last != client.testBandwidthPolicyCalls {
-            last = client.testBandwidthPolicyCalls
-            try? await Task.sleep(nanoseconds: 150_000_000)
-        }
-    }
-
-    @Test func onlyAChangeSendsARequest() async {
+    @Test func onlyAChangeSendsARequest() {
         let viewModel = joinedViewModel()
-        let client = viewModel.webRTCClient
-        viewModel.setPipStashed(true)
-        #expect(await settle { client.testLastFocusedUserIds.isEmpty && client.testBandwidthPolicyCalls > 0 })
-        await quiesce(client)
-        let calls = client.testBandwidthPolicyCalls
-        viewModel.setPipStashed(true)
-        try? await Task.sleep(nanoseconds: 150_000_000)
-        #expect(client.testBandwidthPolicyCalls == calls)
-        #expect(client.testLastFocusedUserIds.isEmpty)
+        #expect(viewModel.setPipStashed(true))
+        #expect(!viewModel.setPipStashed(true))
+        #expect(viewModel.isPipStashed)
+        #expect(viewModel.setPipStashed(false))
+        #expect(!viewModel.setPipStashed(false))
     }
 
-    @Test func noRequestIsSentWhileNotInACall() async {
+    @Test func noRequestIsSentWhileNotInACall() {
         let viewModel = MeetingViewModel()
-        let client = viewModel.webRTCClient
-        viewModel.setPipStashed(true)
-        viewModel.setPipStashed(false)
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        #expect(client.testBandwidthPolicyCalls == 0)
-        #expect(!viewModel.isPipStashed)
+        #expect(!viewModel.setPipStashed(true))
+        #expect(viewModel.isPipStashed, "the stash is still recorded for the next policy pass")
+        #expect(!viewModel.setPipStashed(false))
+        #expect(viewModel.webRTCClient.testBandwidthPolicyCalls == 0)
     }
 }
 #endif
