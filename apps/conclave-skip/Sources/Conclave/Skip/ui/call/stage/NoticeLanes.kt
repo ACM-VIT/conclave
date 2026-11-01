@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -63,7 +64,7 @@ private fun NoticeBannerLane(stage: StagePresenter) {
     if (notice != null) retained.notice = notice
     ConclaveBannerLane(noticeId = notice?.id, identifier = "stage.banner", modifier = Modifier.padding(top = geometry.bannerTop.dp)) {
         val shown = retained.notice
-        if (shown != null) NoticeBanner(stage, shown)
+        if (shown != null) key(shown.id) { NoticeBanner(stage, shown) }
     }
 }
 
