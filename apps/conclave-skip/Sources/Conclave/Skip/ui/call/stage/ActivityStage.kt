@@ -142,14 +142,11 @@ private fun ActivityStageHeaderIdentity(kind: String, parts: ActivityStageIdenti
             Icon(if (parts.gameId.isNotEmpty()) gameGlyphIcon(parts.gameId) else activityStageIcon(kind, parts.appId), contentDescription = null,
                 tint = scheme.onSurface, modifier = Modifier.size(20.dp))
         }
-        Column(Modifier.weight(1f)) {
-            Text(parts.name, style = MaterialTheme.typography.titleMedium, color = scheme.onSurface, maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
-            if (parts.status.isNotEmpty()) {
-                Text(parts.status, style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-            }
-        }
+        Text(parts.name, style = MaterialTheme.typography.titleMedium, color = scheme.onSurface, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).semantics {
+                heading()
+                if (parts.status.isNotEmpty()) stateDescription = parts.status
+            })
     }
 }
 

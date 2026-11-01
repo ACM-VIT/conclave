@@ -127,19 +127,12 @@ struct ActivityStageIdentity: View {
                 .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
                             in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(parts.name)
-                    .font(.headline)
-                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                    .lineLimit(1)
-                    .accessibilityAddTraits(.isHeader)
-                if !parts.status.isEmpty {
-                    Text(parts.status)
-                        .font(.footnote)
-                        .foregroundStyle(HostingTheme.inCallTextSecondary)
-                        .lineLimit(1)
-                }
-            }
+            Text(parts.name)
+                .font(.headline)
+                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                .lineLimit(1)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityValue(parts.status)
         }
     }
 
