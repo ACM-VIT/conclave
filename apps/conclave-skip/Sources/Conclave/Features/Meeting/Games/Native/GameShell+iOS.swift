@@ -89,10 +89,7 @@ final class GameShellBoundsProbe {
     private(set) var viewportRect = GameShellRect.zero
     private(set) var contentRect = GameShellRect.zero
     private(set) var barRect = GameShellRect.zero
-
-    var barShowsEdge: Bool {
-        GameShellInsetPolicy.barShowsEdge(viewport: viewportRect, content: contentRect, bar: barRect)
-    }
+    private(set) var barShowsEdge = false
 
     var readout: String {
         GameShellInsetPolicy.readout(body: bodyRect, viewport: viewportRect, content: contentRect, bar: barRect)
@@ -106,10 +103,17 @@ final class GameShellBoundsProbe {
         case .content: if contentRect != rect { contentRect = rect }
         case .bar: if barRect != rect { barRect = rect }
         }
+        refreshEdge()
     }
 
     func clearBar() {
         if barRect != GameShellRect.zero { barRect = GameShellRect.zero }
+        refreshEdge()
+    }
+
+    private func refreshEdge() {
+        let showsEdge = GameShellInsetPolicy.barShowsEdge(viewport: viewportRect, content: contentRect, bar: barRect)
+        if barShowsEdge != showsEdge { barShowsEdge = showsEdge }
     }
 }
 
@@ -118,15 +122,11 @@ struct GameShellBoundsMeasure: ViewModifier {
     let part: GameShellBoundsPart
 
     func body(content: Content) -> some View {
-        #if DEBUG
         content.onGeometryChange(for: CGRect.self) { proxy in
             proxy.frame(in: .global)
         } action: { frame in
             probe.record(part, frame)
         }
-        #else
-        content
-        #endif
     }
 }
 

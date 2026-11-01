@@ -67,7 +67,7 @@ struct ChessSceneView: View {
                             }
                             .modifier(GameShellBoundsMeasure(probe: bounds, part: .viewport))
                             .scrollDismissesKeyboard(.interactively)
-                            GameShellBottomBar(games: games)
+                            GameShellBottomBar(games: games, showsEdge: bounds.barShowsEdge)
                                 .modifier(GameShellBoundsMeasure(probe: bounds, part: .bar))
                         }
                     }

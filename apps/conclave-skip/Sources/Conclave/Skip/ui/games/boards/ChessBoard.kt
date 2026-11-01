@@ -208,13 +208,15 @@ private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinis
                         }
                     }
                 } else {
+                    val stackedScroll = rememberScrollState()
                     Column(Modifier.fillMaxSize()) {
                         cardHeader(false)
                         HorizontalDivider(color = LocalConclaveExtendedColors.current.border)
-                        GameShellScrollColumn(games, Modifier.weight(1f).fillMaxWidth(), bounds) {
+                        GameShellScrollColumn(games, Modifier.weight(1f).fillMaxWidth(), bounds, stackedScroll) {
                             stackedScene()
                         }
-                        GameShellBottomBar(games, Modifier.gameShellBounds(bounds) { probe, rect -> probe.bar = rect })
+                        GameShellBottomBar(games, Modifier.gameShellBounds(bounds) { probe, rect -> probe.bar = rect },
+                            showsEdge = stackedScroll.canScrollForward)
                     }
                 }
                 if (bounds != null) GameShellBoundsReadout(bounds, Modifier.align(Alignment.TopStart))
