@@ -189,6 +189,36 @@ struct PR243AppMountRegressionTests {
         relay.end()
     }
 
+    @Test(arguments: [false, true])
+    func overflowDuringSuspendedSyncRequiresAFreshSnapshotBeforeReady(byteOverflow: Bool) async {
+        let wire = Wire()
+        let relay = session(wire)
+        #expect(ready(relay, mount: relay.bridgeGeneration) == .none)
+        #expect(await settle { wire.continuations.count == 1 })
+        if byteOverflow {
+            relay.receiveRemoteUpdate(appId: "whiteboard", data: Data(repeating: 2, count: ActiveAppSession.pendingByteLimit + 1))
+        } else {
+            for index in 0...ActiveAppSession.pendingItemLimit {
+                relay.receiveRemoteUpdate(appId: "whiteboard", data: Data([UInt8(index % 255)]))
+            }
+        }
+        wire.continuations[0].resume(returning: AppsSyncResponse(syncMessage: Data([1]), stateVector: nil, awarenessUpdate: nil))
+        #expect(await settle { wire.continuations.count == 2 || relay.isReady })
+        #expect(wire.continuations.count == 2)
+        #expect(!relay.isReady && !relay.snapshotDelivered)
+        #expect(!wire.delivered.contains { AppBridgeCodec.jsonObject($0)?["type"] as? String == "snapshot" })
+        if wire.continuations.count == 2 {
+            relay.receiveRemoteUpdate(appId: "whiteboard", data: Data([3]))
+            wire.continuations[1].resume(returning: AppsSyncResponse(syncMessage: Data([1, 2]), stateVector: nil, awarenessUpdate: nil))
+            #expect(await settle { relay.isReady })
+            let snapshots = wire.delivered.compactMap { AppBridgeCodec.jsonObject($0) }.filter { $0["type"] as? String == "snapshot" }
+            #expect(snapshots.count == 1)
+            #expect((snapshots.first?["payload"] as? [String: Any])?["syncMessage"] as? String == Data([1, 2]).base64EncodedString())
+            #expect(wire.delivered.last.flatMap { AppBridgeCodec.jsonObject($0) }?["type"] as? String == "update")
+        }
+        relay.end()
+    }
+
     @Test func twoSyncFailuresFailTheHostWithoutAdvertisingReady() async {
         let wire = Wire()
         let relay = session(wire)

@@ -416,10 +416,12 @@ final class ActiveAppSession {
                 if Task.isCancelled || self.appSessionId != expectedSession || self.connectionEpoch != expectedEpoch
                     || self.bridgeGeneration != expectedMount { return }
                 attempt += 1
+                if self.pendingRemoteOverflowed { self.clearBuffer() }
                 do {
                     let response = try await self.syncActiveApp(stateVector: stateVector)
                     if Task.isCancelled || self.appSessionId != expectedSession || self.connectionEpoch != expectedEpoch
                         || self.bridgeGeneration != expectedMount { return }
+                    if self.pendingRemoteOverflowed { continue }
                     self.syncTask = nil
                     self.deliverSnapshot(response, requestId: requestId)
                     return
