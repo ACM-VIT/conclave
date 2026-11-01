@@ -17,6 +17,11 @@ struct LobbyView: View {
         viewportSize.width >= 640 && (horizontalSizeClass == .regular || verticalSizeClass == .compact)
     }
 
+    private var isCentered: Bool {
+        PremeetingLayoutPolicy.usesCenteredLayout(width: Double(viewportSize.width), horizontalRegular: horizontalSizeClass == .regular,
+                                                  verticalRegular: verticalSizeClass == .regular)
+    }
+
     private var revealsStatusReason: Bool {
         guard let status = premeeting.lobbyStatus, status.routeId == route.id else { return false }
         let reasonRows = LobbyStatusPolicy.rows(status: status, media: nil, supportsRationale: false, offersAppInfo: false)
@@ -31,17 +36,23 @@ struct LobbyView: View {
         let layout = isWide
             ? AnyLayout(HStackLayout(alignment: .top, spacing: 24))
             : AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
+        let centered = isCentered
         ScrollViewReader { proxy in
             ScrollView {
-                layout {
-                    LobbyPreviewCard(premeeting: premeeting, isWide: isWide, visibleHeight: viewportSize.height)
-                        .frame(maxWidth: isWide ? 560 : .infinity)
-                        .padding(.horizontal, isWide ? 0 : 16)
-                    LobbyControlsColumn(premeeting: premeeting, nameFocus: $isNameFocused)
-                        .frame(minWidth: isWide ? 360 : nil, maxWidth: isWide ? 420 : .infinity)
+                if centered {
+                    LobbyCenteredComposition(premeeting: premeeting, routeId: route.id, width: viewportSize.width,
+                                             visibleHeight: visibleHeight, nameFocus: $isNameFocused)
+                } else {
+                    layout {
+                        LobbyPreviewCard(premeeting: premeeting, isWide: isWide, visibleHeight: viewportSize.height)
+                            .frame(maxWidth: isWide ? 560 : .infinity)
+                            .padding(.horizontal, isWide ? 0 : 16)
+                        LobbyControlsColumn(premeeting: premeeting, nameFocus: $isNameFocused)
+                            .frame(minWidth: isWide ? 360 : nil, maxWidth: isWide ? 420 : .infinity)
+                    }
+                    .padding(.horizontal, isWide ? 16 : 0)
+                    .padding(.vertical, 12)
                 }
-                .padding(.horizontal, isWide ? 16 : 0)
-                .padding(.vertical, 12)
             }
             .background(Color(uiColor: .systemGroupedBackground))
             .scrollDismissesKeyboard(.interactively)
@@ -71,7 +82,7 @@ struct LobbyView: View {
         .onChange(of: isNameFocused) {
             if !isNameFocused { nameRevealed = false }
         }
-        .modifier(LobbyBottomBar(premeeting: premeeting, routeId: route.id, nameFocused: isNameFocused))
+        .modifier(LobbyBottomBar(premeeting: premeeting, routeId: route.id, nameFocused: isNameFocused, isFloating: !centered))
         .modifier(LobbyTitle(premeeting: premeeting, route: route))
         .modifier(LobbyChrome(premeeting: premeeting, routeId: route.id))
         .task(id: route.id) {
@@ -80,6 +91,31 @@ struct LobbyView: View {
         .onDisappear {
             premeeting.lobbyDidDisappear(routeId: route.id)
         }
+    }
+}
+
+private struct LobbyCenteredComposition: View {
+    let premeeting: PremeetingPresenter
+    let routeId: Int
+    let width: CGFloat
+    let visibleHeight: CGFloat
+    let nameFocus: FocusState<Bool>.Binding
+
+    var body: some View {
+        let previewWidth = CGFloat(PremeetingLayoutPolicy.lobbyPreviewWidth(width: Double(width)))
+        HStack(alignment: .center, spacing: CGFloat(PremeetingLayoutPolicy.lobbySpacing)) {
+            LobbyPreviewCard(premeeting: premeeting, isWide: true, visibleHeight: visibleHeight, roomy: true)
+                .frame(width: previewWidth)
+            VStack(alignment: .leading, spacing: 8) {
+                LobbyControlsColumn(premeeting: premeeting, nameFocus: nameFocus)
+                EntryStatusBlock(premeeting: premeeting, routeId: routeId, reservesNameReason: nameFocus.wrappedValue,
+                                 fillsWidth: true)
+            }
+            .padding(.horizontal, -16)
+            .frame(width: CGFloat(PremeetingLayoutPolicy.lobbyColumnWidth))
+        }
+        .padding(.vertical, 24)
+        .frame(maxWidth: .infinity, minHeight: max(0, visibleHeight), alignment: .center)
     }
 }
 
@@ -265,12 +301,18 @@ private struct LobbyBottomBar: ViewModifier {
     let premeeting: PremeetingPresenter
     let routeId: Int
     let nameFocused: Bool
+    var isFloating = true
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .conclaveFloatingActionBar(shaded: true, over: Color(uiColor: .systemGroupedBackground)) {
-                EntryStatusBlock(premeeting: premeeting, routeId: routeId, reservesNameReason: nameFocused)
-            }
+        if isFloating {
+            content
+                .conclaveFloatingActionBar(shaded: true, over: Color(uiColor: .systemGroupedBackground)) {
+                    EntryStatusBlock(premeeting: premeeting, routeId: routeId, reservesNameReason: nameFocused)
+                }
+        } else {
+            content
+        }
     }
 }
 

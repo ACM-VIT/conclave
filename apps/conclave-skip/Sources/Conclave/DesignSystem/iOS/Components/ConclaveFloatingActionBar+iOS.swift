@@ -73,6 +73,7 @@ struct ConclaveFloatingActionButton: View {
     let title: String
     var isEnabled = true
     var isPending = false
+    var fillsWidth = false
     let identifier: String
     let action: () -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -93,6 +94,7 @@ struct ConclaveFloatingActionButton: View {
                             .minimumScaleFactor(pendingOnOneLine ? 0.5 : 1)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    .frame(maxWidth: fillsWidth ? .infinity : nil)
                     .foregroundStyle(HostingTheme.floatingActionLabel)
                     .opacity(isEnabled ? 1 : ConclaveButtonMetrics.disabledOpacity)
                 }

@@ -15,6 +15,7 @@ private typealias AppDelegate = ConclaveAppDelegate
                 .frame(minWidth: CGFloat(ConclaveWindowMetrics.minimumWidth), maxWidth: .infinity, maxHeight: .infinity)
         }
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 1180, height: 820)
         #if os(iOS)
 
         .commands { ConclaveCallCommands() }

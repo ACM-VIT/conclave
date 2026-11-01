@@ -5069,6 +5069,9 @@
     "Start %@" : {
       "extractionState" : "manual"
     },
+    "Start an instant meeting" : {
+      "extractionState" : "manual"
+    },
     "Start Game" : {
       "extractionState" : "manual"
     },

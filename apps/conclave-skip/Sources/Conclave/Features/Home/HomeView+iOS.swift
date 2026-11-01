@@ -15,10 +15,26 @@ enum PremeetingSymbols {
 
 struct HomeView: View {
     let premeeting: PremeetingPresenter
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @State private var width: CGFloat = 0
+
+    private var isCentered: Bool {
+        PremeetingLayoutPolicy.usesCenteredLayout(width: Double(width), horizontalRegular: horizontalSizeClass == .regular,
+                                                  verticalRegular: verticalSizeClass == .regular)
+    }
 
     var body: some View {
         let home = premeeting.home
+        let centered = isCentered
         List {
+            if centered {
+                Section {
+                    HomeActionTiles(onNewMeeting: { premeeting.newMeeting() }, onJoin: { premeeting.openJoinSheet() })
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+            }
             if home.updateRequired {
                 Section {
                     HomeUpdateBanner(onOpen: { premeeting.openStoreListing() })
@@ -30,7 +46,7 @@ struct HomeView: View {
                                   onSignIn: { premeeting.openAccount() })
                 }
             }
-            if !home.isSignedIn {
+            if !home.isSignedIn && !centered {
                 Section {
                     Button { premeeting.openAccount() } label: {
                         Text(ConclaveStrings.text("Sign In"))
@@ -49,7 +65,7 @@ struct HomeView: View {
             if let card = home.rejoin {
                 Section {
                     RejoinCardRow(card: card, onRejoin: { premeeting.rejoin() })
-                        .listRowBackground(Color.clear)
+                        .listRowBackground(centered ? Color(uiColor: .secondarySystemGroupedBackground) : Color.clear)
                         .listRowSeparator(.hidden)
                 }
             }
@@ -69,7 +85,9 @@ struct HomeView: View {
             if home.recents.isEmpty && home.rejoin == nil {
                 Section {
                     Text(ConclaveStrings.text("No Recent Meetings"))
-                        .font(.title2.weight(.semibold))
+                        .font(centered ? .headline : .title2.weight(.semibold))
+                        .foregroundStyle(centered ? HostingTheme.secondaryText : Color.primary)
+                        .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
                         .padding(.vertical, 20)
                         .accessibilityIdentifier("home.empty")
                         .listRowBackground(Color.clear)
@@ -77,16 +95,26 @@ struct HomeView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .modifier(HomeCenteredMargins(isCentered: centered, width: width))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { next in
+            if width != next { width = next }
+        }
         .navigationTitle(ConclaveStrings.text("Conclave"))
-        .toolbarTitleDisplayMode(.inlineLarge)
+        .toolbarTitleDisplayMode(centered ? .inline : .inlineLarge)
+        .toolbar(centered ? .hidden : .automatic, for: .bottomBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if home.isSignedIn {
                     HomeAccountButton(isSignedIn: true, name: home.accountName, seed: home.accountSeed,
                                       action: { premeeting.openAccount() })
+                } else if centered {
+                    Button(ConclaveStrings.text("Sign In")) { premeeting.openAccount() }
+                        .fontWeight(.semibold)
+                        .accessibilityIdentifier("home.signIn")
                 }
             }
             ToolbarItemGroup(placement: .bottomBar) {
+                if !centered {
                 Button(ConclaveStrings.text("Join")) { premeeting.openJoinSheet() }
                     .buttonStyle(.plain)
                     .controlSize(.large)
@@ -105,8 +133,107 @@ struct HomeView: View {
                 .controlSize(.large)
                 .keyboardShortcut("n", modifiers: .command)
                 .accessibilityIdentifier("home.newMeeting")
+                }
             }
         }
+    }
+}
+
+private struct HomeCenteredMargins: ViewModifier {
+    let isCentered: Bool
+    let width: CGFloat
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isCentered {
+            let margin = PremeetingLayoutPolicy.sideMargin(width: Double(width), maxContentWidth: PremeetingLayoutPolicy.homeContentMaxWidth)
+            content.contentMargins(.horizontal, CGFloat(margin), for: .scrollContent)
+        } else {
+            content
+        }
+    }
+}
+
+private struct HomeActionTiles: View {
+    let onNewMeeting: () -> Void
+    let onJoin: () -> Void
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Button(action: onNewMeeting) {
+                HomeActionTileLabel(title: ConclaveStrings.text("New Meeting"), subtitle: ConclaveStrings.text("Start an instant meeting"),
+                                    systemImage: ConclaveSymbols.videoBadgePlus)
+            }
+            .buttonStyle(HomeActionTileStyle(isPrimary: true))
+            .keyboardShortcut("n", modifiers: .command)
+            .accessibilityIdentifier("home.newMeeting")
+            Button(action: onJoin) {
+                HomeActionTileLabel(title: ConclaveStrings.text("Join"), subtitle: ConclaveStrings.text("Meeting Code or Link"),
+                                    systemImage: ConclaveSymbols.keyboard)
+            }
+            .buttonStyle(HomeActionTileStyle(isPrimary: false))
+            .keyboardShortcut("j", modifiers: .command)
+            .accessibilityIdentifier("home.join")
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+private struct HomeActionTileLabel: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Image(systemName: systemImage)
+                .font(.title2)
+                .accessibilityHidden(true)
+            Spacer(minLength: 16)
+            Text(title)
+                .font(.headline)
+            Text(subtitle)
+                .font(.subheadline)
+                .opacity(0.8)
+        }
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct HomeActionTileStyle: ButtonStyle {
+    let isPrimary: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        HomeActionTileSurface(isPrimary: isPrimary, isPressed: configuration.isPressed) {
+            configuration.label
+        }
+    }
+}
+
+private struct HomeActionTileSurface<Content: View>: View {
+    let isPrimary: Bool
+    let isPressed: Bool
+    @ViewBuilder let content: () -> Content
+    @State private var isHovered = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        content()
+            .foregroundStyle(isPrimary ? HostingTheme.onCoral : Color.primary)
+            .padding(18)
+            .background(isPrimary ? HostingTheme.coralFill : Color(uiColor: .secondarySystemGroupedBackground), in: shape)
+            .overlay {
+                shape.strokeBorder(Color(uiColor: .separator).opacity(isPrimary ? 0 : 1), lineWidth: 1)
+            }
+            .overlay {
+                shape.fill(Color.primary.opacity(isPressed ? 0.12 : (isHovered ? 0.05 : 0)))
+                    .allowsHitTesting(false)
+            }
+            .contentShape(shape)
+            .onHover { hovering in
+                if isHovered != hovering { isHovered = hovering }
+            }
     }
 }
 

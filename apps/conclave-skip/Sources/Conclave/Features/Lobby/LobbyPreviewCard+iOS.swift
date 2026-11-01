@@ -6,6 +6,7 @@ struct LobbyPreviewCard: View {
     let premeeting: PremeetingPresenter
     let isWide: Bool
     let visibleHeight: CGFloat
+    var roomy = false
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var cardWidth: CGFloat = 0
     @State private var controlsHeight: CGFloat = 84
@@ -13,7 +14,7 @@ struct LobbyPreviewCard: View {
 
     private var videoHeight: CGFloat {
         let minimum: CGFloat = isCompact ? 180 : 280
-        let maximum: CGFloat = isCompact ? 320 : 420
+        let maximum: CGFloat = roomy ? CGFloat(PremeetingLayoutPolicy.lobbyPreviewRoomyMaxHeight) : (isCompact ? 320 : 420)
         let ratio: CGFloat = isCompact ? 9.0 / 16.0 : 1
         let natural = max(cardWidth, 1) * ratio
         let upper = min(maximum, max(minimum, visibleHeight * (isCompact ? 0.75 : 0.58)))

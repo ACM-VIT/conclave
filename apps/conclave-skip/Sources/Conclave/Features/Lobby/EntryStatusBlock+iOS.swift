@@ -5,11 +5,12 @@ struct EntryStatusBlock: View {
     let premeeting: PremeetingPresenter
     let routeId: Int
     let reservesNameReason: Bool
+    var fillsWidth = false
 
     var body: some View {
         if let status = premeeting.lobbyStatus, status.routeId == routeId {
             EntryStatusContent(status: status, isSignedIn: isSignedIn, premeeting: premeeting,
-                               reservesNameReason: reservesNameReason)
+                               reservesNameReason: reservesNameReason, fillsWidth: fillsWidth)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .onChange(of: status.mode) { previous, current in
@@ -29,6 +30,7 @@ private struct EntryStatusContent: View {
     let isSignedIn: Bool
     let premeeting: PremeetingPresenter
     let reservesNameReason: Bool
+    let fillsWidth: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AccessibilityFocusState private var isRetryFocused: Bool
     @State private var primaryPresses = 0
@@ -42,7 +44,8 @@ private struct EntryStatusContent: View {
         VStack(spacing: 8) {
             ConclaveFloatingActionButton(title: EntryStatusCopy.primaryTitle(status),
                                          isEnabled: isPending || LobbyStatusPolicy.primaryEnabled(status: status, isSignedIn: isSignedIn),
-                                         isPending: isPending, identifier: isFailed ? "lobby.retry" : "lobby.primary") {
+                                         isPending: isPending, fillsWidth: fillsWidth,
+                                         identifier: isFailed ? "lobby.retry" : "lobby.primary") {
                 primaryPresses += 1
                 if isFailed {
                     premeeting.retryJoin()
