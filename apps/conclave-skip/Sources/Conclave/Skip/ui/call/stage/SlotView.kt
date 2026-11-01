@@ -135,7 +135,10 @@ private fun ParticipantTile(
     val menu = remember(slot, model, kind, titles, moveTitles, isRtl) {
         stageTileMenu(slot, model, kind, titles, selfViewMoveSections(slot, model, moveTitles, isRtl))
     }
-    val menuActions = remember(menu) { stageTileActions(menu, stage) }
+    val peopleActions = stage.people?.let { people ->
+        if (menu.isPeopleCandidate && people.rows.contains(slot.userId)) people.rows.entry(slot.userId).model.actions else null
+    }
+    val menuActions = remember(menu, peopleActions) { stageTileActions(menu, stage) }
     val actionsLabel = conclaveString("stg_tile_actions")
     val games = LocalActivitySession.current?.games
     val adornment = if (isShare) null else games?.tileAdornment(slot.userId)
