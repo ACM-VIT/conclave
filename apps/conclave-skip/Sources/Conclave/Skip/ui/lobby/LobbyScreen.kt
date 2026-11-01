@@ -324,7 +324,7 @@ private fun LobbyIdentityItems(premeeting: PremeetingPresenter, routeId: Int, ba
         }
     }
     if (identity.needsInviteCode) {
-        var code by remember(routeId) { mutableStateOf("") }
+        var code by remember(routeId) { mutableStateOf(premeeting.inviteCode) }
         val reveal = remember { BringIntoViewRequester() }
         var inviteSize by remember { mutableStateOf(IntSize.Zero) }
         val coverPx by rememberUpdatedState(with(LocalDensity.current) { (bandCover ?: 0.dp).toPx() })

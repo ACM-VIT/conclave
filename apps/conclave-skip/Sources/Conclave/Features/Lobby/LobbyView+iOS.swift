@@ -272,6 +272,11 @@ private struct LobbyInviteCodeSection: View {
                         .accessibilityIdentifier("lobby.invite")
                 }
             }
+            .task(id: identity.routeId) {
+                if code != premeeting.inviteCode {
+                    code = premeeting.inviteCode
+                }
+            }
             .onChange(of: code) {
                 premeeting.setInviteCode(code)
             }

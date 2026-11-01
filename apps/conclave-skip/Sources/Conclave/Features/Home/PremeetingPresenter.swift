@@ -621,6 +621,8 @@ final class PremeetingPresenter {
         refreshLobby()
     }
 
+    var inviteCode: String { inviteCodeDraft }
+
     func setInviteCode(_ code: String) {
         guard code != inviteCodeDraft else { return }
         inviteCodeDraft = code

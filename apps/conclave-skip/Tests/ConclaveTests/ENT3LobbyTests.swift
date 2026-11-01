@@ -120,7 +120,9 @@ struct ENT3LobbyTests {
                                               accountName: "Avery"))
         #expect(presenter.lobbyIdentity?.needsInviteCode == true)
         #expect(presenter.lobbyIdentity?.inviteCodeInvalid == false)
+        #expect(presenter.inviteCode.isEmpty)
         presenter.setInviteCode("abc123")
+        #expect(presenter.inviteCode == "abc123", "a rebuilt invite field restores the draft Join will send")
         presenter.apply(PremeetingInputs.make(callSession: 4, phase: .entering, roomLabel: "rose-sora-luffy",
                                               currentRoomId: "rose-sora-luffy", accountName: "Avery"))
         presenter.apply(PremeetingInputs.make(callSession: 4, notice: .formError, noticeText: "Invalid meeting invite code",
@@ -129,6 +131,7 @@ struct ENT3LobbyTests {
         #expect(presenter.lobbyIdentity?.inviteCodeInvalid == true)
         presenter.setInviteCode("abc124")
         #expect(presenter.lobbyIdentity?.inviteCodeInvalid == false, "editing the code clears the error")
+        #expect(presenter.inviteCode == "abc124")
     }
 
     @Test func theIssueClassifierMapsTheServerSentences() {
