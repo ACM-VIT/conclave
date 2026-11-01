@@ -9,6 +9,7 @@ vi.mock("@/lib/sfu-client-id", () => import("../src/lib/sfu-client-id"));
 vi.mock("@/lib/sfu-super-admin", () => import("../src/lib/sfu-super-admin"));
 vi.mock("@/lib/sfu-url", () => import("../src/lib/sfu-url"));
 vi.mock("@/lib/sfu-routing-policy", () => import("../src/lib/sfu-routing-policy"));
+vi.mock("@/app/lib/site-version", () => import("../src/app/lib/site-version"));
 
 beforeEach(() => {
   getSession.mockResolvedValue(null);

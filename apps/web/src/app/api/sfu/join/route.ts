@@ -2,6 +2,7 @@ import jwt from "jsonwebtoken";
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import { resolveHostGrant } from "@conclave/meeting-core";
+import { resolveConclaveMinNativeVersion } from "@/app/lib/site-version";
 import { auth } from "@/lib/auth";
 import {
   canonicalizeSfuClientId,
@@ -773,5 +774,6 @@ export async function POST(request: Request) {
     token,
     sfuUrl: routedSfuUrl,
     ...(iceServers.length > 0 ? { iceServers } : {}),
+    minNativeVersion: resolveConclaveMinNativeVersion(process.env),
   });
 }
