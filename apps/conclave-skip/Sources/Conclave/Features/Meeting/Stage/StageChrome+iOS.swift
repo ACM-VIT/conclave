@@ -215,60 +215,10 @@ enum StageCapsuleText {
 
 struct StageStatusChips: View {
     let stage: StagePresenter
-    @State private var raiseCount = 0
-    @State private var raiseArmed = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: CGFloat(DesignTokens.space8)) {
-            handChip
             StageNowPlayingChip(stage: stage)
-        }
-        .onChange(of: stage.localHand, initial: true) { _, new in
-            if new == LocalHandState.raising {
-                raiseArmed = true
-            } else if new == LocalHandState.lowered {
-                raiseArmed = false
-            } else if new == LocalHandState.raised {
-                if raiseArmed { raiseCount += 1 }
-                raiseArmed = false
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var handChip: some View {
-        if #available(iOS 18.0, *) {
-            StageHandChip(stage: stage).symbolEffectsRemoved(reduceMotion).symbolEffect(.wiggle, value: raiseCount)
-        } else {
-            StageHandChip(stage: stage).symbolEffectsRemoved(reduceMotion).symbolEffect(.bounce, value: raiseCount)
-        }
-    }
-}
-
-struct StageHandChip: View {
-    let stage: StagePresenter
-    @State private var lowers = 0
-
-    var body: some View {
-        switch stage.localHand {
-        case .raised:
-            ConclaveStageChip(title: ConclaveStrings.text("Hand Raised"), systemImage: ConclaveSymbols.handRaisedFill,
-                              actionTitle: ConclaveStrings.text("Lower"), identifier: "stage.chip.hand",
-                              onAction: {
-                                  stage.lowerHand()
-                                  lowers += 1
-                              },
-                              actionAccessibilityLabel: ConclaveStrings.text("Lower Hand"))
-                .conclaveGestureFeedback(.handLowered, trigger: lowers)
-        case .raising:
-            ConclaveStageChip(title: ConclaveStrings.text("Raising Hand…"), systemImage: ConclaveSymbols.handRaisedFill,
-                              identifier: "stage.chip.hand")
-        case .lowering:
-            ConclaveStageChip(title: ConclaveStrings.text("Hand Raised"), systemImage: ConclaveSymbols.handRaisedFill,
-                              identifier: "stage.chip.hand")
-        case .lowered:
-            EmptyView()
         }
     }
 }

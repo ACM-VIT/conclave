@@ -191,29 +191,7 @@ internal fun stageCapsuleSubtitle(model: StageCapsuleModel): String = when (mode
 @Composable
 private fun StageStatusChips(stage: StagePresenter) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        StageHandChip(stage)
         StageNowPlayingChip(stage)
-    }
-}
-
-@Composable
-private fun StageHandChip(stage: StagePresenter) {
-    val haptics = rememberConclaveHaptics()
-    when (stage.localHand) {
-        LocalHandState.raised -> ConclaveStageChip(
-            title = conclaveString("stg_hand_raised"), identifier = "stage.chip.hand", icon = ConclaveIcons.FrontHandFill1,
-            actionTitle = conclaveString("stg_lower"),
-            onAction = {
-                stage.lowerHand()
-                haptics.gesture(FeedbackKind.handLowered)
-            },
-            actionDescription = conclaveString("stg_lower_hand"),
-        )
-        LocalHandState.raising -> ConclaveStageChip(title = conclaveString("stg_raising_hand"), identifier = "stage.chip.hand",
-            icon = ConclaveIcons.FrontHandFill1)
-        LocalHandState.lowering -> ConclaveStageChip(title = conclaveString("stg_hand_raised"), identifier = "stage.chip.hand",
-            icon = ConclaveIcons.FrontHandFill1)
-        else -> {}
     }
 }
 
