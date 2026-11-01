@@ -90,6 +90,14 @@ struct S6CReviewRegressionTests {
         presenter.setPath([])
     }
 
+    @Test func deniedMicrophoneIsClassifiedWithMicrophoneCopy() {
+        let mic = MeetingErrorClassifier.classifyMediaPermission(context: .media, device: .microphone)
+        #expect(mic.category == .microphonePermission)
+        #expect(MeetingErrorLegacyCopy.message(mic, device: .microphone) == "Microphone access is off. Turn it on in Settings.")
+        #expect(MeetingErrorClassifier.classifyMediaPermission(context: .media, device: .camera).category == .cameraPermission)
+        #expect(MeetingErrorClassifier.classifyMediaPermission(context: .screenShare, device: .screen).category == .screenCapturePermission)
+    }
+
 }
 
 @MainActor

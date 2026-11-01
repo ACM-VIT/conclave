@@ -9685,8 +9685,11 @@ final class MeetingViewModel {
     }
 
     private func reportMediaFailure(_ error: Error, kind: MeetingActionKind?) {
+        let device: MeetingMediaDevice = kind == .microphone
+            ? MeetingMediaDevice.microphone
+            : (kind == .screenShare ? MeetingMediaDevice.screen : MeetingMediaDevice.camera)
         let context: MeetingErrorContext = kind == .screenShare ? .screenShare : .media
-        let classified = MeetingErrorClassifier.classify(error, context: context, isNetworkOffline: state.isNetworkOffline)
+        let classified = MeetingErrorClassifier.classify(error, context: context, isNetworkOffline: state.isNetworkOffline, device: device)
         CallDiagnostics.shared.recordFailure(classified)
         debugLog("[Meeting] Media failure \(classified.diagnosticCode): \(error.localizedDescription)")
         if let kind {
@@ -9698,9 +9701,6 @@ final class MeetingViewModel {
                                            detail: kind.rawValue))
             }
         }
-        let device: MeetingMediaDevice = kind == .microphone
-            ? MeetingMediaDevice.microphone
-            : (kind == .screenShare ? MeetingMediaDevice.screen : MeetingMediaDevice.camera)
         guard let message = MeetingErrorLegacyCopy.message(classified, device: device) else { return }
         state.errorMessage = message
     }

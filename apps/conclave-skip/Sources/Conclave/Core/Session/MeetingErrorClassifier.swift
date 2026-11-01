@@ -47,7 +47,7 @@ enum MeetingErrorClassifier {
 
     static let cleanTextLimit = 200
 
-    static func classify(_ error: Error, context: MeetingErrorContext, isNetworkOffline: Bool = false) -> ClassifiedError {
+    static func classify(_ error: Error, context: MeetingErrorContext, isNetworkOffline: Bool = false, device: MeetingMediaDevice = .none) -> ClassifiedError {
 
         if let shareError = error as? ScreenShareStartError {
             return typed(ScreenShareFailurePolicy.category(shareError.failure), context: context,
@@ -102,8 +102,7 @@ enum MeetingErrorClassifier {
         if let mediaError = error as? WebRTCError {
             switch mediaError {
             case .permissionDenied:
-                let category: MeetingErrorCategory = context == .screenShare ? .screenCapturePermission : .cameraPermission
-                return typed(category, context: context, code: "media.permission")
+                return classifyMediaPermission(context: context, device: device)
             case .noCameraAvailable:
                 return typed(.deviceUnavailable, context: context, code: "media.noCamera")
             case .notConfigured, .staleConfiguration, .noTransport:
@@ -135,6 +134,12 @@ enum MeetingErrorClassifier {
         }
         #endif
         return classify(serverMessage: error.localizedDescription, context: context)
+    }
+
+    static func classifyMediaPermission(context: MeetingErrorContext, device: MeetingMediaDevice) -> ClassifiedError {
+        let category: MeetingErrorCategory = context == .screenShare || device == .screen
+            ? .screenCapturePermission : (device == .microphone ? .microphonePermission : .cameraPermission)
+        return typed(category, context: context, code: "media.permission")
     }
 
     static func classify(serverMessage: String, context: MeetingErrorContext) -> ClassifiedError {
