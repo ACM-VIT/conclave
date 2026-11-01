@@ -98,6 +98,80 @@ struct S6CReviewRegressionTests {
         #expect(MeetingErrorClassifier.classifyMediaPermission(context: .screenShare, device: .screen).category == .screenCapturePermission)
     }
 
+    private func gatedViewModel() -> MeetingViewModel {
+        let viewModel = MeetingViewModel()
+        viewModel.testDetachHostNetworkMonitor()
+        viewModel.versionGateDefaults = UserDefaults(suiteName: "s6c.version." + UUID().uuidString)!
+        viewModel.currentAppVersion = { "2.0.0" }
+        _ = viewModel.applyVersionGate(.payload(MinNativeVersionPayload(ios: "9.0.0", android: "9.0.0")), source: "test")
+        return viewModel
+    }
+
+    @Test func foregroundRefreshClearsACachedBlockAndIsRateLimited() async {
+        let viewModel = gatedViewModel()
+        var now = 100000.0
+        var requests = 0
+        viewModel.versionGateNowMillis = { now }
+        viewModel.versionGateFetch = { requests += 1; return .payload(nil) }
+        viewModel.handleAppBecameActive()
+        #expect(await settle { !viewModel.versionGate.updateRequired })
+        #expect(requests == 1)
+        viewModel.handleAppBecameActive()
+        for _ in 0..<10 { await Task.yield() }
+        #expect(requests == 1)
+        now += MeetingViewModel.versionGateRefreshFloorMillis
+        viewModel.handleAppBecameActive()
+        #expect(await settle { requests == 2 })
+    }
+
+    @Test func networkRecoveryRefreshesTheSavedGate() async {
+        let viewModel = gatedViewModel()
+        viewModel.versionGateFetch = { .payload(nil) }
+        await viewModel.networkReachabilityChanged(true)
+        #expect(viewModel.versionGate.updateRequired)
+        await viewModel.networkReachabilityChanged(false)
+        #expect(await settle { !viewModel.versionGate.updateRequired })
+    }
+
+    @Test func blockedPresenterActionRequestsARefresh() async {
+        let viewModel = gatedViewModel()
+        viewModel.versionGateFetch = { .payload(nil) }
+        PremeetingAppWiring.installVersionGateRefresh(presenter: viewModel.premeeting, viewModel: viewModel)
+        viewModel.premeeting.newMeeting()
+        #expect(await settle { !viewModel.versionGate.updateRequired })
+        #expect(viewModel.premeeting.path.isEmpty)
+        #expect(!viewModel.premeeting.isUpdatePromptPresented)
+        viewModel.premeeting.newMeeting()
+        #expect(viewModel.premeeting.path.last?.kind == .lobby)
+        viewModel.premeeting.setPath([])
+    }
+
+    @Test func blockedDirectJoinRefreshesAndSettlesTheEntryState() async {
+        let viewModel = gatedViewModel()
+        viewModel.versionGateFetch = { .payload(nil) }
+        viewModel.state.connectionState = .joining
+        viewModel.state.isEnteringMeeting = true
+        viewModel.joinRoom(roomId: "rose-sora-luffy", displayName: "Guest")
+        #expect(viewModel.state.connectionState == .disconnected)
+        #expect(!viewModel.state.isEnteringMeeting)
+        #expect(await settle { !viewModel.versionGate.updateRequired })
+    }
+
+    @Test func blockedDemotionHandoffStopsWithoutAStrandedContinuation() async {
+        let call = RejoinHarness()
+        #expect(await call.join())
+        call.viewModel.versionGateDefaults = UserDefaults(suiteName: "s6c.demotion." + UUID().uuidString)!
+        call.viewModel.currentAppVersion = { "2.0.0" }
+        call.viewModel.versionGateFetch = { .unavailable }
+        _ = call.viewModel.applyVersionGate(.payload(MinNativeVersionPayload(ios: "9.0.0", android: "9.0.0")), source: "test")
+        call.deliverWebinarDemoted(slug: "design-week")
+        call.deliverServerDisconnect()
+        #expect(await settle { call.viewModel.state.connectionState == .disconnected })
+        #expect(await settle { call.viewModel.shell.session.phase != .entering })
+        #expect(!call.viewModel.state.isEnteringMeeting)
+        #expect(call.viewModel.premeeting.home.updateRequired)
+        await call.finish()
+    }
 }
 
 @MainActor

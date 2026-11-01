@@ -439,6 +439,9 @@ final class MeetingViewModel {
     @ObservationIgnored var versionGateFetch: () async -> VersionGateFetch = { await VersionGateService.fetch() }
     @ObservationIgnored var versionGateDefaults: UserDefaults = UserDefaults.standard
     @ObservationIgnored var currentAppVersion: () -> String = { VersionGateService.currentAppVersion() }
+    @ObservationIgnored var versionGateNowMillis: () -> Double = { Date().timeIntervalSince1970 * 1000.0 }
+    @ObservationIgnored private var lastVersionGateRefreshMillis: Double? = nil
+    static let versionGateRefreshFloorMillis = 30000.0
     @ObservationIgnored private var versionGateRefreshTask: Task<Void, Never>? = nil
 
     private(set) var isPipStashed = false
@@ -1487,16 +1490,21 @@ final class MeetingViewModel {
         }
     }
 
+    func networkReachabilityChanged(_ isOffline: Bool) async {
+        let wasOffline = state.isNetworkOffline
+        networkMonitorReportsOffline = isOffline
+        state.isNetworkOffline = effectiveNetworkOffline
+        if wasOffline && !state.isNetworkOffline {
+            refreshVersionGate()
+            await recoverActiveMeetingFromForeground()
+        }
+    }
+
     private func setupNetworkBindings() {
         networkMonitor.onStatusChanged = { [weak self] isOffline in
             Task { @MainActor in
                 guard let self else { return }
-                let wasOffline = self.state.isNetworkOffline
-                self.networkMonitorReportsOffline = isOffline
-                self.state.isNetworkOffline = self.effectiveNetworkOffline
-                if wasOffline && !self.state.isNetworkOffline {
-                    await self.recoverActiveMeetingFromForeground()
-                }
+                await self.networkReachabilityChanged(isOffline)
             }
         }
         networkMonitor.onQualityHintChanged = { [weak self] quality in
@@ -6526,8 +6534,8 @@ final class MeetingViewModel {
     ) {
         if versionGate.updateRequired && !isRejoinInFlight {
             PerformanceDiagnostics.event("join_blocked_update_required", details: "room=\(roomId)")
-            clearMeetingEntry()
-            premeeting.apply(makePremeetingInputs())
+            refreshVersionGate()
+            finishUpdateRequiredJoin()
             return
         }
         let joinStartedAt = Date()
@@ -9762,12 +9770,16 @@ final class MeetingViewModel {
 
     func refreshVersionGate() {
         applyVersionGate(VersionGateFetch.unavailable, source: "cache")
-        versionGateRefreshTask?.cancel()
+        let now = versionGateNowMillis()
+        guard versionGateRefreshTask == nil else { return }
+        if let last = lastVersionGateRefreshMillis, now - last < Self.versionGateRefreshFloorMillis { return }
+        lastVersionGateRefreshMillis = now
         versionGateRefreshTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let fetch = await self.versionGateFetch()
             guard !Task.isCancelled else { return }
-            self.applyVersionGate(fetch, source: "launch")
+            self.versionGateRefreshTask = nil
+            self.applyVersionGate(fetch, source: "refresh")
         }
     }
 
@@ -9816,6 +9828,7 @@ final class MeetingViewModel {
     func setPremeetingAppActive(_ isActive: Bool) {
         guard isActive != premeetingIsAppActive else { return }
         premeetingIsAppActive = isActive
+        if isActive { refreshVersionGate() }
         premeeting.apply(makePremeetingInputs())
     }
 
@@ -10002,7 +10015,7 @@ final class MeetingViewModel {
     }
 
     func handleAppBecameActive() {
-
+        refreshVersionGate()
         let refresh = lifecycleRefreshTracker.record(.active)
         lifecycleRefreshCounters.record(refresh)
         #if canImport(UIKit) && !SKIP

@@ -64,6 +64,8 @@ final class PremeetingPresenter {
 
     @ObservationIgnored var webinarHooks: WebinarLandingHooks? = nil
 
+    @ObservationIgnored var onBlockedUpdateRetry: (() -> Void)? = nil
+
     @ObservationIgnored var storeOpener: ((String) -> Void)? = nil
 
     @ObservationIgnored var webinarRefetchIntervalMillis: Double = WebinarLandingPolicy.refetchIntervalMillis
@@ -227,6 +229,7 @@ final class PremeetingPresenter {
         guard next != inputs else { return }
         let previous = inputs
         inputs = next
+        if previous.updateRequired && !next.updateRequired { setUpdatePrompt(false) }
 
         if previous.isSignedIn && !next.isSignedIn {
 
@@ -1095,6 +1098,7 @@ final class PremeetingPresenter {
 
     private func blockedByUpdate() -> Bool {
         guard inputs.updateRequired else { return false }
+        onBlockedUpdateRetry?()
         setUpdatePrompt(true)
         return true
     }

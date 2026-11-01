@@ -20,6 +20,7 @@ enum PremeetingAppWiring {
         presenter.store = store
         presenter.bootstrap(user: appState.currentUser, recents: store.load())
         ConclaveAppDelegate.shared.registerPremeeting(presenter)
+        installVersionGateRefresh(presenter: presenter, viewModel: viewModel)
         viewModel.refreshVersionGate()
 
         LobbyProductionHooks.install(presenter: presenter, viewModel: viewModel, appState: appState)
@@ -32,6 +33,13 @@ enum PremeetingAppWiring {
             viewModel.setPremeetingSigningIn(signingIn)
         }
         AccountAppWiring.install(appState: appState, account: presenter.account, premeeting: presenter)
+    }
+
+    @MainActor
+    static func installVersionGateRefresh(presenter: PremeetingPresenter, viewModel: MeetingViewModel) {
+        presenter.onBlockedUpdateRetry = { [weak viewModel] in
+            viewModel?.refreshVersionGate()
+        }
     }
 
     @MainActor
