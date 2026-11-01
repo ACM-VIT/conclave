@@ -2520,6 +2520,9 @@
     "Full-Quality Bitrate" : {
       "extractionState" : "manual"
     },
+    "Get answers drawn from everything that’s been said so far." : {
+      "extractionState" : "manual"
+    },
     "GIF" : {
       "extractionState" : "manual"
     },
@@ -3975,6 +3978,9 @@
     "Pause" : {
       "extractionState" : "manual"
     },
+    "Pause Live Notes" : {
+      "extractionState" : "manual"
+    },
     "Paused" : {
       "extractionState" : "manual"
     },
@@ -4429,6 +4435,9 @@
     "Reduce Transparency" : {
       "extractionState" : "manual"
     },
+    "Refresh" : {
+      "extractionState" : "manual"
+    },
     "Refresh Access List" : {
       "extractionState" : "manual"
     },
@@ -4583,6 +4592,9 @@
       "extractionState" : "manual"
     },
     "Resume" : {
+      "extractionState" : "manual"
+    },
+    "Resume Live Notes" : {
       "extractionState" : "manual"
     },
     "Resume Notes" : {
@@ -5705,6 +5717,15 @@
       "extractionState" : "manual"
     },
     "Typography" : {
+      "extractionState" : "manual"
+    },
+    "Updated %lld hr ago" : {
+      "extractionState" : "manual"
+    },
+    "Updated %lld min ago" : {
+      "extractionState" : "manual"
+    },
+    "Updated just now" : {
       "extractionState" : "manual"
     },
     "URLs cannot contain spaces." : {

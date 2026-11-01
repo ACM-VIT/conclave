@@ -37,8 +37,17 @@ private struct TranscriptPanelContent: View {
 
     var body: some View {
         let snapshot = transcript.snapshot
-        TranscriptPanelBody(transcript: transcript, snapshot: snapshot, showsCopied: showsCopied)
+        let subtitle = snapshot.body == TranscriptBody.content
+            ? TranscriptCopy.statusLine(snapshot.status, host: snapshot.host, name: snapshot.controllerName, showsCopied: showsCopied)
+            : ""
+        TranscriptPanelBody(transcript: transcript, snapshot: snapshot, subtitle: subtitle)
+            .modifier(TranscriptPanelSubtitle(text: subtitle))
             .toolbar {
+                if snapshot.body == TranscriptBody.content && snapshot.canPause {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        TranscriptPanelPauseButton(transcript: transcript, snapshot: snapshot)
+                    }
+                }
                 if TranscriptViewPolicy.menuEnabled(hasContent: snapshot.hasContent, canStop: snapshot.canStop,
                                                     offersRecap: snapshot.offersRecapToChat) {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -91,10 +100,52 @@ private struct TranscriptPanelContent: View {
 
 }
 
+enum TranscriptPanelPlatform {
+    static var usesScrollGeometry: Bool {
+        if #available(iOS 18.0, *) { return true }
+        return false
+    }
+
+    static var usesNavigationSubtitle: Bool {
+        if #available(iOS 26.0, *) { return true }
+        return false
+    }
+}
+
+private struct TranscriptPanelSubtitle: ViewModifier {
+    let text: String
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), !text.isEmpty {
+            content.navigationSubtitle(text)
+        } else {
+            content
+        }
+    }
+}
+
+private struct TranscriptPanelPauseButton: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+
+    var body: some View {
+        let paused = snapshot.phase == LiveNotesPhase.paused
+        Button {
+            if paused { transcript.resume() } else { transcript.pause() }
+        } label: {
+            Label(paused ? TranscriptCopy.resumeNotes : TranscriptCopy.pauseNotes,
+                  systemImage: paused ? ConclaveSymbols.playFill : ConclaveSymbols.pauseFill)
+        }
+        .disabled(snapshot.controlsDisabled)
+        .accessibilityIdentifier("transcript.status.pause")
+    }
+}
+
 private struct TranscriptPanelBody: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
-    let showsCopied: Bool
+    let subtitle: String
 
     var body: some View {
         switch snapshot.body {
@@ -113,7 +164,7 @@ private struct TranscriptPanelBody: View {
         case .startCard:
             TranscriptPanelStartCard(transcript: transcript, snapshot: snapshot)
         case .content:
-            TranscriptPanelSession(transcript: transcript, snapshot: snapshot, showsCopied: showsCopied)
+            TranscriptPanelSession(transcript: transcript, snapshot: snapshot, subtitle: subtitle)
         }
     }
 }
@@ -144,12 +195,19 @@ private struct TranscriptPanelMenu: View {
                     .accessibilityIdentifier("transcript.menu.recap")
             }
             if snapshot.canStop {
-                Button(role: .destructive) { transcript.requestStop() } label: {
-                    Label(TranscriptCopy.stopMenu, systemImage: ConclaveSymbols.stopFill)
+                Section {
+                    Button(role: .destructive) { transcript.requestStop() } label: {
+                        Label(TranscriptCopy.stopMenu, systemImage: ConclaveSymbols.stopFill)
+                    }
+                        .disabled(snapshot.controlsDisabled)
+                        .accessibilityIdentifier("transcript.menu.stop")
                 }
-                    .disabled(snapshot.controlsDisabled)
-                    .accessibilityIdentifier("transcript.menu.stop")
             }
+            #if DEBUG
+            if TranscriptDiagnostics.driver != nil {
+                TranscriptPanelFixtureMenu()
+            }
+            #endif
         } label: {
             Image(systemName: ConclaveSymbols.ellipsis)
                 .accessibilityLabel(TranscriptCopy.moreActions)
@@ -362,13 +420,44 @@ private struct TranscriptPanelTag: View {
 private struct TranscriptPanelSession: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
-    let showsCopied: Bool
+    let subtitle: String
 
     var body: some View {
+        if snapshot.status == TranscriptStatusKind.ended && snapshot.offersStart {
+            tabs.conclaveFloatingActionBar { TranscriptPanelRestartBar(transcript: transcript, snapshot: snapshot) }
+        } else {
+            tabs
+        }
+    }
+
+    private var tabs: some View {
         TranscriptPanelTabContent(transcript: transcript, snapshot: snapshot)
             .conclaveTopBar {
-                TranscriptPanelTopBar(transcript: transcript, snapshot: snapshot, showsCopied: showsCopied)
+                TranscriptPanelTopBar(transcript: transcript, snapshot: snapshot, subtitle: subtitle)
             }
+    }
+}
+
+private struct TranscriptPanelRestartBar: View {
+    let transcript: TranscriptPresenter
+    let snapshot: TranscriptSnapshot
+
+    var body: some View {
+        let drafts = transcript.drafts
+        let ready = TranscriptKeyPolicy.hasRequiredKeys(provider: drafts.provider, keysKnown: snapshot.keysKnown,
+                                                        openAICovered: snapshot.openAICovered, sarvamCovered: snapshot.sarvamCovered,
+                                                        providerKey: drafts.providerKey, assistantKey: drafts.assistantKey)
+        ConclaveFloatingActionButton(title: TranscriptCopy.startButton(TranscriptStartKind.start), isEnabled: ready,
+                                     identifier: "transcript.status.start") {
+            let current = transcript.drafts
+            transcript.start(options: TranscriptKeyPolicy.options(provider: current.provider, assistantModel: current.assistantModel,
+                                                                  openAICovered: snapshot.openAICovered,
+                                                                  sarvamCovered: snapshot.sarvamCovered,
+                                                                  providerKey: current.providerKey, assistantKey: current.assistantKey))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, CGFloat(DesignTokens.space16))
+        .padding(.vertical, CGFloat(DesignTokens.space8))
     }
 }
 
@@ -391,23 +480,27 @@ private struct TranscriptPanelTabContent: View {
 private struct TranscriptPanelTopBar: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
-    let showsCopied: Bool
+    let subtitle: String
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             if !snapshot.tabs.isEmpty {
                 ConclaveViewSwitch(TranscriptCopy.viewSwitchLabel, options: options,
                                    selection: Binding(get: { transcript.tab.rawValue },
                                                       set: { raw in transcript.select(TranscriptTab(rawValue: raw) ?? TranscriptTab.transcript) }),
                                    identifier: "transcript.tabs")
             }
-            TranscriptPanelStatusRow(transcript: transcript, snapshot: snapshot, showsCopied: showsCopied)
-            TranscriptPanelIssueBanner(transcript: transcript, snapshot: snapshot)
-            #if DEBUG
-            if TranscriptDiagnostics.driver != nil {
-                TranscriptPanelFixtureBar()
+            if !TranscriptPanelPlatform.usesNavigationSubtitle && !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(HostingTheme.secondaryText)
+                    .lineLimit(2)
+                    .padding(.horizontal, CGFloat(DesignTokens.space16))
+                    .padding(.bottom, CGFloat(DesignTokens.space8))
+                    .accessibilityIdentifier("transcript.status")
             }
-            #endif
+            TranscriptPanelIssueBanner(transcript: transcript, snapshot: snapshot)
+            Divider()
         }
         .background(Color(uiColor: .systemBackground))
     }
@@ -418,90 +511,6 @@ private struct TranscriptPanelTopBar: View {
             result.append(ConclaveSegmentModel(id: tab.rawValue, title: TranscriptCopy.tab(tab), isEnabled: true))
         }
         return result
-    }
-}
-
-private struct TranscriptPanelStatusRow: View {
-    let transcript: TranscriptPresenter
-    let snapshot: TranscriptSnapshot
-    let showsCopied: Bool
-
-    var body: some View {
-        HStack(spacing: CGFloat(DesignTokens.space8)) {
-            HStack(spacing: CGFloat(DesignTokens.space8)) {
-                TranscriptPanelStatusGlyph(status: snapshot.status)
-                Text(TranscriptCopy.status(snapshot.status))
-                    .font(.subheadline.weight(.semibold))
-                let detail = showsCopied ? TranscriptCopy.copied : TranscriptCopy.host(snapshot.host, name: snapshot.controllerName)
-                if !detail.isEmpty {
-                    Text(detail)
-                        .font(.subheadline)
-                        .foregroundStyle(HostingTheme.secondaryText)
-                        .lineLimit(2)
-                }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("transcript.status")
-            Spacer(minLength: CGFloat(DesignTokens.space8))
-            if snapshot.status == TranscriptStatusKind.ended && snapshot.offersStart {
-                ConclaveButton(TranscriptCopy.startButton(TranscriptStartKind.start), role: .primary,
-                               isEnabled: endedStartReady, identifier: "transcript.status.start") {
-                    transcript.start(options: endedStartOptions)
-                }
-            }
-            if snapshot.canPause {
-                Button(snapshot.phase == LiveNotesPhase.paused ? TranscriptCopy.resume : TranscriptCopy.pause) {
-                    if snapshot.phase == LiveNotesPhase.paused { transcript.resume() } else { transcript.pause() }
-                }
-                .buttonStyle(.bordered)
-                .tint(Color.primary)
-                .disabled(snapshot.controlsDisabled)
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("transcript.status.pause")
-            }
-            if snapshot.canStop {
-                Button(TranscriptCopy.stop, role: .destructive) { transcript.requestStop() }
-                    .buttonStyle(.bordered)
-                    .disabled(snapshot.controlsDisabled)
-                    .frame(minHeight: 44)
-                    .accessibilityLabel(TranscriptCopy.stopConfirm)
-                    .accessibilityIdentifier("transcript.status.stop")
-            }
-        }
-        .frame(minHeight: 44)
-        .padding(.horizontal, CGFloat(DesignTokens.space16))
-        .padding(.vertical, CGFloat(DesignTokens.space4))
-    }
-
-    private var endedStartOptions: TranscriptStartOptions {
-        let drafts = transcript.drafts
-        return TranscriptKeyPolicy.options(provider: drafts.provider, assistantModel: drafts.assistantModel,
-                                           openAICovered: snapshot.openAICovered, sarvamCovered: snapshot.sarvamCovered,
-                                           providerKey: drafts.providerKey, assistantKey: drafts.assistantKey)
-    }
-
-    private var endedStartReady: Bool {
-        let drafts = transcript.drafts
-        return TranscriptKeyPolicy.hasRequiredKeys(provider: drafts.provider, keysKnown: snapshot.keysKnown,
-                                                   openAICovered: snapshot.openAICovered, sarvamCovered: snapshot.sarvamCovered,
-                                                   providerKey: drafts.providerKey, assistantKey: drafts.assistantKey)
-    }
-}
-
-private struct TranscriptPanelStatusGlyph: View {
-    let status: TranscriptStatusKind
-
-    var body: some View {
-        switch status {
-        case .live:
-            Circle().fill(HostingTheme.statusLive).frame(width: 8, height: 8).accessibilityHidden(true)
-        case .paused:
-            Circle().fill(HostingTheme.statusWarning).frame(width: 8, height: 8).accessibilityHidden(true)
-        case .starting, .stopping, .reconnecting:
-            ProgressView().controlSize(.small).accessibilityHidden(true)
-        case .none, .ended:
-            EmptyView()
-        }
     }
 }
 
@@ -546,14 +555,18 @@ private struct TranscriptPanelFollowKey: Equatable {
 
 private struct TranscriptPanelFeedList: View {
     let feed: TranscriptFeed
-    @State private var isAtBottom = true
+    @State private var isAtLatest = true
     @State private var sentinel = TranscriptPanelBottomSentinel()
 
     var body: some View {
         let ids = feed.rowIds
         if ids.isEmpty {
-            ConclaveEmptyStatus(title: TranscriptCopy.listeningTitle, message: TranscriptCopy.listeningBody,
-                                systemImage: ConclaveSymbols.captionsBubble, identifier: "transcript.listening")
+            ScrollView {
+                TranscriptPanelNote(title: TranscriptCopy.listeningTitle, message: TranscriptCopy.listeningBody)
+                    .padding(.horizontal, CGFloat(DesignTokens.space16))
+                    .padding(.top, CGFloat(DesignTokens.space8))
+            }
+            .accessibilityIdentifier("transcript.listening")
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -572,44 +585,46 @@ private struct TranscriptPanelFeedList: View {
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, CGFloat(DesignTokens.space16))
-                    .padding(.vertical, CGFloat(DesignTokens.space12))
+                    .padding(.top, CGFloat(DesignTokens.space4))
+                    .padding(.bottom, CGFloat(DesignTokens.space16))
                 }
-                .defaultScrollAnchor(.bottom)
-                .modifier(TranscriptPanelSizeChangeAnchor())
-                .modifier(TranscriptPanelBottomProximity(isAtBottom: $isAtBottom))
+                .modifier(TranscriptPanelLatestAnchor())
+                .modifier(TranscriptPanelLatestProximity(isAtLatest: $isAtLatest))
                 .background {
                     TranscriptPanelFollowLeaf(feed: feed, proxy: proxy, isPinned: { pinned })
                 }
                 .overlay(alignment: .bottom) {
-
+                    let showsJump = TranscriptFollowPolicy.showsJumpToLatest(
+                        rowCount: ids.count, distanceFromLatest: isAtLatest ? 0 : TranscriptFollowPolicy.farFromLatest)
                     TranscriptPanelJumpPill {
                         jump(proxy, to: feed.newestId)
                     }
-                    .padding(.bottom, CGFloat(DesignTokens.space8))
-                    .opacity(isAtBottom ? 0 : 1)
-                    .allowsHitTesting(!isAtBottom)
-                    .accessibilityHidden(isAtBottom)
-                    .animation(.easeOut(duration: 0.12), value: isAtBottom)
+                    .padding(.bottom, CGFloat(DesignTokens.space12))
+                    .opacity(showsJump ? 1 : 0)
+                    .allowsHitTesting(showsJump)
+                    .accessibilityHidden(!showsJump)
+                    .animation(.easeOut(duration: 0.15), value: showsJump)
                 }
-                .scrollDismissesKeyboard(.interactively)
             }
             .accessibilityIdentifier("transcript.list")
         }
     }
 
     private var pinned: Bool {
-        TranscriptPanelPlatform.usesScrollGeometry ? isAtBottom : sentinel.isVisible
+        TranscriptPanelPlatform.usesScrollGeometry ? isAtLatest : sentinel.isVisible
     }
 
     private func setBottomVisible(_ visible: Bool) {
         sentinel.isVisible = visible
-        if isAtBottom != visible { isAtBottom = visible }
+        if isAtLatest != visible { isAtLatest = visible }
     }
 
     private func jump(_ proxy: ScrollViewProxy, to id: String) {
         guard !id.isEmpty else { return }
-        proxy.scrollTo(id, anchor: .bottom)
-        isAtBottom = true
+        withAnimation(.easeOut(duration: 0.25)) {
+            proxy.scrollTo(id, anchor: .bottom)
+        }
+        isAtLatest = true
     }
 }
 
@@ -629,32 +644,32 @@ private struct TranscriptPanelFollowLeaf: View {
     }
 }
 
-enum TranscriptPanelPlatform {
-    static var usesScrollGeometry: Bool {
-        if #available(iOS 18.0, *) { return true }
-        return false
-    }
-}
-
-private struct TranscriptPanelSizeChangeAnchor: ViewModifier {
+private struct TranscriptPanelLatestAnchor: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
-            content.defaultScrollAnchor(.bottom, for: .sizeChanges)
-        } else {
             content
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                .defaultScrollAnchor(.top, for: .alignment)
+        } else {
+            content.defaultScrollAnchor(.bottom)
         }
     }
 }
 
-private struct TranscriptPanelBottomProximity: ViewModifier {
-    @Binding var isAtBottom: Bool
+private struct TranscriptPanelLatestProximity: ViewModifier {
+    @Binding var isAtLatest: Bool
 
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
             content.onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentOffset.y + geometry.containerSize.height >= geometry.contentSize.height - 24
-            } action: { _, atBottom in
-                if isAtBottom != atBottom { isAtBottom = atBottom }
+                let distance = TranscriptFollowPolicy.distanceFromLatest(
+                    offset: Double(geometry.contentOffset.y), viewport: Double(geometry.visibleRect.height),
+                    content: Double(geometry.contentSize.height), leadingInset: Double(geometry.contentInsets.top),
+                    trailingInset: Double(geometry.contentInsets.bottom))
+                return TranscriptFollowPolicy.isAtLatest(distanceFromLatest: distance)
+            } action: { _, atLatest in
+                if isAtLatest != atLatest { isAtLatest = atLatest }
             }
         } else {
             content
@@ -672,12 +687,14 @@ private struct TranscriptPanelJumpPill: View {
             } icon: {
                 Image(systemName: ConclaveSymbols.arrowDown).accessibilityHidden(true)
             }
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, CGFloat(DesignTokens.space16))
+            .frame(minHeight: 44)
+            .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color(uiColor: .separator), lineWidth: 1))
+            .contentShape(Capsule())
         }
-        .buttonStyle(.bordered)
-        .tint(.primary)
-        .controlSize(.small)
-        .frame(minHeight: 44)
-        .background(Color(uiColor: .systemBackground), in: Capsule())
+        .buttonStyle(.plain)
         .accessibilityIdentifier("transcript.jumpPill")
     }
 }
@@ -704,19 +721,20 @@ private struct TranscriptPanelRowView: View {
         } else {
             let name = TranscriptCopy.speaker(row.speakerName, isYou: row.isYou)
             let time = TranscriptCopy.clock(row.startMillis)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: CGFloat(DesignTokens.space8)) {
                     Text(name)
                         .font(.subheadline.weight(.semibold))
-                    Spacer(minLength: CGFloat(DesignTokens.space8))
+                        .lineLimit(1)
                     Text(time)
                         .font(.caption)
                         .foregroundStyle(HostingTheme.secondaryText)
                         .monospacedDigit()
+                        .layoutPriority(1)
+                    Spacer(minLength: 0)
                 }
                 Text(row.text)
                     .font(.body)
-                    .foregroundStyle(row.isFinal ? Color.primary : HostingTheme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.vertical, CGFloat(DesignTokens.space8))
@@ -734,17 +752,18 @@ private struct TranscriptPanelAskView: View {
     let snapshot: TranscriptSnapshot
     @State private var draft = ""
     @State private var didSeed = false
+    @FocusState private var focused: Bool
 
     var body: some View {
         let showsComposer = TranscriptViewPolicy.showsAskComposer(tab: TranscriptTab.ask, canAsk: snapshot.canAsk, phase: snapshot.phase)
         Group {
             if showsComposer {
-                TranscriptPanelAskList(transcript: transcript, onSuggestion: { draft = $0 })
+                TranscriptPanelAskList(transcript: transcript, onSuggestion: suggest)
                     .conclaveComposerBar {
-                        TranscriptPanelAskComposer(transcript: transcript, snapshot: snapshot, draft: $draft)
+                        TranscriptPanelAskComposer(transcript: transcript, snapshot: snapshot, draft: $draft, focused: $focused)
                     }
             } else {
-                TranscriptPanelAskList(transcript: transcript, onSuggestion: { draft = $0 })
+                TranscriptPanelAskList(transcript: transcript, onSuggestion: suggest)
             }
         }
         .onAppear {
@@ -755,38 +774,28 @@ private struct TranscriptPanelAskView: View {
         }
         .onChange(of: draft) { _, value in transcript.drafts.ask = value }
     }
+
+    private func suggest(_ text: String) {
+        draft = text
+        focused = true
+    }
 }
 
 private struct TranscriptPanelAskList: View {
     let transcript: TranscriptPresenter
     let onSuggestion: (String) -> Void
-    @State private var isAtBottom = true
+    @State private var isAtLatest = true
     @State private var sentinel = TranscriptPanelBottomSentinel()
 
     var body: some View {
         let thread = transcript.ask
         let ids = thread.rowIds
         if ids.isEmpty {
-            ContentUnavailableView {
-                Label(TranscriptCopy.askEmptyTitle, systemImage: ConclaveSymbols.sparkles)
-                    .accessibilityAddTraits(.isHeader)
-            } description: {
-                Text(TranscriptCopy.askEmptyBody)
-            } actions: {
-                VStack(spacing: CGFloat(DesignTokens.space8)) {
-                    ForEach(TranscriptCopy.askSuggestions, id: \.self) { suggestion in
-
-                        Button(suggestion) { onSuggestion(suggestion) }
-                            .buttonStyle(.bordered)
-                            .tint(.primary)
-                    }
-                }
-            }
-            .accessibilityIdentifier("transcript.ask.empty")
+            TranscriptPanelAskEmpty(onSuggestion: onSuggestion)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: CGFloat(DesignTokens.space12)) {
+                    LazyVStack(alignment: .leading, spacing: CGFloat(DesignTokens.space20)) {
                         ForEach(ids, id: \.self) { id in
                             TranscriptPanelAskRow(row: thread.row(id), onRetry: { transcript.retryAsk(rowId: id) })
                                 .id(id)
@@ -801,11 +810,11 @@ private struct TranscriptPanelAskList: View {
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, CGFloat(DesignTokens.space16))
-                    .padding(.vertical, CGFloat(DesignTokens.space12))
+                    .padding(.top, CGFloat(DesignTokens.space8))
+                    .padding(.bottom, CGFloat(DesignTokens.space16))
                 }
-                .defaultScrollAnchor(.bottom)
-                .modifier(TranscriptPanelSizeChangeAnchor())
-                .modifier(TranscriptPanelBottomProximity(isAtBottom: $isAtBottom))
+                .modifier(TranscriptPanelLatestAnchor())
+                .modifier(TranscriptPanelLatestProximity(isAtLatest: $isAtLatest))
                 .background {
                     TranscriptPanelAskFollowLeaf(thread: thread, proxy: proxy, isPinned: { pinned })
                 }
@@ -816,12 +825,75 @@ private struct TranscriptPanelAskList: View {
     }
 
     private var pinned: Bool {
-        TranscriptPanelPlatform.usesScrollGeometry ? isAtBottom : sentinel.isVisible
+        TranscriptPanelPlatform.usesScrollGeometry ? isAtLatest : sentinel.isVisible
     }
 
     private func setBottomVisible(_ visible: Bool) {
         sentinel.isVisible = visible
-        if isAtBottom != visible { isAtBottom = visible }
+        if isAtLatest != visible { isAtLatest = visible }
+    }
+}
+
+private struct TranscriptPanelAskEmpty: View {
+    let onSuggestion: (String) -> Void
+
+    var body: some View {
+        let suggestions = TranscriptCopy.askSuggestions
+        ScrollView {
+            VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space16)) {
+                TranscriptPanelNote(title: TranscriptCopy.askEmptyTitle, message: TranscriptCopy.askEmptyBody)
+                VStack(alignment: .leading, spacing: 0) {
+                    Divider()
+                    ForEach(suggestions, id: \.self) { suggestion in
+                        Button { onSuggestion(suggestion) } label: {
+                            HStack(spacing: CGFloat(DesignTokens.space12)) {
+                                Text(suggestion)
+                                    .font(.body)
+                                    .foregroundStyle(Color.primary)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: CGFloat(DesignTokens.space8))
+                                Image(systemName: ConclaveSymbols.arrowUp)
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(HostingTheme.secondaryText)
+                                    .accessibilityHidden(true)
+                            }
+                            .padding(.vertical, CGFloat(DesignTokens.space12))
+                            .frame(minHeight: 48)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("transcript.ask.suggestion")
+                        Divider()
+                    }
+                }
+            }
+            .padding(.horizontal, CGFloat(DesignTokens.space16))
+            .padding(.top, CGFloat(DesignTokens.space8))
+            .padding(.bottom, CGFloat(DesignTokens.space16))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .accessibilityIdentifier("transcript.ask.empty")
+    }
+}
+
+private struct TranscriptPanelNote: View {
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space4)) {
+            Text(title)
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(HostingTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -849,10 +921,10 @@ private struct TranscriptPanelAskRow: View {
     let onRetry: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space8)) {
+        VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space12)) {
             HStack {
                 Spacer(minLength: 48)
-                ConclaveChatBubble(tone: .own, identifier: "transcript.ask." + row.id + ".question") {
+                ConclaveChatBubble(tone: .peer, identifier: "transcript.ask." + row.id + ".question") {
                     Text(row.question)
                         .font(.body)
                         .fixedSize(horizontal: false, vertical: true)
@@ -860,10 +932,8 @@ private struct TranscriptPanelAskRow: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(TranscriptCopy.youAsked + ", " + row.question)
             }
-            HStack {
-                answer
-                Spacer(minLength: 48)
-            }
+            answer
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityIdentifier("transcript.ask." + row.id)
     }
@@ -872,42 +942,48 @@ private struct TranscriptPanelAskRow: View {
     private var answer: some View {
         switch row.state {
         case .thinking:
-            ConclaveChatBubble(tone: .answer, identifier: "transcript.ask." + row.id + ".answer") {
-                HStack(spacing: CGFloat(DesignTokens.space8)) {
-                    ProgressView().controlSize(.small)
-                    Text(TranscriptCopy.thinking)
-                }
+            HStack(spacing: CGFloat(DesignTokens.space8)) {
+                ProgressView().controlSize(.small)
+                Text(TranscriptCopy.thinking)
+                    .font(.subheadline)
+                    .foregroundStyle(HostingTheme.secondaryText)
             }
             .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("transcript.ask." + row.id + ".answer")
         case .streaming, .done:
-            ConclaveChatBubble(tone: .answer, identifier: "transcript.ask." + row.id + ".answer") {
-                AssistantMarkdownView(blocks: row.blocks, identifier: "transcript.ask." + row.id + ".markdown")
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(TranscriptCopy.conclaveAnswered)
-            .contextMenu {
-                if row.state == AskRowState.done {
-                    Button {
-                        UIPasteboard.general.string = row.answerText
-                    } label: {
-                        Label(TranscriptCopy.copyAnswer, systemImage: ConclaveSymbols.docOnDoc)
+            AssistantMarkdownView(blocks: row.blocks, identifier: "transcript.ask." + row.id + ".markdown")
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(TranscriptCopy.conclaveAnswered)
+                .accessibilityIdentifier("transcript.ask." + row.id + ".answer")
+                .contextMenu {
+                    if row.state == AskRowState.done {
+                        Button {
+                            UIPasteboard.general.string = row.answerText
+                        } label: {
+                            Label(TranscriptCopy.copyAnswer, systemImage: ConclaveSymbols.docOnDoc)
+                        }
                     }
                 }
-            }
         case .error, .notSent, .timedOut:
-            ConclaveChatBubble(tone: .answer, identifier: "transcript.ask." + row.id + ".answer") {
-                VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space8)) {
+            VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space4)) {
+                Label {
                     Text(TranscriptCopy.askState(row.state, errorText: row.errorText))
-                        .font(.body)
                         .lineLimit(4)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button(TranscriptCopy.tryAgain, action: onRetry)
-                        .buttonStyle(.borderless)
-                        .tint(HostingTheme.coralText)
-                        .frame(minHeight: 44)
-                        .accessibilityIdentifier("transcript.ask." + row.id + ".retry")
+                } icon: {
+                    Image(systemName: ConclaveSymbols.exclamationmarkCircleFill)
+                        .accessibilityHidden(true)
                 }
+                .font(.subheadline)
+                .foregroundStyle(HostingTheme.secondaryText)
+                Button(TranscriptCopy.tryAgain, action: onRetry)
+                    .font(.subheadline.weight(.semibold))
+                    .buttonStyle(.borderless)
+                    .tint(HostingTheme.coralText)
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("transcript.ask." + row.id + ".retry")
             }
+            .accessibilityIdentifier("transcript.ask." + row.id + ".answer")
         }
     }
 }
@@ -916,7 +992,7 @@ private struct TranscriptPanelAskComposer: View {
     let transcript: TranscriptPresenter
     let snapshot: TranscriptSnapshot
     @Binding var draft: String
-    @FocusState private var focused: Bool
+    var focused: FocusState<Bool>.Binding
 
     var body: some View {
         let canSend = AskRowPolicy.canSend(draft, canAsk: snapshot.canAsk, phase: snapshot.phase, link: snapshot.link)
@@ -927,7 +1003,7 @@ private struct TranscriptPanelAskComposer: View {
                 TextField(TranscriptCopy.askPlaceholder, text: $draft, axis: .vertical)
                     .lineLimit(1...ConclaveComposerMetrics.maximumLines)
                     .textInputAutocapitalization(.sentences)
-                    .focused($focused)
+                    .focused(focused)
                     .submitLabel(.send)
                     .onSubmit(send)
                     .accessibilityLabel(TranscriptCopy.askPlaceholder)
@@ -951,62 +1027,99 @@ private struct TranscriptPanelMinutesList: View {
     var body: some View {
         let minutes = transcript.minutes
         let empty = MinutesPolicy.emptyKind(phase: snapshot.phase, hasContent: minutes.hasContent)
-        List {
-            Section {
-                TranscriptPanelMinutesStatus(updating: snapshot.minutesUpdating, updatedAtMillis: snapshot.minutesUpdatedAtMillis)
-                if snapshot.canRefreshMinutes {
-                    Button(TranscriptCopy.refreshMinutes) { transcript.refreshMinutes() }
-                        .disabled(snapshot.minutesUpdating)
-                        .accessibilityIdentifier("transcript.minutes.refresh")
+        let showsRecap = snapshot.offersRecapToChat || snapshot.recap != RecapPhase.idle
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                TranscriptPanelMinutesStatus(transcript: transcript, updating: snapshot.minutesUpdating,
+                                             updatedAtMillis: snapshot.minutesUpdatedAtMillis, hasContent: minutes.hasContent,
+                                             canRefresh: snapshot.canRefreshMinutes)
+                if empty != MinutesEmptyKind.none {
+                    TranscriptPanelNote(title: TranscriptCopy.emptyTitle(empty), message: TranscriptCopy.emptyBody(empty))
+                        .padding(.top, CGFloat(DesignTokens.space8))
+                        .accessibilityIdentifier("transcript.minutes.empty")
                 }
-                if snapshot.offersRecapToChat || snapshot.recap != RecapPhase.idle {
-                    TranscriptPanelRecapRow(transcript: transcript, recap: snapshot.recap, offersRecap: snapshot.offersRecapToChat)
-                }
-            }
-            if !minutes.summary.isEmpty {
-                Section {
+                if !minutes.summary.isEmpty {
+                    TranscriptPanelMinutesHeading(title: TranscriptCopy.section(MinutesSection.summary))
                     Text(minutes.summary)
+                        .font(.body)
                         .fixedSize(horizontal: false, vertical: true)
-                } header: {
-                    Text(TranscriptCopy.section(MinutesSection.summary))
-                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier("transcript.minutes.summary")
                 }
-            }
-            ForEach(minutes.sections) { section in
-                Section {
+                ForEach(minutes.sections) { section in
+                    TranscriptPanelMinutesHeading(title: TranscriptCopy.section(section.section))
                     ForEach(section.entries) { entry in
                         TranscriptPanelMinutesEntryRow(entry: entry)
                     }
-                } header: {
-                    Text(TranscriptCopy.section(section.section))
-                        .accessibilityAddTraits(.isHeader)
+                }
+                if showsRecap {
+                    TranscriptPanelRecapBlock(transcript: transcript, recap: snapshot.recap, offersRecap: snapshot.offersRecapToChat)
                 }
             }
-        }
-        .listStyle(.insetGrouped)
-        .overlay {
-            if empty != MinutesEmptyKind.none {
-                ConclaveEmptyStatus(title: TranscriptCopy.emptyTitle(empty), message: TranscriptCopy.emptyBody(empty),
-                                    systemImage: ConclaveSymbols.listBulletClipboard, identifier: "transcript.minutes.empty")
-                    .padding(.top, 120)
-            }
+            .padding(.horizontal, CGFloat(DesignTokens.space16))
+            .padding(.top, CGFloat(DesignTokens.space4))
+            .padding(.bottom, CGFloat(DesignTokens.space24))
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityIdentifier("transcript.minutes")
     }
 }
 
+private struct TranscriptPanelMinutesHeading: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.headline)
+            .padding(.top, CGFloat(DesignTokens.space20))
+            .padding(.bottom, CGFloat(DesignTokens.space4))
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
 private struct TranscriptPanelMinutesStatus: View {
+    let transcript: TranscriptPresenter
     let updating: Bool
     let updatedAtMillis: Double
+    let hasContent: Bool
+    let canRefresh: Bool
 
     var body: some View {
         let kind = MinutesPolicy.statusKind(updating: updating, updatedAtMillis: updatedAtMillis)
+        if MinutesPolicy.showsStatusText(kind, hasContent: hasContent) || canRefresh {
+            row(kind)
+        }
+    }
+
+    private func row(_ kind: MinutesStatusKind) -> some View {
+        HStack(spacing: CGFloat(DesignTokens.space8)) {
+            if MinutesPolicy.showsStatusText(kind, hasContent: hasContent) {
+                status(kind)
+            }
+            Spacer(minLength: CGFloat(DesignTokens.space8))
+            if canRefresh {
+                Button { transcript.refreshMinutes() } label: {
+                    Label(TranscriptCopy.refresh, systemImage: ConclaveSymbols.arrowClockwise)
+                        .font(.footnote.weight(.semibold))
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .tint(HostingTheme.coralText)
+                .disabled(updating)
+                .accessibilityLabel(TranscriptCopy.refreshMinutes)
+                .accessibilityIdentifier("transcript.minutes.refresh")
+            }
+        }
+        .frame(minHeight: 44)
+    }
+
+    private func status(_ kind: MinutesStatusKind) -> some View {
         HStack(spacing: CGFloat(DesignTokens.space8)) {
             if kind == MinutesStatusKind.updating {
                 ProgressView().controlSize(.small)
             }
             if kind == MinutesStatusKind.updated {
-                TimelineView(.periodic(from: Date(), by: 60)) { context in
+                TimelineView(.periodic(from: Date(), by: MinutesAgePolicy.tickMillis / 1000.0)) { context in
                     Text(TranscriptCopy.minutesStatus(kind, updatedAtMillis: updatedAtMillis,
                                                       nowMillis: context.date.timeIntervalSince1970 * 1000.0))
                 }
@@ -1014,52 +1127,62 @@ private struct TranscriptPanelMinutesStatus: View {
                 Text(TranscriptCopy.minutesStatus(kind, updatedAtMillis: updatedAtMillis, nowMillis: 0))
             }
         }
+        .font(.footnote)
         .foregroundStyle(HostingTheme.secondaryText)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("transcript.minutes.status")
     }
 }
 
-private struct TranscriptPanelRecapRow: View {
+private struct TranscriptPanelRecapBlock: View {
     let transcript: TranscriptPresenter
     let recap: RecapPhase
     let offersRecap: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space4)) {
+        VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space8)) {
+            Divider()
+                .padding(.bottom, CGFloat(DesignTokens.space16))
             Button {
                 transcript.postRecapToChat()
             } label: {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(TranscriptCopy.postRecap)
-                        Text(TranscriptCopy.recapDetail)
-                            .font(.footnote)
-                            .foregroundStyle(HostingTheme.secondaryText)
-                    }
-                    Spacer(minLength: CGFloat(DesignTokens.space8))
+                HStack(spacing: CGFloat(DesignTokens.space8)) {
                     if recap == RecapPhase.posting {
                         ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: recap == RecapPhase.posted ? ConclaveSymbols.checkmark : ConclaveSymbols.sparkles)
+                            .accessibilityHidden(true)
                     }
-                    if recap == RecapPhase.posting || recap == RecapPhase.posted {
-                        Text(TranscriptCopy.recapValue(recap))
-                            .foregroundStyle(HostingTheme.secondaryText)
-                    }
+                    Text(TranscriptCopy.postRecap)
                 }
+                .frame(minHeight: 32)
             }
+            .buttonStyle(.bordered)
+            .tint(Color.primary)
             .disabled(!offersRecap || recap == RecapPhase.posting)
+            .accessibilityValue(TranscriptCopy.recapValue(recap))
             .accessibilityIdentifier("transcript.minutes.recap")
             if recap == RecapPhase.failed {
-                Text(TranscriptCopy.recapValue(RecapPhase.failed))
+                HStack(spacing: CGFloat(DesignTokens.space8)) {
+                    Text(TranscriptCopy.recapValue(RecapPhase.failed))
+                        .font(.footnote)
+                        .foregroundStyle(Color(uiColor: .systemRed))
+                    Button(TranscriptCopy.tryAgain) { transcript.postRecapToChat() }
+                        .font(.footnote.weight(.semibold))
+                        .buttonStyle(.borderless)
+                        .tint(HostingTheme.coralText)
+                        .frame(minHeight: 44)
+                        .disabled(!offersRecap)
+                        .accessibilityIdentifier("transcript.minutes.recap.retry")
+                }
+            } else {
+                Text(recap == RecapPhase.posted ? TranscriptCopy.recapValue(RecapPhase.posted) : TranscriptCopy.recapDetail)
                     .font(.footnote)
-                    .foregroundStyle(Color(uiColor: .systemRed))
-                Button(TranscriptCopy.tryAgain) { transcript.postRecapToChat() }
-                    .buttonStyle(.borderless)
-                    .tint(HostingTheme.coralText)
-                    .disabled(!offersRecap)
-                    .accessibilityIdentifier("transcript.minutes.recap.retry")
+                    .foregroundStyle(HostingTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(.top, CGFloat(DesignTokens.space24))
     }
 }
 
@@ -1067,21 +1190,28 @@ private struct TranscriptPanelMinutesEntryRow: View {
     let entry: MinutesEntryModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: CGFloat(DesignTokens.space4)) {
-            Text(entry.text)
-                .fixedSize(horizontal: false, vertical: true)
-            if !entry.owner.isEmpty {
-                Text(TranscriptCopy.owner(entry.owner))
-                    .font(.footnote)
-                    .foregroundStyle(HostingTheme.secondaryText)
-            }
-            if !entry.due.isEmpty {
-                Text(TranscriptCopy.due(entry.due))
-                    .font(.footnote)
-                    .foregroundStyle(HostingTheme.secondaryText)
+        let detail = TranscriptCopy.entryDetail(owner: entry.owner, due: entry.due)
+        HStack(alignment: .firstTextBaseline, spacing: CGFloat(DesignTokens.space8)) {
+            Text(verbatim: "\u{2022}")
+                .font(.body)
+                .foregroundStyle(HostingTheme.secondaryText)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.text)
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(HostingTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
+        .padding(.vertical, CGFloat(DesignTokens.space4))
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("transcript.minutes.entry." + entry.id)
     }
 }
 
@@ -1129,33 +1259,21 @@ private struct TranscriptPanelFinalizedAnnouncer: View {
 }
 
 #if DEBUG
-private struct TranscriptPanelFixtureBar: View {
-    @State private var refresh = 0
-
+private struct TranscriptPanelFixtureMenu: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ScrollView(.horizontal) {
-                HStack(spacing: CGFloat(DesignTokens.space8)) {
-                    ForEach(TranscriptFixtureScriptName.allCases, id: \.self) { script in
-                        Button {
-                            TranscriptDiagnostics.driver?.run(script)
-                            refresh += 1
-                        } label: {
-                            Text(verbatim: script.rawValue)
-                                .font(.caption)
-                        }
-                        .buttonStyle(.bordered)
-                        .accessibilityIdentifier("transcript.fixture." + script.rawValue)
-                    }
+        Section {
+            ForEach(TranscriptFixtureScriptName.allCases, id: \.self) { script in
+                Button {
+                    TranscriptDiagnostics.driver?.run(script)
+                } label: {
+                    Text(verbatim: script.rawValue)
                 }
+                .accessibilityIdentifier("transcript.fixture." + script.rawValue)
             }
-            Text(verbatim: TranscriptDiagnostics.readout() + (refresh >= 0 ? "" : ""))
-                .font(.caption2.monospaced())
-                .foregroundStyle(HostingTheme.secondaryText)
+        } header: {
+            Text(verbatim: TranscriptDiagnostics.readout())
                 .accessibilityIdentifier("transcript.calls")
         }
-        .padding(.horizontal, CGFloat(DesignTokens.space16))
-        .padding(.bottom, CGFloat(DesignTokens.space4))
     }
 }
 #endif

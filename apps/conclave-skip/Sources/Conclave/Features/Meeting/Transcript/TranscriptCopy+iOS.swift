@@ -2,7 +2,7 @@
 import Foundation
 
 enum TranscriptCopy {
-    static var title: String { ConclaveStrings.text("Transcript") }
+    static var title: String { ConclaveStrings.text("Live Notes") }
     static var viewSwitchLabel: String { ConclaveStrings.text("Transcript View") }
 
     static func tab(_ tab: TranscriptTab) -> String {
@@ -91,10 +91,17 @@ enum TranscriptCopy {
         }
     }
 
-    static var pause: String { ConclaveStrings.text("Pause") }
-    static var resume: String { ConclaveStrings.text("Resume") }
-    static var stop: String { ConclaveStrings.text("Stop\u{2026}") }
+    static var pauseNotes: String { ConclaveStrings.text("Pause Live Notes") }
+    static var resumeNotes: String { ConclaveStrings.text("Resume Live Notes") }
     static var copied: String { ConclaveStrings.text("Copied") }
+
+    static func statusLine(_ status: TranscriptStatusKind, host: TranscriptHostKind, name: String, showsCopied: Bool) -> String {
+        let lead = TranscriptCopy.status(status)
+        let detail = showsCopied ? copied : TranscriptCopy.host(host, name: name)
+        if lead.isEmpty { return detail }
+        if detail.isEmpty { return lead }
+        return lead + " \u{00B7} " + detail
+    }
 
     static var stopTitle: String { ConclaveStrings.text("Stop Live Notes for Everyone?") }
     static var stopMessage: String { ConclaveStrings.text("The transcript and minutes so far stay available to export.") }
@@ -140,7 +147,7 @@ enum TranscriptCopy {
     }
 
     static var askEmptyTitle: String { ConclaveStrings.text("Ask the Meeting") }
-    static var askEmptyBody: String { ConclaveStrings.text("Get a private answer drawn from everything that\u{2019}s been said. Only you see it.") }
+    static var askEmptyBody: String { ConclaveStrings.text("Get answers drawn from everything that\u{2019}s been said so far.") }
     static var askSuggestions: [String] {
         [ConclaveStrings.text("What decisions have we made?"), ConclaveStrings.text("Summarize the discussion"),
          ConclaveStrings.text("What are the action items?")]
@@ -195,20 +202,31 @@ enum TranscriptCopy {
         switch kind {
         case .automatic: return ConclaveStrings.text("Minutes build automatically")
         case .updating: return ConclaveStrings.text("Updating Minutes")
-        case .updated:
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .short
-            let relative = formatter.localizedString(for: Date(timeIntervalSince1970: updatedAtMillis / 1000.0),
-                                                     relativeTo: Date(timeIntervalSince1970: nowMillis / 1000.0))
-            return ConclaveStrings.format("Updated %@", relative)
+        case .updated: return updated(MinutesAgePolicy.age(updatedAtMillis: updatedAtMillis, nowMillis: nowMillis))
         }
     }
 
+    static func updated(_ age: MinutesAge) -> String {
+        switch age.kind {
+        case .justNow: return ConclaveStrings.text("Updated just now")
+        case .minutes: return ConclaveStrings.format("Updated %lld min ago", age.count)
+        case .hours: return ConclaveStrings.format("Updated %lld hr ago", age.count)
+        }
+    }
+
+    static var refresh: String { ConclaveStrings.text("Refresh") }
     static var refreshMinutes: String { ConclaveStrings.text("Refresh Minutes") }
     static var recapDetail: String { ConclaveStrings.text("Conclave writes a short recap in the room chat for everyone.") }
 
     static func owner(_ name: String) -> String { ConclaveStrings.format("Owner: %@", name) }
     static func due(_ text: String) -> String { ConclaveStrings.format("Due: %@", text) }
+
+    static func entryDetail(owner name: String, due text: String) -> String {
+        var parts: [String] = []
+        if !name.isEmpty { parts.append(owner(name)) }
+        if !text.isEmpty { parts.append(due(text)) }
+        return parts.joined(separator: " \u{00B7} ")
+    }
 
     static func recapValue(_ phase: RecapPhase) -> String {
         switch phase {
