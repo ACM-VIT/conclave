@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -50,6 +51,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -107,6 +109,8 @@ internal fun inCallPageReservation(
 internal fun InCallPage(
     title: String,
     variant: InCallPageVariant,
+    subtitle: String? = null,
+    subtitleIdentifier: String = "panel.subtitle",
     appearance: PanelAppearance = PanelAppearance.system,
     hasComposer: Boolean,
     miniTile: CallMiniTileModel?,
@@ -162,8 +166,14 @@ internal fun InCallPage(
             topBar = {
                 TopAppBar(
                     title = {
-                        Text(title, modifier = Modifier.testTag("panel.title").focusRequester(titleFocus).focusable()
-                            .semantics { heading() })
+                        Column {
+                            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("panel.title").focusRequester(titleFocus).focusable().semantics { heading() })
+                            if (!subtitle.isNullOrEmpty()) {
+                                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag(subtitleIdentifier))
+                            }
+                        }
                     },
                     navigationIcon = { PanelNavigationIcon(title, navigation, navigate) },
                     actions = actions,

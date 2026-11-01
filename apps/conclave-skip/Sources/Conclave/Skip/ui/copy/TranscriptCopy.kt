@@ -86,10 +86,16 @@ internal object TranscriptCopy {
         MinutesEmptyKind.cooking -> "trn_minutes_cooking_body"
     }
 
-    fun minutesStatus(kind: MinutesStatusKind): String = when (kind) {
+    fun minutesStatus(kind: MinutesStatusKind): String? = when (kind) {
         MinutesStatusKind.automatic -> "trn_minutes_auto"
         MinutesStatusKind.updating -> "trn_minutes_updating"
-        MinutesStatusKind.updated -> "trn_minutes_updated"
+        MinutesStatusKind.updated -> null
+    }
+
+    fun minutesAge(kind: MinutesAgeKind): String = when (kind) {
+        MinutesAgeKind.justNow -> "trn_minutes_updated_now"
+        MinutesAgeKind.minutes -> "trn_minutes_updated_min"
+        MinutesAgeKind.hours -> "trn_minutes_updated_hr"
     }
 
     fun recapValue(phase: RecapPhase): String? = when (phase) {
@@ -122,7 +128,8 @@ internal object TranscriptCopy {
         "trn_you", "trn_still_speaking", "trn_ask_empty_title", "trn_ask_empty_body", "trn_ask_suggest_decisions",
         "trn_ask_suggest_summary", "trn_ask_suggest_actions", "trn_ask_placeholder", "trn_ask_send", "trn_ask_private",
         "trn_thinking", "trn_copy_answer", "trn_ask_error", "trn_ask_not_sent", "trn_ask_timed_out", "trn_you_asked",
-        "trn_conclave_answered", "trn_answer_ready", "trn_minutes_updating", "trn_minutes_updated", "trn_minutes_auto",
+        "trn_conclave_answered", "trn_answer_ready", "trn_minutes_updating", "trn_minutes_updated_now", "trn_minutes_updated_min",
+        "trn_minutes_updated_hr", "trn_minutes_auto", "trn_refresh", "trn_pause_live_notes", "trn_resume_live_notes",
         "trn_refresh_minutes", "trn_post_recap_detail", "trn_section_summary", "trn_section_topics", "trn_section_decisions",
         "trn_section_action_items", "trn_section_open_questions", "trn_section_follow_ups", "trn_owner", "trn_due",
         "trn_minutes_empty_title", "trn_minutes_empty_body", "trn_minutes_cooking_title", "trn_minutes_cooking_body",

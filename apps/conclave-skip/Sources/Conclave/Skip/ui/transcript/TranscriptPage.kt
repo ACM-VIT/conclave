@@ -20,14 +20,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SnackbarDuration
@@ -100,6 +98,10 @@ internal fun TranscriptPage(
     val recapFailed = conclaveString("trn_recap_failed")
     val tryAgain = conclaveString("ds_try_again")
     val showsStartBar = TranscriptViewPolicy.showsStartBar(body = snapshot.body, offersStart = snapshot.offersStart)
+    val showsRestart = snapshot.body == TranscriptBody.content && snapshot.status == TranscriptStatusKind.ended && snapshot.offersStart
+    val subtitle = if (snapshot.body == TranscriptBody.content) transcriptStatusLine(snapshot) else null
+    val showsAskComposer = snapshot.body == TranscriptBody.content &&
+        TranscriptViewPolicy.showsAskComposer(tab = tab, canAsk = snapshot.canAsk, phase = snapshot.phase)
 
     val announcement = presenter.announcement
     LaunchedEffect(announcement?.id) {
@@ -114,25 +116,29 @@ internal fun TranscriptPage(
     InCallPage(
         title = conclaveString("trn_title"),
         variant = variant,
+        subtitle = subtitle,
+        subtitleIdentifier = "transcript.status",
         appearance = appearance,
-        hasComposer = true,
+        hasComposer = showsAskComposer || showsStartBar || showsRestart,
         miniTile = miniTile,
         onClose = { panels.dismiss(cancelPending = true) },
         onMounted = onMounted,
         onDisposed = onDisposed,
         miniTileVideo = miniTileVideo,
         composer = {
-            if (snapshot.body == TranscriptBody.content &&
-                TranscriptViewPolicy.showsAskComposer(tab = tab, canAsk = snapshot.canAsk, phase = snapshot.phase)) {
+            if (showsAskComposer) {
                 TranscriptAskComposer(presenter, snapshot, page)
             } else if (showsStartBar) {
                 TranscriptStartBar(presenter, snapshot, page)
+            } else if (showsRestart) {
+                TranscriptRestartBar(presenter, snapshot, page)
             }
         },
         composerOverlaysContent = showsStartBar,
         contentMode = InCallPageContent.lazyList,
         snackbarHost = { SnackbarHost(snackbars) },
         actions = {
+            if (snapshot.body == TranscriptBody.content && snapshot.canPause) TranscriptPauseAction(presenter, snapshot)
             TranscriptOverflowMenu(presenter, snapshot, page,
                 onExport = {
                     val file = TranscriptExport.build(context, presenter)
@@ -166,7 +172,7 @@ internal fun TranscriptPage(
                         modifier = Modifier.padding(top = reservation.calculateTopPadding()))
                     TranscriptBody.startCard -> TranscriptStartCard(presenter, snapshot, page, reservation)
                     TranscriptBody.content -> {
-                        TranscriptSessionHeader(presenter, snapshot, tab, page)
+                        TranscriptSessionHeader(presenter, snapshot, tab)
                         when (tab) {
                             TranscriptTab.transcript -> TranscriptFeedList(presenter.feed, reservation)
                             TranscriptTab.ask -> TranscriptAskList(presenter, page, reservation)
@@ -252,7 +258,8 @@ private fun TranscriptOverflowMenu(
 ) {
     val enabled = TranscriptViewPolicy.menuEnabled(hasContent = snapshot.hasContent, canStop = snapshot.canStop,
         offersRecap = snapshot.offersRecapToChat)
-    if (!enabled) return
+    val fixtures = TranscriptDiagnostics.driver != null
+    if (!enabled && !fixtures) return
     val scheme = MaterialTheme.colorScheme
     Box {
         IconButton(onClick = { page.menuOpen = true }, modifier = Modifier.testTag("transcript.menu")) {
@@ -305,8 +312,36 @@ private fun TranscriptOverflowMenu(
                     enabled = !snapshot.controlsDisabled,
                 )
             }
+            if (fixtures) TranscriptFixtureMenuItems(onRun = { page.menuOpen = false })
         }
     }
+}
+
+@Composable
+private fun TranscriptPauseAction(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot) {
+    val paused = snapshot.phase == LiveNotesPhase.paused
+    IconButton(
+        onClick = { if (paused) presenter.resume() else presenter.pause() },
+        enabled = !snapshot.controlsDisabled,
+        modifier = Modifier.testTag("transcript.status.pause"),
+    ) {
+        Icon(if (paused) ConclaveIcons.PlayArrowFill1 else ConclaveIcons.PauseFill1,
+            contentDescription = conclaveString(if (paused) "trn_resume_live_notes" else "trn_pause_live_notes"))
+    }
+}
+
+@Composable
+private fun transcriptStatusLine(snapshot: TranscriptSnapshot): String? {
+    val statusName = TranscriptCopy.status(snapshot.status)
+    val hostName = TranscriptCopy.host(snapshot.host)
+    val lead = if (statusName != null) conclaveString(statusName) else ""
+    val detail = when {
+        hostName == null -> ""
+        snapshot.host == TranscriptHostKind.named -> conclaveString(hostName, snapshot.controllerName)
+        else -> conclaveString(hostName)
+    }
+    val line = listOf(lead, detail).filter { it.isNotEmpty() }.joinToString(" \u00B7 ")
+    return line.ifEmpty { null }
 }
 
 @Composable
@@ -323,89 +358,14 @@ private fun TranscriptStopDialog(presenter: TranscriptPresenter) {
 }
 
 @Composable
-private fun TranscriptSessionHeader(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, tab: TranscriptTab, page: TranscriptPageState) {
+private fun TranscriptSessionHeader(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, tab: TranscriptTab) {
     val tabs = snapshot.tabs.toList()
     if (tabs.isNotEmpty()) {
         val options = tabs.map { ConclaveSegmentModel(id = it.rawValue, title = conclaveString(TranscriptCopy.tab(it)), isEnabled = true) }
         ConclaveTabSwitch(options = options, selectedId = tab.rawValue, identifier = "transcript.tabs",
             onSelect = { raw -> presenter.select(TranscriptTab.init(rawValue = raw) ?: TranscriptTab.transcript) })
     }
-    TranscriptStatusRow(presenter, snapshot, page)
     TranscriptIssueBanner(presenter, snapshot)
-    if (TranscriptDiagnostics.driver != null) {
-        TranscriptFixtureBar()
-    }
-}
-
-@Composable
-private fun TranscriptStatusRow(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, page: TranscriptPageState) {
-    val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
-    val statusName = TranscriptCopy.status(snapshot.status)
-    val hostName = TranscriptCopy.host(snapshot.host)
-    val hostText = when {
-        hostName == null -> null
-        snapshot.host == TranscriptHostKind.named -> conclaveString(hostName, snapshot.controllerName)
-        else -> conclaveString(hostName)
-    }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            when (snapshot.status) {
-                TranscriptStatusKind.live -> Box(Modifier.size(8.dp).background(ext.live, CircleShape))
-                TranscriptStatusKind.paused -> Box(Modifier.size(8.dp).background(ext.warning, CircleShape))
-                TranscriptStatusKind.starting, TranscriptStatusKind.stopping, TranscriptStatusKind.reconnecting ->
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                else -> Unit
-            }
-            Row(Modifier.weight(1f).semantics(mergeDescendants = true) {}.testTag("transcript.status"),
-                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (statusName != null) {
-                    ConclaveText(conclaveString(statusName), line = "transcript.status.text", style = MaterialTheme.typography.titleSmall)
-                }
-                if (hostText != null) {
-                    ConclaveText(hostText, line = "transcript.status.host", style = MaterialTheme.typography.bodyMedium,
-                        color = scheme.onSurfaceVariant, maxLines = 2)
-                }
-            }
-        }
-        if (snapshot.canPause || snapshot.canStop || (snapshot.status == TranscriptStatusKind.ended && snapshot.offersStart)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-                if (snapshot.status == TranscriptStatusKind.ended && snapshot.offersStart) {
-                    val drafts = presenter.drafts
-                    val ready = TranscriptKeyPolicy.hasRequiredKeys(provider = drafts.provider, keysKnown = snapshot.keysKnown,
-                        openAICovered = snapshot.openAICovered, sarvamCovered = snapshot.sarvamCovered,
-                        providerKey = drafts.providerKey, assistantKey = drafts.assistantKey)
-                    ConclaveButton(title = conclaveString("trn_start"), role = ConclaveButtonRole.Primary,
-                        identifier = "transcript.status.start", enabled = ready, onClick = {
-                            presenter.start(options = TranscriptKeyPolicy.options(provider = drafts.provider,
-                                assistantModel = drafts.assistantModel, openAICovered = snapshot.openAICovered,
-                                sarvamCovered = snapshot.sarvamCovered, providerKey = drafts.providerKey,
-                                assistantKey = drafts.assistantKey))
-                            page.clearKeys()
-                        })
-                }
-                if (snapshot.canPause) {
-                    val paused = snapshot.phase == LiveNotesPhase.paused
-                    OutlinedButton(
-                        onClick = { if (paused) presenter.resume() else presenter.pause() },
-                        enabled = !snapshot.controlsDisabled,
-                        modifier = Modifier.heightIn(min = 48.dp).testTag("transcript.status.pause"),
-                    ) { ConclaveText(conclaveString(if (paused) "trn_resume" else "trn_pause"), line = "transcript.status.pause") }
-                }
-                if (snapshot.canStop) {
-                    val stopLabel = conclaveString("trn_stop_confirm")
-                    OutlinedButton(
-                        onClick = { presenter.requestStop() },
-                        enabled = !snapshot.controlsDisabled,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = scheme.error),
-                        modifier = Modifier.heightIn(min = 48.dp).testTag("transcript.status.stop")
-                            .semantics { contentDescription = stopLabel },
-                    ) { ConclaveText(conclaveString("trn_stop"), line = "transcript.status.stop") }
-                }
-            }
-        }
-    }
 }
 
 @Composable
@@ -607,6 +567,30 @@ private fun TranscriptStartBar(presenter: TranscriptPresenter, snapshot: Transcr
 }
 
 @Composable
+private fun TranscriptRestartBar(presenter: TranscriptPresenter, snapshot: TranscriptSnapshot, page: TranscriptPageState) {
+    val drafts = presenter.drafts
+    val ready = TranscriptKeyPolicy.hasRequiredKeys(provider = drafts.provider, keysKnown = snapshot.keysKnown,
+        openAICovered = snapshot.openAICovered, sarvamCovered = snapshot.sarvamCovered,
+        providerKey = drafts.providerKey, assistantKey = drafts.assistantKey)
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        ConclaveButton(
+            title = conclaveString("trn_start"),
+            role = ConclaveButtonRole.Primary,
+            identifier = "transcript.status.start",
+            enabled = ready,
+            onClick = {
+                val current = presenter.drafts
+                presenter.start(options = TranscriptKeyPolicy.options(provider = current.provider,
+                    assistantModel = current.assistantModel, openAICovered = snapshot.openAICovered,
+                    sarvamCovered = snapshot.sarvamCovered, providerKey = current.providerKey,
+                    assistantKey = current.assistantKey))
+                page.clearKeys()
+            },
+        )
+    }
+}
+
+@Composable
 private fun TranscriptAnnouncementRegion(presenter: TranscriptPresenter) {
     val announcement = presenter.announcement ?: return
     val name = TranscriptCopy.announcement(announcement.kind) ?: return
@@ -638,21 +622,17 @@ private fun TranscriptFinalizedRegion(feed: TranscriptFeed) {
 }
 
 @Composable
-private fun TranscriptFixtureBar() {
-    var refresh by remember { mutableStateOf(0) }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            for (script in TranscriptFixtureScriptName.allCases) {
-                TextButton(onClick = {
-                    TranscriptDiagnostics.driver?.run(script)
-                    refresh += 1
-                }, modifier = Modifier.testTag("transcript.fixture." + script.rawValue)) {
-                    ConclaveText(script.rawValue, line = "transcript.fixture." + script.rawValue, style = MaterialTheme.typography.labelSmall)
-                }
-            }
-        }
-        val readout = TranscriptDiagnostics.readout() + (if (refresh >= 0) "" else "")
-        ConclaveText(readout, line = "transcript.calls", style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("transcript.calls"))
+private fun TranscriptFixtureMenuItems(onRun: () -> Unit) {
+    ConclaveMenuDivider()
+    for (script in TranscriptFixtureScriptName.allCases) {
+        ConclaveMenuItem(
+            title = script.rawValue,
+            identifier = "transcript.fixture." + script.rawValue,
+            onClick = {
+                TranscriptDiagnostics.driver?.run(script)
+                onRun()
+            },
+        )
     }
+    ConclaveMenuItem(title = TranscriptDiagnostics.readout(), identifier = "transcript.calls", onClick = {}, enabled = false)
 }

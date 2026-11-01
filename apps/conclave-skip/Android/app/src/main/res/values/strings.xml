@@ -2114,7 +2114,7 @@
     <string name="fx_publish_cap">While effects are on, video is sent at up to 720p and 30 fps.</string>
 
 
-    <string name="trn_title">Transcript</string>
+    <string name="trn_title">Live notes</string>
     <string name="trn_tab_transcript">Transcript</string>
     <string name="trn_tab_ask">Ask</string>
     <string name="trn_tab_minutes">Minutes</string>
@@ -2155,6 +2155,8 @@
     <string name="trn_following">Following live</string>
     <string name="trn_pause">Pause</string>
     <string name="trn_resume">Resume</string>
+    <string name="trn_pause_live_notes">Pause live notes</string>
+    <string name="trn_resume_live_notes">Resume live notes</string>
     <string name="trn_stop">Stop</string>
     <string name="trn_stop_title">Stop live notes for everyone?</string>
     <string name="trn_stop_message">The transcript and minutes so far stay available to export.</string>
@@ -2166,7 +2168,7 @@
     <string name="trn_you">You</string>
     <string name="trn_still_speaking">Still speaking</string>
     <string name="trn_ask_empty_title">Ask the meeting</string>
-    <string name="trn_ask_empty_body">Get a private answer drawn from everything that’s been said. Only you see it.</string>
+    <string name="trn_ask_empty_body">Get answers drawn from everything that’s been said so far.</string>
     <string name="trn_ask_suggest_decisions">What decisions have we made?</string>
     <string name="trn_ask_suggest_summary">Summarize the discussion</string>
     <string name="trn_ask_suggest_actions">What are the action items?</string>
@@ -2182,9 +2184,12 @@
     <string name="trn_conclave_answered">Conclave answered</string>
     <string name="trn_answer_ready">Answer ready</string>
     <string name="trn_minutes_updating">Updating minutes</string>
-    <string name="trn_minutes_updated">Updated %1$s</string>
+    <string name="trn_minutes_updated_now">Updated just now</string>
+    <string name="trn_minutes_updated_min">Updated %1$d min ago</string>
+    <string name="trn_minutes_updated_hr">Updated %1$d hr ago</string>
     <string name="trn_minutes_auto">Minutes build automatically</string>
     <string name="trn_refresh_minutes">Refresh minutes</string>
+    <string name="trn_refresh">Refresh</string>
     <string name="trn_post_recap_detail">Conclave writes a short recap in the room chat for everyone.</string>
     <string name="trn_section_summary">Summary</string>
     <string name="trn_section_topics">Topics</string>

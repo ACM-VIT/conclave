@@ -200,7 +200,8 @@ class TRN2TranscriptBridgeTests {
         for (state in AskRowState.allCases) TranscriptCopy.askState(state)?.let { names.add(it) }
         for (section in MinutesSection.allCases) names.add(TranscriptCopy.section(section))
         for (kind in MinutesEmptyKind.allCases) { TranscriptCopy.emptyTitle(kind)?.let { names.add(it) }; TranscriptCopy.emptyBody(kind)?.let { names.add(it) } }
-        for (kind in MinutesStatusKind.allCases) names.add(TranscriptCopy.minutesStatus(kind))
+        for (kind in MinutesStatusKind.allCases) TranscriptCopy.minutesStatus(kind)?.let { names.add(it) }
+        for (kind in MinutesAgeKind.allCases) names.add(TranscriptCopy.minutesAge(kind))
         for (phase in RecapPhase.allCases) TranscriptCopy.recapValue(phase)?.let { names.add(it) }
         for (kind in TranscriptAnnouncementKind.allCases) TranscriptCopy.announcement(kind)?.let { names.add(it) }
 
