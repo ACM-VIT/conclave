@@ -423,17 +423,12 @@ private struct TranscriptPanelSession: View {
     let subtitle: String
 
     var body: some View {
-        if snapshot.status == TranscriptStatusKind.ended && snapshot.offersStart {
-            tabs.conclaveFloatingActionBar { TranscriptPanelRestartBar(transcript: transcript, snapshot: snapshot) }
-        } else {
-            tabs
-        }
-    }
-
-    private var tabs: some View {
         TranscriptPanelTabContent(transcript: transcript, snapshot: snapshot)
             .conclaveTopBar {
                 TranscriptPanelTopBar(transcript: transcript, snapshot: snapshot, subtitle: subtitle)
+            }
+            .conclaveFloatingActionBar(isVisible: snapshot.status == TranscriptStatusKind.ended && snapshot.offersStart) {
+                TranscriptPanelRestartBar(transcript: transcript, snapshot: snapshot)
             }
     }
 }

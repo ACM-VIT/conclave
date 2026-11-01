@@ -2,8 +2,8 @@
 import SwiftUI
 
 extension View {
-    func conclaveFloatingActionBar<Bar: View>(shaded: Bool = true, @ViewBuilder _ bar: () -> Bar) -> some View {
-        modifier(ConclaveFloatingActionBar(bar: bar(), shaded: shaded))
+    func conclaveFloatingActionBar<Bar: View>(shaded: Bool = true, isVisible: Bool = true, @ViewBuilder _ bar: () -> Bar) -> some View {
+        modifier(ConclaveFloatingActionBar(bar: bar(), shaded: shaded, isVisible: isVisible))
     }
 
     func conclaveFloatingActionBar<Bar: View>(shaded: Bool, over surface: Color, @ViewBuilder _ bar: () -> Bar) -> some View {
@@ -18,6 +18,7 @@ private enum ConclaveFloatingActionVeil {
 private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
     let bar: Bar
     let shaded: Bool
+    var isVisible = true
     var surface: Color? = nil
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -31,24 +32,28 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
             content
                 .scrollEdgeEffectStyle(.soft, for: .bottom)
                 .safeAreaBar(edge: .bottom, spacing: 0) {
-                    bar.background {
-                        if needsOpaqueSurface {
-                            ground.ignoresSafeArea(edges: .bottom)
+                    if isVisible {
+                        bar.background {
+                            if needsOpaqueSurface {
+                                ground.ignoresSafeArea(edges: .bottom)
+                            }
                         }
                     }
                 }
         } else {
             content.safeAreaInset(edge: .bottom, spacing: 0) {
-                bar.background {
-                    if needsOpaqueSurface {
-                        ground.ignoresSafeArea(edges: .bottom)
-                    } else if shaded {
-                        fadedGround
-                    } else {
-                        Rectangle().fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom)
+                if isVisible {
+                    bar.background {
+                        if needsOpaqueSurface {
+                            ground.ignoresSafeArea(edges: .bottom)
+                        } else if shaded {
+                            fadedGround
+                        } else {
+                            Rectangle().fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom)
+                        }
                     }
+                    .padding(.top, shaded && !needsOpaqueSurface ? ConclaveFloatingActionVeil.fadeHeight : 0)
                 }
-                .padding(.top, shaded && !needsOpaqueSurface ? ConclaveFloatingActionVeil.fadeHeight : 0)
             }
         }
     }
