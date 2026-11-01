@@ -74,7 +74,6 @@ enum ConclaveSymbols {
     static let chevronDown: String = "chevron.down"
     static let chevronRight: String = "chevron.right"
     static let circleCircle: String = "circle.circle"
-    static let clock: String = "clock"
     static let clockArrowCirclepath: String = "clock.arrow.circlepath"
     static let deleteBackward: String = "delete.backward"
     static let docOnClipboard: String = "doc.on.clipboard"
@@ -92,7 +91,6 @@ enum ConclaveSymbols {
     static let line3Horizontal: String = "line.3.horizontal"
     static let line3HorizontalDecreaseCircle: String = "line.3.horizontal.decrease.circle"
     static let link: String = "link"
-    static let listBullet: String = "list.bullet"
     static let listBulletClipboard: String = "list.bullet.clipboard"
     static let megaphone: String = "megaphone"
     static let nosign: String = "nosign"
@@ -120,6 +118,5 @@ enum ConclaveSymbols {
     static let videoBadgePlus: String = "video.badge.plus"
     static let wifiSlash: String = "wifi.slash"
     static let xmarkCircle: String = "xmark.circle"
-    static let xmarkCircleFill: String = "xmark.circle.fill"
 }
 #endif
