@@ -71,4 +71,53 @@ class S6CFenceRegressionTests {
         NativeAuthSessionBridge.storeSetCookieHeader("$name=; Max-Age=0; Path=/", url.absoluteString)
     }
 
+    private fun set(manager: SocketIOManager, field: String, value: Any?) {
+        SocketIOManager::class.java.getDeclaredField(field).apply { isAccessible = true }.set(manager, value)
+    }
+
+    private fun register(manager: SocketIOManager, socket: Socket) {
+        SocketIOManager::class.java.getDeclaredMethod("registerEventHandlers", Socket::class.java)
+            .apply { isAccessible = true }.invoke(manager, socket)
+    }
+
+    private fun deliver(socket: Socket, event: String, packet: JSONObject) {
+        val listeners = socket.listeners(event).toList()
+        assertTrue(listeners.isNotEmpty())
+        var failure: Throwable? = null
+        val worker = Thread {
+            try { listeners.forEach { it.call(packet) } } catch (error: Throwable) { failure = error }
+        }
+        worker.start()
+        worker.join(5000)
+        assertFalse(worker.isAlive)
+        failure?.let { throw it }
+    }
+
+    private fun checkDelivery(assistant: Boolean, replaceBeforeDelivery: Boolean) {
+        val manager = SocketIOManager()
+        val origin = IO.socket("http://127.0.0.1:1")
+        set(manager, "socket", origin)
+        set(manager, "activeRoomId", "same-room")
+        set(manager, "activeRoomAliases", setOf("same-room"))
+        register(manager, origin)
+        var deliveries = 0
+        var onMain = false
+        manager.onConclaveAssistantPacket = { deliveries += 1; onMain = Looper.myLooper() == Looper.getMainLooper() }
+        manager.onParticipantMediaPermissionsChanged = { deliveries += 1; onMain = Looper.myLooper() == Looper.getMainLooper() }
+        val event = if (assistant) SocketEvent.conclaveMessage else SocketEvent.participantMediaPermissionsChanged
+        val packet = if (assistant) JSONObject("""{"id":"answer","roomId":"same-room","reasoning":"pending"}""")
+            else JSONObject("""{"roomId":"same-room","unmuteAllowed":false,"videoAllowed":false}""")
+        deliver(origin, event, packet)
+        assertEquals(0, deliveries)
+        if (replaceBeforeDelivery) set(manager, "socket", IO.socket("http://127.0.0.1:2"))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(if (replaceBeforeDelivery) 0 else 1, deliveries)
+        if (!replaceBeforeDelivery) assertTrue(onMain)
+        set(manager, "socket", null)
+    }
+
+    @Test fun permissionsAreDeliveredOnMain() = checkDelivery(assistant = false, replaceBeforeDelivery = false)
+    @Test fun assistantPacketsAreDeliveredOnMain() = checkDelivery(assistant = true, replaceBeforeDelivery = false)
+    @Test fun queuedPermissionsFromAReplacedSocketAreDropped() = checkDelivery(assistant = false, replaceBeforeDelivery = true)
+    @Test fun queuedAssistantPacketsFromAReplacedSocketAreDropped() = checkDelivery(assistant = true, replaceBeforeDelivery = true)
 }

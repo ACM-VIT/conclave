@@ -3362,6 +3362,12 @@ internal class SocketIOManager {
         )
     }
 
+    private fun deliverSocketEvent(origin: Socket, delivery: () -> Unit) {
+        closeConsumerHandler.post {
+            if (this.socket === origin) delivery()
+        }
+    }
+
     private fun registerEventHandlers(socket: Socket) {
         socket.on(SocketEvent.userJoined, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
@@ -3460,8 +3466,10 @@ internal class SocketIOManager {
             if (this.socket !== socket) return@Listener
 
             decodeConclaveAssistantPacket(args.firstOrNull())?.let { packet ->
-                if (eventRoomIdMatchesActiveOrPending(packet.roomId, allowMissingRoomId = true)) {
-                    onConclaveAssistantPacket?.invoke(packet)
+                deliverSocketEvent(socket) {
+                    if (eventRoomIdMatchesActiveOrPending(packet.roomId, allowMissingRoomId = true)) {
+                        onConclaveAssistantPacket?.invoke(packet)
+                    }
                 }
             }
             val notification = decodeConclaveMessage(args.firstOrNull()) ?: return@Listener
@@ -3566,8 +3574,11 @@ internal class SocketIOManager {
         socket.on(SocketEvent.participantMediaPermissionsChanged, Emitter.Listener { args ->
             if (this.socket !== socket) return@Listener
             val notification = decode<ParticipantMediaPermissionsChangedNotification>(args.firstOrNull()) ?: return@Listener
-            if (!eventRoomIdMatchesActiveOrPending(notification.roomId)) return@Listener
-            onParticipantMediaPermissionsChanged?.invoke(notification)
+            deliverSocketEvent(socket) {
+                if (eventRoomIdMatchesActiveOrPending(notification.roomId)) {
+                    onParticipantMediaPermissionsChanged?.invoke(notification)
+                }
+            }
         })
 
         socket.on(SocketEvent.ttsDisabledChanged, Emitter.Listener { args ->
