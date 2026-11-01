@@ -5945,13 +5945,22 @@
     "Vote" : {
       "extractionState" : "manual"
     },
+    "Vote for %@" : {
+      "extractionState" : "manual"
+    },
     "Vote for a Game" : {
+      "extractionState" : "manual"
+    },
+    "Vote for yourself" : {
       "extractionState" : "manual"
     },
     "Vote open" : {
       "extractionState" : "manual"
     },
     "Vote too, then start the winner." : {
+      "extractionState" : "manual"
+    },
+    "Voted" : {
       "extractionState" : "manual"
     },
     "Wait for Green" : {

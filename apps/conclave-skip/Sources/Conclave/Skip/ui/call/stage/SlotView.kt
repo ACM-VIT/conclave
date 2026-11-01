@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -134,8 +135,15 @@ private fun ParticipantTile(
     val menu = remember(slot, model, kind, titles, moveTitles, isRtl) {
         stageTileMenu(slot, model, kind, titles, selfViewMoveSections(slot, model, moveTitles, isRtl))
     }
-    val actions = remember(menu) { stageTileActions(menu, stage) }
+    val menuActions = remember(menu) { stageTileActions(menu, stage) }
     val actionsLabel = conclaveString("stg_tile_actions")
+    val games = LocalActivitySession.current?.games
+    val adornment = if (isShare) null else games?.tileAdornment(slot.userId)
+    val voteLabel = adornment?.let { tileVoteLabel(it) }
+    val castVote: (String) -> Unit = { userId ->
+        if (games?.voteFromTile(userId) == ActivityTapResult.dispatched) haptics.gesture(FeedbackKind.voteCast)
+    }
+    val actions = remember(menuActions, adornment, voteLabel) { tileVoteActions(menuActions, adornment, voteLabel.orEmpty(), castVote) }
 
     val zoom = remember { ShareZoomState() }
     val zoomable = ShareZoomPolicy.isZoomable(slotId = slot.id, role = role, isLocal = model.isLocal)
@@ -215,12 +223,45 @@ private fun ParticipantTile(
         TileReconnectDetail(entry, isShare, Modifier.fillMaxSize())
         OneOnOneCameraOffCaption(slot, entry, stage, isShare, Modifier.fillMaxSize())
         TileUnpinTarget(slot, entry, stage, isShare, Modifier.align(Alignment.TopEnd))
+        if (adornment != null && !minimized) {
+            TileVoteChip(adornment, slot.id, voteLabel.orEmpty(), castVote, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp))
+        }
         if (isShare) {
             ShareResetZoomChip(zoom, zoomable, onReset = {
                 zoom.settle(ShareZoomValue.identity, scope, reduceMotion, renderTargetResize)
             }, modifier = Modifier.align(Alignment.TopEnd))
         }
         TileMenuAnchor(menuState, menu, stage, "stage.tile.menu.${slot.id}", Modifier.align(AbsoluteAlignment.TopLeft))
+    }
+}
+
+internal const val TILE_VOTE_ACTION_ID = "game.vote"
+
+internal fun tileVoteActions(
+    base: List<ConclaveTileAction>, adornment: StageTileAdornment?, label: String, vote: (String) -> Unit,
+): List<ConclaveTileAction> {
+    if (adornment == null || adornment.isSelected) return base
+    val userId = adornment.userId
+    return listOf(ConclaveTileAction(TILE_VOTE_ACTION_ID, label) { vote(userId) }) + base
+}
+
+@Composable
+private fun tileVoteLabel(adornment: StageTileAdornment): String =
+    if (adornment.isYou) conclaveString("stg_vote_for_yourself") else conclaveString("stg_vote_for", adornment.name)
+
+@Composable
+private fun TileVoteChip(adornment: StageTileAdornment, slotId: String, label: String, vote: (String) -> Unit, modifier: Modifier) {
+    if (adornment.isSelected) {
+        ConclaveStageChip(title = conclaveString("stg_voted"), identifier = "stage.tile.vote.$slotId",
+            modifier = modifier.clearAndSetSemantics { }, icon = ConclaveIcons.CheckFill0)
+    } else {
+        ConclaveStageChip(title = conclaveString("stg_vote"), identifier = "stage.tile.vote.$slotId",
+            modifier = modifier.clearAndSetSemantics {
+                contentDescription = label
+                role = Role.Button
+                onClick(label = label) { vote(adornment.userId); true }
+            },
+            onClick = { vote(adornment.userId) })
     }
 }
 

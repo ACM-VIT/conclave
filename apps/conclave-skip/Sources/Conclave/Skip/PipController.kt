@@ -66,8 +66,13 @@ object PipController {
         if (nativeRootComposed != value) nativeRootComposed = value
     }
 
+    var onStashedChanged: (Boolean) -> Unit = { stashed -> MeetingViewModel.shared.setPipStashed(stashed) }
+
     fun setPictureInPictureUiState(stashed: Boolean, transitioningToPip: Boolean) {
-        if (isStashed != stashed) isStashed = stashed
+        if (isStashed != stashed) {
+            isStashed = stashed
+            onStashedChanged(stashed)
+        }
         if (isTransitioningToPip != transitioningToPip) isTransitioningToPip = transitioningToPip
     }
 

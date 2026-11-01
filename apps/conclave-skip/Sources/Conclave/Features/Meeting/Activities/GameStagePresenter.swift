@@ -10,6 +10,8 @@ final class GameStagePresenter {
     private(set) var results: GameResultsModel = GameResultsModel.empty
     private(set) var interaction: GameInteractionModel = GameInteractionModel.idle
 
+    private(set) var tileAdornments: [String: StageTileAdornment] = [:]
+
     private(set) var feedbackState = MeetingShellFeedbackState(session: 0, token: FeedbackToken.baseline)
 
     private(set) var wordleDraft: String = ""
@@ -157,6 +159,20 @@ final class GameStagePresenter {
         onCommand?(GameStageCommand(kind: GameStageCommandKind.move, type: stamped.type,
                                     payloadJSON: GameMoveAdapter.payloadJSON(stamped), requestId: requestId))
         return ActivityTapResult.dispatched
+    }
+
+    func tileAdornment(for userId: String) -> StageTileAdornment? {
+        tileAdornments[userId]
+    }
+
+    func voteFromTile(_ userId: String) -> ActivityTapResult {
+        guard let adornment = tileAdornments[userId], !adornment.isSelected else { return ActivityTapResult.ignored }
+        return send(GameMoveIntent.vote(userId))
+    }
+
+    private func syncTileAdornments() {
+        let next = StageTileAdornmentPolicy.adornments(personVote: scene.mostLikelyTo)
+        if next != tileAdornments { tileAdornments = next }
     }
 
     func join() {
@@ -334,6 +350,7 @@ final class GameStagePresenter {
         if chessPendingMove != ChessPendingMoveModel.none { chessPendingMove = ChessPendingMoveModel.none }
         if chrome.withRevision(0) != GameChromeModel.empty { chrome = GameChromeModel.empty.withRevision(chrome.revision + 1) }
         if scene.withRevision(0) != GameScene.empty { scene = GameScene.empty.withRevision(scene.revision + 1) }
+        syncTileAdornments()
         if countdown != nil { countdown = nil }
         if results.withRevision(0) != GameResultsModel.empty { results = GameResultsModel.empty.withRevision(results.revision + 1) }
         publishInteraction()
@@ -428,6 +445,7 @@ final class GameStagePresenter {
                                   lobby: lobby, projection: projection, trivia: trivia, bluff: bluff, wouldYouRather: wouldYouRather,
                                   mostLikelyTo: mostLikelyTo, reaction: reaction, imposter: imposter, wordle: wordle, chess: chess, zip: zip)
         if nextScene != scene { scene = nextScene.withRevision(scene.revision + 1) }
+        syncTileAdornments()
         syncWordleDraft(wordle)
         syncChessPending(chess)
         for outcome in outcomes where outcome != FeedbackKind.none {

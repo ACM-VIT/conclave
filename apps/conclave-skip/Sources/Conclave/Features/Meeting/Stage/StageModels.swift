@@ -422,3 +422,22 @@ struct StageInputs: Equatable {
         return nil
     }
 }
+
+struct StageTileAdornment: Equatable {
+    let userId: String
+    let name: String
+    let isYou: Bool
+    let isSelected: Bool
+}
+
+enum StageTileAdornmentPolicy {
+    static func adornments(personVote scene: PersonVoteScene?) -> [String: StageTileAdornment] {
+        guard let scene, scene.phase == "vote", scene.canVote else { return [:] }
+        var result: [String: StageTileAdornment] = [:]
+        for candidate in scene.candidates where candidate.isEligible && !candidate.id.isEmpty {
+            result[candidate.id] = StageTileAdornment(userId: candidate.id, name: candidate.name, isYou: candidate.isYou,
+                                                      isSelected: candidate.isMine)
+        }
+        return result
+    }
+}

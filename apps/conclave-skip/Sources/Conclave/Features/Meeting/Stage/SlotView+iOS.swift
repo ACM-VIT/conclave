@@ -79,7 +79,9 @@ struct ParticipantTile: View {
     @State private var menuFlips = 0
 
     @State private var zoom = ShareZoomState()
+    @State private var voteCasts = 0
     @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.activitySession) private var session
 
     var body: some View {
         let isShare = slot.id.hasPrefix("share:")
@@ -91,10 +93,13 @@ struct ParticipantTile: View {
         let extraSections = SelfViewMoveText.sections(slot: slot, model: model, layoutDirection: layoutDirection)
         let menu = TileMenuModel.make(slot: slot, model: model, stage: stage, people: extraSections)
         let zoomable = ShareZoomPolicy.isZoomable(slotId: slot.id, role: slot.role, isLocal: model.isLocal)
+        let games = session?.games
+        let adornment = isShare ? nil : games?.tileAdornment(for: slot.userId)
         ConclaveTileChrome(model: StageSlotViewModel.pausedModel(model, slot: slot, stage: stage), speaking: speaking,
                            variant: slot.role.isSelfView ? .selfView : .grid,
                            isSpotlight: slot.role == .spotlightMain, cornerRadius: StageSlotViewModel.cornerRadius(slot.role),
-                           actions: menu.accessibilityActions(stage: stage, onDispatched: noteDispatch),
+                           actions: TileVoteAdornment.actions(menu.accessibilityActions(stage: stage, onDispatched: noteDispatch),
+                                                              adornment: adornment, vote: castVote),
                            identifier: "stage.tile." + slot.id,
 
                            accessibilityName: slot.role == .programFeed
@@ -119,9 +124,15 @@ struct ParticipantTile: View {
         .accessibilityAddTraits(slot.role == .selfMinimized ? .isButton : [])
         .stageTileMenu(menu, model: model, speaking: speaking, stage: stage, onDispatched: noteDispatch)
         .conclaveGestureFeedback(.selectionChanged, trigger: menuFlips)
+        .conclaveGestureFeedback(.voteCast, trigger: voteCasts)
         .overlay {
 
             MinimizedSelfFace(stage: stage, isMinimized: slot.role == .selfMinimized)
+        }
+        .overlay(alignment: .bottom) {
+            if let adornment, slot.role != .selfMinimized {
+                TileVoteAdornment(adornment: adornment, slotId: slot.id, vote: castVote)
+            }
         }
         .overlay { CameraPausedCaption(slot: slot, entry: entry, stage: stage, isShare: isShare) }
         .overlay { TileReconnectDetail(entry: entry, isShare: isShare) }
@@ -142,6 +153,46 @@ struct ParticipantTile: View {
         if itemId == TileMenuItemId.flipCamera.rawValue {
             menuFlips += 1
         }
+    }
+
+    private func castVote(_ userId: String) {
+        if session?.games.voteFromTile(userId) == .dispatched {
+            voteCasts += 1
+        }
+    }
+}
+
+struct TileVoteAdornment: View {
+    let adornment: StageTileAdornment
+    let slotId: String
+    let vote: (String) -> Void
+
+    static let actionId = "game.vote"
+
+    static func label(_ adornment: StageTileAdornment) -> String {
+        adornment.isYou ? ConclaveStrings.text("Vote for yourself") : ConclaveStrings.format("Vote for %@", adornment.name)
+    }
+
+    static func actions(_ base: [ConclaveTileAction], adornment: StageTileAdornment?,
+                        vote: @escaping (String) -> Void) -> [ConclaveTileAction] {
+        guard let adornment, !adornment.isSelected else { return base }
+        let userId = adornment.userId
+        return [ConclaveTileAction(id: actionId, title: label(adornment), action: { vote(userId) })] + base
+    }
+
+    var body: some View {
+        Group {
+            if adornment.isSelected {
+                ConclaveStageChip(title: ConclaveStrings.text("Voted"), systemImage: ConclaveSymbols.checkmark,
+                                  identifier: "stage.tile.vote." + slotId)
+                    .accessibilityHidden(true)
+            } else {
+                ConclaveStageChip(title: ConclaveStrings.text("Vote"), identifier: "stage.tile.vote." + slotId,
+                                  onTap: { vote(adornment.userId) })
+                    .accessibilityLabel(TileVoteAdornment.label(adornment))
+            }
+        }
+        .padding(.bottom, 8)
     }
 }
 

@@ -664,6 +664,9 @@
     <string name="stg_banner_resume">Resume</string>
     <string name="stg_use_audio_only">Use audio only</string>
     <string name="stg_vote">Vote</string>
+    <string name="stg_voted">Voted</string>
+    <string name="stg_vote_for">Vote for %1$s</string>
+    <string name="stg_vote_for_yourself">Vote for yourself</string>
     <string name="stg_less">Less</string>
     <string name="stg_more">More</string>
     <string name="stg_toast_joined">%1$s joined</string>
