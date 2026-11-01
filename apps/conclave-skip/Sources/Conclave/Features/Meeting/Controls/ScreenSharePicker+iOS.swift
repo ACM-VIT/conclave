@@ -134,7 +134,11 @@ final class ScreenSharePickerHostView: UIView, UIGestureRecognizerDelegate {
     }
 
     override func accessibilityActivate() -> Bool {
-        false
+        layoutIfNeeded()
+        guard isUserInteractionEnabled, let button = observedButton else { return false }
+        onArm?()
+        button.sendActions(for: .touchUpInside)
+        return true
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
