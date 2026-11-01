@@ -516,6 +516,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     var onCallAudioRouteChanged: (() -> Void)?
     var onLocalAudioProducerLost: (() -> Void)?
     var onLocalVideoProducerLost: (() -> Void)?
+    var onLocalScreenProducerLost: (() -> Void)?
     var onPlannedConsumerResetOutcome: ((String) -> Void)?
 
     private var suppressLocalStateCallbacks = false
@@ -4893,8 +4894,12 @@ final class WebRTCClient: NSObject, ObservableObject {
             closeSendProducer(oldProducer)
             debugLog("[WebRTC] Refreshed screen producer for \(connectionQuality.rawValue) bandwidth")
         } catch {
-            intentionalLocalScreenProducerCloseIds.remove(oldProducer.id)
+            let closeAlreadyArrived = intentionalLocalScreenProducerCloseIds.remove(oldProducer.id) == nil
             debugLog("[WebRTC] Failed to refresh screen producer for bandwidth: \(error)")
+            if closeAlreadyArrived, screenProducer === oldProducer {
+                await stopScreenSharing()
+                onLocalScreenProducerLost?()
+            }
         }
     }
 

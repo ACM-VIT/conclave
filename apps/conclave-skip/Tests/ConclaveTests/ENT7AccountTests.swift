@@ -384,11 +384,6 @@ struct ENT7AccountTests {
         #expect(firstBlock.text.contains("the c0nclav3 app"), "OQ9: the product name stays until the legal update")
     }
 
-    @Test func accountStringsResolveOnBothPlatforms() throws {
-        let catalog = try ent7Source("Sources/Conclave/Resources/Localizable.xcstrings")
-        let xml = try ent7Source("Android/app/src/main/res/values/strings.xml")
-    }
-
     @Test func accountStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent7Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])

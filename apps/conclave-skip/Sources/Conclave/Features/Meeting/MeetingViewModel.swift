@@ -2698,6 +2698,16 @@ final class MeetingViewModel {
                 await self.reassertLocalVideoPublishingIfNeeded(context: self.currentSocketEventContext())
             }
         }
+
+        webRTCClient.onLocalScreenProducerLost = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.state.isScreenSharing else { return }
+                await self.stopScreenCapture()
+                self.state.isScreenSharing = false
+                self.clearLocalActiveScreenShareIfNeeded()
+                self.reportScreenShareFailure(ScreenShareFailure.interrupted)
+            }
+        }
     }
 
     private func applyLocalMutedStateFromServer(_ muted: Bool, context: SocketEventContext? = nil) {
@@ -6287,6 +6297,10 @@ final class MeetingViewModel {
 
     private func stopScreenCaptureManager(source: ScreenShareStopSource) async {
         publishScreenShare(ScreenSharePhasePolicy.ended(screenShare, failure: ScreenShareFailure.none, stopSource: source))
+        await stopScreenCapture()
+    }
+
+    private func stopScreenCapture() async {
         #if canImport(UIKit) && !SKIP
         ScreenCaptureManager.shared.onBroadcastStopped = nil
         await ScreenCaptureManager.shared.stopCapture()
@@ -11097,7 +11111,8 @@ final class MeetingViewModel {
         debugLog("[Meeting] Screen share failure \(ScreenShareFailurePolicy.diagnosticCode(failure))")
         _ = shell.reportFailure(MeetingActionKind.screenShare, MeetingErrorClassifier.actionResult(classified))
         stage.postLocal(ScreenShareFailurePolicy.notice(failure))
-        if let message = MeetingErrorLegacyCopy.message(classified, device: MeetingMediaDevice.screen) {
+        if failure != ScreenShareFailure.interrupted,
+           let message = MeetingErrorLegacyCopy.message(classified, device: MeetingMediaDevice.screen) {
             state.errorMessage = message
         }
     }

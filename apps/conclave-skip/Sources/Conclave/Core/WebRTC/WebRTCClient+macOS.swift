@@ -38,6 +38,7 @@ final class WebRTCClient {
     var onCallAudioRouteChanged: (() -> Void)?
     var onLocalAudioProducerLost: (() -> Void)?
     var onLocalVideoProducerLost: (() -> Void)?
+    var onLocalScreenProducerLost: (() -> Void)?
 
     var testCallGate: (@MainActor (String) async throws -> Void)?
 

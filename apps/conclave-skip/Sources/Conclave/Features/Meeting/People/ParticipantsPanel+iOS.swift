@@ -153,24 +153,27 @@ private struct ParticipantsList: View {
                 }
                 guard step == PeopleFocusStep.placeHeader else { return }
                 let target = PeopleFocusTarget.header(request.sectionId)
+                func scroll<ID: Hashable>(_ id: ID, anchor: UnitPoint) {
+                    if reduceMotion {
+                        proxy.scrollTo(id, anchor: anchor)
+                    } else {
+                        withAnimation { proxy.scrollTo(id, anchor: anchor) }
+                    }
+                }
                 var isLive = true
                 var isPlaced = false
                 var attempts = 0
                 while isLive && !isPlaced && attempts < PeopleFocusTiming.scrollAttempts {
                     attempts += 1
-                    let lead = PeopleFocusTarget.lead(before: request.sectionId,
-                                                      in: PeopleSearchPolicy.filter(people.snapshot.sections, query: query),
-                                                      snapshot: people.snapshot, isSearching: PeopleSearchPolicy.isSearching(query))
+                    let lead = attempts == 1
+                        ? PeopleFocusTarget.lead(before: request.sectionId,
+                                                 in: PeopleSearchPolicy.filter(people.snapshot.sections, query: query),
+                                                 snapshot: people.snapshot, isSearching: PeopleSearchPolicy.isSearching(query))
+                        : nil
                     if let lead {
-                        if reduceMotion {
-                            proxy.scrollTo(lead, anchor: .top)
-                        } else {
-                            withAnimation { proxy.scrollTo(lead, anchor: .top) }
-                        }
-                    } else if reduceMotion {
-                        proxy.scrollTo(target, anchor: .top)
+                        scroll(lead, anchor: .top)
                     } else {
-                        withAnimation { proxy.scrollTo(target, anchor: .top) }
+                        scroll(target, anchor: .top)
                     }
                     try? await Task.sleep(for: .milliseconds(reduceMotion ? PeopleFocusTiming.reducedSettleMilliseconds
                                                                            : PeopleFocusTiming.settleMilliseconds))
@@ -181,26 +184,14 @@ private struct ParticipantsList: View {
                 if isLive && !isPlaced && !isMediumDetent,
                    let first = PeopleSearchPolicy.filter(people.snapshot.sections, query: query)
                     .first(where: { $0.id == request.sectionId })?.rowIds.first {
-                    let row = PeopleFocusTarget.row(request.sectionId, first)
-                    if reduceMotion {
-                        proxy.scrollTo(row, anchor: .bottom)
-                    } else {
-                        withAnimation { proxy.scrollTo(row, anchor: .bottom) }
-                    }
+                    scroll(PeopleFocusTarget.row(request.sectionId, first), anchor: .bottom)
                     try? await Task.sleep(for: .milliseconds(reduceMotion ? PeopleFocusTiming.reducedSettleMilliseconds
                                                                            : PeopleFocusTiming.settleMilliseconds))
                     guard !Task.isCancelled else { return }
                     isLive = PeopleSearchPolicy.filter(people.snapshot.sections, query: query).contains { $0.id == request.sectionId }
                     isPlaced = isLive && placement.isHeaderPlaced(request.sectionId)
-                    if isLive && !isPlaced,
-                       let lead = PeopleFocusTarget.lead(before: request.sectionId,
-                                                         in: PeopleSearchPolicy.filter(people.snapshot.sections, query: query),
-                                                         snapshot: people.snapshot, isSearching: PeopleSearchPolicy.isSearching(query)) {
-                        if reduceMotion {
-                            proxy.scrollTo(lead, anchor: .top)
-                        } else {
-                            withAnimation { proxy.scrollTo(lead, anchor: .top) }
-                        }
+                    if isLive && !isPlaced {
+                        scroll(target, anchor: .top)
                         try? await Task.sleep(for: .milliseconds(reduceMotion ? PeopleFocusTiming.reducedSettleMilliseconds
                                                                                : PeopleFocusTiming.settleMilliseconds))
                         guard !Task.isCancelled else { return }
@@ -210,6 +201,12 @@ private struct ParticipantsList: View {
                     promoteToLarge()
                     try? await Task.sleep(for: .milliseconds(PeopleFocusTiming.settleMilliseconds))
                     guard !Task.isCancelled else { return }
+                    if PeopleSearchPolicy.filter(people.snapshot.sections, query: query).contains(where: { $0.id == request.sectionId }) {
+                        scroll(target, anchor: .top)
+                        try? await Task.sleep(for: .milliseconds(reduceMotion ? PeopleFocusTiming.reducedSettleMilliseconds
+                                                                               : PeopleFocusTiming.settleMilliseconds))
+                        guard !Task.isCancelled else { return }
+                    }
                 }
 
                 people.focusRequestHandled(id: request.id)

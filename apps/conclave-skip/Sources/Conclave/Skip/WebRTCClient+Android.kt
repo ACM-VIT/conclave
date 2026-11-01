@@ -176,6 +176,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal var onCallAudioRouteChanged: (() -> Unit)? = null
     internal var onLocalAudioProducerLost: (() -> Unit)? = null
     internal var onLocalVideoProducerLost: (() -> Unit)? = null
+    internal var onLocalScreenProducerLost: (() -> Unit)? = null
 
     internal var localAudioEnabled: Boolean = false
         private set
@@ -3625,7 +3626,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             val nextProducer = try {
                 produceScreenVideo(transport, track, appData, connectionQuality)
             } catch (t: Throwable) {
-                intentionalLocalScreenProducerCloseIds.remove(oldProducer.id)
+                val closeAlreadyArrived = !intentionalLocalScreenProducerCloseIds.remove(oldProducer.id)
+                if (closeAlreadyArrived && screenProducer === oldProducer) {
+                    ScreenShareAndroidLog.warn("refreshLost", t)
+                    stopScreenSharing()
+                    onLocalScreenProducerLost?.invoke()
+                    return
+                }
                 throw t
             }
             if (screenProducer !== oldProducer || screenVideoTrack !== track) {

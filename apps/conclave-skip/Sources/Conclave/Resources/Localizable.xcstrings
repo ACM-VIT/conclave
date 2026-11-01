@@ -4686,6 +4686,9 @@
     "Screen sharing isn’t allowed on this device." : {
       "extractionState" : "manual"
     },
+    "Screen sharing stopped. Share your screen again." : {
+      "extractionState" : "manual"
+    },
     "Search" : {
       "extractionState" : "manual"
     },

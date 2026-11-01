@@ -39,6 +39,7 @@ final class WebRTCClient {
     var onCallAudioRouteChanged: (() -> Void)?
     var onLocalAudioProducerLost: (() -> Void)?
     var onLocalVideoProducerLost: (() -> Void)?
+    var onLocalScreenProducerLost: (() -> Void)?
 
     private(set) var localAudioEnabled: Bool = false
     var hasLocalAudioProducer: Bool { fatalError() }

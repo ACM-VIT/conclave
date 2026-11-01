@@ -202,6 +202,7 @@ struct SYS10ScreenShareTests {
         #expect(ScreenSharePhase.allCases.map { $0.rawValue } == ["idle", "choosing", "starting", "live", "stopping"])
         #expect(ScreenShareFailure.allCases.map { $0.rawValue } == [
             "none", "cancelled", "deniedBySystem", "extensionTimeout", "serviceRefused", "producerFailed", "notConfigured",
+            "interrupted",
         ])
         #expect(ScreenShareStopSource.allCases.map { $0.rawValue } == ["none", "person", "system", "host", "recovery", "callEnded"])
     }
@@ -222,6 +223,9 @@ struct SYS10ScreenShareTests {
         }
         #expect(ScreenShareFailurePolicy.iosCopyKey(detail: "deniedBySystem") == "Screen sharing isn’t allowed on this device.")
         #expect(ScreenShareFailurePolicy.androidResourceName(detail: "deniedBySystem") == "sys_err_screen_denied")
+        #expect(ScreenShareFailurePolicy.iosCopyKey(detail: "interrupted") == "Screen sharing stopped. Share your screen again.")
+        #expect(ScreenShareFailurePolicy.androidResourceName(detail: "interrupted") == "sys_share_interrupted")
+        #expect(ScreenShareStartError(failure: .interrupted).errorDescription == "Screen sharing stopped. Share your screen again.")
 
         #expect(ScreenShareFailurePolicy.failure(detail: "") == .producerFailed)
         let notice = ScreenShareFailurePolicy.notice(.serviceRefused)

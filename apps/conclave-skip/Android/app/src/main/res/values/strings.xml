@@ -264,6 +264,7 @@
     <string name="sys_diag_fixture_error">Record test error</string>
     <string name="sys_diag_fixture_hang">Simulate hang</string>
     <string name="sys_share_failed">Couldn’t start screen sharing. Try again.</string>
+    <string name="sys_share_interrupted">Screen sharing stopped. Share your screen again.</string>
     <string name="sys_err_screen_denied">Screen sharing isn’t allowed on this device.</string>
     <string name="sys_channel_share">Screen sharing</string>
     <string name="sys_channel_share_desc">Shows while you’re sharing your screen.</string>

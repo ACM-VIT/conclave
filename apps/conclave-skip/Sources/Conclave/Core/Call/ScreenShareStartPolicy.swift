@@ -5,7 +5,7 @@ enum ScreenSharePhase: String, CaseIterable, Equatable {
 }
 
 enum ScreenShareFailure: String, CaseIterable, Equatable {
-    case none, cancelled, deniedBySystem, extensionTimeout, serviceRefused, producerFailed, notConfigured
+    case none, cancelled, deniedBySystem, extensionTimeout, serviceRefused, producerFailed, notConfigured, interrupted
 }
 
 enum ScreenShareStopSource: String, CaseIterable, Equatable {
@@ -247,19 +247,26 @@ enum ScreenShareFailurePolicy {
     }
 
     static func iosCopyKey(detail: String) -> String {
-        failure(detail: detail) == ScreenShareFailure.deniedBySystem
-            ? "Screen sharing isn’t allowed on this device."
-            : "Couldn’t start screen sharing. Try again."
+        switch failure(detail: detail) {
+        case .deniedBySystem: return "Screen sharing isn’t allowed on this device."
+        case .interrupted: return "Screen sharing stopped. Share your screen again."
+        default: return "Couldn’t start screen sharing. Try again."
+        }
     }
 
     static func androidResourceName(detail: String) -> String {
-        failure(detail: detail) == ScreenShareFailure.deniedBySystem ? "sys_err_screen_denied" : "sys_share_failed"
+        switch failure(detail: detail) {
+        case .deniedBySystem: return "sys_err_screen_denied"
+        case .interrupted: return "sys_share_interrupted"
+        default: return "sys_share_failed"
+        }
     }
 
     static func englishSentence(_ failure: ScreenShareFailure) -> String {
         switch failure {
         case .cancelled: return "Screen sharing was cancelled."
         case .deniedBySystem: return "Screen sharing isn't allowed on this device."
+        case .interrupted: return "Screen sharing stopped. Share your screen again."
         default: return "Couldn't start screen sharing. Try again."
         }
     }

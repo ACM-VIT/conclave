@@ -351,9 +351,6 @@ struct SET3VideoConnectionTests {
         }
     }
 
-    @Test func theCeilingSectionsStayFreeOfStoresSoTheSystemPressureRulesHold() throws {
-    }
-
     static let sharedFiles = [
         "Sources/Conclave/Features/Meeting/Settings/SettingsPresenter.swift",
         "Sources/Conclave/Features/Meeting/Settings/SettingsRoute.swift",
