@@ -163,8 +163,9 @@ private struct AndroidVersionHTTPResponse: Decodable {
 #endif
 
 enum VersionGateService {
-    static func versionURL(joinURL: URL) -> URL? {
+    static func versionURL(joinURL: URL, isDebugSimulator: Bool = false) -> URL? {
         guard let scheme = joinURL.scheme, let host = joinURL.host, !host.isEmpty else { return nil }
+        if isDebugSimulator && !["localhost", "127.0.0.1", "::1"].contains(host.lowercased()) { return nil }
         var base = scheme + "://" + host
         if let port = joinURL.port {
             base += ":" + String(port)
@@ -195,7 +196,14 @@ enum VersionGateService {
         #if os(macOS) && !SKIP
         return VersionGateFetch.unavailable
         #else
-        guard let url = versionURL(joinURL: SfuJoinService.resolveJoinURL()) else { return VersionGateFetch.unavailable }
+        #if DEBUG && targetEnvironment(simulator) && !SKIP
+        let isDebugSimulator = true
+        #else
+        let isDebugSimulator = false
+        #endif
+        guard let url = versionURL(joinURL: SfuJoinService.resolveJoinURL(), isDebugSimulator: isDebugSimulator) else {
+            return VersionGateFetch.unavailable
+        }
         #if SKIP
         do {
             let raw: String = try await withCheckedThrowingContinuation { continuation in

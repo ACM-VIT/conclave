@@ -106,5 +106,25 @@ struct S6BReviewRegressionTests {
         router.reset()
     }
 
+    @Test func debugSimulatorVersionURLRejectsProductionEvenWithAViewerJoinURL() throws {
+        let production = try #require(URL(string: "https://conclave.acmvit.in/api/sfu/join"))
+        #expect(VersionGateService.versionURL(joinURL: production, isDebugSimulator: true) == nil)
+        #expect(VersionGateService.versionURL(joinURL: production, isDebugSimulator: false)?.path == "/api/version")
+        let local = try #require(URL(string: "http://127.0.0.1:3000/api/sfu/join"))
+        #expect(VersionGateService.versionURL(joinURL: local, isDebugSimulator: true)?.absoluteString == "http://127.0.0.1:3000/api/version")
+    }
+
+    @Test(arguments: ["<html>captive portal</html>", "{", "null", "[]"])
+    func unusableSuccessfulVersionBodyPreservesCachedMinimum(_ body: String) {
+        let result = VersionGatePolicy.resolve(fetch: VersionGateService.decode(statusCode: 200, json: body),
+                                               platform: "ios", currentVersion: "2.0.0", cachedMinimum: "2.1.0")
+        #expect(result.cache == .keep)
+        #expect(result.state.updateRequired)
+        let malformedField = VersionGatePolicy.resolve(fetch: VersionGateService.decode(statusCode: 200, json: #"{"minNativeVersion":false}"#),
+                                                       platform: "ios", currentVersion: "2.0.0", cachedMinimum: "2.1.0")
+        #expect(malformedField.cache == .clear)
+        #expect(!malformedField.state.updateRequired)
+    }
+
 }
 #endif
