@@ -188,6 +188,28 @@ struct CHT4PhotoTests {
         #expect(chat.composer.inlineNotice == .photoTooLarge)
     }
 
+    @Test func privateRecipientNeverDispatchesAReadyPhotoAndRetainsTheDraft() {
+        for caption in ["", "private caption", "/help"] {
+            let attachment = ready("file:///private-photo.jpg")
+            let chat = ChatPoliciesTests.presenter(inputs(attachment: attachment))
+            var commands: [ChatCommandRequest] = []
+            chat.onCommand = { commands.append($0) }
+            chat.setPrivateTo(userId: ChatPoliciesTests.avery)
+            let draftKey = chat.composer.draftKey
+            chat.drafts.setText(caption, for: draftKey)
+            #expect(ChatComposerPolicy.sendBlock(text: caption, gate: .allowed, isVoiceMode: false,
+                                                 attachment: attachment, isPrivateMode: true) != .none)
+            #expect(chat.send(text: caption) == .blocked)
+            #expect(commands.isEmpty)
+            #expect(chat.composer.inlineNotice == .privateTextOnly)
+            #expect(chat.composer.attachment == attachment)
+            #expect(chat.drafts.text(for: draftKey) == caption)
+            chat.setPrivateTo(userId: "")
+            #expect(chat.send(text: "") == .dispatched)
+            #expect(commands.last?.fileURL == attachment.thumbnailKey)
+        }
+    }
+
     @Test func photosFollowPrivateModeAndTheHostSwitch() {
         var log: [ChatCommandRequest] = []
         let chat = ChatPoliciesTests.presenter(inputs(attachment: .none))

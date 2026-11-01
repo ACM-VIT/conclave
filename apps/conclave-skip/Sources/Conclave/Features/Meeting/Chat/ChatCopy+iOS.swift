@@ -171,6 +171,7 @@ enum ChatCopy {
         case .overLimit: return ConclaveStrings.format("%lld characters over the limit", max(overBy, 1))
         case .photoPending: return ConclaveStrings.text("Uploading photo")
         case .photoFailed: return ChatMediaCopy.attachmentStatus(attachment)
+        case .privatePhoto: return ChatCopy.failureReason(.privateTextOnly)
         }
     }
 

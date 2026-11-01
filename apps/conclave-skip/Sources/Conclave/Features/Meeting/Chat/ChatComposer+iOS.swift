@@ -43,7 +43,7 @@ struct ChatComposer: View {
         let limit = ChatComposerPolicy.limit(text: text, isVoiceMode: composer.isVoiceMode)
         let count = ChatComposerPolicy.limitLength(text: text, isVoice: composer.isVoiceMode)
         let block = ChatComposerPolicy.sendBlock(text: text, gate: composer.gate, isVoiceMode: composer.isVoiceMode,
-                                                 attachment: composer.attachment)
+                                                 attachment: composer.attachment, isPrivateMode: composer.privateTo != nil)
         let suggestions = ChatComposerSuggestions.make(draft: text, composer: composer, dismissedKey: dismissedSuggestionKey,
                                                        highlightedId: highlightedId, highlightQueryKey: highlightQueryKey,
                                                        showsHighlight: hasHardwareKeyboard)
@@ -339,7 +339,7 @@ struct ChatComposer: View {
     private func sendFromKeyboard() {
         let composer = chat.composer
         let block = ChatComposerPolicy.sendBlock(text: text, gate: composer.gate, isVoiceMode: composer.isVoiceMode,
-                                                 attachment: composer.attachment)
+                                                 attachment: composer.attachment, isPrivateMode: composer.privateTo != nil)
         let overBy = ChatComposerPolicy.limitLength(text: text, isVoice: composer.isVoiceMode)
             - ChatComposerPolicy.limit(text: text, isVoiceMode: composer.isVoiceMode)
         let noticeBefore = composer.inlineNotice

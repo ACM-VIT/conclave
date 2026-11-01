@@ -52,7 +52,7 @@ enum ChatReturnKeyAction: String, CaseIterable {
 }
 
 enum ChatSendBlock: String, CaseIterable {
-    case none, empty, notJoined, reconnecting, offline, locked, attendee, overLimit, photoPending, photoFailed
+    case none, empty, notJoined, reconnecting, offline, locked, attendee, overLimit, photoPending, photoFailed, privatePhoto
 }
 
 enum ChatComposerPolicy {
@@ -278,12 +278,14 @@ enum ChatComposerPolicy {
         sendBlock(text: text, gate: gate, isVoiceMode: isVoiceMode, attachment: attachment) == ChatSendBlock.none
     }
 
-    static func sendBlock(text: String, gate: ChatSendGate, isVoiceMode: Bool, attachment: ChatAttachmentState) -> ChatSendBlock {
+    static func sendBlock(text: String, gate: ChatSendGate, isVoiceMode: Bool, attachment: ChatAttachmentState,
+                          isPrivateMode: Bool = false) -> ChatSendBlock {
         let gated = gateBlock(gate)
         if gated != ChatSendBlock.none { return gated }
         if attachment.phase == ChatAttachmentPhase.failed { return ChatSendBlock.photoFailed }
         if attachment.blocksSend { return ChatSendBlock.photoPending }
         if attachment.isReady {
+            if isPrivateMode { return ChatSendBlock.privatePhoto }
             if isOverLimit(text: text, isVoiceMode: isVoiceMode) { return ChatSendBlock.overLimit }
             return ChatSendBlock.none
         }

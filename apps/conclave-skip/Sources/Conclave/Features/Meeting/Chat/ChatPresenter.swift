@@ -245,6 +245,10 @@ final class ChatPresenter {
         if trimmed.isEmpty && !attachment.isReady { return ChatSendResult.empty }
         if inputs.gate != ChatSendGate.allowed { return ChatSendResult.blocked }
         if attachment.blocksSend { return ChatSendResult.blocked }
+        if attachment.isReady && !privateToUserId.isEmpty {
+            setInlineNotice(ChatFailure.privateTextOnly)
+            return ChatSendResult.blocked
+        }
         if !trimmed.isEmpty && ChatComposerPolicy.isOverLimit(text: trimmed, isVoiceMode: voiceModeOn) {
             setInlineNotice(ChatComposerPolicy.limit(text: trimmed, isVoiceMode: voiceModeOn) == ChatComposerPolicy.voiceLimit
                             ? ChatFailure.voiceTooLong : ChatFailure.tooLong)

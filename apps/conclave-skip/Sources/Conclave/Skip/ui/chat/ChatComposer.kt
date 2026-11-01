@@ -196,7 +196,7 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
     val suggestions = ChatSuggestionsModel.make(draft, composer, keys, hardware)
     val limit = ChatComposerPolicy.limit(draft, composer.isVoiceMode)
     val count = ChatComposerPolicy.limitLength(draft, composer.isVoiceMode)
-    val block = ChatComposerPolicy.sendBlock(draft, composer.gate, composer.isVoiceMode, composer.attachment)
+    val block = ChatComposerPolicy.sendBlock(draft, composer.gate, composer.isVoiceMode, composer.attachment, composer.privateTo != null)
     val canSend = block == ChatSendBlock.none
     val sendReason = chatSendBlockReason(block, count - limit, composer.attachment)
 
@@ -217,7 +217,7 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
 
     val sendFromKeyboard: () -> Unit = {
         val current = presenter.composer
-        val pressed = ChatComposerPolicy.sendBlock(draftState.text.toString(), current.gate, current.isVoiceMode, current.attachment)
+        val pressed = ChatComposerPolicy.sendBlock(draftState.text.toString(), current.gate, current.isVoiceMode, current.attachment, current.privateTo != null)
         val noticeBefore = current.inlineNotice
         val result = dispatch()
         if (result == ChatSendResult.blocked && presenter.composer.inlineNotice == noticeBefore
@@ -348,6 +348,7 @@ internal fun chatSendBlockReasonName(block: ChatSendBlock): String = when (block
     ChatSendBlock.locked -> "chat_placeholder_locked"
     ChatSendBlock.overLimit -> "ds_char_over_limit"
     ChatSendBlock.photoPending -> "chat_send_reason_uploading"
+    ChatSendBlock.privatePhoto -> "chat_reason_private_text"
 }
 
 @Composable
