@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -313,31 +314,36 @@ internal fun GameShellBottomBar(games: GameStagePresenter, modifier: Modifier = 
     val chrome = games.chrome
     val scene = games.scene
     val results = games.results
+    val content = GameShellBarPolicy.content(chrome = chrome, scene = scene, results = results)
     var prompt by remember { mutableStateOf(false) }
-    Box(modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).testTag("game.bar")) {
-        if (chrome.phase == GameChromePhase.lobby && chrome.isHost && scene.lobby.reason != GameLobbyReason.reconnecting) {
-            if (scene.lobby.showsJoin) {
-                GameKitHostBar(primaryTitle = conclaveString("gm_join"), onPrimary = { games.join() })
-            } else if (scene.lobby.reason != GameLobbyReason.joinToStart) {
-                GameKitHostBar(primaryTitle = conclaveString("gm_start_game"), onPrimary = { games.send(GameMoveIntent.start()) },
+    if (content == GameShellBarContent.none) {
+        Box(modifier.fillMaxWidth().testTag("game.bar"))
+        return
+    }
+    Column(modifier.fillMaxWidth().testTag("game.bar")) {
+        HorizontalDivider(color = LocalConclaveExtendedColors.current.border)
+        Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 12.dp)) {
+            when (content) {
+                GameShellBarContent.join -> GameKitHostBar(primaryTitle = conclaveString("gm_join"), onPrimary = { games.join() })
+                GameShellBarContent.start -> GameKitHostBar(primaryTitle = conclaveString("gm_start_game"),
+                    onPrimary = { games.send(GameMoveIntent.start()) },
                     primaryEnabled = scene.lobby.canStart, primaryPending = games.interaction.pendingType == "start")
+                GameShellBarContent.rematch -> {
+                    val showsEnd = GameShellBarPolicy.showsResultsEnd(chrome = chrome)
+                    GameKitHostBar(
+                        primaryTitle = if (results.rematchPending) conclaveString("act_starting") else conclaveString("gm_play_again"),
+                        onPrimary = { games.rematch() },
+                        primaryPending = results.rematchPending,
+                        secondaryTitle = if (showsEnd) conclaveString("gm_end_game") else "",
+                        secondaryDestructive = true,
+                        onSecondary = if (showsEnd) ({ prompt = true }) else null,
+                    )
+                }
+                GameShellBarContent.promptHost -> PromptGameHostBar(games)
+                GameShellBarContent.wordleNextRound -> WordleHostBar(games)
+                GameShellBarContent.zipNextRound -> ZipHostBar(games)
+                else -> {}
             }
-        } else if (chrome.phase == GameChromePhase.results && results.canRematch) {
-            GameKitHostBar(
-                primaryTitle = if (results.rematchPending) conclaveString("act_starting") else conclaveString("gm_play_again"),
-                onPrimary = { games.rematch() },
-                primaryPending = results.rematchPending,
-                secondaryTitle = conclaveString("gm_end_game"),
-                secondaryDestructive = true,
-                onSecondary = { prompt = true },
-            )
-        } else if (chrome.phase == GameChromePhase.playing) {
-
-            PromptGameHostBar(games)
-
-            WordleHostBar(games)
-
-            ZipHostBar(games)
         }
     }
     if (prompt) GameShellEndDialog(games, chrome.name, onDismiss = { prompt = false })

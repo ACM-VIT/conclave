@@ -296,38 +296,59 @@ struct GameResultsBody: View {
 
 struct GameShellBottomBar: View {
     let games: GameStagePresenter
+
+    var body: some View {
+        let content = GameShellBarPolicy.content(chrome: games.chrome, scene: games.scene, results: games.results)
+        if content != .none {
+            GameShellBarContentView(games: games, content: content)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity)
+                .background(HostingTheme.token(DesignTokens.iosInCallSurface))
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(HostingTheme.inCallBorder)
+                        .frame(height: 1)
+                }
+                .accessibilityIdentifier("game.bar")
+        } else {
+            Color.clear.frame(height: 0)
+        }
+    }
+}
+
+struct GameShellBarContentView: View {
+    let games: GameStagePresenter
+    let content: GameShellBarContent
     @State private var endPrompt = false
 
     var body: some View {
         let chrome = games.chrome
-        let scene = games.scene
         let results = games.results
-        Group {
-            if chrome.phase == .lobby && chrome.isHost && scene.lobby.reason != .reconnecting {
-                if scene.lobby.showsJoin {
-                    GameKitHostBar(primaryTitle: ConclaveStrings.text("Join"), onPrimary: { games.join() })
-                } else if scene.lobby.reason != .joinToStart {
-                    GameKitHostBar(primaryTitle: ConclaveStrings.text("Start Game"), primaryEnabled: scene.lobby.canStart,
-                                   primaryPending: games.interaction.pendingType == "start",
-                                   onPrimary: { _ = games.send(GameMoveIntent.start()) })
-                }
-            } else if chrome.phase == .results && results.canRematch {
-                GameKitHostBar(primaryTitle: results.rematchPending ? ConclaveStrings.text("Starting") : ConclaveStrings.text("Play Again"),
-                               primaryPending: results.rematchPending, onPrimary: { games.rematch() },
-                               secondaryTitle: ConclaveStrings.text("End Game…"), secondaryRole: .destructive,
-                               onSecondary: { endPrompt = true })
-                    .modifier(GameShellEndDialog(games: games, name: chrome.name, isPresented: $endPrompt))
-            } else if chrome.phase == .playing {
-
-                PromptGameHostBar(games: games)
-
-                WordleHostBar(games: games)
-
-                ZipHostBar(games: games)
-            }
+        switch content {
+        case .none:
+            EmptyView()
+        case .join:
+            GameKitHostBar(primaryTitle: ConclaveStrings.text("Join"), onPrimary: { games.join() })
+        case .start:
+            GameKitHostBar(primaryTitle: ConclaveStrings.text("Start Game"), primaryEnabled: games.scene.lobby.canStart,
+                           primaryPending: games.interaction.pendingType == "start",
+                           onPrimary: { _ = games.send(GameMoveIntent.start()) })
+        case .rematch:
+            let showsEnd = GameShellBarPolicy.showsResultsEnd(chrome: chrome)
+            GameKitHostBar(primaryTitle: results.rematchPending ? ConclaveStrings.text("Starting") : ConclaveStrings.text("Play Again"),
+                           primaryPending: results.rematchPending, onPrimary: { games.rematch() },
+                           secondaryTitle: showsEnd ? ConclaveStrings.text("End Game…") : "", secondaryRole: .destructive,
+                           onSecondary: showsEnd ? { endPrompt = true } : nil)
+                .modifier(GameShellEndDialog(games: games, name: chrome.name, isPresented: $endPrompt))
+        case .promptHost:
+            PromptGameHostBar(games: games)
+        case .wordleNextRound:
+            WordleHostBar(games: games)
+        case .zipNextRound:
+            ZipHostBar(games: games)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
     }
 }
 
