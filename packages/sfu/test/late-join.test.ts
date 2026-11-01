@@ -39,6 +39,49 @@ const advanceToNextQuestion = (session: GameSession): void => {
   session.tick(Date.now() + 60_000);
 };
 
+const lobbySession = (module: typeof triviaModule | typeof imposterModule, roster: GamePlayer[] = players): GameSession =>
+  new GameSession({
+    module,
+    players: roster,
+    adminIds: ["host"],
+    hostId: "host",
+    config: {},
+    seed: 7,
+  });
+
+describe("lobby seats", () => {
+  it("seats a lobby joiner at once instead of queueing them", () => {
+    const session = lobbySession(triviaModule);
+    expect(session.getPublicState(0).phase).toBe("lobby");
+
+    expect(session.requestSeat({ id: "late", name: "Late Joiner" })).toEqual({ ok: true });
+    expect(session.hasPlayer("late")).toBe(true);
+    expect(session.hasPendingPlayer("late")).toBe(false);
+    const state = session.getPublicState(0);
+    expect(state.pendingJoiners).toEqual([]);
+    expect(state.players.map((p) => p.id)).toEqual(["host", "p2", "late"]);
+
+    expect(session.applyMove("host", "start", undefined)).toEqual({ ok: true });
+    expect(session.applyMove("late", "answer", { choice: 0 }).ok).toBe(true);
+  });
+
+  it("lets a lobby joiner into games without mid-game join", () => {
+    const session = lobbySession(imposterModule);
+    expect(session.requestSeat({ id: "p3", name: "Player Three" })).toEqual({ ok: true });
+    expect(session.getPublicState(0).players.map((p) => p.id)).toEqual(["host", "p2", "p3"]);
+    expect(session.applyMove("host", "start", undefined).ok).toBe(true);
+  });
+
+  it("still refuses a lobby seat once the game is full", () => {
+    const full: GamePlayer[] = Array.from({ length: imposterModule.maxPlayers }, (_, index) => ({
+      id: index === 0 ? "host" : `p${index}`,
+      name: `Player ${index}`,
+    }));
+    const session = lobbySession(imposterModule, full);
+    expect(session.requestSeat({ id: "extra", name: "Extra" })).toEqual({ ok: false, error: "Game is full" });
+  });
+});
+
 describe("late-join seats", () => {
   it("queues a joiner and seats them when the next question starts", () => {
     const session = startedTriviaSession();
@@ -131,8 +174,9 @@ describe("late-join seats", () => {
       config: {},
       seed: 7,
     });
+    expect(session.applyMove("host", "start", undefined).ok).toBe(true);
     const result = session.requestSeat({ id: "late", name: "Late" });
-    expect(result.ok).toBe(false);
+    expect(result).toEqual({ ok: false, error: "This game does not support joining mid-game" });
   });
 
   it("exposes canJoinLate on the public state", () => {

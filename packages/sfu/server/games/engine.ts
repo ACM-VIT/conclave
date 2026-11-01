@@ -121,7 +121,8 @@ export class GameSession {
   }
 
   /**
-   * Queue a room member for a seat at the next round boundary. The seat is
+   * Seat a room member at once while the game is still in its lobby, or queue
+   * them for a seat at the next round boundary. The seat is
    * granted when the game transitions into one of the module's declared
    * `lateJoinPhases`, so a joiner never lands mid-round with impossible state.
    */
@@ -135,6 +136,15 @@ export class GameSession {
       return { ok: false, error: "You are already in this game" };
     }
     if (this.hasPendingPlayer(player.id)) {
+      return { ok: true };
+    }
+    if (this.module.getPhase(this.state) === "lobby") {
+      if (this.players.length >= this.module.maxPlayers) {
+        return { ok: false, error: "Game is full" };
+      }
+      this.playerIds.add(player.id);
+      this.players.push({ id: player.id, name: player.name });
+      this.activePlayers.push({ id: player.id, name: player.name });
       return { ok: true };
     }
     if (this.getLateJoinPhases().length === 0) {
