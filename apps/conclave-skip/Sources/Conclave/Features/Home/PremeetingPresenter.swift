@@ -968,13 +968,13 @@ final class PremeetingPresenter {
     }
 
     private func openForLink(_ parsed: NativeJoinLinkTarget) {
-        if root.showsOutcome {
-            dismissOutcome()
-        }
         openOrQueue(makeTarget(from: parsed, intent: .join))
     }
 
     private func openOrQueue(_ target: PremeetingRouteTarget) {
+        if root.showsOutcome {
+            dismissOutcome()
+        }
         guard isJoinSheetPresented || isAccountSheetPresented else {
             openFromHome(target)
             return

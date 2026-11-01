@@ -77,7 +77,6 @@ struct HomeView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .onChange(of: home.rejoin, initial: true) { _, card in ShortcutPublisher.publish(rejoin: card) }
         .navigationTitle(ConclaveStrings.text("Conclave"))
         .toolbarTitleDisplayMode(.inlineLarge)
         .toolbar {

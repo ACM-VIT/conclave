@@ -20,6 +20,7 @@ struct NativePremeetingProductionRoot: View {
 
         .environment(viewModel.controls)
         .conclavePremeetingFeedback(premeeting: viewModel.premeeting)
+        .background { RejoinShortcutPublisher(premeeting: viewModel.premeeting) }
     }
 }
 

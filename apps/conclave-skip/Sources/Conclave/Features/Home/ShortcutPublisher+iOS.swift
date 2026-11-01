@@ -1,4 +1,5 @@
 #if os(iOS) && !SKIP
+import SwiftUI
 import UIKit
 
 @MainActor
@@ -20,6 +21,15 @@ enum ShortcutPublisher {
             userInfo: nil
         )
         UIApplication.shared.shortcutItems = kept + [item]
+    }
+}
+struct RejoinShortcutPublisher: View {
+    let premeeting: PremeetingPresenter
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .onChange(of: premeeting.home.rejoin, initial: true) { _, card in ShortcutPublisher.publish(rejoin: card) }
     }
 }
 #endif

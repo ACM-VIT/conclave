@@ -68,9 +68,13 @@ final class ShortcutIntake {
             if !busy {
                 presenter.openRecent(id: payload)
             } else if let row = presenter.home.recents.first(where: { $0.id == payload }) {
-                presenter.handleIncomingURL(row.roomId)
+                presenter.handleIncomingURL(recentLink(row))
             }
         }
+    }
+
+    static func recentLink(_ row: RecentMeetingRow) -> String {
+        row.routeKind == PremeetingRouteKind.webinarLanding ? "w/" + row.roomId : row.roomId
     }
 
     static func joinLink(_ payload: String) -> String {

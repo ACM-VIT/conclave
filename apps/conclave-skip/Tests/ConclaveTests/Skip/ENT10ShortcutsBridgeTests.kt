@@ -68,4 +68,21 @@ class ENT10ShortcutsBridgeTests {
         val target = presenter.target(forRoute = presenter.path[0].id)
         assertEquals(LobbyIntent.newMeeting, target?.intent)
     }
+
+    @Test
+    fun aShortcutOnTheOutcomeScreenReplacesTheOutcomeInTheAndroidBackStack() {
+        val presenter = PremeetingPresenter()
+        ShortcutIntake.shared.attach(presenter)
+        presenter.apply(PremeetingInputs.make(callSession = 1, phase = MeetingPhaseKind.inCall, roomLabel = "maple-goku-tulip",
+            hasBeenAdmittedThisSession = true, currentRoomId = "maple-goku-tulip"))
+        presenter.apply(PremeetingInputs.make(callSession = 1, phase = MeetingPhaseKind.outcome, outcomeId = 9,
+            outcomeKind = MeetingTerminalOutcomeKind.removed, hasBeenAdmittedThisSession = true))
+        assertEquals(listOf(PremeetingKey.HomeKey, PremeetingKey.OutcomeKey(9)),
+            PremeetingBackStack.from(presenter.path.toList(), presenter.outcome))
+
+        assertTrue(handleConclaveShortcutIntent(context, Intent(ConclaveShortcutActions.NEW_MEETING)))
+        val keys = PremeetingBackStack.from(presenter.path.toList(), presenter.outcome)
+        assertEquals(2, keys.size)
+        assertTrue(keys.last() is PremeetingKey.LobbyKey)
+    }
 }
