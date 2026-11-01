@@ -12,6 +12,84 @@ struct S6CReviewRegressionTests {
         return presenter
     }
 
+    @Test func coveredLobbyRetainsDraftsValidationAndAudioChoice() async throws {
+        let presenter = presenter()
+        let hooks = LobbyCoreHooks()
+        var joins: [LobbyJoinRequest] = []
+        hooks.join = { joins.append($0) }
+        presenter.lobbyHooks = hooks
+        presenter.handleIncomingURL("https://conclave.acmvit.in/rose-sora-luffy")
+        let lobby = try #require(presenter.path.first)
+        presenter.apply(PremeetingInputs.make(notice: .formError, noticeText: "This meeting requires an invite code",
+                                              accountName: "Initial Guest"))
+        presenter.setGuestName("Draft Guest")
+        presenter.setInviteCode("private-code")
+        presenter.applyAudioRoutes(outputs: [
+            AudioRouteOption(id: "speaker", kind: .speaker, name: "Speaker", isConnecting: false),
+            AudioRouteOption(id: "buds", kind: .bluetooth, name: "Buds", isConnecting: false)
+        ], currentOutputId: "speaker", inputOptions: [], currentInputId: "")
+        presenter.selectAudioOutput(kind: "bluetooth")
+        presenter.openPrivacyPolicy()
+        presenter.openAppSettings()
+        presenter.setPath(Array(presenter.path.dropLast()))
+        #expect(presenter.lobbyStatus == nil)
+        presenter.setPath([lobby])
+        #expect(presenter.lobbyIdentity?.guestName == "Draft Guest")
+        #expect(presenter.lobbyIdentity?.needsInviteCode == true)
+        #expect(presenter.lobbyAudio?.routeKind == "bluetooth")
+        presenter.startOrJoin()
+        #expect(joins.count == 1)
+        #expect(joins.first?.displayName == "Draft Guest")
+        #expect(joins.first?.meetingInviteCode == "private-code")
+        presenter.setPath([])
+        presenter.handleIncomingURL("https://conclave.acmvit.in/lily-zoro-iris")
+        #expect(presenter.lobbyIdentity?.guestName == "Initial Guest")
+        #expect(presenter.lobbyIdentity?.needsInviteCode == false)
+        presenter.setPath([])
+    }
+
+    @Test func occupiedCandidatesNeverSubmitAndAnExplicitRetryCanSucceed() async {
+        let presenter = presenter()
+        let hooks = LobbyCoreHooks()
+        var checks = 0
+        var joins: [LobbyJoinRequest] = []
+        var codes = 0
+        presenter.generateRoomCode = { codes += 1; return "generated-\(codes)" }
+        hooks.fetchPresence = { _, _ in checks += 1; return checks <= 3 ? 1 : 0 }
+        hooks.join = { joins.append($0) }
+        presenter.lobbyHooks = hooks
+        presenter.newMeeting()
+        presenter.startOrJoin()
+        #expect(await settle { presenter.lobbyStatus?.isPrimaryPending == false })
+        #expect(checks == 3)
+        #expect(joins.isEmpty)
+        #expect(presenter.lobbyStatus?.issue == .failedServerBusy)
+        #expect(presenter.lobbyStatus?.mode == .editing)
+        presenter.retryJoin()
+        #expect(await settle { joins.count == 1 })
+        #expect(joins.first?.roomId == "generated-3")
+        presenter.setPath([])
+    }
+
+    @Test func unavailableCollisionLookupStillStartsTheMeeting() async {
+        let presenter = presenter()
+        let hooks = LobbyCoreHooks()
+        var checks = 0
+        hooks.fetchPresence = { _, _ in checks += 1; return nil }
+        var joins: [LobbyJoinRequest] = []
+        hooks.join = { joins.append($0) }
+        presenter.generateRoomCode = { "generated-extra" }
+        presenter.lobbyHooks = hooks
+        presenter.newMeeting()
+        let candidate = presenter.path.last?.roomId
+        presenter.startOrJoin()
+        #expect(await settle { joins.count == 1 })
+        #expect(checks == 1)
+        #expect(joins.first?.roomId == candidate)
+        #expect(presenter.lobbyStatus?.issue != .failedServerBusy)
+        presenter.setPath([])
+    }
+
 }
 
 @MainActor

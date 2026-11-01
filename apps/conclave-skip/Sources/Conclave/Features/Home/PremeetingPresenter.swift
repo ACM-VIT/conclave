@@ -1373,7 +1373,7 @@ final class PremeetingPresenter {
     private func clearLobby() {
         cancelLobbyTasks()
         isStarting = false
-        if lobbyRouteId != 0 {
+        if lobbyRouteId != 0 && !PremeetingPresenter.routesContain(path, routeId: lobbyRouteId) {
             lobbyRouteId = 0
         }
         visibleLobbyRouteId = 0
@@ -1557,10 +1557,15 @@ final class PremeetingPresenter {
 
     private func runCollisionCheck(routeId: Int) async {
         var attempt = 1
+        var available = false
         while !Task.isCancelled {
             guard let target = self.target(forRoute: routeId), let fetch = lobbyHooks?.fetchPresence else { break }
             let count = await fetch(target.roomId, presenceClientId(routeId: routeId))
             if Task.isCancelled { return }
+            if count == nil || count == 0 {
+                available = true
+                break
+            }
             guard LobbyCollisionPolicy.shouldRegenerate(count: count, attempt: attempt) else { break }
             replaceTargetRoom(routeId: routeId, roomId: generateRoomCode())
             attempt += 1
@@ -1569,6 +1574,12 @@ final class PremeetingPresenter {
         collisionTask = nil
         isStarting = false
         guard let target = self.target(forRoute: routeId), topLobbyTarget()?.routeId == routeId else {
+            refreshLobby()
+            return
+        }
+        guard available else {
+            formIssue = LobbyFormIssue(issue: .failedServerBusy, needsInviteCode: formIssue.needsInviteCode,
+                                       inviteCodeInvalid: false)
             refreshLobby()
             return
         }

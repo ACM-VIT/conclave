@@ -284,7 +284,7 @@ struct ENT3LobbyTests {
         #expect(presenter.liveTaskCount == 0)
     }
 
-    @Test func threeBusyCodesStartWithTheThirdOnTheNormalPath() async {
+    @Test func threeBusyCodesStopWithARetryableError() async {
         let hooks = ENT3HookRecorder()
         hooks.presenceAnswers = [3, 1, 4, 9]
         let presenter = presenter(hooks: hooks)
@@ -292,9 +292,11 @@ struct ENT3LobbyTests {
         presenter.generateRoomCode = { codes.isEmpty ? "extra-code-requested" : codes.removeFirst() }
         presenter.newMeeting()
         presenter.startOrJoin()
-        #expect(await ent3Settle { hooks.joins.count == 1 })
+        #expect(await ent3Settle { presenter.lobbyStatus?.isPrimaryPending == false })
         #expect(hooks.presenceRooms.count == LobbyCollisionPolicy.maxAttempts)
-        #expect(hooks.joins.first?.roomId == "dahl-daisy-erica")
+        #expect(hooks.joins.isEmpty, "the third occupied code is never joined as a new meeting")
+        #expect(presenter.lobbyStatus?.issue == .failedServerBusy)
+        #expect(presenter.lobbyStatus?.mode == .editing)
         #expect(LobbyCollisionPolicy.shouldRegenerate(count: nil, attempt: 1) == false, "a failed request counts as free")
         #expect(LobbyCollisionPolicy.shouldRegenerate(count: 2, attempt: 3) == false)
     }
