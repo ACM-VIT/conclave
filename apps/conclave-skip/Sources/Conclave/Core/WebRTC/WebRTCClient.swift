@@ -542,6 +542,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     private var localVideoOffIntentGeneration = 0
+    private var pendingLocalVideoTrack: RTCVideoTrack?
     var hasLocalVideoProducer: Bool {
         isUsableProducer(videoProducer) &&
             sendTransport?.closed == false &&
@@ -2698,6 +2699,10 @@ final class WebRTCClient: NSObject, ObservableObject {
 
             let track = Self.factory.videoTrack(with: source, trackId: nextLocalVideoTrackId())
             track.isEnabled = true
+            pendingLocalVideoTrack = track
+            defer {
+                if pendingLocalVideoTrack === track { pendingLocalVideoTrack = nil }
+            }
 
             let appData = try encodeJSONString(ProducerAppData(type: ProducerType.webcam.rawValue, paused: false))
             let producer = try await createProducerOffMain(
@@ -3931,6 +3936,14 @@ final class WebRTCClient: NSObject, ObservableObject {
             debugLog("[WebRTC] Failed to toggle video: \(error)")
             throw error
         }
+    }
+
+    func fenceLocalVideoForHold() {
+        localVideoOffIntentGeneration += 1
+        pendingLocalVideoTrack?.isEnabled = false
+        rtcLocalVideoTrack?.isEnabled = false
+        localVideoTrack?.isEnabled = false
+        localVideoEnabled = false
     }
 
     func suspendLocalVideoForRecovery() async {

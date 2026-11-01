@@ -9651,6 +9651,9 @@ final class MeetingViewModel {
     func setCameraSuspendedForHold(_ suspended: Bool) {
         guard suspended != isCameraSuspendedForHold else { return }
         isCameraSuspendedForHold = suspended
+        #if os(iOS) || SKIP
+        if suspended { webRTCClient.fenceLocalVideoForHold() }
+        #endif
         cameraHoldRevision += 1
         let revision = cameraHoldRevision
         let generation = cameraHoldGeneration

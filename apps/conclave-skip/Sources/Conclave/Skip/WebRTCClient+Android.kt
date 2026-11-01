@@ -3047,6 +3047,13 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
+    internal fun fenceLocalVideoForHold() {
+        localVideoOffIntentGeneration += 1
+        localVideoTrack?.setEnabled(false)
+        localVideoTrackWrapper?.isEnabled = false
+        localVideoEnabled = false
+    }
+
     internal suspend fun suspendLocalVideoForRecovery() {
         localVideoOffIntentGeneration += 1
         invalidateWebcamReceiverCapacityAuthority()

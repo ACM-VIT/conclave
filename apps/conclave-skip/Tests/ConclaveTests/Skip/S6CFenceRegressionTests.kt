@@ -28,6 +28,26 @@ class S6CFenceRegressionTests {
         override fun setEnabled(enable: Boolean): Boolean { live = enable; return true }
     }
 
+    @Test fun aHoldSynchronouslySilencesTheTrackAndInvalidatesPendingEnables() {
+        val allocator = unsafe()
+        val media = allocator.allocateInstance(WebRTCClient::class.java) as WebRTCClient
+        val track = allocator.allocateInstance(RecordingTrack::class.java) as RecordingTrack
+        track.live = true
+        val generation = WebRTCClient::class.java.getDeclaredField("localVideoOffIntentGeneration").apply { isAccessible = true }
+        val enabled = WebRTCClient::class.java.getDeclaredField("localVideoEnabled").apply { isAccessible = true }
+        WebRTCClient::class.java.getDeclaredField("localVideoTrack").apply { isAccessible = true }.set(media, track)
+        enabled.setBoolean(media, true)
+        val pendingEnableGeneration = generation.getInt(media)
+        media.fenceLocalVideoForHold()
+        assertFalse(track.live)
+        assertFalse(media.localVideoEnabled)
+        assertNotEquals(pendingEnableGeneration, generation.getInt(media))
+        val heldGeneration = generation.getInt(media)
+        media.fenceLocalVideoForHold()
+        assertNotEquals(heldGeneration, generation.getInt(media))
+        assertFalse(track.live)
+    }
+
     @Test fun aCancelledCookieTransactionCannotOverwriteANewerAcceptedSession() {
         val url = skip.foundation.URL(string = "http://127.0.0.1:3000/api/auth/get-session")
         val name = "better-auth.s6c-" + java.util.UUID.randomUUID().toString()
