@@ -435,6 +435,14 @@ final class MeetingViewModel {
 
     private var premeetingIsSigningIn = false
 
+    private(set) var versionGate = VersionGateState.open
+    @ObservationIgnored var versionGateFetch: () async -> VersionGateFetch = { await VersionGateService.fetch() }
+    @ObservationIgnored var versionGateDefaults: UserDefaults = UserDefaults.standard
+    @ObservationIgnored var currentAppVersion: () -> String = { VersionGateService.currentAppVersion() }
+    @ObservationIgnored private var versionGateRefreshTask: Task<Void, Never>? = nil
+
+    private(set) var isPipStashed = false
+
     private(set) var callSessionSerial = 0 {
         didSet {
             state.resetParticipantJoinSerials()
@@ -6516,6 +6524,12 @@ final class MeetingViewModel {
         allowRoomCreation: Bool = false,
         reuseExistingSocket: Bool = false
     ) {
+        if versionGate.updateRequired && !isRejoinInFlight {
+            PerformanceDiagnostics.event("join_blocked_update_required", details: "room=\(roomId)")
+            clearMeetingEntry()
+            premeeting.apply(makePremeetingInputs())
+            return
+        }
         let joinStartedAt = Date()
         PerformanceDiagnostics.event(
             "join_room_start",
@@ -6664,6 +6678,10 @@ final class MeetingViewModel {
                     PerformanceDiagnostics.timing("join_fetch_info", startedAt: fetchStartedAt, details: "room=\(roomId)")
                     guard let joinInfo = fetchedJoinInfo, self.activeJoinAttemptId == joinAttemptId else {
                         await self.cleanupAbandonedJoinAttempt()
+                        return
+                    }
+                    if self.joinResponseBlocksForUpdate(joinInfo, isRecoveryJoin: isRecoveryJoin) {
+                        self.finishUpdateRequiredJoin()
                         return
                     }
                     let sfuUrl = SfuJoinService.platformReachableURLString(joinInfo.sfuUrl)
@@ -7739,6 +7757,25 @@ final class MeetingViewModel {
         recordTerminalOutcome(outcome, serverText: classification.serverText, joinContext: preservedJoinContext)
         state.connectionState = ConnectionState.error
         state.errorMessage = MeetingErrorLegacyCopy.message(classification) ?? "Failed to join the meeting."
+    }
+
+    private func finishUpdateRequiredJoin() {
+        redirectContinuationPending = false
+        activeJoinAttemptId = nil
+        currentJoinInfo = nil
+        isIntentionalLeave = true
+        shouldRejoinAfterReconnect = false
+        isRejoinInFlight = false
+        clearConnectionRecovery()
+        resetReconnectRetryState()
+        clearMeetingResumeSnapshot()
+        endResumeInFlight()
+        clearMeetingEntry()
+        socketManager.disconnect()
+        clearPendingPreAckRoomEvents()
+        state.connectionState = ConnectionState.disconnected
+        state.errorMessage = nil
+        premeeting.apply(makePremeetingInputs())
     }
 
     private func finishRecoverableJoinFormFailure(_ message: String) {
@@ -9706,7 +9743,8 @@ final class MeetingViewModel {
             cameraIntentOn: isPromotionLobbyOpen ? promotionCameraIntent : (state.pendingEntryMediaIntent?.camera ?? !state.isCameraOff),
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeRoomId,
-
+            updateRequired: versionGate.updateRequired,
+            storeURL: StoreListing.platformURL,
             rejoinRoomId: rejoinContext?.roomId ?? "",
             serverRestartText: state.serverRestartNotice ?? "",
             joinFailureCategory: lastJoinFailureCategory,
@@ -9715,6 +9753,48 @@ final class MeetingViewModel {
             entrySocketConnected: state.connectionState == ConnectionState.connected
                 || state.connectionState == ConnectionState.joining
         ))
+    }
+
+    func refreshVersionGate() {
+        applyVersionGate(VersionGateFetch.unavailable, source: "cache")
+        versionGateRefreshTask?.cancel()
+        versionGateRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let fetch = await self.versionGateFetch()
+            guard !Task.isCancelled else { return }
+            self.applyVersionGate(fetch, source: "launch")
+        }
+    }
+
+    @discardableResult
+    func applyVersionGate(_ fetch: VersionGateFetch, source: String) -> Bool {
+        let platform = VersionGatePolicy.platform
+        let cache = VersionGateCache(defaults: versionGateDefaults, platform: platform)
+        let resolution = VersionGatePolicy.resolve(fetch: fetch, platform: platform,
+                                                   currentVersion: currentAppVersion(), cachedMinimum: cache.load())
+        cache.apply(resolution.cache)
+        if resolution.invalidField {
+            PerformanceDiagnostics.event("version_gate_invalid_field", details: "source=\(source)")
+        }
+        if resolution.state != versionGate {
+            versionGate = resolution.state
+            premeeting.apply(makePremeetingInputs())
+        }
+        return resolution.state.updateRequired
+    }
+
+    func joinResponseBlocksForUpdate(_ joinInfo: SfuJoinInfo, isRecoveryJoin: Bool) -> Bool {
+        let gated = applyVersionGate(VersionGateFetch.payload(joinInfo.minNativeVersion), source: "join")
+        return gated && !isRecoveryJoin
+    }
+
+    func setPipStashed(_ stashed: Bool) {
+        guard stashed != isPipStashed else { return }
+        isPipStashed = stashed
+        guard state.connectionState == .joined else { return }
+        Task { @MainActor [weak self] in
+            await self?.applyRemoteConsumerBandwidthPolicy()
+        }
     }
 
     func setPremeetingIdentity(isSignedIn: Bool, accountName: String, accountSeed: String) {
@@ -11449,9 +11529,10 @@ final class MeetingViewModel {
 
     private func applyRemoteConsumerBandwidthPolicy() async {
         guard state.connectionState == .joined else { return }
+        let stashed = isPipStashed
         await webRTCClient.applyRemoteConsumerBandwidthPolicy(
-            focusedUserIds: remoteFocusedConsumerUserIds(),
-            visibleUserIds: remoteVisibleConsumerUserIds(),
+            focusedUserIds: stashed ? Set<String>() : remoteFocusedConsumerUserIds(),
+            visibleUserIds: stashed ? Set<String>() : remoteVisibleConsumerUserIds(),
             connectionQuality: receiveConnectionQuality,
             videoQuality: state.videoQuality,
             receiveVideo: shouldReceiveRemoteVideoConsumers,

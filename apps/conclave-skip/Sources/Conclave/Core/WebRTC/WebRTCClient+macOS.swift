@@ -88,6 +88,9 @@ final class WebRTCClient {
         dataSaver: Bool = false
     ) async {
         testLastReceiveDataSaver = dataSaver
+        testBandwidthPolicyCalls += 1
+        testLastFocusedUserIds = focusedUserIds
+        testLastVisibleUserIds = visibleUserIds
     }
     func updateVideoQuality(_ quality: VideoQuality) { }
     func updateMediaPublishConfiguration(
@@ -283,6 +286,9 @@ final class WebRTCClient {
     func playTestTone() { }
 
     private(set) var testLastReceiveDataSaver = false
+    private(set) var testBandwidthPolicyCalls = 0
+    private(set) var testLastFocusedUserIds: Set<String> = []
+    private(set) var testLastVisibleUserIds: Set<String> = []
 
     var testConnectionStats: ConnectionStatsCounters?
     var mirrorsLocalVideo: Bool {

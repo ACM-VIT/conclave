@@ -25,7 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -228,19 +227,12 @@ private fun PremeetingSwitchDialog(premeeting: PremeetingPresenter, prompt: Room
 
 @Composable
 private fun PremeetingUpdateDialog(premeeting: PremeetingPresenter) {
-    val uriHandler = LocalUriHandler.current
     AlertDialog(
         onDismissRequest = { premeeting.dismissUpdatePrompt() },
         title = { Text(conclaveString("pm_update_title")) },
         text = { Text(conclaveString("pm_update_body")) },
         confirmButton = {
-            TextButton(onClick = {
-                val storeURL = premeeting.home.storeURL
-                premeeting.openStoreListing()
-                if (storeURL.isNotEmpty()) {
-                    runCatching { uriHandler.openUri(storeURL) }
-                }
-            }) {
+            TextButton(onClick = { premeeting.openStoreListing() }) {
                 Text(conclaveString("pm_update_action"))
             }
         },

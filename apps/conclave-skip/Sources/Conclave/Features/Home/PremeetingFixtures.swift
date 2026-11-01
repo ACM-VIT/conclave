@@ -163,7 +163,7 @@ enum PremeetingFixtureScript {
             resumeInFlight: resumeInFlight,
             resumeRoomId: resumeInFlight ? roomLabel : "",
             updateRequired: updateRequired,
-            storeURL: updateRequired ? "https://apps.apple.com/app/id0" : "",
+            storeURL: updateRequired ? StoreListing.platformURL : "",
             rejoinRoomId: rejoinRoomId,
             serverRestartText: serverRestartText,
             joinFailureCategory: joinFailureCategory,
@@ -542,6 +542,7 @@ final class PremeetingFixtureSession {
     let state: PremeetingFixtureState
 
     private(set) var selfCheckStatus = "pending"
+    private(set) var storeOpenRequests: [String] = []
     @ObservationIgnored private var timeline: Task<Void, Never>? = nil
     @ObservationIgnored private var appliedSteps = 0
     @ObservationIgnored private var baselineShellPublishes = 0
@@ -571,6 +572,9 @@ final class PremeetingFixtureSession {
         premeeting.bootstrap(user: nil, recents: PremeetingFixtureScript.recents(for: state, nowMillis: now))
         premeeting.onCommand = { [weak self] command in
             self?.answer(command)
+        }
+        premeeting.storeOpener = { [weak self] url in
+            self?.storeOpenRequests.append(url)
         }
         let notice = PremeetingFixtureScript.localNotice(for: state)
         if notice != .none {

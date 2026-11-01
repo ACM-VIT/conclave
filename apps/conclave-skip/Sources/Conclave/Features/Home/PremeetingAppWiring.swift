@@ -15,10 +15,12 @@ enum PremeetingAppWiring {
         appState.onIdentityChanged = {
             PremeetingAppWiring.pushIdentity(appState: appState, viewModel: viewModel)
         }
+        presenter.storeOpener = { url in StoreListing.open(url) }
         let store = RecentMeetingsStore(defaults: UserDefaults.standard)
         presenter.store = store
         presenter.bootstrap(user: appState.currentUser, recents: store.load())
         ConclaveAppDelegate.shared.registerPremeeting(presenter)
+        viewModel.refreshVersionGate()
 
         LobbyProductionHooks.install(presenter: presenter, viewModel: viewModel, appState: appState)
 

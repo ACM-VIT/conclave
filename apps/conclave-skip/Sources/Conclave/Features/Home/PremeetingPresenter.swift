@@ -64,6 +64,8 @@ final class PremeetingPresenter {
 
     @ObservationIgnored var webinarHooks: WebinarLandingHooks? = nil
 
+    @ObservationIgnored var storeOpener: ((String) -> Void)? = nil
+
     @ObservationIgnored var webinarRefetchIntervalMillis: Double = WebinarLandingPolicy.refetchIntervalMillis
 
     @ObservationIgnored var webinarCalendarResolverDisabled = false
@@ -476,6 +478,10 @@ final class PremeetingPresenter {
     }
 
     func openStoreListing() {
+        let url = inputs.storeURL
+        if !url.isEmpty {
+            storeOpener?(url)
+        }
         setUpdatePrompt(false)
     }
 

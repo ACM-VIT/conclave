@@ -46,7 +46,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
@@ -126,7 +125,7 @@ internal fun HomeScreen(premeeting: PremeetingPresenter, modifier: Modifier = Mo
                 ),
             ) {
                 if (home.updateRequired) {
-                    item("update") { HomeUpdateBanner(home.storeURL) { premeeting.openStoreListing() } }
+                    item("update") { HomeUpdateBanner { premeeting.openStoreListing() } }
                 }
                 if (home.noticeKind != HomeNoticeKind.none) {
                     item("notice") {
@@ -201,20 +200,14 @@ private fun HomeAccountAction(isSignedIn: Boolean, name: String, seed: String, o
 }
 
 @Composable
-private fun HomeUpdateBanner(storeURL: String, onOpen: () -> Unit) {
-    val uriHandler = LocalUriHandler.current
+private fun HomeUpdateBanner(onOpen: () -> Unit) {
     ConclaveBanner(
         kind = ConclaveBannerKind.Info,
         text = conclaveString("pm_update_body"),
         identifier = "home.update",
         inCall = false,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-        actions = listOf(ConclaveBannerAction(conclaveString("pm_update_action"), "home.update.action") {
-            onOpen()
-            if (storeURL.isNotEmpty()) {
-                runCatching { uriHandler.openUri(storeURL) }
-            }
-        }),
+        actions = listOf(ConclaveBannerAction(conclaveString("pm_update_action"), "home.update.action", onClick = onOpen)),
     )
 }
 

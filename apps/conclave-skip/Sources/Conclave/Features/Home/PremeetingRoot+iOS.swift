@@ -242,7 +242,6 @@ struct PremeetingSwitchAlert: ViewModifier {
 
 private struct PremeetingUpdatePrompt: ViewModifier {
     let premeeting: PremeetingPresenter
-    @Environment(\.openURL) private var openURL
 
     private var isPresented: Binding<Bool> {
         Binding(get: { premeeting.isUpdatePromptPresented }, set: { if !$0 { premeeting.dismissUpdatePrompt() } })
@@ -251,13 +250,7 @@ private struct PremeetingUpdatePrompt: ViewModifier {
     func body(content: Content) -> some View {
         content.alert(ConclaveStrings.text("Update Conclave"), isPresented: isPresented) {
             Button(ConclaveStrings.text("Cancel"), role: .cancel) { premeeting.dismissUpdatePrompt() }
-            Button(ConclaveStrings.text("Update")) {
-                let storeURL = premeeting.home.storeURL
-                premeeting.openStoreListing()
-                if let url = URL(string: storeURL), !storeURL.isEmpty {
-                    openURL(url)
-                }
-            }
+            Button(ConclaveStrings.text("Update")) { premeeting.openStoreListing() }
         } message: {
             Text(ConclaveStrings.text("This version of Conclave can no longer join meetings. Update to continue."))
         }

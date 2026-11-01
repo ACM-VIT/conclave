@@ -21,7 +21,7 @@ struct HomeView: View {
         List {
             if home.updateRequired {
                 Section {
-                    HomeUpdateBanner(storeURL: home.storeURL, onOpen: { premeeting.openStoreListing() })
+                    HomeUpdateBanner(onOpen: { premeeting.openStoreListing() })
                 }
             }
             if home.noticeKind != .none {
@@ -133,27 +133,18 @@ private struct HomeAccountButton: View {
 }
 
 private struct HomeUpdateBanner: View {
-    let storeURL: String
     let onOpen: () -> Void
-    @Environment(\.openURL) private var openURL
 
     var body: some View {
         ConclaveBanner(
             kind: .info,
             text: ConclaveStrings.text("This version of Conclave can no longer join meetings. Update to continue."),
             surface: .app,
-            actions: [ConclaveBannerAction(title: ConclaveStrings.text("Update"), identifier: "home.update.action", action: open)],
+            actions: [ConclaveBannerAction(title: ConclaveStrings.text("Update"), identifier: "home.update.action", action: onOpen)],
             identifier: "home.update"
         )
         .listRowInsets(EdgeInsets())
         .listRowBackground(Color.clear)
-    }
-
-    private func open() {
-        onOpen()
-        if let url = URL(string: storeURL), !storeURL.isEmpty {
-            openURL(url)
-        }
     }
 }
 

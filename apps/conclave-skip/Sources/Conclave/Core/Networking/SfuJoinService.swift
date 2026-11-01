@@ -19,6 +19,34 @@ struct SfuJoinInfo: Decodable {
     let token: String
     let sfuUrl: String
     let iceServers: [SfuIceServer]?
+    let minNativeVersion: MinNativeVersionPayload?
+
+    enum CodingKeys: String, CodingKey {
+        case token
+        case sfuUrl
+        case iceServers
+    }
+
+    init(token: String, sfuUrl: String, iceServers: [SfuIceServer]?, minNativeVersion: MinNativeVersionPayload? = nil) {
+        self.token = token
+        self.sfuUrl = sfuUrl
+        self.iceServers = iceServers
+        self.minNativeVersion = minNativeVersion
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.token = try container.decode(String.self, forKey: .token)
+        self.sfuUrl = try container.decode(String.self, forKey: .sfuUrl)
+        self.iceServers = try container.decodeIfPresent([SfuIceServer].self, forKey: .iceServers)
+        self.minNativeVersion = nil
+    }
+
+    static func decode(_ data: Data) throws -> SfuJoinInfo {
+        let decoded = try JSONDecoder().decode(SfuJoinInfo.self, from: data)
+        return SfuJoinInfo(token: decoded.token, sfuUrl: decoded.sfuUrl, iceServers: decoded.iceServers,
+                           minNativeVersion: MinNativeVersionPayload.from(json: data))
+    }
 
     func iceServersJSONString() -> String? {
         guard let iceServers, !iceServers.isEmpty else { return nil }
@@ -242,7 +270,7 @@ enum SfuJoinService {
             )
         }
 
-        return try JSONDecoder().decode(SfuJoinInfo.self, from: data)
+        return try SfuJoinInfo.decode(data)
         #endif
     }
 
@@ -311,7 +339,7 @@ enum SfuJoinService {
             )
         }
 
-        return try JSONDecoder().decode(SfuJoinInfo.self, from: data)
+        return try SfuJoinInfo.decode(data)
     }
     #endif
 
