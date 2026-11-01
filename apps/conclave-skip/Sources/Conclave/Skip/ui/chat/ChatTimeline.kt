@@ -1,5 +1,11 @@
 package conclave.module
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
@@ -25,6 +31,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -66,10 +73,12 @@ internal fun ChatTimeline(
     val reduceMotion = rememberReduceMotion()
     var unseen by remember { mutableIntStateOf(0) }
     var highlightId by remember { mutableStateOf("") }
-    val atBottom by remember {
+    val atBottomState = remember {
         derivedStateOf { !listState.canScrollBackward ||
             (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 48) }
     }
+    val atBottom by atBottomState
+    val anchor = remember(listState) { ChatTimelineAnchor(listState, atBottomState) }
     var wasAtBottom by remember { mutableStateOf(true) }
     var jumpRequests by remember { mutableIntStateOf(0) }
     var initialPositioned by remember { mutableStateOf(false) }
@@ -121,34 +130,42 @@ internal fun ChatTimeline(
     }
 
     ChatComposerFocusFollow(listState, reduceMotion) { actions.composerFocusRevision }
-    Column(Modifier.fillMaxSize()) {
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+    Box(Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
             val maxBubble = maxWidth * ConclaveBubbleGeometry.maxWidthFraction.toFloat()
-            LazyColumn(
-                state = listState,
-                reverseLayout = true,
-                verticalArrangement = Arrangement.Top,
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp + reservation.calculateTopPadding(),
-                    bottom = 12.dp + reservation.calculateBottomPadding()),
-                modifier = Modifier.fillMaxSize().imeNestedScroll().testTag("chat.timeline")
-                    .semantics { collectionInfo = CollectionInfo(reversed.ids.size, 1) },
-            ) {
-                items(count = reversed.ids.size, key = { reversed.ids[it] }, contentType = { reversed.kinds[it] }) { index ->
-                    val rowId = reversed.ids[index]
-                    ChatRow(presenter.rows.entry(rowId), actions, sidePane, maxBubble, highlightId == rowId)
+            CompositionLocalProvider(LocalChatTimelineAnchor provides anchor) {
+                LazyColumn(
+                    state = listState,
+                    reverseLayout = true,
+                    verticalArrangement = Arrangement.Top,
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp + reservation.calculateTopPadding(),
+                        bottom = 12.dp + reservation.calculateBottomPadding()),
+                    modifier = Modifier.fillMaxSize().imeNestedScroll().testTag("chat.timeline")
+                        .semantics { collectionInfo = CollectionInfo(reversed.ids.size, 1) },
+                ) {
+                    items(count = reversed.ids.size, key = { reversed.ids[it] }, contentType = { reversed.kinds[it] }) { index ->
+                        val rowId = reversed.ids[index]
+                        ChatRow(presenter.rows.entry(rowId), actions, sidePane, maxBubble, highlightId == rowId)
+                    }
                 }
             }
         }
-        if (initialPositioned && ChatTimelinePolicy.showsJumpToLatest(isAtBottom = atBottom, unseenCount = unseen)) {
+        AnimatedVisibility(
+            visible = initialPositioned && ChatTimelinePolicy.showsJumpToLatest(isAtBottom = atBottom, unseenCount = unseen),
+            enter = if (reduceMotion) EnterTransition.None else fadeIn(ConclaveMotion.fast()) + slideInVertically(ConclaveMotion.fast()) { it / 2 },
+            exit = if (reduceMotion) ExitTransition.None else fadeOut(ConclaveMotion.fast()),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp + reservation.calculateBottomPadding()),
+        ) {
             FilledTonalButton(
                 onClick = {
                     unseen = 0
                     jumpRequests += 1
                 },
                 contentPadding = PaddingValues(horizontal = 16.dp),
-                modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 8.dp).testTag("chat.jumpPill"),
+                modifier = Modifier.testTag("chat.jumpPill"),
             ) {
-                val label = conclavePlural("chat_jump_new", unseen, unseen)
+                if (unseen > 0) placement.pillCount = unseen
+                val label = conclavePlural("chat_jump_new", placement.pillCount, placement.pillCount)
                 ConclaveText(label, line = "chat.jumpPill.label")
             }
         }
@@ -164,6 +181,7 @@ internal fun ChatTimeline(
 private class ChatTimelinePlacement {
     var newestId = ""
     var focusRequest = 0
+    var pillCount = 1
 }
 
 @Composable
