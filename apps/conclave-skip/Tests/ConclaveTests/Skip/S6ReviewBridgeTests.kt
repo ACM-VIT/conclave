@@ -117,4 +117,36 @@ class S6ReviewBridgeTests {
         assertTrue(written.count { it.exists() } < 16)
         assertArrayEquals(byteArrayOf(4, 5, 6), requireNotNull(latest).readBytes())
     }
+
+    @Test fun staleRendererCallbackCannotReleaseTheReplacement() {
+        checkRendererReplacement(callbackBeforeReplacement = false)
+    }
+
+    @Test fun queuedRendererCleanupCannotReleaseTheReplacement() {
+        checkRendererReplacement(callbackBeforeReplacement = true)
+    }
+
+    private fun checkRendererReplacement(callbackBeforeReplacement: Boolean) {
+        val context = RuntimeEnvironment.getApplication()
+        BrowserWebViewRegistry.releaseAll()
+        val presenter = BrowserStagePresenter()
+        presenter.onCommand = { _ -> }
+        presenter.apply(BrowserStageInputs.make(callSession = 1, isActive = true, isHost = true,
+            url = "https://example.com", inputBaseURL = "https://example.com/vnc.html", isYouController = true,
+            provider = "chromium", hasAudio = true, videoUserId = "video", videoTrackKey = "track"))
+        val id = presenter.model.browserSessionId
+        val old = requireNotNull(BrowserWebViewRegistry.webView(context, presenter.model, presenter, 0))
+        val client = old.webViewClient
+        shadowOf(Looper.getMainLooper()).idle()
+        if (callbackBeforeReplacement) client.onRenderProcessGone(old, null)
+        else presenter.webViewFailed(browserSessionId = id, reloadSerial = presenter.model.reloadSerial, issue = BrowserLoadIssue.rendererGone)
+        presenter.retryLoad()
+        val replacement = requireNotNull(BrowserWebViewRegistry.webView(context, presenter.model, presenter, 0))
+        assertNotSame(old, replacement)
+        if (!callbackBeforeReplacement) client.onRenderProcessGone(old, null)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(BrowserWebViewRegistry.hasWebView(id))
+        assertSame(replacement, BrowserWebViewRegistry.webView(context, presenter.model, presenter, 0))
+        BrowserWebViewRegistry.releaseAll()
+    }
 }

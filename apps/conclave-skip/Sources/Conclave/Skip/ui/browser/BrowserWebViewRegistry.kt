@@ -231,8 +231,11 @@ internal object BrowserWebViewRegistry {
 
             override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
 
+                val entry = entries[id]?.takeIf { it.webView === view } ?: return true
                 report(presenter, id, serial, BrowserLoadIssue.rendererGone)
-                main.post { release(id) }
+                main.post {
+                    if (entries[id] === entry) release(id)
+                }
                 return true
             }
         }
