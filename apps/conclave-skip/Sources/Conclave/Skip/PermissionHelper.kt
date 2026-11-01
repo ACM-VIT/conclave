@@ -505,7 +505,7 @@ object PermissionHelper {
                 notificationPermissionPromptActive = false
                 suppressShareUntilElapsedMs =
                     SystemClock.elapsedRealtime() + NOTIFICATION_SHARE_SUPPRESSION_MS
-                finishNotificationsPermission(false)
+                finishNotificationsPermission(false, answered = false)
             }
         }
         finishRuntimePermissionRequest(requestCode)
