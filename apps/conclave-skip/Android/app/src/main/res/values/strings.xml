@@ -998,8 +998,7 @@
     <string name="chat_cmd_desc_leave">Leave the meeting</string>
     <string name="chat_cmd_desc_clear">Clear chat on this device</string>
 
-    <string name="chat_attach">Add attachment</string>
-    <string name="chat_attach_photo">Photo</string>
+    <string name="chat_attach_photo">Add photo</string>
     <string name="chat_attach_gif">GIFs and stickers</string>
     <string name="chat_attachment_remove">Remove photo</string>
     <string name="chat_attachment_preparing">Preparing…</string>
@@ -1013,7 +1012,6 @@
     <string name="chat_fail_photo_blocked">Photo not sent. Our safety check flagged it as potentially harmful. Only you can see this notice.</string>
     <string name="chat_fail_photo_rate">Too many photo uploads. Wait a moment and try again.</string>
     <string name="chat_fail_photos_disabled">Photos are turned off by the host.</string>
-    <string name="chat_reason_photos_off">Photos are turned off by the host.</string>
     <string name="chat_photo_failed">Couldn’t load photo. Tap to retry.</string>
     <string name="chat_ax_retry_photo">Retry loading photo</string>
     <string name="chat_ax_open_photo">Open photo</string>
@@ -1060,7 +1058,6 @@
     <string name="chat_placeholder_voice">Message to read aloud</string>
     <string name="chat_send_voice">Send voice message</string>
     <string name="chat_ax_voice">Voice message</string>
-    <string name="chat_attach_voice">Voice message</string>
 
     <string name="chat_assistant_name">Conclave</string>
     <string name="chat_assistant_tag">AI</string>

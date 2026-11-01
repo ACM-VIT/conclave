@@ -51,6 +51,12 @@ enum ChatReturnKeyAction: String, CaseIterable {
     case insertSuggestion
 }
 
+struct ChatAttachAffordance: Equatable {
+    let isEnabled: Bool
+    let opens: Bool
+    let notice: ChatFailure
+}
+
 enum ChatSendBlock: String, CaseIterable {
     case none, empty, notJoined, reconnecting, offline, locked, attendee, overLimit, photoPending, photoFailed, privatePhoto
 }
@@ -265,13 +271,23 @@ enum ChatComposerPolicy {
         roomId + "|" + privateToUserId
     }
 
-    static let attachKinds: [String] = ["photo", "gif", "voice"]
+    static let attachKinds: [String] = ["photo", "gif"]
 
-    static func attachItemReason(kind: String, isPrivateMode: Bool, photosEnabled: Bool, voiceEnabled: Bool) -> String {
+    static func attachItemReason(kind: String, isPrivateMode: Bool, photosEnabled: Bool) -> String {
         if isPrivateMode { return "privateTextOnly" }
         if kind == "photo" && !photosEnabled { return "photosDisabled" }
-        if kind == "voice" && !voiceEnabled { return "voiceDisabled" }
         return ""
+    }
+
+    static func attachAffordance(kind: String, gate: ChatSendGate, isPrivateMode: Bool, photosEnabled: Bool,
+                                 hasAttachment: Bool) -> ChatAttachAffordance {
+        if gate != ChatSendGate.allowed { return ChatAttachAffordance(isEnabled: false, opens: false, notice: ChatFailure.none) }
+        if isPrivateMode { return ChatAttachAffordance(isEnabled: true, opens: false, notice: ChatFailure.privateTextOnly) }
+        if kind == "photo" {
+            if !photosEnabled { return ChatAttachAffordance(isEnabled: true, opens: false, notice: ChatFailure.photosDisabled) }
+            if hasAttachment { return ChatAttachAffordance(isEnabled: true, opens: false, notice: ChatFailure.oneAttachment) }
+        }
+        return ChatAttachAffordance(isEnabled: true, opens: true, notice: ChatFailure.none)
     }
 
     static func canSend(text: String, gate: ChatSendGate, isVoiceMode: Bool, attachment: ChatAttachmentState) -> Bool {

@@ -161,7 +161,7 @@ struct CHT4PhotoTests {
         var log: [ChatCommandRequest] = []
         let chat = ChatPoliciesTests.presenter(inputs(attachment: .none))
         chat.onCommand = { log.append($0) }
-        #expect(chat.composer.attachKinds == ["photo", "gif", "voice"])
+        #expect(chat.composer.attachKinds == ["photo", "gif"])
         chat.attachPhoto(fileURL: "file:///cache/chat-photos/a.jpg", mimeType: "image/jpeg", fileName: "a.jpg")
         #expect(chat.composer.attachment.phase == .preparing && chat.composer.attachment.thumbnailKey == "file:///cache/chat-photos/a.jpg")
         #expect(log.last?.kind == .attachPhoto && log.last?.fileURL == "file:///cache/chat-photos/a.jpg")
@@ -221,10 +221,10 @@ struct CHT4PhotoTests {
         off.onCommand = { log.append($0) }
         off.attachPhoto(fileURL: "file:///x.jpg", mimeType: "image/jpeg", fileName: "x.jpg")
         #expect(log.isEmpty && off.composer.inlineNotice == .photosDisabled)
-        #expect(ChatComposerPolicy.attachItemReason(kind: "photo", isPrivateMode: true, photosEnabled: true, voiceEnabled: true) == "privateTextOnly")
-        #expect(ChatComposerPolicy.attachItemReason(kind: "gif", isPrivateMode: true, photosEnabled: true, voiceEnabled: true) == "privateTextOnly")
-        #expect(ChatComposerPolicy.attachItemReason(kind: "photo", isPrivateMode: false, photosEnabled: false, voiceEnabled: true) == "photosDisabled")
-        #expect(ChatComposerPolicy.attachItemReason(kind: "gif", isPrivateMode: false, photosEnabled: false, voiceEnabled: true) == "",
+        #expect(ChatComposerPolicy.attachItemReason(kind: "photo", isPrivateMode: true, photosEnabled: true) == "privateTextOnly")
+        #expect(ChatComposerPolicy.attachItemReason(kind: "gif", isPrivateMode: true, photosEnabled: true) == "privateTextOnly")
+        #expect(ChatComposerPolicy.attachItemReason(kind: "photo", isPrivateMode: false, photosEnabled: false) == "photosDisabled")
+        #expect(ChatComposerPolicy.attachItemReason(kind: "gif", isPrivateMode: false, photosEnabled: false) == "",
                 "GIFs stay allowed when photos are off (INM C5)")
     }
 

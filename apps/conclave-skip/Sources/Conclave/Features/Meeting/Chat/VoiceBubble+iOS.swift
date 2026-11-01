@@ -49,12 +49,6 @@ enum VoiceCopy {
     static var accessibilityValue: String {
         ConclaveStrings.text("Voice message")
     }
-
-    static func unavailableReason(_ composer: ChatComposerSnapshot) -> String {
-        if composer.privateTo != nil { return ConclaveStrings.text("Private messages are text only.") }
-        if !composer.voiceEnabled { return ConclaveStrings.text("Voice messages are turned off by the host.") }
-        return ""
-    }
 }
 
 struct ChatVoiceControl: View {
@@ -152,29 +146,6 @@ struct ChatVoiceModeRow: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("chat.composer.voice")
         }
-    }
-}
-
-struct ChatVoiceAttachItem: View {
-    let chat: ChatPresenter
-    let composer: ChatComposerSnapshot
-
-    var body: some View {
-        let reason = VoiceCopy.unavailableReason(composer)
-        Button {
-            chat.setVoiceMode(true)
-        } label: {
-            Label {
-                Text(VoiceCopy.modeTitle)
-                if !reason.isEmpty {
-                    Text(reason)
-                }
-            } icon: {
-                Image(systemName: VoiceSymbols.voiceMessage)
-            }
-        }
-        .disabled(!reason.isEmpty)
-        .accessibilityIdentifier("chat.composer.attach.voice")
     }
 }
 #endif

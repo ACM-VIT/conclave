@@ -59,7 +59,7 @@ struct ChatComposer: View {
             ChatAttachmentRow(chat: chat, attachment: composer.attachment)
             if pasteboardHasImage && composer.attachment.phase == ChatAttachmentPhase.none
                 && ChatComposerPolicy.attachItemReason(kind: "photo", isPrivateMode: composer.privateTo != nil,
-                                                       photosEnabled: composer.photosEnabled, voiceEnabled: composer.voiceEnabled).isEmpty
+                                                       photosEnabled: composer.photosEnabled).isEmpty
                 && composer.gate == ChatSendGate.allowed {
                 PasteButton(supportedContentTypes: [UTType.image]) { providers in
                     pasteImage(providers)
@@ -86,7 +86,7 @@ struct ChatComposer: View {
                         title: ConclaveStrings.format("Close %@", ConclaveStrings.text("Photo Library")),
                         identifier: "chat.photos.close", action: { showsPhotoPicker = false })
                 } else {
-                    ChatAttachMenu(chat: chat, composer: composer, onPhoto: { openPhotoLibrary() }, onGifs: { openGifs() })
+                    ChatAttachMenu(composer: composer, onPhoto: { openPhotoLibrary() }, onGifs: { openGifs() })
                 }
             } field: {
                 TextField(ChatCopy.placeholder(composer), text: $text, axis: .vertical)
@@ -672,7 +672,6 @@ private struct ChatSuggestionHighlight: View {
 }
 
 private struct ChatAttachMenu: View {
-    let chat: ChatPresenter
     let composer: ChatComposerSnapshot
     let onPhoto: () -> Void
     let onGifs: () -> Void
@@ -696,7 +695,7 @@ private struct ChatAttachMenu: View {
     @ViewBuilder
     private func item(_ kind: String) -> some View {
         let reason = ChatComposerPolicy.attachItemReason(kind: kind, isPrivateMode: composer.privateTo != nil,
-                                                         photosEnabled: composer.photosEnabled, voiceEnabled: composer.voiceEnabled)
+                                                         photosEnabled: composer.photosEnabled)
         if kind == "photo" {
             Button(action: onPhoto) {
                 Text(ConclaveStrings.text("Photo Library"))
@@ -713,8 +712,6 @@ private struct ChatAttachMenu: View {
             }
             .disabled(!reason.isEmpty)
             .accessibilityIdentifier("chat.composer.attach.gif")
-        } else if kind == VoiceMessagePolicy.attachKind {
-            ChatVoiceAttachItem(chat: chat, composer: composer)
         }
     }
 }

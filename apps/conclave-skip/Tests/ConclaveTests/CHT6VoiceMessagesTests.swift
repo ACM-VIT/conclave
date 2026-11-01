@@ -97,7 +97,6 @@ struct CHT6VoiceMessagesTests {
         #expect(VoiceMessagePolicy.voiceModeAllowed(voiceEnabled: true, isPrivateMode: false))
         #expect(!VoiceMessagePolicy.voiceModeAllowed(voiceEnabled: true, isPrivateMode: true))
         #expect(!VoiceMessagePolicy.voiceModeAllowed(voiceEnabled: false, isPrivateMode: false))
-        #expect(VoiceMessagePolicy.attachKind == "voice")
     }
 
     @Test func theCallAudioOwnerBlocksPlaybackDuringInterruptions() {
@@ -333,7 +332,7 @@ struct CHT6VoiceMessagesTests {
         let xml = try chatSource("Android/app/src/main/res/values/strings.xml")
         for name in ["chat_voice", "chat_voice_speaking", "chat_voice_play", "chat_voice_play_hint", "chat_voice_stop",
                      "chat_voice_line", "chat_voice_hint", "chat_voice_system", "chat_voice_personal", "chat_voice_exit",
-                     "chat_placeholder_voice", "chat_send_voice", "chat_ax_voice", "chat_attach_voice",
+                     "chat_placeholder_voice", "chat_send_voice", "chat_ax_voice",
                      "chat_reason_private_text", "chat_reason_voice_off"] {
             #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)")
         }
@@ -373,7 +372,7 @@ struct CHT6VoiceMessagesTests {
         var log: [String] = []
         chat.onCommand = { log.append($0.logLine) }
         chat.apply(Self.inputs([]), change: .messages)
-        #expect(chat.composer.attachKinds.contains(VoiceMessagePolicy.attachKind))
+        #expect(!chat.composer.attachKinds.contains("voice"), "voice is reached through /tts, not the attach button")
         #expect(chat.composer.voiceKind == VoiceKind.system.rawValue)
         chat.setVoiceMode(true)
         #expect(chat.composer.isVoiceMode)
