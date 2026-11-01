@@ -31,6 +31,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -54,6 +55,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 internal data class ActivitiesKey(val route: ActivitiesRoute, val id: String) {
@@ -244,10 +246,13 @@ private fun ActivitiesRoot(session: ActivitySession, reservation: PaddingValues,
             }
             if (s.canLockApps) {
                 item(key = "apps.lock") {
-                    ConclaveToggleRow(conclaveString("act_lock_apps"), s.appsLocked, "activities.lockApps",
-                        onCheckedChange = { locked ->
-                            if (s.appsReason != ActivitiesReason.noAppOpen && !s.appsLockPending && !s.isRecovering) activities.setAppsLocked(locked)
-                        })
+                    val enabled = ActivitiesSectionPolicy.canToggleAppsLock(s)
+                    ListItem(
+                        headlineContent = { Text(conclaveString("act_lock_apps")) },
+                        trailingContent = { Switch(checked = s.appsLocked, onCheckedChange = null, enabled = enabled) },
+                        modifier = Modifier.testTag("activities.lockApps")
+                            .conclaveSwitch(value = s.appsLocked, enabled = enabled, onValueChange = { locked -> activities.setAppsLocked(locked) }),
+                    )
                 }
             }
             item(key = "f:apps") {
@@ -258,14 +263,14 @@ private fun ActivitiesRoot(session: ActivitySession, reservation: PaddingValues,
                 }
                 ConclaveSectionFooter(footer, "activities.footer.apps")
             }
-            if (s.browser.isAvailable || s.browser.isActive) {
+            if (ActivitiesSectionPolicy.showsBrowserSection(s)) {
                 item(key = "h:browser") { ConclaveSectionHeader(conclaveString("act_browser"), "activities.header.browser") }
                 if (s.role == ActivityRole.host) {
                     item(key = "browser.row") {
                         ListItem(
                             headlineContent = { Text(conclaveString("br_title")) },
-                            supportingContent = { Text(if (s.browser.isActive && s.browser.hostLabel.isNotEmpty()) s.browser.hostLabel else conclaveString("br_detail")) },
-                            leadingContent = { Icon(ConclaveIcons.PublicFill0, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                            supportingContent = { Text(if (s.browser.isActive && s.browser.hostLabel.isNotEmpty()) s.browser.hostLabel else conclaveString("br_detail"), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            leadingContent = { Icon(activityGlyphIcon(ActivityGlyph.browser), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                             modifier = Modifier.testTag("activities.browser")
                                 .clickable(enabled = s.browser.isAvailable, role = Role.Button) { onPush(ActivitiesKey(ActivitiesRoute.browser, "")) },
                         )

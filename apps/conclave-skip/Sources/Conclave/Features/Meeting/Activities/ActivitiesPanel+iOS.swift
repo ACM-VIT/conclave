@@ -91,7 +91,7 @@ private struct ActivitiesRootList: View {
             if s.role == .host || !s.isVoteOpen {
                 AppsSection(snapshot: s, activities: session.activities, onReplace: { replaceTarget = $0 })
             }
-            if (s.browser.isAvailable || s.browser.isActive) && (s.role == .host || !s.isVoteOpen) {
+            if ActivitiesSectionPolicy.showsBrowserSection(s) {
                 BrowserSection(snapshot: s, activities: session.activities)
             }
             if let message = ActivitiesCopy.reason(s.inlineError, serverText: s.inlineErrorServerText) {
@@ -322,7 +322,7 @@ private struct AppsSection: View {
                 Toggle(ConclaveStrings.text("Lock App Editing"), isOn: Binding(
                     get: { snapshot.appsLocked },
                     set: { activities.setAppsLocked($0) }))
-                    .disabled(snapshot.appsReason == .noAppOpen || snapshot.appsLockPending || snapshot.isRecovering)
+                    .disabled(!ActivitiesSectionPolicy.canToggleAppsLock(snapshot))
                     .accessibilityIdentifier("activities.lockApps")
             }
         } header: {
@@ -386,13 +386,17 @@ private struct BrowserSection: View {
         Section(ConclaveStrings.text("Shared Browser")) {
             if snapshot.role == .host {
                 NavigationLink(value: ActivitiesPage(route: .browser, id: "")) {
-                    LabeledContent {
-                        Text(snapshot.browser.isActive ? snapshot.browser.hostLabel : "")
-                    } label: {
+                    Label {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(ConclaveStrings.text("Shared Browser"))
-                            Text(ConclaveStrings.text("Show a website to everyone")).font(.subheadline).foregroundStyle(.secondary)
+                            Text(snapshot.browser.isActive && !snapshot.browser.hostLabel.isEmpty
+                                 ? snapshot.browser.hostLabel : ConclaveStrings.text("Show a website to everyone"))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
                         }
+                    } icon: {
+                        Image(systemName: ActivityChromeSymbols.glyph(ActivityGlyph.browser))
                     }
                 }
                 .disabled(!snapshot.browser.isAvailable)

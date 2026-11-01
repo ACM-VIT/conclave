@@ -83,11 +83,7 @@ enum ActivityStageCopy {
     }
 
     static func symbol(kind raw: String, appId: String) -> String {
-        switch kind(raw) {
-        case .game: return ConclaveSymbols.gamecontrollerFill
-        case .app: return appId == "whiteboard" ? ConclaveSymbols.pencilAndScribble : ConclaveSymbols.squareGrid2x2
-        case .browser: return ConclaveSymbols.globe
-        }
+        return ActivityChromeSymbols.glyph(ActivityGlyphPolicy.glyph(kind: raw, appId: appId))
     }
 }
 

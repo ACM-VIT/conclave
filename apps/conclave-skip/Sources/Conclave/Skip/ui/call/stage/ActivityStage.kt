@@ -81,11 +81,8 @@ private fun ActivityStageCardContent(kind: String, stage: StagePresenter, sessio
 
 internal fun activityStageKind(raw: String): ActivityKind = ActivityKind.init(rawValue = raw) ?: ActivityKind.game
 
-internal fun activityStageIcon(raw: String, appId: String): ImageVector = when (activityStageKind(raw)) {
-    ActivityKind.game -> ConclaveIcons.SportsEsportsFill0
-    ActivityKind.app -> if (appId == "whiteboard") ConclaveIcons.DrawFill0 else ConclaveIcons.AppsFill0
-    ActivityKind.browser -> ConclaveIcons.PublicFill0
-}
+internal fun activityStageIcon(raw: String, appId: String): ImageVector =
+    activityGlyphIcon(ActivityGlyphPolicy.glyph(kind = activityStageKind(raw).rawValue, appId = appId))
 
 @Composable
 internal fun activityStageDisplayName(kind: String, name: String): String = when (activityStageKind(kind)) {
@@ -239,38 +236,18 @@ private fun ActivityStageBody(kind: String, stage: StagePresenter, session: Acti
 private fun ActivityWebBody(kind: String, stage: StagePresenter, session: ActivitySession) {
     val phase = session.cardPhase(kind = kind)
     val parts = activityStageIdentity(kind, session)
-    val scheme = MaterialTheme.colorScheme
-    Column(
-        Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        when (phase) {
-            ActivityCardPhase.opening -> {
-                CircularProgressIndicator(color = scheme.onSurface)
-                Spacer(Modifier.size(12.dp))
-                Text(activitiesCardPhase(phase, parts.name) ?: "", style = MaterialTheme.typography.bodyMedium,
-                    color = scheme.onSurfaceVariant, textAlign = TextAlign.Center)
-            }
-            ActivityCardPhase.failed -> {
-                Text(activitiesCardPhase(phase, parts.name) ?: "", style = MaterialTheme.typography.titleMedium,
-                    color = scheme.onSurface, textAlign = TextAlign.Center)
-                Spacer(Modifier.size(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = {
-                        session.setCardPhase(kind = kind, phase = ActivityCardPhase.opening)
-                        session.activities.refresh()
-                    }, modifier = Modifier.heightIn(min = 48.dp).testTag("stage.activity.retry")) {
-                        Text(conclaveString("stg_retry"))
-                    }
-                    Spacer(Modifier.width(0.dp))
-                    OutlinedButton(onClick = { stage.setShowsVideoOverActivity(true) },
-                        modifier = Modifier.heightIn(min = 48.dp).testTag("stage.activity.failedShowVideo")) {
-                        Text(conclaveString("stg_show_video"))
-                    }
-                }
-            }
-            ActivityCardPhase.live -> {}
-        }
+    when (phase) {
+        ActivityCardPhase.opening -> ActivityLoadingBlock(activitiesCardPhase(phase, parts.name) ?: "", "stage.activity.opening")
+        ActivityCardPhase.failed -> ActivityFailureBlock(
+            title = activitiesCardPhase(phase, parts.name) ?: "", detail = null, showsRetry = true,
+            identifier = "stage.activity.failed", retryIdentifier = "stage.activity.retry",
+            showVideoIdentifier = "stage.activity.failedShowVideo",
+            onRetry = {
+                session.setCardPhase(kind = kind, phase = ActivityCardPhase.opening)
+                session.activities.refresh()
+            },
+            onShowVideo = { stage.setShowsVideoOverActivity(true) },
+        )
+        ActivityCardPhase.live -> {}
     }
 }
