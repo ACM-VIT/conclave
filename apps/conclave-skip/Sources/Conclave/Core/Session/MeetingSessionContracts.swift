@@ -169,6 +169,7 @@ struct MeetingShellFeedbackState: Equatable {
 
 enum MeetingShellCommand: String, CaseIterable, Equatable {
     case toggleMicrophone, toggleCamera, toggleScreenShare, toggleHand, leave, endForEveryone, retry, dismissOutcome
+    case startScreenShareFromSystemPicker
 }
 
 struct MeetingShellInputs: Equatable {

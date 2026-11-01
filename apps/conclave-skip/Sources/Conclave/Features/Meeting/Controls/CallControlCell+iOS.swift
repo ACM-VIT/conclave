@@ -12,7 +12,14 @@ struct CallControlCell: View {
 
     var body: some View {
         switch model.kind {
-        case .microphone, .camera, .screenShare, .hand:
+        case .screenShare:
+            let mode = controls.systemSharePickerMode(model, isPickerAvailable: ScreenSharePickerSupport.isAvailable)
+            if mode == ScreenSharePickerMode.none {
+                CallControlToggleCell(model: model, controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText)
+            } else {
+                ScreenSharePickerControl(model: model, controls: controls, diameter: diameter, mode: mode)
+            }
+        case .microphone, .camera, .hand:
             CallControlToggleCell(model: model, controls: controls, diameter: diameter, isAccessibilityText: isAccessibilityText)
         case .chat, .participants, .qa:
             CallControlInvokerCell(model: model, controls: controls, diameter: diameter)

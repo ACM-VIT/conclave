@@ -223,6 +223,19 @@ final class MeetingShellPresenter {
     }
 
     @discardableResult
+    func startScreenShareFromSystemPicker() -> MeetingDispatch {
+        let row = currentRow(.screenShare)
+        guard row.isVisible, row.isEnabled, !row.isOn else { return .unavailable }
+        guard !row.isPending else { return .duplicate }
+        if screenShareFailure != .none {
+            screenShareFailure = .none
+            publishAll(resolution: MeetingPhasePolicy.resolve(inputs))
+        }
+        onCommand?(.startScreenShareFromSystemPicker, nil)
+        return .dispatched
+    }
+
+    @discardableResult
     func toggleHand() -> MeetingDispatch {
         let row = currentRow(.hand)
         guard row.isVisible, row.isEnabled else { return .unavailable }

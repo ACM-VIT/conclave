@@ -550,6 +550,9 @@ final class ControlsFixtureSession {
             counters.recordShare()
             isScreenSharing = !isScreenSharing
             push()
+        case .startScreenShareFromSystemPicker:
+            counters.recordShare()
+            refreshControls()
         case .toggleHand:
             counters.recordHand()
             if state == .handRaising || state == .slowAck {

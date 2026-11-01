@@ -296,6 +296,21 @@ enum ControlBarPolicy {
     }
 }
 
+enum ScreenSharePickerMode: String, CaseIterable, Equatable {
+    case none, interactive, holding
+}
+
+enum ScreenSharePickerPolicy {
+    static func mode(model: CallControlModel, composition: ControlBarComposition, windowWidth: ControlsWindowClass,
+                     isPhone: Bool, isAttendee: Bool, isPickerAvailable: Bool) -> ScreenSharePickerMode {
+        if !isPickerAvailable || isPhone || isAttendee { return ScreenSharePickerMode.none }
+        if composition != ControlBarComposition.wide || windowWidth != ControlsWindowClass.regular { return ScreenSharePickerMode.none }
+        if model.kind != CallControlKind.screenShare || model.isOn || model.isBlocked { return ScreenSharePickerMode.none }
+        if model.reason != ControlBlockedReason.none { return ScreenSharePickerMode.none }
+        return model.isPending ? ScreenSharePickerMode.holding : ScreenSharePickerMode.interactive
+    }
+}
+
 public enum ConclaveWindowMetrics {
     public static let minimumWidth: Double = CompactBarFit.requiredWidth(
         targets: [CompactBarFit.iosMinimumTarget, CompactBarFit.iosMinimumTarget, CompactBarFit.iosMinimumTarget,

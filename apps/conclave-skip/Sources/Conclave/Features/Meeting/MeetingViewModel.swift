@@ -9577,6 +9577,8 @@ final class MeetingViewModel {
             toggleCamera()
         case .toggleScreenShare:
             toggleScreenShare()
+        case .startScreenShareFromSystemPicker:
+            toggleScreenShare(presentation: ScreenSharePresentation.systemPicker)
         case .toggleHand:
             toggleHandRaise { [weak self] result in
                 guard let self, let ticket else { return }
@@ -10946,7 +10948,8 @@ final class MeetingViewModel {
         }
     }
 
-    func toggleScreenShare() {
+    func toggleScreenShare(presentation: ScreenSharePresentation = ScreenSharePresentation.programmatic) {
+        if presentation == ScreenSharePresentation.systemPicker && state.isScreenSharing { return }
         guard state.connectionState == .joined,
               !state.mediaPublishingDisabled,
               (!state.isAudioOnlyMode || state.isScreenSharing),
@@ -11000,7 +11003,7 @@ final class MeetingViewModel {
                             joinAttemptId: actionJoinAttemptId
                         )
                     }
-                    try await ScreenCaptureManager.shared.startCapture(webRTCClient: webRTCClient)
+                    try await ScreenCaptureManager.shared.startCapture(webRTCClient: webRTCClient, presentation: presentation)
                     publishScreenShare(ScreenSharePhasePolicy.starting(screenShare))
                     guard isCurrentJoinedCall(roomId: actionRoomId, joinAttemptId: actionJoinAttemptId) else {
                         if canOrphanedScreenShareToggleStopCapture() {

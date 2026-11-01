@@ -7,6 +7,8 @@ final class CallControlsPresenter {
 
     private(set) var bar: ControlBarSnapshot = ControlBarSnapshot.empty
 
+    private(set) var hostsSystemSharePicker = false
+
     private(set) var leaveState: LeaveSnapshot = LeaveSnapshot.idle
 
     private(set) var explanation: ControlExplanation? = nil
@@ -186,6 +188,23 @@ final class CallControlsPresenter {
         case .leave:
             return leave()
         }
+    }
+
+    func systemSharePickerMode(_ model: CallControlModel, isPickerAvailable: Bool) -> ScreenSharePickerMode {
+        guard hostsSystemSharePicker else { return ScreenSharePickerMode.none }
+        return ScreenSharePickerPolicy.mode(model: model, composition: layout.composition, windowWidth: windowWidth,
+                                            isPhone: isPhone, isAttendee: inputs.isWebinarAttendee,
+                                            isPickerAvailable: isPickerAvailable)
+    }
+
+    @discardableResult
+    func beginSystemSharePicker() -> ControlTapResult {
+        stage.noteControlAction()
+        guard let current = model(CallControlKind.screenShare),
+              systemSharePickerMode(current, isPickerAvailable: true) == ScreenSharePickerMode.interactive else {
+            return ControlTapResult.ignored
+        }
+        return result(shell.startScreenShareFromSystemPicker(), kind: CallControlKind.screenShare)
     }
 
     @discardableResult
@@ -573,6 +592,13 @@ final class CallControlsPresenter {
         if candidate != bar {
             bar = candidate.withRevision(bar.revision + 1)
             barPublishCount += 1
+        }
+        let hostsPicker = bar.control(CallControlKind.screenShare) != nil
+            && !overflowIds.contains(CallControlKind.screenShare.rawValue)
+            && layout.composition == ControlBarComposition.wide && windowWidth == ControlsWindowClass.regular
+            && !isPhone && !inputs.isWebinarAttendee
+        if hostsPicker != hostsSystemSharePicker {
+            hostsSystemSharePicker = hostsPicker
         }
 
         let leaveCandidate = RecapPolicy.leaveSnapshot(ControlBarPolicy.leaveSnapshot(inputs: inputs, revision: leaveState.revision),

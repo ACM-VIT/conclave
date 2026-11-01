@@ -156,7 +156,7 @@ final class ScreenCaptureManager: NSObject {
     static let shared = ScreenCaptureManager()
 
     private let appGroupIdentifier = "group.com.acmvit.conclave.screenshare"
-    private let broadcastExtensionBundleId = "com.acmvit.conclave.ScreenShareExtension"
+    nonisolated static let broadcastExtensionBundleId = "com.acmvit.conclave.ScreenShareExtension"
     private let publishFrameRateKey = "conclave.screenShare.maxFrameRate"
     private let publishMaxWidthKey = "conclave.screenShare.maxWidth"
     private let publishMaxHeightKey = "conclave.screenShare.maxHeight"
@@ -188,6 +188,8 @@ final class ScreenCaptureManager: NSObject {
     private var stopWrittenForCurrentAttempt = false
 
     private var baselinePresentedController: ObjectIdentifier?
+    private var armedPickerBaseline: ObjectIdentifier?
+    private var armedPickerAtMs: Double = -1.0
     private var reconnectGraceTask: Task<Void, Never>?
     private let frameGate = ScreenShareFrameRateGate()
     private let framePump = ScreenShareLatestFramePump()
@@ -235,7 +237,20 @@ final class ScreenCaptureManager: NSObject {
         }
     }
 
-    func startCapture(webRTCClient: WebRTCClient) async throws {
+    func armSystemPicker() {
+        armedPickerBaseline = Self.topPresentedController().map { ObjectIdentifier($0) }
+        armedPickerAtMs = Self.nowMs()
+    }
+
+    private func adoptSystemPickerPresentation() {
+        let current = ScreenShareStartPolicy.pickerArmIsCurrent(armedAtMs: armedPickerAtMs, nowMs: Self.nowMs())
+        baselinePresentedController = current ? armedPickerBaseline : Self.topPresentedController().map { ObjectIdentifier($0) }
+        armedPickerBaseline = nil
+        armedPickerAtMs = -1.0
+    }
+
+    func startCapture(webRTCClient: WebRTCClient,
+                      presentation: ScreenSharePresentation = ScreenSharePresentation.programmatic) async throws {
         if server != nil {
             await stopCapture()
         }
@@ -312,9 +327,13 @@ final class ScreenCaptureManager: NSObject {
                     return
                 }
 
-                guard presentBroadcastPicker() else {
-                    failPendingStart(generation: generation, failure: ScreenShareFailure.notConfigured, stopReason: nil)
-                    return
+                if presentation == ScreenSharePresentation.systemPicker {
+                    adoptSystemPickerPresentation()
+                } else {
+                    guard presentBroadcastPicker() else {
+                        failPendingStart(generation: generation, failure: ScreenShareFailure.notConfigured, stopReason: nil)
+                        return
+                    }
                 }
 
                 openStartWindow(generation: generation)
@@ -561,7 +580,7 @@ final class ScreenCaptureManager: NSObject {
         let picker = RPSystemBroadcastPickerView(
             frame: CGRect(x: 0, y: 0, width: 1, height: 1)
         )
-        picker.preferredExtension = broadcastExtensionBundleId
+        picker.preferredExtension = Self.broadcastExtensionBundleId
         picker.showsMicrophoneButton = false
 
         window.addSubview(picker)

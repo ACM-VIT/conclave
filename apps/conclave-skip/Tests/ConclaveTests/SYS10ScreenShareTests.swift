@@ -1,5 +1,6 @@
 #if !SKIP
 import Foundation
+import Observation
 import Testing
 @testable import Conclave
 
@@ -310,6 +311,281 @@ struct SYS10ScreenShareTests {
         #expect(buildFile["isa"] as? String == "PBXBuildFile" && buildFile["fileRef"] as? String == "5C10A7E12EB0B6A100D1A011", "R5 b")
         let resources = try #require(objects["D8437152ED65B65BAD66390E"]?["files"] as? [String])
         #expect(resources.filter { $0 == "5C10A7E12EB0B6A100D1A010" }.count == 1)
+    }
+
+    private static func shareModel(kind: CallControlKind = CallControlKind.screenShare, isOn: Bool = false, isPending: Bool = false,
+                                   isBlocked: Bool = false,
+                                   reason: ControlBlockedReason = ControlBlockedReason.none) -> CallControlModel {
+        CallControlModel(id: kind.rawValue, kind: kind, isOn: isOn, visual: ControlBarPolicy.visual(kind: kind, isOn: isOn),
+                         isBlocked: isBlocked, isPending: isPending, reason: reason, reasonName: "", appliesAfterReconnect: false,
+                         badgeCount: 0, showsDot: false, hasShortcut: false)
+    }
+
+    private static func pickerMode(_ model: CallControlModel, composition: ControlBarComposition = ControlBarComposition.wide,
+                                   width: ControlsWindowClass = ControlsWindowClass.regular, isPhone: Bool = false,
+                                   isAttendee: Bool = false, isPickerAvailable: Bool = true) -> ScreenSharePickerMode {
+        ScreenSharePickerPolicy.mode(model: model, composition: composition, windowWidth: width, isPhone: isPhone,
+                                     isAttendee: isAttendee, isPickerAvailable: isPickerAvailable)
+    }
+
+    @Test func thePickerOnlyHostsOnARegularWidthIPadBar() {
+        let idle = Self.shareModel()
+        #expect(Self.pickerMode(idle) == .interactive)
+        #expect(Self.pickerMode(idle, isPhone: true) == ScreenSharePickerMode.none)
+        #expect(Self.pickerMode(idle, width: .compact) == ScreenSharePickerMode.none)
+        #expect(Self.pickerMode(idle, composition: .compact) == ScreenSharePickerMode.none)
+        #expect(Self.pickerMode(idle, composition: .attendee) == ScreenSharePickerMode.none)
+        #expect(Self.pickerMode(idle, isAttendee: true) == ScreenSharePickerMode.none)
+        #expect(Self.pickerMode(idle, isPickerAvailable: false) == ScreenSharePickerMode.none)
+        let blockedReasons: [ControlBlockedReason] = [.remoteShareActive, .audioOnly, .offline, .reconnecting, .leaving, .unsupported]
+        for reason in blockedReasons {
+            #expect(Self.pickerMode(Self.shareModel(isBlocked: true, reason: reason)) == ScreenSharePickerMode.none, "\(reason)")
+            #expect(Self.pickerMode(Self.shareModel(reason: reason)) == ScreenSharePickerMode.none, "unblocked \(reason)")
+        }
+        #expect(Self.pickerMode(Self.shareModel(isPending: true)) == .holding)
+        #expect(Self.pickerMode(Self.shareModel(isOn: true)) == ScreenSharePickerMode.none)
+        #expect(Self.pickerMode(Self.shareModel(isOn: true, isPending: true)) == ScreenSharePickerMode.none)
+        for kind in CallControlKind.allCases where kind != .screenShare {
+            #expect(Self.pickerMode(Self.shareModel(kind: kind)) == ScreenSharePickerMode.none, "\(kind)")
+        }
+        #expect(ScreenSharePickerMode.allCases.map { $0.rawValue } == ["none", "interactive", "holding"])
+    }
+
+    @MainActor
+    private final class PickerHarness {
+        let shell = MeetingShellPresenter()
+        let stage: StagePresenter
+        let controls: CallControlsPresenter
+        var commands: [MeetingShellCommand] = []
+
+        init() {
+            stage = StagePresenter(shell: shell)
+            controls = CallControlsPresenter(shell: shell, stage: stage)
+            shell.onCommand = { [weak self] command, _ in self?.commands.append(command) }
+        }
+
+        func push(sharing: Bool = false, inFlight: Bool = false, remote: Bool = false, supported: Bool = true) {
+            shell.apply(MeetingShellInputs.make(
+                identity: MeetingSessionIdentity(callSession: 1, attempt: 1, attemptToken: "picker"),
+                connectionState: .joined, roomId: "abc-defg-hij", displayName: "You", isScreenSharing: sharing,
+                hasActiveRemoteScreenShare: remote, isScreenShareSupported: supported, screenShareToggleInFlight: inFlight))
+            controls.apply(CallControlsInputs.fromShell(shell))
+        }
+
+        func mode() -> ScreenSharePickerMode {
+            guard let model = controls.model(.screenShare) else { return ScreenSharePickerMode.none }
+            return controls.systemSharePickerMode(model, isPickerAvailable: true)
+        }
+
+        func shareRow() -> MeetingControlRow? {
+            shell.controls.rows.first { $0.id == MeetingControlID.screenShare.rawValue }
+        }
+    }
+
+    @MainActor @Test func aWindowThatArrivesAfterTheFirstRenderStillSwitchesTheCellToThePicker() {
+        let h = PickerHarness()
+        h.controls.setCompositionOverride(.wide)
+        h.push()
+        #expect(h.mode() == ScreenSharePickerMode.none)
+
+        var notified = false
+        withObservationTracking {
+            _ = h.mode()
+        } onChange: {
+            notified = true
+        }
+        h.controls.setWindow(width: .regular, height: .regular, isPhone: false)
+        #expect(notified)
+        #expect(h.mode() == .interactive)
+    }
+
+    @MainActor @Test func thePresenterHostsThePickerAndDispatchesTheSystemPickerCommand() {
+        let h = PickerHarness()
+        h.controls.setWindow(width: .regular, height: .regular, isPhone: false)
+        h.push()
+        #expect(h.controls.bar.composition == .wide)
+        #expect(h.mode() == .interactive)
+        #expect(h.controls.beginSystemSharePicker() == .dispatched)
+        #expect(h.commands == [.startScreenShareFromSystemPicker])
+
+        h.push(inFlight: true)
+        #expect(h.mode() == .holding)
+        #expect(h.controls.beginSystemSharePicker() == .ignored)
+        #expect(h.commands.count == 1)
+
+        h.push(sharing: true)
+        #expect(h.mode() == ScreenSharePickerMode.none)
+        #expect(h.controls.beginSystemSharePicker() == .ignored)
+
+        h.push()
+        h.controls.setWindow(width: .compact, height: .regular, isPhone: false)
+        #expect(h.mode() == ScreenSharePickerMode.none)
+        #expect(h.controls.beginSystemSharePicker() == .ignored)
+
+        h.controls.setWindow(width: .regular, height: .regular, isPhone: true)
+        h.controls.setCompositionOverride(.wide)
+        #expect(h.controls.bar.control(.screenShare) != nil)
+        #expect(h.mode() == ScreenSharePickerMode.none)
+        h.controls.setCompositionOverride(nil)
+
+        h.controls.setWindow(width: .regular, height: .regular, isPhone: false)
+        h.controls.setOverflow(ids: [CallControlKind.screenShare.rawValue])
+        #expect(h.mode() == ScreenSharePickerMode.none)
+        #expect(h.controls.beginSystemSharePicker() == .ignored)
+        h.controls.setOverflow(ids: [])
+        #expect(h.mode() == .interactive)
+
+        h.push(remote: true)
+        #expect(h.controls.model(.screenShare)?.reason == .remoteShareActive)
+        #expect(h.mode() == ScreenSharePickerMode.none)
+        #expect(h.controls.beginSystemSharePicker() == .ignored)
+        #expect(h.commands == [.startScreenShareFromSystemPicker])
+        #expect(h.controls.tap(.screenShare) == .explained)
+        #expect(h.commands == [.startScreenShareFromSystemPicker])
+    }
+
+    @MainActor @Test func theShellRefusesASystemPickerStartWhileSharingOrPending() {
+        let h = PickerHarness()
+        h.push(sharing: true)
+        #expect(h.shell.startScreenShareFromSystemPicker() == .unavailable)
+        h.push(sharing: true, inFlight: true)
+        #expect(h.shell.startScreenShareFromSystemPicker() == .unavailable)
+        h.push(remote: true)
+        #expect(h.shell.startScreenShareFromSystemPicker() == .unavailable)
+        h.push(supported: false)
+        #expect(h.shell.startScreenShareFromSystemPicker() == .unavailable)
+        h.push(inFlight: true)
+        #expect(h.shell.startScreenShareFromSystemPicker() == .duplicate)
+        #expect(h.commands.isEmpty)
+
+        h.push()
+        #expect(h.shell.reportFailure(.screenShare, MeetingActionResult.failed(MeetingActionFailure.rejectedByServer)))
+        #expect(h.shareRow()?.failure == MeetingActionFailure.rejectedByServer)
+        #expect(h.shell.startScreenShareFromSystemPicker() == .dispatched)
+        #expect(h.shareRow()?.failure == MeetingActionFailure.none)
+        #expect(h.commands == [.startScreenShareFromSystemPicker])
+        #expect(h.shell.toggleScreenShare() == .dispatched)
+        #expect(h.commands == [.startScreenShareFromSystemPicker, .toggleScreenShare])
+    }
+
+    @Test func aPickerArmIsHonoredOnlyWithinItsLifetime() {
+        #expect(!ScreenShareStartPolicy.pickerArmIsCurrent(armedAtMs: -1.0, nowMs: 0.0))
+        #expect(ScreenShareStartPolicy.pickerArmIsCurrent(armedAtMs: 0.0, nowMs: 0.0))
+        #expect(ScreenShareStartPolicy.pickerArmIsCurrent(armedAtMs: 0.0, nowMs: 10_000.0))
+        #expect(!ScreenShareStartPolicy.pickerArmIsCurrent(armedAtMs: 0.0, nowMs: 10_001.0))
+        #expect(!ScreenShareStartPolicy.pickerArmIsCurrent(armedAtMs: 5_000.0, nowMs: 4_999.0))
+        #expect(ScreenShareStartPolicy.pickerArmIsCurrent(armedAtMs: 5_000.0, nowMs: 5_000.0 + ScreenShareStartPolicy.pickerArmLifetimeMs))
+        #expect(ScreenSharePresentation.allCases.map { $0.rawValue } == ["programmatic", "systemPicker"])
+    }
+
+    private static func foldedPhases(_ steps: [ShareFixtureStep]) -> [ScreenSharePhase] {
+        var phases: [ScreenSharePhase] = []
+        for step in steps where phases.last != step.snapshot.phase {
+            phases.append(step.snapshot.phase)
+        }
+        return phases
+    }
+
+    @MainActor @Test func sharePhaseFixturesCoverEveryPhaseOnBothPlatforms() {
+        for phase in ShareFixturePhase.allCases {
+            let state = ShareFixtureScript.state(for: phase)
+            #expect(state.rawValue == "share-" + phase.rawValue)
+            #expect(ShareFixtureScript.phase(for: state) == phase)
+            #expect(SystemFixtureScript.state(named: state.rawValue) == state)
+        }
+        #expect(ShareFixtureScript.failure(platform: .ios) == .extensionTimeout)
+        #expect(ShareFixtureScript.failure(platform: .android) == .serviceRefused)
+
+        let readouts: [ShareFixturePhase: (String, String, Bool, Bool, [ScreenSharePhase])] = [
+            .requesting: ("choosing/none/none/video", "choosing/app/wait", false, true, [.choosing]),
+            .consent: ("choosing/none/none/video", "choosing/system/wait", false, true, [.choosing]),
+            .starting: ("starting/none/none/video", "starting/app/wait", false, true, [.choosing, .starting]),
+            .live: ("live/none/none/video", "idle/app/wait", true, false, [.choosing, .starting, .live]),
+            .stopping: ("stopping/none/none/video", "idle/app/wait", true, true, [.choosing, .starting, .live, .stopping]),
+            .failed: ("", "idle/app/wait", false, false, [.choosing, .starting, .idle]),
+        ]
+        for platform in ScreenSharePlatform.allCases {
+            let failure = ShareFixtureScript.failure(platform: platform)
+            for phase in ShareFixturePhase.allCases {
+                let label = "\(platform) \(phase)"
+                guard let row = readouts[phase] else {
+                    Issue.record("missing \(label)")
+                    continue
+                }
+                let session = SystemFixtureSession(state: ShareFixtureScript.state(for: phase), platform: platform)
+                session.start()
+                guard let share = session.share else {
+                    Issue.record("no rig for \(label)")
+                    continue
+                }
+                #expect(share.platform == platform)
+                #expect(session.presenceReadout == "live/none/inactive/1", "\(label)")
+                let expectedShare = phase == .failed ? "idle/" + failure.rawValue + "/none/video" : row.0
+                #expect(session.shareReadout == expectedShare, "\(label)")
+                #expect(session.shareWindowReadout == row.1, "\(label)")
+                #expect(session.shareCommandsReadout == "none", "\(label)")
+                let model = share.controls.model(.screenShare)
+                #expect(model?.isOn == row.2, "\(label)")
+                #expect(model?.isPending == row.3, "\(label)")
+                #expect(model?.isBlocked == false, "\(label)")
+                #expect(share.controls.bar.composition == .wide, "\(label)")
+                #expect(Self.foldedPhases(ShareFixtureScript.steps(phase, platform: platform)) == row.4, "\(label)")
+                #expect(share.stage.layout.isLocalPresenting == row.2, "\(label)")
+                if phase == .failed {
+                    let notice = share.notice
+                    #expect(notice?.kind == NoticeKind.shareFailed, "\(label)")
+                    #expect(notice?.detail == failure.rawValue, "\(label)")
+                    #expect(ScreenShareFailurePolicy.showsToast(failure))
+                    #expect(session.shareNoticeReadout == "shareFailed:" + failure.rawValue, "\(label)")
+                    #expect(share.stage.noticesReadout().contains("toast=shareFailed"), "\(label)")
+                    if platform == .ios {
+                        #expect(ScreenShareFailurePolicy.iosCopyKey(detail: failure.rawValue) == "Couldn’t start screen sharing. Try again.")
+                    } else {
+                        #expect(ScreenShareFailurePolicy.androidResourceName(detail: failure.rawValue) == "sys_share_failed")
+                    }
+                    session.repostShareFailure()
+                    #expect(share.stage.noticesReadout().contains("toast=shareFailed"), "\(label)")
+                    #expect(session.shareNoticeReadout == "shareFailed:" + failure.rawValue, "\(label)")
+                } else {
+                    #expect(share.notice == nil, "\(label)")
+                    #expect(session.shareNoticeReadout == "none", "\(label)")
+                    #expect(!share.stage.noticesReadout().contains("toast=shareFailed"), "\(label)")
+                }
+            }
+        }
+
+        let live = SystemFixtureSession(state: .shareLive, platform: .ios)
+        live.start()
+        #expect(live.share?.controls.tap(.screenShare) == .dispatched)
+        #expect(live.shareCommandsReadout == "toggleScreenShare")
+
+        for state in SystemFixtureState.allCases where ShareFixtureScript.phase(for: state) == nil {
+            let session = SystemFixtureSession(state: state)
+            session.start()
+            #expect(session.share == nil, "\(state)")
+            #expect(session.shareReadout == "none", "\(state)")
+        }
+        #expect(SystemFixtureScript.currentPlatform == .ios)
+    }
+
+    @MainActor @Test func shareFixturesNeverClaimDeviceAudio() {
+        for platform in ScreenSharePlatform.allCases {
+            for phase in ShareFixturePhase.allCases {
+                for step in ShareFixtureScript.steps(phase, platform: platform) {
+                    #expect(!step.snapshot.canShareDeviceAudio, "\(platform) \(phase) \(step.atMs)")
+                    #expect(!step.snapshot.isSharingDeviceAudio, "\(platform) \(phase) \(step.atMs)")
+                }
+                let session = SystemFixtureSession(state: ShareFixtureScript.state(for: phase), platform: platform)
+                session.start()
+                #expect(session.share?.snapshot.canShareDeviceAudio == false, "\(platform) \(phase)")
+                #expect(session.share?.snapshot.isSharingDeviceAudio == false, "\(platform) \(phase)")
+                #expect(session.shareReadout.hasSuffix("/video"), "\(platform) \(phase)")
+            }
+        }
+        for api in 29...36 {
+            #expect(!ScreenShareCapabilityPolicy.current(platform: .android, apiLevel: api), "API \(api)")
+        }
+        #expect(!ScreenShareCapabilityPolicy.current(platform: .ios, apiLevel: 0))
     }
 }
 

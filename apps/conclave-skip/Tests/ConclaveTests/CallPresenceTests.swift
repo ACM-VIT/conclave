@@ -426,6 +426,13 @@ struct CallPresenceTests {
             .pipSpeaker: "live/none/inactive/1",
 
             .receiverCameraOff: "live/none/inactive/1",
+
+            .shareRequesting: "live/none/inactive/1",
+            .shareConsent: "live/none/inactive/1",
+            .shareStarting: "live/none/inactive/1",
+            .shareLive: "live/none/inactive/1",
+            .shareStopping: "live/none/inactive/1",
+            .shareFailed: "live/none/inactive/1",
         ]
         for state in SystemFixtureState.allCases {
             let session = SystemFixtureSession(state: state)

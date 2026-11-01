@@ -12,6 +12,10 @@ enum ScreenShareStopSource: String, CaseIterable, Equatable {
     case none, person, system, host, recovery, callEnded
 }
 
+enum ScreenSharePresentation: String, CaseIterable, Equatable {
+    case programmatic, systemPicker
+}
+
 struct ScreenShareSnapshot: Equatable {
     let phase: ScreenSharePhase
     let failure: ScreenShareFailure
@@ -126,6 +130,12 @@ enum ScreenShareStartPolicy {
     static let connectGraceMs = 8_000.0
 
     static let pollIntervalMs = 250.0
+
+    static let pickerArmLifetimeMs = 10_000.0
+
+    static func pickerArmIsCurrent(armedAtMs: Double, nowMs: Double) -> Bool {
+        armedAtMs >= 0.0 && nowMs >= armedAtMs && nowMs - armedAtMs <= pickerArmLifetimeMs
+    }
 
     static func opened(nowMs: Double) -> ScreenShareStartWindow {
         ScreenShareStartWindow(
