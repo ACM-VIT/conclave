@@ -37,6 +37,19 @@ enum ChatGifPickerPhase: String, CaseIterable {
     case loading, results, empty, error
 }
 
+enum ChatGifSheetPolicy {
+
+    static let heightFraction = 0.62
+    static let minimumHeight = 360.0
+    static let topClearance = 72.0
+
+    static func height(windowHeight: Double, keyboardHeight: Double) -> Double {
+        let preferred = max(windowHeight * heightFraction, minimumHeight)
+        let fits = windowHeight - max(keyboardHeight, 0.0) - topClearance
+        return max(min(preferred, fits), 0.0)
+    }
+}
+
 struct ChatGifPickerState: Equatable {
     let kind: ChatGifKind
     let query: String

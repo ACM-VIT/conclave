@@ -421,7 +421,7 @@ internal fun ConclaveSearchField(
 internal fun ConclaveSegmentedRow(
     options: List<ConclaveSegmentModel>, selectedId: String, identifier: String, onSelect: (String) -> Unit,
     modifier: Modifier = Modifier, fallback: ConclaveSegmentedFallback = ConclaveSegmentedFallback.rows,
-    haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
+    showsSelectionIcon: Boolean = true, haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
     onGesture: (FeedbackKind, GestureHapticDecision) -> Unit = { _, _ -> },
 ) {
     val fontScale = LocalDensity.current.fontScale
@@ -449,6 +449,7 @@ internal fun ConclaveSegmentedRow(
                 shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
                 modifier = Modifier.testTag("$identifier.${option.id}"),
                 enabled = option.isEnabled,
+                icon = if (showsSelectionIcon) ({ SegmentedButtonDefaults.Icon(isSelected) }) else ({}),
             ) {
                 ConclaveText(option.title, line = "$identifier.${option.id}")
             }
