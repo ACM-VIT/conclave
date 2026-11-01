@@ -20,8 +20,8 @@ class NativeIconContractTests {
     @Test fun realCatalogIsLazyThreadSafeAndStructurallyComplete() {
 
         val baseline = ConclaveIcons.initializedCount()
-        assertEquals(115, NativeIconCatalog.artwork.size)
-        assertEquals(134, NativeIconCatalog.bindings.size)
+        assertEquals(93, NativeIconCatalog.artwork.size)
+        assertEquals(110, NativeIconCatalog.bindings.size)
         assertEquals(baseline, ConclaveIcons.initializedCount())
         assertEquals(setOf("arrow_back.fill0", "send.fill1", "backspace.fill0", "reply.fill0"), NativeIconCatalog.artwork.filter { it.mirrors }.map { it.id }.toSet())
         assertEquals(baseline, ConclaveIcons.initializedCount())
@@ -38,9 +38,9 @@ class NativeIconContractTests {
                 assertEquals(a.id, first.name)
             }
         } finally { pool.shutdown() }
-        assertEquals(115, ConclaveIcons.initializedCount())
-        assertEquals(115, NativeIconCatalog.artwork.map { it.id }.toSet().size)
-        assertEquals(134, NativeIconCatalog.bindings.map { it.id }.toSet().size)
+        assertEquals(93, ConclaveIcons.initializedCount())
+        assertEquals(93, NativeIconCatalog.artwork.map { it.id }.toSet().size)
+        assertEquals(110, NativeIconCatalog.bindings.map { it.id }.toSet().size)
         val bindings = NativeIconCatalog.bindings.associateBy { it.id }
         assertSame(bindings.getValue("admit.action").vector(), bindings.getValue("copy_link.copied").vector())
         assertSame(bindings.getValue("host.host_badge").vector(), bindings.getValue("host.host_controls_action").vector())
@@ -120,14 +120,14 @@ class NativeIconContractTests {
         val cases = iconRasterCases(IconRasterPlan.Artwork)
         assertEquals(ICON_RASTER_MAX_CASES, cases.size)
         val primary = cases.filter { it.repetition == "primary" }
-        assertEquals(920, primary.size)
+        assertEquals(744, primary.size)
         assertTrue(primary.all { it.direction == LayoutDirection.Ltr })
-        assertEquals(115, primary.filter { it.pixels == 72 }.size)
+        assertEquals(93, primary.filter { it.pixels == 72 }.size)
         assertEquals(32, cases.count { it.repetition == "cycle-rtl" && it.direction == LayoutDirection.Rtl && it.artwork.mirrors })
         assertEquals(32, cases.count { it.repetition == "cycle-before" && it.direction == LayoutDirection.Ltr })
         assertEquals(32, cases.count { it.repetition == "cycle-after" && it.direction == LayoutDirection.Ltr })
         val controls = cases.filter { it.repetition == "nonmirror-control" }
-        assertEquals(111, controls.count { !it.artwork.mirrors && it.pixels == 72 && it.direction == LayoutDirection.Rtl })
+        assertEquals(89, controls.count { !it.artwork.mirrors && it.pixels == 72 && it.direction == LayoutDirection.Rtl })
         assertTrue(controls.any { it.artwork.id == "check.fill0" })
         assertTrue(cases.all { it.pixels in 18..ICON_RASTER_MAX_PIXELS })
         assertEquals(cases.indices.toList(), cases.map { it.ordinal })
