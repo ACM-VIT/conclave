@@ -1881,7 +1881,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         val device = Device()
         try {
             val loadStartedAt = System.nanoTime()
-            device.load(capabilities, null)
+            device.load(RouterCodecSendOrder.preferringVp8(capabilities), null)
             this.device = device
             NativePerformanceDiagnostics.timingAlways("webrtc_device_load", loadStartedAt)
         } catch (error: Throwable) {

@@ -464,6 +464,37 @@ private struct MediaProducerCreationResult: @unchecked Sendable {
     let producer: Producer
 }
 
+private struct ConsumerCreationRequest: @unchecked Sendable {
+    let transport: ReceiveTransport
+    let queue: DispatchQueue
+    let consumerId: String
+    let producerId: String
+    let kind: MediaKind
+    let rtpParameters: String
+
+    func consume() throws -> ConsumerCreationResult {
+        ConsumerCreationResult(
+            consumer: try transport.consume(
+                consumerId: consumerId,
+                producerId: producerId,
+                kind: kind,
+                rtpParameters: rtpParameters,
+                appData: nil
+            )
+        )
+    }
+}
+
+private struct ConsumerCreationResult: @unchecked Sendable {
+    let consumer: Consumer
+}
+
+private struct ReceiveTransportOperationHandle: @unchecked Sendable {
+    var transport: ReceiveTransport?
+    var consumer: Consumer?
+    var device: Device?
+}
+
 private struct SendTransportOperationHandle: @unchecked Sendable {
     var producer: Producer?
     var transport: SendTransport?
@@ -2065,6 +2096,14 @@ final class WebRTCClient: NSObject, ObservableObject {
 
     private var sendTransportOperationQueue: DispatchQueue?
 
+    private var receiveTransportOperationQueue: DispatchQueue?
+
+    private let receiveTransportConnectGate = ReceiveTransportConnectGate()
+
+    nonisolated let transportConnectOutcomes = TransportConnectOutcomes()
+
+    private var outstandingTransportConnects: [ObjectIdentifier: TransportConnectAcknowledgement] = [:]
+
     private var sendProducerOperationQueues: [ObjectIdentifier: DispatchQueue] = [:]
     private var lastWebcamProducerSignalingError: Error?
     private var lastScreenProducerSignalingError: Error?
@@ -2235,11 +2274,87 @@ final class WebRTCClient: NSObject, ObservableObject {
             throw WebRTCError.staleConfiguration
         }
 
-        receiveTransport?.close()
+        closeReceiveTransport(receiveTransport, on: receiveTransportOperationQueue, device: device)
         receiveTransportId = consumerTransportParams.id
         receiveTransport = nextReceiveTransport
+        receiveTransportOperationQueue = DispatchQueue(label: "conclave.webrtc.receive-transport", qos: .userInitiated)
 
         debugLog("[WebRTC] Receive transport ready: \(consumerTransportParams.id)")
+    }
+
+    private func consumeOnUnconnectedReceiveTransport(
+        _ request: ConsumerCreationRequest,
+        transportId: String
+    ) async throws -> ConsumerCreationResult {
+        let result: Result<ConsumerCreationResult, Error> = await withCheckedContinuation { continuation in
+            request.queue.async {
+                continuation.resume(returning: Result { try request.consume() })
+            }
+        }
+        let outcome = transportConnectOutcomes.take(transportId: transportId)
+        let created = try result.get()
+        let connectFailed = outcome == .rejected || outcome == .timedOut
+        let isCurrent = receiveTransport === request.transport && !request.transport.closed
+        guard isCurrent, !connectFailed else {
+            let handle = ReceiveTransportOperationHandle(consumer: created.consumer)
+            request.queue.async {
+                handle.consumer?.close()
+            }
+            guard isCurrent else { throw WebRTCError.staleConfiguration }
+            abandonReceiveTransport(request.transport)
+            throw WebRTCError.connectionFailed("SFU did not accept the receive transport connection")
+        }
+        return created
+    }
+
+    private func closeReceiveTransport(_ transport: ReceiveTransport?, on queue: DispatchQueue?, device: Device?) {
+        guard let transport else { return }
+        guard let queue else {
+            transport.close()
+            return
+        }
+        let handle = ReceiveTransportOperationHandle(transport: transport, device: device)
+        queue.async {
+            withExtendedLifetime(handle.device) {
+                handle.transport?.close()
+            }
+        }
+    }
+
+    private func abandonReceiveTransport(_ transport: ReceiveTransport) {
+        guard receiveTransport === transport else { return }
+        closeReceiveTransport(transport, on: receiveTransportOperationQueue, device: device)
+        receiveTransport = nil
+        receiveTransportId = nil
+        receiveTransportOperationQueue = nil
+    }
+
+    private func abandonSendTransport(_ transport: SendTransport) {
+        guard sendTransport === transport else { return }
+        closeSendTransport(transport, on: sendTransportOperationQueue, device: device)
+        sendTransport = nil
+        sendTransportId = nil
+        sendTransportOperationQueue = nil
+    }
+
+    private func settleSendTransportConnect(_ transport: SendTransport, producer: Producer, queue: DispatchQueue) throws {
+        guard let outcome = transportConnectOutcomes.take(transportId: transport.id), outcome != .accepted else {
+            return
+        }
+        closeSendProducer(producer, on: queue)
+        guard sendTransport === transport else { throw WebRTCError.staleConfiguration }
+        let producerId = producer.id
+        let socket = socketManager
+        Task { try? await socket?.closeProducer(producerId: producerId) }
+        abandonSendTransport(transport)
+        throw WebRTCError.connectionFailed("SFU did not accept the send transport connection")
+    }
+
+    private func releaseOutstandingTransportConnects() {
+        for acknowledgement in outstandingTransportConnects.values {
+            acknowledgement.resolve(accepted: false)
+        }
+        outstandingTransportConnects.removeAll()
     }
 
     func restartIce() async -> Bool {
@@ -2274,6 +2389,8 @@ final class WebRTCClient: NSObject, ObservableObject {
                 guard let transport = receiveTransport, let transportId = receiveTransportId else { return false }
                 let response = try await socket.restartIce(transport: transportKind, transportId: transportId)
                 let iceParameters = try encodeJSONString(response.iceParameters)
+                await receiveTransportConnectGate.waitUntilIdle(transportId: transportId)
+                guard self.receiveTransport === transport, !transport.closed else { return false }
                 try transport.restartICE(with: iceParameters)
             default:
                 return false
@@ -2992,17 +3109,24 @@ final class WebRTCClient: NSObject, ObservableObject {
             appData: appData
         )
         let queue = try sendOperationQueue(for: transport)
-        let result = try await performSendTransportOperation(on: queue) {
-            ScreenProducerCreationResult(
-                producer: try request.transport.createProducer(
-                    for: request.track,
-                    encodings: request.encodings,
-                    codecOptions: nil,
-                    codec: request.codec,
-                    appData: request.appData
+        let result: ScreenProducerCreationResult
+        do {
+            result = try await performSendTransportOperation(on: queue) {
+                ScreenProducerCreationResult(
+                    producer: try request.transport.createProducer(
+                        for: request.track,
+                        encodings: request.encodings,
+                        codecOptions: nil,
+                        codec: request.codec,
+                        appData: request.appData
+                    )
                 )
-            )
+            }
+        } catch {
+            _ = transportConnectOutcomes.take(transportId: transport.id)
+            throw error
         }
+        try settleSendTransportConnect(transport, producer: result.producer, queue: queue)
         return try requireRegisteredProducer(result.producer, label: "screen", queue: queue)
     }
 
@@ -3024,17 +3148,24 @@ final class WebRTCClient: NSObject, ObservableObject {
             appData: appData
         )
         let queue = try sendOperationQueue(for: transport)
-        let result = try await performSendTransportOperation(on: queue) {
-            MediaProducerCreationResult(
-                producer: try request.transport.createProducer(
-                    for: request.track,
-                    encodings: request.encodings,
-                    codecOptions: request.codecOptions,
-                    codec: request.codec,
-                    appData: request.appData
+        let result: MediaProducerCreationResult
+        do {
+            result = try await performSendTransportOperation(on: queue) {
+                MediaProducerCreationResult(
+                    producer: try request.transport.createProducer(
+                        for: request.track,
+                        encodings: request.encodings,
+                        codecOptions: request.codecOptions,
+                        codec: request.codec,
+                        appData: request.appData
+                    )
                 )
-            )
+            }
+        } catch {
+            _ = transportConnectOutcomes.take(transportId: transport.id)
+            throw error
         }
+        try settleSendTransportConnect(transport, producer: result.producer, queue: queue)
         return try requireRegisteredProducer(result.producer, label: label, queue: queue)
     }
 
@@ -3199,7 +3330,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         guard let socket = socketManager,
               let device,
               let receiveTransport = receiveTransport,
-              let receiveTransportId = receiveTransportId else {
+              let receiveTransportId = receiveTransportId,
+              let receiveQueue = receiveTransportOperationQueue else {
             throw WebRTCError.notConfigured
         }
 
@@ -3262,13 +3394,27 @@ final class WebRTCClient: NSObject, ObservableObject {
         let consumer: Consumer
         do {
             rtpParameters = try encodeJSONString(response.rtpParameters)
-            consumer = try receiveTransport.consume(
+            let request = ConsumerCreationRequest(
+                transport: receiveTransport,
+                queue: receiveQueue,
                 consumerId: response.id,
                 producerId: response.producerId,
                 kind: kind,
-                rtpParameters: rtpParameters,
-                appData: nil
+                rtpParameters: rtpParameters
             )
+            let created = try await receiveTransportConnectGate.perform(
+                transportId: receiveTransportId,
+                firstOperation: {
+                    try await self.consumeOnUnconnectedReceiveTransport(request, transportId: receiveTransportId)
+                },
+                connectedOperation: {
+                    guard self.receiveTransport === request.transport, !request.transport.closed else {
+                        throw WebRTCError.staleConfiguration
+                    }
+                    return try request.consume()
+                }
+            )
+            consumer = created.consumer
         } catch {
             let rollbackAcknowledged = await rollbackServerConsumerGenerationAndConfirm(
                 consumerId: response.id,
@@ -5013,7 +5159,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             previousPublishMediaCounterSample = nil
         }
 
-        if let receiveTransport, !receiveTransport.closed,
+        if let receiveTransport, !receiveTransport.closed, !receiveTransportConnectGate.isBusy,
            let sample = Self.parseConnectionStats(receiveTransport.stats) {
             hasReceiveStats = true
             receive.mergeRtt(sample.rttMs)
@@ -5558,13 +5704,15 @@ final class WebRTCClient: NSObject, ObservableObject {
         localVideoTrack = nil
         remoteVideoTracks.removeAll()
 
+        releaseOutstandingTransportConnects()
         closeSendTransport(sendTransport, on: sendTransportOperationQueue, device: device)
-        receiveTransport?.close()
+        closeReceiveTransport(receiveTransport, on: receiveTransportOperationQueue, device: device)
         sendTransport = nil
         sendTransportOperationQueue = nil
         sendTransportId = nil
         receiveTransport = nil
         receiveTransportId = nil
+        receiveTransportOperationQueue = nil
         transportConnectionStates.removeAll()
         device = nil
         runtimeIceServersJSON = nil
@@ -5623,18 +5771,37 @@ final class WebRTCClient: NSObject, ObservableObject {
 
 extension WebRTCClient: SendTransportDelegate, ReceiveTransportDelegate, ProducerDelegate, ConsumerDelegate {
     nonisolated func onConnect(transport: any Transport, dtlsParameters: String) {
+        let transportId = transport.id
+        let acknowledgement = TransportConnectAcknowledgement()
         Task { @MainActor in
+            let key = ObjectIdentifier(acknowledgement)
+            self.outstandingTransportConnects[key] = acknowledgement
+            var accepted = false
+            defer {
+                self.outstandingTransportConnects.removeValue(forKey: key)
+                acknowledgement.resolve(accepted: accepted)
+            }
             guard let socket = self.socketManager else { return }
             do {
                 let params = try self.decodeJSONString(dtlsParameters, as: DtlsParameters.self)
-                if transport.id == self.sendTransportId {
-                    try await socket.connectProducerTransport(transportId: transport.id, dtlsParameters: params)
+                if transportId == self.sendTransportId {
+                    try await socket.connectProducerTransport(transportId: transportId, dtlsParameters: params)
                 } else {
-                    try await socket.connectConsumerTransport(transportId: transport.id, dtlsParameters: params)
+                    try await socket.connectConsumerTransport(transportId: transportId, dtlsParameters: params)
                 }
+                accepted = true
             } catch {
                 debugLog("[WebRTC] Transport connect failed: \(error)")
             }
+        }
+        guard !Thread.isMainThread else {
+            debugLog("[WebRTC] Transport connect requested on the main thread; media may start before the SFU connects")
+            return
+        }
+        let outcome = acknowledgement.wait(timeout: TransportConnectAcknowledgement.timeoutSeconds)
+        transportConnectOutcomes.record(outcome, transportId: transportId)
+        if outcome != .accepted {
+            debugLog("[WebRTC] Transport connect \(outcome) for \(transportId)")
         }
     }
 
@@ -6366,7 +6533,7 @@ extension WebRTCClient {
         if let sendTransport, !sendTransport.closed {
             send = Self.statsObjects(sendTransport.stats)
         }
-        if let receiveTransport, !receiveTransport.closed {
+        if let receiveTransport, !receiveTransport.closed, !receiveTransportConnectGate.isBusy {
             receive = Self.statsObjects(receiveTransport.stats)
         }
         if send.isEmpty && receive.isEmpty { return nil }
