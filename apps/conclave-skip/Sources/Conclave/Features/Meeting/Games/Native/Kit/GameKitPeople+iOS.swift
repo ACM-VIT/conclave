@@ -6,7 +6,7 @@ struct GameKitPlayerChips: View {
     let pending: [GamePlayerModel]
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 8, alignment: .leading)], alignment: .leading, spacing: 8) {
+        ConclaveFlowLayout(spacing: 8) {
             ForEach(players) { player in
                 GameKitPlayerChip(player: player)
             }
@@ -14,6 +14,7 @@ struct GameKitPlayerChips: View {
                 GameKitPlayerChip(player: player)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(ActivitiesCopy.players(players.count))
         .accessibilityIdentifier("game.players")
@@ -41,11 +42,11 @@ struct GameKitPlayerChip: View {
                     .accessibilityHidden(true)
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.leading, 4)
+        .padding(.trailing, 10)
         .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
-                    in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusSmall), style: .continuous))
+        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Capsule())
+        .overlay { Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
         .accessibilityElement(children: .combine)
     }
 }
@@ -101,33 +102,13 @@ struct GameKitScoreboard: View {
     let rows: [GameScoreboardRow]
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 2) {
             ForEach(rows) { row in
-                HStack(spacing: 10) {
-                    Text(row.rank.formatted(.number))
-                        .font(.subheadline.weight(.semibold))
-                        .monospacedDigit()
-                        .frame(minWidth: 22, alignment: .leading)
-                    Text(row.isYou ? ConclaveStrings.text("You") : row.name)
-                        .font(.body)
-                        .lineLimit(2)
-                    if row.isLeader {
-                        Image(systemName: ConclaveSymbols.trophyFill).font(.caption).accessibilityHidden(true)
-                        GameKitTag(title: ConclaveStrings.text("Leading"))
-                    }
-                    Spacer(minLength: 8)
-                    Text(GameCopy.score(row.score))
-                        .font(.body.weight(.semibold))
-                        .monospacedDigit()
-                }
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(row.isLeader ? HostingTheme.token(DesignTokens.iosInCallSurfaceHigh) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusSmall), style: .continuous))
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(GameCopy.scoreRowLabel(row))
-                .accessibilityIdentifier("game.score." + row.id)
+                GameKitRankRow(rank: row.rank, name: row.isYou ? ConclaveStrings.text("You") : row.name, value: GameCopy.score(row.score),
+                               isHighlighted: row.isLeader, isMuted: false, showsTrophy: row.isLeader)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(GameCopy.scoreRowLabel(row))
+                    .accessibilityIdentifier("game.score." + row.id)
             }
         }
     }
@@ -137,28 +118,94 @@ struct GameKitRoundResults: View {
     let rows: [GameKitRoundRow]
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 2) {
             ForEach(rows) { row in
-                HStack(spacing: 10) {
-                    Text(row.rank.formatted(.number))
-                        .font(.subheadline.weight(.semibold))
-                        .monospacedDigit()
-                        .frame(minWidth: 22, alignment: .leading)
-                    Text(row.isYou ? ConclaveStrings.text("You") : row.name)
-                        .font(.body)
-                        .lineLimit(2)
-                    Spacer(minLength: 8)
-                    Text(row.value)
-                        .font(.body.weight(.semibold))
-                        .monospacedDigit()
-                }
-                .foregroundStyle(row.isMuted ? HostingTheme.inCallTextSecondary : HostingTheme.token(DesignTokens.iosInCallText))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(row.isWinner ? HostingTheme.token(DesignTokens.iosInCallSurfaceHigh) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusSmall), style: .continuous))
-                .accessibilityElement(children: .combine)
+                GameKitRankRow(rank: row.rank, name: row.isYou ? ConclaveStrings.text("You") : row.name, value: row.value,
+                               isHighlighted: row.isWinner, isMuted: row.isMuted, showsTrophy: false)
+                    .accessibilityElement(children: .combine)
             }
+        }
+    }
+}
+
+struct GameKitRankRow: View {
+    let rank: Int
+    let name: String
+    let value: String
+    let isHighlighted: Bool
+    let isMuted: Bool
+    let showsTrophy: Bool
+
+    var body: some View {
+        let ink = isMuted ? HostingTheme.inCallTextSecondary : HostingTheme.token(DesignTokens.iosInCallText)
+        HStack(spacing: 12) {
+            Text(rank.formatted(.number))
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(HostingTheme.inCallTextSecondary)
+                .frame(minWidth: 20, alignment: .leading)
+            Text(name)
+                .font(isHighlighted ? .body.weight(.semibold) : .body)
+                .foregroundStyle(ink)
+                .lineLimit(2)
+            if showsTrophy {
+                Image(systemName: ConclaveSymbols.trophyFill)
+                    .font(.footnote)
+                    .foregroundStyle(ink)
+                    .accessibilityHidden(true)
+            }
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.body.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(ink)
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 40)
+        .background(isHighlighted ? HostingTheme.token(DesignTokens.iosInCallSurfaceHigh) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusSmall), style: .continuous))
+    }
+}
+
+struct GameKitFact: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let value: String
+}
+
+struct GameKitFactList: View {
+    let facts: [GameKitFact]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(facts) { fact in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(fact.label)
+                        .font(.body)
+                        .foregroundStyle(HostingTheme.inCallTextSecondary)
+                    Spacer(minLength: 8)
+                    Text(fact.value)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                        .multilineTextAlignment(.trailing)
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 48)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("game.fact." + fact.id)
+                if fact.id != facts.last?.id {
+                    Rectangle()
+                        .fill(HostingTheme.inCallBorder)
+                        .frame(height: 1)
+                        .padding(.leading, 14)
+                }
+            }
+        }
+        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
+                    in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous)
+                .strokeBorder(HostingTheme.inCallBorder, lineWidth: 1)
         }
     }
 }

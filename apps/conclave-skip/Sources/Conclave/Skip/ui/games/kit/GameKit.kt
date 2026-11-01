@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -27,8 +28,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -142,8 +145,9 @@ private fun GameKitPlayerChip(player: GamePlayerModel) {
     val scheme = MaterialTheme.colorScheme
     val ext = LocalConclaveExtendedColors.current
     val name = if (player.isYou) conclaveString("ds_you") else player.name
-    Surface(shape = MaterialTheme.shapes.small, color = scheme.surfaceContainerHigh, modifier = Modifier.semantics(mergeDescendants = true) {}) {
-        Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
+    Surface(shape = CircleShape, color = scheme.surfaceContainerHigh, border = BorderStroke(1.dp, ext.border),
+        modifier = Modifier.semantics(mergeDescendants = true) {}) {
+        Row(Modifier.padding(start = 4.dp, end = 10.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ConclaveAvatar(name = player.name, id = player.id, size = ConclaveAvatarSize.mention)
             Text(name, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
@@ -210,52 +214,90 @@ internal fun GameKitHostBar(
 
 @Composable
 internal fun GameKitScoreboard(rows: Iterable<GameScoreboardRow>) {
-    val scheme = MaterialTheme.colorScheme
-    val tabular = rememberTabular(MaterialTheme.typography.bodyLarge)
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         for (row in rows) {
             val label = gameScoreRowLabel(row)
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(if (row.isLeader) scheme.surfaceContainerHighest else scheme.surfaceContainer, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                    .testTag("game.score.${row.id}")
-                    .semantics(mergeDescendants = true) { contentDescription = label },
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(row.rank.toString(), style = tabular, color = scheme.onSurface, modifier = Modifier.widthIn(min = 22.dp))
-                Text(if (row.isYou) conclaveString("ds_you") else row.name, style = MaterialTheme.typography.bodyLarge,
-                    color = scheme.onSurface, maxLines = 2, modifier = Modifier.weight(1f))
-                if (row.isLeader) {
-                    Icon(ConclaveIcons.EmojiEventsFill1, contentDescription = null, tint = scheme.onSurface, modifier = Modifier.size(16.dp))
-                    GameKitTag(conclaveString("act_leading"))
-                }
-                Text(gameScore(row.score), style = tabular, color = scheme.onSurface)
-            }
+            GameKitRankRow(
+                rank = row.rank,
+                name = if (row.isYou) conclaveString("ds_you") else row.name,
+                value = gameScore(row.score),
+                highlighted = row.isLeader,
+                muted = false,
+                showsTrophy = row.isLeader,
+                modifier = Modifier.testTag("game.score.${row.id}").clearAndSetSemantics { contentDescription = label },
+            )
         }
     }
 }
 
 @Composable
 internal fun GameKitRoundResults(rows: Iterable<GameKitRoundRow>) {
-    val scheme = MaterialTheme.colorScheme
-    val tabular = rememberTabular(MaterialTheme.typography.bodyLarge)
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         for (row in rows) {
-            val color = if (row.isMuted) scheme.onSurfaceVariant else scheme.onSurface
-            Row(
-                Modifier.fillMaxWidth()
-                    .background(if (row.isWinner) scheme.surfaceContainerHighest else scheme.surfaceContainer, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                    .semantics(mergeDescendants = true) {},
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(row.rank.toString(), style = tabular, color = color, modifier = Modifier.widthIn(min = 22.dp))
-                Text(if (row.isYou) conclaveString("ds_you") else row.name, style = MaterialTheme.typography.bodyLarge, color = color,
-                    maxLines = 2, modifier = Modifier.weight(1f))
-                Text(row.value, style = tabular, color = color)
+            GameKitRankRow(
+                rank = row.rank,
+                name = if (row.isYou) conclaveString("ds_you") else row.name,
+                value = row.value,
+                highlighted = row.isWinner,
+                muted = row.isMuted,
+                showsTrophy = false,
+                modifier = Modifier.semantics(mergeDescendants = true) {},
+            )
+        }
+    }
+}
+
+@Composable
+internal fun GameKitRankRow(
+    rank: Int,
+    name: String,
+    value: String,
+    highlighted: Boolean,
+    muted: Boolean,
+    showsTrophy: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val ink = if (muted) scheme.onSurfaceVariant else scheme.onSurface
+    val tabular = rememberTabular(MaterialTheme.typography.bodyLarge)
+    Row(
+        modifier.fillMaxWidth().heightIn(min = 40.dp)
+            .background(if (highlighted) scheme.surfaceContainerHighest else Color.Transparent, RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(rank.toString(), style = rememberTabular(MaterialTheme.typography.labelLarge), color = scheme.onSurfaceVariant,
+            modifier = Modifier.widthIn(min = 20.dp))
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(name, style = if (highlighted) MaterialTheme.typography.titleSmall else MaterialTheme.typography.bodyLarge, color = ink,
+                maxLines = 2, modifier = Modifier.weight(1f, fill = false))
+            if (showsTrophy) Icon(ConclaveIcons.EmojiEventsFill1, contentDescription = null, tint = ink, modifier = Modifier.size(16.dp))
+        }
+        Text(value, style = tabular, color = ink)
+    }
+}
+
+internal class GameKitFactRow(val id: String, val label: String, val value: String)
+
+@Composable
+internal fun GameKitFactList(facts: List<GameKitFactRow>) {
+    val scheme = MaterialTheme.colorScheme
+    val ext = LocalConclaveExtendedColors.current
+    Surface(shape = MaterialTheme.shapes.medium, color = scheme.surfaceContainerHigh, border = BorderStroke(1.dp, ext.border),
+        modifier = Modifier.fillMaxWidth()) {
+        Column {
+            facts.forEachIndexed { index, fact ->
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 14.dp).testTag("game.fact.${fact.id}")
+                        .semantics(mergeDescendants = true) {},
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(fact.label, style = MaterialTheme.typography.bodyLarge, color = scheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    Text(fact.value, style = MaterialTheme.typography.titleSmall, color = scheme.onSurface)
+                }
+                if (index < facts.size - 1) HorizontalDivider(Modifier.padding(start = 14.dp), color = ext.border)
             }
         }
     }

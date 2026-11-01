@@ -11,7 +11,7 @@ struct GameKitChoiceList: View {
         VStack(spacing: 8) {
             ForEach(choices) { choice in
                 GameKitChoiceRow(choice: choice, isPending: pendingId == choice.id,
-                                 isEnabled: isEnabled && pendingId.isEmpty && !choice.isDisabled) {
+                                 isEnabled: GameKitChoicePolicy.isInteractive(choice, listEnabled: isEnabled, pendingId: pendingId)) {
                     onSelect(choice.id)
                 }
             }
@@ -24,20 +24,22 @@ struct GameKitChoiceRow: View {
     let isPending: Bool
     let isEnabled: Bool
     let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let muted = GameKitChoicePolicy.isMuted(choice, isInteractive: isEnabled || isPending)
         Button(action: action) {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(choice.text)
                         .font(.body)
-                        .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                        .foregroundStyle(muted ? HostingTheme.inCallTextSecondary : HostingTheme.token(DesignTokens.iosInCallText))
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                     if let markText = GameKitChoiceRow.markText(choice.mark) {
-                        Label(markText, systemImage: GameKitChoiceRow.markSymbol(choice.mark))
+                        Text(markText)
                             .font(.footnote.weight(.semibold))
-                            .foregroundStyle(HostingTheme.inCallTextSecondary)
+                            .foregroundStyle(GameKitChoiceRow.tint(choice.mark))
                     } else if !choice.detail.isEmpty {
                         Text(choice.detail)
                             .font(.footnote)
@@ -45,29 +47,12 @@ struct GameKitChoiceRow: View {
                     }
                 }
                 Spacer(minLength: 8)
-                if isPending {
-                    ProgressView().tint(HostingTheme.token(DesignTokens.iosInCallText))
-                } else if choice.count >= 0 {
-                    Text(choice.count.formatted(.number))
-                        .font(.body.weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                }
+                GameKitRowTrailing(count: choice.count, mark: choice.mark, isPending: isPending)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-            .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
-                        in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous)
-                    .strokeBorder(GameKitChoiceRow.border(choice.mark), lineWidth: choice.mark == .none ? 1 : 2)
-            }
-            .contentShape(Rectangle())
+            .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: choice.mark)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GameKitRowButtonStyle(mark: choice.mark))
         .disabled(!isEnabled)
-        .opacity(isEnabled || choice.mark != .none ? 1 : HostingTheme.disabledOpacity)
         .accessibilityValue(GameKitChoiceRow.accessibilityValue(choice))
         .accessibilityAddTraits(choice.isSelected ? .isSelected : [])
         .accessibilityIdentifier("game.choice." + choice.id)
@@ -81,20 +66,17 @@ struct GameKitChoiceRow: View {
         }
     }
 
-    static func markSymbol(_ mark: GameKitMark) -> String {
+    static func tint(_ mark: GameKitMark) -> Color {
         switch mark {
-        case .correct, .selected: return ConclaveSymbols.checkmark
-        case .wrongPick, .none: return ConclaveSymbols.xmark
-        }
-    }
-
-    static func border(_ mark: GameKitMark) -> Color {
-        switch mark {
-        case .none: return HostingTheme.inCallBorder
+        case .none: return HostingTheme.inCallTextSecondary
         case .selected: return HostingTheme.coralFill
         case .correct: return HostingTheme.token(DesignTokens.iosInCallSuccess)
         case .wrongPick: return HostingTheme.inCallLeave
         }
+    }
+
+    static func border(_ mark: GameKitMark) -> Color {
+        mark == .none ? HostingTheme.inCallBorder : tint(mark)
     }
 
     static func accessibilityValue(_ choice: GameKitChoice) -> String {
@@ -102,6 +84,60 @@ struct GameKitChoiceRow: View {
         if let mark = markText(choice.mark) { parts.append(mark) }
         if choice.count >= 0 { parts.append(ActivitiesCopy.voteCountLabel(choice.count)) }
         return parts.joined(separator: ", ")
+    }
+}
+
+struct GameKitRowTrailing: View {
+    let count: Int
+    let mark: GameKitMark
+    var isPending: Bool = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if count >= 0 {
+                Text(count.formatted(.number))
+                    .font(.body.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    .contentTransition(.numericText())
+            }
+            if isPending {
+                ProgressView()
+                    .tint(HostingTheme.token(DesignTokens.iosInCallText))
+            } else if mark != .none {
+                Image(systemName: mark == .wrongPick ? ConclaveSymbols.xmarkCircle : ConclaveSymbols.checkmarkCircleFill)
+                    .font(.title3)
+                    .foregroundStyle(GameKitChoiceRow.tint(mark))
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+struct GameKitRowButtonStyle: ButtonStyle {
+    let mark: GameKitMark
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .modifier(GameKitRowSurface(mark: mark, isPressed: configuration.isPressed))
+    }
+}
+
+struct GameKitRowSurface: ViewModifier {
+    let mark: GameKitMark
+    var isPressed: Bool = false
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous)
+        content
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .background(isPressed ? HostingTheme.token(DesignTokens.iosInCallSurfaceHigh)
+                        : HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: shape)
+            .overlay { shape.strokeBorder(GameKitChoiceRow.border(mark), lineWidth: 1) }
+            .contentShape(shape)
     }
 }
 
@@ -113,15 +149,17 @@ struct GameKitBinaryChoice: View {
     let onSelect: (String) -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
-            GameKitChoiceRow(choice: first, isPending: pendingId == first.id, isEnabled: isEnabled && pendingId.isEmpty) {
+        VStack(spacing: 6) {
+            GameKitChoiceRow(choice: first, isPending: pendingId == first.id,
+                             isEnabled: GameKitChoicePolicy.isInteractive(first, listEnabled: isEnabled, pendingId: pendingId)) {
                 onSelect(first.id)
             }
             Text(ConclaveStrings.text("or"))
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(HostingTheme.inCallTextSecondary)
                 .accessibilityHidden(true)
-            GameKitChoiceRow(choice: second, isPending: pendingId == second.id, isEnabled: isEnabled && pendingId.isEmpty) {
+            GameKitChoiceRow(choice: second, isPending: pendingId == second.id,
+                             isEnabled: GameKitChoicePolicy.isInteractive(second, listEnabled: isEnabled, pendingId: pendingId)) {
                 onSelect(second.id)
             }
         }
@@ -133,32 +171,46 @@ struct GameKitSplitResult: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            GeometryReader { proxy in
-                HStack(spacing: 2) {
-                    Rectangle()
-                        .fill(HostingTheme.token(DesignTokens.iosInCallText))
-                        .frame(width: max(0, (proxy.size.width - 2) * split.fractionA))
-                    Rectangle()
-                        .fill(HostingTheme.token(DesignTokens.iosInCallText).opacity(0.32))
-                }
-            }
-            .frame(height: 12)
-            .clipShape(Capsule())
-            .background(HostingTheme.inCallBorderStrong, in: Capsule())
-            .accessibilityHidden(true)
-            side(label: split.labelA, count: split.countA, names: split.namesA)
-            side(label: split.labelB, count: split.countB, names: split.namesB)
+            GameKitSplitSide(label: split.labelA, count: split.countA, total: split.total, fraction: split.fractionOfTotalA,
+                             names: split.namesA, leads: split.leadsA, picked: split.picked == 0)
+            GameKitSplitSide(label: split.labelB, count: split.countB, total: split.total, fraction: split.fractionOfTotalB,
+                             names: split.namesB, leads: split.leadsB, picked: split.picked == 1)
         }
     }
+}
 
-    private func side(label: String, count: Int, names: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(label).font(.subheadline.weight(.semibold))
-                Spacer()
-                Text(count.formatted(.number)).font(.subheadline.weight(.semibold)).monospacedDigit()
+struct GameKitSplitSide: View {
+    let label: String
+    let count: Int
+    let total: Int
+    let fraction: Double
+    let names: [String]
+    let leads: Bool
+    let picked: Bool
+
+    var body: some View {
+        let mark = picked ? GameKitMark.selected : GameKitMark.none
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(label)
+                    .font(leads ? .body.weight(.semibold) : .body)
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Text(count.formatted(.number))
+                    .font(.body.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
             }
-            .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+            ProgressView(value: fraction)
+                .tint(picked ? HostingTheme.coralFill
+                      : (leads ? HostingTheme.token(DesignTokens.iosInCallText) : HostingTheme.inCallTextSecondary))
+                .accessibilityHidden(true)
+            if picked {
+                Text(ConclaveStrings.text("Your answer"))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(HostingTheme.coralFill)
+            }
             if !names.isEmpty {
                 Text(names.joined(separator: ", "))
                     .font(.footnote)
@@ -166,8 +218,9 @@ struct GameKitSplitResult: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .modifier(GameKitRowSurface(mark: mark))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(GameCopy.progress(count, split.total) + ", " + label)
+        .accessibilityLabel(GameCopy.progress(count, total) + ", " + label)
     }
 }
 #endif

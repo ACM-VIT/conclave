@@ -35,8 +35,13 @@ struct GameKitSplit: Equatable {
     let countB: Int
     let namesA: [String]
     let namesB: [String]
+    let picked: Int
 
     var total: Int { countA + countB }
+    var fractionOfTotalA: Double { GameKitSplitPolicy.fraction(countA, total: total) }
+    var fractionOfTotalB: Double { GameKitSplitPolicy.fraction(countB, total: total) }
+    var leadsA: Bool { GameKitSplitPolicy.isLeading(countA, other: countB) }
+    var leadsB: Bool { GameKitSplitPolicy.isLeading(countB, other: countA) }
 
     var fractionA: Double {
         if total <= 0 { return 0.5 }

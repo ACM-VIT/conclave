@@ -4,14 +4,17 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -32,6 +35,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
@@ -52,23 +56,43 @@ internal fun GameKitTextEntry(
     enabled: Boolean,
     onSubmit: () -> Unit,
 ) {
-    val canSubmit = enabled && !isPending && text.trim().isNotEmpty()
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { value -> onTextChange(if (maxLength > 0 && value.length > maxLength) value.take(maxLength) else value) },
-            label = { Text(label) },
-            placeholder = { Text(placeholder) },
-            enabled = enabled && !isPending,
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { if (canSubmit) onSubmit() }),
-            supportingText = if (maxLength > 0 && text.length >= maxOf(0, maxLength - ActivitiesCatalogPolicy.counterLead)) {
-                { Text(activitiesCharacterCount(text.length, maxLength), style = rememberTabular(MaterialTheme.typography.bodySmall)) }
-            } else null,
-            modifier = Modifier.fillMaxWidth().testTag("game.text.field"),
-        )
-        GameKitHostBar(primaryTitle = submitTitle, onPrimary = onSubmit, primaryEnabled = canSubmit, primaryPending = isPending)
+    val canSubmit = GameKitEntryPolicy.canSubmit(text = text, isEnabled = enabled, isPending = isPending)
+    OutlinedTextField(
+        value = text,
+        onValueChange = { value -> onTextChange(if (maxLength > 0 && value.length > maxLength) value.take(maxLength) else value) },
+        label = { Text(label) },
+        placeholder = { Text(placeholder) },
+        enabled = enabled && !isPending,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+        keyboardActions = KeyboardActions(onSend = { if (canSubmit) onSubmit() }),
+        trailingIcon = { GameKitSubmitButton(submitTitle, canSubmit, isPending, "game.bar.primary", onSubmit) },
+        supportingText = if (GameKitEntryPolicy.showsCounter(count = text.length, limit = maxLength)) {
+            { Text(activitiesCharacterCount(text.length, maxLength), style = rememberTabular(MaterialTheme.typography.bodySmall)) }
+        } else null,
+        modifier = Modifier.fillMaxWidth().testTag("game.text.field"),
+    )
+}
+
+@Composable
+internal fun GameKitSubmitButton(title: String, enabled: Boolean, isPending: Boolean, tag: String, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    val inProgress = conclaveString("ds_in_progress")
+    if (isPending) {
+        Box(Modifier.size(48.dp).testTag(tag).semantics { contentDescription = title; stateDescription = inProgress },
+            contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(Modifier.size(20.dp), color = scheme.onSurface, strokeWidth = 2.dp)
+        }
+    } else {
+        FilledIconButton(
+            onClick = onClick,
+            enabled = enabled,
+            colors = IconButtonDefaults.filledIconButtonColors(containerColor = scheme.primaryContainer,
+                contentColor = scheme.onPrimaryContainer),
+            modifier = Modifier.padding(end = 4.dp).testTag(tag).semantics { contentDescription = title },
+        ) {
+            Icon(ConclaveIcons.ArrowUpwardFill0, contentDescription = null)
+        }
     }
 }
 

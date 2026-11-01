@@ -3,12 +3,13 @@ package conclave.module
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -22,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -59,29 +61,24 @@ internal fun GameKitCountdown(model: CountdownModel, modifier: Modifier = Modifi
     LaunchedEffect(announcedText) {
         if (announcedText.isNotEmpty()) announcement = announcedText
     }
-    Column(
+    Row(
         modifier.fillMaxWidth().testTag("game.countdown").clearAndSetSemantics { contentDescription = label },
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (model.durationMillis > 0) {
-                val fraction = model.fractionLeft(nowMillis = nowMillis).toFloat()
-                LinearProgressIndicator(
-                    progress = { fraction },
-                    modifier = Modifier.weight(1f),
-                    color = color,
-                    trackColor = scheme.outlineVariant,
-                    drawStopIndicator = {},
-                )
-            }
-            Surface(shape = CircleShape, color = scheme.surfaceContainer, border = BorderStroke(1.dp, ext.border)) {
-                Text(gameSeconds(seconds), style = rememberTabular(MaterialTheme.typography.labelLarge), color = color,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
-            }
+        if (model.durationMillis > 0) {
+            val fraction = model.fractionLeft(nowMillis = nowMillis).toFloat()
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.weight(1f),
+                color = color,
+                trackColor = scheme.outlineVariant,
+                drawStopIndicator = {},
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
         }
-        if (warning && seconds > 0) {
-            Text(label, style = MaterialTheme.typography.bodySmall, color = ext.warning)
-        }
+        GameKitTimerCapsule(gameSeconds(seconds), warning)
     }
 
     Box(Modifier.size(1.dp).semantics {
@@ -89,3 +86,17 @@ internal fun GameKitCountdown(model: CountdownModel, modifier: Modifier = Modifi
         contentDescription = announcement
     })
 }
+
+@Composable
+internal fun GameKitTimerCapsule(text: String, warning: Boolean, modifier: Modifier = Modifier) {
+    val ext = LocalConclaveExtendedColors.current
+    val ink = if (warning) ext.warning else MaterialTheme.colorScheme.onSurface
+    Surface(shape = CircleShape, color = Color.Transparent, border = BorderStroke(1.dp, if (warning) ink else ext.border), modifier = modifier) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Icon(ConclaveIcons.TimerFill0, contentDescription = null, tint = ink, modifier = Modifier.size(16.dp))
+            Text(text, style = rememberTabular(MaterialTheme.typography.labelLarge), color = ink, maxLines = 1)
+        }
+    }
+}
+

@@ -12,38 +12,83 @@ struct GameKitTextEntry: View {
     let onSubmit: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField(label, text: $text, prompt: Text(placeholder))
-                .textFieldStyle(.plain)
-                .font(.body)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .submitLabel(.send)
-                .onSubmit { if canSubmit { onSubmit() } }
-                .onChange(of: text) { _, value in
-                    if maxLength > 0 && value.count > maxLength { text = String(value.prefix(maxLength)) }
-                }
-                .padding(.horizontal, 12)
-                .frame(minHeight: 44)
-                .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised),
-                            in: RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous)
-                        .strokeBorder(HostingTheme.inCallBorderStrong, lineWidth: 1)
-                }
-                .disabled(!isEnabled || isPending)
-                .accessibilityIdentifier("game.text.field")
-            if maxLength > 0 && text.count >= max(0, maxLength - ActivitiesCatalogPolicy.counterLead) {
+        let canSubmit = GameKitEntryPolicy.canSubmit(text: text, isEnabled: isEnabled, isPending: isPending)
+        VStack(alignment: .leading, spacing: 6) {
+            GameKitFieldFrame {
+                TextField(label, text: $text, prompt: Text(placeholder))
+                    .textFieldStyle(.plain)
+                    .font(.body)
+                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+                    .submitLabel(.send)
+                    .onSubmit { if canSubmit { onSubmit() } }
+                    .onChange(of: text) { _, value in
+                        if maxLength > 0 && value.count > maxLength { text = String(value.prefix(maxLength)) }
+                    }
+                    .disabled(!isEnabled || isPending)
+                    .accessibilityIdentifier("game.text.field")
+            } trailing: {
+                GameKitSubmitButton(title: submitTitle, isEnabled: canSubmit, isPending: isPending, identifier: "game.bar.primary",
+                                    action: onSubmit)
+            }
+            if GameKitEntryPolicy.showsCounter(count: text.count, limit: maxLength) {
                 Text(ActivitiesCopy.characterCount(text.count, limit: maxLength))
                     .font(.footnote)
                     .monospacedDigit()
                     .foregroundStyle(HostingTheme.inCallTextSecondary)
+                    .padding(.leading, 12)
             }
-            GameKitHostBar(primaryTitle: submitTitle, primaryEnabled: canSubmit, primaryPending: isPending, onPrimary: onSubmit)
         }
     }
+}
 
-    private var canSubmit: Bool {
-        isEnabled && !isPending && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+struct GameKitFieldFrame<Field: View, Trailing: View>: View {
+    @ViewBuilder let field: Field
+    @ViewBuilder let trailing: Trailing
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: CGFloat(DesignTokens.radiusMedium), style: .continuous)
+        HStack(spacing: 4) {
+            field
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            trailing
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 4)
+        .padding(.vertical, 2)
+        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: shape)
+        .overlay { shape.strokeBorder(HostingTheme.inCallBorderStrong, lineWidth: 1) }
+    }
+}
+
+struct GameKitSubmitButton: View {
+    let title: String
+    let isEnabled: Bool
+    let isPending: Bool
+    let identifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                if isPending {
+                    ProgressView()
+                        .tint(HostingTheme.token(DesignTokens.iosInCallText))
+                } else {
+                    Image(systemName: ConclaveSymbols.arrowUpCircleFill)
+                        .font(.title2)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(isEnabled ? HostingTheme.inCallOnCoral : HostingTheme.inCallTextSecondary,
+                                         isEnabled ? HostingTheme.coralFill : HostingTheme.token(DesignTokens.iosInCallSurfaceHigh))
+                }
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled || isPending)
+        .accessibilityLabel(title)
+        .accessibilityValue(isPending ? ConclaveStrings.text("In Progress") : "")
+        .accessibilityIdentifier(identifier)
     }
 }
 
