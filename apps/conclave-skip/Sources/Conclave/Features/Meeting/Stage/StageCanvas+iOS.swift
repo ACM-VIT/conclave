@@ -9,7 +9,6 @@ enum StageCanvasMetrics {
 
     static let trailingReserve: CGFloat = 64
 
-    static let chipRowReserve: CGFloat = CGFloat(StageViewportPolicy.iosChipRowReserve)
 }
 
 struct StageSlotIdKey: LayoutValueKey {
@@ -33,8 +32,7 @@ struct StageCanvas: View {
                 contentWidth: Double(proxy.size.width), contentHeight: Double(proxy.size.height), safeArea: safeArea,
                 regularWidth: horizontalSizeClass == .regular, compactHeight: verticalSizeClass == .compact,
                 topReserve: Double(StageCanvasMetrics.topReserve), barReserve: Double(StageCanvasMetrics.barReserve),
-                trailingReserve: Double(StageCanvasMetrics.trailingReserve),
-                chipRowReserve: stage.chipRowVisible ? Double(StageCanvasMetrics.chipRowReserve) : 0
+                trailingReserve: Double(StageCanvasMetrics.trailingReserve)
             )
             let layout = stage.layout
             let frames = StageLayoutPolicy.frames(viewport: viewport, kind: layout.kind, slots: layout.slots, selfCorner: layout.selfCorner)

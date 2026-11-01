@@ -119,7 +119,7 @@ struct S1StageAloneTests {
                                                 untaggedSlotId: localSlot) == viewport.insetBottom)
     }
 
-    @Test func theAloneCompositionStaysBetweenTheChipRowAndTheToastLaneAndTurnsCompactWhenTheBandIsShort() throws {
+    @Test func theAloneCompositionStaysBetweenTheHeaderAndTheToastLaneAndTurnsCompactWhenTheBandIsShort() throws {
         #expect(StageAlonePolicy.compactAvatarDiameter == 40 && StageAlonePolicy.maxTitleLines == 2)
         #expect(StageAlonePolicy.titleLineHeight == 28 && StageAlonePolicy.statusLineHeight == 20)
 
@@ -127,8 +127,7 @@ struct S1StageAloneTests {
         #expect(handState.rawValue == "solo-cameraOff-alone-hand" && StageFixtureScript.state(named: handState.rawValue) == handState)
         #expect(NativeFixtureLaunch.iOSSelector(system: nil, stage: handState.rawValue, people: nil, premeeting: nil))
         let hand = presenter(StageFixtureScript.inputs(for: handState))
-        #expect(hand.alone != nil && hand.chipRowVisible)
-        #expect(StageFixtureSession(state: handState).stage.chipRowVisible)
+        #expect(hand.alone != nil)
         for frame in hand.currentFrames() {
             #expect(frame.x == 0 && frame.y == 0 && frame.height == StagePoliciesTests.iphone17e.height)
         }
@@ -153,8 +152,8 @@ struct S1StageAloneTests {
 
         let iosHand = StageViewportPolicy.iOS(contentWidth: 750, contentHeight: 369,
                                               safeArea: StageChromeInsets(top: 0, bottom: 21, leading: 47, trailing: 47),
-                                              regularWidth: false, compactHeight: true, topReserve: 56, barReserve: 64,
-                                              trailingReserve: 64, chipRowReserve: StageViewportPolicy.iosChipRowReserve)
+                                              regularWidth: false, compactHeight: true, topReserve: 108, barReserve: 64,
+                                              trailingReserve: 64)
         #expect(iosHand.height == 390 && iosHand.insetTop == 108 && StageAlonePolicy.bandHeight(iosHand) == 173)
         #expect(!StageAlonePolicy.usesCompactLayout(iosHand, titleLine: 28, statusLine: 20))
         #expect(StageAlonePolicy.titleLineLimit(iosHand, titleLine: 28, statusLine: 20) == 2)
@@ -165,8 +164,8 @@ struct S1StageAloneTests {
 
         let iosPortraitHand = StageViewportPolicy.iOS(contentWidth: 390, contentHeight: 763,
                                                       safeArea: StageChromeInsets(top: 47, bottom: 34, leading: 0, trailing: 0),
-                                                      regularWidth: false, compactHeight: false, topReserve: 56, barReserve: 64,
-                                                      trailingReserve: 64, chipRowReserve: StageViewportPolicy.iosChipRowReserve)
+                                                      regularWidth: false, compactHeight: false, topReserve: 108, barReserve: 64,
+                                                      trailingReserve: 64)
         let portraits = [iosPortraitHand, StagePoliciesTests.iphoneSE, StagePoliciesTests.iphone17e, StagePoliciesTests.android360]
         for viewport in portraits {
             for (title, status) in [(28.0, 20.0), (ax2Title, ax2Status), (56.0, 40.0)] {
@@ -201,54 +200,6 @@ struct S1StageAloneTests {
     @Test func theAloneFilesAreStaticAndOfferNoShareOrCopy() throws {
         let labels = Mirror(reflecting: StageAloneSnapshot(slotId: "p:you", roomLabel: "abc", seed: "abc")).children.compactMap { $0.label }
         #expect(labels == ["slotId", "roomLabel", "seed"])
-    }
-
-    @Test func theChipRowIsReservedWheneverAStatusChipShows() throws {
-        #expect(!presenter(StageFixtureScript.inputs(for: .grid4)).chipRowVisible)
-        #expect(presenter(StageFixtureScript.inputs(for: .handRaised)).chipRowVisible)
-        #expect(presenter(StageFixtureScript.inputs(for: .handRaising)).chipRowVisible)
-        #expect(!presenter(StageFixtureScript.inputs(for: .soloCameraOn)).chipRowVisible)
-        #expect(!presenter(StageFixtureScript.inputs(for: .soloCameraOffAlone)).chipRowVisible)
-        let playing = presenter(StageFixtureScript.inputs(for: .nowPlaying))
-        #expect(!playing.chipRowVisible)
-        playing.setShowsVideoOverActivity(true)
-        #expect(playing.chipRowVisible)
-        let hand = presenter(StageFixtureScript.inputs(for: .handRaised))
-        hand.apply(StageFixtureScript.inputs(for: .grid4))
-        #expect(!hand.chipRowVisible)
-        hand.apply(StageFixtureScript.inputs(for: .handRaised))
-        #expect(hand.chipRowVisible && hand.noticeGeometry.chipsVisible)
-        hand.reset()
-        #expect(!hand.chipRowVisible)
-
-        #expect(StageViewportPolicy.iosChipRowReserve == 8 + 44)
-        #expect(StageViewportPolicy.androidChipRowReserve == 8 + 48)
-    }
-
-    @Test func theReservedChipRowKeepsEveryTileBelowTheChipInPortraitAndLandscape() {
-        let portrait = StageChromeInsets(top: 47, bottom: 34, leading: 0, trailing: 0)
-        let landscape = StageChromeInsets(top: 0, bottom: 21, leading: 59, trailing: 61)
-        for compact in [false, true] {
-            let safe = compact ? landscape : portrait
-            let width = compact ? 724.0 : 390.0
-            let height = compact ? 354.0 : 844.0 - 81.0
-            let bare = StageViewportPolicy.iOS(contentWidth: width, contentHeight: height, safeArea: safe, regularWidth: false,
-                                               compactHeight: compact, topReserve: 56, barReserve: 64, trailingReserve: 64)
-            let reserved = StageViewportPolicy.iOS(contentWidth: width, contentHeight: height, safeArea: safe, regularWidth: false,
-                                                   compactHeight: compact, topReserve: 56, barReserve: 64, trailingReserve: 64,
-                                                   chipRowReserve: StageViewportPolicy.iosChipRowReserve)
-            #expect(reserved.insetTop == bare.insetTop + 52)
-            #expect(reserved.insetBottom == bare.insetBottom && reserved.width == bare.width && reserved.height == bare.height)
-            #expect(reserved.insetTrailing == bare.insetTrailing && reserved.placement == bare.placement)
-            let chipBottom = safe.top + 12 + 44 + 8 + 44
-            #expect(StageLayoutPolicy.contentFrame(bare).y < chipBottom)
-            #expect(StageLayoutPolicy.contentFrame(reserved).y >= chipBottom)
-            let stage = presenter(StageFixtureScript.inputs(for: .handRaised), viewport: reserved)
-            #expect(stage.chipRowVisible)
-            for frame in stage.currentFrames() {
-                #expect(frame.y >= chipBottom, "\(compact ? "landscape" : "portrait") \(frame.slotId)")
-            }
-        }
     }
 
     @Test func theToastLaneSitsAboveTheControlBarAndClearsTileNameTags() throws {

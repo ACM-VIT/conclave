@@ -36,6 +36,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.material3.MaterialTheme
 
 internal class StageChromeVisibilityState {
     var state by mutableStateOf(ChromeVisibilityState.initial)
@@ -108,7 +114,6 @@ internal fun StageChrome(
                     StageTopRow(stage, capsuleMax, onMinimize, routeAction)
                 }
             }
-            StageStatusChips(stage)
         }
         val stageWidth = maxWidth
         val stageHeight = maxHeight
@@ -158,6 +163,11 @@ private fun StageTopRow(stage: StagePresenter, capsuleMax: Dp, onMinimize: () ->
             StageCapsule(stage, capsuleMax, Modifier)
         }
         Spacer(Modifier.width(8.dp))
+        val playing = snapshot.nowPlaying
+        if (playing != null) {
+            StageActivityButton(stage, playing)
+            Spacer(Modifier.width(8.dp))
+        }
         ConclaveRouteButton(routeKind = snapshot.routeKind, routeName = snapshot.routeName, onClick = onRoute, identifier = "stage.route")
         if (snapshot.canFlipCamera) {
             Spacer(Modifier.width(8.dp))
@@ -189,24 +199,19 @@ internal fun stageCapsuleSubtitle(model: StageCapsuleModel): String = when (mode
 }
 
 @Composable
-private fun StageStatusChips(stage: StagePresenter) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        StageNowPlayingChip(stage)
-    }
-}
-
-@Composable
-private fun StageNowPlayingChip(stage: StagePresenter) {
-    val chip = stage.chrome.nowPlaying ?: return
-    val name = activityStageDisplayName(chip.kind, chip.name)
-    val icon = when (chip.kind) {
+private fun StageActivityButton(stage: StagePresenter, playing: NowPlayingChip) {
+    val name = activityStageDisplayName(playing.kind, playing.name)
+    val icon = when (playing.kind) {
         "app" -> ConclaveIcons.AppsFill0
         "browser" -> ConclaveIcons.PublicFill0
         else -> ConclaveIcons.SportsEsportsFill0
     }
-    ConclaveStageChip(title = conclaveString("stg_activity_running", name), identifier = "stage.chip.nowPlaying", icon = icon,
-        actionTitle = conclaveString("stg_show"), onAction = { stage.showHiddenActivity() },
-        actionDescription = conclaveString("stg_show_activity", name))
+    Box {
+        ConclaveChromeButton(description = conclaveString("stg_show_activity", name), icon = icon, identifier = "stage.activity",
+            onClick = { stage.showHiddenActivity() }, stateText = conclaveString("stg_activity_running", name))
+        Box(Modifier.align(Alignment.TopEnd).size(10.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary)
+            .border(2.dp, LocalConclaveExtendedColors.current.stage, CircleShape))
+    }
 }
 
 @Composable

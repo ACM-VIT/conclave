@@ -12,20 +12,17 @@ struct StageChromeInsets: Equatable {
 enum StageViewportPolicy {
     static let tileControlGap = 8.0
 
-    static let iosChipRowReserve = 52.0
-    static let androidChipRowReserve = 56.0
-
     static let nameTagBand = 40.0
     static let toastReach = 64.0
     static let toastMinimumHeight = 44.0
 
     static func iOS(contentWidth: Double, contentHeight: Double, safeArea: StageChromeInsets,
                     regularWidth: Bool, compactHeight: Bool, topReserve: Double, barReserve: Double,
-                    trailingReserve: Double, chipRowReserve: Double = 0.0) -> StageViewport {
+                    trailingReserve: Double) -> StageViewport {
         StageViewport(
             width: contentWidth + safeArea.leading + safeArea.trailing,
             height: contentHeight + safeArea.top + safeArea.bottom,
-            insetTop: safeArea.top + topReserve + chipRowReserve,
+            insetTop: safeArea.top + topReserve,
             insetBottom: safeArea.bottom + (compactHeight ? 12.0 : barReserve),
             insetLeading: safeArea.leading,
             insetTrailing: safeArea.trailing + (compactHeight ? trailingReserve : 0.0),

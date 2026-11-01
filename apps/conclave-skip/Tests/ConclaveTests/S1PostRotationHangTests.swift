@@ -13,8 +13,7 @@ struct S1PostRotationHangTests {
                                      heightClass: StageSizeClass.compact, placement: .trailingStack)
         let floating = StageFrame(slotId: "p:you", x: selfX, y: 654.4, width: 109.2, height: 145.6)
         return NoticeLaneGeometryPolicy.geometry(viewport: viewport, frames: [floating],
-                                                 slots: [StageSlot(id: "p:you", role: .selfFloating, userId: "you", fit: .fill)],
-                                                 chipsVisible: false)
+                                                 slots: [StageSlot(id: "p:you", role: .selfFloating, userId: "you", fit: .fill)])
     }
 
     @Test func theRotationTransientToastPaddingsOverflowTheSafeAreaProposal() {

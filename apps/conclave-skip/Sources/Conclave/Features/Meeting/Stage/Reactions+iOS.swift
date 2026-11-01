@@ -44,8 +44,7 @@ struct ReactionBurstLayer: View {
             safeArea: StageChromeInsets(top: layer.top, bottom: layer.bottom, leading: layer.leading, trailing: layer.trailing),
             regularWidth: horizontalSizeClass == .regular, compactHeight: verticalSizeClass == .compact,
             topReserve: Double(StageCanvasMetrics.topReserve), barReserve: Double(StageCanvasMetrics.barReserve),
-            trailingReserve: Double(StageCanvasMetrics.trailingReserve),
-            chipRowReserve: stage.chipRowVisible ? Double(StageCanvasMetrics.chipRowReserve) : 0
+            trailingReserve: Double(StageCanvasMetrics.trailingReserve)
         )
         return ReactionSlotGeometry(slotHeight: StageReactionPolicy.reducedSlotHeight(pillLineHeight: Double(pillLine)),
                                     labelBand: StageReactionPolicy.tileLabelBand(lineHeight: Double(tileLine)),

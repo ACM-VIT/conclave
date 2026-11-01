@@ -32,7 +32,7 @@ internal object StageCanvasMetrics {
 }
 
 internal fun stageViewportFrom(
-    width: Double, height: Double, top: Double, bottom: Double, leading: Double, trailing: Double, chipRow: Double = 0.0,
+    width: Double, height: Double, top: Double, bottom: Double, leading: Double, trailing: Double,
 ): StageViewport {
     val widthClass = when {
         width < StageCanvasMetrics.MEDIUM_WIDTH_DP -> StageSizeClass.compact
@@ -43,7 +43,7 @@ internal fun stageViewportFrom(
     return StageViewport(
         width = width,
         height = height,
-        insetTop = top + StageCanvasMetrics.TOP_RESERVE_DP + chipRow,
+        insetTop = top + StageCanvasMetrics.TOP_RESERVE_DP,
         insetBottom = bottom + StageCanvasMetrics.BAR_RESERVE_DP,
         insetLeading = leading,
         insetTrailing = trailing,
@@ -70,7 +70,6 @@ internal fun StageCanvas(stage: StagePresenter, renderers: StageRenderers, chrom
             bottom = insets.getBottom(density) / scale,
             leading = if (direction == LayoutDirection.Ltr) left else right,
             trailing = if (direction == LayoutDirection.Ltr) right else left,
-            chipRow = if (stage.chipRowVisible) StageViewportPolicy.androidChipRowReserve else 0.0,
         )
 
         val inPip = PipController.inPipMode

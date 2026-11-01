@@ -85,49 +85,6 @@ class S1StageAloneBridgeTests {
         }
     }
 
-    @Test fun theChipRowIsReservedWheneverAStatusChipShows() {
-        assertFalse(presenter(StageFixtureScript.inputs(StageFixtureState.grid4)).chipRowVisible)
-        assertTrue(presenter(StageFixtureScript.inputs(StageFixtureState.handRaised)).chipRowVisible)
-        assertTrue(presenter(StageFixtureScript.inputs(StageFixtureState.handRaising)).chipRowVisible)
-        assertFalse(presenter(StageFixtureScript.inputs(StageFixtureState.soloCameraOn)).chipRowVisible)
-        val playing = presenter(StageFixtureScript.inputs(StageFixtureState.nowPlaying))
-        assertFalse(playing.chipRowVisible)
-        playing.setShowsVideoOverActivity(true)
-        assertTrue(playing.chipRowVisible)
-        val hand = presenter(StageFixtureScript.inputs(StageFixtureState.handRaised))
-        hand.apply(StageFixtureScript.inputs(StageFixtureState.grid4))
-        assertFalse(hand.chipRowVisible)
-        hand.apply(StageFixtureScript.inputs(StageFixtureState.handRaised))
-        assertTrue(hand.chipRowVisible)
-        hand.reset()
-        assertFalse(hand.chipRowVisible)
-    }
-
-    @Test fun androidViewportsReserveTheChipRowInPortraitAndLandscape() {
-        val chipBottom = 24.0 + 12.0 + 48.0 + 8.0 + 48.0
-        val portrait = stageViewportFrom(width = 360.0, height = 800.0, top = 24.0, bottom = 48.0, leading = 0.0, trailing = 0.0)
-        val reserved = stageViewportFrom(width = 360.0, height = 800.0, top = 24.0, bottom = 48.0, leading = 0.0, trailing = 0.0,
-            chipRow = StageViewportPolicy.androidChipRowReserve)
-        assertEquals(84.0, portrait.insetTop, 0.001)
-        assertEquals(140.0, reserved.insetTop, 0.001)
-        assertEquals(portrait.insetBottom, reserved.insetBottom, 0.001)
-        assertTrue(StageLayoutPolicy.contentFrame(portrait).y < chipBottom)
-        assertTrue(StageLayoutPolicy.contentFrame(reserved).y >= chipBottom)
-        val landscape = stageViewportFrom(width = 800.0, height = 360.0, top = 24.0, bottom = 0.0, leading = 0.0, trailing = 48.0,
-            chipRow = StageViewportPolicy.androidChipRowReserve)
-        assertTrue(StageLayoutPolicy.contentFrame(landscape).y >= chipBottom)
-        for (viewport in listOf(reserved, landscape)) {
-            val stage = presenter(StageFixtureScript.inputs(StageFixtureState.handRaised), viewport)
-            assertTrue(stage.chipRowVisible)
-            for (frame in stage.currentFrames()) assertTrue(frame.slotId, frame.y >= chipBottom)
-        }
-        val ios = StageViewportPolicy.iOS(contentWidth = 390.0, contentHeight = 763.0,
-            safeArea = StageChromeInsets(top = 47.0, bottom = 34.0, leading = 0.0, trailing = 0.0), regularWidth = false,
-            compactHeight = false, topReserve = 56.0, barReserve = 64.0, trailingReserve = 64.0,
-            chipRowReserve = StageViewportPolicy.iosChipRowReserve)
-        assertEquals(47.0 + 56.0 + 52.0, ios.insetTop, 0.001)
-    }
-
     @Test fun theToastLaneClearsTileNameTagsAboveTheBar() {
         val grid = presenter(StageFixtureScript.base(count = 4))
         var lowest = 0.0
@@ -170,7 +127,7 @@ class S1StageAloneBridgeTests {
         assertEquals(raised, stage.noticeGeometry.toastBottom, 0.001)
     }
 
-    @Test fun theAloneCompositionStaysBetweenTheChipRowAndTheToastLaneInLandscapeWithARaisedHand() {
+    @Test fun theAloneCompositionStaysBetweenTheHeaderAndTheToastLaneInLandscapeWithARaisedHand() {
         assertEquals(40.0, StageAlonePolicy.compactAvatarDiameter, 0.0)
         assertEquals(28.0, StageAlonePolicy.titleLineHeight, 0.0)
         assertEquals(20.0, StageAlonePolicy.statusLineHeight, 0.0)
@@ -178,15 +135,12 @@ class S1StageAloneBridgeTests {
         assertEquals(StageFixtureState.soloCameraOffAloneHand, StageFixtureScript.state(named = "solo-cameraOff-alone-hand"))
         val hand = presenter(StageFixtureScript.inputs(StageFixtureState.soloCameraOffAloneHand))
         assertNotNull(hand.alone)
-        assertTrue(hand.chipRowVisible)
-        assertTrue(StageFixtureSession(state = StageFixtureState.soloCameraOffAloneHand).stage.chipRowVisible)
         for (frame in hand.currentFrames()) {
             assertEquals(0.0, frame.y, 0.001)
             assertEquals(android360.height, frame.height, 0.001)
         }
 
-        val landscape = stageViewportFrom(width = 891.0, height = 411.0, top = 24.0, bottom = 24.0, leading = 0.0, trailing = 0.0,
-            chipRow = StageViewportPolicy.androidChipRowReserve)
+        val landscape = stageViewportFrom(width = 891.0, height = 411.0, top = 80.0, bottom = 24.0, leading = 0.0, trailing = 0.0)
         assertEquals(140.0, StageAlonePolicy.topPadding(landscape), 0.001)
         assertEquals(176.0, StageAlonePolicy.bottomPadding(landscape), 0.001)
         assertEquals(95.0, StageAlonePolicy.bandHeight(landscape), 0.001)
@@ -201,8 +155,7 @@ class S1StageAloneBridgeTests {
         val bare = stageViewportFrom(width = 891.0, height = 411.0, top = 24.0, bottom = 24.0, leading = 0.0, trailing = 0.0)
         assertFalse(StageAlonePolicy.usesCompactLayout(bare, titleLine = 28.0, statusLine = 20.0))
         assertEquals(1, StageAlonePolicy.titleLineLimit(bare, titleLine = 28.0, statusLine = 20.0))
-        val portrait = stageViewportFrom(width = 360.0, height = 800.0, top = 24.0, bottom = 48.0, leading = 0.0, trailing = 0.0,
-            chipRow = StageViewportPolicy.androidChipRowReserve)
+        val portrait = stageViewportFrom(width = 360.0, height = 800.0, top = 80.0, bottom = 48.0, leading = 0.0, trailing = 0.0)
         assertFalse(StageAlonePolicy.usesCompactLayout(portrait, titleLine = 56.0, statusLine = 40.0))
         assertEquals(2, StageAlonePolicy.titleLineLimit(portrait, titleLine = 56.0, statusLine = 40.0))
 

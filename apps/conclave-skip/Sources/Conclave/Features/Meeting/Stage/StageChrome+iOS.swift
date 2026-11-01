@@ -56,8 +56,6 @@ struct StageChromeLayer: View {
                     .allowsHitTesting(!hidden)
                     .accessibilityHidden(hidden)
                     .accessibilitySortPriority(6)
-                StageStatusChips(stage: stage)
-                    .accessibilitySortPriority(5)
             }
             .padding(.horizontal, CGFloat(DesignTokens.space12))
             .padding(.top, CGFloat(DesignTokens.space12))
@@ -168,6 +166,7 @@ struct StageTopRow: View {
         ConclaveTopChromeCluster(spacing: CGFloat(DesignTokens.space12)) {
             StageCapsuleButton(stage: stage, maxWidth: capsuleMaxWidth)
             Spacer(minLength: CGFloat(DesignTokens.space8))
+            StageActivityButton(stage: stage)
             if let routeControls {
                 CallRoutePickerButton(controls: routeControls)
             } else {
@@ -213,26 +212,24 @@ enum StageCapsuleText {
     }
 }
 
-struct StageStatusChips: View {
-    let stage: StagePresenter
-
-    var body: some View {
-        HStack(spacing: CGFloat(DesignTokens.space8)) {
-            StageNowPlayingChip(stage: stage)
-        }
-    }
-}
-
-struct StageNowPlayingChip: View {
+struct StageActivityButton: View {
     let stage: StagePresenter
 
     var body: some View {
         if let chip = stage.chrome.nowPlaying {
             let name = ActivityStageCopy.displayName(kind: chip.kind, name: chip.name)
-            ConclaveStageChip(title: ConclaveStrings.format("%@ Is Running", name), systemImage: StageNowPlayingChip.symbol(chip.kind),
-                              actionTitle: ConclaveStrings.text("Show"), identifier: "stage.chip.nowPlaying",
-                              onAction: { stage.showHiddenActivity() },
-                              actionAccessibilityLabel: ConclaveStrings.format("Show %@", name))
+            ConclaveChromeButton(title: ConclaveStrings.format("Show %@", name), value: ConclaveStrings.format("%@ Is Running", name),
+                                 systemImage: StageActivityButton.symbol(chip.kind), identifier: "stage.activity") {
+                stage.showHiddenActivity()
+            }
+            .overlay(alignment: .topTrailing) {
+                Circle()
+                    .fill(HostingTheme.inCallCoralText)
+                    .frame(width: 10, height: 10)
+                    .overlay(Circle().strokeBorder(HostingTheme.token(DesignTokens.iosInCallStage), lineWidth: 2))
+                    .accessibilityHidden(true)
+            }
+            .transition(.opacity)
         }
     }
 

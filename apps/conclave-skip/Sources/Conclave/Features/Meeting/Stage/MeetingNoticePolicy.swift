@@ -300,12 +300,11 @@ enum StageNoticeAnnouncementKind {
 
 struct NoticeLaneGeometry: Equatable {
     let bannerTop: Double
-    let chipsVisible: Bool
     let toastBottom: Double
     let toastLeading: Double
     let toastTrailing: Double
 
-    static let zero = NoticeLaneGeometry(bannerTop: 0, chipsVisible: false, toastBottom: 0, toastLeading: 0, toastTrailing: 0)
+    static let zero = NoticeLaneGeometry(bannerTop: 0, toastBottom: 0, toastLeading: 0, toastTrailing: 0)
 }
 
 enum NoticeLaneGeometryPolicy {
@@ -315,7 +314,7 @@ enum NoticeLaneGeometryPolicy {
     static let bottomBand = 160.0
     static let selfViewGap = 8.0
 
-    static func geometry(viewport: StageViewport, frames: [StageFrame], slots: [StageSlot], chipsVisible: Bool) -> NoticeLaneGeometry {
+    static func geometry(viewport: StageViewport, frames: [StageFrame], slots: [StageSlot]) -> NoticeLaneGeometry {
         var leading = viewport.insetLeading + edgeMargin
         var trailing = viewport.insetTrailing + edgeMargin
         let bandTop = viewport.height - viewport.insetBottom - bottomBand
@@ -330,7 +329,7 @@ enum NoticeLaneGeometryPolicy {
                 }
             }
         }
-        return NoticeLaneGeometry(bannerTop: viewport.insetTop, chipsVisible: chipsVisible, toastBottom: viewport.insetBottom,
+        return NoticeLaneGeometry(bannerTop: viewport.insetTop, toastBottom: viewport.insetBottom,
                                   toastLeading: leading, toastTrailing: trailing)
     }
 }

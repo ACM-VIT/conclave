@@ -84,7 +84,7 @@ class S1bPostReducedReactionsBridgeTests {
     private val androidGestureSafeBottom = 24.0
     private val iosLandscape = StageViewportPolicy.iOS(contentWidth = 750.0, contentHeight = 369.0,
         safeArea = StageChromeInsets(top = 0.0, bottom = 21.0, leading = 47.0, trailing = 47.0), regularWidth = false, compactHeight = true,
-        topReserve = 56.0, barReserve = 64.0, trailingReserve = 64.0, chipRowReserve = 0.0)
+        topReserve = 56.0, barReserve = 64.0, trailingReserve = 64.0)
     private val iosSafeBottom = 21.0
     private val shapes = listOf(StageReactionSlotShape.row, StageReactionSlotShape.column, StageReactionSlotShape.block)
 

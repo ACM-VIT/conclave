@@ -70,7 +70,6 @@ internal fun ReactionBurstLayer(stage: StagePresenter, modifier: Modifier = Modi
             bottom = safeBottom,
             leading = if (direction == LayoutDirection.Ltr) left else right,
             trailing = if (direction == LayoutDirection.Ltr) right else left,
-            chipRow = if (stage.chipRowVisible) StageViewportPolicy.androidChipRowReserve else 0.0,
         )
         val placement = if (reduceMotion) {
             val layout = stage.layout

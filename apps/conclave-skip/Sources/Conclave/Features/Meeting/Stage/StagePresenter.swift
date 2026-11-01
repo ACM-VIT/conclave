@@ -21,7 +21,6 @@ final class StagePresenter {
 
     private(set) var noticeGeometry: NoticeLaneGeometry = NoticeLaneGeometry.zero
 
-    private(set) var chipRowVisible: Bool = false
 
     private(set) var alone: StageAloneSnapshot? = nil
 
@@ -442,7 +441,6 @@ final class StagePresenter {
         }
         if capsule != StageCapsuleModel.empty { capsule = StageCapsuleModel.empty }
         if alone != nil { alone = nil }
-        if chipRowVisible { chipRowVisible = false }
         if localHand != LocalHandState.lowered { localHand = LocalHandState.lowered }
         if autoHideBlocker != AutoHideBlocker.none { autoHideBlocker = AutoHideBlocker.none }
         if chrome.withRevision(0) != StageChromeSnapshot.empty {
@@ -554,8 +552,6 @@ final class StagePresenter {
             localHand = hand
         }
         recomputeBlocker()
-        let chips = statusChipsVisible()
-        if chips != chipRowVisible { chipRowVisible = chips }
         refreshNoticeGeometry()
         updateCaptionsActive()
         publishActivityChanges(activityResolution)
@@ -579,10 +575,6 @@ final class StagePresenter {
                                       isAttendee: inputs.isWebinarAttendee)
     }
 
-    private func statusChipsVisible() -> Bool {
-        localHand != LocalHandState.lowered || chrome.nowPlaying != nil
-    }
-
     func setToastHeight(_ height: Double) {
         let next = max(0.0, height)
         if next == toastHeight { return }
@@ -592,12 +584,11 @@ final class StagePresenter {
 
     private func refreshNoticeGeometry() {
         let frames = currentFrames()
-        let lanes = NoticeLaneGeometryPolicy.geometry(viewport: viewport, frames: frames, slots: layout.slots,
-                                                      chipsVisible: chipRowVisible)
+        let lanes = NoticeLaneGeometryPolicy.geometry(viewport: viewport, frames: frames, slots: layout.slots)
         let untagged = StageViewportPolicy.untaggedSoloSlotId(inputs, kind: layout.kind)
         let toastBottom = StageViewportPolicy.toastBottom(viewport: viewport, toastHeight: toastHeight, kind: layout.kind,
                                                           frames: frames, slots: layout.slots, untaggedSlotId: untagged)
-        let geometry = NoticeLaneGeometry(bannerTop: lanes.bannerTop, chipsVisible: lanes.chipsVisible,
+        let geometry = NoticeLaneGeometry(bannerTop: lanes.bannerTop,
                                           toastBottom: max(lanes.toastBottom, toastBottom), toastLeading: lanes.toastLeading,
                                           toastTrailing: lanes.toastTrailing)
         if geometry != noticeGeometry { noticeGeometry = geometry }

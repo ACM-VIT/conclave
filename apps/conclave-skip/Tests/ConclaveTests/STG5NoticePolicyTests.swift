@@ -455,15 +455,13 @@ struct STG5NoticePolicyTests {
         #expect(stage.announcement?.kind == StageNoticeAnnouncementKind.reconnected)
     }
 
-    @Test func laneGeometryFollowsTheReservedInsetsTheChipsAndABottomSelfView() {
+    @Test func laneGeometryFollowsTheReservedInsetsAndABottomSelfView() {
         let clock = Clock()
         let stage = presenter(clock)
         let viewport = StagePoliciesTests.iphoneSE
-        #expect(stage.noticeGeometry.bannerTop == viewport.insetTop && !stage.noticeGeometry.chipsVisible)
+        #expect(stage.noticeGeometry.bannerTop == viewport.insetTop)
         #expect(stage.noticeGeometry.toastBottom == viewport.insetBottom + StageLayoutPolicy.compactPadding + StageViewportPolicy.nameTagBand)
         #expect(stage.noticeGeometry.toastLeading == NoticeLaneGeometryPolicy.edgeMargin)
-        stage.apply(StageFixtureScript.inputs(for: .handRaised))
-        #expect(stage.noticeGeometry.chipsVisible)
         stage.apply(StageFixtureScript.rolesSweepStep(3))
         let floating = stage.layout.slots.contains { $0.role == .selfFloating }
         if floating {
