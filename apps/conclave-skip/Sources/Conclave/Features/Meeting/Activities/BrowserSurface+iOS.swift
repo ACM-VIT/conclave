@@ -59,11 +59,10 @@ struct BrowserAddressRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if typeSize.isAccessibilitySize {
-
                 field
-                HStack(spacing: 8) { actions }
+                HStack(spacing: 4) { actions }
             } else {
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     field
                     actions
                 }
@@ -94,6 +93,7 @@ struct BrowserAddressRow: View {
             .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
             .tint(HostingTheme.inCallCoralText)
             .lineLimit(1)
+            .truncationMode(.middle)
             .padding(.horizontal, 12)
             .frame(minHeight: 44)
             .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: shape)
@@ -105,34 +105,32 @@ struct BrowserAddressRow: View {
 
     @ViewBuilder private var actions: some View {
         Button(action: go) {
-            HStack(spacing: 6) {
+            ZStack {
+                Circle().fill(HostingTheme.coralFill)
                 if model.navigatePending {
                     ProgressView()
+                        .controlSize(.small)
                         .tint(HostingTheme.inCallOnCoral)
-                        .accessibilityHidden(true)
+                } else {
+                    Image(systemName: "arrow.right")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(HostingTheme.inCallOnCoral)
                 }
-                Text(model.navigatePending ? ConclaveStrings.text("Navigating") : ConclaveStrings.text("Go"))
-                    .foregroundStyle(HostingTheme.inCallOnCoral)
-                    .lineLimit(1)
             }
-            .frame(minWidth: 44, minHeight: 44)
+            .frame(width: ActivityToolMetrics.side, height: ActivityToolMetrics.side)
+            .contentShape(Circle())
         }
-        .buttonStyle(.borderedProminent)
-        .tint(HostingTheme.coralFill)
+        .buttonStyle(.plain)
         .disabled(model.navigatePending)
+        .help(ConclaveStrings.text("Go"))
+        .accessibilityLabel(model.navigatePending ? ConclaveStrings.text("Navigating") : ConclaveStrings.text("Go"))
+        .accessibilityShowsLargeContentViewer { Label(ConclaveStrings.text("Go"), systemImage: "arrow.right") }
         .accessibilityIdentifier("browser.go")
-        Button {
+        ActivityToolButton(title: ConclaveStrings.text("Keyboard"), systemImage: ConclaveSymbols.keyboard, isSelected: false,
+                           isPending: false, isEnabled: BrowserChromePolicy.canFocusKeyboard(model), identifier: "browser.keyboard") {
             focused = false
             _ = browser.focusKeyboard()
-        } label: {
-            Text(ConclaveStrings.text("Keyboard"))
-                .lineLimit(1)
-                .frame(minWidth: 44, minHeight: 44)
         }
-        .buttonStyle(.bordered)
-        .tint(HostingTheme.token(DesignTokens.iosInCallText))
-        .disabled(!model.inputInteractive || !model.hasSurface)
-        .accessibilityIdentifier("browser.keyboard")
     }
 
     private func go() {
@@ -262,82 +260,32 @@ struct BrowserStateOverlay: View {
     let browser: BrowserStagePresenter
     let model: BrowserStageModel
     let onShowVideo: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        switch model.load {
-        case .starting:
-            VStack(spacing: 12) {
-                ProgressView()
-                    .tint(HostingTheme.token(DesignTokens.iosInCallText))
-                Text(ConclaveStrings.text("Starting browser"))
-                    .font(.subheadline)
-                    .foregroundStyle(HostingTheme.inCallTextSecondary)
-                    .multilineTextAlignment(.center)
+        let block = BrowserChromePolicy.statusBlock(model)
+        let chip = BrowserChromePolicy.showsReconnectingChip(model)
+        ZStack {
+            switch block.kind {
+            case .none:
+                EmptyView()
+            case .loading:
+                ActivityLoadingBlock(title: ConclaveStrings.text("Starting browser"), identifier: "browser.starting")
+                    .transition(.opacity)
+            case .failure:
+                ActivityFailureBlock(title: BrowserCopy.loadFailed, detail: nil, showsRetry: block.showsRetry,
+                                     identifier: "browser.failed." + model.issue.rawValue, retryIdentifier: "browser.retry",
+                                     showVideoIdentifier: "browser.failedShowVideo", onRetry: { _ = browser.retryLoad() },
+                                     onShowVideo: onShowVideo)
+                    .transition(.opacity)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(HostingTheme.token(DesignTokens.iosInCallStage))
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("browser.starting")
-        case .failed:
-            BrowserFailureView(browser: browser, model: model, onShowVideo: onShowVideo)
-        case .reconnecting:
-            HStack {
-                Text(ConclaveStrings.text("Reconnecting"))
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(HostingTheme.inCallLabelScrim, in: Capsule())
-                    .accessibilityIdentifier("browser.reconnecting")
-                Spacer(minLength: 0)
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        case .loading, .live:
-            EmptyView()
-        }
-    }
-}
-
-struct BrowserFailureView: View {
-    let browser: BrowserStagePresenter
-    let model: BrowserStageModel
-    let onShowVideo: () -> Void
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: ConclaveSymbols.exclamationmarkTriangleFill)
-                .font(.title2)
-                .foregroundStyle(HostingTheme.inCallLeave)
-                .accessibilityHidden(true)
-            Text(BrowserCopy.loadFailed)
-                .font(.headline)
-                .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-                .multilineTextAlignment(.center)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { buttons }
-                VStack(spacing: 8) { buttons }
+            if chip {
+                ActivityStatusChip(title: ConclaveStrings.text("Reconnecting"), showsLock: false, identifier: "browser.reconnecting")
+                    .transition(.opacity)
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(HostingTheme.token(DesignTokens.iosInCallStage))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("browser.failed." + model.issue.rawValue)
-    }
-
-    @ViewBuilder private var buttons: some View {
-        Button(ConclaveStrings.text("Try Again")) { _ = browser.retryLoad() }
-            .buttonStyle(.bordered)
-            .tint(HostingTheme.token(DesignTokens.iosInCallText))
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("browser.retry")
-        Button(ConclaveStrings.text("Show Video")) { onShowVideo() }
-            .buttonStyle(.bordered)
-            .tint(HostingTheme.token(DesignTokens.iosInCallText))
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("browser.failedShowVideo")
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: block.kind)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: chip)
     }
 }
 

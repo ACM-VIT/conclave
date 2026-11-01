@@ -2,9 +2,13 @@ package conclave.module
 
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,13 +24,17 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -127,32 +135,31 @@ private fun BrowserAddressRow(browser: BrowserStagePresenter, model: BrowserStag
                 modifier = fieldModifier.onFocusChanged { focused = it.isFocused }.testTag("browser.address"),
             )
         }
+        val goLabel = conclaveString(if (model.navigatePending) "br_navigating" else "br_go")
         val actions = @Composable {
-            Button(
-                onClick = { browser.navigate(draft) },
-                enabled = !model.navigatePending,
-                colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
-                modifier = Modifier.heightIn(min = 48.dp).testTag("browser.go"),
-            ) {
-                if (model.navigatePending) {
-                    CircularProgressIndicator(Modifier.size(16.dp), color = scheme.onPrimaryContainer, strokeWidth = 2.dp)
-                    Spacer(Modifier.width(6.dp))
+            CallControlTooltip(goLabel) {
+                FilledIconButton(
+                    onClick = { browser.navigate(draft) },
+                    enabled = !model.navigatePending,
+                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = scheme.primaryContainer,
+                        contentColor = scheme.onPrimaryContainer),
+                    modifier = Modifier.size(48.dp).testTag("browser.go").semantics { contentDescription = goLabel },
+                ) {
+                    if (model.navigatePending) {
+                        CircularProgressIndicator(Modifier.size(18.dp), color = scheme.onPrimaryContainer, strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
+                    }
                 }
-                Text(conclaveString(if (model.navigatePending) "br_navigating" else "br_go"), maxLines = 1)
             }
-            OutlinedButton(
-                onClick = { browser.focusKeyboard() },
-                enabled = model.inputInteractive && model.hasSurface,
-                modifier = Modifier.heightIn(min = 48.dp).testTag("browser.keyboard"),
-            ) {
-                Text(conclaveString("br_keyboard"), maxLines = 1)
-            }
+            ActivityToolButton(conclaveString("br_keyboard"), ConclaveIcons.KeyboardFill0, selected = false, pending = false,
+                enabled = BrowserChromePolicy.canFocusKeyboard(model), identifier = "browser.keyboard") { browser.focusKeyboard() }
         }
         if (stacked) {
             field(Modifier.fillMaxWidth())
-            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { actions() }
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) { actions() }
         } else {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 field(Modifier.weight(1f))
                 actions()
             }
@@ -241,68 +248,22 @@ private fun BrowserPageProgressBar(browserSessionId: String, modifier: Modifier)
 }
 
 @Composable
-private fun BrowserStateOverlay(browser: BrowserStagePresenter, model: BrowserStageModel, onShowVideo: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
-    when (model.load) {
-        BrowserLoadState.starting -> {
-            Column(
-                Modifier.fillMaxSize().background(ext.stage).padding(16.dp).testTag("browser.starting").semantics(mergeDescendants = true) {},
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                CircularProgressIndicator(color = scheme.onSurface)
-                Spacer(Modifier.size(12.dp))
-                Text(conclaveString("br_starting"), style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center)
-            }
-        }
-        BrowserLoadState.failed -> BrowserFailureView(browser, model, onShowVideo)
-        BrowserLoadState.reconnecting -> {
-            Box(Modifier.fillMaxSize().padding(10.dp)) {
-                Text(
-                    conclaveString("br_reconnecting"),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = scheme.onSurface,
-                    maxLines = 1,
-                    modifier = Modifier.align(Alignment.TopStart).background(ext.labelScrim, RoundedCornerShape(50))
-                        .padding(horizontal = 10.dp, vertical = 4.dp).testTag("browser.reconnecting"),
-                )
-            }
-        }
-        BrowserLoadState.loading, BrowserLoadState.live -> {}
-    }
-}
-
-@Composable
-private fun BrowserFailureView(browser: BrowserStagePresenter, model: BrowserStageModel, onShowVideo: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    val ext = LocalConclaveExtendedColors.current
-    val stacked = LocalDensity.current.fontScale >= 1.5f
-    Column(
-        Modifier.fillMaxSize().background(ext.stage).padding(16.dp).testTag("browser.failed.${model.issue.rawValue}"),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(ConclaveIcons.ErrorFill1, contentDescription = null, tint = scheme.error)
-        Spacer(Modifier.size(12.dp))
-        Text(conclaveString("br_load_failed"), style = MaterialTheme.typography.titleMedium, color = scheme.onSurface,
-            textAlign = TextAlign.Center, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-        Spacer(Modifier.size(12.dp))
-        val buttons = @Composable {
-            OutlinedButton(onClick = { browser.retryLoad() }, modifier = Modifier.heightIn(min = 48.dp).testTag("browser.retry")) {
-                Text(conclaveString("ds_try_again"))
-            }
-            OutlinedButton(onClick = onShowVideo, modifier = Modifier.heightIn(min = 48.dp).testTag("browser.failedShowVideo")) {
-                Text(conclaveString("stg_show_video"))
-            }
-        }
-        if (stacked) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) { buttons() }
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { buttons() }
+private fun BoxScope.BrowserStateOverlay(browser: BrowserStagePresenter, model: BrowserStageModel, onShowVideo: () -> Unit) {
+    val block = BrowserChromePolicy.statusBlock(model)
+    val removeAnimations = rememberSystemAccessibility().removeAnimations
+    Crossfade(targetState = block.kind, animationSpec = if (removeAnimations) snap() else tween(200), label = "browser.status") { kind ->
+        when (kind) {
+            ActivityStatusBlockKind.loading -> ActivityLoadingBlock(conclaveString("br_starting"), "browser.starting")
+            ActivityStatusBlockKind.failure -> ActivityFailureBlock(
+                title = conclaveString("br_load_failed"), detail = null, showsRetry = block.showsRetry,
+                identifier = "browser.failed.${model.issue.rawValue}", retryIdentifier = "browser.retry",
+                showVideoIdentifier = "browser.failedShowVideo", onRetry = { browser.retryLoad() }, onShowVideo = onShowVideo,
+            )
+            ActivityStatusBlockKind.none -> Box(Modifier.fillMaxSize())
         }
     }
+    ActivityStatusChip(conclaveString("br_reconnecting"), showsLock = false, identifier = "browser.reconnecting",
+        visible = BrowserChromePolicy.showsReconnectingChip(model), reduceMotion = removeAnimations)
 }
 
 @Composable
