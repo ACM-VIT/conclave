@@ -527,8 +527,10 @@ final class TranscriptPresenter {
     func retryAsk(rowId: String) -> Bool {
         let row = ask.row(rowId)
         guard AskRowPolicy.offersRetry(row.state), !row.question.isEmpty else { return false }
-        ask.hide(rowId)
-        return dispatch(TranscriptCommand.make(TranscriptCommandKind.ask, text: row.question))
+        guard AskRowPolicy.canSend(row.question, canAsk: snapshot.canAsk, phase: snapshot.phase, link: snapshot.link) else { return false }
+        let accepted = dispatch(TranscriptCommand.make(TranscriptCommandKind.ask, text: row.question))
+        if accepted { ask.hide(rowId) }
+        return accepted
     }
 
     @discardableResult

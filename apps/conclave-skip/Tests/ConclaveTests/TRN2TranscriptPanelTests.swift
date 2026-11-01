@@ -242,6 +242,43 @@ struct TRN2TranscriptPanelTests {
         #expect(presenter.ask.row(workerId).state == .error && presenter.ask.row(workerId).errorText == "Worker restarted")
     }
 
+    @Test func rejectedAndDisconnectedRetriesKeepTheOriginalQuestionAndAnswer() {
+        let driver = fixture(.ask)
+        let presenter = driver.presenter
+        driver.state.applyQuestionUpdate(id: "qa-error", question: "Summarize the discussion", answer: "Partial answer",
+                                         status: .error, error: nil, timestamp: 2_000)
+        let originalQuestion = presenter.ask.row("qa-error").question
+        let originalAnswer = presenter.ask.row("qa-error").answerText
+        var commands = 0
+        presenter.onCommand = { _ in commands += 1; return false }
+        #expect(!presenter.retryAsk(rowId: "qa-error"))
+        #expect(presenter.ask.rowIds.contains("qa-error"))
+        #expect(presenter.ask.row("qa-error").question == originalQuestion)
+        #expect(presenter.ask.row("qa-error").answerText == originalAnswer)
+        driver.state.connectionStatus = .connecting
+        let before = commands
+        #expect(!presenter.retryAsk(rowId: "qa-error"))
+        #expect(commands == before)
+        #expect(presenter.ask.rowIds.contains("qa-error"))
+        driver.state.connectionStatus = .connected
+        presenter.onCommand = { _ in true }
+        #expect(presenter.retryAsk(rowId: "qa-error"))
+        #expect(!presenter.ask.rowIds.contains("qa-error"))
+    }
+
+    @Test func retryWithANotSentReplacementStillPreservesTheOriginal() {
+        let driver = fixture(.ask)
+        let presenter = driver.presenter
+        presenter.onCommand = { command in
+            driver.state.beginQuestion(id: "retry-not-sent", question: command.text, timestamp: 9_000)
+            driver.state.markQuestionNotSent(id: "retry-not-sent")
+            return false
+        }
+        #expect(!presenter.retryAsk(rowId: "qa-error"))
+        #expect(presenter.ask.rowIds.contains("qa-error"))
+        #expect(presenter.ask.rowIds.contains("retry-not-sent"))
+    }
+
     @Test func tryAgainHidesTheRowAndAsksAgainAndTheDraftSurvivesTabs() {
         let driver = fixture(.ask)
         let presenter = driver.presenter
