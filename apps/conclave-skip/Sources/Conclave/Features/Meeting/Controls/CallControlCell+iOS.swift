@@ -200,6 +200,7 @@ struct CallControlSurfaceBody<Content: View>: View {
             .contentShape(Circle())
             .conclaveControlSurface(state, isEnabled: !isBlocked, shape: .circle)
             .conclaveControlPressed(isPressed)
+            .conclavePointerHover(shape: .circle)
     }
 }
 

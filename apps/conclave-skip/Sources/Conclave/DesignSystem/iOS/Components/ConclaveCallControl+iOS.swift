@@ -143,6 +143,32 @@ extension View {
     func conclaveControlPressed(_ isPressed: Bool) -> some View {
         environment(\.conclaveControlPressed, isPressed)
     }
+
+    func conclavePointerHover(shape: ConclaveControlShape) -> some View {
+        modifier(ConclavePointerHover(shape: shape))
+    }
+}
+
+private struct ConclavePointerHover: ViewModifier {
+    let shape: ConclaveControlShape
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let lit = isHovered && isEnabled
+        content
+            .overlay {
+                ConclaveControlOutline(shape: shape)
+                    .strokeBorder(HostingTheme.token(DesignTokens.iosInCallText).opacity(lit ? 0.45 : 0), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            .scaleEffect(lit && !reduceMotion ? 1.04 : 1)
+            .animation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion), value: lit)
+            .onHover { hovering in
+                if isHovered != hovering { isHovered = hovering }
+            }
+    }
 }
 
 struct ConclaveControlOutline: InsettableShape {
