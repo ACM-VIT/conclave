@@ -121,6 +121,7 @@ struct ParticipantTile: View {
                                  binding: binding, stage: stage, renderers: renderers)
             }
             .overlay { SharePlaceholder(model: model, binding: binding, isShare: isShare) }
+            .background(HostingTheme.token(DesignTokens.iosInCallTile))
             .opacity(slot.role == .selfMinimized ? 0 : 1)
         } selfViewAccessory: {
 
