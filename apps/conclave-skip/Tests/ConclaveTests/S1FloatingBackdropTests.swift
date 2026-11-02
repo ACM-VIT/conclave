@@ -4,10 +4,6 @@ import Testing
 @testable import Conclave
 
 struct S1FloatingBackdropTests {
-    static let floatingActionBarFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveFloatingActionBar+iOS.swift"
-    static let floatingActionScrimFile = "Sources/Conclave/Skip/ui/components/ConclaveFloatingActionScrim.kt"
-    static let legacyStreamingMarkdownFile = "Sources/Conclave/Shared/NativeStreamingMarkdown.swift"
-    static let gradientAllowlist: Set<String> = [floatingActionBarFile, floatingActionScrimFile, legacyStreamingMarkdownFile]
 
     static let lobbyViewFile = "Sources/Conclave/Features/Lobby/LobbyView+iOS.swift"
     static let lobbyCardFile = "Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift"
@@ -19,17 +15,14 @@ struct S1FloatingBackdropTests {
         text.lowercased().contains("gradient") || text.contains("ShaderBrush")
     }
 
-    @Test func gradientApisAppearOnlyInTheD1Allowlist() throws {
+    @Test func noGradientApisAppearInTheNativeTree() throws {
         var files = try s1bFiles(under: "Sources/Conclave", extensions: ["swift", "kt"])
         files += try s1bFiles(under: "Android/app/src/main", extensions: ["kt", "xml"])
         var users: Set<String> = []
         for file in files where Self.usesGradient(try s1bSource(file)) {
             users.insert(file)
         }
-        #expect(users == Self.gradientAllowlist, "gradient APIs outside the D-1 allowlist: \(users.subtracting(Self.gradientAllowlist).sorted())")
-
-        let kotlinRamps = users.filter { $0.hasSuffix(".kt") }
-        #expect(kotlinRamps == [Self.floatingActionScrimFile], "the scrim is the only alpha-ramp brush in the Kotlin tree")
+        #expect(users.isEmpty, "gradient APIs in the native tree: \(users.sorted())")
     }
 
 }

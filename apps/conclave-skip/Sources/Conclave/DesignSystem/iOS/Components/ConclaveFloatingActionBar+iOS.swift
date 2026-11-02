@@ -11,10 +11,6 @@ extension View {
     }
 }
 
-private enum ConclaveFloatingActionVeil {
-    static let fadeHeight: CGFloat = 24
-}
-
 private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
     let bar: Bar
     let shaded: Bool
@@ -44,33 +40,15 @@ private struct ConclaveFloatingActionBar<Bar: View>: ViewModifier {
             content.safeAreaInset(edge: .bottom, spacing: 0) {
                 if isVisible {
                     bar.background {
-                        if needsOpaqueSurface {
+                        if needsOpaqueSurface || shaded {
                             ground.ignoresSafeArea(edges: .bottom)
-                        } else if shaded {
-                            fadedGround
                         } else {
                             Rectangle().fill(.ultraThinMaterial).ignoresSafeArea(edges: .bottom)
                         }
                     }
-                    .padding(.top, shaded && !needsOpaqueSurface ? ConclaveFloatingActionVeil.fadeHeight : 0)
                 }
             }
         }
-    }
-
-    private var fadedGround: some View {
-        ground
-            .mask {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.black.opacity(0), .black], startPoint: .top, endPoint: .bottom)
-                        .frame(height: ConclaveFloatingActionVeil.fadeHeight)
-                    Color.black
-                }
-            }
-            .padding(.top, -ConclaveFloatingActionVeil.fadeHeight)
-            .ignoresSafeArea(edges: .bottom)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
     }
 }
 
