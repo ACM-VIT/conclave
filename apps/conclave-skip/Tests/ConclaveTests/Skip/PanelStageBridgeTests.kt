@@ -698,7 +698,7 @@ class PanelStageBridgeTests {
                                 variant = variant,
                                 hasComposer = pageComposer,
                                 miniTile = if (decision.showsMiniTile) {
-                                    CallMiniTileModel(displayName = "Avery", cameraOff = true, isLocal = false, speaking = false)
+                                    CallMiniTileModel(displayName = "Avery", cameraOff = false, isLocal = false, speaking = false)
                                 } else null,
                                 onClose = { presenter.panels.dismiss(cancelPending = true) },
                                 onMounted = { pageMounts++; lifetime.mounted(session, request.presentationID) },

@@ -247,10 +247,19 @@ private fun CallPanelContent(
     request: PanelRequest, decision: PanelHostDecision, variant: InCallPageVariant, onMounted: () -> Unit, onDisposed: () -> Unit,
     webinarLinkProvider: (suspend () -> String?)? = null,
 ) {
+    val miniTarget = stageMiniTileSlot(stage)
     val miniTileVideo: (@Composable () -> Unit)? = if (renderers.usesProbes) {
         @Composable {
             RendererProbe(key = "mini:$session:${request.presentationID}", slot = RendererSlot.miniTile,
                 modifier = Modifier.fillMaxSize(), pattern = renderers.pattern)
+        }
+    } else if (miniTarget != null) {
+        val participant = stage.inputs.participant(miniTarget.userId)
+        val videoKey = participant?.videoKey ?: ""
+        val local = participant?.isLocal == true
+        @Composable {
+            StageLiveVideo(slotId = "mini:${miniTarget.userId}", userId = miniTarget.userId, isLocal = local, isShare = false,
+                videoKey = videoKey, fit = StageVideoFit.fill, mirror = local && stage.chrome.isFrontCamera)
         }
     } else null
     if (request.panel == MeetingPanel.meetingInfo) {
@@ -438,16 +447,23 @@ private fun EffectsPreviewContent(
 
 @Composable
 private fun stageMiniTileModel(stage: StagePresenter): CallMiniTileModel? {
-    val layout = stage.layout
-    for (slot in layout.slots) {
-        if (slot.id.startsWith("p:")) {
-            val model = stage.tileChrome.entry(slot.userId).model
-            val name = if (model.isLocal) conclaveString("ds_you") else model.displayName
-            return CallMiniTileModel(displayName = name, cameraOff = model.isCameraOff, isLocal = model.isLocal,
-                speaking = stage.speaking.state(slot.userId).isSpeaking)
-        }
-    }
-    return null
+    val slot = stageMiniTileSlot(stage) ?: return null
+    val model = stage.tileChrome.entry(slot.userId).model
+    val name = if (model.isLocal) conclaveString("ds_you") else model.displayName
+    return CallMiniTileModel(displayName = name, cameraOff = model.isCameraOff, isLocal = model.isLocal,
+        speaking = stage.speaking.state(slot.userId).isSpeaking, avatarSeed = model.avatarSeed)
+}
+
+private fun stageMiniTileSlot(stage: StagePresenter): StageSlot? {
+    val people = stage.layout.slots.filter { it.id.startsWith("p:") }
+    if (people.isEmpty()) return null
+    val featured = people.firstOrNull { it.role == StageSlotRole.spotlightMain }
+    if (featured != null) return featured
+    val local = stage.inputs.localUserId
+    val speaker = people.firstOrNull { it.userId != local && stage.speaking.isSpeaking(it.userId) }
+    if (speaker != null) return speaker
+    val camera = people.firstOrNull { it.userId != local && !stage.tileChrome.entry(it.userId).model.isCameraOff }
+    return camera ?: people.firstOrNull { it.userId != local } ?: people.first()
 }
 
 @Composable
