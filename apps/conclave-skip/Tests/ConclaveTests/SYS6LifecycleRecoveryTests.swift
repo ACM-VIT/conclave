@@ -142,6 +142,13 @@ struct SYS6LifecycleRecoveryTests {
         #expect(!NetworkCaptivePortalPolicy.isCaptivePortal(hasCaptivePortalCapability: false, isValidated: true))
     }
 
+    @Test func anUnvalidatedNetworkWithInternetStillCountsAsOnline() {
+        #expect(NetworkUsablePolicy.isUsable(hasInternet: true, isValidated: false, hasCaptivePortalCapability: false))
+        #expect(NetworkUsablePolicy.isUsable(hasInternet: true, isValidated: true, hasCaptivePortalCapability: false))
+        #expect(!NetworkUsablePolicy.isUsable(hasInternet: true, isValidated: false, hasCaptivePortalCapability: true))
+        #expect(!NetworkUsablePolicy.isUsable(hasInternet: false, isValidated: false, hasCaptivePortalCapability: false))
+    }
+
     @Test func captivePortalBannerReplacesOfflineOnAndroidOnly() {
         let inputs = StageNoticeInputs.make(isOffline: true, isCaptivePortal: true)
         let android = MeetingNoticePolicy.bannerCandidates(inputs, hostNotice: nil, liveNotesEpisode: 0, currentPanel: "",

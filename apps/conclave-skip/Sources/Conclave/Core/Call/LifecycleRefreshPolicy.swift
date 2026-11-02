@@ -134,6 +134,14 @@ enum RecoveryRetryPolicy {
     }
 }
 
+enum NetworkUsablePolicy {
+    static func isUsable(hasInternet: Bool, isValidated: Bool, hasCaptivePortalCapability: Bool) -> Bool {
+        guard hasInternet else { return false }
+        return !NetworkCaptivePortalPolicy.isCaptivePortal(hasCaptivePortalCapability: hasCaptivePortalCapability,
+                                                          isValidated: isValidated)
+    }
+}
+
 enum NetworkCaptivePortalPolicy {
     static func isCaptivePortal(hasCaptivePortalCapability: Bool, isValidated: Bool) -> Bool {
         hasCaptivePortalCapability && !isValidated
