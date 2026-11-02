@@ -634,7 +634,8 @@ struct DesignContractsTests {
             let sheet = panel == .layout || panel == .effects
             let android = PanelPresentationPolicy.resolve(request(panel), window: androidPhone, platform: .android)
             #expect(android.style == (sheet ? .bottomSheet : .overlay), "\(panel)")
-            #expect(android.showsMiniTile == !sheet, "\(panel)")
+            let form = panel == .settings || panel == .hostControls
+            #expect(android.showsMiniTile == (!sheet && !form), "\(panel)")
             #expect(android.detents.isEmpty && android.initialDetent == nil && android.paneWidth == 0, "\(panel)")
             #expect(PanelPresentationPolicy.coverage(android, detent: nil) == (sheet ? .partial : .full), "\(panel)")
             #expect(android.hasBottomComposer == ios.hasBottomComposer, "\(panel)")

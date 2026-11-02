@@ -122,7 +122,8 @@ class PanelStageBridgeTests {
             val bottomSheet = row.panel == MeetingPanel.layout || row.panel == MeetingPanel.effects
             val overlay = PanelPresentationPolicy.resolve(request(row.panel), window = androidPortrait, platform = PanelPlatform.android)
             assertEquals("${row.panel}", if (bottomSheet) PanelHostStyle.bottomSheet else PanelHostStyle.overlay, overlay.style)
-            assertTrue("${row.panel}", overlay.showsMiniTile == !bottomSheet && overlay.detents.isEmpty && overlay.initialDetent == null)
+            val form = row.panel == MeetingPanel.settings || row.panel == MeetingPanel.hostControls
+            assertTrue("${row.panel}", overlay.showsMiniTile == (!bottomSheet && !form) && overlay.detents.isEmpty && overlay.initialDetent == null)
             assertEquals("${row.panel}", if (bottomSheet) PanelStageCoverage.partial else PanelStageCoverage.full,
                 PanelPresentationPolicy.coverage(overlay, detent = null))
             assertFalse("${row.panel}", PanelPresentationPolicy.keepsSheetInCompactHeight(overlay))
@@ -306,7 +307,7 @@ class PanelStageBridgeTests {
         assertEquals(360, expanded.paneWidthDp)
         assertFalse(expanded.showsMiniTile)
         assertEquals(PanelHostStyle.overlay, compact.style)
-        assertTrue(compact.showsMiniTile)
+        assertFalse(compact.showsMiniTile)
 
         assertEquals(PanelHostStyle.overlay, panelHostDecision(request, PanelPresentationPolicy.androidWindow(width = 720.0, height = 1000.0)).style)
         for (window in listOf(tablet, phone, tablet, phone)) {

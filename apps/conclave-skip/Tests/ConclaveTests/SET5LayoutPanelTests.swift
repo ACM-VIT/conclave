@@ -142,7 +142,7 @@ struct SET5LayoutPanelTests {
                                                                window: window, platform: .android)
                 #expect(resolved.style == (sheet ? .bottomSheet : .overlay), "\(panel) at \(window.width)")
                 #expect(PanelPresentationPolicy.coverage(resolved, detent: nil) == (sheet ? .partial : .full), "\(panel)")
-                #expect(resolved.showsMiniTile == !sheet && resolved.detents.isEmpty && resolved.initialDetent == nil && resolved.paneWidth == 0)
+                #expect(resolved.showsMiniTile == (!sheet && panel != .settings && panel != .hostControls) && resolved.detents.isEmpty && resolved.initialDetent == nil && resolved.paneWidth == 0)
                 #expect(!PanelPresentationPolicy.keepsSheetInCompactHeight(resolved))
                 #expect(PanelPresentationPolicy.stageInteractiveDetent(resolved) == nil)
                 if sheet { #expect(resolved.appearance == .inCall, "Q8 6: dark from every invoker") }
