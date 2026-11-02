@@ -35,7 +35,6 @@ Conclave is a real-time meetings platform with:
 
 - `apps/web`: Next.js web client and API routes
 - `apps/conclave-skip`: active SwiftUI/Skip project for iOS and Android
-- `apps/mobile`: deprecated Expo client; do not use for new work
 - `packages/sfu`: mediasoup SFU and real-time socket handlers
 - `packages/apps-sdk`: web in-meeting apps runtime (provider, Yjs sync, and awareness)
 - `packages/shared-browser`: optional VNC-based shared browser service
@@ -105,8 +104,7 @@ swift test -q
 ```
 
 See [`apps/conclave-skip/README.md`](./apps/conclave-skip/README.md) for Android
-and iOS build commands. `apps/mobile` is deprecated and excluded from the
-workspace.
+and iOS build commands.
 
 ---
 
