@@ -24,14 +24,16 @@ struct MoreControl: View {
     @State private var lastPromptedId = 0
 
     @State private var closedConfirmationId = 0
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var isEngaged: Bool { showsSheet || showsTray }
 
     var body: some View {
         let metrics = controls.moreMetrics
         let estimate = MoreMenuPolicy.estimatedHeight(metrics, textScale: MoreTextScale.of(textSize))
-        let usesSheet = MoreMenuPolicy.usesSheet(estimate: estimate, menuSpace: Double(menuSpace),
-                                                 isAccessibilitySize: textSize.isAccessibilitySize, isVerticalBar: isVerticalBar)
+        let usesSheet = horizontalSizeClass != .regular
+            || MoreMenuPolicy.usesSheet(estimate: estimate, menuSpace: Double(menuSpace),
+                                        isAccessibilitySize: textSize.isAccessibilitySize, isVerticalBar: isVerticalBar)
         let confirmationId = controls.leaveState.confirmationId
         let visual = isEngaged ? CallControlVisual.engaged : CallControlVisual.on
         Group {
@@ -66,9 +68,6 @@ struct MoreControl: View {
         .accessibilityIdentifier("control.more")
         .sheet(isPresented: $showsSheet, onDismiss: performDeferred) {
             MoreSheet(controls: controls, actions: actions(inSheet: true), onClose: { showsSheet = false })
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-
                 .preferredColorScheme(.dark)
                 .dynamicTypeSize(textSize)
         }
