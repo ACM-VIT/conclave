@@ -1,5 +1,16 @@
 package conclave.module
 
+import android.os.Build
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -56,14 +67,22 @@ internal fun InviteCodePage(people: PeoplePresenter, reservation: PaddingValues,
     val scheme = MaterialTheme.colorScheme
     val saving = snapshot.inviteCodePhase == HostFieldPhase.sending
     val blocked = snapshot.blockedReason != MeetingBlockedReason.none.rawValue
+    val known = host.knownInviteCode
+    val status = HostInviteCodePolicy.status(requiresCode = snapshot.access.requiresCode, knownCode = known)
     var draft by rememberSaveable { mutableStateOf(host.drafts.meetingCode) }
     var seenSavedSerial by rememberSaveable { mutableIntStateOf(snapshot.inviteCodeSavedSerial) }
-    val canSave = HostControlsPolicy.canSaveInviteCode(draft, isPending = saving, isBlocked = blocked)
-    val save = { if (canSave) host.setMeetingInviteCode(draft) }
+    val canSave = HostControlsPolicy.canSaveInviteCode(draft, isPending = saving, isBlocked = blocked) &&
+        !HostInviteCodePolicy.isUnchanged(draft, knownCode = known)
+    val keyboard = LocalSoftwareKeyboardController.current
+    val save = {
+        if (canSave) {
+            keyboard?.hide()
+            host.setMeetingInviteCode(draft)
+        }
+    }
     LaunchedEffect(snapshot.inviteCodeSavedSerial) {
         if (snapshot.inviteCodeSavedSerial == seenSavedSerial) return@LaunchedEffect
         seenSavedSerial = snapshot.inviteCodeSavedSerial
-
         draft = host.drafts.meetingCode
         snackbar.showSnackbar(conclaveStringOf(context, "hst_code_saved"))
     }
@@ -71,17 +90,23 @@ internal fun InviteCodePage(people: PeoplePresenter, reservation: PaddingValues,
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(reservation).padding(16.dp)
             .testTag("host.page.inviteCode"),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        ListItem(
-            headlineContent = { ConclaveText(conclaveString("hst_status"), line = "host.inviteCode.status") },
-            trailingContent = {
-                ConclaveText(conclaveString(if (snapshot.access.requiresCode) "stg_on" else "stg_off"),
-                    line = "host.inviteCode.status.value", color = scheme.onSurfaceVariant)
-            },
-            colors = ListItemDefaults.colors(containerColor = scheme.surface),
-            modifier = Modifier.widthIn(max = AccessFieldMaxWidth).testTag("host.inviteCode.status"),
-        )
+        when (status) {
+            HostInviteCodeStatus.off -> Column(Modifier.widthIn(max = AccessFieldMaxWidth), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ConclaveText(conclaveString("hst_code_intro_title"), line = "host.inviteCode.intro.title",
+                    style = MaterialTheme.typography.titleMedium)
+                ConclaveText(conclaveString("hst_code_intro_body"), line = "host.inviteCode.intro.body",
+                    style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+            }
+            HostInviteCodeStatus.onKnown -> InviteCodeCurrentCard(people, known, snackbar)
+            HostInviteCodeStatus.onUnknown -> InviteCodeCard {
+                ConclaveText(conclaveString("hst_code_on_title"), line = "host.inviteCode.on.title",
+                    style = MaterialTheme.typography.titleMedium)
+                ConclaveText(conclaveString("hst_code_unknown"), line = "host.inviteCode.unknown",
+                    style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+            }
+        }
         OutlinedTextField(
             value = draft,
             onValueChange = {
@@ -90,34 +115,98 @@ internal fun InviteCodePage(people: PeoplePresenter, reservation: PaddingValues,
             },
             modifier = Modifier.fillMaxWidth().widthIn(max = AccessFieldMaxWidth).testTag("host.inviteCode.field"),
             enabled = !saving && !blocked,
-            label = { ConclaveText(conclaveString("hst_new_code"), line = "host.inviteCode.field.label") },
+            label = {
+                ConclaveText(conclaveString(if (status == HostInviteCodeStatus.off) "hst_code_label" else "hst_new_code"),
+                    line = "host.inviteCode.field.label")
+            },
+            trailingIcon = {
+                IconButton(onClick = {
+                    val code = HostInviteCodePolicy.generate()
+                    draft = code
+                    host.drafts.meetingCode = code
+                }, enabled = !saving && !blocked, modifier = Modifier.testTag("host.inviteCode.generate")) {
+                    Icon(ConclaveIcons.RefreshFill0, contentDescription = conclaveString("hst_code_generate"))
+                }
+            },
             supportingText = {
-                ConclaveText(reason ?: conclaveString("hst_code_footer"), line = "host.inviteCode.field.footer")
+                ConclaveText(reason ?: conclaveString("hst_code_hint"), line = "host.inviteCode.field.footer")
             },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
+            textStyle = MaterialTheme.typography.bodyLarge.monospaced(),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false,
                 keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { save() }),
+            keyboardActions = KeyboardActions(onDone = { if (canSave) save() else keyboard?.hide() }),
         )
         Button(
             onClick = { save() },
             enabled = canSave,
-            colors = ButtonDefaults.buttonColors(containerColor = scheme.primaryContainer, contentColor = scheme.onPrimaryContainer),
-            modifier = Modifier.widthIn(max = AccessFieldMaxWidth).heightIn(min = 48.dp).testTag("host.inviteCode.save"),
+            modifier = Modifier.fillMaxWidth().widthIn(max = AccessFieldMaxWidth).heightIn(min = 52.dp)
+                .testTag("host.inviteCode.save"),
         ) {
             if (saving) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = scheme.onPrimaryContainer)
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = scheme.onPrimary)
             } else {
-                ConclaveText(conclaveString("hst_save_code"), line = "host.inviteCode.save")
+                ConclaveText(conclaveString(if (status == HostInviteCodeStatus.off) "hst_code_turn_on" else "hst_code_save_new"),
+                    line = "host.inviteCode.save")
             }
         }
-        if (snapshot.access.requiresCode) {
+        if (status != HostInviteCodeStatus.off) {
             TextButton(
                 onClick = { host.requestClearMeetingInviteCode() },
                 enabled = !saving && !blocked,
                 colors = ButtonDefaults.textButtonColors(contentColor = scheme.error),
-                modifier = Modifier.heightIn(min = 48.dp).testTag("host.inviteCode.remove"),
+                modifier = Modifier.fillMaxWidth().widthIn(max = AccessFieldMaxWidth).heightIn(min = 48.dp)
+                    .testTag("host.inviteCode.remove"),
             ) { ConclaveText(conclaveString("hst_remove_code"), line = "host.inviteCode.remove") }
+        }
+    }
+}
+
+@Composable
+private fun InviteCodeCard(content: @Composable ColumnScope.() -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = scheme.surfaceContainer,
+        border = BorderStroke(1.dp, scheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth().widthIn(max = AccessFieldMaxWidth),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+    }
+}
+
+@Composable
+private fun InviteCodeCurrentCard(people: PeoplePresenter, code: String, snackbar: SnackbarHostState) {
+    val context = LocalContext.current
+    val scheme = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val haptics = rememberConclaveHaptics()
+    InviteCodeCard {
+        ConclaveText(conclaveString("hst_code_current"), line = "host.inviteCode.current.label",
+            style = MaterialTheme.typography.labelLarge, color = scheme.onSurfaceVariant)
+        ConclaveText(code, line = "host.inviteCode.current.value",
+            style = MaterialTheme.typography.headlineMedium.monospaced().copy(letterSpacing = 3.sp),
+            modifier = Modifier.testTag("host.inviteCode.current"))
+        Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilledTonalButton(onClick = {
+                ClipboardHelper.copyToClipboard(code, conclaveStringOf(context, "hst_invite_code"))
+                haptics.gesture(FeedbackKind.linkCopied)
+                if (Build.VERSION.SDK_INT < 33) scope.launch { snackbar.showSnackbar(conclaveStringOf(context, "hst_code_copied")) }
+            }, modifier = Modifier.heightIn(min = 44.dp).testTag("host.inviteCode.copy")) {
+                Icon(ConclaveIcons.ContentCopyFill0, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                ConclaveText(conclaveString("hst_code_copy"), line = "host.inviteCode.copy")
+            }
+            OutlinedButton(onClick = {
+                val link = people.stage.layout.meetingLink
+                val text = if (link.isEmpty()) conclaveStringOf(context, "hst_code_share_text_code", code)
+                    else conclaveStringOf(context, "hst_code_share_text", link, code)
+                NativeMeetingShare.shareText(conclaveStringOf(context, "ds_share_subject"), text)
+            }, modifier = Modifier.heightIn(min = 44.dp).testTag("host.inviteCode.share")) {
+                Icon(ConclaveIcons.ShareFill0, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                ConclaveText(conclaveString("hst_code_share"), line = "host.inviteCode.share")
+            }
         }
     }
 }

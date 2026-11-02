@@ -3977,9 +3977,6 @@
     "People can join without a code. Anyone already waiting stays in the waiting room." : {
       "extractionState" : "manual"
     },
-    "People need this code to join. Share it with the meeting link." : {
-      "extractionState" : "manual"
-    },
     "People who are speaking or pinned always show." : {
       "extractionState" : "manual"
     },
@@ -4441,9 +4438,6 @@
       "extractionState" : "manual"
     },
     "Remove Image" : {
-      "extractionState" : "manual"
-    },
-    "Remove Invite Code?" : {
       "extractionState" : "manual"
     },
     "Remove Link Preview" : {
@@ -6064,9 +6058,6 @@
     "Wheel Sounds" : {
       "extractionState" : "manual"
     },
-    "When the meeting is locked, new people wait until a host admits them. Guests are people who aren’t signed in." : {
-      "extractionState" : "manual"
-    },
     "Which One Is the Truth?" : {
       "extractionState" : "manual"
     },
@@ -6821,6 +6812,63 @@
       "extractionState" : "manual"
     },
     "your current meeting" : {
+      "extractionState" : "manual"
+    },
+    "Anyone with the link can join" : {
+      "extractionState" : "manual"
+    },
+    "Ask for a Code to Join" : {
+      "extractionState" : "manual"
+    },
+    "Code" : {
+      "extractionState" : "manual"
+    },
+    "Conclave invite code: %@" : {
+      "extractionState" : "manual"
+    },
+    "Current Code" : {
+      "extractionState" : "manual"
+    },
+    "Everyone who joins needs this code, even with the meeting link." : {
+      "extractionState" : "manual"
+    },
+    "Generate a Code" : {
+      "extractionState" : "manual"
+    },
+    "Invite Code Is On" : {
+      "extractionState" : "manual"
+    },
+    "Join my Conclave meeting: %@\nInvite code: %@" : {
+      "extractionState" : "manual"
+    },
+    "New people wait until a host lets them in" : {
+      "extractionState" : "manual"
+    },
+    "People enter a code to join" : {
+      "extractionState" : "manual"
+    },
+    "People who aren’t signed in can join" : {
+      "extractionState" : "manual"
+    },
+    "Save New Code" : {
+      "extractionState" : "manual"
+    },
+    "Share Code" : {
+      "extractionState" : "manual"
+    },
+    "Short codes are easier to read out and type." : {
+      "extractionState" : "manual"
+    },
+    "The current code was set earlier or by another host. Set a new one to see and share it." : {
+      "extractionState" : "manual"
+    },
+    "Turn Off Invite Code…" : {
+      "extractionState" : "manual"
+    },
+    "Turn On Invite Code" : {
+      "extractionState" : "manual"
+    },
+    "Turn Off the Invite Code?" : {
       "extractionState" : "manual"
     }
   },

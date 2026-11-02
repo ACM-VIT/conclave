@@ -121,7 +121,7 @@ class PPL2PPL4BridgeTests {
         val (quiet, _) = hostPeople()
         val keys = hostListItems(quiet.host.snapshot).map { it.key }
         assertEquals(listOf("h:everyone", "b:muteAll", "b:camerasOff", "h:access", "p:lockMeeting", "p:allowGuests", "inviteCode",
-            "accessList", "f:access", "h:media", "p:allowUnmute", "p:allowVideo", "f:media", "h:chat", "p:allowChat",
+            "accessList", "h:media", "p:allowUnmute", "p:allowVideo", "f:media", "h:chat", "p:allowChat",
             "p:directMessages", "p:photos", "p:readAloud", "p:reactions", "h:notice", "notice", "f:notice", "h:webinar",
             "p:webinarMode", "f:webinar", "end"), keys)
         val (busy, _) = hostPeople(sharing = true, hand = true)

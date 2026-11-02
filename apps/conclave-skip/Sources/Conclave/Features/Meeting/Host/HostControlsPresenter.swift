@@ -8,6 +8,8 @@ final class HostControlsPresenter {
 
     private(set) var attendeeCount: Int = 0
 
+    private(set) var knownInviteCode: String = ""
+
     @ObservationIgnored let drafts = HostDrafts()
 
     @ObservationIgnored weak var parent: PeoplePresenter?
@@ -43,6 +45,9 @@ final class HostControlsPresenter {
             reset()
         }
         announceRemoteChanges(previous: previous, next: next)
+        if previous.meetingRequiresInviteCode && !next.meetingRequiresInviteCode && !knownInviteCode.isEmpty {
+            knownInviteCode = ""
+        }
         inputs = next
         if attendeeCount != next.webinarAttendeeCount { attendeeCount = next.webinarAttendeeCount }
         rebuild()
@@ -292,11 +297,14 @@ final class HostControlsPresenter {
         case .setMeetingInviteCode:
             if completed {
                 drafts.meetingCode = ""
+                knownInviteCode = entry.command.text
                 inviteCodePhase = HostFieldPhase.sent
                 inviteCodeSavedSerial += 1
             } else {
                 inviteCodePhase = failed ? HostFieldPhase.failed : HostFieldPhase.idle
             }
+        case .clearMeetingInviteCode:
+            if completed { knownInviteCode = "" }
         case .allowKey, .blockKey:
             if completed && HostControlsPolicy.normalizedAccessKey(drafts.accessKey) == entry.command.targetId {
                 drafts.accessKey = ""
@@ -344,6 +352,7 @@ final class HostControlsPresenter {
         requested = [:]
         noticePhase = HostFieldPhase.idle
         inviteCodePhase = HostFieldPhase.idle
+        knownInviteCode = ""
         linkPhase = WebinarLinkPhase.idle
         linkTask = nil
         inputs = HostControlsInputs.make()

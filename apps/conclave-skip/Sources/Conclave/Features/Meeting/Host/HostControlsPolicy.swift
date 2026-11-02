@@ -140,3 +140,37 @@ enum HostControlsPolicy {
         return value
     }
 }
+
+enum HostInviteCodeStatus: String, Equatable {
+    case off, onKnown, onUnknown
+}
+
+enum HostInviteCodePolicy {
+    static let alphabet: [String] = ["A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "M", "N", "P", "Q", "R", "S", "T", "U",
+                                     "V", "W", "X", "Y", "Z", "2", "3", "4", "5", "6", "7", "8", "9"]
+    static let generatedLength = 6
+
+    static func status(requiresCode: Bool, knownCode: String) -> HostInviteCodeStatus {
+        if !requiresCode { return HostInviteCodeStatus.off }
+        return knownCode.isEmpty ? HostInviteCodeStatus.onUnknown : HostInviteCodeStatus.onKnown
+    }
+
+    static func code(indices: [Int]) -> String {
+        var result = ""
+        for index in indices {
+            let wrapped = ((index % alphabet.count) + alphabet.count) % alphabet.count
+            result += alphabet[wrapped]
+        }
+        return result
+    }
+
+    static func generate() -> String {
+        var indices: [Int] = []
+        for _ in 0..<generatedLength { indices.append(Int.random(in: 0..<alphabet.count)) }
+        return code(indices: indices)
+    }
+
+    static func isUnchanged(_ draft: String, knownCode: String) -> Bool {
+        !knownCode.isEmpty && draft.trimmingCharacters(in: .whitespacesAndNewlines) == knownCode
+    }
+}

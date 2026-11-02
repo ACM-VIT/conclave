@@ -7,47 +7,118 @@ struct InviteCodePage: View {
     @State private var didSeed = false
     @State private var showsSaved = false
     @State private var savedToken = 0
+    @State private var copies = 0
+    @State private var showsCopied = false
+    @FocusState private var fieldFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let host = people.host
         let snapshot = host.snapshot
         let saving = snapshot.inviteCodePhase == HostFieldPhase.sending
         let blocked = snapshot.blockedReason != MeetingBlockedReason.none.rawValue
+        let known = host.knownInviteCode
+        let status = HostInviteCodePolicy.status(requiresCode: snapshot.access.requiresCode, knownCode: known)
+        let canSave = HostControlsPolicy.canSaveInviteCode(draft, isPending: saving, isBlocked: blocked)
+            && !HostInviteCodePolicy.isUnchanged(draft, knownCode: known)
         Form {
             Section {
-                LabeledContent(ConclaveStrings.text("Status"), value: HostText.onOff(snapshot.access.requiresCode))
+                switch status {
+                case .off:
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(ConclaveStrings.text("Ask for a Code to Join"))
+                            .font(.headline)
+                        Text(ConclaveStrings.text("Everyone who joins needs this code, even with the meeting link."))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    .accessibilityElement(children: .combine)
+                case .onKnown:
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(ConclaveStrings.text("Current Code"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text(known)
+                            .font(.system(.title, design: .monospaced).weight(.semibold))
+                            .kerning(2)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("host.inviteCode.current")
+                    }
+                    .padding(.vertical, 4)
+                    .accessibilityElement(children: .combine)
+                    Button {
+                        copy(known)
+                    } label: {
+                        Label(showsCopied ? ConclaveStrings.text("Copied") : ConclaveStrings.text("Copy Code"),
+                              systemImage: showsCopied ? ConclaveSymbols.checkmark : ConclaveSymbols.docOnDoc)
+                            .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                    }
+                    .conclaveGestureFeedback(.linkCopied, trigger: copies)
+                    .accessibilityIdentifier("host.inviteCode.copy")
+                    ShareLink(item: shareText(known)) {
+                        Label(ConclaveStrings.text("Share Code"), systemImage: ConclaveSymbols.squareAndArrowUp)
+                    }
+                    .accessibilityIdentifier("host.inviteCode.share")
+                case .onUnknown:
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(ConclaveStrings.text("Invite Code Is On"))
+                            .font(.headline)
+                        Text(ConclaveStrings.text("The current code was set earlier or by another host. Set a new one to see and share it."))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    .accessibilityElement(children: .combine)
+                }
             }
             Section {
-                TextField(ConclaveStrings.text("New Code"), text: $draft)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .onSubmit { save() }
+                HStack(spacing: 12) {
+                    TextField(status == .off ? ConclaveStrings.text("Code") : ConclaveStrings.text("New Code"), text: $draft)
+                        .font(.body.monospaced())
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .focused($fieldFocused)
+                        .onSubmit { save(canSave) }
+                        .disabled(saving || blocked)
+                        .accessibilityIdentifier("host.inviteCode.field")
+                    Button {
+                        draft = HostInviteCodePolicy.generate()
+                    } label: {
+                        Image(systemName: ConclaveSymbols.arrowClockwise)
+                    }
+                    .buttonStyle(.borderless)
                     .disabled(saving || blocked)
-                    .accessibilityIdentifier("host.inviteCode.field")
+                    .accessibilityLabel(ConclaveStrings.text("Generate a Code"))
+                    .accessibilityIdentifier("host.inviteCode.generate")
+                }
                 HostInlineFailureLine(people: people, sourceKey: HostFieldID.inviteCode)
             } footer: {
-                Text(ConclaveStrings.text("People need this code to join. Share it with the meeting link."))
+                Text(ConclaveStrings.text("Short codes are easier to read out and type."))
             }
             Section {
                 Button {
-                    save()
+                    save(canSave)
                 } label: {
                     HStack(spacing: 8) {
-                        Text(ConclaveStrings.text("Save Code"))
+                        Text(status == .off ? ConclaveStrings.text("Turn On Invite Code") : ConclaveStrings.text("Save New Code"))
+                            .fontWeight(.semibold)
                         Spacer(minLength: 0)
                         if saving { ProgressView().accessibilityHidden(true) }
                     }
                 }
-                .disabled(!HostControlsPolicy.canSaveInviteCode(draft, isPending: saving, isBlocked: blocked))
+                .disabled(!canSave)
                 .accessibilityIdentifier("host.inviteCode.save")
                 if showsSaved {
                     Label(ConclaveStrings.text("Code saved"), systemImage: ConclaveSymbols.checkmark)
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("host.inviteCode.saved")
                 }
-                if snapshot.access.requiresCode {
-                    Button(ConclaveStrings.text("Remove Code\u{2026}"), role: .destructive) {
+            }
+            if status != .off {
+                Section {
+                    Button(ConclaveStrings.text("Turn Off Invite Code\u{2026}"), role: .destructive) {
                         host.requestClearMeetingInviteCode()
                     }
                     .disabled(saving || blocked)
@@ -57,6 +128,7 @@ struct InviteCodePage: View {
             }
         }
         .formStyle(.grouped)
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle(ConclaveStrings.text("Invite Code"))
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -81,11 +153,33 @@ struct InviteCodePage: View {
             try? await Task.sleep(for: .seconds(2))
             if !Task.isCancelled { showsSaved = false }
         }
+        .task(id: copies) {
+            guard copies > 0 else { return }
+            try? await Task.sleep(for: .milliseconds(Int(MeetingInfoPolicy.copiedMillis)))
+            if !Task.isCancelled { showsCopied = false }
+        }
         .accessibilityIdentifier("host.page.inviteCode")
     }
 
-    private func save() {
+    private func save(_ allowed: Bool) {
+        guard allowed else {
+            fieldFocused = false
+            return
+        }
+        fieldFocused = false
         people.host.setMeetingInviteCode(draft)
+    }
+
+    private func copy(_ code: String) {
+        UIPasteboard.general.string = code
+        copies += 1
+        withAnimation(ConclaveMotion.travel(ConclaveMotion.snap, reduceMotion: reduceMotion)) { showsCopied = true }
+    }
+
+    private func shareText(_ code: String) -> String {
+        let link = people.stage.layout.meetingLink
+        if link.isEmpty { return ConclaveStrings.format("Conclave invite code: %@", code) }
+        return ConclaveStrings.format("Join my Conclave meeting: %@\nInvite code: %@", link, code)
     }
 }
 

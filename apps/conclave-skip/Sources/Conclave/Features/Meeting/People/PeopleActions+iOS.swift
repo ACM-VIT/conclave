@@ -93,9 +93,9 @@ enum PeopleActionText {
                               message: ConclaveStrings.text("Attendees can watch without a code."),
                               confirm: ConclaveStrings.text("Remove Code"), isDestructive: true, blockTitle: nil)
         case .clearInviteCode:
-            return DialogCopy(title: ConclaveStrings.text("Remove Invite Code?"),
+            return DialogCopy(title: ConclaveStrings.text("Turn Off the Invite Code?"),
                               message: ConclaveStrings.text("People can join without a code. Anyone already waiting stays in the waiting room."),
-                              confirm: ConclaveStrings.text("Remove Code"), isDestructive: true, blockTitle: nil)
+                              confirm: ConclaveStrings.text("Turn Off"), isDestructive: true, blockTitle: nil)
         case .block:
             return DialogCopy(title: ConclaveStrings.format("Block %@?", name),
                               message: ConclaveStrings.text("They can\u{2019}t join this meeting. If they\u{2019}re here, they\u{2019}re removed now."),
