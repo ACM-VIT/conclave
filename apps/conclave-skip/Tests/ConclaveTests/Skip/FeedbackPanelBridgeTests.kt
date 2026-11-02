@@ -97,26 +97,27 @@ class FeedbackPanelBridgeTests {
             group(H.VIRTUAL_KEY, FeedbackKind.primaryActionPressed, FeedbackKind.messageSent)
             group(confirm, FeedbackKind.leftCall, FeedbackKind.handRaised, FeedbackKind.reactionSent, FeedbackKind.joined,
                 FeedbackKind.admitted, FeedbackKind.shareStarted, FeedbackKind.transcriptionStarted,
+                FeedbackKind.shareStopped, FeedbackKind.transcriptionStopped, FeedbackKind.becameHost,
                 FeedbackKind.gameCorrect, FeedbackKind.signInSucceeded, FeedbackKind.meetingOpened,
                 FeedbackKind.wordSolved, FeedbackKind.gameStarted, FeedbackKind.tapValid, FeedbackKind.pieceMoved,
                 FeedbackKind.hostAdmitted, FeedbackKind.hostAdmittedAll, FeedbackKind.questionSent,
                 FeedbackKind.hostMadeHost, FeedbackKind.hostBulkApplied, FeedbackKind.hostInvitedToStage, FeedbackKind.hostMovedToAudience)
             group(reject, FeedbackKind.joinFailed, FeedbackKind.denied, FeedbackKind.removed,
                 FeedbackKind.connectionLost, FeedbackKind.hostMutedYou, FeedbackKind.gameWrong,
+                FeedbackKind.sessionExpired, FeedbackKind.stillConnecting, FeedbackKind.endForEveryonePrompted,
                 FeedbackKind.validationFailed, FeedbackKind.cameraOffByHost, FeedbackKind.actionRejected,
                 FeedbackKind.routeSwitchFailed, FeedbackKind.liveNotesFailed, FeedbackKind.tapEarly,
                 FeedbackKind.guessInvalid, FeedbackKind.moveRejected, FeedbackKind.hostActionFailed, FeedbackKind.questionFailed)
             group(if (api >= 34) H.SEGMENT_TICK else H.CLOCK_TICK, FeedbackKind.selectionChanged,
                 FeedbackKind.upvoteChanged, FeedbackKind.answerLocked, FeedbackKind.voteCast, FeedbackKind.bluffSubmitted)
             group(H.LONG_PRESS, FeedbackKind.longPress, FeedbackKind.revealHeld)
-            group(if (api >= 30) H.GESTURE_END else null, FeedbackKind.selfViewSnapped)
+            group(if (api >= 30) H.GESTURE_END else H.CLOCK_TICK, FeedbackKind.selfViewSnapped)
             group(if (api >= 34) H.GESTURE_THRESHOLD_ACTIVATE else H.CONTEXT_CLICK, FeedbackKind.swipeThresholdCrossed)
-            group(if (api >= 33) null else confirm, FeedbackKind.linkCopied)
-            group(null, FeedbackKind.none, FeedbackKind.sessionExpired, FeedbackKind.stillConnecting,
+            group(confirm, FeedbackKind.linkCopied)
+            group(null, FeedbackKind.none,
                 FeedbackKind.handLoweredByHost, FeedbackKind.shareStoppedBySystem, FeedbackKind.recapPostingStarted,
-                FeedbackKind.connectionRestored, FeedbackKind.endForEveryonePrompted, FeedbackKind.shareStopped,
-                FeedbackKind.transcriptionStopped, FeedbackKind.hostDenied, FeedbackKind.hostRemoved,
-                FeedbackKind.hostPolicyChanged, FeedbackKind.becameHost, FeedbackKind.lostHost)
+                FeedbackKind.connectionRestored, FeedbackKind.hostDenied, FeedbackKind.hostRemoved,
+                FeedbackKind.hostPolicyChanged, FeedbackKind.lostHost)
             assertEquals(FeedbackKind.values().toSet(), expected.keys)
             for ((kind, constant) in expected) assertEquals("$kind at API $api", constant, ConclaveHaptics.constant(kind, api))
         }
@@ -193,7 +194,7 @@ class FeedbackPanelBridgeTests {
         delivery.updateSuspended(false)
         delivery.deliver(delivery.observe())
         assertTrue(received.isEmpty())
-        owner.completeNextFixtureAction(kind = FeedbackKind.sessionExpired)
+        owner.completeNextFixtureAction(kind = FeedbackKind.handLoweredByHost)
         delivery.deliver(delivery.observe())
         delivery.deliver(delivery.observe())
         assertTrue(received.isEmpty())

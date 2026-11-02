@@ -13,8 +13,8 @@ enum FeedbackHapticContract {
         FeedbackHapticRow(kind: .none, ios: "none", android34: "none", android30: "none", android28: "none"),
         FeedbackHapticRow(kind: .signInSucceeded, ios: "success", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .validationFailed, ios: "error", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
-        FeedbackHapticRow(kind: .sessionExpired, ios: "warning", android34: "none", android30: "none", android28: "none"),
-        FeedbackHapticRow(kind: .stillConnecting, ios: "warning", android34: "none", android30: "none", android28: "none"),
+        FeedbackHapticRow(kind: .sessionExpired, ios: "warning", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
+        FeedbackHapticRow(kind: .stillConnecting, ios: "warning", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
         FeedbackHapticRow(kind: .meetingOpened, ios: "success", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .cameraOffByHost, ios: "warning", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
         FeedbackHapticRow(kind: .handLoweredByHost, ios: "none", android34: "none", android30: "none", android28: "none"),
@@ -32,10 +32,10 @@ enum FeedbackHapticContract {
         FeedbackHapticRow(kind: .reactionSent, ios: "impact.soft", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .selectionChanged, ios: "selection", android34: "SEGMENT_TICK", android30: "CLOCK_TICK", android28: "CLOCK_TICK"),
         FeedbackHapticRow(kind: .longPress, ios: "none", android34: "LONG_PRESS", android30: "LONG_PRESS", android28: "LONG_PRESS"),
-        FeedbackHapticRow(kind: .selfViewSnapped, ios: "alignment", android34: "GESTURE_END", android30: "GESTURE_END", android28: "none"),
+        FeedbackHapticRow(kind: .selfViewSnapped, ios: "alignment", android34: "GESTURE_END", android30: "GESTURE_END", android28: "CLOCK_TICK"),
         FeedbackHapticRow(kind: .swipeThresholdCrossed, ios: "impact.medium", android34: "GESTURE_THRESHOLD_ACTIVATE", android30: "CONTEXT_CLICK", android28: "CONTEXT_CLICK"),
-        FeedbackHapticRow(kind: .linkCopied, ios: "success", android34: "none", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
-        FeedbackHapticRow(kind: .endForEveryonePrompted, ios: "warning", android34: "none", android30: "none", android28: "none"),
+        FeedbackHapticRow(kind: .linkCopied, ios: "success", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
+        FeedbackHapticRow(kind: .endForEveryonePrompted, ios: "warning", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
         FeedbackHapticRow(kind: .joined, ios: "success", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .admitted, ios: "success", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .joinFailed, ios: "error", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
@@ -44,9 +44,9 @@ enum FeedbackHapticContract {
         FeedbackHapticRow(kind: .connectionLost, ios: "error", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
         FeedbackHapticRow(kind: .hostMutedYou, ios: "warning", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
         FeedbackHapticRow(kind: .shareStarted, ios: "impact.medium", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
-        FeedbackHapticRow(kind: .shareStopped, ios: "impact.soft", android34: "none", android30: "none", android28: "none"),
+        FeedbackHapticRow(kind: .shareStopped, ios: "impact.soft", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .transcriptionStarted, ios: "impact.medium", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
-        FeedbackHapticRow(kind: .transcriptionStopped, ios: "impact.soft", android34: "none", android30: "none", android28: "none"),
+        FeedbackHapticRow(kind: .transcriptionStopped, ios: "impact.soft", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .gameCorrect, ios: "success", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .gameWrong, ios: "error", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
         FeedbackHapticRow(kind: .liveNotesFailed, ios: "error", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
@@ -75,7 +75,7 @@ enum FeedbackHapticContract {
         FeedbackHapticRow(kind: .questionFailed, ios: "error", android34: "REJECT", android30: "REJECT", android28: "LONG_PRESS"),
         FeedbackHapticRow(kind: .upvoteChanged, ios: "selection", android34: "SEGMENT_TICK", android30: "CLOCK_TICK", android28: "CLOCK_TICK"),
 
-        FeedbackHapticRow(kind: .becameHost, ios: "success", android34: "none", android30: "none", android28: "none"),
+        FeedbackHapticRow(kind: .becameHost, ios: "success", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .lostHost, ios: "none", android34: "none", android30: "none", android28: "none"),
         FeedbackHapticRow(kind: .primaryActionPressed, ios: "impact.medium", android34: "VIRTUAL_KEY", android30: "VIRTUAL_KEY", android28: "VIRTUAL_KEY"),
         FeedbackHapticRow(kind: .leftCall, ios: "impact.medium", android34: "CONFIRM", android30: "CONFIRM", android28: "VIRTUAL_KEY"),
@@ -83,8 +83,6 @@ enum FeedbackHapticContract {
         FeedbackHapticRow(kind: .switchedOn, ios: "none", android34: "TOGGLE_ON", android30: "CONTEXT_CLICK", android28: "CONTEXT_CLICK"),
         FeedbackHapticRow(kind: .switchedOff, ios: "none", android34: "TOGGLE_OFF", android30: "CONTEXT_CLICK", android28: "CONTEXT_CLICK"),
     ]
-
-    static let linkCopiedFromAPI33 = "none"
 
     static let iPhoneSilentTokens: Set<String> = ["none", "start", "stop"]
 
@@ -102,7 +100,6 @@ enum FeedbackHapticContract {
     static func android(_ kind: FeedbackKind, api: Int) -> String {
         guard let match = row(for: kind) else { return "none" }
         if api >= 34 { return match.android34 }
-        if api >= 33 && kind == .linkCopied { return linkCopiedFromAPI33 }
         if api >= 30 { return match.android30 }
         return match.android28
     }

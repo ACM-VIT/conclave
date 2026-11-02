@@ -164,12 +164,12 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(FeedbackHapticContract.ios(.shareStopped) == "impact.soft")
         #expect(FeedbackHapticContract.ios(.transcriptionStopped) == "impact.soft")
         #expect(FeedbackHapticContract.ios(.becameHost) == "success")
-        #expect(FeedbackHapticContract.android(.becameHost, api: 36) == "none")
+        #expect(FeedbackHapticContract.android(.becameHost, api: 36) == "CONFIRM")
 
         #expect(FeedbackHapticContract.android(.linkCopied, api: 32) == "CONFIRM")
-        #expect(FeedbackHapticContract.android(.linkCopied, api: 33) == "none")
+        #expect(FeedbackHapticContract.android(.linkCopied, api: 33) == "CONFIRM")
         #expect(FeedbackHapticContract.android(.linkCopied, api: 29) == "VIRTUAL_KEY")
-        #expect(FeedbackHapticContract.android(.selfViewSnapped, api: 29) == "none")
+        #expect(FeedbackHapticContract.android(.selfViewSnapped, api: 29) == "CLOCK_TICK")
         #expect(FeedbackHapticContract.android(.selfViewSnapped, api: 30) == "GESTURE_END")
     }
 
@@ -181,10 +181,10 @@ struct TypographyHapticsGalleryContractsTests {
         #expect(!FeedbackHapticContract.isSilentOnIPhone(.selfViewSnapped))
         #expect(FeedbackHapticContract.iPhoneSilentTokens == ["none", "start", "stop"])
 
-        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 34) }.count == 16)
-        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 33) }.count == 16)
-        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 30) }.count == 15)
-        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 28) }.count == 16)
+        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 34) }.count == 9)
+        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 33) }.count == 9)
+        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 30) }.count == 9)
+        #expect(FeedbackKind.allCases.filter { FeedbackHapticContract.isSilentOnAndroid($0, api: 28) }.count == 9)
     }
 
     private func mapperMismatches(_ body: String) -> [String] {

@@ -200,9 +200,9 @@ class NativeRootFeedbackBridgeTests {
         premeeting.account.sessionDidExpire()
         assertEquals(FeedbackKind.sessionExpired, premeeting.feedbackState.token.kind)
         poll(delivery)
-        assertEquals(listOf(FeedbackKind.signInSucceeded), received)
-        assertEquals(1, records.count)
+        assertEquals(listOf(FeedbackKind.signInSucceeded, FeedbackKind.sessionExpired), received)
+        assertEquals(2, records.count)
         assertTrue(NativePremeetingFeedbackKinds.delivers(FeedbackKind.stillConnecting))
-        assertNull(ConclaveHaptics.constant(FeedbackKind.stillConnecting))
+        assertNotNull(ConclaveHaptics.constant(FeedbackKind.stillConnecting))
     }
 }
