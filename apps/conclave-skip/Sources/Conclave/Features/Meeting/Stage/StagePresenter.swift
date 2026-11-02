@@ -86,6 +86,7 @@ final class StagePresenter {
     @ObservationIgnored private var remoteOrder: [String] = []
     @ObservationIgnored private var featuredUserId = ""
     @ObservationIgnored private var currentSpeakerId = ""
+    @ObservationIgnored private var pipSpeakerId = ""
     @ObservationIgnored private var speakerSinceMillis = 0.0
     @ObservationIgnored private var lastSwapMillis = StageOrderPolicy.neverSwappedMillis
     @ObservationIgnored private var promotionSinceMillis = 0.0
@@ -167,6 +168,10 @@ final class StagePresenter {
         if id == currentSpeakerId { return }
         if !currentSpeakerId.isEmpty { lastSpokeAt[currentSpeakerId] = atMillis }
         currentSpeakerId = id
+        if !id.isEmpty && id != inputs.localUserId {
+            pipSpeakerId = id
+            refreshPipTarget()
+        }
         speakerSinceMillis = atMillis
         speaking.setSpeaker(id)
         if !id.isEmpty { lastSpokeAt[id] = atMillis }
@@ -175,6 +180,11 @@ final class StagePresenter {
             rebuild()
         }
         evaluatePromotion()
+    }
+
+    private func refreshPipTarget() {
+        let next = PipTargetPolicy.choose(inputs: inputs, layout: layout, speakerUserId: pipSpeakerId)
+        if next != pipTarget { pipTarget = next }
     }
 
     func reactionsChanged(_ items: [StageReactionInput]) {
@@ -412,6 +422,7 @@ final class StagePresenter {
         bindings.removeAll()
         frameSizes.removeAll()
         if !pipTarget.isEmpty { pipTarget = PipTargetChoice.none }
+        pipSpeakerId = ""
         inputs = StageInputs.make()
         visibility = StageVisibilityReport.none
         hasVisibilityReport = false
@@ -570,8 +581,7 @@ final class StagePresenter {
         if kind != nextKind { kind = nextKind }
         let nextAlone = StageAlonePolicy.snapshot(inputs, kind: nextKind)
         if nextAlone != alone { alone = nextAlone }
-        let nextPip = PipTargetPolicy.choose(inputs: inputs, layout: layout)
-        if nextPip != pipTarget { pipTarget = nextPip }
+        refreshPipTarget()
 
         for participant in present {
             tileChrome.write(tileModel(participant))

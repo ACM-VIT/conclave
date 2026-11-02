@@ -70,9 +70,10 @@ internal fun ConclaveTileChrome(
     accessibilityName: String? = null,
     isSolo: Boolean = false, showsHandBadge: Boolean = true,
     overlayInsets: PaddingValues = PaddingValues(0.dp),
+    bare: Boolean = false,
     renderer: @Composable () -> Unit,
 ) {
-    val shape = RoundedCornerShape(cornerRadius)
+    val shape = RoundedCornerShape(if (bare) 0.dp else cornerRadius)
     val name = accessibilityName ?: when {
         model.isLocal -> conclaveString("ds_you")
         model.isVoiceAgent -> model.displayName + ", " + conclaveString("ds_tag_ai")
@@ -118,6 +119,7 @@ internal fun ConclaveTileChrome(
                     }
                 }
             }
+            if (bare) return@Box
             Box(Modifier.fillMaxSize().padding(overlayInsets)) {
                 TileOverlays(model, speaking, variant, density, !isSolo || !model.isCameraOff, showsHandBadge, selfViewAccessory)
             }

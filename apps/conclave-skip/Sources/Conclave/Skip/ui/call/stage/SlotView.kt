@@ -163,6 +163,7 @@ private fun ParticipantTile(
     }
 
     val paused = model.isLocal && !isShare && !model.isCameraOff && stage.chrome.isCameraPaused
+    val bare = PipController.inPipMode
 
     val chromeVisibility = LocalStageChromeVisibility.current
     val viewport = LocalStageViewport.current ?: stage.viewport
@@ -215,12 +216,14 @@ private fun ParticipantTile(
             showsHandBadge = !model.isLocal,
             overlayInsets = PaddingValues(start = tileInsets.leading.dp, top = tileInsets.top.dp,
                 end = tileInsets.trailing.dp, bottom = tileInsets.bottom.dp),
+            bare = bare,
         ) {
             ShareZoomBox(zoom, zoomable, slot.id, stage, Modifier.fillMaxSize().graphicsLayer { alpha = if (minimized) 0f else 1f }) {
                 StageRendererSlot(slot.id, slot.userId, model.isLocal, isShare, slot.fit, binding, stage, renderers, Modifier.fillMaxSize())
             }
             SharePlaceholder(model, binding, isShare, Modifier.fillMaxSize())
         }
+        if (bare) return@Box
         if (minimized) {
 
             ConclaveStageChip(title = conclaveString("ds_you"), identifier = "stage.selfView.minimized",
