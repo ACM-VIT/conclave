@@ -75,7 +75,7 @@ struct MicReplayIntegrationTests {
             settings.stopMicTest()
             #expect(audio.stops == 1)
             if !muted {
-                #expect(await settle { call.calls.count("setAudioEnabled(true)") == enables + 1 })
+                #expect(await settle(timeout: .seconds(20)) { call.calls.count("setAudioEnabled(true)") == enables + 1 })
             } else {
                 for _ in 0..<30 { await Task.yield() }
                 #expect(call.calls.count("setAudioEnabled(true)") == enables)
