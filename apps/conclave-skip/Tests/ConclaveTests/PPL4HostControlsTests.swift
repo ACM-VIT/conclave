@@ -162,6 +162,19 @@ struct PPL4HostControlsTests {
         #expect(host.knownInviteCode.isEmpty)
     }
 
+    @Test func theSavedAttendeeCodeStaysKnownUntilTheWebinarCodeIsTurnedOff() throws {
+        let (people, log) = makeHost(host: HostControlsInputs.make(callSession: 1, isWebinarEnabled: true))
+        let host = people.host
+        #expect(host.setAttendeeCode(" WATCH7 ") == .dispatched)
+        people.finish(try #require(log.tickets.last), HostActionResult.completed)
+        #expect(host.knownAttendeeCode == "WATCH7")
+        #expect(host.knownInviteCode.isEmpty)
+        host.apply(HostControlsInputs.make(callSession: 1, isWebinarEnabled: true, webinarRequiresCode: true))
+        #expect(host.knownAttendeeCode == "WATCH7")
+        host.apply(HostControlsInputs.make(callSession: 1, isWebinarEnabled: true, webinarRequiresCode: false))
+        #expect(host.knownAttendeeCode.isEmpty)
+    }
+
     @Test func generatedInviteCodesAvoidLookalikeCharacters() {
         #expect(HostInviteCodePolicy.code(indices: [0, 1, 2]) == "ABC")
         #expect(HostInviteCodePolicy.code(indices: [-1, HostInviteCodePolicy.alphabet.count]) == "9A")

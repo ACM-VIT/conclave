@@ -10,6 +10,8 @@ final class HostControlsPresenter {
 
     private(set) var knownInviteCode: String = ""
 
+    private(set) var knownAttendeeCode: String = ""
+
     @ObservationIgnored let drafts = HostDrafts()
 
     @ObservationIgnored weak var parent: PeoplePresenter?
@@ -47,6 +49,9 @@ final class HostControlsPresenter {
         announceRemoteChanges(previous: previous, next: next)
         if previous.meetingRequiresInviteCode && !next.meetingRequiresInviteCode && !knownInviteCode.isEmpty {
             knownInviteCode = ""
+        }
+        if previous.webinarRequiresCode && !next.webinarRequiresCode && !knownAttendeeCode.isEmpty {
+            knownAttendeeCode = ""
         }
         inputs = next
         if attendeeCount != next.webinarAttendeeCount { attendeeCount = next.webinarAttendeeCount }
@@ -319,6 +324,7 @@ final class HostControlsPresenter {
             }
         case .setAttendeeCode, .clearAttendeeCode:
             if completed {
+                knownAttendeeCode = entry.command.kind == PeopleCommandKind.setAttendeeCode ? entry.command.text : ""
                 drafts.attendeeCode = ""
                 noteSaved(HostFieldID.attendeeCode)
             }
@@ -353,6 +359,7 @@ final class HostControlsPresenter {
         noticePhase = HostFieldPhase.idle
         inviteCodePhase = HostFieldPhase.idle
         knownInviteCode = ""
+        knownAttendeeCode = ""
         linkPhase = WebinarLinkPhase.idle
         linkTask = nil
         inputs = HostControlsInputs.make()

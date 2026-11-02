@@ -1037,9 +1037,6 @@
     "Attendees can watch without a code." : {
       "extractionState" : "manual"
     },
-    "Attendees need this code to watch." : {
-      "extractionState" : "manual"
-    },
     "Attendees see this under the question." : {
       "extractionState" : "manual"
     },
@@ -4419,17 +4416,6 @@
     "Remove All Effects" : {
       "extractionState" : "manual"
     },
-    "Remove Attendee Code?" : {
-      "extractionState" : "manual"
-    },
-    "Remove Code" : {
-      "extractionState" : "manual",
-      "generatesSymbol" : false
-    },
-    "Remove Code…" : {
-      "extractionState" : "manual",
-      "generatesSymbol" : false
-    },
     "Remove From Meeting" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -4630,9 +4616,6 @@
       "extractionState" : "manual"
     },
     "Save" : {
-      "extractionState" : "manual"
-    },
-    "Save Code" : {
       "extractionState" : "manual"
     },
     "Save Link" : {
@@ -6890,6 +6873,30 @@
       "extractionState" : "manual"
     },
     "Muted for you" : {
+      "extractionState" : "manual"
+    },
+    "Ask Attendees for a Code" : {
+      "extractionState" : "manual"
+    },
+    "Attendees need this code to watch, even with the webinar link." : {
+      "extractionState" : "manual"
+    },
+    "Attendee Code Is On" : {
+      "extractionState" : "manual"
+    },
+    "Turn On Attendee Code" : {
+      "extractionState" : "manual"
+    },
+    "Turn Off Attendee Code…" : {
+      "extractionState" : "manual"
+    },
+    "Conclave attendee code: %@" : {
+      "extractionState" : "manual"
+    },
+    "Watch my Conclave webinar: %@\nAttendee code: %@" : {
+      "extractionState" : "manual"
+    },
+    "Turn Off the Attendee Code?" : {
       "extractionState" : "manual"
     }
   },

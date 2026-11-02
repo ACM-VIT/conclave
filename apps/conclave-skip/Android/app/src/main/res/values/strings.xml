@@ -1890,9 +1890,7 @@
     <string name="hst_code_share_text">Join my Conclave meeting: %1$s\nInvite code: %2$s</string>
     <string name="hst_code_share_text_code">Conclave invite code: %1$s</string>
     <string name="hst_invite_title">Invite code</string>
-    <string name="hst_status">Status</string>
     <string name="hst_new_code">New code</string>
-    <string name="hst_save_code">Save code</string>
     <string name="hst_remove_code">Turn off invite code…</string>
     <string name="hst_code_saved">Code saved</string>
     <string name="hst_remove_code_title">Turn off invite code?</string>
@@ -1946,8 +1944,14 @@
     <string name="hst_slug_rule">Use 3 to 32 lowercase letters, numbers or hyphens.</string>
     <string name="hst_save_link">Save link</string>
     <string name="hst_clear_link">Clear link</string>
-    <string name="hst_attendee_code_footer">Attendees need this code to watch.</string>
-    <string name="hst_remove_attendee_code_title">Remove attendee code?</string>
+    <string name="hst_attendee_intro_title">Ask attendees for a code</string>
+    <string name="hst_attendee_intro_body">Attendees need this code to watch, even with the webinar link.</string>
+    <string name="hst_attendee_on_title">Attendee code is on</string>
+    <string name="hst_attendee_turn_on">Turn on attendee code</string>
+    <string name="hst_attendee_turn_off">Turn off attendee code…</string>
+    <string name="hst_attendee_share_text">Watch my Conclave webinar: %1$s\nAttendee code: %2$s</string>
+    <string name="hst_attendee_share_text_code">Conclave attendee code: %1$s</string>
+    <string name="hst_remove_attendee_code_title">Turn off attendee code?</string>
     <string name="hst_remove_attendee_code_message">Attendees can watch without a code.</string>
     <string name="hst_announce_new_link">New link copied.</string>
     <string name="hst_fail_webinar">Couldn’t update webinar settings.</string>
