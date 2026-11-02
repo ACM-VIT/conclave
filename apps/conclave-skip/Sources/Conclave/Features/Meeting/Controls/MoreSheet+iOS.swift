@@ -186,7 +186,21 @@ private struct MoreSheetQuickButton: View {
     }
 }
 
+struct MoreSheetStatusNote: Equatable {
+    let text: String
+    let isWarning: Bool
+}
+
 extension MoreSheetLayout {
+    static func statusNote(_ item: MoreItem) -> MoreSheetStatusNote? {
+        guard let text = MoreCopy.subtitle(item) else { return nil }
+        switch item.status {
+        case .paused, .notesOff: return MoreSheetStatusNote(text: text, isWarning: false)
+        case .attention: return MoreSheetStatusNote(text: text, isWarning: true)
+        default: return nil
+        }
+    }
+
     static func quickTitle(_ item: MoreItem) -> String {
         switch item.kind {
         case .hand: return item.isOn ? ConclaveStrings.text("Lower Hand") : ConclaveStrings.text("Raise Hand")
@@ -324,6 +338,18 @@ private struct MoreSheetListRow: View {
                     .frame(minWidth: 24, minHeight: 22)
                     .background(HostingTheme.coralFill, in: Capsule())
                     .accessibilityHidden(true)
+            } else if value == nil, let note = MoreSheetLayout.statusNote(item) {
+                HStack(spacing: 4) {
+                    if note.isWarning {
+                        Image(systemName: ConclaveSymbols.exclamationmarkTriangleFill)
+                            .font(.footnote)
+                    }
+                    Text(note.text)
+                        .font(.subheadline)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(note.isWarning ? AnyShapeStyle(HostingTheme.coralFill) : AnyShapeStyle(.secondary))
+                .accessibilityHidden(true)
             } else if item.status != MoreItemStatus.none && value == nil {
                 Circle()
                     .fill(HostingTheme.coralFill)
