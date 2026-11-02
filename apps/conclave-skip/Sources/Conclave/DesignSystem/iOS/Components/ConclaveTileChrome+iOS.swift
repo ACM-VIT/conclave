@@ -296,9 +296,9 @@ private struct TileNamePill: View {
                 Image(systemName: ConclaveSymbols.micSlashFill)
                     .accessibilityHidden(true)
             }
-            PillWaveform(state: speaking)
             Text(model.isLocal ? ConclaveStrings.text("You") : model.displayName)
                 .lineLimit(1)
+            if !model.isMuted { PillWaveform(state: speaking) }
             if model.isVoiceAgent {
                 Text(ConclaveStrings.text("AI"))
                     .fontWeight(.semibold)
@@ -315,11 +315,14 @@ private struct TileNamePill: View {
 
 private struct PillWaveform: View {
     let state: TileSpeakingState
-    @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if state.isSpeaking && differentiateWithoutColor {
+        if state.isSpeaking {
             Image(systemName: ConclaveSymbols.waveform)
+                .foregroundStyle(HostingTheme.coralFill)
+                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
+                .transition(.opacity)
                 .accessibilityHidden(true)
         }
     }

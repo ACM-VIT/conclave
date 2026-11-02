@@ -1,5 +1,16 @@
 package conclave.module
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -108,7 +119,7 @@ internal fun ConclaveTileChrome(
                 }
             }
             Box(Modifier.fillMaxSize().padding(overlayInsets)) {
-                TileOverlays(model, variant, density, !isSolo || !model.isCameraOff, showsHandBadge, selfViewAccessory)
+                TileOverlays(model, speaking, variant, density, !isSolo || !model.isCameraOff, showsHandBadge, selfViewAccessory)
             }
             if (variant == ConclaveTileVariant.SelfView) {
                 Box(Modifier.fillMaxSize().border(1.dp, ext.border, shape))
@@ -179,13 +190,13 @@ private fun SpeakingStroke(speaking: TileSpeakingState, cornerRadius: Dp) {
 }
 
 @Composable
-private fun TileOverlays(model: TileChromeModel, variant: ConclaveTileVariant, density: TileChromeDensity,
+private fun TileOverlays(model: TileChromeModel, speaking: TileSpeakingState, variant: ConclaveTileVariant, density: TileChromeDensity,
                          showsName: Boolean, showsHandBadge: Boolean, selfViewAccessory: @Composable () -> Unit) {
     val badge = TileChromePolicy.badgeSize(density).dp
     val inset = if (density == TileChromeDensity.dense) 4.dp else 8.dp
     Box(Modifier.fillMaxSize().padding(inset)) {
         if (variant == ConclaveTileVariant.Grid && showsName) {
-            TileNamePill(model, density, Modifier.align(Alignment.BottomStart))
+            TileNamePill(model, speaking, density, Modifier.align(Alignment.BottomStart))
         }
         Row(Modifier.align(Alignment.TopStart), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             if (model.isHandRaised && showsHandBadge) ConclaveTileBadge(ConclaveTileBadgeKind.handRaised, badge)
@@ -220,7 +231,7 @@ private fun MutedBadge(size: Dp) {
 }
 
 @Composable
-private fun TileNamePill(model: TileChromeModel, density: TileChromeDensity, modifier: Modifier) {
+private fun TileNamePill(model: TileChromeModel, speaking: TileSpeakingState, density: TileChromeDensity, modifier: Modifier) {
     val ext = LocalConclaveExtendedColors.current
     val scheme = MaterialTheme.colorScheme
     Surface(modifier = modifier, shape = CircleShape, color = ext.labelScrim, contentColor = scheme.onSurface) {
@@ -234,6 +245,25 @@ private fun TileNamePill(model: TileChromeModel, density: TileChromeDensity, mod
                 ConclaveText(conclaveString("ds_tag_ai"), line = "tile.${model.userId}.ai",
                     style = MaterialTheme.typography.labelSmall, color = scheme.onSurfaceVariant)
             }
+            if (speaking.isSpeaking && !model.isMuted) VoiceActivityBars(ext.speaking)
+        }
+    }
+}
+
+@Composable
+private fun VoiceActivityBars(color: Color) {
+    val reduce = rememberReduceMotion()
+    val transition = rememberInfiniteTransition(label = "voice")
+    val first by transition.animateFloat(0.45f, 1f, infiniteRepeatable(tween(390, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "voice0")
+    val second by transition.animateFloat(0.45f, 1f,
+        infiniteRepeatable(tween(390, easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(120)), label = "voice1")
+    val third by transition.animateFloat(0.45f, 1f,
+        infiniteRepeatable(tween(390, easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(240)), label = "voice2")
+    val heights = if (reduce) listOf(0.7f, 0.7f, 0.7f) else listOf(first, second, third)
+    Row(Modifier.height(12.dp), horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.Bottom) {
+        for (height in heights) {
+            Box(Modifier.width(2.dp).fillMaxHeight(height).clip(CircleShape).background(color))
         }
     }
 }
