@@ -21,7 +21,7 @@ struct SlotView: View {
             ActivityStageContainer(stage: stage)
         } else {
             ParticipantTile(slot: slot, entry: stage.tileChrome.entry(for: slot.userId),
-                            speaking: stage.speaking.state(for: slot.userId), binding: stage.bindings.binding(for: slot.id),
+                            speaking: stage.speaking.state(forSlot: slot), binding: stage.bindings.binding(for: slot.id),
                             stage: stage, viewport: viewport, renderers: renderers)
         }
     }

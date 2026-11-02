@@ -550,4 +550,16 @@ struct STG2PinViewModelTests {
     }
 }
 #endif
+
+@MainActor
+struct StageSpeakingSlotTests {
+    @Test func aScreenShareNeverWearsThePresentersSpeakingRing() {
+        let store = TileSpeakingStore()
+        store.setSpeaker("ada")
+        let camera = StageSlot(id: StageSlot.participantId("ada"), role: .spotlightMain, userId: "ada", fit: .fill)
+        let share = StageSlot(id: StageSlot.shareId("ada"), role: .share, userId: "ada", fit: .fit)
+        #expect(store.state(forSlot: camera).isSpeaking)
+        #expect(!store.state(forSlot: share).isSpeaking)
+    }
+}
 #endif

@@ -95,7 +95,7 @@ internal fun SlotView(
                 onClick = { stage.openPeople(destination = PanelDestination.none) }, modifier = modifier)
         }
         StageSlot.activityId -> ActivityStageCard(stage, modifier)
-        else -> ParticipantTile(slot, stage.tileChrome.entry(slot.userId), stage.speaking.state(slot.userId),
+        else -> ParticipantTile(slot, stage.tileChrome.entry(slot.userId), stage.speaking.state(forSlot = slot),
             stage.bindings.binding(slot.id), stage, renderers, modifier)
     }
 }
