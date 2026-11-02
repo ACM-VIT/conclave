@@ -65,12 +65,6 @@ enum PromptGameCopy {
     static func bluffPlaceholder() -> String { ConclaveStrings.text("Make up a believable answer") }
     static func bluffSubmit() -> String { ConclaveStrings.text("Submit Bluff") }
     static func bluffSubmitted(_ text: String) -> String { ConclaveStrings.format("Submitted: %@", text) }
-    static func bluffSubmittedCount(_ scene: BluffScene) -> String {
-        ConclaveStrings.format("%lld of %lld submitted", scene.submittedCount, scene.totalPlayers)
-    }
-    static func bluffChosenCount(_ scene: BluffScene) -> String {
-        ConclaveStrings.format("%lld of %lld chose", scene.chosenCount, scene.totalPlayers)
-    }
     static func ownBluff() -> String { ConclaveStrings.text("Your bluff") }
 
     static func bluffRevealLines(_ option: BluffOptionModel) -> [String] {
@@ -93,8 +87,6 @@ enum PromptGameCopy {
 
     static func wouldYouRather() -> String { ConclaveStrings.text("Would You Rather") }
     static func chose(_ done: Int, _ total: Int) -> String { ConclaveStrings.format("%lld of %lld chose", done, total) }
-    static func nobodyPicked() -> String { ConclaveStrings.text("Nobody picked this") }
-    static func wyrWrapBody() -> String { ConclaveStrings.text("Nice picks. Run it back any time.") }
 
     static func mostLikelyTitle(_ prompt: String) -> String {
         GameKitTextPolicy.question(ConclaveStrings.format("Who’s most likely %@", prompt))
@@ -121,8 +113,6 @@ enum PromptGameCopy {
         if scene.winnerName.isEmpty { return "" }
         return ConclaveStrings.format("Most votes: %@", scene.winnerName)
     }
-
-    static func mltWrapBody() -> String { ConclaveStrings.text("No hard feelings, right?") }
 
     static func padTitle(_ state: ReactionPadState, ms: Int) -> String {
         switch state {
@@ -167,12 +157,6 @@ enum PromptGameCopy {
         }
     }
 
-    static func discussKicker(_ scene: ImposterScene) -> String {
-        let starts = scene.starterName.isEmpty ? "" : ConclaveStrings.format("%@ starts", scene.starterName)
-        return twoFacts(scene.category, starts)
-    }
-
-    static func discussBody() -> String { ConclaveStrings.text("Take turns describing the word, but stay vague.") }
     static func voteTitle() -> String { ConclaveStrings.text("Who’s the Imposter?") }
     static func abstained() -> String { ConclaveStrings.text("You didn’t vote.") }
 
@@ -196,12 +180,5 @@ enum PromptGameCopy {
         return facts
     }
 
-    static func award(kind: String) -> String {
-        switch kind {
-        case GameSceneKind.bluff: return bestBluffer()
-        case GameSceneKind.reaction: return sharpestReflexes()
-        default: return ConclaveStrings.text("Results")
-        }
-    }
 }
 #endif

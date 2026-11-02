@@ -208,16 +208,3 @@ struct StageModeInput {
     let hasActiveVideoSpeaker: Bool
     var tiledThreshold: Int = 12
 }
-
-func chooseStageMode(_ input: StageModeInput) -> StageMode {
-    if input.pinned || input.count <= 2 || (input.presenting && !input.hasActiveVideoSpeaker) {
-        return .spotlight
-    }
-    if input.presenting {
-        return .sideBySide
-    }
-    if input.count <= input.tiledThreshold {
-        return .tiled
-    }
-    return .sidebar
-}

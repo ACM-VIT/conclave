@@ -418,11 +418,6 @@ internal fun ConclaveSearchField(
 }
 
 @Composable
-internal fun ConclaveSearchNoResults(identifier: String, modifier: Modifier = Modifier) {
-    ConclaveEmptyStatus(conclaveString("ds_no_results"), "", ConclaveIcons.SearchFill0, identifier, modifier)
-}
-
-@Composable
 internal fun ConclaveSegmentedRow(
     options: List<ConclaveSegmentModel>, selectedId: String, identifier: String, onSelect: (String) -> Unit,
     modifier: Modifier = Modifier, fallback: ConclaveSegmentedFallback = ConclaveSegmentedFallback.rows,

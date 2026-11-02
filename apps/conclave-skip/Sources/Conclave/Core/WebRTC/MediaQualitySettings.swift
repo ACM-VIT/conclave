@@ -509,20 +509,6 @@ enum NativeMediaQualityPolicy {
         resolvedCamera(effectiveCamera(camera, dataSaverOn: dataSaverOn, systemSendCeiling: systemSendCeiling))
     }
 
-    static func baseVideoQuality(_ settings: NativeCameraQualitySettings) -> VideoQuality {
-        let resolved = resolvedCamera(settings)
-        return resolved.width <= 640 && resolved.maxBitrateBps <= 500_000 ? .low : .standard
-    }
-
-    static func bitrateLabel(kbps: Int) -> String {
-        if kbps >= 1_000 {
-            let whole = kbps / 1_000
-            let remainder = (kbps % 1_000) / 100
-            return remainder == 0 ? "\(whole) Mbps" : "\(whole).\(remainder) Mbps"
-        }
-        return "\(kbps) kbps"
-    }
-
     private static func bounded(_ value: Int, minimum: Int, maximum: Int) -> Int {
         min(maximum, max(minimum, value))
     }

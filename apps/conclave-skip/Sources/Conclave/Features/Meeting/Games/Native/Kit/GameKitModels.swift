@@ -67,7 +67,4 @@ enum GameKitBarPolicy {
 
     static let stackCharacterBudget = 28
 
-    static func stacks(primaryTitle: String, secondaryTitle: String, isAccessibilitySize: Bool) -> Bool {
-        isAccessibilitySize || primaryTitle.count + secondaryTitle.count > stackCharacterBudget
-    }
 }

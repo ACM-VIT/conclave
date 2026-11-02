@@ -69,7 +69,7 @@ struct ENT2JoinCodeTests {
     @Test func entryStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent2Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Meetings", "New Meeting", "Join", "Recent", "Join Meeting", "Meeting Code or Link", "Code or Link",
+        for key in ["New Meeting", "Join", "Recent", "Join Meeting", "Meeting Code or Link", "Code or Link",
                     "This isn\u{2019}t a Conclave code or link.",
                     "Join Another Meeting?", "You\u{2019}re in %@. Leave it and join %@?", "Stay", "Leave and Join",
                     "This link can\u{2019}t be opened in Conclave.", "Update Conclave", "No Recent Meetings"] {

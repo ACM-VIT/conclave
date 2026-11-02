@@ -51,9 +51,4 @@ final class CallSessionCoordinator {
         return presence.handle(muted ? .mute : .unmute, source: .callKit, presenceSession: presence.snapshot.presenceSession)
     }
 
-    func leaveCall() {
-        guard let viewModel = activeViewModel else { return }
-        let presence = viewModel.callPresence
-        presence.handle(.leave, source: .system, presenceSession: presence.snapshot.presenceSession)
-    }
 }

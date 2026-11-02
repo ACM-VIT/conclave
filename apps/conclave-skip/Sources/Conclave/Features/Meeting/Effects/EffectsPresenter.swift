@@ -497,14 +497,6 @@ final class EffectsPresenter {
         rebuild()
     }
 
-    func engineDidWithdraw() {
-        catalog = []
-        enginePublishesPanel = false
-        isPreparing = false
-        processingId = ""
-        rebuild()
-    }
-
     func engineDidApply(id: String) {
         if processingId == id { processingId = "" }
         isPreparing = false
