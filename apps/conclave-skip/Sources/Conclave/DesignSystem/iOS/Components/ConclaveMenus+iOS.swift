@@ -32,6 +32,7 @@ enum ConclaveMenuSymbols {
         case "change_name": return ConclaveSymbols.pencil
         case "lower_hand": return ConclaveSymbols.handRaisedSlash
         case "request_declined": return ConclaveSymbols.handRaisedSlash
+        case "speaker": return ConclaveSymbols.speakerWave2Fill
         case "speaker_off": return ConclaveSymbols.speakerSlashFill
         case "move_to_audience": return ConclaveSymbols.arrowDownCircle
         case "admit": return ConclaveSymbols.checkmark

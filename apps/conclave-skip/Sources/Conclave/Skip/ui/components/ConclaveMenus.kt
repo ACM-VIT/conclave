@@ -69,6 +69,7 @@ internal fun conclaveMenuIcon(concept: String): ImageVector? = when (concept) {
     "change_name" -> ConclaveIcons.EditFill0
     "lower_hand" -> ConclaveIcons.DoNotTouchFill0
     "request_declined" -> ConclaveIcons.DoNotTouchFill0
+    "speaker" -> ConclaveIcons.VolumeUpFill0
     "speaker_off" -> ConclaveIcons.VolumeOffFill1
     "move_to_audience" -> ConclaveIcons.MoveDownFill0
     "admit" -> ConclaveIcons.CheckFill0

@@ -598,6 +598,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     var consumers: [String: ConsumerInfo] = [:]
+    private var participantAudioGains: [String: Double] = [:]
     private var nextConsumerGeneration = 0
     private var firstDecodedVideoFrameSignals: [ConsumerGenerationIdentity: FirstDecodedVideoFrameSignal] = [:]
     private var firstDecodedVideoFrameRenderers: [ConsumerGenerationIdentity: FirstDecodedVideoFrameRenderer] = [:]
@@ -3434,6 +3435,9 @@ final class WebRTCClient: NSObject, ObservableObject {
             )
         }
         consumer.delegate = self
+        if response.kind == "audio", let track = consumer.track as? RTCAudioTrack {
+            track.source.volume = participantAudioGain(userId: producerUserId)
+        }
         consumer.resume()
 
         let isScreenVideo = (producerType == "screen" && response.kind == "video")
@@ -3757,6 +3761,29 @@ final class WebRTCClient: NSObject, ObservableObject {
     func hasAudioConsumer(userIdPrefix: String) -> Bool {
         consumers.values.contains { info in
             info.kind == "audio" && info.userId.hasPrefix(userIdPrefix)
+        }
+    }
+
+    private func participantAudioGain(userId: String) -> Double {
+        if let gain = participantAudioGains[userId] { return gain }
+        for (target, gain) in participantAudioGains where trackKeyMatchesUser(userId, userId: target) {
+            return gain
+        }
+        return 1.0
+    }
+
+    func setParticipantAudioGain(userId: String, gain: Double) {
+        let clamped = ParticipantAudioPreference(volume: gain).gain
+        participantAudioGains[userId] = clamped
+        for info in consumers.values where info.kind == "audio" && consumerMatchesUser(info, userId: userId) {
+            (info.consumer.track as? RTCAudioTrack)?.source.volume = clamped
+        }
+    }
+
+    func resetParticipantAudioGains() {
+        participantAudioGains = [:]
+        for info in consumers.values where info.kind == "audio" {
+            (info.consumer.track as? RTCAudioTrack)?.source.volume = 1.0
         }
     }
 

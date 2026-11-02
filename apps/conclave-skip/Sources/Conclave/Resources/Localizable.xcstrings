@@ -6870,6 +6870,27 @@
     },
     "Turn Off the Invite Code?" : {
       "extractionState" : "manual"
+    },
+    "People need this code to join. Share it with the meeting link." : {
+      "extractionState" : "manual"
+    },
+    "Remove Invite Code?" : {
+      "extractionState" : "manual"
+    },
+    "When the meeting is locked, new people wait until a host admits them. Guests are people who aren’t signed in." : {
+      "extractionState" : "manual"
+    },
+    "Mute for me" : {
+      "extractionState" : "manual"
+    },
+    "Unmute for me" : {
+      "extractionState" : "manual"
+    },
+    "Local volume" : {
+      "extractionState" : "manual"
+    },
+    "Muted for you" : {
+      "extractionState" : "manual"
     }
   },
   "version" : "1.0"

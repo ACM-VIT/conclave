@@ -2503,6 +2503,9 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             )
             throw ConsumerGenerationRegistrationException(error, rollbackAcknowledged)
         }
+        if (response.kind == "audio") {
+            (consumer.track as? AudioTrack)?.setVolume(participantAudioGain(producerUserId))
+        }
         consumer.resume()
 
         val isScreenVideo = producerType == "screen" && response.kind == "video"
@@ -2823,6 +2826,30 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
 
     internal fun hasAudioConsumer(userIdPrefix: String): Boolean {
         return consumers.values.any { it.kind == "audio" && it.userId.startsWith(userIdPrefix) }
+    }
+
+    private val participantAudioGains = mutableMapOf<String, Double>()
+
+    private fun participantAudioGain(userId: String): Double {
+        participantAudioGains[userId]?.let { return it }
+        return participantAudioGains.entries.firstOrNull { trackKeyMatchesUser(userId, it.key) }?.value ?: 1.0
+    }
+
+    internal fun setParticipantAudioGain(userId: String, gain: Double) {
+        val clamped = if (gain.isNaN()) 1.0 else gain.coerceIn(0.0, 1.0)
+        participantAudioGains[userId] = clamped
+        for (info in consumers.values) {
+            if (info.kind == "audio" && consumerMatchesUser(info, userId)) {
+                (info.consumer.track as? AudioTrack)?.setVolume(clamped)
+            }
+        }
+    }
+
+    internal fun resetParticipantAudioGains() {
+        participantAudioGains.clear()
+        for (info in consumers.values) {
+            if (info.kind == "audio") (info.consumer.track as? AudioTrack)?.setVolume(1.0)
+        }
     }
 
     internal fun setAudioConsumersEnabled(userIdPrefix: String, enabled: Boolean) {

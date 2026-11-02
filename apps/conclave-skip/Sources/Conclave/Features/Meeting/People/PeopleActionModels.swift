@@ -148,6 +148,9 @@ struct PeopleActionTitles: Equatable {
     let reasonNotJoined: String
     let reasonPending: String
     let reasonRenameDisabled: String
+    let muteForMe: String
+    let unmuteForMe: String
+    let localVolume: String
 }
 
 enum PeopleRenamePhase: String, CaseIterable, Equatable {

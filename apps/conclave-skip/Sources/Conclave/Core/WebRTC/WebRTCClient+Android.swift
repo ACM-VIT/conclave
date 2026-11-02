@@ -104,6 +104,8 @@ final class WebRTCClient {
     func closeConsumers(userIdPrefix: String) { fatalError() }
     func applyConsumerTelemetry(_ notification: ConsumerTelemetryNotification) { fatalError() }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { fatalError() }
+    func setParticipantAudioGain(userId: String, gain: Double) { fatalError() }
+    func resetParticipantAudioGains() { fatalError() }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { fatalError() }
     func setAudioEnabled(_ enabled: Bool) async throws { fatalError() }
     func suspendLocalAudioForRecovery() { fatalError() }

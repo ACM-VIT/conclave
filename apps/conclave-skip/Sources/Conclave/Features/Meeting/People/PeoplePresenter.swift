@@ -24,6 +24,12 @@ final class PeoplePresenter {
 
     private(set) var headerActions: PeopleHeaderActions = PeopleHeaderActions.none
 
+    private(set) var localAudioRowId = ""
+    private(set) var localAudioSource = ""
+    @ObservationIgnored let participantAudio = ParticipantAudioStore()
+    @ObservationIgnored var onParticipantAudioChanged: ((String, ParticipantAudioPreference) -> Void)? = nil
+    @ObservationIgnored var onParticipantAudioReset: (() -> Void)? = nil
+
     @ObservationIgnored let rows = PersonRowStore()
     @ObservationIgnored let waiting = WaitingRowStore()
     @ObservationIgnored let shell: MeetingShellPresenter
@@ -175,6 +181,7 @@ final class PeoplePresenter {
         if presentationID == 0 || presentationID != openPresentationID { return }
         openPresentationID = 0
         openDestination = PanelDestination.none
+        if localAudioSource != PeopleActionSource.tileMenu { dismissLocalAudio() }
         coverage = PanelStageCoverage.none
         isOnHostPage = false
         if focusRequest != nil { focusRequest = nil }
@@ -217,7 +224,36 @@ final class PeoplePresenter {
         shell.panels.present(MeetingPanel.webinarQA, from: PanelInvoker.call)
     }
 
+    func resetParticipantAudio() {
+        participantAudio.reset()
+        dismissLocalAudio()
+        onParticipantAudioReset?()
+    }
+
+    func dismissLocalAudio() {
+        localAudioRowId = ""
+        localAudioSource = ""
+    }
+
+    func setParticipantVolume(rowId: String, volume: Double) {
+        guard let person = inputs.participant(rowId), PeopleActionPolicy.canAdjustLocalAudio(person) else { return }
+        let preference = participantAudio.setVolume(userId: person.userId, volume: volume)
+        onParticipantAudioChanged?(person.userId, preference)
+        rebuild(previousViewer: snapshot.viewerRole)
+    }
+
+    private func setParticipantMuted(rowId: String, muted: Bool) {
+        guard let person = inputs.participant(rowId), PeopleActionPolicy.canAdjustLocalAudio(person) else { return }
+        if !muted && participantAudio.preference(userId: person.userId).volume == 0.0 {
+            _ = participantAudio.setVolume(userId: person.userId, volume: 1.0)
+        }
+        let preference = participantAudio.setMuted(userId: person.userId, muted: muted)
+        onParticipantAudioChanged?(person.userId, preference)
+        rebuild(previousViewer: snapshot.viewerRole)
+    }
+
     func reset() {
+        resetParticipantAudio()
         ledger.interruptAll()
         clearConfirmation()
         rows.removeAll()
@@ -278,6 +314,13 @@ final class PeoplePresenter {
         guard let available = item, available.isEnabled else { return ControlTapResult.ignored }
         record("perform:" + action.rawValue)
         switch action {
+        case .muteForMe, .unmuteForMe:
+            setParticipantMuted(rowId: model.serverId, muted: action == PersonActionID.muteForMe)
+            return ControlTapResult.dispatched
+        case .localVolume:
+            localAudioRowId = rowId
+            localAudioSource = source
+            return ControlTapResult.dispatched
         case .pin:
             stage.togglePin(userId: model.serverId)
             return ControlTapResult.dispatched
@@ -876,9 +919,11 @@ final class PeoplePresenter {
             if person.isLocal && pending.isEmpty && ledger.isPending(renameKey) {
                 pending = PersonActionID.changeName.rawValue
             }
-            let actions = PeopleActionPolicy.actions(person, role: role, context: context, pendingAction: pending)
-            let model = PeopleRowPolicy.rowModel(person, role: role, handOrder: handPosition[person.userId] ?? 0,
+            let localAudio = participantAudio.preference(userId: person.userId)
+            let actions = PeopleActionPolicy.actions(person, role: role, context: context, pendingAction: pending, localAudio: localAudio)
+            var model = PeopleRowPolicy.rowModel(person, role: role, handOrder: handPosition[person.userId] ?? 0,
                                                  actions: actions, pendingAction: pending)
+            model.localAudio = localAudio
             if rows.write(model) { rowWriteCount += 1 }
             rowKeys.append(model.id)
             meetingKeys.append(model.id)
@@ -925,6 +970,7 @@ final class PeoplePresenter {
         }
 
         validateConfirmation(rowKeys: rowKeys, blockedReason: blocked.rawValue)
+        if !localAudioRowId.isEmpty && !rowKeys.contains(localAudioRowId) { dismissLocalAudio() }
         rows.prune(keeping: rowKeys)
         host.peopleChanged(isHostViewer: viewer.isHostRole, blockedReason: blocked.rawValue, hasActiveShare: hasActiveShare,
                            anyHandRaised: !ordered.raisedHands.isEmpty)

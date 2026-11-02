@@ -51,6 +51,7 @@ internal fun personRowTexts(context: Context, model: PersonRowModel, showsQueue:
         else -> {}
     }
     if (model.messagesHidden) parts.add(conclaveStringOf(context, "ppl_detail_hidden"))
+    if (model.localAudio.isSilent) parts.add(conclaveStringOf(context, "ppl_muted_for_you"))
     var sub: String? = null
     for (part in parts) {
         val current = sub
@@ -67,6 +68,7 @@ internal fun personRowTexts(context: Context, model: PersonRowModel, showsQueue:
     if (model.isPresenting) states.add(conclaveStringOf(context, "ds_state_presenting"))
     if (model.isCameraOff) states.add(conclaveStringOf(context, "ds_state_camera_off"))
     if (model.isMuted) states.add(conclaveStringOf(context, "ds_state_muted"))
+    if (model.localAudio.isSilent) states.add(conclaveStringOf(context, "ppl_muted_for_you"))
     if (model.isReconnecting) states.add(conclaveStringOf(context, "ds_state_reconnecting"))
     if (model.pendingAction.isNotEmpty()) states.add(conclaveStringOf(context, "ds_in_progress"))
     return PersonRowTexts(name = name, sub = sub, states = states.joinToString(", "),

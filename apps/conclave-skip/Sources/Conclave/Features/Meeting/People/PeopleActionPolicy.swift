@@ -5,8 +5,9 @@ enum PeopleActionPolicy {
 
     static let selfTarget = "self"
 
+    @MainActor
     static func actions(_ person: PeopleParticipantInput, role: PersonRole, context: PeopleActionContext,
-                        pendingAction: String) -> [PersonActionModel] {
+                        pendingAction: String, localAudio: ParticipantAudioPreference = ParticipantAudioPreference()) -> [PersonActionModel] {
         let viewer = context.viewerRole
         let isSelf = person.isLocal
         let blocked = context.blockedReason
@@ -41,6 +42,12 @@ enum PeopleActionPolicy {
         }
         if isSelf && person.isHandRaised {
             group0.append(item(PersonActionID.lowerOwnHand, group: 0, reason: isBlocked ? blocked : PeopleActionReason.none))
+        }
+
+        if canAdjustLocalAudio(person) {
+            group0.append(item(localAudio.isSilent ? PersonActionID.unmuteForMe : PersonActionID.muteForMe,
+                               group: 0, reason: PeopleActionReason.none))
+            group0.append(item(PersonActionID.localVolume, group: 0, reason: PeopleActionReason.none))
         }
 
         var group1: [PersonActionModel] = []
@@ -90,6 +97,12 @@ enum PeopleActionPolicy {
         result.append(contentsOf: group2)
         result.append(contentsOf: group3)
         return result
+    }
+
+    @MainActor
+    static func canAdjustLocalAudio(_ person: PeopleParticipantInput) -> Bool {
+        !person.isLocal && !person.userId.isEmpty && !person.isLeaving && !person.isWebinarAttendee
+            && !MeetingState.isSyntheticRosterUserId(person.userId)
     }
 
     private static func item(_ action: PersonActionID, group: Int, reason: String, isDestructive: Bool = false,
@@ -175,6 +188,9 @@ enum PeopleActionPolicy {
 
     static func title(_ action: PersonActionID, titles: PeopleActionTitles) -> String {
         switch action {
+        case .muteForMe: return titles.muteForMe
+        case .unmuteForMe: return titles.unmuteForMe
+        case .localVolume: return titles.localVolume
         case .pin: return titles.pin
         case .unpin: return titles.unpin
         case .sendPrivateMessage: return titles.sendPrivateMessage
@@ -207,6 +223,8 @@ enum PeopleActionPolicy {
 
     static func concept(_ action: PersonActionID) -> String {
         switch action {
+        case .muteForMe: return "speaker_off"
+        case .unmuteForMe, .localVolume: return "speaker"
         case .pin: return "pin"
         case .unpin: return "unpin"
         case .sendPrivateMessage: return "private_message"
@@ -252,7 +270,7 @@ enum PeopleActionPolicy {
         case .deny: return PeopleCommandKind.deny
         case .bringOnStage: return PeopleCommandKind.bringOnStage
         case .cancelStageInvite: return PeopleCommandKind.cancelStageInvite
-        case .pin, .unpin, .sendPrivateMessage, .hideMessages, .showMessages, .changeName, .lowerOwnHand:
+        case .muteForMe, .unmuteForMe, .localVolume, .pin, .unpin, .sendPrivateMessage, .hideMessages, .showMessages, .changeName, .lowerOwnHand:
             return nil
         }
     }

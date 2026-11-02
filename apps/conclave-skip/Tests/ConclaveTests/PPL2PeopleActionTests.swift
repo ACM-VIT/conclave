@@ -85,7 +85,7 @@ struct PPL2PeopleActionTests {
         people.apply(hostRoster(isAdmin: false, hostUserId: me, local: priya))
         let onHost = people.rows.entry(for: me).model.actions
         #expect(PeopleActionPolicy.groupOrder(onHost) == [0])
-        #expect(onHost.map { $0.action } == [.pin, .sendPrivateMessage, .hideMessages])
+        #expect(onHost.map { $0.action } == [.pin, .sendPrivateMessage, .hideMessages, .muteForMe, .localVolume])
     }
 
     @Test func recoveringDisablesHostItemsWithTheReason() {
@@ -110,7 +110,8 @@ struct PPL2PeopleActionTests {
                                         turnOffCamera: "Cam", stopScreenShare: "Share", stopScreenAudio: "Audio",
                                         makeCoHost: "Co", makeHost: "Host", moveToAudience: "Aud", remove: "Remove",
                                         reasonReconnecting: "r", reasonOffline: "o", reasonNotJoined: "n", reasonPending: "p",
-                                        reasonRenameDisabled: "d")
+                                        reasonRenameDisabled: "d", muteForMe: "Mute for me", unmuteForMe: "Unmute for me",
+                                        localVolume: "Local volume")
         let sections = PeopleActionPolicy.menuSections(PeopleActionPolicy.tileActions(actions), titles: titles)
 
         let context = TileMenuContext(slotId: "p:" + priya, userId: priya, role: StageSlotRole.grid, kind: StageKind.grid,

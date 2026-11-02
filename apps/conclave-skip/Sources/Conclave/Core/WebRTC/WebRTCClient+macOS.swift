@@ -167,6 +167,8 @@ final class WebRTCClient {
     func consumeIntentionalLocalVideoProducerClose(producerId: String) -> Bool { false }
     func consumeIntentionalLocalAudioProducerClose(producerId: String) -> Bool { false }
     func hasAudioConsumer(userIdPrefix: String) -> Bool { false }
+    func setParticipantAudioGain(userId: String, gain: Double) { }
+    func resetParticipantAudioGains() { }
     func setAudioConsumersEnabled(userIdPrefix: String, enabled: Bool) { }
     func setAudioEnabled(_ enabled: Bool) async throws {
         let muteIntent = testLocalAudioMuteIntent

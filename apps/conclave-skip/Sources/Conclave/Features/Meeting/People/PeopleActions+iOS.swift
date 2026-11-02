@@ -23,7 +23,10 @@ enum PeopleActionText {
             reasonOffline: ConclaveStrings.text("Unavailable while offline"),
             reasonNotJoined: ConclaveStrings.text("Unavailable while reconnecting"),
             reasonPending: ConclaveStrings.text("In Progress"),
-            reasonRenameDisabled: ConclaveStrings.text("Name changes are turned off for this meeting.")
+            reasonRenameDisabled: ConclaveStrings.text("Name changes are turned off for this meeting."),
+            muteForMe: ConclaveStrings.text("Mute for me"),
+            unmuteForMe: ConclaveStrings.text("Unmute for me"),
+            localVolume: ConclaveStrings.text("Local volume")
         )
     }
 
@@ -207,6 +210,58 @@ enum PeopleActionText {
             return ConclaveStrings.format("People Want To Join %lld", Int(announcement.name) ?? 0)
         default: return nil
         }
+    }
+}
+
+struct PeopleLocalAudioSheet: ViewModifier {
+    let people: PeoplePresenter
+    let stage: Bool
+
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: Binding(get: {
+            !people.localAudioRowId.isEmpty && (people.localAudioSource == PeopleActionSource.tileMenu) == stage
+        }, set: { shown in
+            if !shown { people.dismissLocalAudio() }
+        })) {
+            PeopleLocalAudioControls(people: people, entry: people.rows.entry(for: people.localAudioRowId))
+                .presentationDetents([.height(280), .medium])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Color(uiColor: .systemGroupedBackground))
+        }
+    }
+}
+
+private struct PeopleLocalAudioControls: View {
+    let people: PeoplePresenter
+    let entry: PersonRowEntry
+
+    var body: some View {
+        let model = entry.model
+        VStack(alignment: .leading, spacing: 20) {
+            Text(PeopleText.displayName(model))
+                .font(.headline)
+            HStack {
+                Text(ConclaveStrings.text("Local volume"))
+                Spacer()
+                Text(model.localAudio.volume, format: .percent.precision(.fractionLength(0)))
+                    .monospacedDigit()
+            }
+            Slider(value: Binding(get: { entry.model.localAudio.volume }, set: { value in
+                people.setParticipantVolume(rowId: model.serverId, volume: value)
+            }), in: 0.0...1.0, step: 0.05)
+                .tint(HostingTheme.coralFill)
+                .accessibilityLabel(ConclaveStrings.text("Local volume"))
+                .accessibilityValue(Text(model.localAudio.volume, format: .percent.precision(.fractionLength(0))))
+                .accessibilityIdentifier("people.localAudio.volume")
+            Button(model.localAudio.isSilent ? ConclaveStrings.text("Unmute for me") : ConclaveStrings.text("Mute for me")) {
+                people.perform(model.localAudio.isSilent ? PersonActionID.unmuteForMe : PersonActionID.muteForMe,
+                               rowId: model.id, source: people.localAudioSource)
+            }
+            .buttonStyle(.bordered)
+            .tint(HostingTheme.coralFill)
+            .accessibilityIdentifier("people.localAudio.mute")
+        }
+        .padding(24)
     }
 }
 
@@ -425,6 +480,7 @@ private struct PeopleStageConfirmationHost: ViewModifier {
     func body(content: Content) -> some View {
         if let people {
             content.modifier(PeopleStageConfirmationDialog(people: people))
+                .modifier(PeopleLocalAudioSheet(people: people, stage: true))
         } else {
             content
         }

@@ -1312,6 +1312,12 @@ final class MeetingViewModel {
         bindStageInputs()
         bindPeopleInputs()
 
+        people.onParticipantAudioChanged = { [weak self] userId, preference in
+            self?.webRTCClient.setParticipantAudioGain(userId: userId, gain: preference.gain)
+        }
+        people.onParticipantAudioReset = { [weak self] in
+            self?.webRTCClient.resetParticipantAudioGains()
+        }
         people.onCommand = { [weak self] command, ticket in
             self?.performPeopleCommand(command, ticket)
         }
@@ -10393,6 +10399,7 @@ final class MeetingViewModel {
         webRTCJoinAttemptId = nil
         guard meetingLifecycleGeneration == cleanupGeneration else { return }
 
+        people.resetParticipantAudio()
         state.participants.removeAll()
         state.displayNames.removeAll()
         state.pendingUsers.removeAll()
