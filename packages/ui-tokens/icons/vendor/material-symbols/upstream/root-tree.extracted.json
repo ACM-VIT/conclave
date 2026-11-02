@@ -1,0 +1,70 @@
+{
+  "path": "/",
+  "currentOid": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+  "root_items": [
+    {
+      "name": ".github/workflows",
+      "path": ".github/workflows",
+      "contentType": "directory",
+      "hasSimplifiedPath": true
+    },
+    {
+      "name": "android",
+      "path": "android",
+      "contentType": "directory"
+    },
+    {
+      "name": "font",
+      "path": "font",
+      "contentType": "directory"
+    },
+    {
+      "name": "ios",
+      "path": "ios",
+      "contentType": "directory"
+    },
+    {
+      "name": "png",
+      "path": "png",
+      "contentType": "directory"
+    },
+    {
+      "name": "src",
+      "path": "src",
+      "contentType": "directory"
+    },
+    {
+      "name": "symbols",
+      "path": "symbols",
+      "contentType": "directory"
+    },
+    {
+      "name": "update",
+      "path": "update",
+      "contentType": "directory"
+    },
+    {
+      "name": "variablefont",
+      "path": "variablefont",
+      "contentType": "directory"
+    },
+    {
+      "name": ".gitignore",
+      "path": ".gitignore",
+      "contentType": "file"
+    },
+    {
+      "name": "LICENSE",
+      "path": "LICENSE",
+      "contentType": "file"
+    },
+    {
+      "name": "README.md",
+      "path": "README.md",
+      "contentType": "file"
+    }
+  ],
+  "total_count": 12,
+  "notice_candidates": [],
+  "scope": "Pinned repository root listing and retained files only; no recursive NOTICE-absence claim."
+}

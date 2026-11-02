@@ -1,0 +1,140 @@
+#if DEBUG && os(iOS) && !SKIP
+import SwiftUI
+
+enum StageFixtureLaunch {
+    static func state(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> StageFixtureState? {
+        guard let raw = environment["CONCLAVE_STAGE_FIXTURE"] else { return nil }
+        return StageFixtureScript.state(named: raw)
+    }
+
+    static func pattern(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> RendererProbePattern {
+        StageFixtureScript.pattern(named: environment["CONCLAVE_STAGE_FIXTURE_PATTERN"])
+    }
+
+    static func forcesScreenReader(environment: [String: String] = NativeRuntimeConfig.debugLaunchEnvironment()) -> Bool {
+        environment["CONCLAVE_STAGE_FORCE_SCREEN_READER"] == "1"
+    }
+}
+
+struct StageFixtureView: View {
+    @State private var session: StageFixtureSession
+
+    init(state: StageFixtureState, pattern: RendererProbePattern = StageFixtureLaunch.pattern(),
+         forceScreenReader: Bool = StageFixtureLaunch.forcesScreenReader()) {
+        _session = State(initialValue: StageFixtureSession(state: state, pattern: pattern, forceScreenReader: forceScreenReader))
+    }
+
+    var body: some View {
+        CallRoot(shell: session.shell, stage: session.stage,
+                 renderers: StageRendererProvider.probes(ledger: session.renderers, pattern: session.pattern),
+                 forceScreenReader: session.forceScreenReader, activitySession: session.activity,
+                 webinarLinkProvider: { await session.ensureWebinarLink() })
+            .environment(\.stageRenderTargetResize, { session.counters.recordRenderTargetResize() })
+            .overlay(alignment: .leading) {
+                StageFixtureControls(session: session)
+            }
+            .task {
+
+                if let chatState = ChatFixtureLaunch.state() {
+                    _ = ChatFixtureDriver.installOnStage(state: chatState, shell: session.shell)
+                }
+
+                if let transcriptState = TranscriptFixtureDriver.fixtureState(named: NativeRuntimeConfig.debugLaunchValue(forKey: "CONCLAVE_TRANSCRIPT_FIXTURE")) {
+                    TranscriptFixtureDriver.installOnStage(state: transcriptState, shell: session.shell)
+                }
+            }
+    }
+}
+
+private struct StageFixtureControls: View {
+    let session: StageFixtureSession
+    @State private var expanded = true
+    @State private var refresh = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            fixtureButton("Fixture", identifier: "stage.fixture.toggle") { expanded.toggle() }
+            if expanded {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        fixtureButton("Magic Tap", identifier: "stage.fixture.magicTap") { session.magicTap(); refresh += 1 }
+                        fixtureButton("Speakers", identifier: "stage.fixture.speakers") { session.runSpeakerScript(); refresh += 1 }
+                        fixtureButton("Speak Hidden", identifier: "stage.fixture.speakHidden") { session.speakHiddenParticipant(); refresh += 1 }
+                        fixtureButton("Speak Self", identifier: "stage.fixture.speakSelf") { session.speakSelf(); refresh += 1 }
+                        fixtureButton("Next Role", identifier: "stage.fixture.rolesNext") { session.nextRolesSweepStep(); refresh += 1 }
+                        fixtureButton("Reactions", identifier: "stage.fixture.reactions") { session.replayReactions(); refresh += 1 }
+                        fixtureButton("Join Burst", identifier: "stage.fixture.joinBurst") { session.postJoinBurst(); refresh += 1 }
+                        fixtureButton("Dismiss Toast", identifier: "stage.fixture.dismissToast") { session.dismissCurrentToast(); refresh += 1 }
+                        fixtureButton("Previews 1 Sender", identifier: "stage.fixture.previews.sameSender3") { session.postChatPreviewScript(named: "sameSender3"); refresh += 1 }
+                        fixtureButton("Previews 3 Senders", identifier: "stage.fixture.previews.mixed3") { session.postChatPreviewScript(named: "mixed3"); refresh += 1 }
+                        fixtureButton("Suspend Toasts", identifier: "stage.fixture.suspendToasts") { session.toggleToastSuspension(); refresh += 1 }
+                        fixtureButton("Next Caption", identifier: "stage.fixture.nextCaption") { session.nextCaption(); refresh += 1 }
+                        fixtureButton("Reconnect", identifier: "stage.fixture.reconnect") { session.toggleReconnecting(); refresh += 1 }
+                        fixtureButton("Toggle Lock", identifier: "stage.fixture.lock") { session.toggleRoomLock(); refresh += 1 }
+                        fixtureButton("Refresh", identifier: "stage.fixture.refresh") { refresh += 1 }
+                        StageFixtureReadouts(session: session, refresh: refresh)
+                    }
+                }
+                .frame(maxHeight: 360)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: 220, alignment: .leading)
+        .background(HostingTheme.inCallLabelScrim, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding([.leading, .vertical], 8)
+        .environment(\.colorScheme, .dark)
+    }
+
+    private func fixtureButton(_ title: String, identifier: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(verbatim: title)
+                .font(.caption.weight(.semibold))
+                .frame(minHeight: 28)
+        }
+        .buttonStyle(.borderless)
+        .tint(HostingTheme.inCallCoralText)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+private struct StageFixtureReadouts: View {
+    let session: StageFixtureSession
+    let refresh: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            readout(session.renderersReadout(), identifier: "stage.renderers")
+            readout(session.layoutReadout(), identifier: "stage.layout")
+            readout(session.countersReadout(), identifier: "stage.counters")
+            readout(session.announcementsReadout(), identifier: "stage.announcements")
+            readout(session.noticesReadout(), identifier: "stage.notices")
+            readout(session.chatPreviewReadout(), identifier: "chat.preview")
+            readout(session.settingsCallsReadout(), identifier: "wp3.calls")
+            readout(session.speakerTestReadout(), identifier: "speakerTest.count")
+            readout(session.voicePreviewReadout(), identifier: "voicePreview.count")
+
+            readout(session.layoutCallsReadout(), identifier: "layout.calls")
+            readout(session.effectsCallsReadout(), identifier: "wp10.calls")
+
+            readout(session.statsPollsReadout(), identifier: "stats.polls")
+            readout(session.publishCeilingReadout(), identifier: "wp3.ceiling")
+            readout(session.captionsReadout(), identifier: "stage.captions.readout")
+            readout(session.activityReadout(), identifier: "game.emits")
+            readout(session.panelReadout(), identifier: "panel.current")
+            readout(session.meetingInfoReadout(), identifier: "stage.meetingInfo")
+            readout(session.attendeeReadout(), identifier: "stage.attendee.readout")
+            readout(session.chromeReadout(), identifier: "chrome.transient")
+            readout(session.recomposeReadout(), identifier: "stage.recompose")
+            readout("refresh " + String(refresh), identifier: "stage.fixture.refreshCount")
+        }
+    }
+
+    private func readout(_ text: String, identifier: String) -> some View {
+        Text(verbatim: text)
+            .font(.caption2.monospaced())
+            .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
+            .lineLimit(3)
+            .accessibilityIdentifier(identifier)
+    }
+}
+#endif

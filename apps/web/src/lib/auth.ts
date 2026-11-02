@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { revokeAppleAuthorizationForDeletion } from "@/lib/apple-token-revocation";
 import { isLocalDevAuthRuntimeEnabled } from "@/lib/dev-auth";
 import {
   getAuthBaseUrl,
@@ -95,6 +96,20 @@ export const auth = betterAuth({
   user: {
     deleteUser: {
       enabled: true,
+      beforeDelete: async (_user, request): Promise<void> => {
+        await revokeAppleAuthorizationForDeletion({
+          clientId: process.env.APPLE_CLIENT_ID,
+          clientSecret: process.env.APPLE_CLIENT_SECRET,
+          loadRefreshToken: async () => {
+            if (!request) return null;
+            const tokens = await auth.api.refreshToken({
+              body: { useAccountCookie: true },
+              headers: request.headers,
+            });
+            return tokens.providerId === "apple" ? tokens.refreshToken ?? null : null;
+          },
+        });
+      },
     },
   },
   emailAndPassword: {

@@ -13,24 +13,24 @@ enum HapticType {
 @MainActor
 final class HapticManager {
     static let shared = HapticManager()
-    
+
     private let notificationGenerator = UINotificationFeedbackGenerator()
     private let lightImpactGenerator = UIImpactFeedbackGenerator(style: .light)
     private let mediumImpactGenerator = UIImpactFeedbackGenerator(style: .medium)
     private let heavyImpactGenerator = UIImpactFeedbackGenerator(style: .heavy)
-    
+
     private init() {
         notificationGenerator.prepare()
         lightImpactGenerator.prepare()
         mediumImpactGenerator.prepare()
         heavyImpactGenerator.prepare()
     }
-    
+
     func notification(type: UINotificationFeedbackGenerator.FeedbackType) {
         notificationGenerator.notificationOccurred(type)
         notificationGenerator.prepare()
     }
-    
+
     func impact(style: UIImpactFeedbackGenerator.FeedbackStyle) {
         switch style {
         case .light:
@@ -47,7 +47,7 @@ final class HapticManager {
             lightImpactGenerator.prepare()
         }
     }
-    
+
     func trigger(_ type: HapticType) {
         switch type {
         case .success:

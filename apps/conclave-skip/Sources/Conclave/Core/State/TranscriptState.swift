@@ -1,8 +1,6 @@
 import Foundation
 import Observation
 
-/// Lifecycle of the transcript worker WebSocket (distinct from the transcription
-/// session status, which is server-driven).
 enum TranscriptConnectionStatus: String {
     case idle
     case connecting
@@ -151,8 +149,6 @@ struct TranscriptQAMessageModel: Identifiable, Equatable {
     let error: String?
 }
 
-/// A single transcript line. `itemId` is the stable identity used to merge
-/// streaming deltas and finalized segments, matching the web client.
 struct TranscriptSegmentModel: Identifiable, Equatable {
     let itemId: String
     let sequence: Int
@@ -165,13 +161,11 @@ struct TranscriptSegmentModel: Identifiable, Equatable {
     var id: String { itemId }
 }
 
-/// A run of consecutive captions from the same speaker, rendered as one block.
 struct TranscriptGroup: Identifiable, Equatable {
     let id: String
     let speakerUserId: String
     let speakerDisplayName: String
-    /// Wall-clock of the group's first caption - the header timestamp,
-    /// matching the web panel's per-group time.
+
     let firstStartMs: Double
     private(set) var text: String
     private(set) var isFinal: Bool
@@ -231,8 +225,6 @@ enum TranscriptPresentationPolicy {
         return "\(segments.count)-\(last.itemId)-\(last.text.count)"
     }
 
-    /// A lull long enough that a quiet time marker helps you scan back later
-    /// (mirrors the web's TRANSCRIPT_PAUSE_MARKER_MS).
     static let pauseMarkerMs: Double = 180_000
 
     static func showsPauseMarker(previous: TranscriptGroup?, next: TranscriptGroup) -> Bool {
@@ -240,8 +232,6 @@ enum TranscriptPresentationPolicy {
         return next.firstStartMs - previous.lastStartMs >= pauseMarkerMs
     }
 
-    /// Ids of groups that follow a long lull - cached alongside the groups so
-    /// the panel's ForEach stays a plain pass over presentation state.
     static func pauseMarkerGroupIds(for groups: [TranscriptGroup]) -> Set<String> {
         var ids = Set<String>()
         var previous: TranscriptGroup?
@@ -254,22 +244,16 @@ enum TranscriptPresentationPolicy {
         return ids
     }
 
-    /// Shared formatter: allocating one per timestamp measurably hurts the
-    /// live-update render path.
     private static let clockFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
         return formatter
     }()
 
-    /// Clock-style timestamp for group headers and exports, matching the web's
-    /// `formatTranscriptTimestamp` (hour:minute:second).
     static func clockTimestamp(fromMs ms: Double) -> String {
         clockFormatter.string(from: Date(timeIntervalSince1970: ms / 1000.0))
     }
 
-    /// Markdown export of everything currently on screen, matching the web's
-    /// `exportTranscriptMarkdown` line shape.
     static func exportMarkdown(
         roomId: String,
         segments: [TranscriptSegmentModel],
@@ -318,17 +302,51 @@ enum TranscriptPresentationPolicy {
     }
 }
 
-/// Observable transcript view state. Holds finalized segments plus the in-flight
-/// partials map so the panel can render live captions as they stream in.
+enum TranscriptPanelChange: String, CaseIterable, Equatable {
+    case session, rows, minutes, ask
+}
+
 @MainActor
 @Observable
 final class TranscriptState {
-    var connectionStatus: TranscriptConnectionStatus = .idle
-    var sessionStatus: String = "idle"           // idle/starting/live/paused/stopping/error/takeover_needed
+    var connectionStatus: TranscriptConnectionStatus = .idle {
+        didSet {
+            if oldValue != connectionStatus {
+                onStageInputChanged?()
+                onPanelChanged?(TranscriptPanelChange.session)
+            }
+        }
+    }
+    var sessionStatus: String = "idle" {
+        didSet {
+            guard oldValue != sessionStatus else { return }
+            if TranscriptPhasePolicy.isRunning(sessionStatus) { sawSessionThisCall = true }
+            onStageInputChanged?()
+            onPanelChanged?(TranscriptPanelChange.session)
+        }
+    }
     var errorMessage: String?
-    var controllerName: String?
-    var sessionTranscriptModel = TranscriptConfiguration.defaultTranscriptModel
-    var sessionQaModel = TranscriptConfiguration.defaultAssistantModel
+    var controllerName: String? {
+        didSet {
+            if oldValue != controllerName { onPanelChanged?(TranscriptPanelChange.session) }
+        }
+    }
+
+    var controllerUserId: String = "" {
+        didSet {
+            if oldValue != controllerUserId { onPanelChanged?(TranscriptPanelChange.session) }
+        }
+    }
+    var sessionTranscriptModel = TranscriptConfiguration.defaultTranscriptModel {
+        didSet {
+            if oldValue != sessionTranscriptModel { onPanelChanged?(TranscriptPanelChange.session) }
+        }
+    }
+    var sessionQaModel = TranscriptConfiguration.defaultAssistantModel {
+        didSet {
+            if oldValue != sessionQaModel { onPanelChanged?(TranscriptPanelChange.session) }
+        }
+    }
     var sessionTransportMode = "sfu"
     private(set) var capabilitiesKnown = false
     private(set) var canStart: Bool = false
@@ -341,13 +359,112 @@ final class TranscriptState {
 
     private(set) var finals: [TranscriptSegmentModel] = []
     private(set) var partials: [String: TranscriptSegmentModel] = [:]
-    private(set) var orderedSegments: [TranscriptSegmentModel] = []
+
+    let feedEngine = TranscriptFeedEngine()
+
+    private(set) var segmentsRevision = 0
+
+    private(set) var hasContent = false
+
+    private(set) var unsentQuestionIds: Set<String> = []
+
+    @ObservationIgnored private(set) var legacyPresentationEnabled = true
+
+    @ObservationIgnored private(set) var legacyRebuildCount = 0
+
+    @ObservationIgnored var onPanelChanged: ((TranscriptPanelChange) -> Void)? = nil
+
+    var orderedSegments: [TranscriptSegmentModel] {
+        segmentsRevision >= 0 ? feedEngine.segments : []
+    }
+
     private(set) var groupedSegments: [TranscriptGroup] = []
     private(set) var pauseMarkerIds: Set<String> = []
     private(set) var scrollTrigger: String = "0"
     private(set) var minutes = TranscriptMinutesSnapshotModel.empty()
     private(set) var minutesStatus: TranscriptMinutesStatus = .idle
     private(set) var qaMessages: [TranscriptQAMessageModel] = []
+
+    private(set) var issue: TranscriptIssue = .none
+    private(set) var issueServerText: String = ""
+
+    private(set) var relay: RelayAvailability = .unknown
+
+    private(set) var failedAttempts: Int = 0
+
+    private(set) var hasSessionSnapshot = false
+
+    private(set) var sessionStartedAtMillis: Double = 0.0
+
+    private(set) var sawSessionThisCall = false
+
+    @ObservationIgnored var onStageInputChanged: (() -> Void)? = nil
+
+    @ObservationIgnored var onCaptionChanged: ((CaptionLine) -> Void)? = nil
+    @ObservationIgnored private var lastCaption = CaptionLine.empty
+    @ObservationIgnored private var newestFinal: TranscriptSegmentModel? = nil
+
+    var phase: LiveNotesPhase {
+        TranscriptPhasePolicy.phase(sessionStatus: sessionStatus, hasSnapshot: hasSessionSnapshot, failedAttempts: failedAttempts,
+                                    sawSession: sawSessionThisCall)
+    }
+
+    var link: TranscriptLink {
+        TranscriptPhasePolicy.link(connectionStatus: connectionStatus, failedAttempts: failedAttempts)
+    }
+
+    var liveNotes: LiveNotesState {
+        LiveNotesPolicy.stageState(phase: phase, link: link, issue: issue)
+    }
+
+    func setIssue(_ next: TranscriptIssue, serverText: String = "") {
+        let text = next == .server ? serverText : ""
+        guard issue != next || issueServerText != text else { return }
+        issue = next
+        issueServerText = text
+        onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
+    }
+
+    func setRelay(_ next: RelayAvailability) {
+        guard relay != next else { return }
+        relay = next
+        onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
+    }
+
+    func recordFailedAttempts(_ count: Int) {
+        guard failedAttempts != count else { return }
+        failedAttempts = count
+        onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
+    }
+
+    func markSessionSnapshot() {
+        guard !hasSessionSnapshot else { return }
+        hasSessionSnapshot = true
+        onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
+    }
+
+    func applySessionStartedAt(_ millis: Double) {
+        guard sessionStartedAtMillis != millis else { return }
+        sessionStartedAtMillis = millis
+        onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
+    }
+
+    func setLegacyPresentation(_ enabled: Bool) {
+        if legacyPresentationEnabled == enabled { return }
+        legacyPresentationEnabled = enabled
+        if enabled { rebuildPresentation() }
+    }
+
+    func markQuestionNotSent(id: String) {
+        if unsentQuestionIds.contains(id) { return }
+        unsentQuestionIds.insert(id)
+        onPanelChanged?(TranscriptPanelChange.ask)
+    }
 
     var isLive: Bool { sessionStatus == "live" }
     var isBusy: Bool { sessionStatus == "starting" || sessionStatus == "stopping" }
@@ -374,22 +491,27 @@ final class TranscriptState {
         if canTakeover != takeover { canTakeover = takeover }
         if canStop != stop { canStop = stop }
         if canAsk != ask { canAsk = ask }
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func applyProviderKeyAvailability(openAI: Bool, sarvam: Bool) {
         if !providerKeyAvailabilityKnown { providerKeyAvailabilityKnown = true }
         if globalOpenAIKeyAvailable != openAI { globalOpenAIKeyAvailable = openAI }
         if globalSarvamKeyAvailable != sarvam { globalSarvamKeyAvailable = sarvam }
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func applyMinutes(_ snapshot: TranscriptMinutesSnapshotModel) {
         guard minutes != snapshot else { return }
         minutes = snapshot
+        updateHasContent()
+        onPanelChanged?(TranscriptPanelChange.minutes)
     }
 
     func applyMinutesStatus(_ status: TranscriptMinutesStatus) {
         guard minutesStatus != status else { return }
         minutesStatus = status
+        onPanelChanged?(TranscriptPanelChange.session)
     }
 
     func beginQuestion(id: String, question: String, timestamp: Double) {
@@ -412,6 +534,7 @@ final class TranscriptState {
             updatedAt: timestamp,
             error: nil
         ))
+        onPanelChanged?(TranscriptPanelChange.ask)
     }
 
     func applyQuestionUpdate(
@@ -439,20 +562,28 @@ final class TranscriptState {
         )
         guard current != next else { return }
         qaMessages[index] = next
+        onPanelChanged?(TranscriptPanelChange.ask)
     }
 
     func applyPartial(_ segment: TranscriptSegmentModel) {
         if partials[segment.itemId] == segment { return }
         partials[segment.itemId] = segment
+        feedEngine.upsert(segment)
         rebuildPresentation()
+        publishCaption()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func applyFinal(_ segment: TranscriptSegmentModel) {
         let removedPartial = partials.removeValue(forKey: segment.itemId) != nil
         var changedFinal = false
-        if let index = finals.firstIndex(where: { $0.itemId == segment.itemId }) {
-            if finals[index] != segment {
-                finals[index] = segment
+
+        let previous = feedEngine.segment(itemId: segment.itemId)
+        if let known = previous, known.isFinal {
+            if known != segment {
+                if let index = finals.firstIndex(where: { $0.itemId == segment.itemId }) {
+                    finals[index] = segment
+                }
                 changedFinal = true
             }
         } else {
@@ -460,13 +591,24 @@ final class TranscriptState {
             changedFinal = true
         }
         guard removedPartial || changedFinal else { return }
+        if let current = newestFinal {
+            if segment.sequence >= current.sequence { newestFinal = segment }
+        } else {
+            newestFinal = segment
+        }
+        feedEngine.upsert(segment)
         rebuildPresentation()
+        publishCaption()
+        updateHasContent()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func resetPartials() {
         guard !partials.isEmpty else { return }
         partials = [:]
+        feedEngine.removePartials()
         rebuildPresentation()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func replaceSnapshot(finals: [TranscriptSegmentModel], partials: [TranscriptSegmentModel]) {
@@ -476,14 +618,37 @@ final class TranscriptState {
             map[segment.itemId] = segment
         }
         self.partials = map
+
+        var newest: TranscriptSegmentModel? = nil
+        for segment in finals {
+            if let current = newest {
+                if segment.sequence >= current.sequence { newest = segment }
+            } else {
+                newest = segment
+            }
+        }
+        newestFinal = newest
+
+        var all: [TranscriptSegmentModel] = partials
+        for segment in finals {
+            all.append(segment)
+        }
+        feedEngine.replaceAll(all)
         rebuildPresentation()
+        updateHasContent()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func clearSegments() {
-        guard !finals.isEmpty || !partials.isEmpty || !orderedSegments.isEmpty || !groupedSegments.isEmpty else { return }
+        newestFinal = nil
+        lastCaption = CaptionLine.empty
+        guard !finals.isEmpty || !partials.isEmpty || !feedEngine.isEmpty || !groupedSegments.isEmpty else { return }
         finals = []
         partials = [:]
+        feedEngine.removeAll()
         rebuildPresentation()
+        updateHasContent()
+        onPanelChanged?(TranscriptPanelChange.rows)
     }
 
     func resetAll() {
@@ -506,16 +671,55 @@ final class TranscriptState {
         minutes = TranscriptMinutesSnapshotModel.empty()
         minutesStatus = .idle
         qaMessages = []
+        issue = .none
+        issueServerText = ""
+        relay = .unknown
+        failedAttempts = 0
+        hasSessionSnapshot = false
+        sessionStartedAtMillis = 0.0
+        sawSessionThisCall = false
+        controllerUserId = ""
+        unsentQuestionIds = []
+        updateHasContent()
+        onStageInputChanged?()
+        onPanelChanged?(TranscriptPanelChange.session)
+        onPanelChanged?(TranscriptPanelChange.minutes)
+        onPanelChanged?(TranscriptPanelChange.ask)
+    }
+
+    private func publishCaption() {
+        guard let listener = onCaptionChanged else { return }
+        var open: [TranscriptSegmentModel] = []
+        for segment in partials.values {
+            open.append(segment)
+        }
+        guard let newest = CaptionLinePolicy.newest(partials: open, lastFinal: newestFinal) else { return }
+        let line = CaptionLinePolicy.line(from: newest, atMillis: Date().timeIntervalSince1970 * 1000.0)
+        if !CaptionLinePolicy.changesVisibleText(lastCaption, line) { return }
+        lastCaption = line
+        listener(line)
     }
 
     private func rebuildPresentation() {
-        let nextOrderedSegments = TranscriptPresentationPolicy.orderedSegments(
-            finals: finals,
-            partials: partials
-        )
-        orderedSegments = nextOrderedSegments
+        segmentsRevision += 1
+        guard legacyPresentationEnabled else { return }
+        legacyRebuildCount += 1
+        let nextOrderedSegments = feedEngine.segments
         groupedSegments = TranscriptPresentationPolicy.groupedSegments(from: nextOrderedSegments)
         pauseMarkerIds = TranscriptPresentationPolicy.pauseMarkerGroupIds(for: groupedSegments)
         scrollTrigger = TranscriptPresentationPolicy.scrollTrigger(for: nextOrderedSegments)
     }
+
+    private func updateHasContent() {
+        let next = feedEngine.finalCount > 0 || minutes.hasContent
+        if next == hasContent { return }
+        hasContent = next
+        onPanelChanged?(TranscriptPanelChange.session)
+    }
 }
+
+#if !SKIP
+extension TranscriptMinutesEntryModel: Sendable {}
+extension TranscriptMinutesSnapshotModel: Sendable {}
+extension TranscriptSegmentModel: Sendable {}
+#endif

@@ -1,0 +1,453 @@
+#if os(iOS) && !SKIP
+import SwiftUI
+
+enum PeopleActionText {
+    static func titles(name: String) -> PeopleActionTitles {
+        PeopleActionTitles(
+            pin: ConclaveStrings.text("Pin"),
+            unpin: ConclaveStrings.text("Unpin"),
+            sendPrivateMessage: ConclaveStrings.text("Send Private Message"),
+            hideMessages: ConclaveStrings.format("Hide Messages from %@", name),
+            showMessages: ConclaveStrings.format("Show Messages from %@", name),
+            changeName: ConclaveStrings.text("Change Name\u{2026}"),
+            lowerHand: ConclaveStrings.text("Lower Hand"),
+            mute: ConclaveStrings.text("Mute"),
+            turnOffCamera: ConclaveStrings.text("Turn Off Camera"),
+            stopScreenShare: ConclaveStrings.text("Stop Screen Share"),
+            stopScreenAudio: ConclaveStrings.text("Stop Screen Audio"),
+            makeCoHost: ConclaveStrings.text("Make Co-Host\u{2026}"),
+            makeHost: ConclaveStrings.text("Make Host\u{2026}"),
+            moveToAudience: ConclaveStrings.text("Move to Audience\u{2026}"),
+            remove: ConclaveStrings.text("Remove from Meeting\u{2026}"),
+            reasonReconnecting: ConclaveStrings.text("Unavailable while reconnecting"),
+            reasonOffline: ConclaveStrings.text("Unavailable while offline"),
+            reasonNotJoined: ConclaveStrings.text("Unavailable while reconnecting"),
+            reasonPending: ConclaveStrings.text("In Progress"),
+            reasonRenameDisabled: ConclaveStrings.text("Name changes are turned off for this meeting.")
+        )
+    }
+
+    static func displayName(_ model: PersonRowModel) -> String {
+        PeopleText.displayName(model)
+    }
+
+    static func menuLabel(_ model: PersonRowModel) -> String {
+        ConclaveStrings.format("Actions for %@", displayName(model))
+    }
+
+    static func symbol(_ item: MenuItemModel) -> String? {
+        ConclaveMenuSymbols.symbol(for: item.concept)
+    }
+
+    struct DialogCopy {
+        let title: String
+        let message: String
+        let confirm: String
+        let isDestructive: Bool
+
+        let blockTitle: String?
+    }
+
+    static func dialog(_ confirmation: PeopleConfirmation) -> DialogCopy {
+        let name = confirmation.targetName
+        switch confirmation.kind {
+        case .remove:
+            var message = ConclaveStrings.format("%@ will leave the meeting. They can join again with the link unless you block them.", name)
+            if confirmation.canBlock && confirmation.isGuest {
+                message += " " + ConclaveStrings.text("A blocked guest can still join from another device.")
+            }
+            return DialogCopy(title: ConclaveStrings.format("Remove %@?", name), message: message,
+                              confirm: ConclaveStrings.text("Remove"), isDestructive: true,
+                              blockTitle: confirmation.canBlock ? ConclaveStrings.text("Remove and Block") : nil)
+        case .makeCoHost:
+            return DialogCopy(title: ConclaveStrings.format("Make %@ a Co-Host?", name),
+                              message: ConclaveStrings.text("Co-hosts can admit people, mute or remove participants and change meeting settings. This lasts until the meeting ends."),
+                              confirm: ConclaveStrings.text("Make Co-Host"), isDestructive: false, blockTitle: nil)
+        case .makeHost:
+            return DialogCopy(title: ConclaveStrings.format("Make %@ the Host?", name),
+                              message: ConclaveStrings.format("%@ becomes the host. You stay in the meeting as a co-host.", name),
+                              confirm: ConclaveStrings.text("Make Host"), isDestructive: false, blockTitle: nil)
+        case .moveToAudience:
+            return DialogCopy(title: ConclaveStrings.format("Move %@ to the Audience?", name),
+                              message: ConclaveStrings.format("%@ leaves the stage and keeps watching as an attendee. They can\u{2019}t rejoin as a panelist while webinar mode is on.", name),
+                              confirm: ConclaveStrings.text("Move to Audience"), isDestructive: true, blockTitle: nil)
+        case .denyAll:
+            return DialogCopy(title: ConclaveStrings.format("Deny %lld People?", confirmation.count),
+                              message: ConclaveStrings.text("They won\u{2019}t join this meeting. They can ask to join again."),
+                              confirm: ConclaveStrings.text("Deny All"), isDestructive: true, blockTitle: nil)
+        case .muteAll:
+            return DialogCopy(title: ConclaveStrings.text("Mute Everyone?"),
+                              message: ConclaveStrings.text("Everyone except hosts is muted. People can unmute again unless unmuting is turned off."),
+                              confirm: ConclaveStrings.text("Mute Everyone"), isDestructive: false, blockTitle: nil)
+        case .camerasOff:
+            return DialogCopy(title: ConclaveStrings.text("Turn Off Everyone\u{2019}s Camera?"),
+                              message: ConclaveStrings.text("Everyone except hosts stops sending video. People can turn their camera back on unless video is turned off."),
+                              confirm: ConclaveStrings.text("Turn Off Cameras"), isDestructive: false, blockTitle: nil)
+        case .stopAllShares:
+            return DialogCopy(title: ConclaveStrings.text("Stop All Screen Shares?"),
+                              message: ConclaveStrings.text("Everyone who is presenting stops sharing."),
+                              confirm: ConclaveStrings.text("Stop All Shares"), isDestructive: false, blockTitle: nil)
+        case .clearAttendeeCode:
+
+            return DialogCopy(title: ConclaveStrings.text("Remove Attendee Code?"),
+                              message: ConclaveStrings.text("Attendees can watch without a code."),
+                              confirm: ConclaveStrings.text("Remove Code"), isDestructive: true, blockTitle: nil)
+        case .clearInviteCode:
+            return DialogCopy(title: ConclaveStrings.text("Remove Invite Code?"),
+                              message: ConclaveStrings.text("People can join without a code. Anyone already waiting stays in the waiting room."),
+                              confirm: ConclaveStrings.text("Remove Code"), isDestructive: true, blockTitle: nil)
+        case .block:
+            return DialogCopy(title: ConclaveStrings.format("Block %@?", name),
+                              message: ConclaveStrings.text("They can\u{2019}t join this meeting. If they\u{2019}re here, they\u{2019}re removed now."),
+                              confirm: ConclaveStrings.text("Block"), isDestructive: true, blockTitle: nil)
+        case .rotateWebinarLink:
+            return DialogCopy(title: ConclaveStrings.text("Rotate Webinar Link?"),
+                              message: ConclaveStrings.text("Anyone with the old link can no longer join. You\u{2019}ll get a new link to share."),
+                              confirm: ConclaveStrings.text("Rotate Link"), isDestructive: true, blockTitle: nil)
+        }
+    }
+
+    static func failure(_ model: HostActionFailureModel) -> String {
+        failure(kind: PeopleFailureCopy.kind(action: model.action, failure: model.failure, sourceKey: model.sourceKey),
+                name: model.targetName, sourceKey: model.sourceKey)
+    }
+
+    static func failure(kind: String, name: String, sourceKey: String) -> String {
+        switch kind {
+        case PeopleFailureCopy.cantRemove: return ConclaveStrings.text("This person can\u{2019}t be removed.")
+        case PeopleFailureCopy.rateLimited: return ConclaveStrings.text("Too many host actions. Try again in a moment.")
+        case PeopleFailureCopy.reconnect: return ConclaveStrings.text("Reconnect to use host controls.")
+        case PeopleFailureCopy.alreadyLeft: return ConclaveStrings.text("That person already left.")
+        case PeopleFailureCopy.mute: return ConclaveStrings.format("Couldn\u{2019}t mute %@.", name)
+        case PeopleFailureCopy.camera: return ConclaveStrings.format("Couldn\u{2019}t turn off %@\u{2019}s camera.", name)
+        case PeopleFailureCopy.share, PeopleFailureCopy.shareAudio:
+            return ConclaveStrings.format("Couldn\u{2019}t stop %@\u{2019}s screen share.", name)
+        case PeopleFailureCopy.remove: return ConclaveStrings.format("Couldn\u{2019}t remove %@.", name)
+        case PeopleFailureCopy.coHost: return ConclaveStrings.format("Couldn\u{2019}t make %@ a co-host.", name)
+        case PeopleFailureCopy.host: return ConclaveStrings.format("Couldn\u{2019}t make %@ the host.", name)
+        case PeopleFailureCopy.audience: return ConclaveStrings.format("Couldn\u{2019}t move %@ to the audience.", name)
+        case PeopleFailureCopy.rename: return ConclaveStrings.text("Couldn\u{2019}t change your name.")
+        case PeopleFailureCopy.lockMeeting: return ConclaveStrings.text("Couldn\u{2019}t change the meeting lock. Try again.")
+        case PeopleFailureCopy.policy:
+            return ConclaveStrings.format("Couldn\u{2019}t update %@.", HostText.policyTitle(HostPolicyID(rawValue: sourceKey)))
+        case PeopleFailureCopy.muteAll: return ConclaveStrings.text("Couldn\u{2019}t mute everyone.")
+        case PeopleFailureCopy.cameras: return ConclaveStrings.text("Couldn\u{2019}t turn off cameras.")
+        case PeopleFailureCopy.shares: return ConclaveStrings.text("Couldn\u{2019}t stop screen shares.")
+        case PeopleFailureCopy.codeSave: return ConclaveStrings.text("Couldn\u{2019}t save the invite code.")
+        case PeopleFailureCopy.codeRemove: return ConclaveStrings.text("Couldn\u{2019}t remove the invite code.")
+        case PeopleFailureCopy.access: return ConclaveStrings.text("Couldn\u{2019}t update the access list.")
+        case PeopleFailureCopy.notice: return ConclaveStrings.text("Couldn\u{2019}t send the notice.")
+        case PeopleFailureCopy.link: return ConclaveStrings.text("Webinar link unavailable.")
+        case PeopleFailureCopy.invite: return ConclaveStrings.format("Couldn\u{2019}t invite %@ on stage.", name)
+        case PeopleFailureCopy.inviteGone: return ConclaveStrings.format("%@ is no longer watching.", name)
+        case PeopleFailureCopy.cancelInvite: return ConclaveStrings.text("Couldn\u{2019}t cancel the invite.")
+        case PeopleFailureCopy.webinar: return ConclaveStrings.text("Couldn\u{2019}t update webinar settings.")
+        case PeopleFailureCopy.qaSend: return ConclaveStrings.text("Couldn\u{2019}t send your question.")
+        case PeopleFailureCopy.qaRateLimited: return ConclaveStrings.text("You\u{2019}re sending questions too quickly.")
+        case PeopleFailureCopy.qaTooShort: return ConclaveStrings.text("Ask a longer question.")
+        case PeopleFailureCopy.qaModerate: return ConclaveStrings.text("Couldn\u{2019}t update the question.")
+
+        case PeopleFailureCopy.admit: return ConclaveStrings.format("Couldn’t admit %@.", name)
+        case PeopleFailureCopy.admitAll: return ConclaveStrings.text("Couldn’t admit everyone.")
+        case PeopleFailureCopy.deny: return ConclaveStrings.format("Couldn’t deny %@.", name)
+        case PeopleFailureCopy.hands: return ConclaveStrings.text("Couldn’t lower all hands.")
+        default: return ConclaveStrings.text("That didn\u{2019}t go through. Try again.")
+        }
+    }
+
+    static func stageToast(_ notice: MeetingNotice) -> String {
+        let kind = PeopleFailureCopy.kind(action: PeopleFailurePlacementPolicy.stageAction(notice.detail),
+                                          failure: PeopleFailurePlacementPolicy.stageFailure(notice.detail), sourceKey: notice.userId)
+        return failure(kind: kind, name: notice.name, sourceKey: notice.userId)
+    }
+
+    static func renameRefusal(_ raw: String) -> String {
+        switch HostActionFailure(rawValue: raw) {
+        case .renameRateLimited: return ConclaveStrings.text("You\u{2019}re changing your name too quickly. Try again in a moment.")
+        case .renameDisabled: return ConclaveStrings.text("Name changes are turned off for this meeting.")
+        case .renameTooLong: return ConclaveStrings.text("Use 40 characters or fewer.")
+        default: return ConclaveStrings.text("Couldn\u{2019}t change your name.")
+        }
+    }
+
+    static func renameModel(draft: String, refusal: String) -> ConclaveTextEntryDialogModel {
+        var message = ConclaveStrings.text("Up to 40 characters. Everyone sees the new name.")
+        if !refusal.isEmpty {
+            message = renameRefusal(refusal)
+        } else if DisplayNamePolicy.isCounterVisible(count: draft.count) {
+            message = ConclaveStrings.format("%lld of %lld characters", draft.count, DisplayNamePolicy.limit)
+        }
+        return ConclaveTextEntryDialogModel(kind: .name, title: ConclaveStrings.text("Change Your Name"), message: message,
+                                            fieldLabel: ConclaveStrings.text("Name"), confirmTitle: ConclaveStrings.text("Save"),
+                                            limit: DisplayNamePolicy.limit, counterFrom: DisplayNamePolicy.counterThreshold)
+    }
+
+    static func announcement(_ announcement: StageAnnouncement) -> String? {
+        switch announcement.kind {
+        case PeopleAnnouncementKind.madeCoHost: return ConclaveStrings.format("%@ is now a co-host.", announcement.name)
+        case PeopleAnnouncementKind.madeHost: return ConclaveStrings.format("%@ is now the host.", announcement.name)
+        case PeopleAnnouncementKind.removed: return ConclaveStrings.format("%@ was removed.", announcement.name)
+        case PeopleAnnouncementKind.policyOn:
+            return ConclaveStrings.format("%@ turned on by another host.", HostText.policyTitle(HostPolicyID(rawValue: announcement.name)))
+        case PeopleAnnouncementKind.policyOff:
+            return ConclaveStrings.format("%@ turned off by another host.", HostText.policyTitle(HostPolicyID(rawValue: announcement.name)))
+        case PeopleAnnouncementKind.noticeSent: return ConclaveStrings.text("Notice sent")
+        case PeopleAnnouncementKind.invitedToStage: return ConclaveStrings.format("Invited %@ on stage.", announcement.name)
+        case PeopleAnnouncementKind.joinedStage: return ConclaveStrings.format("%@ joined the stage.", announcement.name)
+        case PeopleAnnouncementKind.movedToAudience: return ConclaveStrings.format("%@ moved to the audience.", announcement.name)
+        case PeopleAnnouncementKind.newLinkCopied: return ConclaveStrings.text("New link copied.")
+        case PeopleAnnouncementKind.questionSent: return ConclaveStrings.text("Your question was sent.")
+        case PeopleAnnouncementKind.qaOff: return ConclaveStrings.text("Q&A is off.")
+        case PeopleAnnouncementKind.newHost: return ConclaveStrings.format("%@ is now the host.", announcement.name)
+
+        case PeopleAnnouncementKind.admittedAll:
+            return ConclaveStrings.format("%lld admitted", Int(announcement.name) ?? 0)
+        case PeopleAnnouncementKind.knock: return ConclaveStrings.format("%@ wants to join", announcement.name)
+        case PeopleAnnouncementKind.knockMany:
+            return ConclaveStrings.format("People Want To Join %lld", Int(announcement.name) ?? 0)
+        default: return nil
+        }
+    }
+}
+
+struct PeopleRowMenu: View {
+    let people: PeoplePresenter
+    let model: PersonRowModel
+    let sectionId: String
+
+    var body: some View {
+        if !model.actions.isEmpty {
+            Menu {
+                ConclaveMenuContent(sections: PeopleActionPolicy.menuSections(model.actions,
+                                                                              titles: PeopleActionText.titles(name: PeopleActionText.displayName(model))),
+                                    symbol: { PeopleActionText.symbol($0) },
+                                    onSelect: { item in perform(item) })
+            } label: {
+                Image(systemName: ConclaveSymbols.ellipsis)
+                    .frame(width: PeopleRowMetrics.trailingTarget, height: PeopleRowMetrics.trailingTarget)
+                    .contentShape(Rectangle())
+            }
+            .menuOrder(.fixed)
+            .accessibilityLabel(PeopleActionText.menuLabel(model))
+            .accessibilityIdentifier("people.row." + sectionId + "." + model.id + ".menu")
+        }
+    }
+
+    private func perform(_ item: MenuItemModel) {
+        guard let action = PersonActionID(rawValue: item.id) else { return }
+        people.perform(action, rowId: model.id, source: PeopleActionSource.rowMenu)
+    }
+}
+
+struct PeopleRowActionsModifier: ViewModifier {
+    let people: PeoplePresenter
+    let entry: PersonRowEntry
+    let sectionId: String
+
+    func body(content: Content) -> some View {
+        let model = entry.model
+        let available = PeopleActionPolicy.availableActions(model.actions)
+        let swipes = PeopleActionPolicy.swipeActions(model.actions)
+        content
+            .contextMenu {
+                if !available.isEmpty {
+                    ConclaveMenuContent(sections: PeopleActionPolicy.menuSections(available,
+                                                                                  titles: PeopleActionText.titles(name: PeopleActionText.displayName(model))),
+                                        symbol: { PeopleActionText.symbol($0) },
+                                        onSelect: { item in
+                                            if let action = PersonActionID(rawValue: item.id) {
+                                                people.perform(action, rowId: model.id, source: PeopleActionSource.rowMenu)
+                                            }
+                                        })
+                }
+            } preview: {
+                PeopleRowPreview(model: model)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                ForEach(swipes) { item in
+                    if item.action == PersonActionID.remove {
+                        Button(role: .destructive) {
+                            people.perform(item.action, rowId: model.id, source: PeopleActionSource.swipe)
+                        } label: {
+                            Label(ConclaveStrings.text("Remove"), systemImage: ConclaveSymbols.personFillXmark)
+                        }
+                    } else {
+                        Button {
+                            people.perform(item.action, rowId: model.id, source: PeopleActionSource.swipe)
+                        } label: {
+                            Label(ConclaveStrings.text("Mute"), systemImage: ConclaveSymbols.micSlash)
+                        }
+                        .tint(Color(uiColor: .systemGray))
+                    }
+                }
+            }
+            .modifier(PeopleRowConfirmation(people: people, entry: entry))
+    }
+}
+
+private struct PeopleRowConfirmation: ViewModifier {
+    let people: PeoplePresenter
+    let entry: PersonRowEntry
+
+    func body(content: Content) -> some View {
+        let confirmation = entry.confirmation
+        let copy = confirmation.map { PeopleActionText.dialog($0) }
+        content.confirmationDialog(copy?.title ?? "", isPresented: Binding(get: { entry.confirmation != nil }, set: { shown in
+            if !shown, let current = entry.confirmation { people.cancelConfirmation(id: current.id) }
+        }), titleVisibility: .visible, presenting: confirmation) { current in
+            PeopleDialogButtons(people: people, confirmation: current)
+        } message: { current in
+            Text(PeopleActionText.dialog(current).message)
+        }
+    }
+}
+
+struct PeopleDialogButtons: View {
+    let people: PeoplePresenter
+    let confirmation: PeopleConfirmation
+
+    var body: some View {
+        let copy = PeopleActionText.dialog(confirmation)
+        Button(copy.confirm, role: copy.isDestructive ? .destructive : nil) {
+            people.confirm(id: confirmation.id, block: false)
+        }
+        .accessibilityIdentifier("people.dialog." + confirmation.kind.rawValue + ".confirm")
+        if let blockTitle = copy.blockTitle {
+            Button(blockTitle, role: .destructive) {
+                people.confirm(id: confirmation.id, block: true)
+            }
+            .accessibilityIdentifier("people.dialog." + confirmation.kind.rawValue + ".block")
+        }
+        Button(ConclaveStrings.text("Cancel"), role: .cancel) {
+            people.cancelConfirmation(id: confirmation.id)
+        }
+    }
+}
+
+private struct PeopleRowPreview: View {
+    let model: PersonRowModel
+
+    var body: some View {
+        ConclavePersonRow(name: PeopleText.displayName(model), detail: PeopleText.subLine(model), lineLimit: 2,
+                          identifier: "people.row.preview." + model.id) {
+            ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(model.avatarSeed), size: .row)
+        }
+        .padding(16)
+        .frame(minWidth: 280, alignment: .leading)
+        .accessibilityHidden(true)
+    }
+}
+
+struct PeopleRowAccessibilityActions: ViewModifier {
+    let model: PersonRowModel
+    let onAction: ((PersonActionID) -> Void)?
+
+    func body(content: Content) -> some View {
+        if let onAction, !model.actions.isEmpty {
+            let titles = PeopleActionText.titles(name: PeopleActionText.displayName(model))
+            content.accessibilityActions {
+                ForEach(PeopleActionPolicy.availableActions(model.actions)) { item in
+                    Button(PeopleActionPolicy.title(item.action, titles: titles)) { onAction(item.action) }
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+struct PeopleFailureBannerSection: View {
+    let people: PeoplePresenter
+
+    var body: some View {
+        if let failure = people.lastFailure, failure.placement == HostFailurePlacement.panelInline.rawValue,
+           PeopleFailureScope.isRowFailure(failure) {
+            Section {
+                ConclaveBanner(kind: .error, text: PeopleActionText.failure(failure), surface: .app,
+                               actions: [ConclaveBannerAction(title: ConclaveStrings.text("Retry"), identifier: "people.failure.retry",
+                                                              action: { people.retry(failureId: failure.id) })],
+                               onDismiss: { people.dismissFailure(id: failure.id) }, identifier: "people.failure")
+            }
+        }
+    }
+}
+
+enum PeopleFailureScope {
+    static func isRowFailure(_ failure: HostActionFailureModel) -> Bool {
+        guard let kind = PeopleCommandKind(rawValue: failure.action) else { return false }
+        switch kind {
+        case .admit, .deny, .admitAll, .denyAll, .mute, .turnOffCamera, .stopScreenShare, .stopScreenAudio, .remove, .block,
+             .makeCoHost, .makeHost, .moveToAudience, .bringOnStage, .cancelStageInvite:
+            return true
+        case .bulk:
+
+            return PeopleAdmissionsPolicy.isHeaderBulkSource(failure.sourceKey)
+        default:
+            return false
+        }
+    }
+}
+
+struct PeopleRenameAlertHost: ViewModifier {
+    let people: PeoplePresenter
+    @State private var draft = ""
+
+    func body(content: Content) -> some View {
+        let rename = people.rename
+        let shown = rename.phase == PeopleRenamePhase.editing || rename.phase == PeopleRenamePhase.refused
+        content
+            .conclaveTextEntryDialog(PeopleActionText.renameModel(draft: draft, refusal: rename.refusal), text: $draft,
+                                     isPresented: Binding(get: { shown }, set: { isShown in
+                                         if !isShown && (people.rename.phase == PeopleRenamePhase.editing
+                                                         || people.rename.phase == PeopleRenamePhase.refused) {
+                                             people.cancelRename()
+                                         }
+                                     }),
+                                     identifier: "people.rename",
+                                     onConfirm: { people.submitRename(draft) },
+                                     onCancel: { people.cancelRename() })
+            .onChange(of: rename.id) { _, _ in
+                draft = people.rename.draft
+            }
+    }
+}
+
+extension View {
+
+    func peopleStageConfirmations(_ people: PeoplePresenter?) -> some View {
+        modifier(PeopleStageConfirmationHost(people: people))
+    }
+}
+
+private struct PeopleStageConfirmationHost: ViewModifier {
+    let people: PeoplePresenter?
+
+    func body(content: Content) -> some View {
+        if let people {
+            content.modifier(PeopleStageConfirmationDialog(people: people))
+        } else {
+            content
+        }
+    }
+}
+
+private struct PeopleStageConfirmationDialog: ViewModifier {
+    let people: PeoplePresenter
+
+    func body(content: Content) -> some View {
+        let current = people.confirmation
+        let staged = current?.source == PeopleActionSource.tileMenu ? current : nil
+        content.confirmationDialog(staged.map { PeopleActionText.dialog($0).title } ?? "",
+                                   isPresented: Binding(get: { staged != nil }, set: { shown in
+                                       if !shown, let open = people.confirmation, open.source == PeopleActionSource.tileMenu {
+                                           people.cancelConfirmation(id: open.id)
+                                       }
+                                   }),
+                                   titleVisibility: .visible, presenting: staged) { confirmation in
+            PeopleDialogButtons(people: people, confirmation: confirmation)
+        } message: { confirmation in
+            Text(PeopleActionText.dialog(confirmation).message)
+        }
+    }
+}
+#endif

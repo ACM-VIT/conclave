@@ -1,0 +1,4854 @@
+{
+  "artifact_kind": "fresh_timestamped_snapshot_extraction_not_original_metadata_recovery",
+  "created_at_utc": "2026-10-23T16:25:43.663999Z",
+  "source": {
+    "file": "metadata/material-symbols.raw",
+    "sha256": "1a36a710d57b32eef8f101980d87ae7dea560146157b3143ab115b791affa669",
+    "bytes": 5822254
+  },
+  "source_url": "https://fonts.google.com/metadata/icons?incomplete=1&key=material_symbols",
+  "retrieved_at_utc": "2026-10-23T16:12:39.289119Z",
+  "mutable_upstream": true,
+  "upstream_commit": null,
+  "historical_metadata_sha256_recovered_in_archive": "af3684343e02b353e32bc69efbef085b09f6c5850fd39e7715d01f0163a413f3",
+  "matches_that_historical_snapshot": false,
+  "historical_snapshot_payload_recovered": false,
+  "metadata_revision_is_not_svg_revision": true,
+  "raw_icons_count": 6131,
+  "raw_json_prefix": ")]}'\\n",
+  "json_pointer_base": "parsed JSON after the five-byte anti-XSSI prefix; original raw bytes preserved",
+  "top_level_fields_without_icons": {
+    "host": "fonts.gstatic.com",
+    "asset_url_pattern": "/s/i/{family}/{icon}/v{version}/{asset}",
+    "families": [
+      "Material Icons",
+      "Material Icons Outlined",
+      "Material Icons Round",
+      "Material Icons Sharp",
+      "Material Icons Two Tone",
+      "Material Symbols Outlined",
+      "Material Symbols Rounded",
+      "Material Symbols Sharp"
+    ]
+  },
+  "family_rule": "For every row independently: Material Symbols families minus unsupported_families; require Rounded and size 24. Preserve all matching rows and original array pointers.",
+  "names": {
+    "add_reaction": [
+      {
+        "json_pointer": "/icons/210",
+        "row": {
+          "name": "add_reaction",
+          "version": 399,
+          "popularity": 2717,
+          "codepoint": 57811,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Social"
+          ],
+          "tags": [
+            "+",
+            "add",
+            "add emotion",
+            "add feeling",
+            "add reaction",
+            "append",
+            "button",
+            "chat",
+            "circle",
+            "comment",
+            "communications",
+            "emoji",
+            "emoticon",
+            "emotions",
+            "express",
+            "expressions",
+            "face",
+            "feedback",
+            "feelings",
+            "glad",
+            "happiness",
+            "happy",
+            "icon",
+            "icons",
+            "include",
+            "insert",
+            "interaction",
+            "like",
+            "mood",
+            "new",
+            "outline",
+            "person",
+            "pleased",
+            "plus",
+            "plus sign",
+            "positive",
+            "response",
+            "smile",
+            "smiley face",
+            "smiling",
+            "social",
+            "social media",
+            "survey",
+            "symbol"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "715504c31f90e544e5cb43e9a6a15e3f5dbaf3d8f37288952560f2fc57889a84",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/211",
+        "row": {
+          "name": "add_reaction",
+          "version": 9,
+          "popularity": 6401,
+          "codepoint": 57811,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "social"
+          ],
+          "tags": [
+            "+",
+            "add",
+            "emoji",
+            "emotions",
+            "expressions",
+            "face",
+            "feelings",
+            "glad",
+            "happiness",
+            "happy",
+            "icon",
+            "icons",
+            "insert",
+            "like",
+            "mood",
+            "new",
+            "person",
+            "pleased",
+            "plus",
+            "smile",
+            "smiling",
+            "social",
+            "survey",
+            "symbol"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "0393ad05221b1f1d9919cb0f113b3e6c65cf1cdbf9a64962f1558f9deb00346a",
+        "rounded_24_eligible": false
+      }
+    ],
+    "apps": [
+      {
+        "json_pointer": "/icons/392",
+        "row": {
+          "name": "apps",
+          "version": 399,
+          "popularity": 19249,
+          "codepoint": 58819,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "UI actions"
+          ],
+          "tags": [
+            "3x3 grid",
+            "access",
+            "all",
+            "all apps",
+            "application",
+            "applications",
+            "apps",
+            "circles",
+            "collection",
+            "components",
+            "dashboard",
+            "desktop",
+            "display",
+            "dots",
+            "features",
+            "functions",
+            "general",
+            "grid",
+            "home",
+            "icons",
+            "interface",
+            "launcher",
+            "launchpad",
+            "menu",
+            "mobile",
+            "navigation",
+            "nine squares",
+            "options",
+            "programs",
+            "quick access",
+            "services",
+            "settings",
+            "shortcut",
+            "software",
+            "squares",
+            "system",
+            "tiles",
+            "ui",
+            "ux"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "f08216cbb5ea505e370e22c364042d4044988b11999a8c3adf3d285c6ffb8f19",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/393",
+        "row": {
+          "name": "apps",
+          "version": 12,
+          "popularity": 76116,
+          "codepoint": 58819,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "navigation"
+          ],
+          "tags": [
+            "all",
+            "applications",
+            "apps",
+            "circles",
+            "collection",
+            "components",
+            "dots",
+            "grid",
+            "interface",
+            "squares",
+            "ui",
+            "ux"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "79f43602e0686d4e7f880efa160da2683ee328900b92fe03ed72b62cd129d0e1",
+        "rounded_24_eligible": false
+      }
+    ],
+    "arrow_back": [
+      {
+        "json_pointer": "/icons/409",
+        "row": {
+          "name": "arrow_back",
+          "version": 399,
+          "popularity": 0,
+          "codepoint": 58820,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "UI actions"
+          ],
+          "tags": [
+            "DISABLE_IOS",
+            "app",
+            "application",
+            "arrow",
+            "back",
+            "back button",
+            "backward",
+            "chevron",
+            "components",
+            "direction",
+            "directional",
+            "disable_ios",
+            "escape",
+            "exit",
+            "go back",
+            "history",
+            "indicator",
+            "interface",
+            "last",
+            "lead back",
+            "left",
+            "move",
+            "navigation",
+            "past",
+            "pointer",
+            "previous",
+            "prior",
+            "reply",
+            "retreat",
+            "return",
+            "reverse",
+            "revert",
+            "screen",
+            "site",
+            "step back",
+            "turn back",
+            "ui",
+            "undo",
+            "ux",
+            "way back",
+            "web",
+            "website"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "68873f21fc17cac2f0140f57cd23117c298015f16baca77e90e43c78f010f948",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/410",
+        "row": {
+          "name": "arrow_back",
+          "version": 17,
+          "popularity": 250568,
+          "codepoint": 58820,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "navigation"
+          ],
+          "tags": [
+            "DISABLE_IOS",
+            "app",
+            "application",
+            "arrow",
+            "back",
+            "components",
+            "direction",
+            "disable_ios",
+            "interface",
+            "left",
+            "navigation",
+            "previous",
+            "screen",
+            "site",
+            "ui",
+            "ux",
+            "web",
+            "website"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "b8f969d82f7bb4514f8b5273676ad1968ba0fe245162bd3d857d815d8008abaf",
+        "rounded_24_eligible": false
+      }
+    ],
+    "bluetooth": [
+      {
+        "json_pointer": "/icons/756",
+        "row": {
+          "name": "bluetooth",
+          "version": 399,
+          "popularity": 2473,
+          "codepoint": 57767,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Android"
+          ],
+          "tags": [
+            "audio",
+            "bluetooth",
+            "cast",
+            "communication",
+            "connect",
+            "connection",
+            "connectivity",
+            "data",
+            "device",
+            "electronic",
+            "icon",
+            "line",
+            "mobile",
+            "network",
+            "pairing",
+            "paring",
+            "share",
+            "signal",
+            "streaming",
+            "symbol",
+            "technology",
+            "transfer",
+            "wireless",
+            "zig-zag"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "32f2395c6b724955cfef28d0ae24aea19aadc2066dd6d75881d0ea80d586602d",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/757",
+        "row": {
+          "name": "bluetooth",
+          "version": 11,
+          "popularity": 13385,
+          "codepoint": 57767,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "device"
+          ],
+          "tags": [
+            "bluetooth",
+            "cast",
+            "connect",
+            "connection",
+            "device",
+            "paring",
+            "streaming",
+            "symbol",
+            "wireless"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "50306c767cfe06433b2c33c0ec279104f307d8daa7297c501baab20c1e52a766",
+        "rounded_24_eligible": false
+      }
+    ],
+    "bluetooth_audio": [
+      {
+        "json_pointer": "/icons/758",
+        "row": {
+          "name": "bluetooth_audio",
+          "version": 12,
+          "popularity": 1915,
+          "codepoint": 58895,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "notification"
+          ],
+          "tags": [
+            "audio",
+            "bluetooth",
+            "connect",
+            "connection",
+            "device",
+            "music",
+            "signal",
+            "sound",
+            "symbol"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "038a5582240eadd18c0d5619d25a94b4099798326f9c7616c3a74d8826916925",
+        "rounded_24_eligible": false
+      }
+    ],
+    "call_end": [
+      {
+        "json_pointer": "/icons/959",
+        "row": {
+          "name": "call_end",
+          "version": 329,
+          "popularity": 1876,
+          "codepoint": 57521,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Communicate"
+          ],
+          "tags": [
+            "audio",
+            "button",
+            "call",
+            "cancel",
+            "cell",
+            "close",
+            "communication",
+            "contact",
+            "control",
+            "decline",
+            "device",
+            "disconnect",
+            "end",
+            "hang up",
+            "hardware",
+            "incoming",
+            "interaction",
+            "mobile",
+            "outgoing",
+            "phone",
+            "pictogram",
+            "reject",
+            "ringing",
+            "shape",
+            "stop",
+            "symbol",
+            "telephone",
+            "terminate",
+            "voice"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "e5f491b04eb6fc32daddcc04cde8f3729afd1796b1c5d2977d0e7f7b81211b53",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/960",
+        "row": {
+          "name": "call_end",
+          "version": 16,
+          "popularity": 11924,
+          "codepoint": 57521,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "communication"
+          ],
+          "tags": [
+            "call",
+            "cell",
+            "contact",
+            "device",
+            "end",
+            "hardware",
+            "mobile",
+            "phone",
+            "telephone"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "38f942474a21cc8dce01e1a80c40a276ec8679a13ed956b66fd1b3f1a66622f4",
+        "rounded_24_eligible": false
+      }
+    ],
+    "cameraswitch": [
+      {
+        "json_pointer": "/icons/990",
+        "row": {
+          "name": "cameraswitch",
+          "version": 399,
+          "popularity": 0,
+          "codepoint": 61419,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Android"
+          ],
+          "tags": [
+            "arrow",
+            "arrows",
+            "back camera",
+            "camera",
+            "camera switch",
+            "camera toggle",
+            "cameraswitch",
+            "change camera",
+            "circle",
+            "circular arrows",
+            "communication",
+            "flip",
+            "flip camera",
+            "front camera",
+            "mobile camera",
+            "photo camera",
+            "photography",
+            "record",
+            "rotate",
+            "rotate camera",
+            "selfie camera",
+            "shoot",
+            "swap",
+            "switch",
+            "switch camera",
+            "two arrows",
+            "video call",
+            "video camera",
+            "video chat",
+            "videography",
+            "view"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "9c6c97bd6dd4de13b6f39d4bb028fb527015370c8a57c8c9de522a6276586bbc",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/991",
+        "row": {
+          "name": "cameraswitch",
+          "version": 10,
+          "popularity": 8343,
+          "codepoint": 61419,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "device"
+          ],
+          "tags": [
+            "arrows",
+            "camera",
+            "cameraswitch",
+            "flip",
+            "rotate",
+            "swap",
+            "switch",
+            "view"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "e9602e0ab8f7e84d15e1f4c887137f6f1582b4a2bb11d10e3cce8528a2310846",
+        "rounded_24_eligible": false
+      }
+    ],
+    "cancel_presentation": [
+      {
+        "json_pointer": "/icons/997",
+        "row": {
+          "name": "cancel_presentation",
+          "version": 399,
+          "popularity": 0,
+          "codepoint": 57577,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Communicate"
+          ],
+          "tags": [
+            "abort",
+            "cancel",
+            "clear",
+            "close",
+            "conference",
+            "cross",
+            "denial",
+            "device",
+            "diagonal lines",
+            "dismiss",
+            "display",
+            "end",
+            "exclude",
+            "exit",
+            "halt",
+            "meeting",
+            "monitor",
+            "no",
+            "present",
+            "presentation",
+            "projection",
+            "projector",
+            "quit",
+            "rectangle",
+            "rejection",
+            "remove",
+            "revoke",
+            "screen",
+            "slide",
+            "slideshow",
+            "stop",
+            "terminate",
+            "website",
+            "window",
+            "x",
+            "x mark"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "26fd73aee25eddf294465e5394f8419c42b8167425682f2a8d3e5a776c018ca9",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/998",
+        "row": {
+          "name": "cancel_presentation",
+          "version": 14,
+          "popularity": 8395,
+          "codepoint": 57577,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "communication"
+          ],
+          "tags": [
+            "cancel",
+            "clear",
+            "close",
+            "device",
+            "exit",
+            "no",
+            "present",
+            "presentation",
+            "quit",
+            "remove",
+            "screen",
+            "slide",
+            "stop",
+            "website",
+            "window",
+            "x"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "c774b3849d84df5f40b71b34f2040a8edf2164dd385e2cd2d01aed8d8982c92d",
+        "rounded_24_eligible": false
+      }
+    ],
+    "chat_bubble": [
+      {
+        "json_pointer": "/icons/1099",
+        "row": {
+          "name": "chat_bubble",
+          "version": 329,
+          "popularity": 10480,
+          "codepoint": 57546,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Communicate"
+          ],
+          "tags": [
+            "bubble",
+            "chat",
+            "chat outline",
+            "chatbox",
+            "comment",
+            "communicate",
+            "communication",
+            "communication bubble",
+            "contact",
+            "conversation",
+            "dialog",
+            "dialogue",
+            "discuss",
+            "feedback",
+            "forum",
+            "help",
+            "interaction",
+            "message",
+            "message outline",
+            "messaging",
+            "new message",
+            "notification",
+            "social",
+            "speak",
+            "speech",
+            "speech outline",
+            "support",
+            "talk",
+            "text",
+            "texting",
+            "thoughts"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "af80a30ae8e2e3189824459c73e00e34115d17eb40ed8c2141a4dcfd83f94be6",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/1100",
+        "row": {
+          "name": "chat_bubble",
+          "version": 15,
+          "popularity": 33928,
+          "codepoint": 57546,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "communication"
+          ],
+          "tags": [
+            "bubble",
+            "chat",
+            "comment",
+            "communicate",
+            "feedback",
+            "message",
+            "speech"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "1734acaff358f74ee10ecc96030572dada4e543d605628267c2bde84e43ffc75",
+        "rounded_24_eligible": false
+      }
+    ],
+    "check": [
+      {
+        "json_pointer": "/icons/1109",
+        "row": {
+          "name": "check",
+          "version": 399,
+          "popularity": 33322,
+          "codepoint": 58826,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "UI actions"
+          ],
+          "tags": [
+            "!",
+            "DISABLE_IOS",
+            "acceptance",
+            "achievement",
+            "alert",
+            "apply",
+            "approve",
+            "attention",
+            "caution",
+            "check",
+            "checkmark",
+            "complete",
+            "completion",
+            "confirm",
+            "confirmation",
+            "correct",
+            "danger",
+            "disable_ios",
+            "done",
+            "enter",
+            "error",
+            "exclamation",
+            "final",
+            "finished",
+            "good",
+            "input",
+            "mark",
+            "notification",
+            "ok",
+            "okay",
+            "option",
+            "right",
+            "select",
+            "selection",
+            "submit",
+            "success",
+            "task",
+            "tick",
+            "validated",
+            "verified",
+            "verify",
+            "yes"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "daf5d2503e7f8c8886e662ba0067ce992b868c9eeee9207c98c67efc90f7119c",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/1110",
+        "row": {
+          "name": "check",
+          "version": 18,
+          "popularity": 111745,
+          "codepoint": 58826,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "navigation"
+          ],
+          "tags": [
+            "!",
+            "DISABLE_IOS",
+            "alert",
+            "attention",
+            "caution",
+            "check",
+            "confirm",
+            "correct",
+            "danger",
+            "disable_ios",
+            "done",
+            "enter",
+            "error",
+            "exclamation",
+            "mark",
+            "notification",
+            "ok",
+            "okay",
+            "select",
+            "tick",
+            "yes"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "bc1695252ca6e916b731c3c8288005b28db09ef2b88be47a83aeae46b9a44eb2",
+        "rounded_24_eligible": false
+      }
+    ],
+    "close": [
+      {
+        "json_pointer": "/icons/1195",
+        "row": {
+          "name": "close",
+          "version": 329,
+          "popularity": 137164,
+          "codepoint": 58829,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "UI actions"
+          ],
+          "tags": [
+            "abort",
+            "action",
+            "alert",
+            "cancel",
+            "cancel button",
+            "clear",
+            "close",
+            "confirmation",
+            "cross",
+            "delete",
+            "delete button",
+            "dialog close",
+            "dismiss",
+            "error",
+            "exit",
+            "exit button",
+            "interface control",
+            "modal close",
+            "multiply",
+            "notification",
+            "remove",
+            "remove item",
+            "stop",
+            "times",
+            "warning",
+            "window close",
+            "x",
+            "x mark"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "b3b5d896da9160ca56ea466ee61f59d01a1decdaadc165f51bf17e7ed2392dd8",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/1196",
+        "row": {
+          "name": "close",
+          "version": 19,
+          "popularity": 431964,
+          "codepoint": 58829,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "navigation"
+          ],
+          "tags": [
+            "cancel",
+            "clear",
+            "close",
+            "exit",
+            "remove",
+            "stop",
+            "x"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "a6cbd8f0c843885ddd544ad28c55a17febe1062bd40b4a93a516ece7f9d90c7f",
+        "rounded_24_eligible": false
+      }
+    ],
+    "closed_caption": [
+      {
+        "json_pointer": "/icons/1200",
+        "row": {
+          "name": "closed_caption",
+          "version": 329,
+          "popularity": 1387,
+          "codepoint": 57372,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Audio&Video"
+          ],
+          "tags": [
+            "accessibility",
+            "accessible",
+            "alphabet",
+            "audio",
+            "box",
+            "button",
+            "caption",
+            "captions",
+            "cc",
+            "character",
+            "closed",
+            "closed captions",
+            "controls",
+            "decoder",
+            "disabled",
+            "font",
+            "language",
+            "letters",
+            "line",
+            "listen",
+            "media",
+            "movies",
+            "off",
+            "player",
+            "read",
+            "rectangle",
+            "settings",
+            "slash",
+            "speech",
+            "spoken",
+            "subtitle",
+            "subtitles",
+            "switch",
+            "symbol",
+            "text",
+            "toggle",
+            "translation",
+            "tv",
+            "type",
+            "video"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "2d0f30adce6808e6858a7407ab42bef42727fc44e1c00592c271234632c85ae4",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/1201",
+        "row": {
+          "name": "closed_caption",
+          "version": 12,
+          "popularity": 5576,
+          "codepoint": 57372,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "av"
+          ],
+          "tags": [
+            "accessible",
+            "alphabet",
+            "caption",
+            "cc",
+            "character",
+            "closed",
+            "decoder",
+            "font",
+            "language",
+            "letters",
+            "media",
+            "movies",
+            "subtitle",
+            "subtitles",
+            "symbol",
+            "text",
+            "tv",
+            "type"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "8a0a87f7a4c7fea89e17b4c6cf05e5bfe1e85f4a48879928531d42ea9f7b0796",
+        "rounded_24_eligible": false
+      }
+    ],
+    "content_copy": [
+      {
+        "json_pointer": "/icons/1310",
+        "row": {
+          "name": "content_copy",
+          "version": 399,
+          "popularity": 20959,
+          "codepoint": 57677,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Text"
+          ],
+          "tags": [
+            "action",
+            "clipboard",
+            "clone",
+            "content",
+            "copy",
+            "copy content",
+            "create",
+            "cut",
+            "data",
+            "doc",
+            "document",
+            "duplicate",
+            "edit",
+            "entry",
+            "file",
+            "information",
+            "make copy",
+            "menu",
+            "multiple",
+            "new",
+            "object",
+            "option",
+            "overlapping",
+            "pages",
+            "paper",
+            "paste",
+            "record",
+            "rectangle",
+            "replicate",
+            "sheet",
+            "square",
+            "stack",
+            "text",
+            "toolbar"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "22c6dcc426711b813c2556ae455eb6f39bba08175d9110f4ee4bf49031ec19d9",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/1311",
+        "row": {
+          "name": "content_copy",
+          "version": 17,
+          "popularity": 141068,
+          "codepoint": 57677,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "content"
+          ],
+          "tags": [
+            "content",
+            "copy",
+            "cut",
+            "doc",
+            "document",
+            "duplicate",
+            "file",
+            "multiple",
+            "paste",
+            "stack"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "b4350018ca893ad12731d05339f5f743c7c84ef439699c5a403c1356cf428519",
+        "rounded_24_eligible": false
+      }
+    ],
+    "delete": [
+      {
+        "json_pointer": "/icons/1496",
+        "row": {
+          "name": "delete",
+          "version": 399,
+          "popularity": 71760,
+          "codepoint": 59506,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "UI actions"
+          ],
+          "tags": [
+            "action",
+            "basket",
+            "bin",
+            "can",
+            "cancel",
+            "clean up",
+            "clear",
+            "control",
+            "delete",
+            "delete content",
+            "delete file",
+            "destroy",
+            "discard",
+            "dispose",
+            "dustbin",
+            "edit",
+            "eliminate",
+            "empty",
+            "erase",
+            "garbage",
+            "get rid of",
+            "junk",
+            "management",
+            "obliterate",
+            "outline",
+            "recycle",
+            "remove",
+            "remove item",
+            "trash",
+            "waste"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "71de7eeea726f1216f1f8f1892e4cac3bd9470a27114b9cd4874ecbf34c74fce",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/1497",
+        "row": {
+          "name": "delete",
+          "version": 17,
+          "popularity": 388629,
+          "codepoint": 59506,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "action"
+          ],
+          "tags": [
+            "bin",
+            "can",
+            "delete",
+            "garbage",
+            "remove",
+            "trash"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "73a9623823e4f8b0d024667754e44c4dbd5186d34fcae5f743fbcb050260532d",
+        "rounded_24_eligible": false
+      }
+    ],
+    "description": [
+      {
+        "json_pointer": "/icons/1523",
+        "row": {
+          "name": "description",
+          "version": 399,
+          "popularity": 34523,
+          "codepoint": 59507,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Text"
+          ],
+          "tags": [
+            "article",
+            "content",
+            "data",
+            "description",
+            "details",
+            "doc",
+            "document",
+            "draft",
+            "drive",
+            "earmark",
+            "file",
+            "folded corner",
+            "folder",
+            "folders",
+            "format",
+            "info",
+            "information",
+            "lines",
+            "list",
+            "note",
+            "notes",
+            "office",
+            "page",
+            "paper",
+            "read",
+            "report",
+            "sheet",
+            "slide",
+            "summary",
+            "template",
+            "text",
+            "work",
+            "write",
+            "writing"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "d9507833d1388208d9db4ba53cdddc81e06ee3fbcaa4b38dd546f7bfb98d52d8",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/1524",
+        "row": {
+          "name": "description",
+          "version": 12,
+          "popularity": 268783,
+          "codepoint": 59507,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "action"
+          ],
+          "tags": [
+            "article",
+            "data",
+            "description",
+            "doc",
+            "document",
+            "drive",
+            "file",
+            "folder",
+            "folders",
+            "notes",
+            "page",
+            "paper",
+            "sheet",
+            "slide",
+            "text",
+            "writing"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "f933a16c685267e2ca5dbd81738563554f6c2f270923923b14ce6acd1d032f16",
+        "rounded_24_eligible": false
+      }
+    ],
+    "draw": [
+      {
+        "json_pointer": "/icons/1743",
+        "row": {
+          "name": "draw",
+          "version": 399,
+          "popularity": 6048,
+          "codepoint": 59206,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Text"
+          ],
+          "tags": [
+            "art",
+            "artist",
+            "compose",
+            "crayon",
+            "create",
+            "creative",
+            "curve",
+            "design",
+            "doodle",
+            "dot",
+            "draft",
+            "draw",
+            "edit",
+            "editing",
+            "form",
+            "freehand",
+            "graphic",
+            "hand drawn",
+            "illustration",
+            "ink",
+            "input",
+            "line",
+            "marker",
+            "modify",
+            "outline",
+            "pen",
+            "pencil",
+            "point",
+            "scribble",
+            "shape",
+            "sketch",
+            "tool",
+            "write",
+            "writing"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "5333162bdc91987bd3085fbfd3cbeeb3bfd795efa017988aa6257a77357fdd5a",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/1744",
+        "row": {
+          "name": "draw",
+          "version": 6,
+          "popularity": 14256,
+          "codepoint": 59206,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "editor"
+          ],
+          "tags": [
+            "compose",
+            "create",
+            "design",
+            "draft",
+            "draw",
+            "edit",
+            "editing",
+            "input",
+            "pen",
+            "pencil",
+            "write",
+            "writing"
+          ],
+          "sizes_px": [
+            20,
+            24
+          ]
+        },
+        "canonical_json_sha256": "077de0f37f10e656e9f1d103a716e216fbfb40e1309711cca8cbc1d6d03968c9",
+        "rounded_24_eligible": false
+      }
+    ],
+    "error": [
+      {
+        "json_pointer": "/icons/1911",
+        "row": {
+          "name": "error",
+          "version": 399,
+          "popularity": 30866,
+          "codepoint": 57344,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Actions"
+          ],
+          "tags": [
+            "!",
+            "alert",
+            "attention",
+            "bug",
+            "caution",
+            "circle",
+            "critical",
+            "danger",
+            "error",
+            "exception",
+            "exclamation",
+            "failure",
+            "important",
+            "information",
+            "invalid",
+            "issue",
+            "mark",
+            "message",
+            "mistake",
+            "notification",
+            "outline",
+            "problem",
+            "round",
+            "security",
+            "status",
+            "stop",
+            "symbol",
+            "system",
+            "trouble",
+            "validation",
+            "warning",
+            "wrong"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "4f50409ca24aa878f55da6f9c744be2c45f2954bda9fd7ca5cea5f2f68bb5f5f",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/1912",
+        "row": {
+          "name": "error",
+          "version": 20,
+          "popularity": 111502,
+          "codepoint": 57344,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "alert"
+          ],
+          "tags": [
+            "!",
+            "alert",
+            "attention",
+            "caution",
+            "circle",
+            "danger",
+            "error",
+            "exclamation",
+            "important",
+            "mark",
+            "notification",
+            "symbol",
+            "warning"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "260d376af66b1ccaf88ef52157dc935a2ea8bd020cc39ed30d277ac9c406a28b",
+        "rounded_24_eligible": false
+      }
+    ],
+    "featured_video": [
+      {
+        "json_pointer": "/icons/2044",
+        "row": {
+          "name": "featured_video",
+          "version": 382,
+          "popularity": 484,
+          "codepoint": 57454,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Audio&Video"
+          ],
+          "tags": [
+            "advertised",
+            "advertisement",
+            "cinema",
+            "circle",
+            "clip",
+            "content",
+            "entertainment",
+            "featured",
+            "file",
+            "film",
+            "footage",
+            "highlight",
+            "highlighted",
+            "important",
+            "media",
+            "movie",
+            "multimedia",
+            "play",
+            "player",
+            "premium",
+            "recommended",
+            "recording",
+            "ring",
+            "round",
+            "screen",
+            "shape",
+            "spotlight",
+            "star",
+            "stream",
+            "ui icon",
+            "video",
+            "watch"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "03e666f1bb36020af62b54b709b618a5bd775075897802bce420ae6a0830e71f",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/2045",
+        "row": {
+          "name": "featured_video",
+          "version": 12,
+          "popularity": 2863,
+          "codepoint": 57454,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "av"
+          ],
+          "tags": [
+            "advertised",
+            "advertisement",
+            "featured",
+            "highlighted",
+            "recommended",
+            "video",
+            "watch"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "43831eb0df7d095c2ecf3bc16e895a5211605823bc59ac03f558eca5cec65c65",
+        "rounded_24_eligible": false
+      }
+    ],
+    "front_hand": [
+      {
+        "json_pointer": "/icons/2397",
+        "row": {
+          "name": "front_hand",
+          "version": 399,
+          "popularity": 2805,
+          "codepoint": 59241,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Social"
+          ],
+          "tags": [
+            "accessibility",
+            "alert",
+            "anatomy",
+            "body part",
+            "communication",
+            "control",
+            "cursor",
+            "fingers",
+            "five",
+            "front",
+            "gesture",
+            "greeting",
+            "hand",
+            "hello",
+            "high five",
+            "human",
+            "interaction",
+            "limb",
+            "open hand",
+            "outstretched hand",
+            "palm",
+            "point",
+            "pointer",
+            "recognition",
+            "selection",
+            "stop",
+            "symbol",
+            "touch",
+            "warning",
+            "wave"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "f581370627dbcab4810708593e8127099d85ccb6a8d6625a435894247ff0e3af",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/2398",
+        "row": {
+          "name": "front_hand",
+          "version": 3,
+          "popularity": 10924,
+          "codepoint": 59241,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "social"
+          ],
+          "tags": [
+            "fingers",
+            "front",
+            "gesture",
+            "hand",
+            "hello",
+            "palm",
+            "stop"
+          ],
+          "sizes_px": [
+            20,
+            24
+          ]
+        },
+        "canonical_json_sha256": "3eb980329444589b350bc23e0a6c8df7b58c3cbbc92f44fcb0d4a373721ffe7a",
+        "rounded_24_eligible": false
+      }
+    ],
+    "gif_box": [
+      {
+        "json_pointer": "/icons/2472",
+        "row": {
+          "name": "gif_box",
+          "version": 399,
+          "popularity": 782,
+          "codepoint": 59299,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Images"
+          ],
+          "tags": [
+            "add",
+            "alphabet",
+            "animated",
+            "animation",
+            "bitmap",
+            "box",
+            "character",
+            "chat",
+            "communication",
+            "digital file",
+            "expression",
+            "f",
+            "file type",
+            "font",
+            "format",
+            "funny",
+            "g",
+            "gif",
+            "graphics",
+            "i",
+            "image",
+            "insert",
+            "interchange",
+            "letter",
+            "letters",
+            "media",
+            "message",
+            "moving image",
+            "multimedia",
+            "picture",
+            "reaction",
+            "social media",
+            "square",
+            "symbol",
+            "text",
+            "type",
+            "upload",
+            "video"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "6be903edd5da822c60172eb822d5d56b0419015c77a5af6e01200573b752b2a7",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/2473",
+        "row": {
+          "name": "gif_box",
+          "version": 3,
+          "popularity": 4163,
+          "codepoint": 59299,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "action"
+          ],
+          "tags": [
+            "alphabet",
+            "animated",
+            "animation",
+            "bitmap",
+            "character",
+            "font",
+            "format",
+            "gif",
+            "graphics",
+            "interchange",
+            "letter",
+            "letters",
+            "symbol",
+            "text",
+            "type"
+          ],
+          "sizes_px": [
+            20,
+            24
+          ]
+        },
+        "canonical_json_sha256": "7b3e009a78c70604cd834041d0de5a1403d1f83d49a1c8814a08b5d0c76ca683",
+        "rounded_24_eligible": false
+      }
+    ],
+    "graphic_eq": [
+      {
+        "json_pointer": "/icons/2519",
+        "row": {
+          "name": "graphic_eq",
+          "version": 399,
+          "popularity": 2301,
+          "codepoint": 57784,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Android"
+          ],
+          "tags": [
+            "audio",
+            "audio analysis",
+            "audio control",
+            "audio customization",
+            "audio effect",
+            "audio icon",
+            "audio mixer",
+            "audio settings",
+            "audio spectrum",
+            "audio tuning",
+            "audio visualization",
+            "bar graph",
+            "detect",
+            "detection",
+            "eq",
+            "equalization",
+            "equalizer",
+            "equalizer bars",
+            "frequency bands",
+            "graphic",
+            "graphic equalizer",
+            "media player",
+            "music",
+            "music icon",
+            "music player",
+            "music settings",
+            "noise",
+            "recording",
+            "sound",
+            "sound adjustment",
+            "sound analysis",
+            "sound customization",
+            "sound effect",
+            "sound icon",
+            "sound levels",
+            "sound mixer",
+            "sound tuning",
+            "sound waves",
+            "vertical bars",
+            "voice",
+            "volume control"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "c4e1500745c1e37ff347933b0837f4143060cad4f9b5f891fc2583dae4aa5efb",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/2520",
+        "row": {
+          "name": "graphic_eq",
+          "version": 13,
+          "popularity": 13223,
+          "codepoint": 57784,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "device"
+          ],
+          "tags": [
+            "audio",
+            "detect",
+            "detection",
+            "eq",
+            "equalizer",
+            "graphic",
+            "music",
+            "noise",
+            "recording",
+            "sound",
+            "voice"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "23cbc230545c2933c081bc9aa4f29bb5febcbaf04e3089013f187c9aa7ef442e",
+        "rounded_24_eligible": false
+      }
+    ],
+    "group": [
+      {
+        "json_pointer": "/icons/2540",
+        "row": {
+          "name": "group",
+          "version": 399,
+          "popularity": 38504,
+          "codepoint": 59375,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Social"
+          ],
+          "tags": [
+            "accounts",
+            "administration",
+            "audience",
+            "basic",
+            "committee",
+            "community",
+            "contacts",
+            "crowd",
+            "directory",
+            "employees",
+            "face",
+            "family",
+            "figures",
+            "friends",
+            "group",
+            "heads",
+            "humans",
+            "list",
+            "management",
+            "members",
+            "network",
+            "outline",
+            "people",
+            "persons",
+            "profile",
+            "profiles",
+            "roster",
+            "shape",
+            "silhouettes",
+            "simple",
+            "social",
+            "staff",
+            "team",
+            "users"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "5362a98e1e9e86e469f5707ea345d81d06ee197ac69a8f9c247e706400261650",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/2541",
+        "row": {
+          "name": "group",
+          "version": 19,
+          "popularity": 64829,
+          "codepoint": 59375,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "social"
+          ],
+          "tags": [
+            "accounts",
+            "committee",
+            "face",
+            "family",
+            "friends",
+            "group",
+            "humans",
+            "network",
+            "people",
+            "persons",
+            "profiles",
+            "social",
+            "team",
+            "users"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "15ea71b2220584d015e21a962558b596dfeeb2144e75e924221ec3c22b4f4c26",
+        "rounded_24_eligible": false
+      }
+    ],
+    "headphones": [
+      {
+        "json_pointer": "/icons/2612",
+        "row": {
+          "name": "headphones",
+          "version": 399,
+          "popularity": 4570,
+          "codepoint": 61471,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Hardware"
+          ],
+          "tags": [
+            "accessory",
+            "audio",
+            "audio device",
+            "audio equipment",
+            "call",
+            "communication",
+            "device",
+            "ear",
+            "ear cups",
+            "earphone",
+            "electronics",
+            "entertainment",
+            "equipment",
+            "gaming",
+            "headband",
+            "headphones",
+            "headphones icon",
+            "headset",
+            "headset icon",
+            "listen",
+            "listening",
+            "listening device",
+            "multimedia",
+            "music",
+            "over ear",
+            "sound",
+            "sound device",
+            "stereo",
+            "support",
+            "technology",
+            "virtual reality"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "6a4ba5b38c4b1b110a4ea19e406fafaaef3937d1bfdff357022304b4f07af101",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/2613",
+        "row": {
+          "name": "headphones",
+          "version": 9,
+          "popularity": 17665,
+          "codepoint": 61471,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "hardware"
+          ],
+          "tags": [
+            "accessory",
+            "audio",
+            "device",
+            "ear",
+            "earphone",
+            "headphones",
+            "headset",
+            "listen",
+            "music",
+            "sound"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "6a8a12f8ed802d10796888a7586aeb00381ada9c66c879f402736c285729d977",
+        "rounded_24_eligible": false
+      }
+    ],
+    "image": [
+      {
+        "json_pointer": "/icons/2797",
+        "row": {
+          "name": "image",
+          "version": 329,
+          "popularity": 17704,
+          "codepoint": 58356,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Images"
+          ],
+          "tags": [
+            "add",
+            "adjust",
+            "album",
+            "asset",
+            "camera",
+            "collection",
+            "crop",
+            "display",
+            "edit",
+            "editor",
+            "file",
+            "frame",
+            "gallery",
+            "graphic",
+            "image",
+            "import",
+            "insert",
+            "landscape",
+            "library",
+            "media",
+            "mountain",
+            "mountains",
+            "original",
+            "photo",
+            "photography",
+            "picture",
+            "rectangle",
+            "restore",
+            "square",
+            "upload",
+            "view",
+            "visual"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "e063842cd98259ad8c1507a6b4336436562071177efc099a03d84f7662eaa4fb",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/2798",
+        "row": {
+          "name": "image",
+          "version": 16,
+          "popularity": 101151,
+          "codepoint": 58356,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "image"
+          ],
+          "tags": [
+            "image",
+            "landscape",
+            "mountain",
+            "mountains",
+            "photo",
+            "photography",
+            "picture"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "98edd07695cd986600550149faf0debcb84b355b856d191f8173c837099cc92c",
+        "rounded_24_eligible": false
+      }
+    ],
+    "info": [
+      {
+        "json_pointer": "/icons/2829",
+        "row": {
+          "name": "info",
+          "version": 399,
+          "popularity": 58502,
+          "codepoint": 59534,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Actions"
+          ],
+          "tags": [
+            "about",
+            "alert",
+            "announcement",
+            "assistance",
+            "circle",
+            "content",
+            "data",
+            "details",
+            "dialog",
+            "dot",
+            "guide",
+            "help",
+            "i",
+            "important",
+            "indicator",
+            "info",
+            "information",
+            "knowledge",
+            "learn",
+            "letter i",
+            "line",
+            "message",
+            "notice",
+            "popup",
+            "query",
+            "question",
+            "read",
+            "round",
+            "service",
+            "support",
+            "symbol",
+            "tip"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "24fab6f41b165ddbb914bab6882bb4d4d3fcdd86d30f709c4b9611468c3c7d54",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/2830",
+        "row": {
+          "name": "info",
+          "version": 21,
+          "popularity": 466924,
+          "codepoint": 59534,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "action"
+          ],
+          "tags": [
+            "alert",
+            "announcement",
+            "assistance",
+            "details",
+            "help",
+            "i",
+            "info",
+            "information",
+            "service",
+            "support"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "c5a6a11dfae09e1ce3848a83f24e6048b2b422994cf0804ce70238b0f183bf6e",
+        "rounded_24_eligible": false
+      }
+    ],
+    "keep": [
+      {
+        "json_pointer": "/icons/2905",
+        "row": {
+          "name": "keep",
+          "version": 399,
+          "popularity": 962,
+          "codepoint": 59050,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Actions"
+          ],
+          "tags": [
+            "basic",
+            "bookmark",
+            "border",
+            "empty",
+            "favorite",
+            "form",
+            "keep",
+            "memo",
+            "note",
+            "outline",
+            "pin",
+            "push",
+            "pushpin",
+            "remember",
+            "reminder",
+            "save",
+            "shape",
+            "simple",
+            "star",
+            "stroke",
+            "tack",
+            "task",
+            "thin",
+            "thumb",
+            "unfilled"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "1063cbff654734b8d50450770db1f3de8bfba7fbd4276c516607a40246af5d2e",
+        "rounded_24_eligible": true
+      }
+    ],
+    "keep_off": [
+      {
+        "json_pointer": "/icons/2906",
+        "row": {
+          "name": "keep_off",
+          "version": 399,
+          "popularity": 254,
+          "codepoint": 59129,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Actions"
+          ],
+          "tags": [
+            "cancel",
+            "close",
+            "cross",
+            "delete",
+            "diagonal line",
+            "disable",
+            "disable item",
+            "disable keep",
+            "disable pin",
+            "disabled",
+            "enabled",
+            "exit",
+            "keep",
+            "keep note off",
+            "keep off",
+            "line",
+            "off",
+            "on",
+            "pin",
+            "push",
+            "pushpin",
+            "reminder",
+            "remove",
+            "remove item",
+            "remove keep",
+            "remove pin",
+            "save",
+            "slash",
+            "stop",
+            "strike",
+            "stroke",
+            "tack",
+            "task",
+            "thumb",
+            "unkeep",
+            "unpin",
+            "unpin item",
+            "unpin note"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "b6436c325a2110a1cd87a18db4fc3d4e76df0e8b2846d7427b23c4a41fdcddeb",
+        "rounded_24_eligible": true
+      }
+    ],
+    "lock": [
+      {
+        "json_pointer": "/icons/3182",
+        "row": {
+          "name": "lock",
+          "version": 399,
+          "popularity": 31415,
+          "codepoint": 59543,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Actions"
+          ],
+          "tags": [
+            "access",
+            "authentication",
+            "authorization",
+            "browser",
+            "closed",
+            "confidential",
+            "connection",
+            "data",
+            "digital",
+            "encryption",
+            "https",
+            "internet",
+            "key",
+            "lock",
+            "locked",
+            "network",
+            "outline",
+            "padlock",
+            "password",
+            "privacy",
+            "private",
+            "protected",
+            "protection",
+            "protocol",
+            "restrict",
+            "safe",
+            "safeguard",
+            "safety",
+            "secure",
+            "security",
+            "ssl",
+            "tls",
+            "website"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "855cfd936934e0feb283422a9c40c5b75c4afd647133d45421d407e2311c10a0",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/3183",
+        "row": {
+          "name": "lock",
+          "version": 18,
+          "popularity": 224607,
+          "codepoint": 59543,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "action"
+          ],
+          "tags": [
+            "lock",
+            "locked",
+            "password",
+            "privacy",
+            "private",
+            "protection",
+            "safety",
+            "secure",
+            "security"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "417b217e4bc9be9599b3c306ba5a6925b9beeb08187827183111e592c9b0322f",
+        "rounded_24_eligible": false
+      }
+    ],
+    "lock_open": [
+      {
+        "json_pointer": "/icons/3186",
+        "row": {
+          "name": "lock_open",
+          "version": 399,
+          "popularity": 8602,
+          "codepoint": 59544,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Actions"
+          ],
+          "tags": [
+            "access",
+            "action open",
+            "authorized",
+            "button open",
+            "control open",
+            "freedom",
+            "grant access",
+            "keyhole",
+            "lock",
+            "lock open",
+            "open",
+            "open door",
+            "padlock open",
+            "password",
+            "permission",
+            "privacy",
+            "privacy open",
+            "private",
+            "protection",
+            "protection open",
+            "release",
+            "safety",
+            "safety open",
+            "secure",
+            "security",
+            "security open",
+            "state open",
+            "symbol open",
+            "toggle lock",
+            "unblocked",
+            "unlock",
+            "unlocked",
+            "unrestricted",
+            "unsecure",
+            "vulnerability"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "1b1528e8dac2e992944f4c1cbcaaef05bf01db60e143abad69d67487619fe95c",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/3187",
+        "row": {
+          "name": "lock_open",
+          "version": 16,
+          "popularity": 64276,
+          "codepoint": 59544,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "action"
+          ],
+          "tags": [
+            "lock",
+            "open",
+            "password",
+            "privacy",
+            "private",
+            "protection",
+            "safety",
+            "secure",
+            "security",
+            "unlocked"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "0a279447200d2537f0dc844be1e60283dc664a2424064b8918a591ccc5ad9073",
+        "rounded_24_eligible": false
+      }
+    ],
+    "mic": [
+      {
+        "json_pointer": "/icons/3356",
+        "row": {
+          "name": "mic",
+          "version": 399,
+          "popularity": 14125,
+          "codepoint": 57385,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Audio&Video"
+          ],
+          "tags": [
+            "audio",
+            "audio button",
+            "audio capture",
+            "audio input",
+            "audio recording",
+            "chat",
+            "communication",
+            "dictate",
+            "dictation",
+            "hear",
+            "hearing",
+            "input",
+            "keyboard",
+            "messaging",
+            "mic",
+            "mic button",
+            "microphone",
+            "microphone button",
+            "multimedia",
+            "noise",
+            "record",
+            "recorder",
+            "recording",
+            "recording button",
+            "sound",
+            "sound capture",
+            "sound input",
+            "sound recording",
+            "speak",
+            "speaker",
+            "speech",
+            "talk",
+            "voice",
+            "voice button",
+            "voice command",
+            "voice input"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "04809492599898745ca0cc23c6cf15f0a0c9a5c2f2d7009f7e133da824e21b87",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/3357",
+        "row": {
+          "name": "mic",
+          "version": 13,
+          "popularity": 0,
+          "codepoint": 57385,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "av"
+          ],
+          "tags": [
+            "dictation",
+            "hear",
+            "hearing",
+            "keyboard",
+            "mic",
+            "microphone",
+            "noise",
+            "record",
+            "recorder",
+            "sound",
+            "speaker",
+            "voice"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "3a7ff4de79b5250d90c49e24572a1bc4f7658edc1ee2f2b8a1b6dfcc76038e9e",
+        "rounded_24_eligible": false
+      }
+    ],
+    "mic_off": [
+      {
+        "json_pointer": "/icons/3366",
+        "row": {
+          "name": "mic_off",
+          "version": 399,
+          "popularity": 2547,
+          "codepoint": 57387,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Audio&Video"
+          ],
+          "tags": [
+            "audio",
+            "audio input disabled",
+            "audio off",
+            "audio settings",
+            "bar",
+            "call control",
+            "communication",
+            "diagonal line",
+            "disabled",
+            "enabled",
+            "hear",
+            "hearing",
+            "input settings",
+            "meeting control",
+            "mic",
+            "mic disabled",
+            "mic symbol",
+            "microphone",
+            "microphone icon",
+            "microphone muted",
+            "microphone off",
+            "mute",
+            "no audio",
+            "no sound",
+            "noise",
+            "off",
+            "on",
+            "privacy",
+            "quiet",
+            "record",
+            "recording",
+            "recording mute",
+            "recording off",
+            "security",
+            "silenced",
+            "slash",
+            "sound",
+            "sound off",
+            "speak off",
+            "talk mute",
+            "voice",
+            "voice input off",
+            "voice mute",
+            "voice off"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "19e30905bf0ebaa4b37d4a8d6da2d899107b8d026fcda03d7de4ff507988e627",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/3367",
+        "row": {
+          "name": "mic_off",
+          "version": 14,
+          "popularity": 15623,
+          "codepoint": 57387,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "av"
+          ],
+          "tags": [
+            "audio",
+            "disabled",
+            "enabled",
+            "hear",
+            "hearing",
+            "mic",
+            "microphone",
+            "mute",
+            "noise",
+            "off",
+            "on",
+            "record",
+            "recording",
+            "slash",
+            "sound",
+            "voice"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "3e7325dbc3c8ec5c7acd997af9b0633ec22f649dfb7cdce2697762f21f0ab37e",
+        "rounded_24_eligible": false
+      }
+    ],
+    "mood": [
+      {
+        "json_pointer": "/icons/3494",
+        "row": {
+          "name": "mood",
+          "version": 399,
+          "popularity": 6701,
+          "codepoint": 59378,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Social"
+          ],
+          "tags": [
+            "add",
+            "character",
+            "chat",
+            "cheerful",
+            "circle",
+            "communication",
+            "emoji",
+            "emoticon",
+            "emotion",
+            "emotions",
+            "expression",
+            "expressions",
+            "face",
+            "feeling",
+            "feelings",
+            "glad",
+            "grin",
+            "happiness",
+            "happy",
+            "insert",
+            "joy",
+            "like",
+            "message",
+            "mood",
+            "outline",
+            "person",
+            "pleased",
+            "reaction",
+            "round",
+            "select",
+            "smile",
+            "smiley",
+            "smiling",
+            "social",
+            "survey",
+            "symbol",
+            "tag",
+            "text"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "f1f4b8ca57ee227f05f867c4c45204b449a808bf29617c1b7f756530e722c519",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/3495",
+        "row": {
+          "name": "mood",
+          "version": 16,
+          "popularity": 15547,
+          "codepoint": 59378,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "social"
+          ],
+          "tags": [
+            "emoji",
+            "emotions",
+            "expressions",
+            "face",
+            "feelings",
+            "glad",
+            "happiness",
+            "happy",
+            "like",
+            "mood",
+            "person",
+            "pleased",
+            "smile",
+            "smiling",
+            "social",
+            "survey"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "0e1ae1acf058cb88be9df13d8b35ee5a85c9ab0755f1bf5e7b5d76b1e3bd410b",
+        "rounded_24_eligible": false
+      }
+    ],
+    "more_vert": [
+      {
+        "json_pointer": "/icons/3512",
+        "row": {
+          "name": "more_vert",
+          "version": 329,
+          "popularity": 0,
+          "codepoint": 58836,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "UI actions"
+          ],
+          "tags": [
+            "3",
+            "DISABLE_IOS",
+            "actions",
+            "additional options",
+            "android",
+            "app",
+            "application",
+            "components",
+            "context menu",
+            "controls",
+            "detail menu",
+            "disable_ios",
+            "dots",
+            "dropdown menu",
+            "ellipsis",
+            "etc",
+            "expand menu",
+            "expanded menu",
+            "extra options",
+            "hidden options",
+            "interface",
+            "list menu",
+            "list options",
+            "menu",
+            "more",
+            "more actions",
+            "more options",
+            "options menu",
+            "overflow",
+            "overflow menu",
+            "pop-up menu",
+            "screen",
+            "settings",
+            "site",
+            "submenu",
+            "tertiary actions",
+            "three",
+            "ui",
+            "ux",
+            "vert",
+            "vertical",
+            "vertical dots",
+            "web",
+            "website"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "3705237f52fadab6b819779ea68c2567d389539ed5e6463e5a5328c9d952da08",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/3513",
+        "row": {
+          "name": "more_vert",
+          "version": 19,
+          "popularity": 151622,
+          "codepoint": 58836,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "navigation"
+          ],
+          "tags": [
+            "3",
+            "DISABLE_IOS",
+            "android",
+            "app",
+            "application",
+            "components",
+            "disable_ios",
+            "dots",
+            "etc",
+            "interface",
+            "more",
+            "screen",
+            "site",
+            "three",
+            "ui",
+            "ux",
+            "vert",
+            "vertical",
+            "web",
+            "website"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "f2588e1a4776a28e40c737cae77c38d808c12af921b84913a2322b2354d1d6cd",
+        "rounded_24_eligible": false
+      }
+    ],
+    "person_remove": [
+      {
+        "json_pointer": "/icons/4017",
+        "row": {
+          "name": "person_remove",
+          "version": 399,
+          "popularity": 2951,
+          "codepoint": 61286,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Social"
+          ],
+          "tags": [
+            "account",
+            "avatar",
+            "ban",
+            "blacklist",
+            "block",
+            "cancellation",
+            "circle",
+            "contact",
+            "delete",
+            "depart",
+            "diagonal line",
+            "exclude",
+            "exit",
+            "face",
+            "friend",
+            "human",
+            "line",
+            "minus",
+            "negative",
+            "people",
+            "person",
+            "profile",
+            "prohibition",
+            "refusal",
+            "rejection",
+            "remove",
+            "slash",
+            "unfollow",
+            "unfriend",
+            "unsubscribe",
+            "user",
+            "withdrawal"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "41f1f7b531becba589aeef54907de7849c218536effaa6b1cdb7d2dbec4ba1c6",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/4018",
+        "row": {
+          "name": "person_remove",
+          "version": 12,
+          "popularity": 18675,
+          "codepoint": 61286,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "social"
+          ],
+          "tags": [
+            "account",
+            "avatar",
+            "delete",
+            "face",
+            "human",
+            "minus",
+            "people",
+            "person",
+            "profile",
+            "remove",
+            "unfriend",
+            "user"
+          ],
+          "sizes_px": [
+            20,
+            24
+          ]
+        },
+        "canonical_json_sha256": "1973334810e16caff6f69b79459bfc80aa445feb010982753cfd06cdbb0693ec",
+        "rounded_24_eligible": false
+      }
+    ],
+    "phone_in_talk": [
+      {
+        "json_pointer": "/icons/4053",
+        "row": {
+          "name": "phone_in_talk",
+          "version": 329,
+          "popularity": 9934,
+          "codepoint": 58909,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Communicate"
+          ],
+          "tags": [
+            "active call",
+            "audio",
+            "call",
+            "call in progress",
+            "calling",
+            "cell",
+            "cellular",
+            "chat",
+            "communication",
+            "communication device",
+            "connected",
+            "connection",
+            "contact",
+            "conversation",
+            "data",
+            "device",
+            "handset",
+            "hardware",
+            "in",
+            "line",
+            "line active",
+            "mobile",
+            "network",
+            "ongoing call",
+            "phone",
+            "phone call",
+            "scan",
+            "service",
+            "signal",
+            "sound",
+            "sound waves",
+            "speaker",
+            "speaking",
+            "talk",
+            "talk line",
+            "talking",
+            "telephone",
+            "telephone call",
+            "voice",
+            "voice communication",
+            "volume",
+            "waves",
+            "wireless"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "12daa8d655b5a07085f2205ec77d4f4bddb222f98a44a2e9ca5257738ad88777",
+        "rounded_24_eligible": true
+      }
+    ],
+    "present_to_all": [
+      {
+        "json_pointer": "/icons/4221",
+        "row": {
+          "name": "present_to_all",
+          "version": 399,
+          "popularity": 1080,
+          "codepoint": 57567,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Communicate"
+          ],
+          "tags": [
+            "all",
+            "arrow",
+            "audience",
+            "broadcast",
+            "cast",
+            "classroom",
+            "communicate",
+            "conference",
+            "demonstrate",
+            "display",
+            "distribute",
+            "education",
+            "everyone",
+            "global",
+            "group",
+            "lectern",
+            "meeting",
+            "multi-screen",
+            "output",
+            "present",
+            "presentation",
+            "project",
+            "public",
+            "screen",
+            "share",
+            "show",
+            "site",
+            "slides",
+            "speaker",
+            "stream",
+            "team",
+            "to",
+            "training",
+            "web",
+            "webinar",
+            "website"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "465f87eb923f75d0735d77361f2e3fbf7e3634ca0ada26452053a70c52e92439",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/4222",
+        "row": {
+          "name": "present_to_all",
+          "version": 11,
+          "popularity": 5338,
+          "codepoint": 57567,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "communication"
+          ],
+          "tags": [
+            "all",
+            "arrow",
+            "present",
+            "presentation",
+            "screen",
+            "share",
+            "site",
+            "slides",
+            "to",
+            "web",
+            "website"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "d3b5a7f70c8c0e66bb98b571f4afe0ab28bf574acc1e6dd7a1d36b3dd7565ca3",
+        "rounded_24_eligible": false
+      }
+    ],
+    "public": [
+      {
+        "json_pointer": "/icons/4263",
+        "row": {
+          "name": "public",
+          "version": 399,
+          "popularity": 18536,
+          "codepoint": 59403,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Social"
+          ],
+          "tags": [
+            "access",
+            "accessibility",
+            "circle",
+            "community",
+            "connection",
+            "country",
+            "earth",
+            "everybody",
+            "geography",
+            "global",
+            "globe",
+            "international",
+            "internet",
+            "location",
+            "map",
+            "network",
+            "open",
+            "planet",
+            "public",
+            "round",
+            "share",
+            "social",
+            "space",
+            "sphere",
+            "unlocked",
+            "visible",
+            "web",
+            "world",
+            "worldwide"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "0c3c05f2422bf5011c24d7d01fcffac5d60a2c378c5bb9e9d05a30ada8341448",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/4264",
+        "row": {
+          "name": "public",
+          "version": 13,
+          "popularity": 89047,
+          "codepoint": 59403,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "social"
+          ],
+          "tags": [
+            "earth",
+            "global",
+            "globe",
+            "map",
+            "network",
+            "planet",
+            "public",
+            "social",
+            "space",
+            "web",
+            "world"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "4d1306362461a2147e509fa14f68ec6f8f91297c0779d4e3cad2dc198535ed19",
+        "rounded_24_eligible": false
+      }
+    ],
+    "quiz": [
+      {
+        "json_pointer": "/icons/4301",
+        "row": {
+          "name": "quiz",
+          "version": 399,
+          "popularity": 5988,
+          "codepoint": 61516,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Social"
+          ],
+          "tags": [
+            "?",
+            "academic",
+            "answer",
+            "assessment",
+            "assistance",
+            "certification",
+            "challenge",
+            "clipboard",
+            "comprehension",
+            "document",
+            "e-learning",
+            "education",
+            "evaluate",
+            "evaluation",
+            "exam",
+            "faq",
+            "feedback",
+            "game",
+            "grade",
+            "help",
+            "info",
+            "information",
+            "knowledge",
+            "learning",
+            "paper",
+            "poll",
+            "punctuation",
+            "question mark",
+            "questions",
+            "quiz",
+            "report",
+            "results",
+            "review",
+            "score",
+            "study",
+            "support",
+            "survey",
+            "symbol",
+            "test",
+            "trivia"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "44a83693b6a75fe7a6c663e1802727305a7e6112a1bd5324c3037f3e01b07bb8",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/4302",
+        "row": {
+          "name": "quiz",
+          "version": 10,
+          "popularity": 31089,
+          "codepoint": 61516,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "device"
+          ],
+          "tags": [
+            "?",
+            "assistance",
+            "faq",
+            "help",
+            "info",
+            "information",
+            "punctuation",
+            "question mark",
+            "quiz",
+            "support",
+            "symbol",
+            "test"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "fa6fefe10982a5fe22b6f7d5cddbe51f8585548576cfc39580065605b2aa5741",
+        "rounded_24_eligible": false
+      }
+    ],
+    "search": [
+      {
+        "json_pointer": "/icons/4618",
+        "row": {
+          "name": "search",
+          "version": 399,
+          "popularity": 184306,
+          "codepoint": 59574,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "UI actions"
+          ],
+          "tags": [
+            "browse",
+            "circle",
+            "discover",
+            "discover icon",
+            "explore",
+            "explore icon",
+            "filter",
+            "find",
+            "find icon",
+            "glass",
+            "handle",
+            "inspect",
+            "investigate",
+            "locate",
+            "locate icon",
+            "look",
+            "magnifier",
+            "magnify",
+            "magnifying",
+            "mode",
+            "options",
+            "query",
+            "query icon",
+            "scope",
+            "search",
+            "search bar",
+            "search button",
+            "see",
+            "stick",
+            "tool",
+            "view",
+            "zoom"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "b1de81bee8c0548ac513192e86f0a67b56d267be8ab0ce783ee9c802e0ef1f94",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/4619",
+        "row": {
+          "name": "search",
+          "version": 17,
+          "popularity": 863744,
+          "codepoint": 59574,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "action"
+          ],
+          "tags": [
+            "filter",
+            "find",
+            "glass",
+            "look",
+            "magnify",
+            "magnifying",
+            "search",
+            "see"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "026c10457fc4bbfb7328a35aaf12fe1b6f98109912cd9b9a478cd0a94db78480",
+        "rounded_24_eligible": false
+      }
+    ],
+    "send": [
+      {
+        "json_pointer": "/icons/4658",
+        "row": {
+          "name": "send",
+          "version": 329,
+          "popularity": 22606,
+          "codepoint": 57699,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Communicate"
+          ],
+          "tags": [
+            "action",
+            "airplane",
+            "arrow",
+            "chat",
+            "communication",
+            "complete",
+            "data",
+            "deliver",
+            "direct message",
+            "dispatch",
+            "document",
+            "email",
+            "flight",
+            "form",
+            "forward",
+            "give",
+            "mail",
+            "message",
+            "outgoing",
+            "paper",
+            "paper plane",
+            "plane",
+            "point",
+            "post",
+            "publish",
+            "reply",
+            "right",
+            "send",
+            "share",
+            "submit",
+            "transfer",
+            "transmit",
+            "upload"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "dba917613ca8a42dcd96c7a3276ccd5463b9e5b900704b7ccd527bcf066f2be8",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/4659",
+        "row": {
+          "name": "send",
+          "version": 20,
+          "popularity": 131408,
+          "codepoint": 57699,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "content"
+          ],
+          "tags": [
+            "email",
+            "mail",
+            "message",
+            "paper",
+            "plane",
+            "reply",
+            "right",
+            "send",
+            "share"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "f4ccd09b62320b50853e252e9d594ced8700d48a9ea5f01974c5f0933be20ab1",
+        "rounded_24_eligible": false
+      }
+    ],
+    "settings": [
+      {
+        "json_pointer": "/icons/4702",
+        "row": {
+          "name": "settings",
+          "version": 399,
+          "popularity": 0,
+          "codepoint": 59576,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "UI actions"
+          ],
+          "tags": [
+            "adjustments",
+            "administration",
+            "administration panel",
+            "application",
+            "change",
+            "cog",
+            "cogwheel",
+            "configuration",
+            "control",
+            "control panel",
+            "customization settings",
+            "customize",
+            "details",
+            "fine tune",
+            "gear",
+            "gear wheel",
+            "info",
+            "information",
+            "machinery",
+            "manage",
+            "management",
+            "management tools",
+            "mechanism",
+            "modify",
+            "options",
+            "options button",
+            "panel",
+            "parameter",
+            "personal",
+            "preference settings",
+            "preferences",
+            "service",
+            "settings",
+            "setup",
+            "system",
+            "tools"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "eae705415b35b0b43280633edddb31c76c8a220d00a4f383e70d18b24c0a3574",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/4703",
+        "row": {
+          "name": "settings",
+          "version": 19,
+          "popularity": 611692,
+          "codepoint": 59576,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "action"
+          ],
+          "tags": [
+            "application",
+            "change",
+            "details",
+            "gear",
+            "info",
+            "information",
+            "options",
+            "personal",
+            "service",
+            "settings"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "085999248e15b99e2a2fa5448fb01476368f11ddcd4a32406a4803a937f1512d",
+        "rounded_24_eligible": false
+      }
+    ],
+    "share": [
+      {
+        "json_pointer": "/icons/4764",
+        "row": {
+          "name": "share",
+          "version": 399,
+          "popularity": 22670,
+          "codepoint": 59405,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Social"
+          ],
+          "tags": [
+            "DISABLE_IOS",
+            "activity",
+            "andriod share",
+            "android",
+            "arrow",
+            "communication",
+            "communication icon",
+            "connect",
+            "connection",
+            "contect",
+            "data",
+            "disable_ios",
+            "distribute",
+            "export",
+            "forward",
+            "geometric",
+            "line",
+            "lines",
+            "link",
+            "media",
+            "multimedia",
+            "multiple",
+            "network",
+            "options",
+            "outreach",
+            "point",
+            "pointing",
+            "send",
+            "send to",
+            "send to friends",
+            "send to others",
+            "send to social",
+            "share",
+            "shared",
+            "sharing",
+            "social",
+            "three dots",
+            "up arrow"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "5fa2e7898f3e97518656675ef4b31657081aefa16b52781ecea027dba297f6ce",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/4765",
+        "row": {
+          "name": "share",
+          "version": 18,
+          "popularity": 0,
+          "codepoint": 59405,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "social"
+          ],
+          "tags": [
+            "DISABLE_IOS",
+            "android",
+            "connect",
+            "contect",
+            "disable_ios",
+            "link",
+            "media",
+            "multimedia",
+            "multiple",
+            "network",
+            "options",
+            "share",
+            "shared",
+            "sharing",
+            "social"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "3767adbf2f0d3a0e0510b8c3881c4241ecbbf3de55ca9d28531f4ee200b48a43",
+        "rounded_24_eligible": false
+      }
+    ],
+    "shield_person": [
+      {
+        "json_pointer": "/icons/4786",
+        "row": {
+          "name": "shield_person",
+          "version": 399,
+          "popularity": 395,
+          "codepoint": 63056,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Privacy"
+          ],
+          "tags": [
+            "account",
+            "admin",
+            "avatar",
+            "certified",
+            "face",
+            "figure",
+            "glyph",
+            "human",
+            "icon",
+            "identity",
+            "isolated",
+            "outline",
+            "panel",
+            "people",
+            "person",
+            "privacy",
+            "private",
+            "profile",
+            "protect",
+            "protection",
+            "safety",
+            "secure",
+            "security",
+            "settings",
+            "shape",
+            "shield",
+            "silhouette",
+            "symbol",
+            "user",
+            "verified"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "716299c4bb318364d10923617eb2319cb13992a37a3f8938a323b51271bb8bd2",
+        "rounded_24_eligible": true
+      }
+    ],
+    "signal_wifi_bad": [
+      {
+        "json_pointer": "/icons/4880",
+        "row": {
+          "name": "signal_wifi_bad",
+          "version": 399,
+          "popularity": 510,
+          "codepoint": 61539,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Android"
+          ],
+          "tags": [
+            "access",
+            "arc",
+            "bad",
+            "bar",
+            "bars",
+            "cancel",
+            "cell",
+            "cellular",
+            "clear",
+            "close",
+            "communication",
+            "cone",
+            "connect",
+            "connection",
+            "data",
+            "disconnected",
+            "error",
+            "exit",
+            "hotspot",
+            "icon",
+            "internet",
+            "issue",
+            "lines",
+            "mobile",
+            "network",
+            "no",
+            "outage",
+            "phone",
+            "problem",
+            "quit",
+            "radiating",
+            "remove",
+            "signal",
+            "stop",
+            "symbol",
+            "technology",
+            "triangle",
+            "unconnected",
+            "waves",
+            "wifi",
+            "wireless",
+            "x"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "ae8748348412ee38544ae9f7a6a14060f60443bf9ebfaa1f4bd814edf25a3a41",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/4881",
+        "row": {
+          "name": "signal_wifi_bad",
+          "version": 10,
+          "popularity": 2586,
+          "codepoint": 61539,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "device"
+          ],
+          "tags": [
+            "bad",
+            "bar",
+            "cancel",
+            "cell",
+            "cellular",
+            "clear",
+            "close",
+            "data",
+            "exit",
+            "internet",
+            "mobile",
+            "network",
+            "no",
+            "phone",
+            "quit",
+            "remove",
+            "signal",
+            "stop",
+            "wifi",
+            "wireless",
+            "x"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "089c86791666b89043a2fdd0da080f267790aac09343ecb18758dfe63ab960ca",
+        "rounded_24_eligible": false
+      }
+    ],
+    "sports_esports": [
+      {
+        "json_pointer": "/icons/5093",
+        "row": {
+          "name": "sports_esports",
+          "version": 399,
+          "popularity": 0,
+          "codepoint": 59944,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Activities"
+          ],
+          "tags": [
+            "asset",
+            "competitive gaming",
+            "computer games",
+            "console",
+            "console controller",
+            "console games",
+            "control",
+            "controller",
+            "device",
+            "digital",
+            "digital entertainment",
+            "entertainment",
+            "esports",
+            "game",
+            "game console",
+            "game controller",
+            "game input",
+            "gamepad",
+            "gaming",
+            "gaming controller",
+            "google",
+            "handheld",
+            "hardware",
+            "hobby",
+            "joystick",
+            "leisure",
+            "online",
+            "online gaming",
+            "play",
+            "play games",
+            "playstation",
+            "remote",
+            "social",
+            "sports",
+            "stadia",
+            "technology",
+            "tournament",
+            "video",
+            "video game",
+            "video game controller",
+            "video games",
+            "videogame",
+            "xbox"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "75a0f0590877d6bb5ae74140468b3b739475aac8ce6cc59876227a58ac56bd4a",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/5094",
+        "row": {
+          "name": "sports_esports",
+          "version": 11,
+          "popularity": 0,
+          "codepoint": 59944,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "social"
+          ],
+          "tags": [
+            "asset",
+            "console",
+            "control",
+            "controller",
+            "device",
+            "entertainment",
+            "esports",
+            "game",
+            "gamepad",
+            "gaming",
+            "google",
+            "handheld",
+            "hardware",
+            "hobby",
+            "online",
+            "playstation",
+            "remote",
+            "social",
+            "sports",
+            "stadia",
+            "video",
+            "video game",
+            "videogame",
+            "xbox"
+          ],
+          "sizes_px": [
+            20,
+            24
+          ]
+        },
+        "canonical_json_sha256": "8519a75572b7ff74756d2e4912689f8cf3904c5b4f099033fa6cdb07ed8c2133",
+        "rounded_24_eligible": false
+      }
+    ],
+    "videocam": [
+      {
+        "json_pointer": "/icons/5816",
+        "row": {
+          "name": "videocam",
+          "version": 382,
+          "popularity": 11876,
+          "codepoint": 57419,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Audio&Video"
+          ],
+          "tags": [
+            "broadcast",
+            "broadcasting",
+            "cam",
+            "camera",
+            "capture",
+            "conference",
+            "electronic",
+            "film",
+            "filming",
+            "hardware",
+            "image",
+            "lens",
+            "live",
+            "media",
+            "motion",
+            "movie",
+            "picture",
+            "playback",
+            "record",
+            "recording",
+            "shutter",
+            "stream",
+            "streaming",
+            "technology",
+            "video",
+            "video recording",
+            "videocam",
+            "videography"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "1920950af1bad0b82de51d35ea280e2762fcf9d49a4e6080319554df971f4c21",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/5817",
+        "row": {
+          "name": "videocam",
+          "version": 16,
+          "popularity": 0,
+          "codepoint": 57419,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "av"
+          ],
+          "tags": [
+            "cam",
+            "camera",
+            "conference",
+            "film",
+            "filming",
+            "hardware",
+            "image",
+            "motion",
+            "picture",
+            "video",
+            "videography"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "075415001f2089d9542cfeda176169bc07f154eae090032b641e8d475a741608",
+        "rounded_24_eligible": false
+      }
+    ],
+    "videocam_off": [
+      {
+        "json_pointer": "/icons/5819",
+        "row": {
+          "name": "videocam_off",
+          "version": 399,
+          "popularity": 1313,
+          "codepoint": 57420,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Audio&Video"
+          ],
+          "tags": [
+            "blocked",
+            "broadcasting",
+            "call",
+            "cam",
+            "camera",
+            "capture",
+            "collaboration",
+            "communication",
+            "conference",
+            "crossed out",
+            "diagonal",
+            "disabled",
+            "enabled",
+            "film",
+            "filming",
+            "forbidden",
+            "hardware",
+            "image",
+            "lens",
+            "line",
+            "media",
+            "meeting",
+            "motion",
+            "multimedia",
+            "mute",
+            "off",
+            "offline",
+            "on",
+            "picture",
+            "recording",
+            "rectangle",
+            "remote work",
+            "screen sharing",
+            "slash",
+            "stopped",
+            "stream",
+            "unavailable",
+            "video",
+            "video call",
+            "videography",
+            "web conferencing"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "70a7765c498f190a7723c4928a708c718c9ed7361fe6eb42026dcdd586074a26",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/5820",
+        "row": {
+          "name": "videocam_off",
+          "version": 12,
+          "popularity": 9738,
+          "codepoint": 57420,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "av"
+          ],
+          "tags": [
+            "cam",
+            "camera",
+            "conference",
+            "disabled",
+            "enabled",
+            "film",
+            "filming",
+            "hardware",
+            "image",
+            "motion",
+            "off",
+            "offline",
+            "on",
+            "picture",
+            "slash",
+            "video",
+            "videography"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "55e47ec9b92c477b46963310b69a9dcff6ce4753f61374c9c4a8a4ebe0563277",
+        "rounded_24_eligible": false
+      }
+    ],
+    "volume_up": [
+      {
+        "json_pointer": "/icons/5901",
+        "row": {
+          "name": "volume_up",
+          "version": 399,
+          "popularity": 11057,
+          "codepoint": 57424,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Audio&Video"
+          ],
+          "tags": [
+            "acoustic",
+            "adjust volume",
+            "amplify",
+            "audio",
+            "audio bars",
+            "audio control",
+            "audio output",
+            "control",
+            "controls",
+            "decibels",
+            "hearing",
+            "high volume",
+            "icon",
+            "increase volume",
+            "listen",
+            "loud",
+            "media",
+            "multimedia",
+            "music",
+            "playback",
+            "settings",
+            "sound",
+            "sound bars",
+            "sound levels",
+            "sound setting",
+            "sound wave",
+            "speaker",
+            "symbol",
+            "tv",
+            "up",
+            "video",
+            "volume",
+            "volume control",
+            "volume up"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "27820a408a8eb400aeeb9b44d8f1e8753050571bdade9581de1cc1535efdd840",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/5902",
+        "row": {
+          "name": "volume_up",
+          "version": 14,
+          "popularity": 63029,
+          "codepoint": 57424,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "av"
+          ],
+          "tags": [
+            "audio",
+            "control",
+            "music",
+            "sound",
+            "speaker",
+            "tv",
+            "up",
+            "volume"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "f3b93507a44f667fb5792fc42c909874c45bc84951ba6bcded4ab2544cafb6c1",
+        "rounded_24_eligible": false
+      }
+    ],
+    "warning": [
+      {
+        "json_pointer": "/icons/5931",
+        "row": {
+          "name": "warning",
+          "version": 399,
+          "popularity": 34856,
+          "codepoint": 57346,
+          "unsupported_families": [
+            "Material Icons",
+            "Material Icons Outlined",
+            "Material Icons Round",
+            "Material Icons Sharp",
+            "Material Icons Two Tone"
+          ],
+          "categories": [
+            "Actions"
+          ],
+          "tags": [
+            "!",
+            "alert",
+            "app",
+            "attention",
+            "caution",
+            "danger",
+            "error",
+            "exclamation",
+            "flag",
+            "hazard",
+            "important",
+            "interface",
+            "issue",
+            "mark",
+            "message",
+            "notification",
+            "problem",
+            "risk",
+            "security",
+            "shield",
+            "sign",
+            "signal",
+            "status",
+            "symbol",
+            "system",
+            "triangle",
+            "ui",
+            "urgent",
+            "ux",
+            "warning",
+            "website"
+          ],
+          "sizes_px": [
+            20,
+            24,
+            40,
+            48
+          ]
+        },
+        "canonical_json_sha256": "8e5f6def74237b641fdf0a31623fa0bc6f7ca16d955d5a60b4eb98e38460dfb1",
+        "rounded_24_eligible": true
+      },
+      {
+        "json_pointer": "/icons/5932",
+        "row": {
+          "name": "warning",
+          "version": 17,
+          "popularity": 130765,
+          "codepoint": 57346,
+          "unsupported_families": [
+            "Material Symbols Outlined",
+            "Material Symbols Rounded",
+            "Material Symbols Sharp"
+          ],
+          "categories": [
+            "alert"
+          ],
+          "tags": [
+            "!",
+            "alert",
+            "attention",
+            "caution",
+            "danger",
+            "error",
+            "exclamation",
+            "important",
+            "mark",
+            "notification",
+            "symbol",
+            "triangle",
+            "warning"
+          ],
+          "sizes_px": [
+            24
+          ]
+        },
+        "canonical_json_sha256": "1685b8aa7612a259b94c9139c71d34ac608ef2e09c35a8b9ed737ab722a6684f",
+        "rounded_24_eligible": false
+      }
+    ]
+  }
+}

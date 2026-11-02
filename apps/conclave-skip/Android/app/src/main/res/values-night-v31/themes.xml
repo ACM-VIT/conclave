@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.Conclave" parent="Base.Theme.Conclave">
+        <item name="android:windowSplashScreenBackground">@color/conclave_window_background</item>
+    </style>
+</resources>

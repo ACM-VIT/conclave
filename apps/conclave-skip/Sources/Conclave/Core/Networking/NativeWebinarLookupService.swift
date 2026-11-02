@@ -6,13 +6,21 @@ import FoundationNetworking
 struct NativeScheduledWebinar: Decodable {
     let linkSlug: String?
     let title: String?
+
+    let hostName: String?
     let scheduledStartAt: Double?
     let scheduledEndAt: Double?
     let status: String?
     let earlyEntryMinutes: Int?
+    let requiresInviteCode: Bool?
+    let webinarLink: String?
     let clientId: String?
 
     var isOpenForAttendee: Bool {
+        opensForAttendee(nowMillis: Date().timeIntervalSince1970 * 1000.0)
+    }
+
+    func opensForAttendee(nowMillis: Double) -> Bool {
         let normalizedStatus = status?.lowercased() ?? ""
         if normalizedStatus == "ended" || normalizedStatus == "cancelled" {
             return false
@@ -24,9 +32,13 @@ struct NativeScheduledWebinar: Decodable {
             return true
         }
         let earlyMs = Double(earlyEntryMinutes ?? 0) * 60_000.0
-        let nowMs = Date().timeIntervalSince1970 * 1000.0
-        return nowMs >= scheduledStartAt - earlyMs
+        return nowMillis >= scheduledStartAt - earlyMs
     }
+}
+
+struct NativeWebinarLookupResult {
+    let outcome: WebinarLookupOutcome
+    let webinar: NativeScheduledWebinar?
 }
 
 private struct NativeScheduledWebinarResponse: Decodable {
@@ -47,12 +59,46 @@ private struct AndroidNativeWebinarHTTPResponse: Decodable {
 #endif
 
 enum NativeWebinarLookupService {
+
     static func fetchScheduledWebinar(slug: String, clientId overrideClientId: String? = nil) async -> NativeScheduledWebinar? {
+        let result = await fetchLookupResult(slug: slug, clientId: overrideClientId)
+        return result.outcome == WebinarLookupOutcome.found ? result.webinar : nil
+    }
+
+    static func lookup(slug: String, clientId overrideClientId: String) async -> WebinarLookupAnswer {
+        let result = await fetchLookupResult(slug: slug, clientId: overrideClientId)
+        switch result.outcome {
+        case .found:
+            guard let webinar = result.webinar else { return WebinarLookupAnswer.unscheduled }
+            return answer(from: webinar)
+        case .notScheduled:
+            return WebinarLookupAnswer.unscheduled
+        case .failed:
+            return WebinarLookupAnswer.lookupFailed
+        }
+    }
+
+    static func answer(from webinar: NativeScheduledWebinar) -> WebinarLookupAnswer {
+        WebinarLookupAnswer(
+            outcome: WebinarLookupOutcome.found,
+            title: (webinar.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            hostName: (webinar.hostName ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            status: (webinar.status ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            startsAtMillis: webinar.scheduledStartAt ?? 0.0,
+            endsAtMillis: webinar.scheduledEndAt ?? 0.0,
+            earlyEntryMinutes: max(0, webinar.earlyEntryMinutes ?? 0),
+            requiresInviteCode: webinar.requiresInviteCode ?? false,
+            link: (webinar.webinarLink ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    private static func fetchLookupResult(slug: String, clientId overrideClientId: String?) async -> NativeWebinarLookupResult {
+        let failed = NativeWebinarLookupResult(outcome: WebinarLookupOutcome.failed, webinar: nil)
         let trimmedSlug = slug.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSlug.isEmpty,
               let baseURL = NativeAuthService.resolveAppBaseURL(),
               let url = scheduledWebinarURL(slug: trimmedSlug, baseURL: baseURL) else {
-            return nil
+            return failed
         }
 
         var request = URLRequest(url: url)
@@ -66,20 +112,21 @@ enum NativeWebinarLookupService {
         NativeCookieSupport.attachCookies(to: &request)
 
         guard let result = try? await performWebinarRequest(request, url: url) else {
-            return nil
+            return failed
         }
         guard (200...299).contains(result.statusCode),
               let decoded = try? JSONDecoder().decode(NativeScheduledWebinarResponse.self, from: result.data) else {
-            return nil
+            return failed
         }
 
         guard let webinar = decoded.scheduledWebinar else {
-            return nil
+
+            return NativeWebinarLookupResult(outcome: WebinarLookupOutcome.notScheduled, webinar: nil)
         }
         if let webinarClientId = webinar.clientId, !webinarClientId.isEmpty, webinarClientId != clientId {
-            return nil
+            return NativeWebinarLookupResult(outcome: WebinarLookupOutcome.notScheduled, webinar: nil)
         }
-        return webinar
+        return NativeWebinarLookupResult(outcome: WebinarLookupOutcome.found, webinar: webinar)
     }
 
     static func resolvedClientId(override: String?) -> String {

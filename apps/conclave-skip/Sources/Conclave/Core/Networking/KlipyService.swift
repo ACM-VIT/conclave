@@ -3,8 +3,6 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// The Klipy catalogs surfaced in the picker. Values map to the plural path
-/// segments the web proxy (`/api/klipy/gifs`) forwards to Klipy.
 enum KlipyMediaKind: String, CaseIterable, Equatable {
     case gifs
     case stickers
@@ -25,11 +23,91 @@ enum KlipyMediaKind: String, CaseIterable, Equatable {
         case .clips: return "clips"
         }
     }
+
+    static func from(_ kind: ChatGifKind) -> KlipyMediaKind {
+        switch kind {
+        case .gif: return KlipyMediaKind.gifs
+        case .sticker: return KlipyMediaKind.stickers
+        case .clip: return KlipyMediaKind.clips
+        }
+    }
 }
 
-/// Mirrors the `KlipyMediaSearchResponse` returned by the web proxy. Items
-/// decode straight into `ChatGifAttachment` because the proxy already emits the
-/// exact field set the chat pipeline consumes (id/title/url/previewUrl/…).
+enum ChatGifPickerPhase: String, CaseIterable {
+    case loading, results, empty, error
+}
+
+struct ChatGifPickerState: Equatable {
+    let kind: ChatGifKind
+    let query: String
+    let generation: Int
+    let items: [ChatGifAttachment]
+
+    let page: Int
+    let hasNext: Bool
+    let phase: ChatGifPickerPhase
+    let isLoadingMore: Bool
+    let loadMoreFailed: Bool
+
+    static let debounceMillis = 250
+
+    static let loadMoreThreshold = 6
+
+    static let initial = ChatGifPickerState(kind: ChatGifKind.gif, query: "", generation: 0, items: [], page: 0, hasNext: false,
+                                            phase: ChatGifPickerPhase.loading, isLoadingMore: false, loadMoreFailed: false)
+
+    func starting(kind: ChatGifKind, query: String) -> ChatGifPickerState {
+        ChatGifPickerState(kind: kind, query: query, generation: generation + 1, items: [], page: 0, hasNext: false,
+                           phase: ChatGifPickerPhase.loading, isLoadingMore: false, loadMoreFailed: false)
+    }
+
+    func acceptingFirst(_ result: ChatGifPage, generation answered: Int) -> ChatGifPickerState {
+        if answered != self.generation { return self }
+        if result.failed {
+            return ChatGifPickerState(kind: kind, query: query, generation: self.generation, items: [], page: 0, hasNext: false,
+                                      phase: ChatGifPickerPhase.error, isLoadingMore: false, loadMoreFailed: false)
+        }
+        return ChatGifPickerState(kind: kind, query: query, generation: self.generation, items: result.items, page: 1,
+                                  hasNext: result.hasNext,
+                                  phase: result.items.isEmpty ? ChatGifPickerPhase.empty : ChatGifPickerPhase.results,
+                                  isLoadingMore: false, loadMoreFailed: false)
+    }
+
+    var canLoadMore: Bool {
+        phase == ChatGifPickerPhase.results && hasNext && !isLoadingMore
+    }
+
+    var nextPage: Int { page + 1 }
+
+    func startingMore() -> ChatGifPickerState {
+        if !canLoadMore { return self }
+        return ChatGifPickerState(kind: kind, query: query, generation: generation, items: items, page: page, hasNext: hasNext,
+                                  phase: phase, isLoadingMore: true, loadMoreFailed: false)
+    }
+
+    func acceptingMore(_ result: ChatGifPage, generation answered: Int) -> ChatGifPickerState {
+        if answered != self.generation || !isLoadingMore { return self }
+        if result.failed {
+            return ChatGifPickerState(kind: kind, query: query, generation: self.generation, items: items, page: page,
+                                      hasNext: hasNext, phase: phase, isLoadingMore: false, loadMoreFailed: true)
+        }
+        var merged = items
+        for item in result.items {
+            var seen = false
+            for existing in merged {
+                if existing.id == item.id { seen = true }
+            }
+            if !seen { merged.append(item) }
+        }
+        return ChatGifPickerState(kind: kind, query: query, generation: self.generation, items: merged, page: page + 1,
+                                  hasNext: result.hasNext, phase: phase, isLoadingMore: false, loadMoreFailed: false)
+    }
+
+    func shouldLoadMore(afterShowing index: Int) -> Bool {
+        canLoadMore && !loadMoreFailed && index >= items.count - ChatGifPickerState.loadMoreThreshold
+    }
+}
+
 struct KlipySearchResponse: Decodable {
     let items: [ChatGifAttachment]
     let page: Int
@@ -42,18 +120,24 @@ private struct KlipyHTTPResult {
 }
 
 #if SKIP
-private struct AndroidKlipyHTTPResponse: Decodable {
+
+struct AndroidKlipyHTTPResponse: Decodable {
     let statusCode: Int
     let body: String
     let setCookieHeaders: [String]
 }
 #endif
 
-/// Fetches GIF/sticker/clip search + trending results through the Conclave web
-/// backend, which owns the Klipy API key. Keeps the key out of the native
-/// binary and reuses the backend's response normalization.
 enum KlipyService {
     static let defaultLimit = 16
+
+    static func searchPage(kind: ChatGifKind, query: String, page: Int) async -> ChatGifPage {
+        if Task.isCancelled { return ChatGifPage.failure }
+        let response = await search(kind: KlipyMediaKind.from(kind), query: query, page: max(1, page))
+        if Task.isCancelled { return ChatGifPage.failure }
+        guard let found = response else { return ChatGifPage.failure }
+        return ChatGifPage(items: found.items, hasNext: found.hasNext, failed: false)
+    }
 
     static func search(
         kind: KlipyMediaKind,

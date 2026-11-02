@@ -1,0 +1,121 @@
+{
+  "scope": "Requested/source axis and row eligibility evidence; no measured geometry or font-instance reconstruction.",
+  "axes": {
+    "family": "Material Symbols Rounded",
+    "path_family": "materialsymbolsrounded",
+    "FILL": [
+      0,
+      1
+    ],
+    "wght": 400,
+    "GRAD": 0,
+    "opsz": 24
+  },
+  "inference": "Pinned destination template and axis loops produce the exact selected file paths: omitted weight is regular 400, omitted grade is default 0, absent fill suffix is FILL 0, _fill1 is FILL 1, _24px encodes opsz 24. Pinned README gives weight/grade defaults. No inference from visual thickness.",
+  "pinned_evidence": [
+    {
+      "file": "upstream/README.md",
+      "sha256": "e1ab9d093fa612bd83a1043717ac150d636354c444792893dba2119f22a212c3",
+      "bytes": 7856,
+      "lines": [
+        50,
+        68
+      ],
+      "purpose": "Symbols families, regular weight400, grade0, opsz default24 and Symbols subtrees",
+      "text": "## Material Symbols\n\nThese newer icons can be browsed in a more user-friendly way at https://fonts.google.com/icons. Use the popdown menu near top left to choose between the two sets; Material Symbols is the default.\n\nThese icons were built/designed as variable fonts first (based on the 24 px designs from Material Icons). There are three separate Material Symbols variable fonts, which also have static icons available (but those do not have all the variations available, as that would be hundreds of styles):\n- Outlined\n- Rounded\n- Sharp\n- Note that although there is no separate Filled font, the Fill axis allows access to filled styles, in all three fonts. It can also be manipulated for an animated fill effect, to indicate user selection.\n\nEach of the fonts has these design axes, which can be varied in CSS, or in many more modern design apps:\n- Optical Size (opsz) from 20 to 48 px. The default is 24.\n- Weight from 100 (Thin) to 700 (Bold). Regular is 400.\n- Grade from -50 to 200. The default is 0 (zero). -50 is suggested for reversed contrast (e.g. white icons on black background)\n- Fill from 0 to 100. The default is 0 (zero).\n\nThe following directories in this repo contain specifically Material Symbols (not Material Icons) content:\n- symbols\n- variablefont"
+    },
+    {
+      "file": "upstream/update_symbols.py.txt",
+      "sha256": "7d62ec54ca9ce638104f8ed03d5c0d05ba8366459e722072cc1658e07e565e42",
+      "bytes": 8287,
+      "lines": [
+        39,
+        39
+      ],
+      "purpose": "Official metadata endpoint; HTTPS equivalent acquired",
+      "text": "_METADATA_URL = \"http://fonts.google.com/metadata/icons?incomplete=1&key=material_symbols\""
+    },
+    {
+      "file": "upstream/update_symbols.py.txt",
+      "sha256": "7d62ec54ca9ce638104f8ed03d5c0d05ba8366459e722072cc1658e07e565e42",
+      "bytes": 8287,
+      "lines": [
+        57,
+        65
+      ],
+      "purpose": "SVG source and repository destination templates; source template does not pin CDN revision",
+      "text": "_ICON_ASSETS = (\n    Asset(\n        \"https://{host}/s/i/short-term/release/{stylistic_set_snake}/{icon.name}/{style}/{size_px}px.svg\",\n        \"symbols/web/{icon.name}/{stylistic_set_snake}/{icon.name}{style_suffix}_{size_px}px.svg\",\n    ),\n    Asset(\n        \"https://{host}/s/i/short-term/release/{stylistic_set_snake}/{icon.name}/{style}/{size_px}px.xml\",\n        \"symbols/android/{icon.name}/{stylistic_set_snake}/{icon.name}{style_suffix}_{size_px}px.xml\",\n    ),"
+    },
+    {
+      "file": "upstream/update_symbols.py.txt",
+      "sha256": "7d62ec54ca9ce638104f8ed03d5c0d05ba8366459e722072cc1658e07e565e42",
+      "bytes": 8287,
+      "lines": [
+        102,
+        114
+      ],
+      "purpose": "Eligibility computed separately for every metadata row",
+      "text": "def _symbol_families(metadata):\n    return set(s for s in set(metadata[\"families\"]) if \"Symbols\" in s)\n\n\ndef _icons(metadata):\n    all_sets = _symbol_families(metadata)\n    for raw_icon in metadata[\"icons\"]:\n        unsupported = set(raw_icon[\"unsupported_families\"])\n        yield Icon(\n            raw_icon[\"name\"],\n            raw_icon[\"version\"],\n            all_sets - unsupported,\n        )"
+    },
+    {
+      "file": "upstream/update_symbols.py.txt",
+      "sha256": "7d62ec54ca9ce638104f8ed03d5c0d05ba8366459e722072cc1658e07e565e42",
+      "bytes": 8287,
+      "lines": [
+        182,
+        193
+      ],
+      "purpose": "Family normalization, default style, suffix and size",
+      "text": "def _pattern_args(metadata, stylistic_set):\n    return {\n        \"host\": metadata[\"host\"],\n        \"stylistic_set_snake\": stylistic_set.replace(\" \", \"\").lower(),\n        \"stylistic_set_url\": stylistic_set.replace(\" \", \"+\"),\n        \"stylistic_set_font\": stylistic_set.replace(\" \", \"\") + \"[FILL,GRAD,opsz,wght]\",\n    }\n\ndef _create_fetches(style, opsz, pattern_args, fetches, skips, assets):\n    pattern_args[\"style\"] = style if style else \"default\"  \n    pattern_args[\"style_suffix\"] = f\"_{style}\" if style else \"\"\n    pattern_args[\"size_px\"] = str(opsz)"
+    },
+    {
+      "file": "upstream/update_symbols.py.txt",
+      "sha256": "7d62ec54ca9ce638104f8ed03d5c0d05ba8366459e722072cc1658e07e565e42",
+      "bytes": 8287,
+      "lines": [
+        222,
+        232
+      ],
+      "purpose": "Unsupported-family exclusion and separate opsz/fill/grade/weight loops",
+      "text": "        for stylistic_set in stylistic_sets:\n            if stylistic_set not in icon.stylistic_sets:\n                continue\n            pattern_args = _pattern_args(metadata, stylistic_set)\n            pattern_args[\"icon\"] = icon\n            for opsz in [20,24,40,48] :\n                for fill in [\"\",\"fill1\"] :\n                    for grad in [\"gradN25\",\"\",\"grad200\"]:\n                        _create_fetches(grad + fill, opsz, pattern_args, fetches, skips, _ICON_IOS_ASSETS)\n                        for wght in [\"wght100\",\"wght200\",\"wght300\",\"\",\"wght500\",\"wght600\",\"wght700\"] :\n                            _create_fetches(wght + grad + fill, opsz, pattern_args, fetches, skips, _ICON_ASSETS)"
+    }
+  ],
+  "fresh_guide": {
+    "file": "metadata/material-symbols-guide.html",
+    "sha256": "52aeb1b22d6353b602cfd9b2591e0bed023eab29640d0b9961681cc0589286b0",
+    "bytes": 74679,
+    "url": "https://developers.google.com/fonts/docs/material_symbols",
+    "retrieved_at_utc": "2026-10-23T16:12:30.529450Z",
+    "mutable_upstream": true,
+    "upstream_commit": null,
+    "sections": [
+      "FILL axis",
+      "Licensing",
+      "Git repository",
+      "Static font with Google Fonts"
+    ],
+    "scope": "General binary FILL semantics and license/SVG context. Its opsz48 webfont example does not establish SVG opsz24. Separate documentation-page license remains preserved in original HTML."
+  },
+  "readme_caveat": "Pinned README line64 says Fill from 0 to 100. Retained unchanged; binary FILL0/1 is established by the updater fill list and fresh official guide. No ROND/new-family substitution from current documentation.",
+  "codepoints": {
+    "file": "upstream/rounded.codepoints",
+    "sha256": "0c9dae3ed678a81549c3be046bc8045335e5f57f2cbe2287360fbf0c2cc1355f",
+    "bytes": 79354,
+    "source_url": "https://raw.githubusercontent.com/google/material-design-icons/49d4db35df873165d6bd6ba09b063c7dafbac2f4/variablefont/MaterialSymbolsRounded%5BFILL,GRAD,opsz,wght%5D.codepoints",
+    "upstream_commit": "49d4db35df873165d6bd6ba09b063c7dafbac2f4",
+    "scope": "Pinned name/codepoint presence; does not override per-row eligibility or establish SVG geometry."
+  },
+  "metadata": {
+    "file": "metadata/selected-rows.json",
+    "sha256": "37f9f1696a43c5eb2b21e03cde5cbb14a140f42a41661b6431feeab6a1de1f7e",
+    "bytes": 120221,
+    "raw": {
+      "file": "metadata/material-symbols.raw",
+      "sha256": "1a36a710d57b32eef8f101980d87ae7dea560146157b3143ab115b791affa669",
+      "bytes": 5822254
+    },
+    "status": "fresh_mutable_snapshot_not_historical_metadata",
+    "upstream_commit": null,
+    "scope": "Eligibility at fresh retrieval time; does not claim this metadata produced the pinned SVG commit."
+  }
+}

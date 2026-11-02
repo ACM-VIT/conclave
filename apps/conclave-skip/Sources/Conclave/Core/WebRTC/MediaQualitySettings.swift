@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 enum NativeMediaResolution: String, Codable, CaseIterable, Identifiable {
     case p360 = "360p"
@@ -468,6 +469,46 @@ enum NativeMediaQualityPolicy {
         )
     }
 
+    static func publishTier(of camera: NativeCameraQualitySettings) -> NativePublishTier {
+        let normalized = normalizedCamera(camera)
+        let height = normalized.resolution.height
+        if height >= NativeMediaResolution.p1080.height {
+            return normalized.frameRate > 30 ? NativePublishTier.studio : NativePublishTier.highDefinition
+        }
+        if height >= NativeMediaResolution.p720.height {
+            return NativePublishTier.auto
+        }
+        return NativePublishTier.dataSaver
+    }
+
+    static func capped(_ camera: NativeCameraQualitySettings, to ceiling: NativeCameraQualitySettings) -> NativeCameraQualitySettings {
+        var next = normalizedCamera(camera)
+        if ceiling.resolution.height < next.resolution.height {
+            next.resolution = ceiling.resolution
+        }
+        next.frameRate = min(next.frameRate, ceiling.frameRate)
+        next.maxBitrateKbps = min(next.maxBitrateKbps, ceiling.maxBitrateKbps)
+        return normalizedCamera(next)
+    }
+
+    static func effectiveCamera(_ camera: NativeCameraQualitySettings, dataSaverOn: Bool,
+                                systemSendCeiling: NativeSystemSendCeiling) -> NativeCameraQualitySettings {
+        var effective = normalizedCamera(camera)
+        if dataSaverOn || systemSendCeiling.appliesDataSaver {
+            effective = capped(effective, to: NativePublishTier.dataSaver.camera)
+        }
+        if systemSendCeiling.thermalSteps > 0 {
+            let tier = publishTier(of: effective).lowered(by: systemSendCeiling.thermalSteps)
+            effective = capped(effective, to: tier.camera)
+        }
+        return effective
+    }
+
+    static func resolvedPublishCamera(_ camera: NativeCameraQualitySettings, dataSaverOn: Bool,
+                                      systemSendCeiling: NativeSystemSendCeiling) -> NativeResolvedCameraPublishSettings {
+        resolvedCamera(effectiveCamera(camera, dataSaverOn: dataSaverOn, systemSendCeiling: systemSendCeiling))
+    }
+
     static func baseVideoQuality(_ settings: NativeCameraQualitySettings) -> VideoQuality {
         let resolved = resolvedCamera(settings)
         return resolved.width <= 640 && resolved.maxBitrateBps <= 500_000 ? .low : .standard
@@ -490,13 +531,13 @@ enum NativeMediaQualityPolicy {
 enum NativeMediaQualityPreferences {
     static let storageKey = "conclave:media-quality-settings:v1"
 
-    static func load() -> NativeMediaQualitySettings {
-        decode(UserDefaults.standard.string(forKey: storageKey))
+    static func load(defaults: UserDefaults = UserDefaults.standard) -> NativeMediaQualitySettings {
+        decode(defaults.string(forKey: storageKey))
     }
 
-    static func save(_ settings: NativeMediaQualitySettings) {
+    static func save(_ settings: NativeMediaQualitySettings, defaults: UserDefaults = UserDefaults.standard) {
         guard let value = encode(settings) else { return }
-        UserDefaults.standard.set(value, forKey: storageKey)
+        defaults.set(value, forKey: storageKey)
     }
 
     static func decode(_ value: String?) -> NativeMediaQualitySettings {
@@ -510,7 +551,319 @@ enum NativeMediaQualityPreferences {
 
     static func encode(_ settings: NativeMediaQualitySettings) -> String? {
         let normalized = NativeMediaQualityPolicy.normalized(settings)
-        guard let data = try? JSONEncoder().encode(normalized) else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = JSONEncoder.OutputFormatting.sortedKeys
+        guard let data = try? encoder.encode(normalized) else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+}
+
+enum NativeVideoPreferences {
+    static let mirrorSelfViewKey = "conclave.pref.mirrorSelfView"
+    static let dataSaverKey = "conclave.pref.dataSaver"
+    static let shareDeviceAudioKey = "conclave.pref.shareDeviceAudio"
+
+    static func mirrorsSelfView(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+        boolValue(mirrorSelfViewKey, fallback: true, defaults: defaults)
+    }
+
+    static func setMirrorsSelfView(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+        defaults.set(on, forKey: mirrorSelfViewKey)
+    }
+
+    static func dataSaver(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+        boolValue(dataSaverKey, fallback: false, defaults: defaults)
+    }
+
+    static func setDataSaver(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+        defaults.set(on, forKey: dataSaverKey)
+    }
+
+    static func shareDeviceAudio(defaults: UserDefaults = UserDefaults.standard) -> Bool {
+        boolValue(shareDeviceAudioKey, fallback: false, defaults: defaults)
+    }
+
+    static func setShareDeviceAudio(_ on: Bool, defaults: UserDefaults = UserDefaults.standard) {
+        defaults.set(on, forKey: shareDeviceAudioKey)
+    }
+
+    private static func boolValue(_ key: String, fallback: Bool, defaults: UserDefaults) -> Bool {
+        if defaults.object(forKey: key) == nil { return fallback }
+        return defaults.bool(forKey: key)
+    }
+}
+
+enum LocalVideoMirrorPolicy {
+
+    static func mirrors(isFront: Bool, preference: Bool) -> Bool {
+        isFront && preference
+    }
+
+    static let mirrorsSentStream = false
+}
+
+@MainActor
+@Observable
+final class LocalVideoMirrorPreference {
+    static let shared = LocalVideoMirrorPreference()
+
+    private(set) var isOn: Bool = true
+
+    init(defaults: UserDefaults = UserDefaults.standard) {
+        isOn = NativeVideoPreferences.mirrorsSelfView(defaults: defaults)
+    }
+
+    func update(_ on: Bool) {
+        if isOn != on { isOn = on }
+    }
+}
+
+enum DataSaverPolicy {
+
+    static func isOn(preference: Bool, systemDataSaver: Bool) -> Bool {
+        preference || systemDataSaver
+    }
+
+    static func appliesPublishCeiling(dataSaverOn: Bool, qualityCappedByHost: Bool) -> Bool {
+        dataSaverOn || qualityCappedByHost
+    }
+
+    static func reducesReceive(isLowQuality: Bool, dataSaverOn: Bool) -> Bool {
+        isLowQuality || dataSaverOn
+    }
+}
+
+struct CameraCaptureCapability: Equatable {
+    let maxHeight: Int
+    let maxFrameRate: Int
+
+    init(maxHeight: Int, maxFrameRate: Int) {
+        self.maxHeight = maxHeight
+        self.maxFrameRate = maxFrameRate
+    }
+
+    static let unknown = CameraCaptureCapability(maxHeight: 0, maxFrameRate: 0)
+}
+
+enum NativeQualityOptions {
+    static let cameraBitrateMinKbps = 150
+    static let cameraBitrateMaxKbps = 6_000
+    static let cameraBitrateStepKbps = 50
+    static let screenBitrateMinKbps = 300
+    static let screenBitrateMaxKbps = 10_000
+    static let screenBitrateStepKbps = 100
+
+    static func cameraPresets(capability: CameraCaptureCapability) -> [NativeCameraQualityPreset] {
+        let supports1080 = capability.maxHeight <= 0 || capability.maxHeight >= NativeMediaResolution.p1080.height
+        let supports60 = capability.maxFrameRate <= 0 || capability.maxFrameRate >= 60
+        var result: [NativeCameraQualityPreset] = [NativeCameraQualityPreset.auto]
+        if supports1080 { result.append(NativeCameraQualityPreset.highDefinition) }
+        if supports1080 && supports60 { result.append(NativeCameraQualityPreset.studio) }
+        result.append(NativeCameraQualityPreset.custom)
+        return result
+    }
+
+    static func cameraSelection(_ preset: NativeCameraQualityPreset) -> NativeCameraQualityPreset {
+        preset == NativeCameraQualityPreset.dataSaver ? NativeCameraQualityPreset.auto : preset
+    }
+
+    static func cameraResolutions(capability: CameraCaptureCapability) -> [NativeMediaResolution] {
+        var result: [NativeMediaResolution] = []
+        for resolution in NativeMediaResolution.allCases {
+            if resolution == NativeMediaResolution.p360 || capability.maxHeight <= 0 || resolution.height <= capability.maxHeight {
+                result.append(resolution)
+            }
+        }
+        return result
+    }
+
+    static func cameraFrameRates(capability: CameraCaptureCapability) -> [Int] {
+        var result: [Int] = []
+        for rate in NativeMediaQualityPolicy.cameraFrameRateOptions {
+            if rate <= 15 || capability.maxFrameRate <= 0 || rate <= capability.maxFrameRate {
+                result.append(rate)
+            }
+        }
+        return result
+    }
+
+    static let cameraOptimizeOptions: [NativeCameraContentHint] = [NativeCameraContentHint.motion, NativeCameraContentHint.detail]
+    static let cameraPressureOptions: [NativeMediaDegradationPreference] = [
+        NativeMediaDegradationPreference.maintainFramerate,
+        NativeMediaDegradationPreference.balanced,
+        NativeMediaDegradationPreference.maintainResolution
+    ]
+
+    static let screenSharePresets: [NativeScreenShareQualityPreset] = [
+        NativeScreenShareQualityPreset.auto,
+        NativeScreenShareQualityPreset.presentation,
+        NativeScreenShareQualityPreset.motion,
+        NativeScreenShareQualityPreset.custom
+    ]
+    static let screenShareResolutions: [NativeMediaResolution] = [
+        NativeMediaResolution.p720,
+        NativeMediaResolution.p1080,
+        NativeMediaResolution.p1440,
+        NativeMediaResolution.p2160
+    ]
+    static let screenShareOptimizeOptions: [NativeScreenShareContentHint] = [
+        NativeScreenShareContentHint.text,
+        NativeScreenShareContentHint.detail,
+        NativeScreenShareContentHint.motion
+    ]
+    static let screenSharePressureOptions: [NativeMediaDegradationPreference] = [
+        NativeMediaDegradationPreference.maintainResolution,
+        NativeMediaDegradationPreference.balanced,
+        NativeMediaDegradationPreference.maintainFramerate
+    ]
+
+    static func snappedBitrate(_ kbps: Int, minimum: Int, maximum: Int, step: Int) -> Int {
+        let clamped = min(maximum, max(minimum, kbps))
+        if step <= 1 { return clamped }
+        let steps = (clamped - minimum + step / 2) / step
+        return min(maximum, minimum + steps * step)
+    }
+}
+
+enum NativePublishTier: String, CaseIterable, Equatable {
+    case studio
+    case highDefinition
+    case auto
+    case dataSaver
+
+    var preset: NativeCameraQualityPreset {
+        switch self {
+        case .studio: return NativeCameraQualityPreset.studio
+        case .highDefinition: return NativeCameraQualityPreset.highDefinition
+        case .auto: return NativeCameraQualityPreset.auto
+        case .dataSaver: return NativeCameraQualityPreset.dataSaver
+        }
+    }
+
+    var camera: NativeCameraQualitySettings {
+        NativeMediaQualityPolicy.cameraPreset(preset, current: NativeMediaQualityPolicy.defaultSettings.camera)
+    }
+
+    var lower: NativePublishTier {
+        switch self {
+        case .studio: return NativePublishTier.highDefinition
+        case .highDefinition: return NativePublishTier.auto
+        case .auto: return NativePublishTier.dataSaver
+        case .dataSaver: return NativePublishTier.dataSaver
+        }
+    }
+
+    func lowered(by steps: Int) -> NativePublishTier {
+        var tier = self
+        var remaining = steps
+        while remaining > 0 {
+            tier = tier.lower
+            remaining -= 1
+        }
+        return tier
+    }
+}
+
+enum SystemThermalLevel: String, CaseIterable, Equatable {
+    case nominal
+    case fair
+    case serious
+    case critical
+
+    var ceilingSteps: Int {
+        switch self {
+        case .serious: return 1
+        case .critical: return 2
+        case .nominal, .fair: return 0
+        }
+    }
+
+    static func fromAndroidThermalStatus(_ status: Int) -> SystemThermalLevel {
+        if status >= 4 { return SystemThermalLevel.critical }
+        if status == 3 { return SystemThermalLevel.serious }
+        if status >= 1 { return SystemThermalLevel.fair }
+        return SystemThermalLevel.nominal
+    }
+}
+
+struct NativeSystemSendCeiling: Equatable {
+
+    let thermalSteps: Int
+
+    let appliesDataSaver: Bool
+
+    init(thermalSteps: Int, appliesDataSaver: Bool) {
+        self.thermalSteps = thermalSteps
+        self.appliesDataSaver = appliesDataSaver
+    }
+
+    static let unconstrained = NativeSystemSendCeiling(thermalSteps: 0, appliesDataSaver: false)
+
+    var isActive: Bool {
+        thermalSteps > 0 || appliesDataSaver
+    }
+
+    static func make(thermalLevel: SystemThermalLevel, isLowPowerMode: Bool) -> NativeSystemSendCeiling {
+        NativeSystemSendCeiling(thermalSteps: thermalLevel.ceilingSteps, appliesDataSaver: isLowPowerMode)
+    }
+}
+
+struct SystemPressureChange: Equatable {
+    let ceilingChanged: Bool
+    let postsQualityLoweredToast: Bool
+
+    init(ceilingChanged: Bool, postsQualityLoweredToast: Bool) {
+        self.ceilingChanged = ceilingChanged
+        self.postsQualityLoweredToast = postsQualityLoweredToast
+    }
+}
+
+enum SystemPressurePolicy {
+
+    static func postsQualityLoweredToast(previousSteps: Int, nextSteps: Int, isInCall: Bool,
+                                         alreadyPostedThisCall: Bool) -> Bool {
+        isInCall && !alreadyPostedThisCall && nextSteps > previousSteps
+    }
+}
+
+struct SystemPressureState: Equatable {
+    private(set) var thermalLevel: SystemThermalLevel
+    private(set) var isLowPowerMode: Bool
+
+    private(set) var toastCallSession: Int
+
+    private(set) var qualityLoweredToastsPosted: Int
+
+    init() {
+        thermalLevel = SystemThermalLevel.nominal
+        isLowPowerMode = false
+        toastCallSession = -1
+        qualityLoweredToastsPosted = 0
+    }
+
+    var ceiling: NativeSystemSendCeiling {
+        NativeSystemSendCeiling.make(thermalLevel: thermalLevel, isLowPowerMode: isLowPowerMode)
+    }
+
+    @discardableResult
+    mutating func applyThermalLevel(_ level: SystemThermalLevel, callSession: Int, isInCall: Bool) -> SystemPressureChange {
+        let previousSteps = thermalLevel.ceilingSteps
+        let nextSteps = level.ceilingSteps
+        thermalLevel = level
+        let posts = SystemPressurePolicy.postsQualityLoweredToast(previousSteps: previousSteps, nextSteps: nextSteps,
+                                                                  isInCall: isInCall,
+                                                                  alreadyPostedThisCall: toastCallSession == callSession)
+        if posts {
+            toastCallSession = callSession
+            qualityLoweredToastsPosted += 1
+        }
+        return SystemPressureChange(ceilingChanged: previousSteps != nextSteps, postsQualityLoweredToast: posts)
+    }
+
+    @discardableResult
+    mutating func applyLowPowerMode(_ isOn: Bool) -> SystemPressureChange {
+        let changed = isOn != isLowPowerMode
+        isLowPowerMode = isOn
+        return SystemPressureChange(ceilingChanged: changed, postsQualityLoweredToast: false)
     }
 }

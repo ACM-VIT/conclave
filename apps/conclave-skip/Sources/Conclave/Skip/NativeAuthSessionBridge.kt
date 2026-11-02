@@ -1,6 +1,8 @@
 package conclave.module
 
 import android.webkit.CookieManager as AndroidCookieManager
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.CookieHandler
 import java.net.CookiePolicy
 import java.net.CookieManager as JavaCookieManager
@@ -10,6 +12,43 @@ import java.net.URI
 object NativeAuthSessionBridge {
     private val lock = Any()
     private val javaCookieManager = JavaCookieManager(null, CookiePolicy.ACCEPT_ALL)
+
+    fun requestAuthJson(method: String, url: String, body: String?, cookieHeader: String?, origin: String?,
+                        callback: (String?, String?) -> Unit) {
+        kotlin.concurrent.thread(name = "ConclaveAuthHttp") {
+            val result = try {
+                val mediaType = "application/json; charset=utf-8".toMediaType()
+                val requestBody = if (method == "GET") null else (body ?: "").toRequestBody(mediaType)
+                val builder = okhttp3.Request.Builder().url(url).method(method, requestBody)
+                    .header("Accept", "application/json")
+                if (!cookieHeader.isNullOrBlank()) builder.header("Cookie", cookieHeader)
+                if (!origin.isNullOrBlank()) builder.header("Origin", origin)
+                AndroidNativeHttpClient.authClient.newCall(builder.build()).execute().use { response ->
+                    org.json.JSONObject().put("statusCode", response.code)
+                        .put("body", response.body?.string().orEmpty())
+                        .put("setCookieHeaders", org.json.JSONArray(response.headers.values("Set-Cookie"))).toString()
+                }
+            } catch (error: Throwable) {
+                callback(null, error.localizedMessage ?: "Authentication request failed.")
+                return@thread
+            }
+            callback(result, null)
+        }
+    }
+
+    fun pendingCookieHeader(setCookieHeaders: skip.lib.Array<String>, forURL: String): String? {
+        val manager = JavaCookieManager(null, CookiePolicy.ACCEPT_ALL)
+        val target = uri(forURL) ?: return null
+        for (header in setCookieHeaders) {
+            for (value in splitSetCookieHeader(header)) {
+                try {
+                    for (cookie in HttpCookie.parse(value)) manager.cookieStore.add(target, cookie)
+                } catch (_: Throwable) {
+                }
+            }
+        }
+        return manager.get(target, emptyMap())["Cookie"]?.joinToString("; ")
+    }
 
     fun install() {
         val startedAt = System.nanoTime()

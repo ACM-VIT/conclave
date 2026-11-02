@@ -7,10 +7,13 @@ ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor
 
 INFOPLIST_FILE = Info.plist
 GENERATE_INFOPLIST_FILE = NO
+CONCLAVE_DEBUG_VIEWER_PROFILE = NO
+CONCLAVE_DEBUG_SFU_JOIN_URL_NO = http:/$()/127.0.0.1:3000/api/sfu/join
+CONCLAVE_DEBUG_SFU_JOIN_URL_YES = https:/$()/conclave.acmvit.in/api/sfu/join
 SFU_JOIN_URL = https:/$()/conclave.acmvit.in/api/sfu/join
-SFU_JOIN_URL[config=Debug][sdk=iphonesimulator*] = http:/$()/127.0.0.1:3000/api/sfu/join
+SFU_JOIN_URL[config=Debug][sdk=iphonesimulator*] = $(CONCLAVE_DEBUG_SFU_JOIN_URL_$(CONCLAVE_DEBUG_VIEWER_PROFILE))
 CONCLAVE_AUTH_BASE_URL = https:/$()/conclave.acmvit.in
-CONCLAVE_AUTH_BASE_URL[config=Debug][sdk=iphonesimulator*] = http:/$()/127.0.0.1:3000
+CONCLAVE_AUTH_BASE_URL[config=Debug] =
 
 IPHONEOS_DEPLOYMENT_TARGET = 17.0
 MACOSX_DEPLOYMENT_TARGET = 14.0
@@ -32,9 +35,10 @@ CODE_SIGNING_REQUIRED[sdk=iphoneos*] = YES
 CODE_SIGN_STYLE = Automatic
 CODE_SIGN_ENTITLEMENTS = Entitlements.plist
 
-// Debug device signing stays automatic by default. Headless builds can inject
-// manual profile values on the xcodebuild command line without committing one
-// developer's profile names to the project.
+CONCLAVE_DEVELOPER_APPLINKS_HOST = conclave.acmvit.in
+CONCLAVE_DEVELOPER_ASSOCIATED_DOMAIN = applinks:conclave.acmvit.in
+CONCLAVE_DEVELOPER_ASSOCIATED_DOMAIN[config=Debug] = applinks:$(CONCLAVE_DEVELOPER_APPLINKS_HOST)?mode=developer
+
 CONCLAVE_DEBUG_CODE_SIGN_STYLE = Automatic
 CONCLAVE_DEBUG_CODE_SIGN_IDENTITY = Apple Development
 CONCLAVE_DEVELOPMENT_TEAM =

@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// Bottom-sheet GIF / sticker / clip picker backed by Klipy (proxied through the
-/// Conclave web backend). Mirrors the web `GifPicker`: debounced search, three
-/// media catalogs, a two-column grid, and incremental paging. Selecting an item
-/// hands a ready-to-send `ChatGifAttachment` back to the composer.
 struct GifPickerView: View {
     let onSelect: (ChatGifAttachment) -> Void
     var onDismiss: (() -> Void)? = nil
@@ -273,8 +269,6 @@ struct GifPickerView: View {
         .accessibilityLabel(gif.title.isEmpty ? "GIF" : gif.title)
     }
 
-    // MARK: - Loading
-
     private func close() {
         if let onDismiss {
             onDismiss()
@@ -334,8 +328,7 @@ struct GifPickerView: View {
                 page = response.page
                 hasNext = response.hasNext
             }
-            // On a transient failure keep `hasNext` as-is so paging can retry on the
-            // next scroll instead of being permanently disabled.
+
         }
     }
 }

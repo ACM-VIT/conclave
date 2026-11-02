@@ -470,4 +470,37 @@ describe("zip game module", () => {
     expect(view.hintsUsed).toBe(0);
     expect(view.hintAvailableAt).toBe(0);
   });
+
+  it("publishes the solve times, result and round fields the native board reads", () => {
+    const state = zipModule.setup(context(0));
+    const playing = zipModule.onMove(state, { playerId: "host", type: "start", payload: undefined }, context(1000));
+    const solution = playing.solutionPath;
+    // Undo as the native board sends it: the full path minus its last cell is a valid prefix.
+    const undone = zipModule.onMove(
+      zipModule.onMove(playing, { playerId: "alice", type: "move", payload: { cells: [solution[0], solution[1]] } }, context(1500)),
+      { playerId: "alice", type: "move", payload: { cells: [solution[0]] } },
+      context(1600),
+    );
+    expect(undone.players["alice"]?.path).toEqual([solution[0]]);
+    const solved = zipModule.onMove(playing, { playerId: "alice", type: "move", payload: { cells: solution } }, context(4000));
+    const pub = zipModule.publicView(solved, context(5000)) as {
+      gridSize: number;
+      serverNow: number;
+      currentRound: number;
+      totalRounds: number;
+      isFinalRound: boolean;
+      standings: Array<{ playerId: string; outcome: string | null; solvedAt: number | null; totalCells: number }>;
+    };
+    expect(pub.gridSize).toBe(6);
+    expect(pub.serverNow).toBe(5000);
+    expect(pub.currentRound).toBe(1);
+    expect(pub.isFinalRound).toBe(true);
+    const alice = pub.standings.find((row) => row.playerId === "alice");
+    expect(alice?.outcome).toBe("win");
+    expect(alice?.solvedAt).toBe(4000);
+    expect(pub.standings[0]?.playerId).toBe("alice");
+    const mine = zipModule.playerView(solved, "alice", context(5000)) as { solvedAt: number | null; outcome: string | null };
+    expect(mine.solvedAt).toBe(4000);
+    expect(mine.outcome).toBe("win");
+  });
 });

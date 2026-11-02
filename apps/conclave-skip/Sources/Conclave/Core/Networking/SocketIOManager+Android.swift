@@ -32,6 +32,14 @@ final class SocketIOManager {
     var onWebinarAttendeeCountChanged: ((WebinarAttendeeCountChangedNotification) -> Void)?
     var onWebinarFeedChanged: ((WebinarFeedChangedNotification) -> Void)?
     var onWebinarParticipantJoined: ((WebinarParticipantJoinedNotification) -> Void)?
+
+    var onWebinarQaChanged: ((WebinarQaChangedNotification) -> Void)?
+    var onWebinarQaSnapshot: ((WebinarQaSnapshot) -> Void)?
+
+    var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Void)?
+
+    var onWebinarPromoted: ((WebinarPromotedNotification) -> Void)?
+    var onWebinarDemoted: ((WebinarDemotedNotification) -> Void)?
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
@@ -58,6 +66,8 @@ final class SocketIOManager {
 
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
+    var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?
+    var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Void)?
     var onReaction: ((Reaction) -> Void)?
 
     var onHandRaised: ((HandRaisedNotification) -> Void)?
@@ -68,6 +78,8 @@ final class SocketIOManager {
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
     var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
+
+    var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
@@ -143,7 +155,8 @@ final class SocketIOManager {
     func toggleCamera(producerId: String, paused: Bool) async throws { fatalError() }
     func closeProducer(producerId: String) async throws { fatalError() }
 
-    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) async throws -> ChatMessage { fatalError() }
+    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil, suppressEmbeds: Bool = false) async throws -> ChatMessage { fatalError() }
+    func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction] { fatalError() }
     func authorizeChatImageUpload() async throws -> ChatImageUploadAuthorization { fatalError() }
     func requestConclaveAuthorization(answerId: String, questionMessageId: String) async throws -> ConclaveAuthorizeResponse { fatalError() }
     func relayConclaveAnswer(_ packet: ConclaveAssistantRelayPacket) { fatalError() }
@@ -157,6 +170,10 @@ final class SocketIOManager {
     func setDmEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
     func setTtsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
     func setReactionsDisabled(_ disabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
+
+    func setImageAttachmentsEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse { fatalError() }
+
+    func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?) async throws -> ParticipantMediaPermissionsResponse { fatalError() }
     func setRoomPolicies(
         locked: Bool? = nil,
         noGuests: Bool? = nil,
@@ -181,7 +198,20 @@ final class SocketIOManager {
     func updateWebinarLinkSlug(_ linkSlug: String?) async throws -> WebinarConfigSnapshot { fatalError() }
     func generateWebinarLink() async throws -> WebinarLinkResponse { fatalError() }
     func rotateWebinarLink() async throws -> WebinarLinkResponse { fatalError() }
+
+    func updateWebinarQaEnabled(_ enabled: Bool) async throws -> WebinarConfigSnapshot { fatalError() }
+
+    func promoteWebinarAttendee(userId: String) async throws { fatalError() }
+    func demoteWebinarParticipant(userId: String) async throws { fatalError() }
+    func setWebinarHandRaised(_ raised: Bool) async throws -> Bool { fatalError() }
+    func declineWebinarStage() async throws { fatalError() }
+
+    func submitWebinarQuestion(_ question: String) async throws -> String { fatalError() }
+    func upvoteWebinarQuestion(id: String) async throws -> WebinarQaUpvoteResponse { fatalError() }
+    func moderateWebinarQuestion(id: String, action: String, answerText: String?) async throws { fatalError() }
     func getBrowserState() async throws -> BrowserStateNotification { fatalError() }
+
+    func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse { fatalError() }
     func launchBrowser(url: String) async throws -> LaunchBrowserResponse { fatalError() }
     func navigateBrowser(url: String) async throws -> LaunchBrowserResponse { fatalError() }
     func closeBrowser() async throws { fatalError() }

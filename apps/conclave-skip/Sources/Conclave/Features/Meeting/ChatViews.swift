@@ -29,9 +29,7 @@ enum ChatSubmitReplyPolicy {
 
 enum ChatComposerLayout {
     static func inputHeight(isAndroid: Bool) -> CGFloat {
-        // Android: sized to sit beside the Material text field, which
-        // enforces its own 56dp minimum height and must NOT be frame-clamped
-        // (a smaller frame clips the text instead of shrinking the field).
+
         isAndroid ? 44.0 : 40.0
     }
 
@@ -56,10 +54,7 @@ enum ChatComposerLayout {
     }
 
     static func composerBottomPadding(isAndroid: Bool, contentInset: CGFloat) -> CGFloat {
-        // contentInset is the total clearance requested by the host (home
-        // indicator or keyboard), not extra spacing to stack below the normal
-        // composer padding. Taking the maximum avoids the dead strip that used
-        // to appear below the input on iPhones with a home indicator.
+
         max(composerVerticalPadding(isAndroid: isAndroid), contentInset)
     }
 
@@ -109,8 +104,6 @@ struct ChatLatestEntryChange: Equatable {
     let shouldScroll: Bool
 }
 
-// MARK: - Chat Overlay
-
 struct ChatOverlayView: View {
     @Bindable var viewModel: MeetingViewModel
     var bottomContentInset: CGFloat = 0.0
@@ -128,8 +121,7 @@ struct ChatOverlayView: View {
 
         VStack(spacing: 0) {
             #if SKIP
-            // System BACK closes the chat panel instead of backgrounding the
-            // whole activity mid-call (zero-size host, emits no UI).
+
             ComposeView { _ in
                 MeetingSheetBackHandler(enabled: true) {
                     closeChat()
@@ -201,9 +193,7 @@ struct ChatOverlayView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .acmColorBackground(ACMColors.surface)
         .overlay {
-            // Draw the outline inside the panel bounds. A regular stroke puts
-            // half its width outside the trailing screen edge, which made the
-            // right side look clipped while the left divider stayed visible.
+
             Rectangle().strokeBorder(ACMColors.border, lineWidth: 1)
         }
         .onDisappear {
@@ -261,8 +251,6 @@ struct ChatOverlayView: View {
 
 }
 
-/// Owns the hot draft/focus state so each keystroke invalidates only the
-/// composer and suggestion list—not the message timeline or full meeting dock.
 private struct ChatComposerView: View {
     @Bindable var viewModel: MeetingViewModel
     @Binding var replyTarget: ChatReplyPreview?
@@ -500,9 +488,7 @@ private struct ChatComposerView: View {
             }
             .onTapGesture { markComposerActive() }
         }
-        // Suggestions are a popover anchored above the composer, not a VStack
-        // child. Appearing/disappearing must never move the input row or resize
-        // the timeline while somebody is typing.
+
         .overlay(alignment: .topLeading) {
             if !visibleMentionSuggestions.isEmpty, let context = mentionContext {
                 ChatMentionSuggestionsView(
@@ -609,8 +595,7 @@ private struct ChatComposerView: View {
         HapticManager.shared.trigger(.light)
         Task {
             let sent = await viewModel.sendChatImage(fileURL: url, caption: caption, replyTo: activeReply)
-            // A failed upload should not eat the user's draft: put the caption
-            // and reply back unless they already started something new.
+
             if !sent {
                 if messageText.isEmpty { messageText = caption }
                 if replyTarget == nil { replyTarget = activeReply }
@@ -676,9 +661,6 @@ private struct ChatComposerView: View {
     }
 }
 
-/// Only pull the list down for a new entry when the reader is already at the
-/// bottom or the entry is their own; otherwise they are reading history and
-/// yanking the scroll position is hostile.
 enum ChatAutoScrollPolicy {
     static func shouldAutoScroll(isAtBottom: Bool, latestIsFromLocalUser: Bool) -> Bool {
         isAtBottom || latestIsFromLocalUser
@@ -689,13 +671,6 @@ enum ChatAutoScrollPolicy {
     }
 }
 
-/// Reference box for bottom-sentinel tracking. Appearance callbacks re-fire on
-/// body re-runs (SwiftUI merges and re-invokes them when the modifier value is
-/// replaced), so they must never write observed view state - an @State write
-/// from onAppear/onDisappear re-invalidates body, which re-fires the callbacks,
-/// and the timeline spins at 100% CPU until the watchdog kills the app. Fields
-/// on this box are plain storage: reads happen inside discrete event handlers
-/// (new-message onChange), never in body, so no observation is needed.
 private final class ChatBottomSentinelBox {
     var isAtBottom = true
 }
@@ -738,7 +713,7 @@ private struct ChatTimelineView: View, Equatable {
         case .message(let message):
             return isCurrentUser(message.userId)
         case .system:
-            // System rows are feedback for something this user just did.
+
             return true
         }
     }
@@ -763,11 +738,6 @@ private struct ChatTimelineView: View, Equatable {
                             .id(entry.id)
                         }
 
-                        // Bottom sentinel: while it is composed the reader is
-                        // effectively at the end of the timeline. Track it in
-                        // the non-observed box (see ChatBottomSentinelBox); the
-                        // only @State write here is clearing the unseen pill,
-                        // guarded so it is a no-op unless a pill is showing.
                         Color.clear
                             .frame(height: 1)
                             .onAppear {
@@ -783,9 +753,7 @@ private struct ChatTimelineView: View, Equatable {
                 }
             }
             .overlay(alignment: .bottom) {
-                // Reaching the bottom clears the count via the sentinel, so the
-                // pill's visibility only needs the count itself (body must not
-                // read the sentinel box - it is deliberately unobserved).
+
                 if unseenCount > 0 {
                     ChatNewMessagesPill(count: unseenCount) {
                         unseenCount = 0
@@ -809,8 +777,7 @@ private struct ChatTimelineView: View, Equatable {
             }
 #else
             .onChange(of: latestEntryId) { previousEntryId, currentEntryId in
-                // Keep the appear-guard's baseline in sync so onAppear refires
-                // do not treat an already-observed entry as new.
+
                 observedLatestEntryId = currentEntryId
                 guard ChatTimelineScrollPolicy.shouldScrollToLatest(
                     previousEntryId: previousEntryId,
@@ -822,10 +789,7 @@ private struct ChatTimelineView: View, Equatable {
             }
 #endif
             .onAppear {
-                // Appearance callbacks can re-fire on body re-runs; only the
-                // first mount (or a genuinely new latest entry) may scroll,
-                // otherwise the scroll + state write re-invalidates body and
-                // the view spins at 100% CPU.
+
                 guard observedLatestEntryId != latestEntryId else { return }
                 observedLatestEntryId = latestEntryId
                 scrollToLatestMessage(in: entries, proxy: proxy, animated: false)
@@ -874,8 +838,7 @@ private struct ChatTimelineView: View, Equatable {
     private func messageValue(_ entry: ChatTimelineEntry) -> ChatMessage? {
         switch entry {
         case .message(let message):
-            // Action messages ("/me …") render in their own row style and should
-            // not group with plain messages.
+
             return ChatMessagePresentation.actionText(from: message.content) == nil ? message : nil
         case .system:
             return nil
@@ -899,10 +862,7 @@ private struct ChatTimelineView: View, Equatable {
             let isReplyFromCurrentUser = message.replyTo.map { reply in
                 isCurrentUser(reply.userId)
             } == true
-            // The server and SFU can use different raw ids for the same local
-            // participant. Optimistic sends use the SFU id, while the echo may
-            // use the account/session id; treat both as one canonical sender so
-            // a follow-up message is grouped before its acknowledgement arrives.
+
             let sameLocalSender = isFromCurrentUser && previousMessage.map { previous in
                 isCurrentUser(previous.userId)
             } == true
@@ -986,8 +946,6 @@ private struct ChatTimelineView: View, Equatable {
     }
 }
 
-/// Floating jump-to-latest chip shown while the reader is scrolled up and new
-/// messages arrive underneath.
 private struct ChatNewMessagesPill: View {
     let count: Int
     let action: () -> Void
@@ -1109,8 +1067,6 @@ private struct ChatPreviewRow: View {
         return title.isEmpty ? "GIF" : title
     }
 }
-
-// MARK: - Chat Suggestions
 
 enum ChatMentionMode: Equatable {
     case at
@@ -1407,9 +1363,6 @@ private struct ChatSuggestionsContainer<Content: View>: View {
     }
 }
 
-// MARK: - System Message Row
-
-/// A centered, muted note for slash-command feedback (e.g. "You used /raise").
 struct SystemMessageRow: View {
     let message: SystemMessage
 
@@ -1545,10 +1498,6 @@ struct ChatActionMessageRow: View {
     }
 }
 
-// MARK: - Chat Bubble
-
-/// Groups consecutive messages from the same sender (like the web chat) so the
-/// avatar + name/time header only shows once per run.
 enum ChatGroupingPolicy {
     static let groupWindowSeconds: TimeInterval = 300
 
@@ -1578,17 +1527,11 @@ enum ChatTimestampPresentation {
 
 enum ChatMessageLayout {
     static func maximumContentWidth(isFromCurrentUser: Bool) -> CGFloat {
-        // The phone chat dock is at least 320pt wide. Reserving the 32pt
-        // avatar and 10pt gap keeps peer bubbles fully inside their column,
-        // including long unbroken error strings on Compose.
+
         isFromCurrentUser ? 280.0 : 250.0
     }
 }
 
-/// Flat, left-aligned message row (Meet / Discord / web-chat style): avatar +
-/// name + time header on the first message of a sender run, plain-text body,
-/// no bubbles or right/left split. Actions live behind a long press (context
-/// menu on iOS, an inline strip on Android) so rows stay clean.
 struct ChatMessageRow: View {
     let message: ChatMessage
     let isFromCurrentUser: Bool
@@ -1612,9 +1555,7 @@ struct ChatMessageRow: View {
     }
 
     var body: some View {
-        // Mirrors the web panel: own messages sit on the right in coral
-        // bubbles with no avatar; peers sit on the left with an avatar and a
-        // raised bubble. The empty spacer keeps own bubbles off the far edge.
+
         HStack(alignment: .top, spacing: 10) {
             if isFromCurrentUser {
                 Spacer(minLength: 44)
@@ -1652,7 +1593,7 @@ struct ChatMessageRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         #if SKIP
-        // Long-press reveals the action strip; a faint surface confirms the hit.
+
         .padding(.horizontal, isActionActive ? 8.0 : 0.0)
         .padding(.vertical, isActionActive ? 6.0 : 0.0)
         .acmColorBackground(isActionActive ? ACMColors.surfaceRaised : Color.clear)
@@ -1717,9 +1658,7 @@ struct ChatMessageRow: View {
     @ViewBuilder
     private var messageContent: some View {
         if let image = message.image {
-            // Web parity (chatImageCaption): the server substitutes the file
-            // name for an empty caption; suppress it so bare images show no
-            // caption bar.
+
             let trimmedCaption = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
             ChatImageMessageView(
                 image: image,
@@ -1762,7 +1701,6 @@ struct ChatMessageRow: View {
     }
 }
 
-/// Plain message text (no bubble) with inline link chips, for the flat row.
 struct ChatMessageFlatText: View {
     let content: String
     let isDirect: Bool
@@ -1978,9 +1916,6 @@ enum ChatMessageLinkParser {
     private static let asciiNumbers = "0123456789"
 }
 
-/// An uploaded image in the timeline: rounded frame, tap for a full-screen
-/// viewer, optional caption bar underneath (the message content rides as the
-/// caption, like the web's ChatImageAttachmentView).
 struct ChatImageMessageView: View {
     let image: ChatImageAttachment
     let caption: String
@@ -1994,15 +1929,7 @@ struct ChatImageMessageView: View {
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 if let imageURL {
-                    // Fixed-HEIGHT stage for every load phase. The bubble's
-                    // height must NOT depend on whether the bitmap has loaded:
-                    // LazyVStack evicts row state off-screen, so phase-sized
-                    // frames make content height oscillate, which re-solves the
-                    // bottom-anchored scroll, re-toggles the sentinel, and
-                    // spins the timeline at 100% CPU until the watchdog kills
-                    // the app (0x8BADF00D, seen 2026-07-17). Width flexes up to
-                    // 280 so compact panels never clip the row; Color.clear
-                    // keeps the stage greedy while the spinner shows.
+
                     ZStack {
                         Color.clear
                         AsyncImage(url: imageURL) { phase in
@@ -2062,7 +1989,6 @@ struct ChatImageMessageView: View {
     }
 }
 
-/// Full-screen viewer for a chat image (the web lightbox's native sibling).
 struct ChatImageLightboxView: View {
     let image: ChatImageAttachment
     let onClose: () -> Void
@@ -2230,7 +2156,6 @@ enum ChatGifAttachmentPresentation {
     }
 }
 
-/// Copies the readable text of a message (GIF title when there is no text).
 func copyChatMessageText(_ message: ChatMessage) {
     let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
     let text: String
@@ -2249,8 +2174,7 @@ func copyChatMessageText(_ message: ChatMessage) {
 }
 
 #if SKIP
-/// Android stand-in for the iOS context menu: a compact action strip revealed
-/// by a long press, inline under the message.
+
 struct ChatMessageActionStrip: View {
     let onReply: () -> Void
     let onCopy: () -> Void
@@ -2313,9 +2237,7 @@ struct ChatReplyComposerView: View {
     }
 
     var body: some View {
-        // The accent bar is an overlay so the card's height stays driven by
-        // the two text lines; a freestanding Rectangle would greedily expand
-        // this strip to fill the whole panel.
+
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(ChatMessagePresentation.replyDisplayName(for: replyTo, isFromCurrentUser: isReplyFromCurrentUser))
@@ -2392,13 +2314,11 @@ struct ChatReplyQuoteView: View {
     }
 }
 
-// MARK: - Chat Empty State
-
 struct ChatEmptyStateView: View {
     var body: some View {
         VStack(spacing: 16) {
             Spacer()
-            
+
             ACMSystemIcon.icon("bubble.left", android: "chat.outline", size: 32)
                 .foregroundStyle(ACMColors.textFaint)
 
@@ -2411,7 +2331,7 @@ struct ChatEmptyStateView: View {
                     .font(ACMFont.trial(14))
                     .foregroundStyle(ACMColors.textMuted)
             }
-            
+
             Spacer()
         }
         .frame(maxWidth: .infinity)

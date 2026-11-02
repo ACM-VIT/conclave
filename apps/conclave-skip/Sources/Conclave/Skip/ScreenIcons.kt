@@ -2,9 +2,7 @@ package conclave.module
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
-// Rounded Material variants read closest to iOS SF Symbols (soft, rounded
-// terminals) so the Android glyphs match the iOS ones. Outlined variants are
-// kept only where the icon is intentionally an outline state.
+
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Chat
@@ -81,8 +79,6 @@ import androidx.compose.ui.unit.dp
 private val meetingIconsWarmLock = Any()
 @Volatile private var meetingIconsWarmStarted = false
 
-/// Maps stable icon keys to material-icons-extended vectors for Android.
-/// SkipUI's `Image(systemName:)` only resolves a small core glyph set.
 internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "mic"             -> Icons.Rounded.Mic
     "mic.off"         -> Icons.Rounded.MicOff
@@ -92,7 +88,7 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     "screen.share"    -> Icons.Rounded.ScreenShare
     "screen.share.off" -> Icons.Rounded.StopScreenShare
     "hangup"          -> Icons.Rounded.CallEnd
-    "more"            -> Icons.Rounded.MoreHoriz   // iOS ellipsis is horizontal
+    "more"            -> Icons.Rounded.MoreHoriz
     "chat"            -> Icons.AutoMirrored.Rounded.Chat
     "chat.outline"    -> Icons.Outlined.ChatBubbleOutline
     "reply"           -> Icons.AutoMirrored.Rounded.Reply
@@ -154,15 +150,11 @@ internal fun meetingIconVector(name: String): ImageVector = when (name) {
     else              -> Icons.Rounded.HelpOutline
 }
 
-/// Resolves a semantic tint key to an explicit Carbon color. Relying on
-/// Compose's inherited `LocalContentColor` is unreliable across SkipUI bridge
-/// contexts - e.g. a `.plain` Button drives the Icon dark while coloring the
-/// sibling Text correctly - so meeting icons always set an explicit `tint`.
 internal fun meetingIconTint(key: String): Color = when (key) {
     "text", "white" -> Color(0xFFFAFAFA)
-    "muted"         -> Color(0xBDFAFAFA)   // 74%
-    "faint"         -> Color(0x8FFAFAFA)   // 56%
-    "amber"         -> Color(0xF2FBBF24)   // hand-raised amber-400
+    "muted"         -> Color(0xBDFAFAFA)
+    "faint"         -> Color(0x8FFAFAFA)
+    "amber"         -> Color(0xF2FBBF24)
     "danger", "error" -> Color(0xFFEA4335)
     "accent", "orange" -> Color(0xFFF95F4A)
     "pink"          -> Color(0xFFFF007A)
@@ -171,7 +163,6 @@ internal fun meetingIconTint(key: String): Color = when (key) {
     else            -> Color(0xFFFAFAFA)
 }
 
-/// Warms lazily-built ImageVectors off the UI thread before the first sheet opens.
 fun warmMeetingIcons() {
     synchronized(meetingIconsWarmLock) {
         if (meetingIconsWarmStarted) return
@@ -192,7 +183,7 @@ fun warmMeetingIcons() {
             "north.east", "north.west", "south.east", "south.west"
         )
         for (k in keys) {
-            // Touch the vector so its backing field initializes; result unused.
+
             meetingIconVector(k)
         }
         NativePerformanceDiagnostics.timingAlways(
@@ -206,7 +197,6 @@ fun warmMeetingIcons() {
     warm.start()
 }
 
-/// Renders a meeting icon with an EXPLICIT tint (defaults to near-white `text`).
 @Composable
 internal fun MeetingIcon(name: String, size: Double, tint: String = "text", modifier: Modifier = Modifier) {
     Icon(

@@ -1,7 +1,5 @@
 import Foundation
 
-// MARK: - Chat Command Types
-
 enum ChatCommand: String, CaseIterable {
     case help = "help"
     case dm = "dm"
@@ -115,8 +113,6 @@ enum ChatCommand: String, CaseIterable {
     }
 }
 
-// MARK: - Parsed Command
-
 struct ParsedCommand {
     let command: ChatCommand
     let arguments: [String]
@@ -127,35 +123,33 @@ struct ParsedCommand {
     }
 }
 
-// MARK: - Command Parser
-
 struct ChatCommandParser {
     private static let reservedRoomMentionTargets: Set<String> = ["conclave"]
     private static let conclaveMentionToken = "conclave"
-    
+
     static func parse(_ text: String) -> ParsedCommand? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("/") else { return nil }
 
         let withoutSlash = String(trimmed.dropFirst())
         let components = whitespaceSeparatedTokens(in: withoutSlash)
-        
+
         guard let commandPart = components.first else { return nil }
-        
+
         let commandString = commandPart.lowercased()
         guard let command = ChatCommand(rawValue: commandString) else {
             return nil
         }
 
         let arguments = Array(components.dropFirst())
-        
+
         return ParsedCommand(
             command: command,
             arguments: arguments,
             originalText: trimmed
         )
     }
-    
+
     static func isCommandPrefix(_ text: String) -> Bool {
         return text.hasPrefix("/") && text.count == 1
     }
@@ -187,8 +181,6 @@ struct ChatCommandParser {
         return whitespaceSeparatedTokens(in: result).joined(separator: " ")
     }
 
-    /// Mirrors the SFU DM parser so native can block disabled private-message
-    /// attempts before sending.
     static func parseDirectMessage(_ text: String) -> (target: String, body: String)? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let isAt = trimmed.hasPrefix("@")
@@ -269,12 +261,12 @@ struct ChatCommandParser {
     private static func isConclaveMentionTrailingSeparator(_ character: Character) -> Bool {
         character.isWhitespace || character.isNewline || character == "," || character == ":"
     }
-    
+
     static func matchesPartialCommand(_ text: String) -> [ChatCommand] {
         guard text.hasPrefix("/") else { return [] }
-        
+
         let withoutSlash = String(text.dropFirst()).lowercased()
-        
+
         if withoutSlash.isEmpty {
             return ChatCommand.primaryCommands
         }
@@ -305,6 +297,31 @@ enum ChatMessageContentPolicy {
         return nil
     }
 
+    static func fullActionText(from content: String) -> String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let text = fullCommandText(in: trimmed, command: "/me") {
+            return text
+        }
+        if let text = fullCommandText(in: trimmed, command: "/action") {
+            return text
+        }
+        if trimmed.hasPrefix("* ") {
+            let text = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        return nil
+    }
+
+    private static func fullCommandText(in content: String, command: String) -> String? {
+        guard content.lowercased().hasPrefix(command) else { return nil }
+        let remainder = String(content.dropFirst(command.count))
+        guard let separator = remainder.first, separator.isWhitespace || separator.isNewline else {
+            return nil
+        }
+        let text = remainder.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
     private static func commandText(in content: String, command: String) -> String? {
         guard content.lowercased().hasPrefix(command) else { return nil }
 
@@ -324,15 +341,12 @@ enum ChatMessageContentPolicy {
     }
 }
 
-// MARK: - System Message
-
 enum SystemMessageType {
     case commandExecuted(command: ChatCommand, userName: String)
     case commandFailed(command: ChatCommand, reason: String)
     case info(String)
 }
 
-/// A unified chat-log entry for user messages and slash-command feedback.
 enum ChatTimelineEntry: Identifiable {
     case message(ChatMessage)
     case system(SystemMessage)
@@ -356,13 +370,25 @@ struct SystemMessage: Identifiable, Equatable {
     let id: String
     let type: SystemMessageType
     let timestamp: Date
-    
-    init(id: String = UUID().uuidString, type: SystemMessageType, timestamp: Date = Date()) {
+
+    let notice: String
+
+    init(id: String = UUID().uuidString, type: SystemMessageType, timestamp: Date = Date(), notice: String = "") {
         self.id = id
         self.type = type
         self.timestamp = timestamp
+        self.notice = notice
     }
-    
+
+    var isError: Bool {
+        switch type {
+        case .commandFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
     var displayText: String {
         switch type {
         case .commandExecuted(let command, let userName):
@@ -373,10 +399,11 @@ struct SystemMessage: Identifiable, Equatable {
             return text
         }
     }
-    
+
     static func == (lhs: SystemMessage, rhs: SystemMessage) -> Bool {
         lhs.id == rhs.id &&
         lhs.timestamp == rhs.timestamp &&
-        lhs.displayText == rhs.displayText
+        lhs.displayText == rhs.displayText &&
+        lhs.notice == rhs.notice
     }
 }

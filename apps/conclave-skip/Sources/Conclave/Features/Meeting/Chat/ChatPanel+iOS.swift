@@ -1,0 +1,436 @@
+#if os(iOS) && !SKIP
+import Accessibility
+import SafariServices
+import SwiftUI
+import UIKit
+
+enum ChatPage: Hashable {
+    case reactions(rowId: String)
+    case addReaction(rowId: String)
+
+    case photo(rowId: String)
+
+    case gifs
+}
+
+@MainActor
+@Observable
+final class ChatRowActions {
+    @ObservationIgnored let chat: ChatPresenter
+    @ObservationIgnored var push: (ChatPage) -> Void = { _ in }
+
+    @ObservationIgnored var pop: () -> Void = {}
+
+    @ObservationIgnored var hostStyle = PanelHostStyle.sheet
+
+    var photoSheetRowId = ""
+
+    private(set) var focusRequest = 0
+
+    private(set) var composerFocusRevision = 0
+
+    @ObservationIgnored var pendingInsert = ""
+
+    var pendingExternalURL: URL? = nil
+
+    var pendingAssistantURL: URL? = nil
+
+    init(chat: ChatPresenter) {
+        self.chat = chat
+    }
+
+    func focusComposer(inserting text: String = "") {
+        pendingInsert = text
+        focusRequest += 1
+    }
+
+    func composerDidFocus() {
+        composerFocusRevision += 1
+    }
+
+    func composerDidResize() {
+        composerFocusRevision += 1
+    }
+
+    func reply(_ rowId: String) {
+        chat.beginReply(rowId: rowId)
+        focusComposer()
+    }
+
+    func messagePrivately(_ userId: String) {
+        chat.setPrivateTo(userId: userId)
+        focusComposer()
+    }
+
+    func copy(_ rowId: String) {
+        UIPasteboard.general.string = chat.copyText(rowId: rowId)
+        chat.noteCopied()
+    }
+
+    func copyLink(_ rowId: String) {
+        UIPasteboard.general.string = chat.linkText(rowId: rowId)
+        chat.noteCopied()
+    }
+
+    func toggle(_ rowId: String, emoji: String) {
+        chat.toggleReaction(rowId: rowId, emoji: emoji)
+    }
+
+    func retry(_ rowId: String) {
+        chat.retry(rowId: rowId)
+    }
+
+    func retryAssistant(_ rowId: String) {
+        chat.retryAssistant(rowId: rowId)
+    }
+
+    func openAssistantLink(_ url: URL) {
+        pendingAssistantURL = url
+    }
+
+    func confirmAssistantLink() {
+        guard let url = pendingAssistantURL else { return }
+        pendingAssistantURL = nil
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "http" || scheme == "https" {
+            openLink(url)
+        } else {
+            UIApplication.shared.open(url)
+        }
+    }
+
+    func copyAssistantLink() {
+        guard let url = pendingAssistantURL else { return }
+        pendingAssistantURL = nil
+        UIPasteboard.general.string = url.absoluteString
+        chat.noteCopied()
+    }
+
+    func delete(_ rowId: String) {
+        chat.deleteFailed(rowId: rowId)
+    }
+
+    func hideSender(_ userId: String) {
+        chat.hideSender(userId: userId)
+    }
+
+    func showSender(_ userId: String) {
+        chat.showSender(userId: userId)
+    }
+
+    func jumpToReply(_ messageId: String) {
+        chat.jumpTo(messageId: messageId)
+    }
+
+    func viewReactions(_ rowId: String) {
+        push(.reactions(rowId: rowId))
+    }
+
+    func addReaction(_ rowId: String) {
+        push(.addReaction(rowId: rowId))
+    }
+
+    func openPhoto(_ rowId: String) {
+        if hostStyle == PanelHostStyle.inspector {
+            photoSheetRowId = rowId
+        } else {
+            push(.photo(rowId: rowId))
+        }
+    }
+
+    func openGifs() {
+        push(.gifs)
+    }
+
+    func embed(_ url: String) -> ChatEmbedEntry {
+        chat.embeds.entry(for: url)
+    }
+
+    func openURLString(_ value: String) {
+        guard let url = URL(string: value) else { return }
+        openLink(url)
+    }
+
+    func openLink(_ url: URL) {
+        let kind = NativeJoinLinkParser.classify(url.absoluteString)
+        if kind == NativeJoinLinkKind.meeting || kind == NativeJoinLinkKind.webinar {
+            _ = ConclaveAppDelegate.shared.onOpenURL(url)
+            return
+        }
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "http" || scheme == "https" {
+            ChatInAppBrowser.present(url)
+            return
+        }
+        if scheme == "tel" {
+            UIApplication.shared.open(url)
+            return
+        }
+        pendingExternalURL = url
+    }
+
+    func confirmExternalLink() {
+        guard let url = pendingExternalURL else { return }
+        pendingExternalURL = nil
+        UIApplication.shared.open(url)
+    }
+}
+
+enum ChatInAppBrowser {
+    @MainActor
+    static func present(_ url: URL) {
+        var root: UIViewController? = nil
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene, windowScene.activationState == .foregroundActive else { continue }
+            root = windowScene.keyWindow?.rootViewController
+        }
+        guard var top = root else {
+            UIApplication.shared.open(url)
+            return
+        }
+        while let presented = top.presentedViewController {
+            top = presented
+        }
+        let controller = SFSafariViewController(url: url)
+        controller.modalPresentationStyle = .overFullScreen
+        top.present(controller, animated: true)
+    }
+}
+
+struct ChatPanelHost: View {
+    let chat: ChatPresenter
+    let panels: PanelCoordinator
+    let presentation: NativePanelPresentation
+    let resolved: PanelPresentation
+    let onPromoteToLarge: () -> Void
+    @Environment(\.conclaveSystemColorScheme) private var systemScheme
+    @State private var path: [ChatPage] = []
+
+    var body: some View {
+        PanelShell(title: ConclaveStrings.text("Chat"), presentation: resolved, hostStyle: resolved.style,
+                   systemScheme: systemScheme, path: $path,
+                   onClose: { panels.dismiss(cancelPending: true) },
+                   onPromoteToLarge: onPromoteToLarge) {
+            ChatPanel(chat: chat, path: $path, hostStyle: resolved.style)
+        }
+        .task(id: presentation.id) {
+            let opened = Date().timeIntervalSince1970 * 1000.0
+            chat.panelDidOpen(destination: ChatPresenter.destination(for: presentation.request.destination),
+                              targetId: presentation.request.targetId)
+            #if DEBUG
+            ChatDiagnostics.counters?.recordOpenLatency(Date().timeIntervalSince1970 * 1000.0 - opened)
+            #endif
+        }
+        .onDisappear { chat.panelDidClose() }
+        .onChange(of: panels.destinationRequest) { _, _ in
+            guard let request = panels.latestDestination(for: presentation.request.presentationID) else { return }
+            chat.panelDidOpen(destination: ChatPresenter.destination(for: request.destination), targetId: request.targetId)
+        }
+    }
+}
+
+struct ChatPanel: View {
+    let chat: ChatPresenter
+    @Binding var path: [ChatPage]
+    let hostStyle: PanelHostStyle
+    @State private var actions: ChatRowActions
+
+    @Namespace private var photoNamespace
+
+    init(chat: ChatPresenter, path: Binding<[ChatPage]>, hostStyle: PanelHostStyle = PanelHostStyle.sheet) {
+        self.chat = chat
+        _path = path
+        self.hostStyle = hostStyle
+        let actions = ChatRowActions(chat: chat)
+        actions.hostStyle = hostStyle
+        _actions = State(initialValue: actions)
+    }
+
+    var body: some View {
+        ChatTimeline(chat: chat, actions: actions)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ChatPolicyBanner(chat: chat)
+            }
+            .conclaveComposerBar {
+                ChatComposer(chat: chat, actions: actions)
+            }
+            .navigationDestination(for: ChatPage.self) { page in
+                ChatPageView(page: page, chat: chat, actions: actions)
+            }
+            .environment(\.openURL, OpenURLAction { url in
+                actions.openLink(url)
+                return .handled
+            })
+            .environment(\.chatPhotoNamespace, photoNamespace)
+            .modifier(ChatExternalLinkConfirmation(actions: actions))
+            .modifier(ChatAssistantLinkConfirmation(actions: actions))
+            .modifier(ChatAnnouncementPoster(chat: chat))
+            .modifier(ChatFixtureBarHost())
+            .modifier(ChatPhotoSheetHost(chat: chat, actions: actions))
+            .onAppear {
+                let pages = $path
+                actions.push = { page in pages.wrappedValue.append(page) }
+                actions.pop = {
+                    if !pages.wrappedValue.isEmpty { pages.wrappedValue.removeLast() }
+                }
+            }
+            .onChange(of: hostStyle) { _, style in
+
+                actions.hostStyle = style
+            }
+            .accessibilityIdentifier("chat.panel")
+    }
+}
+
+private struct ChatPhotoSheetHost: ViewModifier {
+    let chat: ChatPresenter
+    @Bindable var actions: ChatRowActions
+
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: Binding(get: { !actions.photoSheetRowId.isEmpty },
+                                           set: { if !$0 { actions.photoSheetRowId = "" } })) {
+            ChatPhotoViewerSheet(entry: chat.rows.entry(for: actions.photoSheetRowId)) {
+                actions.photoSheetRowId = ""
+            }
+        }
+    }
+}
+
+private struct ChatPolicyBanner: View {
+    let chat: ChatPresenter
+
+    var body: some View {
+        let panel = chat.panel
+        if panel.isLocked {
+            if panel.isHost {
+                ConclaveComposerStatusLine(text: ConclaveStrings.text("Chat is locked for participants. You can still send messages."),
+                                           identifier: "chat.lockedNote")
+                    .padding(.horizontal, CGFloat(DesignTokens.space16))
+                    .padding(.vertical, CGFloat(DesignTokens.space8))
+                    .background(Color(uiColor: .systemBackground))
+            } else {
+                ConclaveBanner(kind: .info,
+                               text: ConclaveStrings.text("Chat Is Locked") + "\n"
+                                   + ConclaveStrings.text("The host has paused messaging. You'll be able to chat when it reopens."),
+                               surface: .app, identifier: "chat.lockedBanner")
+                    .padding(.horizontal, CGFloat(DesignTokens.space16))
+                    .padding(.vertical, CGFloat(DesignTokens.space8))
+            }
+        }
+    }
+}
+
+private struct ChatExternalLinkConfirmation: ViewModifier {
+    @Bindable var actions: ChatRowActions
+
+    func body(content: Content) -> some View {
+        content.alert(
+            ConclaveStrings.text("Open External Link?"),
+            isPresented: Binding(get: { actions.pendingExternalURL != nil },
+                                 set: { if !$0 { actions.pendingExternalURL = nil } })
+        ) {
+            Button(ConclaveStrings.text("Open Link")) { actions.confirmExternalLink() }
+            Button(ConclaveStrings.text("Copy Link")) {
+                UIPasteboard.general.string = actions.pendingExternalURL?.absoluteString ?? ""
+                actions.pendingExternalURL = nil
+            }
+            Button(ConclaveStrings.text("Cancel"), role: .cancel) { actions.pendingExternalURL = nil }
+        } message: {
+            Text(externalMessage)
+        }
+    }
+
+    private var externalMessage: String {
+        let body = ConclaveStrings.text("This link opens another app.")
+
+        if !actions.chat.showsCameraLine { return body }
+        return body + " " + ConclaveStrings.text("Your camera pauses while you're outside Conclave.")
+    }
+}
+
+private struct ChatAssistantLinkConfirmation: ViewModifier {
+    @Bindable var actions: ChatRowActions
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            ConclaveStrings.text("Open External Link?"),
+            isPresented: Binding(get: { actions.pendingAssistantURL != nil },
+                                 set: { if !$0 { actions.pendingAssistantURL = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button(ConclaveStrings.text("Open Link")) { actions.confirmAssistantLink() }
+            Button(ConclaveStrings.text("Copy Link")) { actions.copyAssistantLink() }
+            Button(ConclaveStrings.text("Cancel"), role: .cancel) { actions.pendingAssistantURL = nil }
+        } message: {
+            Text(message)
+        }
+    }
+
+    private var message: String {
+        guard let url = actions.pendingAssistantURL else { return "" }
+        let scheme = url.scheme?.lowercased() ?? ""
+        let isWeb = scheme == "http" || scheme == "https"
+        var text = isWeb ? ConclaveStrings.text("This link opens a website outside Conclave. Only open links you trust.")
+            : ConclaveStrings.text("This link opens another app.")
+        if !isWeb && actions.chat.showsCameraLine {
+            text += " " + ConclaveStrings.text("Your camera pauses while you're outside Conclave.")
+        }
+        let host = url.host() ?? ""
+        if !host.isEmpty { text += "\n" + host }
+        return text
+    }
+}
+
+private struct ChatAnnouncementPoster: ViewModifier {
+    let chat: ChatPresenter
+
+    func body(content: Content) -> some View {
+        content.onChange(of: chat.announcement?.id) { _, _ in
+            guard let announcement = chat.announcement else { return }
+            let text = ChatCopy.announcement(announcement)
+            guard !text.isEmpty else { return }
+            #if DEBUG
+            ChatDiagnostics.counters?.bump("chat.announcement." + announcement.kind)
+            #endif
+            var attributed = AttributedString(text)
+            attributed.accessibilitySpeechAnnouncementPriority = .low
+            AccessibilityNotification.Announcement(attributed).post()
+        }
+    }
+}
+
+private struct ChatFixtureBarHost: ViewModifier {
+    func body(content: Content) -> some View {
+        #if DEBUG
+        if let driver = ChatDiagnostics.driver {
+            content.safeAreaInset(edge: .top, spacing: 0) {
+                ChatFixtureControlsBar(driver: driver)
+            }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+}
+
+private struct ChatPageView: View {
+    let page: ChatPage
+    let chat: ChatPresenter
+    let actions: ChatRowActions
+
+    var body: some View {
+        switch page {
+        case .reactions(let rowId):
+            ReactionsPage(chat: chat, rowId: rowId)
+        case .addReaction(let rowId):
+            AddReactionPage(chat: chat, rowId: rowId)
+        case .photo(let rowId):
+            ChatPhotoViewerPage(entry: chat.rows.entry(for: rowId))
+        case .gifs:
+            ChatGifPickerPage(chat: chat, onPicked: { actions.pop() })
+        }
+    }
+}
+#endif

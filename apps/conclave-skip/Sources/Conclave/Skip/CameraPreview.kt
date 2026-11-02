@@ -32,6 +32,8 @@ object CameraPreviewController {
     private var activePreview: Preview? = null
     private var releaseGeneration = 0L
 
+    internal var onReleased: ((Preview?) -> Unit)? = null
+
     fun releasePreview() {
         val action = Runnable {
             releaseGeneration += 1
@@ -46,6 +48,7 @@ object CameraPreviewController {
                     debugLog("[CameraPreview] Failed to unbind preview: ${error}")
                 }
             }
+            onReleased?.invoke(preview)
         }
 
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -80,13 +83,13 @@ object CameraPreviewController {
     }
 }
 
-private data class PreviewCameraSelection(
+internal data class PreviewCameraSelection(
     val selector: CameraSelector,
     val mirrored: Boolean,
     val facing: String
 )
 
-private fun selectPreviewCamera(cameraProvider: ProcessCameraProvider, facing: String): PreviewCameraSelection? {
+internal fun selectPreviewCamera(cameraProvider: ProcessCameraProvider, facing: String): PreviewCameraSelection? {
     val wantsBackCamera = facing.trim().lowercase() == "back"
     val preferred = if (wantsBackCamera) {
         PreviewCameraSelection(CameraSelector.DEFAULT_BACK_CAMERA, mirrored = false, facing = "back")

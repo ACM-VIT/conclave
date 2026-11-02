@@ -31,6 +31,12 @@ final class SocketIOManager {
     var onWebinarAttendeeCountChanged: ((WebinarAttendeeCountChangedNotification) -> Void)?
     var onWebinarFeedChanged: ((WebinarFeedChangedNotification) -> Void)?
     var onWebinarParticipantJoined: ((WebinarParticipantJoinedNotification) -> Void)?
+
+    var onWebinarQaChanged: ((WebinarQaChangedNotification) -> Void)?
+    var onWebinarQaSnapshot: ((WebinarQaSnapshot) -> Void)?
+    var onWebinarHandQueueChanged: ((WebinarHandQueueChangedNotification) -> Void)?
+    var onWebinarPromoted: ((WebinarPromotedNotification) -> Void)?
+    var onWebinarDemoted: ((WebinarDemotedNotification) -> Void)?
     var onBrowserState: ((BrowserStateNotification) -> Void)?
     var onBrowserClosed: ((BrowserClosedNotification) -> Void)?
     var onAppsState: ((AppsStateNotification) -> Void)?
@@ -57,6 +63,9 @@ final class SocketIOManager {
 
     var onChatMessage: ((ChatMessage) -> Void)?
     var onChatHistorySnapshot: ((ChatHistorySnapshotNotification) -> Void)?
+
+    var onChatReactionChanged: ((ChatReactionChangedNotification) -> Void)?
+    var onConclaveAssistantPacket: ((ConclaveAssistantMessageNotification) -> Void)?
     var onReaction: ((Reaction) -> Void)?
 
     var onHandRaised: ((HandRaisedNotification) -> Void)?
@@ -67,6 +76,8 @@ final class SocketIOManager {
     var onNoGuestsChanged: ((NoGuestsChangedNotification) -> Void)?
     var onDmStateChanged: ((DmStateChangedNotification) -> Void)?
     var onImageAttachmentsStateChanged: ((ImageAttachmentsStateChangedNotification) -> Void)?
+
+    var onParticipantMediaPermissionsChanged: ((ParticipantMediaPermissionsChangedNotification) -> Void)?
     var onTtsDisabledChanged: ((TtsDisabledChangedNotification) -> Void)?
     var onReactionsDisabledChanged: ((ReactionsDisabledChangedNotification) -> Void)?
     var onPendingUsersSnapshot: ((PendingUsersSnapshotNotification) -> Void)?
@@ -76,6 +87,14 @@ final class SocketIOManager {
     var onSetVideoQuality: ((SetVideoQualityNotification) -> Void)?
     var onAdminMediaEnforced: ((AdminMediaEnforcedNotification) -> Void)?
     var onAdminBulkMediaEnforced: ((AdminBulkMediaEnforcedNotification) -> Void)?
+
+    var testCallGate: (@MainActor (String) async throws -> Void)?
+
+    var testSendChatError: Error?
+
+    var testLastSendSuppressedEmbeds = false
+    var testChatReactionError: Error?
+    var testChatReactionResult: [ChatMessageReaction]?
 
     func connect(sfuURL: String, token: String) async throws {
         throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
@@ -154,8 +173,16 @@ final class SocketIOManager {
     func toggleCamera(producerId: String, paused: Bool) async throws { }
     func closeProducer(producerId: String) async throws { }
 
-    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil) async throws -> ChatMessage {
-        ChatMessage(userId: "local", displayName: "You", content: content, gif: gif, image: image)
+    func sendChat(content: String, gif: ChatGifAttachment? = nil, image: ChatImageAttachment? = nil, recipient: String? = nil, replyTo: ChatReplyPreview? = nil, suppressEmbeds: Bool = false) async throws -> ChatMessage {
+        if let error = testSendChatError { throw error }
+        testLastSendSuppressedEmbeds = suppressEmbeds
+        return ChatMessage(userId: "local", displayName: "You", content: content, gif: gif, image: image, replyTo: replyTo,
+                           suppressEmbeds: suppressEmbeds)
+    }
+    func toggleChatReaction(messageId: String, emoji: String) async throws -> [ChatMessageReaction] {
+        try await testCallGate?("toggleChatReaction(\(emoji))")
+        if let error = testChatReactionError { throw error }
+        return testChatReactionResult ?? []
     }
     func authorizeChatImageUpload() async throws -> ChatImageUploadAuthorization {
         throw NSError(domain: "Conclave", code: -1, userInfo: [NSLocalizedDescriptionKey: "SocketIO not available on macOS"])
@@ -165,7 +192,7 @@ final class SocketIOManager {
     }
     func relayConclaveAnswer(_ packet: ConclaveAssistantRelayPacket) { }
     func sendReaction(emoji: String?, kind: String?, value: String?, label: String?) async throws { }
-    func setHandRaised(_ raised: Bool) async throws { }
+    func setHandRaised(_ raised: Bool) async throws { try await testCallGate?("setHandRaised(\(raised))") }
     func updateDisplayName(_ name: String) async throws { }
 
     func lockRoom(_ locked: Bool) async throws -> RoomPolicyMutationResponse {
@@ -209,9 +236,20 @@ final class SocketIOManager {
                 ttsDisabled: ttsDisabled,
                 dmEnabled: dmEnabled,
                 reactionsDisabled: reactionsDisabled,
-                requiresMeetingInviteCode: nil
+                requiresMeetingInviteCode: nil,
+                imageAttachmentsEnabled: nil,
+                participantUnmuteAllowed: nil,
+                participantVideoAllowed: nil
             )
         )
+    }
+
+    func setImageAttachmentsEnabled(_ enabled: Bool) async throws -> RoomPolicyMutationResponse {
+        RoomPolicyMutationResponse(success: true, error: nil, changed: nil, locked: nil, noGuests: nil, disabled: nil, enabled: enabled, policies: nil)
+    }
+
+    func setParticipantMediaPermissions(unmuteAllowed: Bool?, videoAllowed: Bool?) async throws -> ParticipantMediaPermissionsResponse {
+        ParticipantMediaPermissionsResponse(success: true, error: nil, unmuteAllowed: unmuteAllowed, videoAllowed: videoAllowed)
     }
     func getRoomLockStatus() async throws -> Bool { false }
     func getChatLockStatus() async throws -> Bool { false }
@@ -247,8 +285,26 @@ final class SocketIOManager {
     func rotateWebinarLink() async throws -> WebinarLinkResponse {
         WebinarLinkResponse(slug: "", link: "", publicAccess: false, linkVersion: 0)
     }
+
+    func updateWebinarQaEnabled(_ enabled: Bool) async throws -> WebinarConfigSnapshot {
+        WebinarConfigSnapshot(roomId: nil, enabled: nil, publicAccess: nil, locked: nil, maxAttendees: nil, attendeeCount: nil, requiresInviteCode: nil, linkSlug: nil, feedMode: nil, qaEnabled: enabled)
+    }
+
+    func promoteWebinarAttendee(userId: String) async throws { }
+    func demoteWebinarParticipant(userId: String) async throws { }
+    func setWebinarHandRaised(_ raised: Bool) async throws -> Bool { raised }
+    func declineWebinarStage() async throws { }
+
+    func submitWebinarQuestion(_ question: String) async throws -> String { "" }
+    func upvoteWebinarQuestion(id: String) async throws -> WebinarQaUpvoteResponse {
+        WebinarQaUpvoteResponse(success: true, upvotes: nil, hasUpvoted: nil)
+    }
+    func moderateWebinarQuestion(id: String, action: String, answerText: String?) async throws { }
     func getBrowserState() async throws -> BrowserStateNotification {
         BrowserStateNotification(active: false, url: nil, noVncUrl: nil, controllerUserId: nil, provider: nil, roomId: nil)
+    }
+    func getBrowserCapabilities() async throws -> BrowserCapabilitiesResponse {
+        BrowserCapabilitiesResponse(available: false)
     }
     func launchBrowser(url: String) async throws -> LaunchBrowserResponse {
         LaunchBrowserResponse(success: true, noVncUrl: nil, provider: nil, error: nil)

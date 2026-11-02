@@ -1,0 +1,92 @@
+{
+  "id": "metadata",
+  "kind": "mutable-snapshot",
+  "request_url": "https://fonts.google.com/metadata/icons?incomplete=1&key=material_symbols",
+  "request_method": "GET",
+  "request_headers": {
+    "Accept-Encoding": "identity",
+    "User-Agent": "Conclave-selected-input-recovery/1.0"
+  },
+  "started_at_utc": "2026-10-23T16:12:29.107541Z",
+  "source_revision": null,
+  "historical_status": "fresh_network_retrieval",
+  "body_file": "metadata/material-symbols.raw",
+  "receipt_file": "http/metadata.json",
+  "redirect_policy": "record and reject; no substitutions",
+  "redirects": [],
+  "http_status": 200,
+  "final_url": "https://fonts.google.com/metadata/icons?incomplete=1&key=material_symbols",
+  "response_headers": [
+    [
+      "Content-Type",
+      "application/json; charset=utf-8"
+    ],
+    [
+      "Vary",
+      "Origin"
+    ],
+    [
+      "X-Content-Type-Options",
+      "nosniff"
+    ],
+    [
+      "Expires",
+      "Fri, 23 Oct 2026 19:12:29 GMT"
+    ],
+    [
+      "Date",
+      "Fri, 23 Oct 2026 16:12:29 GMT"
+    ],
+    [
+      "Cache-Control",
+      "public, max-age=10800"
+    ],
+    [
+      "Content-Disposition",
+      "attachment; filename=\"json.txt\"; filename*=UTF-8''json.txt"
+    ],
+    [
+      "Cross-Origin-Opener-Policy",
+      "same-origin-allow-popups"
+    ],
+    [
+      "Server",
+      "ESF"
+    ],
+    [
+      "X-XSS-Protection",
+      "0"
+    ],
+    [
+      "X-Frame-Options",
+      "SAMEORIGIN"
+    ],
+    [
+      "Alt-Svc",
+      "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+    ],
+    [
+      "Accept-Ranges",
+      "none"
+    ],
+    [
+      "Vary",
+      "Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site,Accept-Encoding"
+    ],
+    [
+      "Connection",
+      "close"
+    ],
+    [
+      "Transfer-Encoding",
+      "chunked"
+    ]
+  ],
+  "bytes": 5822254,
+  "sha256": "1a36a710d57b32eef8f101980d87ae7dea560146157b3143ab115b791affa669",
+  "body_complete_within_limit": true,
+  "max_bytes": 16777216,
+  "errors": [],
+  "completed_at_utc": "2026-10-23T16:12:39.289119Z",
+  "retrieval_ok": true
+}

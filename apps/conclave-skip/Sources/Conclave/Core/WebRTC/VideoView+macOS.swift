@@ -36,8 +36,7 @@ struct VideoGridItem: View {
     let isHandRaised: Bool
     let isSpeaking: Bool
     let isLocal: Bool
-    // Stable identity for the facehash avatar (falls back to the remote
-    // track's user id, then to the name alone).
+
     var identityId: String? = nil
     var connectionStatus: ParticipantConnectionStatus? = nil
     var fillStage: Bool = false
@@ -76,7 +75,7 @@ struct VideoGridItem: View {
 
     @ViewBuilder
     var aspectAdjustedContent: some View {
-        // Fill the frame the parent assigns (grid cell / stage / thumbnail).
+
         ZStack { videoContent; overlays }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -189,8 +188,7 @@ struct VideoGridItem: View {
             Spacer()
 
             HStack {
-                // Web-style nameplate: a dark pill chip instead of a text
-                // shadow, so it stays readable over video without any glow.
+
                 HStack(spacing: 5) {
                     if isMuted {
                         Image(systemName: "mic.slash.fill")

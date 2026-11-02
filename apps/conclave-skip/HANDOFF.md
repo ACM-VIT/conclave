@@ -16,7 +16,7 @@
 2. **P0 - Lottie renders black on Android.** lottie-compose shows nothing (black) where the Conclave lockup should animate. Cosmetic but makes the overlay + any branded screen look broken. (§4.2)
 3. **P0 - Confirm the onChange NPE fix.** Fixed this session (zero-param `onChange`); no crash seen after, but not yet confirmed through a full meeting entry. (§4.3)
 4. **P1 - Performance.** The sluggishness is **recomposition-bound**. Split large `@Observable`-reading bodies, isolate high-frequency state, lighten sheets. This is the headline ask. (§5)
-5. Keep both platforms green (`swift build` + `gradle :app:assembleRelease`) and `swift test` passing. (§2, §7)
+5. Keep both platforms green (`swift build` + `./gradlew :app:assembleRelease`) and `swift test` passing. (§2, §7)
 
 ---
 
@@ -32,7 +32,7 @@
 
 ## 2. Environment · build · install · test
 
-Primary dir: `apps/conclave-skip`. Android Gradle project: `apps/conclave-skip/Android` (uses the **system** `gradle` at `/opt/homebrew/bin/gradle` - there is **no** `./gradlew` wrapper).
+Primary dir: `apps/conclave-skip`. Android Gradle project: `apps/conclave-skip/Android` (uses the checked-in `./gradlew` wrapper, Gradle 9.7.1; export `JAVA_HOME` to JDK 21 first, see AGENTS.md).
 
 ```bash
 # ---- iOS / macOS host build (fast Swift-level gate; also runs as the Android prebuild) ----
@@ -42,11 +42,11 @@ swift test                        # keep green
 
 # ---- Android: fast Kotlin compile gate for the library (catches transpile/overload errors) ----
 cd apps/conclave-skip/Android
-gradle :Conclave:compileDebugKotlin
+./gradlew :Conclave:compileDebugKotlin
 
 # ---- Android: release APK you install on device ----
 cd apps/conclave-skip/Android
-ALLOW_DEBUG_RELEASE_SIGNING=true gradle :app:assembleRelease
+ALLOW_DEBUG_RELEASE_SIGNING=true ./gradlew :app:assembleRelease
 #   -> APK: apps/conclave-skip/.build/Android/app/outputs/apk/release/app-release.apk
 #      (NOTE the non-standard path under .build/Android, NOT app/build/outputs)
 
@@ -54,7 +54,7 @@ ALLOW_DEBUG_RELEASE_SIGNING=true gradle :app:assembleRelease
 adb install -r apps/conclave-skip/.build/Android/app/outputs/apk/release/app-release.apk
 ```
 
-- The Android build's `settings.gradle.kts:19` runs `skip plugin --prebuild && swift build --scratch-path .build/index-build` (a macOS host transpile). If it fails, run `swift build` directly to see the real error.
+- The Android build's `settings.gradle.kts` (pluginManagement block) runs `skip plugin --prebuild && swift build --scratch-path .build/index-build` (a macOS host transpile). If it fails, run `swift build` directly to see the real error.
 - `ALLOW_DEBUG_RELEASE_SIGNING=true` is required locally (no `keystore.properties`); it signs release with the debug key. Fine for on-device testing.
 - App id: **`com.acmvit.conclave`**, launcher activity **`conclave.module.MainActivity`**.
 - **Don't** pipe `swift build`/`gradle` through `tail`/`grep` in a way that masks the exit code when you need pass/fail - read the tail but trust the exit status.
@@ -66,7 +66,7 @@ adb install -r apps/conclave-skip/.build/Android/app/outputs/apk/release/app-rel
 - onChange NPE - R8 strips a null-check path (worked around with `-assumenosideeffects checkNotNullParameter` in `proguard-rules.pro`, now inactive since minify is off).
 - Preference NPE - `Preference.getReduced()` on null in SkipUI's `PresentationRoot` (crashed "Invite people" share sheet); `-dontoptimize` did **not** fix it.
 
-Non-minified avoids **both** R8 crashes. The tradeoff: `checkNotNullParameter` is present at runtime, so any SkipUI null it would have stripped now throws (see §4.3). APK is ~200 MB - that's expected for the un-minified local artifact.
+Non-minified avoids **both** R8 crashes. The tradeoff: `checkNotNullParameter` is present at runtime, so any SkipUI null it would have stripped now throws (see §4.3). APK is ~120 MB (about 88 MB of it is un-minified DEX) - that's expected for the un-minified local artifact. It was ~220 MB while the app still linked SkipFuse.
 
 ---
 
@@ -174,7 +174,7 @@ Suggested measurement loop: pick one surface (start with **the sheets** - user c
 
 - [ ] `swift build` → "Build complete!"
 - [ ] `swift test` green
-- [ ] `gradle :app:assembleRelease` (with `ALLOW_DEBUG_RELEASE_SIGNING=true`) → BUILD SUCCESSFUL
+- [ ] `./gradlew :app:assembleRelease` (with `ALLOW_DEBUG_RELEASE_SIGNING=true`) → BUILD SUCCESSFUL
 - [ ] Install, cold start → **JoinView renders** (flat, coral accent, prejoin mic+camera OFF), no black screen
 - [ ] New meeting (guest) → overlay (Lottie **visible** + sound) → **reveals a settled meeting < ~2 s after ready**, no device-init hiccup, no crash
 - [ ] Join by code, bad code (branded error → setup), locked room (→ WaitingRoomView)
