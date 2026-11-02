@@ -248,7 +248,7 @@ struct NativeRootFeedbackIntegrationTests {
         #expect(premeeting.feedbackState.token.kind == .sessionExpired)
         #expect(NativePremeetingFeedbackKinds.delivers(.sessionExpired))
         #expect(FeedbackHapticContract.ios(.sessionExpired) == "warning")
-        #expect(FeedbackHapticContract.android(.sessionExpired, api: 34) == "none")
+        #expect(FeedbackHapticContract.android(.sessionExpired, api: 34) == "REJECT")
         #expect(!DeliveredTokenKinds.delivers(.signInSucceeded) && !DeliveredTokenKinds.delivers(.sessionExpired))
     }
 
@@ -266,7 +266,7 @@ struct NativeRootFeedbackIntegrationTests {
         #expect(premeeting.feedbackState.token.kind == .stillConnecting)
         #expect(NativePremeetingFeedbackKinds.delivers(.stillConnecting))
         #expect(FeedbackHapticContract.ios(.stillConnecting) == "warning")
-        #expect(FeedbackHapticContract.android(.stillConnecting, api: 34) == "none")
+        #expect(FeedbackHapticContract.android(.stillConnecting, api: 34) == "REJECT")
         let state = premeeting.feedbackState
         premeeting.lobbyDidAppear(routeId: route)
         #expect(premeeting.feedbackState == state)
