@@ -735,8 +735,7 @@ private struct TranscriptQAMessageRow: View {
                         NativeTextShimmer(
                             text: "Thinking",
                             font: ACMFont.trial(12),
-                            duration: 2.0,
-                            spread: 2.0
+                            duration: 2.0
                         )
                     }
                 } else if message.status == .error {
@@ -787,8 +786,7 @@ private struct TranscriptMinutesTab: View {
                         NativeTextShimmer(
                             text: "Updating minutes",
                             font: ACMFont.trial(11.5),
-                            duration: 2.0,
-                            spread: 2.0
+                            duration: 2.0
                         )
                     } else {
                         Circle().fill(ACMColors.success).frame(width: 6, height: 6)

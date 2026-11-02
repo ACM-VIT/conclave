@@ -168,7 +168,6 @@ internal object KeepScreenOnHolds {
         }
     }
 
-    fun holdCount(view: View): Int = counts[view] ?: 0
 }
 
 @Composable

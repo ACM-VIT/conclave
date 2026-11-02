@@ -728,9 +728,6 @@
     "Activities" : {
       "extractionState" : "manual"
     },
-    "Activity" : {
-      "extractionState" : "manual"
-    },
     "Activity Players %lld" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -989,9 +986,6 @@
     "Ask Conclave AI" : {
       "extractionState" : "manual"
     },
-    "Ask Conclave AI anything. Type @Conclave anywhere in a message." : {
-      "extractionState" : "manual"
-    },
     "Ask a longer question." : {
       "extractionState" : "manual"
     },
@@ -1131,9 +1125,6 @@
       "extractionState" : "manual"
     },
     "Bar Width" : {
-      "extractionState" : "manual"
-    },
-    "Be the first to say something. Share a photo, send a GIF, drop a link or just say hi." : {
       "extractionState" : "manual"
     },
     "Being Answered" : {
@@ -2427,9 +2418,6 @@
     "Everyone except hosts stops sending video. People can turn their camera back on unless video is turned off." : {
       "extractionState" : "manual"
     },
-    "Everyone in this call can see messages, including people who join later. Private messages stay between you and the recipient." : {
-      "extractionState" : "manual"
-    },
     "Everyone loses this page." : {
       "extractionState" : "manual"
     },
@@ -2571,9 +2559,6 @@
       "extractionState" : "manual"
     },
     "Gesture Route" : {
-      "extractionState" : "manual"
-    },
-    "Get a private answer drawn from everything that’s been said. Only you see it." : {
       "extractionState" : "manual"
     },
     "Get notified about private messages and mentions while you’re in another app." : {
@@ -2987,9 +2972,6 @@
     "Join the Game" : {
       "extractionState" : "manual"
     },
-    "Join the game to start it." : {
-      "extractionState" : "manual"
-    },
     "Joined %@" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
@@ -3245,9 +3227,6 @@
     "Low time" : {
       "extractionState" : "manual"
     },
-    "Lower" : {
-      "extractionState" : "manual"
-    },
     "Lower All" : {
       "extractionState" : "manual"
     },
@@ -3343,9 +3322,6 @@
       "extractionState" : "manual"
     },
     "Meeting not found" : {
-      "extractionState" : "manual"
-    },
-    "Meetings" : {
       "extractionState" : "manual"
     },
     "Mentioned you" : {
@@ -3613,9 +3589,6 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
-    "Nice picks. Run it back any time." : {
-      "extractionState" : "manual"
-    },
     "No Clips Found" : {
       "extractionState" : "manual"
     },
@@ -3664,9 +3637,6 @@
     "No games are available right now." : {
       "extractionState" : "manual"
     },
-    "No hard feelings, right?" : {
-      "extractionState" : "manual"
-    },
     "No hints" : {
       "extractionState" : "manual"
     },
@@ -3695,9 +3665,6 @@
       "extractionState" : "manual"
     },
     "Nobody made it in time" : {
-      "extractionState" : "manual"
-    },
-    "Nobody picked this" : {
       "extractionState" : "manual"
     },
     "Nobody solved it" : {
@@ -3887,9 +3854,6 @@
         }
       }
     },
-    "Options" : {
-      "extractionState" : "manual"
-    },
     "Or Start with a Classic" : {
       "extractionState" : "manual"
     },
@@ -3965,9 +3929,6 @@
           }
         }
       }
-    },
-    "Participants watch only." : {
-      "extractionState" : "manual"
     },
     "Party" : {
       "extractionState" : "manual"
@@ -4084,12 +4045,6 @@
     "Photos in Chat" : {
       "extractionState" : "manual"
     },
-    "Pick Up the Live Notes" : {
-      "extractionState" : "manual"
-    },
-    "Pick a game, or let the room vote." : {
-      "extractionState" : "manual"
-    },
     "Picks are sent to the host to approve." : {
       "extractionState" : "manual"
     },
@@ -4124,9 +4079,6 @@
       "extractionState" : "manual"
     },
     "Playback, seeking and the queue. Off means host only." : {
-      "extractionState" : "manual"
-    },
-    "Players" : {
       "extractionState" : "manual"
     },
     "Players are tapping" : {
@@ -4868,9 +4820,6 @@
     "Share Webinar Link" : {
       "extractionState" : "manual"
     },
-    "Share the link to invite people." : {
-      "extractionState" : "manual"
-    },
     "Share this link with people who should watch. Rotating it stops the old link from working." : {
       "extractionState" : "manual"
     },
@@ -4940,12 +4889,6 @@
     "Showing Activity" : {
       "extractionState" : "manual"
     },
-    "Shown to others in the meeting." : {
-      "extractionState" : "manual"
-    },
-    "Shown to others when you join as a guest." : {
-      "extractionState" : "manual"
-    },
     "Shows meeting details." : {
       "extractionState" : "manual"
     },
@@ -4974,9 +4917,6 @@
       "extractionState" : "manual"
     },
     "Sign in to join" : {
-      "extractionState" : "manual"
-    },
-    "Sign in to keep your name and host meetings from any device." : {
       "extractionState" : "manual"
     },
     "Sign-in didn’t finish. Try again, or keep going as a guest." : {
@@ -5137,9 +5077,6 @@
     "Starts in %@" : {
       "extractionState" : "manual"
     },
-    "Starts when live notes are on" : {
-      "extractionState" : "manual"
-    },
     "Status" : {
       "extractionState" : "manual"
     },
@@ -5220,10 +5157,6 @@
     "Stopping Shares…" : {
       "extractionState" : "manual"
     },
-    "Stop…" : {
-      "extractionState" : "manual",
-      "generatesSymbol" : false
-    },
     "Stroke Width %lld" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -5296,16 +5229,10 @@
       "extractionState" : "manual",
       "generatesSymbol" : false
     },
-    "Take turns describing the word, but stay vague." : {
-      "extractionState" : "manual"
-    },
     "Takeback requested" : {
       "extractionState" : "manual"
     },
     "Tap Now" : {
-      "extractionState" : "manual"
-    },
-    "Tap the game you want." : {
       "extractionState" : "manual"
     },
     "Taps" : {
@@ -5405,12 +5332,6 @@
       "extractionState" : "manual"
     },
     "The host turned off microphones for participants." : {
-      "extractionState" : "manual"
-    },
-    "The last host stepped away. Bring your key to keep the room transcribed." : {
-      "extractionState" : "manual"
-    },
-    "The last host stepped away. Resume it with Conclave’s shared key." : {
       "extractionState" : "manual"
     },
     "The lobby opens %lld minutes before the start." : {
@@ -5668,9 +5589,6 @@
     "Turn Off Everyone’s Camera…" : {
       "extractionState" : "manual",
       "generatesSymbol" : false
-    },
-    "Turn On Live Notes" : {
-      "extractionState" : "manual"
     },
     "Turn On for Everyone" : {
       "extractionState" : "manual"
@@ -5984,9 +5902,6 @@
     "Vote open" : {
       "extractionState" : "manual"
     },
-    "Vote too, then start the winner." : {
-      "extractionState" : "manual"
-    },
     "Voted" : {
       "extractionState" : "manual"
     },
@@ -6018,9 +5933,6 @@
       "extractionState" : "manual"
     },
     "Waiting for the word." : {
-      "extractionState" : "manual"
-    },
-    "Waiting to Start" : {
       "extractionState" : "manual"
     },
     "Warm glow" : {
@@ -6680,6 +6592,9 @@
     "You’ll join as an attendee. Your camera and mic stay off." : {
       "extractionState" : "manual"
     },
+    "You’ll play next round" : {
+      "extractionState" : "manual"
+    },
     "You’ll stay in this call as a guest and lose host controls." : {
       "extractionState" : "manual"
     },
@@ -6762,9 +6677,6 @@
       "generatesSymbol" : false
     },
     "You’re watching this round." : {
-      "extractionState" : "manual"
-    },
-    "You’re watching. Roles are secret." : {
       "extractionState" : "manual"
     },
     "Zip Solved In %@" : {

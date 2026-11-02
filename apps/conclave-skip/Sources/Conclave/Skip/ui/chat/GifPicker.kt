@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,6 +40,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -65,9 +69,13 @@ internal fun GifPickerSheet(presenter: ChatPresenter, onDismiss: () -> Unit) {
         modifier = Modifier.semantics { testTagsAsResourceId = true }.testTag("chat.gifs"),
     ) {
         NativeSemanticsPopupRoot("chat.gifs")
+        val density = LocalDensity.current
+        val windowHeight = with(density) { LocalWindowInfo.current.containerSize.height.toDp().value }
+        val keyboardHeight = with(density) { WindowInsets.ime.getBottom(density).toDp().value }
+        val height = ChatGifSheetPolicy.height(windowHeight = windowHeight.toDouble(), keyboardHeight = keyboardHeight.toDouble())
         GifPickerContent(presenter, onPicked = {
             scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
-        })
+        }, modifier = Modifier.height(height.dp))
     }
 }
 
@@ -119,9 +127,12 @@ internal fun GifPickerContent(presenter: ChatPresenter, onPicked: () -> Unit, mo
     LaunchedEffect(nearEnd, state.generation, state.items.count) {
         if (nearEnd && state.canLoadMore && !state.loadMoreFailed) loadMore()
     }
+    LaunchedEffect(state.generation) {
+        if (gridState.firstVisibleItemIndex != 0 || gridState.firstVisibleItemScrollOffset != 0) gridState.scrollToItem(0)
+    }
 
     val navigation = WindowInsets.navigationBars.asPaddingValues()
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         ConclaveSearchField(
             query = query,
             onQueryChange = { query = it },
@@ -140,38 +151,41 @@ internal fun GifPickerContent(presenter: ChatPresenter, onPicked: () -> Unit, mo
             },
             modifier = Modifier.padding(horizontal = 16.dp),
             fallback = ConclaveSegmentedFallback.menu,
+            showsSelectionIcon = false,
         )
-        when (state.phase) {
-            ChatGifPickerPhase.loading -> Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-            ChatGifPickerPhase.empty -> GifPickerStatus(gifEmptyText(kind), "chat.gifs.empty", null)
-            ChatGifPickerPhase.error -> GifPickerStatus(gifErrorText(kind), "chat.gifs.error") { start(kind, query) }
-            else -> LazyVerticalGrid(
-                columns = GridCells.Adaptive(104.dp),
-                state = gridState,
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp + navigation.calculateBottomPadding()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth().testTag("chat.gifs.grid"),
-            ) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    ConclaveTipCard(
-                        id = OneTimeTipID.gifPicker.rawValue,
-                        title = conclaveString("chat_gif_tip_title"),
-                        body = conclaveString("chat_gif_tip_body"),
-                        icon = ConclaveIcons.GifBoxFill0,
-                        identifier = "chat.gifs.tip",
-                    )
-                }
-                itemsIndexed(state.items.toList(), key = { _, gif -> gif.id }) { _, gif ->
-                    GifTile(gif, kind) {
-                        presenter.sendGif(gif)
-                        onPicked()
+        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            when (state.phase) {
+                ChatGifPickerPhase.loading -> CircularProgressIndicator(Modifier.testTag("chat.gifs.loading"))
+                ChatGifPickerPhase.empty -> GifPickerStatus(gifEmptyText(kind), "chat.gifs.empty", null)
+                ChatGifPickerPhase.error -> GifPickerStatus(gifErrorText(kind), "chat.gifs.error") { start(kind, query) }
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Adaptive(104.dp),
+                    state = gridState,
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp + navigation.calculateBottomPadding()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("chat.gifs.grid"),
+                ) {
+                    if (query.isEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            ConclaveTipCard(
+                                id = OneTimeTipID.gifPicker.rawValue,
+                                title = conclaveString("chat_gif_tip_title"),
+                                body = conclaveString("chat_gif_tip_body"),
+                                icon = ConclaveIcons.GifBoxFill0,
+                                identifier = "chat.gifs.tip",
+                            )
+                        }
                     }
-                }
-                item(span = { GridItemSpan(maxLineSpan) }) {
-                    GifPickerFooter(state.loadMoreFailed, state.isLoadingMore) { loadMore() }
+                    itemsIndexed(state.items.toList(), key = { _, gif -> gif.id }) { _, gif ->
+                        GifTile(gif, kind) {
+                            presenter.sendGif(gif)
+                            onPicked()
+                        }
+                    }
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        GifPickerFooter(state.loadMoreFailed, state.isLoadingMore) { loadMore() }
+                    }
                 }
             }
         }

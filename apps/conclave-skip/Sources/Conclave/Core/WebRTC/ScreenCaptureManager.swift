@@ -203,16 +203,6 @@ final class ScreenCaptureManager: NSObject {
         server != nil && (connected || reconnectGraceTask != nil)
     }
 
-    func updateMaxFrameRate(_ maxFrameRate: Double) {
-        updatePublishProfile(
-            maxFrameRate: maxFrameRate,
-            maxWidth: publishMaxWidth,
-            maxHeight: publishMaxHeight,
-            maxBitrateBps: publishMaxBitrateBps,
-            contentHint: publishContentHint
-        )
-    }
-
     func updatePublishProfile(
         maxFrameRate: Double,
         maxWidth: Int,

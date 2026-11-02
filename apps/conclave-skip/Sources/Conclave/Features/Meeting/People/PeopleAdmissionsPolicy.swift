@@ -46,10 +46,6 @@ enum PeopleAdmissionsPolicy {
         PeopleActionPolicy.ledgerKey(PeopleCommandKind.admit, target: rowKey)
     }
 
-    static func denyKey(_ rowKey: String) -> String {
-        PeopleActionPolicy.ledgerKey(PeopleCommandKind.deny, target: rowKey)
-    }
-
     static func hasAdmissionPending(_ pendingKeys: [String]) -> Bool {
         let admitPrefix = PeopleCommandKind.admit.rawValue + ":" + PeopleOrderPolicy.waitingPrefix
         let denyPrefix = PeopleCommandKind.deny.rawValue + ":" + PeopleOrderPolicy.waitingPrefix

@@ -11,6 +11,7 @@ enum AppBridgeProtocol {
     static let iosScheme = "conclave-embed"
     static let iosHost = "app"
     static let iosOrigin = "conclave-embed://app"
+    static let iosIdentityOrigin = "https://com.acmvit.conclave"
     static let androidOrigin = "https://appassets.androidplatform.net"
 
     static let envelopeCharacterLimit = 1_572_864
@@ -51,10 +52,18 @@ enum AppBridgeProtocol {
         return "#v=" + String(version) + "&callSessionId=" + callSessionId + "&appSessionId=" + appSessionId + "&appId=" + appId
     }
 
+    static func usesIdentityOrigin(appId: String) -> Bool {
+        appId == "watch"
+    }
+
+    static func iosOrigin(appId: String) -> String {
+        usesIdentityOrigin(appId: appId) ? iosIdentityOrigin : iosOrigin
+    }
+
     static func iosEntryURL(appId: String, callSessionId: String, appSessionId: String) -> String {
         let file = entryFile(appId: appId)
         if file.isEmpty { return "" }
-        return iosOrigin + "/" + file + fragment(callSessionId: callSessionId, appSessionId: appSessionId, appId: appId)
+        return iosOrigin(appId: appId) + "/" + file + fragment(callSessionId: callSessionId, appSessionId: appSessionId, appId: appId)
     }
 
     static func androidEntryURL(appId: String, callSessionId: String, appSessionId: String) -> String {

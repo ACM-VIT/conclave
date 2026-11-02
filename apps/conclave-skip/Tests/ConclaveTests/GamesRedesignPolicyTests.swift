@@ -24,6 +24,44 @@ struct GamesRedesignPolicyTests {
         return GameShellHeaderPolicy.showsSeatControl(chrome: games.chrome, sceneKind: games.scene.kind, barContent: bar)
     }
 
+    private func lobbyInputs(local: String, isHost: Bool, pending: [GamePlayerInput], phase: String = "lobby",
+                             isFinished: Bool = false) -> GameStageInputs {
+        let base = ActivityFixtureScript.gameInputs(.gameLobbyHost)
+        return GameStageInputs.make(callSession: 1, isActive: true, gameId: base.gameId, name: base.name, phase: phase,
+                                    players: [GamePlayerInput(id: "host", name: "Host"), GamePlayerInput(id: "p2", name: "Ben")],
+                                    pendingJoiners: pending, isFinished: isFinished, config: base.config, options: base.options,
+                                    minPlayers: base.minPlayers, publicViewJSON: base.publicViewJSON, localPlayerId: local, isHost: isHost,
+                                    receivedAtMillis: base.receivedAtMillis)
+    }
+
+    @Test func lobbyJoinersAreShownAsPlayersNotNextRound() {
+        let host = presenter([ActivityFixtureScript.gameInputs(.gameLobbyHost)])
+        #expect(host.scene.pendingJoiners.isEmpty)
+        #expect(host.scene.players.contains { $0.name == "Dee" && !$0.isPending })
+        let queued = presenter([lobbyInputs(local: "me", isHost: false, pending: [GamePlayerInput(id: "me", name: "Me")])])
+        #expect(queued.chrome.seat == .player)
+        #expect(queued.scene.players.contains { $0.isYou && !$0.isPending })
+        #expect(!headerShowsSeat(queued))
+    }
+
+    @Test func nonHostsWaitInTheBottomBarInsteadOfACaption() {
+        let waiting = presenter([lobbyInputs(local: "p2", isHost: false, pending: [])])
+        let bar = GameShellBarPolicy.content(chrome: waiting.chrome, scene: waiting.scene, results: waiting.results)
+        #expect(bar == .waitingForHost)
+        let caption = GameLobbyPolicy.caption(reason: waiting.scene.lobby.reason, isHost: false)
+        #expect(caption == .waitingForHost)
+        #expect(GameLobbyPolicy.bodyCaption(caption, barContent: bar) == .none)
+        #expect(GameLobbyPolicy.bodyCaption(.needsPlayers, barContent: bar) == .needsPlayers)
+        let watcher = presenter([lobbyInputs(local: "stranger", isHost: false, pending: [])])
+        #expect(GameShellBarPolicy.content(chrome: watcher.chrome, scene: watcher.scene, results: watcher.results) == .none)
+        let results = presenter([ActivityFixtureScript.gameInputs(.gameResults)])
+        let hostBar = GameShellBarPolicy.content(chrome: results.chrome, scene: results.scene, results: results.results)
+        #expect(hostBar == (results.results.canRematch ? .rematch : .none))
+        let guestResults = presenter([lobbyInputs(local: "p2", isHost: false, pending: [], phase: "results", isFinished: true)])
+        #expect(GameShellBarPolicy.content(chrome: guestResults.chrome, scene: guestResults.scene, results: guestResults.results)
+                == .waitingForHost)
+    }
+
     @Test func everyGameIdGetsItsOwnGlyphAndUnknownIdsFallBack() {
         let ids = ["trivia", "bluff", "would-you-rather", "most-likely-to", "reaction", "imposter", "wordle", "chess", "zip"]
         let glyphs = ids.map { GameGlyphPolicy.glyph(gameId: $0) }

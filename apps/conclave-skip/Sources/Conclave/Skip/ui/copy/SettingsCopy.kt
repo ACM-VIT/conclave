@@ -45,15 +45,6 @@ internal object SettingsCopy {
         SettingsRowID.version -> "set_version"
     }
 
-    fun rowDetailName(row: SettingsRowID): String? = when (row) {
-        SettingsRowID.microphone -> "set_test_microphone_detail"
-        SettingsRowID.noiseSuppression -> "set_noise_suppression_detail"
-        SettingsRowID.captions -> "set_captions_detail"
-        SettingsRowID.captionStyle -> "set_caption_style_detail"
-        SettingsRowID.messageNotifications -> "set_message_notifications_desc"
-        else -> null
-    }
-
     fun pageTitleName(route: SettingsRoute): String = when (route) {
         SettingsRoute.root -> "set_title"
         SettingsRoute.output -> "set_audio_output"
@@ -90,8 +81,6 @@ internal object SettingsCopy {
         if (reason == SettingsReason.reconnecting) "set_name_reconnect" else null
 
     fun connectionName(label: ConnectionQualityLabel): String = ConnectionQualityLabelPolicy.androidResourceName(label)
-
-    fun facingName(facing: String): String = if (facing == "back") "set_back" else "set_front"
 
     fun voiceKindName(kind: VoiceKind): String = when (kind) {
         VoiceKind.system -> "set_system_voice"
@@ -131,15 +120,8 @@ internal object SettingsCopy {
         else -> null
     }
 
-    fun notificationPermissionName(permission: NotificationPermission): String = when (permission) {
-        NotificationPermission.notDetermined, NotificationPermission.granted -> "set_message_notifications_desc"
-        NotificationPermission.denied -> "sys_notif_off"
-    }
-
     fun linkVerificationName(state: LinkVerification): String =
         if (state == LinkVerification.verified) "sys_links_in_app" else "sys_links_in_browser"
-
-    fun callNotificationName(enabled: Boolean): String = if (enabled) "sys_call_notif_on" else "sys_call_notif_off"
 
     fun signOutMessageName(isHost: Boolean): String = if (isHost) "set_sign_out_host" else "set_sign_out_guest"
 

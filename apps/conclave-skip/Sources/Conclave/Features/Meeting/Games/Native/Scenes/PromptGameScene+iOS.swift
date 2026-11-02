@@ -56,8 +56,9 @@ struct PromptSpectatorNotice: View {
     var allowsJoin = true
 
     var body: some View {
-        GameKitWatching(title: GameCopy.seatTag(games.chrome.seat) ?? ConclaveStrings.text("Watching"),
-                        canJoin: allowsJoin && games.chrome.seat == .canJoin, onJoin: { games.join() })
+        let queued = games.chrome.seat == .joiningNextRound
+        GameKitWatching(title: queued ? ConclaveStrings.text("You’ll play next round") : ConclaveStrings.text("Watching"),
+                        isQueued: queued, canJoin: allowsJoin && games.chrome.seat == .canJoin, onJoin: { games.join() })
     }
 }
 
@@ -185,7 +186,6 @@ struct PromptResultsBody: View {
     let scene: GameScene
 
     var body: some View {
-        let isHost = games.chrome.isHost
         VStack(alignment: .leading, spacing: 12) {
             if let imposter = scene.imposter {
                 ImposterResultView(scene: imposter)
@@ -201,9 +201,6 @@ struct PromptResultsBody: View {
                 .padding(.top, 12)
             } else {
                 PromptScoredResults(games: games, kind: scene.kind)
-            }
-            if !isHost {
-                GameKitWaitingLine(text: PromptGameCopy.waitingForHost())
             }
         }
         .accessibilityIdentifier("game.scene.results")

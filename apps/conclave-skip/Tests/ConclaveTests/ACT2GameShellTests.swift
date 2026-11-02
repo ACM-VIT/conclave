@@ -241,7 +241,7 @@ struct ACT2GameShellTests {
         host.apply(ActivityFixtureScript.gameInputs(.gameLobbyHost))
         #expect(host.chrome.phase == GameChromePhase.lobby && host.scene.kind == GameSceneKind.lobby)
         #expect(host.scene.lobby.canStart && host.scene.lobby.reason == GameLobbyReason.none)
-        #expect(host.scene.pendingJoiners.map { $0.name } == ["Dee"] && host.chrome.pendingCount == 1)
+        #expect(host.scene.pendingJoiners.isEmpty && host.scene.players.map { $0.name }.contains("Dee") && host.chrome.pendingCount == 1)
         #expect(host.scene.options.map { $0.label + "=" + $0.value } == ["Questions=7", "Pace=Normal"])
         let unseated = GameStagePresenter()
         unseated.apply(ActivityFixtureScript.gameInputs(.gameLobbyHostUnseated))

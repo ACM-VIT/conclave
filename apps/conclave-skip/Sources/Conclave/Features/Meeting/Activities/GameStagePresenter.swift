@@ -373,8 +373,6 @@ final class GameStagePresenter {
         for player in inputs.pendingJoiners where player.id == localId && !localId.isEmpty {
             isQueued = true
         }
-        let seat = GameStagePresenter.seat(isSeated: isSeated, isQueued: isQueued, canJoinLate: inputs.canJoinLate,
-                                           isFinished: inputs.isFinished)
         let common = projection.common
         let known = projection.isKnownGame || !inputs.isActive
         var phase = GameChromePhase.playing
@@ -385,6 +383,10 @@ final class GameStagePresenter {
         } else if inputs.phase == "lobby" || inputs.phase.isEmpty {
             phase = GameChromePhase.lobby
         }
+        let isLobby = phase == GameChromePhase.lobby
+        let holdsLobbySeat = isSeated || (isLobby && isQueued)
+        let seat = GameStagePresenter.seat(isSeated: holdsLobbySeat, isQueued: isQueued,
+                                           canJoinLate: inputs.canJoinLate, isFinished: inputs.isFinished)
         let nextChrome = GameChromeModel(
             revision: chrome.revision, gameId: inputs.gameId, name: inputs.name, phase: phase, roundIndex: common.roundNumber,
             roundTotal: common.roundTotal, seat: seat, isHost: inputs.isHost, playerCount: inputs.players.count,
@@ -401,9 +403,15 @@ final class GameStagePresenter {
         }
         var pending: [GamePlayerModel] = []
         for player in inputs.pendingJoiners {
-            pending.append(GamePlayerModel(id: player.id, name: player.name, isYou: player.id == localId, isPending: true, hasActed: false))
+            if isLobby {
+                players.append(GamePlayerModel(id: player.id, name: player.name, isYou: player.id == localId, isPending: false,
+                                               hasActed: false))
+            } else {
+                pending.append(GamePlayerModel(id: player.id, name: player.name, isYou: player.id == localId, isPending: true,
+                                               hasActed: false))
+            }
         }
-        let lobby = GameStagePresenter.lobby(isHost: inputs.isHost, isSeated: isSeated, seat: seat, isRecovering: inputs.isRecovering,
+        let lobby = GameStagePresenter.lobby(isHost: inputs.isHost, isSeated: holdsLobbySeat, seat: seat, isRecovering: inputs.isRecovering,
                                              minPlayers: inputs.minPlayers, playerCount: inputs.players.count)
         rememberPlayers()
 

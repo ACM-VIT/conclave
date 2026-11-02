@@ -159,7 +159,7 @@ struct ZipResultsView: View {
                 GameKitScoreboard(rows: games.results.scoreboard)
             }
             ZipStandingsList(scene: scene)
-            if !games.chrome.isHost {
+            if !games.chrome.isHost && !isFinished {
                 PromptLine(text: isFinal ? ZipCopy.waitingForHost() : ZipCopy.waitingNextRound())
             }
         }

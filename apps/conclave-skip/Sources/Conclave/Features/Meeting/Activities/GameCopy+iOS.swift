@@ -71,14 +71,7 @@ enum GameCopy {
     }
 
     static func privateViewBody() -> String { ConclaveStrings.text("Waiting for the server to send your private view.") }
-    static func spectatorBody() -> String { ConclaveStrings.text("You’re watching this round.") }
-    static func rolesSecret() -> String { ConclaveStrings.text("You’re watching. Roles are secret.") }
     static func endFailed() -> String { ConclaveStrings.text("Couldn’t end the game. Try again.") }
-
-    static func winnerLine(_ results: GameResultsModel) -> String? {
-        if results.winnerName.isEmpty || results.isTie { return nil }
-        return ConclaveStrings.format("%@ wins with %@", results.winnerName, score(results.winnerScore))
-    }
 
     static func score(_ value: Int) -> String {
         value.formatted(.number)

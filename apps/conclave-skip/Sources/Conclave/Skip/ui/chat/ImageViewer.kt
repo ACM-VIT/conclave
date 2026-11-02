@@ -295,14 +295,6 @@ internal object ChatMediaCopyAndroid {
     }
 
     @Composable
-    fun attachReason(reason: String): String = when (reason) {
-        "privateTextOnly" -> conclaveString("chat_reason_private_text")
-        "photosDisabled" -> conclaveString("chat_reason_photos_off")
-        "voiceDisabled" -> conclaveString("chat_reason_voice_off")
-        else -> ""
-    }
-
-    @Composable
     fun attachmentStatus(attachment: ChatAttachmentState): String = when (attachment.phase) {
         ChatAttachmentPhase.preparing -> conclaveString("chat_attachment_preparing")
         ChatAttachmentPhase.uploading -> if (attachment.progress < 0) conclaveString("chat_attachment_uploading_indeterminate")

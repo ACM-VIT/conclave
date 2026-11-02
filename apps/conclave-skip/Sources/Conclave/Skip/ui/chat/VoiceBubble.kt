@@ -53,13 +53,6 @@ internal object VoiceCopyAndroid {
 
     @Composable
     fun accessibilityValue(): String = conclaveString("chat_ax_voice")
-
-    @Composable
-    fun unavailableReason(composer: ChatComposerSnapshot): String = when {
-        composer.privateTo != null -> conclaveString("chat_reason_private_text")
-        !composer.voiceEnabled -> conclaveString("chat_reason_voice_off")
-        else -> ""
-    }
 }
 
 @Composable
@@ -120,20 +113,4 @@ internal fun ChatVoiceModeRow(presenter: ChatPresenter, composer: ChatComposerSn
             }
         }
     }
-}
-
-@Composable
-internal fun ChatVoiceAttachMenuItem(presenter: ChatPresenter, composer: ChatComposerSnapshot, onDismiss: () -> Unit) {
-    val reason = VoiceCopyAndroid.unavailableReason(composer)
-    ConclaveMenuItem(
-        title = conclaveString("chat_attach_voice"),
-        identifier = "chat.composer.attach.voice",
-        onClick = {
-            presenter.setVoiceMode(true)
-            onDismiss()
-        },
-        leadingIcon = VoiceIcons.voiceMessage,
-        supporting = if (reason.isEmpty()) null else reason,
-        enabled = reason.isEmpty(),
-    )
 }

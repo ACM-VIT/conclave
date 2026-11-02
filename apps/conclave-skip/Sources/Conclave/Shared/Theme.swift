@@ -6,10 +6,6 @@ func acmColor(red: Double, green: Double, blue: Double, opacity: Double = 1.0) -
     Color(red: red / 255.0, green: green / 255.0, blue: blue / 255.0, opacity: opacity)
 }
 
-func acmColor01(red: Double, green: Double, blue: Double, opacity: Double = 1.0) -> Color {
-    Color(red: red, green: green, blue: blue, opacity: opacity)
-}
-
 enum ACMColors {
     static let primaryOrange = acmColor(red: 249.0, green: 95.0, blue: 74.0)
     static let primaryPink = acmColor(red: 255.0, green: 0.0, blue: 122.0)
@@ -65,12 +61,6 @@ enum ACMColors {
 
     static func blackOverlay(_ opacity: Double) -> Color {
         acmColor(red: 0.0, green: 0.0, blue: 0.0, opacity: opacity)
-    }
-
-    static func avatarColor(for key: String) -> Color {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return FacehashPresentation.palette[0] }
-        return FacehashPresentation.color(for: trimmed)
     }
 
     static let handRaised = acmColor(red: 251.0, green: 191.0, blue: 36.0, opacity: 0.95)
@@ -253,56 +243,6 @@ extension View {
         #endif
     }
 
-    public func acmPrimaryButtonStyle(isLoading: Bool = false) -> some View {
-        #if SKIP
-        return self
-            .font(ACMFont.trial(14, weight: .medium))
-            .foregroundStyle(ACMColors.white)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .acmColorBackground(ACMColors.primaryOrange)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-        #else
-        return self.buttonStyle(ACMPrimaryButtonStyle(isLoading: isLoading))
-        #endif
-    }
-}
-
-extension View {
-    public func acmInputStyle() -> some View {
-        self
-            .font(ACMFont.trial(14))
-            .foregroundStyle(ACMColors.text)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .acmColorBackground(ACMColors.bgAlt)
-            .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(lineWidth: 1)
-                    .foregroundStyle(ACMColors.border)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-extension View {
-    public func acmVideoTile(isSpeaking: Bool = false) -> some View {
-        self
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(lineWidth: isSpeaking ? 2.0 : 1.0)
-                    .foregroundStyle(isSpeaking ? ACMColors.speaking : ACMColors.border)
-            }
-    }
-}
-
-extension View {
-    public func acmLabel() -> some View {
-        self
-            .font(ACMFont.trial(12, weight: .medium))
-            .foregroundStyle(ACMColors.textMuted)
-    }
 }
 
 extension View {
@@ -314,23 +254,6 @@ extension View {
         #endif
     }
 
-    public func acmBackground() -> some View {
-        self.acmColorBackground(ACMColors.bg)
-    }
-
-    public func acmPill() -> some View {
-        self
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .acmColorBackground(ACMColors.scrim)
-            .acmMaterialBackground(opacity: 0.3)
-            .overlay {
-                Capsule()
-                    .strokeBorder(lineWidth: 1)
-                    .foregroundStyle(ACMColors.border)
-            }
-            .clipShape(Capsule())
-    }
 }
 
 extension View {

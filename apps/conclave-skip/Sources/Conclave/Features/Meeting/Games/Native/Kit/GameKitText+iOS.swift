@@ -34,20 +34,6 @@ struct GameKitPrompt: View {
     }
 }
 
-struct GameKitTag: View {
-    let title: String
-
-    var body: some View {
-        Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(HostingTheme.token(DesignTokens.iosInCallText))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(HostingTheme.token(DesignTokens.iosInCallSurfaceHigh), in: Capsule())
-            .overlay { Capsule().strokeBorder(HostingTheme.inCallBorder, lineWidth: 1) }
-    }
-}
-
 struct GameKitSeatControl: View {
     let seat: SeatState
     let onJoin: () -> Void
@@ -67,10 +53,8 @@ struct GameKitSeatControl: View {
             .accessibilityLabel(ConclaveStrings.text("Join the Game"))
             .accessibilityIdentifier("game.seat.join")
         case .joiningNextRound, .watching:
-            if let tag = GameCopy.seatTag(seat) {
-                GameKitTag(title: tag)
-                    .accessibilityIdentifier("game.seat.tag")
-            }
+            GameKitSeatChip(seat: seat)
+                .accessibilityIdentifier("game.seat.tag")
         case .player:
             EmptyView()
         }

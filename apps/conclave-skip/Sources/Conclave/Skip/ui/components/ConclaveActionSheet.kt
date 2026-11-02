@@ -17,10 +17,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,14 +36,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -84,6 +89,7 @@ internal object ConclaveActionSheetMetrics {
     const val TILE_PADDING_DP = 8
 
     const val MAX_WIDTH_DP = 640
+    const val HOST_PEEK_DP = 44
 
     fun columns(rowWidth: Int, longestWord: Int, gap: Int, padding: Int): Int {
         var columns = COLUMNS
@@ -124,7 +130,7 @@ internal fun ConclaveActionSheet(
     haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
 ) {
     HostingTheme(inCall = true) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val scope = rememberCoroutineScope()
         val paneTitle = conclaveString("ds_more_options")
         ModalBottomSheet(
@@ -140,8 +146,15 @@ internal fun ConclaveActionSheet(
         ) {
 
             NativeSemanticsPopupRoot(identifier)
+            val hasHostRows = hostTitle != null && hostRows.isNotEmpty()
+            var mainBottomPx by remember { mutableIntStateOf(0) }
+            val sheetDensity = LocalDensity.current
+            val cap = if (hasHostRows && mainBottomPx > 0) {
+                with(sheetDensity) { mainBottomPx.toDp() } + ConclaveActionSheetMetrics.HOST_PEEK_DP.dp
+            } else null
             Column(
                 Modifier.widthIn(max = ConclaveActionSheetMetrics.MAX_WIDTH_DP.dp).fillMaxWidth().align(Alignment.CenterHorizontally)
+                    .then(if (cap != null) Modifier.heightIn(max = cap) else Modifier)
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp).padding(bottom = 16.dp).testTag(identifier).semantics { this.paneTitle = paneTitle },
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -172,7 +185,10 @@ internal fun ConclaveActionSheet(
                     val density = LocalDensity.current
                     val labels = tiles.map { it.label }
                     val longestWord = remember(labels, labelStyle, measurer) { longestTileWord(labels, labelStyle, measurer) }
-                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    BoxWithConstraints(Modifier.fillMaxWidth().onGloballyPositioned { coordinates ->
+                        val bottom = (coordinates.positionInParent().y + coordinates.size.height).toInt()
+                        if (bottom != mainBottomPx) mainBottomPx = bottom
+                    }) {
                         val columns = if (constraints.hasBoundedWidth) {
                             ConclaveActionSheetMetrics.columns(rowWidth = constraints.maxWidth, longestWord = longestWord,
                                 gap = with(density) { ConclaveActionSheetMetrics.TILE_GAP_DP.dp.roundToPx() },

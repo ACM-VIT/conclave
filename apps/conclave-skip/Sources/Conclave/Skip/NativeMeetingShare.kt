@@ -86,9 +86,6 @@ object NativeMeetingShare {
 
 object NativeExternalHandoff {
 
-    fun supportsCustomTabs(context: Context): Boolean =
-        CustomTabsClient.getPackageName(context, emptyList<String>()) != null
-
     fun openWebLink(url: String): Boolean {
         val activity = UIApplication.shared.androidActivity ?: return openExternalApp(url)
         val uri = Uri.parse(url)

@@ -71,6 +71,7 @@ internal fun ReactionBurstLayer(stage: StagePresenter, modifier: Modifier = Modi
             leading = if (direction == LayoutDirection.Ltr) left else right,
             trailing = if (direction == LayoutDirection.Ltr) right else left,
         )
+        val spreadWidth = StageReactionPolicy.spreadLayerWidth(viewport)
         val placement = if (reduceMotion) {
             val layout = stage.layout
             val metrics = StageReactionSlotMetrics(defaultBottomInset = bottomInset, layerLeading = viewport.insetLeading,
@@ -90,14 +91,15 @@ internal fun ReactionBurstLayer(stage: StagePresenter, modifier: Modifier = Modi
             contentAlignment = Alignment.BottomStart,
         ) {
             for (event in events) {
-                key(event.id) { ReactionBubble(event, reduceMotion, placement.shape, slotHeight) }
+                key(event.id) { ReactionBubble(event, reduceMotion, placement.shape, slotHeight, spreadWidth) }
             }
         }
     }
 }
 
 @Composable
-private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean, slotShape: StageReactionSlotShape, slotHeight: Double) {
+private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean, slotShape: StageReactionSlotShape, slotHeight: Double,
+    spreadWidth: Double) {
     val rise = remember { Animatable(0f) }
     val drift = remember { Animatable(0f) }
     val pop = remember { Animatable(if (reduceMotion) 1f else StageReactionPolicy.popFromScale.toFloat()) }
@@ -136,9 +138,11 @@ private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean, slotShap
     }
     Column(
         Modifier.zIndex(if (event.isLocal) 1f else 0f)
-            .offset(x = StageReactionPolicy.slotOffsetX(lane = lane, reduceMotion = reduceMotion, shape = slotShape).dp,
+            .offset(x = (if (reduceMotion) StageReactionPolicy.slotOffsetX(lane = lane, reduceMotion = true, shape = slotShape)
+                else StageReactionPolicy.spreadOffsetX(eventId = event.id, layerWidth = spreadWidth,
+                    itemWidth = StageReactionPolicy.spreadItemWidth)).dp,
                 y = (-StageReactionPolicy.slotOffsetY(lane = lane, shape = slotShape, slotHeight = slotHeight)).dp)
-            .then(if (reduceMotion) Modifier.width(StageReactionPolicy.reducedSlotWidth.dp) else Modifier).graphicsLayer {
+            .width(if (reduceMotion) StageReactionPolicy.reducedSlotWidth.dp else StageReactionPolicy.spreadItemWidth.dp).graphicsLayer {
             translationX = drift.value.dp.toPx()
             translationY = -rise.value.dp.toPx()
             scaleX = pop.value

@@ -146,7 +146,8 @@ internal fun MessageActionsSheet(presenter: ChatPresenter, actions: ChatRowActio
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             if (row.canReact) {
                 ChatEmojiRow(row, Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) { emoji ->
-                    hideThen { actions.toggle(row.id, emoji) }
+                    actions.toggle(row.id, emoji)
+                    hideThen { }
                 }
             }
             val groups = chatMenuActions(row, actions, close = { hideThen { } }, openViewer = { hideThen { actions.openViewer(row.id) } })

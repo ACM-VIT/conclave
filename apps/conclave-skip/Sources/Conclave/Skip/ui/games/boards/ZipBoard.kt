@@ -222,7 +222,7 @@ private fun ZipResultsView(scene: ZipScene, games: GameStagePresenter, isFinishe
         ZipBoardSurface(scene, games, null, shown)
         if (isFinished && scene.roundTotal > 1 && games.results.scoreboard.count > 0) GameKitScoreboard(games.results.scoreboard)
         ZipStandingsList(scene)
-        if (!games.chrome.isHost) PromptLine(conclaveString(if (isFinal) "gm_waiting_host" else "gm_zip_waiting_next"))
+        if (!games.chrome.isHost && !isFinished) PromptLine(conclaveString(if (isFinal) "gm_waiting_host" else "gm_zip_waiting_next"))
         PromptAnnouncement(games, scene.resultKey, winner)
     }
 }

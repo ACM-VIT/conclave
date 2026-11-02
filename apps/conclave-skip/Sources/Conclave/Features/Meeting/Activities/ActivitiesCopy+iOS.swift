@@ -187,12 +187,5 @@ enum ActivitiesCopy {
     static func started(_ name: String) -> String { ConclaveStrings.format("%@ started", name) }
     static func ended(_ name: String) -> String { ConclaveStrings.format("%@ ended", name) }
 
-    static func phaseCopy(_ phase: ActivityCardPhase, name: String) -> String? {
-        switch phase {
-        case .live: return nil
-        case .opening: return opening(name)
-        case .failed: return couldNotOpen(name)
-        }
-    }
 }
 #endif

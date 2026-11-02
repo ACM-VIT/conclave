@@ -1,5 +1,10 @@
 package conclave.module
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -160,7 +166,61 @@ internal fun GameKitStatusRow(acted: Int, total: Int, countdown: CountdownModel?
 }
 
 @Composable
-internal fun GameKitWatching(canJoin: Boolean, onJoin: () -> Unit, title: String = conclaveString("gm_watching")) {
+internal fun GameKitSeatChip(seat: SeatState) {
+    val scheme = MaterialTheme.colorScheme
+    val queued = seat == SeatState.joiningNextRound
+    val tag = gameSeatTagResource(seat)
+    val label = if (tag != null) conclaveString(tag) else ""
+    Row(
+        Modifier.heightIn(min = 36.dp).background(scheme.surfaceContainerHigh, CircleShape).padding(horizontal = 12.dp)
+            .testTag("game.seat.tag").clearAndSetSemantics { contentDescription = label },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(if (queued) Icons.Rounded.Schedule else ConclaveIcons.VisibilityFill0, contentDescription = null,
+            tint = scheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Text(if (queued) conclaveString("gm_next_round") else conclaveString("gm_watching"), style = MaterialTheme.typography.labelLarge,
+            color = scheme.onSurfaceVariant, maxLines = 1)
+    }
+}
+
+@Composable
+internal fun GameKitWaitingBar(text: String) {
+    val scheme = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 50.dp).background(scheme.surfaceContainerHigh, CircleShape).padding(horizontal = 16.dp)
+            .testTag("game.bar.waiting").clearAndSetSemantics { contentDescription = text },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+    ) {
+        GameKitWaitingDots()
+        Text(text, style = MaterialTheme.typography.labelLarge, color = scheme.onSurfaceVariant, maxLines = 1,
+            overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun GameKitWaitingDots() {
+    val scheme = MaterialTheme.colorScheme
+    val reduceMotion = rememberReduceMotion()
+    val transition = rememberInfiniteTransition(label = "waitingDots")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3f,
+        animationSpec = infiniteRepeatable(tween(durationMillis = 1050, easing = LinearEasing)),
+        label = "waitingDotsPhase",
+    )
+    val active = if (reduceMotion) -1 else phase.toInt().coerceIn(0, 2)
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (index in 0 until 3) {
+            Box(Modifier.size(6.dp).background(if (index == active) scheme.primaryContainer else scheme.onSurfaceVariant.copy(alpha = 0.5f),
+                CircleShape))
+        }
+    }
+}
+
+@Composable
+internal fun GameKitWatching(canJoin: Boolean, onJoin: () -> Unit, title: String = conclaveString("gm_watching"), isQueued: Boolean = false) {
     val scheme = MaterialTheme.colorScheme
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -168,9 +228,11 @@ internal fun GameKitWatching(canJoin: Boolean, onJoin: () -> Unit, title: String
         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).testTag("game.notice.spectator"),
     ) {
         Row(Modifier.padding(start = 14.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(ConclaveIcons.VisibilityFill0, contentDescription = null, tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            Icon(if (isQueued) Icons.Rounded.Schedule else ConclaveIcons.VisibilityFill0, contentDescription = null,
+                tint = if (isQueued) scheme.primaryContainer else scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
-            Text(title, style = MaterialTheme.typography.labelLarge, color = scheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Text(title, style = MaterialTheme.typography.labelLarge, color = if (isQueued) scheme.onSurface else scheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f))
             if (canJoin) {
                 val label = conclaveString("gm_join_game")
                 Button(
