@@ -84,7 +84,7 @@ internal fun WebinarLandingScreen(premeeting: PremeetingPresenter, key: Premeeti
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = scheme.surface,
         contentWindowInsets = WindowInsets.safeDrawing,
-        modifier = Modifier.testTag("webinar"),
+        modifier = Modifier.dismissKeyboardOnInteraction().testTag("webinar"),
     ) { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),

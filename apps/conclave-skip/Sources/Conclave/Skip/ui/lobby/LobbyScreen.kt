@@ -94,7 +94,7 @@ internal fun LobbyScreen(premeeting: PremeetingPresenter, key: PremeetingKey.Lob
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = scheme.surface,
         contentWindowInsets = WindowInsets.safeDrawing,
-        modifier = Modifier.imePadding().testTag("lobby"),
+        modifier = Modifier.imePadding().dismissKeyboardOnInteraction().testTag("lobby"),
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             val wide = maxWidth >= 640.dp
