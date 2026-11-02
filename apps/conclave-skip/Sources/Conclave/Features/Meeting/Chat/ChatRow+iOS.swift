@@ -83,6 +83,7 @@ private struct ChatMessageRowView: View {
     let row: ChatRowModel
     let actions: ChatRowActions
     @State private var initialChipIds: Set<String>
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(row: ChatRowModel, actions: ChatRowActions) {
         self.row = row
@@ -109,6 +110,7 @@ private struct ChatMessageRowView: View {
                     ConclaveReactionChipRow(chips: chipModels, initialIds: initialChipIds, identifier: "chat.row." + row.id + ".chip") { chip in
                         actions.toggle(row.id, emoji: chip.emoji)
                     }
+                    .transition(ChatReactionRowMotion.transition(isOwn: row.isOwn))
                 }
 
                 ForEach(Array(row.embedURLs.enumerated()), id: \.element) { index, url in
@@ -119,6 +121,7 @@ private struct ChatMessageRowView: View {
                 ChatDeliveryLine(row: row, actions: actions)
             }
             .frame(maxWidth: .infinity, alignment: row.isOwn ? .trailing : .leading)
+            .animation(ChatReactionRowMotion.animation(reduceMotion: reduceMotion), value: row.reactions.isEmpty)
         }
     }
 
@@ -563,6 +566,16 @@ private struct ChatBubblePreview: View {
                 .lineLimit(8)
         }
         .frame(maxWidth: 320)
+    }
+}
+enum ChatReactionRowMotion {
+    static func transition(isOwn: Bool) -> AnyTransition {
+        .asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.6, anchor: isOwn ? .topTrailing : .topLeading)),
+                    removal: .opacity.combined(with: .scale(scale: 0.8, anchor: isOwn ? .topTrailing : .topLeading)))
+    }
+
+    static func animation(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .snappy(duration: 0.22)
     }
 }
 #endif
