@@ -387,10 +387,10 @@ struct ENT7AccountTests {
     @Test func accountStringsAreInBothCatalogs() throws {
         let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent7Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Sign in to keep your name and host meetings from any device.", "Loading Sign-In Options",
+        for key in ["Loading Sign-In Options",
                     "Couldn\u{2019}t load sign-in options.", "Sign-in isn\u{2019}t available right now. You can still join as a guest.",
                     "Continue with Google", "Sign-in didn\u{2019}t finish. Try again, or keep going as a guest.", "Guest", "Your Name",
-                    "Shown to others when you join as a guest.", "Signed in with Apple", "Signed in with Google", "Signed in",
+                    "Signed in with Apple", "Signed in with Google", "Signed in",
                     "Sign Out", "Privacy Policy", "View on the Web", "Delete Account", "Deleting your account removes it permanently.",
                     "Delete Your Account?",
                     "This permanently deletes your Conclave account and signs you out on this device. This can\u{2019}t be undone.",

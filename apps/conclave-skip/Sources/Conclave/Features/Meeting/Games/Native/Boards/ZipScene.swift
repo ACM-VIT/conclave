@@ -502,10 +502,6 @@ enum ZipPathPolicy {
         return confirmed
     }
 
-    static func progressCount(confirmed: [Int], display: [Int]) -> Int {
-        display.isEmpty ? confirmed.count : display.count
-    }
-
     static func withCells(_ scene: ZipScene) -> ZipScene {
         let next = scene.canMove ? eligibleNext(scene.confirmedPath, scene: scene) : []
         let head = scene.confirmedPath.isEmpty ? -1 : scene.confirmedPath[scene.confirmedPath.count - 1]

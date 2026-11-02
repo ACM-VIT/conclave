@@ -2,6 +2,7 @@ package conclave.module
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -159,31 +160,27 @@ internal fun ConclaveComposerField(
     placeholder: String, value: String, onValueChange: (String) -> Unit, sendEnabled: Boolean, onSend: () -> Unit,
     identifier: String, modifier: Modifier = Modifier, sendLabel: String? = null, enabled: Boolean = true,
     sendDisabledReason: String = "", onHardwareKey: ((KeyEvent) -> Boolean)? = null, fieldModifier: Modifier = Modifier,
-    attach: (@Composable () -> Unit)? = null,
+    attach: (@Composable () -> Unit)? = null, accessory: (@Composable () -> Unit)? = null,
 ) {
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ConclaveComposerMetrics.clusterSpacing.dp),
-        verticalAlignment = Alignment.Bottom) {
-        if (attach != null) ConclaveComposerAttachSlot(attach)
-        Box(Modifier.weight(1f)) {
-            TextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth().then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
-                    conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
-                },
-                enabled = enabled,
-                placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
-                trailingIcon = { Spacer(Modifier.size(48.dp)) },
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { if (sendEnabled) onSend() }),
-                maxLines = 6,
-                shape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp),
-                colors = conclaveComposerColors(),
-            )
-            ConclaveComposerSendSlot(Modifier.align(Alignment.BottomEnd)) {
-                ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason)
-            }
-        }
+    ConclaveComposerFrame(modifier, attach, accessory, {
+        ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason)
+    }) { leading, trailing ->
+        TextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth().then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
+                conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
+            },
+            enabled = enabled,
+            placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
+            leadingIcon = leading,
+            trailingIcon = trailing,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { if (sendEnabled) onSend() }),
+            maxLines = 6,
+            shape = conclaveComposerShape(),
+            colors = conclaveComposerColors(),
+        )
     }
 }
 
@@ -192,32 +189,53 @@ internal fun ConclaveComposerField(
     placeholder: String, state: TextFieldState, sendEnabled: Boolean, onSend: () -> Unit, identifier: String,
     modifier: Modifier = Modifier, sendLabel: String? = null, sendDisabledReason: String = "", enabled: Boolean = true,
     onHardwareKey: ((KeyEvent) -> Boolean)? = null, onSendBlocked: (() -> Unit)? = null, fieldModifier: Modifier = Modifier,
-    attach: (@Composable () -> Unit)? = null,
+    attach: (@Composable () -> Unit)? = null, accessory: (@Composable () -> Unit)? = null,
 ) {
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(ConclaveComposerMetrics.clusterSpacing.dp),
-        verticalAlignment = Alignment.Bottom) {
-        if (attach != null) ConclaveComposerAttachSlot(attach)
-        Box(Modifier.weight(1f)) {
-            TextField(
-                state = state,
-                modifier = Modifier.fillMaxWidth().then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
-                    conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
-                },
-                enabled = enabled,
-                placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
-                trailingIcon = { Spacer(Modifier.size(48.dp)) },
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-                onKeyboardAction = conclaveComposerImeSend(sendEnabled, onSendBlocked, onSend),
-                lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
-                shape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp),
-                colors = conclaveComposerColors(),
-            )
-            ConclaveComposerSendSlot(Modifier.align(Alignment.BottomEnd)) {
-                ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason)
-            }
+    ConclaveComposerFrame(modifier, attach, accessory, {
+        ConclaveComposerSend(identifier, sendEnabled, onSend, sendLabel, sendDisabledReason)
+    }) { leading, trailing ->
+        TextField(
+            state = state,
+            modifier = Modifier.fillMaxWidth().then(fieldModifier).testTag(identifier).onPreviewKeyEvent { event ->
+                conclaveComposerKey(event, sendEnabled, onSend, onHardwareKey)
+            },
+            enabled = enabled,
+            placeholder = { ConclaveText(placeholder, line = "$identifier.placeholder") },
+            leadingIcon = leading,
+            trailingIcon = trailing,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+            onKeyboardAction = conclaveComposerImeSend(sendEnabled, onSendBlocked, onSend),
+            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+            shape = conclaveComposerShape(),
+            colors = conclaveComposerColors(),
+        )
+    }
+}
+
+private val ConclaveComposerSlotSize = 48.dp
+
+@Composable
+private fun ConclaveComposerFrame(
+    modifier: Modifier, attach: (@Composable () -> Unit)?, accessory: (@Composable () -> Unit)?, send: @Composable () -> Unit,
+    field: @Composable (leading: (@Composable () -> Unit)?, trailing: @Composable () -> Unit) -> Unit,
+) {
+    val shape = conclaveComposerShape()
+    val trailingSlots = if (accessory == null) 1 else 2
+    Box(modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)) {
+        field(
+            if (attach == null) null else ({ Spacer(Modifier.size(ConclaveComposerSlotSize)) }),
+            { Spacer(Modifier.size(width = ConclaveComposerSlotSize * trailingSlots, height = ConclaveComposerSlotSize)) },
+        )
+        if (attach != null) ConclaveComposerSlot(Modifier.align(Alignment.BottomStart), attach)
+        Row(Modifier.align(Alignment.BottomEnd)) {
+            if (accessory != null) ConclaveComposerSlot(Modifier, accessory)
+            ConclaveComposerSlot(Modifier, send)
         }
     }
 }
+
+@Composable
+private fun conclaveComposerShape(): RoundedCornerShape = RoundedCornerShape(ConclaveComposerMetrics.androidCornerRadius.dp)
 
 internal fun conclaveComposerKey(
     event: KeyEvent, sendEnabled: Boolean, onSend: () -> Unit, onHardwareKey: ((KeyEvent) -> Boolean)?,
@@ -243,16 +261,9 @@ internal fun conclaveSendStateDescription(sendEnabled: Boolean, reason: String):
     if (!sendEnabled && reason.isNotEmpty()) reason else null
 
 @Composable
-private fun ConclaveComposerAttachSlot(attach: @Composable () -> Unit) {
-    Box(Modifier.heightIn(min = TextFieldDefaults.MinHeight), contentAlignment = Alignment.Center) {
-        attach()
-    }
-}
-
-@Composable
-private fun ConclaveComposerSendSlot(modifier: Modifier, send: @Composable () -> Unit) {
-    Box(modifier.width(48.dp).heightIn(min = TextFieldDefaults.MinHeight), contentAlignment = Alignment.Center) {
-        send()
+private fun ConclaveComposerSlot(modifier: Modifier, content: @Composable () -> Unit) {
+    Box(modifier.width(ConclaveComposerSlotSize).heightIn(min = TextFieldDefaults.MinHeight), contentAlignment = Alignment.Center) {
+        content()
     }
 }
 
@@ -418,15 +429,10 @@ internal fun ConclaveSearchField(
 }
 
 @Composable
-internal fun ConclaveSearchNoResults(identifier: String, modifier: Modifier = Modifier) {
-    ConclaveEmptyStatus(conclaveString("ds_no_results"), "", ConclaveIcons.SearchFill0, identifier, modifier)
-}
-
-@Composable
 internal fun ConclaveSegmentedRow(
     options: List<ConclaveSegmentModel>, selectedId: String, identifier: String, onSelect: (String) -> Unit,
     modifier: Modifier = Modifier, fallback: ConclaveSegmentedFallback = ConclaveSegmentedFallback.rows,
-    haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
+    showsSelectionIcon: Boolean = true, haptics: ConclaveGestureHaptics = rememberConclaveHaptics(),
     onGesture: (FeedbackKind, GestureHapticDecision) -> Unit = { _, _ -> },
 ) {
     val fontScale = LocalDensity.current.fontScale
@@ -454,6 +460,7 @@ internal fun ConclaveSegmentedRow(
                 shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
                 modifier = Modifier.testTag("$identifier.${option.id}"),
                 enabled = option.isEnabled,
+                icon = if (showsSelectionIcon) ({ SegmentedButtonDefaults.Icon(isSelected) }) else ({}),
             ) {
                 ConclaveText(option.title, line = "$identifier.${option.id}")
             }

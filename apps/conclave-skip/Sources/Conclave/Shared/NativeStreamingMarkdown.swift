@@ -711,18 +711,10 @@ private struct StreamingMarkdownBlockView: View, Equatable {
     }
 }
 
-enum NativeTextShimmerLayout {
-    static func highlightWidth(textLength: Int, spread: CGFloat, containerWidth: CGFloat) -> CGFloat {
-        let dynamicWidth = CGFloat(max(1, textLength)) * max(1.0, spread)
-        return min(max(28.0, dynamicWidth), max(28.0, containerWidth * 0.58))
-    }
-}
-
 struct NativeTextShimmer: View {
     let text: String
     var font: Font = ACMFont.trial(12)
     var duration: Double = 2.0
-    var spread: CGFloat = 2.0
     #if SKIP
 
     private let reduceMotion = false
@@ -734,32 +726,11 @@ struct NativeTextShimmer: View {
     var body: some View {
         Text(text)
             .font(font)
-            .foregroundStyle(ACMColors.textFaint)
-            .overlay {
-                if !reduceMotion {
-                    GeometryReader { geometry in
-                        let highlightWidth = NativeTextShimmerLayout.highlightWidth(
-                            textLength: text.count,
-                            spread: spread,
-                            containerWidth: geometry.size.width
-                        )
-                        LinearGradient(
-                            colors: [Color.clear, ACMColors.text, Color.clear],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                        .frame(width: highlightWidth, height: geometry.size.height)
-                        .offset(x: isAnimating ? geometry.size.width + highlightWidth : -highlightWidth)
-                    }
-                    .mask {
-                        Text(text).font(font)
-                    }
-                }
-            }
-            .clipped()
+            .foregroundStyle(ACMColors.text)
+            .opacity(reduceMotion ? 0.7 : (isAnimating ? 1.0 : 0.45))
             .accessibilityLabel(text)
             .animation(
-                .linear(duration: duration).repeatForever(autoreverses: false),
+                .easeInOut(duration: duration / 2).repeatForever(autoreverses: true),
                 value: isAnimating
             )
             .onAppear {

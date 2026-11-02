@@ -9,11 +9,6 @@
       "ios": "13.0"
     },
     {
-      "name": "arrow.counterclockwise",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
       "name": "arrow.down",
       "year": "2019",
       "ios": "13.0"
@@ -29,17 +24,7 @@
       "ios": "13.0"
     },
     {
-      "name": "arrow.left.and.right.righttriangle.left.righttriangle.right",
-      "year": "2020",
-      "ios": "14.0"
-    },
-    {
       "name": "arrow.up",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
-      "name": "arrow.up.arrow.down",
       "year": "2019",
       "ios": "13.0"
     },
@@ -64,34 +49,14 @@
       "ios": "13.0"
     },
     {
-      "name": "bell",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
-      "name": "bell.slash",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
       "name": "cable.connector",
       "year": "2021",
       "ios": "15.0"
     },
     {
-      "name": "calendar.badge.plus",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
       "name": "camera.filters",
       "year": "2020",
       "ios": "14.0"
-    },
-    {
-      "name": "checkmark.bubble",
-      "year": "2021",
-      "ios": "15.0"
     },
     {
       "name": "checkmark.circle.fill",
@@ -139,11 +104,6 @@
       "ios": "17.0"
     },
     {
-      "name": "exclamationmark.bubble",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
       "name": "exclamationmark.circle.fill",
       "year": "2019",
       "ios": "13.0"
@@ -164,19 +124,9 @@
       "ios": "13.0"
     },
     {
-      "name": "headphones",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
       "name": "info.circle",
       "year": "2019",
       "ios": "13.0"
-    },
-    {
-      "name": "key",
-      "year": "2020",
-      "ios": "14.0"
     },
     {
       "name": "keyboard",
@@ -184,47 +134,12 @@
       "ios": "13.0"
     },
     {
-      "name": "lightbulb",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
-      "name": "line.3.horizontal",
-      "year": "2021",
-      "ios": "15.0"
-    },
-    {
-      "name": "line.3.horizontal.decrease.circle",
-      "year": "2021",
-      "ios": "15.0"
-    },
-    {
       "name": "link",
       "year": "2019",
       "ios": "13.0"
     },
     {
-      "name": "list.bullet.clipboard",
-      "year": "2022",
-      "ios": "16.0"
-    },
-    {
       "name": "lock.fill",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
-      "name": "megaphone",
-      "year": "2020",
-      "ios": "14.0"
-    },
-    {
-      "name": "nosign",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
-      "name": "pause.circle",
       "year": "2019",
       "ios": "13.0"
     },
@@ -245,11 +160,6 @@
     },
     {
       "name": "person.crop.circle",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
-      "name": "person.crop.circle.badge.checkmark",
       "year": "2019",
       "ios": "13.0"
     },
@@ -279,17 +189,7 @@
       "ios": "13.0"
     },
     {
-      "name": "record.circle",
-      "year": "2020",
-      "ios": "14.0"
-    },
-    {
       "name": "rectangle.3.group",
-      "year": "2021",
-      "ios": "15.0"
-    },
-    {
-      "name": "rectangle.portrait.and.arrow.right",
       "year": "2021",
       "ios": "15.0"
     },
@@ -340,11 +240,6 @@
     },
     {
       "name": "wifi.slash",
-      "year": "2019",
-      "ios": "13.0"
-    },
-    {
-      "name": "xmark.circle",
       "year": "2019",
       "ios": "13.0"
     }

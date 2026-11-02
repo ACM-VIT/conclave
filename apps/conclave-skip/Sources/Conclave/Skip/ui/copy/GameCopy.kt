@@ -75,12 +75,6 @@ internal fun gameSeconds(value: Int): String = conclaveString("gm_seconds", valu
 @Composable
 internal fun gameSecondsLeft(value: Int): String = conclavePlural("gm_seconds_left", value, value)
 
-@Composable
-internal fun gameWinnerLine(results: GameResultsModel): String? {
-    if (results.winnerName.isEmpty() || results.isTie) return null
-    return conclaveString("gm_wins_with", results.winnerName, gameScore(results.winnerScore))
-}
-
 internal fun gameScore(value: Int): String = NumberFormat.getIntegerInstance().format(value.toLong())
 
 @Composable
@@ -91,13 +85,3 @@ internal fun gameScoreRowLabel(row: GameScoreboardRow): String {
 
 @Composable
 internal fun gameProgress(done: Int, total: Int): String = conclaveString("gm_progress", done, total)
-
-@Composable
-internal fun gameOptionSummary(options: Iterable<GameOptionSummaryModel>): String {
-    var line = ""
-    for (option in options) {
-        val part = conclaveString("gm_option_summary", option.label, option.value)
-        line = if (line.isEmpty()) part else conclaveString("act_two_facts", line, part)
-    }
-    return line
-}

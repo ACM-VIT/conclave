@@ -1370,10 +1370,6 @@ final class MeetingViewModel {
         bindChatInputs()
     }
 
-    func toggleTranscript() {
-        state.isTranscriptOpen = !state.isTranscriptOpen
-    }
-
     func openTranscriptStream() {
         Task { await transcriptService?.open() }
     }
@@ -14055,12 +14051,6 @@ final class MeetingViewModel {
             }
         }
         return true
-    }
-
-    func refreshMeetingConfig() {
-        Task {
-            await refreshMeetingConfigNow()
-        }
     }
 
     @discardableResult

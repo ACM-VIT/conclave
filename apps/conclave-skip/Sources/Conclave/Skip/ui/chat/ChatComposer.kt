@@ -73,6 +73,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
@@ -266,29 +267,27 @@ internal fun ChatComposer(presenter: ChatPresenter, actions: ChatRowActions) {
                     if (now && !focusMemory.fieldFocused) actions.composerDidFocus()
                     focusMemory.fieldFocused = now
                 },
-                attach = {
-                    ChatAttachMenuButton(
-                        presenter,
-                        composer,
-                        isFieldFocused = { focusMemory.fieldFocused },
-                        restoreFocus = restoreFocus,
-                        onPhoto = { capture ->
-                            focusMemory.picker = capture
+                attach = if (composer.attachKinds.contains("gif")) ({
+                    ChatAttachButton("gif", composer, busy = false, isFieldFocused = { focusMemory.fieldFocused },
+                        onNotice = { notice -> presenter.rejectPhoto(notice) }) { capture ->
+                        actions.gifsFocusCapture = capture
+                        actions.openGifs()
+                    }
+                }) else null,
+                accessory = if (composer.attachKinds.contains("photo")) ({
+                    ChatAttachButton("photo", composer, busy = photoIntakeInFlight || composer.attachment.phase != ChatAttachmentPhase.none,
+                        isFieldFocused = { focusMemory.fieldFocused }, onNotice = { notice -> presenter.rejectPhoto(notice) }) { capture ->
+                        focusMemory.picker = capture
 
-                            PipManager.suppressForExternalHandoff(ExternalHandoffKind.photoPicker)
-                            try {
-                                pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                            } catch (failure: Throwable) {
-                                focusMemory.picker = null
-                                PipManager.restoreAutoEnterAfterExternalActivity()
-                            }
-                        },
-                        onGifs = { capture ->
-                            actions.gifsFocusCapture = capture
-                            actions.openGifs()
-                        },
-                    )
-                },
+                        PipManager.suppressForExternalHandoff(ExternalHandoffKind.photoPicker)
+                        try {
+                            pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                        } catch (failure: Throwable) {
+                            focusMemory.picker = null
+                            PipManager.restoreAutoEnterAfterExternalActivity()
+                        }
+                    }
+                }) else null,
             )
             ChatBlockedSendAnnouncer(blockedPress, chatSendBlockReason(blockedBlock, count - limit, composer.attachment))
         }
@@ -729,67 +728,30 @@ private fun chatSuggestionAnnouncement(model: ChatSuggestionsModel, itemId: Stri
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ChatAttachMenuButton(
-    presenter: ChatPresenter, composer: ChatComposerSnapshot, isFieldFocused: () -> Boolean,
-    restoreFocus: (ChatFocusCapture) -> Unit, onPhoto: (ChatFocusCapture) -> Unit, onGifs: (ChatFocusCapture) -> Unit,
+private fun ChatAttachButton(
+    kind: String, composer: ChatComposerSnapshot, busy: Boolean, isFieldFocused: () -> Boolean, onNotice: (ChatFailure) -> Unit,
+    onOpen: (ChatFocusCapture) -> Unit,
 ) {
-
     val imeVisible = WindowInsets.isImeVisible
-    var expanded by remember { mutableStateOf(false) }
-    var capture by remember { mutableStateOf(ChatFocusCapture.none) }
     val context = LocalContext.current
-    Box {
-        IconButton(
-            onClick = {
-                capture = ChatFocusCapture.capture(isFieldFocused(), imeVisible, chatTouchExplorationOn(context))
-                expanded = true
-            },
-            enabled = composer.gate == ChatSendGate.allowed,
-            modifier = Modifier.testTag("chat.composer.attach"),
-        ) {
-            Icon(ConclaveIcons.AddFill0, contentDescription = conclaveString("chat_attach"))
-        }
-        ConclaveDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = {
-                expanded = false
-                if (capture.menuFocusable) restoreFocus(capture)
-            },
-            identifier = "chat.composer.attach.menu",
-            properties = if (capture.menuFocusable) PopupProperties(focusable = true) else PopupProperties(focusable = false),
-        ) {
-            for (kind in composer.attachKinds) {
-                if (kind == VoiceMessagePolicy.attachKind) {
-                    ChatVoiceAttachMenuItem(presenter, composer, onDismiss = {
-                        expanded = false
-                        if (capture.menuFocusable) restoreFocus(capture)
-                    })
-                    continue
-                }
-                val reason = ChatComposerPolicy.attachItemReason(kind, composer.privateTo != null, composer.photosEnabled,
-                    composer.voiceEnabled)
-                val reasonText = ChatMediaCopyAndroid.attachReason(reason)
-                val title = when (kind) {
-                    "photo" -> conclaveString("chat_attach_photo")
-                    "gif" -> conclaveString("chat_attach_gif")
-                    else -> ""
-                }
-                if (title.isEmpty()) continue
-                val busy = kind == "photo" && composer.attachment.phase != ChatAttachmentPhase.none
-                ConclaveMenuItem(
-                    title = title,
-                    identifier = "chat.composer.attach.$kind",
-                    onClick = {
-                        expanded = false
-                        if (kind == "photo") onPhoto(capture) else onGifs(capture)
-                    },
-                    leadingIcon = if (kind == "gif") ConclaveIcons.GifBoxFill0 else ConclaveIcons.ImageFill0,
-                    supporting = if (reasonText.isEmpty()) null else reasonText,
-                    enabled = reason.isEmpty() && !busy,
-                )
+    val scheme = MaterialTheme.colorScheme
+    val affordance = ChatComposerPolicy.attachAffordance(kind = kind, gate = composer.gate, isPrivateMode = composer.privateTo != null,
+        photosEnabled = composer.photosEnabled, hasAttachment = busy)
+    val reason = if (affordance.notice == ChatFailure.none) "" else ChatMediaCopyAndroid.failureReason(affordance.notice)
+    val label = if (kind == "gif") conclaveString("chat_attach_gif") else conclaveString("chat_attach_photo")
+    IconButton(
+        onClick = {
+            if (affordance.opens) {
+                onOpen(ChatFocusCapture.capture(isFieldFocused(), imeVisible, chatTouchExplorationOn(context)))
+            } else {
+                onNotice(affordance.notice)
             }
-        }
-        BackHandler(enabled = expanded && !capture.menuFocusable) { expanded = false }
+        },
+        enabled = affordance.isEnabled,
+        modifier = Modifier.testTag("chat.composer.attach.$kind").semantics { if (reason.isNotEmpty()) stateDescription = reason },
+    ) {
+        val tint = if (affordance.opens) scheme.onSurfaceVariant else scheme.onSurface.copy(alpha = ConclaveDisabledOpacity.android.toFloat())
+        Icon(if (kind == "gif") ConclaveIcons.GifBoxFill0 else ConclaveIcons.ImageFill0, contentDescription = label, tint = tint)
     }
 }
 

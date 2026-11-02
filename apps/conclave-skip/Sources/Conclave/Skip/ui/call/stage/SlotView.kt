@@ -546,8 +546,3 @@ internal fun stageShareMeetingLink(context: Context, link: String, roomLabel: St
         PipManager.restoreAutoEnterAfterExternalActivity()
     }
 }
-
-internal fun stageCopyMeetingLink(context: Context, link: String, roomLabel: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-    clipboard.setPrimaryClip(ClipData.newPlainText(roomLabel, link))
-}

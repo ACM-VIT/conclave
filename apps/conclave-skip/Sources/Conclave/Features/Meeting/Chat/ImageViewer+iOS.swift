@@ -23,7 +23,6 @@ enum ChatMediaCopy {
         switch reason {
         case "privateTextOnly": return ConclaveStrings.text("Private messages are text only.")
         case "photosDisabled": return ConclaveStrings.text("Photos are turned off by the host.")
-        case "voiceDisabled": return ConclaveStrings.text("Voice messages are turned off by the host.")
         default: return ""
         }
     }

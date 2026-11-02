@@ -141,8 +141,6 @@ enum VoiceMessageText {
 
 enum VoiceMessagePolicy {
 
-    static let attachKind = "voice"
-
     static let maxQueued = 6
     static let advanceGapMillis = 250.0
 

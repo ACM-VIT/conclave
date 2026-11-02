@@ -180,7 +180,8 @@ struct GameShellScene: View {
         let chrome = games.chrome
         switch scene.kind {
         case GameSceneKind.lobby:
-            GameLobbyBody(scene: scene, chrome: chrome)
+            GameLobbyBody(scene: scene, chrome: chrome,
+                          barContent: GameShellBarPolicy.content(chrome: chrome, scene: scene, results: games.results))
         case GameSceneKind.privateView:
             GameKitNotice(kind: .privateView, message: GameCopy.privateViewBody())
         case GameSceneKind.trivia, GameSceneKind.bluff, GameSceneKind.wouldYouRather, GameSceneKind.mostLikelyTo,
@@ -221,9 +222,11 @@ struct GameShellScene: View {
 struct GameLobbyBody: View {
     let scene: GameScene
     let chrome: GameChromeModel
+    let barContent: GameShellBarContent
 
     var body: some View {
-        let caption = GameLobbyPolicy.caption(reason: scene.lobby.reason, isHost: chrome.isHost)
+        let caption = GameLobbyPolicy.bodyCaption(GameLobbyPolicy.caption(reason: scene.lobby.reason, isHost: chrome.isHost),
+                                                  barContent: barContent)
         VStack(spacing: 20) {
             VStack(spacing: 12) {
                 GameKitGlyphTile(gameId: chrome.gameId)
@@ -305,9 +308,6 @@ struct GameResultsBody: View {
         let results = games.results
         VStack(spacing: 16) {
             GameKitPodium(rows: results.scoreboard)
-            if !games.chrome.isHost {
-                GameKitWaitingLine(text: ConclaveStrings.text("Waiting for the host"))
-            }
         }
         .padding(.top, 8)
     }
@@ -369,6 +369,9 @@ struct GameShellBarContentView: View {
             WordleHostBar(games: games)
         case .zipNextRound:
             ZipHostBar(games: games)
+        case .waitingForHost:
+            GameKitWaitingBar(text: chrome.phase == .lobby ? ConclaveStrings.text("Waiting for the Host to Start")
+                                                          : ConclaveStrings.text("Waiting for the host"))
         }
     }
 }

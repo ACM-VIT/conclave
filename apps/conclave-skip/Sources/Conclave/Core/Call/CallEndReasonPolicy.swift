@@ -47,7 +47,4 @@ enum CallEndReasonPolicy {
         }
     }
 
-    static func isLocalEnd(_ reason: CallEndReason) -> Bool {
-        callKitEnd(reason) == .localEndRequest
-    }
 }

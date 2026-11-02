@@ -33,7 +33,6 @@ struct ActivitiesPanel: View {
         .background {
             ActivitiesPanelLeaves(session: session, presentationID: presentation.request.presentationID, path: $path)
         }
-        .presentationBackground(Color(uiColor: .systemGroupedBackground))
         .accessibilityIdentifier("activities.panel")
     }
 

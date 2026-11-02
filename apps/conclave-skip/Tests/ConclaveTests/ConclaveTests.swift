@@ -711,19 +711,6 @@ final class ConclaveTests: XCTestCase {
         XCTAssertFalse(state.blocks.contains(where: { $0.isStreamingTail }))
     }
 
-    func testNativeShimmerMatchesWebDynamicSpreadWithoutUnboundedBands() throws {
-        XCTAssertEqual(
-            NativeTextShimmerLayout.highlightWidth(textLength: 8, spread: 2, containerWidth: 120),
-            28,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            NativeTextShimmerLayout.highlightWidth(textLength: 40, spread: 2, containerWidth: 100),
-            58,
-            accuracy: 0.001
-        )
-    }
-
     func testAndroidNetworkReachabilityQualityPolicyUsesBandwidthOnlyForValidatedQuality() throws {
         XCTAssertEqual(
             AndroidNetworkReachabilityQualityPolicy.bandwidthQuality(upstreamKbps: 0, downstreamKbps: 0),

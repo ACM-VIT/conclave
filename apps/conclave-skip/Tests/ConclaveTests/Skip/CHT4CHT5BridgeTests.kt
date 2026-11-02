@@ -68,7 +68,7 @@ class CHT4CHT5BridgeTests {
     fun theAttachmentFlowAndThePhotoSendRulesMatchSwift() {
         val log = mutableListOf<ChatCommandRequest>()
         val chat = presenter(log = log)
-        assertEquals(listOf("photo", "gif", "voice"), chat.composer.attachKinds.toList())
+        assertEquals(listOf("photo", "gif"), chat.composer.attachKinds.toList())
         chat.attachPhoto("file:///cache/chat-photos/a.jpg", "image/jpeg", "a.jpg")
         assertEquals(ChatAttachmentPhase.preparing, chat.composer.attachment.phase)
         assertEquals(ChatCommandKind.attachPhoto, log.last().kind)

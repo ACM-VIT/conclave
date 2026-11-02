@@ -40,7 +40,7 @@ final class ActivityWebViewRegistry {
         }
         let entry = makeEntry(appSessionId: id, appId: model.appId, reloadSerial: model.reloadSerial, session: session)
         entries[id] = entry
-        session.bundleOrigin = AppBridgeProtocol.iosOrigin
+        session.bundleOrigin = AppBridgeProtocol.iosOrigin(appId: model.appId)
         session.onBridgeEnded = { [weak self] endedId in
             self?.release(appSessionId: endedId)
         }
@@ -55,7 +55,13 @@ final class ActivityWebViewRegistry {
             guard attached else { return }
             entry.scriptHandler.mount = session.bridgeGeneration
             entry.delegate.mount = session.bridgeGeneration
-            webView.load(URLRequest(url: bundleURL))
+            if AppBridgeProtocol.usesIdentityOrigin(appId: model.appId),
+               let fileURL = NativeEmbedSchemeHandler.resourceURL(path: "/" + AppBridgeProtocol.entryFile(appId: model.appId)),
+               let html = try? String(contentsOf: fileURL, encoding: .utf8) {
+                webView.loadHTMLString(html, baseURL: bundleURL)
+            } else {
+                webView.load(URLRequest(url: bundleURL))
+            }
             self.registrySerial += 1
         }
         return webView
@@ -214,7 +220,7 @@ final class NativeEmbedNavigationDelegate: NSObject, WKNavigationDelegate, WKUID
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
         let target = navigationAction.request.url?.absoluteString ?? ""
         let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? false
-        if isMainFrame && AppBridgeProtocol.isBundleURL(target, origin: AppBridgeProtocol.iosOrigin) {
+        if isMainFrame && AppBridgeProtocol.isBundleURL(target, origin: AppBridgeProtocol.iosOrigin(appId: session?.appId ?? "")) {
             return .allow
         }
 

@@ -150,10 +150,6 @@ struct ChatCommandParser {
         )
     }
 
-    static func isCommandPrefix(_ text: String) -> Bool {
-        return text.hasPrefix("/") && text.count == 1
-    }
-
     static func parseConclaveMention(_ text: String) -> String? {
         var foundMention = false
         var result = ""

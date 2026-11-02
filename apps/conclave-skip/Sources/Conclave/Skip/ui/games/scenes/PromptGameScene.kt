@@ -81,11 +81,12 @@ internal fun PromptStatusSlot(games: GameStagePresenter, acted: Int = 0, total: 
 @Composable
 internal fun PromptSpectatorNotice(games: GameStagePresenter, allowsJoin: Boolean = true) {
     val seat = games.chrome.seat
-    val tag = gameSeatTagResource(seat)
+    val queued = seat == SeatState.joiningNextRound
     GameKitWatching(
         canJoin = allowsJoin && seat == SeatState.canJoin,
         onJoin = { games.join() },
-        title = if (tag != null) conclaveString(tag) else conclaveString("gm_watching"),
+        title = if (queued) conclaveString("gm_play_next_round") else conclaveString("gm_watching"),
+        isQueued = queued,
     )
 }
 
@@ -181,7 +182,6 @@ internal fun PromptAnnouncement(games: GameStagePresenter, key: String, text: St
 
 @Composable
 internal fun PromptResultsBody(games: GameStagePresenter, scene: GameScene) {
-    val isHost = games.chrome.isHost
     val imposter = scene.imposter
     Column(Modifier.fillMaxWidth().testTag("game.scene.results"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         when {
@@ -196,7 +196,6 @@ internal fun PromptResultsBody(games: GameStagePresenter, scene: GameScene) {
             }
             else -> PromptScoredResults(games, scene.kind)
         }
-        if (!isHost) GameKitWaitingLine(conclaveString("gm_waiting_host"))
     }
 }
 

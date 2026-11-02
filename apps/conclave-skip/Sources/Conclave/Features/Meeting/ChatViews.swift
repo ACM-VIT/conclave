@@ -1745,8 +1745,7 @@ struct ChatMessageTextBubble: View {
                 NativeTextShimmer(
                     text: "Thinking",
                     font: ACMFont.trial(14),
-                    duration: 2.0,
-                    spread: 2.0
+                    duration: 2.0
                 )
             } else if rendersMarkdown {
                 NativeStreamingMarkdownView(

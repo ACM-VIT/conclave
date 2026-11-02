@@ -1,7 +1,7 @@
 import Foundation
 
 enum GameShellBarContent: String, CaseIterable, Equatable {
-    case none, join, start, rematch, promptHost, wordleNextRound, zipNextRound
+    case none, join, start, rematch, promptHost, wordleNextRound, zipNextRound, waitingForHost
 }
 
 enum GameShellBarPolicy {
@@ -11,10 +11,12 @@ enum GameShellBarPolicy {
         case GameChromePhase.lobby:
             if scene.lobby.reason == GameLobbyReason.reconnecting { return GameShellBarContent.none }
             if scene.lobby.showsJoin { return GameShellBarContent.join }
-            if !chrome.isHost || scene.lobby.reason == GameLobbyReason.joinToStart { return GameShellBarContent.none }
+            if !chrome.isHost { return chrome.seat == SeatState.player ? GameShellBarContent.waitingForHost : GameShellBarContent.none }
+            if scene.lobby.reason == GameLobbyReason.joinToStart { return GameShellBarContent.none }
             return GameShellBarContent.start
         case GameChromePhase.results:
-            return results.canRematch ? GameShellBarContent.rematch : GameShellBarContent.none
+            if results.canRematch { return GameShellBarContent.rematch }
+            return chrome.isHost ? GameShellBarContent.none : GameShellBarContent.waitingForHost
         case GameChromePhase.playing:
             if PromptScenePolicy.hostAction(scene) != PromptHostAction.none { return GameShellBarContent.promptHost }
             if let wordle = scene.wordle, wordle.canAdvanceRound { return GameShellBarContent.wordleNextRound }
@@ -113,6 +115,11 @@ enum GameLobbyPolicy {
 
     static func showsSpinner(_ caption: GameLobbyCaption) -> Bool {
         caption == GameLobbyCaption.waitingForHost || caption == GameLobbyCaption.reconnecting
+    }
+
+    static func bodyCaption(_ caption: GameLobbyCaption, barContent: GameShellBarContent) -> GameLobbyCaption {
+        if caption == GameLobbyCaption.waitingForHost && barContent == GameShellBarContent.waitingForHost { return GameLobbyCaption.none }
+        return caption
     }
 }
 

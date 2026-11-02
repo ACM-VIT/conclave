@@ -146,17 +146,89 @@ struct GameKitStatusRow: View {
     }
 }
 
+struct GameKitSeatChip: View {
+    let seat: SeatState
+
+    var body: some View {
+        let queued = seat == .joiningNextRound
+        Label(queued ? ConclaveStrings.text("Next Round") : ConclaveStrings.text("Watching"),
+              systemImage: queued ? ConclaveSymbols.clock : ConclaveSymbols.eye)
+            .labelStyle(GameKitCompactLabelStyle())
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(HostingTheme.inCallTextSecondary)
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .frame(minHeight: ActivityHeaderMetrics.face)
+            .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Capsule())
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(GameCopy.seatTag(seat) ?? "")
+    }
+}
+
+struct GameKitWaitingBar: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            GameKitWaitingDots()
+            Text(text)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(HostingTheme.inCallTextSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, minHeight: 50)
+        .background(HostingTheme.token(DesignTokens.iosInCallSurfaceRaised), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
+        .accessibilityIdentifier("game.bar.waiting")
+    }
+}
+
+struct GameKitWaitingDots: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if reduceMotion {
+            dots(active: -1)
+        } else {
+            TimelineView(.periodic(from: .now, by: 0.35)) { context in
+                dots(active: Int(context.date.timeIntervalSinceReferenceDate / 0.35) % 3)
+                    .animation(.easeInOut(duration: 0.3), value: Int(context.date.timeIntervalSinceReferenceDate / 0.35) % 3)
+            }
+        }
+    }
+
+    private func dots(active: Int) -> some View {
+        HStack(spacing: 4) {
+            ForEach(0..<3, id: \.self) { index in
+                Circle()
+                    .fill(index == active ? HostingTheme.coralFill : HostingTheme.inCallTextSecondary.opacity(0.5))
+                    .frame(width: 6, height: 6)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 struct GameKitWatching: View {
     var title: String = ConclaveStrings.text("Watching")
+    var isQueued = false
     let canJoin: Bool
     let onJoin: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Label(title, systemImage: ConclaveSymbols.eye)
-                .labelStyle(GameKitCompactLabelStyle())
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(HostingTheme.inCallTextSecondary)
+            Label {
+                Text(title)
+                    .foregroundStyle(isQueued ? HostingTheme.token(DesignTokens.iosInCallText) : HostingTheme.inCallTextSecondary)
+            } icon: {
+                Image(systemName: isQueued ? ConclaveSymbols.clock : ConclaveSymbols.eye)
+                    .foregroundStyle(isQueued ? HostingTheme.coralFill : HostingTheme.inCallTextSecondary)
+            }
+            .labelStyle(GameKitCompactLabelStyle())
+            .font(.subheadline.weight(.semibold))
             Spacer(minLength: 8)
             if canJoin {
                 Button(action: onJoin) {

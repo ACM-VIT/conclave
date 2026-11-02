@@ -45,6 +45,7 @@ struct NativePanelSheetHost<PanelContent: View>: ViewModifier {
                     .modifier(PanelStageInteraction(upThrough: PanelPresentationPolicy.stageInteractiveDetent(resolved)
                         .map { Self.systemDetent($0, shortHeight: shortHeight, activities: activities) }))
                     .modifier(PanelCompactHeightRule(keepsSheet: PanelPresentationPolicy.keepsSheetInCompactHeight(resolved)))
+                    .presentationBackground(Color(uiColor: .systemGroupedBackground))
             }
     }
 

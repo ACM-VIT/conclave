@@ -339,15 +339,6 @@ object ScreenCaptureManager {
         callback?.invoke()
     }
 
-    @RequiresApi(Build.VERSION_CODES.Q)
-    internal fun deviceAudioCaptureConfiguration(projection: MediaProjection): AudioPlaybackCaptureConfiguration {
-        val builder = AudioPlaybackCaptureConfiguration.Builder(projection)
-        for (usage in ScreenShareCapabilityPolicy.playbackCaptureUsages) {
-            builder.addMatchingUsage(usage)
-        }
-        return builder.build()
-    }
-
     private fun isScreenCaptureBlockedByPolicy(context: Context): Boolean {
         val policy = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return false
         return try {

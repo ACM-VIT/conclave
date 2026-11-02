@@ -25,6 +25,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
@@ -147,28 +150,46 @@ private fun ChatMessageRow(row: ChatRowModel, actions: ChatRowActions, sidePane:
         ) {
             if (row.isGroupStart) ChatRowHeader(row)
             if (row.privacy != ChatPrivacy.everyone) ChatPrivateLabel(row)
-            Box {
-                ChatBubble(row, actions)
-                if (sidePane && actions.menuRowId == row.id) {
-                    MessageActionsMenu(actions.presenter, actions, row.id)
+            Column(horizontalAlignment = if (row.isOwn) Alignment.End else Alignment.Start) {
+                Box {
+                    ChatBubble(row, actions)
+                    if (sidePane && actions.menuRowId == row.id) {
+                        MessageActionsMenu(actions.presenter, actions, row.id)
+                    }
                 }
-            }
-            if (row.reactions.count > 0) {
-                ConclaveReactionChipRow(
-                    chips = ChatCopyAndroid.chipModels(row),
-                    identifier = "chat.row.${row.id}.chip",
-                    onToggle = { chip -> actions.toggle(row.id, chip.emoji) },
-                    onLongPress = { _ -> actions.openViewer(row.id) },
-                    longPressLabel = conclaveString("chat_action_reactions"),
-                    haptics = haptics,
-                    initialIds = initialChipIds,
-                )
+                ChatReactionRegion(row, actions, haptics, initialChipIds)
             }
 
             row.embedURLs.toList().forEachIndexed { index, url ->
                 LinkEmbedCard(actions.embed(url), row.id, index) { target -> actions.openLink(target) }
             }
             ChatDeliveryLine(row, actions)
+        }
+    }
+}
+
+private class ChatChipMemory(var last: List<ConclaveReactionChipModel>)
+
+@Composable
+private fun ChatReactionRegion(row: ChatRowModel, actions: ChatRowActions, haptics: ConclaveGestureHaptics, initialChipIds: Set<String>) {
+    val chips = ChatCopyAndroid.chipModels(row)
+    val present = chips.isNotEmpty()
+    val memory = remember(row.id) { ChatChipMemory(chips) }
+    if (present) memory.last = chips
+    var retired by remember(row.id) { mutableStateOf(!present) }
+    val display = if (present) chips else if (retired) emptyList() else memory.last
+    ChatAnchoredReveal(present, anchorKey = row.id, onSettled = { shown -> retired = !shown }) {
+        if (display.isNotEmpty()) {
+            ConclaveReactionChipRow(
+                chips = display,
+                identifier = "chat.row.${row.id}.chip",
+                onToggle = { chip -> actions.toggle(row.id, chip.emoji) },
+                modifier = Modifier.padding(top = 4.dp),
+                onLongPress = { _ -> actions.openViewer(row.id) },
+                longPressLabel = conclaveString("chat_action_reactions"),
+                haptics = haptics,
+                initialIds = initialChipIds,
+            )
         }
     }
 }

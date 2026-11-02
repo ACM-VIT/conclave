@@ -67,9 +67,6 @@ internal fun promptTwoFacts(first: String, second: String): String = when {
 }
 
 @Composable
-internal fun promptVoted(done: Int, total: Int): String = activitiesVoteCount(done, total)
-
-@Composable
 internal fun promptDeparted(name: String): String = conclaveString("gm_vote_left", name)
 
 @Composable
@@ -137,10 +134,6 @@ internal fun reactionResultValue(row: ReactionResultModel): String {
 }
 
 @Composable
-internal fun reactionFastest(name: String): String =
-    if (name.isEmpty()) conclaveString("gm_reaction_nobody") else conclaveString("gm_reaction_fastest", name)
-
-@Composable
 internal fun imposterSecret(scene: ImposterScene): String {
     val name = imposterSecretResource(scene.role) ?: return ""
     return if (scene.role == ImposterRole.crew) {
@@ -148,12 +141,6 @@ internal fun imposterSecret(scene: ImposterScene): String {
     } else {
         conclaveString(name) + "\n" + conclaveString("gm_imp_hint", scene.category)
     }
-}
-
-@Composable
-internal fun imposterDiscussKicker(scene: ImposterScene): String {
-    val starts = if (scene.starterName.isEmpty()) "" else conclaveString("gm_imp_starts", scene.starterName)
-    return promptTwoFacts(scene.category, starts)
 }
 
 @Composable

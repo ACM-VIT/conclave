@@ -22,6 +22,7 @@ private struct ReactionsTrayPresenter: ViewModifier {
                 content.popover(isPresented: $isPresented, arrowEdge: .bottom) {
                     ReactionsTray(controls: controls, onSent: onSent)
                         .preferredColorScheme(.dark)
+                        .presentationBackground(Color(uiColor: .systemGroupedBackground))
                 }
             } else {
                 content.sheet(isPresented: $isPresented) {
@@ -33,6 +34,7 @@ private struct ReactionsTrayPresenter: ViewModifier {
                         .presentationDetents([.height(trayHeight)])
                         .presentationBackgroundInteraction(.enabled(upThrough: .height(trayHeight)))
                         .presentationDragIndicator(.visible)
+                        .presentationBackground(Color(uiColor: .systemGroupedBackground))
                         .preferredColorScheme(.dark)
                 }
             }

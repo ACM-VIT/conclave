@@ -230,9 +230,6 @@ enum TranscriptStopPolicy {
         return StopPhase.failed
     }
 
-    static func failedForReconnecting(issue: TranscriptIssue) -> Bool {
-        issue == TranscriptIssue.controlsReconnecting
-    }
 }
 
 enum AskRowPolicy {

@@ -857,48 +857,6 @@
     },
     {
       "coordinate_profile": "font960-translate-y",
-      "id": "block.fill0",
-      "input_sha256": "51573b77765b23ea750d8a03dcf0eda5ad7885a711da763861cc1f2895e155fe",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 2,
-        "M": 3,
-        "Q": 28,
-        "Z": 3
-      },
-      "segments": 36
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "campaign.fill0",
-      "input_sha256": "118ecbf427bc48f199c6adf34747d195b13ba73a6e7173461ed3306026ea8512",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 22,
-        "M": 7,
-        "Q": 40,
-        "Z": 7
-      },
-      "segments": 76
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "cancel.fill0",
-      "input_sha256": "b0478bdb7783de3ecf66e19c7d4458c5a1fe92f2402ae083be00c212cb7e947d",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 8,
-        "M": 4,
-        "Q": 40,
-        "Z": 4
-      },
-      "segments": 56
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
       "id": "check_circle.fill1",
       "input_sha256": "d13fdbc7bbbcf696b792411c8cb5a74915b95d4bb6d4c62f5b09c70d7ade6052",
       "maximum_float32_error": "0",
@@ -969,20 +927,6 @@
     },
     {
       "coordinate_profile": "font960-translate-y",
-      "id": "drag_indicator.fill0",
-      "input_sha256": "0996dc745ce9b9acdcd5b46d1641b1e1bd28b15af06541ddcbe829ffa83e8b89",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 0,
-        "M": 6,
-        "Q": 48,
-        "Z": 6
-      },
-      "segments": 60
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
       "id": "edit.fill0",
       "input_sha256": "65d2e92a5a2d761c82125ecd95aa6fd8a389b6153a631ccc260c9aa658f65ef6",
       "maximum_float32_error": "0",
@@ -1011,20 +955,6 @@
     },
     {
       "coordinate_profile": "font960-translate-y",
-      "id": "event.fill0",
-      "input_sha256": "55543a84454f85ce8a16c7bb91a124e93807c3862d16999a5a0170445b94725e",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 20,
-        "M": 5,
-        "Q": 24,
-        "Z": 5
-      },
-      "segments": 54
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
       "id": "expand_more.fill0",
       "input_sha256": "be3caefbe027b3fd65e88c363b86cc7af9f4bc71fa7c5187fcb02b0e40988a3d",
       "maximum_float32_error": "0",
@@ -1039,34 +969,6 @@
     },
     {
       "coordinate_profile": "font960-translate-y",
-      "id": "fiber_manual_record.fill1",
-      "input_sha256": "99aa0ade9db8de649913ec04b654720ee518766e0d8cb2eab16855bfc18841c7",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 0,
-        "M": 1,
-        "Q": 8,
-        "Z": 1
-      },
-      "segments": 10
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "filter_list.fill0",
-      "input_sha256": "934f99cec288af29e29ef23c6d58c5fb122df12754b15d3e41d6da5873c06dc6",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 6,
-        "M": 3,
-        "Q": 24,
-        "Z": 3
-      },
-      "segments": 36
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
       "id": "fit_screen.fill0",
       "input_sha256": "6b35e4299997666c0daf1817a3f39d854fcb5d015435e18fda19b9962b2a8ae0",
       "maximum_float32_error": "0",
@@ -1078,34 +980,6 @@
         "Z": 7
       },
       "segments": 88
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "flag.fill0",
-      "input_sha256": "e74dc20f968a42d8121f4df417de9e129d215adf47ef57bde7ea70131cd86700",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 17,
-        "M": 3,
-        "Q": 18,
-        "Z": 3
-      },
-      "segments": 41
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "flip.fill0",
-      "input_sha256": "999789fb2faa0c13d8a96062af2eb5a234c68bbfa239b82740fb8ce2c3455aaa",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 8,
-        "M": 9,
-        "Q": 76,
-        "Z": 9
-      },
-      "segments": 102
     },
     {
       "coordinate_profile": "font960-translate-y",
@@ -1137,34 +1011,6 @@
     },
     {
       "coordinate_profile": "font960-translate-y",
-      "id": "how_to_reg.fill0",
-      "input_sha256": "30f59cebbd24c3cde2f23e30995291033333a1cb19610b24ae9ab350d47479b8",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 9,
-        "M": 6,
-        "Q": 46,
-        "Z": 6
-      },
-      "segments": 67
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "key.fill0",
-      "input_sha256": "c3e65b94904b66ace89ab50a249a9e33deaf0d4a54009ae6fbf642aee6fe772e",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 20,
-        "M": 3,
-        "Q": 38,
-        "Z": 3
-      },
-      "segments": 64
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
       "id": "keyboard.fill0",
       "input_sha256": "0a86d3a3fed03e8cc446e30345a81c947e6c8b24d618ba5b60e6b23d5066e289",
       "maximum_float32_error": "0",
@@ -1179,20 +1025,6 @@
     },
     {
       "coordinate_profile": "font960-translate-y",
-      "id": "lightbulb.fill0",
-      "input_sha256": "1aff3e2b989d4cdff56591e03cf3beff2a826051c91a3de3e72a87b7827db820",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 5,
-        "M": 5,
-        "Q": 28,
-        "Z": 5
-      },
-      "segments": 43
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
       "id": "link.fill0",
       "input_sha256": "9c56fecf20eadbb91ff1cde7d8bf45030fc598d7c12824cfa67d5fd98d87fa9d",
       "maximum_float32_error": "0",
@@ -1204,20 +1036,6 @@
         "Z": 3
       },
       "segments": 56
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "logout.fill0",
-      "input_sha256": "d8edf27a9c5debaf0a1d8361bc8596d0e3972f4f80ce8c245627db90ec5f2b85",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 12,
-        "M": 2,
-        "Q": 26,
-        "Z": 2
-      },
-      "segments": 42
     },
     {
       "coordinate_profile": "font960-translate-y",
@@ -1249,34 +1067,6 @@
     },
     {
       "coordinate_profile": "font960-translate-y",
-      "id": "notifications.fill0",
-      "input_sha256": "02392c5f1f11a3095e8b91fd3b7a5d3c4e26cad986f1cf59ac285337bd61e95f",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 11,
-        "M": 4,
-        "Q": 24,
-        "Z": 4
-      },
-      "segments": 43
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "notifications_off.fill0",
-      "input_sha256": "6f45ad705eac3e7d9f23741f469359cb7e4916e2fd16e1b024f44b5ad91b4e0b",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 14,
-        "M": 5,
-        "Q": 44,
-        "Z": 5
-      },
-      "segments": 68
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
       "id": "pause.fill1",
       "input_sha256": "25be92a75759fac11fa809ba44340de5327657e896dcd6363fc480b2191d2809",
       "maximum_float32_error": "0",
@@ -1288,20 +1078,6 @@
         "Z": 2
       },
       "segments": 24
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "pause_circle.fill0",
-      "input_sha256": "e0f1af3582742892238ad51354596c1eb0353a620d87e4a074aac8d4af845f57",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 4,
-        "M": 5,
-        "Q": 40,
-        "Z": 5
-      },
-      "segments": 54
     },
     {
       "coordinate_profile": "font960-translate-y",
@@ -1389,20 +1165,6 @@
     },
     {
       "coordinate_profile": "font960-translate-y",
-      "id": "restart_alt.fill0",
-      "input_sha256": "0483e946d948cdbd0c01f316d362a14998ac5d81d029ce8bdca3def36a737080",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 6,
-        "M": 2,
-        "Q": 40,
-        "Z": 2
-      },
-      "segments": 50
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
       "id": "smart_display.fill0",
       "input_sha256": "67842cb205e9f4d4aae3a626f1af282f3c33b6ea6a3a2587a77b029ea55e6e5c",
       "maximum_float32_error": "0",
@@ -1431,48 +1193,6 @@
     },
     {
       "coordinate_profile": "font960-translate-y",
-      "id": "summarize.fill0",
-      "input_sha256": "b8e2f7945476c2d80b44276597c9a2ac0babe43126f9c286c878b45d26469e2a",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 15,
-        "M": 6,
-        "Q": 36,
-        "Z": 6
-      },
-      "segments": 63
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "swap_vert.fill0",
-      "input_sha256": "6b0ed2c5c8fc52cca914f852269b8a1b44f0e3f7d97e0354898588edf5ebb275",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 12,
-        "M": 2,
-        "Q": 32,
-        "Z": 2
-      },
-      "segments": 48
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "task_alt.fill0",
-      "input_sha256": "6ba4c66bffc14b3d12614fc446b4302f94948fe78bec4cff65698706de52e086",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 4,
-        "M": 2,
-        "Q": 44,
-        "Z": 2
-      },
-      "segments": 52
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
       "id": "timer.fill0",
       "input_sha256": "72c794f81c9d703f7b538f3c2af9f01623e2203d59a5ac2fcbaf0f17fdf3e8e3",
       "maximum_float32_error": "0",
@@ -1484,20 +1204,6 @@
         "Z": 5
       },
       "segments": 60
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "undo.fill0",
-      "input_sha256": "dcd97edcb0f867c19ccff7032e8cebf08a0737898d1d480efdbc6e9468a7ee76",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 8,
-        "M": 1,
-        "Q": 24,
-        "Z": 1
-      },
-      "segments": 34
     },
     {
       "coordinate_profile": "font960-translate-y",
@@ -1596,20 +1302,6 @@
         "Z": 4
       },
       "segments": 71
-    },
-    {
-      "coordinate_profile": "font960-translate-y",
-      "id": "zoom_out_map.fill0",
-      "input_sha256": "88e547d3ffaf09fc06e49b7d72b5a6e9d6ee53c2c60086a435c9a60d1fae65e7",
-      "maximum_float32_error": "0",
-      "maximum_float32_error_decimal": "0",
-      "operations": {
-        "L": 24,
-        "M": 4,
-        "Q": 56,
-        "Z": 4
-      },
-      "segments": 88
     }
   ],
   "base_counts": {
@@ -1620,13 +1312,13 @@
     "sf_literals": 50
   },
   "counts": {
-    "artwork": 115,
-    "bindings": 134,
-    "concepts": 106,
-    "material_names": 108,
-    "sf_literals": 116
+    "artwork": 93,
+    "bindings": 110,
+    "concepts": 84,
+    "material_names": 86,
+    "sf_literals": 95
   },
   "generator_sha256": "96903de45424c01871fa8d5925348dc96e5e5c1d78d9d7f00e394be50b2bdabf",
-  "manifest_sha256": "dda8109e83d0fbfe4d3494aaf823bb34669769b3dbfcdb90a5b81d2e7ed243b5",
+  "manifest_sha256": "a8f815b7cd4ceb7bf9c5d04f6fed8528a3cf77981e3994e91cace24d6e25b541",
   "profile": "material-rounded-24-absolute-v1"
 }

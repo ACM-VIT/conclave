@@ -5,9 +5,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateObserver
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -227,31 +225,10 @@ class PresenterSessionBridgeTests {
     fun oneRowUpdates() {
         val recorder = Recorder()
         val shell = presenter(recorder, joined())
-        val cache = MeetingControlRowsCache(shell)
-
-        val before = cache.current()
         shell.apply(joined(isHandRaised = true))
-        val after = cache.current()
-        assertEquals(before.revision + 1, after.revision)
-        for (index in 0 until after.size) {
-            if (after[index].id == MeetingControlID.hand.rawValue) {
-                assertNotSame(before[index], after[index])
-                assertTrue(after[index].isOn)
-            } else {
-                assertSame(before[index], after[index])
-            }
-        }
-
+        assertTrue(row(shell, MeetingControlID.hand).isOn)
         shell.apply(joined(isHandRaised = true, unreadChatCount = 3))
-        val chat = cache.current()
-        assertEquals(after.revision + 1, chat.revision)
-        for (index in 0 until chat.size) {
-            if (chat[index].id == MeetingControlID.chat.rawValue) {
-                assertEquals(3, chat[index].badgeCount)
-            } else {
-                assertSame(after[index], chat[index])
-            }
-        }
+        assertEquals(3, row(shell, MeetingControlID.chat).badgeCount)
 
         shell.apply(joined(isHandRaised = true, isRecoveringConnection = true, connectionState = ConnectionState.reconnecting, unreadChatCount = 3))
         val ids = shell.controls.rows.toList().map { it.id }
@@ -266,42 +243,6 @@ class PresenterSessionBridgeTests {
         }
         assertEquals(0, invalidations)
         assertEquals(revision, shell.controls.revision)
-    }
-
-    @Test
-    fun cacheHitStillSubscribes() {
-        val recorder = Recorder()
-        val shell = presenter(recorder, joined())
-        val cache = MeetingControlRowsCache(shell)
-        val first = cache.current()
-        val unchanged = observe({ cache.current() }) { shell.apply(joined(attempt = 2)) }
-        assertEquals(0, unchanged)
-        assertSame(first, cache.current())
-        val changed = observe({ cache.current() }) { shell.apply(joined(attempt = 2, isHandRaised = true)) }
-        assertEquals(1, changed)
-        assertNotSame(first, cache.current())
-        val sessions = MeetingSessionCache(shell)
-        val ui = sessions.current()
-        assertSame(ui, sessions.current())
-        assertEquals(MeetingPhaseKind.inCall, ui.phase)
-        assertEquals("lily-zoro-iris", ui.roomLabel)
-    }
-
-    @Test
-    fun unchangedRowsKeepInstanceIdentity() {
-        val recorder = Recorder()
-        val shell = presenter(recorder, joined())
-        val cache = MeetingControlRowsCache(shell)
-        val before = cache.current()
-        shell.apply(joined(isMuted = false))
-        val after = cache.current()
-        assertSame(before.row(MeetingControlID.camera), after.row(MeetingControlID.camera))
-        assertSame(before.row(MeetingControlID.leave), after.row(MeetingControlID.leave))
-        assertNotSame(before.row(MeetingControlID.microphone), after.row(MeetingControlID.microphone))
-        assertTrue(after.row(MeetingControlID.microphone)!!.isOn)
-        val entry = MeetingEntryUi.from(shell.entry)
-        assertTrue(entry.micIntentOn)
-        assertFalse(entry.cameraIntentOn)
     }
 
     @Test
@@ -335,9 +276,6 @@ class PresenterSessionBridgeTests {
         assertTrue(shell.session.hasBeenAdmittedThisSession)
         shell.apply(joined(attempt = 2, isRecoveringConnection = true, connectionState = ConnectionState.reconnecting))
         assertEquals(MeetingEntryOrigin.recovery, shell.session.entryOrigin)
-        val ui = MeetingSessionUi.from(shell.session)
-        assertTrue(ui.hasBeenAdmittedThisSession)
-        assertEquals(MeetingEntryOrigin.recovery, ui.entryOrigin)
         shell.apply(joined(attempt = 3, connectionState = ConnectionState.disconnected, terminalOutcome = MeetingTerminalOutcome(id = 5, callSession = 1, kind = MeetingTerminalOutcomeKind.serverDisconnected, serverText = "")))
         assertEquals(FeedbackKind.connectionLost, shell.feedbackState.token.kind)
     }
@@ -366,10 +304,8 @@ class PresenterSessionBridgeTests {
         assertEquals(MeetingDispatch.dispatched, shell.toggleHand())
         assertTrue(shell.finish(recorder.tickets[0], MeetingActionResult.failed(MeetingActionFailure.ackTimedOut)))
         assertEquals(MeetingActionDirection.lower, row(shell, MeetingControlID.hand).failureDirection)
-        assertEquals(MeetingActionDirection.lower, MeetingControlRowUi.from(row(shell, MeetingControlID.hand)).failureDirection)
         shell.requestEndForEveryone(from = MeetingConfirmationInvoker.hostControls)
         assertEquals("hostControls", shell.session.confirmation?.invoker)
-        assertEquals("hostControls", MeetingSessionUi.from(shell.session).confirmationInvoker)
 
         val failure = MeetingErrorClassifier.actionResult(
             MeetingErrorClassifier.classify(serverMessage = "Microphone permission not granted", context = MeetingErrorContext.media)

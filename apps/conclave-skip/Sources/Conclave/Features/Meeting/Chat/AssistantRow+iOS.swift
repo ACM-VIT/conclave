@@ -67,6 +67,7 @@ struct AssistantRowView: View {
     let entry: ChatRowEntry
     let actions: ChatRowActions
     @State private var initialChipIds: Set<String>
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(entry: ChatRowEntry, actions: ChatRowActions) {
         self.entry = entry
@@ -89,9 +90,11 @@ struct AssistantRowView: View {
                     ConclaveReactionChipRow(chips: chipModels(row), initialIds: initialChipIds, identifier: "chat.row." + row.id + ".chip") { chip in
                         actions.toggle(row.id, emoji: chip.emoji)
                     }
+                    .transition(ChatReactionRowMotion.transition(isOwn: false))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(ChatReactionRowMotion.animation(reduceMotion: reduceMotion), value: row.reactions.isEmpty)
         }
         .modifier(AssistantRowElement(row: row, model: model, actions: actions, isFinished: isFinished))
         .accessibilityIdentifier("chat.row." + row.id + ".assistant")

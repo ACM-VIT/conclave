@@ -31,7 +31,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal const val ICON_RASTER_MAX_CASES = 1127
+internal const val ICON_RASTER_MAX_CASES = 929
 internal const val ICON_RASTER_MAX_PIXELS = 144
 private const val ICON_RASTER_READINESS_MS = 3_000L
 private const val ICON_RASTER_RUN_MS = 600_000L

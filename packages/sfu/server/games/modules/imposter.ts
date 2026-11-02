@@ -160,8 +160,9 @@ export const imposterModule: GameModule<ImposterState> = {
   description: "Spot the faker in the room",
   minPlayers: 3,
   maxPlayers: 12,
-  // Roles are fixed at setup and the crew view carries the secret word, so
-  // this game supports neither mid-game seating nor spectating.
+  // Roles are drawn from the final lobby roster at start and the crew view
+  // carries the secret word, so this game supports neither mid-game seating
+  // nor spectating.
   spectatable: false,
   tickMs: 500,
   options: [
@@ -235,14 +236,12 @@ export const imposterModule: GameModule<ImposterState> = {
         ? ctx.rng.pick(WORD_SETS)
         : WORD_SETS.find((s) => s.category === chosen) ?? ctx.rng.pick(WORD_SETS));
     const word = ctx.rng.pick(set.words);
-    const imposter = ctx.players.length > 0 ? ctx.rng.pick(ctx.players) : null;
-    const starter = ctx.players.length > 0 ? ctx.rng.pick(ctx.players) : null;
     return {
       phase: "lobby",
       category: set.category,
       word,
-      imposterId: imposter?.id ?? "",
-      starterId: starter?.id ?? "",
+      imposterId: "",
+      starterId: "",
       deadline: 0,
       votes: {},
       result: null,
@@ -262,7 +261,13 @@ export const imposterModule: GameModule<ImposterState> = {
         if (ctx.players.length < 3) {
           throw new GameMoveError("Need at least 3 players");
         }
-        return { ...state, phase: "reveal", deadline: ctx.now + REVEAL_MS };
+        return {
+          ...state,
+          phase: "reveal",
+          imposterId: ctx.rng.pick(ctx.players).id,
+          starterId: ctx.rng.pick(ctx.players).id,
+          deadline: ctx.now + REVEAL_MS,
+        };
       }
       case "callVote": {
         if (!ctx.isAdmin(move.playerId)) {
@@ -350,8 +355,8 @@ export const imposterModule: GameModule<ImposterState> = {
   },
 
   playerView(state, playerId) {
-    const isImposter = playerId === state.imposterId;
     const revealed = state.phase !== "lobby";
+    const isImposter = revealed && playerId === state.imposterId;
     return {
       role: isImposter ? "imposter" : "crew",
       category: state.category,

@@ -45,7 +45,6 @@ class S1bPostReducedReactionsBridgeTests {
         assertEquals(StageReactionPolicy.reducedSlotWidth + 8.0, StageReactionPolicy.reducedLaneOffset, 0.0)
         assertEquals(8.0, (StageReactionPolicy.reducedSlotWidth - StageReactionPolicy.bubbleDiameter) / 2.0, 0.0)
         assertEquals(1.5, StageReactionPolicy.reducedPillMaxFontScale, 0.0)
-        assertEquals(20.0, StageReactionPolicy.laneOffset, 0.0)
         assertEquals(3, StageReactionPolicy.laneCount)
         val slotsEnd = StageReactionPolicy.leadingInset + (StageReactionPolicy.laneCount - 1) * StageReactionPolicy.reducedLaneOffset +
             StageReactionPolicy.reducedSlotWidth
@@ -309,7 +308,7 @@ class S1bPostReducedReactionsBridgeTests {
         val blockY = listOf(0.0, 0.0, 80.0)
         for (lane in 0 until StageReactionPolicy.laneCount) {
             for (shape in shapes) {
-                assertEquals(lane * StageReactionPolicy.laneOffset, StageReactionPolicy.slotOffsetX(lane = lane, reduceMotion = false, shape = shape), 0.0)
+                assertEquals(0.0, StageReactionPolicy.slotOffsetX(lane = lane, reduceMotion = false, shape = shape), 0.0)
             }
             assertEquals(lane * StageReactionPolicy.reducedLaneOffset,
                 StageReactionPolicy.slotOffsetX(lane = lane, reduceMotion = true, shape = StageReactionSlotShape.row), 0.0)

@@ -164,7 +164,6 @@ private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinis
             ChessActionsBar(scene, games)
             ChessTeamsList(scene)
             ChessMovesList(scene)
-            if (isFinished && !games.chrome.isHost) PromptLine(conclaveString("gm_waiting_host"))
 
             if (games.chrome.seat == SeatState.canJoin) PromptSpectatorNotice(games)
         }
@@ -201,7 +200,6 @@ private fun ChessSceneView(scene: ChessScene, games: GameStagePresenter, isFinis
                                 ChessActionsBar(scene, games)
                                 ChessTeamsList(scene)
                                 ChessMovesList(scene)
-                                if (isFinished && !games.chrome.isHost) PromptLine(conclaveString("gm_waiting_host"))
                                 if (games.chrome.seat == SeatState.canJoin) PromptSpectatorNotice(games)
                                 GameShellBottomBar(games)
                             }

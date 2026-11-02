@@ -6,8 +6,8 @@ import Testing
 struct NativeIconContractsTests {
     @Test func symbolConstantsAreTheExactManifestLiterals() throws {
         let literals = try #require(try iconManifest()["sf_literals"] as? [String])
-        #expect(literals.count == 116)
-        #expect(Set(literals).count == 116)
+        #expect(literals.count == 95)
+        #expect(Set(literals).count == 95)
     }
 
     @Test func symbolCatalogCoversEveryConceptAndSystemOwnedRole() throws {
@@ -40,7 +40,7 @@ struct NativeIconContractsTests {
                 #expect((label != nil) == ["button", "switch", "checkbox"].contains(role))
             }
         }
-        #expect(roles.count == 134)
+        #expect(roles.count == 110)
         #expect(roles["microphone.muted"]?.role == "switch" && roles["microphone.muted"]?.value == "Muted")
         #expect(roles["share_screen.stop_sharing_action"]?.label == "Stop sharing" && roles["share_screen.stop_sharing_action"]?.value == nil)
         #expect(roles["lock_meeting.locked"]?.role == "checkbox")
@@ -74,7 +74,7 @@ private func iconManifest() throws -> [String: Any] {
     let symbols = try #require(extra["sf_literals"] as? [String])
     let artwork = try #require(extra["artwork"] as? [[String: Any]])
     let concepts = try #require(extra["concepts"] as? [[String: Any]])
-    #expect(symbols.count == 69 && artwork.count == 61 && concepts.count == 70)
+    #expect(symbols.count == 48 && artwork.count == 39 && concepts.count == 48)
     #expect(Set(artwork.compactMap { $0["id"] as? String }).isDisjoint(with: Set(originalArtwork.compactMap { $0["id"] as? String })))
     base["sf_literals"] = originalSymbols + symbols.filter { !originalSymbols.contains($0) }
     base["artwork"] = originalArtwork + artwork
