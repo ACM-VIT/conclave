@@ -347,8 +347,17 @@ enum SpotlightRailPolicy {
     }
 
     static func tileWidth(_ viewport: StageViewport) -> Double {
-        if isStrip(viewport) { return stripTileWidth }
+        if isStrip(viewport) { return filledStripTileWidth(viewport) }
         return usesLargeColumn(viewport) ? largeColumnTileWidth : columnTileWidth
+    }
+
+    static func filledStripTileWidth(_ viewport: StageViewport) -> Double {
+        let count = capacity(viewport: viewport)
+        if count <= 0 { return stripTileWidth }
+        let area = StageLayoutPolicy.contentFrame(viewport)
+        let gap = StageLayoutPolicy.gap(viewport)
+        let filled = (area.width - Double(count - 1) * gap) / Double(count)
+        return max(stripTileWidth, filled)
     }
 
     static func tileHeight(_ viewport: StageViewport) -> Double {

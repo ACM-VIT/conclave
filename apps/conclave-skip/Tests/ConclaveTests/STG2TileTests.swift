@@ -317,7 +317,9 @@ struct STG2TileTests {
             #expect(stage.layout.overflowCount == 5)
 
             let frames = stage.currentFrames().filter { frame in rail.contains { $0.id == frame.slotId } }
-            #expect(frames.allSatisfy { abs($0.width - 80) < 0.01 && abs($0.height - 107) < 0.01 })
+            let width = SpotlightRailPolicy.tileWidth(viewport)
+            #expect(width >= 80)
+            #expect(frames.allSatisfy { abs($0.width - width) < 0.01 && abs($0.height - 107) < 0.01 })
         }
     }
 
@@ -347,11 +349,25 @@ struct STG2TileTests {
         #expect(stage.layout.slots.first?.id == "p:you" && stage.layout.slots.first?.role == .spotlightMain)
     }
 
+    @Test func aShortStripCentersInsteadOfHuggingTheLeadingEdge() {
+        let viewport = StagePoliciesTests.android360
+        let slots = [StageSlot(id: "a", role: .rail, userId: "a", fit: .fill), StageSlot(id: "b", role: .rail, userId: "b", fit: .fill)]
+        let frames = StageLayoutPolicy.railFramesFor(viewport: viewport, slots: slots)
+        let area = StageLayoutPolicy.contentFrame(viewport)
+        let leading = frames[0].x - area.x
+        let trailing = area.x + area.width - (frames[1].x + frames[1].width)
+        #expect(abs(leading - trailing) < 0.001)
+    }
+
     @Test func theRailFollowsTheS20Geometry() {
         for viewport in [StagePoliciesTests.iphoneSE, StagePoliciesTests.iphone17e, StagePoliciesTests.android360] {
             #expect(SpotlightRailPolicy.isStrip(viewport))
-            #expect(SpotlightRailPolicy.tileWidth(viewport) == 80 && SpotlightRailPolicy.tileHeight(viewport) == 107)
+            #expect(SpotlightRailPolicy.tileWidth(viewport) >= 80 && SpotlightRailPolicy.tileHeight(viewport) == 107)
             #expect(SpotlightRailPolicy.capacity(viewport: viewport) == 4, "\(viewport.width)")
+            let area = StageLayoutPolicy.contentFrame(viewport)
+            let gap = StageLayoutPolicy.gap(viewport)
+            let rowWidth = 4 * SpotlightRailPolicy.tileWidth(viewport) + 3 * gap
+            #expect(abs(rowWidth - area.width) < 0.001, "the strip fills \(viewport.width)")
         }
         let landscape = StagePoliciesTests.androidLandscape
         #expect(!SpotlightRailPolicy.isStrip(landscape))
