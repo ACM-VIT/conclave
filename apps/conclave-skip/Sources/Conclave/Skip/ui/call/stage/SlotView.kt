@@ -513,15 +513,33 @@ private fun StageRendererSlot(
             val mirror = if (isLocal && !isShare) {
                 LocalVideoMirrorPolicy.mirrors(isFront = stage.chrome.isFrontCamera, preference = LocalVideoMirrorPreference.shared.isOn)
             } else false
-            StageLiveVideo(slotId, userId, isLocal, isShare, videoKey, fit, mirror)
+            StageLiveVideo(slotId, userId, isLocal, isShare, videoKey, fit, mirror,
+                avatarSeed = stage.tileChrome.entry(userId).model.avatarSeed,
+                isSpotlight = stage.layout.slots.firstOrNull { it.id == slotId }?.role == StageSlotRole.spotlightMain)
         }
     }
 }
 
 @Composable
-internal fun StageLiveVideo(slotId: String, userId: String, isLocal: Boolean, isShare: Boolean, videoKey: String, fit: StageVideoFit, mirror: Boolean) {
+internal fun StageLiveVideo(
+    slotId: String, userId: String, isLocal: Boolean, isShare: Boolean, videoKey: String, fit: StageVideoFit, mirror: Boolean,
+    avatarSeed: String = "", isSpotlight: Boolean = false,
+) {
     val track = remember(videoKey, userId, isLocal, isShare) { stageLiveTrack(userId, isLocal, isShare, videoKey) }
-    VideoTrackView(track = track, mirror = mirror, fit = fit == StageVideoFit.fit, rendererKey = "stage:$slotId", clearBeforeAttach = false)
+    val wrapper = if (!isLocal && !isShare && videoKey.isNotEmpty()) {
+        MeetingViewModel.shared.webRTCClient.remoteVideoTrack(forUserId = userId)
+    } else null
+    Box(Modifier.fillMaxSize()) {
+        VideoTrackView(track = track, mirror = mirror, fit = fit == StageVideoFit.fit, rendererKey = "stage:$slotId", clearBeforeAttach = false)
+        if (wrapper != null && !wrapper.isReceivingFrames) {
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(LocalConclaveExtendedColors.current.tile)) {
+                val density = TileChromePolicy.density(width = maxWidth.value.toDouble(), height = maxHeight.value.toDouble(), isSpotlight = isSpotlight)
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    ConclaveAvatar(ConclaveAvatarIdentity.fromSeed(avatarSeed), TileChromePolicy.avatarSize(density).dp)
+                }
+            }
+        }
+    }
 }
 
 internal fun stageLiveTrack(userId: String, isLocal: Boolean, isShare: Boolean, videoKey: String): VideoTrack? {

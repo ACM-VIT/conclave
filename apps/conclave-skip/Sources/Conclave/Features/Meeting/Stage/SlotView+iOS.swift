@@ -465,7 +465,8 @@ struct RendererSlotView: View {
                 probe
             } else {
                 StageLiveVideo(slotId: slotId, userId: userId, isLocal: isLocal, isShare: isShare, videoKey: videoKey,
-                               fit: fit, isMirrored: mirror)
+                               fit: fit, isMirrored: mirror, avatarSeed: stage.tileChrome.entry(for: userId).model.avatarSeed,
+                               isSpotlight: stage.layout.slots.first { $0.id == slotId }?.role == .spotlightMain)
             }
         }
         .transaction { transaction in transaction.animation = nil }

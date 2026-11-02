@@ -8,7 +8,6 @@ import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -19,6 +18,8 @@ import skip.foundation.ProcessInfo
 
 internal class NetworkReachabilityMonitor {
     internal var onStatusChanged: ((Boolean) -> Unit)? = null
+    internal var onUsablePathChanged: (() -> Unit)? = null
+    private var pathChangeTracker = NetworkPathChangeTracker()
     internal var onQualityHintChanged: ((ConnectionQuality) -> Unit)? = null
 
     internal var onCaptivePortalChanged: ((Boolean) -> Unit)? = null
@@ -70,11 +71,8 @@ internal class NetworkReachabilityMonitor {
                 notifyCurrentStatus()
             }
         }
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
         try {
-            connectivityManager.registerNetworkCallback(request, networkCallback)
+            connectivityManager.registerDefaultNetworkCallback(networkCallback)
             callback = networkCallback
         } catch (error: Throwable) {
             callback = null
@@ -90,18 +88,22 @@ internal class NetworkReachabilityMonitor {
         val activeCallback = callback ?: return
         runCatching { connectivityManager.unregisterNetworkCallback(activeCallback) }
         callback = null
+        pathChangeTracker = NetworkPathChangeTracker()
     }
 
     private fun notifyCurrentStatus() {
         val activeCallback = callback ?: return
         val qualityHint = currentQualityHint()
         val isOffline = !hasValidatedNetwork()
+        val pathId = if (isOffline) null else connectivityManager.activeNetwork?.toString()
         val isCaptivePortal = currentCaptivePortal()
         val systemDataSaver = currentSystemDataSaver()
         mainHandler.post {
             if (callback !== activeCallback) return@post
             logQualityHintIfNeeded(qualityHint, isOffline)
+            val pathChanged = pathChangeTracker.record(usablePathId = pathId)
             onStatusChanged?.invoke(isOffline)
+            if (pathChanged) onUsablePathChanged?.invoke()
             onQualityHintChanged?.invoke(qualityHint.quality)
             publishCaptivePortal(isCaptivePortal)
             publishSystemDataSaver(systemDataSaver)
@@ -111,11 +113,14 @@ internal class NetworkReachabilityMonitor {
     private fun notifyStatusSnapshot() {
         val qualityHint = currentQualityHint()
         val isOffline = !hasValidatedNetwork()
+        val pathId = if (isOffline) null else connectivityManager.activeNetwork?.toString()
         val isCaptivePortal = currentCaptivePortal()
         val systemDataSaver = currentSystemDataSaver()
         mainHandler.post {
             logQualityHintIfNeeded(qualityHint, isOffline)
+            val pathChanged = pathChangeTracker.record(usablePathId = pathId)
             onStatusChanged?.invoke(isOffline)
+            if (pathChanged) onUsablePathChanged?.invoke()
             onQualityHintChanged?.invoke(qualityHint.quality)
             publishCaptivePortal(isCaptivePortal)
             publishSystemDataSaver(systemDataSaver)

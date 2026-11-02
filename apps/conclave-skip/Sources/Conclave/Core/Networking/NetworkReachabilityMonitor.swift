@@ -6,6 +6,8 @@ import Network
 @MainActor
 final class NetworkReachabilityMonitor {
     var onStatusChanged: ((Bool) -> Void)?
+    var onUsablePathChanged: (() -> Void)?
+    private var pathChangeTracker = NetworkPathChangeTracker()
     var onQualityHintChanged: ((ConnectionQuality) -> Void)?
 
     var onCaptivePortalChanged: ((Bool) -> Void)?
@@ -35,14 +37,21 @@ final class NetworkReachabilityMonitor {
         guard monitor == nil else { return }
         let monitor = NWPathMonitor()
         self.monitor = monitor
-        monitor.pathUpdateHandler = { [weak self] path in
+        monitor.pathUpdateHandler = { [weak self, weak monitor] path in
             let isOffline = path.status != .satisfied
+            let pathId: String? = isOffline ? nil : path.availableInterfaces
+                .filter { path.usesInterfaceType($0.type) }
+                .map { "\($0.type):\($0.index):\($0.name)" }
+                .sorted().joined(separator: "|")
             let qualityHint = Self.qualityHint(for: path)
             let isConstrained = path.status == .satisfied && path.isConstrained
             Task { @MainActor in
-                self?.onStatusChanged?(isOffline)
-                self?.onQualityHintChanged?(qualityHint)
-                self?.publishSystemDataSaver(isConstrained)
+                guard let self, let monitor, self.monitor === monitor else { return }
+                let pathChanged = self.pathChangeTracker.record(usablePathId: pathId)
+                self.onStatusChanged?(isOffline)
+                if pathChanged { self.onUsablePathChanged?() }
+                self.onQualityHintChanged?(qualityHint)
+                self.publishSystemDataSaver(isConstrained)
             }
         }
         monitor.start(queue: queue)
@@ -56,6 +65,7 @@ final class NetworkReachabilityMonitor {
         #if canImport(Network) && !SKIP
         monitor?.cancel()
         monitor = nil
+        pathChangeTracker = NetworkPathChangeTracker()
         lastSystemDataSaver = nil
         #endif
         stopSystemPressureObservers()

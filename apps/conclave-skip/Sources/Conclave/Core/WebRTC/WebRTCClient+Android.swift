@@ -11,6 +11,7 @@ final class VideoTrackWrapper: Identifiable {
 
     var rtcVideoTrack: Any?
     var isEnabled: Bool = false
+    var isReceivingFrames: Bool = true
 
     init(
         id: String,

@@ -645,6 +645,9 @@ final class MeetingViewModel {
     private var chatUploadedImage: ChatImageAttachment? = nil
     private var chatUploadedImageFileURL = ""
 
+    private var networkPathRecoveryTask: Task<Void, Never>?
+    private var networkPathRecoveryToken: UUID?
+    private var networkPathRecoveryPending = false
     private var recoveryWatchdogTask: Task<Void, Never>?
     private var recoveryStartedAt: Date?
     private var lastJoinActivityAt = Date()
@@ -1516,11 +1519,63 @@ final class MeetingViewModel {
         state.isNetworkOffline = effectiveNetworkOffline
         if wasOffline && !state.isNetworkOffline {
             refreshVersionGate()
-            await recoverActiveMeetingFromForeground()
+            scheduleNetworkPathRecovery()
+        }
+    }
+
+    private func scheduleNetworkPathRecovery() {
+        guard !isIntentionalLeave, lastJoinContext != nil,
+              state.connectionState == .joined || state.connectionState == .reconnecting || state.connectionState == .waiting else { return }
+        networkPathRecoveryPending = true
+        guard networkPathRecoveryTask == nil else { return }
+        let context = currentSocketEventContext()
+        let token = UUID()
+        networkPathRecoveryToken = token
+        networkPathRecoveryTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.networkPathRecoveryToken == token {
+                    self.networkPathRecoveryTask = nil
+                    self.networkPathRecoveryToken = nil
+                    self.networkPathRecoveryPending = false
+                }
+            }
+            while self.networkPathRecoveryPending {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled, self.isCurrentSocketEvent(context),
+                      !self.networkMonitorReportsOffline, !self.state.isNetworkOffline, !self.isIntentionalLeave else { return }
+                self.networkPathRecoveryPending = false
+                if self.state.connectionState == .joined && self.socketManager.isConnected {
+                    self.cancelPendingIceRestartTasks()
+                    let restarted = await self.webRTCClient.restartIce()
+                    guard !Task.isCancelled, self.isCurrentSocketEvent(context),
+                          !self.networkMonitorReportsOffline, !self.isIntentionalLeave else { return }
+                    if !restarted {
+                        self.networkPathRecoveryTask = nil
+                        self.networkPathRecoveryToken = nil
+                        self.networkPathRecoveryPending = false
+                        await self.forceRejoinWithFreshToken()
+                        return
+                    }
+                    await self.reassertLocalAudioPublishingIfNeeded(context: context)
+                    guard !Task.isCancelled, self.isCurrentSocketEvent(context),
+                          !self.networkMonitorReportsOffline, !self.isIntentionalLeave else { return }
+                    await self.reassertLocalVideoPublishingIfNeeded(context: context)
+                } else {
+                    self.networkPathRecoveryTask = nil
+                    self.networkPathRecoveryToken = nil
+                    self.networkPathRecoveryPending = false
+                    await self.recoverActiveMeetingFromForeground()
+                    return
+                }
+            }
         }
     }
 
     private func setupNetworkBindings() {
+        networkMonitor.onUsablePathChanged = { [weak self] in
+            self?.scheduleNetworkPathRecovery()
+        }
         networkMonitor.onStatusChanged = { [weak self] isOffline in
             Task { @MainActor in
                 guard let self else { return }
@@ -2988,6 +3043,10 @@ final class MeetingViewModel {
     }
 
     private func cancelPendingMediaLifecycleWork() {
+        networkPathRecoveryTask?.cancel()
+        networkPathRecoveryTask = nil
+        networkPathRecoveryToken = nil
+        networkPathRecoveryPending = false
         cancelPendingIceRestartTasks()
         cancelPendingRemoteConsumerBandwidthPolicyUpdate()
         pendingProducerRetryTask?.cancel()
@@ -11614,6 +11673,11 @@ final class MeetingViewModel {
             insertPresentRemoteConsumerUserId(resolvedPipTargetId(), into: &ids)
         }
         #endif
+        let stageFocusedIds = StageReceiveFocusPolicy.focusedUserIds(slots: stage.layout.slots, localUserId: state.userId)
+        for userId in stageFocusedIds {
+            insertPresentRemoteConsumerUserId(userId, into: &ids)
+        }
+        if !stageFocusedIds.isEmpty { return ids }
         insertPresentRemoteConsumerUserId(state.spotlightUserId, into: &ids)
         insertPresentRemoteConsumerUserId(state.effectiveActiveSpeakerId, into: &ids)
         insertPresentRemoteConsumerUserId(state.pinnedUserId, into: &ids)

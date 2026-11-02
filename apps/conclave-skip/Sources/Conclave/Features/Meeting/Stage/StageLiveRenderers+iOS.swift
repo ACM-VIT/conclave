@@ -13,11 +13,18 @@ struct StageLiveVideo: View {
     let videoKey: String
     let fit: StageVideoFit
     let isMirrored: Bool
+    let avatarSeed: String
+    let isSpotlight: Bool
 
     var body: some View {
         #if canImport(WebRTC)
-        StageVideoSurface(track: StageLiveTracks.track(userId: userId, isLocal: isLocal, isShare: isShare, videoKey: videoKey),
-                          fit: fit, isMirrored: isMirrored, slotId: slotId)
+        if !isLocal, !isShare, !videoKey.isEmpty,
+           let wrapper = MeetingViewModel.shared.webRTCClient.remoteVideoTrack(forUserId: userId) {
+            StageLiveRemoteVideo(wrapper: wrapper, slotId: slotId, fit: fit, avatarSeed: avatarSeed, isSpotlight: isSpotlight)
+        } else {
+            StageVideoSurface(track: StageLiveTracks.track(userId: userId, isLocal: isLocal, isShare: isShare, videoKey: videoKey),
+                              fit: fit, isMirrored: isMirrored, slotId: slotId)
+        }
         #else
         Color.clear
         #endif
@@ -25,6 +32,29 @@ struct StageLiveVideo: View {
 }
 
 #if canImport(WebRTC)
+private struct StageLiveRemoteVideo: View {
+    @ObservedObject var wrapper: VideoTrackWrapper
+    let slotId: String
+    let fit: StageVideoFit
+    let avatarSeed: String
+    let isSpotlight: Bool
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                StageVideoSurface(track: wrapper.rtcVideoTrack, fit: fit, isMirrored: false, slotId: slotId)
+                if !wrapper.isReceivingFrames {
+                    let density = TileChromePolicy.density(width: Double(proxy.size.width), height: Double(proxy.size.height),
+                                                           isSpotlight: isSpotlight)
+                    HostingTheme.token(DesignTokens.iosInCallTile)
+                    ConclaveAvatar(identity: ConclaveAvatarIdentity.fromSeed(avatarSeed), size: .tile,
+                                   diameter: CGFloat(TileChromePolicy.avatarSize(density)))
+                }
+            }
+        }
+    }
+}
+
 enum StageLiveTracks {
 
     @MainActor

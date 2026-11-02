@@ -1,5 +1,8 @@
 package conclave.module
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
@@ -50,6 +53,7 @@ import skip.lib.*
 import skip.ui.UIApplication
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -162,6 +166,7 @@ internal class VideoTrackWrapper(
 ) : Identifiable<String> {
     internal var rtcVideoTrack: VideoTrack? = track
     internal var isEnabled: Boolean = track?.enabled() ?: false
+    internal var isReceivingFrames: Boolean by mutableStateOf(true)
 
     internal fun setTrack(track: VideoTrack?) {
         rtcVideoTrack = track
@@ -4561,6 +4566,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         consumers.clear()
         remoteProducerClosureGenerations.clear()
         videoFreezeStats.clear()
+        videoFreezeKeyFrameJobs.values.toList().forEach { it.cancel() }
+        videoFreezeKeyFrameJobs.clear()
         remoteConsumerPreferenceSignatures.clear()
         remoteConsumerLayerPreferenceUnsupportedIds.clear()
         remoteConsumerPreferenceInFlightIds.clear()
@@ -7099,39 +7106,38 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    private val videoFreezeStats: MutableMap<String, Triple<Double, Double, Int>> =
+    private val videoFreezeStats: MutableMap<String, RemoteVideoHealthTracker> =
         mutableMapOf()
+    private val videoFreezeKeyFrameJobs: MutableMap<ConsumerGenerationIdentity, Job> = mutableMapOf()
 
     internal suspend fun checkVideoFreezes() {
-        val minStallByteDelta = 8000.0
-        val stallSamplesBeforePLI = 2
         val active = mutableSetOf<String>()
+        val keyFrameRequests = mutableListOf<ConsumerGenerationIdentity>()
+        val nowMs = SystemClock.elapsedRealtime().toDouble()
         for ((consumerId, info) in consumers) {
             if (info.kind != "video" || !info.lifecycleRole.acceptsPeriodicControls) continue
             active.add(consumerId)
-            val statsJson = try {
-                info.consumer.getStats()
+            val sample = try {
+                parseInboundVideoDecode(info.consumer.getStats())
             } catch (_: Throwable) {
-                continue
+                null
             }
-            val sample = parseInboundVideoDecode(statsJson) ?: continue
-            val frames = sample.first
-            val bytes = sample.second
-            val prev = videoFreezeStats[consumerId]
-            var stalls = 0
-            if (prev != null) {
-                val stuck = frames == prev.first &&
-                    (bytes - prev.second) >= minStallByteDelta
-                stalls = if (stuck) prev.third + 1 else 0
+            val tracker = videoFreezeStats[consumerId] ?: RemoteVideoHealthTracker()
+            val decision = tracker.sample(
+                framesDecoded = sample?.first,
+                nowMs = nowMs,
+                isPaused = info.isConsumerPaused || info.isProducerPaused || info.isAdaptivelyPaused,
+                isScreenShare = info.type == ProducerType.screen.rawValue,
+                bytesReceived = sample?.second,
+            )
+            videoFreezeStats[consumerId] = tracker
+            val wrapper = remoteVideoTracks[info.trackKey]
+            if (wrapper != null && wrapper.id == consumerId && wrapper.consumerGeneration == info.generation) {
+                wrapper.isReceivingFrames = !decision.isStalled
             }
-            if (stalls >= stallSamplesBeforePLI) {
-
-                try {
-                    socketManager?.resumeConsumer(consumerId, true)
-                } catch (_: Throwable) {
-                }
+            if (decision.requestKeyFrame) {
+                keyFrameRequests.add(ConsumerGenerationIdentity(consumerId, info.generation))
             }
-            videoFreezeStats[consumerId] = Triple(frames, bytes, stalls)
         }
         for (key in videoFreezeStats.keys.toList()) {
             if (!active.contains(key)) {
@@ -7140,6 +7146,27 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
                 remoteConsumerLayerPreferenceUnsupportedIds.remove(key)
                 remoteConsumerPreferenceInFlightIds.remove(key)
             }
+        }
+        for (identity in videoFreezeKeyFrameJobs.keys.toList()) {
+            if (consumers[identity.consumerId]?.generation != identity.generation) {
+                videoFreezeKeyFrameJobs.remove(identity)?.cancel()
+            }
+        }
+        for (identity in keyFrameRequests) {
+            if (videoFreezeKeyFrameJobs.containsKey(identity)) continue
+            val job = remoteConsumerPreferenceScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    val info = consumers[identity.consumerId] ?: return@launch
+                    if (info.generation != identity.generation || !info.lifecycleRole.acceptsPeriodicControls ||
+                        info.isConsumerPaused || info.isProducerPaused || info.isAdaptivelyPaused) return@launch
+                    socketManager?.resumeConsumer(identity.consumerId, true)
+                } catch (_: Throwable) {
+                } finally {
+                    videoFreezeKeyFrameJobs.remove(identity)
+                }
+            }
+            videoFreezeKeyFrameJobs[identity] = job
+            job.start()
         }
     }
 
@@ -7186,7 +7213,7 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
         }
     }
 
-    private fun parseInboundVideoDecode(statsJson: String): Pair<Double, Double>? {
+    private fun parseInboundVideoDecode(statsJson: String): Pair<Double, Double?>? {
         val array = try {
             org.json.JSONArray(statsJson)
         } catch (_: Throwable) {
@@ -7197,10 +7224,10 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
             if (obj.optString("type") != "inbound-rtp") continue
             val kind = if (obj.has("kind")) obj.optString("kind") else obj.optString("mediaType")
             if (kind != "video") continue
-            if (!obj.has("framesDecoded") || !obj.has("bytesReceived")) continue
+            if (!obj.has("framesDecoded")) continue
             val frames = obj.optDouble("framesDecoded", -1.0)
-            val bytes = obj.optDouble("bytesReceived", -1.0)
-            if (frames < 0 || bytes < 0) continue
+            if (!frames.isFinite() || frames < 0) continue
+            val bytes = if (obj.has("bytesReceived")) obj.optDouble("bytesReceived") else null
             return Pair(frames, bytes)
         }
         return null

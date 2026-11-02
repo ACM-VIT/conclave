@@ -239,6 +239,7 @@ final class VideoTrackWrapper: ObservableObject, Identifiable {
     @Published var rtcVideoTrack: RTCVideoTrack?
 
     @Published var isEnabled: Bool = true
+    @Published var isReceivingFrames: Bool = true
 
     init(
         id: String,
@@ -5086,7 +5087,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         return best
     }
 
-    private var videoFreezeStats: [String: (frames: Double, bytes: Double, stalls: Int)] = [:]
+    private var videoFreezeStats: [String: RemoteVideoHealthTracker] = [:]
+    private var videoFreezeKeyFrameTasks: [ConsumerGenerationIdentity: Task<Void, Never>] = [:]
 
     private static func statsNumber(_ obj: [String: Any], _ key: String) -> Double? {
         if let d = obj[key] as? Double { return d }
@@ -5626,7 +5628,7 @@ final class WebRTCClient: NSObject, ObservableObject {
         }
     }
 
-    private static func parseInboundVideoDecode(_ statsJson: String) -> (frames: Double, bytes: Double)? {
+    private static func parseInboundVideoDecode(_ statsJson: String) -> (frames: Double, bytes: Double?)? {
         guard let data = statsJson.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return nil
@@ -5635,41 +5637,64 @@ final class WebRTCClient: NSObject, ObservableObject {
             guard (obj["type"] as? String) == "inbound-rtp" else { continue }
             let kind = (obj["kind"] as? String) ?? (obj["mediaType"] as? String)
             guard kind == "video",
-                  let frames = statsNumber(obj, "framesDecoded"),
-                  let bytes = statsNumber(obj, "bytesReceived") else {
+                  let frames = statsNumber(obj, "framesDecoded") else {
                 continue
             }
-            return (frames: frames, bytes: bytes)
+            return (frames: frames, bytes: statsNumber(obj, "bytesReceived"))
         }
         return nil
     }
 
     func checkVideoFreezes() async {
-        let minStallByteDelta: Double = 8000
-        let stallSamplesBeforePLI = 2
         var active = Set<String>()
-        for (consumerId, info) in consumers where
-            info.kind == "video" && info.lifecycleRole.acceptsPeriodicControls {
+        var keyFrameRequests: [ConsumerGenerationIdentity] = []
+        let nowMs = Double(Self.monotonicMilliseconds())
+        for (consumerId, info) in consumers {
+            if info.kind != "video" || !info.lifecycleRole.acceptsPeriodicControls { continue }
             active.insert(consumerId)
-            guard let sample = Self.parseInboundVideoDecode(info.consumer.stats) else { continue }
-            let prev = videoFreezeStats[consumerId]
-            var stalls = 0
-            if let prev = prev {
-                let stuck = sample.frames == prev.frames
-                    && (sample.bytes - prev.bytes) >= minStallByteDelta
-                stalls = stuck ? prev.stalls + 1 : 0
+            let sample = Self.parseInboundVideoDecode(info.consumer.stats)
+            var tracker = videoFreezeStats[consumerId] ?? RemoteVideoHealthTracker()
+            let decision = tracker.sample(
+                framesDecoded: sample?.frames,
+                nowMs: nowMs,
+                isPaused: info.isConsumerPaused || info.isProducerPaused || info.isAdaptivelyPaused,
+                isScreenShare: info.type == ProducerType.screen.rawValue,
+                bytesReceived: sample?.bytes
+            )
+            videoFreezeStats[consumerId] = tracker
+            if let wrapper = remoteVideoTracks[info.trackKey],
+               wrapper.id == consumerId, wrapper.consumerGeneration == info.generation,
+               wrapper.isReceivingFrames == decision.isStalled {
+                wrapper.isReceivingFrames = !decision.isStalled
             }
-            if stalls >= stallSamplesBeforePLI {
-
-                try? await socketManager?.resumeConsumer(consumerId: consumerId, requestKeyFrame: true)
+            if decision.requestKeyFrame {
+                keyFrameRequests.append(ConsumerGenerationIdentity(consumerId: consumerId, generation: info.generation))
             }
-            videoFreezeStats[consumerId] = (frames: sample.frames, bytes: sample.bytes, stalls: stalls)
         }
-        for key in Array(videoFreezeStats.keys) where !active.contains(key) {
-            videoFreezeStats.removeValue(forKey: key)
-            remoteConsumerPreferenceSignatures.removeValue(forKey: key)
-            remoteConsumerLayerPreferenceUnsupportedIds.remove(key)
-            remoteConsumerPreferenceInFlightIds.remove(key)
+        for key in Array(videoFreezeStats.keys) {
+            if !active.contains(key) {
+                videoFreezeStats.removeValue(forKey: key)
+                remoteConsumerPreferenceSignatures.removeValue(forKey: key)
+                remoteConsumerLayerPreferenceUnsupportedIds.remove(key)
+                remoteConsumerPreferenceInFlightIds.remove(key)
+            }
+        }
+        for identity in Array(videoFreezeKeyFrameTasks.keys) {
+            if consumers[identity.consumerId]?.generation != identity.generation {
+                videoFreezeKeyFrameTasks.removeValue(forKey: identity)?.cancel()
+            }
+        }
+        for identity in keyFrameRequests {
+            guard videoFreezeKeyFrameTasks[identity] == nil else { continue }
+            videoFreezeKeyFrameTasks[identity] = Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { self.videoFreezeKeyFrameTasks.removeValue(forKey: identity) }
+                guard !Task.isCancelled,
+                      let info = self.consumers[identity.consumerId], info.generation == identity.generation,
+                      info.lifecycleRole.acceptsPeriodicControls,
+                      !info.isConsumerPaused, !info.isProducerPaused, !info.isAdaptivelyPaused else { return }
+                try? await self.socketManager?.resumeConsumer(consumerId: identity.consumerId, requestKeyFrame: true)
+            }
         }
     }
 
@@ -5725,6 +5750,8 @@ final class WebRTCClient: NSObject, ObservableObject {
         consumers.removeAll()
         remoteProducerClosureGenerations.removeAll()
         videoFreezeStats.removeAll()
+        for task in videoFreezeKeyFrameTasks.values { task.cancel() }
+        videoFreezeKeyFrameTasks.removeAll()
         remoteConsumerPreferenceSignatures.removeAll()
         remoteConsumerLayerPreferenceUnsupportedIds.removeAll()
         remoteConsumerPreferenceInFlightIds.removeAll()
