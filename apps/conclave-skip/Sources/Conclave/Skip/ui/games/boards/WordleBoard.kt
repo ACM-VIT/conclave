@@ -238,7 +238,7 @@ private fun WordleResultsView(scene: WordleScene, games: GameStagePresenter, isF
         if (scene.role == WordleRole.guesser && scene.myRows.count > 0) WordleBoard(scene, games, readOnly = true)
         if (isFinished && scene.roundTotal > 1 && games.results.scoreboard.count > 0) GameKitScoreboard(games.results.scoreboard)
         WordleStandingsList(scene)
-        if (!isHost) PromptLine(conclaveString(if (isFinal) "gm_waiting_host" else "gm_wordle_waiting_next"))
+        if (!isHost && !isFinished) PromptLine(conclaveString(if (isFinal) "gm_waiting_host" else "gm_wordle_waiting_next"))
         PromptAnnouncement(games, scene.resultKey, wordWas)
     }
 }

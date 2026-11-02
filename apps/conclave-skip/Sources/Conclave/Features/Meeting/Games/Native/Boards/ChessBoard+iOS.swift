@@ -131,9 +131,6 @@ struct ChessSceneView: View {
                         ChessActionsBar(scene: scene, games: games)
                         ChessTeamsList(scene: scene)
                         ChessMovesList(scene: scene)
-                        if isFinished && !games.chrome.isHost {
-                            PromptLine(text: ConclaveStrings.text("Waiting for the host"))
-                        }
                         if games.chrome.seat == .canJoin { PromptSpectatorNotice(games: games) }
                         GameShellBottomBar(games: games)
                     }
@@ -172,9 +169,6 @@ struct ChessSceneView: View {
             ChessActionsBar(scene: scene, games: games)
             ChessTeamsList(scene: scene)
             ChessMovesList(scene: scene)
-            if isFinished && !games.chrome.isHost {
-                PromptLine(text: ConclaveStrings.text("Waiting for the host"))
-            }
 
             if games.chrome.seat == .canJoin {
                 PromptSpectatorNotice(games: games)

@@ -219,7 +219,7 @@ struct WordleResultsView: View {
                 GameKitScoreboard(rows: games.results.scoreboard)
             }
             WordleStandingsList(scene: scene)
-            if !isHost {
+            if !isHost && !isFinished {
                 PromptLine(text: isFinal ? WordleCopy.waitingForHost() : WordleCopy.waitingNextRound())
             }
         }
