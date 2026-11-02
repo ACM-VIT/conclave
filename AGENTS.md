@@ -4,7 +4,6 @@
 Conclave is a pnpm monorepo split by runtime surface:
 - `apps/web`: Next.js web client (`src/app`, `src/lib`, static assets in `public/`).
 - `apps/conclave-skip`: active native Swift/Skip application. Make native changes here.
-- `apps/mobile`: deprecated Expo client. Do not modify it.
 - `packages/sfu`: mediasoup SFU server and socket handlers.
 - `packages/apps-sdk`: in-meeting apps runtime SDK.
 - `packages/shared-browser`: optional VNC-based shared browser service.
