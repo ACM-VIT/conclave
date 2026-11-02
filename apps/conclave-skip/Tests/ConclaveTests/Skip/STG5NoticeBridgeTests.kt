@@ -58,17 +58,14 @@ class STG5NoticeBridgeTests {
         assertNull(quality.banner)
     }
 
-    @Test fun qualityDismissalResetsOnlyOnFairOrGood() {
+    @Test fun aDismissedWeakConnectionBannerStaysAwayForTheCall() {
         val center = MeetingNoticeCenter(platform = NoticePlatform.android)
         center.applyState(host(quality = ConnectionQuality.emergency), nowMillis = 0.0)
         center.dismiss(id = center.banner?.id ?: "", nowMillis = 1.0)
         assertNull(center.banner)
-        center.applyState(host(quality = ConnectionQuality.poor), nowMillis = 2.0)
+        center.applyState(host(quality = ConnectionQuality.good), nowMillis = 2.0)
         center.applyState(host(quality = ConnectionQuality.emergency), nowMillis = 3.0)
         assertNull(center.banner)
-        center.applyState(host(quality = ConnectionQuality.fair), nowMillis = 4.0)
-        center.applyState(host(quality = ConnectionQuality.emergency), nowMillis = 5.0)
-        assertEquals(NoticeKind.veryPoorConnection, center.banner?.kind)
     }
 
     @Test fun hostNoticeMaskedForSeventySecondsKeepsItsRemainingTime() {

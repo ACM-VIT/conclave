@@ -733,11 +733,8 @@ enum ConnectionQualityHintPolicy {
         sampledQuality: ConnectionQuality,
         networkHint: ConnectionQuality
     ) -> ConnectionQuality {
-        guard networkHint != .unknown else { return sampledQuality }
-        guard sampledQuality != .unknown else { return networkHint }
-
-        guard networkHint == .emergency else { return sampledQuality }
-        return mostConstrained(sampledQuality, networkHint)
+        guard sampledQuality == .unknown else { return sampledQuality }
+        return networkHint == .emergency ? .poor : networkHint
     }
 
     static func screenSharePublishQuality(

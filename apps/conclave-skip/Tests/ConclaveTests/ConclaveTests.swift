@@ -548,8 +548,12 @@ final class ConclaveTests: XCTestCase {
             ConnectionQuality.fair
         )
         XCTAssertEqual(
-            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.poor, networkHint: ConnectionQuality.emergency),
-            ConnectionQuality.emergency
+            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.good, networkHint: ConnectionQuality.emergency),
+            ConnectionQuality.good
+        )
+        XCTAssertEqual(
+            ConnectionQualityHintPolicy.combined(sampledQuality: ConnectionQuality.unknown, networkHint: ConnectionQuality.emergency),
+            ConnectionQuality.poor
         )
         XCTAssertEqual(
             ConnectionQualityHintPolicy.screenSharePublishQuality(

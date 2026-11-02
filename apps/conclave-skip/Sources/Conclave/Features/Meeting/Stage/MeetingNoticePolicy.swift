@@ -546,8 +546,10 @@ enum MeetingNoticePolicy {
         return false
     }
 
-    static func qualityDismissalResets(_ quality: ConnectionQuality) -> Bool {
-        quality == ConnectionQuality.good || quality == ConnectionQuality.fair
+    static let infoBannerMillis = 6_000.0
+
+    static func autoExpires(_ kind: String) -> Bool {
+        kind == NoticeKind.liveNotesStarted || kind == NoticeKind.veryPoorConnection || kind == NoticeKind.catchUp
     }
 
     static func feedbackKind(forEvent kind: String) -> FeedbackKind? {
@@ -594,6 +596,7 @@ final class MeetingNoticeCenter {
     private var hostNoticeSenderId = ""
     private var hostNoticeSenderName = ""
     private var hostNoticeRemainingMillis = 0.0
+    private var bannerShownSinceMillis: [String: Double] = [:]
     private var hostNoticeShownSinceMillis = 0.0
 
     init(platform: String = NoticePlatform.ios) {
@@ -619,9 +622,6 @@ final class MeetingNoticeCenter {
         if next.liveNotes == LiveNotesState.live && previous.liveNotes != LiveNotesState.live
             && previous.liveNotes != LiveNotesState.paused {
             liveNotesEpisode += 1
-        }
-        if MeetingNoticePolicy.qualityDismissalResets(next.connectionQuality) {
-            dismissed[NoticeKind.veryPoorConnection] = nil
         }
         var chimes: [String] = []
         let wasReady = knockBaselineReady
@@ -803,9 +803,13 @@ final class MeetingNoticeCenter {
     }
 
     func expireIfDue(nowMillis: Double) -> Bool {
-        guard let shown = banner, shown.kind == NoticeKind.hostNotice, shown.expiresAtMillis > 0 else { return false }
+        guard let shown = banner, shown.expiresAtMillis > 0 else { return false }
         if nowMillis < shown.expiresAtMillis { return false }
-        clearHostNotice()
+        if shown.kind == NoticeKind.hostNotice {
+            clearHostNotice()
+        } else {
+            dismissed[shown.kind] = shown.id
+        }
         recomputeBanner(nowMillis: nowMillis)
         return true
     }
@@ -825,6 +829,7 @@ final class MeetingNoticeCenter {
         knockBaselineReady = false
         knockActionsPending = false
         liveNotesEpisode = 0
+        bannerShownSinceMillis = [:]
         clearHostNotice()
     }
 
@@ -855,6 +860,10 @@ final class MeetingNoticeCenter {
         if isHostNotice, let shown = top {
             if !wasHostNotice { hostNoticeShownSinceMillis = nowMillis }
             top = shown.withExpiry(hostNoticeShownSinceMillis + hostNoticeRemainingMillis)
+        } else if let shown = top, MeetingNoticePolicy.autoExpires(shown.kind) {
+            let since = bannerShownSinceMillis[shown.id] ?? nowMillis
+            bannerShownSinceMillis[shown.id] = since
+            top = shown.withExpiry(since + MeetingNoticePolicy.infoBannerMillis)
         }
         banner = top
     }
