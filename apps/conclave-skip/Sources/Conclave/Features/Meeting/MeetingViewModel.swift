@@ -680,6 +680,10 @@ final class MeetingViewModel {
     private var isMuteToggleInFlight: Bool { muteToggleToken != nil }
 
     private var localMuteIntentRevision = 0
+    @ObservationIgnored var micTestAudio: any MicTestAudioDriver = MicTestAudio()
+    @ObservationIgnored private var micReplay = MicReplaySession()
+    @ObservationIgnored private var micReplayTask: Task<Void, Never>?
+    @ObservationIgnored private var micReplayPauseToken: UUID?
     private var isReplacingLocalAudioProducer = false
     private var localAudioProducerReplacementToken: UUID?
     private var cameraToggleToken: UUID? = nil {
@@ -2661,11 +2665,17 @@ final class MeetingViewModel {
         }
 
         webRTCClient.onLocalAudioEnabledChanged = { [weak self] enabled in
+            let pausedForTest = self?.micReplayPauseToken != nil
             Task { @MainActor in
                 guard let self = self else { return }
                 #if os(macOS) && !SKIP
                 defer { self.testLocalMediaReportHandled?() }
                 #endif
+                if !enabled && pausedForTest { return }
+                if enabled && self.micReplay.isActive {
+                    self.webRTCClient.suspendLocalAudioForRecovery()
+                    return
+                }
                 if !enabled,
                    self.isReplacingLocalAudioProducer,
                    self.state.connectionState == .joined,
@@ -6540,6 +6550,7 @@ final class MeetingViewModel {
             finishUpdateRequiredJoin()
             return
         }
+        cancelMicReplay(restore: false)
         let joinStartedAt = Date()
         PerformanceDiagnostics.event(
             "join_room_start",
@@ -7540,7 +7551,7 @@ final class MeetingViewModel {
             return isCurrentJoinAttempt(joinAttemptId)
         }
 
-        if !state.isMuted {
+        if !state.isMuted && !micReplay.isActive {
             do {
                 try await webRTCClient.startProducingAudio()
                 guard isCurrentJoinAttempt(joinAttemptId) else { return false }
@@ -7600,6 +7611,7 @@ final class MeetingViewModel {
     }
 
     func leaveRoom() {
+        cancelMicReplay(restore: false)
         let leavingGeneration = meetingLifecycleGeneration
         recordTerminalOutcome(.left, serverText: "")
         activeJoinAttemptId = nil
@@ -10087,6 +10099,7 @@ final class MeetingViewModel {
     }
 
     func handleAppEnteredBackground() {
+        cancelMicReplay()
         lifecycleRefreshTracker.record(.background)
         persistMeetingResumeSnapshot()
         foregroundResumePresentationTask?.cancel()
@@ -10375,6 +10388,7 @@ final class MeetingViewModel {
     ) async {
         let cleanupGeneration = expectedLifecycleGeneration ?? meetingLifecycleGeneration
         guard meetingLifecycleGeneration == cleanupGeneration else { return }
+        cancelMicReplay(restore: false)
         resetReconnectRetryState()
         cancelPendingMediaLifecycleWork()
         deactivateCallPresence()
@@ -10616,7 +10630,7 @@ final class MeetingViewModel {
 
     private func enableOrStartLocalAudio() async throws {
         let context = currentCallActionContext()
-        guard !state.isMuted else { return }
+        guard !state.isMuted, !micReplay.isActive else { return }
         if webRTCClient.hasLocalAudioProducer {
             do {
                 try await webRTCClient.setAudioEnabled(true)
@@ -10750,6 +10764,7 @@ final class MeetingViewModel {
             return
         }
         guard !state.mediaPublishingDisabled else { return }
+        if micReplay.isActive && state.isMuted { return }
         if isMuteToggleInFlight {
 
             if state.isMuted {
@@ -11893,6 +11908,7 @@ final class MeetingViewModel {
     private func setMuted(_ muted: Bool) async {
         guard state.connectionState == .joined,
               muted || !state.mediaPublishingDisabled,
+              muted || !micReplay.isActive,
               !isMuteToggleInFlight else { return }
         let actionRoomId = state.roomId
         let actionJoinAttemptId = activeJoinAttemptId
@@ -12918,7 +12934,7 @@ final class MeetingViewModel {
             accountEmail: user?.email ?? "",
             accountProvider: provider,
 
-            canRecordMicTest: false,
+            canRecordMicTest: true,
             noiseSuppressionLive: webRTCClient.supportsLiveNoiseSuppressionChange,
 
             hostAlertSoundsAvailable: true,
@@ -13026,15 +13042,138 @@ final class MeetingViewModel {
                 self.requestSettingsRefresh()
                 self.requestStageRefresh()
             }
-        case .startMicTest, .stopMicTest, .showSystemMicModes:
-
+        case .stopMicTest, .cancelMicSample:
+            cancelMicReplay()
+        case .replayMicSample:
+            guard micTestAudio.status == .recorded, micReplay.play(generation: micReplay.generation) else { return }
+            micTestAudio.play()
+            shell.settings.updateMicSample(phase: .replaying)
+        case .startMicTest, .showSystemMicModes:
             break
-        case .recordMicSample, .replayMicSample, .setTestGain:
-
-            break
+        case .recordMicSample:
+            startMicReplay()
+        case .setTestGain:
+            micTestAudio.setGain(command.number)
         case .startVoiceSample, .stopVoiceSample, .playVoiceSample, .createPersonalVoice, .hearPersonalVoice, .deletePersonalVoice:
 
             break
+        }
+    }
+
+    private func startMicReplay() {
+        guard state.connectionState == .joined, !state.mediaPublishingDisabled,
+              !state.isRecoveringConnection, !state.isWebinarAttendee,
+              !isMuteToggleInFlight, !micReplay.isActive, micReplayPauseToken == nil else {
+            shell.settings.updateMicSample(phase: .unavailable)
+            return
+        }
+        guard micTestAudio.hasPermission else {
+            shell.settings.updateMicSample(phase: .unavailable, permissionDenied: true)
+            return
+        }
+        let context = currentCallActionContext()
+        let token = UUID()
+        let generation = micReplay.begin(isMuted: state.isMuted, muteRevision: localMuteIntentRevision, callSession: callSessionSerial)
+        micReplayPauseToken = token
+        muteToggleToken = token
+        shell.settings.updateMicSample(phase: .recording, secondsLeft: 5)
+        webRTCClient.suspendLocalAudioForRecovery()
+        micReplayTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.disableLocalAudioIfNeeded()
+                guard !Task.isCancelled, self.micReplay.generation == generation,
+                      self.isCurrentJoinedCall(context) else { return }
+                self.micTestAudio.setGain(self.shell.settings.audio.testGain)
+                self.micTestAudio.record(noiseSuppression: SettingsPreferences.noiseSuppression())
+                let startedAt = Date()
+                var playbackStarted = false
+                while !Task.isCancelled && self.micReplay.generation == generation {
+                    guard self.isCurrentJoinedCall(context), !self.state.mediaPublishingDisabled,
+                          !self.state.isRecoveringConnection else {
+                        self.cancelMicReplay(restore: false)
+                        return
+                    }
+                    let status = self.micTestAudio.status
+                    if status == .failed || Date().timeIntervalSince(startedAt) > 15 {
+                        self.cancelMicReplay(failed: true)
+                        return
+                    }
+                    if !playbackStarted {
+                        self.micReplay.progress(generation: generation, elapsed: Date().timeIntervalSince(startedAt))
+                        self.shell.settings.updateMicSample(phase: .recording, secondsLeft: self.micReplay.secondsLeft,
+                                                            level: self.micTestAudio.level)
+                        if status == .recorded {
+                            self.shell.settings.replayMicSample()
+                            playbackStarted = self.micReplay.phase == .playing
+                        }
+                    } else if status == .idle {
+                        self.cancelMicReplay()
+                        return
+                    }
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                }
+            } catch {
+                guard self.micReplay.generation == generation else { return }
+                self.cancelMicReplay(failed: true)
+            }
+        }
+    }
+
+    private func cancelMicReplay(restore: Bool = true, failed: Bool = false) {
+        guard micReplay.isActive else {
+            if !restore, let token = micReplayPauseToken {
+                webRTCClient.suspendLocalAudioForRecovery()
+                micReplayPauseToken = nil
+                if muteToggleToken == token { muteToggleToken = nil }
+            }
+            return
+        }
+        let context = currentCallActionContext()
+        let token = micReplayPauseToken
+        let revision = localMuteIntentRevision
+        let shouldRestore = micReplay.finish(generation: micReplay.generation, failed: failed,
+                                            muteRevision: revision, callSession: callSessionSerial,
+                                            isMuted: state.isMuted,
+                                            canRestore: restore && isCurrentJoinedCall(context) && !state.mediaPublishingDisabled)
+        let pendingCapture = micReplayTask
+        pendingCapture?.cancel()
+        micReplayTask = nil
+        micTestAudio.stop()
+        shell.settings.updateMicSample(phase: failed ? .unavailable : .idle,
+                                       permissionDenied: failed && !micTestAudio.hasPermission)
+        if !shouldRestore {
+            micReplayPauseToken = nil
+            if muteToggleToken == token { muteToggleToken = nil }
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.micReplayPauseToken == token { self.micReplayPauseToken = nil }
+                if self.muteToggleToken == token { self.muteToggleToken = nil }
+            }
+            await pendingCapture?.value
+            guard self.micReplayPauseToken == token, self.isCurrentJoinedCall(context),
+                  self.localMuteIntentRevision == revision, !self.state.isMuted,
+                  !self.state.mediaPublishingDisabled else { return }
+            guard self.micTestAudio.hasPermission else {
+                self.applyLocalMuteNow(context: self.currentSocketEventContext())
+                self.shell.settings.updateMicSample(phase: .unavailable, permissionDenied: true)
+                return
+            }
+            do {
+                try await self.enableOrStartLocalAudio()
+                guard self.micReplayPauseToken == token, self.isCurrentJoinedCall(context),
+                      self.localMuteIntentRevision == revision, !self.state.isMuted else { return }
+                await self.confirmLocalAudioProducerUnmutedOrRecover(context: self.currentSocketEventContext(),
+                                                                     allowCurrentMuteToggle: true)
+            } catch {
+                guard self.micReplayPauseToken == token, self.isCurrentJoinedCall(context),
+                      self.localMuteIntentRevision == revision else { return }
+                self.applyLocalMuteNow(context: self.currentSocketEventContext())
+                self.shell.settings.updateMicSample(phase: .unavailable)
+            }
         }
     }
 

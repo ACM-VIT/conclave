@@ -2209,4 +2209,5 @@
     <string name="ppl_local_volume">Local volume</string>
     <string name="ppl_muted_for_you">Muted for you</string>
     <string name="ppl_local_volume_percent">%1$d%%</string>
+    <string name="set_mic_test_retry">Retry</string>
 </resources>

@@ -190,6 +190,7 @@ struct SettingsAudio: Equatable {
     let isMuted: Bool
 
     let testGain: Double
+    var recordingSecondsLeft: Int = 5
 
     static let empty = SettingsAudio(revision: 0, noiseSuppressionOn: true, noiseSuppression: SettingsCapability.available,
                                      noiseSuppressionReason: SettingsReason.none, speakerTest: SpeakerTestPhase.idle,
@@ -458,7 +459,7 @@ enum SettingsCommandKind: String, CaseIterable, Equatable {
 
     case startMicTest, stopMicTest
 
-    case recordMicSample, replayMicSample, setTestGain
+    case recordMicSample, replayMicSample, cancelMicSample, setTestGain
 
     case showSystemMicModes
 
@@ -967,6 +968,8 @@ final class SettingsPresenter {
     @ObservationIgnored private var micRunToken = 0
     @ObservationIgnored private var micRunning = false
     @ObservationIgnored private var testGain = 1.0
+    @ObservationIgnored private var recordingSecondsLeft = 5
+    @ObservationIgnored private var micPermissionDenied = false
     @ObservationIgnored private var signOutPending = false
     @ObservationIgnored private var signOutGeneration = 0
     @ObservationIgnored private var signOutRoomId = ""
@@ -1018,7 +1021,7 @@ final class SettingsPresenter {
         } else if personalVoice == PersonalVoicePhase.unavailable {
             personalVoice = next.hasPersonalVoice ? PersonalVoicePhase.ready : PersonalVoicePhase.none
         }
-        if next.isMuted && micRunning && micPhase != MicTestPhase.idle {
+        if next.isMuted && micRunning && micPhase != .recording && micPhase != .replaying && micPhase != .unavailable && micPhase != MicTestPhase.idle {
             micLevel.reset()
             micPhase = MicTestPhase.idle
         }
@@ -1146,22 +1149,32 @@ final class SettingsPresenter {
     }
 
     func recordMicSample() {
-        guard audio.canRecordMicTest, !inputs.isMuted else { return }
+        guard audio.canRecordMicTest, inputs.isJoined, !inputs.isRecovering, !inputs.isOffline, !inputs.isAttendee,
+              micPhase != .recording, micPhase != .replaying else { return }
+        micPermissionDenied = false
+        recordingSecondsLeft = 5
         micPhase = MicTestPhase.recording
         rebuildAudio()
         dispatch(SettingsCommand.make(SettingsCommandKind.recordMicSample))
     }
 
     func replayMicSample() {
-        guard audio.canRecordMicTest else { return }
-        micPhase = MicTestPhase.replaying
-        rebuildAudio()
+        guard audio.canRecordMicTest, micPhase == .recording else { return }
         dispatch(SettingsCommand.make(SettingsCommandKind.replayMicSample))
     }
 
     func micSampleFinished() {
         guard micPhase == MicTestPhase.recording || micPhase == MicTestPhase.replaying else { return }
         micPhase = micRunning && !inputs.isMuted ? MicTestPhase.metering : MicTestPhase.idle
+        rebuildAudio()
+        dispatch(SettingsCommand.make(SettingsCommandKind.cancelMicSample))
+    }
+
+    func updateMicSample(phase: MicTestPhase, secondsLeft: Int = 5, level: Double = 0, permissionDenied: Bool = false) {
+        micPhase = phase
+        recordingSecondsLeft = secondsLeft
+        micPermissionDenied = permissionDenied
+        micLevel.update(level)
         rebuildAudio()
     }
 
@@ -1589,6 +1602,8 @@ final class SettingsPresenter {
             micLevel.reset()
         }
         micPhase = MicTestPhase.idle
+        recordingSecondsLeft = 5
+        micPermissionDenied = false
         signOutGeneration += 1
         signOutPending = false
         testGain = 1.0
@@ -1621,7 +1636,7 @@ final class SettingsPresenter {
     }
 
     private func micTick() {
-        if micPhase == MicTestPhase.recording || micPhase == MicTestPhase.replaying { return }
+        if micPhase == MicTestPhase.recording || micPhase == MicTestPhase.replaying || micPhase == .unavailable { return }
         if inputs.isMuted {
             micLevel.reset()
             if micPhase != MicTestPhase.idle {
@@ -1699,11 +1714,12 @@ final class SettingsPresenter {
             noiseSuppressionReason: SettingsAudioPolicy.noiseSuppressionReason(scope: scope, liveChangeSupported: inputs.noiseSuppressionLive),
             speakerTest: speakerTest,
             micTest: inCall ? SettingsCapability.available : SettingsCapability.hidden,
-            micTestReason: SettingsAudioPolicy.micTestReason(isMuted: inputs.isMuted),
+            micTestReason: micPermissionDenied ? .permissionDenied : SettingsAudioPolicy.micTestReason(isMuted: inputs.isMuted),
             canRecordMicTest: inCall && inputs.canRecordMicTest,
             micPhase: micPhase,
             isMuted: inputs.isMuted,
-            testGain: testGain
+            testGain: testGain,
+            recordingSecondsLeft: recordingSecondsLeft
         )
     }
 

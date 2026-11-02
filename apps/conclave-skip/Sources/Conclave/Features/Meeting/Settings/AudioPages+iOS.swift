@@ -25,7 +25,20 @@ struct SettingsMicrophonePage: View {
                 }
             }
             Section {
-                if audio.isMuted {
+                if audio.micPhase == .recording {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(ConclaveStrings.format("Keep speaking, %lld s left", audio.recordingSecondsLeft))
+                            .monospacedDigit()
+                        SettingsMicLevelRow(meter: settings.micLevel)
+                        Text(ConclaveStrings.text("Your microphone is paused in the meeting while you record."))
+                            .font(.footnote)
+                            .foregroundStyle(HostingTheme.secondaryText)
+                    }
+                } else if audio.micPhase == .unavailable {
+                    Text(audio.micTestReason == .permissionDenied
+                         ? ConclaveStrings.text("Microphone access is off.")
+                         : ConclaveStrings.text("Microphone unavailable"))
+                } else if audio.isMuted {
                     Text(ConclaveStrings.text("Unmute to test your microphone."))
                         .accessibilityIdentifier("settings.mic.unmuteToTest")
                 } else if audio.micPhase == MicTestPhase.starting {
@@ -38,7 +51,7 @@ struct SettingsMicrophonePage: View {
                     SettingsMicLevelRow(meter: settings.micLevel)
                 }
                 if audio.canRecordMicTest {
-                    SettingsRecordReplayRow(settings: settings, phase: audio.micPhase, isMuted: audio.isMuted)
+                    SettingsRecordReplayRow(settings: settings, phase: audio.micPhase)
                     LabeledContent(ConclaveStrings.text("Test Gain")) {
                         Slider(value: Binding(get: { audio.testGain }, set: { settings.setTestGain($0) }), in: 0...2, step: 0.1)
                             .frame(maxWidth: 160)
@@ -70,6 +83,7 @@ struct SettingsMicrophonePage: View {
         .task {
             await settings.runMicTest()
         }
+        .onDisappear { settings.stopMicTest() }
         .accessibilityIdentifier("settings.page.microphone")
     }
 }
@@ -77,7 +91,6 @@ struct SettingsMicrophonePage: View {
 private struct SettingsRecordReplayRow: View {
     let settings: SettingsPresenter
     let phase: MicTestPhase
-    let isMuted: Bool
 
     var body: some View {
         Button {
@@ -92,10 +105,11 @@ private struct SettingsRecordReplayRow: View {
                     Text(SettingsCopy.micPhase(phase) ?? "")
                 }
             } label: {
-                Text(ConclaveStrings.text("Record and Replay"))
+                Text(phase == .unavailable ? ConclaveStrings.text("Retry")
+                     : phase == .recording ? ConclaveStrings.text("Stop")
+                     : ConclaveStrings.text("Record and Replay"))
             }
         }
-        .disabled(isMuted)
         .accessibilityIdentifier("settings.mic.recordReplay")
     }
 }
