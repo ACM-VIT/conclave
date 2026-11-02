@@ -166,14 +166,16 @@ internal fun GifPickerContent(presenter: ChatPresenter, onPicked: () -> Unit, mo
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth().testTag("chat.gifs.grid"),
                 ) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        ConclaveTipCard(
-                            id = OneTimeTipID.gifPicker.rawValue,
-                            title = conclaveString("chat_gif_tip_title"),
-                            body = conclaveString("chat_gif_tip_body"),
-                            icon = ConclaveIcons.GifBoxFill0,
-                            identifier = "chat.gifs.tip",
-                        )
+                    if (query.isEmpty()) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            ConclaveTipCard(
+                                id = OneTimeTipID.gifPicker.rawValue,
+                                title = conclaveString("chat_gif_tip_title"),
+                                body = conclaveString("chat_gif_tip_body"),
+                                icon = ConclaveIcons.GifBoxFill0,
+                                identifier = "chat.gifs.tip",
+                            )
+                        }
                     }
                     itemsIndexed(state.items.toList(), key = { _, gif -> gif.id }) { _, gif ->
                         GifTile(gif, kind) {

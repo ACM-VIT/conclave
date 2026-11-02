@@ -17,12 +17,15 @@ struct ChatGifSheetPolicyTests {
         #expect(ChatGifSheetPolicy.height(windowHeight: 40, keyboardHeight: 0) == 0)
     }
 
-    @Test func theGifSheetShrinksOnlyAsFarAsTheKeyboardNeeds() {
+    @Test func typingKeepsTheSheetsOverallHeightAndShrinksTheGrid() {
         let resting = ChatGifSheetPolicy.height(windowHeight: 900, keyboardHeight: 0)
-        #expect(ChatGifSheetPolicy.height(windowHeight: 900, keyboardHeight: 200) == resting, "a short keyboard leaves the sheet alone")
-        let typing = ChatGifSheetPolicy.height(windowHeight: 900, keyboardHeight: 380)
-        #expect(typing == 900 - 380 - ChatGifSheetPolicy.topClearance, "the sheet plus the keyboard still clears the status bar")
-        #expect(typing < resting)
+        let short = ChatGifSheetPolicy.height(windowHeight: 900, keyboardHeight: 200)
+        #expect(short + 200 == resting, "the sheet does not climb when the keyboard rises")
+        let tall = ChatGifSheetPolicy.height(windowHeight: 900, keyboardHeight: 380)
+        #expect(tall == ChatGifSheetPolicy.minimumTypingHeight, "the grid keeps a usable floor")
+        #expect(tall + 380 < 900 - ChatGifSheetPolicy.topClearance, "and the sheet stays well below the status bar")
+        let cramped = ChatGifSheetPolicy.height(windowHeight: 600, keyboardHeight: 340)
+        #expect(cramped == 600 - 340 - ChatGifSheetPolicy.topClearance, "only a cramped window lets it reach the top clearance")
         #expect(ChatGifSheetPolicy.height(windowHeight: 300, keyboardHeight: 400) == 0)
     }
 }

@@ -41,12 +41,15 @@ enum ChatGifSheetPolicy {
 
     static let heightFraction = 0.62
     static let minimumHeight = 360.0
+    static let minimumTypingHeight = 300.0
     static let topClearance = 72.0
 
     static func height(windowHeight: Double, keyboardHeight: Double) -> Double {
+        let keyboard = max(keyboardHeight, 0.0)
         let preferred = max(windowHeight * heightFraction, minimumHeight)
-        let fits = windowHeight - max(keyboardHeight, 0.0) - topClearance
-        return max(min(preferred, fits), 0.0)
+        let keepsOverallHeight = keyboard > 0 ? max(preferred - keyboard, minimumTypingHeight) : preferred
+        let fits = windowHeight - keyboard - topClearance
+        return max(min(keepsOverallHeight, fits), 0.0)
     }
 }
 
