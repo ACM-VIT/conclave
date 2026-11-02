@@ -170,5 +170,10 @@ class SettingsTranscriptBridgeTests {
         assertEquals("h:audio", items.first().key)
         assertTrue(items.any { it.key == "f:host" })
         assertEquals(items.size, items.map { it.key }.toSet().size)
+        assertTrue(items.none { it.kind == SettingsItemKind.Appearance })
+        val inCall = settingsListItems(sections, appearanceInList = true).map { it.key }
+        val appearance = inCall.indexOf("appearance")
+        assertTrue(appearance > inCall.indexOf("h:general"))
+        assertEquals("h:account", inCall[appearance + 1])
     }
 }

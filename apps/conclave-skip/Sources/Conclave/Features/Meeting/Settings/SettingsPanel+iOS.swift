@@ -103,11 +103,15 @@ struct SettingsRootList<Route: Hashable>: View {
     var onOpenTranscript: (() -> Void)? = nil
 
     var body: some View {
+        let inCall = settings.scope == SettingsScope.call
+        let generalHostsAppearance = inCall && settings.sections.contains { $0.section == SettingsSection.general }
         Form {
-            Section { AppearanceSettingRow() }
+            if !inCall { Section { AppearanceSettingRow() } }
             ForEach(settings.sections) { section in
-                SettingsSectionView(section: section, settings: settings, link: link, onOpenTranscript: onOpenTranscript)
+                SettingsSectionView(section: section, settings: settings, link: link, onOpenTranscript: onOpenTranscript,
+                                    includesAppearance: generalHostsAppearance)
             }
+            if inCall && !generalHostsAppearance { Section { AppearanceSettingRow() } }
         }
         .formStyle(.grouped)
         .scrollDismissesKeyboard(.interactively)
@@ -121,6 +125,7 @@ private struct SettingsSectionView<Route: Hashable>: View {
     let settings: SettingsPresenter
     let link: (SettingsRoute) -> Route?
     let onOpenTranscript: (() -> Void)?
+    let includesAppearance: Bool
 
     var body: some View {
         switch section.section {
@@ -129,7 +134,7 @@ private struct SettingsSectionView<Route: Hashable>: View {
         case .captions: SettingsCaptionsSection(rows: section.rows, settings: settings, onOpenTranscript: onOpenTranscript)
         case .chat: SettingsChatSection(rows: section.rows, settings: settings, link: link)
         case .host: SettingsHostSection(rows: section.rows, settings: settings, link: link)
-        case .general: SettingsGeneralSection(rows: section.rows, settings: settings, link: link)
+        case .general: SettingsGeneralSection(rows: section.rows, settings: settings, link: link, includesAppearance: includesAppearance)
         case .account: SettingsAccountSection(rows: section.rows, settings: settings)
         case .about: SettingsAboutSection(rows: section.rows, settings: settings, link: link)
         }
@@ -391,6 +396,7 @@ private struct SettingsGeneralSection<Route: Hashable>: View {
     let rows: [SettingsRowID]
     let settings: SettingsPresenter
     let link: (SettingsRoute) -> Route?
+    let includesAppearance: Bool
 
     var body: some View {
         let general = settings.general
@@ -420,6 +426,7 @@ private struct SettingsGeneralSection<Route: Hashable>: View {
                     EmptyView()
                 }
             }
+            if includesAppearance { AppearanceSettingRow() }
         } header: {
             Text(SettingsCopy.sectionTitle(.general))
         } footer: {
