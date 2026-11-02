@@ -89,7 +89,7 @@ final class StagePresenter {
     @ObservationIgnored private var speakerSinceMillis = 0.0
     @ObservationIgnored private var lastSwapMillis = StageOrderPolicy.neverSwappedMillis
     @ObservationIgnored private var lastSpokeAt: [String: Double] = [:]
-    @ObservationIgnored private var fitOverrides: [String: String] = [:]
+    private var fitOverrides: [String: String] = [:]
     @ObservationIgnored private var showsVideoOverActivity = false
 
     @ObservationIgnored private var preferredActivityKind = ""
@@ -284,6 +284,15 @@ final class StagePresenter {
         if fitOverrides[slotId] == fit.rawValue { return }
         fitOverrides[slotId] = fit.rawValue
         rebuild()
+    }
+
+    func videoFit(slot: StageSlot, slotWidth: Double, slotHeight: Double) -> StageVideoFit {
+        if let raw = fitOverrides[slot.id], let fit = StageVideoFit(rawValue: raw) { return fit }
+        if slot.role != .spotlightMain || slot.id.hasPrefix("share:") { return slot.fit }
+        let _ = frameSizes.revision
+        let size = frameSizes.size(slotId: slot.id)
+        return TileFeaturePolicy.mainFit(widthClass: viewport.widthClass, slotWidth: slotWidth, slotHeight: slotHeight,
+                                         videoWidth: Double(size.width), videoHeight: Double(size.height))
     }
 
     func setSelfViewMode(_ raw: String) {

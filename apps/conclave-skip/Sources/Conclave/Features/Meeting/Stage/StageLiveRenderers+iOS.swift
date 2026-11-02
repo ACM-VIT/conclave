@@ -52,6 +52,7 @@ struct StageVideoSurface: UIViewRepresentable {
 
     func makeUIView(context: Context) -> RTCMTLVideoView {
         let view = RTCMTLVideoView()
+        view.backgroundColor = UIColor(HostingTheme.token(DesignTokens.iosInCallStage))
         view.clipsToBounds = true
         view.isUserInteractionEnabled = false
         view.accessibilityIgnoresInvertColors = true

@@ -284,12 +284,14 @@ enum TileFeaturePolicy {
 
     static func mainFit(widthClass: String, slotWidth: Double, slotHeight: Double, videoWidth: Double,
                         videoHeight: Double) -> StageVideoFit {
-        if StageSizeClass.isCompact(widthClass) { return StageVideoFit.fill }
         if slotWidth <= 0 || slotHeight <= 0 || videoWidth <= 0 || videoHeight <= 0 { return StageVideoFit.fill }
         let slotAspect = slotWidth / slotHeight
         let videoAspect = videoWidth / videoHeight
-        let ratio = max(slotAspect, videoAspect) / min(slotAspect, videoAspect)
-        return ratio - 1.0 > mainAspectTolerance ? StageVideoFit.fit : StageVideoFit.fill
+        let landscape = 1.0 + mainAspectTolerance
+        let portrait = 1.0 / landscape
+        let opposite = (slotAspect > 1.0 && videoAspect < portrait)
+            || (slotAspect < 1.0 && videoAspect > landscape)
+        return opposite ? StageVideoFit.fit : StageVideoFit.fill
     }
 
     static func showsFlipControl(isLocal: Bool, isShare: Bool, role: StageSlotRole, canFlipCamera: Bool,

@@ -1,5 +1,6 @@
 #if !SKIP
 import Foundation
+import Observation
 import Testing
 @testable import Conclave
 
@@ -419,21 +420,105 @@ struct STG2TileTests {
         #expect(TileFeaturePolicy.backOnlineMillis == 4_500)
     }
 
-    @Test func theMainFitRuleKeepsFacesUncroppedOnRegularWidthOnly() {
-        #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.compact, slotWidth: 390, slotHeight: 844, videoWidth: 1280,
-                                          videoHeight: 720) == .fill)
-        #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.regular, slotWidth: 1180, slotHeight: 664, videoWidth: 1280,
-                                          videoHeight: 720) == .fill)
-        #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.regular, slotWidth: 1180, slotHeight: 664, videoWidth: 720,
-                                          videoHeight: 1280) == .fit)
+    @Test(arguments: [StageSizeClass.compact, StageSizeClass.regular, StageSizeClass.expanded])
+    func mainFitUsesOppositeOrientationsOnEveryWidthClass(_ widthClass: String) {
+        #expect(TileFeaturePolicy.mainFit(widthClass: widthClass, slotWidth: 390, slotHeight: 844,
+                                          videoWidth: 1280, videoHeight: 720) == .fit)
+        #expect(TileFeaturePolicy.mainFit(widthClass: widthClass, slotWidth: 390, slotHeight: 844,
+                                          videoWidth: 720, videoHeight: 1280) == .fill)
+        #expect(TileFeaturePolicy.mainFit(widthClass: widthClass, slotWidth: 1180, slotHeight: 664,
+                                          videoWidth: 720, videoHeight: 1280) == .fit)
+        #expect(TileFeaturePolicy.mainFit(widthClass: widthClass, slotWidth: 1180, slotHeight: 664,
+                                          videoWidth: 1280, videoHeight: 720) == .fill)
+        #expect(TileFeaturePolicy.mainFit(widthClass: widthClass, slotWidth: 390, slotHeight: 844,
+                                          videoWidth: 480, videoHeight: 1280) == .fill)
+    }
 
-        #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.expanded, slotWidth: 125, slotHeight: 100, videoWidth: 100,
-                                          videoHeight: 100) == .fill)
-        #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.expanded, slotWidth: 140, slotHeight: 100, videoWidth: 100,
-                                          videoHeight: 100) == .fit)
-        #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.regular, slotWidth: 1180, slotHeight: 664, videoWidth: 0,
-                                          videoHeight: 0) == .fill)
-        #expect(TileFeaturePolicy.toggledFit(.fill) == .fit && TileFeaturePolicy.toggledFit(.fit) == .fill)
+    @Test(arguments: [RendererFrameSize(width: 100, height: 100), RendererFrameSize(width: 125, height: 100),
+                      RendererFrameSize(width: 100, height: 125), RendererFrameSize(width: 130, height: 100),
+                      RendererFrameSize(width: 100, height: 130)])
+    func mainFitKeepsNearSquareVideoFilled(_ video: RendererFrameSize) {
+        for slot in [RendererFrameSize(width: 390, height: 844), RendererFrameSize(width: 844, height: 390)] {
+            #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.compact, slotWidth: Double(slot.width),
+                                              slotHeight: Double(slot.height), videoWidth: Double(video.width),
+                                              videoHeight: Double(video.height)) == .fill)
+        }
+    }
+
+    @Test func mainFitDefaultsToFillUntilDimensionsAreKnown() {
+        for size in [RendererFrameSize.zero, RendererFrameSize(width: 0, height: 720),
+                     RendererFrameSize(width: 1280, height: 0)] {
+            #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.compact, slotWidth: 390, slotHeight: 844,
+                                              videoWidth: Double(size.width), videoHeight: Double(size.height)) == .fill)
+        }
+        #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.compact, slotWidth: 0, slotHeight: 844,
+                                          videoWidth: 1280, videoHeight: 720) == .fill)
+        #expect(TileFeaturePolicy.mainFit(widthClass: StageSizeClass.compact, slotWidth: 390, slotHeight: 0,
+                                          videoWidth: 1280, videoHeight: 720) == .fill)
+    }
+
+    @Test func featuredFitReactsToFramesSlotRotationAndExplicitChoices() throws {
+        let stage = presenter(StageFixtureScript.inputs(for: .spotlight))
+        let slot = try #require(stage.layout.slots.first { $0.role == .spotlightMain })
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fill)
+        stage.frameSizes.report(slotId: slot.id, width: 1280, height: 720)
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fit)
+        #expect(stage.videoFit(slot: slot, slotWidth: 844, slotHeight: 390) == .fill)
+        stage.frameSizes.report(slotId: slot.id, width: 720, height: 1280)
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fill)
+        stage.setSlotFit(.fit, slotId: slot.id)
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fit)
+        stage.frameSizes.report(slotId: slot.id, width: 1280, height: 720)
+        stage.setSlotFit(.fill, slotId: slot.id)
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fill)
+        #expect(stage.videoFit(slot: slot, slotWidth: 844, slotHeight: 390) == .fill)
+        stage.frameSizes.remove(slotId: slot.id)
+        stage.setSlotFit(.fit, slotId: slot.id)
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fit)
+    }
+
+    @Test func cropOverrideInvalidatesTheRendererEvenWhenTheLayoutAlreadySaysFill() async throws {
+        let stage = presenter(StageFixtureScript.inputs(for: .spotlight))
+        let slot = try #require(stage.layout.slots.first { $0.role == .spotlightMain })
+        stage.frameSizes.report(slotId: slot.id, width: 1280, height: 720)
+        let revision = stage.layout.revision
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fit)
+        await confirmation(expectedCount: 1) { changed in
+            withObservationTracking {
+                _ = stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844)
+            } onChange: { changed() }
+            stage.setSlotFit(.fill, slotId: slot.id)
+        }
+        #expect(stage.layout.revision == revision)
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fill)
+    }
+
+    @Test func changedFramesInvalidateAutomaticFitAndZeroFramesKeepTheKnownSize() async throws {
+        let stage = presenter(StageFixtureScript.inputs(for: .spotlight))
+        let slot = try #require(stage.layout.slots.first { $0.role == .spotlightMain })
+        await confirmation(expectedCount: 1) { changed in
+            withObservationTracking {
+                _ = stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844)
+            } onChange: { changed() }
+            stage.frameSizes.report(slotId: slot.id, width: 1280, height: 720)
+        }
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fit)
+        stage.frameSizes.report(slotId: slot.id, width: 0, height: 0)
+        #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fit)
+    }
+
+    @Test func automaticFitLeavesOtherRolesAndScreenSharesAlone() {
+        let stage = presenter(StageFixtureScript.inputs(for: .grid6))
+        for role in [StageSlotRole.grid, .gridWide, .rail, .selfFloating, .selfMinimized, .overflow, .programFeed, .speakerInset] {
+            let slot = StageSlot(id: "p:r1", role: role, userId: "r1", fit: .fill)
+            stage.frameSizes.report(slotId: slot.id, width: 1280, height: 720)
+            #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fill)
+        }
+        for role in [StageSlotRole.share, .spotlightMain] {
+            let slot = StageSlot(id: "share:r1", role: role, userId: "r1", fit: .fit)
+            stage.frameSizes.report(slotId: slot.id, width: 720, height: 1280)
+            #expect(stage.videoFit(slot: slot, slotWidth: 390, slotHeight: 844) == .fit)
+        }
     }
 
     @Test func stg2FixtureStatesBuildTheirCells() throws {

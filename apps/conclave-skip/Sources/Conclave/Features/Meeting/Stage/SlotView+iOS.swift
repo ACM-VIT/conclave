@@ -84,6 +84,14 @@ struct ParticipantTile: View {
     @Environment(\.activitySession) private var session
 
     var body: some View {
+        GeometryReader { proxy in
+            let fit = stage.videoFit(slot: slot, slotWidth: Double(proxy.size.width), slotHeight: Double(proxy.size.height))
+            tile(StageSlot(id: slot.id, role: slot.role, userId: slot.userId, fit: fit))
+        }
+    }
+
+    @ViewBuilder
+    private func tile(_ slot: StageSlot) -> some View {
         let isShare = slot.id.hasPrefix("share:")
         let insets = StageViewportPolicy.tileInsets(kind: stage.kind, role: slot.role, viewport: viewport)
         let model = StageSlotViewModel.model(entry.model, isShare: isShare)
