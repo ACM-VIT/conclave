@@ -870,6 +870,86 @@ class PanelStageBridgeTests {
         assertEquals(0, stageReleases)
     }
 
+    @Test fun pipSuppressesPanelsAndRestoresTheirSelectionAndPageStack() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
+        val panels = PanelCoordinator(session = 1)
+        val lifetime = NativePanelOverlayLifetime(panels)
+        val focus = PanelInvokerFocus()
+        val readout = PanelHostReadout()
+        var phone by mutableStateOf(false)
+        var wide by mutableStateOf(false)
+        var coverage = PanelStageCoverage.none
+        val mounted = mutableMapOf<Pair<Int, Int>, Int>()
+        var stack: PanelPageStack? = null
+        var stageMounts = 0
+        var stageDisposals = 0
+        PipController.inPipMode = false
+        PipController.setPictureInPictureUiState(stashed = false, transitioningToPip = false)
+        try {
+            activity.setContent(hostRecomposer()) {
+                Box(if (wide) Modifier.requiredSize(1280.dp, 800.dp) else if (phone) Modifier.requiredSize(360.dp, 800.dp) else Modifier.fillMaxSize()) {
+                    NativePanelHost(panels, lifetime, focus, readout, systemBars = {}, stage = {
+                        coverage = it
+                        DisposableEffect(Unit) {
+                            stageMounts++
+                            onDispose { stageDisposals++ }
+                        }
+                    }, panel = { session, request, _, _ ->
+                        stack = LocalPanelPageStack.current
+                        DisposableEffect(session, request.presentationID) {
+                            val id = session to request.presentationID
+                            mounted[id] = (mounted[id] ?: 0) + 1
+                            lifetime.mounted(session, request.presentationID)
+                            onDispose {
+                                mounted[id] = (mounted[id] ?: 1) - 1
+                                lifetime.disposed(session, request.presentationID)
+                            }
+                        }
+                        Text("Settings or sheet")
+                    })
+                }
+            }
+            settleHost(activity)
+            for (style in listOf("overlay", "sidePane", "bottomSheet")) {
+                wide = style == "sidePane"
+                phone = style == "bottomSheet"
+                panels.present(if (phone) MeetingPanel.layout else MeetingPanel.settings, from = PanelInvoker.more)
+                settleHost(activity)
+                val selected = panels.snapshot
+                val id = selected.session to selected.current!!.presentationID
+                assertTrue("$style mounts its current panel: $mounted ${readout.style}", (mounted[id] ?: 0) > 0)
+                assertTrue(readout.style.startsWith("style=$style"))
+                val pages = stack!!
+                pages.push("inner")
+                PipController.setPictureInPictureUiState(stashed = false, transitioningToPip = true)
+                settleHost(activity)
+                assertTrue("no panel window survives PiP entry: $mounted", mounted.values.all { it == 0 })
+                assertEquals("style=none coverage=none", readout.style)
+                assertEquals(PanelStageCoverage.none, coverage)
+                assertEquals(selected, panels.snapshot)
+                PipController.inPipMode = true
+                PipController.setPictureInPictureUiState(stashed = false, transitioningToPip = false)
+                settleHost(activity)
+                assertTrue(mounted.values.all { it == 0 })
+                assertEquals(selected, panels.snapshot)
+                PipController.inPipMode = false
+                settleHost(activity)
+                assertTrue("returning restores the selected panel", (mounted[id] ?: 0) > 0)
+                assertEquals(selected, panels.snapshot)
+                assertSame(pages, stack)
+                assertEquals("inner", stack!!.top)
+                panels.reset(session = selected.session + 1)
+                settleHost(activity)
+            }
+            assertEquals(1, stageMounts)
+            assertEquals(0, stageDisposals)
+        } finally {
+            PipController.inPipMode = false
+            PipController.setPictureInPictureUiState(stashed = false, transitioningToPip = false)
+            activity.finish()
+        }
+    }
+
     private var hostRuntimeStop: (() -> Unit)? = null
 
     @After fun stopHostRuntime() {

@@ -66,8 +66,8 @@ internal class NativePanelOverlayLifetime(private val coordinator: PanelCoordina
     }
 }
 
-internal fun panelContainerVisible(state: PanelSnapshot): Boolean =
-    state.current != null && !(state.isDismissing && state.pending == null)
+internal fun panelContainerVisible(state: PanelSnapshot, suppressed: Boolean = false): Boolean =
+    !suppressed && state.current != null && !(state.isDismissing && state.pending == null)
 
 internal data class PanelHostDecision(
     val style: PanelHostStyle,
@@ -104,8 +104,8 @@ internal fun PanelHostDecision.underCallRoot(inCallRoot: Boolean): PanelHostDeci
 
 internal data class PanelBarInputs(val overlayVisible: Boolean, val overlayInCall: Boolean)
 
-internal fun panelBarInputs(state: PanelSnapshot, decision: PanelHostDecision?): PanelBarInputs {
-    val overlay = decision != null && decision.style == PanelHostStyle.overlay && panelContainerVisible(state)
+internal fun panelBarInputs(state: PanelSnapshot, decision: PanelHostDecision?, suppressed: Boolean = false): PanelBarInputs {
+    val overlay = decision != null && decision.style == PanelHostStyle.overlay && panelContainerVisible(state, suppressed)
     return PanelBarInputs(overlayVisible = overlay, overlayInCall = overlay && decision?.inCallAppearance == true)
 }
 
@@ -245,11 +245,12 @@ internal fun NativePanelHost(
         val decision = remember(request, window.horizontalRegular, window.verticalRegular, accessibilitySize, inCallRoot) {
             if (request == null) null else panelHostDecision(request, window, isAccessibilitySize = accessibilitySize).underCallRoot(inCallRoot)
         }
-        val visible = panelContainerVisible(state)
+        val suppressed = inCallRoot && PipController.chromeHiddenForPip
+        val visible = panelContainerVisible(state, suppressed)
         val overlay = decision != null && decision.style == PanelHostStyle.overlay && visible
         val sidePane = decision != null && decision.style == PanelHostStyle.sidePane && visible
 
-        val bottomSheet = decision != null && decision.style == PanelHostStyle.bottomSheet && request != null
+        val bottomSheet = !suppressed && decision != null && decision.style == PanelHostStyle.bottomSheet && request != null
         val coverage = if ((overlay || bottomSheet) && decision != null) decision.coverage else PanelStageCoverage.none
         val covered = coverage == PanelStageCoverage.full
         val back = remember(state.session, request?.presentationID) { PanelBackProgress() }
@@ -267,7 +268,7 @@ internal fun NativePanelHost(
                 }
             }
         }
-        systemBars(panelBarInputs(state, decision))
+        systemBars(panelBarInputs(state, decision, suppressed))
         SideEffect { readout.update(decision, overlay || sidePane || bottomSheet) }
         Row(Modifier.fillMaxSize()) {
 
@@ -310,7 +311,6 @@ internal fun NativePanelHost(
             }
         }
         if (bottomSheet && request != null && decision != null) {
-
             key(state.session, request.presentationID) {
                 val session = state.session
                 LayoutSheetHost(
@@ -327,7 +327,7 @@ internal fun NativePanelHost(
         }
         SideEffect { lifetime.acknowledgeAbsent() }
 
-        PredictiveBackHandler(enabled = request != null && !state.isDismissing) { events ->
+        PredictiveBackHandler(enabled = !suppressed && request != null && !state.isDismissing) { events ->
             val action = panelBackAction(pages)
             val progress = if (action == PanelBackAction.PopPage) pages.backProgress else back
             try {
@@ -340,7 +340,8 @@ internal fun NativePanelHost(
         }
 
         val panelVisible = overlay || sidePane || bottomSheet
-        LaunchedEffect(panelVisible) {
+        LaunchedEffect(panelVisible, suppressed) {
+            if (suppressed) return@LaunchedEffect
             val target = focus.tracker.update(panelVisible) ?: return@LaunchedEffect
             requestPanelFocus(PANEL_FOCUS_ATTEMPTS, awaitFrame = { withFrameNanos { } }) { focus.restore(target) }
         }

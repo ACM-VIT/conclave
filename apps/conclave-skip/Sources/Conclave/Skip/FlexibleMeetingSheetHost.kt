@@ -31,7 +31,7 @@ internal fun FlexibleMeetingSheetHost(
 ) {
     val expandedFraction = detentFraction.toFloat().coerceIn(0.25f, 0.95f)
 
-    if (!isPresented) {
+    if (!isPresented || PipController.chromeHiddenForPip) {
         return
     }
 
