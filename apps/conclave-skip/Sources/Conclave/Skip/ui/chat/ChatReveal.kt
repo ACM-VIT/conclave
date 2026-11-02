@@ -23,9 +23,14 @@ import androidx.compose.ui.unit.constrainHeight
 import kotlin.math.roundToInt
 
 internal class ChatTimelineAnchor(private val listState: LazyListState, private val atBottom: State<Boolean>) {
-    fun hold(deltaPx: Float) {
-        if (deltaPx == 0f || atBottom.value) return
-        listState.dispatchRawDelta(deltaPx)
+    fun hold(deltaPx: Float, key: Any?) {
+        if (deltaPx == 0f || atBottom.value || key == null) return
+        val info = listState.layoutInfo
+        val visible = info.visibleItemsInfo
+        val row = visible.firstOrNull { it.key == key } ?: return
+        val center = (info.viewportStartOffset + info.viewportEndOffset) / 2
+        val anchor = visible.minByOrNull { kotlin.math.abs(it.offset + it.size / 2 - center) } ?: return
+        if (row.index <= anchor.index) listState.dispatchRawDelta(deltaPx)
     }
 }
 
@@ -36,7 +41,7 @@ private class ChatRevealMemory(var follows: Boolean)
 private val ChatRevealSpec = tween<Float>(durationMillis = 220, easing = FastOutSlowInEasing)
 
 @Composable
-internal fun ChatAnchoredReveal(present: Boolean, modifier: Modifier = Modifier, onSettled: (Boolean) -> Unit = {},
+internal fun ChatAnchoredReveal(present: Boolean, anchorKey: Any?, modifier: Modifier = Modifier, onSettled: (Boolean) -> Unit = {},
     content: @Composable () -> Unit) {
     val anchor = LocalChatTimelineAnchor.current
     val reduceMotion = rememberReduceMotion()
@@ -55,10 +60,10 @@ internal fun ChatAnchoredReveal(present: Boolean, modifier: Modifier = Modifier,
         var previous = shown.value
         if (reduceMotion) {
             shown.snapTo(target.toFloat())
-            anchor?.hold(target - previous)
+            anchor?.hold(target - previous, anchorKey)
         } else {
             shown.animateTo(target.toFloat(), ChatRevealSpec) {
-                anchor?.hold(value - previous)
+                anchor?.hold(value - previous, anchorKey)
                 previous = value
             }
         }

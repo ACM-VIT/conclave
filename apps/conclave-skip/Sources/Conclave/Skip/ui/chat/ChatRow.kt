@@ -178,7 +178,7 @@ private fun ChatReactionRegion(row: ChatRowModel, actions: ChatRowActions, hapti
     if (present) memory.last = chips
     var retired by remember(row.id) { mutableStateOf(!present) }
     val display = if (present) chips else if (retired) emptyList() else memory.last
-    ChatAnchoredReveal(present, onSettled = { shown -> retired = !shown }) {
+    ChatAnchoredReveal(present, anchorKey = row.id, onSettled = { shown -> retired = !shown }) {
         if (display.isNotEmpty()) {
             ConclaveReactionChipRow(
                 chips = display,

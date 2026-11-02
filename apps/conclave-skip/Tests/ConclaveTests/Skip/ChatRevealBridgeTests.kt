@@ -83,7 +83,7 @@ class ChatRevealBridgeTests {
                                 Column(Modifier.fillMaxWidth().testTag("row-$index")) {
                                     Box(Modifier.fillMaxWidth().height(40.dp).testTag("row-$index.bubble"))
                                     if (index == 8 || index == 0) {
-                                        ChatAnchoredReveal(present = grown) { Box(Modifier.fillMaxWidth().height(48.dp)) }
+                                        ChatAnchoredReveal(present = grown, anchorKey = "row-$index") { Box(Modifier.fillMaxWidth().height(48.dp)) }
                                     }
                                 }
                             }
@@ -114,6 +114,45 @@ class ChatRevealBridgeTests {
         val endAfter = tagged(activity, "row-0").boundsInRoot
         assertEquals("at the end the newest row stays pinned to the bottom", endBefore.bottom, endAfter.bottom, 1.5f)
         assertEquals("and grows upward into view", endBefore.top - 48f * density, endAfter.top, 1.5f)
+    }
+
+    @Test fun theMessageAtTheReadingPointStaysStillWhateverElseGainsReactions() {
+        val activity = activity()
+        var grownRows by mutableStateOf(setOf<Int>())
+        activity.setContent(runtime()) {
+            MaterialTheme {
+                val state = remember { LazyListState(firstVisibleItemIndex = 6, firstVisibleItemScrollOffset = 30) }
+                val atBottom = remember { derivedStateOf { !state.canScrollBackward } }
+                val anchor = remember { ChatTimelineAnchor(state, atBottom) }
+                Box(Modifier.requiredSize(360.dp, 400.dp)) {
+                    CompositionLocalProvider(LocalChatTimelineAnchor provides anchor) {
+                        LazyColumn(state = state, reverseLayout = true, modifier = Modifier.fillMaxSize().testTag("list")) {
+                            items(count = 40, key = { "row-$it" }) { index ->
+                                Column(Modifier.fillMaxWidth().testTag("row-$index")) {
+                                    Box(Modifier.fillMaxWidth().height(40.dp).testTag("row-$index.bubble"))
+                                    ChatAnchoredReveal(present = index in grownRows, anchorKey = "row-$index") {
+                                        Box(Modifier.fillMaxWidth().height(48.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        settle(activity)
+        val visible = (6..16).filter { index -> nodes(activity).any { it.config.getOrNull(SemanticsProperties.TestTag) == "row-$index.bubble" } }
+        val viewportCenter = tagged(activity, "list").boundsInRoot.center.y
+        val center = visible.minByOrNull { kotlin.math.abs(tagged(activity, "row-$it.bubble").boundsInRoot.center.y - viewportCenter) }!!
+        val before = tagged(activity, "row-$center.bubble").boundsInRoot.top
+
+        grownRows = setOf(center + 3)
+        settle(activity)
+        assertEquals("a reaction above the reading point leaves it still", before, tagged(activity, "row-$center.bubble").boundsInRoot.top, 1.5f)
+
+        grownRows = setOf(center + 3, center - 2, center - 3)
+        settle(activity)
+        assertEquals("two reactions below it at once still leave it still", before, tagged(activity, "row-$center.bubble").boundsInRoot.top, 1.5f)
     }
 
     private fun activity(): ComponentActivity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get().also {
