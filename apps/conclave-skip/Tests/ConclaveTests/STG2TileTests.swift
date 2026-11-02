@@ -372,8 +372,8 @@ struct STG2TileTests {
         }
         let landscape = StagePoliciesTests.androidLandscape
         #expect(!SpotlightRailPolicy.isStrip(landscape))
-        #expect(SpotlightRailPolicy.tileWidth(landscape) == 160 && abs(SpotlightRailPolicy.tileHeight(landscape) - 90) < 0.001)
-        #expect(SpotlightRailPolicy.capacity(viewport: landscape) == 1)
+        #expect(SpotlightRailPolicy.tileWidth(landscape) == 128 && abs(SpotlightRailPolicy.tileHeight(landscape) - 72) < 0.001)
+        #expect(SpotlightRailPolicy.capacity(viewport: landscape) == 2)
         #expect(SpotlightRailPolicy.tileWidth(StagePoliciesTests.ipadPortrait) == 200)
         #expect(abs(SpotlightRailPolicy.tileHeight(StagePoliciesTests.ipadPortrait) - 112.5) < 0.001)
         #expect(SpotlightRailPolicy.capacity(viewport: StagePoliciesTests.ipadPortrait) == 8)

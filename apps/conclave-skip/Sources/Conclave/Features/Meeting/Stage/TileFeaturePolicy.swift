@@ -336,6 +336,7 @@ enum SpotlightRailPolicy {
     static let stripTileWidth = 80.0
     static let stripTileHeight = 107.0
     static let columnTileWidth = 160.0
+    static let compactHeightColumnTileWidth = 128.0
     static let largeColumnTileWidth = 200.0
     static let columnAspect = 16.0 / 9.0
 
@@ -350,7 +351,8 @@ enum SpotlightRailPolicy {
 
     static func tileWidth(_ viewport: StageViewport) -> Double {
         if isStrip(viewport) { return filledStripTileWidth(viewport) }
-        return usesLargeColumn(viewport) ? largeColumnTileWidth : columnTileWidth
+        if usesLargeColumn(viewport) { return largeColumnTileWidth }
+        return StageLayoutPolicy.isCompactHeight(viewport) ? compactHeightColumnTileWidth : columnTileWidth
     }
 
     static func filledStripTileWidth(_ viewport: StageViewport) -> Double {
