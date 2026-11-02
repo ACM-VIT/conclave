@@ -244,7 +244,8 @@ export class GameSession {
       pendingJoiners: this.pendingJoiners.slice(),
       canJoinLate:
         !this.finished &&
-        lateJoinPhases.length > 0 &&
+        (this.module.getPhase(this.state) === "lobby" ||
+          lateJoinPhases.length > 0) &&
         this.players.length + this.pendingJoiners.length <
           this.module.maxPlayers,
     };

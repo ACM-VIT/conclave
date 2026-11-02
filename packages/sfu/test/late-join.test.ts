@@ -72,6 +72,42 @@ describe("lobby seats", () => {
     expect(session.applyMove("host", "start", undefined).ok).toBe(true);
   });
 
+  it("advertises the lobby seat for games without mid-game join", () => {
+    const session = lobbySession(imposterModule);
+    expect(session.getPublicState(0).canJoinLate).toBe(true);
+    expect(session.applyMove("host", "start", undefined).ok).toBe(false);
+  });
+
+  it("draws imposter roles from the final lobby roster at start", () => {
+    let joinerWasImposter = false;
+    let joinerStarted = false;
+    for (let seed = 1; seed <= 60 && !(joinerWasImposter && joinerStarted); seed += 1) {
+      const session = new GameSession({
+        module: imposterModule,
+        players: [
+          { id: "host", name: "Host" },
+          { id: "p2", name: "P2" },
+          { id: "p3", name: "P3" },
+        ],
+        adminIds: ["host"],
+        hostId: "host",
+        config: {},
+        seed,
+      });
+      expect(session.requestSeat({ id: "late", name: "Late" })).toEqual({ ok: true });
+      const lobbyRoles = ["host", "p2", "p3", "late"].map(
+        (id) => (session.getPlayerView(id, 0) as { role: string }).role,
+      );
+      expect(lobbyRoles).toEqual(["crew", "crew", "crew", "crew"]);
+      expect(session.applyMove("host", "start", undefined).ok).toBe(true);
+      if ((session.getPlayerView("late", 0) as { role: string }).role === "imposter") joinerWasImposter = true;
+      const view = session.getPublicState(0).view as { starterName?: string | null };
+      if (view.starterName === "Late") joinerStarted = true;
+    }
+    expect(joinerWasImposter).toBe(true);
+    expect(joinerStarted).toBe(true);
+  });
+
   it("still refuses a lobby seat once the game is full", () => {
     const full: GamePlayer[] = Array.from({ length: imposterModule.maxPlayers }, (_, index) => ({
       id: index === 0 ? "host" : `p${index}`,
