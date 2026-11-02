@@ -55,6 +55,7 @@ private enum MeetingViewPreferences {
 }
 
 enum PendingPreAckRosterEvent {
+    case activeSpeakerChanged(ActiveSpeakerChangedNotification)
     case userJoined(UserJoinedNotification)
     case userLeft(UserLeftNotification)
     case webinarParticipantJoined(WebinarParticipantJoinedNotification)
@@ -65,6 +66,8 @@ enum PendingPreAckRosterEvent {
 
     var roomId: String? {
         switch self {
+        case .activeSpeakerChanged(let notification):
+            return notification.roomId
         case .userJoined(let notification):
             return notification.roomId
         case .userLeft(let notification):
@@ -775,6 +778,8 @@ final class MeetingViewModel {
     private let maxPendingPreAckRosterEvents = 128
 
     private var activeSpeakerTask: Task<Void, Never>?
+    private(set) var usesServerActiveSpeaker = false
+    private var serverActiveSpeakerUserId: String?
     private var lastActiveSpeakerId: String?
     private var lastActiveSpeakerAt: Date?
     #if SKIP
@@ -945,7 +950,7 @@ final class MeetingViewModel {
                 return normalizedParticipantUserId(notification.userId).map(state.isRemoteParticipantUserId) ?? false
             case .participantCameraOff(let notification):
                 return normalizedParticipantUserId(notification.userId).map(state.isRemoteParticipantUserId) ?? false
-            case .userLeft:
+            case .userLeft, .activeSpeakerChanged:
                 return false
             }
         }) {
@@ -1808,6 +1813,19 @@ final class MeetingViewModel {
                 }
                 self.syncLastJoinContextHostIntent()
                 self.state.waitingMessage = nil
+            }
+        }
+
+        socketManager.onActiveSpeakerChanged = { [weak self] notification in
+            guard let self = self else { return }
+            let eventContext = self.currentSocketEventContext()
+            Task { @MainActor in
+                guard self.isCurrentSocketEvent(eventContext, roomId: notification.roomId) else { return }
+                if self.shouldBufferRoomSnapshotDuringJoin {
+                    self.appendPendingPreAckRosterEvent(.activeSpeakerChanged(notification))
+                    return
+                }
+                self.applyServerActiveSpeaker(notification)
             }
         }
 
@@ -3191,6 +3209,7 @@ final class MeetingViewModel {
         resetLiveRoomSnapshotStateForJoin(preservingVisibleState: isRecoveryJoin)
         applyJoinSnapshot(response)
         registerExistingProducerState(response.existingProducers, context: currentSocketEventContext())
+        if usesServerActiveSpeaker { updateActiveSpeaker() }
         await replayPendingPreAckRoomEvents(includeDeferredRoomState: false)
 
         webRTCJoinAttemptId = joinAttemptId
@@ -3776,6 +3795,8 @@ final class MeetingViewModel {
         for event in rosterEvents {
             guard isCurrentSocketEvent(replayContext, roomId: event.roomId) else { continue }
             switch event {
+            case .activeSpeakerChanged(let notification):
+                applyServerActiveSpeaker(notification)
             case .userJoined(let notification):
                 applyUserJoinedNotification(notification)
             case .userLeft(let notification):
@@ -4918,6 +4939,12 @@ final class MeetingViewModel {
            !roomId.isEmpty {
             currentRoomAliases = roomAliasSet(requestedRoomId: state.roomId, resolvedRoomId: roomId)
             state.roomId = roomId
+        }
+        if response.hasActiveSpeakerInfo {
+            applyServerActiveSpeaker(ActiveSpeakerChangedNotification(
+                roomId: response.roomId,
+                userId: response.activeSpeakerId
+            ))
         }
         state.isRoomLocked = response.isLocked ?? false
         state.isChatLocked = response.isChatLocked ?? false
@@ -6580,6 +6607,7 @@ final class MeetingViewModel {
             || previousConnectionState == .reconnecting
             || previousConnectionState == .joined
             || previousConnectionState == .joining
+        stopActiveSpeakerPoll()
         activeJoinAttemptId = joinAttemptId
         releaseLocalToggleGuards()
         endShellRefreshBatch()
@@ -7443,6 +7471,9 @@ final class MeetingViewModel {
     func stopActiveSpeakerPoll() {
         activeSpeakerTask?.cancel()
         activeSpeakerTask = nil
+        usesServerActiveSpeaker = false
+        serverActiveSpeakerUserId = nil
+        state.activeSpeakerId = nil
         lastActiveSpeakerId = nil
         lastActiveSpeakerAt = nil
         #if SKIP
@@ -7453,10 +7484,40 @@ final class MeetingViewModel {
         #endif
     }
 
-    private func updateActiveSpeaker() {
-        let levels = webRTCClient.sampleAudioLevels(localUserId: state.userId)
+    func applyServerActiveSpeaker(_ notification: ActiveSpeakerChangedNotification, now: Date = Date()) {
+        guard isCurrentRoomEvent(notification.roomId) else { return }
+        if !usesServerActiveSpeaker {
+            lastActiveSpeakerId = nil
+            lastActiveSpeakerAt = nil
+        }
+        usesServerActiveSpeaker = true
+        let userId = normalizedParticipantUserId(notification.userId)
+        if let userId, shouldIgnoreDepartedParticipant(userId)
+            || (state.isLocalIdentityUserId(userId) && state.isMuted) {
+            serverActiveSpeakerUserId = nil
+        } else {
+            serverActiveSpeakerUserId = userId
+        }
+        updateActiveSpeaker(now: now)
+    }
+
+    func updateActiveSpeaker(now: Date = Date()) {
+        let levels = usesServerActiveSpeaker ? [:] :
+            webRTCClient.sampleAudioLevels(localUserId: state.userId)
 
         var loudestId: String?
+        if usesServerActiveSpeaker, let userId = serverActiveSpeakerUserId,
+           !shouldIgnoreDepartedParticipant(userId) {
+            if state.isLocalIdentityUserId(userId) {
+                if state.isMuted {
+                    serverActiveSpeakerUserId = nil
+                } else {
+                    loudestId = state.userId
+                }
+            } else if let participant = state.participant(for: userId), !participant.isLeaving {
+                loudestId = participant.id
+            }
+        }
         var maxLevel = activeSpeakerThreshold
         for (userId, level) in levels {
             let candidateId: String
@@ -7464,7 +7525,9 @@ final class MeetingViewModel {
                 guard !state.isMuted else { continue }
                 candidateId = state.userId
             } else {
-                guard let participant = state.participant(for: userId), !participant.isMuted else {
+                guard let participant = state.participant(for: userId),
+                      !participant.isMuted, !participant.isLeaving,
+                      !shouldIgnoreDepartedParticipant(userId) else {
                     continue
                 }
                 candidateId = participant.id
@@ -7474,8 +7537,6 @@ final class MeetingViewModel {
                 loudestId = candidateId
             }
         }
-
-        let now = Date()
 
         if let loudestId = loudestId {
             lastActiveSpeakerId = loudestId
@@ -7522,6 +7583,10 @@ final class MeetingViewModel {
     }
 
     private func clearHeldActiveSpeakerIfNeeded(_ userId: String) {
+        if let serverActiveSpeakerUserId,
+           isSameActiveSpeakerIdentity(serverActiveSpeakerUserId, userId) {
+            self.serverActiveSpeakerUserId = nil
+        }
         if let activeSpeakerId = state.activeSpeakerId,
            isSameActiveSpeakerIdentity(activeSpeakerId, userId) {
             state.activeSpeakerId = nil
@@ -7541,7 +7606,8 @@ final class MeetingViewModel {
               let participant = state.participant(for: userId) else {
             return false
         }
-        return !participant.isMuted
+        return !participant.isLeaving && !shouldIgnoreDepartedParticipant(userId)
+            && (usesServerActiveSpeaker || !participant.isMuted)
     }
 
     func startProducing(joinAttemptId: UUID? = nil) async -> Bool {

@@ -739,6 +739,8 @@ struct JoinRoomResponse: Codable {
     let rtpCapabilities: RtpCapabilities
     let existingProducers: [ProducerInfo]
     let status: String?
+    let activeSpeakerId: String?
+    let hasActiveSpeakerInfo: Bool
 
     let roomId: String?
     let hostUserId: String?
@@ -764,6 +766,7 @@ struct JoinRoomResponse: Codable {
         case rtpCapabilities
         case existingProducers
         case status
+        case activeSpeakerId
         case roomId
         case hostUserId
         case hostUserIds
@@ -788,6 +791,8 @@ struct JoinRoomResponse: Codable {
         rtpCapabilities: RtpCapabilities,
         existingProducers: [ProducerInfo],
         status: String? = nil,
+        activeSpeakerId: String? = nil,
+        hasActiveSpeakerInfo: Bool = false,
         roomId: String? = nil,
         hostUserId: String? = nil,
         hostUserIds: [String]? = nil,
@@ -810,6 +815,8 @@ struct JoinRoomResponse: Codable {
         self.rtpCapabilities = rtpCapabilities
         self.existingProducers = existingProducers
         self.status = status
+        self.activeSpeakerId = activeSpeakerId
+        self.hasActiveSpeakerInfo = hasActiveSpeakerInfo || activeSpeakerId != nil
         self.roomId = roomId
         self.hostUserId = hostUserId
         self.hostUserIds = hostUserIds
@@ -842,6 +849,8 @@ struct JoinRoomResponse: Codable {
         }
         self.existingProducers = try container.decodeIfPresent([ProducerInfo].self, forKey: .existingProducers) ?? []
         self.status = status
+        self.activeSpeakerId = try container.decodeIfPresent(String.self, forKey: .activeSpeakerId)
+        self.hasActiveSpeakerInfo = container.contains(.activeSpeakerId)
         self.roomId = try container.decodeIfPresent(String.self, forKey: .roomId)
         self.hostUserId = try container.decodeIfPresent(String.self, forKey: .hostUserId)
         self.hostUserIds = try container.decodeIfPresent([String].self, forKey: .hostUserIds)
@@ -2077,6 +2086,11 @@ struct RedirectNotification: Codable {
 struct HostAssignedNotification: Codable {
     let roomId: String?
     let hostUserId: String?
+}
+
+struct ActiveSpeakerChangedNotification: Codable {
+    let roomId: String?
+    let userId: String?
 }
 
 struct HostChangedNotification: Codable {

@@ -197,6 +197,7 @@ export const SFU_EVENTS = {
 
     // Host / role
     hostAssigned: "hostAssigned",
+    activeSpeakerChanged: "activeSpeakerChanged",
     hostChanged: "hostChanged",
 
     // Room policy state

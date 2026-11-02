@@ -272,7 +272,13 @@ final class WebRTCClient {
         return remoteVideoTracks[normalized]
     }
 
-    func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] { [:] }
+    var testAudioLevels: [String: Double] = [:]
+    private(set) var testAudioLevelSampleCount = 0
+
+    func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] {
+        testAudioLevelSampleCount += 1
+        return testAudioLevels
+    }
 
     func availableAudioInputs() -> [AudioDevice] { [] }
     func availableAudioOutputs() -> [AudioDevice] { [] }

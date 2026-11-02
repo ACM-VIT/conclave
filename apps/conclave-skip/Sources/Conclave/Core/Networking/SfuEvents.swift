@@ -151,6 +151,7 @@ enum SfuServerEvent: String {
     case displayNameUpdated = "displayNameUpdated"
     case displayNameSnapshot = "displayNameSnapshot"
     case hostAssigned = "hostAssigned"
+    case activeSpeakerChanged = "activeSpeakerChanged"
     case hostChanged = "hostChanged"
     case roomLockChanged = "roomLockChanged"
     case chatLockChanged = "chatLockChanged"

@@ -17,6 +17,7 @@ final class SocketIOManager {
     var onJoinApproved: ((JoinDecisionNotification) -> Void)?
     var onJoinRejected: ((JoinDecisionNotification) -> Void)?
     var onHostAssigned: ((HostAssignedNotification) -> Void)?
+    var onActiveSpeakerChanged: ((ActiveSpeakerChangedNotification) -> Void)?
     var onHostChanged: ((HostChangedNotification) -> Void)?
     var onAdminUsersChanged: ((AdminUsersChangedNotification) -> Void)?
     var onKicked: ((KickedNotification) -> Void)?
