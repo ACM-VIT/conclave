@@ -303,7 +303,7 @@ struct STG2TileTests {
         #expect(stage.announcementLog.count == count)
     }
 
-    @Test func spotlightPinned9ShowsThreeTilesPlusFiveWithYouLast() throws {
+    @Test func spotlightPinned9ShowsThreeRemotesPlusFourWithoutCameraOffSelf() throws {
 
         let inputs = StageFixtureScript.copy(StageFixtureScript.base(count: 9), pinnedUserId: StageFixtureScript.remoteId(0))
         for viewport in [StagePoliciesTests.iphoneSE, StagePoliciesTests.iphone17e, StagePoliciesTests.android360] {
@@ -313,9 +313,9 @@ struct STG2TileTests {
             let first = try #require(stage.layout.slots.first)
             #expect(first.id == "p:r1" && first.role == .spotlightMain)
             let rail = stage.layout.slots.dropFirst()
-            #expect(personIds(Array(rail)) == ["r2", "r3", StageFixtureScript.localUserId], "\(viewport.width)")
+            #expect(personIds(Array(rail)) == ["r2", "r3", "r4"], "\(viewport.width)")
             #expect(rail.last?.id == StageSlot.overflowId)
-            #expect(stage.layout.overflowCount == 5)
+            #expect(stage.layout.overflowCount == 4)
 
             let frames = stage.currentFrames().filter { frame in rail.contains { $0.id == frame.slotId } }
             let width = SpotlightRailPolicy.tileWidth(viewport)

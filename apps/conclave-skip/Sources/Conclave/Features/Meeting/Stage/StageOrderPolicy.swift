@@ -6,10 +6,10 @@ struct StageSlotPlanInputs: Equatable {
     let capacity: StageCapacity
     let localUserId: String
 
-    let remoteOrder: [String]
+    var remoteOrder: [String]
     let participants: [StageParticipantInput]
     let pinnedUserId: String
-    let featuredUserId: String
+    var featuredUserId: String
     let presenterUserId: String
     let selfViewMode: String
     let webinarSpeakerUserId: String
@@ -17,6 +17,7 @@ struct StageSlotPlanInputs: Equatable {
     let fitOverrides: [String: String]
     var viewMode: String = ""
     var hasActivitySurface: Bool = false
+    var retainedMainUserId: String = ""
 }
 
 struct StageRailPlan: Equatable {
@@ -34,7 +35,7 @@ struct StageSlotPlan: Equatable {
 enum StageOrderPolicy {
     static let promotionDelayMillis = 1200.0
     static let swapIntervalMillis = 8000.0
-    static let minimumParticipantsForSwap = 4
+    static let recentSpeakerMillis = 30_000.0
 
     static let neverSwappedMillis = -1_000_000_000_000.0
 
@@ -68,6 +69,28 @@ enum StageOrderPolicy {
         return result
     }
 
+    static func priorityTier(_ userId: String, participants: [StageParticipantInput], lastSpokeAt: [String: Double],
+                             protected: [String], speakerUserId: String, nowMillis: Double) -> Int {
+        if protected.contains(userId) { return 0 }
+        if userId == speakerUserId && !userId.isEmpty { return 1 }
+        if let spoke = lastSpokeAt[userId], nowMillis - spoke < recentSpeakerMillis { return 2 }
+        let row = participant(userId, in: participants)
+        if row?.isHandRaised == true { return 3 }
+        return row?.isCameraOff == false ? 4 : 5
+    }
+
+    static func priorityOrder(_ order: [String], participants: [StageParticipantInput], lastSpokeAt: [String: Double] = [:],
+                              protected: [String] = [], speakerUserId: String = "", nowMillis: Double = 0.0) -> [String] {
+        var result: [String] = []
+        for tier in 0...5 {
+            for id in order {
+                if priorityTier(id, participants: participants, lastSpokeAt: lastSpokeAt, protected: protected,
+                                speakerUserId: speakerUserId, nowMillis: nowMillis) == tier { result.append(id) }
+            }
+        }
+        return result
+    }
+
     static func swapped(_ order: [String], promote: String, demote: String) -> [String] {
         var result = order
         var promoteIndex = -1
@@ -92,7 +115,7 @@ enum StageOrderPolicy {
             let row = participant(id, in: participants)
             let cameraOff = row?.isCameraOff ?? true
             let sharing = row?.isScreenSharing ?? false
-            if !cameraOff || sharing || id == featuredUserId || id == pinnedUserId { result.append(id) }
+            if !cameraOff || sharing || row?.isHandRaised == true || id == featuredUserId || id == pinnedUserId { result.append(id) }
         }
         if result.isEmpty, let first = order.first {
             result.append(first)
@@ -134,6 +157,7 @@ enum StageOrderPolicy {
     static func plan(_ inputs: StageSlotPlanInputs) -> StageSlotPlan {
         let local = participant(inputs.localUserId, in: inputs.participants)
         let hasLocal = local != nil && !(local?.isLeaving ?? true)
+        let localCameraOff = local?.isCameraOff ?? true
         let localRole: StageSlotRole? = hasLocal ? StageOrderPolicy.resolvedSelfRole(inputs) : nil
         var slots: [StageSlot] = []
         var overflowCount = 0
@@ -154,10 +178,12 @@ enum StageOrderPolicy {
             var tiles: [String] = inputs.remoteOrder
             if hasLocal && localRole == nil { tiles.append(inputs.localUserId) }
             let cap = max(2, inputs.capacity.gridSlots)
+            let omitLocal = localCameraOff && inputs.capacity.gridSlots > 0 && tiles.count > cap
+            if omitLocal { tiles.removeAll { $0 == inputs.localUserId } }
             var shown: [String] = tiles
             if tiles.count > cap {
 
-                let localIsTile = hasLocal && localRole == nil
+                let localIsTile = hasLocal && localRole == nil && !omitLocal
                 let remoteRoom = cap - 1 - (localIsTile ? 1 : 0)
                 shown = []
                 var index = 0
@@ -179,11 +205,13 @@ enum StageOrderPolicy {
                 slots.append(StageSlot(id: StageSlot.overflowId, role: StageSlotRole.overflow, userId: "", fit: StageVideoFit.fill))
             }
         case .spotlight, .sidebar:
-            let main = TileFeaturePolicy.spotlightMainUserId(pinnedUserId: inputs.pinnedUserId,
+            let proposedMain = TileFeaturePolicy.spotlightMainUserId(pinnedUserId: inputs.pinnedUserId,
                                                              featuredUserId: inputs.featuredUserId,
                                                              remoteOrder: inputs.remoteOrder,
                                                              participants: inputs.participants,
                                                              localUserId: inputs.localUserId)
+            let main = inputs.pinnedUserId.isEmpty && inputs.remoteOrder.contains(inputs.retainedMainUserId)
+                ? inputs.retainedMainUserId : proposedMain
             slots.append(person(main, role: StageSlotRole.spotlightMain, inputs: inputs))
             var rail: [StageSlot] = []
             if !inputs.presenterUserId.isEmpty {
@@ -196,7 +224,7 @@ enum StageOrderPolicy {
             if hasLocal && localRole == nil && main != inputs.localUserId {
                 rail.append(person(inputs.localUserId, role: StageSlotRole.rail, inputs: inputs))
             }
-            let railResult = railSlots(rail, localUserId: inputs.localUserId, capacity: inputs.capacity.railSlots)
+            let railResult = railSlots(rail, localUserId: inputs.localUserId, capacity: inputs.capacity.railSlots, omitLocalWhenOverflow: localCameraOff)
             for slot in railResult.slots {
                 slots.append(slot)
             }
@@ -221,7 +249,7 @@ enum StageOrderPolicy {
             if hasLocal && localRole == nil {
                 rail.append(person(inputs.localUserId, role: StageSlotRole.rail, inputs: inputs))
             }
-            let railResult = railSlots(rail, localUserId: inputs.localUserId, capacity: inputs.capacity.railSlots)
+            let railResult = railSlots(rail, localUserId: inputs.localUserId, capacity: inputs.capacity.railSlots, omitLocalWhenOverflow: localCameraOff)
             for slot in railResult.slots {
                 slots.append(slot)
             }
@@ -238,7 +266,7 @@ enum StageOrderPolicy {
             if hasLocal {
                 rail.append(person(inputs.localUserId, role: StageSlotRole.rail, inputs: inputs))
             }
-            let railResult = railSlots(rail, localUserId: inputs.localUserId, capacity: inputs.capacity.railSlots)
+            let railResult = railSlots(rail, localUserId: inputs.localUserId, capacity: inputs.capacity.railSlots, omitLocalWhenOverflow: localCameraOff)
             for slot in railResult.slots {
                 slots.append(slot)
             }
@@ -267,19 +295,23 @@ enum StageOrderPolicy {
         return StageSlotPlan(slots: slots, overflowCount: overflowCount, overflowSeeds: seeds)
     }
 
-    static func railSlots(_ rail: [StageSlot], localUserId: String, capacity: Int) -> StageRailPlan {
+    static func railSlots(_ rail: [StageSlot], localUserId: String, capacity: Int,
+                          omitLocalWhenOverflow: Bool = false) -> StageRailPlan {
+        let omitLocal = omitLocalWhenOverflow && capacity > 0 && rail.count > max(2, capacity)
+        let effectiveRail = rail.filter { !(omitLocal && $0.userId == localUserId && $0.id.hasPrefix("p:")) }
         var localSlot: StageSlot? = nil
         var others: [StageSlot] = []
-        for slot in rail {
+        for slot in effectiveRail {
             if slot.userId == localUserId && slot.id.hasPrefix("p:") {
                 localSlot = slot
             } else {
                 others.append(slot)
             }
         }
-        let cap = max(localSlot == nil ? 1 : 2, capacity)
-        if rail.count <= cap {
-            return StageRailPlan(slots: rail, hidden: [], overflowCount: 0)
+        let hasLocalSlot = rail.contains { $0.userId == localUserId && $0.id.hasPrefix("p:") }
+        let cap = max(hasLocalSlot ? 2 : 1, capacity)
+        if effectiveRail.count <= cap {
+            return StageRailPlan(slots: effectiveRail, hidden: [], overflowCount: 0)
         }
         let room = cap - 1 - (localSlot == nil ? 0 : 1)
         var shown: [StageSlot] = []
@@ -343,14 +375,14 @@ enum StageOrderPolicy {
     static func replan(_ inputs: StageInputs, kind: StageKind, capacity: StageCapacity, isCompactPortrait: Bool,
                        featuredUserId: String, speakerUserId: String) -> StageSlotPlan {
         let present = inputs.presentParticipants
-        let order = reconcile(previous: [], participants: present)
+        let order = joinOrder(present)
         var featured = featuredUserId
         if featured.isEmpty || !order.contains(featured) {
             featured = defaultFeatured(remoteOrder: order, presenterUserId: inputs.screenShareUserId, localUserId: inputs.localUserId)
         }
         let filtered = applyHideFilter(order, participants: present, hideTilesWithoutVideo: inputs.hideTilesWithoutVideo,
                                        featuredUserId: speakerUserId, pinnedUserId: inputs.pinnedUserId)
-        return plan(StageSlotPlanInputs(
+        var plannedInputs = StageSlotPlanInputs(
             kind: kind,
             isCompactPortrait: isCompactPortrait,
             capacity: capacity,
@@ -365,7 +397,16 @@ enum StageOrderPolicy {
             fitOverrides: [:],
             viewMode: inputs.viewMode,
             hasActivitySurface: !inputs.activeAppId.isEmpty || inputs.isBrowserActive
-        ))
+        )
+        let initial = plan(plannedInputs)
+        if initial.overflowCount == 0 { return initial }
+        plannedInputs.remoteOrder = priorityOrder(filtered, participants: present,
+            protected: [inputs.pinnedUserId, inputs.screenShareUserId], speakerUserId: speakerUserId)
+        if featuredUserId.isEmpty {
+            plannedInputs.featuredUserId = defaultFeatured(remoteOrder: plannedInputs.remoteOrder,
+                presenterUserId: inputs.screenShareUserId, localUserId: inputs.localUserId)
+        }
+        return plan(plannedInputs)
     }
 
     static func consumerFallbackRemoteIds(layout: StageLayoutSnapshot, inputs: StageInputs, speakerUserId: String) -> [String] {
@@ -379,16 +420,20 @@ enum StageOrderPolicy {
     }
 
     static func swapTarget(visibleRemoteIds: [String], lastSpokeAt: [String: Double], participants: [StageParticipantInput],
-                           protected: [String]) -> String? {
+                           protected: [String], speakerUserId: String = "", nowMillis: Double = 0.0) -> String? {
         var best: String? = nil
+        var bestTier = -1
         var bestSpoke = 1.0e300
         var bestSerial = -1
         for id in visibleRemoteIds {
-            if protected.contains(id) { continue }
-            let spoke = lastSpokeAt[id] ?? -1.0
+            if protected.contains(id) || id == speakerUserId { continue }
+            let tier = priorityTier(id, participants: participants, lastSpokeAt: lastSpokeAt, protected: protected,
+                                    speakerUserId: speakerUserId, nowMillis: nowMillis)
+            let spoke = lastSpokeAt[id] ?? neverSwappedMillis
             let serial = participant(id, in: participants)?.joinSerial ?? 0
-            if spoke < bestSpoke || (spoke == bestSpoke && serial > bestSerial) {
+            if tier > bestTier || (tier == bestTier && (spoke < bestSpoke || (spoke == bestSpoke && serial > bestSerial))) {
                 best = id
+                bestTier = tier
                 bestSpoke = spoke
                 bestSerial = serial
             }
@@ -396,13 +441,35 @@ enum StageOrderPolicy {
         return best
     }
 
-    static func promotionDelay(nowMillis: Double, speakerSinceMillis: Double, lastSwapMillis: Double) -> Double {
-        let hold = speakerSinceMillis + promotionDelayMillis - nowMillis
+    static func promotionCandidate(order: [String], visibleRemoteIds: [String], participants: [StageParticipantInput],
+                                   lastSpokeAt: [String: Double], protected: [String], speakerUserId: String,
+                                   nowMillis: Double) -> String {
+        guard let target = swapTarget(visibleRemoteIds: visibleRemoteIds, lastSpokeAt: lastSpokeAt,
+                                      participants: participants, protected: protected, speakerUserId: speakerUserId,
+                                      nowMillis: nowMillis) else { return "" }
+        let targetTier = priorityTier(target, participants: participants, lastSpokeAt: lastSpokeAt, protected: protected,
+                                      speakerUserId: speakerUserId, nowMillis: nowMillis)
+        let ordered = priorityOrder(order, participants: participants, lastSpokeAt: lastSpokeAt, protected: protected,
+                                    speakerUserId: speakerUserId, nowMillis: nowMillis)
+        for id in ordered {
+            if visibleRemoteIds.contains(id) { continue }
+            let tier = priorityTier(id, participants: participants, lastSpokeAt: lastSpokeAt, protected: protected,
+                                    speakerUserId: speakerUserId, nowMillis: nowMillis)
+            if tier < targetTier { return id }
+        }
+        return ""
+    }
+
+    static func promotionDelay(nowMillis: Double, speakerSinceMillis: Double, lastSwapMillis: Double,
+                               bypassHold: Bool = false) -> Double {
+        let hold = bypassHold ? 0.0 : speakerSinceMillis + promotionDelayMillis - nowMillis
         let interval = lastSwapMillis + swapIntervalMillis - nowMillis
         return max(0.0, max(hold, interval))
     }
 
-    static func mayPromote(nowMillis: Double, speakerSinceMillis: Double, lastSwapMillis: Double) -> Bool {
-        nowMillis - speakerSinceMillis >= promotionDelayMillis - 0.5 && nowMillis - lastSwapMillis >= swapIntervalMillis - 0.5
+    static func mayPromote(nowMillis: Double, speakerSinceMillis: Double, lastSwapMillis: Double,
+                           bypassHold: Bool = false) -> Bool {
+        promotionDelay(nowMillis: nowMillis, speakerSinceMillis: speakerSinceMillis,
+                       lastSwapMillis: lastSwapMillis, bypassHold: bypassHold) <= 0.5
     }
 }

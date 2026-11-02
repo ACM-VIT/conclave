@@ -8215,7 +8215,7 @@ final class ConclaveTests: XCTestCase {
             participants.append(StageParticipantInput.make(userId: "remote-\(index)", joinSerial: index + 1))
         }
         let everyone = ["remote-1", "remote-2", "remote-3", "remote-4", "remote-5", "remote-6", "remote-7", "remote-8", "remote-9"]
-        let firstFour = ["remote-1", "remote-2", "remote-3", "remote-4"]
+        let firstFive = ["remote-1", "remote-2", "remote-3", "remote-4", "remote-5"]
         let inputs = StageInputs.make(callSession: 1, isInCall: true, localUserId: "local", participants: participants,
                                       selfViewMode: "tile")
 
@@ -8232,7 +8232,7 @@ final class ConclaveTests: XCTestCase {
                                       viewMaxTiles: 6, selfViewMode: "tile"))
         XCTAssertEqual(capped.layout.capacity, StageCapacity.zero)
         XCTAssertEqual(StageOrderPolicy.consumerFallbackRemoteIds(layout: capped.layout, inputs: capped.inputs,
-                                                                  speakerUserId: capped.speakerUserId), firstFour)
+                                                                  speakerUserId: capped.speakerUserId), firstFive)
 
         let measured = StagePresenter(shell: MeetingShellPresenter())
         measured.setViewport(StageViewport(width: 375.0, height: 667.0, insetTop: 76.0, insetBottom: 64.0, insetLeading: 0.0,
@@ -8243,9 +8243,9 @@ final class ConclaveTests: XCTestCase {
                                                              speakerUserId: measured.speakerUserId)
 
         XCTAssertEqual(measured.layout.capacity, StageCapacity(gridSlots: 6, railSlots: 0))
-        XCTAssertEqual(ids, firstFour)
+        XCTAssertEqual(ids, firstFive)
         XCTAssertEqual(ids, StageOrderPolicy.visibleRemoteIds(measured.layout.slots, localUserId: "local"))
-        XCTAssertEqual(measured.layout.overflowCount, 5)
+        XCTAssertEqual(measured.layout.overflowCount, 4)
         XCTAssertFalse(ids.contains("local"))
     }
 
