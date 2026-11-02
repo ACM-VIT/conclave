@@ -11,6 +11,8 @@ enum LifecycleRefreshKind: String, CaseIterable, Equatable {
 
 enum LifecycleRefreshPolicy {
 
+    static let videoStartKeyFrameRetryMillis: [Int] = [700, 2000, 5000]
+
     static func depth(_ phase: ConclaveAppLifecyclePhase) -> Int {
         switch phase {
         case .active: return 0

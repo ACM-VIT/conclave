@@ -2012,6 +2012,8 @@ final class MeetingViewModel {
                     return
                 }
                 await self.consumeRemoteProducer(producer, context: eventContext)
+                guard producer.kind == "video" else { return }
+                await self.retryVideoKeyFrames(producerIds: [producer.producerId], context: eventContext)
             }
         }
 
@@ -6452,6 +6454,7 @@ final class MeetingViewModel {
                 producer.type == type.rawValue
         }
         var consumersToResume: [(consumerId: String, requestKeyFrame: Bool)] = []
+        var resumedProducerIds: [String] = []
 
         for producer in matchingProducers {
             let wasPaused = producer.paused
@@ -6469,9 +6472,11 @@ final class MeetingViewModel {
                   !(state.isAudioOnlyMode && kind == "video"),
                   let consumerId = webRTCClient.consumerId(forProducer: producer.producerId) else { continue }
             consumersToResume.append((consumerId: consumerId, requestKeyFrame: kind == "video"))
+            resumedProducerIds.append(producer.producerId)
         }
 
         guard !consumersToResume.isEmpty else { return }
+        let resumedIds = resumedProducerIds
         Task { @MainActor [weak self] in
             guard let self,
                   self.isCurrentSocketEvent(context) else { return }
@@ -6487,6 +6492,23 @@ final class MeetingViewModel {
                     debugLog("[Meeting] Failed to resume unpaused consumer \(consumerId): \(error)")
                 }
             }
+            guard kind == "video" else { return }
+            await self.retryVideoKeyFrames(producerIds: resumedIds, context: context)
+        }
+    }
+
+    private func retryVideoKeyFrames(producerIds: [String], context: SocketEventContext) async {
+        var elapsed = 0
+        for target in LifecycleRefreshPolicy.videoStartKeyFrameRetryMillis {
+            try? await Task.sleep(nanoseconds: UInt64((target - elapsed) * 1_000_000))
+            elapsed = target
+            guard !Task.isCancelled, isCurrentSocketEvent(context) else { return }
+            var live: [String] = []
+            for producerId in producerIds {
+                if let info = producerInfosById[producerId], info.paused != true { live.append(producerId) }
+            }
+            if live.isEmpty { return }
+            await requestRemoteVideoKeyFrames(producerIds: live, context: context)
         }
     }
 
