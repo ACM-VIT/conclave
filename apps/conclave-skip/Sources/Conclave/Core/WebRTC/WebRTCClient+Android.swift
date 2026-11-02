@@ -124,6 +124,7 @@ final class WebRTCClient {
 
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
+    func localVideoStageKey() -> String { fatalError() }
     func remoteVideoTrack(forUserId userId: String) -> VideoTrackWrapper? { fatalError() }
 
     func sampleAudioLevels(localUserId: String? = nil) -> [String: Double] { fatalError() }

@@ -2672,6 +2672,7 @@ final class MeetingViewModel {
                 guard let reportContext, self.isSameCallContext(reportContext) else { return }
                 if heldReport || self.isCameraHoldBlockingVideo { return }
                 self.setLocalCameraOffState(!enabled)
+                self.requestStageRefresh()
                 if enabled {
 
                     self.publishLocalCameraFacing()
@@ -8127,7 +8128,7 @@ final class MeetingViewModel {
             isHandRaised: state.isHandRaised,
             isScreenSharing: state.isScreenSharing,
             isHost: state.isAdmin,
-            videoKey: state.isCameraOff ? "" : "local"
+            videoKey: state.isCameraOff ? "" : webRTCClient.localVideoStageKey()
         ))
         var stageIds = Set<String>()
         for rawId in state.participants.keys.sorted() {

@@ -4609,6 +4609,8 @@ internal class WebRTCClient : SendTransport.Listener, RecvTransport.Listener, Pr
     internal fun getCaptureSession(): Any? = null
     internal fun getLocalVideoTrack(): Any? = localVideoTrackWrapper
 
+    internal fun localVideoStageKey(): String = localVideoTrack?.id() ?: ""
+
     internal fun remoteVideoTrack(forUserId: String): VideoTrackWrapper? {
         val normalized = forUserId.trim()
         if (normalized.isEmpty()) return null

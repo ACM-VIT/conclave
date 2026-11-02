@@ -266,6 +266,7 @@ final class WebRTCClient {
 
     func getCaptureSession() -> Any? { nil }
     func getLocalVideoTrack() -> Any? { nil }
+    func localVideoStageKey() -> String { "" }
     func remoteVideoTrack(forUserId userId: String) -> VideoTrackWrapper? {
         let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return nil }

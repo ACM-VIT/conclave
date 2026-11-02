@@ -5010,6 +5010,10 @@ final class WebRTCClient: NSObject, ObservableObject {
         return rtcLocalVideoTrack
     }
 
+    func localVideoStageKey() -> String {
+        rtcLocalVideoTrack?.trackId ?? ""
+    }
+
     func remoteVideoTrack(forUserId userId: String) -> VideoTrackWrapper? {
         let normalized = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return nil }
