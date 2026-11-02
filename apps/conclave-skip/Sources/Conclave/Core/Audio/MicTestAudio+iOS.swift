@@ -88,7 +88,7 @@ final class IOSMicTestAudio {
             guard succeeded else { self.failed = true; return }
             do {
                 let player = try AVAudioPlayer(contentsOf: output)
-                player.volume = Float(self.gain / 2)
+                player.volume = NativeRuntimeConfig.playbackVolume(Float(self.gain / 2))
                 self.player = player
                 if !player.play() { self.failed = true }
             } catch {

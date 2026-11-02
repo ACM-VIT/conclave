@@ -111,7 +111,7 @@ final class ChatClipController {
     func play() {
         guard !playing, let url = URL(string: url) else { return }
         let queue = AVQueuePlayer()
-        queue.isMuted = muted
+        queue.isMuted = muted || NativeRuntimeConfig.silentAudio
         queue.audiovisualBackgroundPlaybackPolicy = .pauses
         player = queue
         looper = AVPlayerLooper(player: queue, templateItem: AVPlayerItem(url: url))
@@ -122,7 +122,7 @@ final class ChatClipController {
 
     func toggleMute() {
         muted.toggle()
-        player?.isMuted = muted
+        player?.isMuted = muted || NativeRuntimeConfig.silentAudio
     }
 
     func stop() {

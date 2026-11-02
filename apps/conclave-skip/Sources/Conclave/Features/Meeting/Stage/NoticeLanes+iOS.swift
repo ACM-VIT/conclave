@@ -334,7 +334,7 @@ enum NoticeSoundOutput {
         if player == nil {
             guard let url = Bundle.module.url(forResource: name, withExtension: "mp3"),
                   let created = try? AVAudioPlayer(contentsOf: url) else { return }
-            created.volume = 0.6
+            created.volume = NativeRuntimeConfig.playbackVolume(0.6)
             created.prepareToPlay()
             players[name] = created
             player = created

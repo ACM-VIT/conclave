@@ -3765,6 +3765,7 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     private func participantAudioGain(userId: String) -> Double {
+        if NativeRuntimeConfig.silentAudio { return 0 }
         if let gain = participantAudioGains[userId] { return gain }
         for (target, gain) in participantAudioGains where trackKeyMatchesUser(userId, userId: target) {
             return gain
@@ -3776,14 +3777,14 @@ final class WebRTCClient: NSObject, ObservableObject {
         let clamped = ParticipantAudioPreference(volume: gain).gain
         participantAudioGains[userId] = clamped
         for info in consumers.values where info.kind == "audio" && consumerMatchesUser(info, userId: userId) {
-            (info.consumer.track as? RTCAudioTrack)?.source.volume = clamped
+            (info.consumer.track as? RTCAudioTrack)?.source.volume = NativeRuntimeConfig.silentAudio ? 0 : clamped
         }
     }
 
     func resetParticipantAudioGains() {
         participantAudioGains = [:]
         for info in consumers.values where info.kind == "audio" {
-            (info.consumer.track as? RTCAudioTrack)?.source.volume = 1.0
+            (info.consumer.track as? RTCAudioTrack)?.source.volume = NativeRuntimeConfig.silentAudio ? 0 : 1.0
         }
     }
 
@@ -6695,7 +6696,7 @@ extension WebRTCClient {
     func playTestTone() {
         testTonePlayer?.stop()
         guard let player = try? AVAudioPlayer(data: Self.testToneWAVData()) else { return }
-        player.volume = 1.0
+        player.volume = NativeRuntimeConfig.playbackVolume(1.0)
         player.prepareToPlay()
         if player.play() {
             testTonePlayer = player
