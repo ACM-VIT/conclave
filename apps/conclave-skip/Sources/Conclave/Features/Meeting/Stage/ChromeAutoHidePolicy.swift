@@ -169,6 +169,7 @@ enum StageReactionPolicy {
     static let spreadMin = 0.12
     static let spreadMax = 0.88
     static let spreadSteps = 17
+    static let spreadItemWidth = 112.0
 
     static func spreadFraction(for eventId: Int) -> Double {
         var step = eventId % spreadSteps

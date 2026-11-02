@@ -40,6 +40,9 @@ struct S1bStageMomentsTests {
         #expect(offsets.allSatisfy { $0 >= 0 && $0 <= width - 48 })
         #expect(offsets.max()! - offsets.min()! > width * 0.6)
         #expect(StageReactionPolicy.spreadOffsetX(eventId: 3, layerWidth: 20, itemWidth: 48) == 0)
+        let wide = StageReactionPolicy.spreadItemWidth
+        #expect(wide > StageReactionPolicy.bubbleDiameter)
+        #expect((0..<34).allSatisfy { StageReactionPolicy.spreadOffsetX(eventId: $0, layerWidth: width, itemWidth: wide) + wide <= width })
         let viewport = StageViewport(width: 400, height: 800, insetTop: 0, insetBottom: 0, insetLeading: 10, insetTrailing: 30,
                                      widthClass: StageSizeClass.compact, heightClass: StageSizeClass.regular,
                                      placement: StageChromePlacement.bottomBar)

@@ -140,9 +140,9 @@ private fun ReactionBubble(event: ReactionEvent, reduceMotion: Boolean, slotShap
         Modifier.zIndex(if (event.isLocal) 1f else 0f)
             .offset(x = (if (reduceMotion) StageReactionPolicy.slotOffsetX(lane = lane, reduceMotion = true, shape = slotShape)
                 else StageReactionPolicy.spreadOffsetX(eventId = event.id, layerWidth = spreadWidth,
-                    itemWidth = StageReactionPolicy.bubbleDiameter)).dp,
+                    itemWidth = StageReactionPolicy.spreadItemWidth)).dp,
                 y = (-StageReactionPolicy.slotOffsetY(lane = lane, shape = slotShape, slotHeight = slotHeight)).dp)
-            .then(if (reduceMotion) Modifier.width(StageReactionPolicy.reducedSlotWidth.dp) else Modifier).graphicsLayer {
+            .width(if (reduceMotion) StageReactionPolicy.reducedSlotWidth.dp else StageReactionPolicy.spreadItemWidth.dp).graphicsLayer {
             translationX = drift.value.dp.toPx()
             translationY = -rise.value.dp.toPx()
             scaleX = pop.value

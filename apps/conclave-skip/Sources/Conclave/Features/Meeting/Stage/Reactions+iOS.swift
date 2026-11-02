@@ -141,7 +141,7 @@ private struct ReactionBubble: View {
         let lane = StageReactionPolicy.lane(for: event.id)
         let slotX = CGFloat(reduceMotion ? StageReactionPolicy.slotOffsetX(lane: lane, reduceMotion: true, shape: slotShape)
                             : StageReactionPolicy.spreadOffsetX(eventId: event.id, layerWidth: layerWidth,
-                                                                itemWidth: StageReactionPolicy.bubbleDiameter))
+                                                                itemWidth: StageReactionPolicy.spreadItemWidth))
         let slotY = CGFloat(StageReactionPolicy.slotOffsetY(lane: lane, shape: slotShape, slotHeight: slotHeight))
         let diameter = CGFloat(StageReactionPolicy.bubbleDiameter)
         VStack(spacing: 4) {
@@ -159,8 +159,11 @@ private struct ReactionBubble: View {
                     .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             } else {
                 namePill
+                    .truncationMode(.tail)
+                    .frame(maxWidth: CGFloat(StageReactionPolicy.spreadItemWidth))
             }
         }
+        .frame(width: reduceMotion ? nil : CGFloat(StageReactionPolicy.spreadItemWidth))
         .scaleEffect(popScale)
         .offset(x: slotX + drift, y: -rise - slotY)
         .opacity(appear * fade)
