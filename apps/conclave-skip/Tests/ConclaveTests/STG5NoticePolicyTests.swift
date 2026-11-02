@@ -120,6 +120,23 @@ struct STG5NoticePolicyTests {
         #expect(center.banner == nil)
     }
 
+    @Test func aSingleBadStatsSampleDoesNotRaiseTheVeryPoorBanner() {
+        let center = MeetingNoticeCenter()
+        var streak = 0
+        var at = 0.0
+        for sample in [ConnectionQuality.emergency, .good, .emergency, .emergency, .emergency] {
+            streak = VeryPoorConnectionNoticePolicy.streak(previous: streak, quality: sample)
+            let quality = VeryPoorConnectionNoticePolicy.noticeQuality(sample, emergencyStreak: streak)
+            _ = center.applyState(host(quality: quality), nowMillis: at)
+            #expect(center.banner == nil)
+            at += 2_000
+        }
+        streak = VeryPoorConnectionNoticePolicy.streak(previous: streak, quality: .emergency)
+        _ = center.applyState(host(quality: VeryPoorConnectionNoticePolicy.noticeQuality(.emergency, emergencyStreak: streak)),
+                              nowMillis: at)
+        #expect(center.banner?.kind == NoticeKind.veryPoorConnection)
+    }
+
     @Test func aDismissedWeakConnectionBannerStaysAwayForTheCall() {
         let center = MeetingNoticeCenter()
         _ = center.applyState(host(quality: .emergency), nowMillis: 0)

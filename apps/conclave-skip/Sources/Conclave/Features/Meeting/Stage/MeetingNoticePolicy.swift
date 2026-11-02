@@ -1137,3 +1137,16 @@ enum ChatPreviewPolicy {
             + " private=" + (shown.isPrivate ? "1" : "0") + " body=" + bodyKind(shown).rawValue + " message=" + shown.messageId
     }
 }
+
+enum VeryPoorConnectionNoticePolicy {
+    static let sustainedSamples = 4
+
+    static func streak(previous: Int, quality: ConnectionQuality) -> Int {
+        quality == .emergency ? previous + 1 : 0
+    }
+
+    static func noticeQuality(_ quality: ConnectionQuality, emergencyStreak: Int) -> ConnectionQuality {
+        if quality == .emergency && emergencyStreak < sustainedSamples { return .poor }
+        return quality
+    }
+}

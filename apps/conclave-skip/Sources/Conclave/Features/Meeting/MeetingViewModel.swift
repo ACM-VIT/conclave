@@ -747,6 +747,7 @@ final class MeetingViewModel {
     private var screenShareConnectionQualityStabilizer = ConnectionQualityStabilizer()
     private var receiveConnectionQualityStabilizer = ConnectionQualityStabilizer()
     private var overallConnectionQualityStabilizer = ConnectionQualityStabilizer()
+    private var emergencyQualityStreak = 0
     private var adminActionsInFlight: [String: UUID] = [:]
     private var lastReactionSentAt = Date.distantPast
     private var reactionRemovalTasks: [String: Task<Void, Never>] = [:]
@@ -854,6 +855,10 @@ final class MeetingViewModel {
         let overallQuality = overallConnectionQualityStabilizer.update(
             with: sampledOverallQuality
         )
+        let noticeQualityBefore = VeryPoorConnectionNoticePolicy.noticeQuality(state.connectionQuality,
+                                                                             emergencyStreak: emergencyQualityStreak)
+        emergencyQualityStreak = VeryPoorConnectionNoticePolicy.streak(previous: emergencyQualityStreak, quality: overallQuality)
+        let noticeQualityAfter = VeryPoorConnectionNoticePolicy.noticeQuality(overallQuality, emergencyStreak: emergencyQualityStreak)
 
         if state.connectionQuality != overallQuality {
             let oldQuality = state.connectionQuality
@@ -868,6 +873,9 @@ final class MeetingViewModel {
             )
             state.connectionQuality = overallQuality
         }
+        if noticeQualityBefore != noticeQualityAfter {
+            requestStageRefresh()
+        }
         return overallQuality
     }
 
@@ -877,6 +885,7 @@ final class MeetingViewModel {
         screenShareConnectionQualityStabilizer.reset(to: startupQuality)
         receiveConnectionQualityStabilizer.reset(to: startupQuality)
         overallConnectionQualityStabilizer.reset(to: startupQuality)
+        emergencyQualityStreak = 0
         publishConnectionQuality = startupQuality
         screenSharePublishConnectionQuality = startupQuality
         receiveConnectionQuality = startupQuality
@@ -8263,7 +8272,8 @@ final class MeetingViewModel {
                                                   joinedAtMillis: presenceJoinedAtMillis,
                                                   isAttendee: state.isWebinarAttendee),
             isAudioOnly: state.isAudioOnlyMode,
-            connectionQuality: state.connectionQuality,
+            connectionQuality: VeryPoorConnectionNoticePolicy.noticeQuality(state.connectionQuality,
+                                                                             emergencyStreak: emergencyQualityStreak),
 
             showsNotificationsPrime: SystemNotifications.shared.snapshot.showsPrimingBanner,
             knockSoundOn: SettingsPreferences.knockSound(),
@@ -10628,6 +10638,7 @@ final class MeetingViewModel {
         screenShareConnectionQualityStabilizer.reset()
         receiveConnectionQualityStabilizer.reset()
         overallConnectionQualityStabilizer.reset()
+        emergencyQualityStreak = 0
         publishConnectionQuality = .unknown
         screenSharePublishConnectionQuality = .unknown
         receiveConnectionQuality = .unknown
