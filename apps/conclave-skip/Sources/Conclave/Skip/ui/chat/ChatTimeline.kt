@@ -133,19 +133,21 @@ internal fun ChatTimeline(
     Box(Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val maxBubble = maxWidth * ConclaveBubbleGeometry.maxWidthFraction.toFloat()
-            CompositionLocalProvider(LocalChatTimelineAnchor provides anchor) {
-                LazyColumn(
-                    state = listState,
-                    reverseLayout = true,
-                    verticalArrangement = Arrangement.Top,
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp + reservation.calculateTopPadding(),
-                        bottom = 12.dp + reservation.calculateBottomPadding()),
-                    modifier = Modifier.fillMaxSize().imeNestedScroll().testTag("chat.timeline")
-                        .semantics { collectionInfo = CollectionInfo(reversed.ids.size, 1) },
-                ) {
-                    items(count = reversed.ids.size, key = { reversed.ids[it] }, contentType = { reversed.kinds[it] }) { index ->
-                        val rowId = reversed.ids[index]
-                        ChatRow(presenter.rows.entry(rowId), actions, sidePane, maxBubble, highlightId == rowId)
+            ChatClipPlaybackHost(listState) {
+                CompositionLocalProvider(LocalChatTimelineAnchor provides anchor) {
+                    LazyColumn(
+                        state = listState,
+                        reverseLayout = true,
+                        verticalArrangement = Arrangement.Top,
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp + reservation.calculateTopPadding(),
+                            bottom = 12.dp + reservation.calculateBottomPadding()),
+                        modifier = Modifier.fillMaxSize().imeNestedScroll().testTag("chat.timeline")
+                            .semantics { collectionInfo = CollectionInfo(reversed.ids.size, 1) },
+                    ) {
+                        items(count = reversed.ids.size, key = { reversed.ids[it] }, contentType = { reversed.kinds[it] }) { index ->
+                            val rowId = reversed.ids[index]
+                            ChatRow(presenter.rows.entry(rowId), actions, sidePane, maxBubble, highlightId == rowId)
+                        }
                     }
                 }
             }

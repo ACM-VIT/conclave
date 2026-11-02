@@ -41,6 +41,8 @@ struct ChatTimeline: View {
     @State private var initialPositioned = false
     @State private var sentinel = ChatBottomSentinelState()
     @State private var visibility = ChatRowVisibilityBox()
+    @State private var clipPool = ChatClipPlaybackPool()
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -69,6 +71,21 @@ struct ChatTimeline: View {
                     .padding(.horizontal, CGFloat(DesignTokens.space16))
                     .padding(.vertical, CGFloat(DesignTokens.space12))
                 }
+                .environment(\.chatClipPool, clipPool)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(key: ChatClipFrames.self,
+                            value: [ChatClipFrames.viewport: geometry.frame(in: .global)])
+                    }
+                }
+                .onPreferenceChange(ChatClipFrames.self) { frames in clipPool.update(frames: frames) }
+                .onChange(of: scenePhase, initial: true) { _, phase in
+                    clipPool.update(active: phase == .active, reduceMotion: reduceMotion)
+                }
+                .onChange(of: reduceMotion) { _, motion in
+                    clipPool.update(active: scenePhase == .active, reduceMotion: motion)
+                }
+                .onDisappear { clipPool.update(active: false, reduceMotion: reduceMotion) }
                 .modifier(ChatTimelineAnchors(isAtBottom: isAtBottom))
                 .background {
                     if !ChatTimelinePlatform.usesScrollGeometry {

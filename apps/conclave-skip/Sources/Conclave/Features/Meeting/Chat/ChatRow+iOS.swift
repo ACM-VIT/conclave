@@ -282,29 +282,8 @@ private struct ChatGifElement: View {
         let media = ChatRowMedia.kind(row)
         Group {
             if media == ChatRowMedia.clip {
-                let height = CGFloat(ChatMediaGeometry.gifHeight(aspect: row.gifAspect))
-                Button {
-                    actions.openURLString(row.gifVideoURL.isEmpty ? row.gifURL : row.gifVideoURL)
-                } label: {
-                    ZStack(alignment: .bottomLeading) {
-                        ChatImageBox(url: row.gifPreviewURL.isEmpty ? row.gifURL : row.gifPreviewURL,
-                                     width: CGFloat(ChatMediaGeometry.gifWidth), height: height, cornerRadius: 0)
-                        Image(systemName: ChatMediaSymbols.play)
-                            .font(.title3)
-                            .foregroundStyle(.primary)
-                            .padding(CGFloat(DesignTokens.space12))
-                            .background(Color(uiColor: .systemBackground), in: Circle())
-                            .frame(width: CGFloat(ChatMediaGeometry.gifWidth), height: height)
-                        Text(ChatMediaCopy.clipTag)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, CGFloat(DesignTokens.space8))
-                            .padding(.vertical, CGFloat(DesignTokens.space2))
-                            .background(Color(uiColor: .systemBackground), in: Capsule())
-                            .padding(CGFloat(DesignTokens.space8))
-                    }
-                }
-                .buttonStyle(.plain)
+                ChatClipAttachment(row: row)
+                    .id(row.gifVideoURL.isEmpty ? row.gifURL : row.gifVideoURL)
             } else if media == ChatRowMedia.sticker {
                 ChatAnimatedImage(url: row.gifURL, width: CGFloat(ChatMediaGeometry.stickerWidth(aspect: row.gifAspect)),
                                   height: CGFloat(ChatMediaGeometry.stickerHeight(aspect: row.gifAspect)), cornerRadius: 0,
@@ -314,10 +293,10 @@ private struct ChatGifElement: View {
                                   height: CGFloat(ChatMediaGeometry.gifHeight(aspect: row.gifAspect)), cornerRadius: 0)
             }
         }
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: media == ChatRowMedia.clip ? .contain : .ignore)
         .accessibilityLabel(ChatCopy.rowLabel(row))
         .accessibilityValue(ChatCopy.rowValue(row))
-        .accessibilityAddTraits(media == ChatRowMedia.clip ? .isButton : .isImage)
+        .accessibilityAddTraits(media == ChatRowMedia.clip ? [] : .isImage)
         .accessibilityActions {
             ChatRowAccessibilityActions(row: row, actions: actions)
         }

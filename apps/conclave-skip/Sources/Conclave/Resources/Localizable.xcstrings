@@ -6898,6 +6898,32 @@
     },
     "Turn Off the Attendee Code?" : {
       "extractionState" : "manual"
+    },
+    "Attendees need this code to watch." : {
+      "extractionState" : "manual"
+    },
+    "Remove Attendee Code?" : {
+      "extractionState" : "manual"
+    },
+    "Remove Code" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
+    },
+    "Remove Code…" : {
+      "extractionState" : "manual",
+      "generatesSymbol" : false
+    },
+    "Save Code" : {
+      "extractionState" : "manual"
+    },
+    "Play clip" : {
+      "extractionState" : "manual"
+    },
+    "Unmute clip" : {
+      "extractionState" : "manual"
+    },
+    "Mute clip" : {
+      "extractionState" : "manual"
     }
   },
   "version" : "1.0"
