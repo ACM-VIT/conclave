@@ -112,7 +112,7 @@ internal fun LayoutList(layout: LayoutPanelPresenter, contentPadding: PaddingVal
             }
         }
         item(key = "maxTiles") {
-            LayoutMaxTilesItem(layout, snapshot.maxTiles, containerColor)
+            LayoutMaxTilesItem(layout, snapshot.maxTiles, snapshot.phoneCap, containerColor)
         }
         item(key = "footers") {
             Column {
@@ -173,7 +173,9 @@ private fun LayoutRadioRows(
 }
 
 @Composable
-private fun LayoutMaxTilesItem(layout: LayoutPanelPresenter, value: Int, containerColor: Color) {
+private fun LayoutMaxTilesItem(layout: LayoutPanelPresenter, stored: Int, phoneCap: Int, containerColor: Color) {
+    val value = LayoutPanelPolicy.shownTiles(stored, phoneCap = phoneCap)
+    val upper = LayoutPanelPolicy.tileUpperBound(phoneCap = phoneCap)
     val title = conclaveString("lay_max_tiles")
     val tabular = rememberTabular(MaterialTheme.typography.bodyLarge)
     ListItem(
@@ -188,8 +190,8 @@ private fun LayoutMaxTilesItem(layout: LayoutPanelPresenter, value: Int, contain
                     val next = raw.roundToInt()
                     if (next != value) layout.setMaxTiles(next)
                 },
-                valueRange = LayoutPanelPolicy.minimumTiles.toFloat()..LayoutPanelPolicy.maximumTiles.toFloat(),
-                steps = LayoutPanelPolicy.sliderSteps,
+                valueRange = LayoutPanelPolicy.minimumTiles.toFloat()..upper.toFloat(),
+                steps = LayoutPanelPolicy.stepCount(phoneCap = phoneCap),
                 modifier = Modifier.testTag("layout.maxTiles.slider").semantics { contentDescription = title },
             )
         },

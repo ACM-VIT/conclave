@@ -43,9 +43,11 @@ private struct LayoutForm: View {
                 Text(ConclaveStrings.text("Only you see this layout."))
             }
             Section {
-                Stepper(value: Binding(get: { snapshot.maxTiles }, set: { layout.setMaxTiles($0) }),
-                        in: LayoutPanelPolicy.minimumTiles...LayoutPanelPolicy.maximumTiles) {
-                    LabeledContent(ConclaveStrings.text("Maximum Tiles"), value: snapshot.maxTiles.formatted())
+                Stepper(value: Binding(get: { LayoutPanelPolicy.shownTiles(snapshot.maxTiles, phoneCap: snapshot.phoneCap) },
+                                       set: { layout.setMaxTiles($0) }),
+                        in: LayoutPanelPolicy.minimumTiles...LayoutPanelPolicy.tileUpperBound(phoneCap: snapshot.phoneCap)) {
+                    LabeledContent(ConclaveStrings.text("Maximum Tiles"),
+                                   value: LayoutPanelPolicy.shownTiles(snapshot.maxTiles, phoneCap: snapshot.phoneCap).formatted())
                 }
                 .accessibilityIdentifier("layout.maxTiles")
                 Toggle(ConclaveStrings.text("Hide Tiles Without Video"),

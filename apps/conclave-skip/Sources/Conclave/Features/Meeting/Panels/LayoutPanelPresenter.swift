@@ -89,6 +89,19 @@ enum LayoutPanelPolicy {
         return result
     }
 
+    static func tileUpperBound(phoneCap: Int) -> Int {
+        if phoneCap <= 0 { return maximumTiles }
+        return max(minimumTiles, min(maximumTiles, phoneCap))
+    }
+
+    static func shownTiles(_ value: Int, phoneCap: Int) -> Int {
+        min(clampTiles(value), tileUpperBound(phoneCap: phoneCap))
+    }
+
+    static func stepCount(phoneCap: Int) -> Int {
+        max(0, tileUpperBound(phoneCap: phoneCap) - minimumTiles - 1)
+    }
+
     static func clampTiles(_ value: Int) -> Int {
         MeetingViewConstants.clampTiles(value)
     }

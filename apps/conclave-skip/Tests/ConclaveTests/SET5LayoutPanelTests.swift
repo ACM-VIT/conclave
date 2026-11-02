@@ -27,6 +27,15 @@ struct SET5LayoutPanelTests {
         #expect(LayoutPanelPolicy.minimumTiles == 2 && LayoutPanelPolicy.maximumTiles == 49 && LayoutPanelPolicy.sliderSteps == 46)
     }
 
+    @Test func phonesOnlyOfferTileCountsTheyCanShow() {
+        #expect(LayoutPanelPolicy.tileUpperBound(phoneCap: 8) == 8)
+        #expect(LayoutPanelPolicy.tileUpperBound(phoneCap: 0) == LayoutPanelPolicy.maximumTiles)
+        #expect(LayoutPanelPolicy.shownTiles(16, phoneCap: 8) == 8)
+        #expect(LayoutPanelPolicy.shownTiles(6, phoneCap: 8) == 6)
+        #expect(LayoutPanelPolicy.shownTiles(16, phoneCap: 0) == 16)
+        #expect(LayoutPanelPolicy.stepCount(phoneCap: 8) == 5)
+    }
+
     @Test func positionShowsOnlyWhileTheSelfViewFloats() {
 
         #expect(!LayoutPanelPolicy.showsPosition(selfMode: "tile", isSelfFloating: true))
