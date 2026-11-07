@@ -194,6 +194,44 @@ export function AppsProvider({
     socketRef.current = socket;
   }, [socket, resetLocalData]);
 
+  // The server destroys an app's document when the app is closed or another
+  // app replaces it. Drop the local copy too: otherwise reopening the app
+  // syncs the old local document against the empty server one and uploads
+  // the "cleared" content again.
+  const discardLocalApp = useCallback((appId: string) => {
+    const doc = docsRef.current.get(appId);
+    if (doc) {
+      const handler = docHandlersRef.current.get(appId);
+      if (handler) doc.off("update", handler);
+      try {
+        doc.destroy();
+      } catch {}
+    }
+    const awareness = awarenessRef.current.get(appId);
+    if (awareness) {
+      const handler = awarenessHandlersRef.current.get(appId);
+      if (handler) awareness.off("update", handler);
+      try {
+        awareness.destroy();
+      } catch {}
+    }
+    docsRef.current.delete(appId);
+    awarenessRef.current.delete(appId);
+    docHandlersRef.current.delete(appId);
+    awarenessHandlersRef.current.delete(appId);
+    pendingInitialUpdatesRef.current.delete(appId);
+    initialUpdateSentRef.current.delete(appId);
+  }, []);
+
+  const previousActiveAppIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = previousActiveAppIdRef.current;
+    previousActiveAppIdRef.current = state.activeAppId;
+    if (previous && previous !== state.activeAppId) {
+      discardLocalApp(previous);
+    }
+  }, [state.activeAppId, discardLocalApp]);
+
   const registerDocHandlers = useCallback((appId: string, doc: Y.Doc) => {
     if (docHandlersRef.current.has(appId)) return;
 
