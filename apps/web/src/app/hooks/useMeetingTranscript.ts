@@ -332,6 +332,10 @@ export function useMeetingTranscript({
   const serviceVersionRef = useRef<TranscriptServiceVersion | null>(null);
   const autoTakeoverAttemptRef = useRef<string | null>(null);
   const suppressAutoTakeoverUntilRef = useRef(0);
+  // Bumped by every explicit stop, so a start or takeover still waiting for
+  // the SFU session can tell the user stopped it rather than reporting the
+  // wait as "still reconnecting".
+  const explicitStopSerialRef = useRef(0);
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current === null) return;
@@ -1141,6 +1145,7 @@ export function useMeetingTranscript({
       }
       sfuRelayStartTokenRef.current = null;
       clearSfuRelayStartTokenWaiters();
+      const stopSerialAtRequest = explicitStopSerialRef.current;
       const sent = send({
         type: "session.start",
         apiKey: options.apiKey,
@@ -1160,6 +1165,9 @@ export function useMeetingTranscript({
               nextSession.status === "takeover_needed"),
           SFU_SESSION_READY_TIMEOUT_MS,
         );
+        if (explicitStopSerialRef.current !== stopSerialAtRequest) {
+          return false;
+        }
         if (readySession?.status !== "live") {
           setError(
             readySession?.error ||
@@ -1205,6 +1213,7 @@ export function useMeetingTranscript({
       }
       sfuRelayStartTokenRef.current = null;
       clearSfuRelayStartTokenWaiters();
+      const stopSerialAtRequest = explicitStopSerialRef.current;
       const sent = send({
         type: "session.takeover",
         apiKey: options.apiKey,
@@ -1224,6 +1233,9 @@ export function useMeetingTranscript({
               nextSession.status === "takeover_needed"),
           SFU_SESSION_READY_TIMEOUT_MS,
         );
+        if (explicitStopSerialRef.current !== stopSerialAtRequest) {
+          return false;
+        }
         if (readySession?.status !== "live") {
           setError(
             readySession?.error ||
@@ -1299,6 +1311,9 @@ export function useMeetingTranscript({
       return;
     }
     const transportMode = session.transportMode;
+    explicitStopSerialRef.current += 1;
+    // Release a start or takeover waiting on the session so it ends now.
+    clearSessionWaiters();
     suppressAutoTakeoverUntilRef.current =
       Date.now() + SFU_EXPLICIT_STOP_SUPPRESS_TAKEOVER_MS;
     send({ type: "session.stop" });
@@ -1310,6 +1325,7 @@ export function useMeetingTranscript({
     }
   }, [
     canStop,
+    clearSessionWaiters,
     send,
     session.transportMode,
     setPermissionError,
@@ -1531,10 +1547,18 @@ export function useMeetingTranscript({
         },
       });
     }
-    relayRef.current
+    const relay = relayRef.current;
+    // The session can pause or hand off before the audio worklet starts; the
+    // relay is then stopped and dropped, and this late result must not mark
+    // audio as streaming (or report an error) for a relay that is gone.
+    relay
       .start(transcriptSources)
-      .then(() => updateIsStreamingAudio(true))
+      .then(() => {
+        if (relayRef.current !== relay) return;
+        updateIsStreamingAudio(true);
+      })
       .catch((startError: unknown) => {
+        if (relayRef.current !== relay) return;
         updateIsStreamingAudio(false);
         setError(
           startError instanceof Error

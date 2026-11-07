@@ -244,16 +244,17 @@ export function useAdminSocket() {
               socket.emit("admin:watchRoom", { channelId: watched.channelId });
             }
           });
+          // socket.io only retries while `socket.active` is true. After a
+          // server-initiated disconnect (or a middleware connect error) it
+          // stops, so showing "reconnecting" there would be shown forever.
+          const connectionAfterDrop = () =>
+            hasConnected && socket.active ? "reconnecting" : "offline";
           socket.on("disconnect", () => {
-            patchInstance(key, {
-              connection: hasConnected ? "reconnecting" : "offline",
-            });
+            patchInstance(key, { connection: connectionAfterDrop() });
             clearInstanceLiveState(key);
           });
           socket.on("connect_error", () => {
-            patchInstance(key, {
-              connection: hasConnected ? "reconnecting" : "offline",
-            });
+            patchInstance(key, { connection: connectionAfterDrop() });
             clearInstanceLiveState(key);
           });
 

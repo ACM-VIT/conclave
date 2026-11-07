@@ -115,6 +115,10 @@ export function useSharedBrowser({
     const [isLaunching, setIsLaunching] = useState(false);
     const [launchError, setLaunchError] = useState<string | null>(null);
     const activityIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    // Bumped by every server browser event. A launch, navigate or close ack
+    // only writes state if no server event arrived after it was requested,
+    // so a late ack cannot undo a newer close or state change.
+    const browserStateEpochRef = useRef(0);
 
     const clearError = useCallback(() => {
         setLaunchError(null);
@@ -172,15 +176,18 @@ export function useSharedBrowser({
         if (!socket || !isConnected) return;
 
         const handleBrowserState = (state: BrowserState) => {
+            browserStateEpochRef.current += 1;
             setBrowserState(state);
             setIsLaunching(false);
         };
 
         const handleBrowserClosed = () => {
+            browserStateEpochRef.current += 1;
             setBrowserState({ active: false });
             setIsLaunching(false);
         };
         const handleDisconnect = () => {
+            browserStateEpochRef.current += 1;
             setBrowserState({ active: false });
             setIsLaunching(false);
         };
@@ -226,6 +233,7 @@ export function useSharedBrowser({
             setIsLaunching(true);
             setLaunchError(null);
 
+            const requestEpoch = browserStateEpochRef.current;
             const response = await emitBrowserCommand(socket, "browser:launch", { url });
             setIsLaunching(false);
             if (response.error) {
@@ -233,6 +241,10 @@ export function useSharedBrowser({
                 return false;
             }
 
+            // The server broadcast the room's browser state after this request
+            // was sent (normally this launch's own "active" state, or a close
+            // that came after it); that is newer than this ack.
+            if (browserStateEpochRef.current !== requestEpoch) return true;
             setBrowserState({
                 active: true,
                 url,
@@ -252,6 +264,7 @@ export function useSharedBrowser({
             setIsLaunching(true);
             setLaunchError(null);
 
+            const requestEpoch = browserStateEpochRef.current;
             const response = await emitBrowserCommand(socket, "browser:navigate", { url });
             setIsLaunching(false);
             if (response.error) {
@@ -259,6 +272,7 @@ export function useSharedBrowser({
                 return false;
             }
 
+            if (browserStateEpochRef.current !== requestEpoch) return true;
             setBrowserState((prev) => ({
                 ...prev,
                 url,
@@ -273,12 +287,14 @@ export function useSharedBrowser({
         const socket = socketRef.current;
         if (!socket || !isAdmin) return false;
 
+        const requestEpoch = browserStateEpochRef.current;
         const response = await emitBrowserCommand(socket, "browser:close");
         if (response.error) {
             setLaunchError(response.error);
             return false;
         }
 
+        if (browserStateEpochRef.current !== requestEpoch) return true;
         setBrowserState({ active: false });
         return true;
     }, [socketRef, isAdmin]);
