@@ -104,6 +104,16 @@ export default function SignInClient({ next }: SignInClientProps) {
     window.location.replace(safeNext);
   }, [safeNext, session?.user]);
 
+  // Coming back from the provider with the Back button can restore this page
+  // from the back-forward cache mid-"Redirecting"; re-enable the buttons.
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setActiveProvider(null);
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setStatus("loading");
@@ -136,10 +146,16 @@ export default function SignInClient({ next }: SignInClientProps) {
       setActiveProvider(provider);
       setError(null);
       try {
-        await signIn.social({
+        // better-auth reports a failed request as `{ error }` rather than
+        // throwing; without this the "Redirecting" state never cleared.
+        const result = await signIn.social({
           provider,
           callbackURL: `${window.location.origin}${safeNext}`,
         });
+        if (result?.error) {
+          setError(result.error.message || "Unable to start sign-in.");
+          setActiveProvider(null);
+        }
       } catch (signInError) {
         setError(
           signInError instanceof Error
