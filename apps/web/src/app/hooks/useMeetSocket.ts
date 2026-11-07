@@ -16,6 +16,7 @@ import {
   buildMicrophoneOpusCodecOptions,
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
+import { emitWithAckTimeout } from "../lib/socket-ack";
 import {
   resolveInFlightReconnectRequest,
   resolveReconnectStartAttempts,
@@ -296,6 +297,11 @@ const getStaleConsumerRecoveryDelayMs = (
   producerInfo.type === "screen"
     ? SCREEN_SHARE_STALE_CONSUMER_RECOVERY_DELAY_MS
     : STALE_CONSUMER_RECOVERY_DELAY_MS;
+
+/** Window for an ordinary request/acknowledgement round trip. */
+const ACK_REQUEST_TIMEOUT_MS = SOCKET_TIMEOUT_MS;
+/** Transcript relay start/stop wait on the transcript worker server-side. */
+const LONG_ACK_REQUEST_TIMEOUT_MS = 30_000;
 
 const startSocketAckTimeout = (
   eventName: string,
@@ -8464,7 +8470,19 @@ export function useMeetSocket({
                       prejoinMediaIntentRef.current = null;
                     }
                   })
-                  .catch(console.error);
+                  .catch((joinError: unknown) => {
+                    // joinRoomInternal already moved to "joining"; a failure
+                    // here must surface as an error the user can act on, as
+                    // the initial join does, not leave a spinner forever.
+                    if (
+                      approvalGeneration !== reconnectGenerationRef.current ||
+                      intentionalDisconnectRef.current ||
+                      socketRef.current !== socket
+                    ) return;
+                    console.error("[Meets] Join after approval failed:", joinError);
+                    setMeetError(createMeetError(joinError));
+                    setConnectionState("error");
+                  });
               } else {
                 console.error(
                   "[Meets] Cannot re-join: missing room ID or local stream",
@@ -8474,6 +8492,10 @@ export function useMeetSocket({
                     bypassMediaPermissions,
                   },
                 );
+                // Approved, but the devices the join needs did not start (or
+                // the room ID is gone): show the error state, as the initial
+                // join does, instead of leaving the user on the waiting screen.
+                setConnectionState("error");
               }
             });
 
@@ -9685,7 +9707,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "lockRoom",
           { locked },
           (
@@ -9715,7 +9740,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "setNoGuests",
           { noGuests },
           (
@@ -9742,7 +9770,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "lockChat",
           { locked },
           (response: { success: boolean; locked?: boolean } | { error: string }) => {
@@ -9768,7 +9799,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "setParticipantMediaPermissions",
           permissions,
           (response: { success: boolean } | { error: string }) => {
@@ -9796,7 +9830,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(false);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(false),
           "admin:endRoom",
           {
             message:
@@ -9830,7 +9867,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "transcript:getToken",
           (response: TranscriptTokenResponse | { error: string }) => {
             if ("error" in response) {
@@ -9853,7 +9893,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "transcript:sfuRelayStatus",
           (response: TranscriptSfuRelayStatusResponse | { error: string }) => {
             if ("error" in response) {
@@ -9878,7 +9921,16 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          LONG_ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({
+              mode: "sfu",
+              success: false,
+              status: "error",
+              reason: "The server did not respond. Try again.",
+              updatedAt: Date.now(),
+            }),
           "transcript:sfuRelayStart",
           request,
           (response: TranscriptSfuRelayStartResponse | { error: string }) => {
@@ -9908,7 +9960,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          LONG_ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "transcript:sfuRelayStop",
           (response: TranscriptSfuRelayStopResponse | { error: string }) => {
             if ("error" in response) {
@@ -9931,7 +9986,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "meeting:getConfig",
           (response: MeetingConfigSnapshot | { error: string }) => {
             if ("error" in response) {
@@ -9957,7 +10015,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "meeting:updateConfig",
           update,
           (
@@ -9989,7 +10050,10 @@ export function useMeetSocket({
     if (!socket) return Promise.resolve(null);
 
     return new Promise((resolve) => {
-      socket.emit(
+      emitWithAckTimeout(
+        socket,
+        ACK_REQUEST_TIMEOUT_MS,
+        () => resolve(null),
         "webinar:getConfig",
         (response: WebinarConfigSnapshot | { error: string }) => {
           if ("error" in response) {
@@ -10010,7 +10074,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "webinar:updateConfig",
           update,
           (
@@ -10037,7 +10104,10 @@ export function useMeetSocket({
     if (!socket) return Promise.resolve(null);
 
     return new Promise((resolve) => {
-      socket.emit(
+      emitWithAckTimeout(
+        socket,
+        ACK_REQUEST_TIMEOUT_MS,
+        () => resolve(null),
         "webinar:rotateLink",
         (response: WebinarLinkResponse | { error: string }) => {
           if ("error" in response) {
@@ -10057,7 +10127,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve(null);
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve(null),
           "webinar:generateLink",
           (response: WebinarLinkResponse | { error: string }) => {
             if ("error" in response) {
@@ -10079,7 +10152,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:qa:submit",
           { question },
           (response: { success: boolean } | { error: string }) => {
@@ -10161,7 +10237,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:qa:moderate",
           request,
           (response: { success: boolean } | { error: string }) => {
@@ -10182,7 +10261,10 @@ export function useMeetSocket({
       const socket = socketRef.current;
       if (!socket) return;
       setIsWebinarHandRaised(raised);
-      socket.emit(
+      emitWithAckTimeout(
+        socket,
+        ACK_REQUEST_TIMEOUT_MS,
+        () => setIsWebinarHandRaised(!raised),
         "webinar:setHandRaised",
         { raised },
         (response: { success: boolean; raised: boolean } | { error: string }) => {
@@ -10207,7 +10289,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:promoteAttendee",
           { userId },
           (response: { success: boolean } | { error: string }) => {
@@ -10229,7 +10314,10 @@ export function useMeetSocket({
       if (!socket) return Promise.resolve({ ok: false, error: "Not connected" });
 
       return new Promise((resolve) => {
-        socket.emit(
+        emitWithAckTimeout(
+          socket,
+          ACK_REQUEST_TIMEOUT_MS,
+          () => resolve({ ok: false, error: "The server did not respond. Try again." }),
           "webinar:demoteParticipant",
           { userId },
           (response: { success: boolean } | { error: string }) => {
