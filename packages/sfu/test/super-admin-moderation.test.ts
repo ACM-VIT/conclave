@@ -280,3 +280,14 @@ describe("super admin HTTP moderation", () => {
     expect(h.closeTransport).toHaveBeenCalledOnce();
   });
 });
+
+describe("kick and admission", () => {
+  it("revokes the kicked identity's waiting-room and lock admission", () => {
+    const h = makeHarness({ targetClaims: {}, targetAdmin: false });
+    h.room.allowUser("admin@example.com");
+    h.room.allowLockedUser("admin@example.com");
+    expect(h.invoke("kickUser", { userId: "target" })).toHaveBeenCalledWith({ success: true });
+    expect(h.room.isAllowed("admin@example.com")).toBe(false);
+    expect(h.room.isLockedAllowed("admin@example.com")).toBe(false);
+  });
+});

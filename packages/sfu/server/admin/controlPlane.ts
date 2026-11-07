@@ -1003,6 +1003,13 @@ export const kickClient = (
   if (!target || isSuperAdminClient(target)) {
     return false;
   }
+  // A removed user has to be let in again: drop the waiting-room and lock
+  // admissions, or they could rejoin a locked or waiting-room meeting at once.
+  const userKey = room.userKeysById.get(userId);
+  if (userKey) {
+    room.revokeAllowedUser(userKey);
+    room.revokeLockedAllowedUser(userKey);
+  }
   target.socket.emit("kicked", { reason, roomId: room.id });
   target.socket.disconnect(true);
 
