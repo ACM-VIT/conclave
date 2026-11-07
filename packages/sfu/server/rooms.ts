@@ -72,7 +72,20 @@ export const getOrCreateRoom = async (
   state: SfuState,
   requestedClientId: string,
   roomId: string,
-): Promise<Room> => {
+): Promise<Room> =>
+  (await getOrCreateRoomWithOrigin(state, requestedClientId, roomId)).room;
+
+/**
+ * Like getOrCreateRoom, but also reports whether this call created the room.
+ * `created` is true only for the caller that started the creation; callers
+ * that found the room already registered, or joined a creation already in
+ * flight, get false.
+ */
+export const getOrCreateRoomWithOrigin = async (
+  state: SfuState,
+  requestedClientId: string,
+  roomId: string,
+): Promise<{ room: Room; created: boolean }> => {
   const clientId = canonicalizeClientId(requestedClientId);
   const channelId = getRoomChannelId(clientId, roomId);
   let room = state.rooms.get(channelId);
@@ -101,7 +114,7 @@ export const getOrCreateRoom = async (
         cleanupRoomState(state, channelId);
         throw new RoomOwnershipError(ownership.owner);
       }
-      return room;
+      return { room, created: false };
     }
     Logger.warn(
       `Discarding stale room with closed router: ${roomId} (${clientId})`,
@@ -112,7 +125,7 @@ export const getOrCreateRoom = async (
 
   const pendingCreation = state.roomCreations.get(channelId);
   if (pendingCreation) {
-    return pendingCreation;
+    return { room: await pendingCreation, created: false };
   }
 
   const creation = (async (): Promise<Room> => {
@@ -153,7 +166,7 @@ export const getOrCreateRoom = async (
   state.roomCreations.set(channelId, creation);
 
   try {
-    return await creation;
+    return { room: await creation, created: true };
   } finally {
     if (state.roomCreations.get(channelId) === creation) {
       state.roomCreations.delete(channelId);
