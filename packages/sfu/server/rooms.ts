@@ -114,12 +114,24 @@ export const getOrCreateRoomWithOrigin = async (
         cleanupRoomState(state, channelId);
         throw new RoomOwnershipError(ownership.owner);
       }
-      return { room, created: false };
+      // The last client can leave during the renew await, which closes the
+      // room and removes it from the map. Returning it then would seat the
+      // joiner in a closed room nobody else can find; create a fresh one.
+      const current = state.rooms.get(channelId);
+      if (current && !current.router.closed) {
+        // Usually the room we renewed; if it closed meanwhile and another
+        // joiner already created its successor, join that one instead.
+        return { room: current, created: false };
+      }
+      Logger.warn(
+        `Room ${roomId} (${clientId}) closed while renewing its lease; recreating`,
+      );
+    } else {
+      Logger.warn(
+        `Discarding stale room with closed router: ${roomId} (${clientId})`,
+      );
+      cleanupRoomState(state, channelId);
     }
-    Logger.warn(
-      `Discarding stale room with closed router: ${roomId} (${clientId})`,
-    );
-    cleanupRoomState(state, channelId);
     room = undefined;
   }
 

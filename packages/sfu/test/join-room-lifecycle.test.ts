@@ -8,7 +8,10 @@ import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
 import { registerAdminHandlers } from "../server/socket/handlers/adminHandlers.js";
+import { registerDisconnectHandlers } from "../server/socket/handlers/disconnectHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
+import { registerTransportHandlers } from "../server/socket/handlers/transportHandlers.js";
+import { getOrCreateRoomWithOrigin } from "../server/rooms.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 
 type Handler = (...args: never[]) => void | Promise<void>;
@@ -230,5 +233,104 @@ describe("delayed room end", () => {
     vi.advanceTimersByTime(10_000);
     expect(state.rooms.get("conclave:room")).toBe(reopened);
     expect(disconnectSockets).not.toHaveBeenCalled();
+  });
+});
+
+describe("room lookup across the lease renew await", () => {
+  it("creates a fresh room when the found room closed during the renew", async () => {
+    const newRouter = { closed: false, rtpCapabilities: {}, close: vi.fn() } as unknown as Router;
+    const createRouter = vi.fn(async () => newRouter);
+    const state = makeState([{ pid: 1, closed: false, createRouter } as unknown as Worker]);
+    const oldRoom = new Room({
+      id: "room",
+      clientId: "conclave",
+      workerPid: null,
+      router: { closed: false, close: vi.fn() } as unknown as Router,
+    });
+    state.rooms.set(oldRoom.channelId, oldRoom);
+
+    let releaseRenew!: () => void;
+    const renewGate = new Promise<void>((resolve) => { releaseRenew = resolve; });
+    const renew = state.roomRegistry.renewRoom.bind(state.roomRegistry);
+    state.roomRegistry.renewRoom = async (input) => {
+      await renewGate;
+      return renew(input);
+    };
+
+    const lookup = getOrCreateRoomWithOrigin(state, "conclave", "room");
+    // The last client leaves while the lease is being renewed.
+    state.rooms.delete(oldRoom.channelId);
+    (oldRoom.router as { closed: boolean }).closed = true;
+    releaseRenew();
+
+    const result = await lookup;
+    expect(result.created).toBe(true);
+    expect(result.room).not.toBe(oldRoom);
+    expect(state.rooms.get("conclave:room")).toBe(result.room);
+  });
+});
+
+describe("transport creation across its await", () => {
+  it("closes a transport created for a seat the socket no longer holds", async () => {
+    const handlers = new Map<string, Handler>();
+    const socket = {
+      id: "s1",
+      on: (event: string, handler: Handler) => handlers.set(event, handler),
+    } as unknown as Socket;
+    let resolveTransport!: (transport: unknown) => void;
+    const close = vi.fn();
+    const client = { id: "u#1", isObserver: false, producerTransport: null } as unknown as Client;
+    const room = {
+      createWebRtcTransport: vi.fn(() => new Promise((resolve) => { resolveTransport = resolve; })),
+      getClient: (id: string) => (id === "u#1" ? client : undefined),
+    } as unknown as Room;
+    const context = createConnectionContext(io, socket, makeState());
+    context.currentRoom = room;
+    context.currentClient = client;
+    registerTransportHandlers(context);
+
+    const callback = vi.fn();
+    const pending = handlers.get("createProducerTransport")!(...[callback] as never[]);
+    // The socket disconnects while mediasoup is creating the transport.
+    context.currentRoom = null;
+    context.currentClient = null;
+    resolveTransport({ id: "t1", close, on: vi.fn(), observer: { on: vi.fn() } });
+    await pending;
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(client.producerTransport).toBeNull();
+    expect(callback).toHaveBeenCalledWith({ error: "Left the room while creating the transport" });
+  });
+});
+
+describe("waiting-room entry on disconnect", () => {
+  it("removes the entry even when the socket is also seated in another room", () => {
+    vi.useFakeTimers();
+    const state = makeState();
+    const makeRoom = (id: string) => {
+      const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
+      state.rooms.set(room.channelId, room);
+      return room;
+    };
+    const seatedRoom = makeRoom("a");
+    const waitingRoom = makeRoom("b");
+    const waitingHost = new Admin({ id: "host#h", socket: makeSocket("host-socket").socket });
+    waitingRoom.addClient(waitingHost);
+
+    const peer = makeSocket("switching-socket", { userId: "u", clientId: "conclave" });
+    const seat = new Client({ id: "u#1", socket: peer.socket });
+    seatedRoom.addClient(seat);
+    waitingRoom.addPendingClient("u", "u#1", peer.socket, "U");
+
+    const context = createConnectionContext(io, peer.socket, state);
+    context.currentRoom = seatedRoom;
+    context.currentClient = seat;
+    context.pendingRoomId = "b";
+    context.pendingRoomChannelId = waitingRoom.channelId;
+    context.pendingUserKey = "u";
+    registerDisconnectHandlers(context);
+
+    void peer.handlers.get("disconnect")!(...["transport close"] as never[]);
+    expect(waitingRoom.pendingClients.has("u")).toBe(false);
   });
 });

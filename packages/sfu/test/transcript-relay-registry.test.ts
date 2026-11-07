@@ -246,4 +246,47 @@ describe("TranscriptRelayRegistry", () => {
       { controllerUserId: "u1", flushBufferedAudio: true },
     ]);
   });
+
+  it("does not orphan a replacement relay started while a stop awaits its handoff", async () => {
+    const closed: string[] = [];
+    let releaseHandoff!: () => void;
+    const handoffGate = new Promise<void>((resolve) => { releaseHandoff = resolve; });
+    const registry = createTranscriptRelayRegistry({
+      enabled: true,
+      createRelay: (options) => ({
+        controllerUserId: options.controllerUserId,
+        start: async () => {},
+        prepareHandoff: async () => {
+          if (options.controllerUserId === "u1") await handoffGate;
+          return true;
+        },
+        syncProducers: async () => {},
+        close: () => { closed.push(options.controllerUserId); },
+      }),
+    });
+    const start = (controllerUserId: string, canReplaceExistingRelay: boolean) =>
+      registry.start({
+        room,
+        workerUrl: "http://worker.test",
+        workerToken: `token-${controllerUserId}`,
+        controllerUserId,
+        controllerDisplayName: controllerUserId,
+        canReplaceExistingRelay,
+      });
+
+    await start("u1", false);
+    const stopping = registry.stopRoomForUser({
+      roomKey: room.channelId,
+      userId: "u1",
+      canStopAnyRelay: false,
+    });
+    // A host replaces the relay while u1's stop is still preparing handoff.
+    await expect(start("u2", true)).resolves.toMatchObject({ success: true });
+    releaseHandoff();
+    await expect(stopping).resolves.toEqual({ success: true });
+
+    // The replacement is still registered, so the room can stop it.
+    registry.stopRoom(room.channelId);
+    expect(closed).toContain("u2");
+  });
 });

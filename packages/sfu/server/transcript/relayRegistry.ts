@@ -184,7 +184,12 @@ export const createTranscriptRelayRegistry = (options: {
         );
       }
       relay.close({ flushBufferedAudio: true });
-      relays.delete(roomKey);
+      // A host can start a replacement relay while prepareHandoff() awaits;
+      // only remove the entry if it is still the relay this call stopped, or
+      // the newer relay would keep running with no way to stop it.
+      if (relays.get(roomKey) === relay) {
+        relays.delete(roomKey);
+      }
       return { success: true };
     },
     async syncRoom(room) {
