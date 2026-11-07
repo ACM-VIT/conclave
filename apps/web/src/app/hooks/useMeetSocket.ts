@@ -16,6 +16,11 @@ import {
   buildMicrophoneOpusCodecOptions,
   buildScreenShareAudioOpusCodecOptions,
 } from "../lib/constants";
+import {
+  resolveInFlightReconnectRequest,
+  resolveReconnectStartAttempts,
+  type ReconnectRequest,
+} from "../lib/reconnect-request-policy";
 import type {
   ActiveSpeakerChangedNotification,
   AdminNoticeNotification,
@@ -8917,15 +8922,17 @@ export function useMeetSocket({
     ],
   );
 
-  const handleReconnect = useCallback(async (options?: { immediate?: boolean }) => {
+  const handleReconnect = useCallback(async (options?: ReconnectRequest) => {
     if (reconnectInFlightRef.current) {
       const cancelBackoff = reconnectBackoffCancelRef.current;
-      manualReconnectRetryRequestedRef.current = true;
-      if (
-        options?.immediate === true &&
-        reconnectPhaseRef.current === "waiting" &&
-        cancelBackoff
-      ) {
+      const decision = resolveInFlightReconnectRequest(options, {
+        isWaitingForBackoff: reconnectPhaseRef.current === "waiting",
+        canCancelBackoff: Boolean(cancelBackoff),
+      });
+      if (decision.markUserRetry) {
+        manualReconnectRetryRequestedRef.current = true;
+      }
+      if (decision.cancelBackoff && cancelBackoff) {
         updateReconnectRecoveryStatus((current) =>
           buildReconnectRecoveryStatus(
             "connecting",
@@ -8937,6 +8944,9 @@ export function useMeetSocket({
         cancelBackoff();
         return;
       }
+      // A background nudge (disconnect, transport failure, focus, online)
+      // while a loop is running: that loop already owns recovery.
+      if (!decision.announceQueuedRetry) return;
 
       updateReconnectRecoveryStatus((current) =>
         current
@@ -8958,6 +8968,10 @@ export function useMeetSocket({
     let skipNextDelay = options?.immediate === true;
     let lastReconnectError: unknown = null;
     reconnectInFlightRef.current = true;
+    reconnectAttemptsRef.current = resolveReconnectStartAttempts(
+      reconnectAttemptsRef.current,
+      MAX_RECONNECT_ATTEMPTS,
+    );
     setMeetError(null);
 
     try {
@@ -9623,7 +9637,7 @@ export function useMeetSocket({
     }
 
     if (reconnectInFlightRef.current) {
-      await handleReconnect({ immediate: true });
+      await handleReconnect({ immediate: true, userInitiated: true });
       return;
     }
 
@@ -9640,7 +9654,7 @@ export function useMeetSocket({
     setConnectionState("reconnecting");
 
     if (currentRoomIdRef.current) {
-      await handleReconnect({ immediate: true });
+      await handleReconnect({ immediate: true, userInitiated: true });
       return;
     }
 
