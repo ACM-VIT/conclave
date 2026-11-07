@@ -7,6 +7,7 @@ import { Room } from "../config/classes/Room.js";
 import { LocalRoomRegistry } from "../server/roomRegistry.js";
 import type { SfuAuthPayload } from "../server/socket/auth.js";
 import { createConnectionContext } from "../server/socket/context.js";
+import { registerAdminHandlers } from "../server/socket/handlers/adminHandlers.js";
 import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { createSfuState, type SfuState } from "../server/state.js";
 
@@ -188,5 +189,46 @@ describe("concurrent room creation", () => {
     expect(room.hostUserKey).toBe("alice");
     expect(room.isAdminUserKey("bob")).toBe(false);
     expect(room.getAdminUserIds()).toEqual(["alice#a"]);
+  });
+});
+
+describe("delayed room end", () => {
+  it("does not close or disconnect a newer room reopened on the same channel", async () => {
+    vi.useFakeTimers();
+    const state = makeState();
+    const makeRoom = () => new Room({
+      id: "room",
+      clientId: "conclave",
+      workerPid: null,
+      router: { closed: false, close: vi.fn() } as unknown as Router,
+    });
+    const endedRoom = makeRoom();
+    state.rooms.set(endedRoom.channelId, endedRoom);
+    const disconnectSockets = vi.fn();
+    const adminIo = {
+      to: () => ({ emit: vi.fn() }),
+      in: () => ({ disconnectSockets }),
+    } as unknown as SocketIOServer;
+    const hostSocket = makeSocket("host-socket");
+    const host = new Admin({ id: "host#h", socket: hostSocket.socket });
+    endedRoom.setUserIdentity(host.id, "host@example.com", "Host");
+    endedRoom.addClient(host);
+    const context = createConnectionContext(adminIo, hostSocket.socket, state);
+    context.currentRoom = endedRoom;
+    context.currentClient = host;
+    registerAdminHandlers(context, { roomId: endedRoom.id });
+
+    const ack = vi.fn();
+    await hostSocket.handlers.get("admin:endRoom")!(...[{ delayMs: 10_000 }, ack] as never[]);
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+    // Everyone leaves early, the room is cleaned up, and the host reopens it.
+    state.rooms.delete(endedRoom.channelId);
+    const reopened = makeRoom();
+    state.rooms.set(reopened.channelId, reopened);
+
+    vi.advanceTimersByTime(10_000);
+    expect(state.rooms.get("conclave:room")).toBe(reopened);
+    expect(disconnectSockets).not.toHaveBeenCalled();
   });
 });

@@ -202,6 +202,16 @@ const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
   return room;
 };
 
+/**
+ * Whether `room` is still the room registered for its channel. A delayed
+ * close armed for one room must not touch a newer room that was reopened on
+ * the same channel (or a second close of the same room).
+ */
+export const isCurrentRoom = (
+  state: SfuState,
+  room: Pick<Room, "channelId">,
+): boolean => state.rooms.get(room.channelId) === room;
+
 export const forceCloseRoom = (state: SfuState, channelId: string): boolean => {
   const room = cleanupRoomState(state, channelId);
   if (!room) {

@@ -1,5 +1,6 @@
 import type { MediaKind } from "mediasoup/types";
 import { Admin } from "../../../config/classes/Admin.js";
+import type { Room } from "../../../config/classes/Room.js";
 import type { ProducerType } from "../../../config/classes/Client.js";
 import type { RedirectData } from "../../../types.js";
 import { Logger } from "../../../utilities/loggers.js";
@@ -21,7 +22,7 @@ import {
   isSuperAdminClient,
   SUPER_ADMIN_REMOVAL_ERROR,
 } from "../../admin/moderation.js";
-import { forceCloseRoom, markRoomEnded } from "../../rooms.js";
+import { forceCloseRoom, isCurrentRoom, markRoomEnded } from "../../rooms.js";
 import { getSocketAuthUser } from "../auth.js";
 import { getSocketContext, type ConnectionContext } from "../context.js";
 import { RATE_LIMITS, takeToken } from "../rateLimit.js";
@@ -1584,9 +1585,17 @@ export const registerAdminHandlers = (
   });
 
   const scheduleRoomClosure = (
-    roomChannelId: string,
+    endedRoom: Room,
     pendingSockets: Array<{ disconnect: (close?: boolean) => void }> = [],
   ) => {
+    const roomChannelId = endedRoom.channelId;
+    if (!isCurrentRoom(state, endedRoom)) {
+      // Everyone left early and the channel was reopened (or this room was
+      // already closed): the sockets in the channel now belong to a newer
+      // room, so leave them and that room alone.
+      Logger.info(`Skipping delayed close of ${roomChannelId}: room already replaced or closed`);
+      return;
+    }
     io.in(roomChannelId).disconnectSockets(true);
     for (const pendingSocket of pendingSockets) {
       pendingSocket.disconnect(true);
@@ -1612,10 +1621,11 @@ export const registerAdminHandlers = (
 
     const message = parseEndRoomMessage(data?.message);
     const delayMs = parseEndRoomDelay(data?.delayMs);
-    const roomChannelId = guard.room.channelId;
-    const roomId = guard.room.id;
+    const endedRoom = guard.room;
+    const roomChannelId = endedRoom.channelId;
+    const roomId = endedRoom.id;
 
-    markRoomEnded(state, guard.room, {
+    markRoomEnded(state, endedRoom, {
       message,
       endedBy: guard.adminId,
     });
@@ -1646,7 +1656,7 @@ export const registerAdminHandlers = (
     const ROOM_END_FLUSH_GRACE_MS = 400;
     setTimeout(
       () => {
-        scheduleRoomClosure(roomChannelId, pendingSockets);
+        scheduleRoomClosure(endedRoom, pendingSockets);
       },
       Math.max(delayMs, ROOM_END_FLUSH_GRACE_MS),
     );

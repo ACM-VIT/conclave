@@ -829,6 +829,42 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
+        // The screen-share checks above ran before the produce await. Another
+        // participant can have started sharing meanwhile (both passed the
+        // check), or this user's screen video can have ended; re-check before
+        // claiming the room's single share slot or advertising screen audio.
+        const screenShareConflictError = (() => {
+          if (isScreenShareVideo) {
+            const currentShareId = room.screenShareProducerId;
+            const currentShareInfo = currentShareId
+              ? room.getProducerInfoById(currentShareId)
+              : null;
+            return currentShareInfo &&
+              currentShareInfo.producerUserId !== currentClient.id
+              ? "Screen is already being shared"
+              : null;
+          }
+          if (isScreenShareAudio) {
+            return currentClient.getProducer("video", "screen")
+              ? null
+              : "Screen share audio requires an active screen share";
+          }
+          return null;
+        })();
+        if (screenShareConflictError) {
+          if (capacityTransitionReservation) {
+            room.cancelWebcamReceiverCapacityTransition(
+              capacityTransitionReservation,
+            );
+            capacityTransitionReservation = null;
+          }
+          try {
+            producer.close();
+          } catch {}
+          respond(callback, { error: screenShareConflictError });
+          return;
+        }
+
         const roomChannelId = room.channelId;
         const clientId = currentClient.id;
         let producerClosed = false;
