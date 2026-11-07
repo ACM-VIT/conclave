@@ -49,6 +49,13 @@ interface BrowserServiceSessionResponse {
 }
 
 const roomBrowserStates: Map<string, RoomBrowserState> = new Map();
+
+// Launches in flight, by channel. A launch spans several awaits (capability
+// probe, browser audio and video producers, the service's /launch) before the
+// channel is marked active. Without this "launching" state a second launch
+// passed the `active` check and leaked the first launch's producers, and a
+// close (or the room closing) during a launch was lost.
+const launchingBrowserChannels: Map<string, { cancelled: boolean }> = new Map();
 const roomBrowserAudio: Map<
     string,
     {
@@ -392,6 +399,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
             callback: (response: LaunchBrowserResponse | { error: string }) => void
         ) => {
             let requestedChannelId: string | undefined;
+            let launch: { cancelled: boolean } | null = null;
             try {
                 const client = context.currentClient;
                 const room = context.currentRoom;
@@ -426,6 +434,13 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     respond(callback, { error: "Browser session already active" });
                     return;
                 }
+                if (launchingBrowserChannels.has(channelId)) {
+                    respond(callback, { error: "Browser is already launching" });
+                    return;
+                }
+                const activeLaunch = { cancelled: false };
+                launch = activeLaunch;
+                launchingBrowserChannels.set(channelId, activeLaunch);
 
                 const capabilities = await getBrowserServiceCapabilities({ verifyBackend: false });
                 let audioTarget = null;
@@ -446,6 +461,13 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     }
                 }
 
+                if (activeLaunch.cancelled) {
+                    await cleanupBrowserAudio(channelId, context);
+                    await cleanupBrowserVideo(channelId, context);
+                    respond(callback, { error: "Browser launch was cancelled" });
+                    return;
+                }
+
                 const result = await callBrowserService<BrowserServiceSessionResponse>("/launch", {
                     payload: {
                         roomId: channelId,
@@ -460,6 +482,21 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     await cleanupBrowserAudio(channelId, context);
                     await cleanupBrowserVideo(channelId, context);
                     respond(callback, { error: result.error || "Failed to launch browser" });
+                    return;
+                }
+
+                if (activeLaunch.cancelled) {
+                    // Closed by an admin, or the room closed, while launching.
+                    try {
+                        await callBrowserService<{ success: boolean; error?: string }>("/close", {
+                            payload: { roomId: channelId },
+                        });
+                    } catch (error) {
+                        Logger.warn("[SharedBrowser] Failed to close a cancelled launch:", error);
+                    }
+                    await cleanupBrowserAudio(channelId, context);
+                    await cleanupBrowserVideo(channelId, context);
+                    respond(callback, { error: "Browser launch was cancelled" });
                     return;
                 }
 
@@ -494,6 +531,14 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     await cleanupBrowserVideo(requestedChannelId, context);
                 }
                 respond(callback, { error: describeBrowserServiceError(error) });
+            } finally {
+                if (
+                    launch &&
+                    requestedChannelId &&
+                    launchingBrowserChannels.get(requestedChannelId) === launch
+                ) {
+                    launchingBrowserChannels.delete(requestedChannelId);
+                }
             }
         }
     );
@@ -622,6 +667,10 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                 const currentState = getBrowserState(channelId);
 
                 if (!currentState.active) {
+                    // A launch in flight is cancelled; it closes its own
+                    // session once the browser service answers.
+                    const launching = launchingBrowserChannels.get(channelId);
+                    if (launching) launching.cancelled = true;
                     respond(callback, { success: true });
                     return;
                 }
@@ -765,6 +814,8 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
 };
 
 export const cleanupRoomBrowser = async (channelId: string): Promise<void> => {
+    const launching = launchingBrowserChannels.get(channelId);
+    if (launching) launching.cancelled = true;
     const state = getBrowserState(channelId);
 
     if (state.active) {
