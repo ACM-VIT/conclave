@@ -1904,7 +1904,17 @@ export const registerMediaHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        if (context.currentRoom.screenShareProducerId === producerId) {
+        // Clears a stale share slot (its producer is already gone) or the
+        // caller's own. Anyone can learn another sharer's producer id, so a
+        // live share owned by someone else must keep the slot.
+        const shareInfo =
+          context.currentRoom.screenShareProducerId === producerId
+            ? context.currentRoom.getProducerInfoById(producerId)
+            : undefined;
+        if (
+          context.currentRoom.screenShareProducerId === producerId &&
+          (!shareInfo || shareInfo.producerUserId === context.currentClient.id)
+        ) {
           context.currentRoom.clearScreenShareProducer(producerId);
           emitWebinarFeedChanged(io, state, context.currentRoom);
         }

@@ -21,6 +21,33 @@ const MAX_APPS_SYNC_BYTES = 64 * 1024;
 const MAX_APPS_SYNC_RESPONSE_BYTES = 1024 * 1024;
 const MAX_APPS_UPDATE_BYTES = 256 * 1024;
 const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
+// A document larger than one sync response can no longer reach new joiners,
+// so it is also the most a document may grow to.
+const MAX_APPS_DOC_BYTES = MAX_APPS_SYNC_RESPONSE_BYTES;
+
+// Encoded size of each document, measured lazily: the last exact measurement
+// plus the bytes accepted since. Without a bound, a participant could stream
+// 256 KB updates into a room's app until the SFU ran out of memory.
+const appDocSizes = new WeakMap<Y.Doc, { measured: number; sinceMeasured: number }>();
+
+/** Whether `update` fits in `doc`, re-measuring only near the limit. */
+const reserveAppDocBytes = (doc: Y.Doc, updateBytes: number): boolean => {
+  let size = appDocSizes.get(doc);
+  if (!size) {
+    size = { measured: Y.encodeStateAsUpdate(doc).length, sinceMeasured: 0 };
+    appDocSizes.set(doc, size);
+  }
+  if (size.measured + size.sinceMeasured + updateBytes > MAX_APPS_DOC_BYTES) {
+    // Deletions can shrink a document, so measure before refusing.
+    if (size.sinceMeasured > 0) {
+      size.measured = Y.encodeStateAsUpdate(doc).length;
+      size.sinceMeasured = 0;
+    }
+    if (size.measured + updateBytes > MAX_APPS_DOC_BYTES) return false;
+  }
+  size.sinceMeasured += updateBytes;
+  return true;
+};
 const MAX_APP_ID_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
@@ -272,6 +299,10 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) return;
     if (update.length > MAX_APPS_UPDATE_BYTES) return;
+    if (!reserveAppDocBytes(doc, update.length)) {
+      Logger.warn(`[Apps] Dropping update for ${appId}: document size limit reached`);
+      return;
+    }
 
     try {
       Y.applyUpdate(doc, update, socket.id);

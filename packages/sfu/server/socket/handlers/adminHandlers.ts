@@ -812,10 +812,18 @@ export const registerAdminHandlers = (
     });
   });
 
+  // Listing other meetings is for verified super admins (operators); a room
+  // admin, which anyone can become by creating a room, sees only their own.
+  const canSeeOtherRooms = () =>
+    getSocketAuthUser(socket)?.isSuperAdmin === true;
+
   socket.on("getRooms", (cb) => {
     const clientId = resolveClientId(context);
+    const ownRoom = context.currentRoom;
     const roomList = Array.from(state.rooms.values())
-      .filter((room) => room.clientId === clientId)
+      .filter((room) =>
+        canSeeOtherRooms() ? room.clientId === clientId : room === ownRoom,
+      )
       .map((room) => ({
         id: room.id,
         userCount:
@@ -832,9 +840,11 @@ export const registerAdminHandlers = (
     }
 
     const clientId = guard.room.clientId;
-    const rooms = Array.from(state.rooms.values())
-      .filter((room) => room.clientId === clientId)
-      .map((room) => toRoomSnapshot(room));
+    const rooms = canSeeOtherRooms()
+      ? Array.from(state.rooms.values())
+          .filter((room) => room.clientId === clientId)
+          .map((room) => toRoomSnapshot(room))
+      : [toRoomSnapshot(guard.room)];
     respond(cb, { rooms });
   });
 

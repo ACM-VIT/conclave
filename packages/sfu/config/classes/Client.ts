@@ -99,6 +99,9 @@ function createProducerKey(
   return `${kind}-${type}`;
 }
 
+/** The current consumer of a producer plus at most two predecessors. */
+export const MAX_LIVE_CONSUMER_GENERATIONS = 3;
+
 export class Client {
   public readonly id: string;
   public readonly socket: Socket;
@@ -334,6 +337,27 @@ export class Client {
     consumer.on("transportclose", cleanup);
     consumer.on("producerclose", cleanup);
     consumer.observer.on("close", cleanup);
+
+    // Bound overlapping generations per producer. Displaced generations are
+    // retired by a delayed timer, but each new consume re-arms every
+    // predecessor's retirement, so a client re-consuming one producer faster
+    // than that delay kept every generation alive: unbounded consumers on the
+    // worker and timers in the process. Restoration only ever uses the newest
+    // live predecessor, so anything older than the last two is closed now.
+    const generationIdsForProducer =
+      this.consumerIdsByProducerId.get(consumer.producerId) ?? [];
+    const excessGenerations =
+      generationIdsForProducer.length - MAX_LIVE_CONSUMER_GENERATIONS;
+    if (excessGenerations > 0) {
+      for (const staleId of generationIdsForProducer.slice(0, excessGenerations)) {
+        if (staleId === consumer.id) continue;
+        const stale = this.consumersById.get(staleId);
+        if (!stale || stale.closed) continue;
+        try {
+          stale.close();
+        } catch {}
+      }
+    }
 
     return displacedConsumer
       ? { consumer: displacedConsumer, retirementRevision }
