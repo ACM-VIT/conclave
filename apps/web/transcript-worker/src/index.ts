@@ -1,3 +1,4 @@
+import { transcriptRoomObjectName, verifyTranscriptRoomToken } from "./auth";
 import { TranscriptRoom } from "./room";
 import { getTranscriptServiceVersion } from "./service-version";
 import type { Env } from "./types";
@@ -48,7 +49,18 @@ export default {
       return json({ error: "WebSocket upgrade required" }, { status: 426 });
     }
 
-    const objectId = env.TRANSCRIPT_ROOM.idFromName(roomId);
+    // Route by the verified token's tenant, not the path alone: the same room
+    // code can exist under different client ids.
+    const payload = await verifyTranscriptRoomToken(
+      url.searchParams.get("token") || "",
+      env.TRANSCRIPT_TOKEN_SECRET,
+      roomId,
+    );
+    const objectName = payload ? transcriptRoomObjectName(payload) : null;
+    if (!objectName) {
+      return json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const objectId = env.TRANSCRIPT_ROOM.idFromName(objectName);
     const stub = env.TRANSCRIPT_ROOM.get(objectId);
     return stub.fetch(request);
   },
