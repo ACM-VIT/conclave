@@ -63,10 +63,17 @@ const getSpeech = async (
 };
 
 export async function POST(request: Request): Promise<Response> {
-  if (!(await takeSpeechRateLimit(request))) {
+  const rateLimit = await takeSpeechRateLimit(request);
+  if (rateLimit === "limited") {
     return NextResponse.json(
       { error: "Too many speech requests. Try again shortly." },
       { status: 429, headers: { "retry-after": "60" } },
+    );
+  }
+  if (rateLimit === "unavailable") {
+    return NextResponse.json(
+      { error: "Speech is temporarily unavailable." },
+      { status: 503, headers: { "retry-after": "30" } },
     );
   }
   try {

@@ -157,6 +157,9 @@ export function AppsProvider({
     isReadOnlyRef.current = isReadOnly;
   }, [isReadOnly]);
 
+  // The active app as of the last state the server sent.
+  const serverActiveAppIdRef = useRef<string | null>(null);
+
   const resetLocalData = useCallback(() => {
     for (const [appId, doc] of docsRef.current.entries()) {
       const handler = docHandlersRef.current.get(appId);
@@ -184,6 +187,7 @@ export function AppsProvider({
     awarenessHandlersRef.current.clear();
     pendingInitialUpdatesRef.current.clear();
     initialUpdateSentRef.current.clear();
+    serverActiveAppIdRef.current = null;
     setState({ activeAppId: null, locked: false });
   }, []);
 
@@ -223,14 +227,21 @@ export function AppsProvider({
     initialUpdateSentRef.current.delete(appId);
   }, []);
 
-  const previousActiveAppIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    const previous = previousActiveAppIdRef.current;
-    previousActiveAppIdRef.current = state.activeAppId;
-    if (previous && previous !== state.activeAppId) {
-      discardLocalApp(previous);
-    }
-  }, [state.activeAppId, discardLocalApp]);
+  // Applies a state the server sent, discarding the local document of an app
+  // the server just closed or replaced. Done per message, not per React
+  // commit: a close and reopen batched into one commit would otherwise never
+  // be seen as a change, and the old document would survive the reopen.
+  const applyServerAppsState = useCallback(
+    (next: AppsState) => {
+      const previous = serverActiveAppIdRef.current;
+      serverActiveAppIdRef.current = next.activeAppId;
+      if (previous && previous !== next.activeAppId) {
+        discardLocalApp(previous);
+      }
+      setState(next);
+    },
+    [discardLocalApp],
+  );
 
   const registerDocHandlers = useCallback((appId: string, doc: Y.Doc) => {
     if (docHandlersRef.current.has(appId)) return;
@@ -327,10 +338,10 @@ export function AppsProvider({
 
     currentSocket.emit("apps:getState", (response?: unknown) => {
       if (isAppsState(response)) {
-        setState(response);
+        applyServerAppsState(response);
       }
     });
-  }, []);
+  }, [applyServerAppsState]);
 
   const syncApp = useCallback(
     (appId: string) => {
@@ -383,7 +394,7 @@ export function AppsProvider({
 
     const handleState = (next: unknown) => {
       if (!isAppsState(next)) return;
-      setState(next);
+      applyServerAppsState(next);
     };
 
     const handleUpdate = (payload: AppsUpdatePayload) => {
@@ -421,7 +432,7 @@ export function AppsProvider({
       socket.off("apps:yjs:update", handleUpdate);
       socket.off("apps:awareness", handleAwareness);
     };
-  }, [socket, getDoc, getAwareness, refreshState]);
+  }, [socket, getDoc, getAwareness, refreshState, applyServerAppsState]);
 
   useEffect(() => {
     if (!socket) return;

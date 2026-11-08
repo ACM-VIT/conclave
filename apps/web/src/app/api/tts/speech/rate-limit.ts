@@ -42,19 +42,37 @@ const takeLocalRateLimit = (key: string): boolean => {
   return true;
 };
 
-/** Whether this request may generate speech now. */
-export async function takeSpeechRateLimit(request: Request): Promise<boolean> {
+export type SpeechRateLimitOutcome = "allowed" | "limited" | "unavailable";
+
+/**
+ * Whether this request may generate speech now. Inside a Cloudflare
+ * deployment the shared limiter is required: if its binding is missing or
+ * fails, requests are refused ("unavailable") rather than metered per isolate,
+ * which would let callers exceed the budget across instances. Outside
+ * Cloudflare (local runs, tests, `next start`) there is no Cloudflare context
+ * and an in-process window applies.
+ */
+export async function takeSpeechRateLimit(
+  request: Request,
+): Promise<SpeechRateLimitOutcome> {
   const key = `tts-speech:${clientKey(request)}`;
+  let env: unknown;
   try {
-    const { env } = await getCloudflareContext({ async: true });
-    const binding = (env as { TTS_SPEECH_RATE_LIMITER?: CloudflareRateLimitBinding })
-      .TTS_SPEECH_RATE_LIMITER;
-    if (binding && typeof binding.limit === "function") {
-      const { success } = await binding.limit({ key });
-      return success;
-    }
+    ({ env } = await getCloudflareContext({ async: true }));
   } catch {
-    // No Cloudflare context (local dev, tests): use the in-process window.
+    return takeLocalRateLimit(key) ? "allowed" : "limited";
   }
-  return takeLocalRateLimit(key);
+  const binding = (env as { TTS_SPEECH_RATE_LIMITER?: CloudflareRateLimitBinding })
+    .TTS_SPEECH_RATE_LIMITER;
+  if (!binding || typeof binding.limit !== "function") {
+    console.error("[TTS] TTS_SPEECH_RATE_LIMITER binding is missing; refusing speech requests.");
+    return "unavailable";
+  }
+  try {
+    const { success } = await binding.limit({ key });
+    return success ? "allowed" : "limited";
+  } catch (error) {
+    console.error("[TTS] Speech rate limiter failed; refusing speech requests.", error);
+    return "unavailable";
+  }
 }

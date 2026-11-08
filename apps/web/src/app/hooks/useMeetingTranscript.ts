@@ -1136,6 +1136,9 @@ export function useMeetingTranscript({
         setPermissionError();
         return false;
       }
+      // Captured before the first await: a stop during connect or the relay
+      // check must keep this start from sending at all.
+      const stopSerialAtRequest = explicitStopSerialRef.current;
       const connected = await connect();
       if (!connected) return false;
       suppressAutoTakeoverUntilRef.current = 0;
@@ -1145,7 +1148,7 @@ export function useMeetingTranscript({
       }
       sfuRelayStartTokenRef.current = null;
       clearSfuRelayStartTokenWaiters();
-      const stopSerialAtRequest = explicitStopSerialRef.current;
+      if (explicitStopSerialRef.current !== stopSerialAtRequest) return false;
       const sent = send({
         type: "session.start",
         apiKey: options.apiKey,
@@ -1204,6 +1207,8 @@ export function useMeetingTranscript({
         setPermissionError();
         return false;
       }
+      // Captured before the first await (see start).
+      const stopSerialAtRequest = explicitStopSerialRef.current;
       const connected = await connect();
       if (!connected) return false;
       suppressAutoTakeoverUntilRef.current = 0;
@@ -1213,7 +1218,7 @@ export function useMeetingTranscript({
       }
       sfuRelayStartTokenRef.current = null;
       clearSfuRelayStartTokenWaiters();
-      const stopSerialAtRequest = explicitStopSerialRef.current;
+      if (explicitStopSerialRef.current !== stopSerialAtRequest) return false;
       const sent = send({
         type: "session.takeover",
         apiKey: options.apiKey,

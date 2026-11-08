@@ -77,3 +77,18 @@ it("does not resurrect a closed app's content when it is reopened", async () => 
     expect(received.getMap("shapes").get("circle")).toBeUndefined();
   }
 });
+
+it("discards the closed document when close and reopen land in one React commit", async () => {
+  await serverState("board");
+  const firstDoc = ctx.getDoc("board");
+  firstDoc.getMap("shapes").set("circle", 1);
+
+  await act(async () => {
+    listeners.get("apps:state")!({ activeAppId: null, locked: false });
+    listeners.get("apps:state")!({ activeAppId: "board", locked: false });
+  });
+
+  const reopened = ctx.getDoc("board");
+  expect(reopened).not.toBe(firstDoc);
+  expect(reopened.getMap("shapes").get("circle")).toBeUndefined();
+});
