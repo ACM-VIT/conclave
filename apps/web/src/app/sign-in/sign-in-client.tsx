@@ -4,6 +4,7 @@ import Image from "next/image";
 import { ArrowLeft, FlaskConical, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { signIn, useSession } from "@/lib/auth-client";
+import { toSafeNextPath } from "../lib/safe-next-path";
 
 type AuthProviderId = "google" | "apple" | "roblox" | "vercel";
 type ActiveSignIn = AuthProviderId | "dev";
@@ -26,10 +27,7 @@ const providerLabels: Record<AuthProviderId, string> = {
 
 const providerOrder: AuthProviderId[] = ["google", "apple", "roblox", "vercel"];
 
-const sanitizeNext = (value: string): string => {
-  if (!value.startsWith("/") || value.startsWith("//")) return "/";
-  return value;
-};
+const sanitizeNext = (value: string): string => toSafeNextPath(value) ?? "/";
 
 const providerIcon = (provider: AuthProviderId) => {
   if (provider === "google") {
