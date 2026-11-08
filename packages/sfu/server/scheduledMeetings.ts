@@ -114,12 +114,49 @@ export const createScheduledMeetingStore = (): ScheduledMeetingStore => ({
 const roomCodeKey = (clientId: string, roomCode: string): string =>
   `${clientId}:${roomCode}`;
 
+const isActiveMeeting = (meeting: ScheduledMeeting): boolean =>
+  meeting.status === "scheduled" || meeting.status === "live";
+
+/**
+ * Point the room-code index at `meeting`. A code can be reused once its
+ * earlier meeting has ended or been cancelled, so several meetings can share
+ * a code; the index keeps pointing at the active one.
+ */
+const claimRoomCode = (
+  store: ScheduledMeetingStore,
+  meeting: ScheduledMeeting,
+): void => {
+  const key = roomCodeKey(meeting.clientId, meeting.roomCode);
+  const ownerId = store.byRoomCode.get(key);
+  const owner = ownerId ? store.byId.get(ownerId) : undefined;
+  if (
+    owner &&
+    owner.id !== meeting.id &&
+    isActiveMeeting(owner) &&
+    !isActiveMeeting(meeting)
+  ) {
+    return;
+  }
+  store.byRoomCode.set(key, meeting.id);
+};
+
+/** Drop `meeting`'s room-code entry, but never another meeting's. */
+const releaseRoomCode = (
+  store: ScheduledMeetingStore,
+  meeting: ScheduledMeeting,
+): void => {
+  const key = roomCodeKey(meeting.clientId, meeting.roomCode);
+  if (store.byRoomCode.get(key) === meeting.id) {
+    store.byRoomCode.delete(key);
+  }
+};
+
 const registerStore = (
   store: ScheduledMeetingStore,
   meeting: ScheduledMeeting,
 ): void => {
   store.byId.set(meeting.id, meeting);
-  store.byRoomCode.set(roomCodeKey(meeting.clientId, meeting.roomCode), meeting.id);
+  claimRoomCode(store, meeting);
 };
 
 const unregisterStore = (
@@ -127,7 +164,7 @@ const unregisterStore = (
   meeting: ScheduledMeeting,
 ): void => {
   store.byId.delete(meeting.id);
-  store.byRoomCode.delete(roomCodeKey(meeting.clientId, meeting.roomCode));
+  releaseRoomCode(store, meeting);
 };
 
 const isCodeTaken = (
@@ -310,10 +347,9 @@ export const updateScheduledMeeting = (
       if (isCodeTaken(store, meeting.clientId, nextCode, meeting.id)) {
         throw new Error("That meeting code is already booked.");
       }
-      const previousKey = roomCodeKey(meeting.clientId, meeting.roomCode);
-      store.byRoomCode.delete(previousKey);
+      releaseRoomCode(store, meeting);
       meeting.roomCode = nextCode;
-      store.byRoomCode.set(roomCodeKey(meeting.clientId, nextCode), meeting.id);
+      claimRoomCode(store, meeting);
     }
   }
   if (request.status) {
@@ -422,10 +458,10 @@ export const moveScheduledMeetingToClient = (
   if (isCodeTaken(store, nextClientId, meeting.roomCode, meeting.id)) {
     throw new Error("That meeting code already exists in the target client.");
   }
-  store.byRoomCode.delete(roomCodeKey(meeting.clientId, meeting.roomCode));
+  releaseRoomCode(store, meeting);
   meeting.clientId = nextClientId;
   meeting.updatedAt = Date.now();
-  store.byRoomCode.set(roomCodeKey(meeting.clientId, meeting.roomCode), meeting.id);
+  claimRoomCode(store, meeting);
   return meeting;
 };
 
@@ -649,7 +685,11 @@ const createSqliteScheduledMeetingPersistence = (
       updated_at INTEGER NOT NULL,
       payload_json TEXT NOT NULL
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS scheduled_meetings_code_idx
+    -- Not unique: a code is reused once its earlier meeting has ended or
+    -- been cancelled, and the store keeps both. The unique index made every
+    -- save that held both fail, silently, for good.
+    DROP INDEX IF EXISTS scheduled_meetings_code_idx;
+    CREATE INDEX IF NOT EXISTS scheduled_meetings_client_code_idx
       ON scheduled_meetings(client_id, room_code);
     CREATE INDEX IF NOT EXISTS scheduled_meetings_status_start_idx
       ON scheduled_meetings(status, scheduled_start_at);
