@@ -47,6 +47,7 @@ import { buildSchedulingMeetingLink } from "../schedulingLinks.js";
 import type { SfuState } from "../state.js";
 import {
   canonicalizeClientId,
+  canMigrateClientNamespace,
   clientIdCandidates,
   resolveDefaultClientId,
 } from "../clientIds.js";
@@ -259,6 +260,9 @@ const requireHostProfile = async (
         user.userId,
       );
       if (!legacyProfile) continue;
+      // Only into the deployment's default client: the requested id comes
+      // from the request and must not move a profile's booking meetings out.
+      if (!canMigrateClientNamespace(legacyProfile.clientId, clientId)) break;
       await migrateProfileNamespace(state, legacyProfile, clientId);
       break;
     }

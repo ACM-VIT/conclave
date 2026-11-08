@@ -27,6 +27,7 @@ import { clearWebinarLinkSlug } from "../webinar.js";
 import type { SfuState } from "../state.js";
 import {
   canonicalizeClientId,
+  canMigrateClientNamespace,
   clientIdCandidates,
   resolveDefaultClientId,
 } from "../clientIds.js";
@@ -185,6 +186,7 @@ export const registerScheduledWebinarRoutes = (
     clientId: string,
   ): ScheduledWebinar | null => {
     if (webinar.clientId === clientId) return webinar;
+    if (!canMigrateClientNamespace(webinar.clientId, clientId)) return null;
     try {
       const migrated = moveScheduledWebinarToClient(
         state.scheduledWebinars,
