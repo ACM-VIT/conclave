@@ -106,7 +106,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
   const { socket, io } = context;
 
   socket.on("apps:getState", (callback: (state: AppsState) => void) => {
-    callback(getRoomAppsState(context));
+    respond(callback, getRoomAppsState(context));
   });
 
   socket.on(

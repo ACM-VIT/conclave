@@ -707,7 +707,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
     socket.on("browser:getState", async (callback: (state: BrowserStateNotification) => void) => {
         const room = context.currentRoom;
         if (!room) {
-            callback({ active: false });
+            respond(callback, { active: false });
             return;
         }
 
@@ -726,7 +726,7 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     context.io.to(channelId).emit("browser:closed", {
                         roomId,
                     });
-                    callback({ active: false, roomId });
+                    respond(callback, { active: false, roomId });
                     return;
                 }
                 state.noVncUrl = response.session?.noVncUrl ?? state.noVncUrl;
@@ -740,14 +740,14 @@ export const registerSharedBrowserHandlers = (context: ConnectionContext): void 
                     context.io.to(channelId).emit("browser:closed", {
                         roomId,
                     });
-                    callback({ active: false, roomId });
+                    respond(callback, { active: false, roomId });
                     return;
                 }
                 // The cached state still lets connected viewers continue when a
                 // transient refresh fails.
             }
         }
-        callback({
+        respond(callback, {
             active: state.active,
             url: state.url,
             noVncUrl: state.noVncUrl,
