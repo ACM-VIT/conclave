@@ -63,4 +63,27 @@ describe("scheduled meeting room-code reuse", () => {
     deleteScheduledMeeting(store, first.id);
     expect(getScheduledMeetingByRoomCode(store, "conclave", "standup-room")?.id).toBe(second.id);
   });
+
+  it("points the code at a meeting that is reactivated", () => {
+    const store = createScheduledMeetingStore();
+    const first = createScheduledMeeting(store, request(3_600_000), options);
+    updateScheduledMeeting(store, first.id, { status: "ended" });
+    const second = createScheduledMeeting(store, request(7_200_000), options);
+    updateScheduledMeeting(store, second.id, { status: "ended" });
+    updateScheduledMeeting(store, first.id, { status: "scheduled" });
+    expect(getScheduledMeetingByRoomCode(store, "conclave", "standup-room")?.id).toBe(first.id);
+  });
+
+  it("refuses to reactivate a meeting whose code another active meeting holds", () => {
+    const store = createScheduledMeetingStore();
+    const first = createScheduledMeeting(store, request(3_600_000), options);
+    updateScheduledMeeting(store, first.id, { status: "ended" });
+    const second = createScheduledMeeting(store, request(7_200_000), options);
+    expect(() => updateScheduledMeeting(store, first.id, { status: "live", title: "Renamed" })).toThrow(
+      "That meeting code is already booked.",
+    );
+    expect(first.status).toBe("ended");
+    expect(first.title).toBe("Standup");
+    expect(getScheduledMeetingByRoomCode(store, "conclave", "standup-room")?.id).toBe(second.id);
+  });
 });

@@ -22,8 +22,8 @@ import {
   cleanupStaleRoom,
   clearEndedRoom,
   getEndedRoom,
-  getOrCreateRoom,
   getOrCreateRoomWithOrigin,
+  renewLocalRoom,
   getRoomChannelId,
 } from "../../rooms.js";
 import {
@@ -321,7 +321,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         if (room) {
           try {
-            room = await getOrCreateRoom(state, clientId, roomId);
+            // Renew only. If the room closed during the renewal, fall through
+            // to the creation path below, which applies the creation checks
+            // and makes this joiner the creator if it creates the room.
+            room = (await renewLocalRoom(state, clientId, roomId)) ?? undefined;
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);

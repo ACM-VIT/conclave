@@ -25,29 +25,57 @@ const MAX_APPS_AWARENESS_BYTES = 64 * 1024;
 // so it is also the most a document may grow to.
 const MAX_APPS_DOC_BYTES = MAX_APPS_SYNC_RESPONSE_BYTES;
 
-// Encoded size of each document, measured lazily: the last exact measurement
-// plus the bytes accepted since. Without a bound, a participant could stream
-// 256 KB updates into a room's app until the SFU ran out of memory.
+// Encoded size of each document after the last accepted update. Without a
+// bound, a participant could stream 256 KB updates into a room's app until the
+// SFU ran out of memory.
 const appDocSizes = new WeakMap<Y.Doc, { measured: number; sinceMeasured: number }>();
 
-/** Whether `update` fits in `doc`, re-measuring only near the limit. */
-const reserveAppDocBytes = (doc: Y.Doc, updateBytes: number): boolean => {
+// An update can grow the encoded document by more than its own size: a
+// deletion splits existing items, and alternating single-character deletions
+// grew a document by about six times the update's bytes in testing. Far from
+// the limit the cheap estimate is safe with this margin; near it, measure the
+// actual result exactly.
+const UPDATE_GROWTH_MARGIN = 16;
+
+const encodedSizeAfter = (doc: Y.Doc, update: Uint8Array): number => {
+  const trial = new Y.Doc({ gc: doc.gc });
+  try {
+    Y.applyUpdate(trial, Y.encodeStateAsUpdate(doc));
+    Y.applyUpdate(trial, update);
+    return Y.encodeStateAsUpdate(trial).length;
+  } finally {
+    trial.destroy();
+  }
+};
+
+/**
+ * Whether `doc` stays within MAX_APPS_DOC_BYTES once `update` is applied.
+ * Records the expected size when it does; the caller then applies it.
+ */
+const reserveAppDocBytes = (doc: Y.Doc, update: Uint8Array): boolean => {
   let size = appDocSizes.get(doc);
   if (!size) {
     size = { measured: Y.encodeStateAsUpdate(doc).length, sinceMeasured: 0 };
     appDocSizes.set(doc, size);
   }
-  if (size.measured + size.sinceMeasured + updateBytes > MAX_APPS_DOC_BYTES) {
-    // Deletions can shrink a document, so measure before refusing.
-    if (size.sinceMeasured > 0) {
-      size.measured = Y.encodeStateAsUpdate(doc).length;
-      size.sinceMeasured = 0;
-    }
-    if (size.measured + updateBytes > MAX_APPS_DOC_BYTES) return false;
+  const estimate =
+    size.measured + size.sinceMeasured + update.length * UPDATE_GROWTH_MARGIN;
+  if (estimate <= MAX_APPS_DOC_BYTES) {
+    size.sinceMeasured += update.length * UPDATE_GROWTH_MARGIN;
+    return true;
   }
-  size.sinceMeasured += updateBytes;
+  let resulting: number;
+  try {
+    resulting = encodedSizeAfter(doc, update);
+  } catch {
+    return false;
+  }
+  if (resulting > MAX_APPS_DOC_BYTES) return false;
+  size.measured = resulting;
+  size.sinceMeasured = 0;
   return true;
 };
+
 const MAX_APP_ID_LENGTH = 128;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
 
@@ -299,7 +327,7 @@ export const registerAppsHandlers = (context: ConnectionContext): void => {
     const update = toUint8Array(data.update);
     if (!update || update.length === 0) return;
     if (update.length > MAX_APPS_UPDATE_BYTES) return;
-    if (!reserveAppDocBytes(doc, update.length)) {
+    if (!reserveAppDocBytes(doc, update)) {
       Logger.warn(`[Apps] Dropping update for ${appId}: document size limit reached`);
       return;
     }

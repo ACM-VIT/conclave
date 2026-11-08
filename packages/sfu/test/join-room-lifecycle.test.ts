@@ -375,3 +375,40 @@ describe("scheduled webinar link codes", () => {
     expect(ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: "sched-real" }));
   });
 });
+
+describe("joining a room that closes during its lease renewal", () => {
+  it("makes the joiner who then creates the room its host", async () => {
+    const newRouter = { closed: false, rtpCapabilities: { codecs: [], headerExtensions: [] }, close: vi.fn() } as unknown as Router;
+    const createRouter = vi.fn(async () => newRouter);
+    const state = makeState([{ pid: 1, closed: false, createRouter } as unknown as Worker]);
+    const oldRoom = new Room({
+      id: "room",
+      clientId: "conclave",
+      workerPid: null,
+      router: { closed: false, close: vi.fn() } as unknown as Router,
+    });
+    state.rooms.set(oldRoom.channelId, oldRoom);
+
+    let releaseRenew!: () => void;
+    const renewGate = new Promise<void>((resolve) => { releaseRenew = resolve; });
+    const renew = state.roomRegistry.renewRoom.bind(state.roomRegistry);
+    state.roomRegistry.renewRoom = async (input) => {
+      await renewGate;
+      return renew(input);
+    };
+
+    const joining = join(state, "creator-socket", {
+      userId: "carol", clientId: "conclave", sessionId: "c", allowRoomCreation: true,
+    });
+    // The last participant leaves while the lease is being renewed.
+    state.rooms.delete(oldRoom.channelId);
+    (oldRoom.router as { closed: boolean }).closed = true;
+    releaseRenew();
+
+    const { ack, context } = await joining;
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ status: "joined" }));
+    expect(createRouter).toHaveBeenCalledOnce();
+    expect(context.currentClient).toBeInstanceOf(Admin);
+    expect(state.rooms.get("conclave:room")?.hostUserKey).toBe("carol");
+  });
+});

@@ -316,6 +316,20 @@ export const updateScheduledMeeting = (
   }
   const now = Date.now();
 
+  // Reactivating a meeting (scheduled or live) must not give a code two
+  // active meetings. Checked before anything changes, against the code the
+  // meeting will have after this update.
+  if (request.status === "scheduled" || request.status === "live") {
+    const requestedCode =
+      typeof request.roomCode === "string"
+        ? sanitizeRoomCode(request.roomCode)
+        : "";
+    const targetCode = requestedCode || meeting.roomCode;
+    if (isCodeTaken(store, meeting.clientId, targetCode, meeting.id)) {
+      throw new Error("That meeting code is already booked.");
+    }
+  }
+
   if (typeof request.title === "string") {
     const next = sanitizeTitle(request.title);
     if (!next) throw new Error("Title is required.");
@@ -360,6 +374,8 @@ export const updateScheduledMeeting = (
     if (request.status === "ended" && !meeting.endedAt) {
       meeting.endedAt = now;
     }
+    // A reactivated meeting takes its code back from an inactive one.
+    claimRoomCode(store, meeting);
   }
   if (request.googleCalendarEventId !== undefined) {
     meeting.googleCalendarEventId =
