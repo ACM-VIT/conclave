@@ -95,36 +95,71 @@ const isPrivateIpv4 = (hostname: string): boolean => {
         return false;
     }
 
-    const [first, second] = octets;
+    const [first, second, third] = octets;
     return (
         first === 0 ||
         first === 10 ||
         first === 127 ||
+        (first === 100 && second >= 64 && second <= 127) ||
         (first === 169 && second === 254) ||
         (first === 172 && second >= 16 && second <= 31) ||
-        (first === 192 && second === 168)
+        (first === 192 && second === 0 && third === 0) ||
+        (first === 192 && second === 168) ||
+        (first === 198 && (second === 18 || second === 19)) ||
+        first >= 224
     );
 };
 
-const isPrivateHostname = (hostname: string): boolean => {
+/**
+ * The IPv4 address an IPv6 literal embeds (mapped `::ffff:a.b.c.d`, the
+ * deprecated compatible `::a.b.c.d`, or NAT64 `64:ff9b::a.b.c.d`), in either
+ * dotted or hex form. The URL parser writes `[::ffff:169.254.169.254]` as
+ * `[::ffff:a9fe:a9fe]`, which the IPv4 checks never saw.
+ */
+const embeddedIpv4 = (ipv6: string): string | null => {
+    const match = ipv6.match(/^(?:::ffff:|::|64:ff9b::)(.+)$/);
+    if (!match) return null;
+    const tail = match[1];
+    if (tail.includes(".")) return tail;
+    const groups = tail.split(":");
+    if (groups.length !== 2 || !groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) {
+        return null;
+    }
+    const high = parseInt(groups[0], 16);
+    const low = parseInt(groups[1], 16);
+    return [high >> 8, high & 0xff, low >> 8, low & 0xff].join(".");
+};
+
+const isPrivateIpv6 = (ipv6: string): boolean => {
+    if (ipv6 === "::" || ipv6 === "::1") return true;
+    const embedded = embeddedIpv4(ipv6);
+    if (embedded !== null) return isPrivateIpv4(embedded);
+    return (
+        ipv6.startsWith("fc") ||
+        ipv6.startsWith("fd") ||
+        /^fe[89ab]/.test(ipv6) ||
+        ipv6.startsWith("ff")
+    );
+};
+
+export const isPrivateHostname = (hostname: string): boolean => {
     const normalized = hostname.toLowerCase().replace(/^\[(.*)\]$/, "$1").replace(/\.$/, "");
     if (
         normalized === "localhost" ||
         normalized.endsWith(".localhost") ||
-        normalized.endsWith(".local")
+        normalized.endsWith(".local") ||
+        // host.docker.internal reaches the Docker host (and the browser
+        // service's own API) from inside the browser container.
+        normalized === "internal" ||
+        normalized.endsWith(".internal") ||
+        normalized.endsWith(".home.arpa")
     ) {
         return true;
     }
     if (isPrivateIpv4(normalized)) {
         return true;
     }
-    if (
-        normalized.includes(":") &&
-        (normalized === "::1" ||
-            normalized.startsWith("fc") ||
-            normalized.startsWith("fd") ||
-            normalized.startsWith("fe80:"))
-    ) {
+    if (normalized.includes(":") && isPrivateIpv6(normalized)) {
         return true;
     }
     return false;
