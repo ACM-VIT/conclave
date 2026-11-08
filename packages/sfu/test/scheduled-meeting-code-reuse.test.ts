@@ -18,7 +18,12 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const options = { clientId: "conclave", createdBy: "host@example.com", defaultHostEmail: "host@example.com" };
+const options = {
+  clientId: "conclave",
+  createdBy: "host@example.com",
+  defaultHostEmail: "host@example.com",
+  defaultHostUserId: null,
+};
 const request = (startOffsetMs: number) => ({
   title: "Standup",
   scheduledStartAt: Date.now() + startOffsetMs,

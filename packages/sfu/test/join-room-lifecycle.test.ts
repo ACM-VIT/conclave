@@ -13,6 +13,8 @@ import { registerJoinRoomHandler } from "../server/socket/handlers/joinRoom.js";
 import { registerTransportHandlers } from "../server/socket/handlers/transportHandlers.js";
 import { getOrCreateRoomWithOrigin } from "../server/rooms.js";
 import { createSfuState, type SfuState } from "../server/state.js";
+import { getOrCreateWebinarRoomConfig, setCustomWebinarLinkSlug } from "../server/webinar.js";
+import type { ScheduledWebinar } from "../types.js";
 
 type Handler = (...args: never[]) => void | Promise<void>;
 
@@ -332,5 +334,44 @@ describe("waiting-room entry on disconnect", () => {
 
     void peer.handlers.get("disconnect")!(...["transport close"] as never[]);
     expect(waitingRoom.pendingClients.has("u")).toBe(false);
+  });
+});
+
+describe("scheduled webinar link codes", () => {
+  it("sends attendees to the scheduled webinar even if another room bound its code", async () => {
+    const state = makeState();
+    const now = Date.now();
+    const webinar = {
+      id: "w1", clientId: "conclave", roomId: "sched-real", linkSlug: "launch", title: "Launch", description: "",
+      hostEmail: "host@example.com", hostName: "Host", hostUserId: null, coHosts: [],
+      scheduledStartAt: now - 60_000, scheduledEndAt: now + 3_600_000, status: "live",
+      publicAccess: true, maxAttendees: 100, requiresInviteCode: false, waitingRoomEnabled: false,
+      earlyEntryMinutes: 10, qaEnabled: true, notes: "", createdAt: now, createdBy: "host@example.com",
+      updatedAt: now, liveStartedAt: now, endedAt: null, totalJoinCount: 0, peakAttendeeCount: 0,
+      webinarLink: "http://localhost/w/launch", coHostInviteTokenHash: null, coHostInviteTokenCreatedAt: null,
+    } as ScheduledWebinar;
+    state.scheduledWebinars.byId.set(webinar.id, webinar);
+    state.scheduledWebinars.bySlug.set(webinar.linkSlug, webinar.id);
+    state.scheduledWebinars.byRoomChannel.set("conclave:sched-real", webinar.id);
+
+    for (const id of ["sched-real", "squat"]) {
+      const room = new Room({ id, clientId: "conclave", workerPid: null, router: { closed: false, close: vi.fn() } as unknown as Router });
+      state.rooms.set(room.channelId, room);
+    }
+    // An ad-hoc room bound the scheduled webinar's code first.
+    const squatConfig = getOrCreateWebinarRoomConfig(state.webinarConfigs, "conclave:squat");
+    squatConfig.enabled = true;
+    squatConfig.publicAccess = true;
+    setCustomWebinarLinkSlug({
+      webinarConfig: squatConfig,
+      webinarLinks: state.webinarLinks,
+      room: { channelId: "conclave:squat", id: "squat", clientId: "conclave" },
+      slug: "launch",
+    });
+
+    const { ack } = await join(state, "attendee-socket", {
+      userId: "viewer", clientId: "conclave", sessionId: "v", joinMode: "webinar_attendee",
+    }, "launch");
+    expect(ack).toHaveBeenCalledWith(expect.objectContaining({ roomId: "sched-real" }));
   });
 });

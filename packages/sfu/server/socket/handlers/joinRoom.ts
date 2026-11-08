@@ -164,13 +164,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             requestedRoomId,
             clientId,
           );
-          if (!webinarTarget && scheduledWebinarForAttendee) {
-            ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, null);
-            webinarTarget = resolveWebinarLinkTarget(
-              state.webinarLinks,
-              requestedRoomId,
-              clientId,
-            );
+          if (scheduledWebinarForAttendee) {
+            // A scheduled webinar's link always leads to its own room. Another
+            // room that bound the same code (before the scheduler did, e.g.
+            // after a restart) must not receive the webinar's audience.
+            if (webinarTarget?.roomId !== scheduledWebinarForAttendee.roomId) {
+              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, null);
+            }
+            webinarTarget = {
+              roomChannelId: getRoomChannelId(
+                scheduledWebinarForAttendee.clientId,
+                scheduledWebinarForAttendee.roomId,
+              ),
+              roomId: scheduledWebinarForAttendee.roomId,
+              clientId: scheduledWebinarForAttendee.clientId,
+            };
           }
           if (!webinarTarget) {
             respond(callback, { error: "Webinar is not live." });
