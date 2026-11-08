@@ -8,6 +8,7 @@ import {
   normalizeDisplayName,
   sanitizeInstitutionDisplayName,
 } from "../lib/utils";
+import { SOCKET_TIMEOUT_MS } from "../lib/constants";
 import type { JoinMode } from "../lib/types";
 
 interface UseMeetDisplayNameOptions {
@@ -141,11 +142,23 @@ export function useMeetDisplayName({
     }
 
     setIsDisplayNameUpdating(true);
-    socket.emit(
+    // A plain ack is dropped if the socket disconnects, which would leave
+    // the form busy forever; time the request out instead.
+    socket.timeout(SOCKET_TIMEOUT_MS).emit(
       "updateDisplayName",
       { displayName: nextName },
-      (res: { success?: boolean; error?: string }) => {
+      (
+        error: Error | null,
+        res: { success?: boolean; error?: string } | undefined,
+      ) => {
         setIsDisplayNameUpdating(false);
+        if (error) {
+          setDisplayNameStatus({
+            type: "error",
+            message: "The server did not respond. Try again.",
+          });
+          return;
+        }
         if (res?.error) {
           setDisplayNameStatus({ type: "error", message: res.error });
           return;

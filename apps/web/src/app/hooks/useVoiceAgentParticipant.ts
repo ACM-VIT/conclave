@@ -752,6 +752,28 @@ export function useVoiceAgentParticipant({
     setSafeStatus("idle");
   }, [setSafeError, setSafeStatus]);
 
+  // A running agent that fails (SFU drop, publish or mix failure) must be
+  // torn down as it enters "error": otherwise its OpenAI realtime session,
+  // mic mix and producer stay live, and dismissing the error shows "idle"
+  // while that session is still connected.
+  const failRuntime = useCallback(
+    (runtime: RuntimeState, message: string) => {
+      if (!mountedRef.current) return;
+      if (runtimeRef.current !== runtime) return;
+      pendingRemoteTrackRef.current = null;
+      lastHeldSpeakerRef.current = null;
+      if (holdExpiryTimeoutRef.current !== null) {
+        window.clearTimeout(holdExpiryTimeoutRef.current);
+        holdExpiryTimeoutRef.current = null;
+      }
+      runtimeRef.current = createRuntimeState();
+      closeRuntimeState(runtime);
+      setSafeError(message);
+      setSafeStatus("error");
+    },
+    [setSafeError, setSafeStatus],
+  );
+
   const producePendingTrack = useCallback(async () => {
     const pendingTrack = pendingRemoteTrackRef.current;
     const runtime = runtimeRef.current;
@@ -1176,14 +1198,12 @@ export function useVoiceAgentParticipant({
         if (!audioTrack) return;
         pendingRemoteTrackRef.current = audioTrack;
         void producePendingTrack().catch((produceError) => {
-          if (!mountedRef.current) return;
-          if (runtimeRef.current !== runtime) return;
-          const message =
+          failRuntime(
+            runtime,
             produceError instanceof Error
               ? produceError.message
-              : "Failed to publish voice agent audio to SFU.";
-          setSafeError(message);
-          setSafeStatus("error");
+              : "Failed to publish voice agent audio to SFU.",
+          );
         });
       };
 
@@ -1286,10 +1306,8 @@ export function useVoiceAgentParticipant({
         const socket = await createSocketConnection(url, token);
         runtime.sfuSocket = socket;
         socket.on("disconnect", () => {
-          if (!mountedRef.current) return;
           if (runtimeRef.current.sfuSocket !== socket) return;
-          setSafeError("Voice agent disconnected from SFU.");
-          setSafeStatus("error");
+          failRuntime(runtime, "Voice agent disconnected from SFU.");
         });
         return socket;
       };
@@ -1384,6 +1402,7 @@ export function useVoiceAgentParticipant({
     }
   }, [
     buildSessionInstructions,
+    failRuntime,
     handleRealtimeToolCall,
     isAdmin,
     isJoined,
@@ -1435,14 +1454,14 @@ export function useVoiceAgentParticipant({
     const runtime = runtimeRef.current;
     if (!runtime.openAiMixContext || !runtime.openAiMixDestination) return;
     void rebuildOpenAiMix(runtime).catch((mixError) => {
-      const message =
+      failRuntime(
+        runtime,
         mixError instanceof Error
           ? mixError.message
-          : "Failed to refresh voice agent audio input.";
-      setSafeError(message);
-      setSafeStatus("error");
+          : "Failed to refresh voice agent audio input.",
+      );
     });
-  }, [rebuildOpenAiMix, setSafeError, setSafeStatus, status]);
+  }, [failRuntime, rebuildOpenAiMix, status]);
 
   return {
     status,

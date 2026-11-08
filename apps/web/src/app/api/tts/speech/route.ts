@@ -7,6 +7,7 @@ import {
   synthesizeClonedSpeech,
   verifyVoiceToken,
 } from "@/lib/tts-voice";
+import { takeSpeechRateLimit } from "./rate-limit";
 
 interface CachedSpeech {
   audio: ArrayBuffer;
@@ -62,6 +63,19 @@ const getSpeech = async (
 };
 
 export async function POST(request: Request): Promise<Response> {
+  const rateLimit = await takeSpeechRateLimit(request);
+  if (rateLimit === "limited") {
+    return NextResponse.json(
+      { error: "Too many speech requests. Try again shortly." },
+      { status: 429, headers: { "retry-after": "60" } },
+    );
+  }
+  if (rateLimit === "unavailable") {
+    return NextResponse.json(
+      { error: "Speech is temporarily unavailable." },
+      { status: 503, headers: { "retry-after": "30" } },
+    );
+  }
   try {
     const body = (await request.json()) as { token?: string; text?: string; roomAiToken?: string };
     const token = body.token?.trim();

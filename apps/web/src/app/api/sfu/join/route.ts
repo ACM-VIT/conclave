@@ -123,20 +123,6 @@ const normalizeEmail = (
   return normalized || undefined;
 };
 
-const normalizeUserId = (
-  value: string | null | undefined,
-): string | undefined => {
-  const normalized = value?.trim();
-  if (!normalized || normalized.length > 128) return undefined;
-  return /^[a-zA-Z0-9._:@-]+$/.test(normalized) ? normalized : undefined;
-};
-
-const isSyntheticGuestEmail = (value: string | undefined): boolean =>
-  Boolean(value && /^guest-[^@]+@guest\.(?:conclave|com)$/i.test(value));
-
-const isSyntheticGuestUserId = (value: string | undefined): boolean =>
-  Boolean(value && value.startsWith("guest-"));
-
 const isScheduledRoomId = (value: string): boolean =>
   /^sched-[a-f0-9]{8}$/i.test(value);
 
@@ -664,24 +650,18 @@ export async function POST(request: Request) {
     .catch(() => null);
   const sessionUser = session?.user;
   const sessionEmail = sessionUser?.email?.trim() || undefined;
-  const rawBodyEmail = normalizeEmail(body?.user?.email);
-  const rawBodyUserId = normalizeUserId(body?.user?.id);
-  const bodyEmail = isSyntheticGuestEmail(rawBodyEmail)
-    ? undefined
-    : rawBodyEmail;
-  const bodyUserId = isSyntheticGuestUserId(rawBodyUserId)
-    ? undefined
-    : rawBodyUserId;
-  // Browser sessions are authoritative when present. Native clients do not have
-  // the better-auth cookie, so preserve their supplied non-guest stable identity
-  // for the SFU's user-keyed reconnect, allow/block-list, and host-tracking
-  // paths. Synthetic web/mobile guests must stay session-scoped because the
-  // clients render their local participant as guest-${sessionId}.
-  const email = sessionEmail || bodyEmail;
+  // Identity comes only from the authenticated session. The SFU keys host
+  // return, webinar host/co-host, allow/block lists and locked-room admission
+  // on the token's email, so an email or id taken from the request body would
+  // let anyone join as anyone (including a room's host). Native clients send
+  // the better-auth session cookie too, and read their identity back from the
+  // token's claims, so a request without a session joins as a session-scoped
+  // guest (`guest-${sessionId}`), as the web client renders it.
+  const email = sessionEmail;
   const name =
     sessionUser?.name?.trim() || body?.user?.name?.trim() || undefined;
   const normalizedSessionEmail = normalizeEmail(sessionEmail);
-  const providedId = sessionUser?.id?.trim() || bodyUserId || undefined;
+  const providedId = sessionUser?.id?.trim() || undefined;
   const baseUserId = email || providedId || `guest-${sessionId}`;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isScheduledHostRoom = isScheduledRoomId(roomId);

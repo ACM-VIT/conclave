@@ -1,5 +1,6 @@
 "use client";
 
+import { toSafeNextPath } from "../lib/safe-next-path";
 import dynamic from "next/dynamic";
 import {
   Loader2,
@@ -693,8 +694,10 @@ function JoinScreen({
   const hasPushedNextRef = useRef(false);
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const candidate = new URLSearchParams(window.location.search).get("next");
-    if (!candidate || !candidate.startsWith("/") || candidate.startsWith("//")) return;
+    const candidate = toSafeNextPath(
+      new URLSearchParams(window.location.search).get("next"),
+    );
+    if (!candidate) return;
     setNextParam(candidate);
   }, []);
   useEffect(() => {

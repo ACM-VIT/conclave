@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import RouteLoadingState from "../components/RouteLoadingState";
 import SignInClient from "./sign-in-client";
+import { toSafeNextPath } from "../lib/safe-next-path";
 
 type SignInPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -13,11 +14,8 @@ const getParamValue = (
   return value;
 };
 
-const sanitizeNext = (value: string | undefined): string => {
-  const next = value?.trim() || "/";
-  if (!next.startsWith("/") || next.startsWith("//")) return "/";
-  return next;
-};
+const sanitizeNext = (value: string | undefined): string =>
+  toSafeNextPath(value) ?? "/";
 
 export default function SignInPage({ searchParams }: SignInPageProps) {
   return (

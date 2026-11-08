@@ -27,6 +27,7 @@ import { clearWebinarLinkSlug } from "../webinar.js";
 import type { SfuState } from "../state.js";
 import {
   canonicalizeClientId,
+  canMigrateClientNamespace,
   clientIdCandidates,
   resolveDefaultClientId,
 } from "../clientIds.js";
@@ -185,6 +186,7 @@ export const registerScheduledWebinarRoutes = (
     clientId: string,
   ): ScheduledWebinar | null => {
     if (webinar.clientId === clientId) return webinar;
+    if (!canMigrateClientNamespace(webinar.clientId, clientId)) return null;
     try {
       const migrated = moveScheduledWebinarToClient(
         state.scheduledWebinars,
@@ -469,8 +471,11 @@ export const registerScheduledWebinarRoutes = (
         { status: "ended" },
       );
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-      const cfg = state.webinarConfigs.get(channelId);
-      if (cfg) cfg.locked = true;
+      // Locks the room through the same path that records the schedule's
+      // status, so a later reopen of the schedule reopens the room.
+      if (state.webinarConfigs.has(channelId)) {
+        ensureWebinarRoomConfig(state, webinar, null);
+      }
       persistChanged(webinar);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });
     } catch (error) {
@@ -490,10 +495,9 @@ export const registerScheduledWebinarRoutes = (
         { status: "cancelled" },
       );
       const channelId = getRoomChannelId(webinar.clientId, webinar.roomId);
-      const cfg = state.webinarConfigs.get(channelId);
-      if (cfg) {
-        cfg.enabled = false;
-        cfg.locked = true;
+      // Disables and locks the room (see the /end route).
+      if (state.webinarConfigs.has(channelId)) {
+        ensureWebinarRoomConfig(state, webinar, null);
       }
       persistChanged(webinar);
       res.json({ scheduledWebinar: serializeScheduledWebinar(webinar) });

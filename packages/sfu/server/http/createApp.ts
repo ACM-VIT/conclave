@@ -36,7 +36,7 @@ import {
 } from "../admin/moderation.js";
 import { recordAdminAudit } from "../admin/adminAudit.js";
 import { createTranscriptSpectatorToken } from "../socket/handlers/transcriptHandlers.js";
-import { forceCloseRoom, getRoomChannelId, markRoomEnded } from "../rooms.js";
+import { forceCloseRoom, getRoomChannelId, isCurrentRoom, markRoomEnded } from "../rooms.js";
 import { resolveCorsOrigins } from "../cors.js";
 import { secretsMatch } from "../secret.js";
 import { readBoolean, requestBody } from "../../utilities/untrusted.js";
@@ -1810,6 +1810,8 @@ export const createSfuApp = ({
     }
 
     const closeNow = () => {
+      // A delayed close must not hit a newer room reopened on this channel.
+      if (!isCurrentRoom(state, room)) return;
       forceCloseRoomWithSockets(io, roomChannelId, pendingSockets);
     };
 

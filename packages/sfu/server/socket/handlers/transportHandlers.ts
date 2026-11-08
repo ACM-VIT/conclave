@@ -70,15 +70,30 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        const transport =
-          await context.currentRoom.createWebRtcTransport("producer");
-        const previousTransport = context.currentClient.producerTransport;
+        const room = context.currentRoom;
+        const client = context.currentClient;
+        const transport = await room.createWebRtcTransport("producer");
+        // The socket can disconnect, be kicked or switch rooms while the
+        // transport is created. Never attach it to a client that is no
+        // longer this socket's seat (or to a seat on another router).
+        if (
+          context.currentRoom !== room ||
+          context.currentClient !== client ||
+          room.getClient(client.id) !== client
+        ) {
+          try {
+            transport.close();
+          } catch {}
+          respond(callback, { error: "Left the room while creating the transport" });
+          return;
+        }
+        const previousTransport = client.producerTransport;
         if (previousTransport && previousTransport.id !== transport.id) {
           try {
             previousTransport.close();
           } catch {}
         }
-        context.currentClient.producerTransport = transport;
+        client.producerTransport = transport;
         const refreshCapacityProofs = () => {
           if (
             context.currentRoom &&
@@ -130,16 +145,31 @@ export const registerTransportHandlers = (context: ConnectionContext): void => {
           return;
         }
 
-        const transport =
-          await context.currentRoom.createWebRtcTransport("consumer");
-        const previousTransport = context.currentClient.consumerTransport;
+        const room = context.currentRoom;
+        const client = context.currentClient;
+        const transport = await room.createWebRtcTransport("consumer");
+        // The socket can disconnect, be kicked or switch rooms while the
+        // transport is created. Never attach it to a client that is no
+        // longer this socket's seat (or to a seat on another router).
+        if (
+          context.currentRoom !== room ||
+          context.currentClient !== client ||
+          room.getClient(client.id) !== client
+        ) {
+          try {
+            transport.close();
+          } catch {}
+          respond(callback, { error: "Left the room while creating the transport" });
+          return;
+        }
+        const previousTransport = client.consumerTransport;
         if (previousTransport && previousTransport.id !== transport.id) {
-          context.currentClient.closeConsumers();
+          client.closeConsumers();
           try {
             previousTransport.close();
           } catch {}
         }
-        context.currentClient.consumerTransport = transport;
+        client.consumerTransport = transport;
         const refreshCapacityProofs = () => {
           if (
             context.currentRoom &&

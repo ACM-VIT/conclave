@@ -1527,6 +1527,35 @@ export default function MeetsMainContent({
     toggleChat();
   }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
 
+  // One right-dock panel at a time, however chat or participants opened. The
+  // handlers above close the other panels, but the chat and participants
+  // hotkeys (meets-client) toggle the shared state directly and cannot reach
+  // the panels local to this component.
+  const previousDockOpenRef = useRef({
+    chat: isChatOpen,
+    participants: isParticipantsOpen,
+  });
+  useEffect(() => {
+    const previous = previousDockOpenRef.current;
+    previousDockOpenRef.current = {
+      chat: isChatOpen,
+      participants: isParticipantsOpen,
+    };
+    const chatOpened = isChatOpen && !previous.chat;
+    const participantsOpened = isParticipantsOpen && !previous.participants;
+    if (!chatOpened && !participantsOpened) return;
+    setIsHostControlsOpen(false);
+    setIsVideoEffectsOpen(false);
+    setIsViewPanelOpen(false);
+    setIsDeviceSettingsOpen(false);
+    setIsTranscriptOpen(false);
+    if (chatOpened && isParticipantsOpen && !participantsOpened) {
+      setIsParticipantsOpen(false);
+    } else if (participantsOpened && isChatOpen && !chatOpened) {
+      toggleChat();
+    }
+  }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
+
   const handlePendingUserStale = useCallback(
     (staleUserId: string) => {
       setPendingUsers((prev) => {

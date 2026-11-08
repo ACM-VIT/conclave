@@ -158,4 +158,29 @@ describe("Client overlapping consumer generations", () => {
     expect(predecessor.close).toHaveBeenCalledOnce();
     expect(client.getConsumer("producer")).toBe(successor.consumer);
   });
+
+  it("keeps at most three live generations of one producer however fast it is re-consumed", () => {
+    const client = new Client({ id: "receiver", socket: {} as never });
+    const generations = Array.from({ length: 8 }, (_unused, index) => makeConsumer(`consumer-${index}`));
+    for (const generation of generations) {
+      client.addConsumer(generation.consumer);
+    }
+    const live = generations.filter((generation) => !generation.consumer.closed);
+    expect(live.map((generation) => generation.consumer.id)).toEqual([
+      "consumer-5",
+      "consumer-6",
+      "consumer-7",
+    ]);
+    expect(client.getConsumer("producer")).toBe(generations[7].consumer);
+  });
+
+  it("still restores the newest predecessor when the current generation closes", () => {
+    const client = new Client({ id: "receiver", socket: {} as never });
+    const generations = Array.from({ length: 5 }, (_unused, index) => makeConsumer(`consumer-${index}`));
+    for (const generation of generations) {
+      client.addConsumer(generation.consumer);
+    }
+    generations[4].close();
+    expect(client.getConsumer("producer")).toBe(generations[3].consumer);
+  });
 });

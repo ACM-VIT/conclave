@@ -4,6 +4,7 @@ import Image from "next/image";
 import { ArrowLeft, FlaskConical, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { signIn, useSession } from "@/lib/auth-client";
+import { toSafeNextPath } from "../lib/safe-next-path";
 
 type AuthProviderId = "google" | "apple" | "roblox" | "vercel";
 type ActiveSignIn = AuthProviderId | "dev";
@@ -26,10 +27,7 @@ const providerLabels: Record<AuthProviderId, string> = {
 
 const providerOrder: AuthProviderId[] = ["google", "apple", "roblox", "vercel"];
 
-const sanitizeNext = (value: string): string => {
-  if (!value.startsWith("/") || value.startsWith("//")) return "/";
-  return value;
-};
+const sanitizeNext = (value: string): string => toSafeNextPath(value) ?? "/";
 
 const providerIcon = (provider: AuthProviderId) => {
   if (provider === "google") {
@@ -104,6 +102,16 @@ export default function SignInClient({ next }: SignInClientProps) {
     window.location.replace(safeNext);
   }, [safeNext, session?.user]);
 
+  // Coming back from the provider with the Back button can restore this page
+  // from the back-forward cache mid-"Redirecting"; re-enable the buttons.
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setActiveProvider(null);
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setStatus("loading");
@@ -136,10 +144,16 @@ export default function SignInClient({ next }: SignInClientProps) {
       setActiveProvider(provider);
       setError(null);
       try {
-        await signIn.social({
+        // better-auth reports a failed request as `{ error }` rather than
+        // throwing; without this the "Redirecting" state never cleared.
+        const result = await signIn.social({
           provider,
           callbackURL: `${window.location.origin}${safeNext}`,
         });
+        if (result?.error) {
+          setError(result.error.message || "Unable to start sign-in.");
+          setActiveProvider(null);
+        }
       } catch (signInError) {
         setError(
           signInError instanceof Error

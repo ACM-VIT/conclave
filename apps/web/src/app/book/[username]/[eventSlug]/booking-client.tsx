@@ -15,7 +15,7 @@ import {
   Mail,
   Video,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AvailableSlot,
   BookingConfirmation,
@@ -253,8 +253,13 @@ export default function BookingClient({ username, eventSlug }: Props) {
     };
   }, [username, eventSlug]);
 
+  // Month and time-zone changes start a new load before the previous one
+  // finishes; only the newest request may update the slots.
+  const slotRequestRef = useRef(0);
   const loadSlots = useCallback(async () => {
     if (!page) return;
+    slotRequestRef.current += 1;
+    const requestId = slotRequestRef.current;
     setSlotStatus("loading");
     setError(null);
     try {
@@ -264,9 +269,11 @@ export default function BookingClient({ username, eventSlug }: Props) {
       const data = await fetchJson<{ slots?: AvailableSlot[] }>(
         `/api/scheduling/public/${encodeURIComponent(username)}/${encodeURIComponent(eventSlug)}/slots?from=${from}&to=${to}&timeZone=${encodeURIComponent(timeZone)}`,
       );
+      if (slotRequestRef.current !== requestId) return;
       setSlots(data.slots ?? []);
       setSlotStatus("idle");
     } catch (slotError) {
+      if (slotRequestRef.current !== requestId) return;
       setError((slotError as Error).message || "Could not load slots");
       setSlotStatus("error");
     }

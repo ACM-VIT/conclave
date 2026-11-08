@@ -72,47 +72,86 @@ export const getOrCreateRoom = async (
   state: SfuState,
   requestedClientId: string,
   roomId: string,
-): Promise<Room> => {
+): Promise<Room> =>
+  (await getOrCreateRoomWithOrigin(state, requestedClientId, roomId)).room;
+
+/**
+ * The live room registered for this channel, with its lease renewed, or null
+ * when there is none (or it closed while the lease was being renewed). Never
+ * creates a room, so callers that may create one apply their own creation
+ * checks and know whether they created it.
+ */
+export const renewLocalRoom = async (
+  state: SfuState,
+  requestedClientId: string,
+  roomId: string,
+): Promise<Room | null> => {
   const clientId = canonicalizeClientId(requestedClientId);
   const channelId = getRoomChannelId(clientId, roomId);
-  let room = state.rooms.get(channelId);
-  if (room) {
-    if (!room.router.closed) {
-      let ownership;
-      try {
-        ownership = await state.roomRegistry.renewRoom({
-          channelId,
-          clientId,
-          roomId,
-        });
-      } catch (error) {
-        if (error instanceof RoomLeaseExpiredError) {
-          Logger.warn(
-            `Closing room ${roomId} (${clientId}) before its unconfirmed shared lease can expire`,
-          );
-          cleanupRoomState(state, channelId);
-        }
-        throw error;
-      }
-      if (!ownership.ok) {
-        Logger.warn(
-          `Closing local room ${roomId} (${clientId}) because ownership belongs to ${ownership.owner.instanceId}`,
-        );
-        cleanupRoomState(state, channelId);
-        throw new RoomOwnershipError(ownership.owner);
-      }
-      return room;
-    }
+  const room = state.rooms.get(channelId);
+  if (!room) return null;
+  if (room.router.closed) {
     Logger.warn(
       `Discarding stale room with closed router: ${roomId} (${clientId})`,
     );
     cleanupRoomState(state, channelId);
-    room = undefined;
+    return null;
+  }
+  let ownership;
+  try {
+    ownership = await state.roomRegistry.renewRoom({
+      channelId,
+      clientId,
+      roomId,
+    });
+  } catch (error) {
+    if (error instanceof RoomLeaseExpiredError) {
+      Logger.warn(
+        `Closing room ${roomId} (${clientId}) before its unconfirmed shared lease can expire`,
+      );
+      cleanupRoomState(state, channelId);
+    }
+    throw error;
+  }
+  if (!ownership.ok) {
+    Logger.warn(
+      `Closing local room ${roomId} (${clientId}) because ownership belongs to ${ownership.owner.instanceId}`,
+    );
+    cleanupRoomState(state, channelId);
+    throw new RoomOwnershipError(ownership.owner);
+  }
+  // The last client can leave during the renew await, which closes the room
+  // and removes it from the map; never hand back a closed room. If another
+  // joiner already created its successor, that is the live room.
+  const current = state.rooms.get(channelId);
+  if (current && !current.router.closed) return current;
+  Logger.warn(
+    `Room ${roomId} (${clientId}) closed while renewing its lease`,
+  );
+  return null;
+};
+
+/**
+ * Like getOrCreateRoom, but also reports whether this call created the room.
+ * `created` is true only for the caller that started the creation; callers
+ * that found the room already registered, or joined a creation already in
+ * flight, get false.
+ */
+export const getOrCreateRoomWithOrigin = async (
+  state: SfuState,
+  requestedClientId: string,
+  roomId: string,
+): Promise<{ room: Room; created: boolean }> => {
+  const clientId = canonicalizeClientId(requestedClientId);
+  const channelId = getRoomChannelId(clientId, roomId);
+  const existing = await renewLocalRoom(state, clientId, roomId);
+  if (existing) {
+    return { room: existing, created: false };
   }
 
   const pendingCreation = state.roomCreations.get(channelId);
   if (pendingCreation) {
-    return pendingCreation;
+    return { room: await pendingCreation, created: false };
   }
 
   const creation = (async (): Promise<Room> => {
@@ -153,7 +192,7 @@ export const getOrCreateRoom = async (
   state.roomCreations.set(channelId, creation);
 
   try {
-    return await creation;
+    return { room: await creation, created: true };
   } finally {
     if (state.roomCreations.get(channelId) === creation) {
       state.roomCreations.delete(channelId);
@@ -188,6 +227,16 @@ const cleanupRoomState = (state: SfuState, channelId: string): Room | null => {
   void cleanupRoomBrowser(channelId);
   return room;
 };
+
+/**
+ * Whether `room` is still the room registered for its channel. A delayed
+ * close armed for one room must not touch a newer room that was reopened on
+ * the same channel (or a second close of the same room).
+ */
+export const isCurrentRoom = (
+  state: SfuState,
+  room: Pick<Room, "channelId">,
+): boolean => state.rooms.get(room.channelId) === room;
 
 export const forceCloseRoom = (state: SfuState, channelId: string): boolean => {
   const room = cleanupRoomState(state, channelId);

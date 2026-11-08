@@ -806,6 +806,11 @@ export function useMeetMedia({
   );
   const toggleMuteInFlightRef = useRef(false);
   const toggleCameraInFlightRef = useRef(false);
+  // Starting a share spans the display picker, transport setup and produce,
+  // and isScreenSharing only turns true at the end. Without this, a second
+  // press (button or hotkey) in that window starts a second capture and
+  // produce, orphaning the first producer on the SFU.
+  const screenShareStartInFlightRef = useRef(false);
   const markAudioTrackForSpeech = useCallback(
     (track?: MediaStreamTrack | null) => {
       if (track && "contentHint" in track) {
@@ -5885,6 +5890,9 @@ export function useMeetMedia({
       return;
     }
 
+    if (screenShareStartInFlightRef.current) return;
+    screenShareStartInFlightRef.current = true;
+
     let acquiredScreenShareStream: MediaStream | null = null;
     let screenShareStarted = false;
 
@@ -6151,6 +6159,8 @@ export function useMeetMedia({
         console.error("[Meets] Error starting screen share:", err);
         setMeetError(createMeetError(err, "MEDIA_ERROR"));
       }
+    } finally {
+      screenShareStartInFlightRef.current = false;
     }
   }, [
     isObserverMode,

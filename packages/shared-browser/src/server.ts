@@ -1,4 +1,5 @@
 import express, { type Express } from "express";
+import { timingSafeEqual } from "node:crypto";
 import cors from "cors";
 import { createBrowserManager } from "./createBrowserManager.js";
 import {
@@ -45,6 +46,22 @@ const readRtpTarget = (record: Record<string, unknown>, key: string): AudioTarge
 app.use(cors());
 app.use(express.json());
 
+const tokenMatches = (candidate: string | undefined, expected: string): boolean => {
+    if (typeof candidate !== "string") return false;
+    const candidateBytes = Buffer.from(candidate);
+    const expectedBytes = Buffer.from(expected);
+    return (
+        candidateBytes.length === expectedBytes.length &&
+        timingSafeEqual(candidateBytes, expectedBytes)
+    );
+};
+
+if (!defaultConfig.serviceToken) {
+    console.warn(
+        "[SharedBrowser] BROWSER_SERVICE_TOKEN is not set: the launch, close and session APIs accept unauthenticated requests. Set it (and the same value on the SFU) unless this service is reachable only from the SFU.",
+    );
+}
+
 app.use((req, res, next) => {
     const expectedToken = defaultConfig.serviceToken;
     if (!expectedToken) {
@@ -64,7 +81,7 @@ app.use((req, res, next) => {
         ? authHeader.slice("Bearer ".length)
         : undefined;
 
-    if (headerToken === expectedToken || bearerToken === expectedToken) {
+    if (tokenMatches(headerToken, expectedToken) || tokenMatches(bearerToken, expectedToken)) {
         next();
         return;
     }

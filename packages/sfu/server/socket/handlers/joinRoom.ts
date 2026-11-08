@@ -22,7 +22,8 @@ import {
   cleanupStaleRoom,
   clearEndedRoom,
   getEndedRoom,
-  getOrCreateRoom,
+  getOrCreateRoomWithOrigin,
+  renewLocalRoom,
   getRoomChannelId,
 } from "../../rooms.js";
 import {
@@ -163,13 +164,21 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             requestedRoomId,
             clientId,
           );
-          if (!webinarTarget && scheduledWebinarForAttendee) {
-            ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, null);
-            webinarTarget = resolveWebinarLinkTarget(
-              state.webinarLinks,
-              requestedRoomId,
-              clientId,
-            );
+          if (scheduledWebinarForAttendee) {
+            // A scheduled webinar's link always leads to its own room. Another
+            // room that bound the same code (before the scheduler did, e.g.
+            // after a restart) must not receive the webinar's audience.
+            if (webinarTarget?.roomId !== scheduledWebinarForAttendee.roomId) {
+              ensureWebinarRoomConfig(state, scheduledWebinarForAttendee, null);
+            }
+            webinarTarget = {
+              roomChannelId: getRoomChannelId(
+                scheduledWebinarForAttendee.clientId,
+                scheduledWebinarForAttendee.roomId,
+              ),
+              roomId: scheduledWebinarForAttendee.roomId,
+              clientId: scheduledWebinarForAttendee.clientId,
+            };
           }
           if (!webinarTarget) {
             respond(callback, { error: "Webinar is not live." });
@@ -312,7 +321,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
 
         if (room) {
           try {
-            room = await getOrCreateRoom(state, clientId, roomId);
+            // Renew only. If the room closed during the renewal, fall through
+            // to the creation path below, which applies the creation checks
+            // and makes this joiner the creator if it creates the room.
+            room = (await renewLocalRoom(state, clientId, roomId)) ?? undefined;
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
@@ -350,7 +362,16 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             return;
           }
           try {
-            room = await getOrCreateRoom(state, clientId, roomId);
+            // Several joiners can miss the lookup above while the room is
+            // still being created; only the one whose call created it is the
+            // creator (and so the host). The rest join it as an existing room.
+            const result = await getOrCreateRoomWithOrigin(
+              state,
+              clientId,
+              roomId,
+            );
+            room = result.room;
+            createdRoom = result.created;
           } catch (error) {
             if (error instanceof RoomOwnershipError) {
               respondWithRoomOwner(error.owner);
@@ -358,13 +379,12 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
             }
             throw error;
           }
-          if (canReopenEndedRoom) {
+          if (createdRoom && canReopenEndedRoom) {
             clearEndedRoom(state, roomChannelId);
             Logger.info(
               `Re-opened ended room ${roomId} (${clientId}) for ${userId}`,
             );
           }
-          createdRoom = true;
         }
 
         const webinarConfig = getOrCreateWebinarRoomConfig(
@@ -444,7 +464,10 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           room.getPendingDisconnectStartedAt(userId);
         const wasReconnectNoticeEmitted =
           room.wasPendingDisconnectNotified(userId);
-        const wasReconnecting = room.clearPendingDisconnect(userId);
+        // Only peek here: the grace timer is the one thing that removes the
+        // old seat if this rejoin is refused or parked in the waiting room
+        // below, so it is cancelled only once the join is going through.
+        const wasReconnecting = room.hasPendingDisconnect(userId);
         const isReplacingExistingSeat =
           Boolean(existingClient) || staleSameIdentitySeats.length > 0;
         const isSameSessionMeetingParticipantRejoin =
@@ -702,6 +725,8 @@ export const registerJoinRoomHandler = (context: ConnectionContext): void => {
           });
           return;
         }
+
+        room.clearPendingDisconnect(userId);
 
         for (const { userId: staleUserId } of staleSameIdentitySeats) {
           Logger.warn(

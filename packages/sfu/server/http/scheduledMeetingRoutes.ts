@@ -15,6 +15,7 @@ import {
 import type { SfuState } from "../state.js";
 import {
   canonicalizeClientId,
+  canMigrateClientNamespace,
   clientIdCandidates,
   resolveDefaultClientId,
 } from "../clientIds.js";
@@ -170,6 +171,7 @@ export const registerScheduledMeetingRoutes = (
     clientId: string,
   ): Promise<ScheduledMeeting | null> => {
     if (meeting.clientId === clientId) return meeting;
+    if (!canMigrateClientNamespace(meeting.clientId, clientId)) return null;
     try {
       const migrated = moveScheduledMeetingToClient(
         state.scheduledMeetings,

@@ -60,6 +60,14 @@
         "limit": 30,
         "period": 60
       }
+    },
+    {
+      "name": "TTS_SPEECH_RATE_LIMITER",
+      "namespace_id": "2005",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
     }
   ],
   "r2_buckets": [
