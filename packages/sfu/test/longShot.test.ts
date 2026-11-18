@@ -117,7 +117,7 @@ describe("long shot classic", () => {
 
   it("keeps a player's answer private until the reveal", () => {
     const state = answer(started(), "host", "Durian", 2_000);
-    expect(me(state, "host").answer).toEqual({ text: "Durian", tier: "longShot", points: 100 });
+    expect(me(state, "host").answer).toEqual({ text: "Durian", tier: "longShot", points: 1000 });
     const view = JSON.stringify(pub(state));
     expect(view).not.toContain("Durian");
     expect(pub(state).tiles.host).toEqual({ acted: true });
@@ -141,10 +141,10 @@ describe("long shot classic", () => {
     const view = pub(state, 2_000);
     expect(view.phase).toBe("reveal");
     const byId = Object.fromEntries(view.results.map((r) => [r.id, r]));
-    expect(byId.host).toMatchObject({ answer: "Durian", points: 120, bonus: 20, shared: false });
-    expect(byId.p2).toMatchObject({ answer: "Apple", points: 10, bonus: 0, shared: true });
-    expect(view.scoreboard[0]).toEqual({ id: "host", name: "Host", score: 120 });
-    expect(view.tiles.host).toEqual({ outcome: "correct", note: "+120" });
+    expect(byId.host).toMatchObject({ answer: "Durian", points: 1200, bonus: 200, shared: false });
+    expect(byId.p2).toMatchObject({ answer: "Apple", points: 100, bonus: 0, shared: true });
+    expect(view.scoreboard[0]).toEqual({ id: "host", name: "Host", score: 1200 });
+    expect(view.tiles.host).toEqual({ outcome: "correct", note: "1200m" });
     expect((view.missedGems as string[]).includes("Durian")).toBe(false);
   });
 
@@ -184,7 +184,7 @@ describe("long shot fuse", () => {
     expect(pub(state).lastMiss).toMatchObject({ reason: "used", name: "Pat" });
     state = answer(state, "p2", "kumquat", 3_000);
     expect(pub(state).turnPlayerId).toBe("p3");
-    expect(pub(state).scoreboard.find((r) => r.id === "p2")?.score).toBe(100);
+    expect(pub(state).scoreboard.find((r) => r.id === "p2")?.score).toBe(1000);
   });
 
   it("pops the holder when the fuse runs out and ends with the last one standing", () => {
@@ -202,7 +202,7 @@ describe("long shot fuse", () => {
     expect(state.phase).toBe("results");
     const view = pub(state);
     expect(view.winnerId).toBe("p3");
-    expect(view.scoreboard[0]).toMatchObject({ id: "p3", score: 200 });
+    expect(view.scoreboard[0]).toMatchObject({ id: "p3", score: 2000 });
     expect(view.tiles.p3).toMatchObject({ winner: true });
   });
 

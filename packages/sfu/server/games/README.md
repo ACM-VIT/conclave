@@ -82,11 +82,12 @@ Full contributor guide: `packages/apps-sdk/docs/guides/add-a-game.md`.
 
 - `trivia`: Kahoot/Deezer-style timed quiz; speed-weighted scoring; projects
   per-player tile status (answered, correct, points) for the video-tile overlay.
-- `long-shot`: typed-answer game where rarer correct answers score more.
-  Answers are matched (aliases, small typos) against curated lists sorted into
-  obvious, solid, rare, and long-shot tiers. Two modes: everyone answers at once
-  (an answer nobody else gave earns a bonus) or pass the fuse (take turns naming
-  an unused answer before the timer pops; last one standing wins).
+- `long-shot`: typed-answer dive game where rarer correct answers sink you
+  deeper (score is depth in meters). Answers are matched (aliases, small typos)
+  against curated lists sorted into obvious, solid, rare, and long-shot tiers.
+  Two modes: dive together (everyone answers at once; an answer nobody else
+  gave earns a bonus) or last one under (take turns naming an unused answer
+  before your air runs out; last diver under wins).
 - `bluff`: Fibbage-style fake-answer game.
 - `would-you-rather`: room split prompts with no wrong answer.
 - `most-likely-to`: player-target voting prompts; tiles are tappable ballots.

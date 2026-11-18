@@ -152,12 +152,15 @@ export const LONG_SHOT_BANK: LongShotPrompt[] = [
   },
 ];
 
-/** Points per tier. Rarer answers fly further and score more. */
+/**
+ * Depth, in meters, each tier sinks you. Score is depth: the rarer the answer,
+ * the deeper the dive.
+ */
 export const LONG_SHOT_TIER_POINTS: Record<LongShotTier, number> = {
-  obvious: 10,
-  solid: 30,
-  rare: 60,
-  longShot: 100,
+  obvious: 100,
+  solid: 300,
+  rare: 600,
+  longShot: 1000,
 };
 
 export const LONG_SHOT_TIERS: LongShotTier[] = ["obvious", "solid", "rare", "longShot"];

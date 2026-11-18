@@ -29,18 +29,18 @@ import {
 
 /**
  * Long Shot: a typed-answer game where the rarer your correct answer, the more
- * it scores. Every prompt ("Name a fruit") has a curated list of accepted
+ * it scores, measured as dive depth in meters. Every prompt ("Name a fruit") has a curated list of accepted
  * answers sorted into four tiers: obvious, solid, rare and long shot.
  *
  * Two modes share the same prompt bank and matcher:
  *
- *  - classic ("Everyone at once"): lobby -> (prompt -> reveal) x N -> results.
+ *  - classic ("Dive together"): lobby -> (prompt -> reveal) x N -> results.
  *    Everyone types an answer to the same prompt at the same time. A player
  *    gets three tries to land on an accepted answer. At the reveal, an answer
  *    nobody else in the room gave earns an "only you" bonus; a shared answer
  *    is a jinx and earns no bonus.
  *
- *  - fuse ("Pass the fuse"): lobby -> (fuse -> popped)* -> results.
+ *  - fuse ("Last one under"): lobby -> (fuse -> popped)* -> results.
  *    Players take turns naming an accepted answer that has not been said yet.
  *    A valid answer scores its tier and passes the fuse on, a little shorter.
  *    When the fuse runs out, the holder loses a life and a new prompt starts.
@@ -61,8 +61,8 @@ const MIN_FUSE_MS = 4_000;
 const FUSE_SHRINK_MS = 250;
 const MAX_TRIES = 3;
 const MAX_ANSWER_LENGTH = 48;
-const ONLY_YOU_BONUS = 20;
-const SURVIVOR_BONUS = 200;
+const ONLY_YOU_BONUS = 200;
+const SURVIVOR_BONUS = 2000;
 const CHAIN_LENGTH = 10;
 const DEFAULT_PROMPTS = 7;
 const DEFAULT_LIVES = 2;
@@ -497,8 +497,8 @@ export const longShotModule: GameModule<LongShotState> = {
       label: "Mode",
       default: "classic",
       choices: [
-        { value: "classic", label: "Everyone at once" },
-        { value: "fuse", label: "Pass the fuse" },
+        { value: "classic", label: "Dive together" },
+        { value: "fuse", label: "Last one under" },
       ],
     },
     {
@@ -738,23 +738,23 @@ export const longShotModule: GameModule<LongShotState> = {
       } else if (state.phase === "reveal") {
         for (const result of state.results) {
           tiles[result.playerId] = result.answer
-            ? { outcome: "correct", note: `+${result.points}` }
+            ? { outcome: "correct", note: `${result.points}m` }
             : { outcome: "wrong" };
         }
       }
     } else if (state.order.length > 0) {
       for (const playerId of state.order) {
         if ((state.lives[playerId] ?? 0) <= 0) {
-          tiles[playerId] = { eliminated: true, note: "Out" };
+          tiles[playerId] = { eliminated: true, note: "Surfaced" };
         } else if (state.phase === "fuse" && state.turnPlayerId === playerId) {
-          tiles[playerId] = { active: true, note: "Has the fuse" };
+          tiles[playerId] = { active: true, note: "Holding breath" };
         }
       }
       if (state.phase === "popped" && state.popped && !state.popped.eliminated) {
-        tiles[state.popped.playerId] = { outcome: "wrong", note: "Popped" };
+        tiles[state.popped.playerId] = { outcome: "wrong", note: "Out of air" };
       }
       if (state.phase === "results" && state.winnerId) {
-        tiles[state.winnerId] = { winner: true, note: "Last one standing" };
+        tiles[state.winnerId] = { winner: true, note: "Last one under" };
       }
     }
 
