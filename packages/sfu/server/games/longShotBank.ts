@@ -241,6 +241,7 @@ export type CompiledAnswer = {
   display: string;
   tier: LongShotTier;
   keys: string[];
+  judged?: boolean;
 };
 
 export type CompiledPrompt = {

@@ -3,6 +3,7 @@ import {
   GameMoveError,
   type GameConfig,
   type GameContext,
+  type GameDecider,
   type GameModule,
   type GameOptionSpec,
   type GamePlayer,
@@ -30,6 +31,7 @@ export class GameSession {
   private readonly content: unknown | null;
   private state: unknown;
   private finished = false;
+  private readonly prepareCache = new Map<string, unknown>();
   /** Room members waiting for a seat at the next round boundary. */
   private pendingJoiners: GamePlayer[] = [];
 
@@ -186,10 +188,51 @@ export class GameSession {
    * `{ ok: false, error }` if the module rejected it (illegal move), in which
    * case state is unchanged. Unexpected errors are surfaced generically.
    */
+  async prepareMove(
+    playerId: string,
+    type: string,
+    payload: unknown,
+    options: {
+      decide: GameDecider | null;
+      signal: AbortSignal;
+      receivedAt?: number;
+      onError?: (error: unknown) => void;
+    },
+  ): Promise<{ ok: true; verified: unknown } | { ok: false; error: string }> {
+    if (this.finished) return { ok: false, error: "Game has ended" };
+    if (!this.hasPlayer(playerId)) {
+      return { ok: false, error: "You are not a player in this game" };
+    }
+    if (!this.module.prepareMove) return { ok: true, verified: null };
+    const now = options.receivedAt ?? Date.now();
+    try {
+      const verified = await this.module.prepareMove(
+        this.state,
+        { playerId, type, payload, receivedAt: now },
+        {
+          players: this.players.slice(),
+          activePlayers: this.activePlayers.slice(),
+          config: this.config,
+          now,
+          decide: options.decide,
+          signal: options.signal,
+          cache: this.prepareCache,
+          isAdmin: (id: string) => this.adminIds.has(id),
+        },
+      );
+      return { ok: true, verified: verified ?? null };
+    } catch (error) {
+      if (error instanceof GameMoveError) return { ok: false, error: error.message };
+      options.onError?.(error);
+      return { ok: true, verified: null };
+    }
+  }
+
   applyMove(
     playerId: string,
     type: string,
     payload: unknown,
+    extras: { verified?: unknown; receivedAt?: number } = {},
   ): { ok: true } | { ok: false; error: string } {
     if (this.finished) {
       return { ok: false, error: "Game has ended" };
@@ -201,7 +244,13 @@ export class GameSession {
     try {
       const next = this.module.onMove(
         this.state,
-        { playerId, type, payload },
+        {
+          playerId,
+          type,
+          payload,
+          ...(extras.verified !== undefined && extras.verified !== null ? { verified: extras.verified } : {}),
+          ...(typeof extras.receivedAt === "number" ? { receivedAt: extras.receivedAt } : {}),
+        },
         this.context(),
       );
       this.state = next;

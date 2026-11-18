@@ -1,8 +1,10 @@
 import {
   GameMoveError,
   type GameContext,
+  type GameDecider,
   type GameModule,
   type GameMove,
+  type GamePrepareContext,
 } from "../types.js";
 import { payloadField, requireString } from "../validation.js";
 import { numberOption, selectOption } from "../config.js";
@@ -21,12 +23,22 @@ import {
   LONG_SHOT_LIST_TIERS,
   compilePrompt,
   matchAnswer,
+  normalizeAnswer,
   type CompiledAnswer,
   type CompiledPrompt,
   type LongShotListTier,
   type LongShotPrompt,
   type LongShotTier,
 } from "../longShotBank.js";
+import {
+  buildJudgePlan,
+  decodeJudgedMove,
+  tidyJudgedText,
+  verdictFromAnswers,
+  type JudgedMove,
+  type JudgeVerdict,
+} from "../longShotJudge.js";
+import { createGameDecider } from "../decisions.js";
 
 type Mode = "classic" | "fuse";
 type Phase = "lobby" | "ready" | "prompt" | "reveal" | "fuse" | "popped" | "results";
@@ -50,6 +62,9 @@ const DEFAULT_PROMPTS = 7;
 const DEFAULT_LIVES = 2;
 const FUSE_GENERATED_PROMPTS = 8;
 const ABSENT_FORFEIT_MS = 30_000;
+const JUDGES_PER_PLAYER_PROMPT = 6;
+const JUDGES_PER_GAME = 400;
+const GENERATED_ANSWER_THRESHOLD = 0.3;
 const RESUME_MIN_MS = 3_000;
 
 type Miss = { text: string; reason: "unknown" | "used"; at: number };
@@ -66,6 +81,7 @@ type RoundResult = {
   answer: string | null;
   tier: LongShotTier | null;
   points: number;
+  judged?: boolean;
 };
 
 type ChainLink = {
@@ -73,9 +89,16 @@ type ChainLink = {
   answer: string;
   tier: LongShotTier;
   points: number;
+  judged?: boolean;
 };
 
-type BestAnswer = { answer: string; tier: LongShotTier; prompt: string; points: number };
+type BestAnswer = {
+  answer: string;
+  tier: LongShotTier;
+  prompt: string;
+  points: number;
+  judged?: boolean;
+};
 
 type LongShotState = {
   mode: Mode;
@@ -194,7 +217,13 @@ const recordBest = (
   if (previous && previous.points >= points) return best;
   return {
     ...best,
-    [playerId]: { answer: answer.display, tier: answer.tier, prompt: prompt.prompt, points },
+    [playerId]: {
+      answer: answer.display,
+      tier: answer.tier,
+      prompt: prompt.prompt,
+      points,
+      ...(answer.judged ? { judged: true } : {}),
+    },
   };
 };
 
@@ -271,7 +300,13 @@ const scoreClassicRound = (state: LongShotState, ctx: GameContext): LongShotStat
     const points = LONG_SHOT_TIER_POINTS[entry.answer.tier];
     scores[playerId] = (scores[playerId] ?? 0) + points;
     best = recordBest(best, playerId, entry.answer, prompt, points);
-    results.push({ playerId, answer: entry.answer.display, tier: entry.answer.tier, points });
+    results.push({
+      playerId,
+      answer: entry.answer.display,
+      tier: entry.answer.tier,
+      points,
+      ...(entry.answer.judged ? { judged: true } : {}),
+    });
   }
   results.sort((a, b) => b.points - a.points || (a.answer ?? "").localeCompare(b.answer ?? ""));
   const said = new Set(
@@ -409,6 +444,98 @@ const afterPop = (state: LongShotState, ctx: GameContext): LongShotState => {
   return enterFuse(state, state.promptIndex + 1, starter, ctx);
 };
 
+const judgeBudgetKey = (state: LongShotState, playerId: string) =>
+  `judge:${state.promptIndex}:${playerId}`;
+
+const spendJudgeBudget = (cache: Map<string, unknown>, key: string, limit: number): boolean => {
+  const used = typeof cache.get(key) === "number" ? (cache.get(key) as number) : 0;
+  if (used >= limit) return false;
+  cache.set(key, used + 1);
+  return true;
+};
+
+export const prepareLongShotAnswer = async (
+  state: LongShotState,
+  move: GameMove,
+  ctx: GamePrepareContext,
+): Promise<{ judge: JudgedMove } | null> => {
+  if (move.type !== "answer" || !ctx.decide) return null;
+  const raw = payloadField(move.payload, "text");
+  if (typeof raw !== "string") return null;
+  const text = raw.trim().slice(0, MAX_ANSWER_LENGTH);
+  const answerable =
+    (state.phase === "prompt" && !state.entries[move.playerId]?.answer) ||
+    (state.phase === "fuse" && state.turnPlayerId === move.playerId);
+  if (!text || !answerable) return null;
+  const prompt = currentPrompt(state);
+  if (!prompt || matchAnswer(prompt, text)) return null;
+  const key = normalizeAnswer(text);
+  if (key.length < 2) return null;
+  const used =
+    state.mode === "fuse"
+      ? prompt.answers.filter((answer) => state.used.includes(answer.id))
+      : [];
+  const cacheKey = `verdict:${state.promptIndex}:${prompt.prompt}:${key}:${used.map((answer) => answer.id).join(",")}`;
+  const cached = ctx.cache.get(cacheKey) as JudgeVerdict | undefined;
+  if (cached) return { judge: { key, verdict: cached } };
+  if (!spendJudgeBudget(ctx.cache, judgeBudgetKey(state, move.playerId), JUDGES_PER_PLAYER_PROMPT)) return null;
+  if (!spendJudgeBudget(ctx.cache, "judge:game", JUDGES_PER_GAME)) return null;
+  const plan = buildJudgePlan(prompt, text, used);
+  const answers = await ctx.decide({ state: plan.state, questions: plan.questions, signal: ctx.signal });
+  const verdict = verdictFromAnswers(plan, answers);
+  ctx.cache.set(cacheKey, verdict);
+  return { judge: { key, verdict } };
+};
+
+export const filterGeneratedPrompts = async (
+  prompts: LongShotPrompt[],
+  decide: GameDecider,
+  signal?: AbortSignal,
+): Promise<LongShotPrompt[]> => {
+  const checked = await Promise.all(
+    prompts.map(async (prompt) => {
+      const entries: { tier: LongShotListTier | "pearl"; value: string }[] = [
+        ...LONG_SHOT_LIST_TIERS.flatMap((tier) => prompt[tier].map((value) => ({ tier, value }))),
+        { tier: "pearl", value: prompt.pearl },
+      ];
+      const questions = Object.fromEntries(
+        entries.map((entry, index) => [
+          `a${index}`,
+          {
+            type: "noul" as const,
+            instructions: {
+              question: "Is `answer` a correct answer to the prompt in the state?",
+              answer: entry.value.split("|")[0],
+            },
+            criteria: {
+              true: "The answer names a real, specific thing that satisfies the prompt.",
+              false: "The answer is wrong, invented, too vague, or does not fit the prompt.",
+            },
+          },
+        ]),
+      );
+      try {
+        const answers = await decide({ state: { prompt: prompt.prompt, category: prompt.category }, questions, signal });
+        const keep = (index: number) => {
+          const answer = answers[`a${index}`];
+          return !answer || answer.type !== "noul" || answer.noul >= GENERATED_ANSWER_THRESHOLD;
+        };
+        const filtered: LongShotPrompt = { ...prompt };
+        for (const tier of LONG_SHOT_LIST_TIERS) {
+          filtered[tier] = prompt[tier].filter((value) =>
+            keep(entries.findIndex((entry) => entry.tier === tier && entry.value === value)),
+          );
+        }
+        if (!keep(entries.length - 1)) return null;
+        return filtered;
+      } catch {
+        return prompt;
+      }
+    }),
+  );
+  return parseLongShotPrompts({ prompts: checked.filter((prompt): prompt is LongShotPrompt => Boolean(prompt)) }) ?? [];
+};
+
 export type LongShotMove =
   | { type: "start" }
   | { type: "answer"; text: string }
@@ -431,20 +558,59 @@ const decodeLongShotMove = (move: GameMove): LongShotMove => {
   }
 };
 
+type ResolvedAnswer = {
+  state: LongShotState;
+  match: CompiledAnswer | null;
+  repeatOf: CompiledAnswer | null;
+};
+
+const resolveAnswer = (
+  state: LongShotState,
+  prompt: CompiledPrompt,
+  text: string,
+  judged: JudgedMove | null,
+): ResolvedAnswer => {
+  const listed = matchAnswer(prompt, text);
+  if (listed) return { state, match: listed, repeatOf: null };
+  const key = normalizeAnswer(text);
+  if (!judged || !key || judged.key !== key) return { state, match: null, repeatOf: null };
+  const { verdict } = judged;
+  const find = (id: string) => prompt.answers.find((answer) => answer.id === id) ?? null;
+  if (verdict.kind === "alias") return { state, match: find(verdict.answerId), repeatOf: null };
+  if (verdict.kind === "repeat") return { state, match: null, repeatOf: find(verdict.answerId) };
+  if (verdict.kind !== "accept") return { state, match: null, repeatOf: null };
+  const known = prompt.answers.find((answer) => answer.keys.includes(key));
+  if (known) return { state, match: known, repeatOf: null };
+  const answer: CompiledAnswer = {
+    id: `judged:${key}`,
+    display: tidyJudgedText(text).slice(0, MAX_ANSWER_LENGTH),
+    tier: verdict.tier,
+    keys: [key],
+    judged: true,
+  };
+  const prompts = state.prompts.slice();
+  prompts[state.promptIndex % prompts.length] = { ...prompt, answers: [...prompt.answers, answer] };
+  return { state: { ...state, prompts }, match: answer, repeatOf: null };
+};
+
 const answerClassic = (
   state: LongShotState,
   playerId: string,
   text: string,
   ctx: GameContext,
+  judged: JudgedMove | null,
+  receivedAt: number,
 ): LongShotState => {
   if (state.phase === "ready") throw new GameMoveError("Get ready");
   if (state.phase !== "prompt") throw new GameMoveError("Not accepting answers right now");
-  if (ctx.now >= state.deadline) throw new GameMoveError("Time's up");
+  if (receivedAt >= state.deadline) throw new GameMoveError("Time's up");
   const prompt = currentPrompt(state);
   if (!prompt) throw new GameMoveError("No prompt");
   const previous = state.entries[playerId];
   if (previous?.answer) throw new GameMoveError("You already locked in");
-  const match = matchAnswer(prompt, text);
+  const resolved = resolveAnswer(state, prompt, text, judged);
+  state = resolved.state;
+  const match = resolved.match;
   const entry: ClassicEntry = match
     ? { answer: match, misses: previous?.misses ?? 0, lastMiss: null, at: ctx.now }
     : {
@@ -463,14 +629,25 @@ const answerFuse = (
   playerId: string,
   text: string,
   ctx: GameContext,
+  judged: JudgedMove | null,
+  receivedAt: number,
 ): LongShotState => {
   if (state.phase !== "fuse") throw new GameMoveError("The fuse is not lit");
   if (state.turnPlayerId !== playerId) throw new GameMoveError("Not your turn");
   if (state.pausedRemainingMs !== null) throw new GameMoveError("Waiting for players");
-  if (ctx.now >= state.deadline) throw new GameMoveError("Time's up");
-  const prompt = currentPrompt(state);
-  if (!prompt) throw new GameMoveError("No prompt");
-  const match = matchAnswer(prompt, text);
+  if (receivedAt >= state.deadline) throw new GameMoveError("Time's up");
+  const currentPromptValue = currentPrompt(state);
+  if (!currentPromptValue) throw new GameMoveError("No prompt");
+  const resolved = resolveAnswer(state, currentPromptValue, text, judged);
+  if (resolved.repeatOf) {
+    return {
+      ...state,
+      lastMiss: { playerId, text: resolved.repeatOf.display, reason: "used", at: ctx.now },
+    };
+  }
+  state = resolved.state;
+  const prompt = currentPrompt(state)!;
+  const match = resolved.match;
   if (!match) {
     return { ...state, lastMiss: { playerId, text, reason: "unknown", at: ctx.now } };
   }
@@ -482,7 +659,10 @@ const answerFuse = (
   }
   const points = LONG_SHOT_TIER_POINTS[match.tier];
   const used = [...state.used, match.id];
-  const chain = [...state.chain, { playerId, answer: match.display, tier: match.tier, points }].slice(
+  const chain = [
+    ...state.chain,
+    { playerId, answer: match.display, tier: match.tier, points, ...(match.judged ? { judged: true } : {}) },
+  ].slice(
     -CHAIN_LENGTH,
   );
   const scores = { ...state.scores, [playerId]: (state.scores[playerId] ?? 0) + points };
@@ -625,6 +805,11 @@ export const longShotModule: GameModule<LongShotState> = {
       },
       maxOutputTokens: 800 + count * 900,
       parse: (payload) => parseLongShotPrompts(payload, Math.min(count, 3)),
+    }).then(async (prompts) => {
+      const decide = ctx.aiEnvironment ? createGameDecider(ctx.aiEnvironment) : null;
+      if (!prompts || !decide) return prompts;
+      const filtered = await filterGeneratedPrompts(prompts, decide, ctx.signal);
+      return filtered.length >= Math.min(count, 3) ? filtered : prompts;
     });
   },
 
@@ -673,6 +858,8 @@ export const longShotModule: GameModule<LongShotState> = {
     };
   },
 
+  prepareMove: prepareLongShotAnswer,
+
   onMove(state, move: GameMove, ctx): LongShotState {
     const m = decodeLongShotMove(move);
     switch (m.type) {
@@ -695,10 +882,13 @@ export const longShotModule: GameModule<LongShotState> = {
         const first = order.find((playerId) => isActive(ctx, playerId)) ?? order[0] ?? null;
         return enterFuse(seeded, 0, first, ctx);
       }
-      case "answer":
+      case "answer": {
+        const judged = decodeJudgedMove(move.verified);
+        const receivedAt = Math.min(move.receivedAt ?? ctx.now, ctx.now);
         return state.mode === "classic"
-          ? answerClassic(state, move.playerId, m.text, ctx)
-          : answerFuse(state, move.playerId, m.text, ctx);
+          ? answerClassic(state, move.playerId, m.text, ctx, judged, receivedAt)
+          : answerFuse(state, move.playerId, m.text, ctx, judged, receivedAt);
+      }
       case "skip": {
         if (!ctx.isAdmin(move.playerId)) {
           throw new GameMoveError("Only the host can skip");
