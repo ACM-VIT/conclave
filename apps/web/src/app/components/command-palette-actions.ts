@@ -80,7 +80,7 @@ const ROW_KEYWORDS: Record<string, string> = {
   "screen-share": "present presentation share screen stop",
   chat: "chat messages send message text",
   participants: "people members attendees who",
-  games: "games play chess wordle trivia bluff imposter",
+  games: "games play chess wordle trivia long shot bluff imposter",
   transcript: "captions transcript subtitles cc",
   "host-controls": "host admin moderation settings",
   popout: "mini view picture in picture pip popout floating",

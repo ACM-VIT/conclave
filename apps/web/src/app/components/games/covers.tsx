@@ -3,6 +3,7 @@
 
 const GAME_ACCENTS: Record<string, string> = {
   trivia: "#3B8EE0",
+  "long-shot": "#4FD1C5",
   bluff: "#8B7BF0",
   "would-you-rather": "#22A578",
   "most-likely-to": "#E06392",
@@ -15,6 +16,7 @@ const GAME_ACCENTS: Record<string, string> = {
 
 const GAME_NAMES: Record<string, string> = {
   trivia: "Trivia",
+  "long-shot": "Long Shot",
   bluff: "Bluff",
   "would-you-rather": "Would You Rather",
   "most-likely-to": "Most Likely To",

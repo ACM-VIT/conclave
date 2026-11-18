@@ -82,6 +82,11 @@ Full contributor guide: `packages/apps-sdk/docs/guides/add-a-game.md`.
 
 - `trivia`: Kahoot/Deezer-style timed quiz; speed-weighted scoring; projects
   per-player tile status (answered, correct, points) for the video-tile overlay.
+- `long-shot`: typed-answer game where rarer correct answers score more.
+  Answers are matched (aliases, small typos) against curated lists sorted into
+  obvious, solid, rare, and long-shot tiers. Two modes: everyone answers at once
+  (an answer nobody else gave earns a bonus) or pass the fuse (take turns naming
+  an unused answer before the timer pops; last one standing wins).
 - `bluff`: Fibbage-style fake-answer game.
 - `would-you-rather`: room split prompts with no wrong answer.
 - `most-likely-to`: player-target voting prompts; tiles are tappable ballots.
@@ -91,7 +96,7 @@ Full contributor guide: `packages/apps-sdk/docs/guides/add-a-game.md`.
   ballots during the accusation vote.
 - `wordle`: turn-based word game with a setter/guesser split.
 
-Trivia, Bluff, Would You Rather, Most Likely To, and Imposter can generate fresh
+Trivia, Long Shot, Bluff, Would You Rather, Most Likely To, and Imposter can generate fresh
 content from the host's topic input when OpenAI is configured.
 
 ## Beyond the dock
