@@ -596,7 +596,8 @@ describe("server-only room credential access", () => {
 
     const unconfigured = await upload();
     expect(unconfigured.status).toBe(201);
-    expect((await unconfigured.json()).image).toMatchObject({ mimeType: "image/png" });
+    const body = (await unconfigured.json()) as { image?: { mimeType?: string } };
+    expect(body.image).toMatchObject({ mimeType: "image/png" });
 
     room.aiCredentials.set("openai", "sk-image-safety", member.id, false);
     room.aiCredentials.configureFeature("images", { enabled: false }, "host", true);
