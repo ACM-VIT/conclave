@@ -582,6 +582,46 @@ describe("server-only room credential access", () => {
     expect(room.addChatImageAsset).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts images without a safety check when no safety model is configured or it is disabled", async () => {
+    const { room, member, url, moderateImage } = await start();
+    const upload = () =>
+      fetch(`${url}/chat-images`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${createChatImageUploadToken("server-secret", room.channelId, member.id)}`,
+          "content-type": "image/png",
+        },
+        body: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]),
+      });
+
+    const unconfigured = await upload();
+    expect(unconfigured.status).toBe(201);
+    expect((await unconfigured.json()).image).toMatchObject({ mimeType: "image/png" });
+
+    room.aiCredentials.set("openai", "sk-image-safety", member.id, false);
+    room.aiCredentials.configureFeature("images", { enabled: false }, "host", true);
+    expect((await upload()).status).toBe(201);
+
+    expect(moderateImage).not.toHaveBeenCalled();
+    expect(room.addChatImageAsset).toHaveBeenCalledTimes(2);
+  });
+
+  it("still rejects uploads when a configured safety check fails", async () => {
+    const { room, member, url, moderateImage } = await start();
+    room.aiCredentials.set("openai", "sk-image-safety", member.id, false);
+    moderateImage.mockRejectedValueOnce(new Error("provider down"));
+    const response = await fetch(`${url}/chat-images`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${createChatImageUploadToken("server-secret", room.channelId, member.id)}`,
+        "content-type": "image/png",
+      },
+      body: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]),
+    });
+    expect(response.status).toBe(503);
+    expect(room.addChatImageAsset).not.toHaveBeenCalled();
+  });
+
   it("aborts abandoned image safety checks without storing an orphan attachment", async () => {
     const {room, member, url, moderateImage} = await start();
     room.aiCredentials.set("openai", "sk-image-safety", member.id, false);

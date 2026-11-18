@@ -53,6 +53,7 @@ import {
   findClipboardImageFile,
   formatChatImageSize,
   isSupportedChatImageType,
+  prepareChatImageFile,
 } from "../lib/chat-images";
 import {
   type AssistantChatMessage,
@@ -577,10 +578,25 @@ function ChatPanel({
     [areImageAttachmentsEnabled, isImageUploading],
   );
 
+  const prepareAndStageImage = useCallback(
+    async (file: File): Promise<boolean> => {
+      const prepared = await prepareChatImageFile(file);
+      if (!prepared) {
+        setImageUploadError(CHAT_IMAGE_TYPE_MESSAGE);
+        return false;
+      }
+      return stageImage(prepared);
+    },
+    [stageImage],
+  );
+
   const handleImageSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const input = event.target;
+    const file = input.files?.[0];
     if (!file) return;
-    if (!stageImage(file)) event.target.value = "";
+    void prepareAndStageImage(file).then((staged) => {
+      if (!staged) input.value = "";
+    });
   };
 
   const handlePaste = useCallback(
@@ -588,9 +604,9 @@ function ChatPanel({
       const file = findClipboardImageFile(event.clipboardData);
       if (!file) return;
       event.preventDefault();
-      stageImage(file);
+      void prepareAndStageImage(file);
     },
-    [stageImage],
+    [prepareAndStageImage],
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
