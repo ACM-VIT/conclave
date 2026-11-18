@@ -14,17 +14,15 @@ type RoundResult = {
   answer: string | null;
   tier: Tier | null;
   points: number;
-  bonus: number;
-  shared: boolean;
 };
 
-type Seat = { id: string; name: string; lives: number; out: boolean };
+type Seat = { id: string; name: string; lives: number; meter: number; out: boolean };
 type ChainLink = { playerId: string; name: string; answer: string; tier: Tier; points: number };
 type Miss = { text: string; reason: "unknown" | "used"; at: number };
 
 type LongShotPublic = {
   mode: "classic" | "fuse";
-  phase: "lobby" | "prompt" | "reveal" | "fuse" | "popped" | "results";
+  phase: "lobby" | "ready" | "prompt" | "reveal" | "fuse" | "popped" | "results";
   serverNow: number;
   deadline: number | null;
   paused?: boolean;
@@ -35,15 +33,15 @@ type LongShotPublic = {
   prompt: string | null;
   tierCounts: Record<Tier, number> | null;
   tierPoints: Record<Tier, number>;
-  onlyYouBonus: number;
-  maxTries: number;
   answeredCount: number;
   totalPlayers: number;
   results: RoundResult[];
   missedGems: string[];
   obviousPicks: string[];
   turnPlayerId: string | null;
-  maxLives: number;
+  maxHearts: number;
+  heartMeter: number;
+  lastHeart: { playerId: string; name: string; at: number } | null;
   seats: Seat[];
   chain: ChainLink[];
   usedCount: number;
@@ -60,12 +58,9 @@ type LongShotMe = {
   rank: number | null;
   answer: { text: string; tier: Tier; points: number } | null;
   misses: number;
-  triesLeft: number;
   locked: boolean;
   lastMiss: Miss | null;
   roundPoints: number;
-  roundBonus: number;
-  shared: boolean;
   yourTurn: boolean;
   lives: number;
 };
@@ -226,7 +221,7 @@ function SonarTimer({ remainingMs, totalMs }: { remainingMs: number; totalMs: nu
   const ratio = totalMs > 0 ? Math.max(0, Math.min(1, remainingMs / totalMs)) : 0;
   const r = 24;
   const circ = 2 * Math.PI * r;
-  const stroke = remainingMs <= 5000 ? color.accent : GLOW.solid;
+  const stroke = remainingMs <= 5000 && totalMs > 5000 ? color.accent : GLOW.solid;
   return (
     <div style={{ position: "relative", width: 60, height: 60, flexShrink: 0 }}>
       <svg width={60} height={60} viewBox="0 0 60 60">
@@ -567,7 +562,7 @@ export default function LongShotGame({
               }}
             >
               {nameOf(seat.id, seat.name, userId)}
-              {pub.maxLives > 1 && !seat.out ? <span style={{ color: MUTED }}> {seat.lives}</span> : null}
+              {!seat.out ? <span style={{ color: MUTED }}> {seat.lives}</span> : null}
             </span>
           );
         })}
@@ -602,7 +597,7 @@ export default function LongShotGame({
               })}
             </div>
             <div style={{ fontFamily: HEAD_FONT, fontSize: 34, color: color.text }}>Out of air</div>
-            <div style={{ fontSize: 14, color: MUTED, marginTop: 8 }}>{pub.popped.eliminated ? `${who} ${who === "You" ? "are" : "is"} out` : `${who} lost a life`}</div>
+            <div style={{ fontSize: 14, color: MUTED, marginTop: 8 }}>{pub.popped.eliminated ? `${who} ${who === "You" ? "are" : "is"} out` : `${who} lost a heart`}</div>
           </div>
           {seats}
           {host ? (
@@ -617,8 +612,11 @@ export default function LongShotGame({
     const holder = pub.seats.find((seat) => seat.id === pub.turnPlayerId) ?? null;
     const myTurn = me.yourTurn && !readOnly;
     const missKey = pub.lastMiss && pub.lastMiss.playerId === userId ? pub.lastMiss.at : null;
-    const air = pub.durationMs > 0 ? Math.max(0, Math.min(1, remaining / pub.durationMs)) : 0;
-    const urgent = remaining <= 3000;
+    const mySeat = pub.seats.find((seat) => seat.id === userId) ?? null;
+    const heartNews =
+      pub.lastHeart && pub.serverNow - pub.lastHeart.at < 4000
+        ? `${nameOf(pub.lastHeart.playerId, pub.lastHeart.name, userId)} earned a heart`
+        : null;
     return (
       <Ocean depth={me.score}>
         {seats}
@@ -632,19 +630,33 @@ export default function LongShotGame({
                   position: "absolute",
                   inset: 0,
                   borderRadius: "50%",
-                  border: `1.5px solid ${urgent ? color.accent : "rgba(210,245,255,0.7)"}`,
-                  background: `radial-gradient(circle at 32% 30%, rgba(255,255,255,0.4), ${urgent ? "rgba(249,95,74,0.22)" : "rgba(57,195,242,0.2)"} 55%, rgba(57,195,242,0.04))`,
-                  "--ls-air": `${0.35 + air * 0.65}`,
-                  animation: "ls-breathe 1.4s ease-in-out infinite",
+                  border: `1.5px solid ${myTurn ? color.accent : "rgba(210,245,255,0.7)"}`,
+                  background: `radial-gradient(circle at 32% 30%, rgba(255,255,255,0.4), ${myTurn ? "rgba(249,95,74,0.22)" : "rgba(57,195,242,0.2)"} 55%, rgba(57,195,242,0.04))`,
+                  "--ls-air": pub.paused ? "0.8" : "0.92",
+                  animation: pub.paused ? undefined : `ls-breathe ${myTurn ? 0.7 : 1.4}s ease-in-out infinite`,
                 } as React.CSSProperties
               }
             />
-            <span style={{ position: "relative", fontFamily: HEAD_FONT, fontSize: 17, color: color.text, fontVariantNumeric: "tabular-nums" }}>
-              {(remaining / 1000).toFixed(1)}
-            </span>
           </div>
-          <div style={{ fontFamily: HEAD_FONT, fontSize: 16, color: myTurn ? GLOW.solid : color.text, ...ellipsis }}>
-            {pub.paused ? "Waiting for players" : myTurn ? "Your turn" : holder ? `${holder.name}'s turn` : ""}
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontFamily: HEAD_FONT, fontSize: 16, color: myTurn ? GLOW.solid : color.text, ...ellipsis }}>
+              {pub.paused ? "Waiting for players" : myTurn ? "Your turn" : holder ? `${holder.name}'s turn` : ""}
+            </div>
+            {mySeat && !mySeat.out ? (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 11.5, color: MUTED }}>Next heart</div>
+                <div style={{ marginTop: 4, height: 3, borderRadius: 2, background: LINE, overflow: "hidden" }}>
+                  <div
+                    style={{
+                      width: `${Math.min(100, (mySeat.meter / pub.heartMeter) * 100)}%`,
+                      height: "100%",
+                      background: GLOW.longShot,
+                      transition: "width 400ms ease",
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -657,9 +669,13 @@ export default function LongShotGame({
           shakeKey={missKey}
           autoFocus={myTurn}
         />
-        <Note tone="miss">
-          {error ?? (pub.lastMiss ? `${nameOf(pub.lastMiss.playerId, pub.lastMiss.name, userId)}: ${missText(pub.lastMiss)}` : null)}
-        </Note>
+        {heartNews && !error && (!pub.lastMiss || pub.lastHeart!.at >= pub.lastMiss.at) ? (
+          <Note>{heartNews}</Note>
+        ) : (
+          <Note tone="miss">
+            {error ?? (pub.lastMiss ? `${nameOf(pub.lastMiss.playerId, pub.lastMiss.name, userId)}: ${missText(pub.lastMiss)}` : null)}
+          </Note>
+        )}
 
         {pub.chain.length > 0 ? (
           <Panel style={{ padding: "2px 12px" }}>
@@ -710,7 +726,6 @@ export default function LongShotGame({
                 <div style={{ fontSize: 14, color: row.answer ? color.text : MUTED, ...ellipsis }}>{row.answer ?? "No answer"}</div>
                 <div style={{ fontSize: 11.5, color: MUTED, marginTop: 1, ...ellipsis }}>
                   {nameOf(row.id, row.name, userId)}
-                  {row.bonus > 0 ? " · only you" : row.shared ? " · jinx" : ""}
                 </div>
               </div>
               <span style={{ fontFamily: HEAD_FONT, fontSize: 13, flexShrink: 0, color: row.tier ? GLOW[row.tier] : MUTED }}>
@@ -734,9 +749,8 @@ export default function LongShotGame({
   }
 
   const missKey = me.lastMiss?.at ?? null;
-  const missNote = me.lastMiss
-    ? `${missText(me.lastMiss)} · ${me.triesLeft === 0 ? "no tries left" : `${me.triesLeft} ${me.triesLeft === 1 ? "try" : "tries"} left`}`
-    : null;
+  const missNote = me.lastMiss ? missText(me.lastMiss) : null;
+  const getReady = pub.phase === "ready";
   return (
     <Ocean depth={me.score}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
@@ -751,9 +765,9 @@ export default function LongShotGame({
       ) : (
         <>
           <AnswerInput
-          key={pub.promptIndex}
-            disabled={readOnly || me.locked}
-            placeholder="Answer"
+            key={pub.promptIndex}
+            disabled={readOnly || me.locked || getReady}
+            placeholder={getReady ? "Get ready" : "Answer"}
             buttonLabel="Dive"
             onSubmit={fire}
             shakeKey={missKey}

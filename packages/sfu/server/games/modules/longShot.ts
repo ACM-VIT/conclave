@@ -28,18 +28,21 @@ import {
 } from "../longShotBank.js";
 
 type Mode = "classic" | "fuse";
-type Phase = "lobby" | "prompt" | "reveal" | "fuse" | "popped" | "results";
+type Phase = "lobby" | "ready" | "prompt" | "reveal" | "fuse" | "popped" | "results";
 
 const CLASSIC_PACE_MS: Record<string, number> = { relaxed: 40_000, normal: 25_000, fast: 15_000 };
-const FUSE_PACE_MS: Record<string, number> = { relaxed: 15_000, normal: 10_000, fast: 7_000 };
+const FUSE_RANGE_MS: Record<string, [number, number]> = {
+  relaxed: [15_000, 40_000],
+  normal: [10_000, 30_000],
+  fast: [6_000, 18_000],
+};
+const READY_MS = 3_000;
 const REVEAL_MS = 9_000;
 const POPPED_MS = 4_000;
-const MIN_FUSE_MS = 4_000;
-const FUSE_SHRINK_MS = 250;
-const MAX_TRIES = 3;
 const MAX_ANSWER_LENGTH = 48;
-const ONLY_YOU_BONUS = 200;
 const SURVIVOR_BONUS = 2000;
+const HEART_METER = 6_000;
+const MAX_HEARTS = 5;
 const CHAIN_LENGTH = 10;
 const DEFAULT_PROMPTS = 7;
 const DEFAULT_LIVES = 2;
@@ -61,8 +64,6 @@ type RoundResult = {
   answer: string | null;
   tier: LongShotTier | null;
   points: number;
-  bonus: number;
-  shared: boolean;
 };
 
 type ChainLink = {
@@ -88,9 +89,10 @@ type LongShotState = {
   results: RoundResult[];
   missedGems: string[];
   obviousPicks: string[];
-  fuseMs: number;
-  currentFuseMs: number;
+  fuseRange: [number, number];
   maxLives: number;
+  meter: Record<string, number>;
+  lastHeart: { playerId: string; at: number } | null;
   order: string[];
   turnPlayerId: string | null;
   lives: Record<string, number>;
@@ -232,49 +234,34 @@ const fuseIsOver = (state: LongShotState): boolean => {
   return state.order.length > 1 ? alive <= 1 : alive === 0;
 };
 
-const enterPrompt = (state: LongShotState, index: number, ctx: GameContext): LongShotState => ({
+const enterReady = (state: LongShotState, index: number, ctx: GameContext): LongShotState => ({
   ...state,
-  phase: "prompt",
+  phase: "ready",
   promptIndex: index,
-  deadline: ctx.now + state.promptMs,
+  deadline: ctx.now + READY_MS,
   entries: {},
   results: [],
   missedGems: [],
   obviousPicks: [],
 });
 
-const classicLocked = (entry: ClassicEntry | undefined): boolean =>
-  Boolean(entry && (entry.answer || entry.misses >= MAX_TRIES));
+const classicLocked = (entry: ClassicEntry | undefined): boolean => Boolean(entry?.answer);
 
 const scoreClassicRound = (state: LongShotState, ctx: GameContext): LongShotState => {
   const prompt = currentPrompt(state);
   if (!prompt) return { ...state, phase: "reveal", deadline: ctx.now + REVEAL_MS };
-  const counts = new Map<string, number>();
-  for (const entry of Object.values(state.entries)) {
-    if (entry.answer) counts.set(entry.answer.id, (counts.get(entry.answer.id) ?? 0) + 1);
-  }
   const scores = { ...state.scores };
   let best = state.best;
   const results: RoundResult[] = [];
   for (const [playerId, entry] of Object.entries(state.entries)) {
     if (!entry.answer) {
-      results.push({ playerId, answer: null, tier: null, points: 0, bonus: 0, shared: false });
+      results.push({ playerId, answer: null, tier: null, points: 0 });
       continue;
     }
-    const shared = (counts.get(entry.answer.id) ?? 0) > 1;
-    const base = LONG_SHOT_TIER_POINTS[entry.answer.tier];
-    const bonus = !shared && ctx.players.length > 1 ? ONLY_YOU_BONUS : 0;
-    const points = base + bonus;
+    const points = LONG_SHOT_TIER_POINTS[entry.answer.tier];
     scores[playerId] = (scores[playerId] ?? 0) + points;
-    best = recordBest(best, playerId, entry.answer, prompt, base);
-    results.push({
-      playerId,
-      answer: entry.answer.display,
-      tier: entry.answer.tier,
-      points,
-      bonus,
-      shared,
-    });
+    best = recordBest(best, playerId, entry.answer, prompt, points);
+    results.push({ playerId, answer: entry.answer.display, tier: entry.answer.tier, points });
   }
   results.sort((a, b) => b.points - a.points || (a.answer ?? "").localeCompare(b.answer ?? ""));
   const said = new Set(
@@ -312,8 +299,8 @@ const enterFuse = (
   phase: "fuse",
   promptIndex,
   turnPlayerId,
-  currentFuseMs: state.fuseMs,
-  deadline: ctx.now + state.fuseMs,
+  deadline:
+    ctx.now + state.fuseRange[0] + ctx.rng.int(state.fuseRange[1] - state.fuseRange[0] + 1),
   used: [],
   chain: [],
   lastMiss: null,
@@ -388,7 +375,7 @@ const tickFuse = (state: LongShotState, ctx: GameContext): LongShotState => {
     return {
       ...tracked,
       turnPlayerId: nextAliveConnected(tracked, holder, ctx),
-      deadline: ctx.now + tracked.currentFuseMs,
+      deadline: Math.max(tracked.deadline, ctx.now + RESUME_MIN_MS),
       pausedRemainingMs: null,
     };
   }
@@ -440,13 +427,13 @@ const answerClassic = (
   text: string,
   ctx: GameContext,
 ): LongShotState => {
+  if (state.phase === "ready") throw new GameMoveError("Get ready");
   if (state.phase !== "prompt") throw new GameMoveError("Not accepting answers right now");
   if (ctx.now >= state.deadline) throw new GameMoveError("Time's up");
   const prompt = currentPrompt(state);
   if (!prompt) throw new GameMoveError("No prompt");
   const previous = state.entries[playerId];
   if (previous?.answer) throw new GameMoveError("You already locked in");
-  if ((previous?.misses ?? 0) >= MAX_TRIES) throw new GameMoveError("No tries left");
   const match = matchAnswer(prompt, text);
   const entry: ClassicEntry = match
     ? { answer: match, misses: previous?.misses ?? 0, lastMiss: null, at: ctx.now }
@@ -490,17 +477,33 @@ const answerFuse = (
   );
   const scores = { ...state.scores, [playerId]: (state.scores[playerId] ?? 0) + points };
   const best = recordBest(state.best, playerId, match, prompt, points);
-  const currentFuseMs = Math.max(MIN_FUSE_MS, state.currentFuseMs - FUSE_SHRINK_MS);
-  const base = { ...state, used, chain, scores, best, lastMiss: null };
+  let hearts = state.lives[playerId] ?? 0;
+  let meter = (state.meter[playerId] ?? 0) + points;
+  let lastHeart = state.lastHeart;
+  while (meter >= HEART_METER && hearts < MAX_HEARTS) {
+    meter -= HEART_METER;
+    hearts += 1;
+    lastHeart = { playerId, at: ctx.now };
+  }
+  if (hearts >= MAX_HEARTS) meter = Math.min(meter, HEART_METER);
+  const base = {
+    ...state,
+    used,
+    chain,
+    scores,
+    best,
+    lastMiss: null,
+    lives: { ...state.lives, [playerId]: hearts },
+    meter: { ...state.meter, [playerId]: meter },
+    lastHeart,
+  };
   if (used.length >= prompt.answers.length) {
     return enterFuse(base, state.promptIndex + 1, nextAliveConnected(base, playerId, ctx), ctx);
   }
   const solo = state.order.length === 1;
   return {
     ...base,
-    currentFuseMs,
     turnPlayerId: solo ? playerId : nextAliveConnected(base, playerId, ctx),
-    deadline: ctx.now + currentFuseMs,
   };
 };
 
@@ -512,7 +515,7 @@ export const longShotModule: GameModule<LongShotState> = {
   maxPlayers: 24,
   tickMs: 250,
   hasLeaderboard: true,
-  lateJoinPhases: (state) => (state.mode === "classic" ? ["prompt"] : []),
+  lateJoinPhases: (state) => (state.mode === "classic" ? ["ready"] : []),
   options: [
     GAME_CONTENT_TOPIC_OPTION,
     {
@@ -538,7 +541,7 @@ export const longShotModule: GameModule<LongShotState> = {
     {
       id: "lives",
       type: "number",
-      label: "Lives",
+      label: "Hearts",
       min: 1,
       max: 3,
       default: DEFAULT_LIVES,
@@ -622,7 +625,6 @@ export const longShotModule: GameModule<LongShotState> = {
       .shuffle(source)
       .slice(0, Math.min(wanted, source.length))
       .map(compilePrompt);
-    const fuseMs = FUSE_PACE_MS[pace] ?? FUSE_PACE_MS.normal;
     const scores: Record<string, number> = {};
     for (const player of ctx.players) scores[player.id] = 0;
     return {
@@ -639,9 +641,10 @@ export const longShotModule: GameModule<LongShotState> = {
       results: [],
       missedGems: [],
       obviousPicks: [],
-      fuseMs,
-      currentFuseMs: fuseMs,
+      fuseRange: FUSE_RANGE_MS[pace] ?? FUSE_RANGE_MS.normal,
       maxLives: numberOption(ctx.config, "lives", DEFAULT_LIVES),
+      meter: {},
+      lastHeart: null,
       order: [],
       turnPlayerId: null,
       lives: {},
@@ -669,7 +672,7 @@ export const longShotModule: GameModule<LongShotState> = {
         if (state.prompts.length === 0) {
           throw new GameMoveError("No prompts available");
         }
-        if (state.mode === "classic") return enterPrompt(state, 0, ctx);
+        if (state.mode === "classic") return enterReady(state, 0, ctx);
         const order = ctx.rng.shuffle(ctx.players.map((player) => player.id));
         const lives: Record<string, number> = {};
         for (const playerId of order) lives[playerId] = state.maxLives;
@@ -712,13 +715,17 @@ export const longShotModule: GameModule<LongShotState> = {
 
   onTick(state, ctx): LongShotState {
     switch (state.phase) {
+      case "ready":
+        return ctx.now >= state.deadline
+          ? { ...state, phase: "prompt", deadline: ctx.now + state.promptMs }
+          : state;
       case "prompt":
         return ctx.now >= state.deadline ? scoreClassicRound(state, ctx) : state;
       case "reveal": {
         if (ctx.now < state.deadline) return state;
         const nextIndex = state.promptIndex + 1;
         if (nextIndex >= state.prompts.length) return { ...state, phase: "results", deadline: 0 };
-        return enterPrompt(state, nextIndex, ctx);
+        return enterReady(state, nextIndex, ctx);
       }
       case "fuse":
         return tickFuse(state, ctx);
@@ -784,17 +791,15 @@ export const longShotModule: GameModule<LongShotState> = {
       mode: state.mode,
       phase: state.phase,
       serverNow: ctx.now,
-      deadline: live && state.deadline > 0 && state.pausedRemainingMs === null ? state.deadline : null,
+      deadline: live && state.phase !== "fuse" && state.deadline > 0 ? state.deadline : null,
       paused: state.phase === "fuse" && state.pausedRemainingMs !== null,
-      durationMs: state.mode === "classic" ? state.promptMs : state.currentFuseMs,
+      durationMs: state.phase === "ready" ? READY_MS : state.promptMs,
       promptIndex: state.promptIndex,
       totalPrompts: state.totalPrompts,
       category: live ? prompt?.category ?? null : null,
       prompt: live ? prompt?.prompt ?? null : null,
       tierCounts: live ? tierCounts(prompt) : null,
       tierPoints: LONG_SHOT_TIER_POINTS,
-      onlyYouBonus: ONLY_YOU_BONUS,
-      maxTries: MAX_TRIES,
       answeredCount: lockedCount,
       totalPlayers: ctx.activePlayers.length,
       results:
@@ -804,13 +809,18 @@ export const longShotModule: GameModule<LongShotState> = {
       missedGems: state.phase === "reveal" ? state.missedGems : [],
       obviousPicks: state.phase === "reveal" ? state.obviousPicks : [],
       turnPlayerId: state.phase === "fuse" ? state.turnPlayerId : null,
-      maxLives: state.maxLives,
+      maxHearts: MAX_HEARTS,
+      heartMeter: HEART_METER,
       seats: state.order.map((playerId) => ({
         id: playerId,
         name: name(playerId),
         lives: state.lives[playerId] ?? 0,
+        meter: state.meter[playerId] ?? 0,
         out: (state.lives[playerId] ?? 0) <= 0,
       })),
+      lastHeart: state.lastHeart
+        ? { ...state.lastHeart, name: name(state.lastHeart.playerId) }
+        : null,
       chain: state.chain.map((link) => ({ ...link, name: name(link.playerId) })),
       usedCount: state.used.length,
       lastMiss: state.lastMiss
@@ -854,12 +864,9 @@ export const longShotModule: GameModule<LongShotState> = {
           }
         : null,
       misses: entry?.misses ?? 0,
-      triesLeft: Math.max(0, MAX_TRIES - (entry?.misses ?? 0)),
       locked: classicLocked(entry),
       lastMiss: entry?.lastMiss ?? null,
       roundPoints: result?.points ?? 0,
-      roundBonus: result?.bonus ?? 0,
-      shared: result?.shared ?? false,
       yourTurn: state.phase === "fuse" && state.turnPlayerId === playerId,
       lives: state.lives[playerId] ?? 0,
     };

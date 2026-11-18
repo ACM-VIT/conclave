@@ -43,13 +43,12 @@ type PublicView = Record<string, unknown> & {
   prompt: string | null;
   turnPlayerId: string | null;
   scoreboard: { id: string; score: number }[];
-  results: { id: string; answer: string | null; points: number; bonus: number; shared: boolean }[];
-  seats: { id: string; lives: number; out: boolean }[];
+  results: { id: string; answer: string | null; points: number }[];
+  seats: { id: string; lives: number; meter: number; out: boolean }[];
   tiles: Record<string, Record<string, unknown>>;
 };
 type PlayerView = Record<string, unknown> & {
   answer: { text: string; tier: string; points: number } | null;
-  triesLeft: number;
   locked: boolean;
   yourTurn: boolean;
 };
@@ -107,10 +106,13 @@ describe("long shot matcher", () => {
 
 describe("long shot classic", () => {
   const started = () =>
-    longShotModule.onMove(
-      longShotModule.setup(context(0)),
-      { playerId: "host", type: "start", payload: undefined },
-      context(1_000),
+    longShotModule.onTick!(
+      longShotModule.onMove(
+        longShotModule.setup(context(0)),
+        { playerId: "host", type: "start", payload: undefined },
+        context(1_000),
+      ),
+      context(4_000),
     );
 
   it("starts in the lobby and only the host can start", () => {
@@ -120,64 +122,75 @@ describe("long shot classic", () => {
     expect(() =>
       longShotModule.onMove(state, { playerId: "p2", type: "start", payload: undefined }, context(0)),
     ).toThrow(GameMoveError);
-    expect(pub(started()).prompt).toBe("Name a fruit");
+  });
+
+  it("shows each prompt for a three-second countdown before the clock starts", () => {
+    const ready = longShotModule.onMove(
+      longShotModule.setup(context(0)),
+      { playerId: "host", type: "start", payload: undefined },
+      context(1_000),
+    );
+    expect(pub(ready, 1_000).phase).toBe("ready");
+    expect(pub(ready, 1_000).prompt).toBe("Name a fruit");
+    expect(() => answer(ready, "host", "Durian", 2_000)).toThrow("Get ready");
+    expect(longShotModule.onTick!(ready, context(3_999)).phase).toBe("ready");
+    const live = longShotModule.onTick!(ready, context(4_000));
+    expect(live.phase).toBe("prompt");
+    expect(pub(live, 4_000).deadline).toBe(29_000);
   });
 
   it("keeps a player's answer private until the reveal", () => {
-    const state = answer(started(), "host", "Durian", 2_000);
+    const state = answer(started(), "host", "Durian", 5_000);
     expect(me(state, "host").answer).toEqual({ text: "Durian", tier: "longShot", points: 1000 });
     const view = JSON.stringify(pub(state));
     expect(view).not.toContain("Durian");
     expect(pub(state).tiles.host).toEqual({ acted: true });
   });
 
-  it("gives three tries, then locks the player out", () => {
+  it("clears a wrong answer and lets the player keep trying until the clock runs out", () => {
     let state = started();
-    for (let i = 0; i < 3; i++) state = answer(state, "p2", `nope ${i}`, 2_000);
-    expect(me(state, "p2").triesLeft).toBe(0);
-    expect(me(state, "p2").locked).toBe(true);
-    expect(() => answer(state, "p2", "Apple", 2_000)).toThrow("No tries left");
+    for (let i = 0; i < 6; i++) state = answer(state, "p2", `nope ${i}`, 5_000);
+    expect(me(state, "p2").locked).toBe(false);
+    expect(me(state, "p2").lastMiss).toMatchObject({ reason: "unknown" });
+    state = answer(state, "p2", "Apple", 6_000);
+    expect(me(state, "p2").answer).toMatchObject({ text: "Apple", points: 100 });
+    expect(() => answer(state, "p2", "Durian", 7_000)).toThrow("You already locked in");
   });
 
-  it("scores tiers, adds the only-you bonus and jinxes shared answers", () => {
+  it("scores each answer by its tier alone", () => {
     let state = started();
-    state = answer(state, "host", "Durian", 2_000);
-    state = answer(state, "p2", "Apple", 2_000);
-    state = answer(state, "p3", "apples", 2_000);
-    state = longShotModule.onTick!(state, context(2_000));
-    const view = pub(state, 2_000);
+    state = answer(state, "host", "Durian", 5_000);
+    state = answer(state, "p2", "Apple", 5_000);
+    state = answer(state, "p3", "apples", 5_000);
+    state = longShotModule.onTick!(state, context(5_000));
+    const view = pub(state, 5_000);
     expect(view.phase).toBe("reveal");
     const byId = Object.fromEntries(view.results.map((r) => [r.id, r]));
-    expect(byId.host).toMatchObject({ answer: "Durian", points: 1200, bonus: 200, shared: false });
-    expect(byId.p2).toMatchObject({ answer: "Apple", points: 100, bonus: 0, shared: true });
-    expect(view.scoreboard[0]).toEqual({ id: "host", name: "Host", score: 1200 });
-    expect(view.tiles.host).toEqual({ outcome: "correct", note: "1200m" });
+    expect(byId.host).toMatchObject({ answer: "Durian", points: 1000 });
+    expect(byId.p2).toMatchObject({ answer: "Apple", points: 100 });
+    expect(byId.p3).toMatchObject({ answer: "Apple", points: 100 });
+    expect(view.scoreboard[0]).toEqual({ id: "host", name: "Host", score: 1000 });
+    expect(view.tiles.host).toEqual({ outcome: "correct", note: "1000m" });
     expect((view.missedGems as string[]).includes("Durian")).toBe(false);
   });
 
-  it("gives the only-you bonus when everyone else misses", () => {
-    let state = started();
-    state = answer(state, "host", "Durian", 2_000);
-    for (let i = 0; i < 3; i++) state = answer(state, "p2", `nope ${i}`, 2_000);
-    state = longShotModule.onTick!(state, context(40_000));
-    const host = pub(state, 40_000).results.find((r) => r.id === "host");
-    expect(host).toMatchObject({ points: 1200, bonus: 200 });
-  });
-
-  it("rejects answers that arrive after the deadline", () => {
-    const state = started();
-    expect(() => answer(state, "host", "Durian", 26_000)).toThrow("Time's up");
+  it("rejects answers that arrive after the clock runs out", () => {
+    expect(() => answer(started(), "host", "Durian", 29_000)).toThrow("Time's up");
   });
 
   it("walks every prompt to the results", () => {
     let state = started();
-    let now = 1_000;
+    let now = 4_000;
     for (let i = 0; i < 3; i++) {
       now += 30_000;
       state = longShotModule.onTick!(state, context(now));
       expect(state.phase).toBe("reveal");
       now += 10_000;
       state = longShotModule.onTick!(state, context(now));
+      if (state.phase === "ready") {
+        now += 3_000;
+        state = longShotModule.onTick!(state, context(now));
+      }
     }
     expect(state.phase).toBe("results");
     expect(longShotModule.isFinished!(state)).toBe(true);
@@ -280,10 +293,48 @@ describe("long shot fuse", () => {
     expect(pub(state, 9_000, away).paused).toBe(true);
     state = longShotModule.onTick!(state, context(20_000, cfg));
     expect(state.phase).toBe("fuse");
-    expect(pub(state, 20_000, cfg).deadline).toBe(23_000);
+    expect(pub(state, 20_000, cfg).deadline).toBeNull();
+    expect(state.deadline).toBe(23_000);
     state = longShotModule.onTick!(state, context(21_000, cfg));
     expect(state.phase).toBe("fuse");
     expect(pub(state, 21_000, cfg).seats.find((s) => s.id === "host")?.lives).toBe(1);
+  });
+
+  it("shares one hidden fuse across passes in a round", () => {
+    let state = started();
+    const fuseEnds = state.deadline;
+    expect(pub(state).deadline).toBeNull();
+    state = answer(state, "host", "Apple", 2_000);
+    state = answer(state, "p2", "Kumquat", 3_000);
+    expect(state.deadline).toBe(fuseEnds);
+    expect(pub(state).turnPlayerId).toBe("p3");
+  });
+
+  it("draws the fuse length at random within the pace range", () => {
+    const longRng: GameRng = { ...rng, int: (max) => max - 1 };
+    const state = longShotModule.onMove(
+      longShotModule.setup({ ...context(0, { config: fuseConfig }), rng: longRng }),
+      { playerId: "host", type: "start", payload: undefined },
+      { ...context(1_000, { config: fuseConfig }), rng: longRng },
+    );
+    expect(state.deadline).toBe(1_000 + 30_000);
+    expect(started().deadline).toBe(1_000 + 10_000);
+  });
+
+  it("earns an extra heart for every 600 points of rare answers, up to five", () => {
+    const solo = [players[0]];
+    const cfg = { config: { ...fuseConfig, lives: 1 }, roster: solo };
+    let state = longShotModule.onMove(
+      longShotModule.setup(context(0, cfg)),
+      { playerId: "host", type: "start", payload: undefined },
+      context(1_000, cfg),
+    );
+    for (const [i, fruit] of ["Durian", "Rambutan", "Mangosteen", "Jackfruit", "Quince", "Kumquat"].entries()) {
+      state = answer(state, "host", fruit, 1_100 + i, cfg);
+    }
+    const seat = pub(state, 2_000, cfg).seats.find((s) => s.id === "host");
+    expect(seat).toMatchObject({ lives: 2, meter: 0 });
+    expect(pub(state, 2_000, cfg).lastHeart).toMatchObject({ playerId: "host" });
   });
 
   it("does not allow joining mid-game in fuse mode", () => {
