@@ -34,9 +34,11 @@ const uses = {
 export default function RoomAiSettings({
   controller,
   onClose,
+  embedded = false,
 }: {
   controller: RoomAiController;
   onClose: () => void;
+  embedded?: boolean;
 }) {
   const [tab, setTab] = useState<"features" | "keys">("features");
   const [expanded, setExpanded] = useState<RoomAiProvider | null>(null);
@@ -105,9 +107,13 @@ export default function RoomAiSettings({
   return (
     <section
       aria-label="Room AI settings"
-      className="max-h-[65vh] shrink-0 overflow-y-auto border-b border-white/10 bg-[#1e1e21] px-4 py-4"
+      className={
+        embedded
+          ? "px-4 py-4"
+          : "max-h-[65vh] shrink-0 overflow-y-auto border-b border-white/10 bg-[#1e1e21] px-4 py-4"
+      }
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className={embedded ? "hidden" : "flex items-center justify-between gap-2"}>
         <h3 className="text-[13px] font-semibold text-[#fafafa]">
           Room AI settings
         </h3>
@@ -120,7 +126,7 @@ export default function RoomAiSettings({
           <X size={16} />
         </button>
       </div>
-      <div className="mt-3 flex items-center gap-1 rounded-lg bg-black/20 p-1" role="tablist" aria-label="AI settings sections">
+      <div className={`${embedded ? "" : "mt-3 "}flex items-center gap-1 rounded-lg bg-black/20 p-1`} role="tablist" aria-label="AI settings sections">
         {(["features", "keys"] as const).map(value => <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)} className={`flex-1 rounded-md py-1.5 text-[12px] font-medium transition-colors ${tab === value ? "bg-white/10 text-white" : "text-[#a1a1aa] hover:text-white"}`}>{value === "features" ? "Features" : "Keys"}</button>)}
       </div>
       <div className="mt-3 flex flex-wrap gap-2" aria-label="Connected providers">

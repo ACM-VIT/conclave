@@ -93,6 +93,7 @@ type MentionInputMode = "at" | "dm";
 
 interface ChatPanelProps {
   roomAi?: RoomAiController;
+  onOpenAiSettings?: () => void;
   messages: ChatMessage[];
   chatInput: string;
   onInputChange: (value: string) => void;
@@ -228,6 +229,7 @@ function TtsMessageBody({
 
 function ChatPanel({
   roomAi,
+  onOpenAiSettings,
   messages,
   chatInput,
   onInputChange,
@@ -775,7 +777,7 @@ function ChatPanel({
               aria-label="Room AI settings"
               aria-expanded={settingsOpen}
               title="Room AI settings"
-              onClick={() => setSettingsOpen((open) => !open)}
+              onClick={() => (onOpenAiSettings ? onOpenAiSettings() : setSettingsOpen((open) => !open))}
               className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[#a1a1aa] hover:bg-white/[0.06] hover:text-white"
             >
               <Settings2 size={16} />

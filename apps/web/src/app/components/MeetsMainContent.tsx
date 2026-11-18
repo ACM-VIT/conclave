@@ -33,6 +33,7 @@ import WebinarViewerChrome, {
 } from "./WebinarViewer";
 import ToastQueue from "./ToastQueue";
 import TranscriptPanel from "./TranscriptPanel";
+import RoomAiPanel from "./RoomAiPanel";
 import AndroidUpsellSheet from "./AndroidUpsellSheet";
 import type { BrowserState } from "../hooks/useSharedBrowser";
 import type {
@@ -720,6 +721,7 @@ export default function MeetsMainContent({
   const [isViewPanelOpen, setIsViewPanelOpen] = useState(false);
   const [isDeviceSettingsOpen, setIsDeviceSettingsOpen] = useState(false);
   const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
   const [transcriptInitialTab, setTranscriptInitialTab] = useState<
     "transcript" | "ask" | "minutes"
   >("transcript");
@@ -1150,6 +1152,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsParticipantsOpen(opening);
   }, [isParticipantsOpen, isChatOpen, setIsParticipantsOpen, toggleChat]);
@@ -1168,6 +1171,7 @@ export default function MeetsMainContent({
     setIsViewPanelOpen(false);
     setIsDeviceSettingsOpen(false);
     setIsTranscriptOpen(false);
+    setIsAiPanelOpen(false);
     setIsParticipantsOpen(true);
   }, [toggleChat, setIsParticipantsOpen]);
 
@@ -1202,7 +1206,8 @@ export default function MeetsMainContent({
     isVideoEffectsOpen ||
     isViewPanelOpen ||
     isDeviceSettingsOpen ||
-    isTranscriptOpen;
+    isTranscriptOpen ||
+    isAiPanelOpen;
   const isGameDockPresent = isGameActive || isGamesOpen || isAppsOpen;
   const gameDockOffset =
     canReserveDockedPanel && isSecondaryPanelOpen ? DOCKED_PANEL_WIDTH : 0;
@@ -1238,6 +1243,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsHostControlsOpen(opening);
   }, [isHostControlsOpen, toggleChat, setIsParticipantsOpen]);
@@ -1273,6 +1279,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsVideoEffectsOpen(opening);
   }, [
@@ -1298,6 +1305,7 @@ export default function MeetsMainContent({
       setIsVideoEffectsOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsViewPanelOpen(opening);
   }, [isViewPanelOpen, setIsParticipantsOpen, toggleChat]);
@@ -1317,6 +1325,7 @@ export default function MeetsMainContent({
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     setIsDeviceSettingsOpen(opening);
   }, [isDeviceSettingsOpen, setIsParticipantsOpen, toggleChat]);
@@ -1342,11 +1351,32 @@ export default function MeetsMainContent({
       setIsVideoEffectsOpen(false);
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
+      setIsAiPanelOpen(false);
     } else {
       setTranscriptInitialTab("transcript");
     }
     setIsTranscriptOpen(opening);
   }, [isTranscriptOpen, setIsParticipantsOpen, toggleChat]);
+
+  const handleToggleAiPanel = useCallback(() => {
+    const opening = !isAiPanelOpen;
+    if (opening && isChatOpenRef.current) {
+      toggleChat();
+    }
+    if (opening) {
+      setIsParticipantsOpen(false);
+      setIsHostControlsOpen(false);
+      setIsVideoEffectsOpen(false);
+      setIsViewPanelOpen(false);
+      setIsDeviceSettingsOpen(false);
+      setIsTranscriptOpen(false);
+    }
+    setIsAiPanelOpen(opening);
+  }, [isAiPanelOpen, setIsParticipantsOpen, toggleChat]);
+
+  const handleOpenAiPanel = useCallback(() => {
+    if (!isAiPanelOpen) handleToggleAiPanel();
+  }, [isAiPanelOpen, handleToggleAiPanel]);
 
   const handleCloseTranscript = useCallback(() => {
     setIsTranscriptOpen(false);
@@ -1475,6 +1505,7 @@ export default function MeetsMainContent({
       setIsViewPanelOpen(false);
       setIsDeviceSettingsOpen(false);
       setIsTranscriptOpen(false);
+      setIsAiPanelOpen(false);
     }
     toggleChat();
   }, [isChatOpen, isParticipantsOpen, setIsParticipantsOpen, toggleChat]);
@@ -1497,6 +1528,7 @@ export default function MeetsMainContent({
     setIsViewPanelOpen(false);
     setIsDeviceSettingsOpen(false);
     setIsTranscriptOpen(false);
+    setIsAiPanelOpen(false);
     if (chatOpened && isParticipantsOpen && !participantsOpened) {
       setIsParticipantsOpen(false);
     } else if (participantsOpened && isChatOpen && !chatOpened) {
@@ -1718,6 +1750,8 @@ export default function MeetsMainContent({
     onToggleScreenShare: toggleScreenShare,
     onToggleChat: handleToggleChat,
     onToggleTranscript: handleToggleTranscript,
+    isAiSettingsOpen: isAiPanelOpen,
+    onToggleAiSettings: roomAi ? handleToggleAiPanel : undefined,
     onToggleHandRaised: toggleHandRaised,
     onSendReaction: sendReaction,
     onLeave: leaveRoom,
@@ -2438,6 +2472,7 @@ export default function MeetsMainContent({
         <ChatPanel
           key={`${currentUserId}:${roomId}`}
           roomAi={roomAi}
+          onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
           messages={chatMessages}
           chatInput={chatInput}
           onInputChange={setChatInput}
@@ -2473,11 +2508,16 @@ export default function MeetsMainContent({
         <TranscriptPanel
           key={`${currentUserId}:${roomId}`}
           roomAi={roomAi}
+          onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
           transcript={transcript}
           onClose={handleCloseTranscript}
           initialTab={transcriptInitialTab}
           onPostRecap={canPostRecapToChat ? handlePostRecap : undefined}
         />
+      )}
+
+      {isJoined && !isWebinarAttendee && isAiPanelOpen && roomAi && (
+        <RoomAiPanel controller={roomAi} onClose={() => setIsAiPanelOpen(false)} />
       )}
 
       {isJoined && !isWebinarAttendee && isParticipantsOpen && (
@@ -2513,6 +2553,7 @@ export default function MeetsMainContent({
         isAdmin &&
         isHostControlsOpen && (
           <MeetSettingsPanel
+            onOpenAiSettings={roomAi ? handleOpenAiPanel : undefined}
             isRoomLocked={isRoomLocked}
             onToggleLock={onToggleLock}
             isNoGuests={isNoGuests}
