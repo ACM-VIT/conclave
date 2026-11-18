@@ -3,7 +3,14 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, PointerEvent, SetStateAction } from "react";
-import { Home, Loader2, LogOut, Plus, RefreshCw } from "lucide-react";
+import {
+  Home,
+  Loader2,
+  LogOut,
+  MonitorPlay,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
 import type { Socket } from "socket.io-client";
 import type { RoomInfo } from "@/lib/sfu-types";
 import ChatOverlay from "./ChatOverlay";
@@ -622,6 +629,24 @@ export default function MeetsMainContent({
   const handleCloseWhiteboard = useCallback(() => closeApp(), [closeApp]);
   const handleOpenWatch = useCallback(() => openApp("watch"), [openApp]);
   const handleCloseWatch = useCallback(() => closeApp(), [closeApp]);
+  // Opting out of Watch together is local: this participant goes back to the
+  // call view while everyone else keeps watching. It lasts until the current
+  // Watch together session ends, so the next one starts joined.
+  const [isWatchOptedOut, setIsWatchOptedOut] = useState(false);
+  const [wasWatchActive, setWasWatchActive] = useState(isWatchActive);
+  if (wasWatchActive !== isWatchActive) {
+    setWasWatchActive(isWatchActive);
+    if (!isWatchActive) setIsWatchOptedOut(false);
+  }
+  const isWatchHiddenLocally = isWatchActive && isWatchOptedOut;
+  const watchLeaveAction = useMemo(
+    () => ({
+      label: "Leave watch together",
+      hint: "You stay in the call. Others keep watching.",
+      onLeave: () => setIsWatchOptedOut(true),
+    }),
+    [],
+  );
   const handleOpenDevPlayground = useCallback(
     () => openApp("dev-playground"),
     [openApp],
@@ -2033,6 +2058,21 @@ export default function MeetsMainContent({
           onCameraStreamChange={handleDevCameraStreamChange}
         />
       )}
+      {isJoined && !isWebinarAttendee && isWatchHiddenLocally ? (
+        <div className="mb-3 flex shrink-0 justify-center">
+          <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-[#18181b] py-1 pl-3 pr-1 text-[12.5px] text-[#a1a1aa]">
+            <MonitorPlay size={14} strokeWidth={1.75} aria-hidden="true" />
+            <span>Watch together is playing</span>
+            <button
+              type="button"
+              onClick={() => setIsWatchOptedOut(false)}
+              className="inline-flex h-7 items-center rounded-full bg-[#F95F4A] px-3 font-medium text-white transition-[filter] duration-150 hover:brightness-105 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/40"
+            >
+              Rejoin
+            </button>
+          </div>
+        </div>
+      ) : null}
       {!isJoined ? (
         hideJoinUI ? (
           (() => {
@@ -2257,10 +2297,12 @@ export default function MeetsMainContent({
           )}
         </div>
       ) : ActiveMeetingApp &&
+        !isWatchHiddenLocally &&
         (!isDevPlaygroundActive || isDevPlaygroundEnabled) ? (
         <MeetingAppLayout
           app={ActiveMeetingApp}
           frameContent={!isDevPlaygroundActive}
+          leaveAction={isWatchActive ? watchLeaveAction : undefined}
           localStream={localStream}
           isCameraOff={isCameraOff}
           isMuted={isMuted}
