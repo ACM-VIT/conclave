@@ -392,4 +392,15 @@ describe("long shot generated prompts", () => {
     expect(parseLongShotPrompts({ prompts: [prompt([3, 0, 4, 5, 6])] })).toBeNull();
     expect(parseLongShotPrompts({ prompts: [prompt([3, 1, 4, 5, 6], "")] })).toBeNull();
   });
+
+  it("needs a pearl that fits in the answer box", () => {
+    expect(parseLongShotPrompts({ prompts: [prompt([3, 1, 4, 5, 6], "A".repeat(60))] })).toBeNull();
+    const parsed = parseLongShotPrompts({ prompts: [prompt([3, 1, 4, 5, 6], `${"A".repeat(60)}|Short name`)] });
+    expect(parsed![0].pearl).toBe("Short name");
+  });
+
+  it("checks each tier minimum after duplicates are merged", () => {
+    const shared = { ...prompt([3, 1, 4, 6, 6]), cliche: ["The pearl"] };
+    expect(parseLongShotPrompts({ prompts: [shared] })).toBeNull();
+  });
 });

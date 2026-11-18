@@ -437,6 +437,7 @@ export const runDecisions = async ({
   if (!model) throw new DecisionError(`Unknown decision model: ${modelId}`);
   validateDecisionQuestions(questions, model.maxQuestions);
   const plan = planRequest(model, credentials, state, questions);
+  if (signal?.aborted) throw new DecisionError("The decision request was cancelled");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const forwardAbort = () => controller.abort();

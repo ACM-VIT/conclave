@@ -261,6 +261,16 @@ describe("runDecisions", () => {
     ).rejects.toThrow(/timed out/);
   });
 
+  it("does not send a request that was already cancelled", async () => {
+    const fetchImpl = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      runDecisions({ model: "jev", credentials: typesafe, state: "x", questions, fetchImpl, signal: controller.signal }),
+    ).rejects.toThrow(/cancelled/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("splits more than 64 questions into concurrent batches", async () => {
     const many = Object.fromEntries(Array.from({ length: 130 }, (_, i) => [`q${i}`, { type: "noul" as const, instructions: `#${i}` }]));
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {

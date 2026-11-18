@@ -41,6 +41,7 @@ import {
   type JudgeVerdict,
 } from "../longShotJudge.js";
 import { createGameDecider } from "../decisions.js";
+import type { DecisionQuestion } from "@conclave/ai/decisions";
 
 type Mode = "classic" | "fuse";
 type Phase = "lobby" | "ready" | "prompt" | "reveal" | "fuse" | "popped" | "results";
@@ -67,6 +68,7 @@ const ABSENT_FORFEIT_MS = 30_000;
 const JUDGES_PER_PLAYER_PROMPT = 6;
 const JUDGES_PER_GAME = 400;
 const GENERATED_ANSWER_THRESHOLD = 0.3;
+const GENERATED_ALIAS_THRESHOLD = 0.5;
 const RESUME_MIN_MS = 3_000;
 
 type Miss = { text: string; reason: "unknown" | "used"; at: number };
@@ -131,6 +133,7 @@ type LongShotState = {
   winnerId: string | null;
   absentSince: Record<string, number>;
   pausedRemainingMs: number | null;
+  turn: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -147,6 +150,14 @@ const TIER_LIMITS: Record<LongShotListTier, { min: number; max: number }> = {
 export const LONG_SHOT_MIN_ANSWERS =
   LONG_SHOT_LIST_TIERS.reduce((sum, tier) => sum + TIER_LIMITS[tier].min, 0) + 1;
 
+const playableEntry = (entry: string | null | undefined): string | null => {
+  const names = (entry ?? "")
+    .split("|")
+    .map((name) => name.trim())
+    .filter((name) => name.length <= MAX_ANSWER_LENGTH && normalizeAnswer(name).length > 0);
+  return names.length > 0 ? names.join("|") : null;
+};
+
 export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPrompt[] | null => {
   if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
   const out: LongShotPrompt[] = [];
@@ -158,21 +169,21 @@ export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPr
     if (!prompt) continue;
     const promptKey = normalizeGeneratedKey(prompt);
     if (!promptKey || seenPrompts.has(promptKey)) continue;
-    const pearl = cleanGeneratedText(item.pearl, 80);
+    const pearl = playableEntry(cleanGeneratedText(item.pearl, 80));
     if (!pearl) continue;
     const tiers = {} as Record<LongShotListTier, string[]>;
-    let valid = true;
     for (const tier of LONG_SHOT_LIST_TIERS) {
-      const list = cleanGeneratedStringArray(item[tier], {
+      tiers[tier] = cleanGeneratedStringArray(item[tier], {
         maxItems: TIER_LIMITS[tier].max,
         maxLength: 80,
-      });
-      if (list.length < TIER_LIMITS[tier].min) valid = false;
-      tiers[tier] = list;
+      })
+        .map(playableEntry)
+        .filter((entry): entry is string => Boolean(entry));
     }
-    if (!valid) continue;
     const raw: LongShotPrompt = { category, prompt, ...tiers, pearl };
-    if (compilePrompt(raw).answers.length < LONG_SHOT_MIN_ANSWERS) continue;
+    const counts = tierCounts(compilePrompt(raw));
+    if (counts.pearl !== 1) continue;
+    if (LONG_SHOT_LIST_TIERS.some((tier) => counts[tier] < TIER_LIMITS[tier].min)) continue;
     seenPrompts.add(promptKey);
     out.push(raw);
     if (out.length >= 15) break;
@@ -465,9 +476,13 @@ export const prepareLongShotAnswer = async (
   const raw = payloadField(move.payload, "text");
   if (typeof raw !== "string") return null;
   const text = raw.trim().slice(0, MAX_ANSWER_LENGTH);
+  const receivedAt = move.receivedAt ?? ctx.now;
   const answerable =
-    (state.phase === "prompt" && !state.entries[move.playerId]?.answer) ||
-    (state.phase === "fuse" && state.turnPlayerId === move.playerId);
+    receivedAt < state.deadline &&
+    ((state.phase === "prompt" && !state.entries[move.playerId]?.answer) ||
+      (state.phase === "fuse" &&
+        state.turnPlayerId === move.playerId &&
+        state.pausedRemainingMs === null));
   if (!text || !answerable) return null;
   const prompt = currentPrompt(state);
   if (!prompt || matchAnswer(prompt, text)) return null;
@@ -477,8 +492,8 @@ export const prepareLongShotAnswer = async (
     state.mode === "fuse"
       ? prompt.answers.filter((answer) => state.used.includes(answer.id))
       : [];
-  const cacheKey = `verdict:${state.promptIndex}:${prompt.prompt}:${key}:${used.map((answer) => answer.id).join(",")}`;
-  const bound = { key, promptIndex: state.promptIndex, prompt: prompt.prompt };
+  const cacheKey = `verdict:${state.promptIndex}:${prompt.prompt}:${JSON.stringify(text)}:${used.map((answer) => answer.id).join(",")}`;
+  const bound = { key, text, promptIndex: state.promptIndex, prompt: prompt.prompt, turn: state.turn };
   const cached = ctx.cache.get(cacheKey) as JudgeVerdict | undefined;
   if (cached) return { judge: { ...bound, verdict: cached } };
   if (!spendJudgeBudget(ctx.cache, judgeBudgetKey(state, move.playerId), JUDGES_PER_PLAYER_PROMPT)) return null;
@@ -518,36 +533,64 @@ export const filterGeneratedPrompts = async (
         ...LONG_SHOT_LIST_TIERS.flatMap((tier) => prompt[tier].map((value) => ({ tier, value }))),
         { tier: "pearl", value: prompt.pearl },
       ];
-      const questions = Object.fromEntries(
-        entries.map((entry, index) => [
-          `a${index}`,
-          {
-            type: "noul" as const,
+      const namesOf = (value: string) =>
+        value
+          .split("|")
+          .map((name) => name.trim())
+          .filter(Boolean);
+      const questions: Record<string, DecisionQuestion> = {};
+      entries.forEach((entry, index) => {
+        const [canonical, ...aliases] = namesOf(entry.value);
+        questions[`a${index}`] = {
+          type: "noul",
+          instructions: {
+            question: "Is `answer` a correct answer to the prompt in the state?",
+            answer: canonical,
+          },
+          criteria: {
+            true: "The answer names a real, specific thing that satisfies the prompt.",
+            false: "The answer is wrong, invented, too vague, or does not fit the prompt.",
+          },
+        };
+        aliases.forEach((alias, aliasIndex) => {
+          questions[`a${index}.${aliasIndex}`] = {
+            type: "noul",
             instructions: {
-              question: "Is `answer` a correct answer to the prompt in the state?",
-              answer: entry.value.split("|")[0],
+              question: "Is `alias` another name, spelling, or abbreviation for exactly the same thing as `answer`?",
+              answer: canonical,
+              alias,
             },
             criteria: {
-              true: "The answer names a real, specific thing that satisfies the prompt.",
-              false: "The answer is wrong, invented, too vague, or does not fit the prompt.",
+              true: "Both name the same specific thing.",
+              false: "They name different things, or the alias is vague or invented.",
             },
-          },
-        ]),
-      );
+          };
+        });
+      });
       try {
         const answers = await decide({ state: { prompt: prompt.prompt, category: prompt.category }, questions, signal });
-        const keep = (index: number) => {
-          const answer = answers[`a${index}`];
+        const passes = (id: string, threshold: number) => {
+          const answer = answers[id];
           if (answer?.type === "refusal") return false;
-          return !answer || answer.type !== "noul" || answer.noul >= GENERATED_ANSWER_THRESHOLD;
+          return !answer || answer.type !== "noul" || answer.noul >= threshold;
+        };
+        const checkedEntry = (index: number): string | null => {
+          if (index < 0 || !passes(`a${index}`, GENERATED_ANSWER_THRESHOLD)) return null;
+          const [canonical, ...aliases] = namesOf(entries[index].value);
+          return [
+            canonical,
+            ...aliases.filter((_, aliasIndex) => passes(`a${index}.${aliasIndex}`, GENERATED_ALIAS_THRESHOLD)),
+          ].join("|");
         };
         const filtered: LongShotPrompt = { ...prompt };
         for (const tier of LONG_SHOT_LIST_TIERS) {
-          filtered[tier] = prompt[tier].filter((value) =>
-            keep(entries.findIndex((entry) => entry.tier === tier && entry.value === value)),
-          );
+          filtered[tier] = prompt[tier]
+            .map((value) => checkedEntry(entries.findIndex((entry) => entry.tier === tier && entry.value === value)))
+            .filter((value): value is string => Boolean(value));
         }
-        if (!keep(entries.length - 1)) return null;
+        const pearl = checkedEntry(entries.length - 1);
+        if (!pearl) return null;
+        filtered.pearl = pearl;
         return filtered;
       } catch {
         return prompt;
@@ -583,6 +626,7 @@ type ResolvedAnswer = {
   state: LongShotState;
   match: CompiledAnswer | null;
   repeatOf: CompiledAnswer | null;
+  unsafe?: boolean;
 };
 
 const resolveAnswer = (
@@ -598,12 +642,17 @@ const resolveAnswer = (
     !judged ||
     !key ||
     judged.key !== key ||
+    judged.text !== text ||
     judged.promptIndex !== state.promptIndex ||
-    judged.prompt !== prompt.prompt
+    judged.prompt !== prompt.prompt ||
+    judged.turn !== state.turn
   ) {
     return { state, match: null, repeatOf: null };
   }
   const { verdict } = judged;
+  if (verdict.kind === "reject" && verdict.reason === "unsafe") {
+    return { state, match: null, repeatOf: null, unsafe: true };
+  }
   const find = (id: string) => prompt.answers.find((answer) => answer.id === id) ?? null;
   if (verdict.kind === "alias") return { state, match: find(verdict.answerId), repeatOf: null };
   if (verdict.kind === "repeat") return { state, match: null, repeatOf: find(verdict.answerId) };
@@ -645,7 +694,7 @@ const answerClassic = (
     : {
         answer: null,
         misses: (previous?.misses ?? 0) + 1,
-        lastMiss: { text, reason: "unknown", at: ctx.now },
+        lastMiss: { text: resolved.unsafe ? "" : text, reason: "unknown", at: ctx.now },
         at: ctx.now,
       };
   const entries = { ...state.entries, [playerId]: entry };
@@ -678,7 +727,10 @@ const answerFuse = (
   const prompt = currentPrompt(state)!;
   const match = resolved.match;
   if (!match) {
-    return { ...state, lastMiss: { playerId, text, reason: "unknown", at: ctx.now } };
+    return {
+      ...state,
+      lastMiss: { playerId, text: resolved.unsafe ? "" : text, reason: "unknown", at: ctx.now },
+    };
   }
   if (state.used.includes(match.id)) {
     return {
@@ -727,7 +779,15 @@ const answerFuse = (
   };
 };
 
-export const longShotModule: GameModule<LongShotState> = {
+const withTurn = (previous: LongShotState, next: LongShotState): LongShotState =>
+  next !== previous &&
+  (next.turnPlayerId !== previous.turnPlayerId ||
+    next.promptIndex !== previous.promptIndex ||
+    next.phase !== previous.phase)
+    ? { ...next, turn: previous.turn + 1 }
+    : next;
+
+const longShotRules: GameModule<LongShotState> = {
   id: "long-shot",
   name: "Long Shot",
   description: "Rare answers score big",
@@ -889,6 +949,7 @@ export const longShotModule: GameModule<LongShotState> = {
       winnerId: null,
       absentSince: {},
       pausedRemainingMs: null,
+      turn: 0,
     };
   },
 
@@ -1122,4 +1183,10 @@ export const longShotModule: GameModule<LongShotState> = {
   },
 
   isFinished: (state) => state.phase === "results",
+};
+
+export const longShotModule: GameModule<LongShotState> = {
+  ...longShotRules,
+  onMove: (state, move, ctx) => withTurn(state, longShotRules.onMove(state, move, ctx)),
+  onTick: (state, ctx) => withTurn(state, longShotRules.onTick ? longShotRules.onTick(state, ctx) : state),
 };

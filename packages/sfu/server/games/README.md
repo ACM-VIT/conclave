@@ -95,7 +95,7 @@ Full contributor guide: `packages/apps-sdk/docs/guides/add-a-game.md`.
   When the room has a decision model (Answer judging), answers missing from the
   list are judged through the engine's async `prepareMove` hook: the model checks
   correctness, safety, aliases of listed answers, repeats, and rarity on the tier
-  scale. Verdicts are cached per room, capped per player per prompt and per game,
+  scale. Verdicts are cached per game session, capped per player per prompt and per game,
   bound to the exact text they judged, and never accepted from the client. Topic
   prompts from the LLM are checked the same way before the game starts.
 - `bluff`: Fibbage-style fake-answer game.

@@ -584,12 +584,27 @@ export function WhiteboardCanvas({
   );
 
   useEffect(() => {
-    const collect = () => {
+    const collect = ({
+      added,
+      updated,
+      removed,
+    }: {
+      added: number[];
+      updated: number[];
+      removed: number[];
+    }) => {
       const receivedAt = Date.now();
       let changed = false;
-      awareness.getStates().forEach((state, clientId) => {
+      for (const clientId of removed) {
+        if (laserTrailsRef.current.delete(clientId)) changed = true;
+      }
+      const states = awareness.getStates();
+      [...added, ...updated].forEach((clientId) => {
         if (clientId === awareness.clientID) return;
-        const record = state as { laser?: unknown; user?: { color?: string } } | null;
+        const record = (states.get(clientId) ?? null) as {
+          laser?: unknown;
+          user?: { color?: string };
+        } | null;
         const points = parseLaserField(record?.laser, receivedAt);
         if (!points) {
           if (laserTrailsRef.current.delete(clientId)) changed = true;
@@ -1294,7 +1309,7 @@ export function WhiteboardCanvas({
       return;
     }
     if (tool === "laser") {
-      endOwnLaser();
+      if (laserPointerIdRef.current === event.pointerId) endOwnLaser();
       return;
     }
     const rotateSession = rotateSessionRef.current;
@@ -1328,7 +1343,7 @@ export function WhiteboardCanvas({
         return;
       }
       if (tool === "laser") {
-        endOwnLaser();
+        if (laserPointerIdRef.current === event.pointerId) endOwnLaser();
         clearCursor();
         return;
       }

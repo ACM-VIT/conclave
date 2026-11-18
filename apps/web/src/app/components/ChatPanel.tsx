@@ -65,7 +65,7 @@ import {
   isConclaveAssistantModel,
 } from "../lib/conclave-assistant";
 import { extractEmbedUrls } from "../lib/link-embeds";
-import { replaceEmojiShortcodesInText } from "../lib/emoji-shortcodes";
+import { replaceEmojiShortcodesInMessage } from "../lib/emoji-shortcodes";
 import { formatDisplayName, getChatMessageSegments } from "../lib/utils";
 import {
   Conversation,
@@ -524,8 +524,8 @@ function ChatPanel({
   }, [composerEmbedUrl, dismissedEmbedUrl]);
 
   const clearPendingImage = useCallback(() => {
-    // Drop any conversion still running so it cannot re-stage an image.
     imagePrepGenerationRef.current += 1;
+    setIsPreparingImage(false);
     if (pendingImageUrlRef.current) {
       URL.revokeObjectURL(pendingImageUrlRef.current);
       pendingImageUrlRef.current = null;
@@ -759,7 +759,9 @@ function ChatPanel({
   };
 
   const renderMessageContent = (content: string, expandEmoji = true) =>
-    getChatMessageSegments(content).map((segment, index) =>
+    getChatMessageSegments(
+      expandEmoji ? replaceEmojiShortcodesInMessage(content) : content,
+    ).map((segment, index) =>
       segment.href ? (
         <a
           key={`${segment.href}-${index}`}
@@ -771,11 +773,7 @@ function ChatPanel({
           {segment.text}
         </a>
       ) : (
-        <span key={`${segment.text}-${index}`}>
-          {expandEmoji
-            ? replaceEmojiShortcodesInText(segment.text)
-            : segment.text}
-        </span>
+        <span key={`${segment.text}-${index}`}>{segment.text}</span>
       )
     );
 

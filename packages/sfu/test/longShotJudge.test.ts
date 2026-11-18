@@ -142,6 +142,8 @@ describe("long shot judge plan", () => {
     const request = { state: plan.state, questions: plan.questions };
     expect(verdictFromAnswers(plan, fakeAnswers(request, { unsafe: 0.9 }))).toEqual({ kind: "reject", reason: "unsafe" });
     expect(verdictFromAnswers(plan, { ...fakeAnswers(request, {}), correct: { type: "refusal" } })).toEqual({ kind: "reject", reason: "unsafe" });
+    expect(verdictFromAnswers(plan, { ...fakeAnswers(request, {}), repeat: { type: "refusal" } })).toEqual({ kind: "reject", reason: "unsure" });
+    expect(verdictFromAnswers(plan, { ...fakeAnswers(request, {}), listed: { type: "refusal" } })).toEqual({ kind: "reject", reason: "unsure" });
     expect(verdictFromAnswers(plan, fakeAnswers(request, { repeat: "u0" }))).toMatchObject({ kind: "repeat", answerId: prompt.answers[0].id });
     expect(verdictFromAnswers(plan, fakeAnswers(request, { listed: "a2" }))).toMatchObject({ kind: "alias", answerId: prompt.answers.filter((a) => !a.judged)[2].id });
     expect(verdictFromAnswers(plan, fakeAnswers(request, { correct: 0.6 }))).toEqual({ kind: "reject", reason: "wrong" });
@@ -151,12 +153,14 @@ describe("long shot judge plan", () => {
   });
 
   it("decodes only well-formed verdicts", () => {
-    const bound = { key: "k", promptIndex: 0, prompt: "Name a fruit" };
+    const bound = { key: "k", text: "K", promptIndex: 0, prompt: "Name a fruit", turn: 0 };
     expect(decodeJudgedMove({ judge: { ...bound, verdict: { kind: "accept", tier: "rare", confidence: 0.9 } } })).toMatchObject(bound);
     expect(decodeJudgedMove({ judge: { key: "k", verdict: { kind: "accept", tier: "rare", confidence: 0.9 } } })).toBeNull();
     expect(decodeJudgedMove({ judge: { ...bound, verdict: { kind: "accept", tier: "pearl", confidence: 0.9 } } })).toBeNull();
     expect(decodeJudgedMove({ judge: { ...bound, verdict: { kind: "accept", tier: "rare", confidence: 2 } } })).toBeNull();
     expect(decodeJudgedMove({ judge: { ...bound, key: "", verdict: { kind: "reject", reason: "wrong" } } })).toBeNull();
+    expect(decodeJudgedMove({ judge: { ...bound, turn: -1, verdict: { kind: "reject", reason: "wrong" } } })).toBeNull();
+    expect(decodeJudgedMove({ judge: { ...bound, text: undefined, verdict: { kind: "reject", reason: "wrong" } } })).toBeNull();
     expect(decodeJudgedMove("nope")).toBeNull();
   });
 
@@ -251,7 +255,14 @@ describe("long shot with an answer judge", () => {
     state = longShotModule.onTick!(state, ctx(4_000));
     const deadline = state.deadline;
     const verified = {
-      judge: { key: "zzyzx berry", promptIndex: 0, prompt: "Name a fruit", verdict: { kind: "accept", tier: "rare", confidence: 0.9 } },
+      judge: {
+        key: "zzyzx berry",
+        text: offList,
+        promptIndex: 0,
+        prompt: "Name a fruit",
+        turn: state.turn,
+        verdict: { kind: "accept", tier: "rare", confidence: 0.9 },
+      },
     };
     const inTime = longShotModule.onMove(
       state,
@@ -278,6 +289,60 @@ describe("long shot with an answer judge", () => {
     expect(await submit(session, holder, "another name for it", decide)).toEqual({ ok: true });
     expect(view(session).lastMiss).toMatchObject({ reason: "used", text: first.display });
     expect(view(session).turnPlayerId).toBe(holder);
+  });
+
+  it("keeps text the judge rejected as unsafe out of the room", async () => {
+    const session = fuseSession();
+    const holder = view(session).turnPlayerId;
+    expect(await submit(session, holder, "something rude", fakeDecider({ unsafe: 0.95 }))).toEqual({ ok: true });
+    expect(view(session).lastMiss).toMatchObject({ reason: "unknown", text: "" });
+    expect(JSON.stringify(session.getPublicState())).not.toContain("something rude");
+  });
+
+  it("does not judge an answer sent while the fuse is paused", async () => {
+    const session = fuseSession();
+    const holder = view(session).turnPlayerId;
+    session.updateRoomMembership({ players: players.filter((player) => player.id === holder), adminIds: ["host"] });
+    session.tick(Date.now());
+    const decide = fakeDecider();
+    await submit(session, holder, offList, decide);
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse a verdict for text the judge never saw", () => {
+    let state = longShotModule.setup({
+      players,
+      activePlayers: players,
+      rng: { next: () => 0, int: () => 0, shuffle: <T,>(items: readonly T[]) => items.slice(), pick: <T,>(items: readonly T[]) => items[0] },
+      config: { mode: "classic", prompts: 3, lives: 2, pace: "normal" },
+      content: null,
+      now: 0,
+      isAdmin: (id: string) => id === "host",
+    });
+    const ctx = (now: number) => ({
+      players,
+      activePlayers: players,
+      rng: { next: () => 0, int: () => 0, shuffle: <T,>(items: readonly T[]) => items.slice(), pick: <T,>(items: readonly T[]) => items[0] },
+      config: { mode: "classic", prompts: 3, lives: 2, pace: "normal" },
+      content: null,
+      now,
+      isAdmin: (id: string) => id === "host",
+    });
+    state = longShotModule.onMove(state, { playerId: "host", type: "start", payload: undefined }, ctx(1_000));
+    state = longShotModule.onTick!(state, ctx(4_000));
+    const judge = {
+      key: "zzyzx berry",
+      text: `${offList} 🙂`,
+      promptIndex: 0,
+      prompt: "Name a fruit",
+      turn: state.turn,
+      verdict: { kind: "accept", tier: "rare", confidence: 0.9 },
+    };
+    const move = (verified: unknown) =>
+      longShotModule.onMove(state, { playerId: "host", type: "answer", payload: { text: offList }, verified, receivedAt: 5_000 }, ctx(5_000));
+    expect(longShotModule.playerView(move({ judge }), "host", ctx(5_000))).toMatchObject({ answer: null });
+    expect(longShotModule.playerView(move({ judge: { ...judge, text: offList, turn: state.turn + 1 } }), "host", ctx(5_000))).toMatchObject({ answer: null });
+    expect(longShotModule.playerView(move({ judge: { ...judge, text: offList } }), "host", ctx(5_000))).toMatchObject({ answer: { tier: "rare" } });
   });
 
   it("passes the fuse on a judged answer and marks it as judged", async () => {
@@ -348,6 +413,20 @@ describe("generated prompt checking", () => {
   it("drops a prompt whose pearl is wrong or that falls below the minimums", async () => {
     expect(await filterGeneratedPrompts([generated], decideBy((a) => (a === "Good pearl" ? 0.1 : 0.9)))).toEqual([]);
     expect(await filterGeneratedPrompts([generated], decideBy((a) => (a.startsWith("Good 1") ? 0.1 : 0.9)))).toEqual([]);
+  });
+
+  it("keeps only aliases the model confirms name the same thing", async () => {
+    const withAliases = { ...generated, obvious: ["Good 1|Kiev|Granite", "Good 2", "Good 3"] };
+    const decide: GameDecider = vi.fn(async (request: GameDecisionRequest) =>
+      Object.fromEntries(
+        Object.entries(request.questions).map(([id, question]) => {
+          const asked = question.instructions as { answer: string; alias?: string };
+          return [id, { type: "noul" as const, noul: asked.alias === "Granite" ? 0.05 : 0.9 }];
+        }),
+      ),
+    );
+    const [prompt] = await filterGeneratedPrompts([withAliases], decide);
+    expect(prompt.obvious[0]).toBe("Good 1|Kiev");
   });
 
   it("keeps the prompt as generated when the model is unavailable", async () => {

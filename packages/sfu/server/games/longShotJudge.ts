@@ -29,7 +29,14 @@ export type JudgeVerdict =
   | { kind: "repeat"; answerId: string; confidence: number }
   | { kind: "reject"; reason: "wrong" | "unsafe" | "unsure" };
 
-export type JudgedMove = { key: string; promptIndex: number; prompt: string; verdict: JudgeVerdict };
+export type JudgedMove = {
+  key: string;
+  text: string;
+  promptIndex: number;
+  prompt: string;
+  turn: number;
+  verdict: JudgeVerdict;
+};
 
 export type JudgePlan = {
   state: Record<string, unknown>;
@@ -155,6 +162,9 @@ export const verdictFromAnswers = (
   if (unsafe?.type === "refusal" || answers.correct?.type === "refusal") {
     return { kind: "reject", reason: "unsafe" };
   }
+  if (answers.repeat?.type === "refusal" || answers.listed?.type === "refusal") {
+    return { kind: "reject", reason: "unsure" };
+  }
   if (unsafe?.type === "noul" && unsafe.noul >= JUDGE_UNSAFE_THRESHOLD) {
     return { kind: "reject", reason: "unsafe" };
   }
@@ -180,11 +190,13 @@ const isConfidence = (value: unknown): value is number =>
 
 export const decodeJudgedMove = (value: unknown): JudgedMove | null => {
   if (!isRecord(value) || !isRecord(value.judge)) return null;
-  const { key, verdict, promptIndex, prompt } = value.judge;
+  const { key, text, verdict, promptIndex, prompt, turn } = value.judge;
   if (typeof key !== "string" || !key || !isRecord(verdict)) return null;
+  if (typeof text !== "string" || !text) return null;
   if (typeof promptIndex !== "number" || !Number.isInteger(promptIndex) || promptIndex < 0) return null;
+  if (typeof turn !== "number" || !Number.isInteger(turn) || turn < 0) return null;
   if (typeof prompt !== "string" || !prompt) return null;
-  const bound = { key, promptIndex, prompt };
+  const bound = { key, text, promptIndex, prompt, turn };
   switch (verdict.kind) {
     case "accept":
       return JUDGED_TIERS.includes(verdict.tier as Exclude<LongShotTier, "pearl">) && isConfidence(verdict.confidence)

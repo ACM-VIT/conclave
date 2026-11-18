@@ -619,7 +619,9 @@ function JoinScreen({
             timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
           },
         ),
-        wantsVideo
+        wantsVideo &&
+        !audioOnlyRef.current &&
+        isCurrentPrejoinMediaRequest("video", requestGeneration.video)
           ? getUserMediaWithTimeout(
               {
                 video: getPrejoinVideoConstraints(shouldRunPreviewVideoEffects),

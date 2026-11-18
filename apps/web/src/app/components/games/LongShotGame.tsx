@@ -665,6 +665,32 @@ export default function LongShotGame({
   const [error, setError] = useState<string | null>(null);
   const host = isAdmin && !readOnly;
   const fuseMode = pub.mode === "fuse";
+  const openPromptRef = useRef<number | null>(null);
+  const [landing, setLanding] = useState<{ promptIndex: number; until: number } | null>(null);
+  const landedTier = me.answer?.tier ?? null;
+
+  useEffect(() => {
+    if (fuseMode) return;
+    if (!landedTier) {
+      if (pub.phase === "prompt") openPromptRef.current = pub.promptIndex;
+      return;
+    }
+    if (openPromptRef.current !== pub.promptIndex) return;
+    openPromptRef.current = null;
+    const reduced =
+      typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    setLanding({ promptIndex: pub.promptIndex, until: Date.now() + diveDuration(landedTier) + 420 });
+  }, [fuseMode, landedTier, pub.phase, pub.promptIndex]);
+
+  useEffect(() => {
+    if (!landing) return;
+    const timer = setTimeout(() => setLanding(null), Math.max(0, landing.until - Date.now()));
+    return () => clearTimeout(timer);
+  }, [landing]);
+
+  const stillDiving =
+    pub.phase === "reveal" && landing?.promptIndex === pub.promptIndex && Boolean(me.answer);
 
   const fire = async (text: string): Promise<boolean> => {
     setError(null);
@@ -907,7 +933,7 @@ export default function LongShotGame({
     );
   }
 
-  if (pub.phase === "reveal") {
+  if (pub.phase === "reveal" && !stillDiving) {
     return (
       <Ocean depth={me.score}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
@@ -954,7 +980,7 @@ export default function LongShotGame({
   const missKey = me.lastMiss?.at ?? null;
   const missNote = me.lastMiss ? missText(me.lastMiss) : null;
   const getReady = pub.phase === "ready";
-  const projected = me.score + (me.answer?.points ?? 0);
+  const projected = stillDiving ? me.score : me.score + (me.answer?.points ?? 0);
   return (
     <Ocean depth={projected}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
@@ -973,7 +999,7 @@ export default function LongShotGame({
             </span>
           ) : null}
         </div>
-        <SonarTimer remainingMs={remaining} totalMs={pub.durationMs} />
+        <SonarTimer remainingMs={stillDiving ? 0 : remaining} totalMs={pub.durationMs} />
       </div>
       <Prompt category={pub.category} prompt={pub.prompt} meta={`${pub.promptIndex + 1}/${pub.totalPrompts}`} />
 
@@ -998,7 +1024,7 @@ export default function LongShotGame({
 
       <DiveColumn key={pub.promptIndex} tier={me.answer?.tier} points={pub.tierPoints} word={me.answer?.text} />
 
-      {host ? (
+      {host && !stillDiving ? (
         <Controls>
           <GhostButton onClick={() => void send({ type: "skip" })}>Skip</GhostButton>
         </Controls>
