@@ -18,6 +18,13 @@ export type TriviaMove =
   | { type: "skip" }
   | { type: "next" };
 
+/** Mirrors LongShotMove in modules/longShot.ts. */
+export type LongShotMove =
+  | { type: "start" }
+  | { type: "answer"; text: string }
+  | { type: "skip" }
+  | { type: "next" };
+
 /** Mirrors BluffMove in modules/bluff.ts. */
 export type BluffMove =
   | { type: "start" }

@@ -475,15 +475,19 @@ function buildGenerationProgressLabels(
   const contentName =
     entry.id === "trivia"
       ? "questions"
-      : entry.id === "imposter"
-        ? "word set"
-        : "prompts";
+      : entry.id === "long-shot"
+        ? "answer lists"
+        : entry.id === "imposter"
+          ? "word set"
+          : "prompts";
   const labels = [`Generating ${contentName}`];
   if (CURRENT_TOPIC_PATTERN.test(topic)) {
     labels.push("Searching recent context");
   }
   if (entry.id === "trivia") {
     labels.push("Building answer choices");
+  } else if (entry.id === "long-shot") {
+    labels.push("Sorting answers by rarity");
   } else if (entry.id === "imposter") {
     labels.push("Balancing secret words");
   } else {

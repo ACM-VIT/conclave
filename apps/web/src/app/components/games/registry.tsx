@@ -3,6 +3,7 @@
 import type React from "react";
 import type { GameViewProps } from "./gameUi";
 import TriviaGame from "./TriviaGame";
+import LongShotGame from "./LongShotGame";
 import BluffGame from "./BluffGame";
 import WouldYouRatherGame from "./WouldYouRatherGame";
 import MostLikelyToGame from "./MostLikelyToGame";
@@ -16,6 +17,7 @@ import ZipGame from "./ZipGame";
 // module. Everything else (launcher, stage routing) reads from this map.
 const GAME_RENDERERS: Record<string, React.ComponentType<GameViewProps>> = {
   trivia: TriviaGame as React.ComponentType<GameViewProps>,
+  "long-shot": LongShotGame as React.ComponentType<GameViewProps>,
   bluff: BluffGame as React.ComponentType<GameViewProps>,
   "would-you-rather": WouldYouRatherGame as React.ComponentType<GameViewProps>,
   "most-likely-to": MostLikelyToGame as React.ComponentType<GameViewProps>,

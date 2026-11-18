@@ -146,3 +146,28 @@ registerTileAction("most-likely-to", ({ publicView, playerId, viewerId }) => {
   // Self-votes are allowed in this game, so every tile is a valid ballot.
   return { type: "vote", payload: { target: playerId }, label: "Vote" };
 });
+
+/* ---- Long shot: locked-in checks, scored reveals, and the fuse holder. ---- */
+
+type LongShotTile = {
+  acted?: boolean;
+  outcome?: "correct" | "wrong";
+  note?: string;
+  active?: boolean;
+  eliminated?: boolean;
+  winner?: boolean;
+};
+
+registerTileResolver("long-shot", ({ publicView, playerId }): PlayerTileState | null => {
+  const tiles = asRecord(asRecord(publicView)?.tiles);
+  const mine = tiles ? (tiles[playerId] as LongShotTile | undefined) : undefined;
+  if (!mine) return null;
+  const state: PlayerTileState = {};
+  if (mine.acted) state.acted = true;
+  if (mine.outcome) state.outcome = mine.outcome;
+  if (mine.active) state.active = true;
+  if (mine.eliminated) state.eliminated = true;
+  if (mine.winner) state.winner = true;
+  if (mine.note) state.note = mine.note;
+  return Object.keys(state).length > 0 ? state : null;
+});
