@@ -290,6 +290,10 @@ function ChatPanel({
   const [imageUploadProgress, setImageUploadProgress] = useState(0);
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
   const [isImageUploading, setIsImageUploading] = useState(false);
+  // Image preparation is async, so its staging step reads these refs rather
+  // than state captured when the paste or pick began.
+  const isImageUploadingRef = useRef(false);
+  const imagePrepGenerationRef = useRef(0);
   const [assistantApiKeyInput, setAssistantApiKeyInput] = useState("");
   const [assistantModel, setAssistantModel] = useState<ConclaveAssistantModel>(
     assistantApiKeyPrompt.model,
@@ -554,7 +558,7 @@ function ChatPanel({
         setImageUploadError("Image attachments are disabled by the host.");
         return false;
       }
-      if (isImageUploading) {
+      if (isImageUploadingRef.current) {
         setImageUploadError("Wait for the current image to finish uploading.");
         return false;
       }
@@ -576,12 +580,15 @@ function ChatPanel({
       textareaRef.current?.focus();
       return true;
     },
-    [areImageAttachmentsEnabled, isImageUploading],
+    [areImageAttachmentsEnabled],
   );
 
   const prepareAndStageImage = useCallback(
     async (file: File): Promise<boolean> => {
+      const generation = ++imagePrepGenerationRef.current;
       const prepared = await prepareChatImageFile(file);
+      // A newer paste or pick superseded this one while it was converting.
+      if (generation !== imagePrepGenerationRef.current) return false;
       if (!prepared) {
         setImageUploadError(CHAT_IMAGE_TYPE_MESSAGE);
         return false;
@@ -623,6 +630,7 @@ function ChatPanel({
         setIsSendAnimating(false);
       }, 240);
       if (pendingImage) {
+        isImageUploadingRef.current = true;
         setIsImageUploading(true);
         setImageUploadProgress(1);
         setImageUploadError(null);
@@ -630,7 +638,9 @@ function ChatPanel({
           pendingImage.file,
           chatInput.trim(),
           setImageUploadProgress,
-        );
+        ).finally(() => {
+          isImageUploadingRef.current = false;
+        });
         setIsImageUploading(false);
         if (sent) {
           clearPendingImage();

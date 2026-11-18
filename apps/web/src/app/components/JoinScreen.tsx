@@ -334,6 +334,9 @@ function JoinScreen({
   // Join without sending or receiving video (for slow connections). Carried
   // into the meeting through the prejoin media handoff.
   const [isAudioOnly, setIsAudioOnly] = useState(false);
+  // Read by async camera paths, which must not start video once audio-only
+  // mode is on even if they began before it was turned on.
+  const audioOnlyRef = useRef(false);
   const [isMicOn, setIsMicOn] = useState(false);
   const [isRequestingPermissions, setIsRequestingPermissions] = useState(false);
   const [permissionRequestError, setPermissionRequestError] = useState<
@@ -571,13 +574,16 @@ function JoinScreen({
   const requestMicrophoneAndCamera = async () => {
     if (isRequestingPermissions) return;
 
-    const requestGeneration = beginPrejoinMediaRequest(["audio", "video"]);
+    const wantsVideo = !audioOnlyRef.current;
+    const requestGeneration = beginPrejoinMediaRequest(
+      wantsVideo ? ["audio", "video"] : ["audio"],
+    );
     setIsRequestingPermissions(true);
     setPermissionRequestError(null);
     try {
-      const videoConstraints = getPrejoinVideoConstraints(
-        shouldRunPreviewVideoEffects,
-      );
+      const videoConstraints = wantsVideo
+        ? getPrejoinVideoConstraints(shouldRunPreviewVideoEffects)
+        : false;
       logJoinMedia("get_user_media_full_request", {
         audio: DEFAULT_AUDIO_CONSTRAINTS,
         video: videoConstraints,
@@ -613,15 +619,17 @@ function JoinScreen({
             timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
           },
         ),
-        getUserMediaWithTimeout(
-          {
-            video: getPrejoinVideoConstraints(shouldRunPreviewVideoEffects),
-          },
-          {
-            label: "prejoin camera fallback permission request",
-            timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
-          },
-        ),
+        wantsVideo
+          ? getUserMediaWithTimeout(
+              {
+                video: getPrejoinVideoConstraints(shouldRunPreviewVideoEffects),
+              },
+              {
+                label: "prejoin camera fallback permission request",
+                timeoutMs: MEDIA_CAPTURE_PERMISSION_TIMEOUT_MS,
+              },
+            )
+          : Promise.resolve(new MediaStream()),
       ]);
 
       if (audioResult.status === "fulfilled") {
@@ -657,7 +665,8 @@ function JoinScreen({
         requestGeneration,
       );
       const audioStale = staleKinds.includes("audio");
-      const videoStale = staleKinds.includes("video");
+      // Video that was not requested (audio-only mode) counts as settled.
+      const videoStale = !wantsVideo || staleKinds.includes("video");
       if (audioStale && videoStale) return;
       if (!hasAudio && !audioStale && !hasVideo && !videoStale) {
         cameraIntentRef.current = false;
@@ -806,11 +815,29 @@ function JoinScreen({
 
   const toggleAudioOnly = () => {
     const next = !isAudioOnly;
+    audioOnlyRef.current = next;
     setIsAudioOnly(next);
-    if (next && isCameraOn) void toggleCamera();
+    if (!next) return;
+    // Invalidate any camera start still in flight, then drop live video now
+    // rather than through toggleCamera, which ignores calls while one runs.
+    beginPrejoinMediaRequest(["video"]);
+    cameraIntentRef.current = false;
+    const currentStream = localStreamRef.current;
+    const videoTracks = currentStream?.getVideoTracks() ?? [];
+    if (currentStream && videoTracks.length > 0) {
+      stopTracks(videoTracks);
+      const remaining = currentStream
+        .getTracks()
+        .filter((track) => track.kind !== "video");
+      commitLocalPreviewStream(
+        remaining.length > 0 ? new MediaStream(remaining) : null,
+      );
+    }
+    setIsCameraOn(false);
   };
 
   const toggleCamera = async () => {
+    if (audioOnlyRef.current) return;
     if (toggleCameraInFlightRef.current) {
       logJoinMedia("toggle_camera_ignored_in_flight", {
         isCameraOn,
