@@ -106,6 +106,9 @@ const zoneFor = (depth: number) => {
 
 const meters = (value: number) => `${Math.round(value).toLocaleString("en-US")} m`;
 
+const shortMeters = (value: number) =>
+  value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : `${Math.round(value)}`;
+
 const nameOf = (id: string, name: string, userId: string | null) => (id === userId ? "You" : name);
 
 const scatter = (index: number, salt: number) => {
@@ -423,29 +426,46 @@ function DiveChart({ rows, userId, winnerId }: { rows: { id: string; name: strin
   const floor = Math.max(1000, ...shown.map((row) => row.score)) * 1.12;
   const height = 150;
   const lines = ZONES.slice(1).filter((zone) => zone.from < floor);
+  const rest = rows.slice(8);
   return (
-    <div style={{ position: "relative", height: height + 34 }}>
-      {lines.map((zone) => (
-        <div key={zone.name} style={{ position: "absolute", left: 0, right: 0, top: (zone.from / floor) * height, borderTop: `1px dashed ${LINE}` }}>
-          <span style={{ position: "absolute", left: 0, top: 3, fontSize: 9.5, color: "rgba(190,235,255,0.45)" }}>{zone.name}</span>
+    <>
+      <div style={{ position: "relative", height: height + 48 }}>
+        {lines.map((zone) => (
+          <div key={zone.name} style={{ position: "absolute", left: 0, right: 0, top: (zone.from / floor) * height, borderTop: `1px dashed ${LINE}` }}>
+            <span style={{ position: "absolute", left: 0, top: 3, fontSize: 9.5, color: "rgba(190,235,255,0.45)" }}>{zone.name}</span>
+          </div>
+        ))}
+        <div style={{ position: "absolute", inset: 0, display: "flex", paddingLeft: 52 }}>
+          {shown.map((row, index) => {
+            const lead = winnerId ? row.id === winnerId : index === 0;
+            const tone = lead ? GLOW.longShot : row.id === userId ? GLOW.solid : GLOW.obvious;
+            return (
+              <div key={row.id} style={{ position: "relative", flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                <div style={{ width: 2, height: (row.score / floor) * height, background: `linear-gradient(180deg, rgba(255,255,255,0.12), ${tone})`, transition: "height 1.2s ease" }} />
+                <span style={{ width: lead ? 18 : 12, height: 2, borderRadius: 1, background: tone, boxShadow: `0 0 8px ${tone}` }} />
+                <span style={{ position: "absolute", top: height + 6, maxWidth: "100%", fontSize: 11, fontFamily: HEAD_FONT, color: row.id === userId ? color.text : MUTED, ...ellipsis }}>
+                  {nameOf(row.id, row.name, userId)}
+                </span>
+                <span style={{ position: "absolute", top: height + 22, maxWidth: "100%", fontSize: 10.5, color: tone, fontVariantNumeric: "tabular-nums", ...ellipsis }}>
+                  {shortMeters(row.score)}
+                </span>
+              </div>
+            );
+          })}
         </div>
-      ))}
-      <div style={{ position: "absolute", inset: 0, display: "flex", paddingLeft: 52 }}>
-        {shown.map((row, index) => {
-          const lead = winnerId ? row.id === winnerId : index === 0;
-          const tone = lead ? GLOW.longShot : row.id === userId ? GLOW.solid : GLOW.obvious;
-          return (
-            <div key={row.id} style={{ position: "relative", flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center" }}>
-              <div style={{ width: 2, height: (row.score / floor) * height, background: `linear-gradient(180deg, rgba(255,255,255,0.12), ${tone})`, transition: "height 1.2s ease" }} />
-              <span style={{ width: lead ? 18 : 12, height: 2, borderRadius: 1, background: tone, boxShadow: `0 0 8px ${tone}` }} />
-              <span style={{ position: "absolute", top: height + 6, maxWidth: "100%", fontSize: 11, fontFamily: HEAD_FONT, color: row.id === userId ? color.text : MUTED, ...ellipsis }}>
-                {nameOf(row.id, row.name, userId)}
-              </span>
-            </div>
-          );
-        })}
       </div>
-    </div>
+      {rest.length > 0 ? (
+        <Panel style={{ padding: "2px 12px" }}>
+          {rest.map((row, index) => (
+            <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderTop: index ? `1px solid ${LINE}` : undefined }}>
+              <span style={{ width: 18, fontSize: 12, color: MUTED, fontFamily: HEAD_FONT, flexShrink: 0 }}>{index + 9}</span>
+              <span style={{ flex: 1, fontSize: 13, color: row.id === userId ? color.text : MUTED, ...ellipsis }}>{nameOf(row.id, row.name, userId)}</span>
+              <span style={{ fontSize: 12.5, fontFamily: HEAD_FONT, color: color.text, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{meters(row.score)}</span>
+            </div>
+          ))}
+        </Panel>
+      ) : null}
+    </>
   );
 }
 
@@ -511,8 +531,8 @@ export default function LongShotGame({
           <Panel style={{ padding: "4px 12px" }}>
             {pub.best.slice(0, 6).map((row, index) => (
               <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: index ? `1px solid ${LINE}` : undefined }}>
-                <span style={{ flex: 1, fontSize: 14, color: color.text, ...ellipsis }}>{row.answer}</span>
-                <span style={{ fontSize: 12, color: MUTED, flexShrink: 0 }}>{nameOf(row.id, row.name, userId)}</span>
+                <span style={{ flex: 1, fontSize: 14, color: color.text, ...ellipsis, minWidth: "40%" }}>{row.answer}</span>
+                <span style={{ fontSize: 12, color: MUTED, flexShrink: 1, ...ellipsis, maxWidth: "30%" }}>{nameOf(row.id, row.name, userId)}</span>
                 <span style={{ fontSize: 12, fontFamily: HEAD_FONT, color: GLOW[row.tier], flexShrink: 0, minWidth: 64, textAlign: "right" }}>
                   {TIER_LABEL[row.tier]}
                 </span>
@@ -656,8 +676,8 @@ export default function LongShotGame({
                   animation: index === 0 ? "ls-up 360ms ease-out" : undefined,
                 }}
               >
-                <span style={{ flex: 1, fontSize: 14, color: color.text, ...ellipsis }}>{link.answer}</span>
-                <span style={{ fontSize: 12, color: MUTED, flexShrink: 0 }}>{nameOf(link.playerId, link.name, userId)}</span>
+                <span style={{ flex: 1, fontSize: 14, color: color.text, ...ellipsis, minWidth: "40%" }}>{link.answer}</span>
+                <span style={{ fontSize: 12, color: MUTED, flexShrink: 1, ...ellipsis, maxWidth: "30%" }}>{nameOf(link.playerId, link.name, userId)}</span>
                 <span style={{ fontSize: 12, fontFamily: HEAD_FONT, color: GLOW[link.tier], flexShrink: 0, minWidth: 64, textAlign: "right" }}>
                   {TIER_LABEL[link.tier]}
                 </span>
