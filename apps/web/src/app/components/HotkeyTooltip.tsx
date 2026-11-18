@@ -1,11 +1,12 @@
 "use client";
 
+import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { formatForDisplay } from "@tanstack/react-hotkeys";
 import type { ReactNode } from "react";
 
 interface HotkeyTooltipProps {
   label: string;
-  hotkey?: string;
+  hotkey?: RegisterableHotkey;
   children: ReactNode;
   className?: string;
   showWithoutHotkey?: boolean;

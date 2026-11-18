@@ -9,8 +9,8 @@ describe("getDisplayableHotkeys", () => {
   it("filters out declared-but-unbound actions", () => {
     // These exist in the map for labeling purposes but have no binding yet;
     // a shortcuts reference row with an empty key chip would be noise.
-    expect(HOTKEYS.toggleReactions.keys).toBe("");
-    expect(HOTKEYS.toggleApps.keys).toBe("");
+    expect(HOTKEYS.toggleReactions.keys).toBeNull();
+    expect(HOTKEYS.toggleApps.keys).toBeNull();
 
     const actions = getDisplayableHotkeys().map((h) => h.action);
     expect(actions).not.toContain("toggleReactions");
@@ -19,7 +19,7 @@ describe("getDisplayableHotkeys", () => {
 
   it("keeps every bound hotkey, including the palette and help bindings", () => {
     const displayable = getDisplayableHotkeys();
-    const bound = HOTKEY_LIST.filter((h) => h.keys.length > 0);
+    const bound = HOTKEY_LIST.filter((h) => h.keys !== null);
     expect(new Set(displayable.map((h) => h.action))).toEqual(
       new Set(bound.map((h) => h.action)),
     );

@@ -1,6 +1,19 @@
+import type { RegisterableHotkey } from "@tanstack/hotkeys";
 
 export interface HotkeyDefinition {
-  keys: string;
+  /**
+   * Typed so the hotkeys library validates every shortcut string; `null` for
+   * an action that is declared but has no binding yet.
+   */
+  keys: RegisterableHotkey | null;
+  label: string;
+  description: string;
+}
+
+/** A hotkey that is actually bound to a key, as listed in the shortcuts help. */
+export interface DisplayableHotkey {
+  action: HotkeyAction;
+  keys: RegisterableHotkey;
   label: string;
   description: string;
 }
@@ -19,7 +32,9 @@ export type HotkeyAction =
   | "commandPalette"
   | "shortcutsHelp";
 
-export const HOTKEYS: Record<HotkeyAction, HotkeyDefinition> = {
+// `satisfies` (not an annotation) keeps each entry's literal type, so a bound
+// action's `keys` is known to be non-null wherever it is registered or shown.
+export const HOTKEYS = {
   toggleMute: {
     keys: "Mod+D",
     label: "Mute / Unmute",
@@ -56,12 +71,12 @@ export const HOTKEYS: Record<HotkeyAction, HotkeyDefinition> = {
     description: "Start or stop sharing your screen.",
   },
   toggleReactions: {
-    keys: "",
+    keys: null,
     label: "Reactions",
     description: "Open or close the reactions panel.",
   },
   toggleApps: {
-    keys: "",
+    keys: null,
     label: "Apps",
     description: "Open or close the apps panel.",
   },
@@ -80,7 +95,7 @@ export const HOTKEYS: Record<HotkeyAction, HotkeyDefinition> = {
     label: "Keyboard shortcuts",
     description: "Show this list of keyboard shortcuts.",
   },
-} as const;
+} as const satisfies Record<HotkeyAction, HotkeyDefinition>;
 
 export const HOTKEY_LIST: (HotkeyDefinition & { action: HotkeyAction })[] =
   (Object.entries(HOTKEYS) as [HotkeyAction, HotkeyDefinition][]).map(
@@ -89,14 +104,15 @@ export const HOTKEY_LIST: (HotkeyDefinition & { action: HotkeyAction })[] =
 
 /**
  * Hotkeys worth showing in the shortcuts reference: some actions are declared
- * here without a binding yet (empty `keys`), and listing those would just be
+ * here without a binding yet (`keys: null`), and listing those would just be
  * a row with a blank chip. The quick-actions palette leads the list — it is
  * the gateway to every other action, so it gets top billing.
  */
-export function getDisplayableHotkeys(): (HotkeyDefinition & {
-  action: HotkeyAction;
-})[] {
-  const bound = HOTKEY_LIST.filter((hotkey) => hotkey.keys.length > 0);
+export function getDisplayableHotkeys(): DisplayableHotkey[] {
+  const bound: DisplayableHotkey[] = [];
+  for (const { action, keys, label, description } of HOTKEY_LIST) {
+    if (keys !== null) bound.push({ action, keys, label, description });
+  }
   return [
     ...bound.filter((hotkey) => hotkey.action === "commandPalette"),
     ...bound.filter((hotkey) => hotkey.action !== "commandPalette"),

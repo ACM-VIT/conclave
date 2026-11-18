@@ -1,3 +1,4 @@
+import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import {
   AudioLines,
   Bot,
@@ -48,7 +49,7 @@ export interface PaletteAction {
   icon?: LucideIcon;
   /** Reaction rows render their emoji/asset instead of an icon. */
   reaction?: { kind: "emoji" | "asset"; value: string };
-  hotkey?: string;
+  hotkey?: RegisterableHotkey;
   /** Currently-on toggle or currently-selected device. */
   active?: boolean;
   danger?: boolean;

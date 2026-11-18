@@ -5,7 +5,6 @@ import { useSharedVoiceStart } from "./hooks/useSharedVoiceStart";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkey } from "@tanstack/react-hotkeys";
-import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { HOTKEYS } from "./lib/hotkeys";
 import type { Socket } from "socket.io-client";
 import { SFU_EVENTS } from "@conclave/meeting-core/sfu-events";
@@ -887,7 +886,7 @@ export default function MeetsClient({
   }, []);
 
   useHotkey(
-    HOTKEYS.toggleMute.keys as RegisterableHotkey,
+    HOTKEYS.toggleMute.keys,
     handleToggleMuteCommand,
     {
       enabled: connectionState === "joined",
@@ -2171,7 +2170,7 @@ export default function MeetsClient({
   }, [setHandRaisedState]);
 
   useHotkey(
-    HOTKEYS.toggleCamera.keys as RegisterableHotkey,
+    HOTKEYS.toggleCamera.keys,
     handleToggleCameraCommand,
     {
       enabled: connectionState === "joined",
@@ -2181,7 +2180,7 @@ export default function MeetsClient({
   );
 
   useHotkey(
-    HOTKEYS.toggleHandRaise.keys as RegisterableHotkey,
+    HOTKEYS.toggleHandRaise.keys,
     toggleHandRaised,
     {
       enabled: connectionState === "joined",
@@ -2190,14 +2189,14 @@ export default function MeetsClient({
     },
   );
 
-  useHotkey(HOTKEYS.toggleChat.keys as RegisterableHotkey, toggleChat, {
+  useHotkey(HOTKEYS.toggleChat.keys, toggleChat, {
     enabled: connectionState === "joined",
     requireReset: true,
     ignoreInputs: true,
   });
 
   useHotkey(
-    HOTKEYS.toggleParticipants.keys as RegisterableHotkey,
+    HOTKEYS.toggleParticipants.keys,
     () => setIsParticipantsOpen((prev) => !prev),
     {
       enabled: connectionState === "joined",
@@ -2206,7 +2205,7 @@ export default function MeetsClient({
     },
   );
 
-  useHotkey(HOTKEYS.toggleScreenShare.keys as RegisterableHotkey, () => {
+  useHotkey(HOTKEYS.toggleScreenShare.keys, () => {
     void toggleScreenShare();
   }, {
     enabled: connectionState === "joined",
@@ -2834,7 +2833,7 @@ export default function MeetsClient({
       },
     });
 
-  useHotkey(HOTKEYS.toggleLockMeeting.keys as RegisterableHotkey, () => {
+  useHotkey(HOTKEYS.toggleLockMeeting.keys, () => {
     if (canModerateMeeting) {
       void socket.toggleRoomLock(!isRoomLocked);
     }
@@ -2844,7 +2843,7 @@ export default function MeetsClient({
     ignoreInputs: true,
   });
 
-  useHotkey(HOTKEYS.toggleMiniView.keys as RegisterableHotkey, () => {
+  useHotkey(HOTKEYS.toggleMiniView.keys, () => {
     if (isPopoutActive) {
       closePopout();
     } else if (isPopoutSupported) {

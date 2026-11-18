@@ -570,7 +570,7 @@ function LeaveControl({
   // If there's no host action available, fall back to a plain leave button.
   if (!onEndForEveryone) {
     return (
-      <HotkeyTooltip label="Leave call" hotkey="">
+      <HotkeyTooltip label="Leave call">
         <button
           type="button"
           onClick={onLeave}
@@ -953,7 +953,7 @@ function ControlsBar(props: ControlsBarProps) {
 
         {!compact && (!isReactionsDisabled || isAdmin) && (
           <div ref={reactionRef} className="relative">
-            <HotkeyTooltip label="Reactions" hotkey="">
+            <HotkeyTooltip label="Reactions">
               <ControlButton
                 icon={Smile}
                 variant={reactionsOpen ? "active" : "default"}

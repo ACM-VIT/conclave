@@ -3,7 +3,6 @@
 import { Keyboard } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { formatForDisplay, useHotkey } from "@tanstack/react-hotkeys";
-import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { color } from "@conclave/ui-tokens";
 import { HOTKEYS, getDisplayableHotkeys } from "../lib/hotkeys";
 import {
@@ -32,7 +31,7 @@ export default function ShortcutsHelpDialog() {
 
   // Register Mod+/ through the app's hotkey system, like every other meeting
   // shortcut (the library preventDefaults Ctrl/Meta shortcuts by default).
-  useHotkey(HOTKEYS.shortcutsHelp.keys as RegisterableHotkey, () =>
+  useHotkey(HOTKEYS.shortcutsHelp.keys, () =>
     setOpen((v) => !v),
   );
 
