@@ -538,6 +538,7 @@ export const filterGeneratedPrompts = async (
         const answers = await decide({ state: { prompt: prompt.prompt, category: prompt.category }, questions, signal });
         const keep = (index: number) => {
           const answer = answers[`a${index}`];
+          if (answer?.type === "refusal") return false;
           return !answer || answer.type !== "noul" || answer.noul >= GENERATED_ANSWER_THRESHOLD;
         };
         const filtered: LongShotPrompt = { ...prompt };

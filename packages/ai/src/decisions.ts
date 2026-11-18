@@ -1,16 +1,18 @@
-export type DecisionProvider = "cloudflare" | "typesafe";
+export type DecisionProvider = "cloudflare" | "typesafe" | "openai";
 
 export type DecisionModel = {
   id: string;
   provider: DecisionProvider;
   label: string;
   apiModel: string;
+  maxQuestions: number;
 };
 
 export const DECISION_MODELS = [
-  { id: "clef-flash", provider: "cloudflare", label: "Clef Flash", apiModel: "clef-flash" },
-  { id: "clef", provider: "cloudflare", label: "Clef", apiModel: "clef" },
-  { id: "jev", provider: "typesafe", label: "Jev", apiModel: "jev-latest" },
+  { id: "clef-flash", provider: "cloudflare", label: "Clef Flash", apiModel: "clef-flash", maxQuestions: 64 },
+  { id: "clef", provider: "cloudflare", label: "Clef", apiModel: "clef", maxQuestions: 64 },
+  { id: "jev", provider: "typesafe", label: "Jev", apiModel: "jev-latest", maxQuestions: 64 },
+  { id: "gpt-6-luna", provider: "openai", label: "GPT-6 Luna", apiModel: "gpt-6-luna", maxQuestions: 400 },
 ] as const satisfies readonly DecisionModel[];
 
 export type DecisionModelId = (typeof DECISION_MODELS)[number]["id"];
@@ -56,7 +58,9 @@ export type ScoreAnswer = {
   confidence: number;
 };
 
-export type DecisionAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
+export type RefusalAnswer = { type: "refusal" };
+
+export type DecisionAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer | RefusalAnswer;
 
 export type DecisionResult = {
   model: string;
@@ -70,6 +74,7 @@ export type CloudflareDecisionCredential = { accountId: string; token: string };
 export type DecisionCredentials = {
   cloudflare?: CloudflareDecisionCredential | null;
   typesafe?: { apiKey: string } | null;
+  openai?: { apiKey: string; baseUrl?: string } | null;
 };
 
 export class DecisionError extends Error {
@@ -93,8 +98,10 @@ const RETRY_BASE_MS = 200;
 
 const CLOUDFLARE_API = "https://api.cloudflare.com/client/v4/accounts";
 const TYPESAFE_API = "https://api.typesafe.ai/v1/systemone";
+const OPENAI_API = "https://api.openai.com/v1";
 const CLOUDFLARE_KEY_ENV = "CLOUDFLARE_AI_API_KEY";
 const TYPESAFE_KEY_ENV = "TYPESAFE_API_KEY";
+const OPENAI_KEY_ENV = "OPENAI_API_KEY";
 
 export const parseCloudflareCredential = (
   value: string | null | undefined,
@@ -116,16 +123,24 @@ export const readDecisionCredentials = (
   env: Partial<Record<string, string | undefined>>,
 ): DecisionCredentials => {
   const typesafe = env[TYPESAFE_KEY_ENV]?.trim();
+  const openai = env[OPENAI_KEY_ENV]?.trim();
   return {
     cloudflare: parseCloudflareCredential(env[CLOUDFLARE_KEY_ENV]),
     typesafe: typesafe ? { apiKey: typesafe } : null,
+    openai: openai
+      ? {
+          apiKey: openai,
+          baseUrl:
+            (env.CLOUDFLARE_AI_GATEWAY_OPENAI_URL?.trim() || env.OPENAI_BASE_URL?.trim() || OPENAI_API).replace(/\/+$/, ""),
+        }
+      : null,
   };
 };
 
 export const hasDecisionCredential = (
   credentials: DecisionCredentials,
   provider: DecisionProvider,
-): boolean => Boolean(provider === "cloudflare" ? credentials.cloudflare : credentials.typesafe);
+): boolean => Boolean(credentials[provider]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -170,11 +185,136 @@ const parseAnswer = (value: unknown, question: DecisionQuestion): DecisionAnswer
   return { type: "score", score: Math.min(top, Math.max(0, value.score)), probabilities, confidence };
 };
 
-export const validateDecisionQuestions = (questions: Record<string, DecisionQuestion>): void => {
+const parseOpenAiAnswer = (value: unknown, question: DecisionQuestion): DecisionAnswer | null => {
+  if (!isRecord(value)) return null;
+  if (value.type === "refusal") return { type: "refusal" };
+  if (question.type === "noul") {
+    if (value.type !== "predicate") return null;
+    const noul = probability(value.probability);
+    return noul === null ? null : { type: "noul", noul };
+  }
+  if (value.type !== question.type || !Array.isArray(value.probabilities)) return null;
+  const confidence = probability(value.confidence);
+  if (confidence === null) return null;
+  const probabilities: Record<string, number> = {};
+  if (question.type === "choice") {
+    const options = new Set(Object.keys(question.criteria));
+    if (typeof value.choice !== "string" || !options.has(value.choice)) return null;
+    for (const entry of value.probabilities as unknown[]) {
+      if (!isRecord(entry)) return null;
+      const p = probability(entry.probability);
+      const option = entry.value;
+      if (p === null || typeof option !== "string" || !options.has(option)) return null;
+      probabilities[option] = p;
+    }
+    if (Object.keys(probabilities).length === 0) return null;
+    return { type: "choice", choice: value.choice, probabilities, confidence };
+  }
+  const top = question.criteria.length - 1;
+  let total = 0;
+  let weighted = 0;
+  for (const entry of value.probabilities as unknown[]) {
+    if (!isRecord(entry)) return null;
+    const p = probability(entry.probability);
+    if (p === null) return null;
+    const label = typeof entry.label === "string" ? entry.label : "";
+    const level = /^\d+$/.test(label) ? Number(label) : NaN;
+    if (!Number.isInteger(level) || level < 0 || level > top) return null;
+    probabilities[String(level)] = p;
+    total += p;
+    weighted += p * level;
+  }
+  if (total <= 0) return null;
+  return { type: "score", score: Math.min(top, Math.max(0, weighted / total)), probabilities, confidence };
+};
+
+const readSystemOneAnswers = (
+  result: unknown,
+  questions: Record<string, DecisionQuestion>,
+  status: number,
+): Record<string, DecisionAnswer> => {
+  if (!isRecord(result) || !isRecord(result.answers)) {
+    throw new DecisionError("The decision model returned an unexpected response", status);
+  }
+  const answers: Record<string, DecisionAnswer> = {};
+  for (const [id, question] of Object.entries(questions)) {
+    const answer = parseAnswer(result.answers[id], question);
+    if (!answer) throw new DecisionError(`The decision model returned no valid answer for ${id}`, status);
+    answers[id] = answer;
+  }
+  return answers;
+};
+
+const readOpenAiAnswers = (
+  result: unknown,
+  questions: Record<string, DecisionQuestion>,
+  status: number,
+): Record<string, DecisionAnswer> => {
+  if (!isRecord(result) || !Array.isArray(result.answers)) {
+    throw new DecisionError("The decision model returned an unexpected response", status);
+  }
+  const ids = Object.keys(questions);
+  const byName = new Map<string, unknown>();
+  result.answers.forEach((answer: unknown, index) => {
+    const name = isRecord(answer) && typeof answer.name === "string" ? answer.name : ids[index];
+    if (name !== undefined && !byName.has(name)) byName.set(name, answer);
+  });
+  const answers: Record<string, DecisionAnswer> = {};
+  for (const id of ids) {
+    const answer = parseOpenAiAnswer(byName.get(id), questions[id]);
+    if (!answer) throw new DecisionError(`The decision model returned no valid answer for ${id}`, status);
+    answers[id] = answer;
+  }
+  return answers;
+};
+
+const asText = (value: unknown): string =>
+  typeof value === "string" ? value : (JSON.stringify(value) ?? "");
+
+const openAiQuestion = (name: string, question: DecisionQuestion) => {
+  if (question.type === "noul") {
+    const lines = [asText(question.instructions)];
+    if (question.criteria?.true !== undefined) lines.push(`True when: ${asText(question.criteria.true)}`);
+    if (question.criteria?.false !== undefined) lines.push(`False when: ${asText(question.criteria.false)}`);
+    return { type: "predicate", name, instructions: lines.join("\n\n") };
+  }
+  if (question.type === "choice") {
+    return {
+      type: "choice",
+      name,
+      instructions: asText(question.instructions),
+      choices: Object.entries(question.criteria).map(([value, description]) => ({
+        value,
+        description: asText(description),
+      })),
+    };
+  }
+  return {
+    type: "score",
+    name,
+    instructions: asText(question.instructions),
+    levels: question.criteria.map((description, level) => ({
+      label: String(level),
+      description: asText(description),
+    })),
+  };
+};
+
+const openAiInput = (state: unknown) =>
+  typeof state === "string"
+    ? state
+    : isRecord(state) || (Array.isArray(state) && state.length > 0 && state.every(isRecord))
+      ? [{ role: "user", content: [{ type: "input_json", data: state }] }]
+      : asText(state);
+
+export const validateDecisionQuestions = (
+  questions: Record<string, DecisionQuestion>,
+  maxQuestions = MAX_DECISION_QUESTIONS,
+): void => {
   const ids = Object.keys(questions);
   if (ids.length === 0) throw new DecisionError("Ask at least one question");
-  if (ids.length > MAX_DECISION_QUESTIONS) {
-    throw new DecisionError(`Ask at most ${MAX_DECISION_QUESTIONS} questions per request`);
+  if (ids.length > maxQuestions) {
+    throw new DecisionError(`Ask at most ${maxQuestions} questions per request`);
   }
   for (const id of ids) {
     if (!QUESTION_ID.test(id)) throw new DecisionError(`Invalid question id: ${id}`);
@@ -198,6 +338,7 @@ const errorMessage = (body: unknown, status: number): string => {
     if (Array.isArray(errors) && errors.length > 0 && isRecord(errors[0]) && typeof errors[0].message === "string") {
       return errors[0].message;
     }
+    if (isRecord(body.error) && typeof body.error.message === "string") return body.error.message;
     if (typeof body.detail === "string") return body.detail;
     if (typeof body.message === "string") return body.message;
     if (typeof body.error === "string") return body.error;
@@ -207,7 +348,12 @@ const errorMessage = (body: unknown, status: number): string => {
   return `The decision model failed (${status})`;
 };
 
-type RequestPlan = { url: string; headers: Record<string, string>; body: string; envelope: boolean };
+type RequestPlan = {
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+  format: "cloudflare" | "systemone" | "openai";
+};
 
 const planRequest = (
   model: DecisionModel,
@@ -215,6 +361,20 @@ const planRequest = (
   state: unknown,
   questions: Record<string, DecisionQuestion>,
 ): RequestPlan => {
+  if (model.provider === "openai") {
+    const credential = credentials.openai;
+    if (!credential) throw new DecisionError("Add an OpenAI API key for GPT-6 Luna decisions");
+    return {
+      url: `${(credential.baseUrl || OPENAI_API).replace(/\/+$/, "")}/decisions`,
+      headers: { authorization: `Bearer ${credential.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: model.apiModel,
+        input: openAiInput(state),
+        questions: Object.entries(questions).map(([name, question]) => openAiQuestion(name, question)),
+      }),
+      format: "openai",
+    };
+  }
   const body = JSON.stringify({ model: model.apiModel, state, questions });
   if (model.provider === "cloudflare") {
     const credential = credentials.cloudflare;
@@ -223,7 +383,7 @@ const planRequest = (
       url: `${CLOUDFLARE_API}/${encodeURIComponent(credential.accountId)}/ai/run/@cf/cloudflare/${model.apiModel}`,
       headers: { authorization: `Bearer ${credential.token}`, "content-type": "application/json" },
       body,
-      envelope: true,
+      format: "cloudflare",
     };
   }
   const credential = credentials.typesafe;
@@ -232,7 +392,7 @@ const planRequest = (
     url: TYPESAFE_API,
     headers: { authorization: `Bearer ${credential.apiKey}`, "content-type": "application/json" },
     body,
-    envelope: false,
+    format: "systemone",
   };
 };
 
@@ -275,7 +435,7 @@ export const runDecisions = async ({
 }: RunDecisionsOptions): Promise<DecisionResult> => {
   const model = decisionModel(modelId);
   if (!model) throw new DecisionError(`Unknown decision model: ${modelId}`);
-  validateDecisionQuestions(questions);
+  validateDecisionQuestions(questions, model.maxQuestions);
   const plan = planRequest(model, credentials, state, questions);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -312,19 +472,15 @@ export const runDecisions = async ({
         if (!retryable) throw lastError;
         continue;
       }
-      const result = plan.envelope && isRecord(payload) && "result" in payload ? payload.result : payload;
-      if (!isRecord(result) || !isRecord(result.answers)) {
-        throw new DecisionError("The decision model returned an unexpected response", response.status);
-      }
-      const answers: Record<string, DecisionAnswer> = {};
-      for (const [id, question] of Object.entries(questions)) {
-        const answer = parseAnswer(result.answers[id], question);
-        if (!answer) throw new DecisionError(`The decision model returned no valid answer for ${id}`, response.status);
-        answers[id] = answer;
-      }
-      const usage = isRecord(result.usage) ? result.usage : {};
+      const result = plan.format === "cloudflare" && isRecord(payload) && "result" in payload ? payload.result : payload;
+      const answers =
+        plan.format === "openai"
+          ? readOpenAiAnswers(result, questions, response.status)
+          : readSystemOneAnswers(result, questions, response.status);
+      const fields = isRecord(result) ? result : {};
+      const usage = isRecord(fields.usage) ? fields.usage : {};
       return {
-        model: typeof result.model === "string" ? result.model : model.apiModel,
+        model: typeof fields.model === "string" ? fields.model : model.apiModel,
         answers,
         usage: {
           inputTokens: typeof usage.input_tokens === "number" ? usage.input_tokens : 0,
@@ -346,10 +502,11 @@ export const runDecisionBatches = async (
     concurrency?: number;
   },
 ): Promise<Record<string, DecisionAnswer>> => {
+  const size = decisionModel(options.model)?.maxQuestions ?? MAX_DECISION_QUESTIONS;
   const entries = Object.entries(options.questions);
   const chunks: Record<string, DecisionQuestion>[] = [];
-  for (let i = 0; i < entries.length; i += MAX_DECISION_QUESTIONS) {
-    chunks.push(Object.fromEntries(entries.slice(i, i + MAX_DECISION_QUESTIONS)));
+  for (let i = 0; i < entries.length; i += size) {
+    chunks.push(Object.fromEntries(entries.slice(i, i + size)));
   }
   const answers: Record<string, DecisionAnswer> = {};
   let cursor = 0;

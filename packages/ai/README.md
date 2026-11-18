@@ -18,7 +18,7 @@ OpenAI or Sarvam: Claude is a text alternative, not a realtime audio provider.
 
 | Setting | Purpose |
 | --- | --- |
-| `OPENAI_API_KEY` | OpenAI text, transcription, and moderation credentials |
+| `OPENAI_API_KEY` | OpenAI text, transcription, moderation, and GPT-6 Luna decision credentials |
 | `ANTHROPIC_API_KEY` | Claude text credentials |
 | `SARVAM_API_KEY` | Sarvam transcription credentials |
 | `ELEVENLABS_API_KEY` | ElevenLabs voice cloning and synthesis credentials |
@@ -170,15 +170,26 @@ Assistant failures emit plain, redacted provider status, error type and request 
 
 ## Decision models
 
-`@conclave/ai/decisions` calls System One decision models: Cloudflare Clef and
-Clef Flash on Workers AI, and TypeSafe Jev. A request sends a `state` and up to
-64 typed questions (`noul` yes/no, `choice`, `score`) and gets back calibrated
-probabilities, with no generated text. `runDecisions` validates questions,
-unwraps the Workers AI envelope, checks every answer against its question, and
-retries 429, 529 and 5xx responses inside a time budget. `runDecisionBatches`
-splits larger requests.
+`@conclave/ai/decisions` calls decision models: Cloudflare Clef and Clef Flash
+on Workers AI, TypeSafe Jev, and OpenAI GPT-6 Luna through the Decisions API
+(`POST /v1/decisions`). A request sends a `state` and typed questions (`noul`
+yes/no, `choice`, `score`) and gets back probabilities, with no generated text.
+Clef and Jev take up to 64 questions per request and OpenAI up to 400.
+
+For OpenAI, `noul` becomes a `predicate` with its criteria folded into the
+instructions, choice options become `choices`, score levels become `levels`
+labelled `0`, `1`, ..., and an object `state` is sent as an `input_json` part.
+The score is recomputed from the level probabilities, so it uses the same 0-based
+scale as Clef and Jev. OpenAI can refuse a single question; that answer comes
+back as `{ type: "refusal" }`, and the Long Shot judge rejects a guess when
+`correct` or `unsafe` is refused.
+
+`runDecisions` validates questions, unwraps the Workers AI envelope, checks every
+answer against its question, and retries 429, 529 and 5xx responses inside a
+time budget. `runDecisionBatches` splits larger requests by the model's limit.
 
 The `answers` room AI feature ("Answer judging") picks the model, defaulting to
 Clef Flash with a 2.5 s timeout. Rooms can share a Cloudflare account ID and
-Workers AI token, or a TypeSafe key, from the Room AI panel.
+Workers AI token, a TypeSafe key, or an OpenAI key from the Room AI panel.
+Anthropic has no decision endpoint, so Claude models are not offered here.
 

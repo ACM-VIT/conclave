@@ -14,6 +14,7 @@ import { resolveAiFeatureSettings, validateFeaturePatch, featureProvider } from 
 
 const cloudflare = { cloudflare: { accountId: "abc123def456", token: "cf-token" } };
 const typesafe = { typesafe: { apiKey: "ts-key" } };
+const openai = { openai: { apiKey: "sk-test", baseUrl: "https://api.openai.com/v1" } };
 
 const questions: Record<string, DecisionQuestion> = {
   urgent: { type: "noul", instructions: "Is this urgent?" },
@@ -54,8 +55,13 @@ describe("decision credentials", () => {
     expect(readDecisionCredentials(env)).toEqual({
       cloudflare: { accountId: "abc123def456", token: "tok" },
       typesafe: { apiKey: "ts" },
+      openai: null,
     });
-    expect(readDecisionCredentials({})).toEqual({ cloudflare: null, typesafe: null });
+    expect(readDecisionCredentials({})).toEqual({ cloudflare: null, typesafe: null, openai: null });
+    expect(
+      readDecisionCredentials({ OPENAI_API_KEY: " sk ", CLOUDFLARE_AI_GATEWAY_OPENAI_URL: "https://gateway.example/openai/" }).openai,
+    ).toEqual({ apiKey: "sk", baseUrl: "https://gateway.example/openai" });
+    expect(readDecisionCredentials({ OPENAI_API_KEY: "sk" }).openai?.baseUrl).toBe("https://api.openai.com/v1");
     expect(isProviderApiKey("cloudflare", "abc123def456:tok")).toBe(true);
     expect(isProviderApiKey("cloudflare", "tok")).toBe(false);
     expect(isProviderApiKey("typesafe", "anything")).toBe(true);
@@ -85,9 +91,118 @@ describe("runDecisions", () => {
     expect(result.model).toBe("jev-1.14.0");
   });
 
+  it("maps questions onto the OpenAI Decisions API and reads its answers back", async () => {
+    const fetchImpl = vi.fn(async () =>
+      json({
+        model: "gpt-6-luna-2026-10-01",
+        answers: [
+          { type: "predicate", name: "urgent", probability: 0.91 },
+          {
+            type: "choice",
+            name: "team",
+            choice: "technical",
+            confidence: 0.8,
+            probabilities: [
+              { value: "billing", probability: 0.1 },
+              { value: "technical", probability: 0.9 },
+            ],
+          },
+          {
+            type: "score",
+            name: "severity",
+            score: 2.5,
+            confidence: 0.6,
+            probabilities: [
+              { label: "0", value: 1, probability: 0 },
+              { label: "1", value: 2, probability: 0.5 },
+              { label: "2", value: 3, probability: 0.5 },
+            ],
+          },
+        ],
+        usage: { input_tokens: 30, output_tokens: 0, total_tokens: 30 },
+      }),
+    );
+    const result = await runDecisions({ model: "gpt-6-luna", credentials: openai, state: { ticket: "Checkout is down" }, questions, fetchImpl });
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.openai.com/v1/decisions");
+    expect((init.headers as Record<string, string>).authorization).toBe("Bearer sk-test");
+    expect(JSON.parse(String(init.body))).toEqual({
+      model: "gpt-6-luna",
+      input: [{ role: "user", content: [{ type: "input_json", data: { ticket: "Checkout is down" } }] }],
+      questions: [
+        { type: "predicate", name: "urgent", instructions: "Is this urgent?" },
+        {
+          type: "choice",
+          name: "team",
+          instructions: "Which team?",
+          choices: [
+            { value: "billing", description: "Payments" },
+            { value: "technical", description: "Outages" },
+          ],
+        },
+        {
+          type: "score",
+          name: "severity",
+          instructions: "How severe?",
+          levels: [
+            { label: "0", description: "None" },
+            { label: "1", description: "Minor" },
+            { label: "2", description: "Major" },
+          ],
+        },
+      ],
+    });
+    expect(result.model).toBe("gpt-6-luna-2026-10-01");
+    expect(result.answers.urgent).toEqual({ type: "noul", noul: 0.91 });
+    expect(result.answers.team).toEqual({ type: "choice", choice: "technical", probabilities: { billing: 0.1, technical: 0.9 }, confidence: 0.8 });
+    expect(result.answers.severity).toEqual({ type: "score", score: 1.5, probabilities: { "0": 0, "1": 0.5, "2": 0.5 }, confidence: 0.6 });
+    expect(result.usage).toEqual({ inputTokens: 30, outputTokens: 0 });
+  });
+
+  it("folds yes/no criteria into the OpenAI predicate and passes refusals through", async () => {
+    const fetchImpl = vi.fn(async () => json({ answers: [{ type: "refusal", name: null }] }));
+    const result = await runDecisions({
+      model: "gpt-6-luna",
+      credentials: openai,
+      state: "a guess",
+      questions: { safe: { type: "noul", instructions: "Is it fine?", criteria: { true: "Fine", false: "Not fine" } } },
+      fetchImpl,
+    });
+    const body = JSON.parse(String((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body)) as {
+      input: unknown;
+      questions: { instructions: string }[];
+    };
+    expect(body.input).toBe("a guess");
+    expect(body.questions[0].instructions).toBe("Is it fine?\n\nTrue when: Fine\n\nFalse when: Not fine");
+    expect(result.answers.safe).toEqual({ type: "refusal" });
+  });
+
+  it("refuses OpenAI answers that do not match the question", async () => {
+    const run = (answer: unknown) =>
+      runDecisions({ model: "gpt-6-luna", credentials: openai, state: "x", questions, fetchImpl: vi.fn(async () => json({ answers: [answer] })) });
+    await expect(run({ type: "predicate", name: "urgent", probability: 0.5 })).rejects.toThrow(/team/);
+    await expect(
+      runDecisions({
+        model: "gpt-6-luna",
+        credentials: openai,
+        state: "x",
+        questions: { severity: questions.severity },
+        fetchImpl: vi.fn(async () =>
+          json({ answers: [{ type: "score", name: "severity", score: 1, confidence: 0.5, probabilities: [{ label: "Major", value: 9, probability: 1 }] }] }),
+        ),
+      }),
+    ).rejects.toThrow(/severity/);
+    const denied = vi.fn(async () => json({ error: { message: "Incorrect API key provided", type: "invalid_request_error" } }, 401));
+    await expect(runDecisions({ model: "gpt-6-luna", credentials: openai, state: "x", questions, fetchImpl: denied })).rejects.toMatchObject({
+      status: 401,
+      message: "Incorrect API key provided",
+    });
+  });
+
   it("needs a credential for the chosen provider", async () => {
     await expect(runDecisions({ model: "clef", credentials: typesafe, state: "x", questions })).rejects.toThrow(/Cloudflare/);
     await expect(runDecisions({ model: "jev", credentials: cloudflare, state: "x", questions })).rejects.toThrow(/TypeSafe/);
+    await expect(runDecisions({ model: "gpt-6-luna", credentials: cloudflare, state: "x", questions })).rejects.toThrow(/OpenAI/);
     await expect(runDecisions({ model: "gpt", credentials: cloudflare, state: "x", questions })).rejects.toThrow(/Unknown decision model/);
   });
 
@@ -155,6 +270,15 @@ describe("runDecisions", () => {
     const result = await runDecisionBatches({ model: "jev", credentials: typesafe, state: "x", questions: many, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(Object.keys(result)).toHaveLength(130);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+
+    const openAiFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { questions: { name: string }[] };
+      return json({ answers: body.questions.map(({ name }) => ({ type: "predicate", name, probability: 0.5 })) });
+    });
+    const wide = Object.fromEntries(Array.from({ length: 450 }, (_, i) => [`q${i}`, { type: "noul" as const, instructions: `#${i}` }]));
+    const openAiResult = await runDecisionBatches({ model: "gpt-6-luna", credentials: openai, state: "x", questions: wide, fetchImpl: openAiFetch as unknown as typeof fetch });
+    expect(Object.keys(openAiResult)).toHaveLength(450);
+    expect(openAiFetch).toHaveBeenCalledTimes(2);
   });
 
   it("reads the most likely level from a score answer", () => {
@@ -168,6 +292,8 @@ describe("answer judging feature", () => {
     expect(settings).toMatchObject({ enabled: true, model: "clef-flash", timeoutMs: 2_500, searchEnabled: false });
     expect(featureProvider("answers", "clef")).toBe("cloudflare");
     expect(featureProvider("answers", "jev")).toBe("typesafe");
+    expect(featureProvider("answers", "gpt-6-luna")).toBe("openai");
+    expect(validateFeaturePatch("answers", { model: "gpt-6-luna" })).toEqual({ model: "gpt-6-luna" });
     expect(validateFeaturePatch("answers", { model: "jev", enabled: false })).toEqual({ model: "jev", enabled: false });
     expect(() => validateFeaturePatch("answers", { model: "gpt-6.1-sol" })).toThrow(/supported model/);
   });

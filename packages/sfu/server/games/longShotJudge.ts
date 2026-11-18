@@ -152,6 +152,9 @@ export const verdictFromAnswers = (
   answers: Record<string, DecisionAnswer>,
 ): JudgeVerdict => {
   const unsafe = answers.unsafe;
+  if (unsafe?.type === "refusal" || answers.correct?.type === "refusal") {
+    return { kind: "reject", reason: "unsafe" };
+  }
   if (unsafe?.type === "noul" && unsafe.noul >= JUDGE_UNSAFE_THRESHOLD) {
     return { kind: "reject", reason: "unsafe" };
   }

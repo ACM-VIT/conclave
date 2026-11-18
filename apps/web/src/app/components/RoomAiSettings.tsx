@@ -25,6 +25,7 @@ const uses = {
     { Icon: ImageIcon, label: "Image safety" },
     { Icon: AudioLines, label: "Transcription" },
     { Icon: MessageSquare, label: "Assistant & games" },
+    { Icon: Gavel, label: "Answer judging" },
   ],
   anthropic: [
     { Icon: MessageSquare, label: "Assistant, questions, minutes & games" },

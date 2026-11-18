@@ -148,7 +148,7 @@ function FeatureEditor({
     controller.isAdmin ||
     (text && (owns("openai") || owns("anthropic"))) ||
     (feature === "transcription" && (owns("openai") || owns("sarvam"))) ||
-    (AI_FEATURES[feature].kind === "decision" && (owns("cloudflare") || owns("typesafe"))) ||
+    (AI_FEATURES[feature].kind === "decision" && (owns("cloudflare") || owns("typesafe") || owns("openai"))) ||
     canEdit;
   const disabled = pending || !controller.ready || !controller.connected;
   const update = <K extends keyof AiFeatureSettings>(
