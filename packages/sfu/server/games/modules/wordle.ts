@@ -47,6 +47,8 @@ type TeamRoundState = {
   turnIndex: number;
   /** Relay only: when the current turn passes on (0 outside relay). */
   turnDeadline: number;
+  /** Relay only: when the current guesser was first seen disconnected. */
+  absentSince: number | null;
 };
 
 type WordleState = {
@@ -73,6 +75,8 @@ type WordleState = {
 
 const WORD_LENGTH = 5;
 const MAX_TRIES = 6;
+/** How long a relay guesser may be disconnected before their turn moves on. */
+const TURN_GRACE_MS = 5_000;
 
 const WORD_SET = new Set<string>(WORDLE_WORDS);
 
@@ -192,27 +196,31 @@ const isActive = (ctx: GameContext, playerId: string): boolean =>
   ctx.activePlayers.some((player) => player.id === playerId);
 
 /**
- * Hand the relay turn to the next connected teammate after `fromIndex`
- * (exclusive) and restart the turn timer. Falls back to plain rotation when
- * nobody is connected so the round deadline can still close it out.
+ * Index of the next connected teammate after the current guesser, or null when
+ * nobody else on the team is connected. The single source of the relay's
+ * "who is up next" rule, shared by turn handoff and both views.
  */
-const passTurn = (
+const nextActiveIndex = (team: TeamRoundState, ctx: GameContext): number | null => {
+  const count = team.turnOrder.length;
+  for (let step = 1; step < count; step += 1) {
+    const candidate = (team.turnIndex + step) % count;
+    if (isActive(ctx, team.turnOrder[candidate])) return candidate;
+  }
+  return null;
+};
+
+/** Give the relay turn to `turnIndex` with a fresh timer. */
+const handTurn = (
   team: TeamRoundState,
+  turnIndex: number,
   ctx: GameContext,
   turnTimeMs: number,
-): TeamRoundState => {
-  const count = team.turnOrder.length;
-  if (count === 0) return team;
-  let nextIndex = (team.turnIndex + 1) % count;
-  for (let step = 1; step <= count; step += 1) {
-    const candidate = (team.turnIndex + step) % count;
-    if (isActive(ctx, team.turnOrder[candidate])) {
-      nextIndex = candidate;
-      break;
-    }
-  }
-  return { ...team, turnIndex: nextIndex, turnDeadline: ctx.now + turnTimeMs };
-};
+): TeamRoundState => ({
+  ...team,
+  turnIndex,
+  turnDeadline: ctx.now + turnTimeMs,
+  absentSince: null,
+});
 
 const currentTurnId = (state: WordleState): string | null => {
   const team = state.team;
@@ -220,6 +228,13 @@ const currentTurnId = (state: WordleState): string | null => {
     return null;
   }
   return team.turnOrder[team.turnIndex] ?? null;
+};
+
+/** Relay: the connected teammate who guesses after the current one, if any. */
+const upNextId = (state: WordleState, ctx: GameContext): string | null => {
+  if (!state.team || !currentTurnId(state)) return null;
+  const index = nextActiveIndex(state.team, ctx);
+  return index == null ? null : state.team.turnOrder[index] ?? null;
 };
 
 /** Fresh per-round board(s) for the seated contestants and the chosen word. */
@@ -259,6 +274,7 @@ const beginRound = (
       turnOrder: ids,
       turnIndex: Math.max(0, starter),
       turnDeadline: state.mode === "relay" ? ctx.now + state.turnTimeMs : 0,
+      absentSince: null,
     },
   };
 };
@@ -549,9 +565,11 @@ export const wordleModule: GameModule<WordleState> = {
           }
           if (state.mode === "relay") {
             // Always rotate, even on the final guess, so `turnIndex` names
-            // whoever opens the next round.
-            nextTeam = passTurn(
-              { ...nextTeam, turnIndex: team.turnOrder.indexOf(move.playerId) },
+            // whoever opens the next round. With nobody else connected the
+            // guesser simply goes again.
+            nextTeam = handTurn(
+              nextTeam,
+              nextActiveIndex(nextTeam, ctx) ?? nextTeam.turnIndex,
               ctx,
               state.turnTimeMs,
             );
@@ -616,7 +634,11 @@ export const wordleModule: GameModule<WordleState> = {
         if (turnId !== move.playerId) {
           throw new GameMoveError("You can only pass on your own turn");
         }
-        return { ...state, team: passTurn(state.team, ctx, state.turnTimeMs) };
+        const nextIndex = nextActiveIndex(state.team, ctx);
+        if (nextIndex == null) {
+          throw new GameMoveError("No teammate is around to take the turn");
+        }
+        return { ...state, team: handTurn(state.team, nextIndex, ctx, state.turnTimeMs) };
       }
       case "nextRound": {
         if (!ctx.isAdmin(move.playerId)) {
@@ -687,16 +709,36 @@ export const wordleModule: GameModule<WordleState> = {
       return finishRound({ ...state, players }, ctx);
     }
 
-    // Relay: a turn passes on when its timer runs out or the guesser drops.
+    // Relay: a turn passes on when its timer runs out, or once the guesser has
+    // been disconnected for a short grace window (a reconnect blip keeps it).
+    // Every branch that changes nothing returns `state` itself, so an idle
+    // tick never triggers a broadcast.
     const turnId = currentTurnId(state);
-    if (
-      state.team &&
-      turnId &&
-      (ctx.now >= state.team.turnDeadline || !isActive(ctx, turnId))
-    ) {
-      return { ...state, team: passTurn(state.team, ctx, state.turnTimeMs) };
+    const team = state.team;
+    if (!team || !turnId) return state;
+
+    const nextIndex = nextActiveIndex(team, ctx);
+    if (!isActive(ctx, turnId)) {
+      // Nobody else to hand to: hold the turn quietly until someone is back
+      // or the round deadline closes the board.
+      if (nextIndex == null) return state;
+      if (team.absentSince == null) {
+        return { ...state, team: { ...team, absentSince: ctx.now } };
+      }
+      if (ctx.now - team.absentSince < TURN_GRACE_MS) return state;
+      return { ...state, team: handTurn(team, nextIndex, ctx, state.turnTimeMs) };
     }
 
+    if (ctx.now >= team.turnDeadline) {
+      // Alone on the team: the same guesser gets a fresh timer.
+      return {
+        ...state,
+        team: handTurn(team, nextIndex ?? team.turnIndex, ctx, state.turnTimeMs),
+      };
+    }
+    if (team.absentSince != null) {
+      return { ...state, team: { ...team, absentSince: null } };
+    }
     return state;
   },
 
@@ -750,8 +792,7 @@ export const wordleModule: GameModule<WordleState> = {
       .sort((a, b) => b.score - a.score);
 
     const turnId = currentTurnId(state);
-    const nextUp = team && turnId ? passTurn(team, ctx, 0) : null;
-    const nextUpId = nextUp ? nextUp.turnOrder[nextUp.turnIndex] ?? null : null;
+    const nextUpId = upNextId(state, ctx);
     // Team boards are public: teammates share them, the setter already knows
     // the word, and nobody is racing anyone, so there is nothing to hide.
     const teamView = team
@@ -773,7 +814,7 @@ export const wordleModule: GameModule<WordleState> = {
           })),
           currentTurnId: turnId,
           currentTurnName: nameOf(turnId),
-          nextTurnId: nextUpId && nextUpId !== turnId ? nextUpId : null,
+          nextTurnId: nextUpId,
           turnDeadline: turnId ? team.turnDeadline : null,
         }
       : null;
@@ -826,11 +867,7 @@ export const wordleModule: GameModule<WordleState> = {
       : state.players[playerId] ?? null;
     const turnId = currentTurnId(state);
     const isMyTurn = onTeam && (state.mode === "huddle" || turnId === playerId);
-    const nextUp = team && turnId ? passTurn(team, ctx, 0) : null;
-    const isUpNext =
-      Boolean(nextUp) &&
-      turnId !== playerId &&
-      nextUp?.turnOrder[nextUp.turnIndex] === playerId;
+    const isUpNext = upNextId(state, ctx) === playerId;
 
     return {
       currentRound: state.currentRound,
@@ -850,13 +887,28 @@ export const wordleModule: GameModule<WordleState> = {
       // The setter already knows the word, so their private view carries every
       // contestant's live board (letters included) to spectate while waiting.
       // Contestants never receive each other's boards; letters would leak.
-      boards: isSetter && !team
-        ? Object.entries(state.players).map(([contestantId, contestant]) => ({
-            playerId: contestantId,
-            guesses: contestant.guesses,
-            outcome: contestant.outcome,
-          }))
-        : null,
+      boards: !isSetter
+        ? null
+        : team
+          ? // Clients that predate team modes only show the setter `boards`, so
+            // mirror the shared board as one entry, labelled with whoever is up
+            // (or made the latest guess).
+            [
+              {
+                playerId:
+                  turnId ??
+                  team.guesses[team.guesses.length - 1]?.by ??
+                  team.turnOrder[0] ??
+                  "team",
+                guesses: team.guesses.map(({ word, feedback, at }) => ({ word, feedback, at })),
+                outcome: team.outcome,
+              },
+            ]
+          : Object.entries(state.players).map(([contestantId, contestant]) => ({
+              playerId: contestantId,
+              guesses: contestant.guesses,
+              outcome: contestant.outcome,
+            })),
     };
   },
 

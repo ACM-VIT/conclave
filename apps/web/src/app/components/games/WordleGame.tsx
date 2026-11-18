@@ -290,9 +290,11 @@ function TeamBanner({
   turnRemainingMs,
   canPass,
   busy,
+  readOnly,
   onPass,
 }: {
   mode: WordleMode;
+  readOnly: boolean;
   team: WordleTeam;
   me: WordleMe;
   turnRemainingMs: number;
@@ -315,9 +317,16 @@ function TeamBanner({
   if (me.isSetter) {
     return (
       <div style={{ ...pill, justifyContent: "center" }}>
-        <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: WORDLE_GREEN }} />
         <span style={{ fontSize: 13, color: color.text }}>You set the word</span>
         <span style={{ fontSize: 13, color: color.textMuted }}>· watching the team</span>
+      </div>
+    );
+  }
+
+  if (mode === "huddle" && (!me.canGuess || readOnly)) {
+    return (
+      <div style={{ ...pill, justifyContent: "center" }}>
+        <span style={{ fontSize: 13, color: color.text }}>Watching the team</span>
       </div>
     );
   }
@@ -373,7 +382,6 @@ function TeamBanner({
 
   return (
     <div style={{ ...pill, flexWrap: "wrap" }}>
-      <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: WORDLE_GREEN }} />
       <span style={{ fontSize: 13, color: color.text, minWidth: 0 }}>
         {team.currentTurnName ?? "A teammate"} is guessing
       </span>
@@ -535,6 +543,7 @@ export default function WordleGame({
   const prevGuessCountRef = useRef(boardGuesses.length);
   const animateRow = useRef(-1);
   const guessInputRef = useRef<HTMLInputElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   const [lastRoundKey, setLastRoundKey] = useState(pub.currentRound);
   if (lastRoundKey !== pub.currentRound) {
@@ -560,8 +569,18 @@ export default function WordleGame({
 
   const myTurnNow = isTeamMode && pub.phase === "playing" && me.canGuess && Boolean(me.isMyTurn);
   useEffect(() => {
-    if (myTurnNow && !readOnly) guessInputRef.current?.focus();
+    if (!myTurnNow || readOnly) return;
+    const active = document.activeElement;
+    const focusIsFree =
+      !active || active === document.body || Boolean(rootRef.current?.contains(active));
+    if (focusIsFree) guessInputRef.current?.focus();
   }, [myTurnNow, readOnly]);
+
+  const [wasMyTurn, setWasMyTurn] = useState(myTurnNow);
+  if (wasMyTurn !== myTurnNow) {
+    setWasMyTurn(myTurnNow);
+    if (!myTurnNow) setGuessDraft("");
+  }
   const wordLengthLabel = `${pub.wordLength}-letter`;
 
   const runMove = async (typedMove: WordleMove) => {
@@ -719,11 +738,17 @@ export default function WordleGame({
         ) : null}
         <p style={{ fontFamily: HEAD_FONT, fontSize: 18, color: color.text, margin: "0 0 4px", textAlign: "center" }}>
           {teamView
-            ? teamOutcomeTitle(teamView.outcome)
+            ? pub.isFinalRound && multiRound
+              ? "Game over"
+              : teamOutcomeTitle(teamView.outcome)
             : pub.isFinalRound ? (multiRound ? "Game over" : pub.result.winnerName ? "Round complete" : "No winner") : pub.result.winnerName ? "Round complete" : "No winner"}
         </p>
         {teamView ? (
-          teamView.outcome === "win" ? (
+          pub.isFinalRound && multiRound && teamView.outcome !== "win" ? (
+            <p style={{ fontSize: 13, color: color.textMuted, textAlign: "center", margin: "0 0 6px" }}>
+              Last round: {teamOutcomeTitle(teamView.outcome).toLowerCase()}
+            </p>
+          ) : teamView.outcome === "win" ? (
             <p style={{ fontSize: 13, color: wordleAccent, textAlign: "center", margin: "0 0 6px" }}>
               Solved in {teamView.guesses.length}/{pub.maxTries}
               {teamView.solvedByName ? ` · ${teamView.solvedByName} landed the final guess` : ""}
@@ -854,7 +879,7 @@ export default function WordleGame({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div ref={rootRef} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <style>{FLIP_STYLE}</style>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -952,7 +977,6 @@ export default function WordleGame({
               border: `1px solid ${color.border}`,
             }}
           >
-            <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: wordleAccent }} />
             <span style={{ fontSize: 13, color: color.text }}>
               {pub.setterName ?? "Someone"} is picking a word
             </span>
@@ -969,8 +993,16 @@ export default function WordleGame({
                 team={teamView}
                 me={me}
                 turnRemainingMs={turnRemainingMs}
-                canPass={mode === "relay" && myTurnNow && !readOnly && teamView.members.length > 1}
+                canPass={
+                  mode === "relay" &&
+                  myTurnNow &&
+                  !readOnly &&
+                  teamView.members.some(
+                    (member) => member.active && member.playerId !== teamView.currentTurnId,
+                  )
+                }
                 busy={busy}
+                readOnly={readOnly}
                 onPass={() => {
                   setGuessDraft("");
                   void runMove({ type: "passTurn" });
@@ -1128,7 +1160,6 @@ export default function WordleGame({
               border: `1px solid ${color.border}`,
             }}
           >
-            <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: wordleAccent }} />
             <span style={{ fontSize: 13, color: color.text }}>You set the word</span>
             <span style={{ fontSize: 13, color: color.textMuted }}>· watching players guess</span>
           </div>
