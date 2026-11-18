@@ -326,7 +326,6 @@ function TeamBanner({
   if (me.isSetter) {
     return (
       <div style={{ ...pill, justifyContent: "center" }}>
-        <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: WORDLE_GREEN }} />
         <span style={{ fontSize: 13, color: color.text }}>You set the word</span>
         <span style={{ fontSize: 13, color: color.textMuted }}>· watching the team</span>
       </div>
@@ -336,7 +335,6 @@ function TeamBanner({
   if (mode === "huddle" && (!me.canGuess || readOnly)) {
     return (
       <div style={{ ...pill, justifyContent: "center" }}>
-        <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: WORDLE_GREEN }} />
         <span style={{ fontSize: 13, color: color.text }}>Watching the team</span>
       </div>
     );
@@ -393,7 +391,6 @@ function TeamBanner({
 
   return (
     <div style={{ ...pill, flexWrap: "wrap" }}>
-      <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: WORDLE_GREEN }} />
       <span style={{ fontSize: 13, color: color.text, minWidth: 0 }}>
         {team.currentTurnName ?? "A teammate"} is guessing
       </span>
@@ -1005,7 +1002,6 @@ export default function WordleGame({
               border: `1px solid ${color.border}`,
             }}
           >
-            <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: wordleAccent }} />
             <span style={{ fontSize: 13, color: color.text }}>
               {pub.setterName ?? "Someone"} is picking a word
             </span>
@@ -1191,7 +1187,6 @@ export default function WordleGame({
               border: `1px solid ${color.border}`,
             }}
           >
-            <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: wordleAccent }} />
             <span style={{ fontSize: 13, color: color.text }}>You set the word</span>
             <span style={{ fontSize: 13, color: color.textMuted }}>· watching players guess</span>
           </div>
