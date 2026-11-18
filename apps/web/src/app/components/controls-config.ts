@@ -1,3 +1,4 @@
+import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import {
   AudioLines,
   Blocks,
@@ -158,7 +159,7 @@ export interface ControlDescriptor {
   id: string;
   icon: LucideIcon;
   label: string;
-  hotkey?: string;
+  hotkey?: RegisterableHotkey;
   showTooltipWithoutHotkey?: boolean;
   variant: ControlButtonVariant;
   badge?: number;
@@ -171,7 +172,7 @@ export interface OverflowRow {
   id: string;
   icon: LucideIcon;
   label: string;
-  hotkey?: string;
+  hotkey?: RegisterableHotkey;
   active?: boolean;
   badge?: number;
   disabled?: boolean;

@@ -33,11 +33,15 @@ const server = createServer((request, response) => {
     if (url.searchParams.has("control")) {
       // Restore upstream initialization only for the negative control. All
       // reporting requests are intercepted below before they leave Chrome.
-      const logger = bundle.endsWith(".js") ? "Bh" : "Uh";
-      source = source.replace(
+      // Minified names are from @mediapipe/tasks-vision 1.2.3; update them
+      // with the patch when MediaPipe is upgraded.
+      const logger = bundle.endsWith(".js") ? "Oh" : "Nh";
+      const restored = source.replace(
         disabledLogger,
-        `function(t,e){e=e.runningMode??"";var r=t.h.Ta();t.o=new ${logger}(t.D(),e,r)}(t,n)`,
+        `function(t,e){e=e.runningMode??"";var r=t.h.Sa();t.o=new ${logger}(t.D(),e,r)}(t,n)`,
       );
+      assert.notEqual(restored, source, `${bundle}: patched logger line not found`);
+      source = restored;
     }
     response.setHeader("Content-Type", "application/javascript");
     response.end(source);

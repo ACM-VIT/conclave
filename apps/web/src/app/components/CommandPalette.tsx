@@ -11,7 +11,6 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { formatForDisplay, useHotkey } from "@tanstack/react-hotkeys";
-import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { color } from "@conclave/ui-tokens";
 import { HOTKEYS } from "../lib/hotkeys";
 import { requestShortcutsHelp } from "./ShortcutsHelpDialog";
@@ -64,7 +63,7 @@ export default function CommandPalette({
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const { audioInput, audioOutput, videoInput } = useEnumeratedDevices(open);
 
-  useHotkey(HOTKEYS.commandPalette.keys as RegisterableHotkey, () =>
+  useHotkey(HOTKEYS.commandPalette.keys, () =>
     setOpen((v) => !v),
   );
 

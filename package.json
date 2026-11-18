@@ -45,10 +45,10 @@
     "test:native-tokens": "node --test packages/ui-tokens/scripts/gen-native-tokens.test.mjs"
   },
   "devDependencies": {
-    "eslint": "^10.12.0",
-    "konsistent": "1.0.0-beta.12",
+    "eslint": "^10.15.0",
+    "konsistent": "1.0.0-beta.13",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "typescript-eslint": "^8.71.2"
+    "typescript-eslint": "^8.73.0"
   },
   "engines": {
     "node": ">=22.22.0"

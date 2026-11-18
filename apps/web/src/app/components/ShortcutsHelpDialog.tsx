@@ -3,7 +3,6 @@
 import { Keyboard } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { formatForDisplay, useHotkey } from "@tanstack/react-hotkeys";
-import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import { color } from "@conclave/ui-tokens";
 import { HOTKEYS, getDisplayableHotkeys } from "../lib/hotkeys";
 import {
@@ -21,7 +20,7 @@ export default function ShortcutsHelpDialog() {
   const [open, setOpen] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  useHotkey(HOTKEYS.shortcutsHelp.keys as RegisterableHotkey, () =>
+  useHotkey(HOTKEYS.shortcutsHelp.keys, () =>
     setOpen((v) => !v),
   );
 

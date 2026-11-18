@@ -22,26 +22,26 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@conclave/ai": "workspace:*",
     "@conclave/shared-browser": "workspace:*",
     "@conclave/ui-tokens": "workspace:*",
     "@socket.io/redis-adapter": "^8.3.0",
     "chess.js": "^1.4.0",
     "cors": "^2.8.6",
-    "dotenv": "^18.0.8",
+    "dotenv": "^18.0.10",
     "express": "^5.3.0",
     "jsonwebtoken": "^9.0.3",
-    "mediasoup": "^3.29.0",
-    "openai": "^7.33.0",
+    "mediasoup": "^3.32.2",
+    "openai": "^7.57.0",
     "opusscript": "0.1.1",
-    "posthog-node": "^5.56.1",
+    "posthog-node": "^5.74.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-email": "^6.11.1",
-    "redis": "^6.3.0",
+    "react-email": "^6.11.14",
+    "redis": "^6.3.1",
     "socket.io": "^4.8.4",
     "y-protocols": "^1.0.7",
-    "yjs": "13.6.33",
-    "@conclave/ai": "workspace:*"
+    "yjs": "13.6.33"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -50,9 +50,9 @@
     "@types/node": "^22.20.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "tsx": "^4.23.15",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "vitest": "^5.0.4",
-    "@typescript/native": "npm:typescript@^7.0.2"
+    "vitest": "^5.1.0"
   }
 }

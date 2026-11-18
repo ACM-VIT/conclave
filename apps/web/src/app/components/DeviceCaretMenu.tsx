@@ -1,5 +1,6 @@
 "use client";
 
+import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import {
   AudioLines,
   Check,
@@ -284,7 +285,7 @@ export interface MediaControlClusterProps {
   label: string;
   onPress?: () => void;
   badge?: number;
-  hotkey?: string;
+  hotkey?: RegisterableHotkey;
   disabled?: boolean;
   loading?: boolean;
   selectedAudioInputDeviceId?: string;
