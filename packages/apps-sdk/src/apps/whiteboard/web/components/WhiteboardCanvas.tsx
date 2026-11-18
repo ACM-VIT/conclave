@@ -72,6 +72,9 @@ const ERASER_HIT_RADIUS = 12;
 const LASER_TTL_MS = 1000;
 const LASER_MAX_POINTS = 48;
 const LASER_GAP_RESET_MS = 300;
+// While the laser is held still, re-stamp its head this often so the dot
+// stays visible (and synced) instead of fading out under the pointer.
+const LASER_HOLD_REFRESH_MS = 250;
 
 type LaserPoint = { x: number; y: number; t: number };
 type LaserTrail = { points: LaserPoint[]; color: string };
@@ -423,6 +426,9 @@ export function WhiteboardCanvas({
   const laserTrailsRef = useRef<Map<number | "self", LaserTrail>>(new Map());
   const laserFrameRef = useRef<number | null>(null);
   const laserSyncRafRef = useRef<number | null>(null);
+  // The pointer currently holding the laser down; the laser shows only then.
+  const laserPointerIdRef = useRef<number | null>(null);
+  const syncOwnLaserRef = useRef<() => void>(() => {});
   const eraserRingRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef(viewport);
 
@@ -438,6 +444,17 @@ export function WhiteboardCanvas({
 
     const now = Date.now();
     const trails = laserTrailsRef.current;
+    const ownTrail = trails.get("self");
+    if (laserPointerIdRef.current !== null && ownTrail) {
+      const head = ownTrail.points[ownTrail.points.length - 1];
+      if (head && now - head.t >= LASER_HOLD_REFRESH_MS) {
+        ownTrail.points.push({ x: head.x, y: head.y, t: now });
+        if (ownTrail.points.length > LASER_MAX_POINTS) {
+          ownTrail.points.splice(0, ownTrail.points.length - LASER_MAX_POINTS);
+        }
+        syncOwnLaserRef.current();
+      }
+    }
     for (const [key, trail] of trails) {
       trail.points = trail.points.filter((point) => now - point.t < LASER_TTL_MS);
       if (trail.points.length === 0) {
@@ -523,6 +540,22 @@ export function WhiteboardCanvas({
     });
   }, [awareness]);
 
+  useEffect(() => {
+    syncOwnLaserRef.current = syncOwnLaser;
+  }, [syncOwnLaser]);
+
+  const endOwnLaser = useCallback(() => {
+    laserPointerIdRef.current = null;
+    if (laserSyncRafRef.current !== null) {
+      cancelAnimationFrame(laserSyncRafRef.current);
+      laserSyncRafRef.current = null;
+    }
+    if (laserTrailsRef.current.delete("self")) {
+      awareness.setLocalStateField("laser", null);
+      kickLaserLoop();
+    }
+  }, [awareness, kickLaserLoop]);
+
   const appendOwnLaserPoint = useCallback(
     (point: { x: number; y: number }) => {
       const now = Date.now();
@@ -558,7 +591,10 @@ export function WhiteboardCanvas({
         if (clientId === awareness.clientID) return;
         const record = state as { laser?: unknown; user?: { color?: string } } | null;
         const points = parseLaserField(record?.laser, receivedAt);
-        if (!points) return;
+        if (!points) {
+          if (laserTrailsRef.current.delete(clientId)) changed = true;
+          return;
+        }
         laserTrailsRef.current.set(clientId, {
           points,
           color: record?.user?.color ?? "#a1a1aa",
@@ -640,6 +676,10 @@ export function WhiteboardCanvas({
     engineRef.current.setTool(tool);
     engineRef.current.setSettings(settings);
   }, [doc, pageId, tool, settings]);
+
+  useEffect(() => {
+    if (tool !== "laser") endOwnLaser();
+  }, [endOwnLaser, tool]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -1067,6 +1107,9 @@ export function WhiteboardCanvas({
       const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
       const point = { x: canvasPoint.x, y: canvasPoint.y, pressure: event.pressure };
       if (tool === "laser") {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        laserTrailsRef.current.delete("self");
+        laserPointerIdRef.current = event.pointerId;
         appendOwnLaserPoint(point);
         scheduleCursorSync(point.x, point.y);
         return;
@@ -1158,7 +1201,21 @@ export function WhiteboardCanvas({
         return;
       }
       if (tool === "laser") {
-        appendOwnLaserPoint(point);
+        if (laserPointerIdRef.current === event.pointerId) {
+          // Pointer capture keeps delivering moves after the pointer leaves the
+          // canvas, and suppresses pointerleave, so end the laser here.
+          const rect = event.currentTarget.getBoundingClientRect();
+          const outside =
+            event.clientX < rect.left ||
+            event.clientX > rect.right ||
+            event.clientY < rect.top ||
+            event.clientY > rect.bottom;
+          if (outside) {
+            endOwnLaser();
+          } else {
+            appendOwnLaserPoint(point);
+          }
+        }
         scheduleCursorSync(point.x, point.y);
         return;
       }
@@ -1215,6 +1272,7 @@ export function WhiteboardCanvas({
     [
       appendOwnLaserPoint,
       doc,
+      endOwnLaser,
       locked,
       moveEraserRing,
       onPanMove,
@@ -1236,6 +1294,7 @@ export function WhiteboardCanvas({
       return;
     }
     if (tool === "laser") {
+      endOwnLaser();
       return;
     }
     const rotateSession = rotateSessionRef.current;
@@ -1258,7 +1317,7 @@ export function WhiteboardCanvas({
       setSelectedId(engineRef.current?.getSelectedId() ?? null);
     }
     clearCursor();
-  }, [locked, clearCursor, flushPendingMove, onPanEnd, tool]);
+  }, [locked, clearCursor, endOwnLaser, flushPendingMove, onPanEnd, tool]);
 
   const handlePointerLeave = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1269,12 +1328,13 @@ export function WhiteboardCanvas({
         return;
       }
       if (tool === "laser") {
+        endOwnLaser();
         clearCursor();
         return;
       }
       handlePointerUp(event);
     },
-    [clearCursor, handlePointerUp, hideEraserRing, tool, onPanEnd]
+    [clearCursor, endOwnLaser, handlePointerUp, hideEraserRing, tool, onPanEnd]
   );
 
   const handleWheel = useCallback(
@@ -1476,6 +1536,7 @@ export function WhiteboardCanvas({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerLeave={handlePointerLeave}
+        onPointerCancel={handlePointerLeave}
         onWheel={handleWheel}
         onDoubleClick={handleDoubleClick}
       />

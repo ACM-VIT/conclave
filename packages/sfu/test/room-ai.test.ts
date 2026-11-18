@@ -8,6 +8,7 @@ import { RoomAiCredentials } from "../server/roomAiCredentials.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { createSfuState } from "../server/state.js";
 import { registerRoomAiHandlers } from "../server/socket/handlers/roomAiHandlers.js";
+import { registerChatHandlers } from "../server/socket/handlers/chatHandlers.js";
 import type { ConnectionContext } from "../server/socket/context.js";
 import { createChatImageUploadToken } from "../server/chatImages.js";
 import type { ModerateChatImageOptions } from "../server/chatImageModeration.js";
@@ -580,6 +581,61 @@ describe("server-only room credential access", () => {
     });
     expect((await upload()).status).toBe(422);
     expect(room.addChatImageAsset).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts images without a safety check when no safety model is configured or it is disabled", async () => {
+    const { room, member, url, moderateImage } = await start();
+    const upload = () =>
+      fetch(`${url}/chat-images`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${createChatImageUploadToken("server-secret", room.channelId, member.id)}`,
+          "content-type": "image/png",
+        },
+        body: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]),
+      });
+
+    const unconfigured = await upload();
+    expect(unconfigured.status).toBe(201);
+    const body = (await unconfigured.json()) as { image?: { mimeType?: string } };
+    expect(body.image).toMatchObject({ mimeType: "image/png" });
+
+    room.aiCredentials.set("openai", "sk-image-safety", member.id, false);
+    room.aiCredentials.configureFeature("images", { enabled: false }, "host", true);
+    expect((await upload()).status).toBe(201);
+
+    expect(moderateImage).not.toHaveBeenCalled();
+    expect(room.addChatImageAsset).toHaveBeenCalledTimes(2);
+  });
+
+  it("authorizes image uploads without requiring a safety model key", () => {
+    const { room, member } = fixture();
+    const socket = { id: "socket", on: vi.fn(), handshake: { headers: { host: "sfu.test" } }, secure: false };
+    registerChatHandlers({ socket, currentRoom: room, currentClient: member, io: { to: () => ({ emit: vi.fn() }) } } as unknown as ConnectionContext);
+    const handlers = Object.fromEntries(socket.on.mock.calls) as Record<string, (...args: unknown[]) => void>;
+    const callback = vi.fn();
+    handlers["chat:imageUploadAuthorize"]({}, callback);
+    expect(room.aiCredentials.get("openai")).toBeFalsy();
+    const response = callback.mock.calls[0][0] as { token?: unknown; uploadUrl?: unknown; error?: unknown };
+    expect(response.error).toBeUndefined();
+    expect(typeof response.token).toBe("string");
+    expect(response.uploadUrl).toBe("http://sfu.test/chat-images");
+  });
+
+  it("still rejects uploads when a configured safety check fails", async () => {
+    const { room, member, url, moderateImage } = await start();
+    room.aiCredentials.set("openai", "sk-image-safety", member.id, false);
+    moderateImage.mockRejectedValueOnce(new Error("provider down"));
+    const response = await fetch(`${url}/chat-images`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${createChatImageUploadToken("server-secret", room.channelId, member.id)}`,
+        "content-type": "image/png",
+      },
+      body: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]),
+    });
+    expect(response.status).toBe(503);
+    expect(room.addChatImageAsset).not.toHaveBeenCalled();
   });
 
   it("aborts abandoned image safety checks without storing an orphan attachment", async () => {
