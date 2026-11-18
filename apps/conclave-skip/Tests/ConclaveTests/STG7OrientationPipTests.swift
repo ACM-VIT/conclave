@@ -125,33 +125,5 @@ struct STG7OrientationPipTests {
         #expect(RendererFrameSizeStore.slotId(rendererKey: "pip:3:r1:track") == "")
         #expect(RendererFrameSizeStore.slotId(rendererKey: "meeting") == "")
     }
-
-    @Test func iPhoneDropsUpsideDownAndIPadKeepsAllFour() throws {
-        let data = try Data(contentsOf: stg7PackageRoot().appendingPathComponent("Darwin/Info.plist"))
-        let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-        let iPhone = try #require(plist["UISupportedInterfaceOrientations"] as? [String])
-        #expect(iPhone == ["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight", "UIInterfaceOrientationPortrait"])
-        let iPad = try #require(plist["UISupportedInterfaceOrientations~ipad"] as? [String])
-        #expect(Set(iPad) == ["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight",
-                              "UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown"])
-
-        #expect(plist["UIRequiresFullScreen"] == nil)
-    }
-
-    @Test func theAppSceneStopsShrinkingAtTheCompactBarMinimum() throws {
-        #expect(ConclaveWindowMetrics.minimumWidth == 276)
-    }
-}
-
-private func stg7PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func stg7Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: stg7PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func stg7Normalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
 #endif

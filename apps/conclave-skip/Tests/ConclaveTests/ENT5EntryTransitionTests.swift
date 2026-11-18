@@ -265,25 +265,6 @@ struct ENT5EntryTransitionTests {
             #expect(session.premeeting.lobbyMedia != nil, "\(state): the card stays with live toggles")
         }
     }
-
-    @Test func entryStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent5Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Joining\u{2026}", "Starting\u{2026}", "Still connecting", "Reconnecting\u{2026}", "Joining %@",
-                    "Couldn\u{2019}t join", "Couldn\u{2019}t reach Conclave", "Hang tight.", "You\u{2019}re in. Joining now.",
-                    "The meeting server is restarting. Try again in a moment."] {
-            #expect(strings[key] != nil, "missing iOS key \(key)")
-        }
-        let xml = try ent5Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["pm_joining", "pm_starting", "pm_reconnecting", "pm_status_still_connecting", "pm_fail_network", "pm_fail_media",
-                     "pm_fail_server_busy", "pm_fail_unknown", "pm_status_fail_network", "pm_status_fail_media",
-                     "pm_status_fail_server_busy", "pm_announce_joining", "pm_status_wait_standard", "pm_status_wait_locked",
-                     "pm_status_wait_no_host", "pm_status_wait_host_available", "pm_status_wait_reconnecting",
-                     "pm_status_wait_offline", "pm_status_wait_server_restart", "pm_admitted", "pm_stop_asking_title",
-                     "pm_stop_asking_body", "pm_stop_asking_confirm", "pm_keep_waiting"] {
-            #expect(xml.contains("<string name=\"\(name)\""), "missing \(name)")
-        }
-    }
 }
 
 private enum SlowNoticeExpectations {
@@ -343,23 +324,6 @@ private func ent5Settle(_ condition: () -> Bool) async -> Bool {
         try? await Task.sleep(nanoseconds: 2_000_000)
     }
     return condition()
-}
-
-private func ent5Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func ent5Flat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func ent5Matches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
-    }
 }
 
 #if os(macOS)

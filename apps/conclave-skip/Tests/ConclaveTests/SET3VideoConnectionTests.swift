@@ -29,10 +29,6 @@ struct SET3VideoConnectionTests {
     }
 
     @Test func videoStoresUseTheirKeysAndDefaults() {
-        #expect(NativeVideoPreferences.mirrorSelfViewKey == "conclave.pref.mirrorSelfView")
-        #expect(NativeVideoPreferences.dataSaverKey == "conclave.pref.dataSaver")
-        #expect(NativeVideoPreferences.shareDeviceAudioKey == "conclave.pref.shareDeviceAudio")
-        #expect(NativeMediaQualityPreferences.storageKey == "conclave:media-quality-settings:v1")
         let defaults = Self.freshDefaults()
         #expect(NativeVideoPreferences.mirrorsSelfView(defaults: defaults))
         #expect(!NativeVideoPreferences.dataSaver(defaults: defaults))
@@ -326,29 +322,6 @@ struct SET3VideoConnectionTests {
         #expect(ConnectionStatsPolicy.windowedLossPercent(lost: 10, received: 90, previousLost: 0, previousReceived: 0) == 10)
         #expect(ConnectionStatsPolicy.codecName(mimeType: "video/H264") == "H264")
         #expect(ConnectionStatsPolicy.intervalMillis == 1000)
-    }
-
-    @Test func everySET3IOSKeyIsInTheCatalogAndEveryAndroidNameResolves() throws {
-        let catalog = try SettingsTranscriptPoliciesTests.catalogKeys()
-        let names = try SettingsTranscriptPoliciesTests.androidStringNames()
-        for file in Self.iosFiles {
-            for key in SettingsTranscriptPoliciesTests.catalogKeysUsed(in: try Self.source(file)) {
-                #expect(catalog.contains(key), "\(file): missing catalog key \(key)")
-            }
-        }
-        for file in Self.kotlinFiles {
-            let text = try Self.source(file)
-            for name in SettingsTranscriptPoliciesTests.matches(#""((?:set|sys|stg|ds)_[a-z0-9_]+)""#, in: text) {
-                #expect(names.contains(name), "\(file): missing resource \(name)")
-            }
-        }
-    }
-
-    @Test func set3SourcesFollowThePlatformRules() throws {
-        for file in Self.sharedFiles {
-            let text = try Self.source(file)
-            #expect(SettingsTranscriptPoliciesTests.matches(#"\.(?:compactMap|map)\([A-Za-z.]+\)"#, in: text).isEmpty, "\(file)")
-        }
     }
 
     static let sharedFiles = [

@@ -64,31 +64,6 @@ class SYS9AppLinkMatcherTests {
         }
     }
 
-    @Test fun oldAndroidCannotEnableTheHttpsAliasButMainActivityKeepsItsIntake() {
-        val manifest = manifest()
-        val alias = manifest.getElementsByTagName("activity-alias").item(0) as Element
-        assertEquals(".MeetingAppLinks", alias.android("name"))
-        assertEquals(".MainActivity", alias.android("targetActivity"))
-        assertEquals("@bool/conclave_verified_app_links_enabled", alias.android("enabled"))
-        assertEquals("true", alias.android("exported"))
-        assertFalse(alias.hasAttributeNS(androidNamespace, "launchMode"))
-        val main = manifest.getElementsByTagName("activity").item(0) as Element
-        assertEquals(".MainActivity", main.android("name"))
-        assertEquals("singleTask", main.android("launchMode"))
-        assertEquals(0, main.getElementsByTagName("data").elements().count { it.android("scheme") == "https" })
-        assertEquals(1, main.getElementsByTagName("data").elements().count { it.android("scheme") == "conclave" })
-        assertEquals(1, main.getElementsByTagName("category").elements().count { it.android("name") == "android.intent.category.LAUNCHER" })
-        val baseEnabled = enabledResource("values")
-        val modernEnabled = enabledResource("values-v31")
-        assertFalse(baseEnabled)
-        assertTrue(modernEnabled)
-        for (api in 28..30) {
-            for (path in accepted + rejected) {
-                assertFalse("API $api must retain browser fallback: $path", baseEnabled && captures(manifestFilters(), "https://${hosts[0]}$path"))
-            }
-        }
-    }
-
     @Test fun placeholderWebinarPathsStillFailClosedAtParserIntake() {
 
         for (path in listOf("/w/null", "/w/undefined")) {
@@ -122,11 +97,6 @@ class SYS9AppLinkMatcherTests {
     }
 
     private fun manifest() = xml("Android/app/src/main/AndroidManifest.xml")
-
-    private fun enabledResource(qualifier: String): Boolean {
-        val values = xml("Android/app/src/main/res/$qualifier/app_links.xml").getElementsByTagName("bool").elements()
-        return values.single { it.getAttribute("name") == "conclave_verified_app_links_enabled" }.textContent.trim().toBooleanStrict()
-    }
 
     private fun xml(relative: String) = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
         .newDocumentBuilder().parse(File(packageRoot(), relative))

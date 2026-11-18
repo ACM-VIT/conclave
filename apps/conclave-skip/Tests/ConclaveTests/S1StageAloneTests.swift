@@ -5,9 +5,6 @@ import Testing
 
 @MainActor
 struct S1StageAloneTests {
-    static let iosFile = "Sources/Conclave/Features/Meeting/Stage/StageAloneIdentity+iOS.swift"
-    static let androidFile = "Sources/Conclave/Skip/ui/call/stage/StageAloneIdentity.kt"
-
     private func presenter(_ inputs: StageInputs, viewport: StageViewport = StagePoliciesTests.iphone17e) -> StagePresenter {
         let stage = StagePresenter(shell: MeetingShellPresenter())
         stage.setViewport(viewport)

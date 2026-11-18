@@ -401,31 +401,4 @@ private final class SnapshotCallbackCounter {
     var count = 0
     var panel: MeetingPanel? = nil
 }
-
-private func pnl1PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func pnl1Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: pnl1PackageRoot().appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func pnl1Code(_ text: String) -> String {
-    text.replacingOccurrences(of: #"//[^\n]*"#, with: "", options: .regularExpression)
-}
-
-private func pnl1Normalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func pnl1Matches(_ pattern: String, in text: String) -> [[String]] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [["invalid pattern"]] }
-    let ns = text as NSString
-    return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { match in
-        (1..<max(match.numberOfRanges, 1)).map { index in
-            let range = match.range(at: index)
-            return range.location == NSNotFound ? "" : ns.substring(with: range)
-        }
-    }
-}
 #endif

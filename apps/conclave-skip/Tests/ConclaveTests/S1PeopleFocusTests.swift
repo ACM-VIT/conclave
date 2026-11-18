@@ -223,22 +223,4 @@ struct S1PeopleFocusTests {
                 "a Waiting section that arrives later never pulls the list on iOS")
     }
 }
-
-private func s1pfRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func s1pfSource(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: s1pfRoot().appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func s1pfFlat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func s1pfSlice(_ text: String, from start: String, to end: String) throws -> String {
-    let lower = try #require(text.range(of: start))
-    let upper = try #require(text.range(of: end, range: lower.upperBound..<text.endIndex))
-    return String(text[lower.lowerBound..<upper.lowerBound])
-}
 #endif

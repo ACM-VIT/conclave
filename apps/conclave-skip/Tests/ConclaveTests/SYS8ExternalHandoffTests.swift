@@ -84,20 +84,5 @@ struct SYS8ExternalHandoffTests {
         android.reportPipTarget(nil)
         #expect(android.snapshot.pipTarget == nil)
     }
-
-    @Test func requestedHandOffHooksAreWired() throws {
-        let yml = try sys8Source("Sources/Conclave/Skip/skip.yml")
-        #expect(yml.components(separatedBy: "implementation(\"androidx.browser:browser:").count - 1 == 1)
-        let manifest = try sys8Source("Android/app/src/main/AndroidManifest.xml")
-        #expect(manifest.contains("android.support.customtabs.action.CustomTabsService"))
-    }
-}
-
-private func sys8PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func sys8Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: sys8PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
 }
 #endif

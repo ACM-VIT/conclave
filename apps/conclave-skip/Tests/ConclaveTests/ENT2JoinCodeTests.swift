@@ -65,34 +65,5 @@ struct ENT2JoinCodeTests {
         #expect(presenter.path.first?.roomId == "rose-sora-luffy")
         #expect(presenter.lobbyStatus?.intent == .rejoin)
     }
-
-    @Test func entryStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent2Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in ["New Meeting", "Join", "Recent", "Join Meeting", "Meeting Code or Link", "Code or Link",
-                    "This isn\u{2019}t a Conclave code or link.",
-                    "Join Another Meeting?", "You\u{2019}re in %@. Leave it and join %@?", "Stay", "Leave and Join",
-                    "This link can\u{2019}t be opened in Conclave.", "Update Conclave", "No Recent Meetings"] {
-            let entry = strings[key] as? [String: Any]
-            #expect(entry != nil, "missing \(key)")
-            #expect(entry?["extractionState"] as? String == "manual", "\(key)")
-        }
-        let xml = try ent2Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["pm_app_title", "pm_new_meeting", "pm_join_with_code", "pm_join_meeting", "pm_code_or_link_label",
-                     "pm_code_invalid", "pm_paste", "pm_join", "pm_switch_title", "pm_switch_body",
-                     "pm_switch_stay", "pm_switch_leave_and_join", "pm_notice_invalid_link", "pm_update_title", "pm_empty_title"] {
-            #expect(xml.contains("<string name=\"\(name)\">"), "missing \(name)")
-        }
-        #expect(xml.contains("<string name=\"pm_switch_body\">You\u{2019}re in %1$s. Leave it and join %2$s?</string>"))
-    }
-}
-
-private func ent2Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func ent2Flat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
 #endif

@@ -377,16 +377,4 @@ struct CTL2LeaveEndTests {
     }
 
 }
-
-private func ctl2PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func ctl2Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: ctl2PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func ctl2Normalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
 #endif

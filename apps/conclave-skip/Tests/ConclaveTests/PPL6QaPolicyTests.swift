@@ -247,9 +247,4 @@ struct PPL6QaPolicyTests {
         #expect(QaComposerPolicy.showsQuestionCounter(450) && !QaComposerPolicy.showsQuestionCounter(449))
     }
 }
-
-private func ppl6Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
 #endif

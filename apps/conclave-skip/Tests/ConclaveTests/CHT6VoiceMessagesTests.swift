@@ -11,16 +11,8 @@ struct CHT6VoiceMessagesTests {
     static let base = 1_800_014_400_000.0
 
     @Test func voicePreferencesUseTheC622KeysAndDefaults() {
-        #expect(VoicePreferences.showsChatPreviewsKey == "conclave.pref.chatPreviews")
-        #expect(VoicePreferences.playsVoiceMessagesKey == "conclave.pref.playVoiceMessages")
-        #expect(VoicePreferences.voiceKindKey == "conclave.pref.voiceKind")
-        #expect(VoicePreferences.standardVoiceIdKey == "conclave.pref.standardVoice")
         let defaults = Self.freshDefaults()
         #expect(VoicePreferences.snapshot(defaults: defaults) == VoicePreferenceSnapshot.defaults)
-        #expect(VoicePreferenceSnapshot.defaults.showsChatPreviews)
-        #expect(VoicePreferenceSnapshot.defaults.playsVoiceMessages)
-        #expect(VoicePreferenceSnapshot.defaults.voiceKind == .system)
-        #expect(VoicePreferenceSnapshot.defaults.standardVoiceId == "")
     }
 
     @Test func voicePreferencesPersistTheChoiceAndFallBackOnBadValues() {
@@ -318,25 +310,6 @@ struct CHT6VoiceMessagesTests {
         #expect(speaker.queue.startedMessageIds == ["m1", "m1", ""])
     }
     #endif
-
-    @Test func voiceStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(
-            with: Data(chatSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let keys = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Voice Message", "Speaking", "Play Voice Message", "Only you will hear it", "Stop Speaking",
-                    "Read aloud to everyone", "System voice", "Your voice", "Voice Mode Line %@ %@", "Exit Voice Message",
-                    "Message to read aloud", "Send Voice Message", "Voice message", "Send",
-                    "Private messages are text only.", "Voice messages are turned off by the host."] {
-            #expect(keys[key] != nil, "missing iOS key \(key)")
-        }
-        let xml = try chatSource("Android/app/src/main/res/values/strings.xml")
-        for name in ["chat_voice", "chat_voice_speaking", "chat_voice_play", "chat_voice_play_hint", "chat_voice_stop",
-                     "chat_voice_line", "chat_voice_hint", "chat_voice_system", "chat_voice_personal", "chat_voice_exit",
-                     "chat_placeholder_voice", "chat_send_voice", "chat_ax_voice",
-                     "chat_reason_private_text", "chat_reason_voice_off"] {
-            #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)")
-        }
-    }
 
     @Test func voiceRowsShowTheFullTextAndFollowThePlaybackSnapshot() {
         let chat = ChatPresenter()

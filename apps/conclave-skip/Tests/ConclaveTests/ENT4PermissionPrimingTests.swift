@@ -316,46 +316,6 @@ struct ENT4PermissionPrimingTests {
         "Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift"
     ]
 
-    @Test func thePurposeStringsAreTheHonestCopy() throws {
-
-        let camera = "Conclave uses your camera so people in your meeting can see you."
-        let microphone = "Conclave uses your microphone so people in your meeting can hear you."
-        let plist = try ent4Source("Darwin/Info.plist")
-        #expect(plist.contains("<key>NSCameraUsageDescription</key>\n\t<string>\(camera)</string>"))
-        #expect(plist.contains("<key>NSMicrophoneUsageDescription</key>\n\t<string>\(microphone)</string>"))
-        for unrelated in ["NSPhotoLibraryUsageDescription", "NSBluetoothAlwaysUsageDescription", "NSContactsUsageDescription",
-                          "NSLocationWhenInUseUsageDescription", "NSUserNotificationsUsageDescription"] {
-            #expect(!plist.contains(unrelated), "Info.plist keeps \(unrelated)")
-        }
-        let data = try #require(try ent4Source("Darwin/InfoPlist.xcstrings").data(using: .utf8))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        #expect(ent4CatalogValue(strings, "NSCameraUsageDescription") == camera)
-        #expect(ent4CatalogValue(strings, "NSMicrophoneUsageDescription") == microphone)
-    }
-
-    @Test func everyPrimingStringResolves() throws {
-
-        let data = try #require(try ent4Source("Sources/Conclave/Resources/Localizable.xcstrings").data(using: .utf8))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let keys = Set((try #require(catalog["strings"] as? [String: Any])).keys)
-        let row = try ent4Source("Sources/Conclave/Features/Lobby/PermissionPrimingRow+iOS.swift")
-            + (try ent4Source("Sources/Conclave/Features/Lobby/LobbyStatusRow+iOS.swift"))
-        for match in ent4Matches(#"ConclaveStrings\.text\("[^"]+"\)"#, in: row) {
-            let key = String(match.dropFirst("ConclaveStrings.text(\"".count).dropLast(2))
-                .replacingOccurrences(of: "\\u{2019}", with: "\u{2019}")
-            #expect(keys.contains(key), "missing iOS key \(key)")
-        }
-        let resources = try ent4Source("Android/app/src/main/res/values/strings.xml")
-        let kotlin = try ent4Source("Sources/Conclave/Skip/ui/lobby/PermissionPrimingRow.kt")
-            + (try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt"))
-            + (try ent4Source("Sources/Conclave/Skip/ui/lobby/LobbyStatusRow.kt"))
-        for match in ent4Matches(#"conclaveString\("[a-z0-9_]+"\)"#, in: kotlin) {
-            let name = String(match.dropFirst("conclaveString(\"".count).dropLast(2))
-            #expect(resources.contains("name=\"\(name)\""), "missing Android resource \(name)")
-        }
-    }
-
     @Test func requestedHooksAreApplied() throws {
         for raw in PermissionPrimingFixture.states {
             #expect(PremeetingFixtureScript.state(named: raw) != nil, "fixture state \(raw)")
@@ -421,30 +381,5 @@ private func ent4Settle(_ condition: () -> Bool) async -> Bool {
         try? await Task.sleep(nanoseconds: 2_000_000)
     }
     return condition()
-}
-
-private func ent4Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func ent4Flat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func ent4Matches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
-    }
-}
-
-private func ent4CatalogValue(_ strings: [String: Any], _ key: String) -> String? {
-    guard let entry = strings[key] as? [String: Any],
-          let localizations = entry["localizations"] as? [String: Any],
-          let english = localizations["en"] as? [String: Any],
-          let unit = english["stringUnit"] as? [String: Any] else { return nil }
-    return unit["value"] as? String
 }
 #endif

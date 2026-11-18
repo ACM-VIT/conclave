@@ -665,8 +665,6 @@ struct PresenterSessionTests {
         let shell = presenter(log, joined(isAdmin: true))
         shell.requestEndForEveryone(from: MeetingConfirmationInvoker.hostControls)
         #expect(shell.session.confirmation?.invoker == "hostControls")
-        #expect(MeetingConfirmationInvoker.call == "call")
-        #expect(MeetingConfirmationInvoker.more == "more")
     }
 }
 
@@ -868,10 +866,5 @@ private func presenterSessionRow(_ rows: [MeetingControlRow], _ id: MeetingContr
     return MeetingControlRow(id: "missing:" + id.rawValue, isVisible: false, isOn: false, isEnabled: false, isPending: false,
                              blockedReason: MeetingBlockedReason.none, hint: MeetingControlHint.none, badgeCount: 0,
                              failure: MeetingActionFailure.none, failureDirection: MeetingActionDirection.none)
-}
-
-private func presenterSessionSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 #endif

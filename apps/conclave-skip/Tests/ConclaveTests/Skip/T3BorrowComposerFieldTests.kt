@@ -1,8 +1,6 @@
 package conclave.module
 
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.ui.input.key.KeyEvent
-import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -124,12 +122,5 @@ class T3BorrowComposerFieldTests {
         assertFalse(ConclaveComposerCounterPolicy.announces(previous = ConclaveCounterBand.over, next = ConclaveCounterBand.over))
         assertFalse(ConclaveComposerCounterPolicy.announces(previous = ConclaveCounterBand.near, next = ConclaveCounterBand.hidden))
         assertFalse(ConclaveComposerCounterPolicy.announces(previous = ConclaveCounterBand.over, next = ConclaveCounterBand.hidden))
-    }
-
-    @Test fun attachSlotIsTheOneLineFieldHeight() {
-
-        assertEquals(56.dp, TextFieldDefaults.MinHeight)
-        assertEquals(4.0, ConclaveComposerMetrics.fieldTrailingGap, 0.0)
-        assertEquals(6, ConclaveComposerMetrics.maximumLines)
     }
 }

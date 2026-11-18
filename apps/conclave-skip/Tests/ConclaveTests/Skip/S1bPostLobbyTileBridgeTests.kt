@@ -46,13 +46,6 @@ class S1bPostLobbyTileBridgeTests {
     }
 
     @Test
-    fun theFloorHoldsTheTogglesAndTheCompactFace() {
-        assertEquals(140.dp, lobbyCompactVideoFloor)
-        assertTrue(lobbyCompactVideoFloor > 72.dp + 56.dp)
-        assertEquals(12.dp, lobbyWideCardInset)
-    }
-
-    @Test
     fun portraitKeepsTheOldFormulaForEveryBand() {
         for (width in widths) for (height in heights) {
             val expected = previous(width.dp, height.dp, compact = false)

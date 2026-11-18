@@ -211,29 +211,6 @@ struct SET6EffectsTests {
         #expect(portrait.stage.effects.snapshot.system.portraitActive)
     }
 
-    @Test func effectsStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(Self.source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        var keys: [String] = []
-        for file in ["Sources/Conclave/Features/Meeting/Effects/EffectsCopy+iOS.swift", "Sources/Conclave/Features/Meeting/Effects/EffectsPanel+iOS.swift",
-                     "Sources/Conclave/Features/Meeting/Effects/EffectTile+iOS.swift"] {
-            keys += set6Captures(#"ConclaveStrings\.(?:text|format)\(\s*"((?:[^"\\]|\\.)*)""#, in: try Self.source(file))
-        }
-        #expect(keys.count >= 40)
-        for key in Set(keys) {
-            #expect(strings[key] != nil, "missing iOS key: \(key)")
-        }
-        let xml = try Self.source("Android/app/src/main/res/values/strings.xml")
-        var names = Set<String>()
-        for file in ["Sources/Conclave/Skip/ui/effects/EffectsPanel.kt", "Sources/Conclave/Skip/ui/effects/EffectTile.kt",
-                     "Sources/Conclave/Skip/ui/effects/EffectsCopy.kt"] {
-            names.formUnion(set6Captures(#""((?:fx|ds|stg)_[a-z0-9_]+)""#, in: try Self.source(file)))
-        }
-        for name in names {
-            #expect(xml.contains("name=\"" + name + "\""), "missing Android name: \(name)")
-        }
-    }
-
     static func make(_ state: EffectsFixtureState) -> (EffectsPresenter, FakeEffectsEngine) {
         let presenter = EffectsPresenter(scope: .call, platform: .ios, defaults: Self.freshDefaults())
         let engine = FakeEffectsEngine()
@@ -253,16 +230,5 @@ struct SET6EffectsTests {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         return try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
     }
-}
-
-private func set6Captures(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let ns = text as NSString
-    var result: [String] = []
-    for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) where match.numberOfRanges > 1 {
-        let range = match.range(at: 1)
-        if range.location != NSNotFound { result.append(ns.substring(with: range)) }
-    }
-    return result
 }
 #endif

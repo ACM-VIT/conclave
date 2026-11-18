@@ -304,19 +304,4 @@ struct SYS6LifecycleRecoveryTests {
     }
 
 }
-
-private func sys6PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func sys6Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: sys6PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func sys6Section(_ text: String, from: String, to: String?) -> String? {
-    guard let start = text.range(of: from) else { return nil }
-    guard let to else { return String(text[start.lowerBound...]) }
-    guard let end = text.range(of: to, range: start.upperBound..<text.endIndex) else { return nil }
-    return String(text[start.lowerBound..<end.lowerBound])
-}
 #endif

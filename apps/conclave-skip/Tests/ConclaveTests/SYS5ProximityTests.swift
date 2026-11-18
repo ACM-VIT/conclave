@@ -333,24 +333,4 @@ struct SYS5ProximityTests {
     }
 
 }
-
-private func sys5PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func sys5Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: sys5PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private struct SYS5SourceRangeMissing: Error {
-    let marker: String
-}
-
-private func sys5Body(_ source: String, from start: String, to end: String) throws -> String {
-    guard let startRange = source.range(of: start) else { throw SYS5SourceRangeMissing(marker: start) }
-    guard let endRange = source.range(of: end, range: startRange.upperBound..<source.endIndex) else {
-        throw SYS5SourceRangeMissing(marker: end)
-    }
-    return String(source[startRange.upperBound..<endRange.lowerBound])
-}
 #endif

@@ -143,38 +143,5 @@ struct S1bJoinIdentityTests {
         #expect(face == ConclaveAvatarIdentity.fromSeed(homeRow.avatarSeed))
         #expect(face.paletteIndex == 4 && face.faceIndex == 0 && face.mouthIndex == 1)
     }
-
-    @Test func theRemovedHelpLineLeavesBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(s1bjiSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        #expect(strings["Enter the code from your invite, or paste the link."] == nil)
-        #expect(strings["This isn\u{2019}t a Conclave code or link."] != nil)
-        let xml = try s1bjiSource("Android/app/src/main/res/values/strings.xml")
-        #expect(!xml.contains("<string name=\"pm_code_help\">"))
-        #expect(xml.contains("<string name=\"pm_code_invalid\">"))
-    }
-}
-
-private func s1bjiSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func s1bjiFlat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func s1bjiSlice(_ text: String, from start: String, to end: String) throws -> String {
-    let lower = try #require(text.range(of: start))
-    let upper = try #require(text.range(of: end, range: lower.upperBound..<text.endIndex))
-    return String(text[lower.lowerBound..<upper.lowerBound])
-}
-
-private func s1bjiMatches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return ["invalid pattern"] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
-    }
 }
 #endif

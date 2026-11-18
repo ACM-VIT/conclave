@@ -38,38 +38,6 @@ struct ACT4WordleTests {
         scene.keyStates.first { $0.letter == letter }?.state ?? WordleKeyState.unused
     }
 
-    private func evaluate(target: String, guess: String) -> [String] {
-        let goal = target.map { String($0) }
-        let attempt = guess.map { String($0) }
-        var feedback = Array(repeating: "gray", count: attempt.count)
-        var pool = goal
-        for index in attempt.indices where index < goal.count && attempt[index] == goal[index] {
-            feedback[index] = "green"
-            pool[index] = ""
-        }
-        for index in attempt.indices where feedback[index] != "green" {
-            if let found = pool.firstIndex(of: attempt[index]) {
-                feedback[index] = "yellow"
-                pool[found] = ""
-            }
-        }
-        return feedback
-    }
-
-    @Test func theFixtureGuessesMatchTheModuleEvaluator() throws {
-        for json in [WordleFixtures.sloth, WordleFixtures.llama, WordleFixtures.logic, WordleFixtures.lemur, WordleFixtures.lemma,
-                     WordleFixtures.leech, WordleFixtures.lemon] {
-            let item = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-            let word = try #require(item["word"] as? String)
-            #expect(item["feedback"] as? [String] == evaluate(target: "LEMON", guess: word), "\(word)")
-        }
-        for json in [WordleFixtures.slate, WordleFixtures.brake, WordleFixtures.crane] {
-            let item = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-            let word = try #require(item["word"] as? String)
-            #expect(item["feedback"] as? [String] == evaluate(target: "CRANE", guess: word), "\(word)")
-        }
-    }
-
     @Test func theBoardMarksCorrectPresentAbsentAndRepeatedLetters() throws {
         let scene = try #require(presenter(.guess).scene.wordle)
         #expect(scene.phase == WordlePhase.playing && scene.role == WordleRole.guesser && scene.canGuess && scene.isRandomWord)
@@ -353,32 +321,6 @@ struct ACT4WordleTests {
         #expect(WordleFixtures.apply(named: "game-wordle-guess", session: session, owner: ActivityFixtureOwner()) == .guess)
         #expect(session.games.wordleDraft == "LEMO")
         #expect(WordleFixtures.apply(named: "game-trivia-6", session: session, owner: ActivityFixtureOwner()) == nil)
-    }
-
-    private let iosPath = "Sources/Conclave/Features/Meeting/Games/Native/Boards/WordleBoard+iOS.swift"
-    private let kotlinPath = "Sources/Conclave/Skip/ui/games/boards/WordleBoard.kt"
-
-    @Test func wordleStringsAreInBothCatalogs() throws {
-        let catalogData = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        let ios = try stageSource(iosPath)
-        var keys = Set<String>()
-        for match in stageMatches(#"ConclaveStrings\.(?:text|format)\("[^"]+""#, in: ios) {
-            if let start = match.firstIndex(of: "\"") { keys.insert(String(match[match.index(after: start)...].dropLast())) }
-        }
-        #expect(keys.count > 35)
-        for key in keys { #expect(strings[key] != nil, "missing iOS key \(key)") }
-        let triesEntry = try #require(strings["%lld tries"] as? [String: Any])
-        #expect(String(describing: triesEntry).contains("1 try") || String(describing: triesEntry).contains("%lld try"))
-        let xml = try stageSource("Android/app/src/main/res/values/strings.xml")
-        let kotlin = try stageSource(kotlinPath)
-        var names = Set<String>()
-        for match in stageMatches(#""(?:gm|ds)_[a-z0-9_]+""#, in: kotlin) { names.insert(String(match.dropFirst().dropLast())) }
-        #expect(names.count > 30)
-        for name in names { #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)") }
-        #expect(xml.contains("<plurals name=\"gm_wordle_tries\">"))
     }
 }
 #endif

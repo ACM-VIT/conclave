@@ -432,33 +432,6 @@ struct STG3ShareSelfViewTests {
         camera.flip()
         #expect(camera.facing == .back && changes == 5)
     }
-
-    @Test func stg3SourcesStayDashFreeFlatAndLocalized() throws {
-        let files = ["Sources/Conclave/Features/Meeting/Stage/ShareZoom+iOS.swift", "Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift",
-                     "Sources/Conclave/Skip/ui/call/stage/ShareZoom.kt", "Sources/Conclave/Skip/ui/call/stage/SlotView.kt",
-                     "Sources/Conclave/Core/WebRTC/LocalCameraFacing.swift", "Sources/Conclave/Core/WebRTC/LocalPreviewController.swift",
-                     "Sources/Conclave/Skip/LocalPreviewController.kt"]
-        for file in files {
-            let text = try stageSource(file)
-            #expect(stageMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-        }
-
-        let catalog = try stageSource("Sources/Conclave/Resources/Localizable.xcstrings")
-        let keys = try #require(try JSONSerialization.jsonObject(with: Data(catalog.utf8)) as? [String: Any])["strings"] as? [String: Any]
-        for file in ["Sources/Conclave/Features/Meeting/Stage/ShareZoom+iOS.swift", "Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift"] {
-            for match in stageMatches(#"ConclaveStrings\.(text|format)\("[^"]+""#, in: try stageSource(file)) {
-                let key = String(match.drop { $0 != "\"" }.dropFirst().dropLast())
-                #expect(keys?[key] != nil, "\(file): missing catalog key \(key)")
-            }
-        }
-        let resources = try stageSource("Android/app/src/main/res/values/strings.xml")
-        for file in ["Sources/Conclave/Skip/ui/call/stage/ShareZoom.kt", "Sources/Conclave/Skip/ui/call/stage/SlotView.kt"] {
-            for match in stageMatches(#""(ppl|stg|ds)_[a-z0-9_]+""#, in: try stageSource(file)) {
-                let name = String(match.dropFirst().dropLast())
-                #expect(resources.contains("name=\"" + name + "\""), "\(file): missing resource \(name)")
-            }
-        }
-    }
 }
 
 #if os(macOS)

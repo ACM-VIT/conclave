@@ -576,8 +576,6 @@ struct StagePoliciesTests {
         #expect(ledger.serial(for: "p:r1") == keep)
     }
 
-    static let debugFixtureName = "StageFixtureView+iOS.swift"
-
 }
 
 #if os(macOS)
@@ -714,34 +712,11 @@ final class FakeStageConsumerClient {
     }
 }
 
-func stageNormalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
 private func stagePackageRoot() -> URL {
     URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 }
 
 func stageSource(_ packageRelativePath: String) throws -> String {
     try String(contentsOf: stagePackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-func stageFiles(under directory: String, extensions: Set<String>) throws -> [String] {
-    let root = stagePackageRoot()
-    var result: [String] = []
-    let enumerator = FileManager.default.enumerator(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)
-    while let url = enumerator?.nextObject() as? URL {
-        if extensions.contains(url.pathExtension) { result.append(url.path) }
-    }
-    let prefix = root.path + "/"
-    return result.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }.sorted()
-}
-
-func stageMatches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
-    }
 }
 #endif

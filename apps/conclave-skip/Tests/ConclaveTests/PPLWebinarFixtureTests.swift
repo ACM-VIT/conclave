@@ -340,13 +340,4 @@ struct PPLWebinarFixtureTests {
         #expect(!session.people.qa.snapshot.composerEnabled)
     }
 }
-
-private func pplWebinarSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func pplWebinarNormalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
 #endif

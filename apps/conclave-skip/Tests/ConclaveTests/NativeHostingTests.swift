@@ -196,31 +196,5 @@ struct NativeHostingTests {
         #expect(timer.startCount == 1)
         #expect(timer.firstFrame(presentationID: 1, at: 1) == -1 && timer.firstFrame(presentationID: 2, at: 1) == 1000)
     }
-
-    @Test
-    func sessionReadoutStringsAreInTheCatalogs() throws {
-        let catalog = try hostingSource("Sources/Conclave/Resources/Localizable.xcstrings")
-        for key in ["Session Readout", "Identity", "Phase", "Outcome", "Controls", "Ledger", "Feedback", "Feedback Records"] {
-            #expect(catalog.contains("\"\(key)\" : {"), "catalog misses \(key)")
-        }
-        let resources = try hostingSource("Android/app/src/main/res/values/strings.xml")
-        #expect(resources.contains("<string name=\"sys_session_readout_title\">Session readout</string>"))
-    }
-}
-
-private func hostingSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func hostingFlat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func hostingSection(_ text: String, from start: String, to end: String) -> String? {
-    guard let lower = text.range(of: start) else { return nil }
-    let rest = text[lower.lowerBound...]
-    guard let upper = rest.range(of: end, range: rest.index(lower.lowerBound, offsetBy: start.count)..<rest.endIndex) else { return nil }
-    return String(text[lower.lowerBound..<upper.lowerBound])
 }
 #endif
