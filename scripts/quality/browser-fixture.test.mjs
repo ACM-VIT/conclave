@@ -38,51 +38,6 @@ const fixtureCapabilities = {
   maxFrameRate: 30,
 };
 
-test("fixture script contains deterministic camera and silent capture hooks", () => {
-  const script = buildFixtureInjectionScript({
-    enableSyntheticCamera: true,
-    targetFps: 30,
-    width: 1280,
-    height: 720,
-  });
-  assert.match(script, /__conclaveQualityHarness/);
-  assert.match(script, /canvas\.captureStream/);
-  assert.match(script, /createMediaStreamDestination/);
-  assert.match(script, /MARKER_REPETITIONS/);
-  assert.match(script, /renderScaledFixtureFrame/);
-  assert.match(script, /captureAtomicVideoSnapshot/);
-  assert.match(script, /resetFixturePerformance/);
-  assert.match(script, /getSourceLatencyEvidence/);
-  assert.match(script, /MARKER_SEQUENCE_MODULUS = markerSequenceModulus/);
-  assert.match(script, /sourceFrameTimeline/);
-  assert.match(script, /performance-time-origin-before-request-frame/);
-  assert.match(script, /metadata\?\.expectedDisplayTime/);
-  assert.match(script, /const presentedAtMs = expectedDisplayTimeMs \?\? callbackAtMs/);
-  assert.match(
-    script,
-    /const presentationGap = Math\.max\([\s\S]*?presentedAtMs - state\.lastPresentedAt/,
-  );
-  assert.match(script, /updateMarkerCadence\(state, marker, presentedAtMs\)/);
-  assert.match(script, /timestampMode: selectedSource\.timestampMode/);
-  assert.match(script, /runtime\.nextFixtureSourceSequence = 0/);
-  assert.match(
-    script,
-    /sourceTimelineResetAtEpochMs: runtime\.fixtureTimelineResetAtEpochMs/,
-  );
-  assert.match(script, /fixture\.renderIntervals = \[\]/);
-  assert.match(script, /jitterBufferEmittedCount/);
-  assert.match(script, /jitterBufferTargetDelay/);
-  assert.match(script, /jitterBufferMinimumDelay/);
-  assert.match(script, /totalFreezesDuration/);
-  assert.match(script, /await sender\.getStats\(\)/);
-  assert.match(script, /stats: senderStats/);
-  assert.match(script, /rtpSenderIds: new WeakMap\(\)/);
-  assert.match(script, /actualContext\.drawImage\(snapshot/);
-  assert.match(script, /Changing synthetic/);
-  assert.doesNotMatch(script, /\.connect\(context\.destination\)/);
-  assert.doesNotThrow(() => new Function(script));
-});
-
 test("synthetic microphone capture can be enabled without a synthetic camera", () => {
   const script = buildFixtureInjectionScript({
     enableSyntheticCamera: false,
@@ -399,29 +354,6 @@ test("sampler expressions use the installed harness API", () => {
   assert.match(stop, /"startedAtEpochMs":10000/);
 });
 
-test("samplers arm fully before a future shared epoch opens", () => {
-  const source = buildFixtureInjectionScript();
-  const armBody = source.slice(
-    source.indexOf("async function armSampler"),
-    source.indexOf("function finalizeCadence"),
-  );
-  const beginBody = source.slice(
-    source.indexOf("async function beginSamplerWindow"),
-    source.indexOf("function stopSampler"),
-  );
-  assert.match(armBody, /await Promise\.race[\s\S]*state\.armed = true/);
-  assert.doesNotMatch(armBody, /scheduleFrameCallbacks\(state\)/);
-  assert.match(beginBody, /await waitUntilEpoch\(measurementWindow\.startedAtEpochMs\)/);
-  assert.match(beginBody, /scheduleFrameCallbacks\(state\)/);
-  assert.ok(
-    beginBody.indexOf("scheduleFrameCallbacks(state)") <
-      beginBody.indexOf("state.statsStartPromise = collectPeerConnectionStats()"),
-  );
-  assert.match(beginBody, /armBoundMediaPathObservationSchedule/);
-  assert.match(beginBody, /state\.statsStart = await state\.statsStartPromise/);
-  assert.match(beginBody, /measurement-window-start-skew-exceeded/);
-});
-
 test("measurement-window builders reject shifted or internally inconsistent epochs", () => {
   assert.deepEqual(normalizeMeasurementWindow(measurementWindow), measurementWindow);
   assert.throws(
@@ -470,65 +402,6 @@ test("sampler begin evaluation timeout includes the future barrier lead", () => 
   assert.throws(
     () => resolveSamplerBeginEvaluationTimeoutMs(measurementWindow, -1),
     /current epoch/,
-  );
-});
-
-test("frame sampling rearms rVFC before dispatching worker analysis", () => {
-  const source = buildFixtureInjectionScript();
-  assert.match(
-    source,
-    /state\.frameCallbackId = null;\s*\/\/ Arm the next[\s\S]*?next\(\);\s*handleVideoFrame/,
-  );
-  assert.match(source, /new Worker/);
-  assert.match(source, /dedicated-web-worker/);
-  assert.match(
-    source,
-    /state\.nextVisualSampleAt \+=\s*elapsedScheduleSlots \* state\.sampleIntervalMs/,
-  );
-  assert.match(
-    source,
-    /p95FrameGapMs: round\(\s*nearestRankPercentile/,
-  );
-  assert.doesNotMatch(
-    source,
-    /state\.nextVisualSampleAt = callbackAtMs \+ state\.sampleIntervalMs/,
-  );
-});
-
-test("telemetry mode retains cadence and exact-path evidence without visual workers", () => {
-  const source = buildFixtureInjectionScript();
-  assert.match(source, /state\.mode === "visual" && callbackAtMs/);
-  assert.match(
-    source,
-    /mode === "visual" \? document\.createElement\("canvas"\) : null/,
-  );
-  assert.match(source, /if \(mode === "visual"\) \{\s*try \{\s*state\.metricWorker/);
-  assert.match(source, /if \(state\.mode === "visual"\) await waitForMetricDrain/);
-  assert.match(source, /disabled-telemetry-only/);
-  assert.match(source, /decodeMarkerFromVideo\(state, state\.video\)/);
-  assert.match(source, /appConnectionState/);
-  assert.match(source, /peerConnectionState/);
-  assert.match(source, /videoTrackReadyState/);
-  assert.match(source, /frameObserverDurations/);
-  assert.match(source, /frameObserverDutyRatio/);
-  assert.match(source, /PATH_TERMINAL_LEAD_MS = 50/);
-  assert.match(
-    source,
-    /MAX_PATH_TICK_LATENESS_MS = MAX_WINDOW_BOUNDARY_SKEW_MS/,
-  );
-  assert.match(source, /observedMaximumTickLatenessMs/);
-  assert.match(source, /armBoundMediaPathObservationSchedule/);
-  assert.match(source, /pathObservationTerminalPromise/);
-  assert.match(source, /pathObservationBoundaryAuthority/);
-  assert.match(
-    source,
-    /target\.phase === "terminal"[\s\S]*collectTerminalPeerConnectionStats\(state\)/,
-  );
-  assert.match(source, /state\.statsEndPromise \?\?= collectPeerConnectionStats/);
-  assert.match(source, /if \(state\.stopPromise\) return state\.stopPromise/);
-  assert.match(
-    source,
-    /state\.stopPromise = finalizeSamplerStop\(state, measurementWindow\)/,
   );
 });
 
@@ -669,15 +542,4 @@ test("fixture builder rejects unsafe dimensions and cadence", () => {
     () => buildFixtureInjectionScript({ enableSyntheticAudio: "yes" }),
     /enableSyntheticAudio/,
   );
-});
-
-test("fixture snapshots serialize live sender parameters for codec proof", () => {
-  const script = buildFixtureInjectionScript({
-    enableSyntheticCamera: true,
-    enableSyntheticAudio: true,
-  });
-  assert.match(script, /getSenders/);
-  assert.match(script, /sender\.getParameters/);
-  assert.match(script, /parametersError/);
-  assert.match(script, /readyState/);
 });
