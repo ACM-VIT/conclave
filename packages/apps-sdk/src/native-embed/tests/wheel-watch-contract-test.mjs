@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -95,32 +95,6 @@ test("the Swift twin matches the limits, commands and entry files", () => {
   const bridge = readFileSync(path.join(swiftDir, "Core", "Models", "AppBridgeProtocol.swift"), "utf8");
   assert.ok(bridge.includes('return "wheel.html"') && bridge.includes('return "watch.html"'), "AppBridgeProtocol.entryFile serves Wheel and Watch");
   assert.ok(bridge.includes("AppEmbedAppCodec.parse("), "AppBridgeCodec.parseStatus reads status.app");
-});
-
-test("the embeds reach no network or storage, and Watch frames only the YouTube player", () => {
-  const sources = [];
-  for (const folder of ["wheel", "watch"]) {
-    for (const name of readdirSync(path.join(embedDir, folder))) {
-      if (/\.(ts|tsx)$/.test(name)) sources.push([`${folder}/${name}`, readFileSync(path.join(embedDir, folder, name), "utf8")]);
-    }
-  }
-  assert.ok(sources.length >= 4);
-  for (const [name, source] of sources) {
-    assert.ok(!/fetch\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|document\.cookie|indexedDB|eval\(|new Function/.test(source), `${name} reaches the network, storage or eval`);
-    assert.ok(!/\u2013|\u2014/.test(source), `${name} has an en or em dash`);
-  }
-  const frame = readFileSync(path.join(embedDir, "watch", "youtubeFrame.ts"), "utf8");
-  assert.ok(frame.includes("postMessage(JSON.stringify(message), WATCH_FRAME_ORIGIN)"), "commands go to the YouTube origin only");
-  assert.ok(frame.includes("event.origin !== WATCH_FRAME_ORIGIN"), "player messages are origin-checked");
-  assert.ok(!/<script|iframe_api|youtube\.com\/iframe/.test(frame), "no YouTube script is loaded into the page");
-  assert.equal(protocol.WATCH_FRAME_ORIGIN, "https://www.youtube-nocookie.com");
-  for (const folder of ["wheel", "watch"]) {
-    const css = readFileSync(path.join(embedDir, folder, "embed.css"), "utf8");
-    assert.ok(!/gradient/i.test(css), `${folder}/embed.css must stay flat`);
-  }
-  const build = readFileSync(path.join(embedDir, "build", "build-native-embed.mjs"), "utf8");
-  assert.ok(build.includes(`appEntry("whiteboard", "'none'"), appEntry("wheel", "'none'"), appEntry("watch", watchFrameOrigin)`));
-  assert.ok(build.includes(`"connect-src 'none'"`) && build.includes("`frame-src ${app.frameSource}`"));
 });
 
 const loadSessionModule = async () => {

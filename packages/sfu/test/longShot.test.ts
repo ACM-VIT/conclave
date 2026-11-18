@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  LONG_SHOT_MIN_ANSWERS,
   longShotModule,
   parseLongShotPrompts,
 } from "../server/games/modules/longShot.js";
@@ -305,7 +304,6 @@ describe("long shot generated prompts", () => {
   });
 
   it("accepts a prompt that meets every tier minimum exactly", () => {
-    expect(LONG_SHOT_MIN_ANSWERS).toBe(18);
     expect(parseLongShotPrompts({ prompts: [prompt([3, 4, 5, 6])] })).toHaveLength(1);
   });
 

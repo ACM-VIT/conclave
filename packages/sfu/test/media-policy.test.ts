@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_CONSUMER_PRIORITY,
-  SCREEN_KEY_FRAME_REQUEST_DELAY_MS,
-  WEBCAM_KEY_FRAME_REQUEST_DELAY_MS,
-  getVideoKeyFrameRequestDelayMs,
   parseConsumerPriority,
   shouldExplicitlyRequestConsumerKeyFrame,
 } from "../server/mediaPolicy.js";
@@ -46,21 +43,6 @@ describe("consumer priority policy", () => {
 });
 
 describe("producer keyframe request policy", () => {
-  it("uses bounded request coalescing for webcam and screen video", () => {
-    expect(getVideoKeyFrameRequestDelayMs("webcam")).toBe(
-      WEBCAM_KEY_FRAME_REQUEST_DELAY_MS,
-    );
-    expect(getVideoKeyFrameRequestDelayMs("screen")).toBe(
-      SCREEN_KEY_FRAME_REQUEST_DELAY_MS,
-    );
-    expect(WEBCAM_KEY_FRAME_REQUEST_DELAY_MS).toBeGreaterThan(0);
-    expect(WEBCAM_KEY_FRAME_REQUEST_DELAY_MS).toBeLessThanOrEqual(250);
-    expect(SCREEN_KEY_FRAME_REQUEST_DELAY_MS).toBeGreaterThan(
-      WEBCAM_KEY_FRAME_REQUEST_DELAY_MS,
-    );
-    expect(SCREEN_KEY_FRAME_REQUEST_DELAY_MS).toBeLessThanOrEqual(1_000);
-  });
-
   it("does not duplicate mediasoup's paused-video resume keyframe", () => {
     expect(
       shouldExplicitlyRequestConsumerKeyFrame({

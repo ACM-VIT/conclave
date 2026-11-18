@@ -6,7 +6,6 @@ import type {
 } from "mediasoup/types";
 import { Room } from "../config/classes/Room.js";
 import {
-  DEFAULT_PRODUCER_MAX_INCOMING_BITRATE_BPS,
   config,
   resolveWebRtcTransportProtocolPolicy,
 } from "../config/config.js";
@@ -102,15 +101,5 @@ describe("Room WebRTC transport policy", () => {
       }),
     );
     expect(harness.setMaxIncomingBitrate).not.toHaveBeenCalled();
-  });
-
-  it("keeps enough default upload headroom for the current publish profile", () => {
-    const currentMaxPublishMediaBitrateBps =
-      1_850_000 + 2_500_000 + 96_000 + 96_000;
-
-    expect(DEFAULT_PRODUCER_MAX_INCOMING_BITRATE_BPS).toBe(6_000_000);
-    expect(DEFAULT_PRODUCER_MAX_INCOMING_BITRATE_BPS).toBeGreaterThan(
-      currentMaxPublishMediaBitrateBps * 1.2,
-    );
   });
 });

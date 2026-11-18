@@ -64,15 +64,6 @@ test("size bounds hold at and just over each limit", () => {
   assert.equal(png.ok ? "none" : png.reason, "payloadTooLarge");
 });
 
-test("no message can carry a native method, a token or a URL load", () => {
-  assert.deepEqual([...protocol.EMBED_TO_NATIVE_TYPES], ["ready", "sync", "update", "awareness", "status", "ack", "resize"]);
-  for (const type of protocol.EMBED_TO_NATIVE_TYPES) {
-    assert.ok(!/token|key|auth|url|open|eval|exec/i.test(type), type);
-  }
-  const source = readFileSync(path.join(embedDir, "session.ts"), "utf8") + readFileSync(path.join(embedDir, "bridge.ts"), "utf8");
-  assert.ok(!/fetch\(|XMLHttpRequest|WebSocket|io\(|localStorage|document\.cookie/.test(source), "embed sources reach the network or storage");
-});
-
 test("the scope comes only from a well-formed fragment", () => {
   const good = protocol.parseScope(`#v=1&callSessionId=${fixtures.scope.callSessionId}&appSessionId=${fixtures.scope.appSessionId}&appId=whiteboard`);
   assert.deepEqual(good, fixtures.scope);

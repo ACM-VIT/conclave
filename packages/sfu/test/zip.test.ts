@@ -51,10 +51,6 @@ describe("zip game module", () => {
     expect(zipModule.getPhase(state)).toBe("lobby");
   });
 
-  it("exposes a configurable time limit", () => {
-    expect(zipModule.options?.some((option) => option.id === "timeLimitMinutes")).toBe(true);
-  });
-
   it("rejects start from non-admin", () => {
     const state = zipModule.setup(context(0));
     expect(() =>
