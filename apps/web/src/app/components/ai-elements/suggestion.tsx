@@ -1,5 +1,7 @@
 "use client";
 
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Suggestion".
+
 import type { ComponentProps } from "react";
 import { cn } from "./utils";
 

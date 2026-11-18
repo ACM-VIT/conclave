@@ -1,5 +1,7 @@
 "use client";
 
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Conversation".
+
 import { ArrowDownIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import { useCallback } from "react";

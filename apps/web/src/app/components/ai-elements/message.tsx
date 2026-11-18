@@ -1,5 +1,7 @@
 "use client";
 
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Message".
+
 import type { ComponentProps, HTMLAttributes } from "react";
 import { cn } from "./utils";
 

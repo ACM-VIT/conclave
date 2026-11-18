@@ -1,5 +1,7 @@
 "use client";
 
+// Ported verbatim from AI SDK Elements (elements.ai-sdk.dev) "Shimmer".
+
 import { motion } from "motion/react";
 import {
   type CSSProperties,

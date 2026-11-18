@@ -1,5 +1,7 @@
 "use client";
 
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Reasoning".
+
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import {
   type ComponentProps,

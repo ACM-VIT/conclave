@@ -1,5 +1,7 @@
 "use client";
 
+// Ported (and trimmed) from AI SDK Elements (elements.ai-sdk.dev) "PromptInput".
+
 import { Loader2, Send, Square, X } from "lucide-react";
 import type { ComponentProps, KeyboardEventHandler } from "react";
 import { useEffect, useRef } from "react";

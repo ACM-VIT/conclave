@@ -1,5 +1,7 @@
 "use client";
 
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Chain of Thought".
+
 import { ChevronDownIcon, DotIcon } from "lucide-react";
 import { type ComponentProps, memo, type ReactNode } from "react";
 import {

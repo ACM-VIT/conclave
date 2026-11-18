@@ -1,5 +1,7 @@
 "use client";
 
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Response".
+
 import type { ComponentProps } from "react";
 import { memo } from "react";
 import { type LinkSafetyConfig, Streamdown } from "streamdown";
