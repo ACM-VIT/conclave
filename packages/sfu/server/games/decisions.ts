@@ -20,7 +20,8 @@ export const createGameDecider = (
   env: AiEnvironment,
   options: GameDeciderOptions = {},
 ): GameDecider | null => {
-  if (options.disabled) return null;
+  const disabled = options.disabled ?? /^(0|false)$/i.test(process.env.SFU_GAME_DECISIONS_ENABLED || "");
+  if (disabled) return null;
   const settings = resolveAiFeatureSettings(env, "answers", roomAiFeatureSettingsFromEnvironment(env));
   if (!settings.enabled) return null;
   const model = decisionModel(settings.model);

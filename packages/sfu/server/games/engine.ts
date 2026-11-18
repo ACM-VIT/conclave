@@ -4,6 +4,7 @@ import {
   type GameConfig,
   type GameContext,
   type GameDecider,
+  type GamePendingMove,
   type GameModule,
   type GameOptionSpec,
   type GamePlayer,
@@ -19,6 +20,8 @@ import {
  * (`getPublicState`, `getPlayerView`). The handler layer is responsible for
  * mapping projections onto sockets (room broadcast vs. per-player emit).
  */
+export const MAX_MOVE_HOLD_MS = 8_000;
+
 export class GameSession {
   readonly module: GameModule;
   readonly hostId: string;
@@ -32,6 +35,7 @@ export class GameSession {
   private state: unknown;
   private finished = false;
   private readonly prepareCache = new Map<string, unknown>();
+  private readonly pendingMoves = new Map<string, number>();
   /** Room members waiting for a seat at the next round boundary. */
   private pendingJoiners: GamePlayer[] = [];
 
@@ -204,7 +208,11 @@ export class GameSession {
       return { ok: false, error: "You are not a player in this game" };
     }
     if (!this.module.prepareMove) return { ok: true, verified: null };
+    if (this.pendingMoves.has(playerId)) {
+      return { ok: false, error: "Still checking your last answer" };
+    }
     const now = options.receivedAt ?? Date.now();
+    this.pendingMoves.set(playerId, now);
     try {
       const verified = await this.module.prepareMove(
         this.state,
@@ -225,7 +233,21 @@ export class GameSession {
       if (error instanceof GameMoveError) return { ok: false, error: error.message };
       options.onError?.(error);
       return { ok: true, verified: null };
+    } finally {
+      this.pendingMoves.delete(playerId);
     }
+  }
+
+  pendingMoveCount(): number {
+    return this.pendingMoves.size;
+  }
+
+  private heldPendingMoves(now: number): GamePendingMove[] {
+    const held: GamePendingMove[] = [];
+    for (const [playerId, receivedAt] of this.pendingMoves) {
+      if (now - receivedAt < MAX_MOVE_HOLD_MS) held.push({ playerId, receivedAt });
+    }
+    return held;
   }
 
   applyMove(
@@ -268,6 +290,10 @@ export class GameSession {
   /** Advance time-driven state. Returns true if the projection changed. */
   tick(now: number = Date.now()): boolean {
     if (this.finished || !this.module.onTick) return false;
+    const held = this.heldPendingMoves(now);
+    if (held.length > 0 && this.module.holdTick?.(this.state, held, this.context(now))) {
+      return false;
+    }
     const previousPhase = this.module.getPhase(this.state);
     const next = this.module.onTick(this.state, this.context(now));
     if (next === this.state) return false;

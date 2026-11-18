@@ -29,7 +29,7 @@ export type JudgeVerdict =
   | { kind: "repeat"; answerId: string; confidence: number }
   | { kind: "reject"; reason: "wrong" | "unsafe" | "unsure" };
 
-export type JudgedMove = { key: string; verdict: JudgeVerdict };
+export type JudgedMove = { key: string; promptIndex: number; prompt: string; verdict: JudgeVerdict };
 
 export type JudgePlan = {
   state: Record<string, unknown>;
@@ -177,13 +177,16 @@ const isConfidence = (value: unknown): value is number =>
 
 export const decodeJudgedMove = (value: unknown): JudgedMove | null => {
   if (!isRecord(value) || !isRecord(value.judge)) return null;
-  const { key, verdict } = value.judge;
+  const { key, verdict, promptIndex, prompt } = value.judge;
   if (typeof key !== "string" || !key || !isRecord(verdict)) return null;
+  if (typeof promptIndex !== "number" || !Number.isInteger(promptIndex) || promptIndex < 0) return null;
+  if (typeof prompt !== "string" || !prompt) return null;
+  const bound = { key, promptIndex, prompt };
   switch (verdict.kind) {
     case "accept":
       return JUDGED_TIERS.includes(verdict.tier as Exclude<LongShotTier, "pearl">) && isConfidence(verdict.confidence)
         ? {
-            key,
+            ...bound,
             verdict: {
               kind: "accept",
               tier: verdict.tier as Exclude<LongShotTier, "pearl">,
@@ -194,11 +197,11 @@ export const decodeJudgedMove = (value: unknown): JudgedMove | null => {
     case "alias":
     case "repeat":
       return typeof verdict.answerId === "string" && verdict.answerId && isConfidence(verdict.confidence)
-        ? { key, verdict: { kind: verdict.kind, answerId: verdict.answerId, confidence: verdict.confidence } }
+        ? { ...bound, verdict: { kind: verdict.kind, answerId: verdict.answerId, confidence: verdict.confidence } }
         : null;
     case "reject":
       return verdict.reason === "wrong" || verdict.reason === "unsafe" || verdict.reason === "unsure"
-        ? { key, verdict: { kind: "reject", reason: verdict.reason } }
+        ? { ...bound, verdict: { kind: "reject", reason: verdict.reason } }
         : null;
     default:
       return null;

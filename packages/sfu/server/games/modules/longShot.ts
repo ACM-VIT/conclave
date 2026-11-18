@@ -4,6 +4,7 @@ import {
   type GameDecider,
   type GameModule,
   type GameMove,
+  type GamePendingMove,
   type GamePrepareContext,
 } from "../types.js";
 import { payloadField, requireString } from "../validation.js";
@@ -11,6 +12,7 @@ import { numberOption, selectOption } from "../config.js";
 import { allActivePlayersActed } from "../roundLoop.js";
 import {
   GAME_CONTENT_TOPIC_OPTION,
+  GameContentGenerationError,
   cleanGeneratedStringArray,
   cleanGeneratedText,
   generateStructuredGameContent,
@@ -476,15 +478,33 @@ export const prepareLongShotAnswer = async (
       ? prompt.answers.filter((answer) => state.used.includes(answer.id))
       : [];
   const cacheKey = `verdict:${state.promptIndex}:${prompt.prompt}:${key}:${used.map((answer) => answer.id).join(",")}`;
+  const bound = { key, promptIndex: state.promptIndex, prompt: prompt.prompt };
   const cached = ctx.cache.get(cacheKey) as JudgeVerdict | undefined;
-  if (cached) return { judge: { key, verdict: cached } };
+  if (cached) return { judge: { ...bound, verdict: cached } };
   if (!spendJudgeBudget(ctx.cache, judgeBudgetKey(state, move.playerId), JUDGES_PER_PLAYER_PROMPT)) return null;
   if (!spendJudgeBudget(ctx.cache, "judge:game", JUDGES_PER_GAME)) return null;
   const plan = buildJudgePlan(prompt, text, used);
   const answers = await ctx.decide({ state: plan.state, questions: plan.questions, signal: ctx.signal });
   const verdict = verdictFromAnswers(plan, answers);
   ctx.cache.set(cacheKey, verdict);
-  return { judge: { key, verdict } };
+  return { judge: { ...bound, verdict } };
+};
+
+export const holdLongShotTick = (
+  state: LongShotState,
+  pending: GamePendingMove[],
+): boolean => {
+  if (state.phase === "prompt") {
+    return pending.some(
+      (move) => move.receivedAt < state.deadline && !state.entries[move.playerId]?.answer,
+    );
+  }
+  if (state.phase === "fuse" && state.pausedRemainingMs === null) {
+    return pending.some(
+      (move) => move.playerId === state.turnPlayerId && move.receivedAt < state.deadline,
+    );
+  }
+  return false;
 };
 
 export const filterGeneratedPrompts = async (
@@ -573,7 +593,15 @@ const resolveAnswer = (
   const listed = matchAnswer(prompt, text);
   if (listed) return { state, match: listed, repeatOf: null };
   const key = normalizeAnswer(text);
-  if (!judged || !key || judged.key !== key) return { state, match: null, repeatOf: null };
+  if (
+    !judged ||
+    !key ||
+    judged.key !== key ||
+    judged.promptIndex !== state.promptIndex ||
+    judged.prompt !== prompt.prompt
+  ) {
+    return { state, match: null, repeatOf: null };
+  }
   const { verdict } = judged;
   const find = (id: string) => prompt.answers.find((answer) => answer.id === id) ?? null;
   if (verdict.kind === "alias") return { state, match: find(verdict.answerId), repeatOf: null };
@@ -809,7 +837,12 @@ export const longShotModule: GameModule<LongShotState> = {
       const decide = ctx.aiEnvironment ? createGameDecider(ctx.aiEnvironment) : null;
       if (!prompts || !decide) return prompts;
       const filtered = await filterGeneratedPrompts(prompts, decide, ctx.signal);
-      return filtered.length >= Math.min(count, 3) ? filtered : prompts;
+      if (filtered.length === 0) {
+        throw new GameContentGenerationError(
+          "Not enough answers for that topic held up. Try another topic.",
+        );
+      }
+      return filtered;
     });
   },
 
@@ -859,6 +892,7 @@ export const longShotModule: GameModule<LongShotState> = {
   },
 
   prepareMove: prepareLongShotAnswer,
+  holdTick: holdLongShotTick,
 
   onMove(state, move: GameMove, ctx): LongShotState {
     const m = decodeLongShotMove(move);

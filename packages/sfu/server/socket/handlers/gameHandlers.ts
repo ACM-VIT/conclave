@@ -83,17 +83,6 @@ type PlayAnalytics = {
 // leaks: when the room drops its session, the entry becomes collectable.
 const playAnalyticsBySession = new WeakMap<GameSession, PlayAnalytics>();
 
-const pendingPreparationsBySession = new WeakMap<GameSession, Set<string>>();
-
-const pendingPreparations = (session: GameSession): Set<string> => {
-  let pending = pendingPreparationsBySession.get(session);
-  if (!pending) {
-    pending = new Set();
-    pendingPreparationsBySession.set(session, pending);
-  }
-  return pending;
-};
-
 const describeDecisionError = (error: unknown): string =>
   error instanceof Error ? error.message : "unknown error";
 
@@ -698,26 +687,12 @@ export const registerGameHandlers = (context: ConnectionContext): void => {
       const receivedAt = Date.now();
       let verified: unknown = null;
       if (session.module.prepareMove) {
-        const pending = pendingPreparations(session);
-        if (pending.has(playerId)) {
-          respond(callback, { success: false, error: "Still checking your last answer" });
-          return;
-        }
-        pending.add(playerId);
-        const controller = new AbortController();
-        let prepared: { ok: true; verified: unknown } | { ok: false; error: string };
-        try {
-          prepared = await session.prepareMove(playerId, data.type, data.payload, {
-            decide: createGameDecider(roomGameAiEnvironment(room), {
-              disabled: /^(0|false)$/i.test(process.env.SFU_GAME_DECISIONS_ENABLED || ""),
-            }),
-            signal: controller.signal,
-            receivedAt,
-            onError: (error) => Logger.warn("[Games] move check failed", describeDecisionError(error)),
-          });
-        } finally {
-          pending.delete(playerId);
-        }
+        const prepared = await session.prepareMove(playerId, data.type, data.payload, {
+          decide: createGameDecider(roomGameAiEnvironment(room)),
+          signal: new AbortController().signal,
+          receivedAt,
+          onError: (error) => Logger.warn("[Games] move check failed", describeDecisionError(error)),
+        });
         if (room.gameSession !== session || session.isFinished()) {
           respond(callback, { success: false, error: "Game has ended" });
           return;

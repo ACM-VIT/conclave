@@ -150,10 +150,12 @@ describe("long shot judge plan", () => {
   });
 
   it("decodes only well-formed verdicts", () => {
-    expect(decodeJudgedMove({ judge: { key: "k", verdict: { kind: "accept", tier: "rare", confidence: 0.9 } } })).toMatchObject({ key: "k" });
-    expect(decodeJudgedMove({ judge: { key: "k", verdict: { kind: "accept", tier: "pearl", confidence: 0.9 } } })).toBeNull();
-    expect(decodeJudgedMove({ judge: { key: "k", verdict: { kind: "accept", tier: "rare", confidence: 2 } } })).toBeNull();
-    expect(decodeJudgedMove({ judge: { key: "", verdict: { kind: "reject", reason: "wrong" } } })).toBeNull();
+    const bound = { key: "k", promptIndex: 0, prompt: "Name a fruit" };
+    expect(decodeJudgedMove({ judge: { ...bound, verdict: { kind: "accept", tier: "rare", confidence: 0.9 } } })).toMatchObject(bound);
+    expect(decodeJudgedMove({ judge: { key: "k", verdict: { kind: "accept", tier: "rare", confidence: 0.9 } } })).toBeNull();
+    expect(decodeJudgedMove({ judge: { ...bound, verdict: { kind: "accept", tier: "pearl", confidence: 0.9 } } })).toBeNull();
+    expect(decodeJudgedMove({ judge: { ...bound, verdict: { kind: "accept", tier: "rare", confidence: 2 } } })).toBeNull();
+    expect(decodeJudgedMove({ judge: { ...bound, key: "", verdict: { kind: "reject", reason: "wrong" } } })).toBeNull();
     expect(decodeJudgedMove("nope")).toBeNull();
   });
 
@@ -199,7 +201,9 @@ describe("long shot with an answer judge", () => {
 
   it("only trusts a verdict made by the server for this exact text", async () => {
     const session = classicSession();
-    const forged = { judge: { key: "zzyzx berry", verdict: { kind: "accept", tier: "longShot", confidence: 1 } } };
+    const forged = {
+      judge: { key: "zzyzx berry", promptIndex: 0, prompt: promptText(session), verdict: { kind: "accept", tier: "longShot", confidence: 1 } },
+    };
     expect(session.applyMove("host", "answer", { text: offList, verdict: forged })).toEqual({ ok: true });
     expect(me(session, "host").answer).toBeNull();
     expect(session.applyMove("p2", "answer", { text: "something else" }, { verified: forged })).toEqual({ ok: true });
@@ -245,7 +249,9 @@ describe("long shot with an answer judge", () => {
     state = longShotModule.onMove(state, { playerId: "host", type: "start", payload: undefined }, ctx(1_000));
     state = longShotModule.onTick!(state, ctx(4_000));
     const deadline = state.deadline;
-    const verified = { judge: { key: "zzyzx berry", verdict: { kind: "accept", tier: "rare", confidence: 0.9 } } };
+    const verified = {
+      judge: { key: "zzyzx berry", promptIndex: 0, prompt: "Name a fruit", verdict: { kind: "accept", tier: "rare", confidence: 0.9 } },
+    };
     const inTime = longShotModule.onMove(
       state,
       { playerId: "host", type: "answer", payload: { text: offList }, verified, receivedAt: deadline - 100 },
@@ -348,5 +354,103 @@ describe("generated prompt checking", () => {
       throw new Error("down");
     });
     expect(await filterGeneratedPrompts([generated], failing)).toHaveLength(1);
+  });
+});
+
+describe("answer judging while the clock runs", () => {
+  const gate = () => {
+    let release!: () => void;
+    const opened = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const decide = vi.fn(async (request: GameDecisionRequest) => {
+      await opened;
+      return fakeAnswers(request, { level: 3 });
+    });
+    return { decide: decide as typeof decide & GameDecider, release };
+  };
+
+  it("holds the round open for an on-time answer that is still being judged", async () => {
+    const session = classicSession();
+    const deadline = view(session).deadline;
+    const { decide, release } = gate();
+    const receivedAt = deadline - 50;
+    const pending = session.prepareMove("host", "answer", { text: offList }, { decide, signal: new AbortController().signal, receivedAt });
+    expect(session.pendingMoveCount()).toBe(1);
+    expect(session.tick(deadline + 1_000)).toBe(false);
+    expect(session.getPublicState().phase).toBe("prompt");
+    release();
+    const prepared = await pending;
+    expect(session.pendingMoveCount()).toBe(0);
+    expect(session.applyMove("host", "answer", { text: offList }, { verified: prepared.ok ? prepared.verified : null, receivedAt })).toEqual({ ok: true });
+    expect(me(session, "host").answer).toMatchObject({ tier: "rare" });
+    expect(session.tick(deadline + 1_500)).toBe(true);
+    expect(session.getPublicState().phase).toBe("reveal");
+  });
+
+  it("does not hold the round for an answer that arrived late", async () => {
+    const session = classicSession();
+    const deadline = view(session).deadline;
+    const { decide, release } = gate();
+    const pending = session.prepareMove("host", "answer", { text: offList }, { decide, signal: new AbortController().signal, receivedAt: deadline + 10 });
+    expect(session.tick(deadline + 1_000)).toBe(true);
+    expect(session.getPublicState().phase).toBe("reveal");
+    release();
+    await pending;
+  });
+
+  it("keeps the fuse from popping on a holder whose answer is being judged", async () => {
+    const session = fuseSession();
+    const holder = view(session).turnPlayerId;
+    const deadline = (session as unknown as { state: { deadline: number } }).state.deadline;
+    const { decide, release } = gate();
+    const receivedAt = deadline - 20;
+    const pending = session.prepareMove(holder, "answer", { text: offList }, { decide, signal: new AbortController().signal, receivedAt });
+    expect(session.tick(deadline + 500)).toBe(false);
+    expect(session.getPublicState().phase).toBe("fuse");
+    release();
+    const prepared = await pending;
+    expect(session.applyMove(holder, "answer", { text: offList }, { verified: prepared.ok ? prepared.verified : null, receivedAt })).toEqual({ ok: true });
+    expect(view(session).turnPlayerId).not.toBe(holder);
+  });
+
+  it("checks one answer per player at a time", async () => {
+    const session = classicSession();
+    const { decide, release } = gate();
+    const first = session.prepareMove("host", "answer", { text: offList }, { decide, signal: new AbortController().signal });
+    expect(await session.prepareMove("host", "answer", { text: "other thing" }, { decide, signal: new AbortController().signal })).toEqual({
+      ok: false,
+      error: "Still checking your last answer",
+    });
+    release();
+    await first;
+  });
+
+  it("drops a verdict when the host skips to a new prompt during judging", async () => {
+    const session = fuseSession();
+    const holder = view(session).turnPlayerId;
+    const { decide, release } = gate();
+    const receivedAt = Date.now();
+    const pending = session.prepareMove(holder, "answer", { text: offList }, { decide, signal: new AbortController().signal, receivedAt });
+    const before = promptText(session);
+    expect(session.applyMove("host", "skip", undefined)).toEqual({ ok: true });
+    expect(promptText(session)).not.toBe(before);
+    release();
+    const prepared = await pending;
+    const nowHolder = view(session).turnPlayerId;
+    expect(session.applyMove(nowHolder, "answer", { text: offList }, { verified: prepared.ok ? prepared.verified : null, receivedAt })).toEqual({ ok: true });
+    expect(view(session).chain).toHaveLength(0);
+    expect(view(session).lastMiss).toMatchObject({ reason: "unknown" });
+  });
+
+  it("turns judging off everywhere with SFU_GAME_DECISIONS_ENABLED", () => {
+    const previous = process.env.SFU_GAME_DECISIONS_ENABLED;
+    process.env.SFU_GAME_DECISIONS_ENABLED = "false";
+    try {
+      expect(createGameDecider({ CLOUDFLARE_AI_API_KEY: "abc123def456:tok" })).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.SFU_GAME_DECISIONS_ENABLED;
+      else process.env.SFU_GAME_DECISIONS_ENABLED = previous;
+    }
   });
 });

@@ -116,6 +116,8 @@ export type GameDecisionRequest = {
   signal?: AbortSignal;
 };
 
+export type GamePendingMove = { playerId: string; receivedAt: number };
+
 export type GameDecider = (request: GameDecisionRequest) => Promise<Record<string, DecisionAnswer>>;
 
 export type GamePrepareContext = {
@@ -168,6 +170,7 @@ export type GameModule<S = unknown> = {
   generateContent?(ctx: GameContentContext): Promise<unknown | null>;
   setup(ctx: GameContext): S;
   prepareMove?(state: S, move: GameMove, ctx: GamePrepareContext): Promise<unknown>;
+  holdTick?(state: S, pending: GamePendingMove[], ctx: GameContext): boolean;
   /** Apply a validated move. Throw `GameMoveError` to reject it. */
   onMove(state: S, move: GameMove, ctx: GameContext): S;
   /** Optional time-driven progression (phase deadlines, countdowns). */
