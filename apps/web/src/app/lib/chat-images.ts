@@ -1,10 +1,5 @@
 import type { ChatImageAttachment } from "./types";
 
-// Client-side mirror of the SFU's chat-image upload contract
-// (MAX_CHAT_IMAGE_BYTES in packages/sfu/config/classes/Room.ts and the
-// supported types in packages/sfu/server/chatImages.ts). The server
-// re-validates everything; these exist so the picker can reject bad files
-// before burning an upload round-trip.
 export const MAX_CHAT_IMAGE_BYTES = 6 * 1024 * 1024;
 
 export const CHAT_IMAGE_MIME_TYPES: readonly ChatImageAttachment["mimeType"][] =
@@ -54,9 +49,6 @@ export function formatChatImageSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Image messages carry the file name as fallback content (so reply previews,
-// TTS, and native clients always have text); only a sender-typed caption
-// should render under the picture.
 export function chatImageCaption(
   content: string,
   image: ChatImageAttachment,

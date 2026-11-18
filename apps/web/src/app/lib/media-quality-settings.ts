@@ -81,10 +81,6 @@ export interface ResolvedScreenSharePublishSettings {
 export const CAMERA_FRAME_RATE_OPTIONS = [15, 20, 24, 30, 60] as const;
 export const SCREEN_SHARE_FRAME_RATE_OPTIONS = [5, 10, 15, 24, 30, 60] as const;
 
-// The current effects renderer deliberately caps its canvas output to keep
-// segmentation and face tracking reliable on ordinary meeting hardware.
-// Keep this policy shared with capture, sender, and settings UI code so the
-// advertised effective quality can never exceed the produced track.
 export const VIDEO_EFFECTS_OUTPUT_MAX_WIDTH = 1280;
 export const VIDEO_EFFECTS_OUTPUT_MAX_HEIGHT = 720;
 export const VIDEO_EFFECTS_OUTPUT_MAX_FRAME_RATE = 30;
@@ -131,10 +127,6 @@ export const SCREEN_SHARE_QUALITY_PRESETS: Record<
   ScreenSharePresetValues
 > = {
   auto: {
-    // A native Retina/4K monitor is substantially more expensive to capture
-    // and software-encode than a tab or window. Keep the automatic path at a
-    // stable 1080p/30; users who explicitly need more detail can still choose
-    // Presentation or Custom.
     resolution: "1080p",
     frameRate: 30,
     maxBitrateKbps: 2500,
@@ -210,9 +202,6 @@ export const normalizeMediaQualitySettings = (
     ["auto", "presentation", "motion", "custom"],
     screenFallback.preset,
   );
-  // Presets are versioned product policy, not a second set of custom fields.
-  // Canonicalizing their video values migrates the previous 4K/24 Auto preset
-  // without discarding picker-only cursor and audio preferences.
   const screenPresetValues =
     screenPreset === "custom"
       ? null

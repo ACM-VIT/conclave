@@ -5,8 +5,6 @@ import Testing
 
 @MainActor
 struct S1PostRotationHangTests {
-    static let lanesFile = "Sources/Conclave/Features/Meeting/Stage/NoticeLanes+iOS.swift"
-
     private func rotationTransient(insetLeading: Double, insetTrailing: Double, selfX: Double) -> NoticeLaneGeometry {
         let viewport = StageViewport(width: 390, height: 844, insetTop: 56, insetBottom: 32, insetLeading: insetLeading,
                                      insetTrailing: insetTrailing, widthClass: StageSizeClass.compact,

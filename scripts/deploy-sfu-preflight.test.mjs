@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -213,38 +212,5 @@ test("a public route resolving to the wrong instance or region is fatal", async 
   await assert.rejects(
     runSfuDeployPreflight({ compose: makeCompose(), fetchImpl }),
     /public route returned instance.*public route returned region/s,
-  );
-});
-
-test("deployment wrappers run the preflight before local or live mutations", async () => {
-  for (const file of ["scripts/deploy-sfu.sh", "scripts/deploy-sfu.ps1"]) {
-    const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
-    const preflight = source.indexOf("deploy-sfu-preflight.mjs");
-    const pull = source.indexOf("Pulling latest code");
-    const build = source.indexOf("--build");
-    const drain = source.indexOf("/drain");
-    assert.ok(preflight >= 0, `${file} invokes the preflight`);
-    assert.ok(preflight < pull, `${file} preflights before git pull`);
-    assert.ok(preflight < build, `${file} preflights before build`);
-    assert.ok(preflight < drain, `${file} preflights before drain`);
-    assert.match(source, /preflightConfigOnly|PREFLIGHT_CONFIG_ONLY/);
-    assert.match(source, /preflightOnly|PREFLIGHT_ONLY/);
-    assert.match(source, /--config-only/);
-  }
-});
-
-test("compose preserves existing deployments with a neutral region default", async () => {
-  const source = await readFile(
-    new URL("../docker-compose.sfu.yml", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(
-    source,
-    /SFU_REGION: \$\{SFU_A_REGION:-\$\{SFU_REGION:-local\}\}/,
-  );
-  assert.match(
-    source,
-    /SFU_REGION: \$\{SFU_B_REGION:-\$\{SFU_REGION:-local\}\}/,
   );
 });

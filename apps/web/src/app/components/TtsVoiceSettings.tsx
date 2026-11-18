@@ -19,8 +19,6 @@ import type {
   TtsSystemVoiceOption,
 } from "../hooks/useMeetTts";
 
-// The voice provider's instant-clone guidance: 1 to 2 minutes of clean,
-// consistent audio gives the best likeness; short samples clone poorly.
 const MIN_RECORDING_SECONDS = 60;
 const MAX_RECORDING_SECONDS = 120;
 const ICON_STROKE = 1.75;
@@ -88,10 +86,6 @@ const attachSink = async (
   }
 };
 
-/**
- * Scrolling level-history waveform for the active recording, fed by its own
- * analyser so it tracks exactly what the recorder hears.
- */
 function LiveWaveform({ stream }: { stream: MediaStream | null }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -231,9 +225,6 @@ export default function TtsVoiceSettings({
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewUrlRef = useRef<string | null>(null);
-  // True only while a system-voice preview this component started is live.
-  // Guards the global speechSynthesis.cancel() so closing settings never
-  // cuts off an unrelated /tts message being spoken in the meeting.
   const ownsSystemPreviewRef = useRef(false);
 
   const clearTimers = useCallback(() => {
@@ -401,7 +392,6 @@ export default function TtsVoiceSettings({
     const audio = new Audio(review.url);
     reviewAudioRef.current = audio;
     await attachSink(audio, audioOutputDeviceId);
-    // A second click or unmount while the sink attached wins ownership.
     if (!mountedRef.current || reviewAudioRef.current !== audio) {
       audio.pause();
       return;
@@ -595,9 +585,6 @@ export default function TtsVoiceSettings({
     stopClonePreview();
     try {
       const synth = window.speechSynthesis;
-      // Preempt anything already speaking so that from here on the only
-      // utterance in flight is ours; stop/unmount cancel is then always safe.
-      // A live meeting message recovers through its own error handler.
       synth.cancel();
       const utterance = new SpeechSynthesisUtterance(SYSTEM_PREVIEW_TEXT);
       const chosen = synth
@@ -671,8 +658,6 @@ export default function TtsVoiceSettings({
         URL.revokeObjectURL(previewUrlRef.current);
         previewUrlRef.current = null;
       }
-      // Only cancels a preview this component started; a live /tts message
-      // in the meeting keeps speaking.
       if (
         ownsSystemPreviewRef.current &&
         typeof window !== "undefined" &&

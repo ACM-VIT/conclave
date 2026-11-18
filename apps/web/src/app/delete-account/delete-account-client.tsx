@@ -62,8 +62,6 @@ export default function DeleteAccountClient() {
   const isSignedIn = Boolean(session?.user?.id);
   const signedInEmail = session?.user?.email || "";
 
-  // Back from the provider can restore this page from the back-forward cache
-  // with a sign-in still marked in progress; re-enable the buttons.
   useEffect(() => {
     const handlePageShow = (event: PageTransitionEvent) => {
       if (event.persisted) setActiveProvider(null);
@@ -77,8 +75,6 @@ export default function DeleteAccountClient() {
     setError(null);
     setNotice(null);
     try {
-      // better-auth reports a failed request as `{ error }` rather than
-      // throwing; surface it instead of leaving the button spinning.
       const result = await signIn.social({
         provider,
         callbackURL: `${window.location.origin}/delete-account`,

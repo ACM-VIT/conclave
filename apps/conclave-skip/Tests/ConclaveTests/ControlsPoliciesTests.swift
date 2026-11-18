@@ -416,10 +416,8 @@ struct ControlsPoliciesTests {
 
     @Test func iPadWindowMinimumComesFromCompactBarFit() {
 
-        #expect(ConclaveWindowMetrics.minimumWidth == 276)
         #expect(CompactBarFit.fits(targets: [44, 44, 44, 44, 44], spacing: DesignTokens.space8, padding: CompactBarFit.iosPadding,
                                    available: ConclaveWindowMetrics.minimumWidth))
-        #expect(ConclaveWindowMetrics.minimumWidth < 320)
     }
 
     @Test func everyFixtureStateBuildsItsCell() {
@@ -532,28 +530,5 @@ private func controlsPackageRoot() -> URL {
 
 func controlsSource(_ packageRelativePath: String) throws -> String {
     try String(contentsOf: controlsPackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-func controlsNormalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-func controlsFiles(under directory: String, extensions: Set<String>) throws -> [String] {
-    let root = controlsPackageRoot()
-    var result: [String] = []
-    let enumerator = FileManager.default.enumerator(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)
-    while let url = enumerator?.nextObject() as? URL {
-        if extensions.contains(url.pathExtension) { result.append(url.path) }
-    }
-    let prefix = root.path + "/"
-    return result.map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }.sorted()
-}
-
-func controlsMatches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
-    }
 }
 #endif

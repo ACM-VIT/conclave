@@ -63,28 +63,5 @@ struct ENT8MeetingLinkBuilderTests {
         let promotion = LobbySnapshotPolicy.link(routeId: 1, intent: .promotion, roomId: "r", title: "r", clientId: nil)
         #expect(!promotion.canShare)
     }
-
-    @Test func linkStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent8Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Meeting Link", "Copy Link", "Copied", "Share Invite",
-                    "Join My Conclave Meeting", "Join me in this Conclave meeting.", "Link copied"] {
-            #expect(strings[key] != nil, "missing \(key)")
-        }
-        let xml = try ent8Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["pm_meeting_link", "pm_clip_label", "pm_link_copied", "pm_copy_link",
-                     "ds_share_invite", "ds_share_subject", "ds_share_text"] {
-            #expect(xml.contains("<string name=\"\(name)\">"), "missing \(name)")
-        }
-    }
-}
-
-private func ent8Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func ent8Flat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
 #endif

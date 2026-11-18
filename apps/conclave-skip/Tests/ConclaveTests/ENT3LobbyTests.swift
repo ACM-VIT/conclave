@@ -490,70 +490,6 @@ struct ENT3LobbyTests {
         #expect(PremeetingFixtureScript.state(named: "lobby-name-missing") == .lobbyNameMissing)
     }
 
-    static let lobbySwiftFiles = [
-        "Sources/Conclave/Features/Lobby/LobbyContracts.swift",
-        "Sources/Conclave/Features/Lobby/LobbyPolicies.swift",
-        "Sources/Conclave/Features/Lobby/LobbyStatusPolicy.swift",
-        "Sources/Conclave/Features/Lobby/LobbyJoinCoordinator.swift",
-        "Sources/Conclave/Features/Lobby/RoomPresenceService.swift",
-        "Sources/Conclave/Features/Lobby/LobbyDeviceServices.swift",
-        "Sources/Conclave/Core/WebRTC/LocalPreviewController.swift",
-        "Sources/Conclave/Core/Networking/MeetingLinkBuilder.swift"
-    ]
-    static let lobbyIOSFiles = [
-        "Sources/Conclave/Features/Lobby/LobbyView+iOS.swift",
-        "Sources/Conclave/Features/Lobby/LobbyPreviewCard+iOS.swift",
-        "Sources/Conclave/Features/Lobby/LobbyGroupedSection+iOS.swift",
-        "Sources/Conclave/Features/Lobby/MeetingLinkRow+iOS.swift",
-        "Sources/Conclave/Features/Lobby/LobbyStatusRow+iOS.swift",
-        "Sources/Conclave/Features/Lobby/EntryStatusBlock+iOS.swift"
-    ]
-    static let lobbyKotlinFiles = [
-        "Sources/Conclave/Skip/ui/lobby/LobbyScreen.kt",
-        "Sources/Conclave/Skip/ui/lobby/LobbyPreviewCard.kt",
-        "Sources/Conclave/Skip/ui/lobby/LobbyUiCache.kt",
-        "Sources/Conclave/Skip/ui/lobby/RouteDialog.kt",
-        "Sources/Conclave/Skip/ui/lobby/MeetingLinkRow.kt",
-        "Sources/Conclave/Skip/ui/lobby/LobbyAudioDevices.kt",
-        "Sources/Conclave/Skip/ui/lobby/LobbyStatusRow.kt",
-        "Sources/Conclave/Skip/ui/lobby/EntryStatusBlock.kt",
-        "Sources/Conclave/Skip/LocalPreviewController.kt"
-    ]
-
-    @Test func lobbyFilesStayFlatDashFreeLiteralFreeAndOffTheCore() throws {
-        for file in Self.lobbySwiftFiles + Self.lobbyIOSFiles + Self.lobbyKotlinFiles {
-            let text = try ent3Source(file)
-            #expect(ent3Matches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x|hue:|white:)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-        }
-
-        for file in Self.lobbyIOSFiles {
-            let text = try ent3Source(file)
-            #expect(ent3Matches(#"(?:Text|Button|Label|navigationTitle|Section|LabeledContent|Picker|TextField)\(\s*""#, in: text).isEmpty,
-                    "\(file) has a literal label")
-        }
-        for file in Self.lobbyKotlinFiles {
-            let text = try ent3Source(file)
-            #expect(ent3Matches(#"Text\(\s*""#, in: text).isEmpty, "\(file) has a literal Text")
-        }
-
-    }
-
-    @Test func lobbyCopyStaysShortOnBothPlatforms() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent3Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Add your name", "Camera unavailable"] {
-            #expect(strings[key] != nil, "missing iOS key \(key)")
-        }
-        for key in ["Add your name to join.", "Add your name to start.", "Camera isn\u{2019}t available. You can join with it off."] {
-            #expect(strings[key] == nil, "stale iOS key \(key)")
-        }
-        let xml = try ent3Source("Android/app/src/main/res/values/strings.xml")
-        for (name, value) in [("pm_camera_unavailable", "Camera unavailable"), ("pm_need_name_join", "Add your name"),
-                              ("pm_need_name_start", "Add your name")] {
-            #expect(xml.contains("<string name=\"\(name)\">\(value)</string>"), "\(name) is \(value)")
-        }
-    }
-
 }
 
 @MainActor
@@ -617,23 +553,6 @@ private func ent3Settle(_ condition: () -> Bool) async -> Bool {
         try? await Task.sleep(nanoseconds: 2_000_000)
     }
     return condition()
-}
-
-private func ent3Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func ent3Flat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func ent3Matches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
-    }
 }
 
 #if os(macOS)

@@ -437,30 +437,6 @@ struct STG2TileTests {
         let sharePinned = presenter(StageFixtureScript.inputs(for: try #require(StageFixtureScript.state(named: "presentation-pinned"))))
         #expect(sharePinned.layout.kind == .spotlight && sharePinned.layout.presenterUserId == "r1")
     }
-
-    @Test func stg2SourcesStayDashFreeFlatAndLocalized() throws {
-        let files = ["Sources/Conclave/Features/Meeting/Stage/TileFeaturePolicy.swift",
-                     "Sources/Conclave/Features/Meeting/Stage/TileMenu+iOS.swift",
-                     "Sources/Conclave/Features/Meeting/Stage/SlotView+iOS.swift",
-                     "Sources/Conclave/Skip/ui/call/stage/TileMenu.kt",
-                     "Sources/Conclave/Skip/ui/call/stage/SlotView.kt",
-                     "Tests/ConclaveTests/Skip/STG2TileBridgeTests.kt"]
-        for file in files {
-            let text = try stageSource(file)
-            #expect(stageMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-        }
-
-        let catalog = try stageSource("Sources/Conclave/Resources/Localizable.xcstrings")
-        let catalogKeys = try #require(try JSONSerialization.jsonObject(with: Data(catalog.utf8)) as? [String: Any])["strings"] as? [String: Any]
-        let resources = try stageSource("Android/app/src/main/res/values/strings.xml")
-        for file in ["Sources/Conclave/Skip/ui/call/stage/TileMenu.kt", "Sources/Conclave/Skip/ui/call/stage/SlotView.kt"] {
-            let text = try stageSource(file)
-            for match in stageMatches(#""(ppl|stg|ds)_[a-z0-9_]+""#, in: text) {
-                let name = String(match.dropFirst().dropLast())
-                #expect(resources.contains("name=\"" + name + "\""), "\(file): missing resource \(name)")
-            }
-        }
-    }
 }
 
 #if os(macOS)

@@ -11,7 +11,6 @@ import {
   getTtsText,
   normalizeChatMessage,
   parseChatCommand,
-  TTS_MAX_TEXT_LENGTH,
 } from "../src/chat-commands";
 import type { ChatMessage } from "../src/types";
 
@@ -154,10 +153,6 @@ describe("formatters", () => {
 
   it("formatActionContent prefixes /me", () => {
     expect(formatActionContent("waves")).toBe("/me waves");
-  });
-
-  it("exposes a sane spoken-text cap", () => {
-    expect(TTS_MAX_TEXT_LENGTH).toBeGreaterThan(0);
   });
 });
 

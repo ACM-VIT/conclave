@@ -684,7 +684,6 @@ function ParticipantsPanel({
         </section>
       )}
 
-      {/* Participant list */}
       <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 py-2">
         {displayParticipants.map((participant) => {
           const isMe = participant.userId === currentUserId;

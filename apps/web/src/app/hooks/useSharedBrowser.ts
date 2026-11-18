@@ -35,9 +35,6 @@ interface UseSharedBrowserReturn {
     clearError: () => void;
 }
 
-// Launching Kitesurf can require two sequential Cloudflare requests. The SFU
-// caps each request at 20 seconds, so leave enough time for a successful launch
-// and its acknowledgement to reach this socket.
 const BROWSER_COMMAND_TIMEOUT_MS = 45000;
 const BROWSER_CAPABILITIES_TIMEOUT_MS = 22000;
 
@@ -115,9 +112,6 @@ export function useSharedBrowser({
     const [isLaunching, setIsLaunching] = useState(false);
     const [launchError, setLaunchError] = useState<string | null>(null);
     const activityIntervalRef = useRef<NodeJS.Timeout | null>(null);
-    // Bumped by every server browser event. A launch, navigate or close ack
-    // only writes state if no server event arrived after it was requested,
-    // so a late ack cannot undo a newer close or state change.
     const browserStateEpochRef = useRef(0);
 
     const clearError = useCallback(() => {
@@ -241,9 +235,6 @@ export function useSharedBrowser({
                 return false;
             }
 
-            // The server broadcast the room's browser state after this request
-            // was sent (normally this launch's own "active" state, or a close
-            // that came after it); that is newer than this ack.
             if (browserStateEpochRef.current !== requestEpoch) return true;
             setBrowserState({
                 active: true,

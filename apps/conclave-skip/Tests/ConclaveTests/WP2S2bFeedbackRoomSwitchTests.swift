@@ -179,9 +179,4 @@ struct WP2S2bRoomSwitchViewModelTests {
     }
 }
 #endif
-
-private func s2bSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
 #endif

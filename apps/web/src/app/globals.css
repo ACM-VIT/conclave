@@ -1,11 +1,7 @@
 @import "tailwindcss";
 @import "@conclave/ui-tokens/tokens.css";
 
-/* Streamdown ships its own utility classes (used by the AI Elements Response
-   component); let Tailwind scan them so markdown rendering is styled. */
 @source "../../../../node_modules/streamdown/dist/**/*.js";
-/* The apps SDK ships web components (whiteboard, watch together) styled with
-   Tailwind classes; it lives outside this app's auto-detected sources. */
 @source "../../../../packages/apps-sdk/src/**/*.{ts,tsx}";
 
 @font-face {
@@ -145,9 +141,6 @@ select:focus {
   }
 }
 
-/* Reduced motion: no float, no scale. Fade in, hold in place, fade out. The
-   class selector + !important out-ranks the universal 0.01ms reset below, so
-   the reaction stays readable and animationend still removes it on time. */
 @keyframes reaction-hold {
   0% {
     opacity: 0;
@@ -178,9 +171,6 @@ select:focus {
   overflow: hidden;
   contain: layout paint;
   border: 1px solid rgba(250, 250, 250, 0.08);
-  /* The active-speaker ring is an INSET shadow, not a border-width change;
-     toggling 1px→2px border resized the video content box on every speaker
-     change and read as jitter/flicker. The shadow keeps the box size constant. */
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
@@ -188,8 +178,6 @@ select:focus {
   border-color: rgba(250, 250, 250, 0.15);
 }
 
-/* The webinar attendee stage is a full-bleed broadcast surface: the card
-   chrome (radius, border, hover ring, speaker ring) reads as clutter there. */
 .webinar-stage-main > .acm-video-tile,
 .webinar-stage-main > .acm-video-tile:hover,
 .webinar-stage-main > .acm-video-tile.speaking {
@@ -245,9 +233,6 @@ select:focus {
   }
 }
 
-/* AI voice agent orb — an ambient "sky" sphere: a bright base with blurred
-   cloud layers drifting inside, brightening and speeding up while speaking.
-   Palette is driven by CSS vars so the whole orb recolors in one place. */
 .voice-agent-orb {
   --vao-sky-top: #eaf6ff;
   --vao-sky-mid: #bfe0ff;
@@ -258,9 +243,6 @@ select:focus {
   position: relative;
   display: grid;
   place-items: center;
-  /* The loudness swell is written straight to this element's transform by
-     VoiceAgentOrb.tsx (only when the level changes), so the core is free to
-     breathe + hue-shift without transform fighting the loudness scale. */
 }
 .voice-agent-orb--regular {
   width: 96px;
@@ -284,14 +266,11 @@ select:focus {
     var(--vao-sky-mid) 30%,
     var(--vao-sky-bottom) 100%
   );
-  /* Slow, soothing hue drift stays within the blue family (never a rainbow
-     spin), over a gentle resting breath. */
   animation: vao-hue 17s ease-in-out infinite, vao-breathe 6s ease-in-out infinite;
 }
 .voice-agent-orb[data-state="speaking"] .voice-agent-orb-core {
   animation-duration: 17s, 3.4s;
 }
-/* A bright near-white bloom in the upper area, drifting slowly. */
 .voice-agent-orb-core::before {
   content: "";
   position: absolute;
@@ -302,8 +281,6 @@ select:focus {
   opacity: 0.75;
   animation: vao-drift-b 15s ease-in-out infinite alternate;
 }
-/* Reactive core glow: intensifies with the agent's live loudness. Its opacity
-   is written directly by VoiceAgentOrb.tsx; this is the resting value. */
 .voice-agent-orb-glow {
   position: absolute;
   inset: 22% 22% 28% 22%;
@@ -320,8 +297,6 @@ select:focus {
   filter: blur(var(--vao-blur));
   will-change: transform, opacity;
 }
-/* Deep-blue cloud mass billowing up from the bottom; the tighter transparent
-   stop + lower blur give it a defined, puffy top edge near the middle. */
 .voice-agent-orb-cloud:nth-child(1) {
   inset: 34% -14% -30% -14%;
   background: radial-gradient(
@@ -331,7 +306,6 @@ select:focus {
   );
   animation: vao-drift-a 13s ease-in-out infinite alternate;
 }
-/* A second, offset blue tuft so the billow reads as layered cloud, not a disc. */
 .voice-agent-orb-cloud:nth-child(2) {
   inset: 46% -24% -26% 16%;
   background: radial-gradient(
@@ -342,7 +316,6 @@ select:focus {
   opacity: 0.9;
   animation: vao-drift-b 10s ease-in-out infinite alternate;
 }
-/* White wisp catching light along the cloud's upper edge. */
 .voice-agent-orb-cloud:nth-child(3) {
   inset: 20% 12% 40% 2%;
   background: radial-gradient(
@@ -382,7 +355,6 @@ select:focus {
     transform: translate(-7%, 6%) scale(0.92);
   }
 }
-/* Soothing hue drift: a narrow sweep around the base blue (never a full spin). */
 @keyframes vao-hue {
   0%, 100% {
     filter: hue-rotate(-15deg) saturate(1);
@@ -400,7 +372,6 @@ select:focus {
   }
 }
 
-/* Reduced motion: hold a calm, legible resting frame. */
 @media (prefers-reduced-motion: reduce) {
   .voice-agent-orb-core,
   .voice-agent-orb-core::before,
@@ -511,8 +482,6 @@ select:focus {
   }
 }
 
-/* Playhead fill: scaleX on a full-width bar (transform-origin: left), not
-   width, so the loop never re-runs layout. */
 @keyframes acm-watch-reel {
   0% {
     transform: scaleX(0.06);
@@ -558,7 +527,6 @@ select:focus {
   }
 }
 
-/* Messages arrive tens of times a call: opacity only, no slide or scale. */
 .web-chat-message-new-peer,
 .web-chat-message-new-self {
   animation: acm-fade-in 0.11s cubic-bezier(0.2, 0.75, 0.15, 1) both;
@@ -612,7 +580,6 @@ select:focus {
   animation: web-chat-highlight-flash 900ms ease-out both;
 }
 
-/* Equalizer bars shown on a TTS voice message while it is being spoken. */
 @keyframes web-chat-tts-eq {
   0%,
   100% {
@@ -648,9 +615,6 @@ select:focus {
   }
 }
 
-/* Smooth height+fade collapse for Radix Collapsible surfaces (Conclave AI
-   reasoning / chain-of-thought). Radix exposes the measured content height as
-   --radix-collapsible-content-height, which lets us animate from/to 0. */
 @keyframes web-collapsible-down {
   from {
     height: 0;
@@ -683,8 +647,6 @@ select:focus {
   animation: web-collapsible-up 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Compact markdown for small preview surfaces (e.g. the GitHub issue approval
-   card) so streamed headings don't tower over ~11px body text. */
 .web-markdown-compact :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.5rem 0 0.25rem;
   font-size: 12px;
@@ -698,8 +660,6 @@ select:focus {
   margin-block: 0.375rem;
 }
 
-/* Re-trim the edges: the unlayered rules above would otherwise out-rank the
-   layered first/last-child utilities the Response component applies. */
 .web-markdown-compact > :first-child {
   margin-top: 0;
 }
@@ -747,8 +707,6 @@ select:focus {
 
 .mobile-sheet {
   background: var(--mobile-sheet-bg);
-  /* 1px border (incl. the top edge) gives the only separation from the stage;
-     no elevation glow. */
   border: 1px solid var(--mobile-sheet-border);
   border-bottom: 0;
   border-radius: 24px 24px 0 0;
@@ -873,8 +831,6 @@ select:focus {
   display: none;
 }
 
-/* Docked-panel slide. Must match REFLOW_DURATION_MS + FLIP_EASING in
-   components/GridLayout.tsx so the panel and the stage reflow move together. */
 @theme {
   --animate-panel-in: meet-panel-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -899,8 +855,6 @@ select:focus {
   }
 }
 
-/* Reaction chip landing: a quick overshoot pop, Discord-style. Applied when a
-   chip first mounts and re-triggered on count change by re-keying the count. */
 @keyframes web-chat-reaction-pop {
   0% {
     transform: scale(0.5);

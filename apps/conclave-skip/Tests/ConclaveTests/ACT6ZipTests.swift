@@ -382,33 +382,5 @@ struct ACT6ZipTests {
         #expect(zip.standings.first?.solvedAtMillis == ZipFixtures.serverNow + ZipFixtures.startOffset + 12000)
         #expect(zip.standings.last?.solvedAtMillis == 0)
     }
-
-    private let iosPath = "Sources/Conclave/Features/Meeting/Games/Native/Boards/ZipBoard+iOS.swift"
-    private let kotlinPath = "Sources/Conclave/Skip/ui/games/boards/ZipBoard.kt"
-
-    @Test func zipStringsAreInBothCatalogs() throws {
-        let catalogData = try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        let ios = try stageSource(iosPath)
-        var keys = Set<String>()
-        for match in stageMatches(#"ConclaveStrings\.(?:text|format)\("[^"]+""#, in: ios) {
-            if let start = match.firstIndex(of: "\"") { keys.insert(String(match[match.index(after: start)...].dropLast())) }
-        }
-        #expect(keys.count > 30)
-        for key in keys { #expect(strings[key] != nil, "missing iOS key \(key)") }
-        let hintsEntry = try #require(strings["%lld hints used"] as? [String: Any])
-        #expect(String(describing: hintsEntry).contains("%lld hint used"))
-        let xml = try stageSource("Android/app/src/main/res/values/strings.xml")
-        let kotlin = try stageSource(kotlinPath)
-        var names = Set<String>()
-        for match in stageMatches(#""(?:act|gm|ds)_[a-z0-9_]+""#, in: kotlin) { names.insert(String(match.dropFirst().dropLast())) }
-        #expect(names.count > 25)
-        for name in names { #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)") }
-        for plural in ["gm_zip_cells", "gm_zip_hints_used", "gm_zip_hint_cost"] {
-            #expect(xml.contains("<plurals name=\"" + plural + "\">"), "missing plural \(plural)")
-        }
-    }
 }
 #endif

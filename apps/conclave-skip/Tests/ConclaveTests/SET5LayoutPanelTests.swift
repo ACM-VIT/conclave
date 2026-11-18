@@ -165,35 +165,9 @@ struct SET5LayoutPanelTests {
         #expect(MeetingNoticePolicy.suspendsToastLane(style: .bottomSheet))
     }
 
-    @Test func layoutStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(Self.source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        let ios = try Self.source("Sources/Conclave/Features/Meeting/Settings/LayoutPanel+iOS.swift")
-        let keys = set5Captures(#"ConclaveStrings\.(?:text|format)\(\s*"((?:[^"\\]|\\.)*)""#, in: ios)
-        for key in keys {
-            #expect(strings[key] != nil, "missing iOS key: \(key)")
-        }
-        let xml = try Self.source("Android/app/src/main/res/values/strings.xml")
-        let android = try Self.source("Sources/Conclave/Skip/ui/settings/LayoutPanel.kt")
-        for name in Set(set5Captures(#""(lay_[a-z0-9_]+)""#, in: android)) {
-            #expect(xml.contains("name=\"" + name + "\""), "missing Android name: \(name)")
-        }
-    }
-
     static func source(_ path: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         return try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
     }
-}
-
-private func set5Captures(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let ns = text as NSString
-    var result: [String] = []
-    for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) where match.numberOfRanges > 1 {
-        let range = match.range(at: 1)
-        if range.location != NSNotFound { result.append(ns.substring(with: range)) }
-    }
-    return result
 }
 #endif

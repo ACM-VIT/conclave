@@ -16,15 +16,10 @@ const RATING = "pg";
 
 const MEDIA_KINDS: readonly KlipyMediaKind[] = ["gifs", "stickers", "clips"];
 
-// Size/format preferences for the catalogs that return nested renditions
-// (gifs + stickers). Clips return a flat file object handled separately.
 const NESTED_SIZE_PREFERENCE = ["md", "sm", "hd", "xs"] as const;
 const PREVIEW_SIZE_PREFERENCE = ["sm", "xs", "md", "hd"] as const;
 
 interface NestedMediaConfig {
-  // Animated formats for the sent media. GIF is preferred so transparency and
-  // animation survive on every client (including native ones that can't render
-  // animated WebP).
   urlFormats: readonly string[];
   previewFormats: readonly string[];
   pagePath: string;
@@ -125,7 +120,6 @@ const findRendition = (
 const buildPageUrl = (path: string, slug: string | null): string | undefined =>
   slug ? `https://klipy.com/${path}/${encodeURIComponent(slug)}` : undefined;
 
-// gifs + stickers: `file` is `{ [size]: { [format]: { url, width, height } } }`.
 const normalizeNestedItem = (
   value: unknown,
   media: "gifs" | "stickers",
@@ -166,8 +160,6 @@ const normalizeNestedItem = (
   };
 };
 
-// clips: `file` is a flat `{ mp4, gif, webp }` map of URLs, with dimensions in
-// a sibling `file_meta` map keyed by the same format names.
 const normalizeClipItem = (value: unknown): KlipyMediaResult | null => {
   const item = asRecord(value);
   if (!item) return null;
@@ -179,8 +171,6 @@ const normalizeClipItem = (value: unknown): KlipyMediaResult | null => {
   const videoUrl = normalizeKlipyMediaUrl(file.mp4);
   if (!videoUrl) return null;
 
-  // The GIF (preferred) or WebP rendition is the image fallback that ships in
-  // `url`, so clients that don't play the MP4 still show the animation.
   const imageUrl =
     normalizeKlipyMediaUrl(file.gif) ?? normalizeKlipyMediaUrl(file.webp);
   if (!imageUrl) return null;

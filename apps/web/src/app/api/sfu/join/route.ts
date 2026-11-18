@@ -138,7 +138,6 @@ const fetchWithTimeout = async (
   const deadline = AbortSignal.timeout(timeoutMs);
   return fetch(input, {
     ...init,
-    // Keep the deadline active while callers consume the response body too.
     signal: init.signal ? AbortSignal.any([init.signal, deadline]) : deadline,
   });
 };
@@ -282,8 +281,6 @@ const resolveNonDrainingSfuUrl = async (options: {
   });
 
   const selection = selectPreOwnerSfu(candidates, options.routingKey);
-  // Stable hashing inside the near-latency band avoids needless placement
-  // churn. The shared reservation below is still the concurrency authority.
   return selection;
 };
 
@@ -375,8 +372,6 @@ const resolveRoutedSfuUrl = async (options: {
   const candidateSfuUrls = options.candidateSfuUrls
     .map((url) => normalizeSfuUrl(url))
     .filter(Boolean);
-  // Ownership lookup and edge-to-SFU health/latency probes are independent.
-  // Running them together removes a full regional RTT from first-join startup.
   const [ownerSfuUrl, selection] = await Promise.all([
     resolveRoomOwnerSfuUrl({
       candidateSfuUrls,
@@ -411,9 +406,6 @@ const resolveRoutedSfuUrl = async (options: {
     }
 
     let everyAttemptWasDraining = true;
-    // A timed-out reservation may still have committed in Redis. Trying the
-    // next healthy candidate is safe: its atomic response returns that first
-    // winner instead of creating a second placement.
     const reservationCandidates = [
       selection.candidate,
       ...selection.alternatives,
@@ -650,13 +642,6 @@ export async function POST(request: Request) {
     .catch(() => null);
   const sessionUser = session?.user;
   const sessionEmail = sessionUser?.email?.trim() || undefined;
-  // Identity comes only from the authenticated session. The SFU keys host
-  // return, webinar host/co-host, allow/block lists and locked-room admission
-  // on the token's email, so an email or id taken from the request body would
-  // let anyone join as anyone (including a room's host). Native clients send
-  // the better-auth session cookie too, and read their identity back from the
-  // token's claims, so a request without a session joins as a session-scoped
-  // guest (`guest-${sessionId}`), as the web client renders it.
   const email = sessionEmail;
   const name =
     sessionUser?.name?.trim() || body?.user?.name?.trim() || undefined;
@@ -665,15 +650,10 @@ export async function POST(request: Request) {
   const baseUserId = email || providedId || `guest-${sessionId}`;
   const isWebinarAttendeeJoin = joinMode === "webinar_attendee";
   const isScheduledHostRoom = isScheduledRoomId(roomId);
-  // Only the authenticated session may confer super admin status; native/body
-  // identity fields are not proof of ownership of an allowlisted email.
   const isSuperAdmin = isSfuSuperAdminEmail(normalizedSessionEmail);
   const isForcedHost = !isWebinarAttendeeJoin && isSuperAdmin;
   const requestedHost = Boolean(body?.isHost ?? body?.isAdmin);
 
-  // For scheduled webinar rooms, only the actual host or a registered co-host
-  // may claim host status. We resolve this by looking the scheduled webinar
-  // up by roomId on the SFU and matching the session email.
   let scheduledRoomHostMatch = false;
   if (isScheduledHostRoom && !isWebinarAttendeeJoin && normalizedSessionEmail) {
     const scheduled = await lookupScheduledWebinarByRoomId(clientId, roomId);
@@ -687,19 +667,12 @@ export async function POST(request: Request) {
     }
   }
 
-  // Host/admin is NEVER minted from a bare client claim. The decision (and its
-  // security invariant + regression tests) lives in resolveHostGrant: a host
-  // *intent* only grants room-creation, so the creator becomes host via the
-  // SFU's server-authoritative createdRoom path — never seizing an existing room.
   const { isHost, allowRoomCreation } = resolveHostGrant({
     isWebinarAttendeeJoin,
     isForcedHost,
     scheduledRoomHostMatch,
     isScheduledHostRoom,
     requestedHost,
-    // `/abc123` public room links intentionally create the room on first join.
-    // This still does not mint host/admin for an existing room; the SFU only
-    // promotes the requester through its server-authoritative createdRoom path.
     bodyAllowRoomCreation: Boolean(body?.allowRoomCreation),
   });
 

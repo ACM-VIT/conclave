@@ -5,9 +5,6 @@ import Testing
 
 @MainActor
 struct S2ChatFollowTests {
-    static let iosTimeline = "Sources/Conclave/Features/Meeting/Chat/ChatTimeline+iOS.swift"
-    static let androidTimeline = "Sources/Conclave/Skip/ui/chat/ChatTimeline.kt"
-
     private struct Reader {
         var isAtBottom: Bool
         var endVisible: Bool
@@ -55,16 +52,6 @@ struct S2ChatFollowTests {
                 endCameIntoView()
             }
         }
-    }
-
-    private func source(_ path: String) throws -> String {
-        try chatSource(path)
-    }
-
-    private func section(_ text: String, from start: String, to end: String) throws -> String {
-        let lower = try #require(text.range(of: start), "missing \(start)")
-        let upper = try #require(text.range(of: end, range: lower.upperBound..<text.endIndex), "missing \(end) after \(start)")
-        return String(text[lower.upperBound..<upper.lowerBound])
     }
 
     @Test func theFollowRuleFollowsAtTheBottomWhenTheEndIsVisibleAndForYourOwnSend() {

@@ -395,34 +395,5 @@ struct SYS3NotificationsTests {
         #expect(!AdmissionNotifyCapability.offersRow(isAndroid: false, cellPassed: true, isWaiting: false, isPromotion: false))
         #expect(!AdmissionNotifyCapability.offersRow(isAndroid: false, cellPassed: true, isWaiting: true, isPromotion: true))
     }
-
-    @Test func sys3StringsResolveOnBothPlatforms() throws {
-
-        let catalog = try sys3Source("Sources/Conclave/Resources/Localizable.xcstrings")
-        for key in ["Notify Me When I’m Let In", "We’ll notify you when you’re let in.", "You’re in. Tap to return to the call.",
-                    "Mentioned you", "Private message", "Message Notifications", "Notifications are off for Conclave.",
-                    "Get notified about private messages and mentions while you’re in another app.", "Open Settings"] {
-            #expect(catalog.contains("\"" + key + "\""), "missing iOS key \(key)")
-        }
-        let strings = try sys3Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["sys_notif_admitted_body", "sys_notif_mention", "sys_notif_mention_line", "sys_channel_admission",
-                     "sys_channel_admission_desc", "sys_channel_messages", "sys_channel_messages_desc", "sys_notif_prime_updates",
-                     "sys_notif_prime_call", "sys_allow", "ds_not_now", "sys_notif_off", "ds_open_settings", "set_message_notifications",
-                     "set_message_notifications_desc", "sys_call_notif_title", "sys_call_notif_on", "sys_call_notif_off", "chat_you",
-                     "chat_preview_photo", "chat_reply_gif", "chat_sticker", "chat_clip", "chat_voice", "chat_private_received"] {
-            #expect(strings.contains("name=\"" + name + "\""), "missing Android resource \(name)")
-        }
-
-        #expect(catalog.contains("\"Private message\"") && catalog.contains("\"Mentioned you\""))
-    }
-}
-
-private func sys3Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func sys3Flat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
 #endif

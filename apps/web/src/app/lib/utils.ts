@@ -2,22 +2,12 @@ import { EMOJI_REACTIONS, type ReactionEmoji } from "./constants";
 import { isMediaCaptureTimeoutError } from "./media-capture-timeout";
 import type { MeetError, ReactionOption } from "./types";
 
-/** Normalize an unknown thrown value into an Error for promise rejections. */
 export const toError = (value: unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
 
-/**
- * The DOMException/Error name of an unknown caught value ("" when it isn't
- * an Error). Promise `.catch` callbacks receive `any`; route them through
- * this instead of touching `.name` directly.
- */
 export const errorName = (value: unknown): string =>
   value instanceof Error ? value.name : "";
 
-/**
- * The error message from a failed fetch Response: the JSON body's `error`
- * field when present, else statusText, else the fallback.
- */
 export const readResponseError = async (
   response: Response,
   fallback = "Request failed",
@@ -258,8 +248,6 @@ export function sanitizeInstitutionDisplayName(
 const CHAT_URL_PATTERN =
   /((?:https?:\/\/|www\.)[^\s]+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?:\/[^\s]*)?)/gi;
 
-//fancy single pass regex linkeifer codex gave me
-// ts is actually agi holly fuck
 export function getChatMessageSegments(
   content: string
 ): Array<{ text: string; href?: string }> {

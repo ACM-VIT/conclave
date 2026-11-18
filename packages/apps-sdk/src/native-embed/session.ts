@@ -1,10 +1,3 @@
-// The embed's half of one app session (S60 13 f, S60R 25): it owns the Y.Doc and Awareness the renderer draws from,
-// says `ready` with its state vector, applies the authoritative `snapshot` (then sends only what the room lacks), applies
-// later room updates, and sends its own updates and coalesced awareness. After a reconnect native sends `resync`; the
-// embed answers `sync` with its state vector and the same snapshot-then-diff rule runs again, so nothing reaches the
-// room twice. Local edits made before the snapshot, while reconnecting or while read-only are not sent; the next diff
-// carries whatever the room still lacks. A `close` (app closed or replaced) invalidates the session for good.
-
 import * as Y from "yjs";
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
 import type { NativeTransport } from "./bridge";
@@ -47,21 +40,17 @@ export type EmbedStatusPayload = {
   editorCount: number;
 };
 
-/** Spin the Wheel page data (ACT-8, `status.app`; bounds in `WHEEL_LIMITS`). */
 export type WheelAppStatus = {
   kind: "wheel";
   entries: { id: string; label: string }[];
-  /** Newest first. */
   results: { id: string; label: string; byName: string }[];
   removeWinner: boolean;
   sounds: boolean;
   spinning: boolean;
-  /** The last spin that settled live in this embed (never a replayed one), for the native "Winner: %@". */
   winnerSpinId: string;
   winnerLabel: string;
 };
 
-/** Watch Together page data (ACT-8, `status.app`; bounds in `WATCH_LIMITS`). */
 export type WatchAppStatus = {
   kind: "watch";
   videoId: string;
@@ -73,7 +62,6 @@ export type WatchAppStatus = {
   requestDeclined: boolean;
 };
 
-/** A Wheel or Watch embed's status: only the page data (native keeps its Whiteboard defaults). */
 export type AppStatusPayload = { app: WheelAppStatus | WatchAppStatus };
 
 export type CommandResult = { ok: boolean; error?: string; pngBase64?: string };
@@ -81,7 +69,6 @@ export type CommandHandler = (envelope: Envelope<NativeToEmbedType>) => CommandR
 
 type AwarenessChange = { added: number[]; updated: number[]; removed: number[] };
 
-/** Until the host says otherwise the embed is read-only, so nothing is sent before native has scoped it. */
 const INITIAL_HOST_STATUS: HostStatus = {
   readOnly: true,
   connection: "live",
@@ -100,7 +87,6 @@ export class NativeEmbedSession {
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
   readonly scope: SessionScope;
-  /** Rejected host messages by reason (never content), for the contract test and debugging. */
   readonly rejections: RejectionReason[] = [];
 
   private readonly transport: NativeTransport;
@@ -125,7 +111,6 @@ export class NativeEmbedSession {
     transport.onMessage((raw) => this.receive(raw));
   }
 
-  /** Announces the bundle and asks for the authoritative snapshot. */
   start(): void {
     this.send("ready", {
       bundleVersion: NATIVE_EMBED_BUNDLE_VERSION,
@@ -146,7 +131,6 @@ export class NativeEmbedSession {
     return this.closed;
   }
 
-  /** The renderer re-reads host status, sync and close through this. */
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => {
@@ -158,7 +142,6 @@ export class NativeEmbedSession {
     this.commandHandler = handler;
   }
 
-  /** The renderer's status (tool, ink, history, pages, presence, or a Wheel or Watch page's data); sent only on change. */
   sendStatus(status: EmbedStatusPayload | AppStatusPayload): void {
     if (this.closed) return;
     const key = JSON.stringify(status);
@@ -172,7 +155,6 @@ export class NativeEmbedSession {
     this.send("resize", { width: Math.max(0, Math.round(width)), height: Math.max(0, Math.round(height)) });
   }
 
-  /** One host message; returns why it was dropped ("none" when handled). */
   receive(raw: unknown): RejectionReason {
     if (this.closed) return this.reject("staleAppSession");
     const decoded = decodeHostMessage(raw, this.scope);
@@ -214,7 +196,6 @@ export class NativeEmbedSession {
       case "close":
         this.close();
         return "none";
-      // Every host command shares this dispatch path; unknown runtime values still reject below.
       case "setTool":
       case "setColor":
       case "setStrokeWidth":
@@ -251,7 +232,6 @@ export class NativeEmbedSession {
     }
   }
 
-  /** Stops sending for good (app closed or replaced). */
   close(): void {
     if (this.closed) return;
     this.closed = true;
@@ -275,7 +255,6 @@ export class NativeEmbedSession {
       try {
         applyAwarenessUpdate(this.awareness, awareness.bytes, REMOTE);
       } catch {
-        // A bad presence snapshot is not fatal; the next cursor move refreshes it.
       }
     }
     this.synced = true;
@@ -284,7 +263,6 @@ export class NativeEmbedSession {
     return "none";
   }
 
-  /** After a snapshot: only what the room lacks (Yjs encodes an empty diff as two bytes). */
   private sendMissing(serverVector: Uint8Array): void {
     if (this.host.readOnly || this.host.connection !== "live") return;
     let diff: Uint8Array;
@@ -315,7 +293,6 @@ export class NativeEmbedSession {
       userId: typeof payload.userId === "string" ? payload.userId.slice(0, 128) : "",
       userName: typeof payload.userName === "string" ? payload.userName.slice(0, 128) : "",
     };
-    // Unlocked after a snapshot: send what was drawn meanwhile only through the next resync diff, never here.
     if (wasReadOnly !== this.host.readOnly) this.lastStatus = "";
     this.notify();
   }
@@ -380,7 +357,6 @@ export class NativeEmbedSession {
   }
 }
 
-/** Narrowing helper for command payloads. */
 export const payloadString = (payload: Record<string, unknown>, key: string): string => {
   const value = payload[key];
   return typeof value === "string" ? value : "";

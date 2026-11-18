@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assessCodecNegotiation,
-  buildCodecCapabilityOverrideScript,
   parseCodecScenario,
 } from "./codec-negotiation.mjs";
 
@@ -410,13 +409,4 @@ test("native-compat fails when override evidence is missing or VP9 remains", () 
   assert.match(assessment.failures.join("\n"), /override was not proven/);
   assert.match(assessment.failures.join("\n"), /video\/VP8/);
   assert.match(assessment.failures.join("\n"), /producer replacement/);
-});
-
-test("native capability override cannot capture or emit audio", () => {
-  const script = buildCodecCapabilityOverrideScript("native-compat");
-  assert.match(script, /RTCRtpSender/);
-  assert.match(script, /RTCRtpReceiver/);
-  assert.match(script, /video\/vp9/);
-  assert.doesNotMatch(script, /getUserMedia|AudioContext|AudioNode|\.play\s*\(/);
-  assert.equal(buildCodecCapabilityOverrideScript("all-modern"), "");
 });

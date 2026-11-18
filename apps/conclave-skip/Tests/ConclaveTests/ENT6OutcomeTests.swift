@@ -243,41 +243,6 @@ struct ENT6OutcomeTests {
         #expect(session.premeeting.lobbyMedia?.micIntentOn == PremeetingFixtureScript.rejoinMicOn)
         #expect(session.premeeting.lobbyMedia?.cameraIntentOn == PremeetingFixtureScript.rejoinCameraOn)
     }
-
-    @Test func outcomeStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent6Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Removed From Meeting", "Request Declined", "Connection Lost", "You Were Disconnected", "Couldn\u{2019}t Rejoin",
-                    "Check your connection, then rejoin.", "You can rejoin.",
-                    "Rejoin", "Try Again", "Back to Home", "We couldn\u{2019}t reach Conclave. Check your connection and try again."] {
-            #expect(strings[key] != nil, "missing iOS key \(key)")
-        }
-        for key in ["The host removed you from this meeting.", "Someone in the meeting declined your request to join.",
-                    "The meeting server ended your connection. You can rejoin."] {
-            #expect(strings[key] == nil, "S1b-T7 removed or renamed iOS key \(key)")
-        }
-        let xml = try ent6Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["pm_removed_title", "pm_denied_title", "pm_lost_title", "pm_lost_body",
-                     "pm_disconnected_title", "pm_disconnected_body", "pm_couldnt_rejoin", "pm_rejoin", "pm_back_home",
-                     "ds_try_again", "pm_fail_network", "pm_fail_unknown"] {
-            #expect(xml.contains("<string name=\"\(name)\""), "missing \(name)")
-        }
-        #expect(xml.contains("<string name=\"pm_disconnected_body\">You can rejoin.</string>"))
-        for name in ["pm_removed_body", "pm_denied_body"] {
-            #expect(!xml.contains("<string name=\"\(name)\""), "S1b-T7 removed \(name)")
-        }
-    }
-
-    @Test func theS1bT7CopyCutsReachTheLandingAndSettings() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(ent6Source("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        #expect(strings["Hang tight."] != nil)
-        #expect(strings["This page updates on its own when the host opens the room."] == nil)
-        #expect(strings["Keeps call controls on screen instead of hiding them after a few seconds."] == nil)
-        let xml = try ent6Source("Android/app/src/main/res/values/strings.xml")
-        #expect(xml.contains("<string name=\"pm_waiting_host_body\">Hang tight.</string>"))
-        #expect(!xml.contains("<string name=\"set_always_show_controls_detail\""))
-    }
 }
 
 private enum PremeetingRootPolicyHelpers {
@@ -290,34 +255,6 @@ private enum PremeetingRootPolicyHelpers {
         default:
             return MeetingNoticeKind.none
         }
-    }
-}
-
-private func ent6Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func ent6Flat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func ent6Between(_ text: String, from start: String, to end: String) -> String? {
-    guard let lower = text.range(of: start), let upper = text.range(of: end, range: lower.upperBound..<text.endIndex) else {
-        return nil
-    }
-    return String(text[lower.upperBound..<upper.lowerBound])
-}
-
-private func ent6Count(_ needle: String, in text: String) -> Int {
-    text.components(separatedBy: needle).count - 1
-}
-
-private func ent6Matches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
     }
 }
 

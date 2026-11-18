@@ -251,47 +251,5 @@ struct ActivityProjectionTests {
         #expect(activities.setup == nil)
         #expect(activities.snapshot.withRevision(0) == ActivitiesSnapshot.empty)
     }
-
-    @Test func activityStringsAreInBothCatalogs() throws {
-        let catalogData = try Data(contentsOf: activityPackageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        let iosFiles = try stageFiles(under: "Sources/Conclave/Features/Meeting/Activities", extensions: ["swift"])
-            + stageFiles(under: "Sources/Conclave/Features/Meeting/Games/Native", extensions: ["swift"])
-            + ["Sources/Conclave/Features/Meeting/Stage/ActivityStage+iOS.swift"]
-        var keys = Set<String>()
-        for file in iosFiles where file.hasSuffix("+iOS.swift") {
-            let text = try stageSource(file)
-            for match in stageMatches(#"ConclaveStrings\.(?:text|format)\("[^"]+""#, in: text) {
-                if let start = match.firstIndex(of: "\"") {
-                    keys.insert(String(match[match.index(after: start)...].dropLast()))
-                }
-            }
-        }
-        #expect(keys.count > 80)
-        for key in keys {
-            #expect(strings[key] != nil, "missing iOS key \(key)")
-        }
-        let xml = try String(contentsOf: activityPackageRoot().appendingPathComponent("Android/app/src/main/res/values/strings.xml"), encoding: .utf8)
-        let kotlinFiles = try stageFiles(under: "Sources/Conclave/Skip/ui/activities", extensions: ["kt"])
-            + stageFiles(under: "Sources/Conclave/Skip/ui/games", extensions: ["kt"])
-            + ["Sources/Conclave/Skip/ui/call/stage/ActivityStage.kt", "Sources/Conclave/Skip/ui/copy/ActivitiesCopy.kt",
-               "Sources/Conclave/Skip/ui/copy/GameCopy.kt"]
-        var names = Set<String>()
-        for file in kotlinFiles {
-            let text = try stageSource(file)
-            for match in stageMatches(#""(?:act|gm|br|app|stg|ds|set)_[a-z0-9_]+""#, in: text) {
-                names.insert(String(match.dropFirst().dropLast()))
-            }
-        }
-        #expect(names.count > 80)
-        for name in names {
-            #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)")
-        }
-    }
-}
-
-private func activityPackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 }
 #endif

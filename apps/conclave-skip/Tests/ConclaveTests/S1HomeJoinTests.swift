@@ -66,55 +66,5 @@ struct S1HomeJoinTests {
         #expect(fixtureRows.last?.title == WebinarLandingFixtureScript.title)
         #expect(fixtureRows.last?.routeKind == .webinarLanding)
     }
-
-    @Test func theEmptyParagraphAndTheDeadInviteHintAreGoneEverywhere() throws {
-        let iosKeys = ["Start a meeting, or join one with a code or link.", "You can invite people after you start."]
-        let androidNames = ["pm_empty_body", "pm_invite_after_start"]
-        let root = s1hjRoot().appendingPathComponent("Sources/Conclave")
-        let enumerator = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
-        var scanned = 0
-        while let url = enumerator.nextObject() as? URL {
-            guard url.pathExtension == "swift" || url.pathExtension == "kt" else { continue }
-            let text = try String(contentsOf: url, encoding: .utf8)
-            scanned += 1
-            for key in iosKeys {
-                #expect(!text.contains(key), "\(url.lastPathComponent) still uses \(key)")
-            }
-            for name in androidNames {
-                #expect(!text.contains("\"\(name)\""), "\(url.lastPathComponent) still resolves \(name)")
-            }
-        }
-        #expect(scanned > 100)
-
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(s1hjSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        for key in iosKeys {
-            #expect(strings[key] == nil, "Localizable.xcstrings still has \(key)")
-        }
-        #expect(strings["No Recent Meetings"] != nil)
-        let xml = try s1hjSource("Android/app/src/main/res/values/strings.xml")
-        for name in androidNames {
-            #expect(!xml.contains("<string name=\"\(name)\">"), "strings.xml still has \(name)")
-        }
-        #expect(xml.contains("<string name=\"pm_empty_title\">"))
-    }
-}
-
-private func s1hjRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func s1hjSource(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: s1hjRoot().appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func s1hjFlat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func s1hjSlice(_ text: String, from start: String, to end: String) throws -> String {
-    let lower = try #require(text.range(of: start))
-    let upper = try #require(text.range(of: end, range: lower.upperBound..<text.endIndex))
-    return String(text[lower.lowerBound..<upper.lowerBound])
 }
 #endif

@@ -1,6 +1,5 @@
 import React from "react";
 
-/** Screen-with-play glyph for launcher surfaces. */
 export function WatchAppIcon() {
   return (
     <svg

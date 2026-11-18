@@ -82,6 +82,14 @@ Full contributor guide: `packages/apps-sdk/docs/guides/add-a-game.md`.
 
 - `trivia`: Kahoot/Deezer-style timed quiz; speed-weighted scoring; projects
   per-player tile status (answered, correct, points) for the video-tile overlay.
+- `long-shot`: typed-answer dive game where rarer correct answers sink you
+  deeper (10 m per point, 7 prompts reach at most 7,000 m). Answers are matched
+  (aliases, small typos) against curated lists sorted into obvious, solid, rare,
+  and long-shot tiers. Two modes: dive together (each prompt shows for a 3 s
+  countdown, then 25 s to land one accepted answer, retrying freely) or last one
+  under (pass a hidden, random 10-30 s fuse by naming unused answers; whoever
+  holds it when it pops loses a heart, every 600 points of answers earns a heart
+  up to five, last diver under wins).
 - `bluff`: Fibbage-style fake-answer game.
 - `would-you-rather`: room split prompts with no wrong answer.
 - `most-likely-to`: player-target voting prompts; tiles are tappable ballots.
@@ -89,9 +97,17 @@ Full contributor guide: `packages/apps-sdk/docs/guides/add-a-game.md`.
 - `imposter`: Spyfall-style social deduction; exercises the hidden-info path
   (imposter and crew receive different `playerView`s); tiles are tappable
   ballots during the accusation vote.
-- `wordle`: turn-based word game with a setter/guesser split.
+- `wordle`: five-letter word game with a random or player-set word. The `mode`
+  option picks `solo` (everyone races on a private board), `relay` ("Take
+  turns": one shared public board, teammates guess in rotation on a
+  `turnSeconds` timer, with a `passTurn` move; a guesser who drops keeps the
+  turn for a 5 s grace window before it moves on) or `huddle` ("All together":
+  one shared board, anyone on the team guesses at any time). Team modes expose
+  the board as `publicView.team` and mirror it into the private view's
+  `myGuesses`/`canGuess` (and the setter's `boards`) so older renderers still
+  work.
 
-Trivia, Bluff, Would You Rather, Most Likely To, and Imposter can generate fresh
+Trivia, Long Shot, Bluff, Would You Rather, Most Likely To, and Imposter can generate fresh
 content from the host's topic input when OpenAI is configured.
 
 ## Beyond the dock

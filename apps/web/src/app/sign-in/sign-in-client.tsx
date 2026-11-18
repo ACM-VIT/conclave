@@ -102,8 +102,6 @@ export default function SignInClient({ next }: SignInClientProps) {
     window.location.replace(safeNext);
   }, [safeNext, session?.user]);
 
-  // Coming back from the provider with the Back button can restore this page
-  // from the back-forward cache mid-"Redirecting"; re-enable the buttons.
   useEffect(() => {
     const handlePageShow = (event: PageTransitionEvent) => {
       if (event.persisted) setActiveProvider(null);
@@ -144,8 +142,6 @@ export default function SignInClient({ next }: SignInClientProps) {
       setActiveProvider(provider);
       setError(null);
       try {
-        // better-auth reports a failed request as `{ error }` rather than
-        // throwing; without this the "Redirecting" state never cleared.
         const result = await signIn.social({
           provider,
           callbackURL: `${window.location.origin}${safeNext}`,

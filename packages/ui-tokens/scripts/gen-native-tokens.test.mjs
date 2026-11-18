@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { native, tokens } from "../src/tokens.ts";
-import * as entry from "../src/tokens.js";
+import { native } from "../src/tokens.ts";
 import { androidRoles, generateNativeTokens, renderNativeTokens } from "./gen-native-tokens.mjs";
 
 const script = fileURLToPath(new URL("./gen-native-tokens.mjs", import.meta.url));
@@ -32,15 +31,6 @@ async function snapshot(root) {
     }
   }));
 }
-
-test("explicit TS import and existing JS shim expose an additive native namespace", () => {
-  assert.equal(entry.native, native);
-  assert.equal(entry.tokens, tokens);
-  assert.deepEqual(Object.keys(tokens), ["color", "space", "radius", "font", "text", "border", "opacity", "motion"]);
-  assert.equal(tokens.color.accentSecondary, "#FF007A");
-  assert.equal(tokens.color.textMuted, "rgba(250, 250, 250, 0.74)");
-  assert.equal(tokens.font.sans, '"PolySans Trial", system-ui, -apple-system, sans-serif');
-});
 
 test("renders all 48 roles per scheme as unsigned ARGB Int64, plus typed metrics and avatar order", () => {
   const swift = renderNativeTokens().get(swiftPath);

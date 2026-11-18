@@ -129,8 +129,6 @@ import {
 
 const ROOT_KEY = "${appId}";
 
-// Joining docs stay empty until server sync. Read helpers should return local
-// UI defaults; mutation helpers should lazily create shared Yjs types.
 export const create${pascal}Doc = (): Y.Doc => createAppDoc(ROOT_KEY);
 
 export const get${pascal}Root = (doc: Y.Doc): Y.Map<unknown> =>

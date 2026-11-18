@@ -1,8 +1,6 @@
 "use client";
 
-// Ported from AI SDK Elements (elements.ai-sdk.dev) "Task" and themed for
-// Conclave. Collapsible, labelled groups with a count — used to present meeting
-// minutes (topics, decisions, action items, ...) like a real summary surface.
+// Ported from AI SDK Elements (elements.ai-sdk.dev) "Task".
 
 import { ChevronDownIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";

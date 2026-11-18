@@ -8,7 +8,6 @@ import MeetsClientPage from "../../meets-client-page";
 const GUEST_USER_STORAGE_KEY = "conclave:guest-user";
 const MAX_ATTENDEE_NAME_LENGTH = 60;
 
-/** The stored guest name, or null when the viewer has never introduced themselves. */
 const readStoredGuestName = (): string | null => {
   if (typeof window === "undefined") return null;
   try {
@@ -40,7 +39,6 @@ const storeGuestName = (name: string): void => {
       JSON.stringify({ id, name }),
     );
   } catch {
-    // A blocked storage still lets them watch; they'll appear as "Guest".
   }
 };
 
@@ -192,7 +190,6 @@ export default function WebinarLandingClient({
         };
         if (data?.scheduledWebinar) setWebinar(data.scheduledWebinar);
       } catch {
-        // The countdown can continue from the server-rendered snapshot.
       }
     };
     const interval = window.setInterval(() => {
@@ -211,8 +208,6 @@ export default function WebinarLandingClient({
     return now >= webinar.scheduledStartAt - earlyMs;
   }, [webinar, now]);
 
-  // Guest session refetches become pending again on window focus. Once admitted,
-  // keep the meeting mounted: unmounting it runs the socket/media cleanup.
   useEffect(() => {
     if (
       isOpen &&
@@ -293,8 +288,6 @@ export default function WebinarLandingClient({
     );
   }
 
-  // `isOpen` is always true when there's no webinar snapshot, so reaching here
-  // guarantees `webinar` is present — this guard just restores that narrowing.
   if (!webinar) return null;
 
   if (webinar.status === "ended" || webinar.status === "cancelled") {

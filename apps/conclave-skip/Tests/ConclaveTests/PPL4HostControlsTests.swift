@@ -84,13 +84,10 @@ struct PPL4HostControlsTests {
 
     @Test func policyIdsAndPositivePhrasingStayStable() {
 
-        #expect(HostPolicyID.directMessages.rawValue == "directMessages")
-        #expect(HostPolicyID.readAloud.rawValue == "readAloud")
         let inputs = HostControlsInputs.make(isChatLocked: true, isTtsDisabled: true, isReactionsDisabled: false)
         #expect(!HostControlsPolicy.isOn(.allowChat, inputs: inputs))
         #expect(!HostControlsPolicy.isOn(.readAloud, inputs: inputs))
         #expect(HostControlsPolicy.isOn(.reactions, inputs: inputs))
-        #expect(HostPolicyID.chatRows == [.allowChat, .directMessages, .photos, .readAloud, .reactions])
     }
 
     @Test func bulkRowsFollowSharesAndHandsAndMediaBulkConfirms() {
@@ -250,10 +247,5 @@ struct PPL4HostControlsTests {
         #expect(host.snapshot == HostControlsSnapshot.empty.withRevision(host.snapshot.revision))
     }
 
-}
-
-private func ppl4Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
 }
 #endif

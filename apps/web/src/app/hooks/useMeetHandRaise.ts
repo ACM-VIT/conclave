@@ -23,8 +23,6 @@ export function useMeetHandRaise({
     isHandRaisedRef.current = isHandRaised;
   }, [isHandRaised, isHandRaisedRef]);
 
-  // Each toggle is optimistic. Only the newest request may roll the state
-  // back, so a late failure from an older toggle cannot undo a newer one.
   const requestSerialRef = useRef(0);
 
   const setHandRaisedState = useCallback(

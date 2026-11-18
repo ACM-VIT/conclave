@@ -3,12 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import { color, radius } from "@conclave/ui-tokens";
 
-/**
- * Small flat primitives for the operator dashboard, composed straight from
- * @conclave/ui-tokens so the panel speaks the same language as the meeting
- * surface: one sans, hairline borders, a single coral accent, no shadows.
- */
-
 export const inputClass =
   "w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] text-[#fafafa] outline-none transition-colors placeholder:text-[#fafafa]/35 focus:border-[#F95F4A]/60";
 
@@ -124,11 +118,6 @@ export function Section({
   );
 }
 
-/**
- * Flat one-hour trend line. Values are index-aligned samples; the line is a
- * plain polyline in the accent color over a hairline baseline, no fill and no
- * decoration. Callers should gate on enough samples to draw a real shape.
- */
 export function Sparkline({
   values,
   width = 72,
@@ -179,10 +168,6 @@ export function Sparkline({
   );
 }
 
-/**
- * Flat popover anchored to a secondary button: opens on click, closes on outside
- * click or Escape. No portal needed while headers stay unclipped.
- */
 export function Popover({
   label,
   active,
@@ -190,7 +175,6 @@ export function Popover({
   children,
 }: {
   label: React.ReactNode;
-  /** Tint the trigger, e.g. when something inside needs attention. */
   active?: boolean;
   width?: number;
   children: React.ReactNode;
@@ -237,10 +221,6 @@ export function Popover({
   );
 }
 
-/**
- * Destructive action with a built-in second step: the first click arms it,
- * the second within four seconds fires it. No modal needed.
- */
 export function ConfirmButton({
   label,
   confirmLabel,

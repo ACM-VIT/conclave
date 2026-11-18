@@ -14,23 +14,6 @@ import {
 import { accentFor } from "./covers";
 import "./tileResolvers";
 
-/**
- * Game adornments and controls drawn on a participant video tile, so the video
- * grid doubles as the game board. It reads the game's views into a semantic
- * PlayerTileState (via the game's registered resolver plus a universal
- * leaderboard rank), maps that to visual primitives through the SDK, and draws
- * them. When the game registers a tile action (tap a face to vote), the tile
- * becomes the controller. Outside a game, or for a non-player, it renders
- * nothing.
- *
- * ID MAPPING: a web participant.userId and a game player.id are the same
- * server-produced identity string (baseId#sessionId, lowercased). Remote tiles
- * pass the participant's userId straight from the SFU snapshot. The local self
- * tile omits the prop and the overlay falls back to useGame().userId, which is
- * the SERVER-CANONICAL selfId carried on game snapshots (never an id rebuilt
- * client-side, which can drift on email casing or session id). Any unmatched
- * id renders nothing (fail safe) rather than guessing.
- */
 const matchesPlayer = (userId: string, playerId: string): boolean =>
   userId === playerId;
 
@@ -43,11 +26,6 @@ function readScoreboard(view: unknown): ScoreRow[] | null {
   return board as ScoreRow[];
 }
 
-/**
- * Live leaderboard position via competition ranking (ties share a rank), only
- * once standings are meaningful (someone has scored). Applied to every
- * leaderboard game so resolvers do not each reimplement it.
- */
 function rankFromScoreboard(view: unknown, userId: string): number | undefined {
   const board = readScoreboard(view);
   const row = board?.find((entry) => matchesPlayer(userId, entry.id));
@@ -73,7 +51,6 @@ const MARK_ICON: Record<TileMarkIcon, typeof Check> = {
 };
 
 interface GameTileOverlayProps {
-  /** The tile's participant id. Omit on the local self tile to use the viewer's id. */
   userId?: string;
   compact?: boolean;
 }
@@ -96,8 +73,6 @@ export default function GameTileOverlay({
   const tileUserId = userId ?? viewerId ?? null;
   if (!tileUserId) return null;
 
-  // Only players in the active game get any treatment. Unknown or unmatched
-  // ids render nothing (fail safe) rather than a blank-or-wrong badge.
   const isPlayer = publicState.players.some((player) =>
     matchesPlayer(tileUserId, player.id),
   );
@@ -116,8 +91,6 @@ export default function GameTileOverlay({
     viewerId,
   };
 
-  // Game-specific semantic state from the registered resolver, plus a universal
-  // leaderboard rank merged on top.
   const resolved = getTileResolver(publicState.gameId)?.(resolverArgs) ?? null;
   const rank =
     publicState.hasLeaderboard && publicState.phase !== "lobby"
@@ -129,9 +102,6 @@ export default function GameTileOverlay({
   const adornment =
     Object.keys(state).length > 0 ? resolveTileAdornment(state, accent) : null;
 
-  // The interactive layer: while the game says this tile is a valid target for
-  // the viewer, tapping it sends the move (tap a face to vote). Read-only
-  // viewers and non-players never get it.
   const action =
     !isReadOnly && viewerIsPlayer && !publicState.finished
       ? (getTileAction(publicState.gameId)?.(resolverArgs) ?? null)
@@ -148,9 +118,6 @@ export default function GameTileOverlay({
   const CenterIcon = centerMark ? MARK_ICON[centerMark.icon] : null;
   const CornerIcon = cornerMark ? MARK_ICON[cornerMark.icon] : null;
 
-  // The bottom-right chip merges a corner mark and the badge into one pill. It
-  // fills with the accent for accent-toned content, otherwise a neutral dark
-  // chip that mirrors the tile's name label.
   const showChip = Boolean(cornerMark || badge);
   const chipIsAccent =
     badge?.tone === "accent" || (!badge && cornerMark?.tone === "accent");
@@ -170,9 +137,6 @@ export default function GameTileOverlay({
   };
 
   return (
-    // rounded-[inherit] here is load bearing: children inherit their radius
-    // from THIS element, so without it every ring and wash renders with square
-    // corners inside the tile's rounded frame.
     <div className="pointer-events-none absolute inset-0 z-[1] rounded-[inherit]">
       {adornment?.fill ? (
         <div

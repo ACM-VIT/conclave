@@ -355,16 +355,4 @@ private final class CTL5Harness {
         controls.apply(make(shell))
     }
 }
-
-private func ctl5PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func ctl5Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: ctl5PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func ctl5Normalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
 #endif

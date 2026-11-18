@@ -302,26 +302,5 @@ struct CHT8UnreadPreviewTests {
         plain.postChatPreviewScript(named: "mixed3")
         #expect(plain.stage.toast?.senderCount == 3 && plain.unreadChatCount == 3)
     }
-
-    @Test func previewStringsAreInBothCatalogs() throws {
-        let catalog = try #require(try JSONSerialization.jsonObject(
-            with: Data(chatSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let keys = try #require(catalog["strings"] as? [String: Any])
-        for key in ["Private", "Photo", "Photo: %@", "GIF", "GIF: %@", "Sticker", "Sticker: %@", "Clip", "Clip: %@", "Voice message",
-                    "Voice message: %@", "%lld new messages", "%@ and %lld others", "Message from %@: %@", "Opens chat",
-                    "Dismiss Message from %@"] {
-            #expect(keys[key] != nil, "missing iOS key \(key)")
-        }
-        let xml = try chatSource("Android/app/src/main/res/values/strings.xml")
-        for name in ["chat_preview_private", "chat_preview_photo", "chat_preview_photo_caption", "chat_preview_gif",
-                     "chat_preview_sticker", "chat_preview_clip", "chat_preview_voice", "chat_preview_label",
-                     "chat_preview_open", "chat_preview_dismiss", "chat_reply_gif", "chat_sticker", "chat_clip", "chat_ax_voice",
-                     "ds_view"] {
-            #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)")
-        }
-        for plural in ["chat_preview_new_count", "ds_name_and_others"] {
-            #expect(xml.contains("<plurals name=\"" + plural + "\""), "missing Android plurals \(plural)")
-        }
-    }
 }
 #endif

@@ -1,5 +1,6 @@
 "use client";
 
+import type { RegisterableHotkey } from "@tanstack/hotkeys";
 import {
   AudioLines,
   Check,
@@ -69,14 +70,11 @@ export function useEnumeratedDevices(active: boolean, refreshToken?: unknown) {
           .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` })),
       );
     } catch {
-      // Enumeration can fail before permission; keep system routing available.
       setAudioOutput([SYSTEM_AUDIO_OUTPUT]);
       setCanSelectAudioOutput(false);
     }
   }, []);
 
-  // refreshToken lets callers force a refetch — e.g. right after a
-  // getUserMedia grant, when device labels first become readable.
   useEffect(() => {
     if (active) void fetchDevices();
   }, [active, refreshToken, fetchDevices]);
@@ -205,12 +203,6 @@ export type DeviceSettingsProps = Pick<
   | "onToggleNoiseCancellation"
 >;
 
-/**
- * Standalone device picker (microphone / speaker / camera + mirror toggle) for
- * surfaces without the inline caret cluster — e.g. the mobile More drawer, where
- * the compact mic/cam buttons have no caret. `active` gates enumeration so the
- * device list is only fetched while the containing sheet is open.
- */
 export function DeviceSettingsSection({
   active,
   bare = false,
@@ -293,7 +285,7 @@ export interface MediaControlClusterProps {
   label: string;
   onPress?: () => void;
   badge?: number;
-  hotkey?: string;
+  hotkey?: RegisterableHotkey;
   disabled?: boolean;
   loading?: boolean;
   selectedAudioInputDeviceId?: string;
@@ -308,7 +300,6 @@ export interface MediaControlClusterProps {
   onToggleNoiseCancellation?: () => void;
 }
 
-/** Mic/camera toggle + device caret as one unified pill control. */
 export function MediaControlCluster(props: MediaControlClusterProps) {
   const {
     kind,

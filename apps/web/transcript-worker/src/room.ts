@@ -172,16 +172,12 @@ export class TranscriptRoom {
     new TranscriptAudioReplayJournal();
   private lastMinutesRefreshAt = 0;
   private lastMinutesCompactionAt = 0;
-  // Auto-minutes scheduler state. We debounce regeneration so AI minutes are
-  // never clobbered mid-conversation; the crude fallback is only ever a seed.
   private minutesTimer: ReturnType<typeof setTimeout> | null = null;
   private minutesDirtySince = 0;
   private minutesGenerating = false;
   private minutesRerunRequested = false;
   private hasAiMinutes = false;
   private minutesStatus: TranscriptMinutesStatus = "idle";
-  // When the controller pauses, we keep the session + OpenAI socket alive but
-  // gate audio so nothing is transcribed until they resume.
   private audioPaused = false;
   private suppressSfuRelayDisconnectsUntil = 0;
   private suppressSfuRelayDisconnectCount = 0;
@@ -697,9 +693,6 @@ export class TranscriptRoom {
       ) {
         return;
       }
-      // SFU audio is room-scoped and can continue without the controller's UI.
-      // Keep it live so a brief app sleep or a controller changing networks is
-      // invisible to the rest of the meeting.
       if (
         this.session.status === "live" &&
         this.session.transportMode === "sfu" &&
@@ -1064,9 +1057,6 @@ export class TranscriptRoom {
     });
   }
 
-  // Pause/resume transcription without ending the session: the OpenAI socket
-  // and accumulated transcript stay intact, we just stop feeding audio. Only
-  // the controller (or a host/admin who could stop it) may toggle this.
   private async setPaused(viewer: Viewer, paused: boolean): Promise<void> {
     if (!this.session) {
       this.sendError(viewer, "No transcript session is running.");
@@ -1091,7 +1081,6 @@ export class TranscriptRoom {
       return;
     }
     if (paused) {
-      // Flush whatever is buffered so the last utterance finalizes cleanly.
       if (this.hasPendingAudio && this.latestSpeaker) {
         this.commitTranscriptionBuffer(
           this.latestSpeaker,
@@ -1928,9 +1917,6 @@ export class TranscriptRoom {
     transcript: string,
   ): Promise<void> {
     if (this.transcriptionSession?.provider === "sarvam") {
-      // Sarvam is a continuous stream and its final items do not map 1:1 to
-      // the room's periodic commit markers. A final acknowledges everything
-      // sent through the current VAD boundary, so begin a fresh recovery window.
       this.transcriptionReplayJournal.reset();
     } else {
       this.transcriptionReplayJournal.finalizeItem(itemId);
@@ -2011,8 +1997,6 @@ export class TranscriptRoom {
     );
   }
 
-  // There's no point summarizing two words of small talk — wait until there's
-  // enough spoken content that minutes are meaningful.
   private hasEnoughContentForMinutes(): boolean {
     let words = 0;
     for (const segment of this.segments) {
@@ -2047,8 +2031,6 @@ export class TranscriptRoom {
     this.minutesStatus = "idle";
   }
 
-  // Debounced auto-refresh: regenerate after the room is quiet for the quiet
-  // window, but never wait longer than the hard cap during continuous talk.
   private scheduleMinutes(): void {
     if (!this.session || this.segments.length === 0) return;
     if (!this.hasAiMinutes && !this.hasEnoughContentForMinutes()) return;
@@ -2071,7 +2053,6 @@ export class TranscriptRoom {
     }, delay);
   }
 
-  // Manual "refresh now" from a viewer: skip the debounce and run immediately.
   private async forceRefreshMinutes(): Promise<void> {
     if (this.minutesTimer !== null) {
       clearTimeout(this.minutesTimer);
@@ -2160,9 +2141,6 @@ export class TranscriptRoom {
             this.minutes = compacted;
           } catch (error) {
             if (signal.aborted || revision !== this.sessionRevision) return;
-            // Keep the live minutes usable even if the background compaction
-            // request fails. The hard bound prevents prompt/persistence growth
-            // and the next interval can try a semantic compaction again.
             console.warn("[TranscriptWorker] minutes compaction failed", {
               roomId: this.session.roomId,
               message: redactSensitiveText(
@@ -2181,8 +2159,6 @@ export class TranscriptRoom {
       }
     } catch {
       if (signal.aborted || revision !== this.sessionRevision) return;
-      // Only fall back to the heuristic when the AI pass fails AND there's
-      // enough content to be worth it — never echo a few words of small talk.
       if (
         !this.hasAiMinutes &&
         !this.hasMinutesContent(this.minutes) &&

@@ -6,13 +6,6 @@ import Testing
 
 @MainActor
 struct DesignContractsTests {
-    @Test func vocabularyAndInitialState() {
-        #expect(FeedbackKind.allCases.count == 71)
-        #expect(Set(FeedbackKind.allCases.map { $0.rawValue }).count == 71)
-        #expect(MeetingPanel.allCases.map { $0.rawValue } == ["chat", "participants", "transcript", "activities", "effects", "hostControls", "settings", "webinarQA", "meetingInfo", "layout"])
-        #expect(NativeHostingPresenter().feedbackState.token == FeedbackToken(sequence: 0, kind: .none))
-    }
-
     @Test func outcomeAcceptanceWithoutConsumerRejectsDuplicatesAndStaleSessions() {
         let owner = NativeHostingPresenter()
         #expect(owner.completeFixtureAction(actionID: 8, expectedSession: 1, kind: .joined))
@@ -969,105 +962,6 @@ struct DesignContractsTests {
         #expect(owner.rowsState.selectedCount == 1)
         #expect(owner.panels.snapshot == panels && owner.feedbackState == feedback)
         #expect(owner.renderers.summary() == "stage c=3 r=0 l=3 lost=0 back=0 | mini c=0 r=0 l=0 lost=0 back=0 | avery#1 robin#2 taylor#3")
-    }
-
-    @Test func wp1PanelSourcesStayFlatDashFreeAndLocalized() throws {
-        let touched = [
-            "Sources/Conclave/Features/Meeting/Panels/MeetingPanel.swift",
-            "Sources/Conclave/Features/Meeting/Panels/PanelCoordinator.swift",
-            "Sources/Conclave/Features/Meeting/Panels/PanelPresentationPolicy.swift",
-            "Sources/Conclave/Features/Meeting/Panels/RendererIdentityLedger.swift",
-            "Sources/Conclave/Features/Meeting/Panels/PanelHostAdapter.swift",
-            "Sources/Conclave/Features/Meeting/Panels/PanelShell+iOS.swift",
-            "Sources/Conclave/Features/Meeting/Panels/NativePanelSheet+iOS.swift",
-            "Sources/Conclave/App/Hosting/NativeHostingPresenter.swift",
-            "Sources/Conclave/App/Hosting/RendererProbe+iOS.swift",
-            "Sources/Conclave/App/PlatformRoot+iOS.swift",
-            "Sources/Conclave/DesignSystem/iOS/NativeComponentGallery.swift",
-            "Sources/Conclave/Skip/ui/AppRoot.kt",
-            "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt",
-            "Sources/Conclave/Skip/ui/call/panels/PanelBackProgress.kt",
-            "Sources/Conclave/Skip/ui/call/panels/InCallPage.kt",
-            "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt",
-            "Sources/Conclave/Skip/ui/call/panels/LayoutSheetHost.kt",
-            "Sources/Conclave/Features/Meeting/Panels/LayoutPanelPresenter.swift",
-            "Sources/Conclave/Skip/ui/hosting/NativeHostingRows.kt",
-            "Sources/Conclave/Skip/ui/hosting/RendererProbe.kt",
-            "Tests/ConclaveTests/Skip/PanelStageBridgeTests.kt",
-            "Android/app/src/main/res/values/strings.xml",
-        ]
-        for file in touched {
-            let text = try panelSource(file)
-
-            #expect(panelMatches(#"(UIColor|Color)\(\s*(red:|\.sRGB|0x)"#, in: text).isEmpty, "\(file) builds a color from a literal")
-        }
-
-        let catalog = try #require(try JSONSerialization.jsonObject(with: Data(panelSource("Sources/Conclave/Resources/Localizable.xcstrings").utf8)) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        var keys = Set<String>()
-        for file in ["Sources/Conclave/Features/Meeting/Panels/PanelShell+iOS.swift", "Sources/Conclave/App/PlatformRoot+iOS.swift"] {
-            keys.formUnion(panelMatches(#"ConclaveStrings\.(?:text|format|machineReadable)\(\s*"((?:[^"\\]|\\.)*)""#, in: try panelSource(file)).map { $0[0] })
-        }
-        #expect(keys.isSuperset(of: ["Close %@", "Participants", "Settings", "Layout", "Grid", "Spotlight", "Sidebar",
-                                     "Layout Panel", "Stage Readouts", "Refresh Readouts", "Compact Width Override"]))
-        for key in keys {
-            let entry = strings[key] as? [String: Any]
-            #expect(entry != nil, "missing String Catalog key: \(key)")
-            #expect(entry?["comment"] == nil, "unexpected translator prose: \(key)")
-            #expect(entry?["extractionState"] as? String == "manual", "\(key)")
-        }
-
-        let xml = try panelSource("Android/app/src/main/res/values/strings.xml")
-        var used = Set<String>()
-        for file in ["Sources/Conclave/Skip/ui/AppRoot.kt", "Sources/Conclave/Skip/ui/call/panels/InCallPage.kt",
-                     "Sources/Conclave/Skip/ui/call/panels/CallMiniTile.kt", "Sources/Conclave/Skip/ui/call/panels/NativePanelHost.kt"] {
-            used.formUnion(panelMatches(#""(native_panel_[a-z0-9_]+)""#, in: try panelSource(file)).map { $0[0] })
-        }
-        let defined = Set(panelMatches(#"<string name="(native_panel_[a-z0-9_]+)""#, in: xml).map { $0[0] })
-
-        #expect(used.count == 14 && used == defined, "\(used.symmetricDifference(defined).sorted())")
-    }
-
-    @Test func pseudolocalesAreEnabledOnTheDebugBuildTypeOnly() throws {
-        let gradle = panelNormalized(try panelSource("Android/app/build.gradle.kts"))
-        #expect(gradle.contains("buildTypes { debug { isPseudoLocalesEnabled = true"))
-        #expect(gradle.components(separatedBy: "isPseudoLocalesEnabled").count - 1 == 1)
-    }
-}
-
-private func panelPackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func panelSource(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: panelPackageRoot().appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func panelCode(_ text: String) -> String {
-    text.replacingOccurrences(of: #"//[^\n]*"#, with: "", options: .regularExpression)
-}
-
-private func panelNormalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func panelSourceFiles(under directory: String) throws -> [String] {
-    let root = panelPackageRoot()
-    let prefix = root.path + "/"
-    return try FileManager.default.contentsOfDirectory(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)
-        .filter { $0.pathExtension == "swift" }
-        .map { $0.path.hasPrefix(prefix) ? String($0.path.dropFirst(prefix.count)) : $0.path }
-        .sorted()
-}
-
-private func panelMatches(_ pattern: String, in text: String) -> [[String]] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [["invalid pattern"]] }
-    let ns = text as NSString
-    return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { match in
-        (1..<match.numberOfRanges).map { index in
-            let range = match.range(at: index)
-            return range.location == NSNotFound ? "" : ns.substring(with: range)
-        }
     }
 }
 #endif

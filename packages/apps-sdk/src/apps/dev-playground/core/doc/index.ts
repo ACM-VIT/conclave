@@ -39,10 +39,6 @@ const touchMeta = (doc: Y.Doc, userId?: string) => {
   }
 };
 
-// Keep a joining client's document empty until the server sync arrives. Yjs
-// map defaults written before that sync can win conflict resolution and reset
-// the room for everyone. Read helpers return UI defaults without mutating;
-// the first real edit creates the shared structures.
 export const createDevPlaygroundDoc = (): Y.Doc => createAppDoc(ROOT_KEY);
 
 export const getCounter = (doc: Y.Doc): number => {

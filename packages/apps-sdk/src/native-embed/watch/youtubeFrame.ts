@@ -1,14 +1,5 @@
-// The Watch Together player frame for the native embed (ACT-8): one privacy-enhanced YouTube embed
-// (`https://www.youtube-nocookie.com/embed/<id>?enablejsapi=1`) driven through the embed player's own postMessage
-// channel, the same JSON messages the YouTube IFrame API sends. No YouTube script runs in this page (its CSP allows
-// only its own inline hashes and frames only WATCH_FRAME_ORIGIN), so nothing from the network can reach the native
-// bridge; the cross-origin frame cannot post to it either (native checks the origin and the main frame). The player
-// keeps YouTube's own controls (seek, live, volume, captions); its play button is the tap-to-start prompt when the
-// platform blocks autoplay (S60 13 c, WEB APP-32).
-
 import { WATCH_FRAME_ORIGIN, isRecord, isValidVideoId } from "../protocol";
 
-/** YouTube player states (IFrame API `PlayerState`). */
 export const PLAYER_STATE = {
   unstarted: -1,
   ended: 0,
@@ -25,7 +16,6 @@ const LISTEN_ATTEMPTS = 60;
 const CHANNEL = "widget";
 const FRAME_ID = 1;
 
-/** The embed URL for a video. `origin` is passed only when it is an https origin (the player rejects others). */
 export const youtubeEmbedUrl = (videoId: string, startSeconds: number, origin: string): string => {
   if (!isValidVideoId(videoId)) return "about:blank";
   const params = new URLSearchParams({
@@ -53,7 +43,6 @@ export class YouTubeFrameController {
   rate = 1;
   isLive = false;
   errorCode = 0;
-  /** When the last time report arrived (ms epoch), so a caller can extrapolate the position between reports. */
   lastTimeAt = 0;
 
   private frame: HTMLIFrameElement | null = null;
@@ -65,7 +54,6 @@ export class YouTubeFrameController {
     window.addEventListener("message", this.handleMessage);
   }
 
-  /** The iframe ref callback: a new frame restarts the handshake; null detaches. */
   attach(frame: HTMLIFrameElement | null): void {
     if (frame === this.frame) return;
     this.stopListening();
@@ -84,7 +72,6 @@ export class YouTubeFrameController {
     window.removeEventListener("message", this.handleMessage);
   }
 
-  /** The position now: the last report plus the time since, while playing. */
   position(now: number = Date.now()): number {
     if (this.state !== PLAYER_STATE.playing || this.lastTimeAt === 0) return this.currentTime;
     return this.currentTime + (Math.max(0, now - this.lastTimeAt) / 1000) * this.rate;
@@ -109,7 +96,6 @@ export class YouTubeFrameController {
     this.command("setPlaybackRate", [rate]);
   }
 
-  /** Switches the frame to another video: playing loads and starts it, paused only cues it. */
   load(videoId: string, startSeconds: number, play: boolean): void {
     if (!isValidVideoId(videoId)) return;
     this.command(play ? "loadVideoById" : "cueVideoById", [{ videoId, startSeconds: Math.max(0, startSeconds) }]);

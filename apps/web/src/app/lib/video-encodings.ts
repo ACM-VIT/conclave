@@ -6,9 +6,6 @@ import {
   STANDARD_VIDEO_MAX_BITRATE,
 } from "./constants";
 
-// Keep the standard simulcast ladder aligned with the native Swift/Android
-// clients. All active simulcast layers consume upload at the same time, so q/h
-// must remain small enough to leave useful BWE headroom for the full 720p layer.
 const STANDARD_BASE_LAYER_MAX_BITRATE = 80_000;
 const STANDARD_MIDDLE_LAYER_MAX_BITRATE = 220_000;
 
@@ -78,13 +75,6 @@ const {
   },
 });
 
-// Chrome otherwise promotes VP8 camera encodings to L1T3. On the measured SFU
-// path, that correlated with the receiver's network-minimum jitter buffer
-// climbing above 80 ms even on lossless local UDP and repeatable decoder
-// starvation. Spatial simulcast already supplies the adaptive ladder; keeping
-// every simulcast and true-single encoding at one temporal layer removes the
-// temporal hierarchy as a controlled low-latency variable, without attributing
-// the result to an unobserved codec mechanism.
 const buildWebcamSimulcastEncodings = (quality: "low" | "standard") =>
   buildBaseWebcamSimulcastEncodings(quality).map((encoding) => ({
     ...encoding,

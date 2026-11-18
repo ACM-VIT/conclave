@@ -380,13 +380,4 @@ struct PPLHostControlsFixtureTests {
         #expect(PeopleFixtureScript.removing(["a", "b"], "c") == ["a", "b"])
     }
 }
-
-private func pplHostSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func pplHostNormalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
 #endif

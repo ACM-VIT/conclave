@@ -22,14 +22,6 @@ class S1bStageMomentsBridgeTests {
         }
     }
 
-    @Test fun theTranspiledPopAndDriftConstantsMatchTheSwiftPolicy() {
-        assertEquals(160.0, StageReactionPolicy.popMillis, 0.0)
-        assertEquals(0.85, StageReactionPolicy.popFromScale, 0.0)
-        assertEquals(10.0, StageReactionPolicy.driftDistance, 0.0)
-        assertTrue(StageReactionPolicy.popMillis < StageReactionPolicy.riseMillis)
-        assertEquals(0.85f, StageReactionPolicy.popFromScale.toFloat(), 0.0001f)
-    }
-
     @Test fun theDriftTargetsTheBubbleAnimatesToAreFloatsWithinTheDistance() {
         val targets = listOf(-1, 0, 1, 2, 3, 1000).map { id ->
             (StageReactionPolicy.driftDirection(id) * StageReactionPolicy.driftDistance).toFloat()

@@ -107,9 +107,6 @@ const POPOUT_CSS = `
     overflow: hidden;
     background: #131316;
     border: 1px solid rgba(250, 250, 250, 0.08);
-    /* Active-speaker ring is an INSET shadow (matching the in-call tile), not a
-       border-width change — toggling 1px→2px resized the video box on every
-       speaker change and read as jitter. */
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
     min-width: 0;
     min-height: 0;
@@ -191,7 +188,6 @@ const POPOUT_CSS = `
     height: 11px;
   }
 
-  /* Active-speaker voice bars — mirrors .acm-voice-activity in the call UI. */
   .video-tile .label-voice {
     display: none;
     width: 13px;
@@ -239,7 +235,6 @@ const POPOUT_CSS = `
     font-family: 'PolySans Trial', sans-serif;
   }
 
-  /* Flat icon buttons — matches the redesigned in-call control bar. */
   .ctrl-btn {
     display: flex;
     align-items: center;
@@ -260,7 +255,6 @@ const POPOUT_CSS = `
     background: rgba(255, 255, 255, 0.08);
   }
 
-  /* Toggled-off (muted mic / camera off) reads in accent, like the call bar. */
   .ctrl-btn.muted {
     color: #F95F4A;
   }
@@ -289,7 +283,6 @@ const POPOUT_CSS = `
     margin: 0 1px;
   }
 
-  /* Leave = solid red pill, identical intent to the in-call hang-up button. */
   .ctrl-btn.leave {
     width: 42px;
     color: #ffffff;
@@ -500,9 +493,6 @@ export function useMeetPopout({
       } else {
         video.style.display = "none";
         avatar.style.display = "flex";
-        // Render the SAME Facehash <Avatar> the in-call tiles use, into the PiP
-        // document (shared JS realm). Only re-render when the seed changes so
-        // the 250ms refresh loop stays a no-op for a stable participant.
         const seed = `${participant.displayName}:${participant.userId}`;
         if (avatarMount && avatarMount.dataset.seed !== seed) {
           let root = avatarRootsRef.current.get(participant.userId);
@@ -527,8 +517,6 @@ export function useMeetPopout({
 
       labelName.textContent = participant.displayName;
       labelYou.style.display = participant.isLocal ? "inline" : "none";
-      // Voice bars only when actively speaking and not muted; otherwise the
-      // mic-off glyph takes over (the two never show together).
       const showVoice = participant.isActiveSpeaker && !participant.isMuted;
       labelVoice.style.display = showVoice ? "inline-flex" : "none";
       labelMuted.style.display = participant.isMuted ? "flex" : "none";

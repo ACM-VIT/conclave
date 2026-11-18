@@ -100,7 +100,6 @@ export type RoomSnapshot = {
   pendingUsers: PendingUserSnapshot[];
 };
 
-/** Lightweight rail entry pushed by the gateway for every active room. */
 export type AdminRoomSummary = {
   channelId: string;
   roomId: string;
@@ -115,7 +114,6 @@ export type AdminRoomSummary = {
   activeGame: string | null;
 };
 
-/** Broadcast chat as stored by the room; DMs never enter this buffer. */
 export type AdminChatMessage = {
   id: string;
   userId: string;
@@ -149,7 +147,6 @@ export type AdminScheduledItem = {
   title: string;
   clientId: string;
   roomId: string;
-  /** Webinar link slug; meetings join by room code. */
   slug: string | null;
   status: string;
   startAt: number;
@@ -186,7 +183,6 @@ export type AdminActionInput = {
   method?: RequestMethod;
   body?: unknown;
   clientId?: string;
-  /** Pool url of the SFU this command targets; validated by the proxy. */
   instanceUrl?: string;
 };
 
@@ -231,11 +227,9 @@ type FindUserMatch = {
   userId: string;
   displayName: string;
   userKey: string | null;
-  /** True when the person is in the waiting room, not the meeting. */
   waiting?: boolean;
 };
 
-/** One SFU in the pool, as tracked by the dashboard. */
 export type InstanceStatus = {
   key: string;
   url: string;

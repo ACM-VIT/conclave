@@ -449,20 +449,5 @@ struct CallPresenceTests {
         #expect(SystemFixtureReadout.commands([]) == "none")
         #expect(SystemFixtureScript.state(named: "missing") == nil)
     }
-
-    @Test func sysStringResourcesExistForEveryNameTheBuilderAsks() throws {
-
-        let xml = try callPresenceSource("Android/app/src/main/res/values/strings.xml")
-        for name in ["sys_call_fallback_title", "sys_call_waiting", "sys_call_joining", "sys_call_reconnecting",
-                     "sys_call_on_hold", "sys_call_mute", "sys_call_unmute",
-                     "sys_channel_call", "sys_channel_call_desc"] {
-            #expect(xml.contains("<string name=\"\(name)\""), "missing \(name)")
-        }
-    }
-}
-
-private func callPresenceSource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 #endif

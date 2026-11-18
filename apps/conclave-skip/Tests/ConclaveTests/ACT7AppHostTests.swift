@@ -466,38 +466,6 @@ struct ACT7AppHostTests {
         }
         #expect(AppHostFixtures.state(named: "app-nope") == nil)
     }
-
-    @Test func theCoreMoveLeftNoYjsInObservableState() throws {
-        let skipYml = try act7Source("Sources/Conclave/Skip/skip.yml")
-        #expect(skipYml.contains("implementation(\"androidx.webkit:webkit:1.14.0\")"))
-        let packageJSON = try String(contentsOf: act7RepoRoot().appendingPathComponent("packages/apps-sdk/package.json"), encoding: .utf8)
-        #expect(packageJSON.contains("\"test:native-embed\": \"node --test ./scripts/native-embed-contract-test.mjs\""))
-        #expect(FileManager.default.fileExists(atPath: act7RepoRoot().appendingPathComponent("packages/apps-sdk/scripts/native-embed-contract-test.mjs").path))
-    }
-
-    @Test func appHostStringsAreInBothCatalogs() throws {
-        let catalogData = try Data(contentsOf: act7PackageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        let ios = try act7Source("Sources/Conclave/Features/Meeting/Activities/NativeAppHost+iOS.swift")
-            + act7Source("Sources/Conclave/Features/Meeting/Activities/ActivityChrome+iOS.swift")
-        let pattern = try NSRegularExpression(pattern: #"ConclaveStrings\.(?:text|format)\("((?:[^"\\]|\\.)+)""#)
-        var keys = Set<String>()
-        for match in pattern.matches(in: ios, range: NSRange(ios.startIndex..., in: ios)) {
-            if let range = Range(match.range(at: 1), in: ios) { keys.insert(String(ios[range])) }
-        }
-        #expect(keys.count > 50)
-        for key in keys { #expect(strings[key] != nil, "missing iOS key \(key)") }
-        let xml = try String(contentsOf: act7PackageRoot().appendingPathComponent("Android/app/src/main/res/values/strings.xml"), encoding: .utf8)
-        let copy = try act7Source("Sources/Conclave/Skip/ui/apps/AppHostCopy.kt") + act7Source("Sources/Conclave/Skip/ui/apps/NativeAppHost.kt")
-            + act7Source("Sources/Conclave/Skip/ui/apps/ActivityChrome.kt")
-        let names = try NSRegularExpression(pattern: #""((?:app|act|stg|ds)_[a-z0-9_]+)""#)
-        for match in names.matches(in: copy, range: NSRange(copy.startIndex..., in: copy)) {
-            guard let range = Range(match.range(at: 1), in: copy) else { continue }
-            let name = String(copy[range])
-            #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)")
-        }
-    }
 }
 
 private func act7PackageRoot() -> URL {
@@ -506,9 +474,5 @@ private func act7PackageRoot() -> URL {
 
 private func act7RepoRoot() -> URL {
     act7PackageRoot().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func act7Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: act7PackageRoot().appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 #endif

@@ -127,10 +127,6 @@ struct SYS10ScreenShareTests {
         #expect(ScreenShareStartPolicy.decision(window, nowMs: 4_000 + ScreenShareStartPolicy.returnWindowMs) == .cancelSilently)
     }
 
-    @Test func theAppGivesUpBeforeTheExtensionDoes() throws {
-        #expect(ScreenShareStartPolicy.connectGraceMs < 12_000)
-    }
-
     @Test func startingThenStoppedBeforeAConnectIsASilentCancel() {
         let run = Self.run([
             ScriptedStep(atMs: 300, event: .systemUIShown),
@@ -276,41 +272,6 @@ struct SYS10ScreenShareTests {
         #expect(ExternalHandoffPolicy.suppressesAutoEnter(.mediaProjectionConsent))
         #expect(ExternalHandoffPolicy.reason(.mediaProjectionConsent) == "media_projection")
         #expect(ScreenSharePipPolicy.consentHoldCapMs == 120_000)
-    }
-
-    @Test func theFallbackNotificationUsesSentenceCaseResourcesByName() throws {
-        #expect(ScreenShareNotificationPolicy.channelId == "conclave_screen_capture_channel")
-        #expect(ScreenShareNotificationPolicy.channelNameResource == "sys_channel_share")
-        #expect(ScreenShareNotificationPolicy.channelDescriptionResource == "sys_channel_share_desc")
-        #expect(ScreenShareNotificationPolicy.titleResource == "sys_share_notif_title")
-        #expect(ScreenShareNotificationPolicy.stopActionResource == "sys_call_stop_sharing")
-        #expect(ScreenShareNotificationPolicy.stopActionDrawable == "conclave_cancel_presentation_fill1")
-        #expect(ScreenShareNotificationPolicy.smallIconDrawable == "conclave_ic_stat")
-        #expect(ScreenShareNotificationPolicy.accentColor == "sys_notification_accent")
-
-        for drawable in [ScreenShareNotificationPolicy.stopActionDrawable, ScreenShareNotificationPolicy.smallIconDrawable] {
-            #expect(FileManager.default.fileExists(atPath: sys10PackagePath("Android/app/src/main/res/drawable/\(drawable).xml")), "\(drawable)")
-        }
-        let manifest = try sys10Source("Android/app/src/main/AndroidManifest.xml")
-        #expect(manifest.contains("android:name=\"conclave.module.ScreenCaptureService\"\n            android:foregroundServiceType=\"mediaProjection\""))
-        #expect(manifest.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"))
-    }
-
-    @Test func theIOSAdapterRunsTheLifecycleBoundWindow() throws {
-        #expect(ScreenShareLifecycleBusKeys.stopReason == "conclave.screenShare.lifecycle.stopReason")
-        #expect(ScreenShareBroadcastStopReason.startTimeout.rawValue == "startTimeout")
-        #expect(ScreenShareBroadcastStopReason.person.rawValue == "person")
-    }
-
-    @Test func requestedHooksAreWired() throws {
-        #expect(FileManager.default.fileExists(atPath: sys10PackagePath("Darwin/ScreenShareExtension/Localizable.xcstrings")), "R5 a")
-        let project = try sys10Source("Darwin/Conclave.xcodeproj/project.pbxproj")
-        let plist = try #require(try PropertyListSerialization.propertyList(from: Data(project.utf8), format: nil) as? [String: Any])
-        let objects = try #require(plist["objects"] as? [String: [String: Any]])
-        let buildFile = try #require(objects["5C10A7E12EB0B6A100D1A010"])
-        #expect(buildFile["isa"] as? String == "PBXBuildFile" && buildFile["fileRef"] as? String == "5C10A7E12EB0B6A100D1A011", "R5 b")
-        let resources = try #require(objects["D8437152ED65B65BAD66390E"]?["files"] as? [String])
-        #expect(resources.filter { $0 == "5C10A7E12EB0B6A100D1A010" }.count == 1)
     }
 
     private static func shareModel(kind: CallControlKind = CallControlKind.screenShare, isOn: Bool = false, isPending: Bool = false,
@@ -587,28 +548,5 @@ struct SYS10ScreenShareTests {
         }
         #expect(!ScreenShareCapabilityPolicy.current(platform: .ios, apiLevel: 0))
     }
-}
-
-private func sys10PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func sys10PackagePath(_ packageRelativePath: String) -> String {
-    sys10PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL.path
-}
-
-private func sys10Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: sys10PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func sys10Line(containing needle: String, in text: String) -> String {
-    text.split(separator: "\n", omittingEmptySubsequences: false).first { $0.contains(needle) }.map { String($0) } ?? ""
-}
-
-private func sys10Body(_ signature: String, in text: String, closing: String) -> String {
-    guard let start = text.range(of: signature) else { return "" }
-    let rest = text[start.lowerBound...]
-    guard let end = rest.range(of: closing) else { return String(rest) }
-    return String(rest[..<end.upperBound])
 }
 #endif

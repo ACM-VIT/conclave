@@ -32,28 +32,6 @@ struct EntryCoreDeltaTests {
 
         #expect(presenter.path.map { $0.roomId } == ["lily-zoro-iris"])
     }
-
-    static let sharedSwiftFiles = [
-        "Sources/Conclave/App/NativeRouteFlags.swift",
-        "Sources/Conclave/Features/Home/PremeetingContracts.swift",
-        "Sources/Conclave/Features/Home/PremeetingPresenter.swift",
-        "Sources/Conclave/Features/Home/PremeetingFixtures.swift",
-        "Sources/Conclave/Features/Home/PremeetingAppWiring.swift",
-        "Sources/Conclave/Features/Home/RecentMeetingsStore.swift",
-        "Sources/Conclave/Features/Join/EntryPolicies.swift"
-    ]
-    static let newSwiftFiles = sharedSwiftFiles + [
-        "Sources/Conclave/Features/Home/HomeView+iOS.swift",
-        "Sources/Conclave/Features/Home/PremeetingRoot+iOS.swift",
-        "Sources/Conclave/Features/Join/JoinCodeSheet+iOS.swift"
-    ]
-    static let newKotlinFiles = [
-        "Sources/Conclave/Skip/ui/home/HomeScreen.kt",
-        "Sources/Conclave/Skip/ui/home/HomeRowsCache.kt",
-        "Sources/Conclave/Skip/ui/home/PremeetingBackStack.kt",
-        "Sources/Conclave/Skip/ui/home/PremeetingHost.kt",
-        "Sources/Conclave/Skip/ui/join/JoinCodeSheet.kt"
-    ]
 }
 
 #if os(macOS)
@@ -91,21 +69,4 @@ struct EntryCoreDeltaViewModelTests {
     }
 }
 #endif
-
-private func entrySource(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func entryFlat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func entryMatches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return regex.matches(in: text, range: range).compactMap { match in
-        Range(match.range, in: text).map { String(text[$0]) }
-    }
-}
 #endif

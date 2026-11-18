@@ -1,6 +1,5 @@
 import type { ConnectionState } from "./types";
 
-/** Preserve the stage during recovery, but never after an intentional exit. */
 export const shouldRetainMeetingSurface = ({
   connectionState,
   hasEnteredMeetingSurface,

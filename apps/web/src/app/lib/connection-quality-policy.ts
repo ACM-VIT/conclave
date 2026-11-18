@@ -72,11 +72,6 @@ export type RollingPacketLossSnapshot = {
 const isValidPacketCount = (value: number): boolean =>
   Number.isFinite(value) && value >= 0;
 
-/**
- * Keeps a short packet-count window and derives loss from the combined packet
- * counts. A missing/empty stats interval contributes no synthetic zero-loss
- * sample, so unsupported or temporarily absent stats cannot prove recovery.
- */
 export const updateRollingPacketLoss = ({
   samples,
   sample,
@@ -144,11 +139,6 @@ export const getSustainedReceiveEmergencyLoss = (
     ? snapshot.fraction
     : null;
 
-/**
- * RTT remains useful to the user-facing quality label, but high latency alone
- * is not evidence that a healthy sender should discard resolution. Only relax
- * a fair label when every congestion signal needed for that decision exists.
- */
 export const getPublishAdaptationQuality = ({
   publishQuality,
   packetLoss,

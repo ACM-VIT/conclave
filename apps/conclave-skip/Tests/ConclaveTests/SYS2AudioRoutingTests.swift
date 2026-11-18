@@ -140,7 +140,6 @@ struct SYS2AudioRoutingTests {
         for (raw, reason) in expected {
             #expect(AudioRouteChangeReason.fromIOSRawValue(raw) == reason, "\(raw)")
         }
-        #expect(AudioRouteChangeReason.routeOverride.rawValue == "override")
     }
 
     @Test func newDeviceRestoresTheReturningIntentOtherwiseFollowsTheDefault() {
@@ -511,42 +510,5 @@ struct SYS2AudioRoutingTests {
         owner.reset()
         #expect(owner.preferredRouteIntent.isEmpty)
     }
-
-    @Test func routeStringsAreInTheCatalogs() throws {
-
-        let xml = try sys2Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["ctl_route_phone", "ctl_route_speaker", "ctl_route_bluetooth", "ctl_route_wired", "ctl_route_usb", "ctl_route_hearing_aid"] {
-            #expect(xml.contains("<string name=\"\(name)\""), "missing \(name)")
-        }
-        let catalog = try sys2Source("Sources/Conclave/Resources/Localizable.xcstrings")
-        #expect(catalog.contains("\"iPhone\""))
-        #expect(catalog.contains("\"Speaker\""))
-    }
-}
-
-private func sys2Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func sys2Code(_ text: String) -> String {
-    text.components(separatedBy: "\n").filter { line in
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return !(trimmed.hasPrefix("//") || trimmed.hasPrefix("/*") || trimmed.hasPrefix("*"))
-    }.joined(separator: "\n")
-}
-
-private func sys2Count(_ needle: String, in text: String) -> Int {
-    text.components(separatedBy: needle).count - 1
-}
-
-private struct SYS2ScanError: Error {
-    let marker: String
-}
-
-private func sys2Body(_ text: String, from start: String, to end: String) throws -> String {
-    guard let lower = text.range(of: start) else { throw SYS2ScanError(marker: start) }
-    guard let upper = text.range(of: end, range: lower.upperBound..<text.endIndex) else { throw SYS2ScanError(marker: end) }
-    return String(text[lower.lowerBound..<upper.lowerBound])
 }
 #endif

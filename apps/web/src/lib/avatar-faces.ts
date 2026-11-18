@@ -22,10 +22,6 @@
 
 type FaceType = "round" | "cross" | "line" | "curved";
 
-/**
- * SVG path data for each face type.
- * Kept identical to facehash so URL avatars match the React avatars.
- */
 export const FACE_SVG_DATA: Record<
   FaceType,
   {

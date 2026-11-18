@@ -12,7 +12,6 @@ async function copyText(value: string): Promise<boolean> {
       return true;
     }
   } catch {
-    // Fall through to the legacy path below.
   }
   try {
     const textarea = document.createElement("textarea");
@@ -42,11 +41,6 @@ function useClock() {
   return time;
 }
 
-/**
- * Compact meeting tag for the controls bar: current time + room code. Clicking
- * it copies the code, with a one-time, self-dismissing hint nudging people
- * toward it. Kept intentionally small so it survives narrow displays.
- */
 export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
   const time = useClock();
   const [copied, setCopied] = useState(false);
@@ -63,7 +57,6 @@ export default function MeetingInfoTag({ roomId }: { roomId?: string }) {
     [],
   );
 
-  // Let the subtle hint linger for a few seconds, then retire it for good.
   useEffect(() => {
     if (!hint.visible) return;
     const t = window.setTimeout(() => hint.dismiss(), 5000);

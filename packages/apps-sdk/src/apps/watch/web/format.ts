@@ -1,4 +1,3 @@
-/** Format seconds as m:ss or h:mm:ss. Meant for tabular-nums display. */
 export const formatTime = (totalSeconds: number): string => {
   if (!Number.isFinite(totalSeconds) || totalSeconds < 0) {
     return "0:00";

@@ -12,10 +12,6 @@ import type {
   WriteContext,
 } from "../model/types";
 
-// The single Yjs root for the Watch together app. Everything the app needs to
-// converge on lives under this map: the current video, the playback record, and
-// the queue. Nobody streams video here; this doc syncs intent only and each
-// participant's own YouTube player fetches the media directly.
 const ROOT_KEY = "watch";
 const VIDEO_ID_KEY = "videoId";
 const VIDEO_TITLE_KEY = "videoTitle";
@@ -23,7 +19,6 @@ const PLAYBACK_KEY = "playback";
 const QUEUE_KEY = "queue";
 const REQUEST_RESOLUTIONS_KEY = "requestResolutions";
 
-// Playback sub-map keys.
 const PB_STATE = "state";
 const PB_POSITION = "positionSeconds";
 const PB_UPDATED_AT = "updatedAt";
@@ -73,27 +68,13 @@ const normalizeRate = (value: unknown): number =>
 const normalizeUpdatedAt = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) ? value : 0;
 
-// A joining client must not author defaults before receiving the room state:
-// Yjs map conflicts can otherwise let those defaults replace live content.
-// Readers below normalize an empty document, and real actions create shared
-// structures only when they have something to write.
 export const createWatchDoc = (): Y.Doc => createAppDoc(ROOT_KEY);
-
-/* ---- Queue requests ------------------------------------------------------
- * When the room is locked, non-admin doc writes are dropped server-side, so a
- * request cannot ride the doc. Requests travel via awareness (exempt from the
- * lock by design, and rightly ephemeral: leave the room, the request goes with
- * you). Only the HOST'S DECISION touches the doc: accept enqueues the item,
- * and either way a resolution marker is written here so the requester's client
- * knows to clear its pending state.
- * ------------------------------------------------------------------------ */
 
 export type WatchRequestResolution = "added" | "declined";
 
 const ensureResolutionsMap = (doc: Y.Doc): Y.Map<unknown> =>
   ensureAppMap(getRoot(doc), REQUEST_RESOLUTIONS_KEY);
 
-/** Record the host's decision on a request (admin write). */
 export const resolveWatchRequest = (
   doc: Y.Doc,
   requestId: string,
@@ -102,7 +83,6 @@ export const resolveWatchRequest = (
   ensureResolutionsMap(doc).set(requestId, resolution);
 };
 
-/** Read the decision for a request id, if the host has made one. */
 export const getWatchRequestResolution = (
   doc: Y.Doc,
   requestId: string,
@@ -111,25 +91,18 @@ export const getWatchRequestResolution = (
   return value === "added" || value === "declined" ? value : null;
 };
 
-/** Expose the root map so the web layer never reaches into raw Yjs itself. */
 export const getWatchRoot = (doc: Y.Doc): WatchRoot => getRoot(doc);
 
-/** The video everyone is currently watching, or null when idle. */
 export const getVideoId = (doc: Y.Doc): string | null => {
   const value = getRoot(doc).get(VIDEO_ID_KEY);
   return typeof value === "string" && value.length > 0 ? value : null;
 };
 
-/** The current video's title (best effort, backfilled after start), or null. */
 export const getVideoTitle = (doc: Y.Doc): string | null => {
   const value = getRoot(doc).get(VIDEO_TITLE_KEY);
   return typeof value === "string" && value.length > 0 ? value : null;
 };
 
-/**
- * Backfill the current video's title once metadata arrives. Guarded by video
- * id so a slow fetch can never label a video that is no longer playing.
- */
 export const setVideoTitle = (
   doc: Y.Doc,
   videoId: string,
@@ -142,7 +115,6 @@ export const setVideoTitle = (
   });
 };
 
-/** Backfill a queue item's title once metadata arrives. No-op if it is gone. */
 export const setQueueItemTitle = (
   doc: Y.Doc,
   itemId: string,
@@ -160,10 +132,6 @@ export const setQueueItemTitle = (
   });
 };
 
-/**
- * Read the current playback record. Returns a fully-normalized object so callers
- * never have to defend against a partially-initialized Yjs map.
- */
 export const getPlayback = (doc: Y.Doc): PlaybackRecord => {
   const playback = readPlaybackMap(doc);
   return {
@@ -175,7 +143,6 @@ export const getPlayback = (doc: Y.Doc): PlaybackRecord => {
   };
 };
 
-/** The full up-next queue, normalized to typed items. */
 export const getQueue = (doc: Y.Doc): QueueItem[] => {
   return (readQueueArray(doc)?.toArray() ?? [])
     .filter(
@@ -186,12 +153,6 @@ export const getQueue = (doc: Y.Doc): QueueItem[] => {
     );
 };
 
-/**
- * Write one playback record. This is the ONE write every acting client makes on
- * play / pause / seek / rate change. `positionSeconds` must be the player
- * position at the exact moment of the action, and `updatedAt` is stamped here so
- * every other client can extrapolate the live position.
- */
 export const writePlayback = (
   doc: Y.Doc,
   next: {
@@ -211,11 +172,6 @@ export const writePlayback = (
   });
 };
 
-/**
- * Point the room at a video. Used both when starting the very first video and
- * when advancing to a queued item. Optionally seeds a fresh playback record so
- * a new video starts cleanly from the given position.
- */
 export const setVideo = (
   doc: Y.Doc,
   videoId: string,
@@ -234,15 +190,11 @@ export const setVideo = (
     playback.set(PB_STATE, options?.play === false ? "paused" : "playing");
     playback.set(PB_POSITION, normalizePosition(options?.positionSeconds ?? 0));
     playback.set(PB_RATE, DEFAULT_RATE);
-    // Preserve explicit room-start intent until a real play/pause/seek write.
-    // It is dormant for ordinary videos and becomes the default latest mode
-    // only when metadata confirms that the source is actively live.
     playback.set(PB_LIVE_EDGE, options?.liveEdge !== false);
     playback.set(PB_UPDATED_AT, Date.now());
   });
 };
 
-/** Append an item to the up-next queue. */
 export const enqueue = (
   doc: Y.Doc,
   input: { videoId: string; title?: string | null },
@@ -259,7 +211,6 @@ export const enqueue = (
   return item;
 };
 
-/** Remove a queue item by its stable id. */
 export const removeQueueItem = (doc: Y.Doc, itemId: string): void => {
   const queue = readQueueArray(doc);
   if (!queue) return;
@@ -269,7 +220,6 @@ export const removeQueueItem = (doc: Y.Doc, itemId: string): void => {
   queue.delete(index, 1);
 };
 
-/** Move a queue item one slot up or down. No-op at the edges or if gone. */
 export const moveQueueItem = (
   doc: Y.Doc,
   itemId: string,
@@ -289,10 +239,6 @@ export const moveQueueItem = (
   });
 };
 
-/**
- * Jump a queued item to the screen right now, atomically: it leaves the queue
- * and becomes the current video with a fresh playing record in one transaction.
- */
 export const playQueueItemNow = (doc: Y.Doc, itemId: string): void => {
   const queue = readQueueArray(doc);
   if (!queue) return;
@@ -315,16 +261,6 @@ export const playQueueItemNow = (doc: Y.Doc, itemId: string): void => {
   });
 };
 
-/**
- * Advance to the next queued video. Returns the video id that became active, or
- * null if the queue was empty.
- *
- * DOUBLE-ADVANCE GUARD: the ENDED event fires on every client, so several may
- * race to advance. `expectedCurrentVideoId` is the video that just ended; we
- * only advance if the doc STILL points at it. The first writer flips `videoId`
- * inside the transaction, so every later racer sees a mismatch and no-ops. This
- * makes the queue head move exactly once per ended video.
- */
 export const advanceQueue = (
   doc: Y.Doc,
   expectedCurrentVideoId: string | null,
@@ -361,13 +297,6 @@ export const advanceQueue = (
   return advancedTo;
 };
 
-/**
- * Compute where playback should be right now given a record and the current
- * clock. This is the extrapolation at the heart of sync: while playing, the
- * position advances in real time from `updatedAt`; while paused it is frozen.
- * Author clocks differ slightly, which the drift threshold in the player hook
- * absorbs, so no server-clock plumbing is needed.
- */
 export const expectedPosition = (
   playback: PlaybackRecord,
   now: number = Date.now(),

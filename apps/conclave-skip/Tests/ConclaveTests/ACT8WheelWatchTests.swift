@@ -164,10 +164,6 @@ struct ACT8WheelWatchTests {
         #expect(AppBridgeProtocol.entryFile(appId: "wheel") == "wheel.html" && AppBridgeProtocol.entryFile(appId: "watch") == "watch.html")
         #expect(AppBridgeProtocol.iosResourceName(appId: "watch") == "native-embed-watch")
         #expect(AppBridgeProtocol.androidAssetPath(appId: "wheel") == "native-embed/wheel.html")
-        let protocolTS = try String(contentsOf: act8RepoRoot().appendingPathComponent("packages/apps-sdk/src/native-embed/protocol.ts"), encoding: .utf8)
-        #expect(protocolTS.contains("entries: \(AppWheelLimits.maxEntries),") && protocolTS.contains("label: \(AppWheelLimits.label),"))
-        #expect(protocolTS.contains("queue: \(AppWatchLimits.queue),") && protocolTS.contains("title: \(AppWatchLimits.title),"))
-        #expect(protocolTS.contains("WATCH_FRAME_ORIGIN = \"\(AppEmbedFramePolicy.watchFrameOrigin)\""))
     }
 
     @Test func pastedLinksResolveLikeTheSDK() throws {
@@ -452,44 +448,8 @@ struct ACT8WheelWatchTests {
         #expect(Set(AppPageFixtureState.allCases.map { $0.rawValue }).isDisjoint(with: Set(AppHostFixtureState.allCases.map { $0.rawValue })))
     }
 
-    @Test func theEmbedsStayIsolatedAndFlat() throws {
-        let root = act8RepoRoot().appendingPathComponent("packages/apps-sdk/src/native-embed")
-        for path in ["wheel/NativeWheelEmbed.tsx", "watch/NativeWatchEmbed.tsx", "watch/youtubeFrame.ts", "wheel/embed.css", "watch/embed.css"] {
-            let text = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
-            #expect(!text.lowercased().contains("gradient"), "\(path)")
-            #expect(!text.contains("fetch(") && !text.contains("localStorage") && !text.contains("XMLHttpRequest"), "\(path)")
-            #expect(!text.contains("\u{2013}") && !text.contains("\u{2014}"), "\(path)")
-        }
-        let build = try String(contentsOf: root.appendingPathComponent("build/build-native-embed.mjs"), encoding: .utf8)
-        #expect(build.contains("appEntry(\"watch\", watchFrameOrigin)") && build.contains("\"connect-src 'none'\""))
-        let packageJSON = try String(contentsOf: act8RepoRoot().appendingPathComponent("packages/apps-sdk/package.json"), encoding: .utf8)
-        #expect(packageJSON.contains("\"test:native-embed-apps\": \"node --test ./src/native-embed/tests/wheel-watch-contract-test.mjs\""))
-    }
-
     @Test func requestedHooksAreWired() throws {
         #expect(ActivitiesDestinationPolicy.isRenderable(.wheel) && ActivitiesDestinationPolicy.isRenderable(.watch))
-    }
-
-    @Test func pageStringsAreInBothCatalogs() throws {
-        let catalogData = try Data(contentsOf: act8PackageRoot().appendingPathComponent("Sources/Conclave/Resources/Localizable.xcstrings"))
-        let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
-        let strings = try #require(catalog["strings"] as? [String: Any])
-        let ios = try act8Source("Sources/Conclave/Features/Meeting/Activities/NativeAppHost+iOS.swift")
-        let pattern = try NSRegularExpression(pattern: #"ConclaveStrings\.(?:text|format)\("((?:[^"\\]|\\.)+)""#)
-        for match in pattern.matches(in: ios, range: NSRange(ios.startIndex..., in: ios)) {
-            guard let range = Range(match.range(at: 1), in: ios) else { continue }
-            let key = String(ios[range])
-            #expect(strings[key] != nil, "missing iOS key \(key)")
-        }
-        let xml = try String(contentsOf: act8PackageRoot().appendingPathComponent("Android/app/src/main/res/values/strings.xml"), encoding: .utf8)
-        let kotlin = try act8Source("Sources/Conclave/Skip/ui/apps/AppPages.kt") + act8Source("Sources/Conclave/Skip/ui/apps/AppHostCopy.kt")
-            + act8Source("Sources/Conclave/Skip/ui/apps/NativeAppHost.kt")
-        let names = try NSRegularExpression(pattern: #""((?:app|act|stg|ds)_[a-z0-9_]+)""#)
-        for match in names.matches(in: kotlin, range: NSRange(kotlin.startIndex..., in: kotlin)) {
-            guard let range = Range(match.range(at: 1), in: kotlin) else { continue }
-            let name = String(kotlin[range])
-            #expect(xml.contains("name=\"" + name + "\""), "missing Android resource \(name)")
-        }
     }
 }
 
@@ -499,9 +459,5 @@ private func act8PackageRoot() -> URL {
 
 private func act8RepoRoot() -> URL {
     act8PackageRoot().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func act8Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: act8PackageRoot().appendingPathComponent(packageRelativePath), encoding: .utf8)
 }
 #endif

@@ -564,25 +564,4 @@ private func ent9Settle(seconds: Double = 2.0, _ condition: () -> Bool) async ->
     }
     return condition()
 }
-
-private func ent9Source(_ packageRelativePath: String) throws -> String {
-    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-    return try String(contentsOf: root.appendingPathComponent(packageRelativePath), encoding: .utf8)
-}
-
-private func ent9Flat(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-}
-
-private func ent9Matches(_ pattern: String, in text: String) -> [String] {
-    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    var found: [String] = []
-    for match in regex.matches(in: text, range: range) {
-        if let span = Range(match.range, in: text) {
-            found.append(String(text[span]))
-        }
-    }
-    return found
-}
 #endif

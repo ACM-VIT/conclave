@@ -40,10 +40,6 @@ export const isSpeakerOutsideVisibleWindow = ({
   return currentIndex >= visibleParticipantLimit;
 };
 
-/**
- * Promotes an overflow speaker with a single seat swap instead of moving them
- * to the front and shifting every visible tile.
- */
 export const placeParticipantAtVisibleBoundary = <
   T extends ParticipantOrderEntry,
 >(

@@ -262,12 +262,4 @@ struct SYS4PipPoliciesTests {
     }
 
 }
-
-private func sys4PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func sys4Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: sys4PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
 #endif

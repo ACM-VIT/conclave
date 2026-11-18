@@ -68,12 +68,10 @@ export async function takeUnfurlRateLimit(
       const { success } = await limiter.limit({ key });
       return success ? { ok: true } : { ok: false, status: 429 };
     } catch {
-      // Fall through to the fail-closed production branch below.
     }
   }
 
   if (process.env.NODE_ENV === "production") {
-    // An unfurler is an outbound-fetch proxy; never run it unmetered.
     return { ok: false, status: 503 };
   }
 

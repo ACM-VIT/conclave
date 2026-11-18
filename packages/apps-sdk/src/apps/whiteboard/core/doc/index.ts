@@ -79,8 +79,6 @@ const insertPage = (
   return pageMap;
 };
 
-// Canonicalization is a write operation and is therefore only called from
-// mutation helpers, never while a joining client is waiting for server sync.
 const normalizePageOrder = (doc: Y.Doc): string[] => {
   const pages = ensurePagesMap(doc);
   const order = ensurePageOrder(doc);
@@ -113,8 +111,6 @@ const normalizePageOrder = (doc: Y.Doc): string[] => {
   return normalizedOrder;
 };
 
-// Keep joining documents empty. Read helpers expose a synthetic Page 1 to the
-// UI; the first edit materializes it in the shared document.
 export const createWhiteboardDoc = (): Y.Doc => createAppDoc(ROOT_KEY);
 
 export const getWhiteboardRoot = (doc: Y.Doc): Y.Map<unknown> => getRoot(doc);
@@ -134,7 +130,6 @@ export const getMetaMap = (doc: Y.Doc): MetaMap | null => {
   return value instanceof Y.Map ? (value as MetaMap) : null;
 };
 
-/** Return valid page ids without repairing or otherwise changing the doc. */
 export const getOrderedPageIds = (doc: Y.Doc): string[] => {
   const pages = getPagesMap(doc);
   if (!pages || pages.size === 0) return [DEFAULT_WHITEBOARD_PAGE_ID];
@@ -184,7 +179,6 @@ export const getPageElements = (
   pageId: string,
 ): WhiteboardElement[] => getPageElementsArray(doc, pageId)?.toArray() ?? [];
 
-/** Explicitly materialize the synthetic first page before a real edit. */
 export const ensureDefaultPage = (doc: Y.Doc): void => {
   doc.transact(() => {
     const pages = ensurePagesMap(doc);

@@ -1,12 +1,5 @@
 import type { Socket } from "socket.io-client";
 
-/**
- * Emits with an acknowledgement callback (the last argument), but calls
- * `onLost` instead when the server does not answer within `timeoutMs` or the
- * socket drops first. socket.io drops plain ack callbacks on disconnect, so a
- * promise resolved only from one never settles, and any busy flag waiting on
- * it stays on forever.
- */
 export const emitWithAckTimeout = (
   socket: Pick<Socket, "timeout">,
   timeoutMs: number,

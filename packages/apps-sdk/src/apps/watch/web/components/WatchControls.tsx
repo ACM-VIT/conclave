@@ -13,10 +13,8 @@ type WatchControlsProps = {
   muted: boolean;
   volume: number;
   readOnly: boolean;
-  /** Cinema (expanded) view; a local preference, available to everyone. */
   cinema: boolean;
   onToggleCinema: () => void;
-  /** Closed captions; a local preference, available to everyone. */
   captionsAvailable: boolean;
   captionsOn: boolean;
   captionTracks: WatchCaptionTrack[];
@@ -32,11 +30,6 @@ type WatchControlsProps = {
   onVolumeChange: (value: number) => void;
 };
 
-/**
- * Slim control bar under the player. Custom flat chrome: a play/pause toggle, a
- * flat seek bar, current/total time in tabular nums, and a LOCAL-ONLY mute and
- * volume control (volume never syncs to the doc).
- */
 export function WatchControls({
   playbackState,
   currentTime,
@@ -62,8 +55,6 @@ export function WatchControls({
   onToggleMute,
   onVolumeChange,
 }: WatchControlsProps) {
-  // While dragging the seek bar, show the dragged value locally and only commit
-  // on release, so the reconcile tick does not fight the drag.
   const [scrubValue, setScrubValue] = useState<number | null>(null);
   const isPlaying = playbackState === "playing";
   const max = duration > 0 ? duration : 0;
@@ -162,8 +153,6 @@ export function WatchControls({
             </svg>
           )}
         </button>
-        {/* Volume rail tucks away and slides out on hover or keyboard focus,
-            so the seek bar stays the only accent line at rest. */}
         <div className="hidden w-0 overflow-hidden transition-all duration-200 group-focus-within/vol:w-16 group-hover/vol:w-16 sm:block">
           <Slider
             className="w-16 pl-1 pr-1.5"
@@ -224,12 +213,6 @@ const CAPTION_SIZES: Array<{ label: string; value: number }> = [
   { label: "Huge", value: 3 },
 ];
 
-/**
- * The one captions control: the CC button opens a small popover with Off, the
- * language tracks, and size. Fixed-positioned from the button's rect (above
- * the bar) so nothing can clip it, closing on outside click, scroll, or
- * resize. All local.
- */
 function CaptionSettings({
   captionsOn,
   tracks,
@@ -309,10 +292,7 @@ function CaptionSettings({
       </button>
 
       {open && anchor
-        ? /* Portaled to body: the control bar's transform and backdrop-filter
-             make it the containing block for fixed descendants, which would
-             trap this popover inside the bar's overflow clipping. */
-          createPortal(
+        ? createPortal(
         <div
           ref={popoverRef}
           className="w-44 rounded-xl border border-white/10 p-1"
@@ -412,9 +392,7 @@ type SliderProps = {
   max: number;
   step: number;
   disabled: boolean;
-  /** Keeps the thumb visible while the user is scrubbing. */
   dragging: boolean;
-  /** Accent (coral) for the seek bar, neutral (white) for volume. */
   tone: "accent" | "neutral";
   ariaLabel: string;
   className?: string;
@@ -422,12 +400,6 @@ type SliderProps = {
   onCommit: (value: number) => void;
 };
 
-/**
- * Flat slider: a hairline rail with a solid fill and a thumb that appears on
- * hover or while dragging, driven by a transparent native range input on top
- * for accessibility and pointer handling. No gradients: the fill is a
- * plain-colored block sized by percentage.
- */
 function Slider({
   value,
   max,
@@ -453,19 +425,14 @@ function Slider({
 
   return (
     <div className={`group relative flex h-4 items-center ${className ?? ""}`}>
-      {/* rail: hairline at rest, a touch taller under the pointer */}
       <div
         className="absolute left-0 right-0 h-[3px] rounded-full transition-all group-hover:h-1"
         style={{ backgroundColor: "#33333b" }}
       />
-      {/* fill (flat solid, sized by percentage) */}
       <div
         className="absolute left-0 h-[3px] rounded-full transition-all group-hover:h-1"
         style={{ width: `${pct}%`, backgroundColor: fillColor }}
       />
-      {/* thumb: revealed on hover or while scrubbing. Its travel is clamped
-          to the rail (0 to 100% minus its own width) so it never clips at
-          either end. */}
       <div
         className={`pointer-events-none absolute h-2.5 w-2.5 rounded-full transition-opacity ${
           dragging ? "opacity-100" : "opacity-0 group-hover:opacity-100"
@@ -475,7 +442,6 @@ function Slider({
           backgroundColor: disabled ? "#6b6b72" : "#ffffff",
         }}
       />
-      {/* transparent native input drives interaction + a11y */}
       <input
         type="range"
         min={0}

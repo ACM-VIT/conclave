@@ -175,7 +175,6 @@ const STROKE_WIDTHS = [2, 3, 5, 8, 12] as const;
 
 const GAP = 10;
 
-/** Shared portal popover state: position under the trigger, close on outside click or scroll. */
 function usePopover() {
   const [open, setOpen] = useState(false);
   const [style, setStyle] = useState<React.CSSProperties>({});
@@ -305,7 +304,6 @@ function BarDivider() {
   return <div className="mx-1 h-5 w-px shrink-0" style={{ backgroundColor: HAIRLINE }} />;
 }
 
-/** One slot for all four shapes: click activates the current kind, caret opens the picker. */
 function ShapeSlot({
   tool,
   onToolChange,
@@ -407,7 +405,6 @@ function ColorSlot({
         ...settings,
         strokeColor: nextColor,
         textColor: nextColor,
-        // When shapes are filled, the fill follows the stroke color
         fillColor: settings.fillColor === "transparent" ? "transparent" : nextColor,
       });
     },
@@ -629,7 +626,6 @@ export function WhiteboardToolbar({
   canUndo: boolean;
   canRedo: boolean;
 }) {
-  // The laser only touches awareness, so viewers on a locked board can still point
   const editDisabled = locked;
 
   return (
@@ -721,10 +717,6 @@ export function WhiteboardToolbar({
   );
 }
 
-/**
- * Contextual settings under the main bar: sticky colors when the sticky tool is
- * active, a fill toggle when a fillable shape is active. Nothing otherwise.
- */
 export function WhiteboardContextBar({
   tool,
   settings,

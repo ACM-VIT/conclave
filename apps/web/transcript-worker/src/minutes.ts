@@ -14,9 +14,6 @@ export const COMPACT_MINUTES_SECTION_LIMITS = {
   followUps: 10,
 } as const;
 
-// Incremental updates get a little breathing room between compactions, but
-// never enough to let a long meeting grow the persisted/model context without
-// bound. The compaction pass folds these back to the canonical limits above.
 export const WORKING_MINUTES_SECTION_LIMITS = {
   topics: 16,
   decisions: 20,
@@ -218,11 +215,6 @@ const applySectionUpdate = (
   return result;
 };
 
-/**
- * Applies the model's incremental minutes update to the accumulated snapshot.
- * An omitted item is deliberately retained; the model must name an existing ID
- * in `remove` when recent transcript evidence resolves or invalidates it.
- */
 export const applyMinutesUpdateFromText = (
   value: string,
   current: TranscriptMinutesSnapshot,

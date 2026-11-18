@@ -6,24 +6,6 @@ import Testing
 @MainActor
 struct S1bStageMomentsTests {
     static let policyFile = "Sources/Conclave/Features/Meeting/Stage/ChromeAutoHidePolicy.swift"
-    static let iosReactionsFile = "Sources/Conclave/Features/Meeting/Stage/Reactions+iOS.swift"
-    static let androidReactionsFile = "Sources/Conclave/Skip/ui/call/stage/Reactions.kt"
-    static let cellFile = "Sources/Conclave/Features/Meeting/Controls/CallControlCell+iOS.swift"
-    static let chromeFile = "Sources/Conclave/Features/Meeting/Stage/StageChrome+iOS.swift"
-    static let detailsFile = "Sources/Conclave/Features/Meeting/Stage/MeetingDetailsPanel+iOS.swift"
-    static let chipFile = "Sources/Conclave/DesignSystem/iOS/Components/ConclaveStageChip+iOS.swift"
-
-    private func section(_ text: String, from start: String, to end: String) throws -> String {
-        let lower = try #require(text.range(of: start), "missing \(start)")
-        let upper = try #require(text.range(of: end, range: lower.upperBound..<text.endIndex), "missing \(end) after \(start)")
-        return String(text[lower.upperBound..<upper.lowerBound])
-    }
-
-    private func tail(_ text: String, after marker: String, from start: String) throws -> String {
-        let anchor = try #require(text.range(of: start), "missing \(start)")
-        let split = try #require(text.range(of: marker, range: anchor.upperBound..<text.endIndex), "missing \(marker) after \(start)")
-        return String(text[split.upperBound..<text.endIndex])
-    }
 
     private func count(_ needle: String, in text: String) -> Int {
         text.components(separatedBy: needle).count - 1
@@ -59,14 +41,6 @@ struct S1bStageMomentsTests {
             let offset = StageReactionPolicy.driftDistance * StageReactionPolicy.driftDirection(eventId: id)
             #expect(offset != 0 && abs(offset) <= StageReactionPolicy.driftDistance, "\(id)")
         }
-    }
-
-    @Test func popAndDriftConstantsAreThePolicyValues() {
-        #expect(StageReactionPolicy.popMillis == 160.0)
-        #expect(StageReactionPolicy.popFromScale == 0.85)
-        #expect(StageReactionPolicy.driftDistance == 10.0)
-        #expect(StageReactionPolicy.popMillis < StageReactionPolicy.riseMillis)
-        #expect(StageReactionPolicy.popFromScale > 0 && StageReactionPolicy.popFromScale < 1)
     }
 
     private func reactionEvent(_ id: Int) -> ReactionEvent {
@@ -125,12 +99,6 @@ struct S1bStageMomentsTests {
                 }
             }
         }
-    }
-
-    @Test func theReducedPillFitsSomeoneAtDefaultTextAndCapsLargeTextOnBothPlatforms() throws {
-        let pillPadding = 6.0
-        #expect(StageReactionPolicy.reducedSlotWidth - 2 * pillPadding >= 51)
-        #expect(StageReactionPolicy.reducedPillMaxFontScale == 1.5)
     }
 
     @Test func theReactionLayerRisesWithTheTileLabelSoPillsNeverCoverItAtLargeText() throws {

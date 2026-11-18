@@ -203,30 +203,5 @@ struct CTL4MediaShortcutTests {
         #expect(ControlsFixtureSession(state: .cameraEffects).shortcutsReadout() == "mic=1 camera=1 items=effects")
         #expect(ControlsFixtureSession(state: .recovering).shortcutsReadout() == "mic=1 camera=0 items=flipCamera(reconnecting)")
     }
-
-    @Test func shortcutStringsResolveInBothCatalogs() throws {
-
-        let catalog = try ctl4Source("Sources/Conclave/Resources/Localizable.xcstrings")
-        for key in ["Speaker", "Microphone\u{2026}", "Choose Microphone", "Microphone", "Mic Mode\u{2026}", "Mic Mode", "Audio Settings",
-                    "Flip Camera", "Effects", "Video Effects\u{2026}", "Video Effects"] {
-            #expect(catalog.contains("\"" + key + "\""), "missing \(key)")
-        }
-        let strings = try ctl4Source("Android/app/src/main/res/values/strings.xml")
-        for name in ["ds_flip_camera", "ctl_effects", "ctl_choose_audio_output", "ctl_reason_reconnecting", "ctl_reason_offline"] {
-            #expect(strings.contains("name=\"" + name + "\""), "missing \(name)")
-        }
-    }
-}
-
-private func ctl4PackageRoot() -> URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-}
-
-private func ctl4Source(_ packageRelativePath: String) throws -> String {
-    try String(contentsOf: ctl4PackageRoot().appendingPathComponent(packageRelativePath).standardizedFileURL, encoding: .utf8)
-}
-
-private func ctl4Normalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
 #endif

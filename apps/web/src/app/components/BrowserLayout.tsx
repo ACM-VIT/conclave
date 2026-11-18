@@ -59,9 +59,6 @@ function BrowserLayout({
     const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
     const [isReady, setIsReady] = useState(false);
 
-    // The shared browser frame reveals itself on its own `load` event. The
-    // timer is only a fallback so a frame that never fires `load` (e.g. blocked
-    // by the network) still resolves instead of spinning forever.
     useEffect(() => {
         setIsReady(false);
         if (!noVncUrl) return;

@@ -140,14 +140,6 @@ export const verifyTranscriptRoomToken = async (
 
 const CONCLAVE_CLIENT_ID = "conclave";
 
-/**
- * The Durable Object a verified token's room lives in. Rooms are per tenant
- * (`clientId`); naming objects by the bare room id let any tenant that could
- * create a room with the same code read another tenant's transcript. The main
- * `conclave` tenant keeps the bare room id so existing transcripts stay where
- * they are; other tenants are separated with a control character, which room
- * ids can never contain, so the two name spaces cannot collide.
- */
 export const transcriptRoomObjectName = (
   payload: Pick<TranscriptTokenPayload, "roomId" | "clientId" | "channelId">,
 ): string | null => {

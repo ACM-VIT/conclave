@@ -31,8 +31,6 @@ const createHarness = (
   const onLocalRoomEnded = vi.fn();
   let api!: SocketApi;
   let refs!: Refs;
-  // Render the real hooks once; network callbacks are exercised directly with
-  // an in-memory socket, without the periodic media effects or a live SFU.
   function Harness() {
     refs = useMeetRefs();
     const noop = () => {};
@@ -157,7 +155,6 @@ describe("media acquisition during shutdown", () => {
     h.socket.connected = true;
     h.dispatch("connect");
     h.api.cleanup();
-    // A subsequent join can own a stream and reuse one track from the old request.
     h.refs.intentionalDisconnectRef.current = false;
     h.refs.localStreamRef.current = newMedia.stream;
     resolveMedia({

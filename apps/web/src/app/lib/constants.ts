@@ -11,10 +11,6 @@ export const BACKGROUND_TRANSPORT_DISCONNECT_GRACE_MS = 18000;
 export const PRODUCER_SYNC_INTERVAL_MS = 15000;
 export const SPEAKER_CHECK_INTERVAL_MS = 250;
 export const SPEAKER_THRESHOLD = 0.03;
-// How long the last active speaker stays highlighted after they go quiet, so a
-// natural pause doesn't drop + re-light the 2px orange border every check tick.
-// Must be comfortably larger than SPEAKER_CHECK_INTERVAL_MS (250ms) or the
-// highlight flickers between speakers (the old value of 50ms never lingered).
 export const ACTIVE_SPEAKER_HOLD_MS = 1500;
 export const REACTION_LIFETIME_MS = 3800;
 export const MAX_REACTIONS = 30;
@@ -35,8 +31,6 @@ const LOW_QUALITY_CONSTRAINTS = {
 const POOR_QUALITY_CONSTRAINTS = {
   width: { ideal: 426, max: 426 },
   height: { ideal: 240, max: 240 },
-  // Match the poor-network sender cap so capture does not generate frames the
-  // encoder must immediately discard.
   frameRate: { ideal: 12, max: 12 },
 };
 
@@ -126,8 +120,6 @@ export const SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE: Record<
   number
 > = {
   good: SCREEN_AUDIO_OPUS_MAX_AVERAGE_BITRATE,
-  // Keep bundled audio m-lines codec-identical per profile. Chrome treats the
-  // same Opus payload type with different fmtp parameters as a BUNDLE collision.
   fair: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.fair,
   poor: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.poor,
   emergency: MICROPHONE_OPUS_MAX_AVERAGE_BITRATE_BY_PROFILE.emergency,

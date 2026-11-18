@@ -80,13 +80,10 @@ interface VideoEffectsPanelProps {
   cameraPermissionBlocked?: boolean;
   cameraActivationBlocked?: boolean;
   onRecenterFraming?: () => void;
-  /** Turns the REAL meeting camera on/off (visible to everyone). */
   onToggleCamera?: () => void;
-  /** True while `localStream` is a private preview no one else can see. */
   isCameraPreviewActive?: boolean;
   isCameraPreviewStarting?: boolean;
   cameraPreviewError?: string | null;
-  /** Starts a local-only camera preview (never broadcast to the meeting). */
   onStartCameraPreview?: () => void;
   onStopCameraPreview?: () => void;
   onClose: () => void;

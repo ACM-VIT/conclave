@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { color, radius } from "@conclave/ui-tokens";
 import {
   CountdownRing,
   GameLobby,
+  GhostButton,
   HEAD_FONT,
   useRemaining,
   type GameViewProps,
@@ -13,9 +14,33 @@ import type { WordleMove } from "./moves";
 
 type TileState = "green" | "yellow" | "gray";
 type PlayerOutcome = "win" | "lose" | "timeout";
+type WordleMode = "solo" | "relay" | "huddle";
+
+type TeamGuess = {
+  word: string;
+  feedback: TileState[];
+  at: number;
+  byId: string;
+  byName: string | null;
+};
+
+type WordleTeam = {
+  guesses: TeamGuess[];
+  outcome: PlayerOutcome | null;
+  solvedById: string | null;
+  solvedByName: string | null;
+  members: Array<{ playerId: string; playerName: string; active: boolean }>;
+  currentTurnId: string | null;
+  currentTurnName: string | null;
+  nextTurnId: string | null;
+  turnDeadline: number | null;
+};
 
 type WordlePublic = {
   phase: "lobby" | "set-word" | "playing" | "results";
+  mode?: WordleMode;
+  turnTimeMs?: number;
+  team?: WordleTeam | null;
   wordSource: "random" | "setter";
   setterId: string | null;
   setterName: string | null;
@@ -47,13 +72,14 @@ type WordlePublic = {
 type WordleMe = {
   currentRound: number;
   isSetter: boolean;
+  isMyTurn?: boolean;
+  isUpNext?: boolean;
   canSetWord: boolean;
   canGuess: boolean;
   secretWord: string | null;
   myGuesses: Array<{ word: string; feedback: TileState[]; at: number }>;
   myOutcome: PlayerOutcome | null;
   mySolvedAt: number | null;
-  /** Setter only: every contestant's live board, letters included. */
   boards: Array<{
     playerId: string;
     guesses: Array<{ word: string; feedback: TileState[]; at: number }>;
@@ -71,6 +97,27 @@ const letterBg = (state: TileState | "empty"): string => {
   if (state === "yellow") return WORDLE_YELLOW;
   if (state === "gray") return WORDLE_GRAY;
   return "transparent";
+};
+
+const TILE_MEANING: Record<TileState, string> = {
+  green: "correct",
+  yellow: "in the word, wrong spot",
+  gray: "not in the word",
+};
+
+const tileLabel = (letter: string, state: TileState | "empty"): string => {
+  if (!letter.trim()) return "empty";
+  return state === "empty" ? letter : `${letter}, ${TILE_MEANING[state]}`;
+};
+
+const tileCue = (state: TileState | "empty", inset = 5, width = 2): React.CSSProperties => {
+  if (state === "green") {
+    return { outline: `${width}px solid rgba(255, 255, 255, 0.6)`, outlineOffset: -inset - width };
+  }
+  if (state === "yellow") {
+    return { outline: `${width}px dashed rgba(255, 255, 255, 0.8)`, outlineOffset: -inset - width };
+  }
+  return {};
 };
 
 const tileBorder = (state: TileState | "empty", hasLetter: boolean): string => {
@@ -157,11 +204,14 @@ function Tile({
   if (!animateReveal) {
     return (
       <div
+        role="img"
+        aria-label={tileLabel(letter, state)}
         style={{
           ...TILE_STYLE,
           aspectRatio: "1",
           border: `2px solid ${isRevealed ? "transparent" : tileBorder("empty", hasLetter)}`,
           background: isRevealed ? letterBg(state) : "transparent",
+          ...tileCue(state),
         }}
       >
         {letter}
@@ -171,7 +221,7 @@ function Tile({
 
   const delay = colIndex * 300;
   return (
-    <div style={{ aspectRatio: "1", perspective: 300 }}>
+    <div role="img" aria-label={tileLabel(letter, state)} style={{ aspectRatio: "1", perspective: 300 }}>
       <div
         style={{
           width: "100%",
@@ -201,11 +251,169 @@ function Tile({
             backfaceVisibility: "hidden",
             transform: "rotateX(180deg)",
             background: letterBg(state),
+            ...tileCue(state),
           }}
         >
           {letter}
         </div>
       </div>
+    </div>
+  );
+}
+
+const teamOutcomeTitle = (outcome: PlayerOutcome | null): string => {
+  if (outcome === "win") return "Team cracked it!";
+  if (outcome === "lose") return "Out of tries";
+  if (outcome === "timeout") return "Time's up";
+  return "Round complete";
+};
+
+function TeamMembers({ team }: { team: WordleTeam }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+      {team.members.map((member, index) => {
+        const current = member.playerId === team.currentTurnId;
+        return (
+          <span
+            key={member.playerId}
+            title={member.active ? member.playerName : `${member.playerName} (away, skipped)`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              maxWidth: 120,
+              padding: "3px 9px",
+              borderRadius: radius.pill,
+              border: `1px solid ${current ? WORDLE_GREEN : color.border}`,
+              background: current ? `${WORDLE_GREEN}26` : "transparent",
+              color: current ? color.text : color.textMuted,
+              fontSize: 11.5,
+              fontFamily: HEAD_FONT,
+              opacity: member.active ? 1 : 0.4,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {team.currentTurnId != null ? (
+              <span style={{ fontSize: 10, color: current ? WORDLE_GREEN : color.textFaint }}>
+                {index + 1}
+              </span>
+            ) : null}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+              {member.playerName}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function TeamBanner({
+  mode,
+  team,
+  me,
+  turnRemainingMs,
+  canPass,
+  busy,
+  readOnly,
+  onPass,
+}: {
+  mode: WordleMode;
+  readOnly: boolean;
+  team: WordleTeam;
+  me: WordleMe;
+  turnRemainingMs: number;
+  canPass: boolean;
+  busy: boolean;
+  onPass: () => void;
+}) {
+  const seconds = Math.max(0, Math.ceil(turnRemainingMs / 1000));
+  const lowTime = seconds <= 5;
+  const pill: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 9,
+    padding: "10px 14px",
+    borderRadius: radius.lg,
+    border: `1px solid ${color.border}`,
+    background: color.surfaceRaised,
+  };
+
+  if (me.isSetter) {
+    return (
+      <div style={{ ...pill, justifyContent: "center" }}>
+        <span style={{ fontSize: 13, color: color.text }}>You set the word</span>
+        <span style={{ fontSize: 13, color: color.textMuted }}>· watching the team</span>
+      </div>
+    );
+  }
+
+  if (mode === "huddle" && (!me.canGuess || readOnly)) {
+    return (
+      <div style={{ ...pill, justifyContent: "center" }}>
+        <span style={{ fontSize: 13, color: color.text }}>Watching the team</span>
+      </div>
+    );
+  }
+
+  if (mode === "huddle") {
+    return (
+      <div style={{ ...pill, flexDirection: "column", gap: 2 }}>
+        <span style={{ fontSize: 13.5, color: color.text, fontFamily: HEAD_FONT }}>
+          One board, no turns
+        </span>
+        <span style={{ fontSize: 12, color: color.textMuted, textAlign: "center" }}>
+          Talk it through on the call. Anyone can type the next guess.
+        </span>
+      </div>
+    );
+  }
+
+  const timer = (
+    <span
+      style={{
+        marginLeft: "auto",
+        fontFamily: HEAD_FONT,
+        fontSize: 13,
+        fontVariantNumeric: "tabular-nums",
+        color: lowTime ? color.danger : color.textMuted,
+      }}
+    >
+      {seconds}s
+    </span>
+  );
+
+  if (me.isMyTurn) {
+    return (
+      <div
+        style={{
+          ...pill,
+          border: `1px solid ${WORDLE_GREEN}`,
+          background: `${WORDLE_GREEN}26`,
+        }}
+      >
+        <span style={{ fontSize: 14, color: color.text, fontFamily: HEAD_FONT, fontWeight: 600, whiteSpace: "nowrap" }}>
+          Your turn
+        </span>
+        {timer}
+        {canPass ? (
+          <GhostButton onClick={onPass} disabled={busy}>
+            Pass
+          </GhostButton>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ ...pill, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 13, color: color.text, minWidth: 0 }}>
+        {team.currentTurnName ?? "A teammate"} is guessing
+      </span>
+      {me.isUpNext ? (
+        <span style={{ fontSize: 12, color: WORDLE_GREEN, fontFamily: HEAD_FONT }}>· you're next</span>
+      ) : null}
+      {timer}
     </div>
   );
 }
@@ -321,7 +529,10 @@ function SetterBoards({
                             background: guess
                               ? letterBg(guess.feedback[colIndex])
                               : "transparent",
+                            ...(guess ? tileCue(guess.feedback[colIndex], 1, 1) : {}),
                           }}
+                          role="img"
+                          aria-label={guess ? tileLabel(guess.word[colIndex] ?? "", guess.feedback[colIndex]) : "empty"}
                         >
                           {guess ? guess.word[colIndex] : ""}
                         </div>
@@ -351,14 +562,17 @@ export default function WordleGame({
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const prevGuessCountRef = useRef(me.myGuesses.length);
+  const teamView = pub.team ?? null;
+  const mode: WordleMode = pub.mode ?? "solo";
+  const isTeamMode = mode !== "solo";
+  const boardGuesses: Array<{ word: string; feedback: TileState[]; at: number; byName?: string | null }> =
+    teamView ? teamView.guesses : me.myGuesses;
+  const boardOutcome = teamView ? teamView.outcome : me.myOutcome;
+  const prevGuessCountRef = useRef(boardGuesses.length);
   const animateRow = useRef(-1);
+  const guessInputRef = useRef<HTMLInputElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // A new round resets the server-side board but not this component, so clear
-  // every piece of local round state here (render-phase reset, per React's
-  // derived-state pattern). Without this, a half-typed draft pre-fills the new
-  // board and the stale animateRow leaves a row stuck on the flip animation's
-  // transparent back face, which reads as a missing row.
   const [lastRoundKey, setLastRoundKey] = useState(pub.currentRound);
   if (lastRoundKey !== pub.currentRound) {
     setLastRoundKey(pub.currentRound);
@@ -369,22 +583,34 @@ export default function WordleGame({
     animateRow.current = -1;
   }
 
-  const currentCount = me.myGuesses.length;
+  const currentCount = boardGuesses.length;
   if (currentCount > prevGuessCountRef.current) {
     animateRow.current = currentCount - 1;
     prevGuessCountRef.current = currentCount;
   } else if (currentCount < prevGuessCountRef.current) {
-    // The board shrank outside a round change (view re-projection); never
-    // leave the reveal animation pointing at a row that no longer exists.
     prevGuessCountRef.current = currentCount;
     animateRow.current = -1;
   }
 
   const remainingMs = useRemaining(pub.deadline, pub.serverNow);
+  const turnRemainingMs = useRemaining(teamView?.turnDeadline ?? null, pub.serverNow);
+
+  const myTurnNow = isTeamMode && pub.phase === "playing" && me.canGuess && Boolean(me.isMyTurn);
+  useEffect(() => {
+    if (!myTurnNow || readOnly) return;
+    const active = document.activeElement;
+    const focusIsFree =
+      !active || active === document.body || Boolean(rootRef.current?.contains(active));
+    if (focusIsFree) guessInputRef.current?.focus();
+  }, [myTurnNow, readOnly]);
+
+  const [wasMyTurn, setWasMyTurn] = useState(myTurnNow);
+  if (wasMyTurn !== myTurnNow) {
+    setWasMyTurn(myTurnNow);
+    if (!myTurnNow) setGuessDraft("");
+  }
   const wordLengthLabel = `${pub.wordLength}-letter`;
 
-  // Typed dispatch: renderers can only send a valid WordleMove. The discriminant
-  // is split off so the wire payload stays exactly { word } / undefined as before.
   const runMove = async (typedMove: WordleMove) => {
     if (busyRef.current) return false;
     busyRef.current = true;
@@ -437,7 +663,7 @@ export default function WordleGame({
   const gridRows = useMemo(() => {
     const rows: Array<{ letters: string[]; states: (TileState | "empty")[] }> = [];
     for (let i = 0; i < pub.maxTries; i += 1) {
-      const entry = me.myGuesses[i];
+      const entry = boardGuesses[i];
       if (entry) {
         rows.push({
           letters: entry.word.split(""),
@@ -446,8 +672,8 @@ export default function WordleGame({
       } else if (
         pub.phase === "playing" &&
         me.canGuess &&
-        me.myOutcome == null &&
-        i === me.myGuesses.length
+        boardOutcome == null &&
+        i === boardGuesses.length
       ) {
         const letters = guessDraft
           .toUpperCase()
@@ -467,14 +693,14 @@ export default function WordleGame({
       }
     }
     return rows;
-  }, [guessDraft, me.canGuess, me.myGuesses, me.myOutcome, pub.maxTries, pub.phase, pub.wordLength]);
+  }, [guessDraft, me.canGuess, boardGuesses, boardOutcome, pub.maxTries, pub.phase, pub.wordLength]);
 
   const wordleAccent = WORDLE_GREEN;
 
   const letterStates = useMemo(() => {
     const map: Record<string, TileState> = {};
     const rank: Record<TileState, number> = { gray: 0, yellow: 1, green: 2 };
-    for (const guess of me.myGuesses) {
+    for (const guess of boardGuesses) {
       for (let i = 0; i < guess.word.length; i++) {
         const ch = guess.word[i];
         const fb = guess.feedback[i];
@@ -484,23 +710,38 @@ export default function WordleGame({
       }
     }
     return map;
-  }, [me.myGuesses]);
+  }, [boardGuesses]);
 
   const isRandomMode = pub.wordSource === "random";
   const minPlayers = isRandomMode ? 1 : 2;
   const setterBoards =
     me.currentRound === pub.currentRound ? me.boards : null;
 
+  const turnSeconds = Math.round((pub.turnTimeMs ?? 45_000) / 1000);
+  const wordIntro = isRandomMode
+    ? `A random ${wordLengthLabel} word is picked`
+    : `One random player sets a ${wordLengthLabel} word`;
+  const lobbyBlurb =
+    mode === "relay"
+      ? `${wordIntro}. ${isRandomMode ? "Everyone shares" : "Everyone else shares"} one board and takes turns guessing, ${turnSeconds}s each. Talk it through on the call.`
+      : mode === "huddle"
+        ? `${wordIntro}. ${isRandomMode ? "Everyone shares" : "Everyone else shares"} one board, and anyone can guess at any time. Talk it through on the call.`
+        : isRandomMode
+          ? `${wordIntro}. Everyone guesses on their own board. Fewest tries wins.`
+          : `${wordIntro}. Everyone else solves it on their own board. Lowest tries wins.`;
+
   if (pub.phase === "lobby") {
     return (
       <GameLobby
         gameId="wordle"
-        title={isRandomMode ? "Guess the word" : "Same word, solo boards"}
-        blurb={
-          isRandomMode
-            ? `A random ${wordLengthLabel} word is picked. Everyone guesses on their own board. Fewest tries wins.`
-            : `One random player sets a ${wordLengthLabel} word. Everyone else solves it on their own board. Lowest tries wins.`
+        title={
+          isTeamMode
+            ? "Crack it together"
+            : isRandomMode
+              ? "Guess the word"
+              : "Same word, solo boards"
         }
+        blurb={lobbyBlurb}
         players={players}
         isAdmin={isAdmin}
         readOnly={readOnly}
@@ -524,9 +765,24 @@ export default function WordleGame({
           </p>
         ) : null}
         <p style={{ fontFamily: HEAD_FONT, fontSize: 18, color: color.text, margin: "0 0 4px", textAlign: "center" }}>
-          {pub.isFinalRound ? (multiRound ? "Game over" : pub.result.winnerName ? "Round complete" : "No winner") : pub.result.winnerName ? "Round complete" : "No winner"}
+          {teamView
+            ? pub.isFinalRound && multiRound
+              ? "Game over"
+              : teamOutcomeTitle(teamView.outcome)
+            : pub.isFinalRound ? (multiRound ? "Game over" : pub.result.winnerName ? "Round complete" : "No winner") : pub.result.winnerName ? "Round complete" : "No winner"}
         </p>
-        {pub.result.winnerName ? (
+        {teamView ? (
+          pub.isFinalRound && multiRound && teamView.outcome !== "win" ? (
+            <p style={{ fontSize: 13, color: color.textMuted, textAlign: "center", margin: "0 0 6px" }}>
+              Last round: {teamOutcomeTitle(teamView.outcome).toLowerCase()}
+            </p>
+          ) : teamView.outcome === "win" ? (
+            <p style={{ fontSize: 13, color: wordleAccent, textAlign: "center", margin: "0 0 6px" }}>
+              Solved in {teamView.guesses.length}/{pub.maxTries}
+              {teamView.solvedByName ? ` · ${teamView.solvedByName} landed the final guess` : ""}
+            </p>
+          ) : null
+        ) : pub.result.winnerName ? (
           <p style={{ fontSize: 13, color: wordleAccent, textAlign: "center", margin: "0 0 6px" }}>
             {pub.result.winnerName} cracked it
           </p>
@@ -537,6 +793,37 @@ export default function WordleGame({
             {pub.result.targetWord ?? "?"}
           </span>
         </p>
+
+        {teamView ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12, alignItems: "center" }}>
+            {teamView.guesses.map((guess, rowIndex) => (
+              <div key={rowIndex} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: `repeat(${pub.wordLength}, 22px)`, gap: 3 }}>
+                  {guess.word.split("").map((letter, colIndex) => (
+                    <div
+                      key={colIndex}
+                      role="img"
+                      aria-label={tileLabel(letter, guess.feedback[colIndex])}
+                      style={{
+                        ...TILE_STYLE,
+                        fontSize: 11,
+                        height: 22,
+                        borderRadius: 3,
+                        background: letterBg(guess.feedback[colIndex]),
+                        ...tileCue(guess.feedback[colIndex], 1.5, 1),
+                      }}
+                    >
+                      {letter}
+                    </div>
+                  ))}
+                </div>
+                <span style={{ width: 80, fontSize: 11.5, color: color.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {guess.byName ?? "Teammate"}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {multiRound && pub.scores.length > 0 ? (
           <div style={{ marginBottom: 12 }}>
@@ -569,7 +856,9 @@ export default function WordleGame({
               ))}
             </div>
           </div>
-        ) : (
+        ) : null}
+
+        {!teamView && !(multiRound && pub.scores.length > 0) ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
             {pub.standings.map((entry, i) => (
               <div
@@ -595,7 +884,7 @@ export default function WordleGame({
               </div>
             ))}
           </div>
-        )}
+        ) : null}
 
         {!pub.isFinalRound && isAdmin && !readOnly ? (
           <button
@@ -627,16 +916,19 @@ export default function WordleGame({
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div ref={rootRef} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <style>{FLIP_STYLE}</style>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <div style={{ minWidth: 0, flex: 1 }}>
           <p style={{ margin: 0, color: wordleAccent, fontFamily: HEAD_FONT, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {isRandomMode ? "Wordle" : pub.setterName ? `Set by ${pub.setterName}` : "Wordle"}
+            {isTeamMode ? "Team Wordle" : isRandomMode ? "Wordle" : pub.setterName ? `Set by ${pub.setterName}` : "Wordle"}
+            {isTeamMode && !isRandomMode && pub.setterName ? ` · set by ${pub.setterName}` : ""}
             {pub.totalRounds > 1 ? ` · Round ${pub.currentRound}/${pub.totalRounds}` : ""}
           </p>
           <p style={{ margin: "2px 0 0", color: color.textFaint, fontSize: 11 }}>
-            {pub.finishedCount}/{pub.totalContestants} finished
+            {teamView
+              ? `${boardGuesses.length}/${pub.maxTries} tries used`
+              : `${pub.finishedCount}/${pub.totalContestants} finished`}
             {pub.phase === "playing" ? ` · ${formatMmSs(remainingMs)}` : ""}
           </p>
         </div>
@@ -644,7 +936,11 @@ export default function WordleGame({
           <CountdownRing
             remainingMs={remainingMs}
             totalMs={pub.timeLimitMs}
-            label={`${pub.finishedCount}/${pub.totalContestants}`}
+            label={
+              teamView
+                ? `${boardGuesses.length}/${pub.maxTries}`
+                : `${pub.finishedCount}/${pub.totalContestants}`
+            }
           />
         ) : null}
       </div>
@@ -656,7 +952,8 @@ export default function WordleGame({
               You're the word setter
             </p>
             <p style={{ margin: 0, color: color.textMuted, fontSize: 13, lineHeight: 1.5, textAlign: "center", maxWidth: 260 }}>
-              Pick a valid {wordLengthLabel} English word. Everyone else will try to guess it.
+              Pick a valid {wordLengthLabel} English word.{" "}
+              {isTeamMode ? "Everyone else will crack it together." : "Everyone else will try to guess it."}
             </p>
             <div style={{ display: "flex", gap: 8, width: "100%", maxWidth: 300 }}>
               <input
@@ -717,7 +1014,6 @@ export default function WordleGame({
               border: `1px solid ${color.border}`,
             }}
           >
-            <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: wordleAccent }} />
             <span style={{ fontSize: 13, color: color.text }}>
               {pub.setterName ?? "Someone"} is picking a word
             </span>
@@ -725,36 +1021,92 @@ export default function WordleGame({
         )
       ) : null}
 
-      {!me.isSetter && pub.phase !== "set-word" ? (
+      {(teamView || !me.isSetter) && pub.phase !== "set-word" ? (
         <>
+          {teamView && pub.phase === "playing" ? (
+            <>
+              <TeamBanner
+                mode={mode}
+                team={teamView}
+                me={me}
+                turnRemainingMs={turnRemainingMs}
+                canPass={
+                  mode === "relay" &&
+                  myTurnNow &&
+                  !readOnly &&
+                  teamView.members.some(
+                    (member) => member.active && member.playerId !== teamView.currentTurnId,
+                  )
+                }
+                busy={busy}
+                readOnly={readOnly}
+                onPass={() => {
+                  void runMove({ type: "passTurn" }).then((ok) => {
+                    if (ok) setGuessDraft("");
+                  });
+                }}
+              />
+              <TeamMembers team={teamView} />
+            </>
+          ) : null}
           <div style={{ display: "flex", justifyContent: "center" }}>
-            <div style={{ display: "grid", gap: 5, maxWidth: 260, width: "100%" }}>
-              {gridRows.map((row, rowIndex) => (
-                <div
-                  key={`row-${rowIndex}`}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: `repeat(${pub.wordLength}, 1fr)`,
-                    gap: 5,
-                  }}
-                >
-                  {row.letters.map((letter, colIndex) => (
-                    <Tile
-                      key={`tile-${rowIndex}-${colIndex}`}
-                      letter={letter}
-                      state={row.states[colIndex]}
-                      animateReveal={rowIndex === animateRow.current}
-                      colIndex={colIndex}
-                    />
-                  ))}
-                </div>
-              ))}
+            <div style={{ display: "grid", gap: 5, maxWidth: teamView ? 330 : 260, width: "100%" }}>
+              {gridRows.map((row, rowIndex) => {
+                const grid = (
+                  <div
+                    key={`row-${rowIndex}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: `repeat(${pub.wordLength}, 1fr)`,
+                      gap: 5,
+                      flex: 1,
+                    }}
+                  >
+                    {row.letters.map((letter, colIndex) => (
+                      <Tile
+                        key={`tile-${rowIndex}-${colIndex}`}
+                        letter={letter}
+                        state={row.states[colIndex]}
+                        animateReveal={rowIndex === animateRow.current}
+                        colIndex={colIndex}
+                      />
+                    ))}
+                  </div>
+                );
+                if (!teamView) return grid;
+                const guess = teamView.guesses[rowIndex];
+                const upNext =
+                  !guess && rowIndex === teamView.guesses.length && teamView.outcome == null
+                    ? me.isMyTurn && mode === "relay"
+                      ? "You"
+                      : teamView.currentTurnName
+                    : null;
+                return (
+                  <div key={`row-${rowIndex}`} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {grid}
+                    <span
+                      style={{
+                        width: 62,
+                        fontSize: 11,
+                        fontFamily: HEAD_FONT,
+                        color: upNext ? WORDLE_GREEN : color.textFaint,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {guess ? guess.byName ?? "Teammate" : upNext ? `${upNext}…` : ""}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
           {pub.phase === "playing" && me.canGuess && !me.myOutcome ? (
             <div style={{ display: "flex", gap: 8, maxWidth: 300, width: "100%", alignSelf: "center" }}>
               <input
+                ref={guessInputRef}
                 value={guessDraft}
                 maxLength={pub.wordLength}
                 disabled={busy || readOnly}
@@ -800,7 +1152,7 @@ export default function WordleGame({
             </div>
           ) : null}
 
-          {me.myGuesses.length > 0 ? (
+          {boardGuesses.length > 0 ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
               {KEYBOARD_ROWS.map((row, ri) => (
                 <div key={ri} style={{ display: "flex", gap: 4, justifyContent: "center" }}>
@@ -846,7 +1198,6 @@ export default function WordleGame({
               border: `1px solid ${color.border}`,
             }}
           >
-            <span style={{ width: 7, height: 7, borderRadius: radius.pill, background: wordleAccent }} />
             <span style={{ fontSize: 13, color: color.text }}>You set the word</span>
             <span style={{ fontSize: 13, color: color.textMuted }}>· watching players guess</span>
           </div>
@@ -861,7 +1212,7 @@ export default function WordleGame({
         </>
       ) : null}
 
-      {pub.standings.length > 0 && pub.phase === "playing" ? (
+      {!teamView && pub.standings.length > 0 && pub.phase === "playing" ? (
         <div style={{ paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
           <p style={{ fontSize: 11, color: color.textFaint, fontFamily: HEAD_FONT, margin: "0 0 6px" }}>Standings</p>
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -894,7 +1245,11 @@ export default function WordleGame({
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 24 }}>
         <span style={{ fontSize: 12, color: color.textMuted }}>
-          {me.myOutcome
+          {teamView
+            ? readOnly
+              ? "Watching only"
+              : ""
+            : me.myOutcome
             ? statusText(me.myOutcome)
             : readOnly
               ? "Watching only"

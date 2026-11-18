@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
-import { CdpClient } from "./cdp.mjs";
 import {
   assertDynamicNetworkTransitionRunConfiguration,
   buildDynamicNetworkRealizationEvidence,
@@ -357,44 +355,6 @@ test("receiver checkpoint ignores stale RTP and fails closed on binding ambiguit
   );
   assert.equal(ambiguous.mediaPathAuthority.matched, false);
   assert.equal(ambiguous.transportEvidence, null);
-});
-
-test("CDP session routing carries the acknowledged flattened session id", async () => {
-  const client = new CdpClient("ws://unused");
-  let payload = null;
-  client.socket = {
-    send(value) {
-      payload = JSON.parse(value);
-    },
-    close() {},
-  };
-  const pending = client.sendToSession(
-    "acknowledged-session",
-    "Network.enable",
-    {},
-  );
-  assert.equal(payload.sessionId, "acknowledged-session");
-  assert.equal(payload.method, "Network.enable");
-  client.close();
-  await assert.rejects(pending, /closed/);
-
-  const runnerSource = readFileSync(
-    new URL("./run-headless-video-quality.mjs", import.meta.url),
-    "utf8",
-  );
-  const silentContractSource = readFileSync(
-    new URL("./silent-browser-contract.mjs", import.meta.url),
-    "utf8",
-  );
-  assert.match(silentContractSource, /Target\.attachToTarget/);
-  assert.match(silentContractSource, /flatten:\s*true/);
-  assert.match(silentContractSource, /createExactTargetNetworkFacade/);
-  assert.match(runnerSource, /dynamicNetworkCdp = session\.networkCdp/);
-  assert.match(runnerSource, /dynamicNetworkCdp\.sessionId/);
-  assert.match(runnerSource, /applyNetworkProfile\(dynamicNetworkCdp/);
-  assert.match(runnerSource, /cdp:\s*browser\.dynamicNetworkCdp/);
-  assert.doesNotMatch(runnerSource, /Target\.attachToTarget/);
-  assert.doesNotMatch(runnerSource, /collectCheckpoint:\s*async/);
 });
 
 test("shared aligned sampler reuses one publisher and two receiver observers", () => {

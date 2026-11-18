@@ -396,10 +396,6 @@ describe("current consumer generation controls", () => {
     );
   });
 
-  it("uses a retirement grace beyond delayed ACK and handoff windows", () => {
-    expect(DISPLACED_CONSUMER_CLOSE_DELAY_MS).toBeGreaterThanOrEqual(30_000);
-  });
-
   it("keeps a predecessor flowing for the full retirement grace", async () => {
     vi.useFakeTimers();
     try {

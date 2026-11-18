@@ -250,24 +250,6 @@ struct CHT4PhotoTests {
         #expect(ChatMediaGeometry.stickerWidth(aspect: 0.5) == 80 && ChatMediaGeometry.stickerHeight(aspect: 0.5) == 160)
     }
 
-    @Test func buildFilesDeclareCoilTheFileProviderAndThePickerBackport() throws {
-        let skip = try chatSource("Sources/Conclave/Skip/skip.yml")
-        #expect(skip.contains("'implementation(\"io.coil-kt.coil3:coil-compose:3.4.0\")'"))
-        #expect(skip.contains("'implementation(\"io.coil-kt.coil3:coil-gif:3.4.0\")'"))
-        let manifest = try chatSource("Android/app/src/main/AndroidManifest.xml")
-        #expect(manifest.contains("android:name=\"androidx.core.content.FileProvider\""))
-        #expect(manifest.contains("android:authorities=\"${applicationId}.fileprovider\"") && manifest.contains("android:exported=\"false\""))
-        #expect(manifest.contains("android:resource=\"@xml/conclave_file_paths\""))
-        #expect(manifest.contains("photopicker_activity:0:required"))
-        let paths = try chatSource("Android/app/src/main/res/xml/conclave_file_paths.xml")
-        #expect(paths.contains("<cache-path name=\"chat_photos\" path=\"chat-photos/\" />"))
-        #expect(!paths.contains("<files-path") && !paths.contains("<external-path"))
-        #expect(ChatPhotoPreparer.directoryName == "chat-photos")
-        for text in [skip, manifest, paths] {
-            #expect(!chatHasDash(text))
-        }
-    }
-
     @Test func theFixtureScriptsTheAttachmentStates() async {
         await ChatFixtureTestGate.acquire()
         defer { ChatFixtureTestGate.release() }

@@ -17,12 +17,6 @@ interface RailLocalTileProps {
   userEmail: string;
 }
 
-/**
- * The local participant's tile for app side rails (watch, whiteboard), styled
- * identically to the compact ParticipantVideo tiles it sits beside: same tile
- * chrome and speaking treatment, same name pill with the coral You tag, the
- * voice activity waves, and the mute icon.
- */
 function RailLocalTile({
   stream,
   isCameraOff,

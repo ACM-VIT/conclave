@@ -3,17 +3,11 @@
 import { color } from "@conclave/ui-tokens";
 
 interface RoomPresenceBadgeProps {
-  // Number of people already in the room (excluding you), or null when unknown.
   count: number | null;
-  // True while the first occupancy check is still in flight.
   loading?: boolean;
   className?: string;
 }
 
-// Quiet inline status that tells you who's already in a room before you join —
-// "No one else is here yet" / "2 people are here". Designed to sit on the field
-// label row (right-aligned) so it reads as a contextual hint without taking up
-// its own space or overlapping the input/button.
 export default function RoomPresenceBadge({
   count,
   loading = false,
