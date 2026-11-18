@@ -65,6 +65,7 @@ import {
   isConclaveAssistantModel,
 } from "../lib/conclave-assistant";
 import { extractEmbedUrls } from "../lib/link-embeds";
+import { replaceEmojiShortcodesInText } from "../lib/emoji-shortcodes";
 import { formatDisplayName, getChatMessageSegments } from "../lib/utils";
 import {
   Conversation,
@@ -753,7 +754,9 @@ function ChatPanel({
           {segment.text}
         </a>
       ) : (
-        <span key={`${segment.text}-${index}`}>{segment.text}</span>
+        <span key={`${segment.text}-${index}`}>
+          {replaceEmojiShortcodesInText(segment.text)}
+        </span>
       )
     );
 
