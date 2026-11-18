@@ -128,3 +128,150 @@ describe("wordle game", () => {
     expect(publicView.standings.map((entry) => entry.playerId)).toEqual(["host"]);
   });
 });
+
+describe("wordle team modes", () => {
+  const team: GamePlayer[] = [
+    { id: "host", name: "Host" },
+    { id: "ana", name: "Ana" },
+    { id: "ben", name: "Ben" },
+  ];
+
+  const session = (mode: "relay" | "huddle", extra: Record<string, number | string> = {}) =>
+    new GameSession({
+      module: wordleModule,
+      players: team,
+      adminIds: ["host"],
+      hostId: "host",
+      config: { mode, wordSource: "setter", rounds: 2, timeLimitMinutes: 3, turnSeconds: 20, ...extra },
+      seed: 1,
+    });
+
+  type TeamPublic = {
+    phase: string;
+    mode: string;
+    team: {
+      guesses: Array<{ word: string; byId: string; byName: string }>;
+      outcome: string | null;
+      solvedByName: string | null;
+      members: Array<{ playerId: string }>;
+      currentTurnId: string | null;
+      nextTurnId: string | null;
+      turnDeadline: number | null;
+    } | null;
+    scores: Array<{ playerId: string; score: number }>;
+    result: { winnerId: string | null } | null;
+  };
+
+  const pub = (s: GameSession, now = 0) => s.getPublicState(now).view as TeamPublic;
+
+  /** Starts a setter round where the seeded setter picks AALII. */
+  const startRound = (s: GameSession) => {
+    expect(s.applyMove("host", "start", undefined)).toEqual({ ok: true });
+    const setterId = (s.getPublicState(0).view as { setterId: string }).setterId;
+    expect(s.applyMove(setterId, "setWord", { word: "AALII" })).toEqual({ ok: true });
+    return setterId;
+  };
+
+  it("takes turns on one shared board and blocks out-of-turn guesses", () => {
+    const s = session("relay");
+    const setterId = startRound(s);
+    const view = pub(s);
+    expect(view.mode).toBe("relay");
+    const order = view.team!.members.map((member) => member.playerId);
+    expect(order).not.toContain(setterId);
+    expect(order).toHaveLength(2);
+    const [first, second] = order;
+    expect(view.team!.currentTurnId).toBe(first);
+    expect(view.team!.nextTurnId).toBe(second);
+
+    expect(s.applyMove(second, "guess", { word: "ABACK" })).toMatchObject({ ok: false });
+    expect(s.getPlayerView(second, 0)).toMatchObject({ canGuess: false, isMyTurn: false });
+    expect(s.getPlayerView(first, 0)).toMatchObject({ canGuess: true, isMyTurn: true });
+
+    expect(s.applyMove(first, "guess", { word: "ABACK" })).toEqual({ ok: true });
+    expect(pub(s).team!.currentTurnId).toBe(second);
+    // Both teammates see the same rows.
+    expect(s.getPlayerView(second, 0)).toMatchObject({
+      myGuesses: [{ word: "ABACK" }],
+      canGuess: true,
+    });
+    expect(s.applyMove(second, "guess", { word: "ABACK" })).toEqual({
+      ok: false,
+      error: "Your team already guessed that word",
+    });
+
+    expect(s.applyMove(second, "guess", { word: "AALII" })).toEqual({ ok: true });
+    const done = pub(s);
+    expect(done.phase).toBe("results");
+    expect(done.team!.outcome).toBe("win");
+    expect(done.result!.winnerId).toBe(second);
+    // Two rows used out of six: every teammate banks 5, the setter nothing.
+    const scores = Object.fromEntries(done.scores.map((entry) => [entry.playerId, entry.score]));
+    expect(scores[first]).toBe(5);
+    expect(scores[second]).toBe(5);
+    expect(scores[setterId]).toBeUndefined();
+  });
+
+  it("lets the current guesser pass, and passes the turn when the timer runs out", () => {
+    const s = session("relay");
+    startRound(s);
+    const [first, second] = pub(s).team!.members.map((member) => member.playerId);
+
+    expect(s.applyMove(second, "passTurn", undefined)).toMatchObject({ ok: false });
+    expect(s.applyMove(first, "passTurn", undefined)).toEqual({ ok: true });
+    expect(pub(s).team!.currentTurnId).toBe(second);
+
+    const deadline = pub(s).team!.turnDeadline!;
+    expect(s.tick(deadline + 1)).toBe(true);
+    expect(pub(s, deadline + 1).team!.currentTurnId).toBe(first);
+    expect(pub(s, deadline + 1).team!.guesses).toHaveLength(0);
+  });
+
+  it("skips a disconnected teammate's turn", () => {
+    const s = session("relay");
+    const setterId = startRound(s);
+    const [first, second] = pub(s).team!.members.map((member) => member.playerId);
+    s.updateRoomMembership({
+      players: team.filter((player) => player.id !== first),
+      adminIds: ["host"],
+    });
+    expect(s.tick(1)).toBe(true);
+    expect(pub(s, 1).team!.currentTurnId).toBe(second);
+    expect(setterId).not.toBe(second);
+  });
+
+  it("lets anyone on the team guess at any time in huddle mode", () => {
+    const s = session("huddle");
+    startRound(s);
+    const [first, second] = pub(s).team!.members.map((member) => member.playerId);
+    expect(pub(s).team!.currentTurnId).toBeNull();
+    expect(s.applyMove(first, "guess", { word: "ABACK" })).toEqual({ ok: true });
+    expect(s.applyMove(first, "guess", { word: "ABASE" })).toEqual({ ok: true });
+    expect(s.applyMove(second, "guess", { word: "ABATE" })).toEqual({ ok: true });
+    expect(pub(s).team!.guesses.map((guess) => guess.byId)).toEqual([first, first, second]);
+    expect(s.applyMove(first, "passTurn", undefined)).toMatchObject({ ok: false });
+  });
+
+  it("ends a team round as a loss after six misses", () => {
+    const s = session("huddle");
+    startRound(s);
+    const [first] = pub(s).team!.members.map((member) => member.playerId);
+    for (const word of ["ABACK", "ABASE", "ABATE", "ABBEY", "ABBOT", "ABHOR"]) {
+      expect(s.applyMove(first, "guess", { word })).toEqual({ ok: true });
+    }
+    expect(pub(s)).toMatchObject({ phase: "results", team: { outcome: "lose" }, result: { winnerId: null } });
+  });
+
+  it("keeps rotating the opening turn into the next round", () => {
+    const s = session("relay", { wordSource: "random" });
+    expect(s.applyMove("host", "start", undefined)).toEqual({ ok: true });
+    const order = pub(s).team!.members.map((member) => member.playerId);
+    expect(order).toEqual(["host", "ana", "ben"]);
+    expect(s.applyMove("host", "guess", { word: "ABACK" })).toEqual({ ok: true });
+    const deadline = (s.getPublicState(0).view as { deadline: number }).deadline;
+    expect(s.tick(deadline + 1)).toBe(true);
+    expect(pub(s, deadline + 1).team!.outcome).toBe("timeout");
+    expect(s.applyMove("host", "nextRound", undefined)).toEqual({ ok: true });
+    expect(pub(s).team!.currentTurnId).toBe("ana");
+  });
+});

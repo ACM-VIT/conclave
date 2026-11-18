@@ -65,6 +65,7 @@ export type WordleMove =
   | { type: "start" }
   | { type: "setWord"; word: string }
   | { type: "guess"; word: string }
+  | { type: "passTurn" }
   | { type: "nextRound" };
 
 /** Mirrors ChessMove in modules/chess.ts. */

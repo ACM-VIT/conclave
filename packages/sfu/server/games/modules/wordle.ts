@@ -26,9 +26,38 @@ type PlayerRoundState = {
 
 type WordSource = "setter" | "random";
 
+/**
+ * - `solo`: everyone races on a private board (the original game).
+ * - `relay`: one shared team board; contestants take turns guessing in a fixed
+ *   rotation, each turn on its own timer.
+ * - `huddle`: one shared team board; any contestant may guess at any time.
+ */
+type WordleMode = "solo" | "relay" | "huddle";
+
+type TeamGuess = GuessResult & { by: string };
+
+type TeamRoundState = {
+  guesses: TeamGuess[];
+  outcome: PlayerOutcome | null;
+  solvedAt: number | null;
+  solvedBy: string | null;
+  /** Contestants seated for this round, in turn order. */
+  turnOrder: string[];
+  /** Relay only: index into `turnOrder` of whoever guesses next. */
+  turnIndex: number;
+  /** Relay only: when the current turn passes on (0 outside relay). */
+  turnDeadline: number;
+};
+
 type WordleState = {
   phase: "lobby" | "set-word" | "playing" | "results";
+  mode: WordleMode;
   wordSource: WordSource;
+  turnTimeMs: number;
+  /** Shared board for team modes; null in solo. */
+  team: TeamRoundState | null;
+  /** Relay: who opens the next round, so turns keep rotating across rounds. */
+  nextStarterId: string | null;
   setterId: string | null;
   targetWord: string | null;
   players: Record<string, PlayerRoundState>;
@@ -142,18 +171,102 @@ const evaluateGuess = (target: string, guess: string): WordleTile[] => {
 const isSolved = (feedback: WordleTile[]): boolean =>
   feedback.length === WORD_LENGTH && feedback.every((tile) => tile === "green");
 
-const contestantIds = (state: WordleState, ctx: GameContext): string[] =>
-  (state.phase === "playing" || state.phase === "results"
+const isTeamMode = (mode: WordleMode): boolean => mode !== "solo";
+
+const contestantIds = (state: WordleState, ctx: GameContext): string[] => {
+  const inRound = state.phase === "playing" || state.phase === "results";
+  if (inRound && state.team) return state.team.turnOrder.slice();
+  return (inRound
     ? Object.keys(state.players)
     : ctx.activePlayers.map((player) => player.id))
     .filter((playerId) => playerId !== state.setterId);
+};
 
 const allContestantsFinished = (state: WordleState, ctx: GameContext): boolean => {
+  if (state.team) return state.team.outcome != null;
   const ids = contestantIds(state, ctx);
   return ids.length > 0 && ids.every((id) => Boolean(state.players[id]?.outcome));
 };
 
+const isActive = (ctx: GameContext, playerId: string): boolean =>
+  ctx.activePlayers.some((player) => player.id === playerId);
+
+/**
+ * Hand the relay turn to the next connected teammate after `fromIndex`
+ * (exclusive) and restart the turn timer. Falls back to plain rotation when
+ * nobody is connected so the round deadline can still close it out.
+ */
+const passTurn = (
+  team: TeamRoundState,
+  ctx: GameContext,
+  turnTimeMs: number,
+): TeamRoundState => {
+  const count = team.turnOrder.length;
+  if (count === 0) return team;
+  let nextIndex = (team.turnIndex + 1) % count;
+  for (let step = 1; step <= count; step += 1) {
+    const candidate = (team.turnIndex + step) % count;
+    if (isActive(ctx, team.turnOrder[candidate])) {
+      nextIndex = candidate;
+      break;
+    }
+  }
+  return { ...team, turnIndex: nextIndex, turnDeadline: ctx.now + turnTimeMs };
+};
+
+const currentTurnId = (state: WordleState): string | null => {
+  const team = state.team;
+  if (state.mode !== "relay" || state.phase !== "playing" || !team || team.outcome) {
+    return null;
+  }
+  return team.turnOrder[team.turnIndex] ?? null;
+};
+
+/** Fresh per-round board(s) for the seated contestants and the chosen word. */
+const beginRound = (
+  state: WordleState,
+  ctx: GameContext,
+  targetWord: string,
+): WordleState => {
+  const ids = ctx.activePlayers
+    .map((player) => player.id)
+    .filter((playerId) => playerId !== state.setterId);
+  const base: WordleState = {
+    ...state,
+    phase: "playing",
+    targetWord,
+    deadline: ctx.now + state.timeLimitMs,
+    winnerId: null,
+  };
+
+  if (!isTeamMode(state.mode)) {
+    const players: Record<string, PlayerRoundState> = {};
+    for (const playerId of ids) {
+      players[playerId] = { guesses: [], outcome: null, solvedAt: null };
+    }
+    return { ...base, players, team: null };
+  }
+
+  const starter = state.nextStarterId ? ids.indexOf(state.nextStarterId) : -1;
+  return {
+    ...base,
+    players: {},
+    team: {
+      guesses: [],
+      outcome: null,
+      solvedAt: null,
+      solvedBy: null,
+      turnOrder: ids,
+      turnIndex: Math.max(0, starter),
+      turnDeadline: state.mode === "relay" ? ctx.now + state.turnTimeMs : 0,
+    },
+  };
+};
+
 const computeWinnerId = (state: WordleState, ctx: GameContext): string | null => {
+  if (state.team) {
+    return state.team.outcome === "win" ? state.team.solvedBy : null;
+  }
   const winners = contestantIds(state, ctx)
     .map((id) => ({ id, progress: state.players[id] }))
     .filter(
@@ -177,13 +290,24 @@ const computeWinnerId = (state: WordleState, ctx: GameContext): string | null =>
   return winners[0]?.id ?? null;
 };
 
-const roundScore = (progress: PlayerRoundState, maxTries: number): number => {
+const roundScore = (
+  progress: { guesses: readonly unknown[]; outcome: PlayerOutcome | null },
+  maxTries: number,
+): number => {
   if (progress.outcome !== "win") return 0;
   return maxTries - progress.guesses.length + 1;
 };
 
 const accumulateScores = (state: WordleState, ctx: GameContext): Record<string, number> => {
   const scores = { ...state.scores };
+  if (state.team) {
+    // Team modes: every seated teammate banks the shared board's score.
+    const points = roundScore(state.team, state.maxTries);
+    for (const playerId of state.team.turnOrder) {
+      scores[playerId] = (scores[playerId] ?? 0) + points;
+    }
+    return scores;
+  }
   for (const playerId of contestantIds(state, ctx)) {
     const progress = state.players[playerId];
     if (!progress) continue;
@@ -192,18 +316,21 @@ const accumulateScores = (state: WordleState, ctx: GameContext): Record<string, 
   return scores;
 };
 
-const withResultsIfComplete = (state: WordleState, ctx: GameContext): WordleState => {
-  if (!allContestantsFinished(state, ctx)) return state;
-  return {
-    ...state,
-    phase: "results",
-    winnerId: computeWinnerId(state, ctx),
-    scores: accumulateScores(state, ctx),
-    usedWords: state.targetWord
-      ? [...state.usedWords, state.targetWord]
-      : state.usedWords,
-  };
-};
+const finishRound = (state: WordleState, ctx: GameContext): WordleState => ({
+  ...state,
+  phase: "results",
+  winnerId: computeWinnerId(state, ctx),
+  scores: accumulateScores(state, ctx),
+  usedWords: state.targetWord
+    ? [...state.usedWords, state.targetWord]
+    : state.usedWords,
+  // `turnIndex` already points at whoever was up next, so the following round
+  // opens with them and the rotation carries on.
+  nextStarterId: state.team ? state.team.turnOrder[state.team.turnIndex] ?? null : null,
+});
+
+const withResultsIfComplete = (state: WordleState, ctx: GameContext): WordleState =>
+  allContestantsFinished(state, ctx) ? finishRound(state, ctx) : state;
 
 /**
  * Typed move contract. Decoded from the untrusted `GameMove` at the top of
@@ -216,11 +343,13 @@ export type WordleMove =
   | { type: "start" }
   | { type: "setWord"; word: unknown }
   | { type: "guess"; word: unknown }
+  | { type: "passTurn" }
   | { type: "nextRound" };
 
 const decodeWordleMove = (move: GameMove): WordleMove => {
   switch (move.type) {
     case "start":
+    case "passTurn":
     case "nextRound":
       return { type: move.type };
     case "setWord":
@@ -242,6 +371,28 @@ export const wordleModule: GameModule<WordleState> = {
     state.wordSource === "setter" ? ["set-word"] : [],
   tickMs: 500,
   options: [
+    {
+      id: "mode",
+      type: "select",
+      label: "Mode",
+      default: "solo",
+      choices: [
+        { value: "solo", label: "Solo" },
+        { value: "relay", label: "Take turns" },
+        { value: "huddle", label: "All together" },
+      ],
+    },
+    {
+      id: "turnSeconds",
+      type: "number",
+      label: "Turn timer",
+      min: 10,
+      max: 120,
+      default: 45,
+      presets: [20, 30, 45, 60],
+      suffix: "s",
+      showWhen: { id: "mode", equals: ["relay"] },
+    },
     {
       id: "wordSource",
       type: "select",
@@ -277,7 +428,11 @@ export const wordleModule: GameModule<WordleState> = {
   setup(ctx: GameContext): WordleState {
     return {
       phase: "lobby",
+      mode: selectOption(ctx.config, "mode", "solo") as WordleMode,
       wordSource: selectOption(ctx.config, "wordSource", "random") as WordSource,
+      turnTimeMs: numberOption(ctx.config, "turnSeconds", 45) * 1_000,
+      team: null,
+      nextStarterId: null,
       setterId: null,
       targetWord: null,
       players: {},
@@ -312,23 +467,18 @@ export const wordleModule: GameModule<WordleState> = {
         }
 
         if (state.wordSource === "random") {
-          const word = ctx.rng.pick(WORDLE_WORDS);
-          const players: Record<string, PlayerRoundState> = {};
-          for (const player of ctx.activePlayers) {
-            players[player.id] = { guesses: [], outcome: null, solvedAt: null };
-          }
-          return {
-            ...state,
-            phase: "playing",
-            setterId: null,
-            targetWord: word,
-            players,
-            deadline: ctx.now + state.timeLimitMs,
-            winnerId: null,
-            currentRound: 1,
-            scores: {},
-            usedWords: [],
-          };
+          return beginRound(
+            {
+              ...state,
+              setterId: null,
+              currentRound: 1,
+              scores: {},
+              usedWords: [],
+              nextStarterId: null,
+            },
+            ctx,
+            ctx.rng.pick(WORDLE_WORDS),
+          );
         }
 
         const setter = ctx.rng.pick(ctx.activePlayers);
@@ -338,6 +488,8 @@ export const wordleModule: GameModule<WordleState> = {
           setterId: setter.id,
           targetWord: null,
           players: {},
+          team: null,
+          nextStarterId: null,
           deadline: 0,
           winnerId: null,
           currentRound: 1,
@@ -354,24 +506,7 @@ export const wordleModule: GameModule<WordleState> = {
           throw new GameMoveError("Only the selected player can set the word");
         }
         const word = normalizeWord(m.word, { role: "secret" });
-
-        const players: Record<string, PlayerRoundState> = {};
-        for (const playerId of contestantIds(currentState, ctx)) {
-          players[playerId] = {
-            guesses: [],
-            outcome: null,
-            solvedAt: null,
-          };
-        }
-
-        return {
-          ...currentState,
-          phase: "playing",
-          targetWord: word,
-          players,
-          deadline: ctx.now + state.timeLimitMs,
-          winnerId: null,
-        };
+        return beginRound(currentState, ctx, word);
       }
       case "guess": {
         if (state.phase !== "playing") {
@@ -382,6 +517,46 @@ export const wordleModule: GameModule<WordleState> = {
         }
         if (state.setterId && move.playerId === state.setterId) {
           throw new GameMoveError("The selected player cannot submit guesses");
+        }
+
+        if (state.team) {
+          const team = state.team;
+          if (!team.turnOrder.includes(move.playerId)) {
+            throw new GameMoveError("You are not on the team this round");
+          }
+          if (team.outcome) {
+            throw new GameMoveError("Your team already finished this board");
+          }
+          const turnId = currentTurnId(state);
+          if (turnId && turnId !== move.playerId) {
+            const name = ctx.players.find((player) => player.id === turnId)?.name;
+            throw new GameMoveError(name ? `It's ${name}'s turn` : "It's not your turn");
+          }
+          const guess = normalizeWord(m.word, { role: "guess" });
+          if (team.guesses.some((entry) => entry.word === guess)) {
+            throw new GameMoveError("Your team already guessed that word");
+          }
+          const feedback = evaluateGuess(state.targetWord, guess);
+          const guesses = [
+            ...team.guesses,
+            { word: guess, feedback, at: ctx.now, by: move.playerId },
+          ];
+          let nextTeam: TeamRoundState = { ...team, guesses };
+          if (isSolved(feedback)) {
+            nextTeam = { ...nextTeam, outcome: "win", solvedAt: ctx.now, solvedBy: move.playerId };
+          } else if (guesses.length >= state.maxTries) {
+            nextTeam = { ...nextTeam, outcome: "lose" };
+          }
+          if (state.mode === "relay") {
+            // Always rotate, even on the final guess, so `turnIndex` names
+            // whoever opens the next round.
+            nextTeam = passTurn(
+              { ...nextTeam, turnIndex: team.turnOrder.indexOf(move.playerId) },
+              ctx,
+              state.turnTimeMs,
+            );
+          }
+          return withResultsIfComplete({ ...state, team: nextTeam }, ctx);
         }
 
         const progress = state.players[move.playerId];
@@ -430,6 +605,19 @@ export const wordleModule: GameModule<WordleState> = {
 
         return withResultsIfComplete(nextState, ctx);
       }
+      case "passTurn": {
+        if (state.mode !== "relay") {
+          throw new GameMoveError("Passing is only for take-turns mode");
+        }
+        const turnId = currentTurnId(state);
+        if (!state.team || !turnId) {
+          throw new GameMoveError("Wordle is not accepting guesses right now");
+        }
+        if (turnId !== move.playerId) {
+          throw new GameMoveError("You can only pass on your own turn");
+        }
+        return { ...state, team: passTurn(state.team, ctx, state.turnTimeMs) };
+      }
       case "nextRound": {
         if (!ctx.isAdmin(move.playerId)) {
           throw new GameMoveError("Only the host can advance rounds");
@@ -445,20 +633,11 @@ export const wordleModule: GameModule<WordleState> = {
         if (state.wordSource === "random") {
           const candidates = WORDLE_WORDS.filter((w) => !state.usedWords.includes(w));
           const word = ctx.rng.pick(candidates.length > 0 ? candidates : WORDLE_WORDS);
-          const players: Record<string, PlayerRoundState> = {};
-          for (const player of ctx.activePlayers) {
-            players[player.id] = { guesses: [], outcome: null, solvedAt: null };
-          }
-          return {
-            ...state,
-            phase: "playing" as const,
-            setterId: null,
-            targetWord: word,
-            players,
-            deadline: ctx.now + state.timeLimitMs,
-            winnerId: null,
-            currentRound: nextRound,
-          };
+          return beginRound(
+            { ...state, setterId: null, currentRound: nextRound },
+            ctx,
+            word,
+          );
         }
 
         const setter = ctx.rng.pick(ctx.activePlayers);
@@ -468,6 +647,7 @@ export const wordleModule: GameModule<WordleState> = {
           setterId: setter.id,
           targetWord: null,
           players: {},
+          team: null,
           deadline: 0,
           winnerId: null,
           currentRound: nextRound,
@@ -485,19 +665,15 @@ export const wordleModule: GameModule<WordleState> = {
 
     if (state.phase !== "playing") return state;
 
-    if (allContestantsFinished(state, ctx)) {
-      return {
-        ...state,
-        phase: "results",
-        winnerId: computeWinnerId(state, ctx),
-        scores: accumulateScores(state, ctx),
-        usedWords: state.targetWord
-          ? [...state.usedWords, state.targetWord]
-          : state.usedWords,
-      };
-    }
+    if (allContestantsFinished(state, ctx)) return finishRound(state, ctx);
 
     if (state.deadline > 0 && ctx.now >= state.deadline) {
+      if (state.team) {
+        return finishRound(
+          { ...state, team: { ...state.team, outcome: "timeout" } },
+          ctx,
+        );
+      }
       const players: Record<string, PlayerRoundState> = { ...state.players };
       for (const playerId of contestantIds(state, ctx)) {
         const progress = players[playerId];
@@ -508,19 +684,17 @@ export const wordleModule: GameModule<WordleState> = {
           solvedAt: null,
         };
       }
-      const timedOutState: WordleState = {
-        ...state,
-        players,
-      };
-      return {
-        ...timedOutState,
-        phase: "results",
-        winnerId: computeWinnerId(timedOutState, ctx),
-        scores: accumulateScores(timedOutState, ctx),
-        usedWords: state.targetWord
-          ? [...state.usedWords, state.targetWord]
-          : state.usedWords,
-      };
+      return finishRound({ ...state, players }, ctx);
+    }
+
+    // Relay: a turn passes on when its timer runs out or the guesser drops.
+    const turnId = currentTurnId(state);
+    if (
+      state.team &&
+      turnId &&
+      (ctx.now >= state.team.turnDeadline || !isActive(ctx, turnId))
+    ) {
+      return { ...state, team: passTurn(state.team, ctx, state.turnTimeMs) };
     }
 
     return state;
@@ -529,9 +703,16 @@ export const wordleModule: GameModule<WordleState> = {
   getPhase: (state) => state.phase,
 
   publicView(state, ctx) {
+    const nameOf = (playerId: string | null): string | null =>
+      playerId
+        ? ctx.players.find((player) => player.id === playerId)?.name ?? "Unknown"
+        : null;
+    const team = state.team;
     const standings = contestantIds(state, ctx)
       .map((playerId) => {
-        const progress = state.players[playerId] ?? {
+        const progress = (team
+          ? { guesses: team.guesses, outcome: team.outcome, solvedAt: team.solvedAt }
+          : state.players[playerId]) ?? {
           guesses: [],
           outcome: null,
           solvedAt: null,
@@ -568,8 +749,40 @@ export const wordleModule: GameModule<WordleState> = {
       }))
       .sort((a, b) => b.score - a.score);
 
+    const turnId = currentTurnId(state);
+    const nextUp = team && turnId ? passTurn(team, ctx, 0) : null;
+    const nextUpId = nextUp ? nextUp.turnOrder[nextUp.turnIndex] ?? null : null;
+    // Team boards are public: teammates share them, the setter already knows
+    // the word, and nobody is racing anyone, so there is nothing to hide.
+    const teamView = team
+      ? {
+          guesses: team.guesses.map((entry) => ({
+            word: entry.word,
+            feedback: entry.feedback,
+            at: entry.at,
+            byId: entry.by,
+            byName: nameOf(entry.by),
+          })),
+          outcome: team.outcome,
+          solvedById: team.solvedBy,
+          solvedByName: nameOf(team.solvedBy),
+          members: team.turnOrder.map((playerId) => ({
+            playerId,
+            playerName: nameOf(playerId) ?? "Unknown",
+            active: isActive(ctx, playerId),
+          })),
+          currentTurnId: turnId,
+          currentTurnName: nameOf(turnId),
+          nextTurnId: nextUpId && nextUpId !== turnId ? nextUpId : null,
+          turnDeadline: turnId ? team.turnDeadline : null,
+        }
+      : null;
+
     return {
       phase: state.phase,
+      mode: state.mode,
+      turnTimeMs: state.turnTimeMs,
+      team: teamView,
       wordSource: state.wordSource,
       setterId: state.setterId,
       setterName: setterName(ctx, state.setterId),
@@ -596,15 +809,40 @@ export const wordleModule: GameModule<WordleState> = {
     };
   },
 
-  playerView(state, playerId) {
+  playerView(state, playerId, ctx) {
     const isSetter = state.setterId === playerId;
-    const progress = state.players[playerId] ?? null;
+    const team = state.team;
+    // In team modes the shared board doubles as "my board", so clients that
+    // only know solo Wordle still render the team's rows and gate input on turn.
+    const onTeam = Boolean(team?.turnOrder.includes(playerId));
+    const progress: PlayerRoundState | null = team
+      ? onTeam
+        ? {
+            guesses: team.guesses.map(({ word, feedback, at }) => ({ word, feedback, at })),
+            outcome: team.outcome,
+            solvedAt: team.solvedAt,
+          }
+        : null
+      : state.players[playerId] ?? null;
+    const turnId = currentTurnId(state);
+    const isMyTurn = onTeam && (state.mode === "huddle" || turnId === playerId);
+    const nextUp = team && turnId ? passTurn(team, ctx, 0) : null;
+    const isUpNext =
+      Boolean(nextUp) &&
+      turnId !== playerId &&
+      nextUp?.turnOrder[nextUp.turnIndex] === playerId;
 
     return {
       currentRound: state.currentRound,
       isSetter,
+      isMyTurn: state.phase === "playing" && team?.outcome == null && isMyTurn,
+      isUpNext,
       canSetWord: state.phase === "set-word" && isSetter,
-      canGuess: state.phase === "playing" && !isSetter && progress?.outcome == null,
+      canGuess:
+        state.phase === "playing" &&
+        !isSetter &&
+        progress?.outcome == null &&
+        (!team || (progress != null && isMyTurn)),
       secretWord: isSetter || state.phase === "results" ? state.targetWord : null,
       myGuesses: progress?.guesses ?? [],
       myOutcome: progress?.outcome ?? null,
@@ -612,7 +850,7 @@ export const wordleModule: GameModule<WordleState> = {
       // The setter already knows the word, so their private view carries every
       // contestant's live board (letters included) to spectate while waiting.
       // Contestants never receive each other's boards; letters would leak.
-      boards: isSetter
+      boards: isSetter && !team
         ? Object.entries(state.players).map(([contestantId, contestant]) => ({
             playerId: contestantId,
             guesses: contestant.guesses,
