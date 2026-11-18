@@ -1,5 +1,3 @@
-/* The native Whiteboard embed page: full-bleed, no page scroll or zoom, no selection callouts, flat only. The few
-   utility classes the SDK canvas uses (WhiteboardCanvas.tsx) are defined here, so the page needs no Tailwind build. */
 html,
 body,
 #root {

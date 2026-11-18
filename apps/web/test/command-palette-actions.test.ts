@@ -300,7 +300,6 @@ describe("filterPaletteActions", () => {
 
 describe("reaction emoji name search", () => {
   it("finds reactions by emoji name, e.g. 'thumbsup' → 👍", () => {
-    // Mirrors EMOJI_REACTIONS: real reaction options label with the glyph.
     const emojiOptions = ["👍", "👏", "😂", "❤️", "🎉", "😮"].map((emoji) => ({
       id: `emoji-${emoji}`,
       kind: "emoji" as const,
@@ -322,7 +321,7 @@ describe("reaction emoji name search", () => {
     expectHit("thumbs up", "👍");
     expectHit("clap", "👏");
     expectHit("lol", "😂");
-    expectHit("heart", "❤️"); // variation selector on the glyph is ignored
+    expectHit("heart", "❤️");
     expectHit("tada", "🎉");
     expectHit("wow", "😮");
   });

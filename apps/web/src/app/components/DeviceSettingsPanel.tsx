@@ -58,12 +58,8 @@ type SettingsTab = "video" | "audio" | "connection";
 
 interface DeviceSettingsPanelProps {
   roomAi?: RoomAiController;
-  /** Video source for the preview tile: the published stream when the camera
-   * is on, otherwise the private local-only preview. */
   localStream: MediaStream | null;
-  /** True when the real meeting camera is live (preview shows what others see). */
   isLocalVideoLive: boolean;
-  /** True when the preview tile is showing the private local-only capture. */
   isPreviewOnly: boolean;
   mirrorLocalPreview: boolean;
   isMirrorCamera?: boolean;
@@ -385,7 +381,6 @@ const formatQualitySummary = ({
       : `${Math.round(maxBitrate / 1000)} kbps`
   }`;
 
-/** Native select styled to match the prejoin device pickers. */
 function DeviceSelect({
   icon: Icon,
   value,
@@ -446,7 +441,6 @@ function DeviceSelect({
   );
 }
 
-/** Segmented input-level meter driven off levelRef via rAF — no re-renders. */
 function MicLevelMeter({
   levelRef,
   active,
@@ -694,15 +688,11 @@ export default function DeviceSettingsPanel({
     outputDeviceId: selectedAudioOutputDeviceId,
   });
 
-  // Device labels only become readable after a capture permission is granted;
-  // refetch once the mic test or camera preview comes up.
   const devices = useEnumeratedDevices(
     true,
     `${micTest.isRunning}:${hasLiveVideo}`,
   );
 
-  // The video tab is the camera test: bring up the private preview on entry
-  // (unless the real camera already covers it) and drop it when leaving.
   useEffect(() => {
     if (activeTab !== "video") return;
     if (isLocalVideoLive || isPreviewOnly) return;
@@ -721,9 +711,6 @@ export default function DeviceSettingsPanel({
 
   useEffect(() => {
     if (activeTab === "video") return;
-    // Unconditional: also cancels an in-flight preview start, so switching
-    // tabs mid-acquisition can't leave a hidden capture running. Stopping is
-    // a no-op for the real camera — it only ends the private preview.
     onStopCameraPreview?.();
   }, [activeTab, onStopCameraPreview]);
 
@@ -840,9 +827,6 @@ export default function DeviceSettingsPanel({
       >
         <div className="min-w-0">
           <h2 className="truncate text-[15px] font-semibold">Settings</h2>
-          {/* <p className="mt-0.5 text-[11.5px]" style={{ color: color.textFaint }}>
-            Device choices stay local. Voice clones are shared only with /tts.
-          </p> */}
         </div>
         <button
           type="button"

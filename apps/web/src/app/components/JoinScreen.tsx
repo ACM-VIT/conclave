@@ -168,9 +168,6 @@ interface JoinScreenProps {
   onEnterStart?: (action: "new" | "join") => void;
 }
 
-// Flat, Google-Meet-style lobby (dark Carbon, no gradients/marketing): a single
-// screen with the mic/cam self-preview on the left and the join actions on the
-// right. The whole 3-phase welcome/auth/join flow was ripped out for this.
 const FIELD =
   "w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 h-12 text-[15px] text-[#fafafa] placeholder:text-[#fafafa]/30 transition-[border-color,background-color] duration-150 focus:border-[#F95F4A]/60 focus:bg-white/[0.05] focus:outline-none disabled:opacity-50";
 const CTA_PRIMARY =
@@ -243,8 +240,6 @@ const warnJoinMedia = (event: string, payload?: unknown) => {
 
 type DeviceOption = { deviceId: string; label: string };
 
-// Compact device dropdown for the prejoin actions column (mic / camera). Styled
-// to match the FIELD inputs; uses a native <select> so it stays accessible.
 function DeviceSelect({
   icon: Icon,
   value,
@@ -318,8 +313,6 @@ function JoinScreen({
   const isRoutedRoom = forceJoinOnly;
   const enforceShortCode = enableRoomRouting || forceJoinOnly;
 
-  // Warm the (large) brand animation while the lobby is idle so the entry
-  // overlay can paint instantly the moment the user commits to a meeting.
   useEffect(() => {
     prefetchConclaveAnimation();
     prefetchConclaveLock();
@@ -345,26 +338,14 @@ function JoinScreen({
   const [isEffectsOpen, setIsEffectsOpen] = useState(false);
   const [guestName, setGuestName] = useState("");
   const [isSigningOut, setIsSigningOut] = useState(false);
-  // presenceChecked: a check has started (pill may appear, possibly as "Checking…").
-  // presenceSettled: a check has completed at least once, so we show a real count
-  // and keep showing it through background polls instead of flickering to "Checking…".
   const [presenceChecked, setPresenceChecked] = useState(false);
   const [presenceSettled, setPresenceSettled] = useState(false);
-  // Prejoin device selection + copy-link. Device pickers only act on a live
-  // track (a clean swap on the local preview, which the handoff then carries
-  // into the call), so none of the toggle/permission paths need to change.
   const [audioInputs, setAudioInputs] = useState<DeviceOption[]>([]);
   const [videoInputs, setVideoInputs] = useState<DeviceOption[]>([]);
   const [selectedAudioId, setSelectedAudioId] = useState("");
   const [selectedVideoId, setSelectedVideoId] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Deferred join: both the guest user (onUserChange) and the host flag
-  // (onIsAdminChange) propagate through the parent asynchronously, and the
-  // parent rebuilds onJoinRoom with the new isHost only on the next render.
-  // So we stash the intent and fire onJoinRoom once both have landed —
-  // otherwise "New meeting" joins with a stale isAdmin=false and the SFU
-  // replies "No room found" (it only creates a room when isHost is true).
   const [pending, setPending] = useState<{ mode: "new" | "join"; roomId: string } | null>(null);
 
   const { data: session } = useSession();
@@ -1025,9 +1006,6 @@ function JoinScreen({
     }
   };
 
-  // Fire the actual join once the deferred guest user AND the host flag have
-  // both propagated. onJoinRoom is rebuilt by the parent with the right
-  // isHost, and arrives on the same render as the updated isAdmin prop.
   useEffect(() => {
     if (!pending || !hasIdentity) return;
     const wantAdmin = pending.mode === "new";
@@ -1041,8 +1019,6 @@ function JoinScreen({
     onJoinRoom(targetId);
   }, [pending, hasIdentity, isAdmin, enableRoomRouting, onJoinRoom, onRoomIdChange]);
 
-  // Ensure a guest user exists (from the name field) before acting; returns
-  // false when nothing actionable (no identity and no usable name).
   const ensureGuest = (): boolean => {
     const name = liveDisplayName;
     if (hasIdentity) {
@@ -1115,9 +1091,6 @@ function JoinScreen({
   const canJoin = normalizedRoomId.trim().length > 0;
   const nameReady = hasIdentity || liveDisplayName.length > 0;
 
-  // Resolve how many people are already in the room we're about to join, matched
-  // against the polled occupancy list (see useMeetRooms). A room with no one in
-  // it simply isn't in the list, which reads as 0 — "no one else is here yet".
   const presenceTarget = enforceShortCode
     ? sanitizeRoomCode(normalizedRoomId)
     : normalizedRoomId.trim();
@@ -1131,8 +1104,6 @@ function JoinScreen({
       )
     : undefined;
   const showPresence = presenceTarget.length > 0 && presenceChecked;
-  // Until the first check settles show "Checking…"; afterwards always show the
-  // real count (a room with no one in it isn't in the list, so that's 0).
   const presenceCount = presenceSettled ? matchedRoom?.userCount ?? 0 : null;
   const presenceLoading = !presenceSettled;
 
@@ -1151,7 +1122,6 @@ function JoinScreen({
           .map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` })),
       );
     } catch {
-      // enumeration can fail before permission — leave the lists as-is.
     }
   }, []);
 
@@ -1166,8 +1136,6 @@ function JoinScreen({
       navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
   }, [refreshDevices]);
 
-  // Once a stream is live the OS exposes device labels + the active deviceId,
-  // so re-enumerate and sync the dropdowns to whatever is actually in use.
   useEffect(() => {
     void refreshDevices();
     const videoId = localStream?.getVideoTracks()[0]?.getSettings().deviceId;
@@ -1286,7 +1254,6 @@ function JoinScreen({
       if (copyResetRef.current) clearTimeout(copyResetRef.current);
       copyResetRef.current = setTimeout(() => setLinkCopied(false), 1800);
     } catch {
-      // clipboard can be blocked; nothing actionable.
     }
   };
 

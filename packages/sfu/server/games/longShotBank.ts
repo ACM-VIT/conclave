@@ -1,15 +1,3 @@
-/**
- * Local prompt bank for Long Shot. Every prompt lists its accepted answers in
- * four rarity tiers, from the answers nearly everyone reaches for first
- * (`obvious`) to the ones almost nobody thinks of (`longShot`).
- *
- * Each answer entry is `"Canonical|alias|alias"`: the first name is what the
- * room sees, the aliases are extra spellings the matcher also accepts.
- *
- * The tiers are curated, not measured. Keep them honest: an entry belongs in
- * `longShot` only when a typical player would genuinely not think of it.
- */
-
 export type LongShotTier = "obvious" | "solid" | "rare" | "longShot";
 
 export type LongShotPrompt = {
@@ -138,9 +126,9 @@ export const LONG_SHOT_BANK: LongShotPrompt[] = [
     category: "Sport",
     prompt: "Name a sport played with a ball",
     obvious: ["Soccer|Football", "Basketball", "Tennis", "Baseball", "Golf", "Volleyball"],
-    solid: ["American football", "Rugby", "Cricket", "Hockey|Field hockey", "Table tennis|Ping pong", "Bowling", "Handball", "Softball", "Water polo", "Badminton"],
+    solid: ["American football", "Rugby", "Cricket", "Hockey|Field hockey", "Table tennis|Ping pong", "Bowling", "Handball", "Softball", "Water polo"],
     rare: ["Lacrosse", "Squash", "Polo", "Dodgeball", "Netball", "Racquetball", "Billiards|Pool|Snooker", "Croquet", "Kickball", "Pickleball", "Bocce", "Futsal", "Beach volleyball"],
-    longShot: ["Sepak takraw", "Hurling", "Gaelic football", "Jai alai|Pelota", "Korfball", "Bandy", "Shinty", "Pesapallo", "Rounders", "Kabaddi", "Goalball", "Petanque|Boules", "Fistball", "Teqball", "Footvolley", "Camogie", "Roller derby", "Underwater rugby", "Cuju", "Tchoukball", "Padel", "Bossaball", "Kemari"],
+    longShot: ["Sepak takraw", "Hurling", "Gaelic football", "Jai alai|Pelota", "Korfball", "Bandy", "Shinty", "Pesapallo", "Rounders", "Goalball", "Petanque|Boules", "Fistball", "Teqball", "Footvolley", "Camogie", "Underwater rugby", "Cuju", "Tchoukball", "Padel", "Bossaball", "Kemari"],
   },
   {
     category: "Colours",
@@ -152,10 +140,6 @@ export const LONG_SHOT_BANK: LongShotPrompt[] = [
   },
 ];
 
-/**
- * Depth, in meters, each tier sinks you. Score is depth: the rarer the answer,
- * the deeper the dive.
- */
 export const LONG_SHOT_TIER_POINTS: Record<LongShotTier, number> = {
   obvious: 100,
   solid: 300,
@@ -165,15 +149,8 @@ export const LONG_SHOT_TIER_POINTS: Record<LongShotTier, number> = {
 
 export const LONG_SHOT_TIERS: LongShotTier[] = ["obvious", "solid", "rare", "longShot"];
 
-/* ---- Answer matching ---- */
-
 const LEADING_ARTICLE = /^(the|a|an)\s+/;
 
-/**
- * Normalize free text for matching: case-fold, strip diacritics, collapse
- * punctuation, drop a leading article and a simple plural. `C++`, `C#` and `F#`
- * keep their symbols because they distinguish real answers.
- */
 export const normalizeAnswer = (raw: string): string => {
   let text = raw
     .normalize("NFKD")
@@ -194,7 +171,6 @@ export const normalizeAnswer = (raw: string): string => {
   return text;
 };
 
-/** Optimal string alignment distance, capped for speed. */
 const editDistance = (a: string, b: string, cap: number): number => {
   if (Math.abs(a.length - b.length) > cap) return cap + 1;
   const rows = a.length + 1;
@@ -218,11 +194,9 @@ const editDistance = (a: string, b: string, cap: number): number => {
   return d[a.length][b.length];
 };
 
-/** Typos tolerated for a key of this length. Short answers must be exact. */
 const typoAllowance = (length: number): number => (length >= 9 ? 2 : length >= 5 ? 1 : 0);
 
 export type CompiledAnswer = {
-  /** Stable id within its prompt (the normalized canonical name). */
   id: string;
   display: string;
   tier: LongShotTier;
@@ -235,7 +209,6 @@ export type CompiledPrompt = {
   answers: CompiledAnswer[];
 };
 
-/** Expand a raw prompt into matchable answers. Duplicate keys keep the first tier. */
 export const compilePrompt = (raw: LongShotPrompt): CompiledPrompt => {
   const answers: CompiledAnswer[] = [];
   const seenKeys = new Set<string>();
@@ -255,10 +228,6 @@ export const compilePrompt = (raw: LongShotPrompt): CompiledPrompt => {
   return { category: raw.category, prompt: raw.prompt, answers };
 };
 
-/**
- * Find the accepted answer a guess refers to: an exact key first, then the
- * closest key within the typo allowance. Returns null when nothing is close.
- */
 export const matchAnswer = (
   prompt: CompiledPrompt,
   guess: string,

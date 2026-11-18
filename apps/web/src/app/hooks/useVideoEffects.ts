@@ -9837,9 +9837,6 @@ export function useVideoEffects({
       externalEffectChangePumpUntilRef.current =
         performance.now() + VIDEO_FRAME_CALLBACK_EFFECT_CHANGE_PUMP_MS;
       effectChangeFramePumpRef.current?.("effects-ref-change");
-      // The output MediaStreamTrack can remain stable while its rendered
-      // effect changes. Tick the version so publishers that fell back to raw
-      // video get another chance to switch back to the processed track.
       setProcessedTrackVersion((version) => version + 1);
     } else {
       hasObservedEffectsRef.current = true;
@@ -14127,8 +14124,6 @@ export function useVideoEffects({
         return null;
       }
 
-      // MediaPipe worker calls can outlive effect switches; ImageBitmap avoids
-      // worker-owned VideoFrames being GC'd during graph teardown.
       const bitmap = await createImageBitmap(modelFrame.image);
       return {
         source: bitmap,

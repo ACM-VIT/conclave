@@ -27,29 +27,6 @@ import {
   type LongShotTier,
 } from "../longShotBank.js";
 
-/**
- * Long Shot: a typed-answer game where the rarer your correct answer, the more
- * it scores, measured as dive depth in meters. Every prompt ("Name a fruit") has a curated list of accepted
- * answers sorted into four tiers: obvious, solid, rare and long shot.
- *
- * Two modes share the same prompt bank and matcher:
- *
- *  - classic ("Dive together"): lobby -> (prompt -> reveal) x N -> results.
- *    Everyone types an answer to the same prompt at the same time. A player
- *    gets three tries to land on an accepted answer. At the reveal, an answer
- *    nobody else in the room gave earns an "only you" bonus; a shared answer
- *    is a jinx and earns no bonus.
- *
- *  - fuse ("Last one under"): lobby -> (fuse -> popped)* -> results.
- *    Players take turns naming an accepted answer that has not been said yet.
- *    A valid answer scores its tier and passes the fuse on, a little shorter.
- *    When the fuse runs out, the holder loses a life and a new prompt starts.
- *    Last player standing wins.
- *
- * The answer lists never leave the server until the reveal, and then only as
- * a short sample, so the reveal cannot be used to cheat a later prompt.
- */
-
 type Mode = "classic" | "fuse";
 type Phase = "lobby" | "prompt" | "reveal" | "fuse" | "popped" | "results";
 
@@ -67,6 +44,8 @@ const CHAIN_LENGTH = 10;
 const DEFAULT_PROMPTS = 7;
 const DEFAULT_LIVES = 2;
 const FUSE_GENERATED_PROMPTS = 8;
+const ABSENT_FORFEIT_MS = 30_000;
+const RESUME_MIN_MS = 3_000;
 
 type Miss = { text: string; reason: "unknown" | "used"; at: number };
 
@@ -104,13 +83,11 @@ type LongShotState = {
   deadline: number;
   scores: Record<string, number>;
   best: Record<string, BestAnswer>;
-  // classic
   promptMs: number;
   entries: Record<string, ClassicEntry>;
   results: RoundResult[];
   missedGems: string[];
   obviousPicks: string[];
-  // fuse
   fuseMs: number;
   currentFuseMs: number;
   maxLives: number;
@@ -123,23 +100,26 @@ type LongShotState = {
   popped: { playerId: string; eliminated: boolean } | null;
   outOrder: string[];
   winnerId: string | null;
+  absentSince: Record<string, number>;
+  pausedRemainingMs: number | null;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 
-/* ---- Generated content ---- */
-
 const TIER_LIMITS: Record<LongShotTier, { min: number; max: number }> = {
   obvious: { min: 3, max: 12 },
   solid: { min: 4, max: 20 },
-  rare: { min: 4, max: 25 },
-  longShot: { min: 4, max: 30 },
+  rare: { min: 5, max: 25 },
+  longShot: { min: 6, max: 30 },
 };
 
-const MIN_ANSWERS_PER_PROMPT = 18;
+export const LONG_SHOT_MIN_ANSWERS = LONG_SHOT_TIERS.reduce(
+  (sum, tier) => sum + TIER_LIMITS[tier].min,
+  0,
+);
 
-const parseGeneratedPrompts = (payload: unknown, minItems = 1): LongShotPrompt[] | null => {
+export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPrompt[] | null => {
   if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
   const out: LongShotPrompt[] = [];
   const seenPrompts = new Set<string>();
@@ -162,7 +142,7 @@ const parseGeneratedPrompts = (payload: unknown, minItems = 1): LongShotPrompt[]
     }
     if (!valid) continue;
     const raw: LongShotPrompt = { category, prompt, ...tiers };
-    if (compilePrompt(raw).answers.length < MIN_ANSWERS_PER_PROMPT) continue;
+    if (compilePrompt(raw).answers.length < LONG_SHOT_MIN_ANSWERS) continue;
     seenPrompts.add(promptKey);
     out.push(raw);
     if (out.length >= 15) break;
@@ -176,8 +156,6 @@ const tierSchema = (tier: LongShotTier) => ({
   maxItems: TIER_LIMITS[tier].max,
   items: { type: "string", maxLength: 80 },
 });
-
-/* ---- Helpers ---- */
 
 const playerName = (ctx: GameContext, playerId: string): string =>
   ctx.players.find((player) => player.id === playerId)?.name ?? "Player";
@@ -223,7 +201,6 @@ const isActive = (ctx: GameContext, playerId: string): boolean =>
 const alivePlayers = (state: LongShotState): string[] =>
   state.order.filter((playerId) => (state.lives[playerId] ?? 0) > 0);
 
-/** The next player after `fromId` in seat order who still has lives. */
 const nextAlive = (state: LongShotState, fromId: string | null): string | null => {
   const alive = new Set(alivePlayers(state));
   if (alive.size === 0) return null;
@@ -235,7 +212,6 @@ const nextAlive = (state: LongShotState, fromId: string | null): string | null =
   return null;
 };
 
-/** Like `nextAlive`, but prefers a connected player so a dropped seat is passed over. */
 const nextAliveConnected = (
   state: LongShotState,
   fromId: string | null,
@@ -255,8 +231,6 @@ const fuseIsOver = (state: LongShotState): boolean => {
   const alive = alivePlayers(state).length;
   return state.order.length > 1 ? alive <= 1 : alive === 0;
 };
-
-/* ---- Classic flow ---- */
 
 const enterPrompt = (state: LongShotState, index: number, ctx: GameContext): LongShotState => ({
   ...state,
@@ -279,7 +253,6 @@ const scoreClassicRound = (state: LongShotState, ctx: GameContext): LongShotStat
   for (const entry of Object.values(state.entries)) {
     if (entry.answer) counts.set(entry.answer.id, (counts.get(entry.answer.id) ?? 0) + 1);
   }
-  const validAnswerers = [...counts.values()].reduce((sum, n) => sum + n, 0);
   const scores = { ...state.scores };
   let best = state.best;
   const results: RoundResult[] = [];
@@ -290,7 +263,7 @@ const scoreClassicRound = (state: LongShotState, ctx: GameContext): LongShotStat
     }
     const shared = (counts.get(entry.answer.id) ?? 0) > 1;
     const base = LONG_SHOT_TIER_POINTS[entry.answer.tier];
-    const bonus = !shared && validAnswerers > 1 ? ONLY_YOU_BONUS : 0;
+    const bonus = !shared && ctx.players.length > 1 ? ONLY_YOU_BONUS : 0;
     const points = base + bonus;
     scores[playerId] = (scores[playerId] ?? 0) + points;
     best = recordBest(best, playerId, entry.answer, prompt, base);
@@ -329,8 +302,6 @@ const scoreClassicRound = (state: LongShotState, ctx: GameContext): LongShotStat
   };
 };
 
-/* ---- Fuse flow ---- */
-
 const enterFuse = (
   state: LongShotState,
   promptIndex: number,
@@ -347,6 +318,7 @@ const enterFuse = (
   chain: [],
   lastMiss: null,
   popped: null,
+  pausedRemainingMs: null,
 });
 
 const finishFuse = (state: LongShotState): LongShotState => {
@@ -373,11 +345,66 @@ const popFuse = (state: LongShotState, ctx: GameContext): LongShotState => {
   };
 };
 
+const forfeitAbsent = (state: LongShotState, ctx: GameContext): LongShotState => {
+  let absentSince = state.absentSince;
+  let lives = state.lives;
+  let outOrder = state.outOrder;
+  let changed = false;
+  for (const playerId of alivePlayers(state)) {
+    const since = absentSince[playerId];
+    if (isActive(ctx, playerId)) {
+      if (since !== undefined) {
+        const rest = { ...absentSince };
+        delete rest[playerId];
+        absentSince = rest;
+        changed = true;
+      }
+      continue;
+    }
+    if (since === undefined) {
+      absentSince = { ...absentSince, [playerId]: ctx.now };
+      changed = true;
+    } else if (ctx.now - since >= ABSENT_FORFEIT_MS) {
+      lives = { ...lives, [playerId]: 0 };
+      outOrder = [...outOrder, playerId];
+      changed = true;
+    }
+  }
+  return changed ? { ...state, absentSince, lives, outOrder } : state;
+};
+
+const tickFuse = (state: LongShotState, ctx: GameContext): LongShotState => {
+  const tracked = forfeitAbsent(state, ctx);
+  if (fuseIsOver(tracked)) return finishFuse(tracked);
+  const alive = alivePlayers(tracked);
+  const connected = alive.filter((playerId) => isActive(ctx, playerId));
+  const waiting = connected.length === 0 || (alive.length > 1 && connected.length < 2);
+  if (waiting) {
+    if (tracked.pausedRemainingMs !== null) return tracked;
+    return { ...tracked, pausedRemainingMs: Math.max(0, tracked.deadline - ctx.now) };
+  }
+  const holder = tracked.turnPlayerId;
+  if (!holder || !connected.includes(holder)) {
+    return {
+      ...tracked,
+      turnPlayerId: nextAliveConnected(tracked, holder, ctx),
+      deadline: ctx.now + tracked.currentFuseMs,
+      pausedRemainingMs: null,
+    };
+  }
+  if (tracked.pausedRemainingMs !== null) {
+    return {
+      ...tracked,
+      pausedRemainingMs: null,
+      deadline: ctx.now + Math.max(RESUME_MIN_MS, tracked.pausedRemainingMs),
+    };
+  }
+  return ctx.now >= tracked.deadline ? popFuse(tracked, ctx) : tracked;
+};
+
 const afterPop = (state: LongShotState, ctx: GameContext): LongShotState => {
   if (fuseIsOver(state)) return finishFuse(state);
   const holder = state.popped?.playerId ?? state.turnPlayerId;
-  // The player who popped starts the next prompt if still alive, so nobody
-  // gets two easy openers in a row; otherwise the next seat does.
   const starter =
     holder && (state.lives[holder] ?? 0) > 0 && isActive(ctx, holder)
       ? holder
@@ -385,9 +412,6 @@ const afterPop = (state: LongShotState, ctx: GameContext): LongShotState => {
   return enterFuse(state, state.promptIndex + 1, starter, ctx);
 };
 
-/* ---- Moves ---- */
-
-/** Typed move contract, decoded from the untrusted wire payload. */
 export type LongShotMove =
   | { type: "start" }
   | { type: "answer"; text: string }
@@ -417,6 +441,7 @@ const answerClassic = (
   ctx: GameContext,
 ): LongShotState => {
   if (state.phase !== "prompt") throw new GameMoveError("Not accepting answers right now");
+  if (ctx.now >= state.deadline) throw new GameMoveError("Time's up");
   const prompt = currentPrompt(state);
   if (!prompt) throw new GameMoveError("No prompt");
   const previous = state.entries[playerId];
@@ -444,6 +469,8 @@ const answerFuse = (
 ): LongShotState => {
   if (state.phase !== "fuse") throw new GameMoveError("The fuse is not lit");
   if (state.turnPlayerId !== playerId) throw new GameMoveError("Not your turn");
+  if (state.pausedRemainingMs !== null) throw new GameMoveError("Waiting for players");
+  if (ctx.now >= state.deadline) throw new GameMoveError("Time's up");
   const prompt = currentPrompt(state);
   if (!prompt) throw new GameMoveError("No prompt");
   const match = matchAnswer(prompt, text);
@@ -465,7 +492,6 @@ const answerFuse = (
   const best = recordBest(state.best, playerId, match, prompt, points);
   const currentFuseMs = Math.max(MIN_FUSE_MS, state.currentFuseMs - FUSE_SHRINK_MS);
   const base = { ...state, used, chain, scores, best, lastMiss: null };
-  // Every answer said: the prompt is exhausted, so move on with no penalty.
   if (used.length >= prompt.answers.length) {
     return enterFuse(base, state.promptIndex + 1, nextAliveConnected(base, playerId, ctx), ctx);
   }
@@ -477,8 +503,6 @@ const answerFuse = (
     deadline: ctx.now + currentFuseMs,
   };
 };
-
-/* ---- Module ---- */
 
 export const longShotModule: GameModule<LongShotState> = {
   id: "long-shot",
@@ -552,6 +576,7 @@ export const longShotModule: GameModule<LongShotState> = {
         "Each prompt must have a large, finite, verifiable set of correct answers (for example 'Name a character from X' or 'Name a city in Y').",
         "Sort the accepted answers into four tiers by how many people would think of them: obvious (the first answers nearly everyone says), solid, rare, and longShot (correct but almost nobody would think of it).",
         "Every listed answer must be factually correct for its prompt. Never repeat an answer across tiers.",
+        `Give every prompt at least ${LONG_SHOT_MIN_ANSWERS} distinct answers: at least ${TIER_LIMITS.obvious.min} obvious, ${TIER_LIMITS.solid.min} solid, ${TIER_LIMITS.rare.min} rare and ${TIER_LIMITS.longShot.min} longShot.`,
         "List as many correct answers as you reliably can, especially in the rare and longShot tiers.",
         "Write each answer as its most common name. Add alternate spellings after a pipe, like 'Kyiv|Kiev'.",
       ].join(" "),
@@ -582,7 +607,7 @@ export const longShotModule: GameModule<LongShotState> = {
         required: ["prompts"],
       },
       maxOutputTokens: 800 + count * 900,
-      parse: (payload) => parseGeneratedPrompts(payload, Math.min(count, 3)),
+      parse: (payload) => parseLongShotPrompts(payload, Math.min(count, 3)),
     });
   },
 
@@ -626,6 +651,8 @@ export const longShotModule: GameModule<LongShotState> = {
       popped: null,
       outOrder: [],
       winnerId: null,
+      absentSince: {},
+      pausedRemainingMs: null,
     };
   },
 
@@ -643,8 +670,6 @@ export const longShotModule: GameModule<LongShotState> = {
           throw new GameMoveError("No prompts available");
         }
         if (state.mode === "classic") return enterPrompt(state, 0, ctx);
-        // Seat order is the roster at start (lobby joiners included). Connected
-        // players go first so the fuse is never lit in an empty hand.
         const order = ctx.rng.shuffle(ctx.players.map((player) => player.id));
         const lives: Record<string, number> = {};
         for (const playerId of order) lives[playerId] = state.maxLives;
@@ -662,8 +687,10 @@ export const longShotModule: GameModule<LongShotState> = {
         }
         if (state.phase === "prompt") return { ...state, deadline: ctx.now };
         if (state.phase === "fuse") {
-          // A dud prompt: swap it for a fresh one without costing anyone a life.
-          return enterFuse(state, state.promptIndex + 1, state.turnPlayerId, ctx);
+          const holder = state.turnPlayerId;
+          const starter =
+            holder && isActive(ctx, holder) ? holder : nextAliveConnected(state, holder, ctx);
+          return enterFuse(state, state.promptIndex + 1, starter, ctx);
         }
         throw new GameMoveError("Nothing to skip");
       }
@@ -693,20 +720,12 @@ export const longShotModule: GameModule<LongShotState> = {
         if (nextIndex >= state.prompts.length) return { ...state, phase: "results", deadline: 0 };
         return enterPrompt(state, nextIndex, ctx);
       }
-      case "fuse": {
-        const holder = state.turnPlayerId;
-        // A holder who dropped out of the call is passed over, not punished.
-        if (holder && !isActive(ctx, holder)) {
-          const next = nextAliveConnected(state, holder, ctx);
-          if (next && next !== holder && isActive(ctx, next)) {
-            return { ...state, turnPlayerId: next, deadline: ctx.now + state.currentFuseMs };
-          }
-          return state;
-        }
-        return ctx.now >= state.deadline ? popFuse(state, ctx) : state;
+      case "fuse":
+        return tickFuse(state, ctx);
+      case "popped": {
+        const tracked = forfeitAbsent(state, ctx);
+        return ctx.now >= tracked.deadline ? afterPop(tracked, ctx) : tracked;
       }
-      case "popped":
-        return ctx.now >= state.deadline ? afterPop(state, ctx) : state;
       case "lobby":
       case "results":
         return state;
@@ -765,7 +784,8 @@ export const longShotModule: GameModule<LongShotState> = {
       mode: state.mode,
       phase: state.phase,
       serverNow: ctx.now,
-      deadline: live && state.deadline > 0 ? state.deadline : null,
+      deadline: live && state.deadline > 0 && state.pausedRemainingMs === null ? state.deadline : null,
+      paused: state.phase === "fuse" && state.pausedRemainingMs !== null,
       durationMs: state.mode === "classic" ? state.promptMs : state.currentFuseMs,
       promptIndex: state.promptIndex,
       totalPrompts: state.totalPrompts,
@@ -783,7 +803,6 @@ export const longShotModule: GameModule<LongShotState> = {
           : [],
       missedGems: state.phase === "reveal" ? state.missedGems : [],
       obviousPicks: state.phase === "reveal" ? state.obviousPicks : [],
-      // fuse
       turnPlayerId: state.phase === "fuse" ? state.turnPlayerId : null,
       maxLives: state.maxLives,
       seats: state.order.map((playerId) => ({
@@ -827,7 +846,6 @@ export const longShotModule: GameModule<LongShotState> = {
     return {
       score: state.scores[playerId] ?? 0,
       rank: rank >= 0 ? rank + 1 : null,
-      // classic: your own answer is private until the reveal
       answer: entry?.answer
         ? {
             text: entry.answer.display,
@@ -842,7 +860,6 @@ export const longShotModule: GameModule<LongShotState> = {
       roundPoints: result?.points ?? 0,
       roundBonus: result?.bonus ?? 0,
       shared: result?.shared ?? false,
-      // fuse
       yourTurn: state.phase === "fuse" && state.turnPlayerId === playerId,
       lives: state.lives[playerId] ?? 0,
     };

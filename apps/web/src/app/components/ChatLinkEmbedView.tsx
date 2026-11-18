@@ -16,8 +16,6 @@ interface ChatLinkEmbedViewProps {
   url: string;
 }
 
-// Sentinel for "unfurl in flight" so a null result ("no preview available")
-// can collapse the embed without a loading flash for links that never embed.
 const LOADING = Symbol("loading");
 
 const CARD_CLASS =
@@ -141,8 +139,6 @@ function TweetPhotoCell({
   );
 }
 
-// A tweet carries at most one video (or animated gif); gifs autoplay muted on
-// loop the way X renders them, real videos are click-to-play with controls.
 function TweetVideoView({
   media,
   label,
@@ -156,9 +152,6 @@ function TweetVideoView({
   const aspectRatio =
     media.width && media.height ? `${media.width} / ${media.height}` : "16 / 9";
 
-  // Kick playback off inside the click's user-activation window (the swap
-  // commits synchronously for discrete events) instead of trusting the
-  // autoplay attribute; retry muted if unmuted playback is denied.
   const startPlayback = (video: HTMLVideoElement | null) => {
     if (!video || hasAutoStartedRef.current) return;
     hasAutoStartedRef.current = true;
@@ -432,11 +425,6 @@ function PageEmbed({ preview }: { preview: ChatLinkPreview }) {
   );
 }
 
-/**
- * Compact preview above the composer for the first link in the draft, with a
- * dismiss control. Dismissing tells the send path to set `suppressEmbeds`, so
- * the message renders without embed cards for everyone.
- */
 export function ChatComposerLinkPreview({
   url,
   onDismiss,
@@ -464,7 +452,6 @@ export function ChatComposerLinkPreview({
   if (preview === LOADING) return null;
 
   const videoId = getYouTubeVideoId(url);
-  // No card would render on the sent message either — nothing to dismiss.
   if (!preview && !videoId) return null;
 
   const thumbnailUrl =
@@ -516,11 +503,6 @@ export function ChatComposerLinkPreview({
   );
 }
 
-/**
- * Rich preview card for a link in a chat message. Renders nothing while the
- * unfurl is in flight and stays empty when the URL yields no metadata, so
- * messages never show broken or placeholder cards.
- */
 export default function ChatLinkEmbedView({ url }: ChatLinkEmbedViewProps) {
   const [preview, setPreview] = useState<
     ChatLinkPreview | null | typeof LOADING
@@ -539,8 +521,6 @@ export default function ChatLinkEmbedView({ url }: ChatLinkEmbedViewProps) {
 
   if (preview === LOADING) return null;
 
-  // YouTube links get an inline click-to-play player even when the page
-  // scrape came back empty — the thumbnail is derivable from the video id.
   const videoId = getYouTubeVideoId(url);
   if (videoId) {
     return <YouTubeEmbed url={url} videoId={videoId} preview={preview} />;

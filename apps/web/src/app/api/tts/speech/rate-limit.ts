@@ -1,8 +1,5 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 
-// Cloned speech is billed per character to the deployment's ElevenLabs key
-// and the route needs no session, so each client address gets a budget.
-// Keep in step with TTS_SPEECH_RATE_LIMITER in wrangler.jsonc.
 const RATE_LIMIT = 20;
 const RATE_WINDOW_MS = 60_000;
 const MAX_LOCAL_BUCKETS = 1_000;
@@ -44,14 +41,6 @@ const takeLocalRateLimit = (key: string): boolean => {
 
 export type SpeechRateLimitOutcome = "allowed" | "limited" | "unavailable";
 
-/**
- * Whether this request may generate speech now. Inside a Cloudflare
- * deployment the shared limiter is required: if its binding is missing or
- * fails, requests are refused ("unavailable") rather than metered per isolate,
- * which would let callers exceed the budget across instances. Outside
- * Cloudflare (local runs, tests, `next start`) there is no Cloudflare context
- * and an in-process window applies.
- */
 export async function takeSpeechRateLimit(
   request: Request,
 ): Promise<SpeechRateLimitOutcome> {

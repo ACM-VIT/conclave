@@ -6,12 +6,9 @@ import type { RoomSelection } from "./types";
 export type OperatorAlert = {
   key: string;
   message: string;
-  /** When set, clicking the alert jumps to this room. */
   selection?: RoomSelection;
 };
 
-/** Amber condition chips under the header: workers down, draining left on,
- * waiting rooms with no host. Dismissals are per session. */
 export function AlertsStrip({
   alerts,
   onJump,

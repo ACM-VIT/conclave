@@ -1,16 +1,5 @@
 "use client";
 
-/**
- * Per-game tile resolvers: how each game reads its views into the shared
- * semantic PlayerTileState the SDK maps to visual primitives, plus the tile
- * actions that turn faces into live controls (tap a tile to vote). This is the
- * configurable seam. Importing this module registers everything once.
- *
- * Resolvers only read what a view genuinely exposes and never invent data.
- * Leaderboard rank is applied universally by the overlay, so resolvers only
- * cover game-specific state (acted, outcome, eliminated, selected, winner).
- */
-
 import {
   registerTileAction,
   registerTileResolver,
@@ -26,13 +15,10 @@ const stringArray = (value: unknown): string[] =>
 const voteLabel = (count: number): string =>
   count === 1 ? "1 vote" : `${count} votes`;
 
-/** The viewer's current pick, read from their own private view. */
 const yourVoteOf = (privateView: unknown): string | null => {
   const vote = asRecord(privateView)?.yourVote;
   return typeof vote === "string" ? vote : null;
 };
-
-/* ---- Trivia: server projects a per-player tiles map (acted / outcome). ---- */
 
 type TriviaTile = {
   acted?: boolean;
@@ -51,8 +37,6 @@ registerTileResolver("trivia", ({ publicView, playerId }): PlayerTileState | nul
   return Object.keys(state).length > 0 ? state : null;
 });
 
-/* ---- Reaction: reveal results carry an early (too soon) flag. ---- */
-
 type ReactionResult = { id: string; early?: boolean };
 
 registerTileResolver("reaction", ({ publicView, playerId }): PlayerTileState | null => {
@@ -62,8 +46,6 @@ registerTileResolver("reaction", ({ publicView, playerId }): PlayerTileState | n
   if (mine?.early) return { eliminated: true, note: "Too soon" };
   return null;
 });
-
-/* ---- Imposter: live vote state, tap to accuse, and the unmask beat. ---- */
 
 registerTileResolver(
   "imposter",
@@ -88,8 +70,6 @@ registerTileResolver(
       const imposterId = typeof result.imposterId === "string" ? result.imposterId : null;
       const votedOutId = typeof result.votedOutId === "string" ? result.votedOutId : null;
       if (imposterId === playerId) {
-        // The unmask lands on the imposter's face: dimmed and skulled when the
-        // crew caught them, crowned when they escaped the vote.
         return votedOutId === playerId
           ? { eliminated: true, note: "Imposter" }
           : { winner: true, note: "Imposter" };
@@ -110,8 +90,6 @@ registerTileAction("imposter", ({ publicView, playerId, viewerId }) => {
   if (!viewerId || playerId === viewerId) return null;
   return { type: "vote", payload: { target: playerId }, label: "Vote" };
 });
-
-/* ---- Most likely to: tap any face to vote (self included), crown the pick. ---- */
 
 registerTileResolver(
   "most-likely-to",
@@ -143,11 +121,8 @@ registerTileAction("most-likely-to", ({ publicView, playerId, viewerId }) => {
   const view = asRecord(publicView);
   if (!view || view.phase !== "vote") return null;
   if (!viewerId) return null;
-  // Self-votes are allowed in this game, so every tile is a valid ballot.
   return { type: "vote", payload: { target: playerId }, label: "Vote" };
 });
-
-/* ---- Long shot: locked-in checks, scored reveals, and the fuse holder. ---- */
 
 type LongShotTile = {
   acted?: boolean;

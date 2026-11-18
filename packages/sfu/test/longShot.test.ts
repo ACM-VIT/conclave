@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { longShotModule } from "../server/games/modules/longShot.js";
+import {
+  LONG_SHOT_MIN_ANSWERS,
+  longShotModule,
+  parseLongShotPrompts,
+} from "../server/games/modules/longShot.js";
 import {
   LONG_SHOT_BANK,
   compilePrompt,
@@ -15,8 +19,6 @@ const players: GamePlayer[] = [
   { id: "p3", name: "Robin" },
 ];
 
-// Identity shuffle: the first prompt is the bank's first ("Name a fruit") and
-// the fuse seat order is the roster order.
 const rng: GameRng = {
   next: () => 0,
   int: () => 0,
@@ -82,8 +84,15 @@ describe("long shot matcher", () => {
     expect(matchAnswer(fruit, "durian")?.tier).toBe("longShot");
     expect(matchAnswer(fruit, "apple")?.tier).toBe("obvious");
     expect(matchAnswer(fruit, "carrot")).toBeNull();
-    // Short answers must be exact so "fog" never becomes "fig".
     expect(matchAnswer(fruit, "fog")).toBeNull();
+  });
+
+  it("only accepts sports that are actually played with a ball", () => {
+    const sports = compilePrompt(LONG_SHOT_BANK.find((p) => p.prompt === "Name a sport played with a ball")!);
+    for (const notBall of ["Kabaddi", "Roller derby", "Badminton"]) {
+      expect(matchAnswer(sports, notBall)).toBeNull();
+    }
+    expect(matchAnswer(sports, "Hurling")?.tier).toBe("longShot");
   });
 
   it("ships a bank where every prompt has a deep list in every tier", () => {
@@ -136,7 +145,6 @@ describe("long shot classic", () => {
     state = answer(state, "host", "Durian", 2_000);
     state = answer(state, "p2", "Apple", 2_000);
     state = answer(state, "p3", "apples", 2_000);
-    // Everyone locked in, so the deadline collapsed and the next tick reveals.
     state = longShotModule.onTick!(state, context(2_000));
     const view = pub(state, 2_000);
     expect(view.phase).toBe("reveal");
@@ -146,6 +154,20 @@ describe("long shot classic", () => {
     expect(view.scoreboard[0]).toEqual({ id: "host", name: "Host", score: 1200 });
     expect(view.tiles.host).toEqual({ outcome: "correct", note: "1200m" });
     expect((view.missedGems as string[]).includes("Durian")).toBe(false);
+  });
+
+  it("gives the only-you bonus when everyone else misses", () => {
+    let state = started();
+    state = answer(state, "host", "Durian", 2_000);
+    for (let i = 0; i < 3; i++) state = answer(state, "p2", `nope ${i}`, 2_000);
+    state = longShotModule.onTick!(state, context(40_000));
+    const host = pub(state, 40_000).results.find((r) => r.id === "host");
+    expect(host).toMatchObject({ points: 1200, bonus: 200 });
+  });
+
+  it("rejects answers that arrive after the deadline", () => {
+    const state = started();
+    expect(() => answer(state, "host", "Durian", 26_000)).toThrow("Time's up");
   });
 
   it("walks every prompt to the results", () => {
@@ -189,14 +211,12 @@ describe("long shot fuse", () => {
 
   it("pops the holder when the fuse runs out and ends with the last one standing", () => {
     let state = started();
-    // Host holds the fuse and lets it burn: one life, so host is out.
     state = longShotModule.onTick!(state, context(20_000, { config: fuseConfig }));
     expect(state.phase).toBe("popped");
     expect(pub(state).seats.find((s) => s.id === "host")?.out).toBe(true);
     state = longShotModule.onTick!(state, context(30_000, { config: fuseConfig }));
     expect(state.phase).toBe("fuse");
     expect(pub(state).turnPlayerId).toBe("p2");
-    // Pat burns out next; Robin is the last one standing.
     state = longShotModule.onTick!(state, context(60_000, { config: fuseConfig }));
     state = longShotModule.onTick!(state, context(70_000, { config: fuseConfig }));
     expect(state.phase).toBe("results");
@@ -215,8 +235,82 @@ describe("long shot fuse", () => {
     expect(pub(state).seats.find((s) => s.id === "p2")?.lives).toBe(1);
   });
 
+  it("rejects a fuse answer that arrives after the fuse burned out", () => {
+    const state = started();
+    expect(() => answer(state, "host", "Apple", 11_000)).toThrow("Time's up");
+  });
+
+  it("lets a departed player forfeit so the connected survivor wins", () => {
+    const twoPlayers = players.slice(0, 2);
+    const cfg = { config: fuseConfig, roster: twoPlayers };
+    let state = longShotModule.onMove(
+      longShotModule.setup(context(0, cfg)),
+      { playerId: "host", type: "start", payload: undefined },
+      context(1_000, cfg),
+    );
+    state = answer(state, "host", "Apple", 2_000, cfg);
+    const hostOnly = { ...cfg, activePlayers: [players[0]] };
+    state = longShotModule.onTick!(state, context(2_500, hostOnly));
+    expect(pub(state, 2_500, hostOnly).paused).toBe(true);
+    state = longShotModule.onTick!(state, context(20_000, hostOnly));
+    expect(state.phase).toBe("fuse");
+    state = longShotModule.onTick!(state, context(33_000, hostOnly));
+    expect(state.phase).toBe("results");
+    expect(pub(state, 33_000, hostOnly).winnerId).toBe("host");
+  });
+
+  it("ends with no winner once every survivor has left", () => {
+    let state = started();
+    const nobody = { config: fuseConfig, activePlayers: [] as GamePlayer[] };
+    state = longShotModule.onTick!(state, context(2_000, nobody));
+    state = longShotModule.onTick!(state, context(40_000, nobody));
+    expect(state.phase).toBe("results");
+    expect(pub(state, 40_000, nobody).winnerId).toBeNull();
+  });
+
+  it("pauses the fuse while the only connected survivor is away and resumes it on return", () => {
+    const twoPlayers = players.slice(0, 2);
+    const cfg = { config: fuseConfig, roster: twoPlayers };
+    let state = longShotModule.onMove(
+      longShotModule.setup(context(0, cfg)),
+      { playerId: "host", type: "start", payload: undefined },
+      context(1_000, cfg),
+    );
+    const away = { ...cfg, activePlayers: [] as GamePlayer[] };
+    state = longShotModule.onTick!(state, context(9_000, away));
+    expect(pub(state, 9_000, away).paused).toBe(true);
+    state = longShotModule.onTick!(state, context(20_000, cfg));
+    expect(state.phase).toBe("fuse");
+    expect(pub(state, 20_000, cfg).deadline).toBe(23_000);
+    state = longShotModule.onTick!(state, context(21_000, cfg));
+    expect(state.phase).toBe("fuse");
+    expect(pub(state, 21_000, cfg).seats.find((s) => s.id === "host")?.lives).toBe(1);
+  });
+
   it("does not allow joining mid-game in fuse mode", () => {
     const resolver = longShotModule.lateJoinPhases as (s: unknown, c: GameContext) => string[];
     expect(resolver(started(), context(0, { config: fuseConfig }))).toEqual([]);
+  });
+});
+
+describe("long shot generated prompts", () => {
+  const tier = (name: string, size: number) => Array.from({ length: size }, (_, i) => `${name} ${i}`);
+  const prompt = (sizes: [number, number, number, number]) => ({
+    category: "Custom",
+    prompt: "Name a thing",
+    obvious: tier("obvious", sizes[0]),
+    solid: tier("solid", sizes[1]),
+    rare: tier("rare", sizes[2]),
+    longShot: tier("long shot", sizes[3]),
+  });
+
+  it("accepts a prompt that meets every tier minimum exactly", () => {
+    expect(LONG_SHOT_MIN_ANSWERS).toBe(18);
+    expect(parseLongShotPrompts({ prompts: [prompt([3, 4, 5, 6])] })).toHaveLength(1);
+  });
+
+  it("rejects a prompt below any tier minimum", () => {
+    expect(parseLongShotPrompts({ prompts: [prompt([3, 4, 5, 5])] })).toBeNull();
+    expect(parseLongShotPrompts({ prompts: [prompt([2, 4, 5, 6])] })).toBeNull();
   });
 });

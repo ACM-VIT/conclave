@@ -25,9 +25,6 @@ export function useMeetReactions({
   isObserverMode = false,
   reactionAssets,
 }: UseMeetReactionsOptions) {
-  // Reactions live in an external store, not React state: a component holding
-  // them in state here would re-render the whole meeting tree on every
-  // reaction add/expiry. Only ReactionOverlay subscribes to this store.
   const storeRef = useRef<ReactionStore | null>(null);
   if (!storeRef.current) {
     storeRef.current = createReactionStore(MAX_REACTIONS);
@@ -151,8 +148,6 @@ export function useMeetReactions({
         window.clearTimeout(timeoutId);
       });
       reactionTimeoutsRef.current.clear();
-      // Also drop the events: the store outlives this effect across dev Fast
-      // Refresh, and without their timeouts cleared reactions would linger.
       reactionStore.clear();
     };
   }, [reactionStore]);

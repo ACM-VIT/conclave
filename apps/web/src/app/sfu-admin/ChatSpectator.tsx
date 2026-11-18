@@ -12,11 +12,6 @@ const formatClock = (at: number): string =>
     minute: "2-digit",
   });
 
-/**
- * Read-only live chat for the watched room, streamed by the gateway from the
- * room's broadcast history (direct messages never enter that buffer, so they
- * can never appear here).
- */
 export function ChatSpectator({ messages }: { messages: AdminChatMessage[] | null }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 

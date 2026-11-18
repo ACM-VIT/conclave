@@ -165,7 +165,6 @@ describe("parseUnfurlableUrl", () => {
   });
 
   it("catches integer hosts that canonicalize to private addresses", () => {
-    // WHATWG URL parsing turns http://2130706433/ into http://127.0.0.1/.
     expect(parseUnfurlableUrl("http://2130706433/")).toBeNull();
     expect(parseUnfurlableUrl("http://0x7f000001/")).toBeNull();
   });
@@ -314,8 +313,6 @@ describe("getSyndicationToken", () => {
   });
 });
 
-// Tweet media round-trips through the asset proxy: images for privacy, video
-// because video.twimg.com 403s hotlinked playback.
 const assetUrl = (raw: string): string =>
   `/api/unfurl/asset?url=${encodeURIComponent(raw)}`;
 
@@ -401,7 +398,6 @@ describe("parseTweetResult", () => {
       width: 1200,
       height: 800,
     });
-    // Middle bitrate mp4: chat cards don't need the 2 Mbps rendition.
     expect(video?.kind).toBe("video");
     expect(video?.videoUrl).toBe(assetUrl("https://video.twimg.com/mid.mp4"));
     expect(video?.url).toBe(

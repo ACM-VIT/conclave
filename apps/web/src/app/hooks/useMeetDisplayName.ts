@@ -142,8 +142,6 @@ export function useMeetDisplayName({
     }
 
     setIsDisplayNameUpdating(true);
-    // A plain ack is dropped if the socket disconnects, which would leave
-    // the form busy forever; time the request out instead.
     socket.timeout(SOCKET_TIMEOUT_MS).emit(
       "updateDisplayName",
       { displayName: nextName },

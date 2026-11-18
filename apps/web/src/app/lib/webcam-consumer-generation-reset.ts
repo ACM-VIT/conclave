@@ -13,11 +13,6 @@ export const WEBCAM_STARTUP_RESET_RESUME_ACK_TIMEOUT_MS = 2_000;
 export const WEBCAM_STARTUP_RESET_RESUME_MAX_ATTEMPTS = 2;
 export const WEBCAM_STARTUP_RESET_PRESENTATION_TIMEOUT_MS = 1_500;
 
-/**
- * Producer-scoped recovery and pause state belongs to the currently presented
- * consumer generation. Closing a displaced predecessor must never erase the
- * successor's state after a make-before-break commit.
- */
 export const isCurrentConsumerGeneration = ({
   currentConsumerId,
   closingConsumerId,
@@ -152,16 +147,11 @@ export const decideWebcamStartupResetPoll = ({
     return { action: "cancel", reason: "adaptively-paused" };
   }
 
-  // This deadline is absolute from the first consumer generation. It also
-  // expires producers waiting in the serialized replacement queue, preventing
-  // a large room from churning tiles well after startup has finished.
   if (now >= deadlineAt) {
     return { action: "fail", reason: "high-layer-convergence-timeout" };
   }
 
   const isPlayable = trackReadyState === "live" && !trackMuted;
-  // A generation reset only addresses the proven VP8 simulcast startup path.
-  // True-single and single-SSRC SVC consumers must stay put.
   const isConverged =
     maximumSpatialLayer > 0 &&
     isPlayable &&

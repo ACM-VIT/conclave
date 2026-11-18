@@ -1,12 +1,6 @@
-// Best-effort YouTube metadata for the UI. Thumbnails come straight from the
-// predictable ytimg CDN (no key, always available). Titles come from the public
-// oEmbed endpoint and are strictly optional: any failure resolves to null and
-// the UI falls back to the video id.
-
 const TITLE_FETCH_TIMEOUT_MS = 2_500;
 const METADATA_FETCH_TIMEOUT_MS = 3_000;
 
-/** Medium-quality 16:9 thumbnail for a video id. */
 export const thumbnailUrl = (videoId: string): string =>
   `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
 
@@ -42,7 +36,6 @@ const isWatchBroadcastStatus = (
   value === "none" ||
   value === "unknown";
 
-/** Upcoming/unknown metadata must not suppress the faster iframe fallback. */
 export const liveHintForMetadata = (
   metadata: WatchVideoMetadata | null,
 ): boolean | null => {
@@ -51,7 +44,6 @@ export const liveHintForMetadata = (
   return null;
 };
 
-/** 3661 -> "1:01:01", 754 -> "12:34". Null in, null out. */
 export const formatDuration = (seconds: number | null): string | null => {
   if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null;
   const whole = Math.round(seconds);
@@ -63,7 +55,6 @@ export const formatDuration = (seconds: number | null): string | null => {
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 };
 
-/** 2712345 -> "2.7M views", 857000 -> "857K views". Null in, null out. */
 export const formatViews = (views: number | null): string | null => {
   if (views == null || !Number.isFinite(views) || views < 0) return null;
   if (views >= 1_000_000_000)
@@ -74,7 +65,6 @@ export const formatViews = (views: number | null): string | null => {
   return `${views} views`;
 };
 
-/** ISO date -> "13 hours ago", "2 days ago", "3 months ago". */
 export const formatAge = (publishedAt: string | null): string | null => {
   if (!publishedAt) return null;
   const then = Date.parse(publishedAt);
@@ -109,16 +99,9 @@ const parseSearchItems = (payload: unknown): WatchSearchResult[] => {
 
 export type WatchSearchOutcome = {
   items: WatchSearchResult[];
-  /** True when the server has no YouTube key (503), so search is a feature
-   * that is off rather than a query with no hits. */
   unavailable: boolean;
 };
 
-/**
- * Search YouTube through the host's server proxy (the API key stays server
- * side). Fails soft to an empty list; a 503 marks the feature as off so the
- * UI can explain instead of showing "nothing found".
- */
 export const searchVideos = async (
   query: string,
 ): Promise<WatchSearchOutcome> => {
@@ -140,11 +123,9 @@ export const searchVideos = async (
 export type TrendingPage = {
   items: WatchSearchResult[];
   nextPageToken: string | null;
-  /** True when the server has no YouTube key configured (503). */
   unavailable: boolean;
 };
 
-/** A page of trending videos for the browse surface. Fails soft to empty. */
 export const fetchTrending = async (
   pageToken?: string | null,
 ): Promise<TrendingPage> => {
@@ -171,11 +152,6 @@ export const fetchTrending = async (
   }
 };
 
-/**
- * Resolve live status through the host's YouTube Data API proxy. Null means
- * the proxy is unavailable; the player hook retains a feature-detected iframe
- * fallback so playback still works without a configured API key.
- */
 export const fetchVideoMetadata = async (
   videoId: string,
 ): Promise<WatchVideoMetadata | null> => {
@@ -220,7 +196,6 @@ export const fetchVideoMetadata = async (
   }
 };
 
-/** Fetch a video's title via oEmbed. Never throws; null on any failure. */
 export const fetchVideoTitle = async (
   videoId: string,
 ): Promise<string | null> => {

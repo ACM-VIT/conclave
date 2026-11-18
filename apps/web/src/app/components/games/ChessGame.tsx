@@ -85,8 +85,6 @@ type BoardCell = {
 const FILES = ["a", "b", "c", "d", "e", "f", "g", "h"];
 const RANKS = ["8", "7", "6", "5", "4", "3", "2", "1"];
 
-/* Board palette: warm cream + muted brick, tuned for the app's dark surface.
- * Highlights are flat translucent overlays (no gradients, no shadows). */
 const LIGHT_SQUARE = "#EFE3CF";
 const DARK_SQUARE = "#9A5C4C";
 const LIGHT_COORD = "rgba(90, 44, 36, 0.55)";
@@ -148,7 +146,6 @@ const isPawn = (piece: PieceCode | null): boolean => piece === "P" || piece === 
 
 const promotionRank = (side: ChessSide): string => (side === "white" ? "8" : "1");
 
-/** Pieces `side` has captured so far (derived from what is missing off the fen). */
 const capturedBy = (fen: string, side: ChessSide): { piece: PieceCode; count: number }[] => {
   const placement = fen.split(" ")[0] ?? "";
   const counts: Record<string, number> = {};
@@ -157,7 +154,6 @@ const capturedBy = (fen: string, side: ChessSide): { piece: PieceCode; count: nu
   }
   const result: { piece: PieceCode; count: number }[] = [];
   for (const type of CAPTURE_ORDER) {
-    // White captures black (lowercase) pieces, and vice versa.
     const key = side === "white" ? type : type.toUpperCase();
     const missing = START_COUNTS[type] - (counts[key] ?? 0);
     if (missing > 0) result.push({ piece: key as PieceCode, count: missing });
@@ -226,7 +222,6 @@ const statusText = (pub: ChessPublic, me: ChessMe): string => {
   return `${sideLabel(pub.turnSide)} to move — ${teamDisplayName(pub, pub.turnSide)}`;
 };
 
-/** Local ticking clocks anchored to the last server broadcast. */
 function useChessClocks(pub: ChessPublic): Record<ChessSide, number | null> {
   const [, setTick] = useState(0);
   const anchorRef = useRef({ clocks: pub.clocks, localAt: Date.now() });
@@ -274,8 +269,6 @@ export default function ChessGame({
   const materialLead = materialPoints(captured.white) - materialPoints(captured.black);
   const clocks = useChessClocks(pub);
 
-  // The position moved on without us (opponent move, rapid-fire auto-move,
-  // accepted takeback): a pending promotion choice no longer applies.
   useEffect(() => {
     setPendingPromotion(null);
   }, [pub.fen]);
@@ -319,7 +312,6 @@ export default function ChessGame({
     if (!selectedTargets.includes(square)) return;
     const movingPiece = board.find((c) => c.square === selected)?.piece ?? null;
     if (isPawn(movingPiece) && me.side && square.endsWith(promotionRank(me.side))) {
-      // Let the player choose the promotion piece instead of silently queening.
       setPendingPromotion({ from: selected, to: square });
       setSelected(null);
       return;

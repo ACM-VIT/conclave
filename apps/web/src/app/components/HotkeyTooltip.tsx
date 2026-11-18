@@ -21,8 +21,6 @@ export default function HotkeyTooltip({
 }: HotkeyTooltipProps) {
   const hasHotkey = Boolean(hotkey);
   const displayedHotkey = hotkey ? formatForDisplay(hotkey) : null;
-  // With no hotkey to surface, the tooltip would just duplicate the control's
-  // own aria-label/title — so skip the hover chrome entirely.
   if (!hasHotkey && !showWithoutHotkey) {
     return <>{children}</>;
   }
@@ -38,7 +36,6 @@ export default function HotkeyTooltip({
             </kbd>
           ) : null}
         </div>
-        {/* downward arrow */}
         <div className="relative h-[7px] w-[14px] overflow-hidden">
           <div className="absolute left-1/2 top-0 h-[10px] w-[10px] -translate-x-1/2 rotate-45 border-b border-r border-[#fafafa]/10 bg-[#131316]/95" />
         </div>

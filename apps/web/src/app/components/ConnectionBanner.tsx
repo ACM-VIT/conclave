@@ -39,7 +39,6 @@ export default function ConnectionBanner({
         ? "Connection interrupted. Reconnecting to the meeting…"
         : "Meeting connection lost.";
 
-  // accent for in-progress recovery, danger for hard failures.
   const tone = isReconnecting
     ? { dot: "#F95F4A", text: "text-[#fafafa]" }
     : { dot: "#ea4335", text: "text-[#fafafa]" };

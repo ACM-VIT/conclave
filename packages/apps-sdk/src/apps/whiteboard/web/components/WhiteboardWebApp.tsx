@@ -70,8 +70,6 @@ export function WhiteboardWebApp() {
 
   const elements = useWhiteboardElements(doc, activePage?.id ?? null);
 
-  // Per-user history: remote updates arrive with origin "remote", so the default
-  // tracked origin (null, our local transactions) only ever undoes your own work.
   useEffect(() => {
     const manager = new Y.UndoManager(getWhiteboardRoot(doc), {
       captureTimeout: 400,
@@ -254,7 +252,6 @@ export function WhiteboardWebApp() {
         return;
       }
 
-      // Leave every other modifier combo to the browser (tab switching, zoom)
       if (withModifier || event.altKey) return;
 
       const mapped = toolsByCode[event.code] ?? toolsByKey[rawKey] ?? toolsByKey[key];

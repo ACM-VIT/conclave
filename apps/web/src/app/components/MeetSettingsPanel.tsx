@@ -115,7 +115,6 @@ const copyToClipboard = async (value: string): Promise<boolean> => {
   return false;
 };
 
-// Keep panel-only keyframes and scrollbar styles out of globals.css.
 const PANEL_STYLES = `
 @keyframes hostpanel-spin { to { transform: rotate(360deg); } }
 @keyframes hostpanel-pulse {
@@ -631,7 +630,6 @@ export default function MeetSettingsPanel({
     normalizedCustomLinkCode.length === 0 ||
     WEBINAR_LINK_CODE_PATTERN.test(normalizedCustomLinkCode);
 
-  // Room access summary line for the section header context.
   const accessSummary = isRoomLocked
     ? "Locked"
     : isNoGuests
@@ -646,10 +644,6 @@ export default function MeetSettingsPanel({
   return (
     <>
       <style>{PANEL_STYLES}</style>
-      {/* Right-docked, content-shrinking side panel — the same sibling pattern
-          as Chat / Participants (fixed rail, the stage reserves room for it via
-          MeetsMainContent's paddingRight). Flat surface, 1px left border, no
-          floating popover, no shadow-glow. */}
       <div
         className="safe-area-pt safe-area-pb fixed right-0 top-0 bottom-0 z-40 flex w-full sm:w-[360px] flex-col overflow-hidden border-l border-white/10 bg-[#18181b] animate-panel-in"
         style={{ fontFamily: SANS }}
@@ -812,8 +806,6 @@ export default function MeetSettingsPanel({
                 disabled={isWebinarWorking}
               />
 
-              {/* Subordinate rows: a single dimmed region when disabled, so the
-                  dependency boundary reads as one unit. */}
               {isWebinarEnabled ? (
                 <div>
                   <SwitchRow
@@ -859,7 +851,6 @@ export default function MeetSettingsPanel({
                     disabled={isWebinarWorking}
                   />
 
-                  {/* Capacity row — counter badge flips to an inline editor. */}
                   <div className="flex min-h-[44px] w-full items-center gap-3 px-4 py-2">
                     <Users
                       size={ICON_SIZE}
@@ -915,7 +906,6 @@ export default function MeetSettingsPanel({
 
                   <Separator />
 
-                  {/* Attendee invite code */}
                   <InviteCodeForm
                     label="Attendee code"
                     value={inviteCodeInput}
@@ -959,7 +949,6 @@ export default function MeetSettingsPanel({
 
                   <Separator />
 
-                  {/* Webinar link */}
                   <div className="px-4 pb-3 pt-1">
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-[14px] text-[#fafafa]">Webinar link</span>
@@ -978,7 +967,6 @@ export default function MeetSettingsPanel({
                           </span>
                         </div>
 
-                        {/* Custom slug editor (kept; validated inline). */}
                         <input
                           type="text"
                           value={customLinkCodeInput}
@@ -1090,7 +1078,6 @@ export default function MeetSettingsPanel({
                         </div>
                       </>
                     ) : (
-                      // Empty state: no link generated yet.
                       <div className="flex items-center justify-center gap-2 rounded-[10px] border border-white/[0.14] bg-[#131316] px-3 py-3">
                         <Link2
                           size={ICON_SIZE}
@@ -1122,7 +1109,6 @@ export default function MeetSettingsPanel({
                   </div>
                 </div>
               ) : (
-                // Disabled subordinate region: one dimmed, non-interactive unit.
                 <div className="pointer-events-none opacity-40">
                   <LockedRow icon={Globe} label="Public access" />
                   <LockedRow icon={Lock} label="Lock attendees" />

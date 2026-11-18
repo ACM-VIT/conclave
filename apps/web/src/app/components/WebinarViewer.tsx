@@ -39,11 +39,6 @@ const formatElapsed = (since: number, now: number): string => {
 const formatViewerCount = (count: number): string =>
   count === 1 ? "1 watching" : `${count} watching`;
 
-/**
- * Overlay chrome for the attendee webinar viewer: title + LIVE + elapsed on
- * top, speaker chip and viewer actions on the bottom. Fades out when the
- * pointer goes idle, like a video player.
- */
 function WebinarViewerChrome({
   title,
   attendeeCount,
@@ -132,7 +127,6 @@ function WebinarViewerChrome({
     }
   }, [stageContainerRef]);
 
-  // Keep the chrome up while nothing is playing, so the room never looks dead.
   const hidden = isIdle && hasLiveStage && !isQaOpen;
 
   const overlayButtonClass =
@@ -282,7 +276,6 @@ const statusChip = (
   }
 };
 
-/** Attendee-facing Q&A dock: ask questions, upvote, read answers. */
 export function WebinarQaPanel({
   entries,
   qaEnabled,
@@ -486,7 +479,6 @@ export function WebinarQaPanel({
   );
 }
 
-/** Modal shown to an attendee the host invited on stage. */
 export function WebinarStageInviteDialog({
   promotedByName,
   onAccept,
@@ -541,7 +533,6 @@ export function WebinarStageInviteDialog({
   );
 }
 
-/** Full-stage placeholder while no panelist is live yet. */
 export function WebinarWaitingCard({
   attendeeCount,
 }: {

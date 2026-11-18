@@ -1,20 +1,11 @@
 "use client";
 
-// Conclave-styled replacement for Streamdown's built-in link-safety modal.
-// The stock modal is styled with shadcn theme classes (bg-background,
-// text-primary, border-border) that this app never defines, so it rendered as
-// an unthemed glass box. Same contract as the original: confirm before opening
-// an external link found in AI / transcript markdown.
-
 import { Check, Copy, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { LinkSafetyModalProps } from "streamdown";
 import { color } from "@conclave/ui-tokens";
 
-/** Renders the URL with the hostname emphasized so the destination that
- * matters is the part that pops. Falls back to plain text for non-URL hrefs
- * (mailto:, relative paths). */
 function UrlPreview({ url }: { url: string }) {
   try {
     const host = new URL(url).host;
@@ -35,7 +26,6 @@ function UrlPreview({ url }: { url: string }) {
       );
     }
   } catch {
-    // Not an absolute URL — show as-is below.
   }
   return <span style={{ color: color.textMuted }}>{url}</span>;
 }
@@ -56,8 +46,6 @@ export function LinkSafetyDialog({
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKeyDown);
-    // Same accessible-modal focus dance as ShortcutsHelpDialog: move focus in
-    // on open, hand it back to the link that opened us on close.
     const previouslyFocused = document.activeElement as HTMLElement | null;
     dialogRef.current?.focus();
     return () => {
@@ -79,7 +67,6 @@ export function LinkSafetyDialog({
       window.clearTimeout(copiedTimerRef.current);
       copiedTimerRef.current = window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard denied — leave the button as-is.
     }
   }, [url]);
 
@@ -90,9 +77,6 @@ export function LinkSafetyDialog({
 
   if (!isOpen) return null;
 
-  // Portal to <body>: the markdown that spawns this dialog lives inside
-  // overflow-hidden chat bubbles and entrance-animated (transformed) rows,
-  // either of which would clip or re-anchor a fixed overlay.
   return createPortal(
     <div
       className="fixed inset-0 z-[95] flex items-center justify-center px-4"

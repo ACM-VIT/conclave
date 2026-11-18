@@ -38,8 +38,6 @@ const proxyAdminRequest = async (
 
   const incomingUrl = new URL(request.url);
 
-  // Multi-instance pools: the dashboard may target a specific SFU. The value
-  // must exactly match a configured pool url, never a caller-supplied host.
   const requestedInstance = incomingUrl.searchParams.get("instance")?.trim();
   let baseUrl = resolveSfuUrl();
   if (requestedInstance) {
@@ -66,10 +64,6 @@ const proxyAdminRequest = async (
     targetUrl.searchParams.append(key, value);
   }
 
-  // Forward only an EXPLICIT client filter from the dashboard. An absent
-  // clientId means "all clients" and the SFU admin endpoints treat it that
-  // way; injecting the env default here (as join flows do) silently hid every
-  // other tenant's rooms from the admin room list.
   const clientId =
     canonicalizeSfuClientId(incomingUrl.searchParams.get("clientId")) ||
     canonicalizeSfuClientId(request.headers.get("x-sfu-client")) ||
@@ -81,7 +75,6 @@ const proxyAdminRequest = async (
   const outgoingHeaders = new Headers();
   outgoingHeaders.set("x-sfu-secret", resolveSfuSecret());
   outgoingHeaders.set("accept", "application/json");
-  // Operator identity rides along so the SFU audit trail can name who did it.
   outgoingHeaders.set(
     "x-sfu-operator",
     authResult.user.email || authResult.user.id || "operator",

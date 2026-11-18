@@ -1,7 +1,3 @@
-// Boots the Whiteboard native embed: reads the scope native put in the fragment, finds the platform channel, owns one
-// Y.Doc for the app session and renders the SDK canvas. Outside the app (no channel) or with a bad scope it renders
-// nothing and says nothing, so native's ready timeout shows "Couldn't Open Whiteboard".
-
 import { createRoot } from "react-dom/client";
 import { createWhiteboardDoc } from "../../apps/whiteboard/core/doc/index";
 import { createNativeTransport } from "../bridge";

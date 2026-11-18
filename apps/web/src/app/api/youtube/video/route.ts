@@ -63,11 +63,6 @@ const writeCache = (value: YouTubeVideoMetadata): void => {
   cache.set(value.videoId, { at: Date.now(), value });
 };
 
-/**
- * Resolve the currently-playing video's live status server-side. The iframe
- * API reports a growing, finite duration for broadcasts, so duration alone
- * cannot distinguish a DVR-enabled live stream from an ordinary video.
- */
 export async function GET(request: Request): Promise<Response> {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) {

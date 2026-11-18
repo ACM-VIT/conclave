@@ -1,13 +1,3 @@
-// Contract test for the native embed bridge v1 (S60 0.8 C6-19, ACT-7). apps-sdk has no test runner, so this is a plain
-// node:test script: `pnpm -C packages/apps-sdk run test:native-embed` (node --test). It pins three things:
-//   1. src/native-embed/protocol.ts against the shared contract-fixtures.json (the Swift codec reads the same file in
-//      apps/conclave-skip/Tests/ConclaveTests/ACT7AppHostTests.swift), including generated size-bound cases;
-//   2. the Swift twin's constants and type lists (Core/Models/AppBridgeProtocol.swift) against protocol.ts;
-//   3. bridge-level convergence of two embed sessions through a fake native relay and room document: snapshot then diff,
-//      remote updates, a reconnect that sends nothing twice, read-only, hostile host messages, acks and close. This part
-//      bundles session.ts with esbuild (hoisted in the workspace) and is skipped with a message when esbuild is absent.
-// protocol.ts has no imports and only erasable TypeScript, so Node loads it directly (type stripping, Node 22.18+).
-
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -75,7 +65,6 @@ test("size bounds hold at and just over each limit", () => {
 });
 
 test("no message can carry a native method, a token or a URL load", () => {
-  // The only embed-to-native types are data messages; nothing names a native method or carries credentials.
   assert.deepEqual([...protocol.EMBED_TO_NATIVE_TYPES], ["ready", "sync", "update", "awareness", "status", "ack", "resize"]);
   for (const type of protocol.EMBED_TO_NATIVE_TYPES) {
     assert.ok(!/token|key|auth|url|open|eval|exec/i.test(type), type);
@@ -133,8 +122,6 @@ test("the Swift twin matches protocol.ts", () => {
   if (inkCases.length > 0) assert.deepEqual(inkCases, [...protocol.INK_COLORS]);
 });
 
-// MARK: Bridge-level convergence (session.ts through a fake native relay)
-
 const loadSessionModule = async () => {
   let esbuild;
   try {
@@ -167,7 +154,6 @@ const loadSessionModule = async () => {
 const sessionModule = await loadSessionModule();
 const skipConvergence = sessionModule === null ? "esbuild is not installed in the workspace" : false;
 
-/** The fake native host and room: validates every embed message like native does, keeps the room's Y.Doc. */
 const makeRoom = (mod, context) => {
   const { Y } = mod;
   const room = new Y.Doc();
@@ -175,7 +161,7 @@ const makeRoom = (mod, context) => {
   context.after(() => {
     for (const client of clients) {
       client.session.close();
-      client.session.doc.destroy(); // Y.Doc destruction also stops Awareness's interval.
+      client.session.doc.destroy();
     }
     room.destroy();
   });

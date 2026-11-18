@@ -169,7 +169,6 @@ export function GameDockCloseButton({
   );
 }
 
-/** Shared props every game renderer receives from the dock. */
 export type GameViewProps<Pub = unknown, Me = unknown> = {
   pub: Pub;
   me: Me;
@@ -182,11 +181,6 @@ export type GameViewProps<Pub = unknown, Me = unknown> = {
   move: (type: string, payload?: unknown) => Promise<GameMoveResult>;
 };
 
-/**
- * Counts down to a server deadline. `deadline` and `serverNow` are server-clock
- * timestamps; we anchor to local time at the moment they arrive so clock skew
- * between client and server never matters.
- */
 export const useRemaining = (
   deadline: number | null | undefined,
   serverNow: number | null | undefined,
@@ -348,7 +342,6 @@ export function Avatar({
   );
 }
 
-/** Pure SVG ring countdown with a number in the middle. */
 export function CountdownRing({
   remainingMs,
   totalMs,
@@ -402,12 +395,6 @@ export function CountdownRing({
   );
 }
 
-/**
- * Party-game lobby: a calm "stage" composition. A soft accent spotlight sits
- * behind a centred game name + title + blurb, with the start (host) or a warm
- * "you're in" state (everyone else) below, so the screen feels good no matter
- * who is looking at it. No artwork, no pills, no pulsing dots, no all-caps.
- */
 export function GameLobby({
   gameId,
   title,
@@ -456,7 +443,6 @@ export function GameLobby({
         padding: "16px 6px",
       }}
     >
-      {/* soft accent spotlight */}
       <div
         style={{
           position: "absolute",
@@ -524,10 +510,6 @@ export function GameLobby({
   );
 }
 
-/**
- * Live leaderboard shown in the game dock for scoring games. Static and clean,
- * sorted by score, with the local player highlighted. No animation.
- */
 export function Leaderboard({
   rows,
   userId,

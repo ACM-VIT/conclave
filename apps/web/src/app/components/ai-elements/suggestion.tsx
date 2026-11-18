@@ -1,8 +1,5 @@
 "use client";
 
-// Ported from AI SDK Elements (elements.ai-sdk.dev) "Suggestion" and themed for
-// Conclave. Horizontally scrollable pills used to seed the Ask experience.
-
 import type { ComponentProps } from "react";
 import { cn } from "./utils";
 

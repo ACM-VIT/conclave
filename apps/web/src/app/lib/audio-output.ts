@@ -34,8 +34,6 @@ export function applyAudioOutputDevice(
   const previous = outputRequests.get(audio);
   const request: OutputRequest = { completion: Promise.resolve(false) };
   const isLatest = () => outputRequests.get(audio) === request && isCurrent();
-  // Serializing native changes also prevents a late successful switch from
-  // overtaking the most recent selection. Superseded work skips its fallback.
   request.completion = Promise.resolve(previous?.completion)
     .catch(() => {})
     .then(async () => {
@@ -45,12 +43,10 @@ export function applyAudioOutputDevice(
       if (deviceId && typeof navigator !== "undefined" && navigator.mediaDevices?.enumerateDevices) {
         try {
           const devices = await navigator.mediaDevices.enumerateDevices();
-          // setSinkId(currentSinkId) can succeed without checking availability.
           if (!devices.some((device) => device.kind === "audiooutput" && device.deviceId === deviceId)) {
             nextDeviceId = "";
           }
         } catch {
-          // An enumeration failure is not evidence that a device disappeared.
         }
       }
       if (!isLatest()) return false;

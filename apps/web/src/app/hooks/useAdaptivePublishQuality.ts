@@ -58,11 +58,6 @@ interface UseAdaptivePublishQualityOptions {
   availableOutgoingBitrateBps?: number | null;
   publishCpuLimited?: boolean;
   dataSaverMode?: boolean;
-  /**
-   * True only after the sole remote receiver has explicitly reported sustained
-   * capacity for the full VP8 layer. Publisher-side health is not sufficient:
-   * an asymmetric call can have a healthy uplink and a constrained downlink.
-   */
   soleReceiverCapacityProof?: ActiveWebcamReceiverCapacityProof | null;
   receiverCapacityProofCache?: WebcamReceiverCapacityProofCache;
   roomId?: string | null;
@@ -233,8 +228,6 @@ export const shouldDowngradeStandardPublishQuality = ({
       capRecoveryElapsedMs,
     })
   ) {
-    // A fair score can be self-induced by the active low sender cap. Do not
-    // immediately undo a separately proven recovery and create a quality loop.
     return false;
   }
   return connectionElapsedMs >= FAIR_DOWNGRADE_AFTER_MS;
@@ -981,9 +974,6 @@ export function useAdaptivePublishQuality({
             error,
           );
           if (wasSupported) {
-            // A server that already acknowledged this protocol remains the
-            // authority. Preserve its last safe ceiling and retry later rather
-            // than freezing every RID with an emergency sender mutation.
             lastAppliedProfilesRef.current.webcam = null;
             writeDebugSnapshot();
             return;
@@ -1024,9 +1014,6 @@ export function useAdaptivePublishQuality({
             );
           }
           appliedProducerTransportProfileRef.current = released;
-          // The sender-specific path below now owns the media allocation. Its
-          // signature must be reapplied even when the requested profile string
-          // matches the former aggregate transport profile.
           lastAppliedProfilesRef.current.webcam = null;
           writeDebugSnapshot();
           if (
@@ -1047,9 +1034,6 @@ export function useAdaptivePublishQuality({
             );
           }
         } catch (error) {
-          // A previously acknowledged SFU remains authoritative. Do not claim
-          // sender ownership while a stale aggregate ceiling may still be in
-          // force; retain the safe ceiling and retry on the next evaluation.
           console.warn(
             "[Meets] Producer transport release before sender fallback failed:",
             error,
@@ -1380,8 +1364,6 @@ export function useAdaptivePublishQuality({
         };
       }
       if (activeProducer && !activeProducer.closed) {
-        // The topology suffix depends on live participant and pressure state;
-        // let the next evaluation write the authoritative signature.
         lastAppliedProfilesRef.current.webcam = null;
         lastAppliedWebcamProfileRef.current = null;
       }
@@ -1828,9 +1810,6 @@ export function useAdaptivePublishQuality({
           optimizeForSingleReceiver ? "single-receiver" : "adaptive-layers",
         ].join(":");
         if (immediateTopologyReversionProfile) {
-          // Proof expiry, a new participant, screen sharing, or pressure must
-          // restore receiver-adaptive layers immediately. Entry is hysteretic;
-          // exit is fail-safe and still works before RTC quality is known.
           topologyWindowRef.current = {
             signature: topologySignature,
             since: now,
@@ -1854,9 +1833,6 @@ export function useAdaptivePublishQuality({
           ? "emergency"
           : "poor";
         autoDowngradedRef.current = true;
-        // Data saver is a transport policy, not a user-facing capture-quality
-        // choice. Preserve the live track, producer, and simulcast topology;
-        // only constrain the existing sender encoders.
         requestLiveProducerProfile(dataSaverProfile);
         writeDebugSnapshot(now);
         return;
@@ -1930,9 +1906,6 @@ export function useAdaptivePublishQuality({
         })
       ) {
         autoDowngradedRef.current = true;
-        // Automatic network adaptation must not replace the capture track or
-        // change a three-RID sender into the two-RID low-quality topology. The
-        // authoritative live profile already contains the survival caps.
         applyAuthoritativeLiveProfile();
         writeDebugSnapshot(now);
         return;
@@ -1962,9 +1935,6 @@ export function useAdaptivePublishQuality({
         currentPublishQuality === "low" &&
         canRecoverAutomaticPressure
       ) {
-        // A low capture selected during startup predates the live producer and
-        // genuinely needs one restore. This is distinct from live adaptation,
-        // which is profile-only and never enters this branch.
         void switchQuality(
           "standard",
           hasFastRecoveryProof ||

@@ -36,7 +36,6 @@ export type WhiteboardCanvasProps = {
   onPanMove?: (screenX: number, screenY: number) => void;
   onPanEnd?: () => void;
   onWheel?: (event: React.WheelEvent<HTMLCanvasElement>) => void;
-  /** Per-user undo manager; the canvas marks a capture boundary on each gesture. */
   undoManager?: Y.UndoManager | null;
 };
 
@@ -70,8 +69,6 @@ const ROTATION_EPSILON = 0.0001;
 const SELECTION_COLOR = "#F95F4A";
 const ERASER_HIT_RADIUS = 12;
 
-// Laser trails live in awareness only and fade out after this long. Points travel
-// as [x, y, ageMs] relative to send time so receiver clocks never need to agree.
 const LASER_TTL_MS = 1000;
 const LASER_MAX_POINTS = 48;
 const LASER_GAP_RESET_MS = 300;
@@ -532,7 +529,6 @@ export function WhiteboardCanvas({
       const trails = laserTrailsRef.current;
       let trail = trails.get("self");
       const color = getColorForUser(user?.id ?? "guest");
-      // A pause breaks the trail instead of drawing a catch-up streak
       if (trail && trail.points.length > 0) {
         const last = trail.points[trail.points.length - 1];
         if (now - last.t > LASER_GAP_RESET_MS) {
@@ -554,7 +550,6 @@ export function WhiteboardCanvas({
     [kickLaserLoop, syncOwnLaser, user]
   );
 
-  // Collect remote laser trails straight from awareness; they never touch React state
   useEffect(() => {
     const collect = () => {
       const receivedAt = Date.now();
@@ -778,7 +773,6 @@ export function WhiteboardCanvas({
   const startEditingById = useCallback(
     (elementId: string | null) => {
       if (locked || !elementId) return;
-      // Read fresh elements from doc, the element may have just been created
       const freshElements = getPageElements(doc, pageId);
       const element = freshElements.find(
         (item): item is EditableElement =>
@@ -823,7 +817,6 @@ export function WhiteboardCanvas({
     setEditingText("");
   }, [doc, editingElementId, editingText, pageId, selectedId]);
 
-  // Live-update the element text while editing for real-time collaboration sync
   useEffect(() => {
     if (!editingElementId) return;
     const element = getPageElements(doc, pageId).find(
@@ -929,8 +922,6 @@ export function WhiteboardCanvas({
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
     ctx.translate(viewport.translateX, viewport.translateY);
     ctx.scale(viewport.scale, viewport.scale);
-    // Keep sticky background visible while editing by only hiding sticky text.
-    // For plain text elements, hide the element entirely under the editor.
     const renderedElements = editingElementId
       ? elements.flatMap((element) => {
           if (element.id !== editingElementId) return [element];
@@ -1087,7 +1078,6 @@ export function WhiteboardCanvas({
         moveRafRef.current = null;
       }
       if (!locked) {
-        // Each pointer gesture is one undo step
         undoManager?.stopCapturing();
         if (tool === "select" && selectedId) {
           const selectedElement = elements.find((element) => element.id === selectedId) ?? null;
@@ -1168,7 +1158,6 @@ export function WhiteboardCanvas({
         return;
       }
       if (tool === "laser") {
-        // No click needed: pointing is the whole gesture
         appendOwnLaserPoint(point);
         scheduleCursorSync(point.x, point.y);
         return;
@@ -1291,7 +1280,6 @@ export function WhiteboardCanvas({
   const handleWheel = useCallback(
     (event: React.WheelEvent<HTMLCanvasElement>) => {
       if (editingElementId) return;
-      // Check if we're over a scrollable sticky note first, that takes priority
       const rect = event.currentTarget.getBoundingClientRect();
       const canvasPoint = toCanvasPoint(event.clientX, event.clientY, rect);
       const sticky = [...elements]
@@ -1314,7 +1302,6 @@ export function WhiteboardCanvas({
           return;
         }
       }
-      // All other scroll/pinch, zoom the viewport
       event.preventDefault();
       onViewportWheel?.(event);
     },

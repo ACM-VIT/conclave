@@ -184,7 +184,6 @@ const toWorkerWebSocketUrl = (token: TranscriptTokenResponse): string => {
   return url.toString();
 };
 
-// Matches ConclaveUpdatePill's cadence so both update prompts behave alike.
 const VERSION_POLL_INTERVAL_MS = 30_000;
 const SFU_SESSION_READY_TIMEOUT_MS = 30_000;
 const SFU_RELAY_TOKEN_TIMEOUT_MS = 5_000;
@@ -332,9 +331,6 @@ export function useMeetingTranscript({
   const serviceVersionRef = useRef<TranscriptServiceVersion | null>(null);
   const autoTakeoverAttemptRef = useRef<string | null>(null);
   const suppressAutoTakeoverUntilRef = useRef(0);
-  // Bumped by every explicit stop, so a start or takeover still waiting for
-  // the SFU session can tell the user stopped it rather than reporting the
-  // wait as "still reconnecting".
   const explicitStopSerialRef = useRef(0);
 
   const clearReconnectTimer = useCallback(() => {
@@ -358,8 +354,6 @@ export function useMeetingTranscript({
     }
     reconnectTimerRef.current = window.setTimeout(() => {
       reconnectTimerRef.current = null;
-      // The current connect attempt schedules its own failures. An obsolete
-      // attempt must not schedule another retry after a replacement opens.
       void connectRef.current?.();
     }, delay);
   }, [cancelPendingQuestions]);
@@ -1110,7 +1104,6 @@ export function useMeetingTranscript({
           setAvailableServiceVersion(payload.serviceVersion);
         }
       } catch {
-        // A version probe should never interrupt the live transcript.
       }
     };
 
@@ -1136,8 +1129,6 @@ export function useMeetingTranscript({
         setPermissionError();
         return false;
       }
-      // Captured before the first await: a stop during connect or the relay
-      // check must keep this start from sending at all.
       const stopSerialAtRequest = explicitStopSerialRef.current;
       const connected = await connect();
       if (!connected) return false;
@@ -1207,7 +1198,6 @@ export function useMeetingTranscript({
         setPermissionError();
         return false;
       }
-      // Captured before the first await (see start).
       const stopSerialAtRequest = explicitStopSerialRef.current;
       const connected = await connect();
       if (!connected) return false;
@@ -1317,7 +1307,6 @@ export function useMeetingTranscript({
     }
     const transportMode = session.transportMode;
     explicitStopSerialRef.current += 1;
-    // Release a start or takeover waiting on the session so it ends now.
     clearSessionWaiters();
     suppressAutoTakeoverUntilRef.current =
       Date.now() + SFU_EXPLICIT_STOP_SUPPRESS_TAKEOVER_MS;
@@ -1553,9 +1542,6 @@ export function useMeetingTranscript({
       });
     }
     const relay = relayRef.current;
-    // The session can pause or hand off before the audio worklet starts; the
-    // relay is then stopped and dropped, and this late result must not mark
-    // audio as streaming (or report an error) for a relay that is gone.
     relay
       .start(transcriptSources)
       .then(() => {

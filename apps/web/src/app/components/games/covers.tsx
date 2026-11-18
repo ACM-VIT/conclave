@@ -1,6 +1,3 @@
-// Per-game identity: a single accent colour + display name. Used for the lobby
-// spotlight tint and overline. Deliberately minimal - no artwork, no glyphs.
-
 const GAME_ACCENTS: Record<string, string> = {
   trivia: "#3B8EE0",
   "long-shot": "#4FD1C5",

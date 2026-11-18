@@ -1,16 +1,3 @@
-// Contract test for the Spin the Wheel and Watch Together native embeds (ACT-8, S60 13). A plain node:test script like
-// scripts/native-embed-contract-test.mjs (apps-sdk has no test runner): `pnpm -C packages/apps-sdk run
-// test:native-embed-apps`. It pins:
-//   1. the `status.app` page data rules in protocol.ts (`isValidAppStatus`) against wheel-watch-fixtures.json, which the
-//      Swift codec (`AppEmbedAppCodec.parse`, apps/conclave-skip/Tests/ConclaveTests/ACT8WheelWatchTests.swift) reads too;
-//   2. the Swift twin: AppHostPresenter.swift's limits and `AppPageCommandKind`, and AppBridgeProtocol.swift's entry files
-//      (true once HD request B8-T2 R1 lands);
-//   3. the host commands through the embed session (each reaches the renderer and is acked under its request id);
-//   4. isolation: the Wheel and Watch embed sources reach no network or storage, Watch frames and posts only to the
-//      privacy-enhanced YouTube origin, the build gives every page connect-src 'none' and only Watch a frame-src;
-//   5. pasted YouTube links: the SDK parseVideoId against the shared watchLinks cases (the Swift twin reads them too).
-// protocol.ts has no imports and only erasable TypeScript, so Node loads it directly (type stripping, Node 22.18+).
-
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -26,7 +13,6 @@ const swiftDir = path.join(repoDir, "apps", "conclave-skip", "Sources", "Conclav
 const protocol = await import(pathToFileURL(path.join(embedDir, "protocol.ts")).href);
 const fixtures = JSON.parse(readFileSync(path.join(testDir, "wheel-watch-fixtures.json"), "utf8"));
 
-/** The generated cases: a valid item repeated `count` times with ids i0, i1, ... (the Swift test builds the same). */
 const appFor = (item) => {
   if (item.generate === "wheelEntries") {
     return { kind: "wheel", entries: Array.from({ length: item.count }, (_, index) => ({ id: `i${index}`, label: `Name ${index}` })) };
@@ -98,7 +84,6 @@ test("the Swift twin matches the limits, commands and entry files", () => {
     assert.ok(block, `missing Swift enum ${enumName}`);
     return Object.fromEntries([...block[1].matchAll(/static let (\w+) = (\d+)/g)].map((match) => [match[1], Number(match[2])]));
   };
-  // Swift names the entry bound maxEntries; the protocol's wire-side constant is entries.
   const { entries, ...wheelLimits } = protocol.WHEEL_LIMITS;
   assert.deepEqual(limits("AppWheelLimits"), { maxEntries: entries, ...wheelLimits });
   assert.deepEqual(limits("AppWatchLimits"), { ...protocol.WATCH_LIMITS });
@@ -107,7 +92,6 @@ test("the Swift twin matches the limits, commands and entry files", () => {
   const cases = [...kinds[1].matchAll(/case ([^\n]+)/g)].flatMap((line) => line[1].split(",").map((name) => name.trim()));
   assert.deepEqual(cases, fixtures.hostCommands);
   assert.ok(presenter.includes(`static let watchFrameOrigin = "${protocol.WATCH_FRAME_ORIGIN}"`), "AppEmbedFramePolicy.watchFrameOrigin");
-  // HD request B8-T2 R1 (the integrator applies it to Core/Models/AppBridgeProtocol.swift).
   const bridge = readFileSync(path.join(swiftDir, "Core", "Models", "AppBridgeProtocol.swift"), "utf8");
   assert.ok(bridge.includes('return "wheel.html"') && bridge.includes('return "watch.html"'), "AppBridgeProtocol.entryFile serves Wheel and Watch");
   assert.ok(bridge.includes("AppEmbedAppCodec.parse("), "AppBridgeCodec.parseStatus reads status.app");
@@ -138,8 +122,6 @@ test("the embeds reach no network or storage, and Watch frames only the YouTube 
   assert.ok(build.includes(`appEntry("whiteboard", "'none'"), appEntry("wheel", "'none'"), appEntry("watch", watchFrameOrigin)`));
   assert.ok(build.includes(`"connect-src 'none'"`) && build.includes("`frame-src ${app.frameSource}`"));
 });
-
-// MARK: Session routing (session.ts through esbuild, hoisted in the workspace; skipped when absent)
 
 const loadSessionModule = async () => {
   let esbuild;
@@ -182,7 +164,7 @@ test("Wheel and Watch commands reach the renderer and are acked under their requ
   const session = new sessionModule.NativeEmbedSession(transport, scope, new Y.Doc());
   context.after(() => {
     session.close();
-    session.doc.destroy(); // Y.Doc destruction also stops Awareness's interval.
+    session.doc.destroy();
   });
   const seen = [];
   session.setCommandHandler((command) => {
@@ -201,7 +183,6 @@ test("Wheel and Watch commands reach the renderer and are acked under their requ
   assert.deepEqual(acks.map((ack) => ack.requestId), fixtures.hostCommands.map((_, index) => `h-${index + 1}`));
   assert.equal(acks.find((ack) => ack.requestId === `h-${fixtures.hostCommands.indexOf("spin") + 1}`).payload.ok, false);
   assert.equal(host("navigate", {}), "unknownType");
-  // A Wheel status with page data passes the native rules.
   session.sendStatus({ app: { kind: "wheel", entries: [{ id: "e1", label: "Ada" }], results: [], removeWinner: false, sounds: true, spinning: false, winnerSpinId: "", winnerLabel: "" } });
   const status = outbox[outbox.length - 1];
   const decoded = sessionModule.decodeEmbedMessage(status, scope, sessionModule.NATIVE_EMBED_ORIGINS.ios, sessionModule.NATIVE_EMBED_ORIGINS.ios, true);

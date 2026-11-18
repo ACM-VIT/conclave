@@ -16,11 +16,6 @@ import {
 const APPS_SDK_DOCS_URL =
   "https://github.com/ACM-VIT/conclave/blob/main/packages/apps-sdk/docs/guides/add-a-new-app-integration.md";
 
-/**
- * The docked Apps launcher. Every app registered with the Apps SDK shows up
- * here automatically; the host opens one for the whole room, everyone else
- * sees what is live.
- */
 export function AppsPanel({
   onClose,
   rightOffset = 0,
@@ -132,8 +127,6 @@ export function AppsPanel({
                       aria-hidden="true"
                     />
                   ) : isActive ? (
-                    // The accent border + icon already say "this one is on";
-                    // a quiet dot marks it without LIVE-badge chrome.
                     <>
                       {canManage && (
                         <span className="text-[11.5px] text-[#71717a] opacity-0 transition-opacity group-hover:opacity-100">

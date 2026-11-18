@@ -1,5 +1,3 @@
-// Ported verbatim from AI SDK Elements (elements.ai-sdk.dev) "Loader".
-
 import type { HTMLAttributes } from "react";
 import { cn } from "./utils";
 

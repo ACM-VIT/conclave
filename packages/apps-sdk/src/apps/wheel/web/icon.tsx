@@ -1,6 +1,5 @@
 import React from "react";
 
-/** Segmented-wheel glyph for launcher surfaces. */
 export function WheelAppIcon() {
   return (
     <svg

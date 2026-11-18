@@ -1,15 +1,9 @@
-// Pure helpers for the /api/unfurl route: hostname safety checks and a
-// tolerant Open Graph / Twitter-card scraper. Everything here is plain string
-// work so it runs identically in Node (next dev), workerd (production), and
-// vitest.
-
 export interface UnfurlPageMetadata {
   title?: string;
   description?: string;
   siteName?: string;
   imageUrl?: string;
   faviconUrl?: string;
-  /** How the embed card should present the image: hero or side thumbnail. */
   imageLayout?: "large" | "thumb";
 }
 
@@ -18,10 +12,6 @@ const MAX_DESCRIPTION_LENGTH = 400;
 const MAX_SITE_NAME_LENGTH = 80;
 const MAX_URL_LENGTH = 2048;
 
-// Hosts that must never be fetched server-side. Production additionally runs
-// with Cloudflare's `global_fetch_strictly_public` flag, which blocks private
-// address resolution outright; this list keeps `next dev` (plain Node fetch)
-// from being used as a LAN probe and gives both runtimes fast, uniform errors.
 const BLOCKED_HOST_SUFFIXES = [
   ".localhost",
   ".local",
@@ -36,28 +26,20 @@ const isPrivateIpv4 = (hostname: string): boolean => {
   if (!match) return false;
   const octets = match.slice(1).map((part) => Number.parseInt(part, 10));
   if (octets.some((octet) => !Number.isFinite(octet) || octet > 255)) {
-    // Not a real IPv4 literal; treat it as a hostname instead.
     return false;
   }
   const [a, b] = octets;
   if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64/10
-  if (a === 169 && b === 254) return true; // link-local + cloud metadata
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 169 && b === 254) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
-  if (a === 192 && b === 0) return true; // 192.0.0/24 + 192.0.2/24 test range
-  if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
-  if (a >= 224) return true; // multicast + reserved + broadcast
+  if (a === 192 && b === 0) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a >= 224) return true;
   return false;
 };
 
-/**
- * Returns true when a hostname must not be unfurled: loopback, private and
- * special-use IPv4 ranges, every IPv6 literal (shared links are never raw
- * IPv6, and the ranges are fiddly to classify), single-label intranet names,
- * and reserved DNS suffixes. Expects a hostname as produced by `new URL()`,
- * which canonicalizes integer/octal/hex IPv4 forms to dotted quads.
- */
 export function isForbiddenUnfurlHost(rawHostname: string): boolean {
   const hostname = rawHostname.toLowerCase().replace(/\.+$/, "");
   if (!hostname) return true;
@@ -70,11 +52,6 @@ export function isForbiddenUnfurlHost(rawHostname: string): boolean {
   return isPrivateIpv4(hostname);
 }
 
-/**
- * Parses and validates a URL that the unfurler is allowed to touch — http(s)
- * only, no embedded credentials, sane length, public-looking host. Returns
- * null when the candidate fails any check.
- */
 export function parseUnfurlableUrl(candidate: string): URL | null {
   if (!candidate || candidate.length > MAX_URL_LENGTH) return null;
   let url: URL;
@@ -136,9 +113,6 @@ const cleanText = (value: string, maxLength: number): string | undefined => {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 };
 
-// Resolves a scraped URL (possibly relative or protocol-relative) against the
-// page URL and re-applies the public-host rules, so a page can't point the
-// viewer's browser at file:, javascript:, or LAN addresses.
 const resolveSafeUrl = (candidate: string, base: URL): string | undefined => {
   const raw = decodeHtmlEntities(candidate).trim();
   if (!raw) return undefined;
@@ -156,8 +130,6 @@ const resolveSafeUrl = (candidate: string, base: URL): string | undefined => {
   return resolved.href.length > MAX_URL_LENGTH ? undefined : resolved.href;
 };
 
-// Pulls attributes out of a single tag's source. Handles double-quoted,
-// single-quoted, and bare values, any attribute order, and uppercase names.
 const parseTagAttributes = (tagSource: string): Map<string, string> => {
   const attributes = new Map<string, string>();
   const pattern = /([a-zA-Z][a-zA-Z0-9:_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/g;
@@ -170,11 +142,6 @@ const parseTagAttributes = (tagSource: string): Map<string, string> => {
   return attributes;
 };
 
-/**
- * Extracts embed metadata from an HTML document (or its truncated prefix).
- * Tolerates attribute-order and quoting variance rather than parsing a full
- * DOM — meta/link/title tags are effectively line-oriented in real pages.
- */
 export function parseUnfurlHtml(html: string, pageUrl: URL): UnfurlPageMetadata {
   const meta = new Map<string, string>();
   for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {

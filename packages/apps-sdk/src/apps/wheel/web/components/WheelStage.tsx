@@ -15,14 +15,10 @@ const LABEL_RADIUS = 87;
 const HUB_RADIUS = 24;
 const FLAPPER_PIVOT_Y = -102;
 const IDLE_DEG_PER_SEC = 3.6;
-// Critically-damped-ish spring for the flapper (per-second units).
 const FLAPPER_STIFFNESS = 640;
 const FLAPPER_DAMPING = 16;
-// Anticipation: the wheel coils back before it launches.
 const PULLBACK_DEG = 8;
 const PULLBACK_MS = 170;
-// A skewed clock may claim the spin is nearly over the moment it arrives;
-// guarantee at least this much visible motion instead of a teleport.
 const MIN_VISIBLE_TAIL_MS = 1500;
 
 export type WheelStageProps = {
@@ -31,10 +27,8 @@ export type WheelStageProps = {
   canSpin: boolean;
   sounds: WheelSounds | null;
   reducedMotion: boolean;
-  /** Winner segment to flash during the reveal beat (index into spin entries). */
   highlightIndex: number | null;
   onRequestSpin: () => void;
-  /** fresh=false means the settle was replayed from history (late join). */
   onSettled: (spin: WheelSpin, fresh: boolean) => void;
   onSpinningChange: (spinning: boolean) => void;
 };
@@ -64,17 +58,11 @@ const segmentPath = (index: number, count: number): string => {
   return `M 0 0 L ${x0} ${y0} A ${WHEEL_RADIUS} ${WHEEL_RADIUS} 0 ${largeArc} 1 ${x1} ${y1} Z`;
 };
 
-/** Wheel-local resting angle that puts the winning segment under the pointer. */
 const restingAngle = (spin: WheelSpin): number => {
   const sweep = 360 / spin.entries.length;
   return mod360(-(spin.winnerIndex + spin.jitter) * sweep);
 };
 
-/**
- * Piecewise rotation curve: a short elastic pull-back, then a hard launch
- * with a very long deceleration crawl. Returns rotation as a fraction of the
- * forward travel (0 at start, 1 settled; briefly negative while coiling).
- */
 const spinCurve = (elapsedMs: number, durationMs: number, travelDeg: number): number => {
   if (elapsedMs <= 0) return 0;
   if (elapsedMs >= durationMs) return 1;
@@ -111,7 +99,6 @@ const truncateLabel = (label: string, count: number): string => {
   return label.length > max ? `${label.slice(0, max - 1)}…` : label;
 };
 
-// Phantom segments so an empty wheel still reads as a wheel.
 const EMPTY_SEGMENT_COUNT = 8;
 const EMPTY_SEGMENT_FILLS = ["#131316", "#0f0f11"];
 
@@ -134,8 +121,6 @@ export function WheelStage({
   const settledSpinIdsRef = useRef<Set<string>>(new Set());
   const flapperRef = useRef({ angle: 0, velocity: 0 });
   const segmentCountRef = useRef(0);
-  // Once a spin has landed, the wheel must hold its pose (idle drift would
-  // walk the pointer off the winner during the reveal and afterwards).
   const restingRef = useRef(false);
 
   const [displayedSpin, setDisplayedSpin] = useState<WheelSpin | null>(null);
@@ -169,14 +154,10 @@ export function WheelStage({
     }
   }, []);
 
-  // React re-renders never touch the transform attribute (it is not a managed
-  // prop), but re-apply after every render in case a node was recreated.
   useLayoutEffect(() => {
     applyTransforms();
   });
 
-  // Adopt a shared spin record: animate it live, or jump straight to its
-  // resting pose when we joined after the ceremony already happened.
   useEffect(() => {
     if (!spin) {
       animationRef.current = null;
@@ -218,8 +199,6 @@ export function WheelStage({
     onSpinningChangeRef.current(true);
   }, [spin, applyTransforms]);
 
-  // Single rAF loop drives rotation, idle drift, and flapper physics without
-  // re-rendering React on every frame.
   useEffect(() => {
     let frameId: number;
     let lastFrameAt = performance.now();
@@ -260,9 +239,6 @@ export function WheelStage({
         }
       }
 
-      // Flapper: kick when a segment boundary sweeps past the pointer, then
-      // spring back. Boundaries pass whenever the total rotation crosses a
-      // multiple of the segment sweep (only while moving forward).
       const segments = segmentCountRef.current;
       const moved = rotationRef.current - previousDeg;
       if (segments > 1 && moved > 0) {
@@ -271,7 +247,7 @@ export function WheelStage({
           Math.floor(rotationRef.current / sweep) -
           Math.floor(previousDeg / sweep);
         if (crossings > 0) {
-          const speed = moved / dt; // deg per second
+          const speed = moved / dt;
           const intensity = Math.min(1, speed / 900);
           flapperRef.current.velocity = Math.max(
             flapperRef.current.velocity,
@@ -341,8 +317,6 @@ export function WheelStage({
     const sweep = 360 / count;
     return displayedEntries.map((entry, index) => {
       const highlighted = highlightIndex === index;
-      // The reveal beat: the winning slice lifts out along its mid angle and
-      // gets a bright edge while everything else stays put.
       const [dx, dy] = highlighted
         ? polar(sweep * (index + 0.5), 3.5)
         : ([0, 0] as const);
@@ -434,7 +408,6 @@ export function WheelStage({
             : `Wheel with ${count} name${count === 1 ? "" : "s"}`
         }
       >
-        {/* Rim: a solid outer ring plus a hairline inset */}
         <circle
           r={WHEEL_RADIUS + 5}
           fill="none"
@@ -448,13 +421,11 @@ export function WheelStage({
           strokeWidth={1}
         />
 
-        {/* Rotating wheel */}
         <g ref={wheelGroupRef}>
           {segments}
           {labels}
         </g>
 
-        {/* Hub / spin button */}
         <g
           role="button"
           aria-label={canSpinNow ? "Spin the wheel" : "Spin unavailable"}
@@ -472,12 +443,9 @@ export function WheelStage({
             transition: "transform 120ms ease-out",
             transformBox: "fill-box",
             transformOrigin: "center",
-            // The hub draws its own focus affordance (coral ring); the UA's
-            // default focus box around the bounding rect reads as a glitch.
             outline: "none",
           }}
         >
-          {/* Dark seat ring keeps the hub crisp on any segment color. */}
           <circle r={HUB_RADIUS + 3} fill="#0b0b0b" />
           <circle
             r={HUB_RADIUS}
@@ -499,7 +467,6 @@ export function WheelStage({
           </text>
         </g>
 
-        {/* Flapper: kite-shaped pointer with a pivot pin */}
         <g ref={flapperGroupRef}>
           <path
             d={`M 0 ${FLAPPER_PIVOT_Y - 7}

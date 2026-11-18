@@ -112,16 +112,6 @@ const prefersScheduledItem = (
   return next.instanceKey.localeCompare(current.instanceKey) < 0;
 };
 
-/**
- * Live data plane for the operator dashboard: one direct BROWSER to SFU
- * socket per instance in the pool. This runs client side only (inside an
- * effect), which is exactly what a serverless web tier needs: no WebSocket
- * ever touches a Next function. The only server involvement is the token mint
- * route, a plain request/response call gated by the operator allowlist; the
- * browser never sees the SFU secret and tokens are re-minted per connection
- * attempt so expiry never strands a session. Everything on screen streams in
- * from here; nothing polls.
- */
 export function useAdminSocket() {
   const [instances, setInstances] = useState<InstanceStatus[]>([]);
   const [roomsByInstance, setRoomsByInstance] = useState<
@@ -223,8 +213,6 @@ export function useAdminSocket() {
           let hasConnected = false;
           const socket = io(`${url}/admin`, {
             transports: ["websocket"],
-            // A fresh token per attempt; fall back to the boot token if the
-            // mint endpoint is briefly unreachable during a reconnect.
             auth: (setAuth) => {
               mint()
                 .then((list) => {
@@ -244,9 +232,6 @@ export function useAdminSocket() {
               socket.emit("admin:watchRoom", { channelId: watched.channelId });
             }
           });
-          // socket.io only retries while `socket.active` is true. After a
-          // server-initiated disconnect (or a middleware connect error) it
-          // stops, so showing "reconnecting" there would be shown forever.
           const connectionAfterDrop = () =>
             hasConnected && socket.active ? "reconnecting" : "offline";
           socket.on("disconnect", () => {
@@ -409,11 +394,6 @@ export function useAdminSocket() {
     };
   }, [retryNonce]);
 
-  /**
-   * Point the detail stream at one room (or null to stop watching). The
-   * previous room's snapshot stays rendered until the new one arrives, so
-   * switching rooms never blanks the pane.
-   */
   const watchRoom = useCallback((selection: RoomSelection | null) => {
     const previous = watchedRef.current;
     watchedRef.current = selection;
@@ -436,7 +416,6 @@ export function useAdminSocket() {
     }
   }, []);
 
-  /** Force a fresh detail push, e.g. to roll back an optimistic edit. */
   const resyncRoom = useCallback(() => {
     const watched = watchedRef.current;
     if (!watched) return;
@@ -447,7 +426,6 @@ export function useAdminSocket() {
     }
   }, []);
 
-  /** Search every connected instance for a person, merged and tagged. */
   const findUser = useCallback(
     async (query: string): Promise<TaggedFindMatch[]> => {
       const trimmed = query.trim();
@@ -547,7 +525,6 @@ export function useAdminSocket() {
     return "connecting";
   }, [bootError, instances]);
 
-  /** Cross-pool participant history, index-aligned from the newest sample. */
   const participantsHistory: number[] = useMemo(() => {
     const series = instances
       .map((instance) => historyByInstance[instance.key] ?? [])

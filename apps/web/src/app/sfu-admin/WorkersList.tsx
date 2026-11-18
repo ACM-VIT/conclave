@@ -16,12 +16,10 @@ type WorkerSnapshot = {
 const formatRss = (usage: Record<string, number> | null): string | null => {
   const rss = usage?.ru_maxrss;
   if (typeof rss !== "number" || rss <= 0) return null;
-  // ru_maxrss is KB on Linux; production runs there.
   const mb = rss / 1024;
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
 };
 
-/** Per-instance mediasoup workers, fetched when the operator opens the fold. */
 export function WorkersList({ instanceUrl }: { instanceUrl: string }) {
   const [workers, setWorkers] = useState<WorkerSnapshot[] | null>(null);
   const [error, setError] = useState<string | null>(null);

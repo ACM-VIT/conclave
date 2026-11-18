@@ -44,13 +44,10 @@ export interface PaletteAction {
   id: string;
   section: string;
   label: string;
-  /** Extra lowercase terms the search matches besides the label. */
   keywords: string;
   icon?: LucideIcon;
-  /** Reaction rows render their emoji/asset instead of an icon. */
   reaction?: { kind: "emoji" | "asset"; value: string };
   hotkey?: RegisterableHotkey;
-  /** Currently-on toggle or currently-selected device. */
   active?: boolean;
   danger?: boolean;
   disabled?: boolean;
@@ -70,10 +67,8 @@ export const PALETTE_SECTIONS = [
   "Use what you typed",
 ] as const;
 
-/** Section shown when a query matches nothing and becomes input instead. */
 export const FALLBACK_SECTION = "Use what you typed";
 
-/** Search terms that users reach for but that don't appear in the labels. */
 const ROW_KEYWORDS: Record<string, string> = {
   mic: "mute unmute microphone audio silence",
   camera: "video cam webcam on off",
@@ -95,12 +90,6 @@ const ROW_KEYWORDS: Record<string, string> = {
   settings: "settings devices test mic microphone camera speaker gain connection quality stats network",
 };
 
-/**
- * Searchable names for reaction emoji, which are otherwise only findable by
- * pasting the glyph (their ReactionOption label is the glyph itself). Keys
- * are stored with variation selectors stripped; look up via stripEmojiVariants.
- * Covers EMOJI_REACTIONS plus common additions so new reactions keep working.
- */
 const EMOJI_KEYWORDS: Record<string, string> = {
   "👍": "thumbsup thumbs up like +1 approve yes agree",
   "👎": "thumbsdown thumbs down dislike -1 no disagree",
@@ -127,7 +116,6 @@ const EMOJI_KEYWORDS: Record<string, string> = {
   "😊": "smile blush happy",
 };
 
-/** FE0E/FE0F presentation selectors make "❤️" ≠ "❤"; compare without them. */
 const EMOJI_VARIANT_SELECTORS = new RegExp(
   `[${String.fromCharCode(0xfe0e)}${String.fromCharCode(0xfe0f)}]`,
   "g",
@@ -135,8 +123,6 @@ const EMOJI_VARIANT_SELECTORS = new RegExp(
 const stripEmojiVariants = (value: string): string =>
   value.replace(EMOJI_VARIANT_SELECTORS, "");
 
-// Normalize the table's own keys too — emoji pasted into source can carry
-// the selector invisibly, which would silently break every lookup.
 const NORMALIZED_EMOJI_KEYWORDS: Record<string, string> = Object.fromEntries(
   Object.entries(EMOJI_KEYWORDS).map(([emoji, names]) => [
     stripEmojiVariants(emoji),
@@ -156,14 +142,6 @@ function reactionKeywords(reaction: {
   return `reaction emoji send react ${names}`.trim();
 }
 
-/**
- * Flattens everything a participant can do in the meeting into searchable
- * palette actions. Reuses buildControlsConfig so any control added to the bar
- * or the More menu shows up here automatically; actions the bar has no row
- * for (device switching, host toggles, copy link, voice agent, leaving) are
- * appended explicitly. Rows are gated the same way as the visible UI: an
- * action is only offered when its handler exists.
- */
 export function buildPaletteActions(
   p: ControlsBarProps,
   devices: PaletteDevices,
@@ -174,8 +152,6 @@ export function buildPaletteActions(
   } = {},
 ): PaletteAction[] {
   const actions: PaletteAction[] = [];
-  // Force the full desktop config so side-panel toggles and hand/screen-share
-  // rows are present even when the visible bar is compact or slimmed.
   const config = buildControlsConfig({ ...p, compact: false, slim: false });
 
   for (const d of config.center) {
@@ -207,8 +183,6 @@ export function buildPaletteActions(
       run: d.onPress,
     });
   }
-  // Mirrors the bar, which appends the host shield to the panel cluster
-  // rather than folding it into the overflow config.
   if (p.isAdmin && p.onToggleHostControls) {
     actions.push({
       id: "host-controls",
@@ -222,10 +196,7 @@ export function buildPaletteActions(
   }
 
   for (const row of config.overflow) {
-    // Rows that only open the URL launcher UI have no direct handler; the
-    // curated quick-launch list below covers that case.
     if (!row.onPress) continue;
-    // The voice agent gets a richer dedicated entry in the AI section below.
     if (row.id === "voice-agent") continue;
     actions.push({
       id: row.id,
@@ -323,8 +294,6 @@ export function buildPaletteActions(
     });
   }
 
-  // Host-only room toggles that otherwise live in the host-controls panel.
-  // Gated on isAdmin (not just handler presence) to match the panel itself.
   if (p.isAdmin) {
     if (p.onToggleLock) {
       actions.push({
@@ -455,11 +424,6 @@ export function buildPaletteActions(
   return actions;
 }
 
-/**
- * How well one token matches an action. 0 = no match (the action is dropped —
- * every token must land somewhere); higher = more direct match so the ranked
- * list puts "Mute" above "Disable text-to-speech" for the query "mu".
- */
 function tokenScore(
   token: string,
   label: string,
@@ -473,12 +437,6 @@ function tokenScore(
   return 0;
 }
 
-/**
- * Case-insensitive multi-token match over label, section, and keywords.
- * Results come back in relevance order (label prefix > word start > label
- * substring > keyword/section hit), with the original build order breaking
- * ties, so the palette's top row is the action the query most directly names.
- */
 export function filterPaletteActions(
   actions: PaletteAction[],
   query: string,
@@ -503,12 +461,6 @@ export function filterPaletteActions(
   return ranked.map((entry) => entry.action);
 }
 
-/**
- * When a query matches no action, the typed text becomes the input instead:
- * send it to chat, ask the Conclave assistant (an @-mention in chat), or —
- * for hosts with the shared browser available — search it together. Rows are
- * only offered when their handler exists, like everything else here.
- */
 export function buildQueryFallbackActions(
   query: string,
   p: ControlsBarProps,
@@ -521,8 +473,6 @@ export function buildQueryFallbackActions(
   if (extras.onSendChatMessage) {
     const sendToChat = (content: string) => {
       extras.onSendChatMessage?.(content);
-      // Surface the result: without the panel open there is no feedback
-      // that the message went out.
       if (!p.isChatOpen) p.onToggleChat();
     };
     actions.push({

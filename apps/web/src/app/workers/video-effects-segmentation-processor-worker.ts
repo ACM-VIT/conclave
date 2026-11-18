@@ -1,6 +1,5 @@
 import { FilesetResolver, ImageSegmenter } from "@mediapipe/tasks-vision";
 
-/** Normalize an unknown thrown value into an Error for promise rejections. */
 const toError = (value: unknown): Error =>
   value instanceof Error ? value : new Error(String(value));
 

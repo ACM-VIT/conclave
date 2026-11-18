@@ -49,8 +49,6 @@ export default {
       return json({ error: "WebSocket upgrade required" }, { status: 426 });
     }
 
-    // Route by the verified token's tenant, not the path alone: the same room
-    // code can exist under different client ids.
     const payload = await verifyTranscriptRoomToken(
       url.searchParams.get("token") || "",
       env.TRANSCRIPT_TOKEN_SECRET,

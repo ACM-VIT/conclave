@@ -1,13 +1,3 @@
-/**
- * Where the bring-your-own OpenAI key for the voice agent lives between uses.
- *
- * The key never touches Conclave servers: it is held in this module (tab
- * memory) and, only when the user opts in, mirrored to sessionStorage so a
- * reload within the same tab doesn't re-prompt. sessionStorage is deliberate —
- * it dies with the tab, unlike localStorage, which would keep a live secret
- * on shared machines indefinitely.
- */
-
 const STORAGE_KEY = "conclave.voice-agent.key";
 
 let inMemoryKey: string | null = null;
@@ -16,7 +6,6 @@ const readSession = (): string | null => {
   try {
     return window.sessionStorage.getItem(STORAGE_KEY);
   } catch {
-    // Storage can be unavailable (privacy modes, disabled cookies).
     return null;
   }
 };

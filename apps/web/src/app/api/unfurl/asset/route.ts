@@ -8,16 +8,11 @@ import {
 
 const FETCH_TIMEOUT_MS = 6_000;
 const MAX_ASSET_BYTES = 5 * 1024 * 1024;
-// Streaming cap per response, not a file-size limit — backpressure means a
-// paused player stops the transfer, and seeks issue fresh range requests.
 const MAX_VIDEO_STREAM_BYTES = 256 * 1024 * 1024;
 const ASSET_CACHE_CONTROL = "private, max-age=86400";
 const IMAGE_CONTENT_TYPE_PATTERN =
   /^image\/(?:png|jpeg|gif|webp|avif|x-icon|vnd\.microsoft\.icon)\b/i;
 const VIDEO_CONTENT_TYPE_PATTERN = /^video\/mp4\b/i;
-// X's video CDN 403s hotlinked <video> requests, so tweet playback has to
-// round-trip through this proxy. Kept to an allowlist so the endpoint can't
-// be repurposed as a general video relay.
 const VIDEO_STREAM_HOSTS = new Set(["video.twimg.com"]);
 const USER_AGENT =
   "Mozilla/5.0 (compatible; ConclaveLinkPreview/1.0; +https://conclave.acmvit.in)";
@@ -36,12 +31,8 @@ export async function GET(request: Request) {
   const rateLimit = await takeUnfurlRateLimit(request);
   if (!rateLimit.ok) return errorResponse(rateLimit.status);
 
-  // <video> issues Range requests for playback and seeking; forward them so
-  // the upstream CDN can answer with 206s. Image loads never carry a range.
   const rangeHeader = request.headers.get("range");
 
-  // The timeout must only bound the connection/headers phase: an
-  // AbortSignal.timeout would also sever a video body mid-stream at 6s.
   const abortController = new AbortController();
   const connectTimer = setTimeout(
     () => abortController.abort(),

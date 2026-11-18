@@ -8,10 +8,6 @@ import { telemetry } from "../lib/telemetry";
 import { errorName } from "../lib/utils";
 import { applyAudioOutputDevice } from "../lib/audio-output";
 
-// How often to verify that an element with a live, unmuted inbound track is
-// actually playing. Media can arrive perfectly (consumer resumed, RTP
-// flowing) while the element sits paused — blocked autoplay, a failed play()
-// after a sink change — which no transport-level watchdog can see (#177).
 const PLAYBACK_WATCHDOG_INTERVAL_MS = 5000;
 
 const playerConfigs = {
@@ -152,10 +148,6 @@ function AudioStreamPlayer({
     const scheduleReplay = playbackRecovery.schedule;
     const audioTrack = stream.getAudioTracks()[0];
     const handleVisibilityChange = () => {
-      // Assert playback at both lifecycle edges. The hidden transition happens
-      // before background timer throttling and keeps the live media element in
-      // the browser's audible-playback path; the visible transition repairs a
-      // player suspended by page freezing or an output-device handoff.
       scheduleReplay();
     };
     const handleUserGesture = () => {
@@ -178,9 +170,6 @@ function AudioStreamPlayer({
     window.addEventListener("click", handleUserGesture, true);
     window.addEventListener("keydown", handleUserGesture, true);
 
-    // Watchdog: media flowing but element not playing. Retry playback and
-    // surface the blocked state so the UI can offer a one-click fix; report
-    // the first stall of each episode to telemetry.
     const watchdogId = window.setInterval(() => {
       if (cancelled) return;
       if (

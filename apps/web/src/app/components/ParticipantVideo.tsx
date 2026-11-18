@@ -34,14 +34,12 @@ interface ParticipantVideoProps {
   onAudioPlaybackStarted?: () => void;
   audioPlaybackAttemptToken?: number;
   disableAudio?: boolean;
-  /** Suppress the built-in name pill (a stage that draws its own chrome). */
   hideLabel?: boolean;
   isPinned?: boolean;
   onTogglePin?: (userId: string) => void;
   isDynamicCropEnabled?: boolean;
   isFullVideoShown?: boolean;
   onToggleFullVideo?: (userId: string) => void;
-  /** Known grid dimensions avoid one ResizeObserver/state path per tile. */
   tileWidth?: number;
   tileHeight?: number;
 }
@@ -69,8 +67,6 @@ function ParticipantVideo({
   tileHeight,
 }: ParticipantVideoProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  // The grid packer shrinks tiles well below the fixed chrome sizes in big
-  // calls — measure the tile and scale the face/pill/badges to fit.
   const tileRef = useRef<HTMLDivElement>(null);
   const hasKnownTileSize =
     typeof tileWidth === "number" &&
@@ -84,8 +80,6 @@ function ParticipantVideo({
   const { dense, avatarSize, avatarLift } = computeTileChrome(tileSize, {
     maxAvatar: compact ? 48 : 80,
   });
-  // Dense tiles dedicate the bottom strip to the name pill (the face is
-  // lifted clear of it), so the pill may run wider before truncating.
   const labelWidthClass = dense
     ? "max-w-[82%]"
     : compact
@@ -208,9 +202,6 @@ function ParticipantVideo({
     }
   };
 
-  // The AI voice agent has no camera and is not a person. It keeps the native
-  // tile frame, label, and active-speaker ring so it sits naturally in the
-  // grid, but swaps the avatar for a waveform mark and tags the label "AI".
   if (isAgent) {
     return (
       <div
@@ -274,8 +265,6 @@ function ParticipantVideo({
   const fullVideoToggleLabel = isFullVideoShown
     ? "Crop this video"
     : "Show the full video";
-  // Hover controls stack right-to-left in fixed slots; dense tiles use
-  // smaller buttons, so the slots sit closer together.
   const controlTopClass = dense ? "top-1.5" : "top-3";
   const controlPadClass = dense ? "p-1.5" : "p-2";
   const controlIconClass = dense ? "w-3.5 h-3.5" : "w-4 h-4";

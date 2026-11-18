@@ -1,20 +1,4 @@
 #!/usr/bin/env node
-// Builds the versioned, self-contained native embed pages (S60 13 c, d; C6-19) and copies them to the two native
-// bundles. One HTML file per app (Whiteboard, and Spin the Wheel and Watch Together since ACT-8): the esbuild bundle of
-// <app>/entry.tsx (React, Yjs and the SDK renderer inlined) and <app>/embed.css in the shared whiteboard/template.html,
-// with a Content-Security-Policy that allows only those exact inline hashes and no network (connect-src 'none'). The
-// one exception is Watch Together's frame-src: the privacy-enhanced YouTube player (WATCH_FRAME_ORIGIN in protocol.ts)
-// and nothing else; no YouTube script runs in the page. Never deployed anywhere: the files ship inside the app.
-//
-//   pnpm -C packages/apps-sdk run build:native-embed           # build and write the native copies
-//   pnpm -C packages/apps-sdk run build:native-embed -- --check  # fail when a native copy is missing or stale
-//
-// Outputs, for <app> in whiteboard, wheel and watch:
-//   apps/conclave-skip/Sources/Conclave/Resources/native-embed-<app>.html   (iOS, Bundle.module, served at
-//     conclave-embed://app/<app>.html by NativeEmbedSchemeHandler)
-//   apps/conclave-skip/Android/app/src/main/assets/native-embed/<app>.html  (Android, WebViewAssetLoader at
-//     https://appassets.androidplatform.net/assets/native-embed/<app>.html)
-// esbuild comes from the hoisted workspace tree (pnpm nodeLinker hoisted).
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -78,7 +62,6 @@ for (const app of apps) {
     define: { "process.env.NODE_ENV": '"production"' },
     logLevel: "warning",
   });
-  // An inline script must never contain its own end tag.
   const script = result.outputFiles[0].text.replace(/<\/script/gi, "<\\/script");
   const style = (await esbuild.transform(readFileSync(app.css, "utf8"), {
     loader: "css",

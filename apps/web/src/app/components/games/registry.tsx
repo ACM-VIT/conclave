@@ -13,8 +13,6 @@ import WordleGame from "./WordleGame";
 import ChessGame from "./ChessGame";
 import ZipGame from "./ZipGame";
 
-// Add a web renderer here (one line). The key is the game id from the SFU
-// module. Everything else (launcher, stage routing) reads from this map.
 const GAME_RENDERERS: Record<string, React.ComponentType<GameViewProps>> = {
   trivia: TriviaGame as React.ComponentType<GameViewProps>,
   "long-shot": LongShotGame as React.ComponentType<GameViewProps>,

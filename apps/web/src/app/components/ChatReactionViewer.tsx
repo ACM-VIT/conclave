@@ -14,19 +14,11 @@ interface ChatReactionViewerProps {
 
 const ALL_TAB = "__all__";
 
-/** One reactor row's worth of data; emoji is set only on the "All" tab. */
 interface ReactorRow {
   userId: string;
   emoji?: string;
 }
 
-/**
- * Discord-style reaction roster: an "All" tab plus one tab per emoji.
- *
- * Reactor identities already travel on the wire (ChatMessageReaction carries
- * userIds, not a bare count), so this only joins them against
- * resolveDisplayName, which also covers people who have since left the room.
- */
 export default function ChatReactionViewer({
   reactions,
   currentUserId,
@@ -41,8 +33,6 @@ export default function ChatReactionViewer({
   const totalCount = reactions.reduce((sum, r) => sum + r.count, 0);
   const tabs = [ALL_TAB, ...reactions.map((r) => r.emoji)];
 
-  // The set shrinks live as people un-react; fall back to All rather than a
-  // tab for an emoji that no longer exists.
   const active = tabs.includes(activeTab) ? activeTab : ALL_TAB;
 
   const rows: ReactorRow[] =
@@ -69,12 +59,6 @@ export default function ChatReactionViewer({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  // Modal focus management. The overlay is aria-modal, but on its own that only
-  // tells AT the background is inert — it doesn't move or contain focus. Without
-  // this, focus stays on the "View who reacted" trigger behind the overlay, so
-  // Tab walks the chat controls underneath instead of the viewer. Move focus in
-  // on open, keep Tab within the card while open, and restore it to the trigger
-  // on close.
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const container = containerRef.current;
@@ -90,8 +74,6 @@ export default function ChatReactionViewer({
           el.offsetParent !== null,
       );
 
-    // Prefer the selected tab (the only one in the tab order); fall back to the
-    // first focusable, e.g. the close button.
     const initial =
       container?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') ??
       getFocusable()[0];
@@ -128,7 +110,6 @@ export default function ChatReactionViewer({
 
   const activeIndex = tabs.indexOf(active);
 
-  // Roving arrow-key navigation across the tabs.
   const handleTabKeyDown = (event: React.KeyboardEvent) => {
     const delta =
       event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;

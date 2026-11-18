@@ -24,11 +24,6 @@ export type AppsProviderProps = {
   socket: Socket | null;
   apps: ConclaveApp[];
   user?: AppUser;
-  /**
-   * Meeting roster (self included). Callers may rebuild this array every
-   * render; the provider only forwards a new identity when the contents
-   * actually change.
-   */
   participants?: AppUser[];
   isAdmin?: boolean;
   isReadOnly?: boolean;
@@ -64,7 +59,6 @@ const decodeBase64 = (value: string): Uint8Array | null => {
     try {
       return Uint8Array.from(maybeBuffer.from(value, "base64"));
     } catch {
-      // continue to atob fallback
     }
   }
 
@@ -157,7 +151,6 @@ export function AppsProvider({
     isReadOnlyRef.current = isReadOnly;
   }, [isReadOnly]);
 
-  // The active app as of the last state the server sent.
   const serverActiveAppIdRef = useRef<string | null>(null);
 
   const resetLocalData = useCallback(() => {
@@ -198,10 +191,6 @@ export function AppsProvider({
     socketRef.current = socket;
   }, [socket, resetLocalData]);
 
-  // The server destroys an app's document when the app is closed or another
-  // app replaces it. Drop the local copy too: otherwise reopening the app
-  // syncs the old local document against the empty server one and uploads
-  // the "cleared" content again.
   const discardLocalApp = useCallback((appId: string) => {
     const doc = docsRef.current.get(appId);
     if (doc) {
@@ -227,10 +216,6 @@ export function AppsProvider({
     initialUpdateSentRef.current.delete(appId);
   }, []);
 
-  // Applies a state the server sent, discarding the local document of an app
-  // the server just closed or replaced. Done per message, not per React
-  // commit: a close and reopen batched into one commit would otherwise never
-  // be seen as a change, and the old document would survive the reopen.
   const applyServerAppsState = useCallback(
     (next: AppsState) => {
       const previous = serverActiveAppIdRef.current;

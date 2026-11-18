@@ -18,25 +18,12 @@ type WatchQueueProps = {
   readOnly: boolean;
   onAdd: (videoId: string, title?: string | null) => void;
   onRemove: (itemId: string) => void;
-  /** Jump this item to the screen right now. */
   onPlayNow: (itemId: string) => void;
-  /** Move this item one slot up (-1) or down (1). */
   onMove: (itemId: string, direction: -1 | 1) => void;
-  /** Right side of the header row (host pill, collapse control). */
   headerAccessory?: React.ReactNode;
-  /** Pending queue requests, rendered between the header and the add box. */
   requestsSection?: React.ReactNode;
 };
 
-/**
- * The side rail: a Now playing card, the up-next list with real thumbnails, and
- * an add-to-queue input. Titles are backfilled from metadata when available and
- * fall back to the video id.
- */
-/**
- * The rail's add box: a link enqueues immediately; anything else searches on
- * submit and shows a compact result list to tap into the queue.
- */
 function QueueAddBox({
   onAdd,
 }: {

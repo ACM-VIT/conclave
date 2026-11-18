@@ -45,11 +45,6 @@ const CONNECTION_TONE: Record<ConnectionState, string> = {
   offline: color.danger,
 };
 
-/**
- * Command bar: connection state, pool stats, the one-hour trend, person
- * search, activity toggle, and per-instance controls. Drain drafts live here
- * because nothing else needs them.
- */
 export function DashboardHeader({
   connection,
   instances,

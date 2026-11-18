@@ -42,7 +42,6 @@ const formatWhen = (at: number): string =>
     hour12: false,
   });
 
-/** "in 2h 15m", "in 5m", "12m ago", "now". */
 const formatRelative = (at: number, now: number): string => {
   const diff = at - now;
   const abs = Math.abs(diff);
@@ -104,10 +103,6 @@ function CopyLinkButton({ path }: { path: string }) {
   );
 }
 
-/**
- * The live floor journal: activity, the operator audit trail, and the
- * scheduling calendar. Streams in over the admin sockets.
- */
 export function ActivityDrawer({
   open,
   onClose,

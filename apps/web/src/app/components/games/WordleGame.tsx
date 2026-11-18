@@ -24,7 +24,6 @@ type TeamGuess = {
   byName: string | null;
 };
 
-/** Shared board for the team modes (public: teammates all see it). */
 type WordleTeam = {
   guesses: TeamGuess[];
   outcome: PlayerOutcome | null;
@@ -39,7 +38,6 @@ type WordleTeam = {
 
 type WordlePublic = {
   phase: "lobby" | "set-word" | "playing" | "results";
-  /** Absent on servers that predate team modes. */
   mode?: WordleMode;
   turnTimeMs?: number;
   team?: WordleTeam | null;
@@ -74,9 +72,7 @@ type WordlePublic = {
 type WordleMe = {
   currentRound: number;
   isSetter: boolean;
-  /** Team modes: you may guess now (relay: it is your turn). */
   isMyTurn?: boolean;
-  /** Relay: you guess after the current player. */
   isUpNext?: boolean;
   canSetWord: boolean;
   canGuess: boolean;
@@ -84,7 +80,6 @@ type WordleMe = {
   myGuesses: Array<{ word: string; feedback: TileState[]; at: number }>;
   myOutcome: PlayerOutcome | null;
   mySolvedAt: number | null;
-  /** Setter only: every contestant's live board, letters included. */
   boards: Array<{
     playerId: string;
     guesses: Array<{ word: string; feedback: TileState[]; at: number }>;
@@ -102,6 +97,27 @@ const letterBg = (state: TileState | "empty"): string => {
   if (state === "yellow") return WORDLE_YELLOW;
   if (state === "gray") return WORDLE_GRAY;
   return "transparent";
+};
+
+const TILE_MEANING: Record<TileState, string> = {
+  green: "correct",
+  yellow: "in the word, wrong spot",
+  gray: "not in the word",
+};
+
+const tileLabel = (letter: string, state: TileState | "empty"): string => {
+  if (!letter.trim()) return "empty";
+  return state === "empty" ? letter : `${letter}, ${TILE_MEANING[state]}`;
+};
+
+const tileCue = (state: TileState | "empty", inset = 5, width = 2): React.CSSProperties => {
+  if (state === "green") {
+    return { outline: `${width}px solid rgba(255, 255, 255, 0.6)`, outlineOffset: -inset - width };
+  }
+  if (state === "yellow") {
+    return { outline: `${width}px dashed rgba(255, 255, 255, 0.8)`, outlineOffset: -inset - width };
+  }
+  return {};
 };
 
 const tileBorder = (state: TileState | "empty", hasLetter: boolean): string => {
@@ -188,11 +204,14 @@ function Tile({
   if (!animateReveal) {
     return (
       <div
+        role="img"
+        aria-label={tileLabel(letter, state)}
         style={{
           ...TILE_STYLE,
           aspectRatio: "1",
           border: `2px solid ${isRevealed ? "transparent" : tileBorder("empty", hasLetter)}`,
           background: isRevealed ? letterBg(state) : "transparent",
+          ...tileCue(state),
         }}
       >
         {letter}
@@ -202,7 +221,7 @@ function Tile({
 
   const delay = colIndex * 300;
   return (
-    <div style={{ aspectRatio: "1", perspective: 300 }}>
+    <div role="img" aria-label={tileLabel(letter, state)} style={{ aspectRatio: "1", perspective: 300 }}>
       <div
         style={{
           width: "100%",
@@ -232,6 +251,7 @@ function Tile({
             backfaceVisibility: "hidden",
             transform: "rotateX(180deg)",
             background: letterBg(state),
+            ...tileCue(state),
           }}
         >
           {letter}
@@ -288,10 +308,6 @@ function TeamMembers({ team }: { team: WordleTeam }) {
   );
 }
 
-/**
- * What the shared board is waiting for, in one glance: whose turn it is and
- * how long they have (take turns), or that anyone can jump in (anyone guesses).
- */
 function TeamBanner({
   mode,
   team,
@@ -513,7 +529,10 @@ function SetterBoards({
                             background: guess
                               ? letterBg(guess.feedback[colIndex])
                               : "transparent",
+                            ...(guess ? tileCue(guess.feedback[colIndex], 1, 1) : {}),
                           }}
+                          role="img"
+                          aria-label={guess ? tileLabel(guess.word[colIndex] ?? "", guess.feedback[colIndex]) : "empty"}
                         >
                           {guess ? guess.word[colIndex] : ""}
                         </div>
@@ -546,8 +565,6 @@ export default function WordleGame({
   const teamView = pub.team ?? null;
   const mode: WordleMode = pub.mode ?? "solo";
   const isTeamMode = mode !== "solo";
-  // Team modes render the public shared board, so the setter and spectators
-  // see the same rows the guessers do.
   const boardGuesses: Array<{ word: string; feedback: TileState[]; at: number; byName?: string | null }> =
     teamView ? teamView.guesses : me.myGuesses;
   const boardOutcome = teamView ? teamView.outcome : me.myOutcome;
@@ -556,11 +573,6 @@ export default function WordleGame({
   const guessInputRef = useRef<HTMLInputElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
-  // A new round resets the server-side board but not this component, so clear
-  // every piece of local round state here (render-phase reset, per React's
-  // derived-state pattern). Without this, a half-typed draft pre-fills the new
-  // board and the stale animateRow leaves a row stuck on the flip animation's
-  // transparent back face, which reads as a missing row.
   const [lastRoundKey, setLastRoundKey] = useState(pub.currentRound);
   if (lastRoundKey !== pub.currentRound) {
     setLastRoundKey(pub.currentRound);
@@ -576,8 +588,6 @@ export default function WordleGame({
     animateRow.current = currentCount - 1;
     prevGuessCountRef.current = currentCount;
   } else if (currentCount < prevGuessCountRef.current) {
-    // The board shrank outside a round change (view re-projection); never
-    // leave the reveal animation pointing at a row that no longer exists.
     prevGuessCountRef.current = currentCount;
     animateRow.current = -1;
   }
@@ -585,9 +595,6 @@ export default function WordleGame({
   const remainingMs = useRemaining(pub.deadline, pub.serverNow);
   const turnRemainingMs = useRemaining(teamView?.turnDeadline ?? null, pub.serverNow);
 
-  // Team modes: put the cursor in the box the moment the turn lands on you,
-  // unless you are typing somewhere else in the meeting (chat, notes): never
-  // redirect keystrokes out of another field.
   const myTurnNow = isTeamMode && pub.phase === "playing" && me.canGuess && Boolean(me.isMyTurn);
   useEffect(() => {
     if (!myTurnNow || readOnly) return;
@@ -597,8 +604,6 @@ export default function WordleGame({
     if (focusIsFree) guessInputRef.current?.focus();
   }, [myTurnNow, readOnly]);
 
-  // A turn that ends (timer, pass, round over) takes its half-typed guess with
-  // it, so a stale draft never pre-fills the next turn.
   const [wasMyTurn, setWasMyTurn] = useState(myTurnNow);
   if (wasMyTurn !== myTurnNow) {
     setWasMyTurn(myTurnNow);
@@ -606,8 +611,6 @@ export default function WordleGame({
   }
   const wordLengthLabel = `${pub.wordLength}-letter`;
 
-  // Typed dispatch: renderers can only send a valid WordleMove. The discriminant
-  // is split off so the wire payload stays exactly { word } / undefined as before.
   const runMove = async (typedMove: WordleMove) => {
     if (busyRef.current) return false;
     busyRef.current = true;
@@ -799,7 +802,16 @@ export default function WordleGame({
                   {guess.word.split("").map((letter, colIndex) => (
                     <div
                       key={colIndex}
-                      style={{ ...TILE_STYLE, fontSize: 11, height: 22, borderRadius: 3, background: letterBg(guess.feedback[colIndex]) }}
+                      role="img"
+                      aria-label={tileLabel(letter, guess.feedback[colIndex])}
+                      style={{
+                        ...TILE_STYLE,
+                        fontSize: 11,
+                        height: 22,
+                        borderRadius: 3,
+                        background: letterBg(guess.feedback[colIndex]),
+                        ...tileCue(guess.feedback[colIndex], 1.5, 1),
+                      }}
                     >
                       {letter}
                     </div>
@@ -1029,8 +1041,9 @@ export default function WordleGame({
                 busy={busy}
                 readOnly={readOnly}
                 onPass={() => {
-                  setGuessDraft("");
-                  void runMove({ type: "passTurn" });
+                  void runMove({ type: "passTurn" }).then((ok) => {
+                    if (ok) setGuessDraft("");
+                  });
                 }}
               />
               <TeamMembers team={teamView} />
@@ -1061,8 +1074,6 @@ export default function WordleGame({
                   </div>
                 );
                 if (!teamView) return grid;
-                // Team boards credit each row to whoever typed it, and mark the
-                // next empty row with whoever is up.
                 const guess = teamView.guesses[rowIndex];
                 const upNext =
                   !guess && rowIndex === teamView.guesses.length && teamView.outcome == null

@@ -1,10 +1,5 @@
 "use client";
 
-// Ported verbatim from AI SDK Elements (elements.ai-sdk.dev) "Shimmer". Only the
-// `cn` import is repointed to the local util and the shadcn theme tokens
-// (--color-background / --color-muted-foreground) are swapped for the Conclave
-// palette: a faint base with a brighter highlight band sweeping across.
-
 import { motion } from "motion/react";
 import {
   type CSSProperties,

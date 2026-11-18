@@ -120,7 +120,6 @@ export default function MeetsClientPage({
         throw error;
       }
 
-      // Our own join API; the SFU socket layer re-validates on connect.
       return (await response.json()) as {
         token: string;
         sfuUrl: string;
@@ -139,7 +138,6 @@ export default function MeetsClientPage({
       throw new Error(await readError(response));
     }
     const data = (await response.json()) as { rooms?: unknown };
-    // Our own rooms API; shape is owned by the SFU admin routes.
     return (Array.isArray(data.rooms) ? data.rooms : []) as RoomInfo[];
   }, [resolvedClientId]);
 

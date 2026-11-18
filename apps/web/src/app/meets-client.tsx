@@ -393,7 +393,6 @@ export type MeetsClientProps = {
   joinMode?: JoinMode;
   autoJoinOnMount?: boolean;
   hideJoinUI?: boolean;
-  /** Public webinar title shown in the attendee viewer chrome. */
   webinarTitle?: string;
   getRooms?: () => Promise<RoomInfo[]>;
   getRoom?: (roomId: string) => Promise<RoomInfo | null>;
@@ -974,9 +973,6 @@ export default function MeetsClient({
     [activeVideoEffectsCount, mediaQualitySettings.camera],
   );
 
-  // Local-only camera preview for the Settings/effects panels: acquired with a
-  // plain getUserMedia and never attached to a producer, so nothing reaches
-  // the room while the real camera stays off.
   const cameraPreview = useLocalCameraPreview({
     deviceId: selectedVideoInputDeviceId,
     publishSettings: cameraPublishSettings,
@@ -984,8 +980,6 @@ export default function MeetsClient({
   const stopCameraPreview = cameraPreview.stop;
   const localStreamHasLiveVideo = hasLiveVideoTrack(localStream);
   useEffect(() => {
-    // The real camera taking over makes the private preview redundant (and
-    // would hold a second capture of the same device) — release it.
     if (localStreamHasLiveVideo) stopCameraPreview();
   }, [localStreamHasLiveVideo, stopCameraPreview]);
 
@@ -1110,8 +1104,6 @@ export default function MeetsClient({
     [replayTts],
   );
 
-  // Latest transcript snapshot for the "@Conclave" assistant. Updated from the
-  // transcript hook below; read lazily so useMeetChat stays decoupled from it.
   const assistantContextRef = useRef<ConclaveAssistantContext>({
     transcript: "",
     transcriptActive: false,
@@ -1269,8 +1261,6 @@ export default function MeetsClient({
     mediaRecoveryBlockedRef: refs.reconnectInFlightRef,
   });
 
-  // Record the picked camera so the dropdown reflects the selection, then run
-  // the media swap. Mirrors how the audio-input handler tracks its selected id.
   const handleVideoInputDeviceSelect = useCallback(
     (deviceId: string) => {
       setSelectedVideoInputDeviceId(deviceId);
@@ -1292,9 +1282,6 @@ export default function MeetsClient({
     return count;
   }, [participants, userId]);
 
-  // Meeting roster (self first) for apps that act on everyone present, e.g.
-  // the wheel's "add everyone" action. AppsProvider drops no-op identity
-  // changes, so rebuilding on participant churn is fine.
   const appsParticipants = useMemo(() => {
     const roster = [appsUser];
     participants.forEach((participant) => {
@@ -1442,18 +1429,10 @@ export default function MeetsClient({
   const videoEffectsDebugStats = shouldRunVideoEffects
     ? videoEffectsBridgeState.debugStats
     : null;
-  // When the effects pipeline is fed by the private preview (camera off, no
-  // dev fixture), its processed output must stay panel-only: it must not
-  // become the display stream that the grid / PiP / popout render, or the
-  // preview would look like the camera is on.
   const processedSourceIsLocalPreview =
     !hasLiveVideoTrack(localStream) &&
     !devCameraStream &&
     Boolean(cameraPreview.stream);
-  // Once the bridge has processed the private preview, its output track (which
-  // can survive source switches with the same id) must not be published until
-  // the effects debug metadata positively confirms the source is the real
-  // camera again. Cleared inside getVideoPublishTrack on that confirmation.
   const requireExplicitProcessedSourceMatchRef = useRef(false);
   useEffect(() => {
     if (processedSourceIsLocalPreview) {
@@ -1463,8 +1442,6 @@ export default function MeetsClient({
   const displayLocalStream =
     (processedSourceIsLocalPreview ? null : processedLocalStream) ??
     localStream;
-  // What the Settings/effects panels render while previewing: the processed
-  // output when effects are active, otherwise the raw private preview.
   const cameraPreviewDisplayStream = cameraPreview.stream
     ? ((processedSourceIsLocalPreview ? processedLocalStream : null) ??
       cameraPreview.stream)
@@ -1550,12 +1527,6 @@ export default function MeetsClient({
           (!processedTrackHasExplicitOutputMismatch ||
             processedTrackOutputIsWarming),
       );
-      // Guard against publishing output derived from the PRIVATE camera
-      // preview. While the preview feeds the bridge, processed output is
-      // blocked outright; after a handoff to the real camera it stays blocked
-      // until the debug metadata positively names the real camera track as
-      // the source (mere absence of metadata is not proof during a handoff —
-      // the retained output track may still be showing preview frames).
       const processedSourceExplicitlyMatches =
         processedSourceMatchesRawTrack || processedSourceMatchesChainedInput;
       if (
@@ -1572,10 +1543,6 @@ export default function MeetsClient({
               !processedSourceExplicitlyMatches)),
       );
       if (processedTrackPublishBlocked && processedTrack) {
-        // The bridge output is (or may still be) the private preview. That
-        // must never be published: it dies when the panel closes, and it was
-        // never meant to leave this machine. Publish raw; the effects bridge
-        // re-pipes to the real camera right after it goes live.
         logMeetVideo("skip_processed_track_local_preview_source", {
           processedTrack: getMeetTrackDebugSnapshot(processedTrack),
           rawTrack: getMeetTrackDebugSnapshot(rawTrack),
@@ -2290,9 +2257,6 @@ export default function MeetsClient({
   const webinarConfigRef = useRef(webinarConfig);
   webinarConfigRef.current = webinarConfig;
 
-  // Host moved this promoted speaker back to the audience: a full navigation
-  // to the public webinar page tears down all publish state and rejoins as a
-  // view-only attendee.
   const handleWebinarDemoted = useCallback(
     (notification: { webinarLinkSlug?: string | null }) => {
       if (typeof window === "undefined") return;
@@ -2398,9 +2362,6 @@ export default function MeetsClient({
     bypassMediaPermissions,
   });
 
-  // Accepting a stage invite rejoins the same room as a full participant via
-  // navigation: the join screen doubles as the mic/camera prejoin, and the
-  // server-side promotion registry waves this identity through the gates.
   const handleAcceptWebinarStageInvite = useCallback(() => {
     if (!webinarStageInvite || typeof window === "undefined") return;
     window.location.assign(
@@ -2411,8 +2372,6 @@ export default function MeetsClient({
   const declineWebinarStageInvite = socket.declineWebinarStageInvite;
   const handleDismissWebinarStageInvite = useCallback(() => {
     setWebinarStageInvite(null);
-    // Declining releases the server-side invite, so "Not now" does not leave
-    // a standing gate bypass attached to this identity.
     declineWebinarStageInvite();
   }, [setWebinarStageInvite, declineWebinarStageInvite]);
 
@@ -2479,8 +2438,6 @@ export default function MeetsClient({
     stopTranscriptSfuRelay: socket.stopTranscriptSfuRelay,
   });
 
-  // Feed the live transcript to "@Conclave" only while a session is running, so
-  // the assistant cites the transcript when it's on and ignores it when it's off.
   const transcriptActive = transcript.isLive || transcript.isPaused;
   useEffect(() => {
     assistantContextRef.current = {
@@ -2522,8 +2479,6 @@ export default function MeetsClient({
     localStream,
     participants,
     recentMessages: chatMessages,
-    // Give the agent recall over the meeting: the live transcript feed and the
-    // running notes/minutes so it can answer "what was decided" accurately.
     transcriptSegments: transcript.allSegments,
     isTranscriptActive: transcriptActive,
     meetingMinutes: transcriptActive ? transcript.minutes : null,
@@ -2559,13 +2514,10 @@ export default function MeetsClient({
     clearVoiceAgentError();
   }, [cancelVoiceKeyStart, clearVoiceAgentError, stopVoiceAgent]);
 
-  // The dialog stays open (showing progress) until the agent is actually
-  // live, so failures land inline instead of in a toast after the fact.
   useEffect(() => {
     if (isVoiceAgentRunning) setIsVoiceAgentDialogOpen(false);
   }, [isVoiceAgentRunning]);
 
-  // A rejected key is useless — forget it and re-prompt with the reason.
   useEffect(() => {
     if (voiceAgentErrorCode !== "invalid-key") return;
     clearStoredVoiceAgentKey();
@@ -2574,8 +2526,6 @@ export default function MeetsClient({
 
   const handleStopVoiceAgent = useCallback(() => {
     cancelVoiceKeyStart();
-    // Deliberately keeps the remembered key: stop → start again later in the
-    // meeting shouldn't demand re-entering it. It dies with the tab.
     setIsVoiceAgentDialogOpen(false);
     stopVoiceAgent();
   }, [cancelVoiceKeyStart, stopVoiceAgent]);
@@ -2611,9 +2561,6 @@ export default function MeetsClient({
     }
   }, [connectionState, refs.intentionalDisconnectRef]);
 
-  // Pre-join occupancy: keep the room-presence indicator fresh while the user is
-  // still on the join screen. Poll when there's a room code to inspect (so guests
-  // see who's already there before joining); admins also get a one-shot refresh.
   useEffect(() => {
     if (connectionState === "joined") return;
     const normalizedRoomId = roomId.trim();
@@ -2754,9 +2701,6 @@ export default function MeetsClient({
         nextProducerId =
           refs.screenProducerRef.current?.id ?? activeScreenShareId ?? null;
       } else if (activeScreenShareId) {
-        // Prefer the participant whose screen producer matches the ACTIVE id so
-        // the staged stream + "X is presenting" always correspond to the right
-        // sharer; fall back to any present share so the stage is never blank.
         let matchedStream: MediaStream | null = null;
         let matchedName = "";
         let matchedProducerId: string | null = null;
@@ -2855,11 +2799,6 @@ export default function MeetsClient({
     ignoreInputs: true,
   });
 
-  // Network-quality polling reuses the media hook's existing transport refs;
-  // it does not create or own any peer connection. This hook MUST run above the
-  // `if (!mounted) return null` early-return below — every hook has to be called
-  // unconditionally on every render (Rules of Hooks), or React throws a
-  // "change in the order of Hooks" error and the whole client crashes.
   const selfConnectionStats = useConnectionQuality({
     producerTransportRef: refs.producerTransportRef,
     consumerTransportRef: refs.consumerTransportRef,
@@ -2872,9 +2811,6 @@ export default function MeetsClient({
     publishEmergencyMode: selfPublishEmergencyMode,
     receiveEmergencyMode: selfReceiveEmergencyMode,
   } = selfConnectionStats;
-  // A fast recovery may use the browser path hint to break a self-imposed
-  // low-bitrate feedback loop, but fair/poor loss or jitter keeps the
-  // conservative recovery path in force.
   const hasBlockingPublishRecoverySignal =
     hasBlockingPublishRecoveryTelemetry({
       packetLoss: selfConnectionStats.publishPacketLoss,
@@ -3072,11 +3008,6 @@ export default function MeetsClient({
     debugStateRef: adaptivePublishDebugRef,
   });
 
-  // Full-screen brand animation that takes over the instant a meeting is
-  // created/joined from the lobby, so navigation feels immediate while the SFU
-  // connection settles underneath. Driven by the lobby's join/new click; on
-  // success it hands off to the meeting/waiting screen, and on failure it
-  // surfaces the error in place instead of bouncing back to the lobby.
   const [enterAction, setEnterAction] = useState<"new" | "join" | null>(null);
   const [enterErrored, setEnterErrored] = useState(false);
 
@@ -3119,19 +3050,14 @@ export default function MeetsClient({
 
   useEffect(() => {
     if (!enterAction) return;
-    // Success / waiting-room hand off to their own screens — fade the overlay.
     if (connectionState === "joined" || connectionState === "waiting") {
       setEnterAction(null);
       setEnterErrored(false);
       return;
     }
-    // Otherwise reflect whether the attempt has failed; the overlay stays up
-    // and switches to its error presentation.
     setEnterErrored(connectionState === "error" || Boolean(meetError));
   }, [enterAction, connectionState, meetError]);
 
-  // Safety net while connecting: if nothing resolves, return to the lobby.
-  // Errored overlays wait for the user instead of auto-dismissing.
   useEffect(() => {
     if (!enterAction || enterErrored) return;
     const timeout = window.setTimeout(() => {
@@ -3193,10 +3119,6 @@ export default function MeetsClient({
       <MeetingEnterOverlay
         show={enterAction !== null}
         action={enterAction}
-        // Some failure paths flip connectionState to "error" without a
-        // meetError (e.g. media unavailable on join). Fall back to a generic
-        // recoverable error so the overlay always shows retry/dismiss controls
-        // instead of stranding the user behind the loading animation.
         error={
           enterErrored
             ? (meetError ?? {
@@ -3576,9 +3498,6 @@ export default function MeetsClient({
         isVoiceAgentRunning={voiceAgent.isRunning}
         isVoiceAgentStarting={voiceAgent.isStarting}
         voiceAgentError={
-          // The dialog surfaces start/key errors inline; the toast only
-          // covers failures that happen while no dialog is up (e.g. the
-          // agent dropping mid-call).
           isVoiceAgentDialogOpen || voiceAgentErrorCode === "invalid-key"
             ? null
             : voiceAgent.error

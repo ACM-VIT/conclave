@@ -32,8 +32,6 @@ const CURRENT_TOPIC_PATTERN =
   /\b(latest|recent|current|news|today|this week|this month|this year|breaking|new)\b/i;
 const GENERATION_STEP_MS = 2_200;
 
-/** One clean list row, used for both the launcher and the vote. Neutral by
- * default; a single coral accent marks selection / progress. */
 function Row({
   name,
   sub,
@@ -95,10 +93,6 @@ function Row({
   );
 }
 
-/**
- * The docked Games launcher. The host can start a game directly, or put the
- * choice to a room vote; everyone else votes or waits.
- */
 export function GamesPanel({
   onClose,
   rightOffset = 0,
@@ -299,8 +293,6 @@ function Segmented<T extends string | number>({
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
 }) {
-  // Few options: a single equal-width segmented row. Many: wrap into chips so
-  // long labels never clip in the narrow dock.
   const wrap = options.length > 4;
   return (
     <div

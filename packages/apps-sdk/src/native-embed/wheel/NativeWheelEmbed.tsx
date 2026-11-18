@@ -1,12 +1,3 @@
-// The Spin the Wheel renderer for the native app host (S60 13 c, ACT-8): the SDK wheel drawing, spin animation and a
-// flat winner card, nothing else. The names list, Spin, Edit Names, results and settings are native (the card's Spin
-// button and the Activities Wheel page) and reach this page as bridge commands; the page answers each with an `ack`
-// after sending the status that shows the change, and adds the page data to every status under `app`. Reduce Motion
-// arrives in the host status: the wheel then jumps to the result (the shared spin record and everyone else's
-// animation are untouched; the result is still recorded only when the spin settles everywhere). Spin sounds are the
-// SDK's synthesized WebAudio sounds (no assets); they start only after a spin and honor Wheel Sounds. The winner is
-// announced natively ("Winner: %@"), so the card here is hidden from assistive technology. Flat surfaces only.
-
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { WheelStage } from "../../apps/wheel/web/components/WheelStage";
 import { useWheelDocState } from "../../apps/wheel/web/hooks/useWheelDocState";
@@ -38,7 +29,6 @@ import {
   type WheelAppStatus,
 } from "../session";
 
-// The web's spin timing (WheelWebApp.tsx), so a native spin looks the same on every client.
 const SPIN_MIN_DURATION_MS = 7200;
 const SPIN_DURATION_SPREAD_MS = 1600;
 const SPIN_MIN_TURNS = 7;
@@ -60,7 +50,6 @@ const useSynced = (session: NativeEmbedSession): boolean =>
     () => session.isSynced,
   );
 
-/** The labels of an `addEntries` payload: strings only, trimmed, non-empty, at most one wheel's worth. */
 const labelsFrom = (payload: Record<string, unknown>): string[] => {
   const raw = payload.labels;
   if (!Array.isArray(raw)) return [];
@@ -123,7 +112,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     };
   }, [clearTimers]);
 
-  // A new spin from anyone replaces whatever ceremony is on screen.
   const activeSpinId = spin?.spinId;
   useEffect(() => {
     setOverlay(null);
@@ -131,7 +119,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     clearTimers();
   }, [activeSpinId, clearTimers]);
 
-  /** Records the result once (the spinner, or after a grace window any other editor); recordResult dedupes by spin. */
   const scheduleFinalize = useCallback(
     (settled: WheelSpin, delayMs: number) => {
       const winnerEntry = settled.entries[settled.winnerIndex];
@@ -167,7 +154,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     setWinner(shown);
   }, []);
 
-  // The live settle (WheelStage animated it here): flash the slice, then the card; the spinner records the result.
   const handleSettled = useCallback(
     (settled: WheelSpin, fresh: boolean) => {
       if (!fresh || handledRef.current.has(settled.spinId)) return;
@@ -187,7 +173,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     [doc, reveal, scheduleFinalize],
   );
 
-  // Reduce Motion: show the result at once, but record it only when the spin settles for everyone.
   useEffect(() => {
     if (!reduceMotion || !spin || handledRef.current.has(spin.spinId)) return;
     const remaining = spin.startedAt + spin.durationMs - Date.now();
@@ -197,8 +182,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     scheduleFinalize(spin, remaining);
   }, [reduceMotion, spin, reveal, scheduleFinalize]);
 
-  // With Reduce Motion the stage gets the record as if it had already settled, so it rests on the winner at once
-  // (WheelStage reports that settle as not fresh; the effect above handles the result).
   const stageSpin = useMemo<WheelSpin | null>(() => {
     if (!spin || !reduceMotion) return spin;
     return { ...spin, startedAt: Math.min(spin.startedAt, Date.now()) - spin.durationMs };
@@ -249,14 +232,12 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
     [entries, history, removeWinnerOnDone, soundOn, isSpinning, winner],
   );
 
-  // Nothing is reported before the room snapshot: an empty pre-sync wheel would read as "No names yet." natively.
   useEffect(() => {
     if (!synced) return;
     const payload: AppStatusPayload = { app: status };
     session.sendStatus(payload);
   }, [session, status, synced]);
 
-  // Host commands. Each one applies, sends the status that shows it, then returns for the ack.
   useEffect(() => {
     const respond = (next: Partial<WheelAppStatus>): CommandResult => {
       session.sendStatus({ app: { ...status, ...next } });
@@ -317,7 +298,6 @@ export function NativeWheelEmbed({ session }: { session: NativeEmbedSession }) {
         case "clearResults":
           clearHistory(doc);
           return { ok: true };
-        // Relay messages and commands for another app retain the same rejection as unknown commands.
         case "snapshot":
         case "update":
         case "awareness":

@@ -20,11 +20,6 @@ const removeWaiter = (stream: MediaStream, waiter: PresentationWaiter) => {
   }
 };
 
-/**
- * Waits for a rendered video element to present the replacement stream. The
- * bounded false result is valid for streams that have no mounted tile (for
- * example an offscreen overflow participant).
- */
 export const waitForRemoteVideoPresentation = ({
   stream,
   timeoutMs,
@@ -66,10 +61,6 @@ export const notifyRemoteVideoPresented = (stream: MediaStream): void => {
   }
 };
 
-/**
- * Arms before playback starts and resolves handoff waiters only after the
- * compositor exposes a frame belonging to this exact MediaStream.
- */
 export const observeRemoteVideoPresentation = (
   video: HTMLVideoElement,
   stream: MediaStream,

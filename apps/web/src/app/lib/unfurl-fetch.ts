@@ -8,11 +8,6 @@ export interface UnfurlFetchResult {
   finalUrl: URL;
 }
 
-/**
- * Fetches a public unfurl resource without letting the runtime follow an
- * unvalidated redirect. Every Location is resolved and checked before the
- * next request, which keeps next dev from following public URLs onto the LAN.
- */
 export async function fetchUnfurlResource(
   target: URL,
   init: RequestInit = {},

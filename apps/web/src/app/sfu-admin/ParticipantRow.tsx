@@ -11,11 +11,6 @@ const roleTone = (role: ParticipantSnapshot["role"]) => {
   return "neutral" as const;
 };
 
-/**
- * Receive-side media health from consumer telemetry: the worst active
- * consumer score is what the participant is actually experiencing.
- * Mediasoup scores run 0 to 10.
- */
 const mediaHealth = (
   participant: ParticipantSnapshot,
 ): { tone: "ok" | "warn" | "danger"; worst: number } | null => {
@@ -34,10 +29,6 @@ const mediaHealth = (
 
 const HEALTH_COLOR = { ok: "#22c55e", warn: "#fbbf24", danger: "#ea4335" } as const;
 
-/**
- * One participant with inline moderation. Memoized so a room push only
- * re-renders the rows whose snapshot actually changed.
- */
 export const ParticipantRow = memo(function ParticipantRow({
   participant,
   roomPath,
@@ -47,7 +38,6 @@ export const ParticipantRow = memo(function ParticipantRow({
 }: {
   participant: ParticipantSnapshot;
   roomPath: string;
-  /** Destructive confirms disable while a command is in flight. */
   isBusy: boolean;
   moderationReason: string;
   act: (input: AdminActionInput) => void;

@@ -1,16 +1,11 @@
 import type { RegisterableHotkey } from "@tanstack/hotkeys";
 
 export interface HotkeyDefinition {
-  /**
-   * Typed so the hotkeys library validates every shortcut string; `null` for
-   * an action that is declared but has no binding yet.
-   */
   keys: RegisterableHotkey | null;
   label: string;
   description: string;
 }
 
-/** A hotkey that is actually bound to a key, as listed in the shortcuts help. */
 export interface DisplayableHotkey {
   action: HotkeyAction;
   keys: RegisterableHotkey;
@@ -32,8 +27,6 @@ export type HotkeyAction =
   | "commandPalette"
   | "shortcutsHelp";
 
-// `satisfies` (not an annotation) keeps each entry's literal type, so a bound
-// action's `keys` is known to be non-null wherever it is registered or shown.
 export const HOTKEYS = {
   toggleMute: {
     keys: "Mod+D",
@@ -102,12 +95,6 @@ export const HOTKEY_LIST: (HotkeyDefinition & { action: HotkeyAction })[] =
     ([action, definition]) => ({ action, ...definition }),
   );
 
-/**
- * Hotkeys worth showing in the shortcuts reference: some actions are declared
- * here without a binding yet (`keys: null`), and listing those would just be
- * a row with a blank chip. The quick-actions palette leads the list — it is
- * the gateway to every other action, so it gets top billing.
- */
 export function getDisplayableHotkeys(): DisplayableHotkey[] {
   const bound: DisplayableHotkey[] = [];
   for (const { action, keys, label, description } of HOTKEY_LIST) {

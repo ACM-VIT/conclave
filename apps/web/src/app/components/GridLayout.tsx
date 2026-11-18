@@ -98,27 +98,14 @@ interface GridLayoutProps {
   presenterName?: string;
   presentationPresenterId?: string | null;
   presentationProducerId?: string | null;
-  /** True when the presentation stream above is YOUR own screen share —
-   *  the stage tile defaults to a chooser instead of mirroring it back. */
   isLocalPresenter?: boolean;
   screenShareControlState?: CapturedSurfaceControlState;
   screenShareCaptureController?: CaptureControllerLike | null;
   getDisplayName: (userId: string) => string;
-  /** px the stage reserves on the right for a docked side panel (0 when none).
-   *  Drives the one-shot reflow glide: when this changes, the grid re-measures
-   *  synchronously and FLIPs every tile to its new size/position. */
   sidePanelReserve?: number;
-  /** Phone-width layout: stage-rail layouts (side-by-side, sidebar) stack
-   * vertically and the companion/thumbnail rail becomes a horizontal strip
-   * instead of a fixed-width side column. */
   isMobile?: boolean;
 }
 
-// Keep this many just-past-the-cutoff participants' <video> mounted (hidden but
-// still decoding) as SIBLINGS of the visible grid tiles. When the active-speaker
-// sort promotes one of them across the overflow boundary, React reconciles it by
-// key within the same parent — the tile REPOSITIONS in place instead of
-// unmount+remounting, so the decoder isn't reset and the tile doesn't black-flash.
 const WARM_BUFFER_TILES = 4;
 const RECENTLY_VISIBLE_WARM_BUFFER_TILES = 4;
 const RECENTLY_VISIBLE_WARM_HOLD_MS = 3500;
@@ -126,42 +113,17 @@ const PRIORITY_WARM_BUFFER_TILES = 4;
 const PRESENTATION_WARM_BUFFER_TILES = 1;
 const PRESENTATION_RECENTLY_VISIBLE_WARM_BUFFER_TILES = 1;
 const PRESENTATION_PRIORITY_WARM_BUFFER_TILES = 2;
-// Spacing of the measured stage. GRID_PADDING mirrors `p-4`; GRID_GAP is the
-// inter-tile gap fed to the Meet packer so it reserves the same gutters we draw.
 const GRID_PADDING = 16;
 const GRID_GAP = 12;
-// Desktop column FLOOR for the packer's cap — the real cap grows with the
-// measured stage width (see computeGridMaxCols) so big calls on wide screens
-// spread across the full stage instead of packing into a narrow centered
-// block with dead gutters on both sides.
 const GRID_MAX_COLS = 6;
 const STAGE_RAIL_TILE_HEIGHT = 112;
 const SIDE_BY_SIDE_RAIL_HEIGHT_RATIO = 0.35;
 const AUTO_GRID_MIN_TILE_WIDTH = 176;
 const AUTO_GRID_MIN_TILE_HEIGHT = 99;
-// On a portrait phone the desktop "fit everyone into the viewport" packer is the
-// wrong model: with many people it either squashes tiles into short 16:9
-// "capsules" (wasted height) or shrinks square tiles to nothing (wasted width).
-// Phones instead get a fixed-size, vertically-SCROLLING 2-up gallery — the
-// standard mobile video-call layout (Meet/Zoom). Tiles fill the column width,
-// stay a usable size, and you scroll when there are more than fit. See
-// computeMobilePortraitGridLayout below. A landscape phone keeps the 16:9
-// packer but with a lower column cap.
 const MOBILE_PORTRAIT_COLS = 2;
-// Tiles are square by default; for small calls that fit on screen they grow
-// taller (up to this width-multiple) to fill the viewport instead of leaving a
-// gap below.
-const MOBILE_PORTRAIT_MAX_TILE_ASPECT = 1.5; // height up to 1.5× width
+const MOBILE_PORTRAIT_MAX_TILE_ASPECT = 1.5;
 const MOBILE_LANDSCAPE_MAX_COLS = 4;
 
-/**
- * Column cap for the packer. A fixed desktop cap of 6 made big calls on wide
- * screens height-limited: tiles shrank to fit 8+ rows while the 6-wide block
- * sat centered between huge empty gutters. Allow as many min-width columns as
- * the measured stage actually fits (never fewer than the old cap) — the packer
- * still picks the tile-size-maximising arrangement, so small calls where fewer
- * columns give bigger tiles are unaffected.
- */
 const computeGridMaxCols = (isMobile: boolean, usableWidth: number) => {
   if (isMobile) return MOBILE_LANDSCAPE_MAX_COLS;
   if (!Number.isFinite(usableWidth) || usableWidth <= 0) return GRID_MAX_COLS;
@@ -171,11 +133,6 @@ const computeGridMaxCols = (isMobile: boolean, usableWidth: number) => {
   );
 };
 
-/**
- * Device-/orientation-aware packing parameters for the desktop/landscape Meet
- * grid (the 16:9 optimal packer). Portrait phones bypass this entirely and use
- * computeMobilePortraitGridLayout instead.
- */
 const getGridPackingParams = (isMobile: boolean, usableWidth: number) => ({
   maxCols: computeGridMaxCols(isMobile, usableWidth),
   targetAspect: 16 / 9,
@@ -186,16 +143,6 @@ const getGridPackingParams = (isMobile: boolean, usableWidth: number) => ({
 const isMobilePortrait = (isMobile: boolean, width: number, height: number) =>
   isMobile && height >= width;
 
-/**
- * Fixed-size, vertically-scrolling 2-column gallery for portrait phones.
- *
- * Unlike the desktop packer (computeGridLayout), this does NOT shrink tiles to
- * cram everyone into the viewport. Each tile fills half the width; height is
- * square by default. When the whole grid fits with room to spare (small calls)
- * tiles grow taller to fill the screen; when it doesn't (many people) tiles keep
- * their size and the grid overflows so the container scrolls. Returns the same
- * GridLayoutResult shape the renderer/FLIP already consume.
- */
 const computeMobilePortraitGridLayout = (
   count: number,
   width: number,
@@ -204,8 +151,6 @@ const computeMobilePortraitGridLayout = (
   maxTilesPerPage: number,
 ): GridLayoutResult => {
   const total = Math.max(1, Math.floor(count));
-  // Solo fills the whole stage (Meet/FaceTime self-view) instead of a centered
-  // letterboxed tile with dead black space above and below.
   if (total === 1) {
     return {
       cols: 1,
@@ -230,8 +175,6 @@ const computeMobilePortraitGridLayout = (
   const rows = Math.ceil(perPage / cols);
   const tileWidth = Math.max(0, Math.floor((width - (cols - 1) * gap) / cols));
 
-  // Square by default; grow to fill the viewport height only if the whole grid
-  // already fits, capped so tiles never become absurdly tall.
   let tileHeight = tileWidth;
   const squareContentHeight = rows * tileHeight + (rows - 1) * gap;
   if (squareContentHeight < height) {
@@ -244,7 +187,6 @@ const computeMobilePortraitGridLayout = (
   const contentWidth = cols * tileWidth + Math.max(0, cols - 1) * gap;
   const contentHeight = rows * tileHeight + Math.max(0, rows - 1) * gap;
   const offsetX = Math.max(0, (width - contentWidth) / 2);
-  // Center vertically when it fits; pin to the top when it overflows (scroll).
   const offsetY = contentHeight <= height ? Math.max(0, (height - contentHeight) / 2) : 0;
 
   const positions: GridTilePosition[] = [];
@@ -286,9 +228,6 @@ const ROOM_TILING_METADATA_INTERVAL_MS = 200;
 const ROOM_TILING_PROMOTE_DELAY_MS = 1200;
 const ROOM_TILING_MIN_SWITCH_INTERVAL_MS = 8000;
 const FLIP_DURATION_MS = 220;
-// Discrete side-panel reflow glides over the SAME duration/easing as the panel
-// slide (`--animate-panel-in` in globals.css) so the stage and the panel move
-// together. Change both together.
 const REFLOW_DURATION_MS = 280;
 const FLIP_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 const FONT_SANS = "'PolySans Trial', system-ui, sans-serif";
@@ -297,9 +236,6 @@ const PRESENTATION_TILE_ID = "__presentation__";
 
 type EffectiveMeetViewMode = MeetViewMode | "sideBySide";
 type ResolvedSelfViewMode = Exclude<MeetSelfViewMode, "auto">;
-// "placeholder" = the flat "you're presenting" card (default); "preview" =
-// an actual mirror of your share. This is a LOCAL-ONLY viewing choice — other
-// participants can always see your share either way, regardless of this mode.
 type SelfPresentationView = "placeholder" | "preview";
 type MeetRoomTilingWarmReason =
   | "boundary"
@@ -790,9 +726,6 @@ const computeMeetAutoTileLimit = (
     return requestedMaxTiles;
   }
 
-  // Portrait phones use a fixed-size scrolling gallery — tiles never shrink to
-  // fit, so the cram-to-fit reduction doesn't apply. Show up to the requested
-  // cap and let the rest spill into the overflow tile / scroll.
   if (isMobilePortrait(isMobile, usableWidth, usableHeight)) {
     return requestedMaxTiles;
   }
@@ -822,25 +755,6 @@ const computeMeetAutoTileLimit = (
   return Math.min(requestedMaxTiles, MEET_VIEW_MIN_TILES);
 };
 
-/**
- * No-dependency FLIP. Keeps every tile gliding smoothly (position AND size)
- * when the grid reflows — both from participant identity/order changes
- * (join/leave, active-speaker reorder) AND from a discrete side-panel toggle —
- * WITHOUT remounting the tiles or resizing the live <video> every frame.
- *
- * The whole point: a tile's LAYOUT box (width/height) is set to its FINAL value
- * exactly once (so the <video> surface layout-resizes once, never per frame),
- * and the visual delta is animated purely as a GPU-composited transform —
- * `translate3d(dx,dy,0) scale(sx,sy)` easing to identity, transform-origin 0 0.
- * Per codex/browser-engineering: transform-scaling a composited <video> is GPU
- * RESAMPLING of the already-decoded texture, NOT a per-frame re-raster — it does
- * not flicker. The flicker we saw earlier came from animating layout width/height
- * (the padding transition driving computeGridLayout every frame), not from scale.
- *
- * `reflowNonce` is a value that changes ONLY on a discrete reflow we want to
- * animate (a side-panel open/close). A continuous window-drag resize changes the
- * layout but NOT the nonce, so it just snaps (no per-frame transform thrash).
- */
 function useFlip(
   flipKeys: string[],
   layoutSignature: string,
@@ -851,9 +765,6 @@ function useFlip(
   const prevRects = useRef(new Map<string, DOMRect>());
   const prevIdentitySignature = useRef<string | null>(null);
   const prevReflowNonce = useRef(reflowNonce);
-  // Steady-state "first" rects captured the instant a panel toggle is detected,
-  // held until the new layout settles (a frame later) so the glide starts from
-  // the pre-reflow geometry, never the half-resized intermediate.
   const pendingReflowFirst = useRef<Map<string, DOMRect> | null>(null);
   const frameIds = useRef<number[]>([]);
   const signature = flipKeys.join("~");
@@ -881,19 +792,13 @@ function useFlip(
     const nodes = nodeMap.current;
     const reduced = prefersReducedMotion();
 
-    // One rect read per node — reused for the delta diff and the next snapshot.
     const next = new Map<string, DOMRect>();
     nodes.forEach((node, key) => next.set(key, node.getBoundingClientRect()));
 
-    // --- discrete panel-toggle reflow: stash steady-state rects, defer play ---
     if (prevReflowNonce.current !== reflowNonce) {
       prevReflowNonce.current = reflowNonce;
-      // The final tile sizes land in the NEXT (synchronous, pre-paint) commit —
-      // capture the geometry from BEFORE the reflow now, and play once it lands.
       pendingReflowFirst.current = prevRects.current;
       prevRects.current = next;
-      // If no size/position actually changes (e.g. height-constrained grid), the
-      // settle commit never fires — drop the stale pending next frame.
       const dropId = requestAnimationFrame(() => {
         pendingReflowFirst.current = null;
       });
@@ -905,14 +810,9 @@ function useFlip(
       prevIdentitySignature.current !== null &&
       prevIdentitySignature.current !== signature;
 
-    // Pick the FLIP source: a settled panel reflow, or an identity/order change.
     let firstRects: Map<string, DOMRect> | null = null;
     let duration = FLIP_DURATION_MS;
     if (pendingReflowFirst.current) {
-      // Prefer the steady-state pre-reflow rects even when identity ALSO changed
-      // this commit (a join mid-reflow) — `prevRects` currently holds the
-      // half-resized intermediate, which would make tiles glide from the wrong
-      // start. New tiles (no pending rect) simply skip and appear in place.
       firstRects = pendingReflowFirst.current;
       duration = REFLOW_DURATION_MS;
     } else if (identityChanged) {
@@ -933,7 +833,6 @@ function useFlip(
         const dy = oldRect.top - newRect.top;
         const sx = oldRect.width / newRect.width;
         const sy = oldRect.height / newRect.height;
-        // Skip imperceptible deltas (sub-pixel jitter).
         if (
           Math.abs(dx) < 1 &&
           Math.abs(dy) < 1 &&
@@ -944,13 +843,9 @@ function useFlip(
           node.style.transform = "";
           return;
         }
-        // 1. Invert: place the tile at its OLD box via a GPU transform. Origin
-        //    0 0 (top-left) — FLIP math requires it. translate THEN scale.
         node.style.transition = "none";
         node.style.transformOrigin = "0 0";
         node.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(${sx}, ${sy})`;
-        // 2. Play: next frame, ease the transform back to identity. Only the
-        //    composited transform animates — the <video> layout box does not.
         const frameId = requestAnimationFrame(() => {
           node.style.transition = `transform ${duration}ms ${FLIP_EASING}`;
           node.style.transform = "translate3d(0, 0, 0) scale(1, 1)";
@@ -958,7 +853,6 @@ function useFlip(
         frameIds.current.push(frameId);
       });
     } else {
-      // First paint / pure window resize / reduced motion: snap, no animation.
       nodes.forEach((node) => {
         node.style.transition = "none";
         node.style.transform = "";
@@ -1008,9 +902,6 @@ function GridLayout({
 }: GridLayoutProps) {
   const stageRootRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  // The packer shrinks grid tiles well below the fixed chrome sizes in big
-  // calls — measure the local tile and scale its face/pill/badges like
-  // ParticipantVideo does for remote tiles.
   const localGridTileRef = useRef<HTMLDivElement>(null);
   const localGridTileSize = useElementSize(localGridTileRef);
   const localTileChrome = computeTileChrome(localGridTileSize);
@@ -1055,9 +946,6 @@ function GridLayout({
   const isLocalActiveSpeaker = activeSpeakerId === currentUserId;
   const isLocalPinned = pinnedId === LOCAL_STAGE_ID;
   const hasPresentation = hasLiveVideo(presentationStream);
-  // Default to the placeholder (not your own mirrored screen) each time a
-  // new share session starts; reset happens the moment sharing stops so the
-  // NEXT share starts fresh rather than carrying over the last choice.
   const [selfPresentationView, setSelfPresentationView] =
     useState<SelfPresentationView>("placeholder");
   useLayoutEffect(() => {
@@ -1164,10 +1052,6 @@ function GridLayout({
     );
   }, [activeVideoEffectsCount, isCameraOff, localStream]);
 
-  // Every remote participant, regardless of view filters. The hidden audio
-  // layer MUST render from this list: audio playback can never depend on tile
-  // visibility (issue #177 — "hide tiles without video" silenced camera-off
-  // speakers for viewers with that setting enabled).
   const allRemoteParticipants = useMemo(
     () =>
       Array.from(participants.values()).filter(
@@ -1178,10 +1062,6 @@ function GridLayout({
     [currentUserId, participants]
   );
 
-  // Memoize the filtered input so it only changes identity when `participants`
-  // actually changes — otherwise a fresh array every render defeats
-  // useSmartParticipantOrder's internal memoization (new sorted array each tick).
-  // This list drives TILES only; audio uses allRemoteParticipants above.
   const remoteInput = useMemo(
     () =>
       allRemoteParticipants.filter(
@@ -1272,9 +1152,6 @@ function GridLayout({
     [fullVideoTileIds],
   );
 
-  // Measure the stage so the Meet packer can size tiles to the actual viewport.
-  // We track the border-box and subtract padding ourselves (one source of truth
-  // with the rendered `p-4`), so initial sync measurement + observer agree.
   const gridRef = useRef<HTMLDivElement>(null);
   const [gridSize, setGridSize] = useState({ width: 0, height: 0 });
   useLayoutEffect(() => {
@@ -1282,8 +1159,6 @@ function GridLayout({
     if (!el) return;
     const measure = () => {
       const rect = el.getBoundingClientRect();
-      // Round to integers so sub-pixel ResizeObserver jitter never re-keys the
-      // layout memo / FLIP signature (computeGridLayout floors anyway).
       const width = Math.round(rect.width);
       const height = Math.round(rect.height);
       setGridSize((prev) =>
@@ -1298,11 +1173,6 @@ function GridLayout({
     return () => observer.disconnect();
   }, []);
 
-  // When a side panel toggles, the stage's reserved width changes INSTANTLY (the
-  // pane's padding snaps). Re-measure SYNCHRONOUSLY here — in the same commit,
-  // before the browser paints — so the tiles reach their final size this frame
-  // (no half-resized intermediate flash) and the FLIP's first/last capture is
-  // clean. The async ResizeObserver above would otherwise land a frame later.
   const prevReserveRef = useRef(sidePanelReserve);
   useLayoutEffect(() => {
     if (prevReserveRef.current === sidePanelReserve) return;
@@ -1411,7 +1281,6 @@ function GridLayout({
       setPinnedId(null);
     }
   }, [pinnedId, hasPresentation]);
-  // Tile visibility does not determine whether other people are in the room.
   const isSolo = allRemoteParticipants.length === 0 && !hasPresentation;
   const visibleParticipants = useMemo(() => {
     if (maxVisibleRemoteParticipants <= 0) {
@@ -1781,10 +1650,6 @@ function GridLayout({
     roomTilingRemoteVisibleIdSignature,
   ]);
 
-  // The few hidden participants just past the visible cutoff that we keep warm
-  // (mounted + decoding, but visually hidden) so they cross the boundary without
-  // a remount. Empty while the overflow gallery is open — it already renders
-  // every hidden participant, so warming them too would double-mount the tile.
   const { warmParticipants, warmReasonById } = useMemo(() => {
     const empty = {
       warmParticipants: [] as Participant[],
@@ -1830,9 +1695,6 @@ function GridLayout({
       .slice(0, recentlyVisibleWarmLimit)
       .forEach((participant) => addWarm(participant, "recently-visible"));
 
-    // Also warm the active speaker even if they're hidden BEYOND the buffer —
-    // useSmartParticipantOrder will promote them into the grid after the debounce
-    // and we don't want that to mount a cold <video>.
     if (activeSpeakerId) {
       addWarm(
         overflowParticipants.find(
@@ -2035,9 +1897,6 @@ function GridLayout({
 
   const localDisplayName = getDisplayName(currentUserId);
 
-  // Optimal-packing grid (shared @conclave/meeting-core engine — same logic web,
-  // RN, and the Swift port use). Tiles are sized and placed exactly by the core
-  // packer so every renderer gets the same centered rows and group offsets.
   const layout = useMemo(() => {
     const usableWidth = Math.max(0, gridSize.width - GRID_PADDING * 2);
     const usableHeight = Math.max(0, gridSize.height - GRID_PADDING * 2);
@@ -2111,9 +1970,6 @@ function GridLayout({
   const tileClass = layout.tileWidth > 0
     ? "absolute will-change-transform"
     : "relative h-full w-full will-change-transform";
-  // Portrait-phone tiled view is a fixed-size, vertically-scrolling gallery
-  // (see computeMobilePortraitGridLayout) — let the grid container scroll when
-  // the tiles overflow instead of clipping them.
   const usesMobileScrollGrid =
     !usesStageLayout &&
     isMobilePortrait(
@@ -2121,10 +1977,6 @@ function GridLayout({
       Math.max(0, gridSize.width - GRID_PADDING * 2),
       Math.max(0, gridSize.height - GRID_PADDING * 2),
     );
-  // Include the measured stage size so a panel toggle that shifts tile POSITION
-  // (the centered group re-centers) WITHOUT changing tile SIZE still re-runs the
-  // FLIP effect on the settle commit — otherwise the pending reflow would be
-  // dropped and the tiles would snap instead of glide.
   const layoutSignature = `${renderedViewMode}-${layout.cols}x${layout.rows}-${layout.tileWidth}x${layout.tileHeight}-${layout.offsetX}x${layout.offsetY}-${gridSize.width}x${gridSize.height}`;
   const hasMeasuredGrid = gridSize.width > 0 && gridSize.height > 0;
 
@@ -2504,9 +2356,6 @@ function GridLayout({
       }
     : undefined;
 
-  // Stable FLIP keys, in render order. Identity/order changes animate; pure
-  // layout size changes only refresh the FLIP snapshot, so panel/window resizes
-  // never run every tile through a transform animation.
   const flipKeys = tiledGridTileIds;
   const registerTile = useFlip(
     flipKeys,
@@ -2515,11 +2364,6 @@ function GridLayout({
     sidePanelReserve,
   );
 
-  // Stable per-key ref callbacks. Inline `ref={(node) => registerTile(key, node)}`
-  // creates a NEW function every render, so React detaches+reattaches the ref
-  // (registerTile(null) then registerTile(node)) on every grid re-render — pure
-  // churn on the hot video-tile path. Caching one callback per key makes the ref
-  // identity stable so React leaves it alone unless the node actually changes.
   const tileRefCbs = useRef(new Map<string, (node: HTMLElement | null) => void>());
   const getTileRef = useCallback(
     (key: string) => {
@@ -3051,8 +2895,6 @@ function GridLayout({
           </div>
         ) : null}
 
-        {/* Local tile — wrapped in a stable FLIP node so the <video> never
-            re-attaches when the grid reflows. */}
         {shouldShowSelfAsTile ? (
           <div
             ref={getTileRef("local")}
@@ -3207,10 +3049,6 @@ function GridLayout({
                 )}
               </div>
               {isSolo && (isMobile || !isCameraOff) ? (
-              // On mobile, or when the camera is on, don't cover the stage with
-              // the full card — show a slim invite pill. Mobile pins it to the
-              // top-center (clear of the bottom-left name plate); desktop keeps
-              // it in the bottom-left corner next to the live self-view.
               <button
                 type="button"
                 onClick={handleInvite}
@@ -3336,22 +3174,11 @@ function GridLayout({
           </div>
         ) : null}
 
-        {/* Warm buffer — mounted but hidden (off-screen, still decoding) as
-            SIBLINGS of the visible grid tiles. Stable key={userId} + same parent
-            means a participant promoted across the overflow boundary by the
-            active-speaker sort REPOSITIONS in place (React preserves the element
-            by key) instead of unmount+remounting — no decoder reset / black
-            flash. Skipped while the overflow gallery is open (it already renders
-            every hidden tile). */}
         {warmParticipants.map((participant) => (
           <div
             key={participant.userId}
             aria-hidden
             className="pointer-events-none absolute overflow-hidden opacity-0"
-            // Keep the warm wrapper at the SAME size it'll be in the grid (not
-            // h-px w-px) — otherwise crossing the boundary forces a huge
-            // compositor/video-layer resize from 1px → full tile. Just park it
-            // far off-screen.
             style={{ ...(tileStyle ?? {}), left: -99999, top: 0 }}
           >
             <ParticipantVideo
@@ -3365,9 +3192,6 @@ function GridLayout({
               videoObjectFit={getGridVideoObjectFit(participant.userId)}
               tileWidth={layout.tileWidth || undefined}
               tileHeight={layout.tileHeight || undefined}
-              // No interactive controls on a warm (off-screen, aria-hidden) tile
-              // — passing onTogglePin would render a focusable pin button that a
-              // keyboard / screen reader could still reach inside aria-hidden.
               onTogglePin={undefined}
             />
           </div>
@@ -3417,12 +3241,6 @@ function GridLayout({
             </div>
             <div className="relative">
               <div className="grid auto-cols-[11rem] grid-flow-col gap-3 overflow-x-scroll scroll-smooth snap-x snap-mandatory px-4 pb-4 pt-4 no-scrollbar">
-                {/* Only MOUNT the gallery <video>s while the tray is actually
-                    open. The wrapper above merely collapses them with max-h-0,
-                    so without this guard every hidden participant kept decoding
-                    video while the tray was closed — wasteful and a duplicate of
-                    the warm buffer. Cold-mounting on open is fine (explicit
-                    user action); the warm buffer covers the grid boundary. */}
                 {isOverflowOpen &&
                   overflowParticipants.map((participant) => (
                     <OverflowGalleryTile
@@ -3544,9 +3362,6 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
   presenterName: string;
   presenterId?: string | null;
   size: "stage" | "grid" | "rail";
-  /** Only set when this presentation IS your own screen share — lets the
-   *  presenter choose between a flat "you're presenting" placeholder and an
-   *  actual mirror of their share, right where the share would render. */
   selfView?: {
     mode: SelfPresentationView;
     onModeChange: (mode: SelfPresentationView) => void;
@@ -3556,8 +3371,6 @@ const PresentationVideoTile = memo(function PresentationVideoTile({
     state: CapturedSurfaceControlState;
   };
   isPinned?: boolean;
-  /** Pins/unpins the share to the main stage — same spotlight mechanism as
-   *  participant tiles, so it works from a small grid/rail tile too. */
   onTogglePin?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
