@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getEmojiForShortcode,
   replaceEmojiShortcodes,
+  replaceEmojiShortcodesInMessage,
 } from "../src/app/lib/emoji-shortcodes";
 
 describe("emoji shortcodes", () => {
@@ -37,5 +38,15 @@ describe("emoji shortcodes", () => {
   it("keeps existing Unicode emoji and plain text unchanged", () => {
     expect(replaceEmojiShortcodes("already 😄 here")).toBe("already 😄 here");
     expect(replaceEmojiShortcodes("no colons")).toBe("no colons");
+  });
+
+  it("keeps a direct-message recipient exactly as typed", () => {
+    expect(replaceEmojiShortcodesInMessage("@sam:cry: secret :cry:")).toBe(
+      "@sam:cry: secret 😢",
+    );
+    expect(replaceEmojiShortcodesInMessage("/dm sam:cry: hi :wave:")).toBe(
+      "/dm sam:cry: hi 👋",
+    );
+    expect(replaceEmojiShortcodesInMessage("hello :wave:")).toBe("hello 👋");
   });
 });

@@ -302,3 +302,18 @@ export function replaceEmojiShortcodes(content: string): string {
     )
     .join("");
 }
+
+// A direct message starts with its recipient (`@name …` or `/dm name …`). The
+// server resolves that token against display names, which may contain colons,
+// so it must reach the server exactly as typed.
+const DIRECT_MESSAGE_PREFIX_PATTERN = /^(\s*(?:@\S+|\/dm\s+\S+))([\s\S]*)$/i;
+
+/**
+ * Expands shortcuts in an outgoing chat message, leaving a direct-message
+ * recipient token untouched.
+ */
+export function replaceEmojiShortcodesInMessage(content: string): string {
+  const match = content.match(DIRECT_MESSAGE_PREFIX_PATTERN);
+  if (!match) return replaceEmojiShortcodes(content);
+  return match[1] + replaceEmojiShortcodes(match[2] ?? "");
+}

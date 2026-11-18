@@ -1,7 +1,7 @@
 import type { Point, WhiteboardElement } from "../model/types";
 import { createId, addElement, updateElement, removeElement, getPageElements } from "../doc/index";
 import { hitTestElement, translateElement } from "../model/geometry";
-import { snapArrowEndpoint } from "./arrowSnap";
+import { snapArrow } from "./arrowSnap";
 import type * as Y from "yjs";
 
 export type ToolKind =
@@ -249,8 +249,7 @@ export class ToolEngine {
       if (element.shape === "arrow") {
         // Attach either end to a nearby shape, aimed at its center.
         const others = elements.filter((item) => item.id !== element.id);
-        end = snapArrowEndpoint(point, this.dragStart, others)?.point ?? point;
-        start = snapArrowEndpoint(this.dragStart, end, others)?.point ?? this.dragStart;
+        ({ start, end } = snapArrow(this.dragStart, point, others));
       }
       const next = {
         ...element,

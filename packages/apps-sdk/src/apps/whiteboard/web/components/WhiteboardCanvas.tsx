@@ -1202,7 +1202,19 @@ export function WhiteboardCanvas({
       }
       if (tool === "laser") {
         if (laserPointerIdRef.current === event.pointerId) {
-          appendOwnLaserPoint(point);
+          // Pointer capture keeps delivering moves after the pointer leaves the
+          // canvas, and suppresses pointerleave, so end the laser here.
+          const rect = event.currentTarget.getBoundingClientRect();
+          const outside =
+            event.clientX < rect.left ||
+            event.clientX > rect.right ||
+            event.clientY < rect.top ||
+            event.clientY > rect.bottom;
+          if (outside) {
+            endOwnLaser();
+          } else {
+            appendOwnLaserPoint(point);
+          }
         }
         scheduleCursorSync(point.x, point.y);
         return;
@@ -1260,6 +1272,7 @@ export function WhiteboardCanvas({
     [
       appendOwnLaserPoint,
       doc,
+      endOwnLaser,
       locked,
       moveEraserRing,
       onPanMove,

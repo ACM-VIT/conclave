@@ -27,7 +27,7 @@ import {
   MAX_CHAT_IMAGE_BYTES,
   isSupportedChatImageType,
 } from "../lib/chat-images";
-import { replaceEmojiShortcodes } from "../lib/emoji-shortcodes";
+import { replaceEmojiShortcodesInMessage } from "../lib/emoji-shortcodes";
 import {
   ConclaveAssistantApiKeyRequiredError,
   type AssistantChatMessage,
@@ -640,7 +640,9 @@ export function useMeetChat({
       // Expand :name: shortcuts before sending so every client, native
       // included, receives the emoji. TTS text is spoken, so it stays as typed.
       const messageContent =
-        isTtsMessage || gif ? rawContent : replaceEmojiShortcodes(rawContent);
+        isTtsMessage || gif
+          ? rawContent
+          : replaceEmojiShortcodesInMessage(rawContent);
       const optimisticMessage = buildOptimisticMessage(
         messageContent,
         gif,

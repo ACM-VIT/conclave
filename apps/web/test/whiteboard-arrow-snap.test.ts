@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ARROW_SNAP_GAP,
+  snapArrow,
   snapArrowEndpoint,
 } from "../../../packages/apps-sdk/src/apps/whiteboard/core/tools/arrowSnap";
 import type { WhiteboardElement } from "../../../packages/apps-sdk/src/apps/whiteboard/core/model/types";
@@ -63,5 +64,37 @@ describe("whiteboard arrow snapping", () => {
 
     const top = shape("top", "rect", 120, 110, 60, 30);
     expect(snapArrowEndpoint(point, from, [box, top])?.targetId).toBe("top");
+  });
+
+  it("does not snap from an ellipse's empty bounding-box corner", () => {
+    const circle = shape("circle", "ellipse", 0, 0, 1000, 1000);
+    expect(snapArrowEndpoint({ x: 10, y: 10 }, { x: -200, y: -200 }, [circle])).toBeNull();
+  });
+
+  it("puts both snapped ends on the line between the two shapes' centers", () => {
+    const tall = shape("tall", "rect", 0, 0, 100, 600);
+    const small = shape("small", "rect", 300, 500, 80, 80);
+    const { start, end, startTargetId, endTargetId } = snapArrow(
+      { x: 50, y: 20 },
+      { x: 340, y: 540 },
+      [tall, small],
+    );
+    expect([startTargetId, endTargetId]).toEqual(["tall", "small"]);
+    const centerA = { x: 50, y: 300 };
+    const centerB = { x: 340, y: 540 };
+    const cross = (p: { x: number; y: number }) =>
+      (centerB.x - centerA.x) * (p.y - centerA.y) - (centerB.y - centerA.y) * (p.x - centerA.x);
+    expect(Math.abs(cross(start))).toBeLessThan(1e-6);
+    expect(Math.abs(cross(end))).toBeLessThan(1e-6);
+    expect(start.x).toBeCloseTo(100 + ARROW_SNAP_GAP * Math.cos(Math.atan2(240, 290)), 5);
+    expect(end.x).toBeLessThan(300);
+  });
+
+  it("leaves an arrow drawn between two points on one shape unsnapped", () => {
+    const wide = shape("wide", "rect", 0, 0, 400, 100);
+    expect(snapArrow({ x: 10, y: 50 }, { x: 390, y: 50 }, [wide])).toEqual({
+      start: { x: 10, y: 50 },
+      end: { x: 390, y: 50 },
+    });
   });
 });

@@ -68,30 +68,95 @@ function outlinePointToward(target: SnapTarget, toward: Point, gap: number): Poi
   return { x: cx + dx * (distance + gap), y: cy + dy * (distance + gap) };
 }
 
+function isWithin(target: SnapTarget, point: Point, padding: number): boolean {
+  if (!target.ellipse) return containsPoint(target.bounds, point, padding);
+  const { bounds } = target;
+  const rx = bounds.width / 2 + padding;
+  const ry = bounds.height / 2 + padding;
+  if (rx <= 0 || ry <= 0) return false;
+  const dx = (point.x - (bounds.x + bounds.width / 2)) / rx;
+  const dy = (point.y - (bounds.y + bounds.height / 2)) / ry;
+  return dx * dx + dy * dy <= 1;
+}
+
+function centerOf(target: SnapTarget): Point {
+  return {
+    x: target.bounds.x + target.bounds.width / 2,
+    y: target.bounds.y + target.bounds.height / 2,
+  };
+}
+
+type SnapOptions = { excludeIds?: readonly string[]; distance?: number; gap?: number };
+
 /**
- * Finds the shape an arrow end at `point` should attach to and the point on
- * its outline to attach at. `otherEnd` is the arrow's other end, which sets the
- * direction the arrow approaches from. Returns null when nothing is close.
+ * The element an arrow end at `point` should attach to: the topmost snap
+ * target within `distance` of the point, unless `otherEnd` is inside that same
+ * element (an arrow drawn within one shape is a mark on it, not a link).
  */
-export function snapArrowEndpoint(
+function findSnapTarget(
   point: Point,
   otherEnd: Point,
   elements: readonly WhiteboardElement[],
-  options: { excludeIds?: readonly string[]; distance?: number; gap?: number } = {},
-): ArrowSnap | null {
+  options: SnapOptions,
+): SnapTarget | null {
   const distance = options.distance ?? ARROW_SNAP_DISTANCE;
-  const gap = options.gap ?? ARROW_SNAP_GAP;
   const exclude = new Set(options.excludeIds ?? []);
-  // Topmost element wins, matching what the user sees under the pointer.
   for (let index = elements.length - 1; index >= 0; index -= 1) {
     const element = elements[index];
     if (!element || exclude.has(element.id)) continue;
     const target = toSnapTarget(element);
     if (!target || target.bounds.width <= 0 || target.bounds.height <= 0) continue;
-    if (!containsPoint(target.bounds, point, distance)) continue;
-    // An arrow drawn entirely inside one shape is a mark on it, not a link.
-    if (containsPoint(target.bounds, otherEnd)) continue;
-    return { point: outlinePointToward(target, otherEnd, gap), targetId: target.id };
+    if (!isWithin(target, point, distance)) continue;
+    if (isWithin(target, otherEnd, 0)) continue;
+    return target;
   }
   return null;
+}
+
+/**
+ * Finds the shape an arrow end at `point` should attach to and the point on
+ * its outline to attach at, aimed from `otherEnd`. Returns null when nothing
+ * is close.
+ */
+export function snapArrowEndpoint(
+  point: Point,
+  otherEnd: Point,
+  elements: readonly WhiteboardElement[],
+  options: SnapOptions = {},
+): ArrowSnap | null {
+  const target = findSnapTarget(point, otherEnd, elements, options);
+  if (!target) return null;
+  return {
+    point: outlinePointToward(target, otherEnd, options.gap ?? ARROW_SNAP_GAP),
+    targetId: target.id,
+  };
+}
+
+/**
+ * Snaps both ends of an arrow drawn from `start` to `end`. Targets are found
+ * first; then each snapped end is placed on the line toward the other end's
+ * target center (or the other raw end), so with two targets both ends sit on
+ * one center-to-center line and the arrow never cuts through either shape.
+ */
+export function snapArrow(
+  start: Point,
+  end: Point,
+  elements: readonly WhiteboardElement[],
+  options: SnapOptions = {},
+): { start: Point; end: Point; startTargetId?: string; endTargetId?: string } {
+  const gap = options.gap ?? ARROW_SNAP_GAP;
+  const endTarget = findSnapTarget(end, start, elements, options);
+  const startTarget = findSnapTarget(start, end, elements, options);
+  // Both ends on the same element is not a link; leave the arrow as drawn.
+  if (startTarget && endTarget && startTarget.id === endTarget.id) {
+    return { start, end };
+  }
+  const startAnchor = startTarget ? centerOf(startTarget) : start;
+  const endAnchor = endTarget ? centerOf(endTarget) : end;
+  return {
+    start: startTarget ? outlinePointToward(startTarget, endAnchor, gap) : start,
+    end: endTarget ? outlinePointToward(endTarget, startAnchor, gap) : end,
+    ...(startTarget ? { startTargetId: startTarget.id } : {}),
+    ...(endTarget ? { endTargetId: endTarget.id } : {}),
+  };
 }

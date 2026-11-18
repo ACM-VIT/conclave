@@ -521,6 +521,8 @@ function ChatPanel({
   }, [composerEmbedUrl, dismissedEmbedUrl]);
 
   const clearPendingImage = useCallback(() => {
+    // Drop any conversion still running so it cannot re-stage an image.
+    imagePrepGenerationRef.current += 1;
     if (pendingImageUrlRef.current) {
       URL.revokeObjectURL(pendingImageUrlRef.current);
       pendingImageUrlRef.current = null;
@@ -533,6 +535,7 @@ function ChatPanel({
 
   useEffect(
     () => () => {
+      imagePrepGenerationRef.current += 1;
       if (pendingImageUrlRef.current) {
         URL.revokeObjectURL(pendingImageUrlRef.current);
       }
@@ -751,7 +754,7 @@ function ChatPanel({
     }
   };
 
-  const renderMessageContent = (content: string) =>
+  const renderMessageContent = (content: string, expandEmoji = true) =>
     getChatMessageSegments(content).map((segment, index) =>
       segment.href ? (
         <a
@@ -765,7 +768,9 @@ function ChatPanel({
         </a>
       ) : (
         <span key={`${segment.text}-${index}`}>
-          {replaceEmojiShortcodesInText(segment.text)}
+          {expandEmoji
+            ? replaceEmojiShortcodesInText(segment.text)
+            : segment.text}
         </span>
       )
     );
@@ -1138,7 +1143,11 @@ function ChatPanel({
                                 : undefined
                             }
                             onStop={onStopTts}
-                            renderContent={renderMessageContent}
+                            renderContent={(content) =>
+                              // Spoken text is shown as typed, matching what
+                              // the voice reads (shortcuts are not expanded).
+                              renderMessageContent(content, false)
+                            }
                           />
                         ) : (
                           <div
