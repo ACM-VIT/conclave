@@ -99,10 +99,6 @@ export function GameProvider({
     pendingStart.current = null;
   }, [socket]);
 
-  // Prefer the server's canonical id for this socket over the host-provided
-  // user id. The server may normalize identity (lowercased email, token
-  // session id), so a locally rebuilt id can silently fail to match the ids
-  // in players lists, scoreboards, and tile state.
   const userId = selfId ?? user?.id ?? null;
 
   const applySnapshot = useCallback((state: unknown) => {

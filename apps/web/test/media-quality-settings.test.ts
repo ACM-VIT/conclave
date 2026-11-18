@@ -217,9 +217,6 @@ describe("media quality settings", () => {
       cursor: "never",
     });
 
-    // Preserve the conservative ideal for settings written by the previous
-    // picker updater, which incorrectly marked the otherwise-auto profile as
-    // custom.
     expect(
       resolveScreenSharePublishSettings({ ...updated, preset: "custom" }),
     ).toMatchObject({

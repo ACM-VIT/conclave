@@ -115,7 +115,6 @@ const sortRecentFirst = <T extends { updatedAt: number; createdAt: number }>(
 export const listCustomVideoBackgrounds = async () => {
   if (!canUseIndexedDb()) return [];
   const backgrounds = await withStore("readonly", (store) =>
-    // Own IndexedDB store; every write goes through this module.
     requestToPromise(store.getAll() as IDBRequest<CustomVideoBackground[]>),
   );
   return sortRecentFirst(backgrounds).map(toSummary);

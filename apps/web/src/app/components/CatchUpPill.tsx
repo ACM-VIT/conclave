@@ -3,17 +3,6 @@
 import { X } from "lucide-react";
 import { useCallback, useState } from "react";
 
-/**
- * A quiet, dismissible chip for late joiners while the meeting assistant is
- * live: one tap opens the transcript panel on the minutes tab, which already
- * holds a self-updating summary of everything they missed.
- *
- * Deliberately gated so it never nags: it only exists when a transcript
- * session is running (the assistant is strictly opt-in per meeting), only for
- * people who joined meaningfully after it started, and once dismissed it stays
- * gone for that session.
- */
-
 const MIN_MISSED_MS = 2 * 60 * 1000;
 
 const dismissalKey = (sessionKey: string): string =>
@@ -32,18 +21,13 @@ const writeDismissed = (sessionKey: string): void => {
   try {
     window.sessionStorage.setItem(dismissalKey(sessionKey), "1");
   } catch {
-    // Storage unavailable; the in-memory state still hides the pill.
   }
 };
 
 interface CatchUpPillProps {
-  /** When the live transcript session started (server clock, ms epoch). */
   startedAt: number | null;
-  /** When this participant joined the call (local clock, ms epoch). */
   joinedAt: number | null;
-  /** Stable key for this transcript session, used for the dismissal memory. */
   sessionKey: string;
-  /** Opens the transcript panel on the minutes tab. */
   onOpen: () => void;
 }
 

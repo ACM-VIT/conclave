@@ -114,12 +114,6 @@ export class TranscriptRecoveryAudioBuffer {
   }
 }
 
-/**
- * Keeps only audio that has not produced a final OpenAI transcript item yet.
- * If the provider socket drops after a commit but before its final event, the
- * room can replay this journal into the replacement socket instead of losing
- * the last utterance.
- */
 export class TranscriptAudioReplayJournal {
   private current:
     | Omit<ReplayBatch, "sequence" | "committedAt">

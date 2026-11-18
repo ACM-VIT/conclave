@@ -24,7 +24,6 @@ const socket = {
   emit: (event: string, payload?: unknown, ack?: (response: unknown) => void) => {
     emitted.push({ event, payload });
     if (event === "apps:yjs:sync" && typeof ack === "function") {
-      // The server's copy of the app is empty: it was destroyed on close.
       ack({ syncMessage: null, stateVector: Y.encodeStateVector(new Y.Doc()) });
     }
   },
@@ -70,7 +69,6 @@ it("does not resurrect a closed app's content when it is reopened", async () => 
   const reopened = ctx.getDoc("board");
   expect(reopened).not.toBe(firstDoc);
   expect(reopened.getMap("shapes").get("circle")).toBeUndefined();
-  // Nothing sent to the server carries the closed app's old content.
   for (const upload of emitted.filter((entry) => entry.event === "apps:yjs:update")) {
     const received = new Y.Doc();
     Y.applyUpdate(received, (upload.payload as { update: Uint8Array }).update);

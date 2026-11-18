@@ -7,12 +7,6 @@ type GestureOverlayProps = {
   title: string | null;
 };
 
-/**
- * Browser autoplay recovery. Muted playback gets a small, non-blocking sound
- * chip; only a genuinely blocked player uses the centered recovery surface.
- * Both actions are explicitly local, so nobody mistakes them for room-wide
- * playback controls.
- */
 export function GestureOverlay({
   need,
   onResolve,

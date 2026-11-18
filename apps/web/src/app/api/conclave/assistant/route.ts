@@ -175,10 +175,6 @@ const TRANSCRIPT_TOOL_NAME = "get_meeting_transcript";
 const GITHUB_ISSUE_TOOL_NAME = "create_github_issue";
 const SHARED_BROWSER_TOOL_NAME = "control_shared_browser";
 
-// In-meeting "@Conclave" assistant. Unlike the transcript Q&A (which is strictly
-// grounded in the transcript), this is a general helper a participant can summon
-// from the chat. It sees recent chat, can call a transcript tool when meeting
-// context is needed, and can search the web for current/general facts.
 const ASSISTANT_SYSTEM_PROMPT = [
   "You are Conclave, a helpful AI assistant living inside a live video meeting's chat.",
   "A participant summoned you by mentioning @Conclave. Reply to them directly and conversationally.",
@@ -218,8 +214,6 @@ const MAX_HISTORY_MESSAGES = 40;
 const MAX_HISTORY_CHARS = 12_000;
 const MAX_TRANSCRIPT_CHARS = 24_000;
 const RELAY_PACKET_TTL_MS = 5 * 60 * 1000;
-// Caps for the process state carried inside relay packets. The SFU rejects
-// packets that exceed these, so they must stay in sync with chatHandlers.ts.
 const MAX_RELAY_REASONING_CHARS = AI_GENERATION_LIMITS.relayReasoningChars;
 const MAX_RELAY_TASKS = 32;
 const MAX_RELAY_TASK_ID_CHARS = 120;
@@ -426,9 +420,6 @@ const relaySigningInput = (
     done: packet.done,
     timestamp: packet.timestamp,
     expiresAt: packet.expiresAt,
-    // Optional process-state fields. `undefined` values are dropped by
-    // JSON.stringify, so packets without them produce the exact legacy signing
-    // input. The SFU builds this same canonical shape when verifying.
     reasoning: packet.reasoning || undefined,
     reasoningDone: packet.reasoningDone === true ? true : undefined,
     tasks: packet.tasks?.length
@@ -736,7 +727,6 @@ export async function POST(request: Request) {
     } catch (error) {
       console.warn("[Conclave] room AI lookup failed:", JSON.stringify(describeRoomAiLookupFailure(error)));
       if (routedRoom) return Response.json({ error: "Room AI settings could not be loaded. Reconnect and try again." }, { status: 503 });
-      /* Missing room credentials use the same provider-specific setup flow. */
     }
   }
   const inferenceEnvironment = routedRoom
@@ -841,8 +831,6 @@ export async function POST(request: Request) {
     signal: request.signal,
   });
 
-  // Mirrors of the process state streamed to the asker, so relay packets can
-  // carry the same thinking/actions flow to everyone else in the room.
   let relayReasoning = "";
   let relayReasoningDone = false;
   let relayTasks: AssistantTask[] | undefined;
@@ -963,8 +951,6 @@ export async function POST(request: Request) {
           return;
         }
         taskFingerprints.set(task.id, fingerprint);
-        // Mirror the step into the relay task list (with the SFU's caps) and
-        // ship a relay packet so the whole room sees the step change live.
         relayTasks = mergeAssistantTask(relayTasks, {
           id: task.id.slice(0, MAX_RELAY_TASK_ID_CHARS),
           kind: task.kind,
@@ -1001,13 +987,9 @@ export async function POST(request: Request) {
         });
       };
 
-      // Streams a reasoning-summary chunk to the asker while keeping the relay
-      // mirror in sync, so the packet fanned out to the room carries the same
-      // accumulated reasoning text the asker's client has rendered.
       const emitReasoning = (delta?: string, done?: boolean): void => {
         if (delta) {
           relayReasoning += delta;
-          // A later tool round can resume thinking after a summary finished.
           relayReasoningDone = false;
         }
         if (done) {
@@ -1164,9 +1146,6 @@ export async function POST(request: Request) {
           "[Conclave] assistant stream failed:",
           JSON.stringify({ model, ...failure }),
         );
-        // Always relay the failure: earlier task/reasoning packets may have
-        // already opened a live bubble for the rest of the room, and it must
-        // terminate in the same error state the asker sees.
         writeStreamEvent({
           type: "error",
           error: participantApiKey && failure.status === 401

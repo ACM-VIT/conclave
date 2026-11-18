@@ -1,9 +1,5 @@
 "use client";
 
-// Ported from AI SDK Elements (elements.ai-sdk.dev) "Message" and themed for
-// Conclave. User turns sit in a filled bubble; assistant turns render flush so
-// the Response markdown reads like part of the panel.
-
 import type { ComponentProps, HTMLAttributes } from "react";
 import { cn } from "./utils";
 

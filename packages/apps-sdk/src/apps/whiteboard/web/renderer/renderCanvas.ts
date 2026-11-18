@@ -254,9 +254,6 @@ const renderRect = (
   ctx.restore();
 };
 
-/**
- * Renders a hand-drawn ellipse, Excalidraw-style.
- */
 const renderEllipse = (
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -316,7 +313,6 @@ const renderGrid = (
   translateY: number,
   scale: number,
 ) => {
-  // Fill background in screen space (before transform)
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = "#121212";
@@ -324,17 +320,14 @@ const renderGrid = (
   ctx.restore();
 
   const step = 20;
-  // Clamp dot radius so it stays visible when zoomed out but not huge when zoomed in
   const dotR = Math.min(1.2, Math.max(0.4, 0.6 / scale));
   const majorDotR = Math.min(2.0, Math.max(0.7, 1.0 / scale));
 
-  // Compute the visible canvas-space range so we only draw dots in view
   const canvasLeft = -translateX / scale;
   const canvasTop = -translateY / scale;
   const canvasRight = canvasLeft + width / scale;
   const canvasBottom = canvasTop + height / scale;
 
-  // Snap start to the nearest grid line behind the visible edge
   const startX = Math.floor(canvasLeft / step) * step;
   const startY = Math.floor(canvasTop / step) * step;
 
@@ -432,8 +425,6 @@ export const renderCanvas = (
   imageCache?: Map<string, HTMLImageElement>,
   viewport?: { translateX: number; translateY: number; scale: number },
 ) => {
-  // clearRect must operate in screen space, reset to identity (ignoring any
-  // pre-applied DPR or viewport transform) then restore after clearing.
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);

@@ -12,7 +12,6 @@ type VersionedCloudflareEnv = {
 
 const readCloudflareVersionMetadata = (): unknown => {
   try {
-    // Optional metadata must not start a local Wrangler runtime on Node.
     const { env } = getCloudflareContext();
     return (env as VersionedCloudflareEnv).CF_VERSION_METADATA;
   } catch {

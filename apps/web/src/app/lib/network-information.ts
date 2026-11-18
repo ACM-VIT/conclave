@@ -50,11 +50,6 @@ export type BrowserNetworkPollAuthority = Readonly<{
   invalidate: () => void;
 }>;
 
-/**
- * Makes overlapping asynchronous stats polls latest-request-wins. A Network
- * Information change can arrive while getStats() is pending; the older poll
- * must not publish its stale browser snapshot after the newer request begins.
- */
 export function createBrowserNetworkPollAuthority(): BrowserNetworkPollAuthority {
   let latestGeneration = 0;
   return Object.freeze({
@@ -69,12 +64,6 @@ export function createBrowserNetworkPollAuthority(): BrowserNetworkPollAuthority
   });
 }
 
-/**
- * Product-owned evidence that the real connection-quality policy consumed a
- * browser Network Information snapshot. The quality harness may inject the
- * browser API, but it cannot mint this observation: only the application poll
- * that drives publish/receive adaptation calls this helper.
- */
 export function buildBrowserNetworkPolicyObservation(
   browserNetwork: BrowserNetworkSnapshot,
   observedAtEpochMs = Date.now(),
@@ -112,7 +101,6 @@ export const isLikelyMobileOrTabletNavigator = (): boolean => {
   const userAgent = navigator.userAgent;
   if (MOBILE_USER_AGENT_PATTERN.test(userAgent)) return true;
 
-  // iPadOS can present a desktop-style Macintosh user agent in Safari.
   return /Macintosh/i.test(userAgent) && navigator.maxTouchPoints > 1;
 };
 
@@ -181,9 +169,6 @@ function getBrowserNetworkStartupQuality(
   const quality = classifyBrowserNetworkQuality(connection);
   if (quality !== "unknown") return quality;
 
-  // Browsers such as Safari do not expose Network Information. Start mobile and
-  // tablet capture conservatively, but keep measured quality unknown so WebRTC
-  // stats can restore full quality on strong links.
   if (!connection && isLikelyMobileOrTabletNavigator()) return "fair";
 
   return "unknown";
@@ -246,8 +231,6 @@ export function shouldStartLowBandwidthVideo(
   ) {
     return true;
   }
-  // Start conservatively only from capacity evidence. A long but otherwise
-  // clean network path cannot be repaired by discarding camera pixels.
   return (
     isFinitePositiveNumber(connection.downlink) && connection.downlink <= 1.5
   );

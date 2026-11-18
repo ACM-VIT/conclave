@@ -7,8 +7,6 @@ import {
 
 describe("getDisplayableHotkeys", () => {
   it("filters out declared-but-unbound actions", () => {
-    // These exist in the map for labeling purposes but have no binding yet;
-    // a shortcuts reference row with an empty key chip would be noise.
     expect(HOTKEYS.toggleReactions.keys).toBe("");
     expect(HOTKEYS.toggleApps.keys).toBe("");
 

@@ -6,8 +6,6 @@ import {
 
 import { isResponseModel } from "@conclave/ai/models";
 
-// Identity of the in-meeting "@Conclave" AI assistant. The SFU validates signed
-// assistant packets before broadcasting them with this stable bot identity.
 export const CONCLAVE_ASSISTANT_USER_ID = "conclave-assistant";
 export const CONCLAVE_ASSISTANT_NAME = "Conclave";
 export const CONCLAVE_MENTION_TOKEN = "Conclave";
@@ -37,9 +35,6 @@ export interface ConclaveAssistantRelayPacket {
   questionMessageId: string;
   content: string;
   done: boolean;
-  // Process state so every participant sees the same thinking/actions flow as
-  // the asker: streamed reasoning summary, whether it finished, and the tool
-  // step timeline. Optional so legacy packets (and their signatures) stay valid.
   reasoning?: string;
   reasoningDone?: boolean;
   tasks?: AssistantTask[];
@@ -56,7 +51,6 @@ export class ConclaveAssistantApiKeyRequiredError extends Error {
   }
 }
 
-// A single streamed assistant step shown in the process timeline.
 type AssistantTaskKind =
   | "reasoning"
   | "web_search"
@@ -82,24 +76,15 @@ export interface AssistantToolApproval {
 
 export type AssistantToolApprovalDecision = "approve" | "deny";
 
-// Client-only fields layered onto a ChatMessage for assistant rendering.
 export interface AssistantChatMessage extends ChatMessage {
   isAssistant?: boolean;
   assistantStatus?: ConclaveAssistantStatus;
   reasoningStatus?: ConclaveAssistantPartStatus;
-  // The model's streamed reasoning summary, rendered as a collapsible trace.
   reasoning?: string;
-  // Tool activity (web search, transcript lookup, issue creation) shown as a
-  // compact action timeline.
   tasks?: AssistantTask[];
-  // Present only for the participant who invoked the side-effecting tool.
-  // Other room members continue to see the relayed in-progress task, but
-  // cannot approve an action on the requester's behalf.
   toolApproval?: AssistantToolApproval;
 }
 
-// Merge a streamed task into an existing list, upserting by id and keeping a
-// "done" status sticky so a late "running" event can't reopen a finished step.
 export const mergeAssistantTask = (
   tasks: AssistantTask[] | undefined,
   next: AssistantTask,
@@ -133,18 +118,11 @@ export interface ConclaveAssistantHistoryItem {
   content: string;
 }
 
-// Matches an "@Conclave" mention anywhere in a message — at the start, or
-// mid-sentence like "Hey @Conclave, what's up". The (^|\s) boundary keeps it
-// from firing inside emails or handles such as "foo@conclave.ai".
 const MENTION_PATTERN = new RegExp(
   `(^|\\s)@${CONCLAVE_MENTION_TOKEN}\\b[\\s,:]*`,
   "i",
 );
 
-// Returns the trimmed question when a message mentions "@Conclave" anywhere,
-// or null when the message is a normal chat line. The mention token is stripped
-// out and the surrounding words become the question ("Hey @Conclave do X" ->
-// "Hey do X").
 export const parseConclaveMention = (content: string): string | null => {
   if (!MENTION_PATTERN.test(content)) return null;
   return content
@@ -153,8 +131,6 @@ export const parseConclaveMention = (content: string): string | null => {
     .trim();
 };
 
-// Renders transcript segments as `[HH:MM:SS] Speaker: text` lines for the
-// assistant's context, matching the format the transcript Q&A uses.
 export const formatTranscriptForAssistant = (
   segments: TranscriptSegment[],
 ): string =>
@@ -269,8 +245,6 @@ const parseAssistantStreamFrame = (
   return parseAssistantStreamEvent(data || trimmed);
 };
 
-// Streams the assistant answer from the API route, invoking onDelta with the
-// accumulated text on each chunk. Resolves with the final text or throws.
 export const streamConclaveAssistant = async ({
   answerId,
   question,
@@ -320,7 +294,6 @@ export const streamConclaveAssistant = async ({
       if (data?.code) code = data.code;
       if (data?.model && isConclaveAssistantModel(data.model)) resolvedModel = data.model;
     } catch {
-      // Non-JSON error body; keep the default message.
     }
     if (response.status === 428 || code === "api_key_required") {
       throw new ConclaveAssistantApiKeyRequiredError(message, resolvedModel);
@@ -343,9 +316,6 @@ export const streamConclaveAssistant = async ({
   let lastRelayedStreamedLength = 0;
   let lastRelayedProcessFingerprint = "";
 
-  // Discrete process-state changes (a task starting/finishing, reasoning
-  // wrapping up, an error) must reach the room immediately; only the steady
-  // text growth of the answer/reasoning is throttled.
   const packetProcessFingerprint = (
     packet: ConclaveAssistantRelayPacket,
   ): string =>

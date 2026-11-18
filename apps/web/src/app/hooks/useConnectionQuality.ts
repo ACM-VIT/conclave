@@ -24,21 +24,13 @@ import type { Transport } from "../lib/types";
 export type ConnectionQuality = NetworkQuality;
 
 export interface MediaTrackQualityStats {
-  /** Actual media bitrate over the most recent stats window, in bits/sec. */
   bitrateBps: number | null;
-  /** Actual encoded/decoded frame rate over the most recent stats window. */
   framesPerSecond: number | null;
-  /** Last observed video frame width, when this is video. */
   frameWidth: number | null;
-  /** Last observed video frame height, when this is video. */
   frameHeight: number | null;
-  /** Negotiated codec MIME type, or "mixed" when multiple codecs are present. */
   codecMimeType: string | null;
-  /** Browser-reported send-side quality limitation reason, if available. */
   qualityLimitationReason: string | null;
-  /** True when at least one send-side video RTP stream is bandwidth-limited. */
   bandwidthLimited: boolean;
-  /** True when at least one send-side video RTP stream is CPU-limited. */
   cpuLimited: boolean;
 }
 
@@ -48,85 +40,49 @@ interface DirectionMediaQualityStats {
 }
 
 export interface ConnectionQualityStats {
-  /** Worst observed tier across publishing and receiving. */
   quality: ConnectionQuality;
-  /** User-facing send-side quality, including latency-only degradation. */
   publishQuality: ConnectionQuality;
-  /**
-   * Send-side media adaptation tier. Unlike publishQuality, an otherwise
-   * healthy RTT-only path can remain good so latency does not discard pixels.
-   */
   publishAdaptationQuality: ConnectionQuality;
-  /** Receive-side quality, used for remote consumer layer selection. */
   receiveQuality: ConnectionQuality;
-  /** Receive-side media adaptation tier with latency-only pressure removed. */
   receiveAdaptationQuality: ConnectionQuality;
-  /** Prefer a lower temporal layer while retaining focus-camera resolution. */
   receiveContinuityRisk: boolean;
-  /** Send-side quality from WebRTC stats before browser-network hinting. */
   rtcPublishQuality: ConnectionQuality;
-  /** Receive-side quality from WebRTC stats before browser-network hinting. */
   rtcReceiveQuality: ConnectionQuality;
-  /** True when either browser hints or WebRTC stats indicate an emergency-grade link. */
   emergencyMode: boolean;
-  /** Send-side media emergency; clean high RTT alone is intentionally excluded. */
   publishEmergencyMode: boolean;
-  /** Receive-side media emergency; clean high RTT alone is intentionally excluded. */
   receiveEmergencyMode: boolean;
-  /** Worst observed round-trip time in milliseconds, if observable. */
   rttMs: number | null;
-  /** Worst observed fraction of packets lost (0-1) over the most recent window. */
   packetLoss: number | null;
-  /** Worst observed jitter in milliseconds, if observable. */
   jitterMs: number | null;
-  /** Send-side round-trip time in milliseconds, if observable. */
   publishRttMs: number | null;
-  /** Send-side packet loss fraction (0-1) over the most recent window. */
   publishPacketLoss: number | null;
-  /** Send-side jitter in milliseconds, if observable from remote inbound stats. */
   publishJitterMs: number | null;
-  /** Receive-side round-trip time in milliseconds, if observable. */
   receiveRttMs: number | null;
-  /** Receive-side packet loss fraction (0-1) over the rolling ~6s window. */
   receivePacketLoss: number | null;
-  /** Receive-side jitter in milliseconds, if observable. */
   receiveJitterMs: number | null;
-  /** Estimated send-side available bitrate in bits/sec, if exposed. */
   availableOutgoingBitrate: number | null;
-  /** Estimated receive-side available bitrate in bits/sec, if exposed. */
   availableIncomingBitrate: number | null;
-  /** Browser Network Information API snapshot used as an early/fallback hint. */
   browserNetwork: BrowserNetworkSnapshot;
-  /** Product-owned proof that this hook consumed the browser-network snapshot. */
   browserNetworkObservation: Readonly<BrowserNetworkPolicyObservation> | null;
-  /** Actual send-side audio/video media stats over the latest polling window. */
   publishMedia: DirectionMediaQualityStats;
-  /** Actual receive-side audio/video media stats over the latest polling window. */
   receiveMedia: DirectionMediaQualityStats;
 }
 
 interface UseConnectionQualityOptions {
-  /** Producer (send) transport ref from the media hook. Reused, not owned. */
   producerTransportRef: React.MutableRefObject<Transport | null>;
-  /** Consumer (recv) transport ref from the media hook. Reused, not owned. */
   consumerTransportRef: React.MutableRefObject<Transport | null>;
-  /** Only poll while truly in the meeting. */
   enabled: boolean;
-  /** Poll cadence; defaults to ~2s. */
   intervalMs?: number;
 }
 
 const DEFAULT_INTERVAL_MS = 2000;
 
-// Thresholds tuned for conservative, non-alarmist reporting. A connection is
-// only "poor" when at least one signal is clearly bad; "fair" is the early
-// warning band; everything else is "good".
 const RTT_FAIR_MS = 250;
 const RTT_POOR_MS = 500;
 const RTT_EMERGENCY_MS = 850;
-const LOSS_FAIR = 0.05; // 5%
-const LOSS_POOR = 0.08; // 8%
-const LOSS_EMERGENCY = 0.15; // 15%
+const LOSS_FAIR = 0.05;
+const LOSS_POOR = 0.08;
+const LOSS_EMERGENCY = 0.15;
 const JITTER_FAIR_MS = 30;
 const JITTER_POOR_MS = 60;
 const JITTER_EMERGENCY_MS = 120;
@@ -236,11 +192,6 @@ type MediaCounterSample = {
   videoCpuLimited: boolean;
 };
 
-/**
- * Reads the relevant numeric fields off an RTCStats entry without forcing the
- * caller to depend on lib.dom's partial RTC stats typings (Safari/Chrome
- * diverge, and mediasoup forwards the raw browser report).
- */
 function num(stat: Record<string, unknown>, key: string): number | null {
   const value = stat[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -330,18 +281,10 @@ const createEmptyMediaCounterSample = (
 
 const normalizeFractionLost = (value: number | null): number | null => {
   if (value == null || value < 0) return null;
-  // Browsers normally expose 0-1 here, but tolerate the RFC3550 0-255 form.
   if (value > 1 && value <= 255) return value / 255;
   return Math.min(value, 1);
 };
 
-/**
- * Derives quality signals from a single transport's RTCStatsReport.
- * - RTT comes from the nominated candidate-pair or remote-inbound-rtp.
- * - Inbound RTP loss/jitter describes download health.
- * - Remote inbound RTP loss/jitter describes what the peer receives from us,
- *   so it is the most useful browser-visible uplink signal.
- */
 function readReport(report: RTCStatsReport): ReportSignals {
   const timestampMs = Date.now();
   let rttMs: number | null = null;
@@ -558,10 +501,6 @@ const isLowAvailableBitrate = (
   if (value == null || value <= 0 || value > threshold) return false;
   if (encoderLimited || mediaBitrate == null) return true;
 
-  // Available bitrate estimates can remain low after we intentionally cap media.
-  // Do not let our own low-bitrate profile prove that the link is still bad; only
-  // treat the estimate as congestion when media is trying to use a meaningful
-  // fraction of the fair/poor threshold itself.
   return mediaBitrate >= threshold * AVAILABLE_BITRATE_SATURATION_RATIO;
 };
 
@@ -794,10 +733,6 @@ function deriveDirectionalEmergencyMode({
     return true;
   }
 
-  // Some browsers report a sender-side bandwidth limitation but omit
-  // availableOutgoingBitrate. Treat that as emergency only while media is near
-  // the emergency threshold; otherwise our own survival cap can keep emergency
-  // mode latched after the link recovers.
   return (
     bandwidthLimited &&
     mediaBitrate != null &&
@@ -835,10 +770,6 @@ const applyBrowserQualityHint = (
   return observed;
 };
 
-/**
- * Polls the mediasoup transports' RTCPeerConnection.getStats() every ~2s and
- * derives directional quality signals for local publishing and receiving.
- */
 export function useConnectionQuality({
   producerTransportRef,
   consumerTransportRef,

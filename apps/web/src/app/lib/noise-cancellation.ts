@@ -1,9 +1,5 @@
 "use client";
 
-// NOTE: @sapphi-red/web-noise-suppressor references AudioWorkletNode at module
-// scope, so it must only ever be imported dynamically, in environments where
-// AudioWorkletNode exists (a static import would throw during SSR/prerender
-// and in browsers without AudioWorklet, taking the whole chunk down).
 import type { RnnoiseWorkletNode } from "@sapphi-red/web-noise-suppressor";
 
 type CleanupOptions = {
@@ -11,13 +7,6 @@ type CleanupOptions = {
   stopOutput?: boolean;
 };
 
-/**
- * Which denoiser actually engaged:
- * - "rnnoise": the RNNoise neural denoiser (wasm worklet) — Krisp-style
- *   per-frame noise removal that works during speech.
- * - "gate": the hand-rolled adaptive RMS gate worklet (fallback).
- * - "filters": neither worklet was available; only the filter/dynamics chain.
- */
 type NoiseCancellationEngine = "rnnoise" | "gate" | "filters";
 
 export type NoiseCancellationPipeline = {
@@ -49,17 +38,12 @@ const rnnoiseWorkletLoadPromises = new WeakMap<
   Promise<boolean>
 >();
 
-// RNNoise assets are copied from @sapphi-red/web-noise-suppressor into
-// public/ by scripts/sync-noise-suppressor-assets.mjs. The version suffix must
-// match the installed package so the immutable cache stays correct.
 const NOISE_SUPPRESSOR_ASSET_VERSION = "0.4.1";
 const NOISE_SUPPRESSOR_ASSET_BASE = `/noise-suppressor/${NOISE_SUPPRESSOR_ASSET_VERSION}`;
 const RNNOISE_WASM_URL = `${NOISE_SUPPRESSOR_ASSET_BASE}/rnnoise.wasm`;
 const RNNOISE_SIMD_WASM_URL = `${NOISE_SUPPRESSOR_ASSET_BASE}/rnnoise_simd.wasm`;
 const RNNOISE_WORKLET_URL = `${NOISE_SUPPRESSOR_ASSET_BASE}/rnnoise-worklet.js`;
 
-// Wasm SIMD feature probe (from wasm-feature-detect): a minimal module using
-// a SIMD instruction; validates only where SIMD is supported.
 const WASM_SIMD_PROBE = new Uint8Array([
   0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1,
   8, 0, 65, 0, 253, 15, 253, 98, 11,
@@ -71,9 +55,6 @@ const fetchWasmBinary = async (url: string): Promise<ArrayBuffer> => {
     throw new Error(`wasm fetch failed: ${response.status} ${url}`);
   }
   const binary = await response.arrayBuffer();
-  // A misdeployed asset path returns an HTML error page with a 200 in some
-  // setups; publishing through a dead denoiser would mean a silent mic, so
-  // verify the wasm magic before trusting the bytes.
   const magic = new Uint8Array(binary.slice(0, 4));
   if (
     magic[0] !== 0x00 ||
@@ -86,8 +67,6 @@ const fetchWasmBinary = async (url: string): Promise<ArrayBuffer> => {
   return binary;
 };
 
-// One wasm download per session, shared by every pipeline; reset on failure so
-// a transient network error doesn't disable RNNoise until reload.
 let rnnoiseWasmPromise: Promise<ArrayBuffer> | null = null;
 
 const loadRnnoiseWasm = (): Promise<ArrayBuffer> => {
@@ -123,7 +102,6 @@ const loadRnnoiseWorklet = (context: AudioContext): Promise<boolean> => {
   return promise;
 };
 
-/** RNNoise assumes 48kHz; the pipeline's AudioContext is created at 48kHz. */
 const createRnnoiseNode = async (
   context: AudioContext,
 ): Promise<RnnoiseWorkletNode | null> => {
@@ -252,13 +230,9 @@ const connectSilentRealtimeDestination = async (
   if (typeof contextWithSink.setSinkId !== "function") return;
 
   try {
-    // Chromium can throttle an AudioContext whose only destination is a
-    // MediaStream when its tab is hidden. Its silent sink keeps the realtime
-    // audio clock rendering without feeding the microphone back to speakers.
     await contextWithSink.setSinkId({ type: "none" });
     source.connect(context.destination);
   } catch {
-    // The MediaStream destination remains the portable fallback.
   }
 };
 
@@ -397,9 +371,6 @@ export async function createNoiseCancellationPipeline(
   lowPass.frequency.value = 8200;
   lowPass.Q.value = 0.55;
 
-  // Prefer the RNNoise neural denoiser; fall back to the adaptive RMS gate
-  // when the wasm or worklet cannot load. RNNoise removes noise DURING speech
-  // (typing, fans, traffic), which a gate fundamentally cannot.
   const rnnoise = await createRnnoiseNode(context);
   let gate: AudioNode | null = null;
   if (!rnnoise) {
@@ -444,8 +415,6 @@ export async function createNoiseCancellationPipeline(
   outputGain.gain.value = 1.05;
 
   const destination = context.createMediaStreamDestination();
-  // RNNoise sits right after DC/hum removal so it denoises the cleanest
-  // possible signal; the voice shaping and dynamics run on its output.
   const nodes = [
     source,
     highPass,
@@ -502,7 +471,6 @@ export async function createNoiseCancellationPipeline(
       sourceTrackPipelines.delete(sourceTrack);
       if (rnnoise) {
         try {
-          // Frees the wasm denoiser state inside the worklet processor.
           rnnoise.destroy();
         } catch {}
       }

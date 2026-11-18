@@ -15,8 +15,6 @@ const players: GamePlayer[] = [
   { id: "p3", name: "Robin" },
 ];
 
-// Identity shuffle: the first prompt is the bank's first ("Name a fruit") and
-// the fuse seat order is the roster order.
 const rng: GameRng = {
   next: () => 0,
   int: () => 0,
@@ -82,7 +80,6 @@ describe("long shot matcher", () => {
     expect(matchAnswer(fruit, "durian")?.tier).toBe("longShot");
     expect(matchAnswer(fruit, "apple")?.tier).toBe("obvious");
     expect(matchAnswer(fruit, "carrot")).toBeNull();
-    // Short answers must be exact so "fog" never becomes "fig".
     expect(matchAnswer(fruit, "fog")).toBeNull();
   });
 
@@ -136,7 +133,6 @@ describe("long shot classic", () => {
     state = answer(state, "host", "Durian", 2_000);
     state = answer(state, "p2", "Apple", 2_000);
     state = answer(state, "p3", "apples", 2_000);
-    // Everyone locked in, so the deadline collapsed and the next tick reveals.
     state = longShotModule.onTick!(state, context(2_000));
     const view = pub(state, 2_000);
     expect(view.phase).toBe("reveal");
@@ -189,14 +185,12 @@ describe("long shot fuse", () => {
 
   it("pops the holder when the fuse runs out and ends with the last one standing", () => {
     let state = started();
-    // Host holds the fuse and lets it burn: one life, so host is out.
     state = longShotModule.onTick!(state, context(20_000, { config: fuseConfig }));
     expect(state.phase).toBe("popped");
     expect(pub(state).seats.find((s) => s.id === "host")?.out).toBe(true);
     state = longShotModule.onTick!(state, context(30_000, { config: fuseConfig }));
     expect(state.phase).toBe("fuse");
     expect(pub(state).turnPlayerId).toBe("p2");
-    // Pat burns out next; Robin is the last one standing.
     state = longShotModule.onTick!(state, context(60_000, { config: fuseConfig }));
     state = longShotModule.onTick!(state, context(70_000, { config: fuseConfig }));
     expect(state.phase).toBe("results");

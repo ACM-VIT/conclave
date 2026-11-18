@@ -126,9 +126,7 @@ interface ChatPanelProps {
   onCancelReply?: () => void;
   onToggleReaction?: (messageId: string, emoji: string) => void;
   isReactionsDisabled?: boolean;
-  /** Names reactors in the chip tooltip and the reaction viewer. */
   resolveDisplayName?: (userId: string) => string;
-  /** Chat message id currently being spoken aloud by the TTS engine. */
   activeTtsMessageId?: string | null;
   onReplayTtsMessage?: (message: ChatMessage) => void;
   onStopTts?: () => void;
@@ -277,8 +275,6 @@ function ChatPanel({
   const [reactionViewerMessageId, setReactionViewerMessageId] = useState<
     string | null
   >(null);
-  // Departed reactors still appear in the stored userIds, so fall back to a
-  // stable label rather than rendering a raw id.
   const resolveReactorName = useCallback(
     (userId: string) => resolveDisplayName?.(userId) ?? "Someone",
     [resolveDisplayName],
@@ -300,9 +296,6 @@ function ChatPanel({
   const [highlightedMessageId, setHighlightedMessageId] = useState<
     string | null
   >(null);
-  // First embeddable URL of the draft (debounced) drives the composer-side
-  // link preview; dismissing it remembers the URL so the preview stays away
-  // while that same link is in the draft, and the send carries the flag.
   const [composerEmbedUrl, setComposerEmbedUrl] = useState<string | null>(null);
   const [dismissedEmbedUrl, setDismissedEmbedUrl] = useState<string | null>(
     null,
@@ -332,7 +325,6 @@ function ChatPanel({
   const isPickingCommand =
     showCommandSuggestions && !chatInput.slice(1).includes(" ");
 
-  // Live hint while composing a /tts message: voice used + character budget.
   const ttsComposer = useMemo(() => {
     const match = chatInput.match(/^\/tts(?:\s+([\s\S]*))?$/i);
     if (!match || match[1] === undefined) return null;
@@ -394,10 +386,6 @@ function ChatPanel({
   const showMentionSuggestions =
     !showCommandSuggestions && mentionQuery !== null && mentionSuggestions.length > 0;
 
-  // The "@Conclave" AI hint is independent of the DM/participant mention system
-  // so it shows even when private messages are disabled. It tracks the "@handle"
-  // the user is typing at the caret, anywhere in the message ("Hey @Con..."), not
-  // just at the start, and disappears once the handle is complete with a space.
   const showConclaveSuggestion = useMemo(() => {
     if (!assistantEnabled || isChatDisabled || showCommandSuggestions) {
       return false;
@@ -410,8 +398,6 @@ function ChatPanel({
   }, [assistantEnabled, isChatDisabled, showCommandSuggestions, chatInput]);
 
   const applyConclaveSuggestion = useCallback(() => {
-    // Replace just the "@handle" token being typed, preserving any text before
-    // it ("Hey @Con" -> "Hey @Conclave ").
     const next = chatInput.replace(
       /((?:^|\s)@)[A-Za-z]*$/,
       `$1${CONCLAVE_MENTION_TOKEN} `,
@@ -517,8 +503,6 @@ function ChatPanel({
       setComposerEmbedUrl(null);
       return;
     }
-    // Debounced so half-typed URLs don't hit the unfurl endpoint on every
-    // keystroke; pasted links settle within one tick.
     const handle = window.setTimeout(() => setComposerEmbedUrl(firstUrl), 450);
     return () => window.clearTimeout(handle);
   }, [chatInput]);
@@ -615,8 +599,6 @@ function ChatPanel({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isChatDisabled || isImageUploading) return;
-    // Keep the draft: the hint bar above the composer explains why the
-    // message can't go out yet (over the limit or host-disabled).
     if (ttsComposer && (ttsComposer.overLimit || isTtsDisabled)) return;
     if (chatInput.trim() || pendingImage) {
       setIsSendAnimating(true);
@@ -645,8 +627,6 @@ function ChatPanel({
         }
         return;
       }
-      // Recomputed from the draft (not the debounced state) so a fast
-      // paste-and-enter can't race the composer preview.
       const [firstUrl] = extractEmbedUrls(chatInput, 1);
       const suppressEmbeds = Boolean(firstUrl) && firstUrl === dismissedEmbedUrl;
       onSend(chatInput, suppressEmbeds ? { suppressEmbeds: true } : undefined);
@@ -851,7 +831,6 @@ function ChatPanel({
 
             return (
               <div className="flex h-full flex-col items-center justify-center gap-5 px-8 text-center">
-                {/* Faded preview of a conversation, hinting at where messages land */}
                 <div
                   aria-hidden="true"
                   className="flex w-full max-w-[14rem] flex-col gap-2 [mask-image:linear-gradient(to_bottom,transparent,#000_55%)]"
@@ -1023,10 +1002,6 @@ function ChatPanel({
                 </button>
               ) : null;
 
-              // Reacting is a chat write, so it honours the chat lock as well
-              // as the reactions kill-switch (hosts keep access through both,
-              // mirroring ControlsBar). DMs are never retained in room history
-              // so they can't carry reactions at all.
               const canReact =
                 Boolean(onToggleReaction) &&
                 canReactToChatMessage(msg) &&
@@ -1096,12 +1071,6 @@ function ChatPanel({
                       </p>
                     ) : null}
                     <div
-                      // max-w-full is load-bearing: in the own-message column
-                      // (items-end) this row is fit-content sized, and a reply
-                      // quote's nowrap text would otherwise set its intrinsic
-                      // width and blow the bubble past the panel edge.
-                      // relative anchors the hover action bar, which overlays
-                      // the bubble's top edge instead of consuming row width.
                       className={`relative flex max-w-full items-end gap-1.5 ${
                         isOwn ? "flex-row-reverse" : ""
                       }`}

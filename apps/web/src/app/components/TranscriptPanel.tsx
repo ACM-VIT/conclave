@@ -75,12 +75,7 @@ interface TranscriptPanelProps {
   roomAi?: RoomAiController;
   transcript: MeetingTranscriptController;
   onClose: () => void;
-  /** Which tab to show when the panel mounts, e.g. "minutes" from catch up. */
   initialTab?: TranscriptTab;
-  /**
-   * Posts a meeting recap into the room chat through the assistant. Omit to
-   * hide the action for view-only attendees.
-   */
   onPostRecap?: () => boolean;
 }
 
@@ -170,9 +165,6 @@ const formatRelativeTime = (timestamp: number, now: number): string => {
   return `${Math.floor(diff / 3_600_000)}h ago`;
 };
 
-// Live "Updated Xs ago / Updating…" line for the minutes tab. Replaces the old
-// manual-only refresh button: minutes regenerate on their own, this just shows
-// where they stand and offers an optional nudge.
 function MinutesStatusBar({
   transcript,
 }: {
@@ -222,7 +214,6 @@ function MinutesStatusBar({
   );
 }
 
-// Calm blue spotlight tint for the start stage, distinct from the brand orange.
 const START_ACCENT = "#4F9CF9";
 
 function StartStage({
@@ -465,9 +456,6 @@ function StartStage({
   );
 }
 
-// Shared empty/fallback shell, modeled on the chat panel: a faded
-// preview of the real content this tab will produce (hinting at where things
-// land), above a short title and description.
 function FallbackState({
   preview,
   title,
@@ -499,8 +487,6 @@ function FallbackState({
   );
 }
 
-// Live equalizer bars reusing the room's voice-activity keyframe, tinted with
-// the transcript accent so the empty state reads as "actively listening".
 function Waveform({
   bars = 7,
   height = 14,
@@ -616,8 +602,6 @@ function MinutesFallback() {
   );
 }
 
-// Shown once a session is live but there isn't yet enough said to summarize, so
-// we promise minutes are coming instead of echoing a few words back as a summary.
 function MinutesBuilding() {
   return (
     <FallbackState
@@ -635,12 +619,9 @@ function MinutesBuilding() {
   );
 }
 
-/** A pause long enough that a quiet time marker helps you scan back later. */
 const TRANSCRIPT_PAUSE_MARKER_MS = 3 * 60 * 1000;
 
 function TranscriptView({ segments }: { segments: TranscriptSegment[] }) {
-  // Groups plus a "long pause before this group" flag, so lulls in the
-  // conversation become scannable time markers instead of invisible seams.
   const rows = useMemo(() => {
     const groups = groupSegments(segments);
     let previousEndMs: number | null = null;
@@ -675,8 +656,6 @@ function TranscriptView({ segments }: { segments: TranscriptSegment[] }) {
                   <span className="h-px flex-1 bg-white/[0.06]" />
                 </div>
               ) : null}
-              {/* One-shot settle on mount so new speech eases in instead of
-                  popping. A single fade, never a loop. */}
               <Message
                 from="assistant"
                 className="max-w-full animate-[acm-fade-in_220ms_ease-out] gap-1.5"
@@ -734,7 +713,6 @@ function AnswerActions({ content }: { content: string }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     } catch {
-      /* ignore */
     }
   };
   return (
@@ -892,8 +870,6 @@ function MinutesView({
   }, [recapPosted]);
 
   if (!hasMinutes) {
-    // While a session is live we're actively working toward minutes; only fall
-    // back to the static "build as you talk" hint when nothing is running.
     return isRunning ? <MinutesBuilding /> : <MinutesFallback />;
   }
 

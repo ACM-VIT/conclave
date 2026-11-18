@@ -26,20 +26,6 @@ export type AdaptiveVideoJitterBufferPolicyOptions = {
   isDocumentVisible: boolean;
 };
 
-/**
- * Returns a conservative requested playout buffer for received video.
- *
- * `RTCRtpReceiver.jitterBufferTarget` is a nullable millisecond target, not a
- * guarantee: the browser may clamp the actual target to its own safe range and
- * changes are intentionally gradual. Keep these requests small enough for an
- * interactive meeting while giving a decoder modest protection from a short
- * arrival-jitter burst.
- *
- * Audio is deliberately never targeted here. The WebRTC specification says a
- * user agent should use the larger target for synchronized audio/video tracks,
- * so the browser may delay paired audio to preserve A/V sync after we target
- * video. Setting audio independently would risk compounding that latency.
- */
 export const getAdaptiveVideoJitterBufferTargetMs = ({
   enabled,
   mediaKind,
@@ -50,7 +36,6 @@ export const getAdaptiveVideoJitterBufferTargetMs = ({
 }: AdaptiveVideoJitterBufferPolicyOptions): AdaptiveVideoJitterBufferTargetMs | null => {
   if (!enabled || mediaKind !== "video") return null;
 
-  // Keep the explicit data-saver policy independent of tab visibility.
   if (sourceType === "webcam" && dataSaverMode) {
     return null;
   }
@@ -62,8 +47,6 @@ export const getAdaptiveVideoJitterBufferTargetMs = ({
   const normalizedQuality = quality === "unknown" ? "good" : quality;
   const qualityTarget = ADAPTIVE_VIDEO_JITTER_BUFFER_TARGET_MS[normalizedQuality];
 
-  // Presentations benefit from continuity and readable text, so keep at least
-  // the fair-link target even when the overall receive path is healthy.
   if (sourceType === "screen") {
     return Math.max(
       qualityTarget,
@@ -125,11 +108,6 @@ const readObservedTargetMs = (
   return { valid: false };
 };
 
-/**
- * Feature-detects and applies a video receiver target without allowing a
- * partial browser implementation to disrupt the meeting. Equality checking
- * makes repeated reconciliation idempotent and avoids redundant native calls.
- */
 export const applyVideoReceiverJitterBufferTarget = (
   receiver: unknown,
   requestedTargetMs: AdaptiveVideoJitterBufferTargetMs | null,
@@ -189,14 +167,6 @@ const getErrorRetryDelayMs = (errorAttempt: number): number => {
   );
 };
 
-/**
- * Reconciles one video receiver against the requested policy target. The
- * caller stores `nextState` in a ref; no React state or rendering is involved.
- * Successful same-target passes still read the receiver on every policy tick,
- * repairing browser or native drift. Errors retry forever with an exponential
- * delay capped at 30 seconds, while unsupported receivers wait for a target or
- * receiver-generation transition before probing again.
- */
 export const reconcileVideoReceiverJitterBufferTarget = ({
   consumerId,
   receiver,
@@ -282,12 +252,6 @@ export const reconcileVideoReceiverJitterBufferTarget = ({
   };
 };
 
-/**
- * Releases one consumer generation from the transient target ledger. A late
- * removal for a displaced consumer leaves the replacement generation intact.
- * Matching live receivers get a best-effort reset before ownership is cleared;
- * closed receivers are never touched.
- */
 export const releaseVideoReceiverJitterBufferTargetState = ({
   removingConsumerId,
   receiverClosed,

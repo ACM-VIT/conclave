@@ -116,7 +116,6 @@ export const takeYouTubeRateLimit = async (
             retryAfterSeconds: Math.max(1, Math.ceil(options.windowMs / 1_000)),
           };
     } catch {
-      // Fall through to the production fail-closed branch below.
     }
   }
 
@@ -132,9 +131,6 @@ export const takeYouTubeRateLimit = async (
   return takeLocalRateLimit(key, options);
 };
 
-// Typed as plain Response: @opennextjs/cloudflare pulls its own copy of the
-// next types, and annotating the richer NextResponse here trips a structural
-// mismatch between the two copies. Route handlers accept Response fine.
 export const youtubeRateLimitResponse = (
   result: Extract<RateLimitResult, { ok: false }>,
 ): Response =>

@@ -18,10 +18,6 @@ export const resolveYouTubeBroadcastStatus = (
   return "unknown";
 };
 
-/**
- * Live, scheduled, and unknown results are transient and must be checked again.
- * Only a confirmed non-live video is safe to hold for the longer VOD window.
- */
 export const youtubeMetadataCacheTtl = (
   status: YouTubeBroadcastStatus,
 ): number =>

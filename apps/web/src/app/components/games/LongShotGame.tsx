@@ -6,12 +6,6 @@ import { createTypedMove } from "@conclave/apps-sdk";
 import { GhostButton, HEAD_FONT, PrimaryButton, useRemaining, type GameViewProps } from "./gameUi";
 import type { LongShotMove } from "./moves";
 
-/*
- * Long Shot, dressed as a dive. Score is depth: every accepted answer sinks
- * you by its tier's meters, and the water darkens through the real ocean
- * zones as you go. Controls stay Conclave: same type, buttons, and coral.
- */
-
 type Tier = "obvious" | "solid" | "rare" | "longShot";
 
 type RoundResult = {
@@ -84,7 +78,6 @@ const TIER_LABEL: Record<Tier, string> = {
   longShot: "Long shot",
 };
 
-/** Bioluminescence: the deeper the tier, the stranger the glow. */
 const GLOW: Record<Tier, string> = {
   obvious: "#9BE7DC",
   solid: "#39C3F2",
@@ -92,7 +85,6 @@ const GLOW: Record<Tier, string> = {
   longShot: "#FF74D4",
 };
 
-/** Real ocean zones by depth. The water follows the zone you have reached. */
 const ZONES = [
   { name: "Sunlight", from: 0, top: "#0F5C70", bottom: "#0B3B52" },
   { name: "Twilight", from: 200, top: "#0B3E5E", bottom: "#0A2440" },
@@ -115,7 +107,6 @@ const meters = (value: number) => `${Math.round(value).toLocaleString("en-US")} 
 
 const nameOf = (id: string, name: string, userId: string | null) => (id === userId ? "You" : name);
 
-/** Deterministic scatter so server and client render the same particles. */
 const scatter = (index: number, salt: number) => {
   const x = Math.sin(index * 127.1 + salt * 311.7) * 43758.5453;
   return x - Math.floor(x);
@@ -134,8 +125,6 @@ const STYLES = `
 @keyframes ls-burst { 0% { transform: translate(0,0) scale(.4); opacity: .9 } 100% { transform: translate(var(--ls-drift, 0px), -200px) scale(1); opacity: 0 } }
 @media (prefers-reduced-motion: reduce) { .ls-scene, .ls-scene * { animation: none !important; transition: none !important } }
 `;
-
-/* ---------------------------------------------------------------- scene */
 
 function Ocean({ depth, children }: { depth: number; children: React.ReactNode }) {
   const zone = zoneFor(depth);
@@ -201,7 +190,6 @@ function Ocean({ depth, children }: { depth: number; children: React.ReactNode }
   );
 }
 
-/** A small submersible in Conclave coral, headlight tinted by tier. */
 function Submersible({ light = "#FFE9A8", size = 1 }: { light?: string; size?: number }) {
   const beam = `ls-beam-${light.slice(1)}`;
   return (
@@ -230,7 +218,6 @@ function Depth({ value, size = 26 }: { value: number; size?: number }) {
   );
 }
 
-/** Sonar-style countdown. */
 function SonarTimer({ remainingMs, totalMs }: { remainingMs: number; totalMs: number }) {
   const ratio = totalMs > 0 ? Math.max(0, Math.min(1, remainingMs / totalMs)) : 0;
   const r = 24;
@@ -292,10 +279,6 @@ function Prompt({ category, prompt, meta }: { category: string | null; prompt: s
   );
 }
 
-/**
- * One band per tier, shallow to deep: the scoring legend before you answer,
- * and the landing spot after (the submersible sinks into your band).
- */
 function DiveColumn({ tier, points }: { tier?: Tier | null; points: Record<Tier, number> }) {
   const landed = tier ?? null;
   return (
@@ -423,9 +406,6 @@ function Controls({ children }: { children: React.ReactNode }) {
 
 const missText = (miss: Miss) => (miss.reason === "used" ? `${miss.text} is taken` : "Not on the list");
 
-/* -------------------------------------------------------------- results */
-
-/** Everyone's dive: a line from the surface down to their depth. */
 function DiveChart({ rows, userId, winnerId }: { rows: { id: string; name: string; score: number }[]; userId: string | null; winnerId: string | null }) {
   const shown = rows.slice(0, 8);
   const floor = Math.max(1000, ...shown.map((row) => row.score)) * 1.12;
@@ -457,8 +437,6 @@ function DiveChart({ rows, userId, winnerId }: { rows: { id: string; name: strin
   );
 }
 
-/* ----------------------------------------------------------------- game */
-
 export default function LongShotGame({
   pub,
   me,
@@ -480,7 +458,6 @@ export default function LongShotGame({
     return result.success;
   };
 
-  /* ---- lobby ---- */
   if (pub.phase === "lobby") {
     return (
       <Ocean depth={0}>
@@ -507,7 +484,6 @@ export default function LongShotGame({
     );
   }
 
-  /* ---- results ---- */
   if (pub.phase === "results") {
     const winner = fuseMode ? pub.scoreboard.find((row) => row.id === pub.winnerId) ?? null : pub.scoreboard[0] ?? null;
     return (
@@ -536,7 +512,6 @@ export default function LongShotGame({
     );
   }
 
-  /* ---- last one under ---- */
   if (fuseMode) {
     const seats = (
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -687,7 +662,6 @@ export default function LongShotGame({
     );
   }
 
-  /* ---- dive together: reveal ---- */
   if (pub.phase === "reveal") {
     return (
       <Ocean depth={me.score}>
@@ -726,7 +700,6 @@ export default function LongShotGame({
     );
   }
 
-  /* ---- dive together: prompt ---- */
   const missKey = me.lastMiss?.at ?? null;
   const missNote = me.lastMiss
     ? `${missText(me.lastMiss)} · ${me.triesLeft === 0 ? "no tries left" : `${me.triesLeft} ${me.triesLeft === 1 ? "try" : "tries"} left`}`

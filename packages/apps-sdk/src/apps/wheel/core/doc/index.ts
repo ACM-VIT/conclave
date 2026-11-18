@@ -25,22 +25,13 @@ export type WheelEntry = {
   label: string;
 };
 
-/**
- * A spin is a single LWW register holding everything every client needs to
- * replay the exact same animation: the entry snapshot it ran over, the
- * predetermined winner, and the timing curve parameters. Entries edited
- * mid-spin never affect an animation in flight.
- */
 export type WheelSpin = {
   spinId: string;
   entries: WheelEntry[];
   winnerIndex: number;
-  /** Spinner's wall clock at launch; clients clamp local skew. */
   startedAt: number;
   durationMs: number;
-  /** Whole extra rotations before settling. */
   turns: number;
-  /** 0..1 resting position within the winning segment. */
   jitter: number;
   spunById: string;
   spunByName: string;
@@ -79,18 +70,11 @@ const isEntry = (value: unknown): value is WheelEntry => {
 export const createEntryId = (): string =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-// Keep a joining client's document empty until the server sync arrives. Yjs
-// map defaults written before that sync can win conflict resolution and reset
-// the room for everyone. Read helpers return UI defaults without mutating;
-// the first real edit creates the shared structures.
 export const createWheelDoc = (): Y.Doc => createAppDoc(ROOT_KEY);
 
 export const getEntries = (doc: Y.Doc): WheelEntry[] => {
   const entries = readEntriesArray(doc);
   if (!entries) return [];
-  // Concurrent edits can merge into duplicate ids (reorder replays) or push
-  // past the cap (parallel adds); normalize at read time so every consumer
-  // sees one bounded list.
   const seen = new Set<string>();
   const result: WheelEntry[] = [];
   for (const entry of entries.toArray()) {
@@ -142,10 +126,6 @@ export const clearEntries = (doc: Y.Doc): void => {
   entries.delete(0, entries.length);
 };
 
-/**
- * Replace the list with a reordered copy (shuffle/sort). Concurrent adds from
- * other clients survive: the delete only covers items this client saw.
- */
 export const replaceEntries = (doc: Y.Doc, next: WheelEntry[]): void => {
   doc.transact(() => {
     const entries = ensureAppArray(getRoot(doc), ENTRIES_KEY) as EntriesArray;
@@ -215,7 +195,6 @@ export const getHistory = (doc: Y.Doc): WheelResult[] => {
   const value = getRoot(doc).get(HISTORY_KEY);
   if (!(value instanceof Y.Array)) return [];
   const results = (value as Y.Array<WheelResult>).toArray().filter(isResult);
-  // Two tabs of the spinner can both record the same settle; keep the first.
   const seen = new Set<string>();
   return results.filter((result) => {
     if (seen.has(result.spinId)) return false;
@@ -224,10 +203,6 @@ export const getHistory = (doc: Y.Doc): WheelResult[] => {
   });
 };
 
-/**
- * Record a finished spin (newest first). Only the spinning client calls this
- * at settle time so results never appear before the wheel stops anywhere.
- */
 export const recordResult = (doc: Y.Doc, result: WheelResult): void => {
   doc.transact(() => {
     const history = ensureAppArray(

@@ -71,7 +71,6 @@ export default function RoomAiSettings({
         );
         if (discovered?.source === "live") {
           if (!discovered.models.length) {
-            // Audio and image-only keys can still be shared without selecting text.
             initialModel = null;
           } else {
             const preferred = AI_RESPONSE_MODELS.find(
@@ -84,7 +83,6 @@ export default function RoomAiSettings({
           }
         }
       } catch {
-        /* Listing permissions do not determine inference permissions. */
       }
     }
     const failure = await controller.configure(

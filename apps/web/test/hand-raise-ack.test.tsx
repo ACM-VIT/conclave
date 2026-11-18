@@ -56,7 +56,6 @@ it("does not let an older request's late failure undo a newer toggle", async () 
   await act(async () => hook.setHandRaisedState(false));
   await act(async () => hook.setHandRaisedState(true));
   expect(raised).toBe(true);
-  // The first request (raise) fails late; the newest request is still raise.
   await act(async () => acks[0](null, { error: "rate limited" }));
   expect(raised).toBe(true);
   await act(async () => acks[2](null, { success: true }));

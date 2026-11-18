@@ -1,10 +1,3 @@
-// Tweet unfurling for the /api/unfurl route. X/Twitter pages are a JS shell
-// with no Open Graph tags for generic scrapers, so tweet links go through the
-// public syndication CDN (the same unauthenticated endpoint react-tweet and
-// the official embed widget use). It returns tweet text, author, photos, and
-// mp4 variants — everything the chat card needs to show real media. Any
-// failure falls back to the generic HTML scrape, which degrades to no embed.
-
 import type {
   ChatLinkPreview,
   ChatLinkTweetData,
@@ -26,7 +19,6 @@ const TWEET_ID_PATTERN = /^\d{1,25}$/;
 const MAX_TWEET_TEXT_LENGTH = 500;
 const MAX_TWEET_MEDIA = 4;
 
-/** Extracts the tweet id from …/status/<id> URLs (incl. /i/web/status). */
 export function getTweetIdFromUrl(url: URL): string | null {
   if (!TWEET_HOSTS.has(url.hostname.toLowerCase())) return null;
   const segments = url.pathname.split("/").filter(Boolean);
@@ -38,8 +30,6 @@ export function getTweetIdFromUrl(url: URL): string | null {
   return TWEET_ID_PATTERN.test(id) ? id : null;
 }
 
-// The syndication endpoint requires a token derived from the tweet id; this
-// is the exact formula the official widget computes client-side.
 export function getSyndicationToken(tweetId: string): string {
   return ((Number(tweetId) / 1e15) * Math.PI)
     .toString(36)
@@ -98,8 +88,6 @@ const asDimension = (value: unknown): number | undefined => {
   return Math.round(value);
 };
 
-// Photos render at card width; ask pbs.twimg.com for the "small" rendition
-// instead of the multi-megabyte original.
 const smallPhotoUrl = (url: string): string =>
   `${url}${url.includes("?") ? "&" : "?"}name=small`;
 
@@ -109,7 +97,6 @@ interface RawVideoVariant {
   url?: unknown;
 }
 
-// Chat cards are ~280px wide; the middle mp4 rendition is plenty.
 const pickMp4Variant = (variants: unknown): string | null => {
   if (!Array.isArray(variants)) return null;
   const mp4s = variants
@@ -143,8 +130,6 @@ const parseMediaDetails = (value: unknown): ChatLinkTweetMedia[] => {
     const height = asDimension(originalInfo?.height);
 
     if (type === "photo") {
-      // Everything the embed renders goes through /api/unfurl/asset: images
-      // for privacy, and video because video.twimg.com 403s hotlinking.
       const photoUrl = toUnfurlAssetUrl(smallPhotoUrl(stillUrl));
       if (photoUrl) {
         media.push({ kind: "photo", url: photoUrl, width, height });
@@ -172,8 +157,6 @@ const parseMediaDetails = (value: unknown): ChatLinkTweetMedia[] => {
   return media;
 };
 
-// Older payload shape: `photos` + `video` at the top level. Used only when
-// `mediaDetails` is absent.
 const parseLegacyMedia = (tweet: Record<string, unknown>): ChatLinkTweetMedia[] => {
   const media: ChatLinkTweetMedia[] = [];
 
@@ -232,8 +215,6 @@ interface RawUrlEntity {
 
 const cleanTweetText = (tweet: Record<string, unknown>): string => {
   const rawText = asString(tweet.text) ?? "";
-  // Ranges are in Unicode code points; slice accordingly so emoji-heavy
-  // tweets don't get cut mid-surrogate.
   const codePoints = Array.from(rawText);
   const range = Array.isArray(tweet.display_text_range)
     ? (tweet.display_text_range as unknown[])
@@ -246,7 +227,6 @@ const cleanTweetText = (tweet: Record<string, unknown>): string => {
       : codePoints.length;
   let text = codePoints.slice(start, end).join("");
 
-  // Swap remaining t.co wrappers for their human-readable display form.
   const entities = asRecord(tweet.entities);
   if (Array.isArray(entities?.urls)) {
     for (const entry of entities.urls) {
@@ -258,8 +238,6 @@ const cleanTweetText = (tweet: Record<string, unknown>): string => {
       }
     }
   }
-  // Trailing media t.co links (present when display_text_range is absent).
-  // Tweets from the http era wrap media as http://t.co/…, hence https?.
   text = text.replace(/(?:\s*https?:\/\/t\.co\/\w+)+\s*$/, "");
 
   text = text.trim();
@@ -268,10 +246,6 @@ const cleanTweetText = (tweet: Record<string, unknown>): string => {
     : text;
 };
 
-/**
- * Maps a syndication `tweet-result` payload onto a chat link preview.
- * Returns null for tombstones (deleted/protected) and unrecognized shapes.
- */
 export function parseTweetResult(
   payload: unknown,
   requestedId: string,
@@ -324,7 +298,6 @@ export function parseTweetResult(
   };
 }
 
-/** Fetches and parses a tweet; null means "use the generic unfurl path". */
 export async function fetchTweetPreview(
   tweetId: string,
   timeoutMs: number,

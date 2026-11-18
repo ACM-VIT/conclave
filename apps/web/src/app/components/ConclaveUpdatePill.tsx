@@ -74,7 +74,6 @@ function ConclaveUpdatePill({
         setAvailableVersion(fallbackAvailable);
       }
     } catch {
-      // A version check should never interrupt the active page.
     }
   }, []);
 

@@ -1,9 +1,3 @@
-/**
- * Synthesized wheel sounds — no assets, one lazily created AudioContext.
- * Autoplay policies can keep the context suspended for participants who
- * haven't interacted yet; every play degrades to silence instead of throwing.
- */
-
 const TICK_MIN_INTERVAL_MS = 34;
 
 type AudioContextCtor = typeof AudioContext;
@@ -39,7 +33,6 @@ export class WheelSounds {
     return this.context.state === "running" ? this.context : null;
   }
 
-  /** Flapper click; intensity 0..1 scales pitch and level with wheel speed. */
   tick(intensity: number): void {
     const now = performance.now();
     if (now - this.lastTickAt < TICK_MIN_INTERVAL_MS) return;
@@ -61,7 +54,6 @@ export class WheelSounds {
     oscillator.stop(start + 0.05);
   }
 
-  /** Soft filtered-noise whoosh as the wheel launches out of the pull-back. */
   launch(): void {
     const context = this.ensureContext();
     if (!context) return;
@@ -94,12 +86,11 @@ export class WheelSounds {
     source.stop(start + durationSeconds);
   }
 
-  /** Short rising arpeggio when the wheel settles on a winner. */
   win(): void {
     const context = this.ensureContext();
     if (!context) return;
 
-    const notes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
+    const notes = [523.25, 659.25, 783.99, 1046.5];
     const start = context.currentTime + 0.02;
     notes.forEach((frequency, index) => {
       const at = start + index * 0.085;

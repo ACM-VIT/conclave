@@ -1,8 +1,5 @@
 "use client";
 
-// Ported from AI SDK Elements (elements.ai-sdk.dev) "Response". Renders
-// streaming-safe markdown via Streamdown, themed for Conclave's dark panel.
-
 import type { ComponentProps } from "react";
 import { memo } from "react";
 import { type LinkSafetyConfig, Streamdown } from "streamdown";
@@ -11,9 +8,6 @@ import { cn } from "./utils";
 
 export type ResponseProps = ComponentProps<typeof Streamdown>;
 
-// Module-level so the reference is stable across renders (Streamdown's memo
-// compares linkSafety by identity). renderModal swaps Streamdown's unthemed
-// stock confirm dialog for the Conclave-styled one.
 const LINK_SAFETY: LinkSafetyConfig = {
   enabled: true,
   renderModal: (props) => <LinkSafetyDialog {...props} />,
@@ -25,8 +19,6 @@ export const Response = memo(
       linkSafety={LINK_SAFETY}
       className={cn(
         "size-full text-[13px] leading-relaxed text-[#e4e4e7]",
-        // Links render as <a> normally but as <button data-streamdown="link">
-        // when link safety is on — target the data attribute to style both.
         "[&_[data-streamdown='link']]:cursor-pointer [&_[data-streamdown='link']]:text-[#ff9d8f] [&_[data-streamdown='link']]:underline [&_[data-streamdown='link']]:underline-offset-2",
         "[&_code]:rounded [&_code]:bg-white/[0.06] [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[12px]",
         "[&_strong]:text-[#fafafa]",

@@ -49,9 +49,6 @@ function GifPicker({
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = useState(false);
-  // Latches true on first open. Drives data loading instead of `isOpen` so that
-  // <Activity> can keep the closed panel mounted (preserving results + scroll)
-  // without the load effect refetching page 1 every time it reopens.
   const [hasOpened, setHasOpened] = useState(false);
   const [mediaKind, setMediaKind] = useState<KlipyMediaKind>("gifs");
   const [query, setQuery] = useState("");
@@ -68,8 +65,6 @@ function GifPicker({
     [mediaKind],
   );
 
-  // Announce the newly added stickers + clips catalogs on the picker itself, so
-  // even people who already dismissed the original "GIFs are here" tip see it.
   const stickersClipsTip = useOneTimeHint("chat-stickers-clips", {
     enabled: showHint && !disabled && !isOpen,
     delay: 900,
@@ -206,15 +201,9 @@ function GifPicker({
     page,
   ]);
 
-  // Point the scroll observer at the freshest loadMore without rebuilding the
-  // IntersectionObserver every time paging state changes. Writing the ref during
-  // render is intentional: it only caches the latest closure, it renders nothing.
   const loadMoreRef = useRef(loadMore);
   loadMoreRef.current = loadMore;
 
-  // Auto-load the next page when the bottom sentinel scrolls into view, so the
-  // user never has to click "More". The callback ref owns the observer's whole
-  // lifecycle: it (re)attaches when the sentinel mounts and disconnects on unmount.
   const observerRef = useRef<IntersectionObserver | null>(null);
   const sentinelRef = useCallback((node: HTMLDivElement | null) => {
     observerRef.current?.disconnect();
@@ -235,9 +224,7 @@ function GifPicker({
     () =>
       variant === "mobile"
         ? "absolute bottom-full left-0 z-20 mb-2 w-[min(22rem,calc(100vw-2rem))]"
-        : // Anchor to the composer wrapper so the panel spans the full input
-          // width and aligns edge-to-edge with it instead of floating off the button.
-          "absolute bottom-full left-0 right-0 z-20 mb-2",
+        : "absolute bottom-full left-0 right-0 z-20 mb-2",
     [variant],
   );
 
@@ -290,9 +277,6 @@ function GifPicker({
         />
       ) : null}
 
-      {/* Once opened, keep the panel mounted but hidden via <Activity> so its
-          loaded media, search query, and scroll position survive close/reopen
-          and the next open is instant. React skips rendering work while hidden. */}
       {hasOpened ? (
         <Activity mode={isOpen ? "visible" : "hidden"}>
           <div

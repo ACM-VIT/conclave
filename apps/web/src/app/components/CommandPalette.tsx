@@ -33,18 +33,9 @@ async function copyText(value: string): Promise<void> {
   try {
     await navigator.clipboard?.writeText(value);
   } catch {
-    // Clipboard access can be denied; the palette has no error surface for
-    // this, and the meeting tag still offers click-to-copy as a fallback.
   }
 }
 
-/**
- * Returns a referentially stable copy of `value` that only changes identity
- * when one of its own values changes (shallow compare). MeetsMainContent
- * rebuilds the `controls` object on every render; without this gate the action
- * list would be rebuilt on every meeting re-render (audio ticks, socket events)
- * while the palette is open.
- */
 function useShallowStable<T extends object>(value: T): T {
   const ref = useRef(value);
   const previous = ref.current;
@@ -56,60 +47,28 @@ function useShallowStable<T extends object>(value: T): T {
   return ref.current;
 }
 
-/**
- * Figma-style quick-actions palette for the meeting: Mod+K opens a searchable
- * list of everything the participant can do (bar controls, More-menu tools,
- * device switching, host toggles, reactions, leaving). Every meeting control
- * stays reachable from the keyboard without memorizing where it lives.
- *
- * Selection is tracked by action *id*, never by index or object identity: the
- * action list rebuilds whenever meeting state changes (unread counts, toggles,
- * socket events), and an identity-based selection would make those background
- * rebuilds move the highlight or yank the scroll position around.
- */
 export default function CommandPalette({
   controls: controlsProp,
   onSendChatMessage,
 }: {
   controls: ControlsBarProps;
-  /** Chat send handler; enables the send-to-chat / ask-AI query fallbacks. */
   onSendChatMessage?: (content: string) => void;
 }) {
-  // The parent recreates `controls` every render; stabilize its identity so the
-  // action list only rebuilds when a control value actually changes.
   const controls = useShallowStable(controlsProp);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  // null = "first runnable row"; set only by explicit user intent (arrow keys,
-  // pointer hover). Survives action-list rebuilds because ids are stable.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  // scrollIntoView must only follow *keyboard* selection moves. If it ran on
-  // every selection change, background action rebuilds and hover would fight
-  // the user's own wheel/trackpad scrolling.
   const keyboardNavRef = useRef(false);
-  // Hover-selects only on real pointer travel. Browsers can emit mouse events
-  // without movement (e.g. after layout shifts), which would otherwise steal
-  // the selection from under the keyboard.
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
-  // Device enumeration only runs while the palette is open, mirroring how the
-  // caret menus and drawers avoid idle permission/device churn.
   const { audioInput, audioOutput, videoInput } = useEnumeratedDevices(open);
 
-  // Register Mod+K through the app's hotkey system, like every other meeting
-  // shortcut. The library's defaults for a Ctrl/Meta shortcut are exactly what
-  // this needs: preventDefault so the browser's own binding never fires, and
-  // ignoreInputs off so it still toggles while the search box (or chat) is
-  // focused.
   useHotkey(HOTKEYS.commandPalette.keys as RegisterableHotkey, () =>
     setOpen((v) => !v),
   );
 
   useEffect(() => {
-    // Escape closes from anywhere while open (callback form = no-op when
-    // closed). Window-level so it still works after Tab moves focus off the
-    // input to a control behind the overlay.
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setOpen((wasOpen) => (wasOpen ? false : wasOpen));
@@ -121,13 +80,10 @@ export default function CommandPalette({
 
   useEffect(() => {
     if (!open) return;
-    // Overlays are mutually exclusive: opening this one closes the others
-    // (e.g. the Mod+/ shortcuts sheet), and vice versa.
     announceOverlayOpen("command-palette");
     setQuery("");
     setSelectedId(null);
     lastPointerRef.current = null;
-    // The input mounts in the same commit; focus once it exists.
     const id = window.requestAnimationFrame(() => inputRef.current?.focus());
     return () => window.cancelAnimationFrame(id);
   }, [open]);
@@ -176,8 +132,6 @@ export default function CommandPalette({
     () => filterPaletteActions(actions, query),
     [actions, query],
   );
-  // A query that matches nothing becomes input for chat / the assistant /
-  // shared-browser search instead of a dead end.
   const visible = useMemo(
     () =>
       results.length > 0
@@ -185,15 +139,10 @@ export default function CommandPalette({
         : buildQueryFallbackActions(query, controls, { onSendChatMessage }),
     [results, query, controls, onSendChatMessage],
   );
-  // Arrow keys walk only the runnable rows; disabled rows stay visible but
-  // are skipped so Enter can never fire a dead action.
   const selectable = useMemo(
     () => visible.filter((action) => !action.disabled),
     [visible],
   );
-  // Derived, not synced by effect: if the remembered id vanished (list
-  // rebuilt, query narrowed), the highlight falls back to the top row with
-  // zero renders spent reconciling state.
   const selected =
     (selectedId != null &&
       selectable.find((action) => action.id === selectedId)) ||
@@ -201,13 +150,11 @@ export default function CommandPalette({
     null;
 
   useEffect(() => {
-    // New query = new result set: highlight the top hit and read from the top.
     setSelectedId(null);
     listRef.current?.scrollTo({ top: 0 });
   }, [query]);
 
   useEffect(() => {
-    // Follow the highlight only when the keyboard moved it (see keyboardNavRef).
     if (!keyboardNavRef.current) return;
     keyboardNavRef.current = false;
     listRef.current
@@ -221,10 +168,6 @@ export default function CommandPalette({
     action.run();
   }, []);
 
-  // Arm the scroll gate only when the highlight actually moves: a no-op move
-  // (Home on the first row, arrows in a one-item list) must not leave the
-  // flag set, or the next background rebuild would scroll without keyboard
-  // input — the exact bug this component was rewritten to fix.
   const selectByKeyboard = (target: PaletteAction | undefined) => {
     if (!target || target.id === selected?.id) return;
     keyboardNavRef.current = true;
@@ -260,7 +203,6 @@ export default function CommandPalette({
         moveSelection(-1);
         return;
       case "Home":
-        // Only hijack Home/End when they can't mean "move the text caret".
         if (query.length === 0) {
           event.preventDefault();
           jumpSelection(0);
@@ -285,8 +227,6 @@ export default function CommandPalette({
   ) => {
     const last = lastPointerRef.current;
     lastPointerRef.current = { x: event.clientX, y: event.clientY };
-    // Ignore mouse events that carry no actual travel — those are layout
-    // shifts or scrolls happening under a resting cursor, not user intent.
     if (last && last.x === event.clientX && last.y === event.clientY) return;
     if (!action.disabled && selected?.id !== action.id) {
       setSelectedId(action.id);
@@ -295,8 +235,6 @@ export default function CommandPalette({
 
   if (!open) return null;
 
-  // Browsing (empty query) keeps the calm grouped directory; searching shows
-  // one flat list in relevance order so the best hit is always the first row.
   const groups: { section: string | null; items: PaletteAction[] }[] =
     searching
       ? [{ section: null, items: visible }]
@@ -397,9 +335,6 @@ export default function CommandPalette({
                       key={action.id}
                       id={`palette-option-${action.id}`}
                       type="button"
-                      // aria-activedescendant keeps real focus on the input, so
-                      // options stay out of the tab order — otherwise Tab moves
-                      // focus off the input and Esc (handled there) stops working.
                       tabIndex={-1}
                       role="option"
                       aria-selected={isSelected}
@@ -460,8 +395,6 @@ export default function CommandPalette({
                         </span>
                       ) : null}
                       {action.active ? (
-                        // Dot shows on-state visually; sr-only text keeps it
-                        // announced now that the "ON" badge is gone.
                         <>
                           <span className="sr-only">(on)</span>
                           <span

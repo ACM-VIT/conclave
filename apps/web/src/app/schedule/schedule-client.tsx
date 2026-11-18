@@ -191,7 +191,6 @@ const listTimeZones = (): string[] => {
     ).supportedValuesOf?.("timeZone");
     if (zones && zones.length > 0) return zones;
   } catch {
-    // Older runtimes: fall back to a curated list below.
   }
   return FALLBACK_TIME_ZONES;
 };
@@ -202,9 +201,6 @@ export default function ScheduleClient({ user: _user }: Props) {
   );
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [status, setStatus] = useState<"loading" | "idle" | "error">("loading");
-  // Operations in flight, by key ("profile", "availability", an event type
-  // id, ...). A single slot let two concurrent saves overwrite each other's
-  // busy flag, re-enabling a button mid-request and clearing the other's.
   const [workingKeys, setWorkingKeys] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -438,7 +434,6 @@ export default function ScheduleClient({ user: _user }: Props) {
         </a>
 
         <div className="rounded-2xl border border-white/10 bg-[#0e0e10]">
-          {/* Header — identity + the one primary action */}
           <div className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4 sm:px-6">
             <div className="flex min-w-0 items-center gap-3">
               <div className="min-w-0">
@@ -489,7 +484,6 @@ export default function ScheduleClient({ user: _user }: Props) {
               </p>
             ) : null}
 
-            {/* Calendar — banner only when it needs attention */}
             {calendarConnected ? (
               <div className="flex items-center justify-between gap-3 text-[12.5px]">
                 <span className="inline-flex min-w-0 items-center gap-2 text-[#fafafa]/55">
@@ -525,7 +519,6 @@ export default function ScheduleClient({ user: _user }: Props) {
               </div>
             )}
 
-            {/* Booking links */}
             <section>
               <p className={`${LABEL} mb-3`}>Booking links</p>
               {dashboard.eventTypes.length === 0 ? (
@@ -625,7 +618,6 @@ export default function ScheduleClient({ user: _user }: Props) {
               )}
             </section>
 
-            {/* Weekly hours */}
             <AvailabilitySection
               availability={dashboard.availability}
               timeZone={dashboard.profile.timeZone}
@@ -634,7 +626,6 @@ export default function ScheduleClient({ user: _user }: Props) {
               onTimeZoneChange={changeTimeZone}
             />
 
-            {/* Bookings — only when there are any */}
             {bookings.length > 0 ? (
               <section>
                 <p className={`${LABEL} mb-3`}>Upcoming</p>

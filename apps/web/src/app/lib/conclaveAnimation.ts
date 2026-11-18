@@ -1,12 +1,3 @@
-// Loader for the Conclave brand animation.
-//
-// The asset ships as a .lottie (a ~1.3MB zip of a small JSON + 301 WebP frame
-// images) instead of the ~6.6MB inlined JSON — much smaller to download. But it
-// is a video-to-lottie (raster frames), which the dotLottie/ThorVG WASM engine
-// can't render, so we unzip it in the browser and inline the frames back into
-// the JSON as data URIs for the proven lottie-web canvas renderer. Done once and
-// cached module-wide.
-
 import { strFromU8, unzipSync } from "fflate";
 
 const ANIMATION_URL = "/conclave-animation.lottie";
@@ -55,15 +46,13 @@ async function buildAnimation(): Promise<Record<string, unknown>> {
 export function loadConclaveAnimation(): Promise<Record<string, unknown>> {
   if (!cached) {
     cached = buildAnimation().catch((err) => {
-      cached = null; // allow a later retry
+      cached = null;
       throw err;
     });
   }
   return cached;
 }
 
-// Warm the cache (download + unzip + inline) while the lobby is idle so the
-// overlay can paint the animation the instant the user commits to a meeting.
 export function prefetchConclaveAnimation(): void {
   void loadConclaveAnimation().catch(() => {});
 }

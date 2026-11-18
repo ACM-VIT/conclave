@@ -1,15 +1,8 @@
-// Client-side plumbing for chat link embeds: which URLs in a message deserve
-// a preview card, YouTube detection for the inline player, and a session-wide
-// cache in front of /api/unfurl so every message, remount, and duplicate link
-// costs at most one request.
-
 export type ChatLinkPreviewKind = "page" | "image" | "tweet";
 
 export interface ChatLinkTweetMedia {
   kind: "photo" | "video" | "gif";
-  /** Photo URL, or the poster frame for videos and gifs. */
   url: string;
-  /** Direct mp4 for videos and gifs. */
   videoUrl?: string;
   width?: number;
   height?: number;
@@ -17,7 +10,6 @@ export interface ChatLinkTweetMedia {
 
 export interface ChatLinkTweetData {
   authorName: string;
-  /** Without the leading @. */
   authorHandle: string;
   authorAvatarUrl?: string;
   text: string;
@@ -26,7 +18,6 @@ export interface ChatLinkTweetData {
 }
 
 export interface ChatLinkPreview {
-  /** Final URL after redirects — what the embed card links to. */
   url: string;
   kind: ChatLinkPreviewKind;
   siteName?: string;
@@ -35,8 +26,6 @@ export interface ChatLinkPreview {
   imageUrl?: string;
   faviconUrl?: string;
   imageLayout?: "large" | "thumb";
-  /** Present when kind is "tweet"; clients without tweet support can fall
-   * back to the generic title/description/imageUrl fields above. */
   tweet?: ChatLinkTweetData;
 }
 
@@ -46,16 +35,8 @@ export interface UnfurlResponsePayload {
 
 export const MAX_EMBEDS_PER_MESSAGE = 2;
 
-// Only unfurl links the sender typed explicitly as links ("https://…" or
-// "www.…"). Bare domains like "vercel.com" still linkify in the message text
-// but don't embed — mid-sentence mentions would otherwise spam cards.
 const EMBED_URL_PATTERN = /(?:https?:\/\/|www\.)[^\s<>]+/gi;
 
-/**
- * Returns the embeddable URLs of a chat message, deduped and capped. Wrapping
- * a link in angle brackets ("<https://…>") suppresses its embed, mirroring
- * the convention chat power users expect.
- */
 export function extractEmbedUrls(
   content: string,
   max: number = MAX_EMBEDS_PER_MESSAGE,
@@ -68,8 +49,6 @@ export function extractEmbedUrls(
     const index = match.index ?? -1;
     if (index < 0) continue;
 
-    // Same trailing-punctuation trim as the message linkifier, so the embed
-    // fetches exactly the URL the text renders as a link.
     const trimmed = match[0].replace(/[),.!?;:]+$/, "");
     if (!trimmed || trimmed.includes("@")) continue;
 
@@ -93,7 +72,6 @@ export function extractEmbedUrls(
 
 const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
 
-/** Extracts a YouTube video id from watch/shorts/live/embed/youtu.be URLs. */
 export function getYouTubeVideoId(rawUrl: string): string | null {
   let url: URL;
   try {
@@ -124,8 +102,6 @@ export const getYouTubeThumbnailUrl = (videoId: string): string =>
 export const getYouTubeEmbedUrl = (videoId: string): string =>
   `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0`;
 
-// Resolved previews (including nulls — "this URL has no card") are kept for
-// the whole session; chat history remounts constantly and must not refetch.
 const previewCache = new Map<string, Promise<ChatLinkPreview | null>>();
 
 export function fetchChatLinkPreview(url: string): Promise<ChatLinkPreview | null> {

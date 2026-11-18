@@ -4,12 +4,6 @@ import {
   youtubeRateLimitResponse,
 } from "../rate-limit";
 
-// Server-side proxy for YouTube Data API search, so the API key never reaches
-// the client. Only embeddable videos are returned, since the watch app plays
-// through the iframe player. Search costs 100 quota units per call (plus one
-// unit to enrich results with duration and view counts), so results are cached
-// briefly and the client only searches on submit.
-
 const YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search";
 const YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos";
 const MAX_QUERY_LENGTH = 100;
@@ -49,7 +43,6 @@ const writeCache = (key: string, items: YouTubeSearchItem[]): void => {
   cache.set(key, { at: Date.now(), items });
 };
 
-/** Parse an ISO 8601 duration (PT1H2M3S) into seconds; null when unknown. */
 export const parseIsoDuration = (value: unknown): number | null => {
   if (typeof value !== "string") return null;
   const match = value.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
@@ -158,7 +151,6 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
 
-    // Enrich with duration and views in one cheap batch call; best effort.
     if (base.length > 0) {
       const detailsUrl = new URL(YOUTUBE_VIDEOS_URL);
       detailsUrl.searchParams.set("part", "contentDetails,statistics");
@@ -185,7 +177,6 @@ export async function GET(request: Request): Promise<Response> {
           }
         }
       } catch {
-        /* enrichment is optional */
       }
     }
 

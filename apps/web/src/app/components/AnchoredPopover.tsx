@@ -19,23 +19,14 @@ interface AnchoredPopoverProps {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
-  /** Preferred side. Flips to the other side when there isn't room. */
   placement?: Placement;
   align?: Align;
-  /** Gap between anchor and panel, px. */
   gap?: number;
-  /** Minimum distance to keep from the viewport edges, px. */
   margin?: number;
   className?: string;
   role?: "dialog" | "menu" | "tooltip";
   ariaLabel?: string;
-  /** Tooltips must not swallow pointer events or trap focus. */
   interactive?: boolean;
-  /**
-   * Close shortly after the pointer leaves both the anchor and the panel, so
-   * moving away dismisses it without a click (Discord-style). A short grace
-   * delay bridges the gap between anchor and panel.
-   */
   dismissOnPointerLeave?: boolean;
 }
 
@@ -45,20 +36,6 @@ interface Position {
   placement: Placement;
 }
 
-/**
- * Anchored popover that renders in a portal on document.body.
- *
- * The chat panel's message list is a scroll container, so any popover nested
- * inside it is clipped by that container - which is what cut the emoji picker
- * off against the panel header. Portalling to the body escapes the clip, and
- * because the panel is then no longer the containing block, the panel has to
- * position itself: it flips to the other side when the preferred side lacks
- * room, and shifts along the cross axis to stay inside the viewport.
- *
- * There is no popover primitive in this codebase (only @radix-ui/react-
- * collapsible, and the two existing createPortal call sites are full-screen
- * modals), so this is hand-rolled rather than delegated to floating-ui.
- */
 export default function AnchoredPopover({
   anchorRef,
   open,
@@ -76,13 +53,7 @@ export default function AnchoredPopover({
 }: AnchoredPopoverProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState<Position | null>(null);
-  // Portals only exist on the client, so gate the first paint on mount to keep
-  // SSR and hydration in sync. The positioning effect depends on isMounted too
-  // (not just open), so a popover mounted already-open re-measures once the
-  // panel actually exists rather than staying visibility:hidden forever.
   const [isMounted, setIsMounted] = useState(false);
-  // The element focused when the popover opened, so focus can return there on
-  // close instead of falling to <body>.
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -97,13 +68,6 @@ export default function AnchoredPopover({
     }
   }, []);
 
-  // Pointer-leave dismissal. Leaving the anchor or the panel starts a short
-  // timer; entering either cancels it, so crossing the gap between them (or a
-  // brief overshoot) doesn't flicker the popover shut.
-  //
-  // Mouse only: a touch tap fires pointerleave on finger-lift right after the
-  // tap that opened the popover, which would auto-dismiss it before the user
-  // could pick. Touch users dismiss by tapping outside or selecting.
   useEffect(() => {
     if (!open || !interactive || !dismissOnPointerLeave) return;
     const anchor = anchorRef.current;
@@ -142,8 +106,6 @@ export default function AnchoredPopover({
     const roomBelow = viewportHeight - anchorRect.bottom - margin;
     const needed = panelRect.height + gap;
 
-    // Flip only when the preferred side cannot fit and the other side can do
-    // better, so the panel stays put during small scrolls.
     let resolved: Placement = placement;
     if (placement === "top" && roomAbove < needed && roomBelow > roomAbove) {
       resolved = "bottom";
@@ -166,8 +128,6 @@ export default function AnchoredPopover({
       left = anchorRect.left + anchorRect.width / 2 - panelRect.width / 2;
     else left = anchorRect.right - panelRect.width;
 
-    // Shift along the cross axis so a panel wider than the space beside its
-    // anchor stays fully on screen instead of running past the edge.
     const maxLeft = viewportWidth - panelRect.width - margin;
     left = Math.min(Math.max(left, margin), Math.max(margin, maxLeft));
 
@@ -191,23 +151,16 @@ export default function AnchoredPopover({
       setPosition(null);
       return;
     }
-    // isMounted is a dep so the panel measures on the render where it first
-    // exists — mounting already-open renders null once before isMounted flips.
     if (!isMounted) return;
     updatePosition();
   }, [isMounted, open, updatePosition]);
 
   useEffect(() => {
     if (!open) return;
-    // Capture phase so scrolling of any ancestor container repositions the
-    // panel, not just the window.
     const handleScroll = () => updatePosition();
     window.addEventListener("scroll", handleScroll, true);
     window.addEventListener("resize", handleScroll);
 
-    // Scroll/resize miss the case where the anchor moves because content above
-    // it grew — e.g. a new chat message arrives while the picker is open. A
-    // ResizeObserver on the anchor and panel catches those layout shifts.
     const observer =
       typeof ResizeObserver !== "undefined"
         ? new ResizeObserver(() => updatePosition())
@@ -222,8 +175,6 @@ export default function AnchoredPopover({
       window.removeEventListener("resize", handleScroll);
       observer?.disconnect();
     };
-    // isMounted is a dep so a popover mounted already-open re-runs this once the
-    // portalled panel exists and gets observed, not just the anchor.
   }, [anchorRef, isMounted, open, updatePosition]);
 
   useEffect(() => {
@@ -252,8 +203,6 @@ export default function AnchoredPopover({
     if (!open || !interactive) return;
     const panel = panelRef.current;
     if (!panel) return;
-    // Remember where focus was so it can return to the trigger on close, then
-    // move focus into the panel so it is keyboard-operable immediately.
     returnFocusRef.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -264,8 +213,6 @@ export default function AnchoredPopover({
     focusable?.focus();
 
     return () => {
-      // Only pull focus back if it is still inside the panel; if the user has
-      // since clicked elsewhere, respect that.
       const active = document.activeElement;
       if (!active || panel.contains(active) || active === document.body) {
         returnFocusRef.current?.focus();
@@ -296,7 +243,6 @@ export default function AnchoredPopover({
         position: "fixed",
         top: position?.top ?? 0,
         left: position?.left ?? 0,
-        // Avoid a first-paint flash at 0,0 before measurement lands.
         visibility: position ? "visible" : "hidden",
       }}
       className={`z-[60] ${interactive ? "" : "pointer-events-none"} ${className}`}

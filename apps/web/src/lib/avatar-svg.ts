@@ -6,7 +6,6 @@ export const AVATAR_COLORS = [
   "#C084FC", "#6366F1", "#10B981", "#FF5EAE",
 ];
 
-// Same integer hash and sphere positions as facehash (MIT; see avatar-faces).
 const hashName = (name: string): number => {
   let hash = 0;
   for (let index = 0; index < name.length; index += 1) {

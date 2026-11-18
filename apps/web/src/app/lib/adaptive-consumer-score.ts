@@ -65,12 +65,6 @@ export const getConsumerScoreSample = (options: {
   let selectedProducerScore: number | null = null;
   let availableProducerScore: number | null = null;
 
-  // mediasoup updates `score` and `currentLayers` from separate worker events.
-  // During a layer transition, `producerScore` can therefore still describe
-  // the previous "no selected stream" state even though currentLayers already
-  // identifies a live stream. Prefer the score for that selected encoding when
-  // it is available. Simulcast spatial layers map one-to-one to encodings; all
-  // SVC spatial layers share the sole encoding at index zero.
   if (Array.isArray(producerScores) && producerScores.length > 0) {
     const validProducerScores = producerScores
       .map(parseScoreValue)
@@ -92,10 +86,6 @@ export const getConsumerScoreSample = (options: {
     }
   }
 
-  // With no current layer, producerScore is zero by definition because there
-  // is no selected stream. That is not evidence of upstream degradation. Use
-  // the best available producer stream to let BWE make the initial selection;
-  // an all-zero producerScores array still degrades immediately.
   const producerPathScore =
     options.currentSpatialLayer === null
       ? availableProducerScore ?? aggregateProducerScore
@@ -142,10 +132,6 @@ export const advanceConsumerScoreAdaptation = (options: {
       };
     }
 
-    // mediasoup emits `consumer.on("score")` when the score changes, not as a
-    // heartbeat. Therefore an old score for the same live consumer generation
-    // remains the latest authoritative score. Only a better score event may
-    // start recovery; missing telemetry is never recovery evidence.
     return {
       consumerId: options.consumerId,
       quality: previous.quality,

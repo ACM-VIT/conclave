@@ -16,7 +16,6 @@ import {
   type RoomAiState,
 } from "@conclave/ai/room";
 
-// Keep only public metadata from socket messages, never credentials.
 export function parseRoomAiState(value: unknown): RoomAiState | null {
   if (!value || typeof value !== "object") return null;
   const state = emptyRoomAiState();
@@ -59,13 +58,10 @@ export type RoomAiController = {
   configure: (
     provider: RoomAiProvider,
     apiKey: string | null | undefined,
-    // null shares a credential without changing the legacy Chat model.
     model?: string | null,
   ) => Promise<string | null>;
 };
 
-// Compact setup controls use the same room credential store as full settings.
-// Save before starting a feature so its server request can resolve the key.
 export async function configureRoomAiForFeature(
   controller: RoomAiController,
   keys: Partial<Record<RoomAiProvider, string>>,
@@ -151,8 +147,6 @@ export function useRoomAi(
       setReady(false);
       setState(emptyRoomAiState());
     };
-    // The SFU sends ai:changed after joinRoom restores membership. Connecting
-    // the transport alone is too early to request room settings.
     const reconnected = () => setConnected(true);
     socket.on("connect", reconnected);
     socket.on("disconnect", disconnected);

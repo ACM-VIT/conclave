@@ -4,8 +4,6 @@ import { color } from "@conclave/ui-tokens";
 import type { AdminActionInput, PendingUserSnapshot } from "./types";
 import { Section, btnTiny, btnTinyDanger } from "./ui";
 
-/** Waiting room list with per-person and bulk admit/reject. Only rendered
- * when someone is actually waiting. */
 export function WaitingSection({
   pendingUsers,
   roomPath,

@@ -13,39 +13,24 @@ import {
 
 const SHOW_SHORTCUTS_EVENT = "conclave:show-shortcuts";
 
-/**
- * Lets other surfaces (the Mod+K quick-actions palette) open the shortcuts
- * dialog without holding a ref to it.
- */
 export function requestShortcutsHelp(): void {
   window.dispatchEvent(new CustomEvent(SHOW_SHORTCUTS_EVENT));
 }
 
-/**
- * Mod+/ reference sheet listing every meeting hotkey, straight from the
- * HOTKEYS map so a newly declared binding shows up here automatically.
- * Self-contained: mount once anywhere in the meeting UI.
- */
 export default function ShortcutsHelpDialog() {
   const [open, setOpen] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Register Mod+/ through the app's hotkey system, like every other meeting
-  // shortcut (the library preventDefaults Ctrl/Meta shortcuts by default).
   useHotkey(HOTKEYS.shortcutsHelp.keys as RegisterableHotkey, () =>
     setOpen((v) => !v),
   );
 
   useEffect(() => {
-    // Escape closes while open (callback form = no-op when closed). Kept as a
-    // window listener rather than a second useHotkey("Escape") so it does not
-    // collide with the palette's own Escape registration.
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setOpen((wasOpen) => (wasOpen ? false : wasOpen));
       }
     };
-    // Let other surfaces (the palette's "View keyboard shortcuts" row) open it.
     const onShowRequest = () => setOpen(true);
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener(SHOW_SHORTCUTS_EVENT, onShowRequest);
@@ -55,8 +40,6 @@ export default function ShortcutsHelpDialog() {
     };
   }, []);
 
-  // Overlays are mutually exclusive: opening this sheet closes the Mod+K
-  // palette, and the palette opening closes this sheet.
   useEffect(() => {
     if (open) announceOverlayOpen("shortcuts-help");
   }, [open]);
@@ -66,10 +49,6 @@ export default function ShortcutsHelpDialog() {
     [],
   );
 
-  // Accessible-modal focus: move focus into the dialog on open and return it to
-  // the trigger on close. The app has no focus-trap dependency, so this is the
-  // minimal correct behavior for an aria-modal element (matches how the palette
-  // focuses its input on open).
   useEffect(() => {
     if (!open) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;

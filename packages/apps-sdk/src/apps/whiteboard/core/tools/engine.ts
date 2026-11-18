@@ -195,7 +195,6 @@ export class ToolEngine {
       return;
     }
 
-    // The laser never writes to the doc; trails live in awareness only.
     if (this.tool === "pan" || this.tool === "laser") {
       return;
     }

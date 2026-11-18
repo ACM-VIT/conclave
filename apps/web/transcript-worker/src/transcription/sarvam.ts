@@ -285,9 +285,6 @@ class SarvamTranscriptionSession implements LiveTranscriptionSession {
   }
 
   commitAudio(): void {
-    // Sarvam is a continuous streaming STT socket. The room/SFU sends periodic
-    // commits for OpenAI's input buffer API; treating those as Sarvam flushes
-    // fragments speech before server-side VAD can finalize an utterance.
   }
 
   clearAudio(): void {

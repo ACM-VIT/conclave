@@ -47,9 +47,6 @@ const serializeProducerProfileMutation = (
   return operation;
 };
 
-// Desktop Chromium/Firefox generally get the strongest simulcast behavior with
-// VP8. Safari/iOS/Android are more sensitive to software video paths, so prefer
-// H264 there when the router/browser intersection supports it.
 const SOFTWARE_VP8_SENSITIVE_CODEC_MIME_TYPES = [
   "video/H264",
   "video/VP8",
@@ -58,20 +55,12 @@ const SIMULCAST_FRIENDLY_CODEC_MIME_TYPES = [
   "video/VP8",
   "video/H264",
 ] as const;
-// Keep screen share on the same reliable codec order as the native app.
-// Desktop VP9 screen capture can look good when it works, but monitor/full
-// screen captures have been observed to publish decodable black frames on some
-// GPU/browser combinations. Keep VP9 only as a last-resort fallback.
 const SCREEN_SHARE_CODEC_MIME_TYPES = [
   "video/VP8",
   "video/H264",
   "video/VP9",
 ] as const;
 const MONITOR_SCREEN_SHARE_CODEC_MIME_TYPES = [
-  // Full-monitor capture is the heaviest path and frequently exceeds the
-  // real-time budget of Chromium's software VP8 encoder on high-DPI screens.
-  // Prefer the broadly hardware-accelerated H.264 path for monitors only;
-  // tabs and windows retain the more detail-efficient VP8 preference.
   "video/H264",
   "video/VP8",
   "video/VP9",
@@ -342,32 +331,13 @@ const LOW_GOOD_START_BITRATE_KBPS = 300;
 const FAIR_START_BITRATE_KBPS = 350;
 const POOR_START_BITRATE_KBPS = 90;
 const EMERGENCY_START_BITRATE_KBPS = 65;
-// Keep a fixed 360p/720p spatial ladder at full cadence. L2T1's inter-layer
-// prediction lets an SFU keep forwarding the continuously decodable base while
-// the enhancement layer returns; changing encoder geometry or toggling L1/L2
-// forced every receiver to wait roughly 500ms for a replacement keyframe.
 const VP9_SVC_SCALABILITY_MODE = "L2T1" as const;
-// The two-layer VP9 profile-0 ladder avoids the former 180p duplicate and
-// reserves the 1.65 Mbps cap for the useful 360p/720p layers. A measured 1.5
-// Mbps cap retained still-frame fidelity but caused 720p cadence and latency
-// misses under deterministic motion, so preserve this headroom for full 30fps.
-// It remains below the pristine budget and the VP8 simulcast ceiling.
 const VP9_SVC_STANDARD_MAX_BITRATE = 1_650_000;
-// Chromium's VP8 encoder emits frequent synchronized keyframes and starves the
-// full stream when q/h are changed to `active: false` on a live simulcast
-// sender. Keep those unused layers as low-rate standbys instead: that preserves
-// the encoder's efficient inter-frame cadence, keeps instant fail-safe layer
-// recovery, and leaves almost the entire 1.8 Mbps pristine budget for 720p.
 const VP8_SINGLE_RECEIVER_STANDBY_CAPS = [
   { maxBitrate: 35_000, maxFramerate: 12 },
   { maxBitrate: 90_000, maxFramerate: 20 },
   { maxBitrate: 1_750_000, maxFramerate: 30 },
 ] as const;
-// A live simulcast encoder is a topology, not a quality switch. Chromium can
-// stall every RID when setMaxSpatialLayer(), `active`, scale, or RTP priority
-// changes rebuild that topology. Keep every independent encoder alive and use
-// bitrate plus max-framerate ceilings for pressure relief without changing the
-// negotiated RID set.
 const VP8_STABLE_SIMULCAST_PROFILE_CAPS = {
   fair: [
     { maxBitrate: 80_000, maxFramerate: 12 },
@@ -390,10 +360,6 @@ export const buildWebcamCodecOptions = (
   quality: VideoQuality,
   profile: WebcamProducerNetworkProfile,
 ): ProducerCodecOptions => ({
-  // mediasoup maps this libwebrtc hint to x-google-start-bitrate. Starting a
-  // healthy 720p sender above Chrome's conservative default lets the requested
-  // full simulcast layer become usable promptly, while constrained profiles
-  // keep a start point inside their active encoding budget.
   videoGoogleStartBitrate:
     profile === "emergency"
       ? EMERGENCY_START_BITRATE_KBPS
@@ -577,9 +543,6 @@ const getCaptureAdjustedScaleResolutionDownBy = (
 ): number | undefined => {
   if (layerRank === 0 && (profile === "poor" || profile === "emergency")) {
     const target = SURVIVAL_BANDWIDTH_CAPTURE_TARGETS[profile];
-    // The RTP cap is intentionally applied before capture constraints are
-    // reopened. Scale a still-large track to the survival raster immediately,
-    // then settle at 1:1 once capture reaches that same raster.
     return getCaptureScaleForTarget(captureSize, target) ?? 1;
   }
   if (profile === "fair" && typeof current === "number") {
@@ -589,8 +552,6 @@ const getCaptureAdjustedScaleResolutionDownBy = (
       captureSize,
       target,
     );
-    // Fair links capture at 640x360. Keep its active q/h ladder at 320x180 and
-    // 640x360 instead of scaling the capture a second time to 160x90/320x180.
     return Math.min(current, targetScale ?? 1);
   }
   if (layerRank !== 0 || typeof current !== "number") return current;
@@ -798,12 +759,6 @@ type KeyFrameRequestingRtpSender = RTCRtpSender & {
   ) => Promise<void>;
 };
 
-/**
- * Ask the active encoder for an immediate key frame after a capture or
- * resolution transition. Browsers without the WebRTC extension either ignore
- * the optional argument or reject it; quality switching must remain usable in
- * both cases.
- */
 export async function requestVideoSenderKeyFrame(
   sender: RTCRtpSender | null | undefined,
 ): Promise<boolean> {
@@ -997,9 +952,6 @@ const applyWebcamEncodingCaps = async (
                   layerRank,
                   captureSize,
                 ),
-          // Chromium currently treats simulcast RTP priority as a sender-wide
-          // preference and rejects attempts to mutate it on every RID. Put the
-          // one-to-one boost on the supported first encoding slot.
           ...(index === 0 && senderPriority
             ? {
                 priority: senderPriority,
@@ -1215,11 +1167,6 @@ const applyScreenShareProducerNetworkProfileNow = async (
   if (producer.kind !== "video" || producer.closed) return;
 
   const cap = getScreenShareCap(profile, publishSettings);
-  // Keep display capture stable for the life of the share. Network adaptation
-  // belongs on RTCRtpSender: repeatedly resizing a live monitor track can
-  // restart the browser/GPU capture pipeline and has produced black frames on
-  // full-screen shares. Initial capture and explicit user quality changes are
-  // the only places that mutate MediaStreamTrack constraints.
   const scaleResolutionDownBy = getScreenShareScaleResolutionDownBy(
     profile,
     getTrackCaptureSize(producer.track),
@@ -1410,13 +1357,6 @@ export async function produceScreenShareTrack({
   );
 }
 
-/**
- * Publishes a processed webcam track and, for ordinary publications, retries
- * the raw camera when the processed track is rejected. Receiver-capacity
- * transitions carry a one-use server nonce: once their first produce attempt
- * starts, no track fallback may reuse that authority, even when the first
- * acknowledgement is ambiguous.
- */
 export async function produceWebcamTrackWithRawTrackFallback<T>({
   publishTrack,
   rawTrack,
@@ -1489,9 +1429,6 @@ export async function produceWebcamTrack({
       publishSettings,
     ),
     codecOptions: buildWebcamCodecOptions(quality, networkProfile),
-    // The effects pipeline may replace the producer track with a processed
-    // canvas track while continuing to read from the raw camera. mediasoup's
-    // default stopTracks=true stops the previous track during replaceTrack().
     stopTracks: false,
     ...(codec ? { codec } : {}),
     appData: {
@@ -1593,11 +1530,6 @@ const applyWebcamProducerNetworkProfileNow = async (
 ): Promise<void> => {
   if (producer.kind !== "video" || producer.closed) return;
 
-  // Never call producer.setMaxSpatialLayer() here. mediasoup-client implements
-  // it by flipping RTCRtpEncodingParameters.active, which rebuilds Chromium's
-  // encoder topology and creates the very freeze this live path must avoid.
-  // Receiver preferences choose the forwarded RID; sender parameters below
-  // only change bitrate/frame-rate caps on the fixed set of encoders.
   await applyWebcamEncodingCaps(
     producer,
     quality,
