@@ -266,8 +266,9 @@ function ChatPanel({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const pendingImageUrlRef = useRef<string | null>(null);
   const sendAnimationTimeoutRef = useRef<number | null>(null);
-  const prevMessageIdsRef = useRef<Set<string>>(new Set());
-  const hasInitializedRef = useRef(false);
+  // null until the first message list is seen, so messages already present
+  // when the panel mounts are never treated (and animated) as new.
+  const prevMessageIdsRef = useRef<Set<string> | null>(null);
   const messageNodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const highlightTimeoutRef = useRef<number | null>(null);
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
@@ -485,10 +486,6 @@ function ChatPanel({
       textareaRef.current?.focus();
     }
   }, [replyTarget]);
-
-  useEffect(() => {
-    hasInitializedRef.current = true;
-  }, []);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -752,7 +749,7 @@ function ChatPanel({
     messages.forEach((message) => {
       const renderKey = getMessageRenderKey(message);
       currentIds.add(renderKey);
-      if (!prevIds.has(renderKey)) {
+      if (prevIds && !prevIds.has(renderKey)) {
         nextNewIds.add(renderKey);
       }
     });
@@ -882,8 +879,7 @@ function ChatPanel({
             {messages.map((msg, index) => {
               const isOwn = msg.userId === currentUserId;
               const messageRenderKey = getMessageRenderKey(msg);
-              const isNew =
-                hasInitializedRef.current && newMessageIds.has(messageRenderKey);
+              const isNew = newMessageIds.has(messageRenderKey);
               const displayName = formatDisplayName(msg.displayName || msg.userId);
 
               const assistantMsg = msg as AssistantChatMessage;
