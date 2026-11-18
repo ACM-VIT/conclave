@@ -707,7 +707,8 @@ export const longShotModule: GameModule<LongShotState> = {
       }
       case "popped":
         return ctx.now >= state.deadline ? afterPop(state, ctx) : state;
-      default:
+      case "lobby":
+      case "results":
         return state;
     }
   },
