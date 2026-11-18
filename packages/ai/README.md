@@ -22,6 +22,8 @@ OpenAI or Sarvam: Claude is a text alternative, not a realtime audio provider.
 | `ANTHROPIC_API_KEY` | Claude text credentials |
 | `SARVAM_API_KEY` | Sarvam transcription credentials |
 | `ELEVENLABS_API_KEY` | ElevenLabs voice cloning and synthesis credentials |
+| `CLOUDFLARE_AI_API_KEY` | Clef decision models on Workers AI, as `ACCOUNT_ID:API_TOKEN` |
+| `TYPESAFE_API_KEY` | Jev decision models on TypeSafe |
 | `CONCLAVE_ASSISTANT_MODEL` | Shared web chat model; defaults to `gpt-6.1-sol` |
 | `SFU_GAME_AI_MODEL` | Initial game model; defaults to `gpt-6-luna` |
 | `CLOUDFLARE_AI_GATEWAY_OPENAI_URL` / `OPENAI_BASE_URL` | OpenAI API base URL, gateway takes precedence |
@@ -165,3 +167,18 @@ The first compatible OpenAI or Anthropic contribution establishes initial text d
 ![Per-feature generation controls](docs/room-ai-generation-options.png)
 
 Assistant failures emit plain, redacted provider status, error type and request ID in Worker logs. The UI distinguishes rejected keys, model access, billing/credits and rate limits. This lets operators diagnose failed inference without recording API keys or request bodies.
+
+## Decision models
+
+`@conclave/ai/decisions` calls System One decision models: Cloudflare Clef and
+Clef Flash on Workers AI, and TypeSafe Jev. A request sends a `state` and up to
+64 typed questions (`noul` yes/no, `choice`, `score`) and gets back calibrated
+probabilities, with no generated text. `runDecisions` validates questions,
+unwraps the Workers AI envelope, checks every answer against its question, and
+retries 429, 529 and 5xx responses inside a time budget. `runDecisionBatches`
+splits larger requests.
+
+The `answers` room AI feature ("Answer judging") picks the model, defaulting to
+Clef Flash with a 2.5 s timeout. Rooms can share a Cloudflare account ID and
+Workers AI token, or a TypeSafe key, from the Room AI panel.
+

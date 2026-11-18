@@ -9,7 +9,8 @@
     "./limits": "./src/limits.ts",
     "./server": "./src/server.ts",
     "./room": "./src/room.ts",
-    "./room-server": "./src/room-server.ts"
+    "./room-server": "./src/room-server.ts",
+    "./decisions": "./src/decisions.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
