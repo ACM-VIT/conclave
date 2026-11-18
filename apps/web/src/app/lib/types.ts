@@ -21,4 +21,6 @@ export interface PrejoinMediaHandoff {
   stream: MediaStream | null;
   isCameraOn: boolean;
   isMicOn: boolean;
+  /** Join in audio-only mode (no outgoing or incoming video). */
+  isAudioOnly?: boolean;
 }

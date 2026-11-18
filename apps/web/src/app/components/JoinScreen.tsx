@@ -3,6 +3,7 @@
 import { toSafeNextPath } from "../lib/safe-next-path";
 import dynamic from "next/dynamic";
 import {
+  Headphones,
   Loader2,
   WandSparkles,
   Video,
@@ -330,6 +331,9 @@ function JoinScreen({
   const micIntentRef = useRef(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [isCameraOn, setIsCameraOn] = useState(false);
+  // Join without sending or receiving video (for slow connections). Carried
+  // into the meeting through the prejoin media handoff.
+  const [isAudioOnly, setIsAudioOnly] = useState(false);
   const [isMicOn, setIsMicOn] = useState(false);
   const [isRequestingPermissions, setIsRequestingPermissions] = useState(false);
   const [permissionRequestError, setPermissionRequestError] = useState<
@@ -769,7 +773,7 @@ function JoinScreen({
   const commitPrejoinMedia = () => {
     if (!onPrejoinMediaCommit) return;
     const stream = localStreamRef.current;
-    const shouldCommitCamera = cameraIntentRef.current;
+    const shouldCommitCamera = cameraIntentRef.current && !isAudioOnly;
     const shouldCommitMic = micIntentRef.current;
     const liveTracks =
       stream
@@ -796,7 +800,14 @@ function JoinScreen({
       stream: handoffStream,
       isCameraOn: shouldCommitCamera && hasLiveVideo,
       isMicOn: shouldCommitMic && hasLiveAudio,
+      isAudioOnly,
     });
+  };
+
+  const toggleAudioOnly = () => {
+    const next = !isAudioOnly;
+    setIsAudioOnly(next);
+    if (next && isCameraOn) void toggleCamera();
   };
 
   const toggleCamera = async () => {
@@ -1304,6 +1315,12 @@ function JoinScreen({
                   }`}
                 >
                   {previewName}
+                  {isAudioOnly ? (
+                    <span className="ml-2 inline-flex items-center gap-1 border-l border-white/20 pl-2 text-white/85">
+                      <Headphones size={13} aria-hidden="true" />
+                      Audio only
+                    </span>
+                  ) : null}
                 </div>
                 {(showPermissionHint || permissionRequestError) && (
                   <div className="pointer-events-none absolute bottom-[76px] left-1/2 max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-full bg-black/65 px-3 py-1.5 text-center text-[12.5px] font-medium text-white/80 backdrop-blur-sm">
@@ -1322,8 +1339,16 @@ function JoinScreen({
                   </button>
                   <button
                     onClick={toggleCamera}
-                    aria-label={isCameraOn ? "Turn off camera" : "Turn on camera"}
-                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                    disabled={isAudioOnly}
+                    aria-label={
+                      isAudioOnly
+                        ? "Camera is off in audio-only mode"
+                        : isCameraOn
+                          ? "Turn off camera"
+                          : "Turn on camera"
+                    }
+                    title={isAudioOnly ? "Camera is off in audio-only mode" : undefined}
+                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45 ${
                       isCameraOn ? "bg-[#232327] hover:bg-[#2e2e33]" : "bg-[#ea4335] hover:brightness-105"
                     }`}
                   >
@@ -1359,7 +1384,23 @@ function JoinScreen({
                   >
                     <WandSparkles size={18} />
                   </button>
+                  <button
+                    type="button"
+                    data-testid="prejoin-audio-only"
+                    onClick={toggleAudioOnly}
+                    aria-pressed={isAudioOnly}
+                    aria-label="Audio only: join without video"
+                    title="Audio only: join without video"
+                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full text-white transition-colors duration-150 ${
+                      isAudioOnly
+                        ? "bg-[#F95F4A] hover:bg-[#ff6d5a]"
+                        : "bg-[#232327] hover:bg-[#2e2e33]"
+                    }`}
+                  >
+                    <Headphones size={18} />
+                  </button>
                 </div>
+
               </div>
 
           <div className="safe-area-pb flex min-h-0 shrink-0 flex-col justify-start gap-3 p-5 pb-10 sm:gap-4 sm:p-8 sm:pb-14 md:min-h-[520px] md:justify-center">

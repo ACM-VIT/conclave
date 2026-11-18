@@ -1386,6 +1386,12 @@ export default function MeetsClient({
       setLocalStream(nextStream);
       setIsCameraOff(!(handoff.isCameraOn && hasLiveVideo));
       setIsMuted(!(handoff.isMicOn && hasLiveAudio));
+      const joinAudioOnly = handoff.isAudioOnly === true;
+      setViewSettings((settings) =>
+        settings.audioOnlyMode === joinAudioOnly
+          ? settings
+          : { ...settings, audioOnlyMode: joinAudioOnly },
+      );
       setMeetError(null);
       logMeetVideo("adopt_prejoin_media", {
         handoff: {
