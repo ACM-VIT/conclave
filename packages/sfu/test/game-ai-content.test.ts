@@ -128,9 +128,11 @@ describe("game AI content", () => {
                     category: "Fixture",
                     prompt: `Name a fixture ${i}`,
                     obvious: tierFixture("obvious", 4),
+                    cliche: tierFixture("cliche", 2),
                     solid: tierFixture("solid", 5),
                     rare: tierFixture("rare", 6),
                     longShot: tierFixture("long shot", 6),
+                    pearl: `Fixture pearl ${i}`,
                   })),
                 }
               : game.id === "imposter"

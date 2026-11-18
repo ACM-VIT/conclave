@@ -6,7 +6,7 @@ import { createTypedMove } from "@conclave/apps-sdk";
 import { GhostButton, HEAD_FONT, PrimaryButton, useRemaining, type GameViewProps } from "./gameUi";
 import type { LongShotMove } from "./moves";
 
-type Tier = "obvious" | "solid" | "rare" | "longShot";
+type Tier = "obvious" | "cliche" | "solid" | "rare" | "longShot" | "pearl";
 
 type RoundResult = {
   id: string;
@@ -37,6 +37,7 @@ type LongShotPublic = {
   totalPlayers: number;
   results: RoundResult[];
   missedGems: string[];
+  pearl: { answer: string | null; foundBy: string[] } | null;
   obviousPicks: string[];
   turnPlayerId: string | null;
   maxHearts: number;
@@ -65,21 +66,35 @@ type LongShotMe = {
   lives: number;
 };
 
-const TIERS: Tier[] = ["obvious", "solid", "rare", "longShot"];
+const TIERS: Tier[] = ["obvious", "cliche", "solid", "rare", "longShot", "pearl"];
 
 const TIER_LABEL: Record<Tier, string> = {
   obvious: "Obvious",
+  cliche: "Cliché",
   solid: "Solid",
   rare: "Rare",
   longShot: "Long shot",
+  pearl: "Pearl",
 };
 
 const GLOW: Record<Tier, string> = {
   obvious: "#9BE7DC",
+  cliche: "#F2B65A",
   solid: "#39C3F2",
   rare: "#8C7BFF",
   longShot: "#FF74D4",
+  pearl: "#FFF1D6",
 };
+
+const VERDICTS = [
+  { from: 4500, label: "Trench" },
+  { from: 3510, label: "Abyss" },
+  { from: 2510, label: "Midnight" },
+  { from: 1510, label: "Twilight" },
+  { from: 0, label: "Shallows" },
+] as const;
+
+const verdictFor = (depth: number) => VERDICTS.find((band) => depth >= band.from)?.label ?? "Shallows";
 
 const ZONES = [
   { name: "Sunlight", from: 0, top: "#0F5C70", bottom: "#0B3B52" },
@@ -520,6 +535,11 @@ export default function LongShotGame({
             {winner ? `${nameOf(winner.id, winner.name, userId)} ${winner.id === userId ? "win" : "wins"}` : "Everyone surfaced"}
           </div>
           {winner ? <div style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>{meters(winner.score)}</div> : null}
+          {!fuseMode ? (
+            <div style={{ fontSize: 13, color: GLOW.solid, marginTop: 10, fontFamily: HEAD_FONT }}>
+              Your dive: {verdictFor(me.score)}
+            </div>
+          ) : null}
         </div>
         <DiveChart rows={pub.scoreboard} userId={userId} winnerId={fuseMode ? pub.winnerId : null} />
         {pub.best.length > 0 ? (
@@ -734,6 +754,12 @@ export default function LongShotGame({
             </div>
           ))}
         </Panel>
+        {pub.pearl?.answer ? (
+          <div style={{ fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
+            Pearl: <span style={{ color: GLOW.pearl, fontFamily: HEAD_FONT }}>{pub.pearl.answer}</span>
+            {pub.pearl.foundBy.length > 0 ? ` · ${pub.pearl.foundBy.join(", ")}` : ""}
+          </div>
+        ) : null}
         {pub.missedGems.length > 0 ? (
           <div style={{ fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
             Missed: <span style={{ color: GLOW.longShot }}>{pub.missedGems.join(", ")}</span>

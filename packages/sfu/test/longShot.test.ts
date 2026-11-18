@@ -44,6 +44,7 @@ type PublicView = Record<string, unknown> & {
   turnPlayerId: string | null;
   scoreboard: { id: string; score: number }[];
   results: { id: string; answer: string | null; points: number }[];
+  pearl: { answer: string | null; foundBy: string[] } | null;
   seats: { id: string; lives: number; meter: number; out: boolean }[];
   tiles: Record<string, Record<string, unknown>>;
 };
@@ -79,7 +80,10 @@ describe("long shot matcher", () => {
   it("matches aliases and small typos, and rejects unknown answers", () => {
     expect(matchAnswer(fruit, "litchi")?.display).toBe("Lychee");
     expect(matchAnswer(fruit, "pomegranit")?.display).toBe("Pomegranate");
-    expect(matchAnswer(fruit, "durian")?.tier).toBe("longShot");
+    expect(matchAnswer(fruit, "durian")?.tier).toBe("cliche");
+    expect(matchAnswer(fruit, "mangosteen")?.tier).toBe("longShot");
+    expect(matchAnswer(fruit, "miracle berry")?.display).toBe("Miracle fruit");
+    expect(matchAnswer(fruit, "miracle berry")?.tier).toBe("pearl");
     expect(matchAnswer(fruit, "apple")?.tier).toBe("obvious");
     expect(matchAnswer(fruit, "carrot")).toBeNull();
     expect(matchAnswer(fruit, "fog")).toBeNull();
@@ -140,10 +144,10 @@ describe("long shot classic", () => {
   });
 
   it("keeps a player's answer private until the reveal", () => {
-    const state = answer(started(), "host", "Durian", 5_000);
-    expect(me(state, "host").answer).toEqual({ text: "Durian", tier: "longShot", points: 1000 });
+    const state = answer(started(), "host", "Mangosteen", 5_000);
+    expect(me(state, "host").answer).toEqual({ text: "Mangosteen", tier: "longShot", points: 850 });
     const view = JSON.stringify(pub(state));
-    expect(view).not.toContain("Durian");
+    expect(view).not.toContain("Mangosteen");
     expect(pub(state).tiles.host).toEqual({ acted: true });
   });
 
@@ -159,19 +163,19 @@ describe("long shot classic", () => {
 
   it("scores each answer by its tier alone", () => {
     let state = started();
-    state = answer(state, "host", "Durian", 5_000);
+    state = answer(state, "host", "Miracle fruit", 5_000);
     state = answer(state, "p2", "Apple", 5_000);
     state = answer(state, "p3", "apples", 5_000);
     state = longShotModule.onTick!(state, context(5_000));
     const view = pub(state, 5_000);
     expect(view.phase).toBe("reveal");
     const byId = Object.fromEntries(view.results.map((r) => [r.id, r]));
-    expect(byId.host).toMatchObject({ answer: "Durian", points: 1000 });
+    expect(byId.host).toMatchObject({ answer: "Miracle fruit", points: 1000 });
     expect(byId.p2).toMatchObject({ answer: "Apple", points: 100 });
     expect(byId.p3).toMatchObject({ answer: "Apple", points: 100 });
     expect(view.scoreboard[0]).toEqual({ id: "host", name: "Host", score: 1000 });
     expect(view.tiles.host).toEqual({ outcome: "correct", note: "1000m" });
-    expect((view.missedGems as string[]).includes("Durian")).toBe(false);
+    expect(view.pearl).toEqual({ answer: "Miracle fruit", foundBy: ["Host"] });
   });
 
   it("rejects answers that arrive after the clock runs out", () => {
@@ -218,7 +222,7 @@ describe("long shot fuse", () => {
     expect(pub(state).lastMiss).toMatchObject({ reason: "used", name: "Pat" });
     state = answer(state, "p2", "kumquat", 3_000);
     expect(pub(state).turnPlayerId).toBe("p3");
-    expect(pub(state).scoreboard.find((r) => r.id === "p2")?.score).toBe(1000);
+    expect(pub(state).scoreboard.find((r) => r.id === "p2")?.score).toBe(850);
   });
 
   it("pops the holder when the fuse runs out and ends with the last one standing", () => {
@@ -321,20 +325,41 @@ describe("long shot fuse", () => {
     expect(started().deadline).toBe(1_000 + 10_000);
   });
 
-  it("earns an extra heart for every 600 points of rare answers, up to five", () => {
-    const solo = [players[0]];
-    const cfg = { config: { ...fuseConfig, lives: 1 }, roster: solo };
+  it("earns an extra heart for every 600 points of answers, up to five", () => {
+    const pair = players.slice(0, 2);
+    const cfg = { config: { ...fuseConfig, lives: 1 }, roster: pair };
     let state = longShotModule.onMove(
       longShotModule.setup(context(0, cfg)),
       { playerId: "host", type: "start", payload: undefined },
       context(1_000, cfg),
     );
-    for (const [i, fruit] of ["Durian", "Rambutan", "Mangosteen", "Jackfruit", "Quince", "Kumquat"].entries()) {
-      state = answer(state, "host", fruit, 1_100 + i, cfg);
-    }
-    const seat = pub(state, 2_000, cfg).seats.find((s) => s.id === "host");
-    expect(seat).toMatchObject({ lives: 2, meter: 0 });
-    expect(pub(state, 2_000, cfg).lastHeart).toMatchObject({ playerId: "host" });
+    const deep = ["Rambutan", "Mangosteen", "Quince", "Kumquat", "Feijoa", "Salak", "Cherimoya", "Loquat"];
+    const easy = ["Apple", "Banana", "Orange", "Strawberry", "Grape", "Mango", "Watermelon"];
+    let now = 1_100;
+    deep.forEach((fruit, i) => {
+      state = answer(state, "host", fruit, (now += 10), cfg);
+      if (easy[i]) state = answer(state, "p2", easy[i], (now += 10), cfg);
+    });
+    const seat = pub(state, now, cfg).seats.find((s) => s.id === "host");
+    expect(seat).toMatchObject({ lives: 2, meter: 800 });
+    expect(pub(state, now, cfg).lastHeart).toMatchObject({ playerId: "host" });
+  });
+
+  it("tops a nearly burnt fuse back up to eight seconds on a pass", () => {
+    let state = started();
+    state = answer(state, "host", "Apple", 9_000);
+    expect(state.deadline).toBe(17_000);
+  });
+
+  it("needs at least two players", () => {
+    const cfg = { config: fuseConfig, roster: [players[0]] };
+    expect(() =>
+      longShotModule.onMove(
+        longShotModule.setup(context(0, cfg)),
+        { playerId: "host", type: "start", payload: undefined },
+        context(1_000, cfg),
+      ),
+    ).toThrow("at least 2 players");
   });
 
   it("does not allow joining mid-game in fuse mode", () => {
@@ -345,21 +370,26 @@ describe("long shot fuse", () => {
 
 describe("long shot generated prompts", () => {
   const tier = (name: string, size: number) => Array.from({ length: size }, (_, i) => `${name} ${i}`);
-  const prompt = (sizes: [number, number, number, number]) => ({
+  const prompt = (sizes: [number, number, number, number, number], pearl = "The pearl") => ({
     category: "Custom",
     prompt: "Name a thing",
     obvious: tier("obvious", sizes[0]),
-    solid: tier("solid", sizes[1]),
-    rare: tier("rare", sizes[2]),
-    longShot: tier("long shot", sizes[3]),
+    cliche: tier("cliche", sizes[1]),
+    solid: tier("solid", sizes[2]),
+    rare: tier("rare", sizes[3]),
+    longShot: tier("long shot", sizes[4]),
+    pearl,
   });
 
   it("accepts a prompt that meets every tier minimum exactly", () => {
-    expect(parseLongShotPrompts({ prompts: [prompt([3, 4, 5, 6])] })).toHaveLength(1);
+    const parsed = parseLongShotPrompts({ prompts: [prompt([3, 1, 4, 5, 6])] });
+    expect(parsed).toHaveLength(1);
+    expect(parsed![0].pearl).toBe("The pearl");
   });
 
-  it("rejects a prompt below any tier minimum", () => {
-    expect(parseLongShotPrompts({ prompts: [prompt([3, 4, 5, 5])] })).toBeNull();
-    expect(parseLongShotPrompts({ prompts: [prompt([2, 4, 5, 6])] })).toBeNull();
+  it("rejects a prompt below any tier minimum or without a pearl", () => {
+    expect(parseLongShotPrompts({ prompts: [prompt([3, 1, 4, 5, 5])] })).toBeNull();
+    expect(parseLongShotPrompts({ prompts: [prompt([3, 0, 4, 5, 6])] })).toBeNull();
+    expect(parseLongShotPrompts({ prompts: [prompt([3, 1, 4, 5, 6], "")] })).toBeNull();
   });
 });

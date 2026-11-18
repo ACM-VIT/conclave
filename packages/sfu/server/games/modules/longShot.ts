@@ -18,11 +18,12 @@ import {
 import {
   LONG_SHOT_BANK,
   LONG_SHOT_TIER_POINTS,
-  LONG_SHOT_TIERS,
+  LONG_SHOT_LIST_TIERS,
   compilePrompt,
   matchAnswer,
   type CompiledAnswer,
   type CompiledPrompt,
+  type LongShotListTier,
   type LongShotPrompt,
   type LongShotTier,
 } from "../longShotBank.js";
@@ -38,7 +39,8 @@ const FUSE_RANGE_MS: Record<string, [number, number]> = {
 };
 const READY_MS = 3_000;
 const REVEAL_MS = 9_000;
-const POPPED_MS = 4_000;
+const POPPED_MS = 2_800;
+const MIN_TURN_MS = 8_000;
 const MAX_ANSWER_LENGTH = 48;
 const SURVIVOR_BONUS = 2000;
 const HEART_METER = 6_000;
@@ -109,17 +111,16 @@ type LongShotState = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 
-const TIER_LIMITS: Record<LongShotTier, { min: number; max: number }> = {
+const TIER_LIMITS: Record<LongShotListTier, { min: number; max: number }> = {
   obvious: { min: 3, max: 12 },
+  cliche: { min: 1, max: 6 },
   solid: { min: 4, max: 20 },
   rare: { min: 5, max: 25 },
   longShot: { min: 6, max: 30 },
 };
 
-export const LONG_SHOT_MIN_ANSWERS = LONG_SHOT_TIERS.reduce(
-  (sum, tier) => sum + TIER_LIMITS[tier].min,
-  0,
-);
+export const LONG_SHOT_MIN_ANSWERS =
+  LONG_SHOT_LIST_TIERS.reduce((sum, tier) => sum + TIER_LIMITS[tier].min, 0) + 1;
 
 export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPrompt[] | null => {
   if (!isRecord(payload) || !Array.isArray(payload.prompts)) return null;
@@ -132,9 +133,11 @@ export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPr
     if (!prompt) continue;
     const promptKey = normalizeGeneratedKey(prompt);
     if (!promptKey || seenPrompts.has(promptKey)) continue;
-    const tiers = {} as Record<LongShotTier, string[]>;
+    const pearl = cleanGeneratedText(item.pearl, 80);
+    if (!pearl) continue;
+    const tiers = {} as Record<LongShotListTier, string[]>;
     let valid = true;
-    for (const tier of LONG_SHOT_TIERS) {
+    for (const tier of LONG_SHOT_LIST_TIERS) {
       const list = cleanGeneratedStringArray(item[tier], {
         maxItems: TIER_LIMITS[tier].max,
         maxLength: 80,
@@ -143,7 +146,7 @@ export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPr
       tiers[tier] = list;
     }
     if (!valid) continue;
-    const raw: LongShotPrompt = { category, prompt, ...tiers };
+    const raw: LongShotPrompt = { category, prompt, ...tiers, pearl };
     if (compilePrompt(raw).answers.length < LONG_SHOT_MIN_ANSWERS) continue;
     seenPrompts.add(promptKey);
     out.push(raw);
@@ -152,7 +155,7 @@ export const parseLongShotPrompts = (payload: unknown, minItems = 1): LongShotPr
   return out.length >= minItems ? out : null;
 };
 
-const tierSchema = (tier: LongShotTier) => ({
+const tierSchema = (tier: LongShotListTier) => ({
   type: "array",
   minItems: TIER_LIMITS[tier].min,
   maxItems: TIER_LIMITS[tier].max,
@@ -168,7 +171,14 @@ const currentPrompt = (state: LongShotState): CompiledPrompt | undefined =>
     : undefined;
 
 const tierCounts = (prompt: CompiledPrompt | undefined): Record<LongShotTier, number> => {
-  const counts: Record<LongShotTier, number> = { obvious: 0, solid: 0, rare: 0, longShot: 0 };
+  const counts: Record<LongShotTier, number> = {
+    obvious: 0,
+    cliche: 0,
+    solid: 0,
+    rare: 0,
+    longShot: 0,
+    pearl: 0,
+  };
   for (const answer of prompt?.answers ?? []) counts[answer.tier] += 1;
   return counts;
 };
@@ -504,6 +514,7 @@ const answerFuse = (
   return {
     ...base,
     turnPlayerId: solo ? playerId : nextAliveConnected(base, playerId, ctx),
+    deadline: Math.max(state.deadline, ctx.now + MIN_TURN_MS),
   };
 };
 
@@ -577,9 +588,10 @@ export const longShotModule: GameModule<LongShotState> = {
       instructions: [
         `Create ${count} open-ended "Name a ..." prompts for a rare-answer game about the topic.`,
         "Each prompt must have a large, finite, verifiable set of correct answers (for example 'Name a character from X' or 'Name a city in Y').",
-        "Sort the accepted answers into four tiers by how many people would think of them: obvious (the first answers nearly everyone says), solid, rare, and longShot (correct but almost nobody would think of it).",
+        "Sort the accepted answers by how many people would think of them: obvious (the first answers nearly everyone says), cliche (the famously 'obscure' picks everyone reaches for when trying to be clever), solid, rare, and longShot (correct but almost nobody would think of it).",
+        "Also choose one pearl per prompt: a single designated gem answer, deep and satisfying to land on, that at least a few people could plausibly get. It must not appear in any other tier.",
         "Every listed answer must be factually correct for its prompt. Never repeat an answer across tiers.",
-        `Give every prompt at least ${LONG_SHOT_MIN_ANSWERS} distinct answers: at least ${TIER_LIMITS.obvious.min} obvious, ${TIER_LIMITS.solid.min} solid, ${TIER_LIMITS.rare.min} rare and ${TIER_LIMITS.longShot.min} longShot.`,
+        `Give every prompt at least ${LONG_SHOT_MIN_ANSWERS} distinct answers including the pearl: at least ${TIER_LIMITS.obvious.min} obvious, ${TIER_LIMITS.cliche.min} cliche, ${TIER_LIMITS.solid.min} solid, ${TIER_LIMITS.rare.min} rare and ${TIER_LIMITS.longShot.min} longShot.`,
         "List as many correct answers as you reliably can, especially in the rare and longShot tiers.",
         "Write each answer as its most common name. Add alternate spellings after a pipe, like 'Kyiv|Kiev'.",
       ].join(" "),
@@ -599,11 +611,13 @@ export const longShotModule: GameModule<LongShotState> = {
                 category: { type: "string", maxLength: 32 },
                 prompt: { type: "string", maxLength: 100 },
                 obvious: tierSchema("obvious"),
+                cliche: tierSchema("cliche"),
                 solid: tierSchema("solid"),
                 rare: tierSchema("rare"),
                 longShot: tierSchema("longShot"),
+                pearl: { type: "string", maxLength: 80 },
               },
-              required: ["category", "prompt", "obvious", "solid", "rare", "longShot"],
+              required: ["category", "prompt", "obvious", "cliche", "solid", "rare", "longShot", "pearl"],
             },
           },
         },
@@ -673,6 +687,7 @@ export const longShotModule: GameModule<LongShotState> = {
           throw new GameMoveError("No prompts available");
         }
         if (state.mode === "classic") return enterReady(state, 0, ctx);
+        if (ctx.players.length < 2) throw new GameMoveError("Last one under needs at least 2 players");
         const order = ctx.rng.shuffle(ctx.players.map((player) => player.id));
         const lives: Record<string, number> = {};
         for (const playerId of order) lives[playerId] = state.maxLives;
@@ -807,6 +822,15 @@ export const longShotModule: GameModule<LongShotState> = {
           ? state.results.map((result) => ({ ...result, id: result.playerId, name: name(result.playerId) }))
           : [],
       missedGems: state.phase === "reveal" ? state.missedGems : [],
+      pearl:
+        state.phase === "reveal" && prompt
+          ? {
+              answer: prompt.answers.find((answer) => answer.tier === "pearl")?.display ?? null,
+              foundBy: state.results
+                .filter((result) => result.tier === "pearl")
+                .map((result) => name(result.playerId)),
+            }
+          : null,
       obviousPicks: state.phase === "reveal" ? state.obviousPicks : [],
       turnPlayerId: state.phase === "fuse" ? state.turnPlayerId : null,
       maxHearts: MAX_HEARTS,
