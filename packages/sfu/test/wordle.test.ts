@@ -227,17 +227,79 @@ describe("wordle team modes", () => {
     expect(pub(s, deadline + 1).team!.guesses).toHaveLength(0);
   });
 
-  it("skips a disconnected teammate's turn", () => {
+  it("skips a disconnected teammate's turn after a short grace window", () => {
     const s = session("relay");
-    const setterId = startRound(s);
+    startRound(s);
     const [first, second] = pub(s).team!.members.map((member) => member.playerId);
     s.updateRoomMembership({
       players: team.filter((player) => player.id !== first),
       adminIds: ["host"],
     });
-    expect(s.tick(1)).toBe(true);
-    expect(pub(s, 1).team!.currentTurnId).toBe(second);
-    expect(setterId).not.toBe(second);
+    // First tick only notes the absence; a quick reconnect keeps the turn.
+    expect(s.tick(1_000)).toBe(true);
+    expect(pub(s, 1_000).team!.currentTurnId).toBe(first);
+    expect(s.tick(3_000)).toBe(false);
+    expect(s.tick(6_500)).toBe(true);
+    expect(pub(s, 6_500).team!.currentTurnId).toBe(second);
+  });
+
+  it("keeps the turn when the guesser reconnects within the grace window", () => {
+    const s = session("relay");
+    startRound(s);
+    const [first] = pub(s).team!.members.map((member) => member.playerId);
+    s.updateRoomMembership({
+      players: team.filter((player) => player.id !== first),
+      adminIds: ["host"],
+    });
+    expect(s.tick(1_000)).toBe(true);
+    s.updateRoomMembership({ players: team, adminIds: ["host"] });
+    expect(s.tick(2_000)).toBe(true);
+    expect(s.tick(7_000)).toBe(false);
+    expect(pub(s, 7_000).team!.currentTurnId).toBe(first);
+    expect(s.applyMove(first, "guess", { word: "ABACK" })).toEqual({ ok: true });
+  });
+
+  it("stays quiet instead of rotating when no teammate is connected", () => {
+    const s = session("relay");
+    const setterId = startRound(s);
+    const before = pub(s).team!.currentTurnId;
+    s.updateRoomMembership({
+      players: team.filter((player) => player.id === setterId),
+      adminIds: ["host"],
+    });
+    for (const now of [500, 1_000, 30_000, 60_000, 100_000]) {
+      expect(s.tick(now)).toBe(false);
+    }
+    expect(pub(s, 100_000).team!.currentTurnId).toBe(before);
+  });
+
+  it("refuses a pass when nobody else is around to take the turn", () => {
+    const s = session("relay");
+    const setterId = startRound(s);
+    const [first, second] = pub(s).team!.members.map((member) => member.playerId);
+    s.updateRoomMembership({
+      players: team.filter((player) => player.id !== second),
+      adminIds: ["host"],
+    });
+    expect(s.applyMove(first, "passTurn", undefined)).toEqual({
+      ok: false,
+      error: "No teammate is around to take the turn",
+    });
+    expect(pub(s).team!.nextTurnId).toBeNull();
+    expect(setterId).not.toBe(first);
+  });
+
+  it("mirrors the shared board into the setter's boards for older clients", () => {
+    const s = session("relay");
+    const setterId = startRound(s);
+    const [first] = pub(s).team!.members.map((member) => member.playerId);
+    expect(s.applyMove(first, "guess", { word: "ABACK" })).toEqual({ ok: true });
+    const view = s.getPlayerView(setterId, 0) as {
+      boards: Array<{ playerId: string; guesses: Array<{ word: string }> }>;
+    };
+    expect(view.boards).toHaveLength(1);
+    expect(view.boards[0].guesses.map((guess) => guess.word)).toEqual(["ABACK"]);
+    expect(view.boards[0].playerId).toBe(pub(s).team!.currentTurnId);
   });
 
   it("lets anyone on the team guess at any time in huddle mode", () => {
