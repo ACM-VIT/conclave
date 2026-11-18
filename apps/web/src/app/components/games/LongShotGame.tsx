@@ -136,6 +136,13 @@ const STYLES = `
 @keyframes ls-shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-5px) } 50% { transform: translateX(4px) } 75% { transform: translateX(-2px) } }
 @keyframes ls-breathe { 0%,100% { transform: scale(var(--ls-air)) } 50% { transform: scale(calc(var(--ls-air) * 1.04)) } }
 @keyframes ls-up { from { transform: translateY(10px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+@keyframes ls-dive { 0% { transform: translateY(var(--ls-from)) rotate(-8deg); opacity: 0 } 10% { opacity: 1 } 84% { transform: translateY(5px) rotate(2deg) } 100% { transform: translateY(0) rotate(0) } }
+@keyframes ls-hold { from, to { border-color: rgba(190,235,255,0.08); box-shadow: none } }
+@keyframes ls-pass { 30% { background-color: rgba(255,255,255,0.12); border-color: var(--ls-c) } }
+@keyframes ls-dim { from { opacity: 1 } }
+@keyframes ls-land { 0% { transform: scale(1) } 35% { transform: scale(1.035); box-shadow: 0 0 28px var(--ls-c) } 100% { transform: scale(1) } }
+@keyframes ls-trail { 0% { opacity: 0; transform: translate(0, 0) scale(.5) } 20% { opacity: .85 } 100% { opacity: 0; transform: translate(var(--ls-drift, 0px), -34px) scale(1) } }
+@keyframes ls-ripple { 0% { opacity: .9; transform: translate(-50%, -50%) scale(.3) } 100% { opacity: 0; transform: translate(-50%, -50%) scale(7) } }
 @keyframes ls-burst { 0% { transform: translate(0,0) scale(.4); opacity: .9 } 100% { transform: translate(var(--ls-drift, 0px), -200px) scale(1); opacity: 0 } }
 @media (prefers-reduced-motion: reduce) { .ls-scene, .ls-scene * { animation: none !important; transition: none !important } }
 `;
@@ -224,10 +231,39 @@ function Submersible({ light = "#FFE9A8", size = 1 }: { light?: string; size?: n
   );
 }
 
-function Depth({ value, size = 26 }: { value: number; size?: number }) {
+function useCountUp(target: number, delayMs = 0, durationMs = 900): number {
+  const [shown, setShown] = useState(target);
+  const fromRef = useRef(target);
+  useEffect(() => {
+    const from = fromRef.current;
+    if (from === target) return;
+    const reduce =
+      typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) {
+      fromRef.current = target;
+      setShown(target);
+      return;
+    }
+    let frame = 0;
+    const start = performance.now() + delayMs;
+    const step = (now: number) => {
+      const t = Math.min(1, Math.max(0, (now - start) / durationMs));
+      const value = from + (target - from) * (1 - Math.pow(1 - t, 3));
+      fromRef.current = value;
+      setShown(value);
+      if (t < 1) frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [target, delayMs, durationMs]);
+  return shown;
+}
+
+function Depth({ value, size = 26, delayMs = 0 }: { value: number; size?: number; delayMs?: number }) {
+  const shown = useCountUp(value, delayMs);
   return (
     <span style={{ fontFamily: HEAD_FONT, fontSize: size, fontWeight: 500, color: color.text, lineHeight: 1.1, fontVariantNumeric: "tabular-nums" }}>
-      {meters(value)}
+      {meters(shown)}
     </span>
   );
 }
@@ -293,41 +329,173 @@ function Prompt({ category, prompt, meta }: { category: string | null; prompt: s
   );
 }
 
-function DiveColumn({ tier, points }: { tier?: Tier | null; points: Record<Tier, number> }) {
-  const landed = tier ?? null;
+const ROW_H = 34;
+const ROW_GAP = 4;
+const DIVER_H = 26;
+
+const diveDuration = (tier: Tier | null | undefined) =>
+  tier ? 560 + TIERS.indexOf(tier) * 190 : 0;
+
+function DiveColumn({
+  tier,
+  points,
+  word,
+}: {
+  tier?: Tier | null;
+  points: Record<Tier, number>;
+  word?: string | null;
+}) {
+  const target = tier ? TIERS.indexOf(tier) : -1;
+  const landedAtMount = useRef(target >= 0);
+  const animate = target >= 0 && !landedAtMount.current;
+  const dur = diveDuration(tier);
+  const targetTop = target * (ROW_H + ROW_GAP) + (ROW_H - DIVER_H) / 2;
+  const glow = tier ? GLOW[tier] : GLOW.solid;
+  const trail = Math.max(2, target + 2);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: ROW_GAP }}>
       {TIERS.map((t, index) => {
-        const here = landed === t;
+        const here = index === target;
+        const dimmed = target >= 0 && !here;
+        const animations: string[] = [];
+        if (animate && index < target) {
+          animations.push(`ls-pass 460ms ease-out ${Math.round(((index + 0.7) / (target + 1)) * dur)}ms both`);
+        }
+        if (animate && dimmed) animations.push(`ls-dim 420ms ease ${dur}ms both`);
+        if (animate && here) {
+          animations.push(`ls-hold ${dur - 80}ms linear`);
+          animations.push(`ls-land 760ms ease-out ${dur - 80}ms both`);
+        }
         return (
           <div
             key={t}
-            style={{
-              position: "relative",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 10,
-              height: here ? 44 : 32,
-              padding: "0 12px",
-              borderRadius: radius.sm,
-              background: `rgba(0, 0, 0, ${0.12 + index * 0.09})`,
-              border: `1px solid ${here ? GLOW[t] : "rgba(190,235,255,0.08)"}`,
-              boxShadow: here ? `0 0 16px ${GLOW[t]}44` : undefined,
-              opacity: landed && !here ? 0.4 : 1,
-              transition: "all 400ms ease",
-            }}
+            style={
+              {
+                position: "relative",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                height: ROW_H,
+                padding: "0 12px",
+                borderRadius: radius.sm,
+                background: `rgba(0, 0, 0, ${0.12 + index * 0.07})`,
+                border: `1px solid ${here ? GLOW[t] : "rgba(190,235,255,0.08)"}`,
+                boxShadow: here ? `0 0 16px ${GLOW[t]}44` : undefined,
+                opacity: dimmed ? 0.4 : 1,
+                transition: animate ? undefined : "all 400ms ease",
+                "--ls-c": GLOW[t],
+                animation: animations.length ? animations.join(", ") : undefined,
+              } as React.CSSProperties
+            }
           >
             <span style={{ fontFamily: HEAD_FONT, fontSize: 12.5, color: color.text }}>{TIER_LABEL[t]}</span>
             <span style={{ fontFamily: HEAD_FONT, fontSize: 12.5, color: GLOW[t] }}>{meters(points[t])}</span>
-            {here ? (
-              <span style={{ position: "absolute", left: "50%", top: 9, animation: "ls-sink 900ms cubic-bezier(.3,.7,.3,1) both" }}>
-                <Submersible light={GLOW[t]} size={0.85} />
-              </span>
-            ) : null}
           </div>
         );
       })}
+      {target >= 0 ? (
+        <>
+          {animate
+            ? Array.from({ length: trail }, (_, k) => (
+                <span
+                  key={`trail-${k}`}
+                  aria-hidden
+                  style={
+                    {
+                      position: "absolute",
+                      left: `calc(50% + ${(scatter(k, 21) - 0.5) * 30}px)`,
+                      top: Math.max(0, (targetTop * (k + 0.5)) / trail),
+                      width: 4 + scatter(k, 22) * 5,
+                      height: 4 + scatter(k, 22) * 5,
+                      borderRadius: "50%",
+                      border: "1px solid rgba(220,245,255,0.75)",
+                      opacity: 0,
+                      pointerEvents: "none",
+                      "--ls-drift": `${(scatter(k, 23) - 0.5) * 16}px`,
+                      animation: `ls-trail 900ms ease-out ${Math.round((dur * (k + 0.5)) / trail)}ms both`,
+                    } as React.CSSProperties
+                  }
+                />
+              ))
+            : null}
+          {animate ? (
+            <span
+              aria-hidden
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: targetTop + DIVER_H / 2,
+                width: 12,
+                height: 12,
+                borderRadius: "50%",
+                border: `1.5px solid ${glow}`,
+                opacity: 0,
+                pointerEvents: "none",
+                animation: `ls-ripple 820ms ease-out ${dur - 40}ms both`,
+              }}
+            />
+          ) : null}
+          <div
+            aria-hidden
+            style={
+              {
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: targetTop,
+                height: DIVER_H,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                pointerEvents: "none",
+                "--ls-from": `${-(targetTop + 58)}px`,
+                animation: animate ? `ls-dive ${dur}ms cubic-bezier(.55,0,.3,1) both` : undefined,
+              } as React.CSSProperties
+            }
+          >
+            <Submersible light={glow} size={0.82} />
+            {word ? (
+              <span
+                style={{
+                  maxWidth: 104,
+                  padding: "2px 9px",
+                  borderRadius: radius.pill,
+                  background: "rgba(3, 10, 20, 0.7)",
+                  border: `1px solid ${glow}`,
+                  color: color.text,
+                  fontFamily: HEAD_FONT,
+                  fontSize: 12,
+                  ...ellipsis,
+                }}
+              >
+                {word}
+              </span>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function LockedAnswer({ text }: { text: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        height: 44,
+        padding: "0 6px 0 16px",
+        borderRadius: radius.pill,
+        border: `1px solid ${LINE}`,
+        background: "rgba(3, 10, 20, 0.35)",
+      }}
+    >
+      <span style={{ flex: 1, fontSize: 15, color: MUTED, ...ellipsis }}>{text}</span>
+      <span style={{ fontFamily: HEAD_FONT, fontSize: 13, color: MUTED, padding: "0 12px" }}>Locked</span>
     </div>
   );
 }
@@ -741,7 +909,7 @@ export default function LongShotGame({
         <Prompt category={pub.category} prompt={pub.prompt} meta={`${pub.promptIndex + 1}/${pub.totalPrompts}`} />
         <Panel style={{ padding: "2px 12px" }}>
           {pub.results.map((row, index) => (
-            <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderTop: index ? `1px solid ${LINE}` : undefined }}>
+            <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderTop: index ? `1px solid ${LINE}` : undefined, animation: `ls-up 380ms ease-out ${index * 90}ms both` }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, color: row.answer ? color.text : MUTED, ...ellipsis }}>{row.answer ?? "No answer"}</div>
                 <div style={{ fontSize: 11.5, color: MUTED, marginTop: 1, ...ellipsis }}>
@@ -777,19 +945,33 @@ export default function LongShotGame({
   const missKey = me.lastMiss?.at ?? null;
   const missNote = me.lastMiss ? missText(me.lastMiss) : null;
   const getReady = pub.phase === "ready";
+  const projected = me.score + (me.answer?.points ?? 0);
   return (
-    <Ocean depth={me.score}>
+    <Ocean depth={projected}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <Depth value={me.score} />
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+          <Depth value={projected} delayMs={diveDuration(me.answer?.tier)} />
+          {me.answer ? (
+            <span
+              style={{
+                fontFamily: HEAD_FONT,
+                fontSize: 14,
+                color: GLOW[me.answer.tier],
+                animation: `ls-up 420ms ease-out ${diveDuration(me.answer.tier)}ms both`,
+              }}
+            >
+              +{meters(me.answer.points)}
+            </span>
+          ) : null}
+        </div>
         <SonarTimer remainingMs={remaining} totalMs={pub.durationMs} />
       </div>
       <Prompt category={pub.category} prompt={pub.prompt} meta={`${pub.promptIndex + 1}/${pub.totalPrompts}`} />
 
-      <DiveColumn tier={me.answer?.tier} points={pub.tierPoints} />
       {me.answer ? (
-        <div style={{ textAlign: "center", fontFamily: HEAD_FONT, fontSize: 16, color: color.text, ...ellipsis }}>{me.answer.text}</div>
+        <LockedAnswer text={me.answer.text} />
       ) : (
-        <>
+        <div>
           <AnswerInput
             key={pub.promptIndex}
             disabled={readOnly || me.locked || getReady}
@@ -799,9 +981,13 @@ export default function LongShotGame({
             shakeKey={missKey}
             autoFocus
           />
-          <Note tone="miss">{error ?? missNote}</Note>
-        </>
+          <div style={{ marginTop: 8 }}>
+            <Note tone="miss">{error ?? missNote}</Note>
+          </div>
+        </div>
       )}
+
+      <DiveColumn key={pub.promptIndex} tier={me.answer?.tier} points={pub.tierPoints} word={me.answer?.text} />
 
       {host ? (
         <Controls>
