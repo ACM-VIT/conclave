@@ -715,10 +715,8 @@ export const registerChatHandlers = (context: ConnectionContext): void => {
         return;
       }
 
-      if (!config.openAi.apiKey && !room.aiCredentials.get("openai")) {
-        respond(callback, { error: "Add an OpenAI room key in AI settings to enable image safety checks.", code: "room_ai_key_required" });
-        return;
-      }
+      // No safety-model gate here: the upload endpoint runs the image safety
+      // check when one is configured and accepts the image when none is.
 
       const forwardedProtocol = socket.handshake.headers["x-forwarded-proto"];
       const forwardedHost = socket.handshake.headers["x-forwarded-host"];

@@ -8,6 +8,7 @@ import { RoomAiCredentials } from "../server/roomAiCredentials.js";
 import { createSfuApp } from "../server/http/createApp.js";
 import { createSfuState } from "../server/state.js";
 import { registerRoomAiHandlers } from "../server/socket/handlers/roomAiHandlers.js";
+import { registerChatHandlers } from "../server/socket/handlers/chatHandlers.js";
 import type { ConnectionContext } from "../server/socket/context.js";
 import { createChatImageUploadToken } from "../server/chatImages.js";
 import type { ModerateChatImageOptions } from "../server/chatImageModeration.js";
@@ -605,6 +606,20 @@ describe("server-only room credential access", () => {
 
     expect(moderateImage).not.toHaveBeenCalled();
     expect(room.addChatImageAsset).toHaveBeenCalledTimes(2);
+  });
+
+  it("authorizes image uploads without requiring a safety model key", () => {
+    const { room, member } = fixture();
+    const socket = { id: "socket", on: vi.fn(), handshake: { headers: { host: "sfu.test" } }, secure: false };
+    registerChatHandlers({ socket, currentRoom: room, currentClient: member, io: { to: () => ({ emit: vi.fn() }) } } as unknown as ConnectionContext);
+    const handlers = Object.fromEntries(socket.on.mock.calls) as Record<string, (...args: unknown[]) => void>;
+    const callback = vi.fn();
+    handlers["chat:imageUploadAuthorize"]({}, callback);
+    expect(room.aiCredentials.get("openai")).toBeFalsy();
+    const response = callback.mock.calls[0][0] as { token?: unknown; uploadUrl?: unknown; error?: unknown };
+    expect(response.error).toBeUndefined();
+    expect(typeof response.token).toBe("string");
+    expect(response.uploadUrl).toBe("http://sfu.test/chat-images");
   });
 
   it("still rejects uploads when a configured safety check fails", async () => {
