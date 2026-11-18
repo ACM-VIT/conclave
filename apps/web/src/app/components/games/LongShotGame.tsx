@@ -14,10 +14,11 @@ type RoundResult = {
   answer: string | null;
   tier: Tier | null;
   points: number;
+  judged?: boolean;
 };
 
 type Seat = { id: string; name: string; lives: number; meter: number; out: boolean };
-type ChainLink = { playerId: string; name: string; answer: string; tier: Tier; points: number };
+type ChainLink = { playerId: string; name: string; answer: string; tier: Tier; points: number; judged?: boolean };
 type Miss = { text: string; reason: "unknown" | "used"; at: number };
 
 type LongShotPublic = {
@@ -517,6 +518,7 @@ function AnswerInput({
 }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [slow, setSlow] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const focusIfFree = () => {
@@ -539,9 +541,12 @@ function AnswerInput({
     const text = draft.trim();
     if (!text || disabled || busy) return;
     setBusy(true);
+    const slowTimer = window.setTimeout(() => setSlow(true), 350);
     try {
       if (await onSubmit(text)) setDraft("");
     } finally {
+      window.clearTimeout(slowTimer);
+      setSlow(false);
       setBusy(false);
       focusIfFree();
     }
@@ -580,7 +585,7 @@ function AnswerInput({
         }}
       />
       <PrimaryButton disabled={disabled || busy || !draft.trim()} onClick={() => void submit()}>
-        {buttonLabel}
+        {busy && slow ? "Checking" : buttonLabel}
       </PrimaryButton>
     </form>
   );
@@ -880,7 +885,10 @@ export default function LongShotGame({
                   animation: index === 0 ? "ls-up 360ms ease-out" : undefined,
                 }}
               >
-                <span style={{ flex: 1, fontSize: 14, color: color.text, ...ellipsis, minWidth: "40%" }}>{link.answer}</span>
+                <span style={{ flex: 1, fontSize: 14, color: color.text, ...ellipsis, minWidth: "40%" }}>
+                  {link.answer}
+                  {link.judged ? <span style={{ fontSize: 11, color: MUTED }}> · judged</span> : null}
+                </span>
                 <span style={{ fontSize: 12, color: MUTED, flexShrink: 1, ...ellipsis, maxWidth: "30%" }}>{nameOf(link.playerId, link.name, userId)}</span>
                 <span style={{ fontSize: 12, fontFamily: HEAD_FONT, color: GLOW[link.tier], flexShrink: 0, minWidth: 64, textAlign: "right" }}>
                   {TIER_LABEL[link.tier]}
@@ -914,6 +922,7 @@ export default function LongShotGame({
                 <div style={{ fontSize: 14, color: row.answer ? color.text : MUTED, ...ellipsis }}>{row.answer ?? "No answer"}</div>
                 <div style={{ fontSize: 11.5, color: MUTED, marginTop: 1, ...ellipsis }}>
                   {nameOf(row.id, row.name, userId)}
+                  {row.judged ? " · judged" : ""}
                 </div>
               </div>
               <span style={{ fontFamily: HEAD_FONT, fontSize: 13, flexShrink: 0, color: row.tier ? GLOW[row.tier] : MUTED }}>

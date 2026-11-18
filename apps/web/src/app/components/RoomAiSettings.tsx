@@ -8,6 +8,7 @@ import {
   MessageSquare,
   ChevronDown,
   ExternalLink,
+  Gavel,
   Loader2,
   X,
 } from "lucide-react";
@@ -29,6 +30,8 @@ const uses = {
     { Icon: MessageSquare, label: "Assistant, questions, minutes & games" },
   ],
   sarvam: [{ Icon: AudioLines, label: "Transcription" }],
+  cloudflare: [{ Icon: Gavel, label: "Answer judging" }],
+  typesafe: [{ Icon: Gavel, label: "Answer judging" }],
 };
 
 export default function RoomAiSettings({
@@ -43,6 +46,11 @@ export default function RoomAiSettings({
   const [tab, setTab] = useState<"features" | "keys">("features");
   const [expanded, setExpanded] = useState<RoomAiProvider | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const keyFor = (provider: RoomAiProvider) =>
+    provider === "cloudflare" ? `${accountId.trim()}:${apiKey.trim()}` : apiKey.trim();
+  const keyReady = (provider: RoomAiProvider) =>
+    Boolean(apiKey.trim()) && (provider !== "cloudflare" || /^[A-Za-z0-9]{8,64}$/.test(accountId.trim()));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<{
     provider?: RoomAiProvider;
@@ -59,14 +67,14 @@ export default function RoomAiSettings({
     let initialModel: string | null | undefined;
     if (
       !remove &&
-      provider !== "sarvam" &&
+      (provider === "openai" || provider === "anthropic") &&
       !controller.state.assistantModel &&
       controller.requestModels
     ) {
       try {
         const catalogs = await controller.requestModels({
           provider,
-          apiKey: apiKey.trim(),
+          apiKey: keyFor(provider),
         });
         const discovered = catalogs.find(
           (entry) => entry.provider === provider,
@@ -89,7 +97,7 @@ export default function RoomAiSettings({
     }
     const failure = await controller.configure(
       provider,
-      remove ? null : apiKey.trim(),
+      remove ? null : keyFor(provider),
       ...(initialModel !== undefined ? [initialModel] : []),
     );
     setPending(false);
@@ -98,6 +106,7 @@ export default function RoomAiSettings({
       return;
     }
     setApiKey("");
+    setAccountId("");
     setExpanded(null);
     setNotice({
       provider,
@@ -243,11 +252,27 @@ export default function RoomAiSettings({
                     void save(provider, false);
                   }}
                 >
+                  {provider === "cloudflare" ? (
+                    <label className="block text-[11px] text-[#d4d4d8]">
+                      Account ID
+                      <input
+                        autoFocus
+                        maxLength={64}
+                        value={accountId}
+                        onChange={(event) => setAccountId(event.target.value)}
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={pending}
+                        placeholder="32-character account ID"
+                        className="mt-1.5 h-10 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-[12px] text-white outline-none focus:border-[#F95F4A]/60"
+                      />
+                    </label>
+                  ) : null}
                   <label className="block text-[11px] text-[#d4d4d8]">
-                    {AI_PROVIDERS[provider].label} API key
+                    {provider === "cloudflare" ? "Workers AI API token" : `${AI_PROVIDERS[provider].label} API key`}
                     <input
-                      autoFocus
-                      maxLength={512}
+                      autoFocus={provider !== "cloudflare"}
+                      maxLength={provider === "cloudflare" ? 440 : 512}
                       type="password"
                       value={apiKey}
                       onChange={(event) => setApiKey(event.target.value)}
@@ -271,7 +296,7 @@ export default function RoomAiSettings({
                     <button
                       type="submit"
                       disabled={
-                        pending || !apiKey.trim() || !controller.connected
+                        pending || !keyReady(provider) || !controller.connected
                       }
                       className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#F95F4A] px-3 text-[12px] font-semibold text-white hover:bg-[#ff735f] disabled:opacity-40"
                     >

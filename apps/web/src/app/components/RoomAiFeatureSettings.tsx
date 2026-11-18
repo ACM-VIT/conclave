@@ -16,6 +16,7 @@ import {
   type AiFeature,
   type AiFeatureSettings,
 } from "@conclave/ai/room-settings";
+import { DECISION_MODELS } from "@conclave/ai/decisions";
 import type { RoomAiController } from "../hooks/useRoomAi";
 import { useAiModels } from "../hooks/useAiModels";
 import AiModelSelect from "./AiModelSelect";
@@ -53,7 +54,7 @@ export default function RoomAiFeatureSettings({
               ? "Key needed"
               : "Enabled";
         const modelLabel =
-          [...AI_RESPONSE_MODELS, ...LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS].find(
+          [...AI_RESPONSE_MODELS, ...LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS, ...DECISION_MODELS].find(
             (model) => model.id === settings.model,
           )?.label ??
           (
@@ -147,6 +148,7 @@ function FeatureEditor({
     controller.isAdmin ||
     (text && (owns("openai") || owns("anthropic"))) ||
     (feature === "transcription" && (owns("openai") || owns("sarvam"))) ||
+    (AI_FEATURES[feature].kind === "decision" && (owns("cloudflare") || owns("typesafe"))) ||
     canEdit;
   const disabled = pending || !controller.ready || !controller.connected;
   const update = <K extends keyof AiFeatureSettings>(
@@ -179,7 +181,9 @@ function FeatureEditor({
     </label>
   );
   const staticModels =
-    feature === "transcription"
+    AI_FEATURES[feature].kind === "decision"
+      ? DECISION_MODELS.map((model) => ({ id: model.id, label: model.label }))
+      : feature === "transcription"
       ? LIVE_TRANSCRIPT_TRANSCRIPTION_MODELS.map((model) => ({
           id: model.id,
           label: model.label,
