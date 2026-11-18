@@ -1,8 +1,8 @@
 import { scoreLevel, type DecisionAnswer, type DecisionQuestion } from "@conclave/ai/decisions";
 import type { CompiledAnswer, CompiledPrompt, LongShotTier } from "./longShotBank.js";
 
-export const JUDGE_CORRECT_THRESHOLD = 0.85;
-export const JUDGE_ALIAS_THRESHOLD = 0.7;
+export const JUDGE_CORRECT_THRESHOLD = 0.75;
+export const JUDGE_ALIAS_THRESHOLD = 0.6;
 export const JUDGE_REPEAT_THRESHOLD = 0.7;
 export const JUDGE_UNSAFE_THRESHOLD = 0.5;
 export const JUDGE_MIN_CONFIDENCE = 0.35;
@@ -157,12 +157,12 @@ export const verdictFromAnswers = (
   }
   const repeat = pickedOption(answers.repeat, plan.repeatOptions, JUDGE_REPEAT_THRESHOLD);
   if (repeat) return { kind: "repeat", answerId: repeat.id, confidence: repeat.confidence };
-  const alias = pickedOption(answers.listed, plan.aliasOptions, JUDGE_ALIAS_THRESHOLD);
-  if (alias) return { kind: "alias", answerId: alias.id, confidence: alias.confidence };
   const correct = answers.correct;
   if (correct?.type !== "noul" || correct.noul < JUDGE_CORRECT_THRESHOLD) {
     return { kind: "reject", reason: "wrong" };
   }
+  const alias = pickedOption(answers.listed, plan.aliasOptions, JUDGE_ALIAS_THRESHOLD);
+  if (alias) return { kind: "alias", answerId: alias.id, confidence: alias.confidence };
   const rarity = answers.rarity;
   if (rarity?.type !== "score") return { kind: "reject", reason: "unsure" };
   const level = Math.max(0, Math.min(JUDGED_TIERS.length - 1, scoreLevel(rarity)));
