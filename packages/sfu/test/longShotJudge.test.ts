@@ -144,6 +144,9 @@ describe("long shot judge plan", () => {
     expect(verdictFromAnswers(plan, { ...fakeAnswers(request, {}), correct: { type: "refusal" } })).toEqual({ kind: "reject", reason: "unsafe" });
     expect(verdictFromAnswers(plan, { ...fakeAnswers(request, {}), repeat: { type: "refusal" } })).toEqual({ kind: "reject", reason: "unsure" });
     expect(verdictFromAnswers(plan, { ...fakeAnswers(request, {}), listed: { type: "refusal" } })).toEqual({ kind: "reject", reason: "unsure" });
+    expect(
+      verdictFromAnswers(plan, { ...fakeAnswers(request, { unsafe: 0.95 }), repeat: { type: "refusal" } }),
+    ).toEqual({ kind: "reject", reason: "unsafe" });
     expect(verdictFromAnswers(plan, fakeAnswers(request, { repeat: "u0" }))).toMatchObject({ kind: "repeat", answerId: prompt.answers[0].id });
     expect(verdictFromAnswers(plan, fakeAnswers(request, { listed: "a2" }))).toMatchObject({ kind: "alias", answerId: prompt.answers.filter((a) => !a.judged)[2].id });
     expect(verdictFromAnswers(plan, fakeAnswers(request, { correct: 0.6 }))).toEqual({ kind: "reject", reason: "wrong" });

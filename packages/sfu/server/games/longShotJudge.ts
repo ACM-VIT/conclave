@@ -162,11 +162,11 @@ export const verdictFromAnswers = (
   if (unsafe?.type === "refusal" || answers.correct?.type === "refusal") {
     return { kind: "reject", reason: "unsafe" };
   }
-  if (answers.repeat?.type === "refusal" || answers.listed?.type === "refusal") {
-    return { kind: "reject", reason: "unsure" };
-  }
   if (unsafe?.type === "noul" && unsafe.noul >= JUDGE_UNSAFE_THRESHOLD) {
     return { kind: "reject", reason: "unsafe" };
+  }
+  if (answers.repeat?.type === "refusal" || answers.listed?.type === "refusal") {
+    return { kind: "reject", reason: "unsure" };
   }
   const repeat = pickedOption(answers.repeat, plan.repeatOptions, JUDGE_REPEAT_THRESHOLD);
   if (repeat) return { kind: "repeat", answerId: repeat.id, confidence: repeat.confidence };
