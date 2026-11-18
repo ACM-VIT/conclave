@@ -18,6 +18,11 @@ import type { AppUser } from "../../../../sdk/types/index";
 import { getColorForUser } from "../../core/presence/colors";
 import type { StickyElement, TextElement, WhiteboardElement } from "../../core/model/types";
 import { getBoundsForElement, hitTestElement, type Bounds } from "../../core/model/geometry";
+import {
+  getLocalResizeHandle,
+  getRotatedResizedBounds,
+  type ResizeHandle,
+} from "../../core/tools/resizeGeometry";
 
 export type WhiteboardCanvasProps = {
   doc: Y.Doc;
@@ -132,7 +137,6 @@ const getMaxStickyScroll = (element: StickyElement) => {
   return Math.max(0, Math.ceil(getStickyTextHeight(element) - getStickyViewportHeight(element)));
 };
 
-type ResizeHandle = "nw" | "ne" | "sw" | "se";
 type ResizableElement = Extract<
   WhiteboardElement,
   { type: "shape" | "sticky" | "image" | "text" | "stroke" }
@@ -147,6 +151,7 @@ type ResizeSession = {
   handle: ResizeHandle;
   startBounds: Bounds;
   startElement: ResizableElement;
+  rotation: number;
 };
 
 type RotateSession = {
@@ -276,41 +281,6 @@ const getResizeMinimums = (element: ResizeSession["startElement"]) => {
     return { minWidth: 8, minHeight: 8 };
   }
   return { minWidth: 12, minHeight: 12 };
-};
-
-const getResizedBounds = (
-  startBounds: Bounds,
-  handle: ResizeHandle,
-  point: { x: number; y: number },
-  minWidth: number,
-  minHeight: number
-): Bounds => {
-  const left = startBounds.x;
-  const top = startBounds.y;
-  const right = startBounds.x + startBounds.width;
-  const bottom = startBounds.y + startBounds.height;
-
-  if (handle === "nw") {
-    const x = Math.min(point.x, right - minWidth);
-    const y = Math.min(point.y, bottom - minHeight);
-    return { x, y, width: right - x, height: bottom - y };
-  }
-
-  if (handle === "ne") {
-    const x = Math.max(point.x, left + minWidth);
-    const y = Math.min(point.y, bottom - minHeight);
-    return { x: left, y, width: x - left, height: bottom - y };
-  }
-
-  if (handle === "sw") {
-    const x = Math.min(point.x, right - minWidth);
-    const y = Math.max(point.y, top + minHeight);
-    return { x, y: top, width: right - x, height: y - top };
-  }
-
-  const x = Math.max(point.x, left + minWidth);
-  const y = Math.max(point.y, top + minHeight);
-  return { x: left, y: top, width: x - left, height: y - top };
 };
 
 const applyResizedBounds = (
@@ -1163,11 +1133,15 @@ export function WhiteboardCanvas({
               const handle = getResizeHandleAtPoint(selectedBounds, point);
               if (handle) {
                 event.preventDefault();
+                const rotation = getElementRotation(selectedElement);
+                const rotated = Math.abs(rotation) >= ROTATION_EPSILON;
+                const localBounds = rotated ? getBoundsForElement(selectedElement) : selectedBounds;
                 resizeSessionRef.current = {
                   elementId: selectedElement.id,
-                  handle,
-                  startBounds: selectedBounds,
+                  handle: rotated ? getLocalResizeHandle(localBounds, rotation, point) : handle,
+                  startBounds: localBounds,
                   startElement: selectedElement,
+                  rotation,
                 };
                 scheduleCursorSync(point.x, point.y);
                 return;
@@ -1263,13 +1237,7 @@ export function WhiteboardCanvas({
         if (resizeSession) {
           event.preventDefault();
           const { minWidth, minHeight } = getResizeMinimums(resizeSession.startElement);
-          const nextBounds = getResizedBounds(
-            resizeSession.startBounds,
-            resizeSession.handle,
-            point,
-            minWidth,
-            minHeight
-          );
+          const nextBounds = getRotatedResizedBounds(resizeSession, point, minWidth, minHeight);
           const nextElement = applyResizedBounds(
             resizeSession.startElement,
             resizeSession.startBounds,
