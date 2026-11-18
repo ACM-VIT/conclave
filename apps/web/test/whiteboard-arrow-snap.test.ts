@@ -97,4 +97,16 @@ describe("whiteboard arrow snapping", () => {
       end: { x: 390, y: 50 },
     });
   });
+
+  it("never reverses an arrow between touching shapes", () => {
+    const left = shape("left", "rect", 0, 0, 100, 100);
+    const right = shape("right", "rect", 100, 0, 100, 100);
+    const result = snapArrow({ x: 20, y: 50 }, { x: 180, y: 50 }, [left, right]);
+    expect(result.end.x - result.start.x).toBeGreaterThan(0);
+    expect(result).toEqual({
+      start: { x: 20, y: 50 },
+      end: { x: 100 - ARROW_SNAP_GAP, y: 50 },
+      endTargetId: "right",
+    });
+  });
 });

@@ -153,10 +153,38 @@ export function snapArrow(
   }
   const startAnchor = startTarget ? centerOf(startTarget) : start;
   const endAnchor = endTarget ? centerOf(endTarget) : end;
-  return {
+  const paired = {
     start: startTarget ? outlinePointToward(startTarget, endAnchor, gap) : start,
     end: endTarget ? outlinePointToward(endTarget, startAnchor, gap) : end,
-    ...(startTarget ? { startTargetId: startTarget.id } : {}),
-    ...(endTarget ? { endTargetId: endTarget.id } : {}),
   };
+  if (pointsForward(paired.start, paired.end, start, end)) {
+    return {
+      ...paired,
+      ...(startTarget ? { startTargetId: startTarget.id } : {}),
+      ...(endTarget ? { endTargetId: endTarget.id } : {}),
+    };
+  }
+  // Shapes that touch or nearly touch leave no room for both gaps, and the
+  // paired ends would cross. Keep the head attached and the tail as drawn.
+  if (endTarget) {
+    const headOnly = outlinePointToward(endTarget, start, gap);
+    if (pointsForward(start, headOnly, start, end)) {
+      return { start, end: headOnly, endTargetId: endTarget.id };
+    }
+  }
+  return { start, end };
+}
+
+/** Shortest snapped arrow kept; anything shorter is left as drawn. */
+const MIN_SNAPPED_ARROW_LENGTH = 4;
+
+/**
+ * True when the arrow from `from` to `to` is long enough and still points the
+ * same way as the arrow as drawn, so snapping never reverses it.
+ */
+function pointsForward(from: Point, to: Point, drawnFrom: Point, drawnTo: Point): boolean {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (Math.hypot(dx, dy) < MIN_SNAPPED_ARROW_LENGTH) return false;
+  return dx * (drawnTo.x - drawnFrom.x) + dy * (drawnTo.y - drawnFrom.y) > 0;
 }
