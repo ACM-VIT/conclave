@@ -126,9 +126,9 @@ export const LONG_SHOT_BANK: LongShotPrompt[] = [
     category: "Sport",
     prompt: "Name a sport played with a ball",
     obvious: ["Soccer|Football", "Basketball", "Tennis", "Baseball", "Golf", "Volleyball"],
-    solid: ["American football", "Rugby", "Cricket", "Hockey|Field hockey", "Table tennis|Ping pong", "Bowling", "Handball", "Softball", "Water polo", "Badminton"],
+    solid: ["American football", "Rugby", "Cricket", "Hockey|Field hockey", "Table tennis|Ping pong", "Bowling", "Handball", "Softball", "Water polo"],
     rare: ["Lacrosse", "Squash", "Polo", "Dodgeball", "Netball", "Racquetball", "Billiards|Pool|Snooker", "Croquet", "Kickball", "Pickleball", "Bocce", "Futsal", "Beach volleyball"],
-    longShot: ["Sepak takraw", "Hurling", "Gaelic football", "Jai alai|Pelota", "Korfball", "Bandy", "Shinty", "Pesapallo", "Rounders", "Kabaddi", "Goalball", "Petanque|Boules", "Fistball", "Teqball", "Footvolley", "Camogie", "Roller derby", "Underwater rugby", "Cuju", "Tchoukball", "Padel", "Bossaball", "Kemari"],
+    longShot: ["Sepak takraw", "Hurling", "Gaelic football", "Jai alai|Pelota", "Korfball", "Bandy", "Shinty", "Pesapallo", "Rounders", "Goalball", "Petanque|Boules", "Fistball", "Teqball", "Footvolley", "Camogie", "Underwater rugby", "Cuju", "Tchoukball", "Padel", "Bossaball", "Kemari"],
   },
   {
     category: "Colours",

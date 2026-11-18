@@ -27,6 +27,7 @@ type LongShotPublic = {
   phase: "lobby" | "prompt" | "reveal" | "fuse" | "popped" | "results";
   serverNow: number;
   deadline: number | null;
+  paused?: boolean;
   durationMs: number;
   promptIndex: number;
   totalPrompts: number;
@@ -337,8 +338,20 @@ function AnswerInput({
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const focusIfFree = () => {
+    const input = inputRef.current;
+    if (!input) return;
+    const active = document.activeElement;
+    const free =
+      !active ||
+      active === document.body ||
+      active === input ||
+      Boolean(input.closest(".ls-scene")?.contains(active));
+    if (free) input.focus();
+  };
+
   useEffect(() => {
-    if (autoFocus && !disabled) inputRef.current?.focus();
+    if (autoFocus && !disabled) focusIfFree();
   }, [autoFocus, disabled]);
 
   const submit = async () => {
@@ -346,11 +359,10 @@ function AnswerInput({
     if (!text || disabled || busy) return;
     setBusy(true);
     try {
-      await onSubmit(text);
-      setDraft("");
+      if (await onSubmit(text)) setDraft("");
     } finally {
       setBusy(false);
-      inputRef.current?.focus();
+      focusIfFree();
     }
   };
 
@@ -612,11 +624,12 @@ export default function LongShotGame({
             </span>
           </div>
           <div style={{ fontFamily: HEAD_FONT, fontSize: 16, color: myTurn ? GLOW.solid : color.text, ...ellipsis }}>
-            {myTurn ? "Your turn" : holder ? `${holder.name}'s turn` : ""}
+            {pub.paused ? "Waiting for players" : myTurn ? "Your turn" : holder ? `${holder.name}'s turn` : ""}
           </div>
         </div>
 
         <AnswerInput
+          key={pub.promptIndex}
           disabled={!myTurn}
           placeholder="Answer"
           buttonLabel="Pass"
@@ -718,6 +731,7 @@ export default function LongShotGame({
       ) : (
         <>
           <AnswerInput
+          key={pub.promptIndex}
             disabled={readOnly || me.locked}
             placeholder="Answer"
             buttonLabel="Dive"
