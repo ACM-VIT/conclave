@@ -85,6 +85,7 @@ export class DecisionError extends Error {
 }
 
 export const MAX_DECISION_QUESTIONS = 64;
+const SCORE_EPSILON = 1e-6;
 const QUESTION_ID = /^[A-Za-z0-9_.-]{1,100}$/;
 const CLOUDFLARE_ACCOUNT = /^[A-Za-z0-9]{8,64}$/;
 const DEFAULT_TIMEOUT_MS = 4_000;
@@ -153,11 +154,20 @@ const parseAnswer = (value: unknown, question: DecisionQuestion): DecisionAnswer
   const confidence = probability(value.confidence);
   if (!probabilities || confidence === null) return null;
   if (question.type === "choice") {
-    if (typeof value.choice !== "string" || !(value.choice in question.criteria)) return null;
+    const options = new Set(Object.keys(question.criteria));
+    if (typeof value.choice !== "string" || !options.has(value.choice)) return null;
+    if (!Object.keys(probabilities).every((option) => options.has(option))) return null;
     return { type: "choice", choice: value.choice, probabilities, confidence };
   }
+  const top = question.criteria.length - 1;
   if (typeof value.score !== "number" || !Number.isFinite(value.score)) return null;
-  return { type: "score", score: value.score, probabilities, confidence };
+  if (value.score < -SCORE_EPSILON || value.score > top + SCORE_EPSILON) return null;
+  const levelsInRange = Object.keys(probabilities).every((level) => {
+    const index = Number(level);
+    return /^\d+$/.test(level) && index >= 0 && index <= top;
+  });
+  if (!levelsInRange) return null;
+  return { type: "score", score: Math.min(top, Math.max(0, value.score)), probabilities, confidence };
 };
 
 export const validateDecisionQuestions = (questions: Record<string, DecisionQuestion>): void => {

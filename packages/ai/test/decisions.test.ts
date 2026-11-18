@@ -111,6 +111,10 @@ describe("runDecisions", () => {
     await expect(run({ answers: { ...answers, team: { ...answers.team, choice: "sales" } } })).rejects.toThrow(/team/);
     await expect(run({ answers: { ...answers, severity: { type: "noul", noul: 0.5 } } })).rejects.toThrow(/severity/);
     await expect(run({ nope: true })).rejects.toThrow(/unexpected response/);
+    await expect(run({ answers: { ...answers, severity: { ...answers.severity, score: 99 } } })).rejects.toThrow(/severity/);
+    await expect(run({ answers: { ...answers, severity: { ...answers.severity, probabilities: { "99": 1 } } } })).rejects.toThrow(/severity/);
+    await expect(run({ answers: { ...answers, severity: { ...answers.severity, probabilities: { "1.5": 1 } } } })).rejects.toThrow(/severity/);
+    await expect(run({ answers: { ...answers, team: { ...answers.team, probabilities: { billing: 0.1, sales: 0.9 } } } })).rejects.toThrow(/team/);
   });
 
   it("retries rate limits and overloads, but not auth failures", async () => {
