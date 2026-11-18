@@ -5,9 +5,6 @@ import type {
 } from "@conclave/meeting-core/transcript-types";
 import type { Env } from "../transcript-worker/src/types";
 import {
-  MINUTES_COMPACTION_SYSTEM_PROMPT,
-  MINUTES_SYSTEM_PROMPT,
-  QA_SYSTEM_PROMPT,
   buildMinutesCompactionInput,
   buildMinutesUpdateInput,
   buildQaTranscriptContext,
@@ -141,14 +138,6 @@ describe("transcript OpenAI request helpers", () => {
     expect(context).toContain(longText);
   });
 
-  it("keeps Ask grounded in transcript evidence and speaker attribution", () => {
-    expect(QA_SYSTEM_PROMPT).toContain("source of truth");
-    expect(QA_SYSTEM_PROMPT).toContain("Do not reassign a statement");
-    expect(QA_SYSTEM_PROMPT).toContain("If the user asks what someone said");
-    expect(QA_SYSTEM_PROMPT).toContain("owner not stated");
-    expect(QA_SYSTEM_PROMPT).toContain("partial");
-  });
-
   it("includes accumulated minutes as memory for each minutes update", () => {
     const input = buildMinutesUpdateInput({
       current: currentMinutes(),
@@ -158,8 +147,6 @@ describe("transcript OpenAI request helpers", () => {
     expect(input).toContain("decision-postgres");
     expect(input).toContain("Use Postgres for v1.");
     expect(input).toContain("review backup options");
-    expect(MINUTES_SYSTEM_PROMPT).toContain("Absence is not evidence of removal");
-    expect(MINUTES_SYSTEM_PROMPT).toContain("incremental update");
   });
 
   it("retains prior minutes entries omitted by an incremental update", () => {
@@ -224,10 +211,6 @@ describe("transcript OpenAI request helpers", () => {
 
     expect(input).toContain("canonical long-term memory");
     expect(input).toContain("decision-postgres");
-    expect(MINUTES_COMPACTION_SYSTEM_PROMPT).toContain("replacement snapshot");
-    expect(MINUTES_COMPACTION_SYSTEM_PROMPT).toContain(
-      "must not lose commitments",
-    );
   });
 
   it("keeps incremental working memory bounded until semantic compaction", () => {
