@@ -534,6 +534,9 @@ export const wordleModule: GameModule<WordleState> = {
         if (state.setterId && move.playerId === state.setterId) {
           throw new GameMoveError("The selected player cannot submit guesses");
         }
+        if (state.deadline > 0 && ctx.now >= state.deadline) {
+          throw new GameMoveError("Time's up");
+        }
 
         if (state.team) {
           const team = state.team;
@@ -547,6 +550,9 @@ export const wordleModule: GameModule<WordleState> = {
           if (turnId && turnId !== move.playerId) {
             const name = ctx.players.find((player) => player.id === turnId)?.name;
             throw new GameMoveError(name ? `It's ${name}'s turn` : "It's not your turn");
+          }
+          if (turnId && team.turnDeadline > 0 && ctx.now >= team.turnDeadline) {
+            throw new GameMoveError("Your turn is over");
           }
           const guess = normalizeWord(m.word, { role: "guess" });
           if (team.guesses.some((entry) => entry.word === guess)) {
@@ -633,6 +639,12 @@ export const wordleModule: GameModule<WordleState> = {
         }
         if (turnId !== move.playerId) {
           throw new GameMoveError("You can only pass on your own turn");
+        }
+        if (
+          (state.deadline > 0 && ctx.now >= state.deadline) ||
+          (state.team.turnDeadline > 0 && ctx.now >= state.team.turnDeadline)
+        ) {
+          throw new GameMoveError("Your turn is over");
         }
         const nextIndex = nextActiveIndex(state.team, ctx);
         if (nextIndex == null) {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GameSession } from "../server/games/engine.js";
 import { wordleModule } from "../server/games/modules/wordle.js";
 import type { GameContext, GamePlayer, GameRng } from "../server/games/types.js";
@@ -312,6 +312,43 @@ describe("wordle team modes", () => {
     expect(s.applyMove(second, "guess", { word: "ABATE" })).toEqual({ ok: true });
     expect(pub(s).team!.guesses.map((guess) => guess.byId)).toEqual([first, first, second]);
     expect(s.applyMove(first, "passTurn", undefined)).toMatchObject({ ok: false });
+  });
+
+  describe("late moves", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("rejects a relay guess or pass after the turn timer runs out", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      const s = session("relay");
+      startRound(s);
+      const [first] = pub(s).team!.members.map((member) => member.playerId);
+      const turnDeadline = pub(s).team!.turnDeadline!;
+      vi.setSystemTime(turnDeadline + 1);
+      expect(s.applyMove(first, "guess", { word: "AALII" })).toEqual({
+        ok: false,
+        error: "Your turn is over",
+      });
+      expect(s.applyMove(first, "passTurn", undefined)).toEqual({
+        ok: false,
+        error: "Your turn is over",
+      });
+      expect(pub(s, turnDeadline + 1).team!.outcome).toBeNull();
+    });
+
+    it("rejects a team guess after the round timer runs out", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      const s = session("huddle");
+      startRound(s);
+      const [first] = pub(s).team!.members.map((member) => member.playerId);
+      const roundDeadline = (s.getPublicState(1_000_000).view as { deadline: number }).deadline;
+      vi.setSystemTime(roundDeadline + 1);
+      expect(s.applyMove(first, "guess", { word: "AALII" })).toEqual({ ok: false, error: "Time's up" });
+      expect(pub(s, roundDeadline + 1).scores.every((entry) => entry.score === 0)).toBe(true);
+    });
   });
 
   it("ends a team round as a loss after six misses", () => {

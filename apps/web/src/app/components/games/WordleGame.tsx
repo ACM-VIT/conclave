@@ -99,6 +99,27 @@ const letterBg = (state: TileState | "empty"): string => {
   return "transparent";
 };
 
+const TILE_MEANING: Record<TileState, string> = {
+  green: "correct",
+  yellow: "in the word, wrong spot",
+  gray: "not in the word",
+};
+
+const tileLabel = (letter: string, state: TileState | "empty"): string => {
+  if (!letter.trim()) return "empty";
+  return state === "empty" ? letter : `${letter}, ${TILE_MEANING[state]}`;
+};
+
+const tileCue = (state: TileState | "empty", inset = 5, width = 2): React.CSSProperties => {
+  if (state === "green") {
+    return { outline: `${width}px solid rgba(255, 255, 255, 0.6)`, outlineOffset: -inset - width };
+  }
+  if (state === "yellow") {
+    return { outline: `${width}px dashed rgba(255, 255, 255, 0.8)`, outlineOffset: -inset - width };
+  }
+  return {};
+};
+
 const tileBorder = (state: TileState | "empty", hasLetter: boolean): string => {
   if (state !== "empty") return "transparent";
   return hasLetter ? color.borderStrong : color.border;
@@ -183,11 +204,14 @@ function Tile({
   if (!animateReveal) {
     return (
       <div
+        role="img"
+        aria-label={tileLabel(letter, state)}
         style={{
           ...TILE_STYLE,
           aspectRatio: "1",
           border: `2px solid ${isRevealed ? "transparent" : tileBorder("empty", hasLetter)}`,
           background: isRevealed ? letterBg(state) : "transparent",
+          ...tileCue(state),
         }}
       >
         {letter}
@@ -197,7 +221,7 @@ function Tile({
 
   const delay = colIndex * 300;
   return (
-    <div style={{ aspectRatio: "1", perspective: 300 }}>
+    <div role="img" aria-label={tileLabel(letter, state)} style={{ aspectRatio: "1", perspective: 300 }}>
       <div
         style={{
           width: "100%",
@@ -227,6 +251,7 @@ function Tile({
             backfaceVisibility: "hidden",
             transform: "rotateX(180deg)",
             background: letterBg(state),
+            ...tileCue(state),
           }}
         >
           {letter}
@@ -504,7 +529,10 @@ function SetterBoards({
                             background: guess
                               ? letterBg(guess.feedback[colIndex])
                               : "transparent",
+                            ...(guess ? tileCue(guess.feedback[colIndex], 1, 1) : {}),
                           }}
+                          role="img"
+                          aria-label={guess ? tileLabel(guess.word[colIndex] ?? "", guess.feedback[colIndex]) : "empty"}
                         >
                           {guess ? guess.word[colIndex] : ""}
                         </div>
@@ -774,7 +802,16 @@ export default function WordleGame({
                   {guess.word.split("").map((letter, colIndex) => (
                     <div
                       key={colIndex}
-                      style={{ ...TILE_STYLE, fontSize: 11, height: 22, borderRadius: 3, background: letterBg(guess.feedback[colIndex]) }}
+                      role="img"
+                      aria-label={tileLabel(letter, guess.feedback[colIndex])}
+                      style={{
+                        ...TILE_STYLE,
+                        fontSize: 11,
+                        height: 22,
+                        borderRadius: 3,
+                        background: letterBg(guess.feedback[colIndex]),
+                        ...tileCue(guess.feedback[colIndex], 1.5, 1),
+                      }}
                     >
                       {letter}
                     </div>
@@ -1004,8 +1041,9 @@ export default function WordleGame({
                 busy={busy}
                 readOnly={readOnly}
                 onPass={() => {
-                  setGuessDraft("");
-                  void runMove({ type: "passTurn" });
+                  void runMove({ type: "passTurn" }).then((ok) => {
+                    if (ok) setGuessDraft("");
+                  });
                 }}
               />
               <TeamMembers team={teamView} />
