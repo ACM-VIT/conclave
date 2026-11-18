@@ -296,6 +296,7 @@ function ChatPanel({
   // than state captured when the paste or pick began.
   const isImageUploadingRef = useRef(false);
   const imagePrepGenerationRef = useRef(0);
+  const [isPreparingImage, setIsPreparingImage] = useState(false);
   const [assistantApiKeyInput, setAssistantApiKeyInput] = useState("");
   const [assistantModel, setAssistantModel] = useState<ConclaveAssistantModel>(
     assistantApiKeyPrompt.model,
@@ -591,9 +592,10 @@ function ChatPanel({
   const prepareAndStageImage = useCallback(
     async (file: File): Promise<boolean> => {
       const generation = ++imagePrepGenerationRef.current;
-      const prepared = await prepareChatImageFile(file);
-      // A newer paste or pick superseded this one while it was converting.
+      setIsPreparingImage(true);
+      const prepared = await prepareChatImageFile(file).catch(() => null);
       if (generation !== imagePrepGenerationRef.current) return false;
+      setIsPreparingImage(false);
       if (!prepared) {
         setImageUploadError(CHAT_IMAGE_TYPE_MESSAGE);
         return false;
@@ -624,7 +626,7 @@ function ChatPanel({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isChatDisabled || isImageUploading) return;
+    if (isChatDisabled || isImageUploading || isPreparingImage) return;
     if (ttsComposer && (ttsComposer.overLimit || isTtsDisabled)) return;
     if (chatInput.trim() || pendingImage) {
       setIsSendAnimating(true);
@@ -1467,6 +1469,11 @@ function ChatPanel({
               onDismiss={() => setDismissedEmbedUrl(composerEmbedUrl)}
             />
           ) : null}
+          {isPreparingImage && !pendingImage && !isChatDisabled ? (
+            <p role="status" className="mb-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-[11.5px] text-[#a1a1aa]">
+              Preparing image…
+            </p>
+          ) : null}
           {pendingImage && !isChatDisabled ? (
             <div className="mb-2 overflow-hidden rounded-xl border border-white/10 bg-white/[0.04]">
               <div className="flex items-center gap-3 p-2">
@@ -1591,6 +1598,7 @@ function ChatPanel({
               disabled={
                 isChatDisabled ||
                 isImageUploading ||
+                isPreparingImage ||
                 (!chatInput.trim() && !pendingImage) ||
                 Boolean(ttsComposer && (ttsComposer.overLimit || isTtsDisabled))
               }
