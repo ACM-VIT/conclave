@@ -2618,11 +2618,13 @@ export default function MeetsClient({
     socket.cleanup,
   ]);
 
-  const handleStartNewMeeting = useCallback(() => {
+  const startNewMeeting = useCallback((keepAudioOnly: boolean) => {
     const targetRoomId = generateRoomCode();
     handleStopVoiceAgent();
     socket.cleanup();
-    setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
+    if (!keepAudioOnly) {
+      setViewSettings((settings) => ({ ...settings, audioOnlyMode: false }));
+    }
     setMeetError(null);
     setMeetingEndedNotice(null);
     setWaitingMessage(null);
@@ -2640,6 +2642,8 @@ export default function MeetsClient({
     setWaitingMessage,
     socket.cleanup,
   ]);
+
+  const handleStartNewMeeting = useCallback(() => startNewMeeting(false), [startNewMeeting]);
 
   useEffect(() => {
     if (!pendingNewMeetingRoomId || !isAdminFlag) return;
@@ -3033,14 +3037,14 @@ export default function MeetsClient({
     setEnterErrored(false);
     setConnectionState("connecting");
     if (enterAction === "new") {
-      handleStartNewMeeting();
+      startNewMeeting(true);
     } else if (roomId) {
       void joinRoomById(roomId);
     }
   }, [
     enterAction,
-    handleStartNewMeeting,
     joinRoomById,
+    startNewMeeting,
     roomId,
     setConnectionState,
     setMeetError,

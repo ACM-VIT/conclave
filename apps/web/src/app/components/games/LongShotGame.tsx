@@ -699,6 +699,13 @@ export default function LongShotGame({
     return result.success;
   };
 
+  const needsCompany = fuseMode && pub.totalPlayers < 2;
+  const start = async () => {
+    setError(null);
+    const result = await send({ type: "start" });
+    if (!result.success) setError(result.error ?? "Could not start");
+  };
+
   if (pub.phase === "lobby") {
     return (
       <Ocean depth={0}>
@@ -715,9 +722,16 @@ export default function LongShotGame({
         </div>
         <DiveColumn points={pub.tierPoints} />
         {host ? (
-          <PrimaryButton full onClick={() => void send({ type: "start" })}>
-            Dive
-          </PrimaryButton>
+          <div>
+            <PrimaryButton full disabled={needsCompany} onClick={() => void start()}>
+              Dive
+            </PrimaryButton>
+            {needsCompany || error ? (
+              <div style={{ marginTop: 8, textAlign: "center" }}>
+                <Note tone={error ? "miss" : "muted"}>{error ?? "Needs at least 2 players"}</Note>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <Note>{readOnly ? "Watching" : "Waiting for the host"}</Note>
         )}
