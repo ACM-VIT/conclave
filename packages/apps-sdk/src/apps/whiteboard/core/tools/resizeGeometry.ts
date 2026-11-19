@@ -1,4 +1,5 @@
-import type { Bounds } from "../model/geometry";
+import { getBoundsForElement, type Bounds } from "../model/geometry";
+import type { WhiteboardElement } from "../model/types";
 
 export type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
@@ -57,35 +58,79 @@ const boundsCenter = (bounds: Bounds) => ({
   y: bounds.y + bounds.height / 2,
 });
 
-export const getLocalResizeHandle = (
+export type ResizeFrame = {
+  startBounds: Bounds;
+  handle: ResizeHandle;
+  rotation: number;
+  grabOffset: { x: number; y: number };
+};
+
+const isRotated = (rotation: number) => Math.abs(rotation) >= ROTATION_EPSILON;
+
+const handleCorner = (bounds: Bounds, handle: ResizeHandle) => ({
+  x: handle === "nw" || handle === "sw" ? bounds.x : bounds.x + bounds.width,
+  y: handle === "nw" || handle === "ne" ? bounds.y : bounds.y + bounds.height,
+});
+
+const OPPOSITE: Record<ResizeHandle, ResizeHandle> = { nw: "se", ne: "sw", sw: "ne", se: "nw" };
+
+export const startResizeFrame = (
   localBounds: Bounds,
   rotation: number,
+  screenHandle: ResizeHandle,
   point: { x: number; y: number }
-): ResizeHandle => {
+): ResizeFrame => {
+  if (!isRotated(rotation)) {
+    return { startBounds: localBounds, handle: screenHandle, rotation: 0, grabOffset: { x: 0, y: 0 } };
+  }
   const center = boundsCenter(localBounds);
   const local = rotateAround(point, center, -rotation);
   const west = local.x < center.x;
   const north = local.y < center.y;
-  return north ? (west ? "nw" : "ne") : west ? "sw" : "se";
+  const handle: ResizeHandle = north ? (west ? "nw" : "ne") : west ? "sw" : "se";
+  const corner = handleCorner(localBounds, handle);
+  return {
+    startBounds: localBounds,
+    handle,
+    rotation,
+    grabOffset: { x: corner.x - local.x, y: corner.y - local.y },
+  };
 };
 
-export const getRotatedResizedBounds = (
-  session: { startBounds: Bounds; handle: ResizeHandle; rotation: number },
-  point: { x: number; y: number },
-  minWidth: number,
-  minHeight: number
-): Bounds => {
-  if (Math.abs(session.rotation) < ROTATION_EPSILON) {
-    return getResizedBounds(session.startBounds, session.handle, point, minWidth, minHeight);
+export const getFrameResizePoint = (frame: ResizeFrame, point: { x: number; y: number }) => {
+  if (!isRotated(frame.rotation)) return point;
+  const local = rotateAround(point, boundsCenter(frame.startBounds), -frame.rotation);
+  return { x: local.x + frame.grabOffset.x, y: local.y + frame.grabOffset.y };
+};
+
+export const translateElement = <T extends WhiteboardElement>(element: T, dx: number, dy: number): T => {
+  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return element;
+  if (element.type === "stroke") {
+    return {
+      ...element,
+      points: element.points.map((point) => ({ ...point, x: point.x + dx, y: point.y + dy })),
+    };
   }
-  const pivot = boundsCenter(session.startBounds);
-  const local = rotateAround(point, pivot, -session.rotation);
-  const resized = getResizedBounds(session.startBounds, session.handle, local, minWidth, minHeight);
-  const center = rotateAround(boundsCenter(resized), pivot, session.rotation);
-  return {
-    x: center.x - resized.width / 2,
-    y: center.y - resized.height / 2,
-    width: resized.width,
-    height: resized.height,
+  return { ...element, x: element.x + dx, y: element.y + dy };
+};
+
+export const anchorResizedElement = <T extends WhiteboardElement>(element: T, frame: ResizeFrame): T => {
+  if (!isRotated(frame.rotation)) return element;
+  const actual = getBoundsForElement(element);
+  const pivot = boundsCenter(frame.startBounds);
+  const anchorWorld = rotateAround(handleCorner(frame.startBounds, OPPOSITE[frame.handle]), pivot, frame.rotation);
+  const towardCenter = {
+    x: (frame.handle === "ne" || frame.handle === "se" ? 1 : -1) * (actual.width / 2),
+    y: (frame.handle === "sw" || frame.handle === "se" ? 1 : -1) * (actual.height / 2),
   };
+  const center = rotateAround(
+    { x: anchorWorld.x + towardCenter.x, y: anchorWorld.y + towardCenter.y },
+    anchorWorld,
+    frame.rotation
+  );
+  return translateElement(
+    element,
+    center.x - actual.width / 2 - actual.x,
+    center.y - actual.height / 2 - actual.y
+  );
 };

@@ -19,8 +19,11 @@ import { getColorForUser } from "../../core/presence/colors";
 import type { StickyElement, TextElement, WhiteboardElement } from "../../core/model/types";
 import { getBoundsForElement, hitTestElement, type Bounds } from "../../core/model/geometry";
 import {
-  getLocalResizeHandle,
-  getRotatedResizedBounds,
+  anchorResizedElement,
+  getFrameResizePoint,
+  getResizedBounds,
+  startResizeFrame,
+  type ResizeFrame,
   type ResizeHandle,
 } from "../../core/tools/resizeGeometry";
 
@@ -146,12 +149,9 @@ type RotatableElement = Extract<
   { type: "shape" | "sticky" | "image" | "text" | "stroke" }
 >;
 
-type ResizeSession = {
+type ResizeSession = ResizeFrame & {
   elementId: string;
-  handle: ResizeHandle;
-  startBounds: Bounds;
   startElement: ResizableElement;
-  rotation: number;
 };
 
 type RotateSession = {
@@ -1137,11 +1137,9 @@ export function WhiteboardCanvas({
                 const rotated = Math.abs(rotation) >= ROTATION_EPSILON;
                 const localBounds = rotated ? getBoundsForElement(selectedElement) : selectedBounds;
                 resizeSessionRef.current = {
+                  ...startResizeFrame(localBounds, rotation, handle, point),
                   elementId: selectedElement.id,
-                  handle: rotated ? getLocalResizeHandle(localBounds, rotation, point) : handle,
-                  startBounds: localBounds,
                   startElement: selectedElement,
-                  rotation,
                 };
                 scheduleCursorSync(point.x, point.y);
                 return;
@@ -1237,11 +1235,16 @@ export function WhiteboardCanvas({
         if (resizeSession) {
           event.preventDefault();
           const { minWidth, minHeight } = getResizeMinimums(resizeSession.startElement);
-          const nextBounds = getRotatedResizedBounds(resizeSession, point, minWidth, minHeight);
-          const nextElement = applyResizedBounds(
-            resizeSession.startElement,
+          const nextBounds = getResizedBounds(
             resizeSession.startBounds,
-            nextBounds
+            resizeSession.handle,
+            getFrameResizePoint(resizeSession, point),
+            minWidth,
+            minHeight
+          );
+          const nextElement = anchorResizedElement(
+            applyResizedBounds(resizeSession.startElement, resizeSession.startBounds, nextBounds),
+            resizeSession
           );
           updateElement(doc, pageId, nextElement);
           setSelectedId(resizeSession.elementId);
