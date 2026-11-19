@@ -3,16 +3,13 @@ import Testing
 @testable import Conclave
 
 struct LocalSenderPolicyTests {
-    @Test func microphoneKeepsAboveDefaultPriorityAsItsBitrateBudgetDrops() {
+    @Test func microphoneBudgetOnlyDropsAsTheConnectionWorsens() {
         let worsening: [ConnectionQuality] = [.good, .fair, .poor, .emergency]
-        let budgets = worsening.map { LocalSenderPolicy.microphoneProfile(for: $0).maxAverageBitrateBps }
+        let budgets = worsening.map { LocalSenderPolicy.microphoneMaxAverageBitrateBps(for: $0) }
         for index in 1..<budgets.count {
             #expect(budgets[index] < budgets[index - 1])
         }
-        #expect(LocalSenderPolicy.microphoneProfile(for: .unknown).maxAverageBitrateBps == budgets[0])
-        for quality in worsening + [.unknown] {
-            #expect(LocalSenderPolicy.microphoneProfile(for: quality).bitratePriority > 1.0)
-        }
+        #expect(LocalSenderPolicy.microphoneMaxAverageBitrateBps(for: .unknown) == budgets[0])
     }
 
     @Test func senderFollowsExplicitVideoPreferenceForEitherSource() {

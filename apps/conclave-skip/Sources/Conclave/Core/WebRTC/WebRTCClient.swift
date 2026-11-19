@@ -2578,13 +2578,12 @@ final class WebRTCClient: NSObject, ObservableObject {
     }
 
     private func microphoneOpusCodecOptionsJSON() throws -> String {
-        let profile = LocalSenderPolicy.microphoneProfile(for: currentLocalBandwidthQuality)
-        return try encodeJSONString(
+        try encodeJSONString(
             OpusCodecOptions(
                 opusStereo: false,
                 opusFec: true,
                 opusDtx: true,
-                opusMaxAverageBitrate: profile.maxAverageBitrateBps,
+                opusMaxAverageBitrate: LocalSenderPolicy.microphoneMaxAverageBitrateBps(for: currentLocalBandwidthQuality),
                 opusPtime: 20
             )
         )
@@ -2754,6 +2753,7 @@ final class WebRTCClient: NSObject, ObservableObject {
 
             rtcLocalVideoTrack = track
             videoProducer = producer
+            applyConfiguredDegradationPreference(to: producer, type: .webcam)
             webcamProducerTopology = .vp8Simulcast
             pendingProducer = nil
             localVideoEnabled = true
@@ -3166,8 +3166,6 @@ final class WebRTCClient: NSObject, ObservableObject {
             for: .webcam,
             setting: configuredCameraDegradationPreference
         )
-        let microphonePriority = LocalSenderPolicy.microphoneProfile(for: currentLocalBandwidthQuality)
-            .bitratePriority
         let result: MediaProducerCreationResult
         do {
             result = try await performSendTransportOperation(on: queue) {
@@ -3178,19 +3176,12 @@ final class WebRTCClient: NSObject, ObservableObject {
                     codec: request.codec,
                     appData: request.appData
                 )
-                producer.updateSenderParameters { parameters in
-                    var next = parameters
-                    if producer.kind == .audio {
-                        if var encodings = next.encodings {
-                            for index in encodings.indices {
-                                encodings[index].bitratePriority = microphonePriority
-                            }
-                            next.encodings = encodings
-                        }
-                    } else {
+                if producer.kind != .audio {
+                    producer.updateSenderParameters { parameters in
+                        var next = parameters
                         next.degradationPreference = Self.degradationPreference(for: cameraDegradation)
+                        return next
                     }
-                    return next
                 }
                 return MediaProducerCreationResult(producer: producer)
             }
@@ -4563,6 +4554,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             }
 
             videoProducer = producer
+            applyConfiguredDegradationPreference(to: producer, type: .webcam)
             webcamProducerTopology = targetTopology
             localVideoTrack = VideoTrackWrapper(
                 id: producer.id,
@@ -4621,6 +4613,16 @@ final class WebRTCClient: NSObject, ObservableObject {
             "producer not current"
         ]
         return !definitiveRejections.contains { message.contains($0) }
+    }
+
+    private func applyConfiguredDegradationPreference(to producer: Producer, type: ProducerType) {
+        let setting = type == .screen ? configuredScreenDegradationPreference : configuredCameraDegradationPreference
+        let preference = LocalSenderPolicy.videoDegradationPreference(for: type, setting: setting)
+        producer.updateSenderParameters { parameters in
+            var next = parameters
+            next.degradationPreference = Self.degradationPreference(for: preference)
+            return next
+        }
     }
 
     nonisolated private static func degradationPreference(
@@ -4696,14 +4698,13 @@ final class WebRTCClient: NSObject, ObservableObject {
         evaluateWebcamTopologyTransition()
 
         if let audioProducer, !audioProducer.closed {
-            let profile = LocalSenderPolicy.microphoneProfile(for: connectionQuality)
+            let audioBitrate = LocalSenderPolicy.microphoneMaxAverageBitrateBps(for: connectionQuality)
             audioProducer.updateSenderParameters { parameters in
                 var next = parameters
                 if var encodings = next.encodings, !encodings.isEmpty {
                     for index in encodings.indices {
                         encodings[index].isActive = true
-                        encodings[index].maxBitrateBps = profile.maxAverageBitrateBps
-                        encodings[index].bitratePriority = profile.bitratePriority
+                        encodings[index].maxBitrateBps = audioBitrate
                     }
                     next.encodings = encodings
                 }
@@ -4939,6 +4940,7 @@ final class WebRTCClient: NSObject, ObservableObject {
             producer.delegate = self
             producer.resume()
             screenProducer = producer
+            applyConfiguredDegradationPreference(to: producer, type: .screen)
             screenProducerBandwidthQuality = connectionQuality
             updateScreenCaptureProfile(connectionQuality: connectionQuality)
             resetScreenFrameLimiter()
@@ -6834,6 +6836,7 @@ extension WebRTCClient {
             producer.resume()
 
             screenProducer = producer
+            applyConfiguredDegradationPreference(to: producer, type: .screen)
             screenProducerBandwidthQuality = currentLocalBandwidthQuality
             evaluateWebcamTopologyTransition()
 

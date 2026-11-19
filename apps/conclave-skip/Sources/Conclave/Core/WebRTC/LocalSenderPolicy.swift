@@ -1,22 +1,15 @@
 enum LocalSenderPolicy {
-    struct MicrophoneProfile {
-        let maxAverageBitrateBps: Int
-        let bitratePriority: Double
-    }
-
-    static func microphoneProfile(for quality: ConnectionQuality) -> MicrophoneProfile {
-        let maxAverageBitrateBps: Int
+    static func microphoneMaxAverageBitrateBps(for quality: ConnectionQuality) -> Int {
         switch quality {
         case .emergency:
-            maxAverageBitrateBps = 24_000
+            return 24_000
         case .poor:
-            maxAverageBitrateBps = 32_000
+            return 32_000
         case .fair:
-            maxAverageBitrateBps = 48_000
+            return 48_000
         case .good, .unknown:
-            maxAverageBitrateBps = 96_000
+            return 96_000
         }
-        return MicrophoneProfile(maxAverageBitrateBps: maxAverageBitrateBps, bitratePriority: 4.0)
     }
 
     static func videoDegradationPreference(
